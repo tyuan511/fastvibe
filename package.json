@@ -1,0 +1,51 @@
+{
+  "name": "fastvibe",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Desktop client for oh-my-pi: agent work, code, and cowork",
+  "author": "FastVibe",
+  "type": "module",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "sync:omp": "node scripts/sync-omp.mjs",
+    "sync:models": "node scripts/sync-models-dev.mjs",
+    "sync": "node scripts/sync-omp.mjs && node scripts/sync-models-dev.mjs",
+    "predev": "node scripts/sync-omp.mjs && node scripts/sync-models-dev.mjs",
+    "dev": "electron-vite dev",
+    "prebuild": "node scripts/sync-omp.mjs && node scripts/sync-models-dev.mjs",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "shadcn": "shadcn"
+  },
+  "packageManager": "pnpm@11.22.0",
+  "dependencies": {
+    "@base-ui/react": "^1.8.0",
+    "@fontsource-variable/geist": "^5.3.0",
+    "@shadcn/react": "^0.3.1",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "cn": "^0.2.6",
+    "lucide-react": "^0.544.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "shadcn": "^4.21.0",
+    "tailwind-merge": "^3.3.1",
+    "tw-animate-css": "^1.4.0",
+    "zustand": "^5.0.8"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.13",
+    "@types/node": "^24.5.2",
+    "@types/react": "^19.1.13",
+    "@types/react-dom": "^19.1.9",
+    "@vitejs/plugin-react": "^5.0.3",
+    "electron": "^38.1.2",
+    "electron-vite": "^5.0.0",
+    "tailwindcss": "^4.1.13",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.6"
+  }
+}
