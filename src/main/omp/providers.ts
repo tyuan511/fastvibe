@@ -264,6 +264,10 @@ export function applyProviders(paths: FastVibePaths): {
   const usable = providers.filter((provider) => provider.models.length > 0);
   const keys = readProviderKeysSync(paths);
   writeFileSync(paths.modelsYml, renderModelsYml(usable, keys), "utf8");
+  // pi-coding-agent's SDK reads the same provider catalog as JSON. Keep the
+  // legacy YAML output for users upgrading from the RPC engine, but make the
+  // JSON registry authoritative for the embedded kernel.
+  writeFileSync(paths.modelsJson, renderModelsJson(usable.filter((provider) => Boolean(keys[provider.apiKeyEnv]))), "utf8");
 
   const allIds = usable.flatMap((provider) => provider.models.map((model) => model.id));
   const defaultId = allIds.length > 0 ? pickDefaultModelId(allIds) : undefined;
@@ -288,6 +292,29 @@ export function applyProviders(paths: FastVibePaths): {
       })),
     ),
   };
+}
+
+function renderModelsJson(providers: StoredProvider[]): string {
+  const result: Record<string, unknown> = { providers: {} };
+  const output = result.providers as Record<string, unknown>;
+  for (const provider of providers) {
+    output[provider.id] = {
+      name: provider.name,
+      baseUrl: provider.baseUrl,
+      api: provider.api,
+      apiKey: provider.apiKeyEnv,
+      authHeader: true,
+      models: provider.models.map((model) => ({
+        id: model.id,
+        name: model.name,
+        contextWindow: model.contextWindow,
+        maxTokens: model.maxTokens,
+        reasoning: model.reasoning,
+        input: model.input,
+      })),
+    };
+  }
+  return `${JSON.stringify(result, null, 2)}\n`;
 }
 
 /** Providers that have at least one model and, when required, a stored key. */

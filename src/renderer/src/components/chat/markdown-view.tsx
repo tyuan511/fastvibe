@@ -1,4 +1,4 @@
-import { useState, type JSX, type ReactNode } from "react";
+import { memo, useState, type JSX, type ReactNode } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Check, Copy } from "lucide-react";
@@ -35,7 +35,11 @@ function CodeBlock({ language, code }: { language?: string; code: string }): JSX
   );
 }
 
-export function MarkdownView({ text }: { text: string }): JSX.Element {
+/**
+ * Memoised on `text`: without this, every streamed token re-parsed the markdown
+ * of every message already on screen.
+ */
+export const MarkdownView = memo(function MarkdownView({ text }: { text: string }): JSX.Element {
   return (
     <Markdown
       remarkPlugins={[remarkGfm]}
@@ -86,7 +90,7 @@ export function MarkdownView({ text }: { text: string }): JSX.Element {
       {text}
     </Markdown>
   );
-}
+});
 
 function nodeText(node: ReactNode): string {
   if (typeof node === "string" || typeof node === "number") return String(node);

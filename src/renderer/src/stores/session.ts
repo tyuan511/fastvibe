@@ -55,6 +55,7 @@ type SessionStore = {
   setRunMode: (runMode: RunMode) => void;
   setQueueBehavior: (queueBehavior: QueueBehavior) => void;
   addUserMessage: (text: string, attachments?: ChatAttachment[]) => void;
+  dropEmptyAssistant: () => void;
   setAttachments: (attachments: ChatAttachment[]) => void;
   enqueue: (item: QueuedPrompt) => void;
   clearQueued: () => void;
@@ -149,11 +150,31 @@ export const useSessionStore = create<SessionStore>((set) => ({
           createdAt: Date.now(),
           attachments,
         },
+        {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          text: "",
+          tools: [],
+          createdAt: Date.now(),
+        },
       ],
       streaming: true,
       error: null,
       attachments: [],
     })),
+  dropEmptyAssistant: () =>
+    set((state) => {
+      const last = state.messages.at(-1);
+      if (
+        last?.role === "assistant" &&
+        !last.text &&
+        !last.thinking &&
+        last.tools.length === 0
+      ) {
+        return { messages: state.messages.slice(0, -1), streaming: false };
+      }
+      return { streaming: false };
+    }),
   setAttachments: (attachments) => set({ attachments }),
   enqueue: (item) => set((state) => ({ queued: [...state.queued, item] })),
   clearQueued: () => set({ queued: [] }),

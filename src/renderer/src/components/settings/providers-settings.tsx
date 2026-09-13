@@ -21,7 +21,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import type { ProviderConfig, ProviderModel } from "@shared/types";
 import { ModelEditor } from "./model-editor";
 import { ModelPicker, inputSummary } from "./model-picker";
@@ -166,12 +165,15 @@ export function ProvidersSettings({ onChanged }: { onChanged: () => void }): JSX
     });
     try {
       const models = await window.fastvibe.providers.refresh(provider.id);
+      const providerIds = new Set(provider.models.map((model) => model.id));
       setManage((current) =>
         current && current.providerId === provider.id
           ? {
               ...current,
               candidates: models,
-              selected: new Set(provider.models.map((model) => model.id)),
+              selected: new Set(
+                models.filter((model) => providerIds.has(model.id)).map((model) => model.id),
+              ),
               busy: false,
             }
           : current,
@@ -270,7 +272,7 @@ export function ProvidersSettings({ onChanged }: { onChanged: () => void }): JSX
       />
 
       <Dialog open={manage !== null} onOpenChange={(open) => !open && setManage(null)}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>管理模型 · {manage?.providerName}</DialogTitle>
             <DialogDescription>勾选要保留的模型。</DialogDescription>
@@ -342,7 +344,9 @@ function ProviderCard({
   const [open, setOpen] = useState(pinned);
 
   return (
-    <div className={`rounded-xl border p-3 ${pinned ? "border-primary/40 bg-primary/5" : "border-border"}`}>
+    <div
+      className={`overflow-hidden rounded-xl border p-3 ${pinned ? "border-primary/40 bg-primary/5" : "border-border"}`}
+    >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -390,7 +394,7 @@ function ProviderCard({
       </div>
 
       {open && provider.models.length > 0 ? (
-        <ScrollArea className="mt-2 max-h-64 rounded-lg border border-border bg-background">
+        <div className="mt-2 max-h-64 overflow-y-auto rounded-lg border border-border bg-background">
           <div className="divide-y divide-border">
             {provider.models.map((model) => (
               <div key={model.id} className="flex items-center gap-2 px-2.5 py-1.5">
@@ -415,7 +419,7 @@ function ProviderCard({
               </div>
             ))}
           </div>
-        </ScrollArea>
+        </div>
       ) : null}
     </div>
   );
@@ -436,7 +440,7 @@ function ConnectDialog({
 }): JSX.Element {
   return (
     <Dialog open={state !== null} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>
             {state?.mode === "fastvibe"

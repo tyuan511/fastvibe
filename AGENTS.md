@@ -1,12 +1,13 @@
 # FastVibe
 
-Electron desktop client for oh-my-pi: agent work, code, office, and multi-agent cowork. Default engine is a **bundled official `omp` binary**, talking JSONL RPC over stdio. Native `~/.omp` is never used as the data root.
+Electron desktop client for agent work, code, office, and multi-agent cowork. The default engine is the embedded **`@mariozechner/pi-coding-agent` SDK** running in the Electron main process. Native `~/.pi`/`~/.omp` state is never used as the data root.
 
 ## Architecture
 
 ```
 src/main/          Electron main: window, IPC, omp process lifecycle
-  omp/             Binary resolve, isolated paths, JSONL RPC client
+  omp/             Isolated paths, provider configuration, and legacy RPC helpers
+  pi/              Embedded pi-coding-agent host and multi-session lifecycle
 src/preload/       contextBridge API (`window.fastvibe`)
 src/renderer/      React UI (Vite renderer)
   src/components/ui/   shadcn-generated primitives only
@@ -24,14 +25,7 @@ Runtime data lives under the app userData directory:
   wt                 OMP_WORKTREE_DIR
 ```
 
-Spawn env is injected only into the omp child. Do not export these variables into the user's login shell or the in-app terminal.
-
-Binary resolution order:
-
-1. `FASTVIBE_OMP` override
-2. Bundled `resources/omp/<platform>-<arch>/omp` (or `process.resourcesPath` when packaged)
-
-Do not scan the host PATH for omp.
+Provider credentials are kept in FastVibe's isolated runtime and injected into the SDK's in-memory auth storage. Do not export these variables into the user's login shell or the in-app terminal.
 
 ## UI: shadcn Nova
 
@@ -50,9 +44,8 @@ Do not scan the host PATH for omp.
 ## Commands
 
 ```bash
-pnpm sync:omp     # fetch latest official omp release (SHA256 verified)
 pnpm sync:models  # rebuild the bundled models.dev index from upstream
-pnpm dev          # sync omp + models.dev if needed, then electron-vite
+pnpm dev          # sync models.dev if needed, then electron-vite
 pnpm typecheck
 pnpm shadcn add <component> -y
 ```
@@ -75,6 +68,6 @@ pnpm shadcn add <component> -y
 
 ## Product constraints
 
-- Code / Office / Cowork are first-class; omp is the default backend.
+- Code / Office / Cowork are first-class; pi-coding-agent is the default backend.
 - Office and extra ACP agents come later; keep Host adapters (RPC/ACP) decoupled from the renderer.
-- Built-in model provider is **fastvibe** (`https://fastvibe.dev/v1`). The user pastes an API key; FastVibe fetches `/models`, writes isolated `models.yml` + `config.yml`, then starts the engine. Do not mention omp in the UI.
+- Built-in model provider is **fastvibe** (`https://fastvibe.dev/v1`). The user pastes an API key; FastVibe fetches `/models`, writes isolated `models.json` plus compatibility YAML, then starts the embedded engine. Do not mention the backend runtime in the UI.

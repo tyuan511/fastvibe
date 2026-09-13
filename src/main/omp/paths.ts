@@ -14,6 +14,8 @@ export type FastVibePaths = {
   ompScratch: string;
   ompStderrLog: string;
   modelsYml: string;
+  /** pi-coding-agent SDK model registry configuration. */
+  modelsJson: string;
   configYml: string;
   agentEnv: string;
   conversationsFile: string;
@@ -43,6 +45,7 @@ export function getFastVibePaths(): FastVibePaths {
     ompScratch,
     ompStderrLog: join(logs, "omp.stderr.log"),
     modelsYml: join(ompAgent, "models.yml"),
+    modelsJson: join(ompAgent, "models.json"),
     configYml: join(ompAgent, "config.yml"),
     agentEnv: join(ompAgent, ".env"),
     conversationsFile: join(userData, "conversations.json"),

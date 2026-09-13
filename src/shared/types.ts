@@ -183,6 +183,8 @@ export type FastVibeModel = {
 
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
+export type PermissionMode = "ask" | "smart" | "full";
+
 export type Project = {
   cwd: string;
   name: string;
@@ -192,7 +194,7 @@ export type Project = {
 export type Conversation = {
   id: string;
   title: string;
-  /** Engine working directory. Always set: the project path, else a per-conversation temp dir. */
+  /** Engine working directory: the project path, else the shared scratch workspace. */
   cwd: string;
   /** Bound project path. Absent when the conversation is not attached to a project. */
   project?: string;
@@ -210,6 +212,14 @@ export type WorkspaceSnapshot = {
 
 export type ConversationOpenResult = WorkspaceSnapshot & {
   conversation: Conversation;
+  messages: ChatMessage[];
+  state: OmpSessionState | null;
+  status: OmpStatus;
+};
+
+/** Pushed when a conversation finishes initialising in the background. */
+export type ConversationReadyEvent = {
+  id: string;
   messages: ChatMessage[];
   state: OmpSessionState | null;
   status: OmpStatus;

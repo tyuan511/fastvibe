@@ -109,6 +109,22 @@ body {
   user-select: text;
 }
 
+.chat-caret {
+  display: inline-block;
+  width: 1.5px;
+  height: 0.95em;
+  margin-left: 1px;
+  vertical-align: text-bottom;
+  background: currentColor;
+  animation: chat-caret 1s steps(1) infinite;
+}
+
+@keyframes chat-caret {
+  50% {
+    opacity: 0;
+  }
+}
+
 .chat-markdown p {
   margin: 0.4em 0;
 }

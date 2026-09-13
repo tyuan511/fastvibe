@@ -63,7 +63,7 @@ export function ModelEditor({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle className="truncate">编辑模型 · {draft.name || draft.id}</DialogTitle>
         </DialogHeader>

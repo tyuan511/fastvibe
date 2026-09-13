@@ -229,7 +229,7 @@ export function Sidebar({
                       <Button
                         size="icon-xs"
                         variant="ghost"
-                        className="hidden shrink-0 group-hover/session:inline-flex"
+                        className="shrink-0 opacity-0 group-hover/session:opacity-100 aria-expanded:opacity-100"
                       />
                     }
                     onClick={(event) => event.stopPropagation()}
@@ -379,7 +379,7 @@ export function Sidebar({
                               <span className="truncate">{group.name}</span>
                             )}
                           </CollapsibleTrigger>
-                          <div className="flex shrink-0 items-center opacity-0 group-hover/project:opacity-100 focus-within:opacity-100">
+                          <div className="flex shrink-0 items-center opacity-0 group-hover/project:opacity-100 focus-within:opacity-100 has-[[aria-expanded=true]]:opacity-100">
                               <Button
                                 size="icon-xs"
                                 variant="ghost"

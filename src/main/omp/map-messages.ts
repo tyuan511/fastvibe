@@ -2,14 +2,27 @@ import type { ChatAttachment, ChatMessage, ToolCallBlock } from "@shared/types";
 
 export function mapEngineMessages(raw: unknown): ChatMessage[] {
   if (!Array.isArray(raw)) return [];
-  return raw.flatMap((entry) => {
+  const output: ChatMessage[] = [];
+  for (const entry of raw) {
     const message = unwrapMessage(entry);
-    if (!message) return [];
+    if (!message) continue;
+    if (message.role === "toolResult") {
+      const id = String(message.toolCallId ?? "");
+      const result = toolText(message.content ?? message.result ?? message.output);
+      if (id && result) {
+        const assistant = [...output].reverse().find((item) => item.role === "assistant" && item.tools.some((tool) => tool.id === id));
+        const tool = assistant?.tools.find((item) => item.id === id);
+        if (tool) {
+          tool.result = result;
+          tool.status = message.isError === true ? "error" : "done";
+        }
+      }
+      continue;
+    }
     const role = message.role === "assistant" || message.role === "system" ? message.role : "user";
     const { text, thinking, tools, attachments } = extractContent(message.content);
-    if (!text && !thinking && tools.length === 0 && attachments.length === 0 && role !== "assistant") return [];
-    return [
-      {
+    if (!text && !thinking && tools.length === 0 && attachments.length === 0 && role !== "assistant") continue;
+    output.push({
         id: String(message.id ?? crypto.randomUUID()),
         role,
         text,
@@ -18,9 +31,9 @@ export function mapEngineMessages(raw: unknown): ChatMessage[] {
         createdAt: typeof message.timestamp === "number" ? message.timestamp : Date.now(),
         kind: role === "system" ? "notice" : "message",
         attachments: attachments.length > 0 ? attachments : undefined,
-      },
-    ];
-  });
+      });
+  }
+  return output;
 }
 
 function unwrapMessage(entry: unknown): Record<string, unknown> | null {
@@ -56,11 +69,11 @@ function extractContent(content: unknown): {
       const thought = typeof part.thinking === "string" ? part.thinking : typeof part.text === "string" ? part.text : "";
       if (thought) thoughts.push(thought);
     }
-    if (type === "tool_use" || type === "toolcall" || type === "tool_call") {
+    if (type === "tool_use" || type === "toolcall" || type === "tool_call" || type === "toolCall") {
       tools.push({
         id: String(part.id ?? crypto.randomUUID()),
         name: String(part.name ?? "tool"),
-        args: part.input ?? part.args,
+        args: part.arguments ?? part.input ?? part.args,
         status: "done",
       });
     }

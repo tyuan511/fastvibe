@@ -163,7 +163,7 @@ export function SessionMenu({
       </Dialog>
 
       <Dialog open={agentsOpen} onOpenChange={setAgentsOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>子 Agent</DialogTitle>
           </DialogHeader>
@@ -288,7 +288,7 @@ export function RunStatusBar({
   );
 }
 
-function usagePercent(session: OmpSessionState | null): number | null {
+export function usagePercent(session: OmpSessionState | null): number | null {
   const usage = session?.contextUsage;
   if (!usage) return null;
   if (usage.tokens != null && usage.contextWindow > 0) {

@@ -35,6 +35,7 @@ export const Ipc = {
   conversationsDelete: "conversations:delete",
   conversationsRecordPrompt: "conversations:record-prompt",
   conversationsSetProject: "conversations:set-project",
+  conversationReady: "conversations:ready",
   projectsAdd: "projects:add",
   projectsRename: "projects:rename",
   projectsRemove: "projects:remove",

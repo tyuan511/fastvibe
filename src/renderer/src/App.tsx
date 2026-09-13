@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState, type JSX } from "react";
+import { useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { AlertCircleIcon } from "lucide-react";
 import { ConnectForm } from "@/components/auth/connect-form";
 import { Composer } from "@/components/chat/composer";
 import { MessageList } from "@/components/chat/message-list";
 import { PermissionDialog } from "@/components/chat/permission-dialog";
 import { PreviewPanel } from "@/components/chat/preview-panel";
-import { RunStatusBar, SessionMenu } from "@/components/chat/session-controls";
+import { RunStatusBar, SessionMenu, usagePercent } from "@/components/chat/session-controls";
 import { Sidebar } from "@/components/layout/sidebar";
 import { StatusPill } from "@/components/layout/status-pill";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -48,6 +48,7 @@ export function App(): JSX.Element {
   const addUserMessage = useSessionStore((state) => state.addUserMessage);
   const applyEvent = useSessionStore((state) => state.applyEvent);
   const setStreaming = useSessionStore((state) => state.setStreaming);
+  const dropEmptyAssistant = useSessionStore((state) => state.dropEmptyAssistant);
   const resetConversation = useSessionStore((state) => state.resetConversation);
   const commands = useSessionStore((state) => state.commands);
   const subagents = useSessionStore((state) => state.subagents);
@@ -74,6 +75,12 @@ export function App(): JSX.Element {
   const [stats, setStats] = useState<SessionStats | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settings = useSettingsStore((state) => state.settings);
+  const updateSettings = useSettingsStore((state) => state.update);
+  // Stable identity so the composer does not re-render on every streamed token.
+  const inputHistory = useMemo(
+    () => messages.filter((item) => item.role === "user").map((item) => item.text).filter(Boolean),
+    [messages],
+  );
 
   useEffect(() => {
     void window.fastvibe.omp.getStatus().then(setStatus);
@@ -92,20 +99,35 @@ export function App(): JSX.Element {
       }
     });
     const offStatus = window.fastvibe.omp.onStatus(setStatus);
+    // Background conversation init finished: fill in the transcript, unless the
+    // user already sent a message (then their optimistic thread wins and engine
+    // events will replace it).
+    const offReady = window.fastvibe.omp.onConversationReady((payload) => {
+      const store = useSessionStore.getState();
+      if (store.activeId !== payload.id || store.streaming) return;
+      store.setMessages(payload.messages);
+      store.setSession(payload.state);
+      store.setStatus(payload.status);
+    });
     const offEvent = window.fastvibe.omp.onEvent((event) => {
       applyEvent(event);
+      // Message/stat reloads are expensive (the engine replays the whole
+      // transcript), so only do them when the transcript actually changed.
       if (
         event.type === "agent_end" ||
         event.type === "agent_settled" ||
-        event.type === "model_changed" ||
-        event.type === "thinking_level_changed" ||
-        event.type === "goal_updated" ||
         event.type === "compaction_end" ||
         event.type === "auto_compaction_end"
       ) {
         void window.fastvibe.omp.getState().then(setSession).catch(() => undefined);
         void window.fastvibe.omp.getMessages().then(setMessages).catch(() => undefined);
         void window.fastvibe.omp.getStats().then(setStats).catch(() => undefined);
+      } else if (
+        event.type === "model_changed" ||
+        event.type === "thinking_level_changed" ||
+        event.type === "goal_updated"
+      ) {
+        void window.fastvibe.omp.getState().then(setSession).catch(() => undefined);
       }
       if (event.type === "available_commands_update") {
         const raw = Array.isArray(event.commands) ? event.commands : [];
@@ -131,13 +153,17 @@ export function App(): JSX.Element {
                   "",
               )
             : "";
-        if (path && /write|edit|apply|read/i.test(name)) {
-          void useSessionStore.getState().openPreview(path);
+        // Only surface files the agent wrote to: auto-previewing every `read`
+        // fired an IPC file read plus a full app re-render on the hottest path.
+        if (path && /write|edit|apply|create/i.test(name)) {
+          const store = useSessionStore.getState();
+          if (store.preview?.path !== path) void store.openPreview(path);
         }
       }
     });
     return () => {
       offStatus();
+      offReady();
       offEvent();
     };
   }, [applyEvent, applySnapshot, setSession, setStatus]);
@@ -204,10 +230,14 @@ export function App(): JSX.Element {
       .getState()
       .then(setSession)
       .catch(() => undefined);
-    void window.fastvibe.omp
-      .getModels()
-      .then(setModels)
-      .catch(() => undefined);
+    // The model list is expensive (~1.5s in the engine) and only changes when
+    // providers change, so fetch it once rather than on every engine start.
+    if (useSessionStore.getState().models.length === 0) {
+      void window.fastvibe.omp
+        .getModels()
+        .then(setModels)
+        .catch(() => undefined);
+    }
     void window.fastvibe.omp
       .getCommands()
       .then(setCommands)
@@ -229,12 +259,15 @@ export function App(): JSX.Element {
   useEffect(() => {
     if (!permission || permission.method !== "confirm") return;
     const key = permissionKey(permission);
-    if (!permissionAlways.includes(key)) return;
+    if (settings.permissionMode !== "full" && !permissionAlways.includes(key)) return;
     void window.fastvibe.omp.respondPermission({ id: permission.id, confirmed: true });
     setPermission(null);
-  }, [permission, permissionAlways, setPermission]);
+  }, [permission, permissionAlways, setPermission, settings.permissionMode]);
 
-  const ready = status.state === "ready";
+  // Sending is allowed while the engine is still coming up: the prompt waits
+  // behind initialisation, which the user experiences as reply latency.
+  const canChat =
+    status.state === "ready" || status.state === "starting" || status.state === "idle";
   const active = conversations.find((item) => item.id === activeId);
   const activeProject = projects.find((item) => item.cwd === active?.project);
   const banner =
@@ -278,7 +311,7 @@ export function App(): JSX.Element {
   async function handleSubmit(): Promise<void> {
     const text = draft.trim();
     const currentAttachments = useSessionStore.getState().attachments;
-    if ((!text && currentAttachments.length === 0) || !ready) return;
+    if ((!text && currentAttachments.length === 0) || !canChat) return;
     let conversationId = activeId;
     if (!conversationId) {
       // Reuse the active conversation's project, else the most recent project; undefined = unbound.
@@ -287,17 +320,19 @@ export function App(): JSX.Element {
       conversationId = created.conversation.id;
     }
     setDraft("");
-    addUserMessage(text || currentAttachments.map((item) => item.name).join("、"), currentAttachments);
-    const nextList = await window.fastvibe.conversations.recordPrompt(
-      conversationId,
-      text || currentAttachments.map((item) => item.name).join("、"),
-    );
+    const promptText = text || currentAttachments.map((item) => item.name).join("、");
+    if (streaming) {
+      enqueue({ id: crypto.randomUUID(), text: promptText, behavior: queueBehavior });
+      setAttachments([]);
+    } else {
+      addUserMessage(promptText, currentAttachments);
+    }
+    const nextList = await window.fastvibe.conversations.recordPrompt(conversationId, promptText);
     applyList(nextList);
     const payload = `${wrapPrompt(text || "请查看附件")}${attachmentPromptSuffix(currentAttachments)}`;
     const images = attachmentsToImages(currentAttachments);
     try {
       if (streaming) {
-        enqueue({ id: crypto.randomUUID(), text: text || "附件", behavior: queueBehavior });
         if (queueBehavior === "steer") await window.fastvibe.omp.steer(payload, images);
         else await window.fastvibe.omp.followUp(payload, images);
       } else {
@@ -305,7 +340,7 @@ export function App(): JSX.Element {
       }
       void window.fastvibe.omp.getState().then(setSession).catch(() => undefined);
     } catch (err) {
-      setStreaming(false);
+      if (!streaming) dropEmptyAssistant();
       setError(err instanceof Error ? err.message : String(err));
     }
   }
@@ -344,7 +379,7 @@ export function App(): JSX.Element {
         ? message
         : [...messages].reverse().find((item) => item.role === "user" && item.createdAt <= message.createdAt);
     const text = source?.text?.trim();
-    if (!text || !ready) return;
+    if (!text || !canChat) return;
     if (streaming) {
       try {
         await window.fastvibe.omp.abort();
@@ -367,7 +402,7 @@ export function App(): JSX.Element {
       });
       void window.fastvibe.omp.getState().then(setSession).catch(() => undefined);
     } catch (err) {
-      setStreaming(false);
+      dropEmptyAssistant();
       setError(err instanceof Error ? err.message : String(err));
     }
   }
@@ -394,7 +429,10 @@ export function App(): JSX.Element {
   }
 
   async function handleOpen(id: string): Promise<void> {
-    if (id === activeId) return;
+    const store = useSessionStore.getState();
+    // Re-opening the active chat is pointless once it has content or a reply is
+    // streaming, but it is how an empty/failed conversation gets retried.
+    if (id === store.activeId && (store.messages.length > 0 || store.streaming)) return;
     try {
       const opened = await window.fastvibe.conversations.open(id);
       applyOpen(opened);
@@ -561,6 +599,7 @@ export function App(): JSX.Element {
             <MessageList
               messages={messages}
               streaming={streaming}
+              loading={status.state === "starting" && messages.length === 0}
               onRetry={(message) => void handleRetry(message)}
               onEdit={(message) => void handleEdit(message)}
               showThinking={settings.showThinking}
@@ -595,9 +634,9 @@ export function App(): JSX.Element {
         {status.state === "needsAuth" ? null : (
           <Composer
             value={draft}
-            disabled={!ready}
+            disabled={!canChat}
             streaming={streaming}
-            placeholder={ready ? "随心输入" : "准备中…"}
+            placeholder={canChat ? "随心输入" : "准备中…"}
             models={models}
             model={session?.model}
             thinkingLevel={session?.thinkingLevel}
@@ -605,10 +644,14 @@ export function App(): JSX.Element {
             projects={projects}
             project={active?.project}
             commands={commands}
-            runMode={runMode}
+            permissionMode={settings.permissionMode}
+            onPermissionModeChange={(mode) => updateSettings({ permissionMode: mode })}
             queueBehavior={queueBehavior}
-            queuedCount={queued.length || session?.queuedMessageCount}
+            queued={queued}
             attachments={attachments}
+            history={inputHistory}
+            contextPercent={usagePercent(session)}
+            contextUsage={session?.contextUsage}
             onChange={setDraft}
             onSubmit={() => void handleSubmit()}
             onAbort={() => void handleAbort()}
@@ -616,7 +659,6 @@ export function App(): JSX.Element {
             onSelectProject={(project) => void handleSetProject(project)}
             onModelChange={(provider, modelId) => void handleModelChange(provider, modelId)}
             onThinkingChange={(level) => void handleThinkingChange(level)}
-            onRunModeChange={setRunMode}
             onQueueBehaviorChange={setQueueBehavior}
             onAttachmentsChange={setAttachments}
             sendOnEnter={settings.sendOnEnter}

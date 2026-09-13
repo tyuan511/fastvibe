@@ -1,10 +1,11 @@
 import { create } from "zustand";
-import type { QueueBehavior, RunMode, ThinkingLevel } from "@shared/types";
+import type { PermissionMode, QueueBehavior, RunMode, ThinkingLevel } from "@shared/types";
 
 const KEY = "fastvibe.settings";
 
 export type AppSettings = {
   runMode: RunMode;
+  permissionMode: PermissionMode;
   thinkingLevel: ThinkingLevel | "auto";
   queueBehavior: QueueBehavior;
   autoCompact: boolean;
@@ -17,6 +18,7 @@ export type AppSettings = {
 
 const DEFAULTS: AppSettings = {
   runMode: "agent",
+  permissionMode: "full",
   thinkingLevel: "auto",
   queueBehavior: "followUp",
   autoCompact: true,

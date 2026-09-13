@@ -1,8 +1,7 @@
 import { useState, type JSX } from "react";
 import { Bug, Check, Compass, Copy, Pencil, RotateCcw, ShieldCheck, Wand2 } from "lucide-react";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { Message, MessageContent, MessageGroup } from "@/components/ui/message";
+import { Message, MessageContent, MessageFooter, MessageGroup } from "@/components/ui/message";
 import {
   MessageScroller,
   MessageScrollerButton,
@@ -12,9 +11,11 @@ import {
   MessageScrollerViewport,
 } from "@/components/ui/message-scroller";
 import { Spinner } from "@/components/ui/spinner";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type { ChatAttachment, ChatMessage } from "@shared/types";
 import { MarkdownView } from "./markdown-view";
+import { ThinkingBlock } from "./thinking-block";
 import { ToolCard } from "./tool-card";
 
 const SUGGESTIONS: Array<{ icon: JSX.Element; label: string; prompt: string }> = [
@@ -65,57 +66,92 @@ function AttachmentStrip({ items }: { items: ChatAttachment[] }): JSX.Element {
   );
 }
 
+function ActionButton({
+  label,
+  onClick,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  children: JSX.Element;
+}): JSX.Element {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            className="rounded-md p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+            aria-label={label}
+            onClick={onClick}
+          />
+        }
+      >
+        {children}
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 function MessageActions({
   message,
   onRetry,
   onEdit,
   showTimestamp,
+  visible,
 }: {
   message: ChatMessage;
   onRetry?: (message: ChatMessage) => void;
   onEdit?: (message: ChatMessage) => void;
   showTimestamp: boolean;
+  visible: boolean;
 }): JSX.Element {
   const [copied, setCopied] = useState(false);
   return (
-    <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+    <MessageFooter
+      className={cn(
+        "gap-1 px-0 transition-opacity",
+        visible ? "opacity-100" : "opacity-0 group-hover/row:opacity-100 focus-within:opacity-100",
+      )}
+    >
       {showTimestamp ? <span className="tabular-nums">{formatTime(message.createdAt)}</span> : null}
       {message.text ? (
         <>
-          <button
-            type="button"
-            className="opacity-0 transition-opacity group-hover/row:opacity-100"
+          <ActionButton
+            label="复制"
             onClick={() => {
               void navigator.clipboard.writeText(message.text);
               setCopied(true);
               window.setTimeout(() => setCopied(false), 1000);
             }}
-            aria-label="复制"
           >
             {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-          </button>
+          </ActionButton>
           {message.role === "user" && onEdit ? (
-            <button
-              type="button"
-              className="opacity-0 transition-opacity group-hover/row:opacity-100"
-              onClick={() => onEdit(message)}
-              aria-label="编辑"
-            >
+            <ActionButton label="编辑" onClick={() => onEdit(message)}>
               <Pencil className="size-3.5" />
-            </button>
+            </ActionButton>
           ) : null}
           {onRetry ? (
-            <button
-              type="button"
-              className="opacity-0 transition-opacity group-hover/row:opacity-100"
-              onClick={() => onRetry(message)}
-              aria-label="重试"
-            >
+            <ActionButton label="重试" onClick={() => onRetry(message)}>
               <RotateCcw className="size-3.5" />
-            </button>
+            </ActionButton>
           ) : null}
         </>
       ) : null}
+    </MessageFooter>
+  );
+}
+
+function WorkingStatus({ message }: { message: ChatMessage }): JSX.Element | null {
+  const running = message.tools.find((tool) => tool.status === "running");
+  if (running) return null;
+  if (message.thinking) return null;
+  return (
+    <div className="flex items-center gap-2 text-[12.5px] text-muted-foreground">
+      <Spinner className="size-3.5" />
+      {message.tools.length > 0 ? "继续工作" : "正在工作"}
     </div>
   );
 }
@@ -123,6 +159,7 @@ function MessageActions({
 function ChatMessageRow({
   message,
   streaming,
+  last,
   onRetry,
   onEdit,
   showThinking,
@@ -130,6 +167,7 @@ function ChatMessageRow({
 }: {
   message: ChatMessage;
   streaming: boolean;
+  last: boolean;
   onRetry?: (message: ChatMessage) => void;
   onEdit?: (message: ChatMessage) => void;
   showThinking: boolean;
@@ -149,6 +187,7 @@ function ChatMessageRow({
   }
 
   const isUser = message.role === "user";
+  const thinkingActive = Boolean(streaming && message.thinking && !message.text && message.tools.length === 0);
 
   return (
     <Message align={isUser ? "end" : "start"} className="group/row">
@@ -156,14 +195,7 @@ function ChatMessageRow({
         {message.attachments?.length ? <AttachmentStrip items={message.attachments} /> : null}
 
         {message.thinking && showThinking ? (
-          <Collapsible>
-            <CollapsibleTrigger className="text-[11px] text-muted-foreground underline-offset-2 hover:underline">
-              思考过程
-            </CollapsibleTrigger>
-            <CollapsibleContent className="mt-1 max-w-2xl rounded-lg border border-border bg-muted/40 p-2.5 whitespace-pre-wrap text-[11.5px] leading-5 text-muted-foreground">
-              {message.thinking}
-            </CollapsibleContent>
-          </Collapsible>
+          <ThinkingBlock thinking={message.thinking} active={thinkingActive} />
         ) : null}
 
         {message.tools.length > 0 ? (
@@ -175,14 +207,14 @@ function ChatMessageRow({
         ) : null}
 
         {message.text ? (
-          <Bubble variant={isUser ? "default" : "ghost"} align={isUser ? "end" : "start"}>
+          <Bubble variant={isUser ? "secondary" : "ghost"} align={isUser ? "end" : "start"}>
             <BubbleContent className="chat-markdown text-[13.5px] leading-6">
               <MarkdownView text={message.text} />
-              {streaming ? <Spinner className="ml-1 inline size-3" /> : null}
+              {streaming ? <span className="chat-caret" aria-hidden /> : null}
             </BubbleContent>
           </Bubble>
         ) : streaming ? (
-          <Spinner />
+          <WorkingStatus message={message} />
         ) : null}
 
         <MessageActions
@@ -190,6 +222,7 @@ function ChatMessageRow({
           onRetry={onRetry}
           onEdit={onEdit}
           showTimestamp={showTimestamp}
+          visible={last && !streaming}
         />
       </MessageContent>
     </Message>
@@ -199,6 +232,7 @@ function ChatMessageRow({
 export function MessageList({
   messages,
   streaming,
+  loading = false,
   onRetry,
   onEdit,
   showThinking = true,
@@ -207,12 +241,22 @@ export function MessageList({
 }: {
   messages: ChatMessage[];
   streaming: boolean;
+  loading?: boolean;
   onRetry?: (message: ChatMessage) => void;
   onEdit?: (message: ChatMessage) => void;
   showThinking?: boolean;
   showTimestamp?: boolean;
   onSuggestion?: (prompt: string) => void;
 }): JSX.Element {
+  if (messages.length === 0 && loading) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-3 text-muted-foreground">
+        <Spinner className="size-4" />
+        <p className="text-[13px]">正在准备工作区…</p>
+      </div>
+    );
+  }
+
   if (messages.length === 0) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-8 px-6">
@@ -264,6 +308,7 @@ export function MessageList({
                     streaming={
                       streaming && index === messages.length - 1 && message.role === "assistant"
                     }
+                    last={index === messages.length - 1}
                     onRetry={onRetry}
                     onEdit={onEdit}
                     showThinking={showThinking}

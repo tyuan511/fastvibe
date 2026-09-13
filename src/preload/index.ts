@@ -4,6 +4,7 @@ import type {
   ChatMessage,
   ConversationDeleteResult,
   ConversationOpenResult,
+  ConversationReadyEvent,
   FastVibeModel,
   SessionStats,
   OmpSessionState,
@@ -75,6 +76,11 @@ const api = {
       const handler = (_event: unknown, payload: OmpStatus): void => listener(payload);
       ipcRenderer.on(Ipc.status, handler);
       return () => ipcRenderer.removeListener(Ipc.status, handler);
+    },
+    onConversationReady: (listener: (payload: ConversationReadyEvent) => void): (() => void) => {
+      const handler = (_event: unknown, payload: ConversationReadyEvent): void => listener(payload);
+      ipcRenderer.on(Ipc.conversationReady, handler);
+      return () => ipcRenderer.removeListener(Ipc.conversationReady, handler);
     },
   },
   providers: {

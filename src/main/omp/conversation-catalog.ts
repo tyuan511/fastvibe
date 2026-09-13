@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { readFileSync, writeFileSync } from "node:fs";
+import { basename } from "node:path";
 import type { Conversation, Project, WorkspaceSnapshot } from "@shared/types";
 
 type CatalogFile = {
@@ -17,6 +17,7 @@ export class ConversationCatalog {
   #projects: Project[] = [];
   #items: Conversation[] = [];
   #activeId: string | undefined;
+  #writeTimer: NodeJS.Timeout | null = null;
 
   constructor(file: string, scratchRoot: string) {
     this.#file = file;
@@ -49,6 +50,7 @@ export class ConversationCatalog {
   }
 
   setActive(id: string | undefined): void {
+    if (this.#activeId === id) return;
     this.#activeId = id;
     this.#write();
   }
@@ -101,7 +103,7 @@ export class ConversationCatalog {
     const conversation: Conversation = {
       id,
       title: "新会话",
-      cwd: bound ?? this.#scratchDir(id),
+      cwd: bound ?? this.#scratchRoot,
       project: bound,
       sessionFile: session?.sessionFile,
       sessionId: session?.sessionId,
@@ -117,7 +119,7 @@ export class ConversationCatalog {
   setProject(id: string, project: string | undefined): Conversation | undefined {
     const bound = normalizeProject(project);
     if (bound) this.ensureProject(bound);
-    return this.update(id, { project: bound, cwd: bound ?? this.#scratchDir(id) });
+    return this.update(id, { project: bound, cwd: bound ?? this.#scratchRoot });
   }
 
   update(id: string, patch: Partial<Conversation>): Conversation | undefined {
@@ -127,25 +129,14 @@ export class ConversationCatalog {
     const next = { ...current, ...patch, id, updatedAt: Date.now() };
     if ("project" in patch) {
       next.project = normalizeProject(patch.project);
-      next.cwd = next.project ?? this.#scratchDir(id);
+      next.cwd = next.project ?? this.#scratchRoot;
     } else if (!next.cwd) {
-      next.cwd = next.project ?? this.#scratchDir(id);
+      next.cwd = next.project ?? this.#scratchRoot;
     }
     this.#items[index] = next;
     if (next.project) this.ensureProject(next.project);
     this.#write();
     return next;
-  }
-
-  /** Absolute path of the hidden scratch workspace for an unbound conversation. */
-  #scratchDir(id: string): string {
-    const dir = join(this.#scratchRoot, id);
-    try {
-      mkdirSync(dir, { recursive: true });
-    } catch {
-      // best effort; engine will fall back to its own cwd
-    }
-    return dir;
   }
 
   remove(id: string): Conversation | undefined {
@@ -218,11 +209,34 @@ export class ConversationCatalog {
     return {
       ...item,
       project: legacyProject,
-      cwd: legacyProject ?? this.#scratchDir(item.id),
+      cwd: legacyProject ?? this.#scratchRoot,
     };
   }
 
+  /**
+   * Coalesce writes: a single user action (e.g. switching project) mutates the
+   * catalog several times, and each `writeFileSync` blocked the main process and
+   * the UI. Callers only read the in-memory state, so a short debounce is safe.
+   */
   #write(): void {
+    if (this.#writeTimer) return;
+    this.#writeTimer = setTimeout(() => {
+      this.#writeTimer = null;
+      this.#flush();
+    }, 40);
+    this.#writeTimer.unref?.();
+  }
+
+  /** Persist immediately (used on shutdown so a pending debounce is not lost). */
+  flush(): void {
+    if (this.#writeTimer) {
+      clearTimeout(this.#writeTimer);
+      this.#writeTimer = null;
+    }
+    this.#flush();
+  }
+
+  #flush(): void {
     const payload: CatalogFile = {
       version: 2,
       activeId: this.#activeId,

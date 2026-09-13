@@ -5,12 +5,12 @@ import { Ipc } from "@shared/ipc";
 import { readFilePreview } from "./omp/file-preview";
 import { loadModelsDev } from "./omp/models-dev";
 import { getFastVibePaths } from "./omp/paths";
-import { OmpProcessManager } from "./omp/process-manager";
+import { PiProcessManager } from "./pi/process-manager";
 import type { ProviderModel } from "@shared/types";
 
 app.setName("FastVibe");
 
-const omp = new OmpProcessManager();
+const omp = new PiProcessManager();
 let mainWindow: BrowserWindow | null = null;
 
 function resolveAppIcon(): string {
@@ -316,6 +316,9 @@ app.whenReady().then(async () => {
   registerIpc();
 
   omp.onStatus(() => broadcastStatus());
+  omp.onConversationReady((payload) => {
+    mainWindow?.webContents.send(Ipc.conversationReady, payload);
+  });
   omp.onEvent((event) => {
     if (event.type === "extension_ui_request") {
       void omp.handleExtensionUi(event);
@@ -341,5 +344,8 @@ app.on("before-quit", (event) => {
   if (stopping) return;
   event.preventDefault();
   stopping = true;
-  void omp.stop().finally(() => app.quit());
+  void omp.stop().finally(() => {
+    omp.flush();
+    app.quit();
+  });
 });

@@ -8,6 +8,7 @@ import type {
   Conversation,
   ConversationDeleteResult,
   ConversationOpenResult,
+  ConversationReadyEvent,
   FastVibeModel,
   OmpSessionState,
   OmpStatus,
@@ -53,17 +54,40 @@ export class OmpProcessManager {
   #cwd = homedir();
   #statusListeners = new Set<(status: OmpStatus) => void>();
   #eventListeners = new Set<(event: Record<string, unknown>) => void>();
+  #readyListeners = new Set<(payload: ConversationReadyEvent) => void>();
   #unsubRpc: (() => void) | null = null;
+  /** Serialises engine starts so a switch cannot race an in-flight start. */
+  #startChain: Promise<void> = Promise.resolve();
+  /** Serialises conversation init so rapid switches cannot interleave on the engine. */
+  #initChain: Promise<void> = Promise.resolve();
+  /**
+   * The available-model list is derived from models.yml, which only changes when
+   * providers do — not per project or session. The engine computes it lazily on
+   * first request (~250ms warm, seconds cold), so cache it across engine restarts.
+   */
+  #modelsCache: FastVibeModel[] | null = null;
+  #modelsPromise: Promise<FastVibeModel[]> | null = null;
+  #modelsGeneration = 0;
+  /** Background conversation initialisation; prompts wait behind it. */
+  #conversationInit: { id: string; token: number; promise: Promise<void> } | null = null;
+  #initToken = 0;
 
   constructor() {
     this.#paths = getFastVibePaths();
     this.#catalog = new ConversationCatalog(this.#paths.conversationsFile, this.#paths.ompScratch);
     const active = this.#catalog.activeId ? this.#catalog.get(this.#catalog.activeId) : undefined;
-    if (active?.cwd) this.#cwd = active.cwd;
+    // Unbound conversations share one scratch workspace so the engine does not
+    // have to restart when the user moves between them.
+    if (active) this.#cwd = active.project ?? this.#paths.ompScratch;
   }
 
   listWorkspace(): WorkspaceSnapshot {
     return this.#catalog.snapshot();
+  }
+
+  /** Persist any debounced catalog write (called on shutdown). */
+  flush(): void {
+    this.#catalog.flush();
   }
 
   get status(): OmpStatus {
@@ -88,7 +112,29 @@ export class OmpProcessManager {
     return () => this.#eventListeners.delete(listener);
   }
 
-  async start(cwd = this.#cwd): Promise<OmpStatus> {
+  onConversationReady(listener: (payload: ConversationReadyEvent) => void): () => void {
+    this.#readyListeners.add(listener);
+    return () => this.#readyListeners.delete(listener);
+  }
+
+  /**
+   * Bring the engine up for `cwd`. Starts are serialised: a start issued while
+   * another is in flight runs after it, and a start for an already-ready cwd is
+   * a no-op. Callers that must not block the UI should not await this directly.
+   */
+  start(cwd = this.#cwd): Promise<OmpStatus> {
+    const run = this.#startChain.then(
+      () => this.#doStart(cwd),
+      () => this.#doStart(cwd),
+    );
+    this.#startChain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  async #doStart(cwd: string): Promise<OmpStatus> {
     if (this.#status.state === "ready" && this.#cwd === cwd && this.#rpc) {
       return this.#status;
     }
@@ -174,6 +220,9 @@ export class OmpProcessManager {
         .request({ type: "set_subagent_subscription", level: "events" })
         .catch(() => undefined);
       this.#setStatus({ state: "ready", binary, cwd });
+      // Warm the model list in the background so the UI never waits on the
+      // engine's lazy model-registry build.
+      if (!this.#modelsCache) void this.getAvailableModels().catch(() => undefined);
       return this.#status;
     } catch (error) {
       if (this.#status.state === "needsAuth") return this.#status;
@@ -238,6 +287,7 @@ export class OmpProcessManager {
     message: string,
     options?: { streamingBehavior?: "steer" | "followUp"; images?: Array<{ type: "image"; data: string; mimeType: string }> },
   ): Promise<void> {
+    await this.#awaitConversationReady();
     const rpc = this.#requireRpc();
     const response = await rpc.request({
       type: "prompt",
@@ -254,6 +304,7 @@ export class OmpProcessManager {
     message: string,
     images?: Array<{ type: "image"; data: string; mimeType: string }>,
   ): Promise<void> {
+    await this.#awaitConversationReady();
     const rpc = this.#requireRpc();
     const response = await rpc.request({
       type: "steer",
@@ -269,6 +320,7 @@ export class OmpProcessManager {
     message: string,
     images?: Array<{ type: "image"; data: string; mimeType: string }>,
   ): Promise<void> {
+    await this.#awaitConversationReady();
     const rpc = this.#requireRpc();
     const response = await rpc.request({
       type: "follow_up",
@@ -443,26 +495,25 @@ export class OmpProcessManager {
   }
 
   async createConversation(project?: string): Promise<ConversationOpenResult> {
-    // Allocate the conversation first: an unbound one needs its scratch dir as the engine cwd.
+    // Allocate the conversation first: an unbound one runs in the shared scratch workspace.
     const created = this.#catalog.create(project);
-    if (created.cwd !== this.#cwd) {
-      await this.start(created.cwd);
+    const cwd = created.project ?? this.#paths.ompScratch;
+    if (this.#status.state === "ready" && this.#cwd === cwd && this.#rpc) {
+      await this.#resetSession();
+      const state = await this.getState();
+      const conversation =
+        this.#catalog.update(created.id, {
+          sessionFile: state?.sessionFile,
+          sessionId: state?.sessionId,
+        }) ?? created;
+      return this.#opened(conversation, [], state);
     }
-    if (this.#status.state === "ready") {
-      try {
-        await this.abort();
-      } catch {
-        // ignore
-      }
-      await this.newSession();
-    }
-    const state = this.#status.state === "ready" ? await this.getState() : null;
-    const conversation =
-      this.#catalog.update(created.id, {
-        sessionFile: state?.sessionFile,
-        sessionId: state?.sessionId,
-      }) ?? created;
-    return this.#opened(conversation, [], state);
+    // Starting the engine for a new workspace takes a moment; return at once so
+    // the chat appears immediately and let a sent prompt wait behind the init.
+    this.#cwd = cwd;
+    this.#setStatus({ state: "starting", cwd });
+    this.#beginInit(created, "new");
+    return this.#opened(created, [], null);
   }
 
   async openConversation(id: string): Promise<ConversationOpenResult> {
@@ -471,27 +522,24 @@ export class OmpProcessManager {
       throw new Error("conversation not found");
     }
     this.#catalog.setActive(id);
-    if (conversation.cwd && conversation.cwd !== this.#cwd) {
-      await this.start(conversation.cwd);
+    const cwd = conversation.project ?? this.#paths.ompScratch;
+    if (!conversation.project && conversation.cwd !== cwd) {
+      // Migrate conversations created before unbound chats shared one scratch dir.
+      this.#catalog.update(id, { cwd });
     }
-    if (this.#status.state === "ready" && conversation.sessionFile) {
-      try {
-        await this.abort();
-      } catch {
-        // ignore
-      }
-      const rpc = this.#requireRpc();
-      const response = await rpc.request({
-        type: "switch_session",
-        sessionPath: conversation.sessionFile,
-      });
-      if (!response.success) {
-        throw new Error(response.error ?? "switch_session failed");
-      }
+    const normalized = this.#catalog.get(id) ?? conversation;
+    if (this.#status.state === "ready" && this.#cwd === cwd && this.#rpc) {
+      await this.#syncSession(normalized);
+      const state = await this.getState();
+      const messages = await this.loadMessages();
+      return this.#opened(normalized, messages, state);
     }
-    const state = this.#status.state === "ready" ? await this.getState() : null;
-    const messages = this.#status.state === "ready" ? await this.loadMessages() : [];
-    return this.#opened(conversation, messages, state);
+    // Switching workspaces restarts the engine. Do it in the background: the
+    // conversation shows up immediately, and a prompt sent meanwhile waits.
+    this.#cwd = cwd;
+    this.#setStatus({ state: "starting", cwd });
+    this.#beginInit(normalized, "switch");
+    return this.#opened(normalized, [], null);
   }
 
   renameConversation(id: string, title: string): WorkspaceSnapshot {
@@ -521,11 +569,15 @@ export class OmpProcessManager {
 
   /** Bind (or clear) a conversation's project. Unbound conversations use a scratch workspace. */
   async setConversationProject(id: string, project: string | null): Promise<WorkspaceSnapshot> {
-    const before = this.#catalog.get(id);
     const updated = this.#catalog.setProject(id, project ?? undefined);
     const isActive = this.#catalog.activeId === id;
-    if (isActive && updated && updated.cwd !== before?.cwd) {
-      await this.start(updated.cwd);
+    if (isActive && updated) {
+      const cwd = updated.project ?? this.#paths.ompScratch;
+      if (cwd !== this.#cwd) {
+        this.#cwd = cwd;
+        this.#setStatus({ state: "starting", cwd });
+        this.#beginInit(updated, "switch");
+      }
     }
     return this.#catalog.snapshot();
   }
@@ -588,7 +640,32 @@ export class OmpProcessManager {
     return mapEngineMessages(raw);
   }
 
+  /** Cached across engine restarts; only the provider set invalidates it. */
   async getAvailableModels(): Promise<FastVibeModel[]> {
+    if (this.#modelsCache) return this.#modelsCache;
+    // Dedupe concurrent callers (a background warm-up racing the UI).
+    if (this.#modelsPromise) return this.#modelsPromise;
+    const generation = this.#modelsGeneration;
+    const promise = this.#fetchAvailableModels()
+      .then((models) => {
+        if (generation === this.#modelsGeneration) this.#modelsCache = models;
+        return models;
+      })
+      .finally(() => {
+        if (this.#modelsPromise === promise) this.#modelsPromise = null;
+      });
+    this.#modelsPromise = promise;
+    return promise;
+  }
+
+  /** Drop the cached model list: the provider set changed. */
+  #invalidateModels(): void {
+    this.#modelsGeneration += 1;
+    this.#modelsCache = null;
+    this.#modelsPromise = null;
+  }
+
+  async #fetchAvailableModels(): Promise<FastVibeModel[]> {
     const rpc = this.#requireRpc();
     const response = await rpc.request({ type: "get_available_models" });
     if (!response.success) {
@@ -776,6 +853,7 @@ export class OmpProcessManager {
 
   /** Re-render models.yml and restart the engine so it picks up the new model set. */
   async reloadProviders(): Promise<OmpStatus> {
+    this.#invalidateModels();
     const keys = await loadProviderKeys(this.#paths);
     if (usableProviders(this.#paths, keys).length === 0) {
       await this.stop();
@@ -814,6 +892,110 @@ export class OmpProcessManager {
       state,
       status: this.#status,
     };
+  }
+
+  /** Wait for the active conversation's background init, then require the engine. */
+  async #awaitConversationReady(): Promise<void> {
+    const init = this.#conversationInit;
+    if (init) await init.promise;
+    if (this.#status.state !== "ready" || !this.#rpc) {
+      await this.start(this.#cwd);
+    }
+    if (this.#status.state !== "ready" || !this.#rpc) {
+      throw new Error("engine not ready");
+    }
+  }
+
+  #beginInit(conversation: Conversation, mode: "switch" | "new"): void {
+    if (this.#conversationInit?.id === conversation.id) return;
+    const token = ++this.#initToken;
+    // Run inits one at a time: a superseded init bails before touching the engine.
+    const promise = this.#initChain.then(() => this.#activate(conversation, token, mode));
+    this.#initChain = promise.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.#conversationInit = { id: conversation.id, token, promise };
+    void promise.finally(() => {
+      if (this.#conversationInit?.token === token) this.#conversationInit = null;
+    });
+  }
+
+  /**
+   * Background half of open/create: start the engine at the conversation's
+   * workspace, point it at the right session, then push the transcript to the
+   * renderer. Stale runs (the user switched again) bail out on the token check.
+   */
+  async #activate(conversation: Conversation, token: number, mode: "switch" | "new"): Promise<void> {
+    if (token !== this.#initToken) return;
+    const cwd = conversation.project ?? this.#paths.ompScratch;
+    try {
+      const status = await this.start(cwd);
+      if (token !== this.#initToken) return;
+      if (status.state !== "ready") {
+        this.#emitConversationReady({
+          id: conversation.id,
+          messages: [],
+          state: null,
+          status: this.#status,
+        });
+        return;
+      }
+      this.#setStatus(status);
+      if (mode === "new") {
+        await this.#resetSession();
+      } else {
+        await this.#syncSession(conversation);
+      }
+      if (token !== this.#initToken) return;
+      const state = await this.getState();
+      const messages = mode === "new" ? [] : await this.loadMessages();
+      if (token !== this.#initToken) return;
+      const updated =
+        this.#catalog.update(conversation.id, {
+          sessionFile: state?.sessionFile,
+          sessionId: state?.sessionId,
+        }) ?? conversation;
+      this.#emitConversationReady({ id: updated.id, messages, state, status: this.#status });
+    } catch (error) {
+      if (token !== this.#initToken) return;
+      this.#setStatus({
+        state: "error",
+        cwd,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      this.#emitConversationReady({ id: conversation.id, messages: [], state: null, status: this.#status });
+    }
+  }
+
+  async #syncSession(conversation: Conversation): Promise<void> {
+    try {
+      await this.abort();
+    } catch {
+      // nothing running (fresh engine or already idle)
+    }
+    if (!conversation.sessionFile) return;
+    const rpc = this.#requireRpc();
+    const response = await rpc.request({
+      type: "switch_session",
+      sessionPath: conversation.sessionFile,
+    });
+    if (!response.success) {
+      throw new Error(response.error ?? "switch_session failed");
+    }
+  }
+
+  async #resetSession(): Promise<void> {
+    try {
+      await this.abort();
+    } catch {
+      // ignore
+    }
+    await this.newSession();
+  }
+
+  #emitConversationReady(payload: ConversationReadyEvent): void {
+    for (const listener of this.#readyListeners) listener(payload);
   }
 
   #requireRpc(): OmpRpcClient {

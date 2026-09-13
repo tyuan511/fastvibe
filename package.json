@@ -9,10 +9,10 @@
   "scripts": {
     "sync:omp": "node scripts/sync-omp.mjs",
     "sync:models": "node scripts/sync-models-dev.mjs",
-    "sync": "node scripts/sync-omp.mjs && node scripts/sync-models-dev.mjs",
-    "predev": "node scripts/sync-omp.mjs && node scripts/sync-models-dev.mjs",
+    "sync": "node scripts/sync-models-dev.mjs",
+    "predev": "node scripts/sync-models-dev.mjs",
     "dev": "electron-vite dev",
-    "prebuild": "node scripts/sync-omp.mjs && node scripts/sync-models-dev.mjs",
+    "prebuild": "node scripts/sync-models-dev.mjs",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
@@ -22,6 +22,7 @@
   "dependencies": {
     "@base-ui/react": "^1.8.0",
     "@fontsource-variable/geist": "^5.3.0",
+    "@mariozechner/pi-coding-agent": "0.73.1",
     "@shadcn/react": "^0.3.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

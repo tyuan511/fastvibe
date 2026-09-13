@@ -40,7 +40,6 @@ const THINKING_LABELS: Record<ThinkingLevel | "auto", string> = {
   max: "最大",
 };
 
-const RUN_MODE_ITEMS = { agent: "对话", plan: "计划", goal: "目标" };
 const QUEUE_ITEMS = { followUp: "完成后执行", steer: "立即打断" };
 const INTERRUPT_ITEMS = { immediate: "立即打断", wait: "等回合结束" };
 const THINKING_ITEMS = THINKING_LABELS;
@@ -201,26 +200,6 @@ export function SettingsDialog({
 
           {section === "general" ? (
             <Group>
-              <Row
-                title="默认执行模式"
-                description="新会话默认使用的模式"
-                control={
-                  <Select
-                    items={RUN_MODE_ITEMS}
-                    value={settings.runMode}
-                    onValueChange={(value) => update({ runMode: value as typeof settings.runMode })}
-                  >
-                    <SelectTrigger size="sm" className="w-36">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="agent">对话</SelectItem>
-                      <SelectItem value="plan">计划</SelectItem>
-                      <SelectItem value="goal">目标</SelectItem>
-                    </SelectContent>
-                  </Select>
-                }
-              />
               <Row
                 title="默认推理强度"
                 description="模型不支持所选档位时会自动回退"
