@@ -7,7 +7,6 @@
   "type": "module",
   "main": "./out/main/index.js",
   "scripts": {
-    "sync:omp": "node scripts/sync-omp.mjs",
     "sync:models": "node scripts/sync-models-dev.mjs",
     "sync": "node scripts/sync-models-dev.mjs",
     "predev": "node scripts/sync-models-dev.mjs",

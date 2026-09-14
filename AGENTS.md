@@ -5,16 +5,14 @@ Electron desktop client for agent work, code, office, and multi-agent cowork. Th
 ## Architecture
 
 ```
-src/main/          Electron main: window, IPC, omp process lifecycle
-  omp/             Isolated paths, provider configuration, and legacy RPC helpers
-  pi/              Embedded pi-coding-agent host and multi-session lifecycle
+src/main/          Electron main: window, IPC, and embedded agent lifecycle
+  omp/             Isolated runtime paths, provider configuration, and shared model/file helpers
+  pi/              Embedded pi-coding-agent host, MCP bridge, and multi-session lifecycle
 src/preload/       contextBridge API (`window.fastvibe`)
 src/renderer/      React UI (Vite renderer)
   src/components/ui/   shadcn-generated primitives only
   src/components/      product composition (chat, layout)
 src/shared/        IPC channels and types used by main + renderer
-scripts/sync-omp.mjs   Download official GitHub release binaries
-resources/omp/     Bundled omp (gitignored); layout `<platform>-<arch>/omp`
 ```
 
 Runtime data lives under the app userData directory:

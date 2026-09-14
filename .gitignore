@@ -12,8 +12,6 @@ release
 *.local
 .vscode
 .idea
-resources/omp/**
-!resources/omp/.gitkeep
 resources/models-dev/**
 !resources/models-dev/.gitkeep
 .firecrawl
