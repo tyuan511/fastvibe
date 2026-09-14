@@ -17,6 +17,7 @@ app.setName("FastVibe");
 
 const omp = new PiProcessManager();
 let mainWindow: BrowserWindow | null = null;
+const windows = new Set<BrowserWindow>();
 
 function resolveAppIcon(): string {
   const name = process.platform === "darwin" ? "icon.icns" : "icon.png";
@@ -54,6 +55,10 @@ function createWindow(): void {
   });
 
   window.on("ready-to-show", () => window.show());
+  window.on("closed", () => {
+    windows.delete(window);
+    if (mainWindow === window) mainWindow = windows.values().next().value ?? null;
+  });
   window.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url);
     return { action: "deny" };
@@ -66,10 +71,11 @@ function createWindow(): void {
   }
 
   mainWindow = window;
+  windows.add(window);
 }
 
 function broadcastStatus(): void {
-  mainWindow?.webContents.send(Ipc.status, omp.status);
+  for (const window of windows) window.webContents.send(Ipc.status, omp.status);
 }
 
 function registerIpc(): void {
@@ -405,6 +411,9 @@ function registerIpc(): void {
       },
     };
   });
+  ipcMain.handle(Ipc.windowNew, () => {
+    createWindow();
+  });
 
   ipcMain.handle(Ipc.workspacePick, async () => {
     const result = await dialog.showOpenDialog({
@@ -425,7 +434,7 @@ app.whenReady().then(async () => {
 
   omp.onStatus(() => broadcastStatus());
   omp.onConversationReady((payload) => {
-    mainWindow?.webContents.send(Ipc.conversationReady, payload);
+    for (const window of windows) window.webContents.send(Ipc.conversationReady, payload);
   });
   omp.onEvent((event) => {
     if (event.type === "conversation_activity" && !mainWindow?.isFocused() && Notification.isSupported()) {
@@ -434,7 +443,7 @@ app.whenReady().then(async () => {
     if (event.type === "extension_ui_request") {
       void omp.handleExtensionUi(event);
     }
-    mainWindow?.webContents.send(Ipc.event, event);
+    for (const window of windows) window.webContents.send(Ipc.event, event);
   });
 
   createWindow();

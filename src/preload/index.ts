@@ -149,6 +149,7 @@ const api = {
   },
   app: {
     getInfo: (): Promise<import("@shared/ipc").AppInfo> => ipcRenderer.invoke(Ipc.appGetInfo),
+    newWindow: (): Promise<void> => ipcRenderer.invoke(Ipc.windowNew),
   },
 };
 

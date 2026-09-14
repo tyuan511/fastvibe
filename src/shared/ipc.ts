@@ -53,6 +53,7 @@ export const Ipc = {
   workspaceGitPull: "workspace:git-pull",
   workspaceGitPush: "workspace:git-push",
   appGetInfo: "app:get-info",
+  windowNew: "window:new",
   providersList: "providers:list",
   providersFetch: "providers:fetch",
   providersSaveFastVibe: "providers:save-fastvibe",

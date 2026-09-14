@@ -215,6 +215,10 @@ export function App(): JSX.Element {
         event.preventDefault();
         setSwitcherOpen(true);
       }
+      if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === "n") {
+        event.preventDefault();
+        void window.fastvibe.app.newWindow();
+      }
       if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
         event.preventDefault();
         const send =
