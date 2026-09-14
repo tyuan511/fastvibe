@@ -29,6 +29,29 @@ function permissionKey(request: PermissionRequest): string {
   return `${request.method}:${request.title ?? ""}:${request.message ?? ""}`;
 }
 
+const DRAFT_KEY = "fastvibe.session-drafts";
+
+function readDrafts(): Record<string, string> {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(DRAFT_KEY) ?? "{}");
+    return parsed && typeof parsed === "object" ? parsed as Record<string, string> : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeDraft(id: string | null, text: string): void {
+  if (!id) return;
+  try {
+    const drafts = readDrafts();
+    if (text) drafts[id] = text;
+    else delete drafts[id];
+    localStorage.setItem(DRAFT_KEY, JSON.stringify(drafts));
+  } catch {
+    // Ignore storage quota and private-mode errors.
+  }
+}
+
 export function App(): JSX.Element {
   const status = useSessionStore((state) => state.status);
   const session = useSessionStore((state) => state.session);
@@ -310,13 +333,17 @@ export function App(): JSX.Element {
     return () => { cancelled = true; };
   }, [activeProject?.cwd]);
 
+  useEffect(() => {
+    writeDraft(activeId, draft);
+  }, [activeId, draft]);
+
   function applyOpen(result: ConversationOpenResult): void {
     applySnapshot(result);
     setActiveId(result.conversation.id);
     setMessages(result.messages);
     setSession(result.state);
     setStatus(result.status);
-    setDraft("");
+    setDraft(readDrafts()[result.conversation.id] ?? "");
     setError(null);
   }
 
