@@ -19,7 +19,7 @@ import type {
   SubagentInfo,
   WorkspaceSnapshot,
 } from "@shared/types";
-import type { GitStatus } from "@shared/ipc";
+import type { GitBranch, GitStatus } from "@shared/ipc";
 
 const api = {
   omp: {
@@ -136,6 +136,11 @@ const api = {
     preview: (path: string): Promise<FilePreview> => ipcRenderer.invoke(Ipc.workspacePreview, { path }),
     gitStatus: (cwd: string): Promise<GitStatus> => ipcRenderer.invoke(Ipc.workspaceGitStatus, { cwd }),
     openTerminal: (cwd: string): Promise<void> => ipcRenderer.invoke(Ipc.workspaceOpenTerminal, { cwd }),
+    gitBranches: (cwd: string): Promise<GitBranch[]> => ipcRenderer.invoke(Ipc.workspaceGitBranches, { cwd }),
+    gitCheckout: (cwd: string, branch: string): Promise<GitStatus> => ipcRenderer.invoke(Ipc.workspaceGitCheckout, { cwd, branch }),
+    gitStage: (cwd: string, paths?: string[], all?: boolean): Promise<GitStatus> => ipcRenderer.invoke(Ipc.workspaceGitStage, { cwd, paths, all }),
+    gitCommit: (cwd: string, message: string): Promise<GitStatus> => ipcRenderer.invoke(Ipc.workspaceGitCommit, { cwd, message }),
+    gitDiff: (cwd: string, path?: string): Promise<string> => ipcRenderer.invoke(Ipc.workspaceGitDiff, { cwd, path }),
   },
   app: {
     getInfo: (): Promise<import("@shared/ipc").AppInfo> => ipcRenderer.invoke(Ipc.appGetInfo),

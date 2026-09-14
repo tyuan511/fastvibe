@@ -43,6 +43,11 @@ export const Ipc = {
   workspacePreview: "workspace:preview",
   workspaceGitStatus: "workspace:git-status",
   workspaceOpenTerminal: "workspace:open-terminal",
+  workspaceGitBranches: "workspace:git-branches",
+  workspaceGitCheckout: "workspace:git-checkout",
+  workspaceGitStage: "workspace:git-stage",
+  workspaceGitCommit: "workspace:git-commit",
+  workspaceGitDiff: "workspace:git-diff",
   appGetInfo: "app:get-info",
   providersList: "providers:list",
   providersFetch: "providers:fetch",
@@ -77,6 +82,8 @@ export type GitStatus = {
   behind?: number;
   files: Array<{ path: string; index: string; worktree: string }>;
 };
+
+export type GitBranch = { name: string; current: boolean; upstream?: string };
 
 export type PromptRequest = {
   message: string;

@@ -23,7 +23,7 @@ import type {
   SessionStats,
   WorkspaceSnapshot,
 } from "@shared/types";
-import type { GitStatus } from "@shared/ipc";
+import type { GitBranch as GitBranchInfo, GitStatus } from "@shared/ipc";
 
 function permissionKey(request: PermissionRequest): string {
   return `${request.method}:${request.title ?? ""}:${request.message ?? ""}`;
@@ -103,6 +103,9 @@ export function App(): JSX.Element {
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [gitDialogOpen, setGitDialogOpen] = useState(false);
   const [gitStatus, setGitStatus] = useState<GitStatus | null>(null);
+  const [gitBranches, setGitBranches] = useState<GitBranchInfo[]>([]);
+  const [gitDiffPath, setGitDiffPath] = useState<string>();
+  const [gitDiffText, setGitDiffText] = useState<string>();
   const settings = useSettingsStore((state) => state.settings);
   const updateSettings = useSettingsStore((state) => state.update);
   // Stable identity so the composer does not re-render on every streamed token.
@@ -322,6 +325,9 @@ export function App(): JSX.Element {
   useEffect(() => {
     if (!activeProject) {
       setGitStatus(null);
+      setGitBranches([]);
+      setGitDiffPath(undefined);
+      setGitDiffText(undefined);
       return;
     }
     let cancelled = false;
@@ -329,6 +335,11 @@ export function App(): JSX.Element {
       if (!cancelled) setGitStatus(next);
     }).catch(() => {
       if (!cancelled) setGitStatus(null);
+    });
+    void window.fastvibe.workspace.gitBranches(activeProject.cwd).then((next) => {
+      if (!cancelled) setGitBranches(next);
+    }).catch(() => {
+      if (!cancelled) setGitBranches([]);
     });
     return () => { cancelled = true; };
   }, [activeProject?.cwd]);
@@ -750,7 +761,19 @@ export function App(): JSX.Element {
         onOpenChange={setSwitcherOpen}
         onSelect={(id) => void handleOpen(id)}
       />
-      <GitStatusDialog open={gitDialogOpen} status={gitStatus} onOpenChange={setGitDialogOpen} onOpenTerminal={() => { if (gitStatus?.cwd) void window.fastvibe.workspace.openTerminal(gitStatus.cwd); }} />
+      <GitStatusDialog
+        open={gitDialogOpen}
+        status={gitStatus}
+        branches={gitBranches}
+        diffPath={gitDiffPath}
+        diffText={gitDiffText}
+        onOpenChange={setGitDialogOpen}
+        onOpenTerminal={() => { if (gitStatus?.cwd) void window.fastvibe.workspace.openTerminal(gitStatus.cwd); }}
+        onCheckout={(branch) => { if (gitStatus?.cwd) void window.fastvibe.workspace.gitCheckout(gitStatus.cwd, branch).then((next) => { setGitStatus(next); return window.fastvibe.workspace.gitBranches(gitStatus.cwd); }).then(setGitBranches).catch((err) => setError(err instanceof Error ? err.message : "切换分支失败")); }}
+        onStageAll={() => { if (gitStatus?.cwd) void window.fastvibe.workspace.gitStage(gitStatus.cwd, [], true).then(setGitStatus).catch((err) => setError(err instanceof Error ? err.message : "暂存失败")); }}
+        onCommit={(message) => { if (gitStatus?.cwd) void window.fastvibe.workspace.gitCommit(gitStatus.cwd, message).then(setGitStatus).catch((err) => setError(err instanceof Error ? err.message : "提交失败")); }}
+        onDiff={(path) => { if (gitStatus?.cwd) void window.fastvibe.workspace.gitDiff(gitStatus.cwd, path).then((text) => { setGitDiffPath(path); setGitDiffText(text || "没有可显示的 diff"); }).catch(() => setGitDiffText("无法读取 diff")); }}
+      />
       <PermissionDialog
         key={permission?.id ?? "permission"}
         request={permission}

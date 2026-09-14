@@ -9,7 +9,7 @@ import { loadModelsDev } from "./omp/models-dev";
 import { getFastVibePaths } from "./omp/paths";
 import { PiProcessManager } from "./pi/process-manager";
 import type { ProviderModel } from "@shared/types";
-import type { GitStatus } from "@shared/ipc";
+import type { GitBranch, GitStatus } from "@shared/ipc";
 
 const execFileAsync = promisify(execFile);
 
@@ -323,6 +323,56 @@ function registerIpc(): void {
       await execFileAsync("x-terminal-emulator", ["--working-directory", cwd]);
     }
   });
+  ipcMain.handle(Ipc.workspaceGitBranches, async (_event, payload: { cwd: string }): Promise<GitBranch[]> => {
+    const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
+    if (!cwd) return [];
+    try {
+      const { stdout } = await execFileAsync("git", ["-C", cwd, "for-each-ref", "--format=%(refname:short)\t%(HEAD)\t%(upstream:short)", "refs/heads"], { timeout: 5000, maxBuffer: 128 * 1024 });
+      return stdout.split(/\r?\n/).filter(Boolean).map((line) => {
+        const [name, head, upstream] = line.split("\t");
+        return { name, current: head === "*", upstream: upstream || undefined };
+      });
+    } catch {
+      return [];
+    }
+  });
+  ipcMain.handle(Ipc.workspaceGitCheckout, async (_event, payload: { cwd: string; branch: string }): Promise<GitStatus> => {
+    const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
+    const branch = typeof payload.branch === "string" ? payload.branch.trim() : "";
+    if (!cwd || !branch || branch.startsWith("-") || branch.includes("\0")) throw new Error("分支名称无效");
+    await execFileAsync("git", ["-C", cwd, "switch", branch], { timeout: 10000, maxBuffer: 128 * 1024 });
+    return readGitStatus(cwd);
+  });
+  ipcMain.handle(Ipc.workspaceGitStage, async (_event, payload: { cwd: string; paths?: string[]; all?: boolean }): Promise<GitStatus> => {
+    const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
+    if (!cwd) throw new Error("项目路径无效");
+    const paths = Array.isArray(payload.paths) ? payload.paths.filter((item): item is string => typeof item === "string" && item.length > 0 && !item.includes("\0")) : [];
+    const args = ["-C", cwd, "add", payload.all || paths.length === 0 ? "-A" : "--", ...paths];
+    await execFileAsync("git", args, { timeout: 10000, maxBuffer: 128 * 1024 });
+    return readGitStatus(cwd);
+  });
+  ipcMain.handle(Ipc.workspaceGitCommit, async (_event, payload: { cwd: string; message: string }): Promise<GitStatus> => {
+    const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
+    const message = typeof payload.message === "string" ? payload.message.trim() : "";
+    if (!cwd || !message) throw new Error("提交信息不能为空");
+    if (message.length > 5000) throw new Error("提交信息过长");
+    await execFileAsync("git", ["-C", cwd, "commit", "-m", message], { timeout: 30000, maxBuffer: 256 * 1024 });
+    return readGitStatus(cwd);
+  });
+  ipcMain.handle(Ipc.workspaceGitDiff, async (_event, payload: { cwd: string; path?: string }): Promise<string> => {
+    const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
+    if (!cwd) return "";
+    const path = typeof payload.path === "string" ? payload.path.trim() : "";
+    const args = ["-C", cwd, "diff", "--no-ext-diff", "--unified=3", "HEAD"];
+    if (path && !path.includes("\0")) args.push("--", path);
+    try {
+      const { stdout } = await execFileAsync("git", args, { timeout: 10000, maxBuffer: 1024 * 1024 });
+      return stdout;
+    } catch (error) {
+      const detail = error && typeof error === "object" && "stdout" in error && typeof error.stdout === "string" ? error.stdout : "";
+      return detail;
+    }
+  });
   ipcMain.handle(Ipc.appGetInfo, () => {
     const paths = getFastVibePaths();
     const meta = loadModelsDev().stats;
@@ -394,3 +444,20 @@ app.on("before-quit", (event) => {
     app.quit();
   });
 });
+
+async function readGitStatus(cwd: string): Promise<GitStatus> {
+  const empty: GitStatus = { cwd, isRepository: false, changed: 0, staged: 0, files: [] };
+  try {
+    const { stdout } = await execFileAsync("git", ["-C", cwd, "status", "--short", "--branch"], { timeout: 5000, maxBuffer: 256 * 1024 });
+    const lines = stdout.split(/\r?\n/).filter(Boolean);
+    const header = lines.shift() ?? "";
+    if (!header.startsWith("## ")) return empty;
+    const branch = header.slice(3).split("...")[0].trim();
+    const ahead = Number(header.match(/ahead (\d+)/)?.[1] ?? 0);
+    const behind = Number(header.match(/behind (\d+)/)?.[1] ?? 0);
+    const files = lines.filter((line) => line.length >= 2).map((line) => ({ index: line[0] === "?" ? "?" : line[0], worktree: line[1] ?? " ", path: line.slice(3).trim() }));
+    return { cwd, isRepository: true, branch: branch || undefined, changed: files.length, staged: files.filter((file) => file.index !== " " && file.index !== "?").length, ahead, behind, files };
+  } catch {
+    return empty;
+  }
+}
