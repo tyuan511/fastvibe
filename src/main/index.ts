@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, Notification, shell } from "electron";
 import { statSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -362,6 +362,9 @@ app.whenReady().then(async () => {
     mainWindow?.webContents.send(Ipc.conversationReady, payload);
   });
   omp.onEvent((event) => {
+    if (event.type === "conversation_activity" && !mainWindow?.isFocused() && Notification.isSupported()) {
+      new Notification({ title: String(event.title ?? "会话"), body: "任务已完成，可以回来查看结果。" }).show();
+    }
     if (event.type === "extension_ui_request") {
       void omp.handleExtensionUi(event);
     }

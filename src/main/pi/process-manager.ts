@@ -270,8 +270,13 @@ export class PiProcessManager {
     });
     const managed: ManagedSession = { conversationId: conversation.id, cwd, session: result.session, unsubscribe: () => undefined };
     managed.unsubscribe = result.session.subscribe((event) => {
-      if (this.#activeId !== conversation.id) return;
-      this.#emit(event as unknown as Record<string, unknown>);
+      if (this.#activeId === conversation.id) {
+        this.#emit(event as unknown as Record<string, unknown>);
+        return;
+      }
+      if (event.type === "agent_end") {
+        this.#emit({ type: "conversation_activity", conversationId: conversation.id, title: this.#catalog.get(conversation.id)?.title ?? "会话", status: "completed" });
+      }
     });
     this.#sessions.set(conversation.id, managed);
     const payload: ConversationReadyEvent = {
