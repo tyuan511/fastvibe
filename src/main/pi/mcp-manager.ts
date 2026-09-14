@@ -1,6 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import type { McpServerConfig, McpServerStatus } from "@shared/types";
@@ -69,7 +69,7 @@ export class McpManager {
     try {
       const client = new Client({ name: "FastVibe", version: "0.1.0" });
       const transport = config.transport === "stdio"
-        ? new StdioClientTransport({ command: config.command ?? "", args: config.args, env: { ...process.env, ...config.env } as Record<string, string>, cwd: process.cwd(), stderr: "pipe" })
+        ? new StdioClientTransport({ command: config.command ?? "", args: config.args, env: { ...getDefaultEnvironment(), ...config.env }, cwd: process.cwd(), stderr: "pipe" })
         : new StreamableHTTPClientTransport(new URL(config.url ?? ""));
       await client.connect(transport);
       const listed = await client.listTools();
