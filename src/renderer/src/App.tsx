@@ -7,6 +7,7 @@ import { PermissionDialog } from "@/components/chat/permission-dialog";
 import { PreviewPanel } from "@/components/chat/preview-panel";
 import { RunStatusBar, SessionMenu, usagePercent } from "@/components/chat/session-controls";
 import { Sidebar } from "@/components/layout/sidebar";
+import { SessionSwitcher } from "@/components/layout/session-switcher";
 import { StatusPill } from "@/components/layout/status-pill";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -75,6 +76,7 @@ export function App(): JSX.Element {
   const restoreId = useRef<string | null>(null);
   const [stats, setStats] = useState<SessionStats | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [switcherOpen, setSwitcherOpen] = useState(false);
   const [gitStatus, setGitStatus] = useState<GitStatus | null>(null);
   const settings = useSettingsStore((state) => state.settings);
   const updateSettings = useSettingsStore((state) => state.update);
@@ -180,6 +182,10 @@ export function App(): JSX.Element {
       if (event.key === "Escape" && useSessionStore.getState().streaming) {
         event.preventDefault();
         document.querySelector<HTMLButtonElement>('[aria-label="停止"]')?.click();
+      }
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setSwitcherOpen(true);
       }
       if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
         event.preventDefault();
@@ -706,6 +712,14 @@ export function App(): JSX.Element {
           void window.fastvibe.omp.getModels().then(setModels).catch(() => undefined);
           void window.fastvibe.omp.getState().then(setSession).catch(() => undefined);
         }}
+      />
+      <SessionSwitcher
+        open={switcherOpen}
+        conversations={conversations}
+        projects={projects}
+        activeId={activeId}
+        onOpenChange={setSwitcherOpen}
+        onSelect={(id) => void handleOpen(id)}
       />
       <PermissionDialog
         key={permission?.id ?? "permission"}
