@@ -4,6 +4,7 @@ import {
   ChevronDown,
   FolderOpen,
   Hand,
+  Mic,
   Plus,
   Search,
   Paperclip,
@@ -163,6 +164,35 @@ export function Composer({
   const [projectOpen, setProjectOpen] = useState(false);
   const [projectQuery, setProjectQuery] = useState("");
   const histDraft = useRef("");
+  const recognitionRef = useRef<{ start: () => void; stop: () => void; onresult: ((event: unknown) => void) | null; onend: (() => void) | null } | null>(null);
+  const voiceBaseRef = useRef("");
+  const [listening, setListening] = useState(false);
+
+  useEffect(() => () => {
+    recognitionRef.current?.stop();
+    recognitionRef.current = null;
+  }, []);
+
+  function toggleVoice(): void {
+    if (listening) {
+      recognitionRef.current?.stop();
+      return;
+    }
+    const Speech = (window as unknown as { SpeechRecognition?: new () => typeof recognitionRef.current; webkitSpeechRecognition?: new () => typeof recognitionRef.current }).SpeechRecognition
+      ?? (window as unknown as { webkitSpeechRecognition?: new () => typeof recognitionRef.current }).webkitSpeechRecognition;
+    if (!Speech) return;
+    const recognition = new Speech() as NonNullable<typeof recognitionRef.current>;
+    voiceBaseRef.current = value;
+    recognition.onresult = (event) => {
+      const result = event as { results?: ArrayLike<{ 0?: { transcript?: string }; isFinal?: boolean }> };
+      const transcript = Array.from(result.results ?? []).map((item) => item[0]?.transcript ?? "").join("");
+      if (transcript) onChange(`${voiceBaseRef.current}${voiceBaseRef.current && !voiceBaseRef.current.endsWith(" ") ? " " : ""}${transcript}`);
+    };
+    recognition.onend = () => { setListening(false); recognitionRef.current = null; };
+    recognitionRef.current = recognition;
+    setListening(true);
+    recognition.start();
+  }
 
   const slash = useMemo(() => {
     if (slashDismissed || !/^\/[^\s]*$/.test(value)) return [];
@@ -508,6 +538,9 @@ export function Composer({
             aria-label="添加附件"
           >
             <Paperclip />
+          </Button>
+          <Button size="icon-sm" variant="ghost" className={cn("rounded-full text-muted-foreground", listening && "bg-red-50 text-red-600 dark:bg-red-950/30")} disabled={disabled} onClick={toggleVoice} aria-label={listening ? "停止语音输入" : "语音输入"} title={listening ? "停止语音输入" : "语音输入"}>
+            <Mic />
           </Button>
 
           <DropdownMenu>
