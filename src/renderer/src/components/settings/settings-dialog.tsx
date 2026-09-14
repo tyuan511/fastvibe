@@ -5,6 +5,7 @@ import {
   FolderOpen,
   Info,
   MessageSquare,
+  Plug,
   RotateCcw,
   Search,
   Server,
@@ -28,6 +29,7 @@ import type { ExtensionInfo, FastVibeModel, OmpSessionState, OmpStatus, Thinking
 import { useSettingsStore } from "@/stores/settings";
 import { cn } from "@/lib/utils";
 import { ProvidersSettings } from "./providers-settings";
+import { McpSettings } from "./mcp-settings";
 
 const THINKING_LABELS: Record<ThinkingLevel | "auto", string> = {
   auto: "跟随模型默认",
@@ -44,7 +46,7 @@ const QUEUE_ITEMS = { followUp: "完成后执行", steer: "立即打断" };
 const INTERRUPT_ITEMS = { immediate: "立即打断", wait: "等回合结束" };
 const THINKING_ITEMS = THINKING_LABELS;
 
-type SectionId = "general" | "chat" | "providers" | "service" | "about";
+type SectionId = "general" | "chat" | "providers" | "mcp" | "service" | "about";
 
 const SECTIONS: Array<{
   group: string;
@@ -59,7 +61,7 @@ const SECTIONS: Array<{
   },
   {
     group: "集成",
-    items: [{ id: "providers", label: "供应商", icon: <Boxes /> }],
+    items: [{ id: "providers", label: "供应商", icon: <Boxes /> }, { id: "mcp", label: "MCP 工具", icon: <Plug /> }],
   },
   {
     group: "关于",
@@ -69,6 +71,7 @@ const SECTIONS: Array<{
     ],
   },
 ];
+
 
 function Group({ title, children }: { title?: string; children: ReactNode }): JSX.Element {
   return (
@@ -311,6 +314,7 @@ export function SettingsDialog({
           ) : null}
 
           {section === "providers" ? <ProvidersSettings onChanged={() => onProvidersChanged?.()} /> : null}
+          {section === "mcp" ? <McpSettings /> : null}
 
           {section === "service" ? (
             <div className="space-y-6">

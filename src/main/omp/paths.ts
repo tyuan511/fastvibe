@@ -20,6 +20,7 @@ export type FastVibePaths = {
   agentEnv: string;
   conversationsFile: string;
   providersFile: string;
+  mcpFile: string;
 };
 
 export function getFastVibePaths(): FastVibePaths {
@@ -50,6 +51,7 @@ export function getFastVibePaths(): FastVibePaths {
     agentEnv: join(ompAgent, ".env"),
     conversationsFile: join(userData, "conversations.json"),
     providersFile: join(userData, "providers.json"),
+    mcpFile: join(userData, "mcp.json"),
   };
 }
 

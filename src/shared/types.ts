@@ -112,6 +112,19 @@ export type ExtensionInfo = {
   error?: string;
 };
 
+export type McpServerConfig = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  transport: "stdio" | "http";
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+};
+
+export type McpServerStatus = McpServerConfig & { connected: boolean; tools: string[]; error?: string };
+
 export type FilePreview =
   | { kind: "image"; path: string; name: string; dataUrl: string }
   | { kind: "pdf"; path: string; name: string; dataUrl: string }

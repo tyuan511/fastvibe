@@ -19,6 +19,8 @@ import type {
   SubagentInfo,
   WorkspaceSnapshot,
   ExtensionInfo,
+  McpServerConfig,
+  McpServerStatus,
 } from "@shared/types";
 import type { GitBranch, GitStatus } from "@shared/ipc";
 
@@ -42,6 +44,8 @@ const api = {
       ipcRenderer.invoke(Ipc.ompCompact, { customInstructions }),
     getCommands: (): Promise<SlashCommand[]> => ipcRenderer.invoke(Ipc.ompGetCommands),
     getExtensions: (): Promise<ExtensionInfo[]> => ipcRenderer.invoke(Ipc.ompGetExtensions),
+    listMcpServers: (): Promise<McpServerStatus[]> => ipcRenderer.invoke(Ipc.ompListMcpServers),
+    saveMcpServers: (configs: McpServerConfig[]): Promise<McpServerStatus[]> => ipcRenderer.invoke(Ipc.ompSaveMcpServers, { configs }),
     getSubagents: (): Promise<SubagentInfo[]> => ipcRenderer.invoke(Ipc.ompGetSubagents),
     getSubagentMessages: (subagentId: string): Promise<ChatMessage[]> =>
       ipcRenderer.invoke(Ipc.ompGetSubagentMessages, { subagentId }),

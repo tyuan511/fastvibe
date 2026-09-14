@@ -46,6 +46,7 @@ import {
   usableProviders,
 } from "../omp/providers";
 import { getFastVibePaths, type FastVibePaths } from "../omp/paths";
+import { McpManager, type McpServerConfig, type McpServerStatus } from "./mcp-manager";
 
 type ManagedSession = { conversationId: string; cwd: string; session: AgentSession; extensions: LoadExtensionsResult; unsubscribe: () => void };
 
@@ -67,10 +68,12 @@ export class PiProcessManager {
   #pendingUi = new Map<string, { resolve: (value: unknown) => void; fallback: unknown }>();
   #sessionPromises = new Map<string, Promise<ManagedSession>>();
   #interruptMode: "immediate" | "wait" = "immediate";
+  #mcp: McpManager;
 
   constructor() {
     this.#paths = getFastVibePaths();
     this.#catalog = new ConversationCatalog(this.#paths.conversationsFile, this.#paths.ompScratch);
+    this.#mcp = new McpManager(this.#paths.mcpFile);
     const active = this.#catalog.activeId ? this.#catalog.get(this.#catalog.activeId) : undefined;
     this.#cwd = active?.project ?? this.#paths.ompScratch;
   }
@@ -100,6 +103,8 @@ export class PiProcessManager {
       }
       this.#models = ModelRegistry.create(this.#auth, join(this.#paths.ompAgent, "models.json"));
       await this.#models.refresh();
+      await this.#mcp.load();
+      await this.#mcp.connectAll();
       const active = this.#catalog.activeId ? this.#catalog.get(this.#catalog.activeId) : undefined;
       if (active) await this.#ensureSession(active);
       this.#setStatus({ state: "ready", cwd: this.#cwd });
@@ -120,6 +125,7 @@ export class PiProcessManager {
       await Promise.all(sessions.map(async (item) => { item.unsubscribe(); await item.session.dispose(); }));
       this.#models = null;
       this.#auth = null;
+      await this.#mcp.close();
       if (this.#status.state === "ready" || this.#status.state === "starting") this.#setStatus({ state: "idle" });
     });
   }
@@ -165,6 +171,8 @@ export class PiProcessManager {
     const errors = managed.extensions.errors.map((error) => ({ path: error.path, name: error.path.split(/[\\/]/).pop() ?? error.path, commands: 0, tools: 0, error: error.error }));
     return [...loaded, ...errors];
   }
+  async listMcpServers(): Promise<McpServerStatus[]> { await this.#mcp.load(); return this.#mcp.list(); }
+  async saveMcpServers(configs: McpServerConfig[]): Promise<McpServerStatus[]> { await this.#mcp.save(configs); if (this.#status.state === "ready") { await this.stop(); await this.start(this.#cwd); } return this.#mcp.list(); }
   async getSubagentMessages(_subagentId: string): Promise<ChatMessage[]> { return []; }
   async getSubagents(): Promise<SubagentInfo[]> { return []; }
   respondPermission(payload: { id: string; confirmed?: boolean; value?: string; cancelled?: boolean }): void {
@@ -272,6 +280,7 @@ export class PiProcessManager {
       modelRegistry: this.#models,
       sessionManager,
       settingsManager: SettingsManager.create(cwd, this.#paths.ompAgent),
+      customTools: await this.#mcp.tools(),
     });
     await result.session.bindExtensions({
       uiContext: this.#extensionUi(),

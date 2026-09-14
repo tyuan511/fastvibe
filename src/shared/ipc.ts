@@ -10,6 +10,8 @@ export const Ipc = {
   ompCompact: "omp:compact",
   ompGetCommands: "omp:get-commands",
   ompGetExtensions: "omp:get-extensions",
+  ompListMcpServers: "omp:list-mcp-servers",
+  ompSaveMcpServers: "omp:save-mcp-servers",
   ompGetSubagents: "omp:get-subagents",
   ompGetSubagentMessages: "omp:get-subagent-messages",
   ompPermissionRespond: "omp:permission-respond",

@@ -137,6 +137,8 @@ function registerIpc(): void {
     return omp.getCommands();
   });
   ipcMain.handle(Ipc.ompGetExtensions, async () => omp.getExtensions());
+  ipcMain.handle(Ipc.ompListMcpServers, async () => omp.listMcpServers());
+  ipcMain.handle(Ipc.ompSaveMcpServers, async (_event, payload: { configs: import("@shared/types").McpServerConfig[] }) => omp.saveMcpServers(payload.configs));
 
   ipcMain.handle(Ipc.ompGetSubagents, async () => {
     return omp.getSubagents();
