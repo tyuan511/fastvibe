@@ -130,6 +130,7 @@ function registerIpc(): void {
   ipcMain.handle(Ipc.ompGetCommands, async () => {
     return omp.getCommands();
   });
+  ipcMain.handle(Ipc.ompGetExtensions, async () => omp.getExtensions());
 
   ipcMain.handle(Ipc.ompGetSubagents, async () => {
     return omp.getSubagents();

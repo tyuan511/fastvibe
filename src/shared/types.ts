@@ -104,6 +104,14 @@ export type SubagentInfo = {
   detail?: string;
 };
 
+export type ExtensionInfo = {
+  path: string;
+  name: string;
+  commands: number;
+  tools: number;
+  error?: string;
+};
+
 export type FilePreview =
   | { kind: "image"; path: string; name: string; dataUrl: string }
   | { kind: "pdf"; path: string; name: string; dataUrl: string }

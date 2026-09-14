@@ -9,6 +9,7 @@ export const Ipc = {
   ompClearQueue: "omp:clear-queue",
   ompCompact: "omp:compact",
   ompGetCommands: "omp:get-commands",
+  ompGetExtensions: "omp:get-extensions",
   ompGetSubagents: "omp:get-subagents",
   ompGetSubagentMessages: "omp:get-subagent-messages",
   ompPermissionRespond: "omp:permission-respond",

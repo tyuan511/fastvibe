@@ -24,7 +24,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import type { AppInfo } from "@shared/ipc";
-import type { FastVibeModel, OmpSessionState, OmpStatus, ThinkingLevel } from "@shared/types";
+import type { ExtensionInfo, FastVibeModel, OmpSessionState, OmpStatus, ThinkingLevel } from "@shared/types";
 import { useSettingsStore } from "@/stores/settings";
 import { cn } from "@/lib/utils";
 import { ProvidersSettings } from "./providers-settings";
@@ -128,12 +128,16 @@ export function SettingsDialog({
   const [section, setSection] = useState<SectionId>("general");
   const [query, setQuery] = useState("");
   const [info, setInfo] = useState<AppInfo | null>(null);
+  const [extensions, setExtensions] = useState<ExtensionInfo[]>([]);
 
   useEffect(() => {
     if (open && !info) {
       void window.fastvibe.app.getInfo().then(setInfo).catch(() => undefined);
     }
-  }, [open, info]);
+    if (open && status.state === "ready") {
+      void window.fastvibe.omp.getExtensions().then(setExtensions).catch(() => setExtensions([]));
+    }
+  }, [open, info, status.state]);
 
   if (!open) return null;
 
@@ -372,6 +376,10 @@ export function SettingsDialog({
                   />
                 </Group>
               ) : null}
+              <Group title="插件与扩展">
+                <Row title="已加载扩展" description={extensions.length ? extensions.map((item) => item.name).join("、") : "未发现扩展"} control={<Badge variant={extensions.some((item) => item.error) ? "destructive" : "secondary"}>{extensions.filter((item) => !item.error).length}</Badge>} />
+                {extensions.filter((item) => item.error).map((item) => <Row key={item.path} title={item.name} description={item.error} control={<Badge variant="destructive">错误</Badge>} />)}
+              </Group>
             </div>
           ) : null}
 

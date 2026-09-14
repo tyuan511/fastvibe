@@ -9,6 +9,7 @@ import {
   SettingsManager,
   type AgentSession,
   type ExtensionUIContext,
+  type LoadExtensionsResult,
 } from "@mariozechner/pi-coding-agent";
 import type {
   ChatMessage,
@@ -16,6 +17,7 @@ import type {
   ConversationDeleteResult,
   ConversationOpenResult,
   ConversationReadyEvent,
+  ExtensionInfo,
   FastVibeModel,
   OmpSessionState,
   OmpStatus,
@@ -45,7 +47,7 @@ import {
 } from "../omp/providers";
 import { getFastVibePaths, type FastVibePaths } from "../omp/paths";
 
-type ManagedSession = { conversationId: string; cwd: string; session: AgentSession; unsubscribe: () => void };
+type ManagedSession = { conversationId: string; cwd: string; session: AgentSession; extensions: LoadExtensionsResult; unsubscribe: () => void };
 
 /** Host adapter backed by pi-coding-agent. It keeps one AgentSession per conversation in one Node process. */
 export class PiProcessManager {
@@ -143,7 +145,25 @@ export class PiProcessManager {
   async compact(customInstructions?: string): Promise<OmpSessionState> { await (await this.#active()).compact(customInstructions); return this.getState(); }
   async getCommands(): Promise<SlashCommand[]> {
     const session = await this.#active();
-    return session.promptTemplates.map((item) => ({ name: item.name, description: item.description, source: "prompt" }));
+    const managed = this.#sessions.get(this.#activeId ?? "");
+    const promptCommands = session.promptTemplates.map((item) => ({ name: item.name, description: item.description, source: "prompt" }));
+    const extensionCommands = managed?.extensions.extensions.flatMap((extension) => [...extension.commands.values()].map((command) => ({ name: command.name, description: command.description, source: "extension" }))) ?? [];
+    const unique = new Map<string, SlashCommand>();
+    for (const command of [...promptCommands, ...extensionCommands]) unique.set(command.name, command);
+    return [...unique.values()];
+  }
+  async getExtensions(): Promise<ExtensionInfo[]> {
+    await this.#ensureReady();
+    const managed = this.#sessions.get(this.#activeId ?? "");
+    if (!managed) return [];
+    const loaded = managed.extensions.extensions.map((extension) => ({
+      path: extension.path,
+      name: extension.sourceInfo?.source ?? extension.path.split(/[\\/]/).pop() ?? extension.path,
+      commands: extension.commands.size,
+      tools: extension.tools.size,
+    }));
+    const errors = managed.extensions.errors.map((error) => ({ path: error.path, name: error.path.split(/[\\/]/).pop() ?? error.path, commands: 0, tools: 0, error: error.error }));
+    return [...loaded, ...errors];
   }
   async getSubagentMessages(_subagentId: string): Promise<ChatMessage[]> { return []; }
   async getSubagents(): Promise<SubagentInfo[]> { return []; }
@@ -268,7 +288,7 @@ export class PiProcessManager {
       },
       onError: (error) => this.#emit({ type: "extension_error", extensionPath: error.extensionPath, event: error.event, error: error.error }),
     });
-    const managed: ManagedSession = { conversationId: conversation.id, cwd, session: result.session, unsubscribe: () => undefined };
+    const managed: ManagedSession = { conversationId: conversation.id, cwd, session: result.session, extensions: result.extensionsResult, unsubscribe: () => undefined };
     managed.unsubscribe = result.session.subscribe((event) => {
       if (this.#activeId === conversation.id) {
         this.#emit(event as unknown as Record<string, unknown>);

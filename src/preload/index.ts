@@ -18,6 +18,7 @@ import type {
   FilePreview,
   SubagentInfo,
   WorkspaceSnapshot,
+  ExtensionInfo,
 } from "@shared/types";
 import type { GitBranch, GitStatus } from "@shared/ipc";
 
@@ -40,6 +41,7 @@ const api = {
     compact: (customInstructions?: string): Promise<OmpSessionState> =>
       ipcRenderer.invoke(Ipc.ompCompact, { customInstructions }),
     getCommands: (): Promise<SlashCommand[]> => ipcRenderer.invoke(Ipc.ompGetCommands),
+    getExtensions: (): Promise<ExtensionInfo[]> => ipcRenderer.invoke(Ipc.ompGetExtensions),
     getSubagents: (): Promise<SubagentInfo[]> => ipcRenderer.invoke(Ipc.ompGetSubagents),
     getSubagentMessages: (subagentId: string): Promise<ChatMessage[]> =>
       ipcRenderer.invoke(Ipc.ompGetSubagentMessages, { subagentId }),
