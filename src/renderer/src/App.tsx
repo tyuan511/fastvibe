@@ -773,6 +773,8 @@ export function App(): JSX.Element {
         onStageAll={() => { if (gitStatus?.cwd) void window.fastvibe.workspace.gitStage(gitStatus.cwd, [], true).then(setGitStatus).catch((err) => setError(err instanceof Error ? err.message : "暂存失败")); }}
         onCommit={(message) => { if (gitStatus?.cwd) void window.fastvibe.workspace.gitCommit(gitStatus.cwd, message).then(setGitStatus).catch((err) => setError(err instanceof Error ? err.message : "提交失败")); }}
         onDiff={(path) => { if (gitStatus?.cwd) void window.fastvibe.workspace.gitDiff(gitStatus.cwd, path).then((text) => { setGitDiffPath(path); setGitDiffText(text || "没有可显示的 diff"); }).catch(() => setGitDiffText("无法读取 diff")); }}
+        onPull={() => { if (gitStatus?.cwd) void window.fastvibe.workspace.gitPull(gitStatus.cwd).then(setGitStatus).catch((err) => setError(err instanceof Error ? err.message : "拉取失败")); }}
+        onPush={() => { if (gitStatus?.cwd) void window.fastvibe.workspace.gitPush(gitStatus.cwd).then(setGitStatus).catch((err) => setError(err instanceof Error ? err.message : "推送失败")); }}
       />
       <PermissionDialog
         key={permission?.id ?? "permission"}

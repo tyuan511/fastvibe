@@ -142,6 +142,8 @@ const api = {
     gitStage: (cwd: string, paths?: string[], all?: boolean): Promise<GitStatus> => ipcRenderer.invoke(Ipc.workspaceGitStage, { cwd, paths, all }),
     gitCommit: (cwd: string, message: string): Promise<GitStatus> => ipcRenderer.invoke(Ipc.workspaceGitCommit, { cwd, message }),
     gitDiff: (cwd: string, path?: string): Promise<string> => ipcRenderer.invoke(Ipc.workspaceGitDiff, { cwd, path }),
+    gitPull: (cwd: string): Promise<GitStatus> => ipcRenderer.invoke(Ipc.workspaceGitPull, { cwd }),
+    gitPush: (cwd: string): Promise<GitStatus> => ipcRenderer.invoke(Ipc.workspaceGitPush, { cwd }),
   },
   app: {
     getInfo: (): Promise<import("@shared/ipc").AppInfo> => ipcRenderer.invoke(Ipc.appGetInfo),

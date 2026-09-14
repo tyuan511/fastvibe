@@ -49,6 +49,8 @@ export const Ipc = {
   workspaceGitStage: "workspace:git-stage",
   workspaceGitCommit: "workspace:git-commit",
   workspaceGitDiff: "workspace:git-diff",
+  workspaceGitPull: "workspace:git-pull",
+  workspaceGitPush: "workspace:git-push",
   appGetInfo: "app:get-info",
   providersList: "providers:list",
   providersFetch: "providers:fetch",

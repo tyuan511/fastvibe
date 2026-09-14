@@ -380,6 +380,14 @@ function registerIpc(): void {
       return detail;
     }
   });
+  for (const [channel, command] of [[Ipc.workspaceGitPull, "pull"], [Ipc.workspaceGitPush, "push"]] as const) {
+    ipcMain.handle(channel, async (_event, payload: { cwd: string }): Promise<GitStatus> => {
+      const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
+      if (!cwd) throw new Error("项目路径无效");
+      await execFileAsync("git", ["-C", cwd, command, ...(command === "pull" ? ["--ff-only"] : [])], { timeout: 60000, maxBuffer: 512 * 1024 });
+      return readGitStatus(cwd);
+    });
+  }
   ipcMain.handle(Ipc.appGetInfo, () => {
     const paths = getFastVibePaths();
     const meta = loadModelsDev().stats;

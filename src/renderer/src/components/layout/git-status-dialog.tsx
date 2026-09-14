@@ -1,12 +1,12 @@
 import { useState, type JSX } from "react";
-import { Check, GitBranch, Minus, Plus, Terminal } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, GitBranch, Minus, Plus, Terminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { GitBranch as GitBranchInfo, GitStatus } from "@shared/ipc";
 import { Input } from "@/components/ui/input";
 
-export function GitStatusDialog({ open, status, branches, diffPath, diffText, onOpenChange, onOpenTerminal, onCheckout, onStageAll, onCommit, onDiff }: { open: boolean; status: GitStatus | null; branches: GitBranchInfo[]; diffPath?: string; diffText?: string; onOpenChange: (open: boolean) => void; onOpenTerminal?: () => void; onCheckout?: (branch: string) => void; onStageAll?: () => void; onCommit?: (message: string) => void; onDiff?: (path: string) => void }): JSX.Element {
+export function GitStatusDialog({ open, status, branches, diffPath, diffText, onOpenChange, onOpenTerminal, onCheckout, onStageAll, onCommit, onDiff, onPull, onPush }: { open: boolean; status: GitStatus | null; branches: GitBranchInfo[]; diffPath?: string; diffText?: string; onOpenChange: (open: boolean) => void; onOpenTerminal?: () => void; onCheckout?: (branch: string) => void; onStageAll?: () => void; onCommit?: (message: string) => void; onDiff?: (path: string) => void; onPull?: () => void; onPush?: () => void }): JSX.Element {
   const [message, setMessage] = useState("");
   const [branchDraft, setBranchDraft] = useState("");
   return (
@@ -38,7 +38,7 @@ export function GitStatusDialog({ open, status, branches, diffPath, diffText, on
         </ScrollArea>
         {diffText ? <div className="border-t border-border bg-muted/30 p-3"><p className="mb-2 text-[11px] font-medium text-muted-foreground">{diffPath ?? "diff"}</p><pre className="max-h-48 overflow-auto whitespace-pre-wrap font-mono text-[10px] leading-4">{diffText}</pre></div> : null}
         {status?.isRepository && onStageAll && onCommit ? <div className="flex gap-2 border-t border-border px-4 py-3"><Button size="sm" variant="outline" onClick={onStageAll}>暂存全部</Button><Input value={message} placeholder="提交信息" className="h-8 text-xs" onChange={(event) => setMessage(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && message.trim()) { onCommit(message.trim()); setMessage(""); } }} /><Button size="sm" disabled={!message.trim()} onClick={() => { onCommit(message.trim()); setMessage(""); }}>提交</Button></div> : null}
-        {status?.cwd && onOpenTerminal ? <div className="flex justify-end border-t border-border px-4 py-3"><Button size="sm" variant="outline" onClick={onOpenTerminal}><Terminal className="size-3.5" />打开终端</Button></div> : null}
+        {status?.cwd && (onOpenTerminal || onPull || onPush) ? <div className="flex justify-end gap-2 border-t border-border px-4 py-3">{onPull ? <Button size="sm" variant="outline" onClick={onPull}><ArrowDown className="size-3.5" />拉取</Button> : null}{onPush ? <Button size="sm" variant="outline" onClick={onPush}><ArrowUp className="size-3.5" />推送</Button> : null}{onOpenTerminal ? <Button size="sm" variant="outline" onClick={onOpenTerminal}><Terminal className="size-3.5" />打开终端</Button> : null}</div> : null}
       </DialogContent>
     </Dialog>
   );
