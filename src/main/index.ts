@@ -288,7 +288,7 @@ function registerIpc(): void {
   });
   ipcMain.handle(Ipc.workspaceGitStatus, async (_event, payload: { cwd: string }): Promise<GitStatus> => {
     const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
-    const empty = { cwd, isRepository: false, changed: 0, staged: 0 };
+    const empty: GitStatus = { cwd, isRepository: false, changed: 0, staged: 0, files: [] };
     if (!cwd) return empty;
     try {
       const { stdout } = await execFileAsync("git", ["-C", cwd, "status", "--short", "--branch"], { timeout: 5000, maxBuffer: 256 * 1024 });
@@ -300,12 +300,14 @@ function registerIpc(): void {
       const behind = Number(header.match(/behind (\d+)/)?.[1] ?? 0);
       let changed = 0;
       let staged = 0;
+      const files: GitStatus["files"] = [];
       for (const line of lines) {
         if (line.length < 2) continue;
         changed += 1;
         if (line[0] !== " " && line[0] !== "?") staged += 1;
+        files.push({ index: line[0] === "?" ? "?" : line[0], worktree: line[1] ?? " ", path: line.slice(3).trim() });
       }
-      return { cwd, isRepository: true, branch: branchText || undefined, changed, staged, ahead, behind };
+      return { cwd, isRepository: true, branch: branchText || undefined, changed, staged, ahead, behind, files };
     } catch {
       return empty;
     }

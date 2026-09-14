@@ -8,6 +8,7 @@ import { PreviewPanel } from "@/components/chat/preview-panel";
 import { RunStatusBar, SessionMenu, usagePercent } from "@/components/chat/session-controls";
 import { Sidebar } from "@/components/layout/sidebar";
 import { SessionSwitcher } from "@/components/layout/session-switcher";
+import { GitStatusDialog } from "@/components/layout/git-status-dialog";
 import { StatusPill } from "@/components/layout/status-pill";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -77,6 +78,7 @@ export function App(): JSX.Element {
   const [stats, setStats] = useState<SessionStats | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [switcherOpen, setSwitcherOpen] = useState(false);
+  const [gitDialogOpen, setGitDialogOpen] = useState(false);
   const [gitStatus, setGitStatus] = useState<GitStatus | null>(null);
   const settings = useSettingsStore((state) => state.settings);
   const updateSettings = useSettingsStore((state) => state.update);
@@ -593,11 +595,11 @@ export function App(): JSX.Element {
           <div className="no-drag flex items-center gap-1.5">
             {permission ? <span className="text-[11px] text-amber-700">待确认</span> : null}
             {gitStatus?.isRepository ? (
-              <span className="hidden items-center gap-1 rounded-md px-1.5 text-[11px] text-muted-foreground sm:flex" title={`${gitStatus.changed} 个改动`}>
+              <button type="button" className="hidden items-center gap-1 rounded-md px-1.5 text-[11px] text-muted-foreground hover:bg-accent sm:flex" title={`${gitStatus.changed} 个改动`} onClick={() => setGitDialogOpen(true)}>
                 <GitBranch className="size-3" />
                 {gitStatus.branch ?? "HEAD"}
                 {gitStatus.changed > 0 ? <span className="text-amber-700">· {gitStatus.changed}</span> : null}
-              </span>
+              </button>
             ) : null}
             <StatusPill status={status} session={session} />
             {status.state === "needsAuth" ? null : (
@@ -721,6 +723,7 @@ export function App(): JSX.Element {
         onOpenChange={setSwitcherOpen}
         onSelect={(id) => void handleOpen(id)}
       />
+      <GitStatusDialog open={gitDialogOpen} status={gitStatus} onOpenChange={setGitDialogOpen} />
       <PermissionDialog
         key={permission?.id ?? "permission"}
         request={permission}

@@ -74,6 +74,7 @@ export type GitStatus = {
   staged: number;
   ahead?: number;
   behind?: number;
+  files: Array<{ path: string; index: string; worktree: string }>;
 };
 
 export type PromptRequest = {
