@@ -180,7 +180,23 @@ export class PiProcessManager {
 
   renameConversation(id: string, title: string): WorkspaceSnapshot { const trimmed = title.trim(); if (trimmed) { this.#catalog.update(id, { title: trimmed }); const active = this.#sessions.get(id); if (active) active.session.setSessionName(trimmed); } return this.#catalog.snapshot(); }
   async deleteConversation(id: string): Promise<ConversationDeleteResult> { const wasActive = this.#catalog.activeId === id; const removed = this.#catalog.remove(id); if (removed?.sessionFile) await unlink(removed.sessionFile).catch(() => undefined); const managed = this.#sessions.get(id); if (managed) { managed.unsubscribe(); await managed.session.dispose(); this.#sessions.delete(id); } return { ...this.#catalog.snapshot(), nextId: wasActive ? (this.#catalog.activeId ?? null) : null }; }
-  async setConversationProject(id: string, project: string | null): Promise<WorkspaceSnapshot> { this.#catalog.setProject(id, project ?? undefined); return this.#catalog.snapshot(); }
+  async setConversationProject(id: string, project: string | null): Promise<WorkspaceSnapshot> {
+    const before = this.#catalog.get(id);
+    const updated = this.#catalog.setProject(id, project ?? undefined);
+    if (!updated || before?.cwd === updated.cwd) return this.#catalog.snapshot();
+    const managed = this.#sessions.get(id);
+    if (managed) {
+      managed.unsubscribe();
+      await managed.session.dispose();
+      this.#sessions.delete(id);
+    }
+    if (this.#activeId === id) {
+      await this.#ensureReady();
+      const reopened = await this.#ensureSession(updated);
+      this.#activate(reopened);
+    }
+    return this.#catalog.snapshot();
+  }
   recordPrompt(id: string, text: string): WorkspaceSnapshot { const preview = text.trim().slice(0, 80); const current = this.#catalog.get(id); const title = current?.title && current.title !== "新会话" && current.title !== "新任务" ? current.title : preview.slice(0, 24) || "新会话"; this.#catalog.update(id, { title, preview }); const active = this.#sessions.get(id); if (active) active.session.setSessionName(title); return this.#catalog.snapshot(); }
   addProject(cwd: string): ProjectAddResult { const project = this.#catalog.ensureProject(cwd); if (!project) throw new Error("invalid project"); return { ...this.#catalog.snapshot(), project }; }
   renameProject(cwd: string, name: string): WorkspaceSnapshot { this.#catalog.renameProject(cwd, name); return this.#catalog.snapshot(); }

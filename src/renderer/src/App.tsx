@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type JSX } from "react";
-import { AlertCircleIcon } from "lucide-react";
+import { AlertCircleIcon, GitBranch } from "lucide-react";
 import { ConnectForm } from "@/components/auth/connect-form";
 import { Composer } from "@/components/chat/composer";
 import { MessageList } from "@/components/chat/message-list";
@@ -21,6 +21,7 @@ import type {
   SessionStats,
   WorkspaceSnapshot,
 } from "@shared/types";
+import type { GitStatus } from "@shared/ipc";
 
 function permissionKey(request: PermissionRequest): string {
   return `${request.method}:${request.title ?? ""}:${request.message ?? ""}`;
@@ -74,6 +75,7 @@ export function App(): JSX.Element {
   const restoreId = useRef<string | null>(null);
   const [stats, setStats] = useState<SessionStats | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [gitStatus, setGitStatus] = useState<GitStatus | null>(null);
   const settings = useSettingsStore((state) => state.settings);
   const updateSettings = useSettingsStore((state) => state.update);
   // Stable identity so the composer does not re-render on every streamed token.
@@ -111,6 +113,11 @@ export function App(): JSX.Element {
     });
     const offEvent = window.fastvibe.omp.onEvent((event) => {
       applyEvent(event);
+      if (event.type === "agent_end" || event.type === "tool_execution_end" || event.type === "toolcall_end") {
+        const state = useSessionStore.getState();
+        const current = state.conversations.find((item) => item.id === state.activeId);
+        if (current?.project) void window.fastvibe.workspace.gitStatus(current.project).then(setGitStatus).catch(() => undefined);
+      }
       // Message/stat reloads are expensive (the engine replays the whole
       // transcript), so only do them when the transcript actually changed.
       if (
@@ -280,6 +287,20 @@ export function App(): JSX.Element {
           : null;
   // Unbound conversations run in a hidden scratch dir, so never surface that path.
   const workspaceLabel = activeProject?.name ?? "无项目";
+
+  useEffect(() => {
+    if (!activeProject) {
+      setGitStatus(null);
+      return;
+    }
+    let cancelled = false;
+    void window.fastvibe.workspace.gitStatus(activeProject.cwd).then((next) => {
+      if (!cancelled) setGitStatus(next);
+    }).catch(() => {
+      if (!cancelled) setGitStatus(null);
+    });
+    return () => { cancelled = true; };
+  }, [activeProject?.cwd]);
 
   function applyOpen(result: ConversationOpenResult): void {
     applySnapshot(result);
@@ -565,6 +586,13 @@ export function App(): JSX.Element {
           <div className="no-drag ml-2 truncate text-[12.5px] text-muted-foreground">{headerTitle}</div>
           <div className="no-drag flex items-center gap-1.5">
             {permission ? <span className="text-[11px] text-amber-700">待确认</span> : null}
+            {gitStatus?.isRepository ? (
+              <span className="hidden items-center gap-1 rounded-md px-1.5 text-[11px] text-muted-foreground sm:flex" title={`${gitStatus.changed} 个改动`}>
+                <GitBranch className="size-3" />
+                {gitStatus.branch ?? "HEAD"}
+                {gitStatus.changed > 0 ? <span className="text-amber-700">· {gitStatus.changed}</span> : null}
+              </span>
+            ) : null}
             <StatusPill status={status} session={session} />
             {status.state === "needsAuth" ? null : (
               <SessionMenu

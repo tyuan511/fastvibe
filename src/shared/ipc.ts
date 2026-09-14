@@ -41,6 +41,7 @@ export const Ipc = {
   projectsRemove: "projects:remove",
   workspaceReveal: "workspace:reveal",
   workspacePreview: "workspace:preview",
+  workspaceGitStatus: "workspace:git-status",
   appGetInfo: "app:get-info",
   providersList: "providers:list",
   providersFetch: "providers:fetch",
@@ -63,6 +64,16 @@ export type AppInfo = {
     generatedAt: number;
     path: string;
   };
+};
+
+export type GitStatus = {
+  cwd: string;
+  isRepository: boolean;
+  branch?: string;
+  changed: number;
+  staged: number;
+  ahead?: number;
+  behind?: number;
 };
 
 export type PromptRequest = {

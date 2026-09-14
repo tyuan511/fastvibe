@@ -38,7 +38,7 @@ export function mapEngineMessages(raw: unknown): ChatMessage[] {
 
 function unwrapMessage(entry: unknown): Record<string, unknown> | null {
   if (!isRecord(entry)) return null;
-  if (isRecord(entry.message)) return { id: entry.id, timestamp: entry.timestamp, ...entry.message };
+  if (isRecord(entry.message)) return { ...entry.message, id: entry.id ?? entry.message.id, _messageId: entry.message.id, timestamp: entry.timestamp };
   if (typeof entry.role === "string") return entry;
   return null;
 }

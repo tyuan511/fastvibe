@@ -1,5 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from "electron";
 import { statSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { join } from "node:path";
 import { Ipc } from "@shared/ipc";
 import { readFilePreview } from "./omp/file-preview";
@@ -7,6 +9,9 @@ import { loadModelsDev } from "./omp/models-dev";
 import { getFastVibePaths } from "./omp/paths";
 import { PiProcessManager } from "./pi/process-manager";
 import type { ProviderModel } from "@shared/types";
+import type { GitStatus } from "@shared/ipc";
+
+const execFileAsync = promisify(execFile);
 
 app.setName("FastVibe");
 
@@ -280,6 +285,30 @@ function registerIpc(): void {
   ipcMain.handle(Ipc.workspacePreview, (_event, payload: { path: string }) => {
     if (!payload.path) return { kind: "error", path: "", name: "", message: "路径无效" };
     return readFilePreview(payload.path);
+  });
+  ipcMain.handle(Ipc.workspaceGitStatus, async (_event, payload: { cwd: string }): Promise<GitStatus> => {
+    const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
+    const empty = { cwd, isRepository: false, changed: 0, staged: 0 };
+    if (!cwd) return empty;
+    try {
+      const { stdout } = await execFileAsync("git", ["-C", cwd, "status", "--short", "--branch"], { timeout: 5000, maxBuffer: 256 * 1024 });
+      const lines = stdout.split(/\r?\n/).filter(Boolean);
+      const header = lines.shift() ?? "";
+      if (!header.startsWith("## ")) return empty;
+      const branchText = header.slice(3).split("...")[0].trim();
+      const ahead = Number(header.match(/ahead (\d+)/)?.[1] ?? 0);
+      const behind = Number(header.match(/behind (\d+)/)?.[1] ?? 0);
+      let changed = 0;
+      let staged = 0;
+      for (const line of lines) {
+        if (line.length < 2) continue;
+        changed += 1;
+        if (line[0] !== " " && line[0] !== "?") staged += 1;
+      }
+      return { cwd, isRepository: true, branch: branchText || undefined, changed, staged, ahead, behind };
+    } catch {
+      return empty;
+    }
   });
   ipcMain.handle(Ipc.appGetInfo, () => {
     const paths = getFastVibePaths();

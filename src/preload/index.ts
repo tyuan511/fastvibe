@@ -19,6 +19,7 @@ import type {
   SubagentInfo,
   WorkspaceSnapshot,
 } from "@shared/types";
+import type { GitStatus } from "@shared/ipc";
 
 const api = {
   omp: {
@@ -133,6 +134,7 @@ const api = {
       ipcRenderer.invoke(Ipc.workspacePick),
     reveal: (cwd: string): Promise<void> => ipcRenderer.invoke(Ipc.workspaceReveal, { cwd }),
     preview: (path: string): Promise<FilePreview> => ipcRenderer.invoke(Ipc.workspacePreview, { path }),
+    gitStatus: (cwd: string): Promise<GitStatus> => ipcRenderer.invoke(Ipc.workspaceGitStatus, { cwd }),
   },
   app: {
     getInfo: (): Promise<import("@shared/ipc").AppInfo> => ipcRenderer.invoke(Ipc.appGetInfo),
