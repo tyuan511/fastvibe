@@ -1,10 +1,11 @@
 import type { JSX } from "react";
-import { Check, GitBranch, Minus, Plus } from "lucide-react";
+import { Check, GitBranch, Minus, Plus, Terminal } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { GitStatus } from "@shared/ipc";
 
-export function GitStatusDialog({ open, status, onOpenChange }: { open: boolean; status: GitStatus | null; onOpenChange: (open: boolean) => void }): JSX.Element {
+export function GitStatusDialog({ open, status, onOpenChange, onOpenTerminal }: { open: boolean; status: GitStatus | null; onOpenChange: (open: boolean) => void; onOpenTerminal?: () => void }): JSX.Element {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-lg">
@@ -31,6 +32,7 @@ export function GitStatusDialog({ open, status, onOpenChange }: { open: boolean;
             }) : <p className="px-3 py-8 text-center text-xs text-muted-foreground">工作区干净</p>}
           </div>
         </ScrollArea>
+        {status?.cwd && onOpenTerminal ? <div className="flex justify-end border-t border-border px-4 py-3"><Button size="sm" variant="outline" onClick={onOpenTerminal}><Terminal className="size-3.5" />打开终端</Button></div> : null}
       </DialogContent>
     </Dialog>
   );

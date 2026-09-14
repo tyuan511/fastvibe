@@ -723,7 +723,7 @@ export function App(): JSX.Element {
         onOpenChange={setSwitcherOpen}
         onSelect={(id) => void handleOpen(id)}
       />
-      <GitStatusDialog open={gitDialogOpen} status={gitStatus} onOpenChange={setGitDialogOpen} />
+      <GitStatusDialog open={gitDialogOpen} status={gitStatus} onOpenChange={setGitDialogOpen} onOpenTerminal={() => { if (gitStatus?.cwd) void window.fastvibe.workspace.openTerminal(gitStatus.cwd); }} />
       <PermissionDialog
         key={permission?.id ?? "permission"}
         request={permission}

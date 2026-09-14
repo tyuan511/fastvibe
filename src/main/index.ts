@@ -312,6 +312,17 @@ function registerIpc(): void {
       return empty;
     }
   });
+  ipcMain.handle(Ipc.workspaceOpenTerminal, async (_event, payload: { cwd: string }): Promise<void> => {
+    const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
+    if (!cwd) return;
+    if (process.platform === "darwin") {
+      await execFileAsync("open", ["-a", "Terminal", cwd]);
+    } else if (process.platform === "win32") {
+      await execFileAsync("cmd.exe", ["/c", "start", "", cwd]);
+    } else {
+      await execFileAsync("x-terminal-emulator", ["--working-directory", cwd]);
+    }
+  });
   ipcMain.handle(Ipc.appGetInfo, () => {
     const paths = getFastVibePaths();
     const meta = loadModelsDev().stats;

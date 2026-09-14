@@ -42,6 +42,7 @@ export const Ipc = {
   workspaceReveal: "workspace:reveal",
   workspacePreview: "workspace:preview",
   workspaceGitStatus: "workspace:git-status",
+  workspaceOpenTerminal: "workspace:open-terminal",
   appGetInfo: "app:get-info",
   providersList: "providers:list",
   providersFetch: "providers:fetch",
