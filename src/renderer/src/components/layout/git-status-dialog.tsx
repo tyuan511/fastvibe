@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 
 export function GitStatusDialog({ open, status, branches, diffPath, diffText, onOpenChange, onOpenTerminal, onCheckout, onStageAll, onCommit, onDiff }: { open: boolean; status: GitStatus | null; branches: GitBranchInfo[]; diffPath?: string; diffText?: string; onOpenChange: (open: boolean) => void; onOpenTerminal?: () => void; onCheckout?: (branch: string) => void; onStageAll?: () => void; onCommit?: (message: string) => void; onDiff?: (path: string) => void }): JSX.Element {
   const [message, setMessage] = useState("");
+  const [branchDraft, setBranchDraft] = useState("");
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-lg">
@@ -16,6 +17,7 @@ export function GitStatusDialog({ open, status, branches, diffPath, diffText, on
         </DialogHeader>
         <div className="flex items-center gap-3 border-b border-border px-4 py-3 text-xs text-muted-foreground">
           {branches.length > 0 && onCheckout ? <select value={status?.branch ?? ""} onChange={(event) => onCheckout(event.target.value)} className="max-w-40 rounded-md border border-border bg-background px-2 py-1 text-xs font-medium"><option value="" disabled>选择分支</option>{branches.map((branch) => <option key={branch.name} value={branch.name}>{branch.name}</option>)}</select> : <span className="font-medium text-foreground">{status?.branch ?? "HEAD"}</span>}
+          {onCheckout ? <><Input value={branchDraft} placeholder="新分支" className="h-7 w-28 text-xs" onChange={(event) => setBranchDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && branchDraft.trim()) { onCheckout(`__create__:${branchDraft.trim()}`); setBranchDraft(""); } }} /><Button size="xs" variant="ghost" disabled={!branchDraft.trim()} onClick={() => { onCheckout(`__create__:${branchDraft.trim()}`); setBranchDraft(""); }}>创建</Button></> : null}
           <span>{status?.staged ?? 0} 个已暂存</span>
           <span>{status?.changed ?? 0} 个改动</span>
           {status?.ahead ? <span>↑ {status.ahead}</span> : null}

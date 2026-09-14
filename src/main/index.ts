@@ -343,6 +343,13 @@ function registerIpc(): void {
     await execFileAsync("git", ["-C", cwd, "switch", branch], { timeout: 10000, maxBuffer: 128 * 1024 });
     return readGitStatus(cwd);
   });
+  ipcMain.handle(Ipc.workspaceGitCreateBranch, async (_event, payload: { cwd: string; branch: string }): Promise<GitStatus> => {
+    const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
+    const branch = typeof payload.branch === "string" ? payload.branch.trim() : "";
+    if (!cwd || !branch || branch.startsWith("-") || branch.includes("\0") || /\s/.test(branch)) throw new Error("分支名称无效");
+    await execFileAsync("git", ["-C", cwd, "switch", "-c", branch], { timeout: 10000, maxBuffer: 128 * 1024 });
+    return readGitStatus(cwd);
+  });
   ipcMain.handle(Ipc.workspaceGitStage, async (_event, payload: { cwd: string; paths?: string[]; all?: boolean }): Promise<GitStatus> => {
     const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
     if (!cwd) throw new Error("项目路径无效");

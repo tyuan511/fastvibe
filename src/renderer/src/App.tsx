@@ -769,7 +769,7 @@ export function App(): JSX.Element {
         diffText={gitDiffText}
         onOpenChange={setGitDialogOpen}
         onOpenTerminal={() => { if (gitStatus?.cwd) void window.fastvibe.workspace.openTerminal(gitStatus.cwd); }}
-        onCheckout={(branch) => { if (gitStatus?.cwd) void window.fastvibe.workspace.gitCheckout(gitStatus.cwd, branch).then((next) => { setGitStatus(next); return window.fastvibe.workspace.gitBranches(gitStatus.cwd); }).then(setGitBranches).catch((err) => setError(err instanceof Error ? err.message : "切换分支失败")); }}
+        onCheckout={(branch) => { if (!gitStatus?.cwd) return; const action = branch.startsWith("__create__:") ? window.fastvibe.workspace.gitCreateBranch(gitStatus.cwd, branch.slice(10)) : window.fastvibe.workspace.gitCheckout(gitStatus.cwd, branch); void action.then((next) => { setGitStatus(next); return window.fastvibe.workspace.gitBranches(gitStatus.cwd); }).then(setGitBranches).catch((err) => setError(err instanceof Error ? err.message : "分支操作失败")); }}
         onStageAll={() => { if (gitStatus?.cwd) void window.fastvibe.workspace.gitStage(gitStatus.cwd, [], true).then(setGitStatus).catch((err) => setError(err instanceof Error ? err.message : "暂存失败")); }}
         onCommit={(message) => { if (gitStatus?.cwd) void window.fastvibe.workspace.gitCommit(gitStatus.cwd, message).then(setGitStatus).catch((err) => setError(err instanceof Error ? err.message : "提交失败")); }}
         onDiff={(path) => { if (gitStatus?.cwd) void window.fastvibe.workspace.gitDiff(gitStatus.cwd, path).then((text) => { setGitDiffPath(path); setGitDiffText(text || "没有可显示的 diff"); }).catch(() => setGitDiffText("无法读取 diff")); }}

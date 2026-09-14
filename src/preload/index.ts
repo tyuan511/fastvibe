@@ -138,6 +138,7 @@ const api = {
     openTerminal: (cwd: string): Promise<void> => ipcRenderer.invoke(Ipc.workspaceOpenTerminal, { cwd }),
     gitBranches: (cwd: string): Promise<GitBranch[]> => ipcRenderer.invoke(Ipc.workspaceGitBranches, { cwd }),
     gitCheckout: (cwd: string, branch: string): Promise<GitStatus> => ipcRenderer.invoke(Ipc.workspaceGitCheckout, { cwd, branch }),
+    gitCreateBranch: (cwd: string, branch: string): Promise<GitStatus> => ipcRenderer.invoke(Ipc.workspaceGitCreateBranch, { cwd, branch }),
     gitStage: (cwd: string, paths?: string[], all?: boolean): Promise<GitStatus> => ipcRenderer.invoke(Ipc.workspaceGitStage, { cwd, paths, all }),
     gitCommit: (cwd: string, message: string): Promise<GitStatus> => ipcRenderer.invoke(Ipc.workspaceGitCommit, { cwd, message }),
     gitDiff: (cwd: string, path?: string): Promise<string> => ipcRenderer.invoke(Ipc.workspaceGitDiff, { cwd, path }),

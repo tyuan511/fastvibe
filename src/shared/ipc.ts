@@ -45,6 +45,7 @@ export const Ipc = {
   workspaceOpenTerminal: "workspace:open-terminal",
   workspaceGitBranches: "workspace:git-branches",
   workspaceGitCheckout: "workspace:git-checkout",
+  workspaceGitCreateBranch: "workspace:git-create-branch",
   workspaceGitStage: "workspace:git-stage",
   workspaceGitCommit: "workspace:git-commit",
   workspaceGitDiff: "workspace:git-diff",
