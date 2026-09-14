@@ -1,16 +1,7 @@
 import { useEffect, useState, type JSX, type ReactNode } from "react";
-import {
-  ArrowLeft,
-  Boxes,
-  FolderOpen,
-  Info,
-  MessageSquare,
-  Plug,
-  RotateCcw,
-  Search,
-  Server,
-  Settings2,
-} from "lucide-react";
+import { useNavigate } from "react-router";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { Analytics01Icon, ArrowLeft01Icon, BoxesIcon, Folder01Icon, InformationCircleIcon, MessageSquareIcon, Plug01Icon, RotateCcwIcon, Search01Icon, Settings02Icon, SparklesIcon } from "@hugeicons/core-free-icons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,11 +16,16 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import type { AppInfo } from "@shared/ipc";
-import type { ExtensionInfo, FastVibeModel, OmpSessionState, OmpStatus, ThinkingLevel } from "@shared/types";
+import type { ThinkingLevel } from "@shared/types";
 import { useSettingsStore } from "@/stores/settings";
+import type { ThemeMode } from "@/lib/themes";
+import { readSidebarWidth } from "@/lib/sidebar-width";
 import { cn } from "@/lib/utils";
 import { ProvidersSettings } from "./providers-settings";
 import { McpSettings } from "./mcp-settings";
+import { SkillsSettings } from "./skills-settings";
+import { ThemeSelect } from "./theme-select";
+import { UsageSettings } from "./usage-settings";
 
 const THINKING_LABELS: Record<ThinkingLevel | "auto", string> = {
   auto: "跟随模型默认",
@@ -45,29 +41,35 @@ const THINKING_LABELS: Record<ThinkingLevel | "auto", string> = {
 const QUEUE_ITEMS = { followUp: "完成后执行", steer: "立即打断" };
 const INTERRUPT_ITEMS = { immediate: "立即打断", wait: "等回合结束" };
 const THINKING_ITEMS = THINKING_LABELS;
+const THEME_MODE_ITEMS = { system: "跟随系统", light: "亮色", dark: "暗色" };
 
-type SectionId = "general" | "chat" | "providers" | "mcp" | "service" | "about";
+export type SectionId = "general" | "chat" | "usage" | "providers" | "mcp" | "skills" | "about";
 
-const SECTIONS: Array<{
+/** Also drives the router's /settings/:section validation. */
+export const SETTINGS_SECTIONS: Array<{
   group: string;
   items: Array<{ id: SectionId; label: string; icon: JSX.Element }>;
 }> = [
   {
     group: "个人",
     items: [
-      { id: "general", label: "通用", icon: <Settings2 /> },
-      { id: "chat", label: "对话", icon: <MessageSquare /> },
+      { id: "general", label: "通用", icon: <HugeiconsIcon strokeWidth={2} icon={Settings02Icon} /> },
+      { id: "chat", label: "对话", icon: <HugeiconsIcon strokeWidth={2} icon={MessageSquareIcon} /> },
+      { id: "usage", label: "使用统计", icon: <HugeiconsIcon strokeWidth={2} icon={Analytics01Icon} /> },
     ],
   },
   {
     group: "集成",
-    items: [{ id: "providers", label: "供应商", icon: <Boxes /> }, { id: "mcp", label: "MCP 工具", icon: <Plug /> }],
+    items: [
+      { id: "providers", label: "模型管理", icon: <HugeiconsIcon strokeWidth={2} icon={BoxesIcon} /> },
+      { id: "mcp", label: "MCP 工具", icon: <HugeiconsIcon strokeWidth={2} icon={Plug01Icon} /> },
+      { id: "skills", label: "技能", icon: <HugeiconsIcon strokeWidth={2} icon={SparklesIcon} /> },
+    ],
   },
   {
     group: "关于",
     items: [
-      { id: "service", label: "服务", icon: <Server /> },
-      { id: "about", label: "关于", icon: <Info /> },
+      { id: "about", label: "关于", icon: <HugeiconsIcon strokeWidth={2} icon={InformationCircleIcon} /> },
     ],
   },
 ];
@@ -76,7 +78,7 @@ const SECTIONS: Array<{
 function Group({ title, children }: { title?: string; children: ReactNode }): JSX.Element {
   return (
     <section className="space-y-2">
-      {title ? <h3 className="px-1 text-[13px] font-semibold">{title}</h3> : null}
+      {title ? <h3 className="px-1 text-[13px] font-medium">{title}</h3> : null}
       <div className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">
         {children}
       </div>
@@ -106,66 +108,81 @@ function Row({
   );
 }
 
+/**
+ * Settings is a route (`#/settings/<section>`), not a modal: the shell stays
+ * mounted behind it and every pane is deep-linkable, so the composer's
+ * 「管理模型」 can jump straight to the model-management pane.
+ */
 export function SettingsDialog({
   open,
   onOpenChange,
-  status,
-  session,
-  models,
-  project,
-  onRenameSession,
   onProvidersChanged,
+  section: controlledSection,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  status: OmpStatus;
-  session: OmpSessionState | null;
-  models: FastVibeModel[];
-  project?: string;
-  onRenameSession: (id: string, title: string) => void;
   onProvidersChanged?: () => void;
+  /** Active sub-route, e.g. "providers". */
+  section?: SectionId;
 }): JSX.Element | null {
   const settings = useSettingsStore((state) => state.settings);
   const update = useSettingsStore((state) => state.update);
   const reset = useSettingsStore((state) => state.reset);
-  const [section, setSection] = useState<SectionId>("general");
+  const navigate = useNavigate();
+  const [section, setSection] = useState<SectionId>(controlledSection ?? "general");
   const [query, setQuery] = useState("");
   const [info, setInfo] = useState<AppInfo | null>(null);
-  const [extensions, setExtensions] = useState<ExtensionInfo[]>([]);
+  // The conversation sidebar is resizable; match whatever width it currently has.
+  const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
+
+  useEffect(() => {
+    if (open) setSidebarWidth(readSidebarWidth());
+  }, [open]);
 
   useEffect(() => {
     if (open && !info) {
       void window.fastvibe.app.getInfo().then(setInfo).catch(() => undefined);
     }
-    if (open && status.state === "ready") {
-      void window.fastvibe.omp.getExtensions().then(setExtensions).catch(() => setExtensions([]));
-    }
-  }, [open, info, status.state]);
+  }, [open, info]);
+
+  // The dialog stays mounted while closed, so re-apply the route's section on open.
+  useEffect(() => {
+    if (open && controlledSection) setSection(controlledSection);
+  }, [open, controlledSection]);
+
+  // Every sidebar entry is a real URL, so history (and back/forward) just works.
+  const goToSection = (id: SectionId): void => {
+    setSection(id);
+    navigate(`/settings/${id}`, { replace: true });
+  };
 
   if (!open) return null;
 
   const q = query.trim().toLowerCase();
-  const visibleSections = SECTIONS.map((group) => ({
+  const visibleSections = SETTINGS_SECTIONS.map((group) => ({
     ...group,
     items: group.items.filter((item) => !q || item.label.toLowerCase().includes(q)),
   })).filter((group) => group.items.length > 0);
 
   return (
     <div className="fixed inset-0 z-50 flex bg-background">
-      <aside className="flex w-60 shrink-0 flex-col border-r border-border bg-sidebar">
-        <div className="drag-region h-9" />
-        <div className="px-2">
+      <aside
+        className="flex shrink-0 flex-col border-r border-border bg-sidebar"
+        style={{ width: sidebarWidth }}
+      >
+        <div className="drag-region h-11 shrink-0" />
+        <div className="no-drag px-2 pt-1">
           <Button
             variant="ghost"
             size="sm"
-            className="w-full justify-start gap-2 text-muted-foreground"
+            className="w-full justify-start gap-2.5 text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
             onClick={() => onOpenChange(false)}
           >
-            <ArrowLeft className="size-4" />
+            <HugeiconsIcon strokeWidth={2} icon={ArrowLeft01Icon} className="size-4" />
             返回应用
           </Button>
           <div className="relative mt-2">
-            <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
+            <HugeiconsIcon strokeWidth={2} icon={Search01Icon} className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
               value={query}
               placeholder="搜索设置"
@@ -187,7 +204,7 @@ export function SettingsDialog({
                       "flex h-8 w-full items-center gap-2.5 rounded-md px-2 text-[13px]",
                       section === item.id ? "bg-sidebar-accent font-medium" : "hover:bg-sidebar-accent/50",
                     )}
-                    onClick={() => setSection(item.id)}
+                    onClick={() => goToSection(item.id)}
                   >
                     <span className="text-muted-foreground [&_svg]:size-4">{item.icon}</span>
                     {item.label}
@@ -200,46 +217,92 @@ export function SettingsDialog({
       </aside>
 
       <ScrollArea className="min-h-0 flex-1">
-        <div className="mx-auto max-w-3xl px-8 py-8">
-          <h2 className="mb-6 text-[26px] font-semibold tracking-tight">
-            {SECTIONS.flatMap((group) => group.items).find((item) => item.id === section)?.label}
+        <div className="mx-auto w-full max-w-[800px] px-8 py-8">
+          <h2 className="mb-5 text-[20px] font-medium tracking-tight">
+            {SETTINGS_SECTIONS.flatMap((group) => group.items).find((item) => item.id === section)?.label}
           </h2>
 
           {section === "general" ? (
-            <Group>
-              <Row
-                title="默认推理强度"
-                description="模型不支持所选档位时会自动回退"
-                control={
-                  <Select
-                    items={THINKING_ITEMS}
-                    value={settings.thinkingLevel}
-                    onValueChange={(value) => update({ thinkingLevel: value as typeof settings.thinkingLevel })}
-                  >
-                    <SelectTrigger size="sm" className="w-36">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {(Object.keys(THINKING_LABELS) as Array<keyof typeof THINKING_LABELS>).map((key) => (
-                        <SelectItem key={key} value={key}>
-                          {THINKING_LABELS[key]}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                }
-              />
-              <Row
-                title="发送快捷键"
-                description="关闭后用 ⌘/Ctrl+Enter 发送"
-                control={
-                  <Switch
-                    checked={settings.sendOnEnter}
-                    onCheckedChange={(checked) => update({ sendOnEnter: checked })}
-                  />
-                }
-              />
-            </Group>
+            <div className="space-y-6">
+              <Group title="外观">
+                <Row
+                  title="主题模式"
+                  description="跟随系统时随 macOS 外观自动切换"
+                  control={
+                    <Select
+                      items={THEME_MODE_ITEMS}
+                      value={settings.themeMode}
+                      onValueChange={(value) => update({ themeMode: value as ThemeMode })}
+                    >
+                      <SelectTrigger size="sm" className="w-36">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="system">跟随系统</SelectItem>
+                        <SelectItem value="light">亮色</SelectItem>
+                        <SelectItem value="dark">暗色</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  }
+                />
+                <Row
+                  title="亮色主题"
+                  description="亮色模式下使用的主题"
+                  control={
+                    <ThemeSelect
+                      kind="light"
+                      value={settings.lightTheme}
+                      onChange={(id) => update({ lightTheme: id })}
+                    />
+                  }
+                />
+                <Row
+                  title="暗色主题"
+                  description="暗色模式下使用的主题"
+                  control={
+                    <ThemeSelect
+                      kind="dark"
+                      value={settings.darkTheme}
+                      onChange={(id) => update({ darkTheme: id })}
+                    />
+                  }
+                />
+              </Group>
+              <Group title="通用">
+                <Row
+                  title="默认推理强度"
+                  description="模型不支持所选档位时会自动回退"
+                  control={
+                    <Select
+                      items={THINKING_ITEMS}
+                      value={settings.thinkingLevel}
+                      onValueChange={(value) => update({ thinkingLevel: value as typeof settings.thinkingLevel })}
+                    >
+                      <SelectTrigger size="sm" className="w-36">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {(Object.keys(THINKING_LABELS) as Array<keyof typeof THINKING_LABELS>).map((key) => (
+                          <SelectItem key={key} value={key}>
+                            {THINKING_LABELS[key]}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  }
+                />
+                <Row
+                  title="发送快捷键"
+                  description="关闭后用 ⌘/Ctrl+Enter 发送"
+                  control={
+                    <Switch
+                      checked={settings.sendOnEnter}
+                      onCheckedChange={(checked) => update({ sendOnEnter: checked })}
+                    />
+                  }
+                />
+              </Group>
+            </div>
           ) : null}
 
           {section === "chat" ? (
@@ -314,78 +377,10 @@ export function SettingsDialog({
           ) : null}
 
           {section === "providers" ? <ProvidersSettings onChanged={() => onProvidersChanged?.()} /> : null}
-          {section === "mcp" ? <McpSettings /> : null}
+          {section === "usage" ? <UsageSettings /> : null}
 
-          {section === "service" ? (
-            <div className="space-y-6">
-              <Group title="运行状态">
-                <Row
-                  title="引擎状态"
-                  control={
-                    <Badge variant={status.state === "ready" ? "secondary" : "outline"}>
-                      {status.state === "ready" ? "运行中" : status.state}
-                    </Badge>
-                  }
-                />
-                <Row
-                  title="当前模型"
-                  control={
-                    <span className="text-[12.5px]">
-                      {session?.model ? `${session.model.provider}/${session.model.id}` : "—"}
-                    </span>
-                  }
-                />
-                <Row
-                  title="工作区"
-                  control={
-                    <span className="max-w-80 truncate text-[12.5px]">
-                      {project ?? "无项目（临时目录）"}
-                    </span>
-                  }
-                />
-                <Row title="可用模型" control={<span className="text-[12.5px]">{models.length}</span>} />
-                <Row
-                  title="会话名称"
-                  description={session?.sessionName ?? "未命名"}
-                  control={
-                    <Button
-                      size="xs"
-                      variant="outline"
-                      disabled={!session?.sessionId}
-                      onClick={() => {
-                        const name = window.prompt("会话名称", session?.sessionName ?? "");
-                        if (name?.trim() && session?.sessionId) onRenameSession(session.sessionId, name.trim());
-                      }}
-                    >
-                      重命名
-                    </Button>
-                  }
-                />
-              </Group>
-              {info ? (
-                <Group title="数据">
-                  <Row
-                    title="运行数据目录"
-                    description={info.runtimeRoot}
-                    control={
-                      <Button
-                        size="xs"
-                        variant="outline"
-                        onClick={() => void window.fastvibe.workspace.reveal(info.runtimeRoot)}
-                      >
-                        <FolderOpen />
-                        打开
-                      </Button>
-                    }
-                  />
-                </Group>
-              ) : null}
-              <Group title="插件与扩展">
-                <Row title="已加载扩展" description={extensions.length ? extensions.map((item) => item.name).join("、") : "未发现扩展"} control={<Badge variant={extensions.some((item) => item.error) ? "destructive" : "secondary"}>{extensions.filter((item) => !item.error).length}</Badge>} />
-                {extensions.filter((item) => item.error).map((item) => <Row key={item.path} title={item.name} description={item.error} control={<Badge variant="destructive">错误</Badge>} />)}
-              </Group>
-            </div>
-          ) : null}
+          {section === "mcp" ? <McpSettings /> : null}
+          {section === "skills" ? <SkillsSettings /> : null}
 
           {section === "about" ? (
             <div className="space-y-6">
@@ -417,7 +412,7 @@ export function SettingsDialog({
                         variant="outline"
                         onClick={() => void window.fastvibe.workspace.reveal(info.userData)}
                       >
-                        <FolderOpen />
+                        <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} />
                         打开
                       </Button>
                     ) : null
@@ -425,7 +420,7 @@ export function SettingsDialog({
                 />
               </Group>
               <Button variant="outline" size="sm" onClick={reset}>
-                <RotateCcw />
+                <HugeiconsIcon strokeWidth={2} icon={RotateCcwIcon} />
                 恢复默认设置
               </Button>
             </div>

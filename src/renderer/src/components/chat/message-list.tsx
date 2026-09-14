@@ -1,5 +1,6 @@
-import { useState, type JSX } from "react";
-import { Bug, Check, Compass, Copy, Pencil, RotateCcw, ShieldCheck, Wand2 } from "lucide-react";
+import { useMemo, useState, type JSX } from "react";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { Copy01Icon, PencilIcon, RotateCcwIcon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Message, MessageContent, MessageFooter, MessageGroup } from "@/components/ui/message";
 import {
@@ -13,33 +14,13 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { groupMessageRows, groupParts, mergeAssistantRun, type RenderPart } from "@/lib/group-parts";
 import type { ChatAttachment, ChatMessage } from "@shared/types";
 import { MarkdownView } from "./markdown-view";
+import { NewSessionHero } from "./new-session";
 import { ThinkingBlock } from "./thinking-block";
 import { ToolCard } from "./tool-card";
-
-const SUGGESTIONS: Array<{ icon: JSX.Element; label: string; prompt: string }> = [
-  {
-    icon: <Compass />,
-    label: "探索并理解代码",
-    prompt: "请探索这个项目，说明它的结构、主要模块和它们之间的关系。",
-  },
-  {
-    icon: <Wand2 />,
-    label: "构建新功能、应用或工具",
-    prompt: "帮我构建一个新功能：",
-  },
-  {
-    icon: <ShieldCheck />,
-    label: "审查代码并提出修改建议",
-    prompt: "请审查最近的代码改动，指出问题和改进建议。",
-  },
-  {
-    icon: <Bug />,
-    label: "修复问题和失败",
-    prompt: "帮我定位并修复这个问题：",
-  },
-];
+import { ToolGroupRow } from "./tool-group";
 
 function formatTime(timestamp: number): string {
   return new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -126,16 +107,16 @@ function MessageActions({
               window.setTimeout(() => setCopied(false), 1000);
             }}
           >
-            {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+            {copied ? <HugeiconsIcon strokeWidth={2} icon={Tick02Icon} className="size-3.5" /> : <HugeiconsIcon strokeWidth={2} icon={Copy01Icon} className="size-3.5" />}
           </ActionButton>
           {message.role === "user" && onEdit ? (
             <ActionButton label="编辑" onClick={() => onEdit(message)}>
-              <Pencil className="size-3.5" />
+              <HugeiconsIcon strokeWidth={2} icon={PencilIcon} className="size-3.5" />
             </ActionButton>
           ) : null}
           {onRetry ? (
             <ActionButton label="重试" onClick={() => onRetry(message)}>
-              <RotateCcw className="size-3.5" />
+              <HugeiconsIcon strokeWidth={2} icon={RotateCcwIcon} className="size-3.5" />
             </ActionButton>
           ) : null}
         </>
@@ -156,8 +137,13 @@ function WorkingStatus({ message }: { message: ChatMessage }): JSX.Element | nul
   );
 }
 
+/** Inline tool rows are grouped, but still share the assistant column's width cap. */
+function PartSlot({ children }: { children: JSX.Element }): JSX.Element {
+  return <div className="flex w-full max-w-2xl flex-col">{children}</div>;
+}
+
 function ChatMessageRow({
-  message,
+  messages,
   streaming,
   last,
   onRetry,
@@ -165,7 +151,7 @@ function ChatMessageRow({
   showThinking,
   showTimestamp,
 }: {
-  message: ChatMessage;
+  messages: ChatMessage[];
   streaming: boolean;
   last: boolean;
   onRetry?: (message: ChatMessage) => void;
@@ -173,6 +159,10 @@ function ChatMessageRow({
   showThinking: boolean;
   showTimestamp: boolean;
 }): JSX.Element {
+  // A reply spans several engine messages; render it as one block with one footer.
+  const message = useMemo(() => mergeAssistantRun(messages), [messages]);
+  const parts = useMemo(() => groupParts(message), [message]);
+
   if (message.role === "system") {
     return (
       <div className="flex justify-center py-1">
@@ -187,43 +177,72 @@ function ChatMessageRow({
   }
 
   const isUser = message.role === "user";
-  const thinkingActive = Boolean(streaming && message.thinking && !message.text && message.tools.length === 0);
+  const hasText = parts.some((part) => part.kind === "text" && part.text);
+
+  const renderPart = (part: RenderPart, index: number): JSX.Element | null => {
+    const isTail = index === parts.length - 1;
+    if (part.kind === "thinking") {
+      if (!showThinking) return null;
+      return (
+        <PartSlot key={`thinking-${index}`}>
+          <ThinkingBlock thinking={part.text} active={streaming && isTail} />
+        </PartSlot>
+      );
+    }
+    if (part.kind === "text") {
+      return (
+        <Bubble
+          key={`text-${index}`}
+          variant={isUser ? "secondary" : "ghost"}
+          align={isUser ? "end" : "start"}
+        >
+          <BubbleContent className="chat-markdown text-[13.5px] leading-6">
+            <MarkdownView text={part.text} />
+            {streaming && isTail ? <span className="chat-caret" aria-hidden /> : null}
+          </BubbleContent>
+        </Bubble>
+      );
+    }
+    if (part.kind === "tool") {
+      return (
+        <PartSlot key={`tool-${part.tool.id}`}>
+          <ToolCard tool={part.tool} />
+        </PartSlot>
+      );
+    }
+    return (
+      <PartSlot key={part.group.id}>
+        <ToolGroupRow group={part.group} />
+      </PartSlot>
+    );
+  };
 
   return (
     <Message align={isUser ? "end" : "start"} className="group/row">
       <MessageContent className={isUser ? "items-end" : "items-start"}>
         {message.attachments?.length ? <AttachmentStrip items={message.attachments} /> : null}
 
-        {message.thinking && showThinking ? (
-          <ThinkingBlock thinking={message.thinking} active={thinkingActive} />
-        ) : null}
+        {parts.map(renderPart)}
 
-        {message.tools.length > 0 ? (
-          <div className="flex w-full max-w-2xl flex-col gap-1">
-            {message.tools.map((tool) => (
-              <ToolCard key={tool.id} tool={tool} />
-            ))}
-          </div>
-        ) : null}
+        {streaming && !hasText ? <WorkingStatus message={message} /> : null}
 
-        {message.text ? (
-          <Bubble variant={isUser ? "secondary" : "ghost"} align={isUser ? "end" : "start"}>
-            <BubbleContent className="chat-markdown text-[13.5px] leading-6">
-              <MarkdownView text={message.text} />
-              {streaming ? <span className="chat-caret" aria-hidden /> : null}
-            </BubbleContent>
-          </Bubble>
-        ) : streaming ? (
-          <WorkingStatus message={message} />
-        ) : null}
-
-        <MessageActions
-          message={message}
-          onRetry={onRetry}
-          onEdit={onEdit}
-          showTimestamp={showTimestamp}
-          visible={last && !streaming}
-        />
+        {/*
+         * Withhold the toolbar while this row is streaming. It used to stay mounted
+         * at `opacity-0` for the hover reveal, so it kept reserving ~20px and its
+         * hover state kept flipping as the growing content reflowed under the
+         * pointer — which read as constant flicker. The actions are also useless
+         * mid-run: retry only makes sense once a reply has finished, and copy would
+         * capture a half-written answer.
+         */}
+        {streaming ? null : (
+          <MessageActions
+            message={message}
+            onRetry={onRetry}
+            onEdit={onEdit}
+            showTimestamp={showTimestamp}
+            visible={last}
+          />
+        )}
       </MessageContent>
     </Message>
   );
@@ -237,7 +256,7 @@ export function MessageList({
   onEdit,
   showThinking = true,
   showTimestamp = true,
-  onSuggestion,
+  emptyState,
 }: {
   messages: ChatMessage[];
   streaming: boolean;
@@ -246,8 +265,11 @@ export function MessageList({
   onEdit?: (message: ChatMessage) => void;
   showThinking?: boolean;
   showTimestamp?: boolean;
-  onSuggestion?: (prompt: string) => void;
+  emptyState?: JSX.Element | null;
 }): JSX.Element {
+  // One row per user prompt and per assistant reply, not per engine message.
+  const rows = useMemo(() => groupMessageRows(messages), [messages]);
+
   if (messages.length === 0 && loading) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 text-muted-foreground">
@@ -258,35 +280,10 @@ export function MessageList({
   }
 
   if (messages.length === 0) {
+    if (emptyState !== undefined) return emptyState ?? <div className="h-full" />;
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-8 px-6">
-        <div className="flex flex-col items-center gap-4">
-          <div className="flex size-12 items-center justify-center rounded-2xl bg-muted">
-            <svg viewBox="0 0 24 24" fill="none" className="size-6 text-muted-foreground" aria-hidden>
-              <rect x="4" y="6" width="16" height="13" rx="4" stroke="currentColor" strokeWidth="1.6" />
-              <path d="M9 21v-2M15 21v-2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-              <circle cx="9.5" cy="12.5" r="1.1" fill="currentColor" />
-              <circle cx="14.5" cy="12.5" r="1.1" fill="currentColor" />
-            </svg>
-          </div>
-          <h2 className="text-[26px] font-semibold tracking-tight">我们要构建什么？</h2>
-        </div>
-        <div className="grid w-full max-w-3xl grid-cols-2 gap-3 lg:grid-cols-4">
-          {SUGGESTIONS.map((item) => (
-            <button
-              key={item.label}
-              type="button"
-              className={cn(
-                "flex h-28 flex-col justify-between rounded-xl border border-border bg-card p-3.5 text-left",
-                "transition-colors hover:bg-muted/50",
-              )}
-              onClick={() => onSuggestion?.(item.prompt)}
-            >
-              <span className="text-muted-foreground [&_svg]:size-4">{item.icon}</span>
-              <span className="text-[12.5px] leading-5 text-foreground">{item.label}</span>
-            </button>
-          ))}
-        </div>
+      <div className="flex h-full flex-col items-center justify-center">
+        <NewSessionHero />
       </div>
     );
   }
@@ -294,21 +291,19 @@ export function MessageList({
   return (
     <MessageScrollerProvider>
       <MessageScroller>
-        <MessageScrollerViewport>
+        <MessageScrollerViewport className="scrollbar-thumb-scrollbar">
           <MessageScrollerContent className="mx-auto w-full max-w-3xl px-6 py-6">
             <MessageGroup className="gap-5">
-              {messages.map((message, index) => (
+              {rows.map((row, index) => (
                 <MessageScrollerItem
-                  key={message.id}
-                  id={message.id}
-                  scrollAnchor={index === messages.length - 1}
+                  key={row.id}
+                  id={row.id}
+                  scrollAnchor={index === rows.length - 1}
                 >
                   <ChatMessageRow
-                    message={message}
-                    streaming={
-                      streaming && index === messages.length - 1 && message.role === "assistant"
-                    }
-                    last={index === messages.length - 1}
+                    messages={row.messages}
+                    streaming={streaming && index === rows.length - 1 && row.messages[0].role === "assistant"}
+                    last={index === rows.length - 1}
                     onRetry={onRetry}
                     onEdit={onEdit}
                     showThinking={showThinking}

@@ -1,14 +1,14 @@
 import type { JSX } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Spinner } from "@/components/ui/spinner";
-import type { OmpSessionState, OmpStatus } from "@shared/types";
+import type { EngineSessionState, EngineStatus } from "@shared/types";
 
 export function StatusPill({
   status,
   session,
 }: {
-  status: OmpStatus;
-  session: OmpSessionState | null;
+  status: EngineStatus;
+  session: EngineSessionState | null;
 }): JSX.Element {
   if (status.state === "ready") {
     return <Badge variant="secondary">{session?.model?.id ?? "就绪"}</Badge>;

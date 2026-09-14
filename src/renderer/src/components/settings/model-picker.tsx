@@ -1,5 +1,6 @@
 import { useMemo, useState, type JSX } from "react";
-import { Check, Loader2, Search } from "lucide-react";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { Loading03Icon, Search01Icon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,10 +9,9 @@ import { cn } from "@/lib/utils";
 import type { ProviderModel } from "@shared/types";
 
 const SOURCE_LABEL: Record<string, string> = {
-  builtin: "内置",
   "models.dev": "models.dev",
-  default: "默认",
-  manual: "手动",
+  native: "内置",
+  default: "默认参数",
 };
 
 export function inputSummary(model: ProviderModel): string {
@@ -52,7 +52,7 @@ export function ModelPicker({
     <div className="flex min-h-0 min-w-0 flex-col gap-2">
       <div className="flex min-w-0 items-center gap-2">
         <div className="relative min-w-0 flex-1">
-          <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          <HugeiconsIcon strokeWidth={2} icon={Search01Icon} className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={query}
             placeholder="搜索模型"
@@ -73,7 +73,7 @@ export function ModelPicker({
       <ScrollArea className="h-72 rounded-lg border border-border">
         {loading ? (
           <div className="flex h-full items-center justify-center gap-2 py-10 text-xs text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" />
+            <HugeiconsIcon strokeWidth={2} icon={Loading03Icon} className="size-4 animate-spin" />
             正在拉取模型列表…
           </div>
         ) : filtered.length === 0 ? (
@@ -95,7 +95,7 @@ export function ModelPicker({
                       checked ? "border-primary bg-primary text-primary-foreground" : "border-input",
                     )}
                   >
-                    {checked ? <Check className="size-3" /> : null}
+                    {checked ? <HugeiconsIcon strokeWidth={2} icon={Tick02Icon} className="size-3" /> : null}
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[12.5px] font-medium">{model.name || model.id}</span>

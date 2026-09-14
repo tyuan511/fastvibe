@@ -1,13 +1,13 @@
-export type OmpStatusState = "idle" | "starting" | "ready" | "needsAuth" | "error" | "missing";
+export type EngineStatusState = "idle" | "starting" | "ready" | "needsAuth" | "error" | "missing";
 
-export type OmpStatus = {
-  state: OmpStatusState;
+export type EngineStatus = {
+  state: EngineStatusState;
   binary?: string;
   cwd?: string;
   message?: string;
 };
 
-export type OmpModel = {
+export type EngineModel = {
   provider: string;
   id: string;
 };
@@ -36,8 +36,8 @@ export type TodoPhase = {
   tasks: TodoTask[];
 };
 
-export type OmpSessionState = {
-  model?: OmpModel;
+export type EngineSessionState = {
+  model?: EngineModel;
   thinkingLevel?: string;
   isStreaming: boolean;
   isCompacting?: boolean;
@@ -62,7 +62,20 @@ export type ToolCallBlock = {
   args?: unknown;
   result?: string;
   status: ToolCallStatus;
+  /** Engine-provided structured payload, e.g. `edit`'s diff or `bash`'s truncation. */
+  details?: unknown;
 };
+
+/**
+ * A message's content in the order the engine produced it. The SDK returns an
+ * ordered `content[]` of text / thinking / toolCall parts, and models routinely
+ * interleave them ("I'll look at X" → read → "now fix Y" → edit). Flattening that
+ * into `{text, tools[]}` loses the sequence and renders every tool above the prose.
+ */
+export type MessagePart =
+  | { kind: "text"; text: string }
+  | { kind: "thinking"; text: string }
+  | { kind: "tool"; toolId: string };
 
 export type PromptImage = {
   type: "image";
@@ -85,6 +98,8 @@ export type ChatMessage = {
   text: string;
   thinking?: string;
   tools: ToolCallBlock[];
+  /** Interleaved render order. Optional so sessions persisted before this field still load. */
+  parts?: MessagePart[];
   createdAt: number;
   kind?: "message" | "notice" | "compact" | "goal";
   attachments?: ChatAttachment[];
@@ -125,6 +140,23 @@ export type McpServerConfig = {
 
 export type McpServerStatus = McpServerConfig & { connected: boolean; tools: string[]; error?: string };
 
+export type SkillInfo = {
+  name: string;
+  description: string;
+  filePath: string;
+  baseDir: string;
+  scope: "user" | "project" | "temporary";
+  source: string;
+  /** True when the skill lives under FastVibe's isolated agentDir/skills. */
+  removable: boolean;
+};
+
+export type SkillDraft = {
+  name: string;
+  description: string;
+  body: string;
+};
+
 export type FilePreview =
   | { kind: "image"; path: string; name: string; dataUrl: string }
   | { kind: "pdf"; path: string; name: string; dataUrl: string }
@@ -148,20 +180,21 @@ export type PermissionRequest = {
 
 export type QueueBehavior = "steer" | "followUp";
 
+export type QueuePauseReason = "stopped" | "error";
+
 export type QueuedPrompt = {
   id: string;
   text: string;
   behavior: QueueBehavior;
+  attachments?: ChatAttachment[];
 };
 
 export type RunMode = "agent" | "plan" | "goal";
 
-export type OmpWireEvent = {
+export type EngineEvent = {
   type: string;
   [key: string]: unknown;
 };
-
-export type MacModelInput = "text" | "image" | "video" | "file";
 
 export type ProviderModel = {
   id: string;
@@ -172,19 +205,50 @@ export type ProviderModel = {
   input: string[];
   thinkingLevels?: ThinkingLevel[];
   thinkingFormat?: "openai" | "zai";
-  /** Where the metadata came from, shown in the editor. */
-  source?: "builtin" | "models.dev" | "default" | "manual";
+  /**
+   * Where the metadata came from. `native` is a pi-coding-agent built-in model
+   * (cost and request compat included); `default` means models.dev had no entry.
+   */
+  source?: "models.dev" | "native" | "default";
 };
+
+/** Streaming APIs offered in settings; values match pi-coding-agent's `api` field. */
+export const PROVIDER_APIS = ["openai-completions", "openai-responses", "anthropic-messages"] as const;
+
+export type ProviderApi = (typeof PROVIDER_APIS)[number];
+
+/**
+ * `builtin` is FastVibe's own endpoint, `native` is a pi-coding-agent built-in
+ * provider configured with an API key, and `custom` is a user-typed endpoint.
+ *
+ * The distinction matters to the engine: native providers' models already live in
+ * the SDK registry, so they are never written to `models.json`.
+ */
+export type ProviderKind = "builtin" | "native" | "custom";
 
 export type ProviderConfig = {
   id: string;
-  kind: "builtin" | "custom";
+  kind: ProviderKind;
   name: string;
   baseUrl: string;
-  api: "openai-completions";
+  /** Native providers report the SDK's own api (e.g. `google-generative-ai`). */
+  api: string;
   apiKeyEnv: string;
   hasKey: boolean;
+  enabled: boolean;
   models: ProviderModel[];
+};
+
+/** A pi-coding-agent built-in provider offered in 添加供应商. */
+export type NativeProviderConfig = {
+  id: string;
+  name: string;
+  api: string;
+  baseUrl: string;
+  models: ProviderModel[];
+  /** False when it needs OAuth or cloud credentials rather than a pasted key. */
+  supported: boolean;
+  unsupportedReason?: string;
 };
 
 export type ProviderDraft = {
@@ -223,6 +287,11 @@ export type Conversation = {
   sessionId?: string;
   updatedAt: number;
   preview?: string;
+  worktree?: { path: string; branch: string };
+  /** Hidden from the left sidebar; lives in the right side pane. */
+  kind?: "side-chat";
+  /** Parent conversation for a side-chat tab. */
+  parentId?: string;
 };
 
 export type WorkspaceSnapshot = {
@@ -234,16 +303,28 @@ export type WorkspaceSnapshot = {
 export type ConversationOpenResult = WorkspaceSnapshot & {
   conversation: Conversation;
   messages: ChatMessage[];
-  state: OmpSessionState | null;
-  status: OmpStatus;
+  state: EngineSessionState | null;
+  status: EngineStatus;
+};
+
+export type MultiRunRequest = {
+  project?: string;
+  prompt: string;
+  models: Array<{ provider: string; modelId: string }>;
+  name?: string;
+  isolate?: boolean;
+};
+
+export type MultiRunResult = WorkspaceSnapshot & {
+  conversationIds: string[];
 };
 
 /** Pushed when a conversation finishes initialising in the background. */
 export type ConversationReadyEvent = {
   id: string;
   messages: ChatMessage[];
-  state: OmpSessionState | null;
-  status: OmpStatus;
+  state: EngineSessionState | null;
+  status: EngineStatus;
 };
 
 export type ConversationDeleteResult = WorkspaceSnapshot & {
@@ -252,4 +333,47 @@ export type ConversationDeleteResult = WorkspaceSnapshot & {
 
 export type ProjectAddResult = WorkspaceSnapshot & {
   project: Project;
+};
+
+/** Windows supported by the 使用统计 settings pane. */
+export type UsageRange = "7d" | "30d" | "90d" | "365d" | "all";
+
+/** One day of aggregated engine usage. `cost` is USD as reported by the provider. */
+export type UsageMetrics = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  /** Total tokens (input + output + cache), as reported by the SDK. */
+  tokens: number;
+  cost: number;
+  /** Assistant turns, i.e. requests. Drives the activity heatmap. */
+  requests: number;
+  toolCalls: number;
+};
+
+export type UsageDay = UsageMetrics & { date: string };
+
+export type UsageTotals = UsageMetrics & {
+  /** Days with at least one request inside the window. */
+  activeDays: number;
+};
+
+export type UsageModelBreakdown = UsageMetrics & {
+  provider: string;
+  model: string;
+};
+
+export type UsageStats = {
+  range: UsageRange;
+  /** Inclusive local-date window (`YYYY-MM-DD`) covered by `days`. */
+  from: string;
+  to: string;
+  totals: UsageTotals;
+  /** Only days with activity, ascending; gaps are filled by the renderer. */
+  days: UsageDay[];
+  /** Models seen in the window, highest token usage first. */
+  models: UsageModelBreakdown[];
+  /** Session transcripts that contributed to the totals. */
+  sessions: number;
 };

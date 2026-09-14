@@ -1,13 +1,6 @@
 import { useState, type JSX } from "react";
-import {
-  Bot,
-  Check,
-  Download,
-  ListTodo,
-  ListTree,
-  MoreHorizontal,
-  Scissors,
-} from "lucide-react";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { BotIcon, Download01Icon, MoreHorizontalIcon, ScissorIcon } from "@hugeicons/core-free-icons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -31,8 +24,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
 import type {
   ChatMessage,
-  OmpSessionState,
-  QueuedPrompt,
+  EngineSessionState,
   SessionStats,
   SubagentInfo,
 } from "@shared/types";
@@ -51,7 +43,7 @@ export function SessionMenu({
   onToggleFollowUp,
   onExport,
 }: {
-  session: OmpSessionState | null;
+  session: EngineSessionState | null;
   subagents: SubagentInfo[];
   streams: Record<string, ChatMessage[]>;
   stats?: SessionStats | null;
@@ -70,14 +62,14 @@ export function SessionMenu({
     <>
       <DropdownMenu>
         <DropdownMenuTrigger render={<Button size="icon-sm" variant="ghost" />}>
-          <MoreHorizontal />
+          <HugeiconsIcon strokeWidth={2} icon={MoreHorizontalIcon} />
           <span className="sr-only">会话设置</span>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-56 min-w-56">
           <DropdownMenuGroup>
             <DropdownMenuLabel>会话</DropdownMenuLabel>
             <DropdownMenuItem onClick={() => setCompactOpen(true)}>
-              <Scissors />
+              <HugeiconsIcon strokeWidth={2} icon={ScissorIcon} />
               压缩上下文
             </DropdownMenuItem>
             <DropdownMenuCheckboxItem
@@ -113,7 +105,7 @@ export function SessionMenu({
           <DropdownMenuGroup>
             {subagents.length > 0 ? (
               <DropdownMenuItem onClick={() => setAgentsOpen(true)}>
-                <Bot />
+                <HugeiconsIcon strokeWidth={2} icon={BotIcon} />
                 查看子 Agent
                 <Badge variant="secondary" className="ml-auto">
                   {subagents.length}
@@ -121,7 +113,7 @@ export function SessionMenu({
               </DropdownMenuItem>
             ) : null}
             <DropdownMenuItem onClick={onExport}>
-              <Download />
+              <HugeiconsIcon strokeWidth={2} icon={Download01Icon} />
               导出 HTML
             </DropdownMenuItem>
             {stats?.tokens?.total != null ? (
@@ -174,21 +166,23 @@ export function SessionMenu({
   );
 }
 
-function SubagentBrowser({
+export function SubagentBrowser({
   subagents,
   streams,
+  initialId,
 }: {
   subagents: SubagentInfo[];
   streams: Record<string, ChatMessage[]>;
+  initialId?: string | null;
 }): JSX.Element {
-  const [active, setActive] = useState<string | null>(subagents[0]?.id ?? null);
+  const [active, setActive] = useState<string | null>(initialId ?? subagents[0]?.id ?? null);
   const [loaded, setLoaded] = useState<Record<string, ChatMessage[]>>({});
 
   async function select(id: string): Promise<void> {
     setActive(id);
     if (streams[id]?.length || loaded[id]) return;
     try {
-      const messages = await window.fastvibe.omp.getSubagentMessages(id);
+      const messages = await window.fastvibe.engine.getSubagentMessages(id);
       setLoaded((prev) => ({ ...prev, [id]: messages }));
     } catch {
       setLoaded((prev) => ({ ...prev, [id]: [] }));
@@ -225,70 +219,7 @@ function SubagentBrowser({
   );
 }
 
-/** Slim status strip shown only when there is a plan, queue, or running agent. */
-export function RunStatusBar({
-  session,
-  queued,
-}: {
-  session: OmpSessionState | null;
-  queued: QueuedPrompt[];
-}): JSX.Element | null {
-  const todos = session?.todoPhases?.flatMap((phase) => phase.tasks) ?? [];
-  const used = usagePercent(session);
-  const show = todos.length > 0 || queued.length > 0;
-  const [open, setOpen] = useState(true);
-  if (!show) return null;
-
-  const done = todos.filter((task) => task.status === "completed").length;
-
-  return (
-    <div className="mx-auto mb-2 w-full max-w-3xl px-6">
-      <div className="flex items-center gap-3 rounded-lg border border-border bg-card px-3 py-1.5 text-xs">
-        {used != null ? (
-          <span className="shrink-0 text-muted-foreground">上下文 {Math.round(used)}%</span>
-        ) : null}
-        {todos.length > 0 ? (
-          <button
-            type="button"
-            className="flex items-center gap-1.5 text-muted-foreground hover:text-foreground"
-            onClick={() => setOpen((value) => !value)}
-          >
-            <ListTodo className="size-3.5" />
-            计划 {done}/{todos.length}
-          </button>
-        ) : null}
-        {queued.length > 0 ? (
-          <span className="flex items-center gap-1.5 text-muted-foreground">
-            <ListTree className="size-3.5" />
-            队列 {queued.length}
-          </span>
-        ) : null}
-      </div>
-      {open && todos.length > 0 ? (
-        <div className="mt-1 space-y-1 rounded-lg border border-border bg-card px-3 py-2">
-          {todos.map((task) => (
-            <div key={task.id} className="flex items-start gap-2 text-xs">
-              <span className="mt-0.5 text-muted-foreground">
-                {task.status === "completed" ? (
-                  <Check className="size-3.5" />
-                ) : task.status === "in_progress" ? (
-                  "…"
-                ) : (
-                  "○"
-                )}
-              </span>
-              <span className={task.status === "completed" ? "text-muted-foreground line-through" : ""}>
-                {task.content}
-              </span>
-            </div>
-          ))}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-export function usagePercent(session: OmpSessionState | null): number | null {
+export function usagePercent(session: EngineSessionState | null): number | null {
   const usage = session?.contextUsage;
   if (!usage) return null;
   if (usage.tokens != null && usage.contextWindow > 0) {

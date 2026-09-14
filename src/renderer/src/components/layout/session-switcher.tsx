@@ -1,5 +1,6 @@
 import { useMemo, useState, type JSX } from "react";
-import { Command, Folder } from "lucide-react";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { CommandIcon, Folder01Icon } from "@hugeicons/core-free-icons";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -24,7 +25,7 @@ export function SessionSwitcher({
   const projectNames = useMemo(() => new Map(projects.map((project) => [project.cwd, project.name])), [projects]);
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    return conversations.filter((item) => !needle || `${item.title} ${item.preview ?? ""} ${projectNames.get(item.project ?? "") ?? ""}`.toLowerCase().includes(needle));
+    return conversations.filter((item) => item.preview && (!needle || `${item.title} ${item.preview ?? ""} ${projectNames.get(item.project ?? "") ?? ""}`.toLowerCase().includes(needle)));
   }, [conversations, projectNames, query]);
 
   function close(): void {
@@ -36,7 +37,7 @@ export function SessionSwitcher({
     <Dialog open={open} onOpenChange={(next) => { if (!next) setQuery(""); onOpenChange(next); }}>
       <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-xl">
         <DialogHeader className="border-b border-border px-4 py-3">
-          <DialogTitle className="flex items-center gap-2 text-sm"><Command className="size-4" />切换会话</DialogTitle>
+          <DialogTitle className="flex items-center gap-2 text-sm"><HugeiconsIcon strokeWidth={2} icon={CommandIcon} className="size-4" />切换会话</DialogTitle>
         </DialogHeader>
         <div className="border-b border-border p-3">
           <Input autoFocus value={query} placeholder="搜索会话、项目或内容" onChange={(event) => setQuery(event.target.value)} />
@@ -49,7 +50,7 @@ export function SessionSwitcher({
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-sm font-medium">{item.title || "新会话"}</span>
                   <span className="mt-0.5 flex items-center gap-1 truncate text-xs text-muted-foreground">
-                    {item.project ? <><Folder className="size-3" />{projectNames.get(item.project) ?? item.project}</> : "无项目"}
+                    {item.project ? <><HugeiconsIcon strokeWidth={2} icon={Folder01Icon} className="size-3" />{projectNames.get(item.project) ?? item.project}</> : "无项目"}
                     {item.preview ? <> · {item.preview}</> : null}
                   </span>
                 </span>

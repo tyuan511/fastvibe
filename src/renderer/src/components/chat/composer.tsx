@@ -1,20 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type JSX, type KeyboardEvent, type ReactNode } from "react";
-import {
-  ArrowUp,
-  ChevronDown,
-  FolderOpen,
-  Hand,
-  Mic,
-  Plus,
-  Search,
-  Paperclip,
-  ShieldAlert,
-  ShieldCheck,
-  Sparkles,
-  Square,
-  X,
-} from "lucide-react";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { Add01Icon, ArrowDown01Icon, ArrowUp02Icon, AttachmentIcon, Cancel01Icon, Folder01Icon, HandIcon, Mic01Icon, Search01Icon, Settings02Icon, ShieldAlertIcon, ShieldCheckIcon, SparklesIcon, SquareIcon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
+import { IconButton } from "@/components/icon-button";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -36,13 +24,14 @@ import type {
   FastVibeModel,
   Project,
   PermissionMode,
-  QueueBehavior,
+  QueuePauseReason,
   QueuedPrompt,
   SlashCommand,
   ThinkingLevel,
 } from "@shared/types";
 import { filesToAttachments } from "@/lib/attachments";
 import { cn } from "@/lib/utils";
+import { MessageQueue } from "./message-queue";
 
 const THINKING_LABELS: Record<ThinkingLevel, string> = {
   off: "关闭推理",
@@ -52,11 +41,6 @@ const THINKING_LABELS: Record<ThinkingLevel, string> = {
   high: "高",
   xhigh: "极高",
   max: "最大",
-};
-
-const QUEUE_LABELS: Record<QueueBehavior, string> = {
-  followUp: "完成后执行",
-  steer: "立即打断",
 };
 
 const PERMISSION_LABELS: Record<PermissionMode, string> = {
@@ -94,6 +78,50 @@ function Chip({
   );
 }
 
+const CONTEXT_RING_SIZE = 14;
+const CONTEXT_RING_STROKE = 2;
+const CONTEXT_RING_RADIUS = (CONTEXT_RING_SIZE - CONTEXT_RING_STROKE) / 2;
+const CONTEXT_RING_CIRCUMFERENCE = 2 * Math.PI * CONTEXT_RING_RADIUS;
+
+function ContextUsageRing({ percent }: { percent: number }): JSX.Element {
+  const clamped = Math.min(100, Math.max(0, percent));
+  const offset = CONTEXT_RING_CIRCUMFERENCE * (1 - clamped / 100);
+  const color =
+    clamped >= 90 ? "text-destructive" : clamped >= 70 ? "text-warning" : "text-muted-foreground";
+
+  return (
+    <svg
+      viewBox={`0 0 ${CONTEXT_RING_SIZE} ${CONTEXT_RING_SIZE}`}
+      className="size-3.5 -rotate-90"
+      aria-hidden="true"
+    >
+      <circle
+        cx={CONTEXT_RING_SIZE / 2}
+        cy={CONTEXT_RING_SIZE / 2}
+        r={CONTEXT_RING_RADIUS}
+        fill="none"
+        stroke="var(--muted-foreground)"
+        strokeOpacity={0.2}
+        strokeWidth={CONTEXT_RING_STROKE}
+      />
+      {clamped > 0 ? (
+        <circle
+          cx={CONTEXT_RING_SIZE / 2}
+          cy={CONTEXT_RING_SIZE / 2}
+          r={CONTEXT_RING_RADIUS}
+          fill="none"
+          className={color}
+          stroke="currentColor"
+          strokeWidth={CONTEXT_RING_STROKE}
+          strokeLinecap="round"
+          strokeDasharray={CONTEXT_RING_CIRCUMFERENCE}
+          strokeDashoffset={offset}
+        />
+      ) : null}
+    </svg>
+  );
+}
+
 export function Composer({
   value,
   disabled,
@@ -105,10 +133,12 @@ export function Composer({
   workspaceLabel,
   projects,
   project,
+  newSession,
+  hideProjectPicker = false,
   commands,
   permissionMode,
-  queueBehavior,
   queued,
+  queuePause,
   attachments,
   history,
   contextPercent,
@@ -119,11 +149,16 @@ export function Composer({
   onPickWorkspace,
   onSelectProject,
   onModelChange,
+  onManageModels,
   onThinkingChange,
   onPermissionModeChange,
-  onQueueBehaviorChange,
   onAttachmentsChange,
+  onRemoveQueued,
+  onEditQueued,
+  onSendQueuedNow,
+  onResumeQueue,
   sendOnEnter = true,
+  className,
 }: {
   value: string;
   disabled: boolean;
@@ -135,11 +170,15 @@ export function Composer({
   workspaceLabel: string;
   projects: Project[];
   project?: string;
+  /** New sessions have no top bar, so the project binding is shown above the input. */
+  newSession?: boolean;
+  /** Hide the project chip entirely (auxiliary chats inherit the parent workspace). */
+  hideProjectPicker?: boolean;
   commands: SlashCommand[];
   permissionMode: PermissionMode;
   onPermissionModeChange: (mode: PermissionMode) => void;
-  queueBehavior: QueueBehavior;
   queued: QueuedPrompt[];
+  queuePause: QueuePauseReason | null;
   attachments: ChatAttachment[];
   history: string[];
   contextPercent?: number | null;
@@ -150,10 +189,16 @@ export function Composer({
   onPickWorkspace: () => void;
   onSelectProject: (project: string | null) => void;
   onModelChange: (provider: string, modelId: string) => void;
+  /** Opens Settings → 模型管理, where providers and their models are configured. */
+  onManageModels: () => void;
   onThinkingChange: (level: string) => void;
-  onQueueBehaviorChange: (behavior: QueueBehavior) => void;
   onAttachmentsChange: (attachments: ChatAttachment[]) => void;
+  onRemoveQueued: (id: string) => void;
+  onEditQueued: (id: string) => void;
+  onSendQueuedNow: (id: string) => void;
+  onResumeQueue: () => void;
   sendOnEnter?: boolean;
+  className?: string;
 }): JSX.Element {
   const fileRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -343,7 +388,7 @@ export function Composer({
 
   return (
     <div
-      className="mx-auto w-full max-w-3xl px-6 pb-5"
+      className={cn("mx-auto w-full max-w-3xl px-6 pb-5", className)}
       onDragOver={(event) => {
         event.preventDefault();
         setDragging(true);
@@ -366,7 +411,7 @@ export function Composer({
               onMouseEnter={() => setSlashIndex(index)}
               onClick={() => applySlash(item.name)}
             >
-              <Sparkles className="mt-0.5 size-3.5 text-muted-foreground" />
+              <HugeiconsIcon strokeWidth={2} icon={SparklesIcon} className="mt-0.5 size-3.5 text-muted-foreground" />
               <span className="min-w-0">
                 <span className="font-medium">/{item.name}</span>
                 {item.description ? (
@@ -374,20 +419,6 @@ export function Composer({
                 ) : null}
               </span>
             </button>
-          ))}
-        </div>
-      ) : null}
-
-      {queued.length > 0 ? (
-        <div className="mb-2 space-y-1">
-          {queued.map((item) => (
-            <div
-              key={item.id}
-              className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-2.5 py-1.5 text-[12px]"
-            >
-              <span className="min-w-0 flex-1 truncate">{item.text}</span>
-              <span className="shrink-0 text-[11px] text-muted-foreground">{QUEUE_LABELS[item.behavior]}</span>
-            </div>
           ))}
         </div>
       ) : null}
@@ -415,7 +446,8 @@ export function Composer({
         </div>
       ) : null}
 
-      <div className="mb-1.5 ml-1 flex items-center gap-1">
+      {!hideProjectPicker && (newSession || !project) ? (
+        <div className="mb-1.5 ml-1 flex items-center gap-1">
         <Popover
           open={projectOpen}
           onOpenChange={(open) => {
@@ -444,17 +476,17 @@ export function Composer({
                 onSelectProject(null);
               } : undefined}
             >
-              <FolderOpen className={cn("absolute inset-0 size-4 transition-opacity", project && "group-hover:opacity-0")} />
-              {project ? <X className="absolute inset-0 size-4 opacity-0 transition-opacity group-hover:opacity-100" /> : null}
+              <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} className={cn("absolute inset-0 size-4 transition-opacity", project && "group-hover:opacity-0")} />
+              {project ? <HugeiconsIcon strokeWidth={2} icon={Cancel01Icon} className="absolute inset-0 size-4 opacity-0 transition-opacity group-hover:opacity-100" /> : null}
             </span>
             <span className="max-w-48 truncate">{project ? projects.find((item) => item.cwd === project)?.name ?? workspaceLabel : "选择项目"}</span>
             {!project ? (
-              <ChevronDown className="size-3.5" />
+              <HugeiconsIcon strokeWidth={2} icon={ArrowDown01Icon} className="size-3.5" />
             ) : null}
           </PopoverTrigger>
           <PopoverContent align="start" side="top" sideOffset={6} className="w-[300px] gap-0 rounded-2xl p-1.5 shadow-lg">
             <div className="relative mb-0.5">
-              <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+              <HugeiconsIcon strokeWidth={2} icon={Search01Icon} className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
               <Input
                 autoFocus
                 value={projectQuery}
@@ -477,7 +509,7 @@ export function Composer({
                     setProjectOpen(false);
                   }}
                 >
-                  <FolderOpen className="size-4 shrink-0 text-muted-foreground" />
+                  <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} className="size-4 shrink-0 text-muted-foreground" />
                   <span className="truncate">{item.name}</span>
                 </button>
               )) : (
@@ -493,16 +525,27 @@ export function Composer({
                 onPickWorkspace();
               }}
             >
-              <Plus className="size-4" />
+              <HugeiconsIcon strokeWidth={2} icon={Add01Icon} className="size-4" />
               <span>新建项目</span>
             </button>
           </PopoverContent>
         </Popover>
       </div>
+      ) : null}
+
+      <MessageQueue
+        items={queued}
+        pauseReason={queuePause}
+        draft={value}
+        onRemove={onRemoveQueued}
+        onEdit={onEditQueued}
+        onSendNow={onSendQueuedNow}
+        onResume={onResumeQueue}
+      />
 
       <div
         className={cn(
-          "rounded-[22px] border border-border bg-card shadow-sm transition-colors focus-within:border-ring",
+          "relative z-10 rounded-[22px] border border-border bg-card shadow-sm transition-colors focus-within:border-ring",
           dragging && "ring-2 ring-ring",
         )}
       >
@@ -521,7 +564,7 @@ export function Composer({
           rows={1}
           value={value}
           disabled={disabled}
-          placeholder={placeholder ?? "随心输入"}
+          placeholder={streaming ? "继续输入以排队后续修改" : placeholder ?? "随心输入"}
           className="field-sizing-content max-h-56 min-h-[52px] resize-none border-0 bg-transparent px-4 pt-3.5 text-[13.5px] leading-6 shadow-none focus-visible:ring-0 disabled:bg-transparent disabled:opacity-100 dark:bg-transparent"
           onChange={(event) => handleChange(event.target.value)}
           onKeyDown={handleKeyDown}
@@ -529,34 +572,41 @@ export function Composer({
         />
 
         <div className="flex items-center gap-1 px-2.5 pb-2.5">
-          <Button
+          <IconButton
             size="icon-sm"
             variant="ghost"
             className="rounded-full text-muted-foreground"
+            label="添加附件"
             disabled={disabled}
             onClick={() => fileRef.current?.click()}
-            aria-label="添加附件"
           >
-            <Paperclip />
-          </Button>
-          <Button size="icon-sm" variant="ghost" className={cn("rounded-full text-muted-foreground", listening && "bg-red-50 text-red-600 dark:bg-red-950/30")} disabled={disabled} onClick={toggleVoice} aria-label={listening ? "停止语音输入" : "语音输入"} title={listening ? "停止语音输入" : "语音输入"}>
-            <Mic />
-          </Button>
+            <HugeiconsIcon strokeWidth={2} icon={AttachmentIcon} />
+          </IconButton>
+          <IconButton
+            size="icon-sm"
+            variant="ghost"
+            className={cn("rounded-full text-muted-foreground", listening && "bg-destructive/10 text-destructive")}
+            label={listening ? "停止语音输入" : "语音输入"}
+            disabled={disabled}
+            onClick={toggleVoice}
+          >
+            <HugeiconsIcon strokeWidth={2} icon={Mic01Icon} />
+          </IconButton>
 
           <DropdownMenu>
             <DropdownMenuTrigger
               render={
-                <Chip className="text-orange-600 hover:bg-orange-50 hover:text-orange-700 dark:hover:bg-orange-950/30">
-                  <ShieldAlert className="size-4" />
+                <Chip className="text-warning hover:bg-warning/10 hover:text-warning">
+                  <HugeiconsIcon strokeWidth={2} icon={ShieldAlertIcon} className="size-4" />
                   {PERMISSION_LABELS[permissionMode]}
-                  <ChevronDown className="size-3" />
+                  <HugeiconsIcon strokeWidth={2} icon={ArrowDown01Icon} className="size-3" />
                 </Chip>
               }
             />
             <DropdownMenuContent align="start" className="w-[300px] min-w-[300px] p-1">
               <DropdownMenuGroup>
                 <DropdownMenuLabel className="px-1.5 py-1 text-xs text-muted-foreground">
-                  应如何批准 ChatGPT 操作？
+                  应如何批准 FastVibe 操作？
                 </DropdownMenuLabel>
               </DropdownMenuGroup>
               <DropdownMenuRadioGroup
@@ -564,17 +614,17 @@ export function Composer({
                 onValueChange={(value) => onPermissionModeChange(value as PermissionMode)}
               >
                 {(["ask", "smart", "full"] as PermissionMode[]).map((mode) => {
-                  const Icon = mode === "ask" ? Hand : mode === "smart" ? ShieldAlert : ShieldCheck;
+                  const modeIcon = mode === "ask" ? HandIcon : mode === "smart" ? ShieldAlertIcon : ShieldCheckIcon;
                   return (
                     <DropdownMenuRadioItem
                       key={mode}
                       value={mode}
                       className={cn(
                         "items-start gap-1.5 rounded-lg px-1.5 py-1.5 pr-7",
-                        mode === permissionMode && "text-orange-600 focus:text-orange-600",
+                        mode === permissionMode && "text-warning focus:text-warning",
                       )}
                     >
-                      <Icon className="mt-0.5 size-3.5 shrink-0" />
+                      <HugeiconsIcon strokeWidth={2} icon={modeIcon} className="mt-0.5 size-3.5 shrink-0" />
                       <span className="min-w-0">
                         <span className="block text-[13px] font-medium leading-4">{PERMISSION_LABELS[mode]}</span>
                         <span className="mt-0.5 block text-[11px] font-normal leading-3.5 text-muted-foreground">
@@ -593,7 +643,7 @@ export function Composer({
           {contextUsedPercent != null && contextWindow > 0 ? (
             <div className="group relative">
               <div className="pointer-events-none absolute bottom-[calc(100%+12px)] right-0 z-20 w-48 rounded-2xl border border-border bg-popover px-4 py-3 text-center text-sm shadow-lg opacity-0 transition-opacity group-hover:opacity-100">
-                <div className="font-semibold text-muted-foreground">背景信息窗口：</div>
+                <div className="font-semibold text-muted-foreground">上下文窗口：</div>
                 <div className="mt-1 leading-5">
                   {contextUsedPercent}% 已用（剩余 {Math.max(0, 100 - contextUsedPercent)}%）
                 </div>
@@ -604,11 +654,7 @@ export function Composer({
                 className="flex size-7 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                 aria-label="查看上下文窗口使用情况"
               >
-                <span
-                  className="size-3.5 rounded-full border-2 border-muted-foreground/20"
-                  style={{ borderTopColor: "var(--muted-foreground)" }}
-                  aria-hidden="true"
-                />
+                  <ContextUsageRing percent={contextUsedPercent} />
               </button>
             </div>
           ) : null}
@@ -619,7 +665,7 @@ export function Composer({
                 render={
                   <Chip className="max-w-52">
                     <span className="truncate">{modelLabel}</span>
-                    <ChevronDown className="size-3" />
+                    <HugeiconsIcon strokeWidth={2} icon={ArrowDown01Icon} className="size-3" />
                   </Chip>
                 }
               />
@@ -627,7 +673,9 @@ export function Composer({
                 <DropdownMenuGroup>
                   <DropdownMenuLabel>模型</DropdownMenuLabel>
                   {models.length === 0 ? (
-                    <DropdownMenuLabel className="font-normal">暂无可用模型</DropdownMenuLabel>
+                    <DropdownMenuLabel className="font-normal text-muted-foreground">
+                      还没有可用的模型
+                    </DropdownMenuLabel>
                   ) : (
                     models.map((item) => (
                       <DropdownMenuCheckboxItem
@@ -640,6 +688,11 @@ export function Composer({
                     ))
                   )}
                 </DropdownMenuGroup>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={onManageModels}>
+                  <HugeiconsIcon strokeWidth={2} icon={Settings02Icon} className="size-3.5" />
+                  {models.length === 0 ? "添加模型" : "管理模型"}
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
@@ -649,7 +702,7 @@ export function Composer({
               render={
                 <Chip>
                   {THINKING_LABELS[thinkingValue]}
-                  <ChevronDown className="size-3" />
+                  <HugeiconsIcon strokeWidth={2} icon={ArrowDown01Icon} className="size-3" />
                 </Chip>
               }
             />
@@ -669,70 +722,40 @@ export function Composer({
             </DropdownMenuContent>
           </DropdownMenu>
 
-          {streaming ? (
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                render={
-                  <Chip>
-                    {QUEUE_LABELS[queueBehavior]}
-                    <ChevronDown className="size-3" />
-                  </Chip>
-                }
-              />
-              <DropdownMenuContent align="end" className="w-36 min-w-36">
-                <DropdownMenuGroup>
-                  <DropdownMenuLabel>发送方式</DropdownMenuLabel>
-                  <DropdownMenuCheckboxItem
-                    checked={queueBehavior === "followUp"}
-                    onCheckedChange={() => onQueueBehaviorChange("followUp")}
-                  >
-                    完成后执行
-                  </DropdownMenuCheckboxItem>
-                  <DropdownMenuCheckboxItem
-                    checked={queueBehavior === "steer"}
-                    onCheckedChange={() => onQueueBehaviorChange("steer")}
-                  >
-                    立即打断
-                  </DropdownMenuCheckboxItem>
-                </DropdownMenuGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          ) : null}
-
           {streaming && hasContent ? (
-            <Button
+            <IconButton
               size="icon-sm"
               variant="default"
               className="rounded-full"
+              label="加入队列"
               disabled={disabled}
               onClick={submit}
-              aria-label="加入队列"
             >
-              <ArrowUp />
-            </Button>
+              <HugeiconsIcon strokeWidth={2} icon={ArrowUp02Icon} />
+            </IconButton>
           ) : null}
 
           {streaming ? (
-            <Button
+            <IconButton
               size="icon-sm"
               variant="secondary"
               className="rounded-full"
+              label="停止"
               onClick={onAbort}
-              aria-label="停止"
             >
-              <Square className="size-3.5 fill-current" />
-            </Button>
+              <HugeiconsIcon strokeWidth={2} icon={SquareIcon} className="size-3.5 fill-current" />
+            </IconButton>
           ) : (
-            <Button
+            <IconButton
               size="icon-sm"
               variant="default"
               className="rounded-full"
+              label="发送"
               disabled={disabled || !hasContent}
               onClick={submit}
-              aria-label="发送"
             >
-              <ArrowUp />
-            </Button>
+              <HugeiconsIcon strokeWidth={2} icon={ArrowUp02Icon} />
+            </IconButton>
           )}
         </div>
       </div>

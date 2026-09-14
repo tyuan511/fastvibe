@@ -1,5 +1,6 @@
 import { useState, type JSX } from "react";
-import { ArrowDown, ArrowUp, Check, GitBranch, Minus, Plus, Terminal } from "lucide-react";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { Add01Icon, ArrowDown02Icon, ArrowUp02Icon, GitBranchIcon, MinusSignIcon, TerminalIcon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -13,7 +14,7 @@ export function GitStatusDialog({ open, status, branches, diffPath, diffText, on
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-lg">
         <DialogHeader className="border-b border-border px-4 py-3">
-          <DialogTitle className="flex items-center gap-2 text-sm"><GitBranch className="size-4" />工作区变更</DialogTitle>
+          <DialogTitle className="flex items-center gap-2 text-sm"><HugeiconsIcon strokeWidth={2} icon={GitBranchIcon} className="size-4" />工作区变更</DialogTitle>
         </DialogHeader>
         <div className="flex items-center gap-3 border-b border-border px-4 py-3 text-xs text-muted-foreground">
           {branches.length > 0 && onCheckout ? <select value={status?.branch ?? ""} onChange={(event) => onCheckout(event.target.value)} className="max-w-40 rounded-md border border-border bg-background px-2 py-1 text-xs font-medium"><option value="" disabled>选择分支</option>{branches.map((branch) => <option key={branch.name} value={branch.name}>{branch.name}</option>)}</select> : <span className="font-medium text-foreground">{status?.branch ?? "HEAD"}</span>}
@@ -29,7 +30,7 @@ export function GitStatusDialog({ open, status, branches, diffPath, diffText, on
               const staged = file.index !== " " && file.index !== "?";
               const added = file.index === "A" || file.worktree === "A" || file.index === "?";
               return <button type="button" key={`${file.index}${file.worktree}:${file.path}`} className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-xs text-left hover:bg-accent/60" onClick={() => onDiff?.(file.path)}>
-                {added ? <Plus className="size-3.5 text-emerald-600" /> : staged ? <Check className="size-3.5 text-blue-600" /> : <Minus className="size-3.5 text-amber-600" />}
+                {added ? <HugeiconsIcon strokeWidth={2} icon={Add01Icon} className="size-3.5 text-success" /> : staged ? <HugeiconsIcon strokeWidth={2} icon={Tick02Icon} className="size-3.5 text-info" /> : <HugeiconsIcon strokeWidth={2} icon={MinusSignIcon} className="size-3.5 text-warning" />}
                 <span className="min-w-0 flex-1 truncate font-mono">{file.path}</span>
                 <span className="text-[10px] text-muted-foreground">{file.index}{file.worktree}</span>
               </button>;
@@ -38,7 +39,7 @@ export function GitStatusDialog({ open, status, branches, diffPath, diffText, on
         </ScrollArea>
         {diffText ? <div className="border-t border-border bg-muted/30 p-3"><p className="mb-2 text-[11px] font-medium text-muted-foreground">{diffPath ?? "diff"}</p><pre className="max-h-48 overflow-auto whitespace-pre-wrap font-mono text-[10px] leading-4">{diffText}</pre></div> : null}
         {status?.isRepository && onStageAll && onCommit ? <div className="flex gap-2 border-t border-border px-4 py-3"><Button size="sm" variant="outline" onClick={onStageAll}>暂存全部</Button><Input value={message} placeholder="提交信息" className="h-8 text-xs" onChange={(event) => setMessage(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && message.trim()) { onCommit(message.trim()); setMessage(""); } }} /><Button size="sm" disabled={!message.trim()} onClick={() => { onCommit(message.trim()); setMessage(""); }}>提交</Button></div> : null}
-        {status?.cwd && (onOpenTerminal || onPull || onPush) ? <div className="flex justify-end gap-2 border-t border-border px-4 py-3">{onPull ? <Button size="sm" variant="outline" onClick={onPull}><ArrowDown className="size-3.5" />拉取</Button> : null}{onPush ? <Button size="sm" variant="outline" onClick={onPush}><ArrowUp className="size-3.5" />推送</Button> : null}{onOpenTerminal ? <Button size="sm" variant="outline" onClick={onOpenTerminal}><Terminal className="size-3.5" />打开终端</Button> : null}</div> : null}
+        {status?.cwd && (onOpenTerminal || onPull || onPush) ? <div className="flex justify-end gap-2 border-t border-border px-4 py-3">{onPull ? <Button size="sm" variant="outline" onClick={onPull}><HugeiconsIcon strokeWidth={2} icon={ArrowDown02Icon} className="size-3.5" />拉取</Button> : null}{onPush ? <Button size="sm" variant="outline" onClick={onPush}><HugeiconsIcon strokeWidth={2} icon={ArrowUp02Icon} className="size-3.5" />推送</Button> : null}{onOpenTerminal ? <Button size="sm" variant="outline" onClick={onOpenTerminal}><HugeiconsIcon strokeWidth={2} icon={TerminalIcon} className="size-3.5" />打开终端</Button> : null}</div> : null}
       </DialogContent>
     </Dialog>
   );

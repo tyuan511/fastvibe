@@ -7,80 +7,95 @@ import type {
   ConversationReadyEvent,
   FastVibeModel,
   SessionStats,
-  OmpSessionState,
-  OmpStatus,
-  OmpWireEvent,
+  EngineSessionState,
+  EngineStatus,
+  EngineEvent,
   ProjectAddResult,
   PromptImage,
   ProviderConfig,
   ProviderModel,
+  NativeProviderConfig,
   SlashCommand,
   FilePreview,
   SubagentInfo,
+  UsageRange,
+  UsageStats,
   WorkspaceSnapshot,
+  MultiRunRequest,
+  MultiRunResult,
   ExtensionInfo,
   McpServerConfig,
   McpServerStatus,
+  SkillDraft,
+  SkillInfo,
 } from "@shared/types";
-import type { GitBranch, GitStatus } from "@shared/ipc";
+import type { GitBranch, GitDiffSource, GitStatus, TerminalDataEvent, TerminalSessionInfo } from "@shared/ipc";
 
 const api = {
-  omp: {
-    getStatus: (): Promise<OmpStatus> => ipcRenderer.invoke(Ipc.ompGetStatus),
-    start: (cwd?: string): Promise<OmpStatus> => ipcRenderer.invoke(Ipc.ompStart, { cwd }),
-    stop: (): Promise<OmpStatus> => ipcRenderer.invoke(Ipc.ompStop),
+  engine: {
+    getStatus: (): Promise<EngineStatus> => ipcRenderer.invoke(Ipc.engineGetStatus),
+    start: (cwd?: string): Promise<EngineStatus> => ipcRenderer.invoke(Ipc.engineStart, { cwd }),
+    stop: (): Promise<EngineStatus> => ipcRenderer.invoke(Ipc.engineStop),
     prompt: (
       message: string,
       options?: { streamingBehavior?: "steer" | "followUp"; images?: PromptImage[] },
-    ): Promise<void> => ipcRenderer.invoke(Ipc.ompPrompt, { message, ...options }),
+    ): Promise<void> => ipcRenderer.invoke(Ipc.enginePrompt, { message, ...options }),
     steer: (message: string, images?: PromptImage[]): Promise<void> =>
-      ipcRenderer.invoke(Ipc.ompSteer, { message, images }),
+      ipcRenderer.invoke(Ipc.engineSteer, { message, images }),
     followUp: (message: string, images?: PromptImage[]): Promise<void> =>
-      ipcRenderer.invoke(Ipc.ompFollowUp, { message, images }),
-    abort: (): Promise<void> => ipcRenderer.invoke(Ipc.ompAbort),
+      ipcRenderer.invoke(Ipc.engineFollowUp, { message, images }),
+    abort: (): Promise<void> => ipcRenderer.invoke(Ipc.engineAbort),
     clearQueue: (): Promise<{ steering: string[]; followUp: string[] }> =>
-      ipcRenderer.invoke(Ipc.ompClearQueue),
-    compact: (customInstructions?: string): Promise<OmpSessionState> =>
-      ipcRenderer.invoke(Ipc.ompCompact, { customInstructions }),
-    getCommands: (): Promise<SlashCommand[]> => ipcRenderer.invoke(Ipc.ompGetCommands),
-    getExtensions: (): Promise<ExtensionInfo[]> => ipcRenderer.invoke(Ipc.ompGetExtensions),
-    listMcpServers: (): Promise<McpServerStatus[]> => ipcRenderer.invoke(Ipc.ompListMcpServers),
-    saveMcpServers: (configs: McpServerConfig[]): Promise<McpServerStatus[]> => ipcRenderer.invoke(Ipc.ompSaveMcpServers, { configs }),
-    getSubagents: (): Promise<SubagentInfo[]> => ipcRenderer.invoke(Ipc.ompGetSubagents),
+      ipcRenderer.invoke(Ipc.engineClearQueue),
+    compact: (customInstructions?: string): Promise<EngineSessionState> =>
+      ipcRenderer.invoke(Ipc.engineCompact, { customInstructions }),
+    getCommands: (): Promise<SlashCommand[]> => ipcRenderer.invoke(Ipc.engineGetCommands),
+    getExtensions: (): Promise<ExtensionInfo[]> => ipcRenderer.invoke(Ipc.engineGetExtensions),
+    listMcpServers: (): Promise<McpServerStatus[]> => ipcRenderer.invoke(Ipc.engineListMcpServers),
+    saveMcpServers: (configs: McpServerConfig[]): Promise<McpServerStatus[]> => ipcRenderer.invoke(Ipc.engineSaveMcpServers, { configs }),
+    listSkills: (): Promise<SkillInfo[]> => ipcRenderer.invoke(Ipc.engineListSkills),
+    createSkill: (draft: SkillDraft): Promise<SkillInfo[]> => ipcRenderer.invoke(Ipc.engineCreateSkill, draft),
+    importSkill: (): Promise<SkillInfo[] | null> => ipcRenderer.invoke(Ipc.engineImportSkill),
+    removeSkill: (name: string): Promise<SkillInfo[]> => ipcRenderer.invoke(Ipc.engineRemoveSkill, { name }),
+    getSubagents: (): Promise<SubagentInfo[]> => ipcRenderer.invoke(Ipc.engineGetSubagents),
     getSubagentMessages: (subagentId: string): Promise<ChatMessage[]> =>
-      ipcRenderer.invoke(Ipc.ompGetSubagentMessages, { subagentId }),
+      ipcRenderer.invoke(Ipc.engineGetSubagentMessages, { subagentId }),
     respondPermission: (payload: {
       id: string;
       confirmed?: boolean;
       value?: string;
       cancelled?: boolean;
-    }): Promise<void> => ipcRenderer.invoke(Ipc.ompPermissionRespond, payload),
-    newSession: (): Promise<void> => ipcRenderer.invoke(Ipc.ompNewSession),
-    getState: (): Promise<OmpSessionState> => ipcRenderer.invoke(Ipc.ompGetState),
-    getModels: (): Promise<FastVibeModel[]> => ipcRenderer.invoke(Ipc.ompGetModels),
-    setModel: (provider: string, modelId: string): Promise<OmpSessionState> =>
-      ipcRenderer.invoke(Ipc.ompSetModel, { provider, modelId }),
-    setThinking: (level: string): Promise<OmpSessionState> =>
-      ipcRenderer.invoke(Ipc.ompSetThinking, { level }),
-    setInterruptMode: (mode: "immediate" | "wait"): Promise<OmpSessionState> =>
-      ipcRenderer.invoke(Ipc.ompSetInterrupt, { mode }),
-    setAutoCompaction: (enabled: boolean): Promise<OmpSessionState> =>
-      ipcRenderer.invoke(Ipc.ompSetAutoCompact, { enabled }),
-    branch: (entryId: string): Promise<ChatMessage[]> => ipcRenderer.invoke(Ipc.ompBranch, { entryId }),
-    getMessages: (): Promise<ChatMessage[]> => ipcRenderer.invoke(Ipc.ompGetMessages),
-    getStats: (): Promise<SessionStats> => ipcRenderer.invoke(Ipc.ompGetStats),
-    setSteeringMode: (mode: "all" | "one-at-a-time"): Promise<OmpSessionState> =>
-      ipcRenderer.invoke(Ipc.ompSetSteering, { mode }),
-    setFollowUpMode: (mode: "all" | "one-at-a-time"): Promise<OmpSessionState> =>
-      ipcRenderer.invoke(Ipc.ompSetFollowUp, { mode }),
-    exportHtml: (): Promise<string | undefined> => ipcRenderer.invoke(Ipc.ompExportHtml),
-    onEvent: (listener: (event: OmpWireEvent) => void): (() => void) => {
-      const handler = (_event: unknown, payload: OmpWireEvent): void => listener(payload);
+    }): Promise<void> => ipcRenderer.invoke(Ipc.enginePermissionRespond, payload),
+    newSession: (): Promise<void> => ipcRenderer.invoke(Ipc.engineNewSession),
+    getState: (): Promise<EngineSessionState> => ipcRenderer.invoke(Ipc.engineGetState),
+    getModels: (): Promise<FastVibeModel[]> => ipcRenderer.invoke(Ipc.engineGetModels),
+    setModel: (provider: string, modelId: string): Promise<EngineSessionState> =>
+      ipcRenderer.invoke(Ipc.engineSetModel, { provider, modelId }),
+    setThinking: (level: string): Promise<EngineSessionState> =>
+      ipcRenderer.invoke(Ipc.engineSetThinking, { level }),
+    setInterruptMode: (mode: "immediate" | "wait"): Promise<EngineSessionState> =>
+      ipcRenderer.invoke(Ipc.engineSetInterrupt, { mode }),
+    setAutoCompaction: (enabled: boolean): Promise<EngineSessionState> =>
+      ipcRenderer.invoke(Ipc.engineSetAutoCompact, { enabled }),
+    branch: (entryId: string): Promise<ChatMessage[]> => ipcRenderer.invoke(Ipc.engineBranch, { entryId }),
+    getMessages: (): Promise<ChatMessage[]> => ipcRenderer.invoke(Ipc.engineGetMessages),
+    getStats: (): Promise<SessionStats> => ipcRenderer.invoke(Ipc.engineGetStats),
+    setSteeringMode: (mode: "all" | "one-at-a-time"): Promise<EngineSessionState> =>
+      ipcRenderer.invoke(Ipc.engineSetSteering, { mode }),
+    setFollowUpMode: (mode: "all" | "one-at-a-time"): Promise<EngineSessionState> =>
+      ipcRenderer.invoke(Ipc.engineSetFollowUp, { mode }),
+    exportHtml: (): Promise<string | undefined> => ipcRenderer.invoke(Ipc.engineExportHtml),
+    promptConversation: (id: string, message: string): Promise<void> =>
+      ipcRenderer.invoke(Ipc.enginePromptConversation, { id, message }),
+    getConversationMessages: (id: string): Promise<ChatMessage[]> =>
+      ipcRenderer.invoke(Ipc.engineGetConversationMessages, { id }),
+    onEvent: (listener: (event: EngineEvent) => void): (() => void) => {
+      const handler = (_event: unknown, payload: EngineEvent): void => listener(payload);
       ipcRenderer.on(Ipc.event, handler);
       return () => ipcRenderer.removeListener(Ipc.event, handler);
     },
-    onStatus: (listener: (status: OmpStatus) => void): (() => void) => {
-      const handler = (_event: unknown, payload: OmpStatus): void => listener(payload);
+    onStatus: (listener: (status: EngineStatus) => void): (() => void) => {
+      const handler = (_event: unknown, payload: EngineStatus): void => listener(payload);
       ipcRenderer.on(Ipc.status, handler);
       return () => ipcRenderer.removeListener(Ipc.status, handler);
     },
@@ -92,6 +107,12 @@ const api = {
   },
   providers: {
     list: (): Promise<ProviderConfig[]> => ipcRenderer.invoke(Ipc.providersList),
+    native: (): Promise<NativeProviderConfig[]> => ipcRenderer.invoke(Ipc.providersNative),
+    addNative: (payload: {
+      id: string;
+      apiKey: string;
+      models: ProviderModel[];
+    }): Promise<ProviderConfig[]> => ipcRenderer.invoke(Ipc.providersAddNative, payload),
     fetch: (baseUrl: string, apiKey: string): Promise<ProviderModel[]> =>
       ipcRenderer.invoke(Ipc.providersFetch, { baseUrl, apiKey }),
     saveFastVibe: (apiKey: string, models: ProviderModel[]): Promise<ProviderConfig[]> =>
@@ -100,12 +121,15 @@ const api = {
       name: string;
       baseUrl: string;
       apiKey: string;
+      api?: import("@shared/types").ProviderApi;
       models: ProviderModel[];
     }): Promise<ProviderConfig[]> => ipcRenderer.invoke(Ipc.providersAdd, payload),
     update: (payload: {
       id: string;
       name?: string;
       baseUrl?: string;
+      api?: import("@shared/types").ProviderApi;
+      enabled?: boolean;
       apiKey?: string;
       models?: ProviderModel[];
     }): Promise<ProviderConfig[]> => ipcRenderer.invoke(Ipc.providersUpdate, payload),
@@ -127,6 +151,10 @@ const api = {
       ipcRenderer.invoke(Ipc.conversationsRecordPrompt, { id, text }),
     setProject: (id: string, project: string | null): Promise<WorkspaceSnapshot> =>
       ipcRenderer.invoke(Ipc.conversationsSetProject, { id, project }),
+    multiRun: (request: MultiRunRequest): Promise<MultiRunResult> =>
+      ipcRenderer.invoke(Ipc.conversationsMultiRun, request),
+    createSide: (payload: { project?: string; parentId?: string; title?: string }): Promise<ConversationOpenResult> =>
+      ipcRenderer.invoke(Ipc.conversationsCreateSide, payload),
   },
   projects: {
     add: (): Promise<ProjectAddResult | null> => ipcRenderer.invoke(Ipc.projectsAdd),
@@ -136,7 +164,7 @@ const api = {
       ipcRenderer.invoke(Ipc.projectsRemove, { cwd }),
   },
   workspace: {
-    pick: (): Promise<{ cwd: string; status: OmpStatus } | null> =>
+    pick: (): Promise<{ cwd: string; status: EngineStatus } | null> =>
       ipcRenderer.invoke(Ipc.workspacePick),
     reveal: (cwd: string): Promise<void> => ipcRenderer.invoke(Ipc.workspaceReveal, { cwd }),
     preview: (path: string): Promise<FilePreview> => ipcRenderer.invoke(Ipc.workspacePreview, { path }),
@@ -147,13 +175,42 @@ const api = {
     gitCreateBranch: (cwd: string, branch: string): Promise<GitStatus> => ipcRenderer.invoke(Ipc.workspaceGitCreateBranch, { cwd, branch }),
     gitStage: (cwd: string, paths?: string[], all?: boolean): Promise<GitStatus> => ipcRenderer.invoke(Ipc.workspaceGitStage, { cwd, paths, all }),
     gitCommit: (cwd: string, message: string): Promise<GitStatus> => ipcRenderer.invoke(Ipc.workspaceGitCommit, { cwd, message }),
-    gitDiff: (cwd: string, path?: string): Promise<string> => ipcRenderer.invoke(Ipc.workspaceGitDiff, { cwd, path }),
+    gitDiff: (cwd: string, path?: string, source?: GitDiffSource): Promise<string> =>
+      ipcRenderer.invoke(Ipc.workspaceGitDiff, { cwd, path, source }),
+    gitUnstage: (cwd: string, paths: string[]): Promise<GitStatus> =>
+      ipcRenderer.invoke(Ipc.workspaceGitUnstage, { cwd, paths }),
+    gitDiscard: (cwd: string, paths: string[]): Promise<GitStatus> =>
+      ipcRenderer.invoke(Ipc.workspaceGitDiscard, { cwd, paths }),
     gitPull: (cwd: string): Promise<GitStatus> => ipcRenderer.invoke(Ipc.workspaceGitPull, { cwd }),
     gitPush: (cwd: string): Promise<GitStatus> => ipcRenderer.invoke(Ipc.workspaceGitPush, { cwd }),
+    terminalStart: (cwd?: string, size?: { cols?: number; rows?: number }): Promise<TerminalSessionInfo> =>
+      ipcRenderer.invoke(Ipc.workspaceTerminalStart, { cwd, ...size }),
+    terminalWrite: (id: string, data: string): Promise<void> => ipcRenderer.invoke(Ipc.workspaceTerminalWrite, { id, data }),
+    terminalResize: (id: string, cols: number, rows: number): Promise<void> =>
+      ipcRenderer.invoke(Ipc.workspaceTerminalResize, { id, cols, rows }),
+    terminalKill: (id: string): Promise<void> => ipcRenderer.invoke(Ipc.workspaceTerminalKill, { id }),
+    onTerminalData: (listener: (event: TerminalDataEvent) => void): (() => void) => {
+      const handler = (_event: unknown, payload: TerminalDataEvent): void => listener(payload);
+      ipcRenderer.on(Ipc.workspaceTerminalData, handler);
+      return () => ipcRenderer.removeListener(Ipc.workspaceTerminalData, handler);
+    },
   },
   app: {
     getInfo: (): Promise<import("@shared/ipc").AppInfo> => ipcRenderer.invoke(Ipc.appGetInfo),
     newWindow: (): Promise<void> => ipcRenderer.invoke(Ipc.windowNew),
+  },
+  settings: {
+    /**
+     * Snapshot captured in the preload world before the page runs, so the
+     * renderer store can apply the theme on first paint without waiting on IPC.
+     */
+    initial: (ipcRenderer.sendSync(Ipc.settingsGetSync) ?? {}) as Record<string, unknown>,
+    load: (): Promise<Record<string, unknown>> => ipcRenderer.invoke(Ipc.settingsGet),
+    save: (settings: Record<string, unknown>): Promise<void> => ipcRenderer.invoke(Ipc.settingsSet, settings),
+    clear: (): Promise<void> => ipcRenderer.invoke(Ipc.settingsClear),
+  },
+  stats: {
+    usage: (range: UsageRange): Promise<UsageStats> => ipcRenderer.invoke(Ipc.statsUsage, { range }),
   },
 };
 

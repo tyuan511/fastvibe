@@ -4,12 +4,12 @@ import type {
   ChatMessage,
   Conversation,
   FastVibeModel,
-  OmpSessionState,
-  OmpStatus,
-  OmpWireEvent,
+  EngineSessionState,
+  EngineStatus,
+  EngineEvent,
   PermissionRequest,
   Project,
-  QueueBehavior,
+  QueuePauseReason,
   QueuedPrompt,
   RunMode,
   FilePreview,
@@ -17,11 +17,12 @@ import type {
   SubagentInfo,
   WorkspaceSnapshot,
 } from "@shared/types";
-import { applyOmpEvent } from "@/lib/apply-omp-event";
+import { applyEngineEvent } from "@/lib/apply-engine-event";
+import { useSidePaneStore } from "@/stores/side-pane";
 
 type SessionStore = {
-  status: OmpStatus;
-  session: OmpSessionState | null;
+  status: EngineStatus;
+  session: EngineSessionState | null;
   models: FastVibeModel[];
   projects: Project[];
   conversations: Conversation[];
@@ -35,14 +36,14 @@ type SessionStore = {
   subagents: SubagentInfo[];
   permission: PermissionRequest | null;
   runMode: RunMode;
-  queueBehavior: QueueBehavior;
   attachments: ChatAttachment[];
   queued: QueuedPrompt[];
+  queuePause: QueuePauseReason | null;
   permissionAlways: string[];
   preview: FilePreview | null;
   subagentStreams: Record<string, ChatMessage[]>;
-  setStatus: (status: OmpStatus) => void;
-  setSession: (session: OmpSessionState | null) => void;
+  setStatus: (status: EngineStatus) => void;
+  setSession: (session: EngineSessionState | null) => void;
   setModels: (models: FastVibeModel[]) => void;
   applySnapshot: (snapshot: WorkspaceSnapshot) => void;
   setActiveId: (activeId: string | null) => void;
@@ -53,21 +54,23 @@ type SessionStore = {
   setSubagents: (subagents: SubagentInfo[]) => void;
   setPermission: (permission: PermissionRequest | null) => void;
   setRunMode: (runMode: RunMode) => void;
-  setQueueBehavior: (queueBehavior: QueueBehavior) => void;
   addUserMessage: (text: string, attachments?: ChatAttachment[]) => void;
   dropEmptyAssistant: () => void;
   setAttachments: (attachments: ChatAttachment[]) => void;
   enqueue: (item: QueuedPrompt) => void;
+  removeQueued: (id: string) => void;
+  prependQueued: (item: QueuedPrompt) => void;
   clearQueued: () => void;
+  setQueuePause: (reason: QueuePauseReason | null) => void;
   rememberPermission: (key: string) => void;
   setPreview: (preview: FilePreview | null) => void;
   openPreview: (path: string) => Promise<void>;
-  applyEvent: (event: OmpWireEvent) => void;
+  applyEvent: (event: EngineEvent) => void;
   resetConversation: () => void;
   setStreaming: (streaming: boolean) => void;
 };
 
-function parsePermission(event: OmpWireEvent): PermissionRequest | null {
+function parsePermission(event: EngineEvent): PermissionRequest | null {
   if (event.type !== "extension_ui_request") return null;
   const method = event.method;
   if (method !== "confirm" && method !== "select" && method !== "input" && method !== "editor") {
@@ -110,9 +113,9 @@ export const useSessionStore = create<SessionStore>((set) => ({
   subagents: [],
   permission: null,
   runMode: "agent",
-  queueBehavior: "followUp",
   attachments: [],
   queued: [],
+  queuePause: null,
   permissionAlways: [],
   preview: null,
   subagentStreams: {},
@@ -137,7 +140,6 @@ export const useSessionStore = create<SessionStore>((set) => ({
   setSubagents: (subagents) => set({ subagents }),
   setPermission: (permission) => set({ permission }),
   setRunMode: (runMode) => set({ runMode }),
-  setQueueBehavior: (queueBehavior) => set({ queueBehavior }),
   addUserMessage: (text, attachments) =>
     set((state) => ({
       messages: [
@@ -147,6 +149,7 @@ export const useSessionStore = create<SessionStore>((set) => ({
           role: "user",
           text,
           tools: [],
+          parts: text ? [{ kind: "text", text }] : [],
           createdAt: Date.now(),
           attachments,
         },
@@ -155,6 +158,7 @@ export const useSessionStore = create<SessionStore>((set) => ({
           role: "assistant",
           text: "",
           tools: [],
+          parts: [],
           createdAt: Date.now(),
         },
       ],
@@ -177,7 +181,10 @@ export const useSessionStore = create<SessionStore>((set) => ({
     }),
   setAttachments: (attachments) => set({ attachments }),
   enqueue: (item) => set((state) => ({ queued: [...state.queued, item] })),
-  clearQueued: () => set({ queued: [] }),
+  removeQueued: (id) => set((state) => ({ queued: state.queued.filter((item) => item.id !== id) })),
+  prependQueued: (item) => set((state) => ({ queued: [item, ...state.queued] })),
+  clearQueued: () => set({ queued: [], queuePause: null }),
+  setQueuePause: (queuePause) => set({ queuePause }),
   rememberPermission: (key) =>
     set((state) =>
       state.permissionAlways.includes(key) ? state : { permissionAlways: [...state.permissionAlways, key] },
@@ -187,20 +194,21 @@ export const useSessionStore = create<SessionStore>((set) => ({
     try {
       const preview = await window.fastvibe.workspace.preview(path);
       set({ preview });
+      useSidePaneStore.getState().openCodeViewer(preview);
     } catch (error) {
-      set({
-        preview: {
-          kind: "error",
-          path,
-          name: path.split("/").at(-1) ?? path,
-          message: error instanceof Error ? error.message : "无法预览",
-        },
-      });
+      const preview: FilePreview = {
+        kind: "error",
+        path,
+        name: path.split("/").at(-1) ?? path,
+        message: error instanceof Error ? error.message : "无法预览",
+      };
+      set({ preview });
+      useSidePaneStore.getState().openCodeViewer(preview);
     }
   },
   applyEvent: (event) =>
     set((state) => {
-      const applied = applyOmpEvent(state.messages, event, state.streaming);
+      const applied = applyEngineEvent(state.messages, event, state.streaming);
       const permission = parsePermission(event);
       const compacting =
         event.type === "compaction_start" || event.type === "auto_compaction_start"
@@ -215,7 +223,6 @@ export const useSessionStore = create<SessionStore>((set) => ({
         streaming: applied.streaming,
         compacting,
         permission: permission ?? state.permission,
-        queued: applied.streaming ? state.queued : [],
         subagents,
         subagentStreams,
       };
@@ -231,11 +238,13 @@ export const useSessionStore = create<SessionStore>((set) => ({
       subagents: [],
       subagentStreams: {},
       preview: null,
+      queued: [],
+      queuePause: null,
     }),
   setStreaming: (streaming) => set({ streaming }),
 }));
 
-function upsertSubagent(list: SubagentInfo[], event: OmpWireEvent): SubagentInfo[] {
+function upsertSubagent(list: SubagentInfo[], event: EngineEvent): SubagentInfo[] {
   if (event.type !== "subagent_lifecycle" && event.type !== "subagent_progress") return list;
   const id = typeof event.subagentId === "string" ? event.subagentId : typeof event.id === "string" ? event.id : "";
   if (!id) return list;
@@ -258,7 +267,7 @@ function upsertSubagent(list: SubagentInfo[], event: OmpWireEvent): SubagentInfo
 
 function applySubagentStream(
   streams: Record<string, ChatMessage[]>,
-  event: OmpWireEvent,
+  event: EngineEvent,
 ): Record<string, ChatMessage[]> {
   if (event.type !== "subagent_event") return streams;
   const id =
@@ -270,11 +279,11 @@ function applySubagentStream(
   if (!id) return streams;
   const nested =
     event.event && typeof event.event === "object"
-      ? (event.event as OmpWireEvent)
+      ? (event.event as EngineEvent)
       : event.payload && typeof event.payload === "object"
-        ? (event.payload as OmpWireEvent)
+        ? (event.payload as EngineEvent)
         : event;
   if (typeof nested.type !== "string" || nested.type === "subagent_event") return streams;
-  const applied = applyOmpEvent(streams[id] ?? [], nested, true);
+  const applied = applyEngineEvent(streams[id] ?? [], nested, true);
   return { ...streams, [id]: applied.messages };
 }

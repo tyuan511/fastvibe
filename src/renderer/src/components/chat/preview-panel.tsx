@@ -1,6 +1,7 @@
 import type { JSX } from "react";
-import { FolderOpen, X } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { Cancel01Icon, Folder01Icon } from "@hugeicons/core-free-icons";
+import { IconButton } from "@/components/icon-button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { FilePreview } from "@shared/types";
 import { highlightCode } from "@/lib/highlight";
@@ -18,13 +19,18 @@ export function PreviewPanel({
       <div className="flex h-12 items-center gap-2 border-b border-border px-3">
         <div className="min-w-0 flex-1 truncate text-sm font-medium">{preview.name}</div>
         {preview.kind !== "error" ? (
-          <Button size="icon-xs" variant="ghost" onClick={() => void window.fastvibe.workspace.reveal(preview.path)}>
-            <FolderOpen />
-          </Button>
+          <IconButton
+            size="icon-xs"
+            variant="ghost"
+            label="在访达中显示"
+            onClick={() => void window.fastvibe.workspace.reveal(preview.path)}
+          >
+            <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} />
+          </IconButton>
         ) : null}
-        <Button size="icon-xs" variant="ghost" onClick={onClose}>
-          <X />
-        </Button>
+        <IconButton size="icon-xs" variant="ghost" label="关闭" onClick={onClose}>
+          <HugeiconsIcon strokeWidth={2} icon={Cancel01Icon} />
+        </IconButton>
       </div>
       <ScrollArea className="min-h-0 flex-1">
         <div className="p-3">
@@ -35,7 +41,7 @@ export function PreviewPanel({
   );
 }
 
-function PreviewBody({ preview }: { preview: FilePreview }): JSX.Element {
+export function PreviewBody({ preview }: { preview: FilePreview }): JSX.Element {
   if (preview.kind === "error") {
     return <p className="text-sm text-destructive">{preview.message}</p>;
   }
@@ -98,11 +104,11 @@ function PreviewBody({ preview }: { preview: FilePreview }): JSX.Element {
             key={index}
             className={
               line.startsWith("+")
-                ? "text-emerald-700"
+                ? "text-success"
                 : line.startsWith("-")
-                  ? "text-red-700"
+                  ? "text-destructive"
                   : line.startsWith("@@")
-                    ? "text-sky-700"
+                    ? "text-info"
                     : "text-muted-foreground"
             }
           >

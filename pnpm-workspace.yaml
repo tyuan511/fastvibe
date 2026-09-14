@@ -1,6 +1,7 @@
 allowBuilds:
   electron: true
   esbuild: true
+  node-pty: true
 onlyBuiltDependencies:
   - electron
   - esbuild

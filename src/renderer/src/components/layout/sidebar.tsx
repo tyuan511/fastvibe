@@ -1,18 +1,6 @@
 import { useMemo, useRef, useState, type JSX, type KeyboardEvent } from "react";
-import {
-  ChevronRight,
-  Folder,
-  FolderOpen,
-  FolderPlus,
-  MessageSquarePlus,
-  MoreHorizontal,
-  Pencil,
-  Plus,
-  Search,
-  Settings,
-  Trash2,
-  X,
-} from "lucide-react";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { Add01Icon, Archive04Icon, Cancel01Icon, Delete02Icon, Folder01Icon, Folder02Icon, FolderRootIcon, MessageSquarePlusIcon, MoreHorizontalIcon, PencilEdit02Icon, PinIcon, Search01Icon, Settings01Icon } from "@hugeicons/core-free-icons";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -24,6 +12,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { IconButton } from "@/components/icon-button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   ContextMenu,
@@ -42,25 +31,66 @@ import {
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
+import { ResizeHandle } from "@/components/resize-handle";
 import appIcon from "@/assets/app-icon.png";
 import { cn } from "@/lib/utils";
+import { clampSidebarWidth, readSidebarWidth, writeSidebarWidth } from "@/lib/sidebar-width";
 import type { Conversation, Project } from "@shared/types";
 
 const COLLAPSED_KEY = "fastvibe.sidebar.collapsed";
+const PINNED_KEY = "fastvibe.sidebar.pinned";
+const ARCHIVED_KEY = "fastvibe.sidebar.archived";
 
 type RenameTarget = { type: "session"; id: string } | { type: "project"; cwd: string };
-type DeleteTarget =
-  | { type: "session"; id: string; title: string }
-  | { type: "project"; cwd: string; title: string };
+/** Only projects can be removed; sessions are archived, never deleted. */
+type DeleteTarget = { type: "project"; cwd: string; title: string };
 
-function readCollapsed(): Set<string> {
+function readIdSet(key: string): Set<string> {
   try {
-    const raw = localStorage.getItem(COLLAPSED_KEY);
+    const raw = localStorage.getItem(key);
     const parsed = raw ? (JSON.parse(raw) as unknown) : [];
     return new Set(Array.isArray(parsed) ? parsed.filter((item) => typeof item === "string") : []);
   } catch {
     return new Set();
   }
+}
+
+function persistIdSet(key: string, value: Set<string>): void {
+  localStorage.setItem(key, JSON.stringify([...value]));
+}
+
+/**
+ * Pins are stored as `id -> pinnedAt` so the "已置顶" list can be ordered by pin
+ * time. Earlier builds stored a plain id array; keep reading that shape.
+ */
+function readPinned(): Record<string, number> {
+  try {
+    const raw = localStorage.getItem(PINNED_KEY);
+    const parsed = raw ? (JSON.parse(raw) as unknown) : {};
+    if (Array.isArray(parsed)) {
+      const out: Record<string, number> = {};
+      for (const id of parsed) if (typeof id === "string") out[id] = 0;
+      return out;
+    }
+    if (parsed && typeof parsed === "object") {
+      const out: Record<string, number> = {};
+      for (const [id, at] of Object.entries(parsed)) {
+        if (typeof at === "number") out[id] = at;
+      }
+      return out;
+    }
+    return {};
+  } catch {
+    return {};
+  }
+}
+
+function persistPinned(value: Record<string, number>): void {
+  localStorage.setItem(PINNED_KEY, JSON.stringify(value));
+}
+
+function matchesSession(item: Conversation, needle: string): boolean {
+  return `${item.title} ${item.preview ?? ""}`.toLowerCase().includes(needle);
 }
 
 function InlineRename({
@@ -109,10 +139,17 @@ function InlineRename({
   );
 }
 
-function SectionLabel({ children }: { children: React.ReactNode }): JSX.Element {
+function SectionLabel({
+  children,
+  action,
+}: {
+  children: React.ReactNode;
+  action?: React.ReactNode;
+}): JSX.Element {
   return (
-    <div className="px-2 pt-4 pb-1 text-[11px] font-medium tracking-wide text-muted-foreground">
-      {children}
+    <div className="group/section mt-3 flex items-center justify-between pr-1 pl-2 text-[11px] font-medium tracking-wide text-muted-foreground">
+      <span className="py-1">{children}</span>
+      {action}
     </div>
   );
 }
@@ -126,7 +163,6 @@ export function Sidebar({
   onOpen,
   onAddProject,
   onRenameSession,
-  onDeleteSession,
   onRenameProject,
   onRemoveProject,
   onRevealProject,
@@ -140,7 +176,6 @@ export function Sidebar({
   onOpen: (id: string) => void;
   onAddProject: () => void;
   onRenameSession: (id: string, title: string) => void;
-  onDeleteSession: (id: string) => void;
   onRenameProject: (cwd: string, name: string) => void;
   onRemoveProject: (cwd: string) => void;
   onRevealProject: (cwd: string) => void;
@@ -148,26 +183,71 @@ export function Sidebar({
 }): JSX.Element {
   const [query, setQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
-  const [collapsed, setCollapsed] = useState<Set<string>>(readCollapsed);
+  const [width, setWidth] = useState(readSidebarWidth);
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => readIdSet(COLLAPSED_KEY));
+  const [pinned, setPinned] = useState<Record<string, number>>(() => readPinned());
+  const [archived, setArchived] = useState<Set<string>>(() => readIdSet(ARCHIVED_KEY));
   const [renaming, setRenaming] = useState<RenameTarget | null>(null);
   const [pendingDelete, setPendingDelete] = useState<DeleteTarget | null>(null);
+  const startWidth = useRef(width);
+
+  /** Live width while dragging; only written to disk once the drag ends. */
+  function applyWidth(next: number): void {
+    setWidth(clampSidebarWidth(next));
+  }
 
   function setOpen(cwd: string, open: boolean): void {
     setCollapsed((prev) => {
       const next = new Set(prev);
       if (open) next.delete(cwd);
       else next.add(cwd);
-      localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next]));
+      persistIdSet(COLLAPSED_KEY, next);
       return next;
     });
   }
 
+  function togglePinned(id: string): void {
+    setPinned((prev) => {
+      const next = { ...prev };
+      if (id in next) delete next[id];
+      else next[id] = Date.now();
+      persistPinned(next);
+      return next;
+    });
+  }
+
+  /** Archived conversations are hidden from every list until a restore surface exists. */
+  function archiveSession(id: string): void {
+    setArchived((prev) => {
+      const next = new Set(prev);
+      next.add(id);
+      persistIdSet(ARCHIVED_KEY, next);
+      return next;
+    });
+  }
+
+  function sortSessions(items: Conversation[]): Conversation[] {
+    return [...items].sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
   const q = query.trim().toLowerCase();
+
+  const pinnedItems = useMemo(() => {
+    const items = conversations.filter(
+      (item) => item.preview && pinned[item.id] !== undefined && !archived.has(item.id),
+    );
+    const filtered = q ? items.filter((item) => matchesSession(item, q)) : items;
+    return [...filtered].sort(
+      (a, b) => (pinned[b.id] ?? 0) - (pinned[a.id] ?? 0) || b.updatedAt - a.updatedAt,
+    );
+  }, [conversations, pinned, archived, q]);
 
   const groups = useMemo(() => {
     const byProject = new Map<string, Conversation[]>();
     for (const item of conversations) {
-      if (!item.project) continue;
+      if (!item.project || !item.preview) continue;
+      // Pinned chats live in the dedicated "已置顶" area, archived ones are hidden.
+      if (pinned[item.id] !== undefined || archived.has(item.id)) continue;
       const list = byProject.get(item.project) ?? [];
       list.push(item);
       byProject.set(item.project, list);
@@ -181,36 +261,38 @@ export function Sidebar({
         ? items
         : items.filter((item) => `${item.title} ${item.preview ?? ""}`.toLowerCase().includes(q));
       if (!q || projectHit || filtered.length > 0) {
-        result.push({ cwd: project.cwd, name: project.name, items: filtered });
+        result.push({ cwd: project.cwd, name: project.name, items: sortSessions(filtered) });
       }
     }
     return result;
-  }, [conversations, projects, q]);
+  }, [conversations, pinned, archived, projects, q]);
 
   // Conversations with no project live here so they stay reachable without a project group.
   const recent = useMemo(() => {
-    return conversations
-      .filter((item) => !item.project)
-      .filter((item) =>
-        !q ? true : `${item.title} ${item.preview ?? ""}`.toLowerCase().includes(q),
-      );
-  }, [conversations, q]);
+    const unbound = conversations
+      .filter((item) => !item.project && item.preview)
+      .filter((item) => pinned[item.id] === undefined && !archived.has(item.id))
+      .filter((item) => !q || matchesSession(item, q));
+    return sortSessions(unbound);
+  }, [conversations, pinned, archived, q]);
 
-  function renderSession(item: Conversation, indent: boolean): JSX.Element {
+  function renderSession(item: Conversation): JSX.Element {
     const active = item.id === activeId;
     const renamingThis = renaming?.type === "session" && renaming.id === item.id;
+    const isPinned = pinned[item.id] !== undefined;
+    const showSpinner = active && streaming;
     return (
       <ContextMenu key={item.id}>
         <ContextMenuTrigger className="w-full">
           <div
             className={cn(
-              "group/session flex h-8 cursor-pointer items-center gap-2 rounded-md pr-1 text-[13px] transition-colors",
-              indent ? "pl-7" : "pl-2",
+              "group/session flex h-8 cursor-pointer items-center gap-2.5 rounded-md pr-1 pl-2 text-[13px] transition-colors",
               active ? "bg-sidebar-accent text-sidebar-accent-foreground" : "hover:bg-sidebar-accent/50",
             )}
             onClick={() => onOpen(item.id)}
           >
-            {active && streaming ? <Spinner className="size-3.5 shrink-0" /> : null}
+            {/* Reserved slot keeps session titles aligned with project names. */}
+            {showSpinner ? <Spinner className="size-4 shrink-0" /> : <span className="size-4 shrink-0" />}
             {renamingThis ? (
               <InlineRename
                 value={item.title}
@@ -223,53 +305,62 @@ export function Sidebar({
             ) : (
               <>
                 <span className="min-w-0 flex-1 truncate">{item.title}</span>
-                <DropdownMenu>
-                  <DropdownMenuTrigger
-                    render={
-                      <Button
-                        size="icon-xs"
-                        variant="ghost"
-                        className="shrink-0 opacity-0 group-hover/session:opacity-100 aria-expanded:opacity-100"
-                      />
-                    }
-                    onClick={(event) => event.stopPropagation()}
+                <div className="flex shrink-0 items-center gap-0.5 opacity-0 group-hover/session:opacity-100 focus-within:opacity-100">
+                  <IconButton
+                    size="icon-xs"
+                    variant="ghost"
+                    className="text-muted-foreground"
+                    label={isPinned ? "取消置顶" : "置顶"}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      togglePinned(item.id);
+                    }}
                     onPointerDown={(event) => event.stopPropagation()}
                   >
-                    <MoreHorizontal />
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-32 min-w-32">
-                    <DropdownMenuItem onClick={() => setRenaming({ type: "session", id: item.id })}>
-                      <Pencil />
-                      重命名
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      variant="destructive"
-                      onClick={() => setPendingDelete({ type: "session", id: item.id, title: item.title })}
-                    >
-                      <Trash2 />
-                      删除
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                    <HugeiconsIcon strokeWidth={2} icon={PinIcon} className={cn(isPinned && "fill-current")} />
+                  </IconButton>
+                  <IconButton
+                    size="icon-xs"
+                    variant="ghost"
+                    className="text-muted-foreground"
+                    label="归档"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      archiveSession(item.id);
+                    }}
+                    onPointerDown={(event) => event.stopPropagation()}
+                  >
+                    <HugeiconsIcon strokeWidth={2} icon={Archive04Icon} />
+                  </IconButton>
+                </div>
               </>
             )}
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent className="w-32">
-          <ContextMenuItem onClick={() => setRenaming({ type: "session", id: item.id })}>重命名</ContextMenuItem>
-          <ContextMenuItem
-            variant="destructive"
-            onClick={() => setPendingDelete({ type: "session", id: item.id, title: item.title })}
-          >
-            删除
+          <ContextMenuItem onClick={() => togglePinned(item.id)}>
+            {isPinned ? "取消置顶" : "置顶"}
           </ContextMenuItem>
+          <ContextMenuItem onClick={() => setRenaming({ type: "session", id: item.id })}>重命名</ContextMenuItem>
+          <ContextMenuItem onClick={() => archiveSession(item.id)}>归档</ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
     );
   }
 
   return (
-    <aside className="flex w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
+    <aside
+      className="relative flex shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground"
+      style={{ width }}
+    >
+      <ResizeHandle
+        side="right"
+        onDragStart={() => {
+          startWidth.current = width;
+        }}
+        onDrag={(delta) => applyWidth(startWidth.current + delta)}
+        onDragEnd={(delta) => writeSidebarWidth(startWidth.current + delta)}
+      />
       <div className="drag-region h-10" />
 
       <div className="no-drag px-2">
@@ -279,27 +370,18 @@ export function Sidebar({
             <span className="text-[13px] font-semibold tracking-tight">FastVibe</span>
           </div>
           <div className="flex items-center gap-0.5">
-            <Button
+            <IconButton
               size="icon-sm"
               variant="ghost"
               className="text-muted-foreground"
+              label={searchOpen ? "关闭搜索" : "搜索"}
               onClick={() => {
                 setSearchOpen((value) => !value);
                 if (searchOpen) setQuery("");
               }}
-              aria-label="搜索"
             >
-              {searchOpen ? <X /> : <Search />}
-            </Button>
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              className="text-muted-foreground"
-              onClick={() => onNewChat()}
-              aria-label="新对话"
-            >
-              <MessageSquarePlus />
-            </Button>
+              {searchOpen ? <HugeiconsIcon strokeWidth={2} icon={Cancel01Icon} /> : <HugeiconsIcon strokeWidth={2} icon={Search01Icon} />}
+            </IconButton>
           </div>
         </div>
 
@@ -321,23 +403,36 @@ export function Sidebar({
             className="flex h-8 w-full items-center gap-2.5 rounded-md px-2 text-[13px] hover:bg-sidebar-accent/50"
             onClick={() => onNewChat()}
           >
-            <MessageSquarePlus className="size-4 text-muted-foreground" />
+            <HugeiconsIcon strokeWidth={2} icon={MessageSquarePlusIcon} className="size-4 text-muted-foreground" />
             新对话
-          </button>
-          <button
-            type="button"
-            className="flex h-8 w-full items-center gap-2.5 rounded-md px-2 text-[13px] hover:bg-sidebar-accent/50"
-            onClick={onAddProject}
-          >
-            <FolderPlus className="size-4 text-muted-foreground" />
-            打开项目
           </button>
         </div>
       </div>
 
       <ScrollArea className="no-drag min-h-0 flex-1">
         <div className="px-2 pb-2">
-          <SectionLabel>项目</SectionLabel>
+          {pinnedItems.length > 0 ? (
+            <>
+              <SectionLabel>已置顶</SectionLabel>
+              <div className="space-y-0.5">{pinnedItems.map((item) => renderSession(item))}</div>
+            </>
+          ) : null}
+
+          <SectionLabel
+            action={
+              <IconButton
+                size="icon-xs"
+                variant="ghost"
+                label="新项目"
+                className="text-muted-foreground opacity-0 transition-opacity focus-visible:opacity-100 group-hover/section:opacity-100"
+                onClick={onAddProject}
+              >
+                <HugeiconsIcon strokeWidth={2} icon={Add01Icon} />
+              </IconButton>
+            }
+          >
+            项目
+          </SectionLabel>
           {groups.length === 0 ? (
             <p className="px-2 py-2 text-[12px] text-muted-foreground">还没有项目</p>
           ) : (
@@ -355,16 +450,10 @@ export function Sidebar({
                       <ContextMenuTrigger className="w-full">
                         <div className="group/project flex h-8 items-center gap-0.5 rounded-md pr-1 pl-2 hover:bg-sidebar-accent/50">
                           <CollapsibleTrigger className="flex min-w-0 flex-1 items-center gap-2.5 text-left text-[13px]">
-                            <ChevronRight
-                              className={cn(
-                                "size-3.5 shrink-0 text-muted-foreground transition-transform",
-                                open && "rotate-90",
-                              )}
-                            />
                             {open ? (
-                              <FolderOpen className="size-4 shrink-0 text-muted-foreground" />
+                              <HugeiconsIcon strokeWidth={2} icon={Folder02Icon} className="size-4 shrink-0 text-muted-foreground" />
                             ) : (
-                              <Folder className="size-4 shrink-0 text-muted-foreground" />
+                              <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} className="size-4 shrink-0 text-muted-foreground" />
                             )}
                             {renamingProject ? (
                               <InlineRename
@@ -379,54 +468,54 @@ export function Sidebar({
                               <span className="truncate">{group.name}</span>
                             )}
                           </CollapsibleTrigger>
-                          <div className="flex shrink-0 items-center opacity-0 group-hover/project:opacity-100 focus-within:opacity-100 has-[[aria-expanded=true]]:opacity-100">
-                              <Button
-                                size="icon-xs"
-                                variant="ghost"
-                                className="text-muted-foreground"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  setOpen(group.cwd, true);
-                                  onNewChat(group.cwd);
-                                }}
-                                aria-label="在该项目中新建"
+                          <div className="flex shrink-0 items-center gap-0.5 opacity-0 group-hover/project:opacity-100 focus-within:opacity-100 has-[[aria-expanded=true]]:opacity-100">
+                            <DropdownMenu>
+                              <DropdownMenuTrigger
+                                render={<Button size="icon-xs" variant="ghost" className="text-muted-foreground" />}
+                                onClick={(event) => event.stopPropagation()}
+                                onPointerDown={(event) => event.stopPropagation()}
                               >
-                                <Plus />
-                              </Button>
-                              <DropdownMenu>
-                                <DropdownMenuTrigger
-                                  render={<Button size="icon-xs" variant="ghost" className="text-muted-foreground" />}
-                                  onClick={(event) => event.stopPropagation()}
-                                  onPointerDown={(event) => event.stopPropagation()}
+                                <HugeiconsIcon strokeWidth={2} icon={MoreHorizontalIcon} />
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end" className="w-40 min-w-40">
+                                <DropdownMenuItem onClick={() => onNewChat(group.cwd)}>
+                                  <HugeiconsIcon strokeWidth={2} icon={Add01Icon} />
+                                  新建对话
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => setRenaming({ type: "project", cwd: group.cwd })}>
+                                  <HugeiconsIcon strokeWidth={2} icon={PencilEdit02Icon} />
+                                  重命名
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => onRevealProject(group.cwd)}>
+                                  <HugeiconsIcon strokeWidth={2} icon={FolderRootIcon} />
+                                  在访达中显示
+                                </DropdownMenuItem>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem
+                                  variant="destructive"
+                                  onClick={() =>
+                                    setPendingDelete({ type: "project", cwd: group.cwd, title: group.name })
+                                  }
                                 >
-                                  <MoreHorizontal />
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end" className="w-40 min-w-40">
-                                  <DropdownMenuItem onClick={() => onNewChat(group.cwd)}>
-                                    <Plus />
-                                    新建对话
-                                  </DropdownMenuItem>
-                                  <DropdownMenuItem onClick={() => setRenaming({ type: "project", cwd: group.cwd })}>
-                                    <Pencil />
-                                    重命名
-                                  </DropdownMenuItem>
-                                  <DropdownMenuItem onClick={() => onRevealProject(group.cwd)}>
-                                    <FolderOpen />
-                                    在访达中显示
-                                  </DropdownMenuItem>
-                                  <DropdownMenuSeparator />
-                                  <DropdownMenuItem
-                                    variant="destructive"
-                                    onClick={() =>
-                                      setPendingDelete({ type: "project", cwd: group.cwd, title: group.name })
-                                    }
-                                  >
-                                    <Trash2 />
-                                    从列表移除
-                                  </DropdownMenuItem>
-                                </DropdownMenuContent>
-                              </DropdownMenu>
-                            </div>
+                                  <HugeiconsIcon strokeWidth={2} icon={Delete02Icon} />
+                                  从列表移除
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                            <IconButton
+                              size="icon-xs"
+                              variant="ghost"
+                              className="text-muted-foreground"
+                              label="新建会话"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setOpen(group.cwd, true);
+                                onNewChat(group.cwd);
+                              }}
+                            >
+                              <HugeiconsIcon strokeWidth={2} icon={PencilEdit02Icon} />
+                            </IconButton>
+                          </div>
                         </div>
                       </ContextMenuTrigger>
                       <ContextMenuContent className="w-40">
@@ -449,9 +538,12 @@ export function Sidebar({
                     <CollapsibleContent>
                       <div className="space-y-0.5">
                         {group.items.length === 0 ? (
-                          <p className="py-1 pl-7 text-[12px] text-muted-foreground">暂无对话</p>
+                          <p className="flex h-8 items-center gap-2.5 pl-2 text-[12px] text-muted-foreground">
+                            <span className="size-4 shrink-0" />
+                            暂无对话
+                          </p>
                         ) : (
-                          group.items.map((item) => renderSession(item, true))
+                          group.items.map((item) => renderSession(item))
                         )}
                       </div>
                     </CollapsibleContent>
@@ -464,7 +556,7 @@ export function Sidebar({
           {recent.length > 0 ? (
             <>
               <SectionLabel>最近</SectionLabel>
-              <div className="space-y-0.5">{recent.map((item) => renderSession(item, false))}</div>
+              <div className="space-y-0.5">{recent.map((item) => renderSession(item))}</div>
             </>
           ) : null}
         </div>
@@ -476,7 +568,7 @@ export function Sidebar({
           className="flex h-8 w-full items-center gap-2.5 rounded-md px-2 text-[13px] hover:bg-sidebar-accent/50"
           onClick={onOpenSettings}
         >
-          <Settings className="size-4 text-muted-foreground" />
+          <HugeiconsIcon strokeWidth={2} icon={Settings01Icon} className="size-4 text-muted-foreground" />
           设置
         </button>
       </div>
@@ -484,13 +576,9 @@ export function Sidebar({
       <AlertDialog open={pendingDelete !== null} onOpenChange={(open) => !open && setPendingDelete(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>
-              {pendingDelete?.type === "project" ? "从列表移除项目？" : "删除对话？"}
-            </AlertDialogTitle>
+            <AlertDialogTitle>从列表移除项目？</AlertDialogTitle>
             <AlertDialogDescription>
-              {pendingDelete?.type === "project"
-                ? `「${pendingDelete.title}」下的对话会从列表中移除，不会删除磁盘上的项目文件。`
-                : `「${pendingDelete?.title ?? ""}」将从列表中删除。`}
+              {`「${pendingDelete?.title ?? ""}」下的对话会从列表中移除，不会删除磁盘上的项目文件。`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -499,12 +587,11 @@ export function Sidebar({
               variant="destructive"
               onClick={() => {
                 if (!pendingDelete) return;
-                if (pendingDelete.type === "project") onRemoveProject(pendingDelete.cwd);
-                else onDeleteSession(pendingDelete.id);
+                onRemoveProject(pendingDelete.cwd);
                 setPendingDelete(null);
               }}
             >
-              {pendingDelete?.type === "project" ? "移除" : "删除"}
+              移除
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

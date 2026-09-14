@@ -1,7 +1,8 @@
 import { memo, useState, type JSX, type ReactNode } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Check, Copy } from "lucide-react";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { Copy01Icon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { highlightCode } from "@/lib/highlight";
 import { useSessionStore } from "@/stores/session";
@@ -24,7 +25,7 @@ function CodeBlock({ language, code }: { language?: string; code: string }): JSX
       <div className="flex items-center justify-between border-b border-border px-2 py-1">
         <span className="text-[11px] font-medium text-muted-foreground">{language || "code"}</span>
         <Button size="xs" variant="ghost" onClick={() => void copy()}>
-          {copied ? <Check /> : <Copy />}
+          {copied ? <HugeiconsIcon strokeWidth={2} icon={Tick02Icon} /> : <HugeiconsIcon strokeWidth={2} icon={Copy01Icon} />}
           {copied ? "已复制" : "复制"}
         </Button>
       </div>

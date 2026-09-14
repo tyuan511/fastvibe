@@ -1,4 +1,4 @@
-import type { ChatAttachment, ChatMessage, ToolCallBlock } from "@shared/types";
+import type { ChatAttachment, ChatMessage, MessagePart, ToolCallBlock } from "@shared/types";
 
 export function mapEngineMessages(raw: unknown): ChatMessage[] {
   if (!Array.isArray(raw)) return [];
@@ -9,18 +9,19 @@ export function mapEngineMessages(raw: unknown): ChatMessage[] {
     if (message.role === "toolResult") {
       const id = String(message.toolCallId ?? "");
       const result = toolText(message.content ?? message.result ?? message.output);
-      if (id && result) {
+      if (id) {
         const assistant = [...output].reverse().find((item) => item.role === "assistant" && item.tools.some((tool) => tool.id === id));
         const tool = assistant?.tools.find((item) => item.id === id);
         if (tool) {
-          tool.result = result;
+          if (result) tool.result = result;
+          if (message.details !== undefined) tool.details = message.details;
           tool.status = message.isError === true ? "error" : "done";
         }
       }
       continue;
     }
     const role = message.role === "assistant" || message.role === "system" ? message.role : "user";
-    const { text, thinking, tools, attachments } = extractContent(message.content);
+    const { text, thinking, tools, attachments, parts } = extractContent(message.content);
     if (!text && !thinking && tools.length === 0 && attachments.length === 0 && role !== "assistant") continue;
     output.push({
         id: String(message.id ?? crypto.randomUUID()),
@@ -28,6 +29,7 @@ export function mapEngineMessages(raw: unknown): ChatMessage[] {
         text,
         thinking,
         tools,
+        parts,
         createdAt: typeof message.timestamp === "number" ? message.timestamp : Date.now(),
         kind: role === "system" ? "notice" : "message",
         attachments: attachments.length > 0 ? attachments : undefined,
@@ -48,34 +50,48 @@ function extractContent(content: unknown): {
   thinking?: string;
   tools: ToolCallBlock[];
   attachments: ChatAttachment[];
+  parts: MessagePart[];
 } {
-  if (typeof content === "string") return { text: content, tools: [], attachments: [] };
-  if (!Array.isArray(content)) return { text: "", tools: [], attachments: [] };
+  if (typeof content === "string") {
+    return { text: content, tools: [], attachments: [], parts: content ? [{ kind: "text", text: content }] : [] };
+  }
+  if (!Array.isArray(content)) return { text: "", tools: [], attachments: [], parts: [] };
   const texts: string[] = [];
   const thoughts: string[] = [];
   const tools: ToolCallBlock[] = [];
   const attachments: ChatAttachment[] = [];
+  const parts: MessagePart[] = [];
   const results = new Map<string, string>();
 
   for (const part of content) {
     if (typeof part === "string") {
       texts.push(part);
+      if (part) parts.push({ kind: "text", text: part });
       continue;
     }
     if (!isRecord(part)) continue;
     const type = String(part.type ?? "");
-    if (typeof part.text === "string" && type !== "thinking") texts.push(part.text);
     if (type === "thinking") {
       const thought = typeof part.thinking === "string" ? part.thinking : typeof part.text === "string" ? part.text : "";
-      if (thought) thoughts.push(thought);
+      if (thought) {
+        thoughts.push(thought);
+        parts.push({ kind: "thinking", text: thought });
+      }
+      continue;
+    }
+    if (typeof part.text === "string") {
+      texts.push(part.text);
+      if (part.text) parts.push({ kind: "text", text: part.text });
     }
     if (type === "tool_use" || type === "toolcall" || type === "tool_call" || type === "toolCall") {
+      const id = String(part.id ?? crypto.randomUUID());
       tools.push({
-        id: String(part.id ?? crypto.randomUUID()),
+        id,
         name: String(part.name ?? "tool"),
         args: part.arguments ?? part.input ?? part.args,
         status: "done",
       });
+      parts.push({ kind: "tool", toolId: id });
     }
     if (type === "image" && typeof part.data === "string") {
       const mime = typeof part.mimeType === "string" ? part.mimeType : "image/png";
@@ -104,6 +120,7 @@ function extractContent(content: unknown): {
     thinking: thoughts.length > 0 ? thoughts.join("\n") : undefined,
     tools,
     attachments,
+    parts,
   };
 }
 

@@ -3,7 +3,8 @@
 import * as React from "react"
 import { ContextMenu as ContextMenuPrimitive } from "@base-ui/react/context-menu"
 import { cn } from "cn"
-import { ChevronRightIcon, CheckIcon } from "lucide-react"
+import { HugeiconsIcon } from "@hugeicons/react"
+import { ArrowRight01Icon, Tick02Icon } from "@hugeicons/core-free-icons"
 
 function ContextMenu({ ...props }: ContextMenuPrimitive.Root.Props) {
   return <ContextMenuPrimitive.Root data-slot="context-menu" {...props} />
@@ -43,7 +44,7 @@ function ContextMenuContent({
   return (
     <ContextMenuPrimitive.Portal>
       <ContextMenuPrimitive.Positioner
-        className="no-drag isolate z-50 outline-none"
+        className="isolate z-50 outline-none"
         align={align}
         alignOffset={alignOffset}
         side={side}
@@ -133,7 +134,7 @@ function ContextMenuSubTrigger({
       {...props}
     >
       {children}
-      <ChevronRightIcon className="ml-auto" />
+      <HugeiconsIcon icon={ArrowRight01Icon} strokeWidth={2} className="ml-auto" />
     </ContextMenuPrimitive.SubmenuTrigger>
   )
 }
@@ -173,8 +174,7 @@ function ContextMenuCheckboxItem({
     >
       <span className="pointer-events-none absolute right-2">
         <ContextMenuPrimitive.CheckboxItemIndicator>
-          <CheckIcon
-          />
+          <HugeiconsIcon icon={Tick02Icon} strokeWidth={2} />
         </ContextMenuPrimitive.CheckboxItemIndicator>
       </span>
       {children}
@@ -213,8 +213,7 @@ function ContextMenuRadioItem({
     >
       <span className="pointer-events-none absolute right-2">
         <ContextMenuPrimitive.RadioItemIndicator>
-          <CheckIcon
-          />
+          <HugeiconsIcon icon={Tick02Icon} strokeWidth={2} />
         </ContextMenuPrimitive.RadioItemIndicator>
       </span>
       {children}

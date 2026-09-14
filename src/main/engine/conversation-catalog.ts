@@ -34,7 +34,24 @@ export class ConversationCatalog {
   }
 
   list(): Conversation[] {
+    return this.#items.filter((item) => item.kind !== "side-chat").sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  listAll(): Conversation[] {
     return [...this.#items].sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  /** Drop auxiliary chats that have no open tab (they are not shown in the tree). */
+  takeSideChats(): Conversation[] {
+    const removed = this.#items.filter((item) => item.kind === "side-chat");
+    if (removed.length === 0) return [];
+    const ids = new Set(removed.map((item) => item.id));
+    this.#items = this.#items.filter((item) => !ids.has(item.id));
+    if (this.#activeId && ids.has(this.#activeId)) {
+      this.#activeId = this.#items[0]?.id;
+    }
+    this.#write();
+    return removed;
   }
 
   listProjects(): Project[] {
@@ -96,21 +113,29 @@ export class ConversationCatalog {
     return removed;
   }
 
-  create(project: string | undefined, session?: { sessionFile?: string; sessionId?: string }): Conversation {
+  create(
+    project: string | undefined,
+    session?: { sessionFile?: string; sessionId?: string; cwd?: string; worktree?: { path: string; branch: string } },
+    options?: { activate?: boolean; kind?: Conversation["kind"]; title?: string; parentId?: string },
+  ): Conversation {
     const id = session?.sessionId || randomUUID();
     const bound = normalizeProject(project);
     if (bound) this.ensureProject(bound);
     const conversation: Conversation = {
       id,
-      title: "新会话",
-      cwd: bound ?? this.#scratchRoot,
+      title: options?.title?.trim() || "新会话",
+      cwd: session?.cwd ?? bound ?? this.#scratchRoot,
       project: bound,
       sessionFile: session?.sessionFile,
       sessionId: session?.sessionId,
+      worktree: session?.worktree,
       updatedAt: Date.now(),
+      kind: options?.kind,
+      parentId: options?.parentId,
+      preview: options?.kind === "side-chat" ? options.title?.trim() || "辅助对话" : undefined,
     };
     this.#items = [conversation, ...this.#items.filter((item) => item.id !== conversation.id)];
-    this.#activeId = conversation.id;
+    if (options?.activate !== false) this.#activeId = conversation.id;
     this.#write();
     return conversation;
   }

@@ -1,22 +1,29 @@
 import { randomUUID } from "node:crypto";
 import { chmod, readFile, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import type { FastVibeModel, ProviderConfig, ProviderModel } from "@shared/types";
-import { lookupBuiltinModel, pickDefaultModelId, toValidEfforts } from "./model-catalog";
+import { PROVIDER_APIS, type FastVibeModel, type NativeProviderConfig, type ProviderApi, type ProviderConfig, type ProviderModel } from "@shared/types";
 import { enrichModel, loadModelsDev, type ModelsDevIndex } from "./models-dev";
+import { findNativeProvider, listNativeProviders, selectedNativeModels } from "./native-providers";
 import type { FastVibePaths } from "./paths";
 
 export const FASTVIBE_PROVIDER_ID = "fastvibe";
 export const FASTVIBE_API_BASE = "https://fastvibe.dev/v1";
 export const FASTVIBE_API_KEY_ENV = "FASTVIBE_API_KEY";
 
+/**
+ * `native` entries point at a pi-coding-agent built-in provider: the id is the SDK
+ * provider id itself (e.g. `deepseek`) and `models` is the user's chosen subset of
+ * the built-in catalog. `baseUrl` / `api` / `name` are derived from the SDK on every
+ * read rather than trusted from disk, so an SDK upgrade refreshes them for free.
+ */
 type StoredProvider = {
   id: string;
-  kind: "builtin" | "custom";
+  kind: "builtin" | "native" | "custom";
   name: string;
   baseUrl: string;
-  api: "openai-completions";
+  api: string;
   apiKeyEnv: string;
+  enabled: boolean;
   models: ProviderModel[];
 };
 
@@ -32,6 +39,7 @@ const FASTVIBE_DEFAULT: StoredProvider = {
   baseUrl: FASTVIBE_API_BASE,
   api: "openai-completions",
   apiKeyEnv: FASTVIBE_API_KEY_ENV,
+  enabled: true,
   models: [],
 };
 
@@ -43,78 +51,20 @@ export function readProviders(paths: FastVibePaths): StoredProvider[] {
   try {
     const parsed = JSON.parse(readFileSync(paths.providersFile, "utf8")) as ProvidersFile;
     if (!parsed || !Array.isArray(parsed.providers)) return [normalizeFastVibe(null)];
-    const list = parsed.providers.filter(isStoredProvider);
-    return ensureFastVibe(list);
+    return ensureFastVibe(parsed.providers.filter(isStoredProvider).map(hydrateProvider).filter(isLiveProvider));
   } catch {
-    const migrated = migrateLegacy(paths);
-    return migrated ?? [normalizeFastVibe(null)];
+    // No providers.json yet: FastVibe exists but has no models until the user connects.
+    return [normalizeFastVibe(null)];
   }
 }
 
 /**
- * Older builds wrote a single fastvibe provider straight into models.yml.
- * If providers.json is missing but that config exists, seed the new store from it
- * so users are not forced to reconnect.
+ * Drop native entries whose provider id no longer exists in the SDK catalog — an
+ * upgrade can retire a built-in, and a stale entry would otherwise show up as a
+ * nameless provider with no models.
  */
-function migrateLegacy(paths: FastVibePaths): StoredProvider[] | null {
-  if (existsSync(paths.providersFile)) return null;
-  try {
-    if (!existsSync(paths.modelsYml)) return null;
-    const keys = readProviderKeysSync(paths);
-    if (!keys[FASTVIBE_API_KEY_ENV]) return null;
-    const ids = parseModelIds(readFileSync(paths.modelsYml, "utf8"));
-    if (ids.length === 0) return null;
-    const models: ProviderModel[] = ids.map((id) => {
-      const builtin = lookupBuiltinModel(id);
-      if (builtin) {
-        return {
-          id,
-          name: builtin.name,
-          contextWindow: builtin.contextWindow,
-          maxTokens: builtin.maxTokens,
-          reasoning: builtin.reasoning,
-          input: builtin.input,
-          thinkingLevels: builtin.thinkingLevels,
-          thinkingFormat: builtin.thinkingFormat,
-          source: "builtin",
-        };
-      }
-      return {
-        id,
-        name: id,
-        contextWindow: 128_000,
-        maxTokens: 8192,
-        reasoning: false,
-        input: ["text"],
-        source: "default",
-      };
-    });
-    const providers = [normalizeFastVibe({ ...FASTVIBE_DEFAULT, models })];
-    try {
-      writeProviders(paths, providers);
-    } catch {
-      // migration is best-effort
-    }
-    return providers;
-  } catch {
-    return null;
-  }
-}
-
-function parseModelIds(yml: string): string[] {
-  const ids: string[] = [];
-  let inFastVibe = false;
-  for (const raw of yml.split("\n")) {
-    const line = raw.replace(/\s+$/, "");
-    if (/^  [A-Za-z0-9_.:-]+:$/.test(line)) {
-      inFastVibe = line.trim() === `${FASTVIBE_PROVIDER_ID}:`;
-      continue;
-    }
-    if (!inFastVibe) continue;
-    const match = /^\s+- id:\s*(.+)$/.exec(line);
-    if (match) ids.push(unquote(match[1].trim()));
-  }
-  return ids;
+function isLiveProvider(provider: StoredProvider): boolean {
+  return provider.kind !== "native" || findNativeProvider(provider.id) !== undefined;
 }
 
 function writeProviders(paths: FastVibePaths, providers: StoredProvider[]): void {
@@ -133,6 +83,7 @@ function normalizeFastVibe(existing: StoredProvider | null): StoredProvider {
   return {
     ...FASTVIBE_DEFAULT,
     models: existing?.models ?? [],
+    enabled: existing?.enabled ?? true,
   };
 }
 
@@ -184,7 +135,21 @@ export function listProviderConfigs(
     api: provider.api,
     apiKeyEnv: provider.apiKeyEnv,
     hasKey: Boolean(keys[provider.apiKeyEnv]),
+    enabled: provider.enabled,
     models: provider.models,
+  }));
+}
+
+/** The pi-coding-agent built-ins offered by 添加供应商, with live metadata. */
+export function nativeProviderCatalog(): NativeProviderConfig[] {
+  return listNativeProviders().map((provider) => ({
+    id: provider.id,
+    name: provider.name,
+    api: provider.api,
+    baseUrl: provider.baseUrl,
+    models: provider.models,
+    supported: provider.supported,
+    unsupportedReason: provider.unsupportedReason,
   }));
 }
 
@@ -225,23 +190,14 @@ export async function fetchProviderModels(
   return models;
 }
 
+/**
+ * Model parameters come from the bundled models.dev snapshot — there is no
+ * hand-maintained catalog to drift out of sync, and no per-model editing UI.
+ * Unknown ids keep models.dev's conservative defaults (128K context / 8K output /
+ * text-only) rather than blocking the model.
+ */
 function enrichOne(index: ModelsDevIndex, id: string, apiName: string): ProviderModel {
-  const builtin = lookupBuiltinModel(id);
-  if (builtin) {
-    return {
-      id,
-      name: apiName || builtin.name,
-      contextWindow: builtin.contextWindow,
-      maxTokens: builtin.maxTokens,
-      reasoning: builtin.reasoning,
-      input: builtin.input,
-      thinkingLevels: builtin.thinkingLevels,
-      thinkingFormat: builtin.thinkingFormat,
-      source: "builtin",
-    };
-  }
-  const meta = enrichModel(index, id, apiName || id);
-  return { ...meta, thinkingFormat: inferThinkingFormat(id) };
+  return { ...enrichModel(index, id, apiName || id), thinkingFormat: inferThinkingFormat(id) };
 }
 
 function inferThinkingFormat(id: string): ProviderModel["thinkingFormat"] {
@@ -255,43 +211,39 @@ function extractModelList(payload: unknown): unknown[] {
   return [];
 }
 
-/** Write models.yml + config.yml from the stored provider selection. */
-export function applyProviders(paths: FastVibePaths): {
-  models: FastVibeModel[];
-  defaultModel?: string;
-} {
-  const providers = readProviders(paths);
-  const usable = providers.filter((provider) => provider.models.length > 0);
+/**
+ * Materialise the engine's model registry. `models.json` is the only config the
+ * pi-coding-agent SDK reads; the YAML/`config.yml` pair the RPC engine used is gone.
+ *
+ * Providers without a stored key are omitted entirely, so an unconfigured provider
+ * contributes no models — which is why a fresh install shows an empty model menu
+ * instead of a preloaded catalog.
+ *
+ * Native providers are excluded from the file on purpose: the SDK already knows
+ * their endpoint, api and models, and a `models.json` entry would make it resolve
+ * `apiKey` as an env-var name — sending the literal name as the bearer token when
+ * that name is not exported. Their credentials go to `AuthStorage` instead.
+ */
+export function applyProviders(paths: FastVibePaths): FastVibeModel[] {
+  const usable = readProviders(paths).filter(
+    (provider) => provider.enabled && (provider.kind === "native" || provider.models.length > 0),
+  );
   const keys = readProviderKeysSync(paths);
-  writeFileSync(paths.modelsYml, renderModelsYml(usable, keys), "utf8");
-  // pi-coding-agent's SDK reads the same provider catalog as JSON. Keep the
-  // legacy YAML output for users upgrading from the RPC engine, but make the
-  // JSON registry authoritative for the embedded kernel.
-  writeFileSync(paths.modelsJson, renderModelsJson(usable.filter((provider) => Boolean(keys[provider.apiKeyEnv]))), "utf8");
+  const connected = usable.filter((provider) => Boolean(keys[provider.apiKeyEnv]));
+  const writable = connected.filter((provider) => provider.kind !== "native");
+  writeFileSync(paths.modelsJson, renderModelsJson(writable), "utf8");
 
-  const allIds = usable.flatMap((provider) => provider.models.map((model) => model.id));
-  const defaultId = allIds.length > 0 ? pickDefaultModelId(allIds) : undefined;
-  const defaultProvider =
-    usable.find((provider) => provider.models.some((model) => model.id === defaultId)) ?? usable[0];
-  if (defaultProvider && defaultId) {
-    writeFileSync(
-      paths.configYml,
-      `modelRoles:\n  default: ${defaultProvider.id}/${defaultId}\n`,
-      "utf8",
-    );
-  }
-
-  return {
-    defaultModel: defaultId,
-    models: usable.flatMap((provider) =>
-      provider.models.map((model) => ({
-        provider: provider.id,
-        id: model.id,
-        name: model.name,
-        thinkingLevels: model.thinkingLevels,
-      })),
-    ),
-  };
+  // Only connected providers: returning a keyless provider's models here would put
+  // them in the composer's menu even though models.json omits them, and selecting
+  // one would then fail with "模型不存在".
+  return connected.flatMap((provider) =>
+    provider.models.map((model) => ({
+      provider: provider.id,
+      id: model.id,
+      name: model.name,
+      thinkingLevels: model.thinkingLevels,
+    })),
+  );
 }
 
 function renderModelsJson(providers: StoredProvider[]): string {
@@ -310,52 +262,27 @@ function renderModelsJson(providers: StoredProvider[]): string {
         contextWindow: model.contextWindow,
         maxTokens: model.maxTokens,
         reasoning: model.reasoning,
-        input: model.input,
+        input: engineInputs(model.input),
       })),
     };
   }
   return `${JSON.stringify(result, null, 2)}\n`;
 }
 
-/** Providers that have at least one model and, when required, a stored key. */
+/**
+ * Providers that have a stored key and so should reach `AuthStorage`.
+ *
+ * Native providers are included even though they hold no `models.json` models —
+ * their models come from the SDK registry, and requiring a non-empty `models` here
+ * would strand them at `needsAuth` no matter what key the user pasted.
+ */
 export function usableProviders(paths: FastVibePaths, keys: Record<string, string>): StoredProvider[] {
   return readProviders(paths).filter(
-    (provider) => provider.models.length > 0 && Boolean(keys[provider.apiKeyEnv]),
+    (provider) =>
+      provider.enabled &&
+      (provider.kind === "native" || provider.models.length > 0) &&
+      Boolean(keys[provider.apiKeyEnv]),
   );
-}
-
-export function renderModelsYml(providers: StoredProvider[], keys: Record<string, string> = {}): string {
-  const lines = ["providers:"];
-  for (const provider of providers) {
-    const hasKey = Boolean(provider.apiKeyEnv && keys[provider.apiKeyEnv]);
-    lines.push(`  ${yamlScalar(provider.id)}:`);
-    lines.push(`    baseUrl: ${yamlScalar(provider.baseUrl)}`);
-    lines.push(`    api: ${provider.api}`);
-    if (hasKey) {
-      lines.push(`    apiKey: ${provider.apiKeyEnv}`);
-      lines.push("    authHeader: true");
-    } else {
-      lines.push("    auth: none");
-    }
-    lines.push("    models:");
-    for (const model of provider.models) {
-      lines.push(`      - id: ${yamlScalar(model.id)}`);
-      lines.push(`        name: ${yamlScalar(model.name)}`);
-      lines.push(`        contextWindow: ${model.contextWindow}`);
-      lines.push(`        maxTokens: ${model.maxTokens}`);
-      lines.push(`        reasoning: ${model.reasoning}`);
-      const input = yamlInputs(model.input);
-      if (input.length > 0) lines.push(`        input: [${input.join(", ")}]`);
-      const efforts = toValidEfforts(model.thinkingLevels);
-      if (efforts.length > 0) {
-        lines.push("        thinking:");
-        lines.push("          mode: effort");
-        lines.push(`          efforts: [${efforts.join(", ")}]`);
-      }
-      if (model.thinkingFormat) lines.push(`        thinkingFormat: ${model.thinkingFormat}`);
-    }
-  }
-  return `${lines.join("\n")}\n`;
 }
 
 function readProviderKeysSync(paths: FastVibePaths): Record<string, string> {
@@ -372,13 +299,15 @@ function readProviderKeysSync(paths: FastVibePaths): Record<string, string> {
   }
 }
 
-function yamlInputs(input: string[] | undefined): string[] {
+/**
+ * The engine's models.json schema only accepts `text` and `image` modalities, and a
+ * single unknown value invalidates the whole file (every custom provider is then
+ * dropped from the registry). models.dev also reports `video`/`file`, which we keep
+ * in the UI metadata but must not hand to the engine.
+ */
+function engineInputs(input: string[] | undefined): string[] {
   if (!input) return [];
   return input.filter((item) => item === "text" || item === "image");
-}
-
-function yamlScalar(value: string): string {
-  return /^[A-Za-z0-9_./:+-]+$/.test(value) ? value : JSON.stringify(value);
 }
 
 /* ---------------- mutations ---------------- */
@@ -394,19 +323,20 @@ export async function saveFastVibe(
 
 export async function addProvider(
   paths: FastVibePaths,
-  draft: { name: string; baseUrl: string; apiKey: string },
+  draft: { name: string; baseUrl: string; apiKey: string; api?: ProviderApi },
   models: ProviderModel[],
 ): Promise<string> {
   const providers = readProviders(paths);
   const id = uniqueProviderId(providers, draft.name);
-  const apiKeyEnv = `FASTVIBE_KEY_${id.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
+  const apiKeyEnv = nativeKeyEnv(id);
   providers.push({
     id,
     kind: "custom",
     name: draft.name.trim() || id,
     baseUrl: draft.baseUrl.trim().replace(/\/+$/, ""),
-    api: "openai-completions",
+    api: draft.api && isProviderApi(draft.api) ? draft.api : "openai-completions",
     apiKeyEnv,
+    enabled: true,
     models,
   });
   writeProviders(paths, providers);
@@ -414,15 +344,74 @@ export async function addProvider(
   return id;
 }
 
+/**
+ * Enable a pi-coding-agent built-in provider with a pasted key.
+ *
+ * Only the key and the chosen models are persisted — name, api and baseUrl are
+ * re-read from the SDK on every `readProviders`, and nothing is written to
+ * `models.json` (see `applyProviders`).
+ */
+export async function addNativeProvider(
+  paths: FastVibePaths,
+  id: string,
+  apiKey: string,
+  models: ProviderModel[],
+): Promise<string> {
+  const native = findNativeProvider(id);
+  if (!native) throw new Error("该内置供应商不存在");
+  if (!native.supported) throw new Error(native.unsupportedReason ?? "该内置供应商暂不支持 API 密钥");
+
+  const providers = readProviders(paths);
+  if (providers.some((provider) => provider.id === id)) throw new Error("该内置供应商已添加");
+
+  const apiKeyEnv = nativeKeyEnv(id);
+  providers.push({
+    id,
+    kind: "native",
+    name: native.name,
+    baseUrl: native.baseUrl,
+    api: native.api,
+    apiKeyEnv,
+    enabled: true,
+    // Re-read through the catalog so a stale renderer payload cannot smuggle in
+    // models the SDK no longer ships.
+    models: selectedNativeModels(
+      id,
+      models.map((model) => model.id),
+    ),
+  });
+  writeProviders(paths, providers);
+  await setProviderKey(paths, apiKeyEnv, apiKey);
+  return id;
+}
+
 export function updateProvider(
   paths: FastVibePaths,
   id: string,
-  patch: Partial<Pick<StoredProvider, "name" | "baseUrl" | "models">>,
+  patch: Partial<Pick<StoredProvider, "name" | "baseUrl" | "api" | "enabled" | "models">>,
 ): void {
   const providers = readProviders(paths);
   const index = providers.findIndex((provider) => provider.id === id);
   if (index < 0) return;
-  providers[index] = { ...providers[index], ...patch };
+  const current = providers[index];
+  const next = { ...current, ...patch };
+  if (id === FASTVIBE_PROVIDER_ID) {
+    next.name = FASTVIBE_DEFAULT.name;
+    next.baseUrl = FASTVIBE_DEFAULT.baseUrl;
+    next.api = FASTVIBE_DEFAULT.api;
+  }
+  if (current.kind === "native") {
+    // Identity and endpoint stay pinned to the SDK; only enablement and the
+    // selected model subset are user-editable.
+    next.name = current.name;
+    next.baseUrl = current.baseUrl;
+    next.api = current.api;
+    next.models = selectedNativeModels(
+      id,
+      (patch.models ?? current.models).map((model) => model.id),
+    );
+  }
+  providers[index] = next;
   writeProviders(paths, providers);
 }
 
@@ -443,18 +432,60 @@ export function providerKeyEnv(paths: FastVibePaths, id: string): string | undef
   return readProviders(paths).find((provider) => provider.id === id)?.apiKeyEnv;
 }
 
-/** Re-fetch a provider's model list using its stored key. */
+/**
+ * Refresh a provider's model list. Custom providers re-fetch `/models` with their
+ * stored key; native providers re-read the SDK catalog (no request, no key needed).
+ */
 export async function refreshProviderModels(
   paths: FastVibePaths,
   id: string,
 ): Promise<ProviderModel[]> {
   const provider = readProviders(paths).find((item) => item.id === id);
   if (!provider) throw new Error("供应商不存在");
+  if (provider.kind === "native") return findNativeProvider(id)?.models ?? [];
   const keys = await loadProviderKeys(paths);
   return fetchProviderModels(provider.baseUrl, keys[provider.apiKeyEnv] ?? "");
 }
 
 /* ---------------- helpers ---------------- */
+
+function hydrateProvider(value: StoredProvider): StoredProvider {
+  const kind: StoredProvider["kind"] =
+    value.kind === "native" || value.kind === "builtin" ? value.kind : "custom";
+
+  if (kind === "native") {
+    // The SDK is the source of truth for a native provider's identity and endpoint.
+    const native = findNativeProvider(value.id);
+    if (!native) return { ...value, kind, enabled: value.enabled !== false };
+    // Intersect with the catalog: an SDK upgrade can retire a model, and a stale
+    // selection would otherwise surface in the composer and then fail to resolve.
+    const live = new Set(native.models.map((model) => model.id));
+    return {
+      ...value,
+      kind,
+      name: native.name,
+      baseUrl: native.baseUrl,
+      api: native.api,
+      enabled: value.enabled !== false,
+      models: value.models.filter((model) => live.has(model.id)),
+    };
+  }
+
+  return {
+    ...value,
+    kind,
+    api: isProviderApi(value.api) ? value.api : "openai-completions",
+    enabled: value.enabled !== false,
+  };
+}
+
+export function nativeKeyEnv(id: string): string {
+  return `FASTVIBE_KEY_${id.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
+}
+
+function isProviderApi(value: unknown): value is ProviderApi {
+  return typeof value === "string" && (PROVIDER_APIS as readonly string[]).includes(value);
+}
 
 function isStoredProvider(value: unknown): value is StoredProvider {
   return (

@@ -3,19 +3,31 @@ import { statSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { join } from "node:path";
+import { homedir } from "node:os";
 import { Ipc } from "@shared/ipc";
-import { readFilePreview } from "./omp/file-preview";
-import { loadModelsDev } from "./omp/models-dev";
-import { getFastVibePaths } from "./omp/paths";
+import { readFilePreview } from "./engine/file-preview";
+import { loadModelsDev } from "./engine/models-dev";
+import {
+  applyNativeTheme,
+  clearAppSettings,
+  paintWindows,
+  readAppSettings,
+  windowBackgroundColor,
+  writeAppSettings,
+} from "./engine/app-settings";
+import { getFastVibePaths } from "./engine/paths";
+import { collectUsageStats } from "./engine/usage-stats";
 import { PiProcessManager } from "./pi/process-manager";
-import type { ProviderModel } from "@shared/types";
-import type { GitBranch, GitStatus } from "@shared/ipc";
+import { TerminalSessions } from "./engine/terminal-sessions";
+import type { ProviderModel, UsageRange } from "@shared/types";
+import type { GitBranch, GitDiffSource, GitStatus } from "@shared/ipc";
 
 const execFileAsync = promisify(execFile);
 
 app.setName("FastVibe");
 
-const omp = new PiProcessManager();
+const engine = new PiProcessManager();
+const terminals = new TerminalSessions();
 let mainWindow: BrowserWindow | null = null;
 const windows = new Set<BrowserWindow>();
 
@@ -42,16 +54,17 @@ function createWindow(): void {
     minHeight: 640,
     title: "FastVibe",
     icon: resolveAppIcon(),
-    backgroundColor: "#ffffff",
+    backgroundColor: windowBackgroundColor(),
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     trafficLightPosition: { x: 16, y: 16 },
     show: false,
-    webPreferences: {
-      preload: join(__dirname, "../preload/index.mjs"),
-      sandbox: false,
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
+      webPreferences: {
+        preload: join(__dirname, "../preload/index.mjs"),
+        sandbox: false,
+        contextIsolation: true,
+        nodeIntegration: false,
+        webviewTag: true,
+      },
   });
 
   window.on("ready-to-show", () => window.show());
@@ -75,23 +88,23 @@ function createWindow(): void {
 }
 
 function broadcastStatus(): void {
-  for (const window of windows) window.webContents.send(Ipc.status, omp.status);
+  for (const window of windows) window.webContents.send(Ipc.status, engine.status);
 }
 
 function registerIpc(): void {
-  ipcMain.handle(Ipc.ompGetStatus, () => omp.status);
+  ipcMain.handle(Ipc.engineGetStatus, () => engine.status);
 
-  ipcMain.handle(Ipc.ompStart, async (_event, payload?: { cwd?: string }) => {
-    return omp.start(payload?.cwd ?? omp.cwd);
+  ipcMain.handle(Ipc.engineStart, async (_event, payload?: { cwd?: string }) => {
+    return engine.start(payload?.cwd ?? engine.cwd);
   });
 
-  ipcMain.handle(Ipc.ompStop, async () => {
-    await omp.stop();
-    return omp.status;
+  ipcMain.handle(Ipc.engineStop, async () => {
+    await engine.stop();
+    return engine.status;
   });
 
   ipcMain.handle(
-    Ipc.ompPrompt,
+    Ipc.enginePrompt,
     async (
       _event,
       payload: {
@@ -100,7 +113,7 @@ function registerIpc(): void {
         images?: Array<{ type: "image"; data: string; mimeType: string }>;
       },
     ) => {
-      await omp.prompt(payload.message, {
+      await engine.prompt(payload.message, {
         streamingBehavior: payload.streamingBehavior,
         images: payload.images,
       });
@@ -108,119 +121,141 @@ function registerIpc(): void {
   );
 
   ipcMain.handle(
-    Ipc.ompSteer,
+    Ipc.engineSteer,
     async (_event, payload: { message: string; images?: Array<{ type: "image"; data: string; mimeType: string }> }) => {
-      await omp.steer(payload.message, payload.images);
+      await engine.steer(payload.message, payload.images);
     },
   );
 
   ipcMain.handle(
-    Ipc.ompFollowUp,
+    Ipc.engineFollowUp,
     async (_event, payload: { message: string; images?: Array<{ type: "image"; data: string; mimeType: string }> }) => {
-      await omp.followUp(payload.message, payload.images);
+      await engine.followUp(payload.message, payload.images);
     },
   );
 
-  ipcMain.handle(Ipc.ompAbort, async () => {
-    await omp.abort();
+  ipcMain.handle(Ipc.engineAbort, async () => {
+    await engine.abort();
   });
 
-  ipcMain.handle(Ipc.ompClearQueue, async () => {
-    return omp.clearQueue();
+  ipcMain.handle(Ipc.engineClearQueue, async () => {
+    return engine.clearQueue();
   });
 
-  ipcMain.handle(Ipc.ompCompact, async (_event, payload?: { customInstructions?: string }) => {
-    return omp.compact(payload?.customInstructions);
+  ipcMain.handle(Ipc.engineCompact, async (_event, payload?: { customInstructions?: string }) => {
+    return engine.compact(payload?.customInstructions);
   });
 
-  ipcMain.handle(Ipc.ompGetCommands, async () => {
-    return omp.getCommands();
+  ipcMain.handle(Ipc.engineGetCommands, async () => {
+    return engine.getCommands();
   });
-  ipcMain.handle(Ipc.ompGetExtensions, async () => omp.getExtensions());
-  ipcMain.handle(Ipc.ompListMcpServers, async () => omp.listMcpServers());
-  ipcMain.handle(Ipc.ompSaveMcpServers, async (_event, payload: { configs: import("@shared/types").McpServerConfig[] }) => omp.saveMcpServers(payload.configs));
+  ipcMain.handle(Ipc.engineGetExtensions, async () => engine.getExtensions());
+  ipcMain.handle(Ipc.engineListMcpServers, async () => engine.listMcpServers());
+  ipcMain.handle(Ipc.engineSaveMcpServers, async (_event, payload: { configs: import("@shared/types").McpServerConfig[] }) => engine.saveMcpServers(payload.configs));
+  ipcMain.handle(Ipc.engineListSkills, async () => engine.listSkills());
+  ipcMain.handle(Ipc.engineCreateSkill, async (_event, payload: import("@shared/types").SkillDraft) => engine.createSkill(payload));
+  ipcMain.handle(Ipc.engineImportSkill, async () => {
+    const result = await dialog.showOpenDialog({
+      title: "导入技能",
+      properties: ["openDirectory"],
+    });
+    if (result.canceled || !result.filePaths[0]) return null;
+    return engine.importSkill(result.filePaths[0]);
+  });
+  ipcMain.handle(Ipc.engineRemoveSkill, async (_event, payload: { name: string }) => engine.removeSkill(payload.name));
 
-  ipcMain.handle(Ipc.ompGetSubagents, async () => {
-    return omp.getSubagents();
+  ipcMain.handle(Ipc.engineGetSubagents, async () => {
+    return engine.getSubagents();
   });
 
-  ipcMain.handle(Ipc.ompGetSubagentMessages, async (_event, payload: { subagentId: string }) => {
-    return omp.getSubagentMessages(payload.subagentId);
+  ipcMain.handle(Ipc.engineGetSubagentMessages, async (_event, payload: { subagentId: string }) => {
+    return engine.getSubagentMessages(payload.subagentId);
   });
+
+  ipcMain.handle(Ipc.conversationsMultiRun, async (_event, payload: import("@shared/types").MultiRunRequest) => engine.multiRun(payload));
 
   ipcMain.handle(
-    Ipc.ompPermissionRespond,
+    Ipc.enginePermissionRespond,
     (_event, payload: { id: string; confirmed?: boolean; value?: string; cancelled?: boolean }) => {
-      omp.respondPermission(payload);
+      engine.respondPermission(payload);
     },
   );
 
-  ipcMain.handle(Ipc.ompNewSession, async () => {
-    await omp.newSession();
+  ipcMain.handle(Ipc.engineNewSession, async () => {
+    await engine.newSession();
   });
 
-  ipcMain.handle(Ipc.ompGetState, async () => {
-    return omp.getState();
+  ipcMain.handle(Ipc.engineGetState, async () => {
+    return engine.getState();
   });
 
-  ipcMain.handle(Ipc.ompGetModels, async () => {
-    return omp.getAvailableModels();
+  ipcMain.handle(Ipc.engineGetModels, async () => {
+    return engine.getAvailableModels();
   });
 
-  ipcMain.handle(Ipc.ompSetModel, async (_event, payload: { provider: string; modelId: string }) => {
-    return omp.setModel(payload.provider, payload.modelId);
+  ipcMain.handle(Ipc.engineSetModel, async (_event, payload: { provider: string; modelId: string }) => {
+    return engine.setModel(payload.provider, payload.modelId);
   });
 
-  ipcMain.handle(Ipc.ompSetThinking, async (_event, payload: { level: string }) => {
-    return omp.setThinkingLevel(payload.level);
+  ipcMain.handle(Ipc.engineSetThinking, async (_event, payload: { level: string }) => {
+    return engine.setThinkingLevel(payload.level);
   });
-  ipcMain.handle(Ipc.ompSetInterrupt, async (_event, payload: { mode: "immediate" | "wait" }) => {
-    return omp.setInterruptMode(payload.mode);
+  ipcMain.handle(Ipc.engineSetInterrupt, async (_event, payload: { mode: "immediate" | "wait" }) => {
+    return engine.setInterruptMode(payload.mode);
   });
-  ipcMain.handle(Ipc.ompSetAutoCompact, async (_event, payload: { enabled: boolean }) => {
-    return omp.setAutoCompaction(payload.enabled);
+  ipcMain.handle(Ipc.engineSetAutoCompact, async (_event, payload: { enabled: boolean }) => {
+    return engine.setAutoCompaction(payload.enabled);
   });
-  ipcMain.handle(Ipc.ompBranch, async (_event, payload: { entryId: string }) => {
-    return omp.branch(payload.entryId);
+  ipcMain.handle(Ipc.engineBranch, async (_event, payload: { entryId: string }) => {
+    return engine.branch(payload.entryId);
   });
-  ipcMain.handle(Ipc.ompGetMessages, async () => {
-    return omp.loadMessages();
+  ipcMain.handle(Ipc.engineGetMessages, async () => {
+    return engine.loadMessages();
   });
-  ipcMain.handle(Ipc.ompGetStats, async () => {
-    return omp.getSessionStats();
+  ipcMain.handle(Ipc.engineGetStats, async () => {
+    return engine.getSessionStats();
   });
-  ipcMain.handle(Ipc.ompSetSteering, async (_event, payload: { mode: "all" | "one-at-a-time" }) => {
-    return omp.setSteeringMode(payload.mode);
+  ipcMain.handle(Ipc.engineSetSteering, async (_event, payload: { mode: "all" | "one-at-a-time" }) => {
+    return engine.setSteeringMode(payload.mode);
   });
-  ipcMain.handle(Ipc.ompSetFollowUp, async (_event, payload: { mode: "all" | "one-at-a-time" }) => {
-    return omp.setFollowUpMode(payload.mode);
+  ipcMain.handle(Ipc.engineSetFollowUp, async (_event, payload: { mode: "all" | "one-at-a-time" }) => {
+    return engine.setFollowUpMode(payload.mode);
   });
-  ipcMain.handle(Ipc.ompExportHtml, async () => {
-    const path = await omp.exportHtml();
+  ipcMain.handle(Ipc.engineExportHtml, async () => {
+    const path = await engine.exportHtml();
     if (path) await shell.openPath(path);
     return path;
   });
 
   ipcMain.handle(Ipc.providersList, async () => {
-    return omp.listProviders();
+    return engine.listProviders();
   });
+  ipcMain.handle(Ipc.providersNative, async () => {
+    return engine.listNativeProviders();
+  });
+  ipcMain.handle(
+    Ipc.providersAddNative,
+    async (_event, payload: { id: string; apiKey: string; models: ProviderModel[] }) => {
+      return engine.addNativeProvider(payload.id, payload.apiKey, payload.models);
+    },
+  );
   ipcMain.handle(
     Ipc.providersFetch,
     async (_event, payload: { baseUrl: string; apiKey: string }) => {
-      return omp.fetchModels(payload.baseUrl, payload.apiKey);
+      return engine.fetchModels(payload.baseUrl, payload.apiKey);
     },
   );
   ipcMain.handle(
     Ipc.providersSaveFastVibe,
     async (_event, payload: { apiKey: string; models: ProviderModel[] }) => {
-      return omp.saveFastVibe(payload.apiKey, payload.models);
+      return engine.saveFastVibe(payload.apiKey, payload.models);
     },
   );
   ipcMain.handle(
     Ipc.providersAdd,
-    async (_event, payload: { name: string; baseUrl: string; apiKey: string; models: ProviderModel[] }) => {
-      return omp.addProvider(
-        { name: payload.name, baseUrl: payload.baseUrl, apiKey: payload.apiKey },
+    async (_event, payload: { name: string; baseUrl: string; apiKey: string; api?: import("@shared/types").ProviderApi; models: ProviderModel[] }) => {
+      return engine.addProvider(
+        { name: payload.name, baseUrl: payload.baseUrl, apiKey: payload.apiKey, api: payload.api },
         payload.models,
       );
     },
@@ -229,41 +264,43 @@ function registerIpc(): void {
     Ipc.providersUpdate,
     async (
       _event,
-      payload: { id: string; name?: string; baseUrl?: string; apiKey?: string; models?: ProviderModel[] },
+      payload: { id: string; name?: string; baseUrl?: string; api?: import("@shared/types").ProviderApi; enabled?: boolean; apiKey?: string; models?: ProviderModel[] },
     ) => {
-      return omp.updateProvider(payload.id, {
+      return engine.updateProvider(payload.id, {
         name: payload.name,
         baseUrl: payload.baseUrl,
+        api: payload.api,
+        enabled: payload.enabled,
         apiKey: payload.apiKey,
         models: payload.models,
       });
     },
   );
   ipcMain.handle(Ipc.providersRemove, async (_event, payload: { id: string }) => {
-    return omp.removeProvider(payload.id);
+    return engine.removeProvider(payload.id);
   });
   ipcMain.handle(Ipc.providersRefresh, async (_event, payload: { id: string }) => {
-    return omp.refreshProviderModels(payload.id);
+    return engine.refreshProviderModels(payload.id);
   });
 
-  ipcMain.handle(Ipc.conversationsList, () => omp.listWorkspace());
+  ipcMain.handle(Ipc.conversationsList, () => engine.listWorkspace());
   ipcMain.handle(Ipc.conversationsCreate, async (_event, payload?: { project?: string }) => {
-    return omp.createConversation(payload?.project);
+    return engine.createConversation(payload?.project);
   });
   ipcMain.handle(Ipc.conversationsOpen, async (_event, payload: { id: string }) => {
-    return omp.openConversation(payload.id);
+    return engine.openConversation(payload.id);
   });
   ipcMain.handle(Ipc.conversationsRename, (_event, payload: { id: string; title: string }) => {
-    return omp.renameConversation(payload.id, payload.title);
+    return engine.renameConversation(payload.id, payload.title);
   });
   ipcMain.handle(Ipc.conversationsDelete, async (_event, payload: { id: string }) => {
-    return omp.deleteConversation(payload.id);
+    return engine.deleteConversation(payload.id);
   });
   ipcMain.handle(Ipc.conversationsRecordPrompt, (_event, payload: { id: string; text: string }) => {
-    return omp.recordPrompt(payload.id, payload.text);
+    return engine.recordPrompt(payload.id, payload.text);
   });
   ipcMain.handle(Ipc.conversationsSetProject, async (_event, payload: { id: string; project: string | null }) => {
-    return omp.setConversationProject(payload.id, payload.project);
+    return engine.setConversationProject(payload.id, payload.project);
   });
   ipcMain.handle(Ipc.projectsAdd, async () => {
     const result = await dialog.showOpenDialog({
@@ -271,13 +308,13 @@ function registerIpc(): void {
       properties: ["openDirectory", "createDirectory"],
     });
     if (result.canceled || !result.filePaths[0]) return null;
-    return omp.addProject(result.filePaths[0]);
+    return engine.addProject(result.filePaths[0]);
   });
   ipcMain.handle(Ipc.projectsRename, (_event, payload: { cwd: string; name: string }) => {
-    return omp.renameProject(payload.cwd, payload.name);
+    return engine.renameProject(payload.cwd, payload.name);
   });
   ipcMain.handle(Ipc.projectsRemove, async (_event, payload: { cwd: string }) => {
-    return omp.removeProject(payload.cwd);
+    return engine.removeProject(payload.cwd);
   });
   ipcMain.handle(Ipc.workspaceReveal, async (_event, payload: { cwd: string }) => {
     if (!payload.cwd) return;
@@ -375,11 +412,15 @@ function registerIpc(): void {
     await execFileAsync("git", ["-C", cwd, "commit", "-m", message], { timeout: 30000, maxBuffer: 256 * 1024 });
     return readGitStatus(cwd);
   });
-  ipcMain.handle(Ipc.workspaceGitDiff, async (_event, payload: { cwd: string; path?: string }): Promise<string> => {
+  ipcMain.handle(Ipc.workspaceGitDiff, async (_event, payload: { cwd: string; path?: string; source?: GitDiffSource }): Promise<string> => {
     const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
     if (!cwd) return "";
     const path = typeof payload.path === "string" ? payload.path.trim() : "";
-    const args = ["-C", cwd, "diff", "--no-ext-diff", "--unified=3", "HEAD"];
+    const source = payload.source ?? "unstaged";
+    const args = ["-C", cwd, "diff", "--no-ext-diff", "--unified=3"];
+    if (source === "staged") args.push("--cached");
+    else if (source === "branch") args.push("@{upstream}...HEAD");
+    else if (source === "last-turn") args.push("HEAD");
     if (path && !path.includes("\0")) args.push("--", path);
     try {
       const { stdout } = await execFileAsync("git", args, { timeout: 10000, maxBuffer: 1024 * 1024 });
@@ -388,6 +429,49 @@ function registerIpc(): void {
       const detail = error && typeof error === "object" && "stdout" in error && typeof error.stdout === "string" ? error.stdout : "";
       return detail;
     }
+  });
+  ipcMain.handle(Ipc.workspaceGitUnstage, async (_event, payload: { cwd: string; paths: string[] }): Promise<GitStatus> => {
+    const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
+    if (!cwd) throw new Error("项目路径无效");
+    const paths = Array.isArray(payload.paths) ? payload.paths.filter((item): item is string => typeof item === "string" && item.length > 0 && !item.includes("\0")) : [];
+    if (paths.length === 0) throw new Error("没有要取消暂存的文件");
+    await execFileAsync("git", ["-C", cwd, "restore", "--staged", "--", ...paths], { timeout: 10000, maxBuffer: 128 * 1024 });
+    return readGitStatus(cwd);
+  });
+  ipcMain.handle(Ipc.workspaceGitDiscard, async (_event, payload: { cwd: string; paths: string[] }): Promise<GitStatus> => {
+    const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
+    if (!cwd) throw new Error("项目路径无效");
+    const paths = Array.isArray(payload.paths) ? payload.paths.filter((item): item is string => typeof item === "string" && item.length > 0 && !item.includes("\0")) : [];
+    if (paths.length === 0) throw new Error("没有要丢弃的文件");
+    await execFileAsync("git", ["-C", cwd, "restore", "--worktree", "--source=HEAD", "--", ...paths], { timeout: 10000, maxBuffer: 128 * 1024 }).catch(async () => {
+      await execFileAsync("git", ["-C", cwd, "checkout", "--", ...paths], { timeout: 10000, maxBuffer: 128 * 1024 });
+    });
+    return readGitStatus(cwd);
+  });
+  ipcMain.handle(Ipc.workspaceTerminalStart, (_event, payload: { cwd?: string; cols?: number; rows?: number }) => {
+    const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
+    // A terminal is not tied to a project: with no workspace bound it opens in home.
+    return terminals.start(cwd || homedir(), { cols: payload.cols, rows: payload.rows });
+  });
+  ipcMain.handle(Ipc.workspaceTerminalWrite, (_event, payload: { id: string; data: string }) => {
+    if (!payload.id || typeof payload.data !== "string") return;
+    terminals.write(payload.id, payload.data);
+  });
+  ipcMain.handle(Ipc.workspaceTerminalResize, (_event, payload: { id: string; cols: number; rows: number }) => {
+    if (!payload.id) return;
+    terminals.resize(payload.id, payload.cols, payload.rows);
+  });
+  ipcMain.handle(Ipc.workspaceTerminalKill, (_event, payload: { id: string }) => {
+    if (payload.id) terminals.kill(payload.id);
+  });
+  ipcMain.handle(Ipc.enginePromptConversation, async (_event, payload: { id: string; message: string }) => {
+    await engine.promptConversation(payload.id, payload.message);
+  });
+  ipcMain.handle(Ipc.engineGetConversationMessages, async (_event, payload: { id: string }) => {
+    return engine.getConversationMessages(payload.id);
+  });
+  ipcMain.handle(Ipc.conversationsCreateSide, async (_event, payload: { project?: string; parentId?: string; title?: string }) => {
+    return engine.createSideConversation(payload?.project, payload?.parentId, payload?.title);
   });
   for (const [channel, command] of [[Ipc.workspaceGitPull, "pull"], [Ipc.workspaceGitPush, "push"]] as const) {
     ipcMain.handle(channel, async (_event, payload: { cwd: string }): Promise<GitStatus> => {
@@ -403,7 +487,7 @@ function registerIpc(): void {
     return {
       version: app.getVersion(),
       userData: paths.userData,
-      runtimeRoot: paths.ompRoot,
+      runtimeRoot: paths.runtimeRoot,
       platform: process.platform,
       modelsDev: {
         models: meta.models,
@@ -413,8 +497,29 @@ function registerIpc(): void {
       },
     };
   });
+  ipcMain.handle(Ipc.statsUsage, (_event, payload?: { range?: UsageRange }) => {
+    return collectUsageStats(getFastVibePaths(), payload?.range ?? "30d");
+  });
   ipcMain.handle(Ipc.windowNew, () => {
     createWindow();
+  });
+
+  ipcMain.on(Ipc.settingsGetSync, (event) => {
+    event.returnValue = readAppSettings(getFastVibePaths());
+  });
+  ipcMain.handle(Ipc.settingsGet, () => readAppSettings(getFastVibePaths()));
+  ipcMain.handle(Ipc.settingsSet, (_event, settings: Record<string, unknown>) => {
+    const payload = settings && typeof settings === "object" ? settings : {};
+    const paths = getFastVibePaths();
+    writeAppSettings(paths, payload);
+    applyNativeTheme(payload);
+    paintWindows(windows);
+  });
+  ipcMain.handle(Ipc.settingsClear, () => {
+    const paths = getFastVibePaths();
+    clearAppSettings(paths);
+    applyNativeTheme({});
+    paintWindows(windows);
   });
 
   ipcMain.handle(Ipc.workspacePick, async () => {
@@ -424,32 +529,37 @@ function registerIpc(): void {
     });
     if (result.canceled || !result.filePaths[0]) return null;
     const cwd = result.filePaths[0];
-    omp.addProject(cwd);
-    await omp.start(cwd);
-    return { cwd, status: omp.status };
+    engine.addProject(cwd);
+    await engine.start(cwd);
+    return { cwd, status: engine.status };
   });
 }
 
 app.whenReady().then(async () => {
   applyAppIcon();
+  applyNativeTheme(readAppSettings(getFastVibePaths()));
   registerIpc();
 
-  omp.onStatus(() => broadcastStatus());
-  omp.onConversationReady((payload) => {
+  engine.onStatus(() => broadcastStatus());
+  engine.onConversationReady((payload) => {
     for (const window of windows) window.webContents.send(Ipc.conversationReady, payload);
   });
-  omp.onEvent((event) => {
+  terminals.onData((event) => {
+    for (const window of windows) window.webContents.send(Ipc.workspaceTerminalData, event);
+  });
+
+  engine.onEvent((event) => {
     if (event.type === "conversation_activity" && !mainWindow?.isFocused() && Notification.isSupported()) {
       new Notification({ title: String(event.title ?? "会话"), body: "任务已完成，可以回来查看结果。" }).show();
     }
     if (event.type === "extension_ui_request") {
-      void omp.handleExtensionUi(event);
+      void engine.handleExtensionUi(event);
     }
     for (const window of windows) window.webContents.send(Ipc.event, event);
   });
 
   createWindow();
-  void omp.start();
+  void engine.start();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -466,8 +576,9 @@ app.on("before-quit", (event) => {
   if (stopping) return;
   event.preventDefault();
   stopping = true;
-  void omp.stop().finally(() => {
-    omp.flush();
+  void engine.stop().finally(() => {
+    terminals.dispose();
+    engine.flush();
     app.quit();
   });
 });

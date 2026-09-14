@@ -1,29 +1,34 @@
 import { useEffect, useMemo, useRef, useState, type JSX } from "react";
-import { AlertCircleIcon, GitBranch } from "lucide-react";
-import { ConnectForm } from "@/components/auth/connect-form";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { AlertCircleIcon, PanelRightCloseIcon, PanelRightOpenIcon } from "@hugeicons/core-free-icons";
+import { useMatch, useNavigate } from "react-router";
 import { Composer } from "@/components/chat/composer";
 import { MessageList } from "@/components/chat/message-list";
+import { NewSessionHero, SuggestionChips } from "@/components/chat/new-session";
 import { PermissionDialog } from "@/components/chat/permission-dialog";
-import { PreviewPanel } from "@/components/chat/preview-panel";
-import { RunStatusBar, SessionMenu, usagePercent } from "@/components/chat/session-controls";
+import { usagePercent } from "@/components/chat/session-controls";
+import { SummaryPanel } from "@/components/chat/summary-panel";
 import { Sidebar } from "@/components/layout/sidebar";
+import { SidePane } from "@/components/layout/side-pane";
 import { SessionSwitcher } from "@/components/layout/session-switcher";
-import { GitStatusDialog } from "@/components/layout/git-status-dialog";
-import { StatusPill } from "@/components/layout/status-pill";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { IconButton } from "@/components/icon-button";
 import { attachmentPromptSuffix, attachmentsToImages } from "@/lib/attachments";
-import { SettingsDialog } from "@/components/settings/settings-dialog";
+
+import { SettingsDialog, SETTINGS_SECTIONS, type SectionId } from "@/components/settings/settings-dialog";
 import { useSessionStore } from "@/stores/session";
 import { useSettingsStore } from "@/stores/settings";
+import { useThemeSync } from "@/lib/use-theme";
 import type {
+  ChatAttachment,
   ChatMessage,
   ConversationOpenResult,
   PermissionRequest,
-  SessionStats,
+  QueuedPrompt,
   WorkspaceSnapshot,
 } from "@shared/types";
-import type { GitBranch as GitBranchInfo, GitStatus } from "@shared/ipc";
+import { useSidePaneStore } from "@/stores/side-pane";
 
 function permissionKey(request: PermissionRequest): string {
   return `${request.method}:${request.title ?? ""}:${request.message ?? ""}`;
@@ -53,6 +58,8 @@ function writeDraft(id: string | null, text: string): void {
 }
 
 export function App(): JSX.Element {
+  // Applies light/dark theme selection (and reacts to OS changes in system mode).
+  useThemeSync();
   const status = useSessionStore((state) => state.status);
   const session = useSessionStore((state) => state.session);
   const models = useSessionStore((state) => state.models);
@@ -80,32 +87,42 @@ export function App(): JSX.Element {
   const subagents = useSessionStore((state) => state.subagents);
   const permission = useSessionStore((state) => state.permission);
   const runMode = useSessionStore((state) => state.runMode);
-  const queueBehavior = useSessionStore((state) => state.queueBehavior);
   const compacting = useSessionStore((state) => state.compacting);
   const setCommands = useSessionStore((state) => state.setCommands);
   const setSubagents = useSessionStore((state) => state.setSubagents);
   const setPermission = useSessionStore((state) => state.setPermission);
   const setRunMode = useSessionStore((state) => state.setRunMode);
-  const setQueueBehavior = useSessionStore((state) => state.setQueueBehavior);
   const attachments = useSessionStore((state) => state.attachments);
   const queued = useSessionStore((state) => state.queued);
   const permissionAlways = useSessionStore((state) => state.permissionAlways);
   const setAttachments = useSessionStore((state) => state.setAttachments);
+  const queuePause = useSessionStore((state) => state.queuePause);
   const enqueue = useSessionStore((state) => state.enqueue);
+  const removeQueued = useSessionStore((state) => state.removeQueued);
+  const prependQueued = useSessionStore((state) => state.prependQueued);
   const clearQueued = useSessionStore((state) => state.clearQueued);
+  const setQueuePause = useSessionStore((state) => state.setQueuePause);
   const rememberPermission = useSessionStore((state) => state.rememberPermission);
-  const preview = useSessionStore((state) => state.preview);
   const subagentStreams = useSessionStore((state) => state.subagentStreams);
-  const setPreview = useSessionStore((state) => state.setPreview);
   const restoreId = useRef<string | null>(null);
-  const [stats, setStats] = useState<SessionStats | null>(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const draining = useRef(false);
+  // Settings lives at #/settings/<section>; no match means we are in the app.
+  const settingsMatch = useMatch("/settings/*");
+  const navigate = useNavigate();
+  const settingsOpen = Boolean(settingsMatch);
+  // The wildcard is "" for a bare /settings and the section name otherwise.
+  const routeSection = settingsMatch?.params["*"] || undefined;
+  const settingsSection = SETTINGS_SECTIONS.flatMap((group) => group.items).some((item) => item.id === routeSection)
+    ? (routeSection as SectionId)
+    : undefined;
+
+  // Normalise /settings and /settings/unknown onto a real pane.
+  useEffect(() => {
+    if (settingsOpen && !settingsSection) navigate("/settings/general", { replace: true });
+  }, [settingsOpen, settingsSection, navigate]);
   const [switcherOpen, setSwitcherOpen] = useState(false);
-  const [gitDialogOpen, setGitDialogOpen] = useState(false);
-  const [gitStatus, setGitStatus] = useState<GitStatus | null>(null);
-  const [gitBranches, setGitBranches] = useState<GitBranchInfo[]>([]);
-  const [gitDiffPath, setGitDiffPath] = useState<string>();
-  const [gitDiffText, setGitDiffText] = useState<string>();
+  const paneCollapsed = useSidePaneStore((state) => state.collapsed);
+  const togglePane = useSidePaneStore((state) => state.toggle);
   const settings = useSettingsStore((state) => state.settings);
   const updateSettings = useSettingsStore((state) => state.update);
   // Stable identity so the composer does not re-render on every streamed token.
@@ -115,7 +132,7 @@ export function App(): JSX.Element {
   );
 
   useEffect(() => {
-    void window.fastvibe.omp.getStatus().then(setStatus);
+    void window.fastvibe.engine.getStatus().then(setStatus);
     void window.fastvibe.conversations.list().then((snapshot) => {
       applySnapshot(snapshot);
       const pending = snapshot.activeId;
@@ -130,24 +147,25 @@ export function App(): JSX.Element {
         restoreId.current = pending ?? null;
       }
     });
-    const offStatus = window.fastvibe.omp.onStatus(setStatus);
+    const offStatus = window.fastvibe.engine.onStatus(setStatus);
     // Background conversation init finished: fill in the transcript, unless the
     // user already sent a message (then their optimistic thread wins and engine
     // events will replace it).
-    const offReady = window.fastvibe.omp.onConversationReady((payload) => {
+    const offReady = window.fastvibe.engine.onConversationReady((payload) => {
       const store = useSessionStore.getState();
       if (store.activeId !== payload.id || store.streaming) return;
       store.setMessages(payload.messages);
       store.setSession(payload.state);
       store.setStatus(payload.status);
     });
-    const offEvent = window.fastvibe.omp.onEvent((event) => {
-      applyEvent(event);
-      if (event.type === "agent_end" || event.type === "tool_execution_end" || event.type === "toolcall_end") {
-        const state = useSessionStore.getState();
-        const current = state.conversations.find((item) => item.id === state.activeId);
-        if (current?.project) void window.fastvibe.workspace.gitStatus(current.project).then(setGitStatus).catch(() => undefined);
+    const offEvent = window.fastvibe.engine.onEvent((event) => {
+      const conversationId = typeof event.conversationId === "string" ? event.conversationId : null;
+      const currentId = useSessionStore.getState().activeId;
+      if (conversationId && currentId && conversationId !== currentId) {
+        useSidePaneStore.getState().applyConversationEvent(conversationId, event);
+        return;
       }
+      applyEvent(event);
       // Message/stat reloads are expensive (the engine replays the whole
       // transcript), so only do them when the transcript actually changed.
       if (
@@ -156,15 +174,14 @@ export function App(): JSX.Element {
         event.type === "compaction_end" ||
         event.type === "auto_compaction_end"
       ) {
-        void window.fastvibe.omp.getState().then(setSession).catch(() => undefined);
-        void window.fastvibe.omp.getMessages().then(setMessages).catch(() => undefined);
-        void window.fastvibe.omp.getStats().then(setStats).catch(() => undefined);
+        void window.fastvibe.engine.getState().then(setSession).catch(() => undefined);
+        void window.fastvibe.engine.getMessages().then(setMessages).catch(() => undefined);
       } else if (
         event.type === "model_changed" ||
         event.type === "thinking_level_changed" ||
         event.type === "goal_updated"
       ) {
-        void window.fastvibe.omp.getState().then(setSession).catch(() => undefined);
+        void window.fastvibe.engine.getState().then(setSession).catch(() => undefined);
       }
       if (event.type === "available_commands_update") {
         const raw = Array.isArray(event.commands) ? event.commands : [];
@@ -176,7 +193,7 @@ export function App(): JSX.Element {
         );
       }
       if (event.type === "subagent_lifecycle" || event.type === "subagent_progress") {
-        void window.fastvibe.omp.getSubagents().then(setSubagents).catch(() => undefined);
+        void window.fastvibe.engine.getSubagents().then(setSubagents).catch(() => undefined);
       }
       if (event.type === "tool_execution_end" || event.type === "toolcall_end") {
         const name = String(event.toolName ?? event.name ?? "");
@@ -226,6 +243,10 @@ export function App(): JSX.Element {
           document.querySelector<HTMLButtonElement>('[aria-label="加入队列"]');
         send?.click();
       }
+      if (event.ctrlKey && event.altKey && event.key.toLowerCase() === "b") {
+        event.preventDefault();
+        useSidePaneStore.getState().toggle();
+      }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -233,17 +254,16 @@ export function App(): JSX.Element {
 
   useEffect(() => {
     setRunMode(settings.runMode);
-    setQueueBehavior(settings.queueBehavior);
     // apply persisted preferences once on mount
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     if (status.state !== "ready") return;
-    void window.fastvibe.omp.setAutoCompaction(settings.autoCompact).catch(() => undefined);
-    void window.fastvibe.omp.setInterruptMode(settings.interruptMode).catch(() => undefined);
+    void window.fastvibe.engine.setAutoCompaction(settings.autoCompact).catch(() => undefined);
+    void window.fastvibe.engine.setInterruptMode(settings.interruptMode).catch(() => undefined);
     if (settings.thinkingLevel !== "auto") {
-      void window.fastvibe.omp
+      void window.fastvibe.engine
         .setThinking(settings.thinkingLevel)
         .then(setSession)
         .catch(() => undefined);
@@ -253,17 +273,17 @@ export function App(): JSX.Element {
 
   useEffect(() => {
     if (status.state !== "ready") return;
-    void window.fastvibe.omp.setAutoCompaction(settings.autoCompact).catch(() => undefined);
+    void window.fastvibe.engine.setAutoCompaction(settings.autoCompact).catch(() => undefined);
   }, [settings.autoCompact, status.state]);
 
   useEffect(() => {
     if (status.state !== "ready") return;
-    void window.fastvibe.omp.setInterruptMode(settings.interruptMode).catch(() => undefined);
+    void window.fastvibe.engine.setInterruptMode(settings.interruptMode).catch(() => undefined);
   }, [settings.interruptMode, status.state]);
 
   useEffect(() => {
     if (status.state !== "ready" || settings.thinkingLevel === "auto") return;
-    void window.fastvibe.omp
+    void window.fastvibe.engine
       .setThinking(settings.thinkingLevel)
       .then(setSession)
       .catch(() => undefined);
@@ -271,23 +291,23 @@ export function App(): JSX.Element {
 
   useEffect(() => {
     if (status.state !== "ready") return;
-    void window.fastvibe.omp
+    void window.fastvibe.engine
       .getState()
       .then(setSession)
       .catch(() => undefined);
     // The model list is expensive (~1.5s in the engine) and only changes when
     // providers change, so fetch it once rather than on every engine start.
     if (useSessionStore.getState().models.length === 0) {
-      void window.fastvibe.omp
+      void window.fastvibe.engine
         .getModels()
         .then(setModels)
         .catch(() => undefined);
     }
-    void window.fastvibe.omp
+    void window.fastvibe.engine
       .getCommands()
       .then(setCommands)
       .catch(() => undefined);
-    void window.fastvibe.omp
+    void window.fastvibe.engine
       .getSubagents()
       .then(setSubagents)
       .catch(() => undefined);
@@ -305,48 +325,29 @@ export function App(): JSX.Element {
     if (!permission || permission.method !== "confirm") return;
     const key = permissionKey(permission);
     if (settings.permissionMode !== "full" && !permissionAlways.includes(key)) return;
-    void window.fastvibe.omp.respondPermission({ id: permission.id, confirmed: true });
+    void window.fastvibe.engine.respondPermission({ id: permission.id, confirmed: true });
     setPermission(null);
   }, [permission, permissionAlways, setPermission, settings.permissionMode]);
 
   // Sending is allowed while the engine is still coming up: the prompt waits
-  // behind initialisation, which the user experiences as reply latency.
+  // behind initialisation, which the user experiences as reply latency. `needsAuth`
+  // is deliberately included — no provider is a normal first-run state, not a
+  // blocker, and the composer's model menu is how you go and configure one.
   const canChat =
-    status.state === "ready" || status.state === "starting" || status.state === "idle";
+    status.state === "ready" ||
+    status.state === "starting" ||
+    status.state === "idle" ||
+    status.state === "needsAuth";
   const active = conversations.find((item) => item.id === activeId);
   const activeProject = projects.find((item) => item.cwd === active?.project);
   const banner =
-    status.state === "needsAuth"
-      ? null
-      : status.state === "missing" || status.state === "error"
-        ? "暂时无法开始对话，请稍后重试。"
-        : error
-          ? "发送失败，请稍后重试。"
-          : null;
+    status.state === "missing" || status.state === "error"
+      ? "暂时无法开始对话，请稍后重试。"
+      : error
+        ? "发送失败，请稍后重试。"
+        : null;
   // Unbound conversations run in a hidden scratch dir, so never surface that path.
   const workspaceLabel = activeProject?.name ?? "无项目";
-
-  useEffect(() => {
-    if (!activeProject) {
-      setGitStatus(null);
-      setGitBranches([]);
-      setGitDiffPath(undefined);
-      setGitDiffText(undefined);
-      return;
-    }
-    let cancelled = false;
-    void window.fastvibe.workspace.gitStatus(activeProject.cwd).then((next) => {
-      if (!cancelled) setGitStatus(next);
-    }).catch(() => {
-      if (!cancelled) setGitStatus(null);
-    });
-    void window.fastvibe.workspace.gitBranches(activeProject.cwd).then((next) => {
-      if (!cancelled) setGitBranches(next);
-    }).catch(() => {
-      if (!cancelled) setGitBranches([]);
-    });
-    return () => { cancelled = true; };
-  }, [activeProject?.cwd]);
 
   useEffect(() => {
     writeDraft(activeId, draft);
@@ -360,6 +361,7 @@ export function App(): JSX.Element {
     setStatus(result.status);
     setDraft(readDrafts()[result.conversation.id] ?? "");
     setError(null);
+    clearQueued();
   }
 
   function applyList(snapshot: WorkspaceSnapshot): void {
@@ -385,64 +387,129 @@ export function App(): JSX.Element {
     if ((!text && currentAttachments.length === 0) || !canChat) return;
     let conversationId = activeId;
     if (!conversationId) {
-      // Reuse the active conversation's project, else the most recent project; undefined = unbound.
-      const created = await window.fastvibe.conversations.create(active?.project ?? projects[0]?.cwd);
+      const created = await window.fastvibe.conversations.create(active?.project);
       applyOpen(created);
       conversationId = created.conversation.id;
     }
     setDraft("");
     const promptText = text || currentAttachments.map((item) => item.name).join("、");
-    if (streaming) {
-      enqueue({ id: crypto.randomUUID(), text: promptText, behavior: queueBehavior });
-      setAttachments([]);
-    } else {
-      addUserMessage(promptText, currentAttachments);
-    }
     const nextList = await window.fastvibe.conversations.recordPrompt(conversationId, promptText);
     applyList(nextList);
-    const payload = `${wrapPrompt(text || "请查看附件")}${attachmentPromptSuffix(currentAttachments)}`;
-    const images = attachmentsToImages(currentAttachments);
-    try {
-      if (streaming) {
-        if (queueBehavior === "steer") await window.fastvibe.omp.steer(payload, images);
-        else await window.fastvibe.omp.followUp(payload, images);
+    if (streaming) {
+      if (settings.queueBehavior === "steer") {
+        setAttachments([]);
+        try {
+          await dispatchPrompt(text, currentAttachments, "steer");
+        } catch (err) {
+          setError(err instanceof Error ? err.message : String(err));
+        }
       } else {
-        await window.fastvibe.omp.prompt(payload, { images });
+        enqueue({
+          id: crypto.randomUUID(),
+          text: promptText,
+          behavior: "followUp",
+          attachments: currentAttachments,
+        });
+        setAttachments([]);
+        setQueuePause(null);
       }
-      void window.fastvibe.omp.getState().then(setSession).catch(() => undefined);
+      return;
+    }
+    addUserMessage(promptText, currentAttachments);
+    try {
+      await dispatchPrompt(text, currentAttachments, "prompt");
     } catch (err) {
-      if (!streaming) dropEmptyAssistant();
+      dropEmptyAssistant();
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function dispatchPrompt(
+    text: string,
+    files: ChatAttachment[],
+    mode: "prompt" | "steer",
+  ): Promise<void> {
+    const payload = `${wrapPrompt(text || "请查看附件")}${attachmentPromptSuffix(files)}`;
+    const images = attachmentsToImages(files);
+    if (mode === "steer") await window.fastvibe.engine.steer(payload, images);
+    else await window.fastvibe.engine.prompt(payload, { images });
+    void window.fastvibe.engine.getState().then(setSession).catch(() => undefined);
+  }
+
+  async function drainQueued(item: QueuedPrompt): Promise<void> {
+    removeQueued(item.id);
+    addUserMessage(item.text, item.attachments);
+    try {
+      await dispatchPrompt(item.text, item.attachments ?? [], "prompt");
+    } catch (err) {
+      dropEmptyAssistant();
+      prependQueued(item);
+      setQueuePause("error");
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  function handleRemoveQueued(id: string): void {
+    removeQueued(id);
+  }
+
+  function handleEditQueued(id: string): void {
+    const item = useSessionStore.getState().queued.find((entry) => entry.id === id);
+    if (!item || draft.trim()) return;
+    removeQueued(id);
+    setDraft(item.text);
+    if (item.attachments?.length) setAttachments(item.attachments);
+  }
+
+  async function handleSendQueuedNow(id: string): Promise<void> {
+    const item = useSessionStore.getState().queued.find((entry) => entry.id === id);
+    if (!item) return;
+    removeQueued(id);
+    if (useSessionStore.getState().streaming) {
+      try {
+        await dispatchPrompt(item.text, item.attachments ?? [], "steer");
+      } catch (err) {
+        prependQueued(item);
+        setError(err instanceof Error ? err.message : String(err));
+      }
+      return;
+    }
+    addUserMessage(item.text, item.attachments);
+    try {
+      await dispatchPrompt(item.text, item.attachments ?? [], "prompt");
+    } catch (err) {
+      dropEmptyAssistant();
+      prependQueued(item);
       setError(err instanceof Error ? err.message : String(err));
     }
   }
 
   async function handleAbort(): Promise<void> {
+    const pending = useSessionStore.getState().queued;
+    if (pending.length > 0) setQueuePause("stopped");
     try {
       try {
-        const queued = await window.fastvibe.omp.clearQueue();
-        const restored = [...queued.steering, ...queued.followUp].join("\n");
-        if (restored && !draft.trim()) setDraft(restored);
+        await window.fastvibe.engine.clearQueue();
       } catch {
         // older engines may not support clear_queue
       }
-      await window.fastvibe.omp.abort();
+      await window.fastvibe.engine.abort();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setStreaming(false);
-      clearQueued();
-      void window.fastvibe.omp.getState().then(setSession).catch(() => undefined);
+      void window.fastvibe.engine.getState().then(setSession).catch(() => undefined);
     }
   }
 
-  async function handleCompact(instructions?: string): Promise<void> {
-    try {
-      const next = await window.fastvibe.omp.compact(instructions);
-      setSession(next);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  }
+  useEffect(() => {
+    if (streaming || queuePause || queued.length === 0 || draining.current) return;
+    const next = queued[0];
+    draining.current = true;
+    void drainQueued(next).finally(() => {
+      draining.current = false;
+    });
+  }, [streaming, queuePause, queued]);
 
   async function handleRetry(message: ChatMessage): Promise<void> {
     const source =
@@ -453,14 +520,14 @@ export function App(): JSX.Element {
     if (!text || !canChat) return;
     if (streaming) {
       try {
-        await window.fastvibe.omp.abort();
+        await window.fastvibe.engine.abort();
       } catch {
         // ignore
       }
     }
     if (source?.id) {
       try {
-        setMessages(await window.fastvibe.omp.branch(source.id));
+        setMessages(await window.fastvibe.engine.branch(source.id));
       } catch {
         // local-only ids cannot branch
       }
@@ -468,10 +535,10 @@ export function App(): JSX.Element {
     setDraft("");
     addUserMessage(text, source?.attachments);
     try {
-      await window.fastvibe.omp.prompt(wrapPrompt(text), {
+      await window.fastvibe.engine.prompt(wrapPrompt(text), {
         images: source?.attachments ? attachmentsToImages(source.attachments) : undefined,
       });
-      void window.fastvibe.omp.getState().then(setSession).catch(() => undefined);
+      void window.fastvibe.engine.getState().then(setSession).catch(() => undefined);
     } catch (err) {
       dropEmptyAssistant();
       setError(err instanceof Error ? err.message : String(err));
@@ -481,7 +548,7 @@ export function App(): JSX.Element {
   async function handleEdit(message: ChatMessage): Promise<void> {
     if (message.id) {
       try {
-        setMessages(await window.fastvibe.omp.branch(message.id));
+        setMessages(await window.fastvibe.engine.branch(message.id));
       } catch {
         // ignore
       }
@@ -489,11 +556,36 @@ export function App(): JSX.Element {
     setDraft(message.text);
   }
 
-  /** Without a project, the new conversation is unbound and shows up under 最近. */
+  async function discardDraft(id: string | null | undefined): Promise<void> {
+    if (!id) return;
+    const item = useSessionStore.getState().conversations.find((entry) => entry.id === id);
+    if (!item || item.preview) return;
+    try {
+      applyList(await window.fastvibe.conversations.delete(id));
+    } catch {
+      // Draft cleanup is best-effort.
+    }
+  }
+
+  /** Empty chats stay off the sidebar until the first prompt is sent. */
   async function handleNewChat(project?: string): Promise<void> {
     try {
+      const current = conversations.find((item) => item.id === activeId);
+      if (current && !current.preview) {
+        if ((current.project ?? undefined) !== (project || undefined)) {
+          applyList(await window.fastvibe.conversations.setProject(current.id, project ?? null));
+          void window.fastvibe.engine.getStatus().then(setStatus).catch(() => undefined);
+          void window.fastvibe.engine.getState().then(setSession).catch(() => undefined);
+        }
+        setMessages([]);
+        setDraft(readDrafts()[current.id] ?? "");
+        setError(null);
+        return;
+      }
+      const previousId = activeId;
       const created = await window.fastvibe.conversations.create(project);
       applyOpen(created);
+      await discardDraft(previousId);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -504,9 +596,11 @@ export function App(): JSX.Element {
     // Re-opening the active chat is pointless once it has content or a reply is
     // streaming, but it is how an empty/failed conversation gets retried.
     if (id === store.activeId && (store.messages.length > 0 || store.streaming)) return;
+    const previousId = store.activeId;
     try {
       const opened = await window.fastvibe.conversations.open(id);
       applyOpen(opened);
+      if (previousId && previousId !== id) await discardDraft(previousId);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -517,7 +611,7 @@ export function App(): JSX.Element {
       const added = await window.fastvibe.projects.add();
       if (!added) return;
       applyList(added);
-      setStatus(await window.fastvibe.omp.getStatus());
+      setStatus(await window.fastvibe.engine.getStatus());
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -526,20 +620,6 @@ export function App(): JSX.Element {
   async function handleRenameSession(id: string, title: string): Promise<void> {
     try {
       applyList(await window.fastvibe.conversations.rename(id, title));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  }
-
-  async function handleDeleteSession(id: string): Promise<void> {
-    try {
-      const result = await window.fastvibe.conversations.delete(id);
-      applyList(result);
-      if (result.nextId) {
-        applyOpen(await window.fastvibe.conversations.open(result.nextId));
-      } else if (id === activeId) {
-        resetConversation();
-      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -567,13 +647,20 @@ export function App(): JSX.Element {
     }
   }
 
-  /** Bind the active conversation to a project, or clear it to "无项目". */
+  /**
+   * Bind the active conversation to a project, or clear it to "无项目". A new
+   * session has no conversation row yet, so picking a project creates one —
+   * unbound sessions stay hidden from the sidebar until their first prompt.
+   */
   async function handleSetProject(project: string | null): Promise<void> {
-    if (!activeId) return;
     try {
+      if (!activeId) {
+        applyOpen(await window.fastvibe.conversations.create(project ?? undefined));
+        return;
+      }
       const snapshot = await window.fastvibe.conversations.setProject(activeId, project);
       applyList(snapshot);
-      void window.fastvibe.omp.getStatus().then(setStatus).catch(() => undefined);
+      void window.fastvibe.engine.getStatus().then(setStatus).catch(() => undefined);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -584,16 +671,16 @@ export function App(): JSX.Element {
     if (!picked) return;
     setStatus(picked.status);
     applyList(await window.fastvibe.conversations.list());
-    if (activeId) await handleSetProject(picked.cwd);
+    await handleSetProject(picked.cwd);
   }
 
   async function handleModelChange(provider: string, modelId: string): Promise<void> {
     try {
-      let next = await window.fastvibe.omp.setModel(provider, modelId);
+      let next = await window.fastvibe.engine.setModel(provider, modelId);
       const catalog = models.find((item) => item.provider === provider && item.id === modelId);
       const levels = catalog?.thinkingLevels;
       if (levels?.length && (!next.thinkingLevel || !levels.includes(next.thinkingLevel as never))) {
-        next = await window.fastvibe.omp.setThinking(levels.includes("high") ? "high" : levels[0]);
+        next = await window.fastvibe.engine.setThinking(levels.includes("high") ? "high" : levels[0]);
       }
       setSession(next);
     } catch {
@@ -603,7 +690,7 @@ export function App(): JSX.Element {
 
   async function handleThinkingChange(level: string): Promise<void> {
     try {
-      const next = await window.fastvibe.omp.setThinking(level);
+      const next = await window.fastvibe.engine.setThinking(level);
       setSession(next);
     } catch {
       setError("无法设置推理强度。");
@@ -613,6 +700,74 @@ export function App(): JSX.Element {
   const headerTitle = active
     ? [activeProject?.name, active.title].filter(Boolean).join(" / ")
     : "新会话";
+  // A conversation with no preview yet is still a "new session": it has no title
+  // or content to put in the top bar, so the bar is dropped and the project
+  // binding is surfaced above the composer instead.
+  const isNewSession = !active?.preview;
+  // `needsAuth` is not a loading state, so the spinner only covers a real start.
+  const loading = status.state === "starting" && messages.length === 0;
+  // A fresh conversation swaps the transcript for the centred greeting hero.
+  const showHero = messages.length === 0 && !loading;
+
+  const bannerNode = banner ? (
+    <div className="mx-auto mb-2 w-full max-w-3xl px-6">
+      <Alert variant="destructive">
+        <HugeiconsIcon strokeWidth={2} icon={AlertCircleIcon} />
+        <AlertTitle>出了点问题</AlertTitle>
+        <AlertDescription>{banner}</AlertDescription>
+        {status.state === "missing" || status.state === "error" ? (
+          <AlertAction>
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={() => void window.fastvibe.engine.start(status.cwd)}
+            >
+              重试
+            </Button>
+          </AlertAction>
+        ) : null}
+      </Alert>
+    </div>
+  ) : null;
+
+  const composer = (
+    <Composer
+      value={draft}
+      disabled={!canChat}
+      streaming={streaming}
+      placeholder={canChat ? "随心输入" : "准备中…"}
+      models={models}
+      model={session?.model}
+      thinkingLevel={session?.thinkingLevel}
+      workspaceLabel={workspaceLabel}
+      projects={projects}
+      project={active?.project}
+      newSession={isNewSession}
+      commands={commands}
+      permissionMode={settings.permissionMode}
+      onPermissionModeChange={(mode) => updateSettings({ permissionMode: mode })}
+      queued={queued}
+      queuePause={queuePause}
+      attachments={attachments}
+      history={inputHistory}
+      contextPercent={usagePercent(session)}
+      contextUsage={session?.contextUsage}
+      onChange={setDraft}
+      onSubmit={() => void handleSubmit()}
+      onAbort={() => void handleAbort()}
+      onPickWorkspace={() => void handlePickWorkspace()}
+      onSelectProject={(project) => void handleSetProject(project)}
+      onModelChange={(provider, modelId) => void handleModelChange(provider, modelId)}
+      onThinkingChange={(level) => void handleThinkingChange(level)}
+      onAttachmentsChange={setAttachments}
+      onRemoveQueued={handleRemoveQueued}
+      onEditQueued={handleEditQueued}
+      onSendQueuedNow={(id) => void handleSendQueuedNow(id)}
+      onResumeQueue={() => setQueuePause(null)}
+      sendOnEnter={settings.sendOnEnter}
+      onManageModels={() => navigate("/settings/providers")}
+    />
+  );
 
   return (
     <div className="flex h-full bg-background">
@@ -625,136 +780,75 @@ export function App(): JSX.Element {
         onOpen={(id) => void handleOpen(id)}
         onAddProject={() => void handleAddProject()}
         onRenameSession={(id, title) => void handleRenameSession(id, title)}
-        onDeleteSession={(id) => void handleDeleteSession(id)}
         onRenameProject={(cwd, name) => void handleRenameProject(cwd, name)}
         onRemoveProject={(cwd) => void handleRemoveProject(cwd)}
         onRevealProject={(cwd) => void window.fastvibe.workspace.reveal(cwd)}
-        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenSettings={() => navigate("/settings/general")}
       />
       <main className="flex min-w-0 flex-1 flex-col">
         <header className="drag-region flex h-11 items-center justify-between px-4">
-          <div className="no-drag ml-2 truncate text-[12.5px] text-muted-foreground">{headerTitle}</div>
-          <div className="no-drag flex items-center gap-1.5">
-            {permission ? <span className="text-[11px] text-amber-700">待确认</span> : null}
-            {gitStatus?.isRepository ? (
-              <button type="button" className="hidden items-center gap-1 rounded-md px-1.5 text-[11px] text-muted-foreground hover:bg-accent sm:flex" title={`${gitStatus.changed} 个改动`} onClick={() => setGitDialogOpen(true)}>
-                <GitBranch className="size-3" />
-                {gitStatus.branch ?? "HEAD"}
-                {gitStatus.changed > 0 ? <span className="text-amber-700">· {gitStatus.changed}</span> : null}
-              </button>
-            ) : null}
-            <StatusPill status={status} session={session} />
-            {status.state === "needsAuth" ? null : (
-              <SessionMenu
-                session={session}
-                subagents={subagents}
-                streams={subagentStreams}
-                stats={stats}
-                onCompact={(instructions) => void handleCompact(instructions)}
-                onToggleAutoCompact={(enabled) => {
-                  void window.fastvibe.omp.setAutoCompaction(enabled).then(setSession).catch(() => setError("无法切换自动压缩"));
-                }}
-                onToggleInterrupt={(mode) => {
-                  void window.fastvibe.omp.setInterruptMode(mode).then(setSession).catch(() => setError("无法切换打断方式"));
-                }}
-                onToggleSteering={(mode) => {
-                  void window.fastvibe.omp.setSteeringMode(mode).then(setSession).catch(() => setError("无法切换打断队列"));
-                }}
-                onToggleFollowUp={(mode) => {
-                  void window.fastvibe.omp.setFollowUpMode(mode).then(setSession).catch(() => setError("无法切换稍后队列"));
-                }}
-                onExport={() => {
-                  void window.fastvibe.omp.exportHtml().catch(() => setError("导出失败"));
-                }}
-              />
-            )}
+          {isNewSession ? <div /> : <div className="no-drag ml-2 truncate text-[12.5px] text-muted-foreground">{headerTitle}</div>}
+          <div className="no-drag flex items-center gap-1">
+            <IconButton
+              size="icon-sm"
+              variant="ghost"
+              label={paneCollapsed ? "展开侧边面板" : "收起侧边面板"}
+              shortcut="⌃⌥B"
+              onClick={togglePane}
+            >
+              <HugeiconsIcon strokeWidth={2} icon={paneCollapsed ? PanelRightOpenIcon : PanelRightCloseIcon} />
+            </IconButton>
           </div>
         </header>
-        <div className="min-h-0 flex-1">
-          {status.state === "needsAuth" ? (
-            <ConnectForm onConnected={() => setError(null)} />
-          ) : (
-            <MessageList
-              messages={messages}
-              streaming={streaming}
-              loading={status.state === "starting" && messages.length === 0}
-              onRetry={(message) => void handleRetry(message)}
-              onEdit={(message) => void handleEdit(message)}
-              showThinking={settings.showThinking}
-              showTimestamp={settings.showTimestamps}
-              onSuggestion={(prompt) => setDraft(prompt)}
-            />
-          )}
-        </div>
-        {status.state === "needsAuth" ? null : (
-          <RunStatusBar session={session} queued={queued} />
-        )}
-        {banner ? (
-          <div className="mx-auto mb-2 w-full max-w-3xl px-6">
-            <Alert variant="destructive">
-              <AlertCircleIcon />
-              <AlertTitle>出了点问题</AlertTitle>
-              <AlertDescription>{banner}</AlertDescription>
-              {status.state === "missing" || status.state === "error" ? (
-                <AlertAction>
-                  <Button
-                    size="xs"
-                    variant="outline"
-                    onClick={() => void window.fastvibe.omp.start(status.cwd)}
-                  >
-                    重试
-                  </Button>
-                </AlertAction>
-              ) : null}
-            </Alert>
+        {showHero ? (
+          // New conversation: the greeting hero sits above the composer and the
+          // suggestion chips below it, with the group centred like the reference.
+          <div className="flex min-h-0 w-full flex-1 flex-col items-center justify-center gap-6">
+            {bannerNode}
+            <NewSessionHero />
+            {composer}
+            <SuggestionChips onSelect={setDraft} />
           </div>
-        ) : null}
-        {status.state === "needsAuth" ? null : (
-          <Composer
-            value={draft}
-            disabled={!canChat}
-            streaming={streaming}
-            placeholder={canChat ? "随心输入" : "准备中…"}
-            models={models}
-            model={session?.model}
-            thinkingLevel={session?.thinkingLevel}
-            workspaceLabel={workspaceLabel}
-            projects={projects}
-            project={active?.project}
-            commands={commands}
-            permissionMode={settings.permissionMode}
-            onPermissionModeChange={(mode) => updateSettings({ permissionMode: mode })}
-            queueBehavior={queueBehavior}
-            queued={queued}
-            attachments={attachments}
-            history={inputHistory}
-            contextPercent={usagePercent(session)}
-            contextUsage={session?.contextUsage}
-            onChange={setDraft}
-            onSubmit={() => void handleSubmit()}
-            onAbort={() => void handleAbort()}
-            onPickWorkspace={() => void handlePickWorkspace()}
-            onSelectProject={(project) => void handleSetProject(project)}
-            onModelChange={(provider, modelId) => void handleModelChange(provider, modelId)}
-            onThinkingChange={(level) => void handleThinkingChange(level)}
-            onQueueBehaviorChange={setQueueBehavior}
-            onAttachmentsChange={setAttachments}
-            sendOnEnter={settings.sendOnEnter}
-          />
+        ) : (
+          <>
+            <div className="relative min-h-0 flex-1">
+              <MessageList
+                messages={messages}
+                streaming={streaming}
+                loading={loading}
+                onRetry={(message) => void handleRetry(message)}
+                onEdit={(message) => void handleEdit(message)}
+                showThinking={settings.showThinking}
+                showTimestamp={settings.showTimestamps}
+              />
+              <SummaryPanel
+                messages={messages}
+                streaming={streaming}
+                runMode={runMode}
+                subagents={subagents}
+                streams={subagentStreams}
+              />
+            </div>
+            {bannerNode}
+            {composer}
+          </>
         )}
       </main>
-      {preview ? <PreviewPanel preview={preview} onClose={() => setPreview(null)} /> : null}
+      <SidePane
+        cwd={activeProject?.cwd}
+        project={active?.project}
+        parentId={activeId ?? undefined}
+        messages={messages}
+        canSideChat={Boolean(activeId && messages.some((item) => item.role === "user" || item.role === "assistant"))}
+        onError={setError}
+      />
       <SettingsDialog
         open={settingsOpen}
-        onOpenChange={setSettingsOpen}
-        status={status}
-        session={session}
-        models={models}
-        project={activeProject?.cwd}
-        onRenameSession={(id, title) => void handleRenameSession(id, title)}
+        onOpenChange={(open) => navigate(open ? "/settings/general" : "/")}
+        section={settingsSection}
         onProvidersChanged={() => {
-          void window.fastvibe.omp.getModels().then(setModels).catch(() => undefined);
-          void window.fastvibe.omp.getState().then(setSession).catch(() => undefined);
+          void window.fastvibe.engine.getModels().then(setModels).catch(() => undefined);
+          void window.fastvibe.engine.getState().then(setSession).catch(() => undefined);
         }}
       />
       <SessionSwitcher
@@ -765,27 +859,12 @@ export function App(): JSX.Element {
         onOpenChange={setSwitcherOpen}
         onSelect={(id) => void handleOpen(id)}
       />
-      <GitStatusDialog
-        open={gitDialogOpen}
-        status={gitStatus}
-        branches={gitBranches}
-        diffPath={gitDiffPath}
-        diffText={gitDiffText}
-        onOpenChange={setGitDialogOpen}
-        onOpenTerminal={() => { if (gitStatus?.cwd) void window.fastvibe.workspace.openTerminal(gitStatus.cwd); }}
-        onCheckout={(branch) => { if (!gitStatus?.cwd) return; const action = branch.startsWith("__create__:") ? window.fastvibe.workspace.gitCreateBranch(gitStatus.cwd, branch.slice(10)) : window.fastvibe.workspace.gitCheckout(gitStatus.cwd, branch); void action.then((next) => { setGitStatus(next); return window.fastvibe.workspace.gitBranches(gitStatus.cwd); }).then(setGitBranches).catch((err) => setError(err instanceof Error ? err.message : "分支操作失败")); }}
-        onStageAll={() => { if (gitStatus?.cwd) void window.fastvibe.workspace.gitStage(gitStatus.cwd, [], true).then(setGitStatus).catch((err) => setError(err instanceof Error ? err.message : "暂存失败")); }}
-        onCommit={(message) => { if (gitStatus?.cwd) void window.fastvibe.workspace.gitCommit(gitStatus.cwd, message).then(setGitStatus).catch((err) => setError(err instanceof Error ? err.message : "提交失败")); }}
-        onDiff={(path) => { if (gitStatus?.cwd) void window.fastvibe.workspace.gitDiff(gitStatus.cwd, path).then((text) => { setGitDiffPath(path); setGitDiffText(text || "没有可显示的 diff"); }).catch(() => setGitDiffText("无法读取 diff")); }}
-        onPull={() => { if (gitStatus?.cwd) void window.fastvibe.workspace.gitPull(gitStatus.cwd).then(setGitStatus).catch((err) => setError(err instanceof Error ? err.message : "拉取失败")); }}
-        onPush={() => { if (gitStatus?.cwd) void window.fastvibe.workspace.gitPush(gitStatus.cwd).then(setGitStatus).catch((err) => setError(err instanceof Error ? err.message : "推送失败")); }}
-      />
       <PermissionDialog
         key={permission?.id ?? "permission"}
         request={permission}
         onRespond={(payload) => {
           if (payload.always && permission) rememberPermission(permissionKey(permission));
-          void window.fastvibe.omp.respondPermission(payload);
+          void window.fastvibe.engine.respondPermission(payload);
           setPermission(null);
         }}
       />
