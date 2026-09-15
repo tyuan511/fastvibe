@@ -56,6 +56,9 @@ jobs:
       - name: Build
         run: pnpm build
 
+      - name: Stage app
+        run: pnpm stage:app
+
       - name: Package
         run: pnpm exec electron-builder --${{ matrix.platform }} --publish never
         env:

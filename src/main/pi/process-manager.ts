@@ -23,6 +23,7 @@ import type {
   ConversationDeleteResult,
   ConversationOpenResult,
   ConversationReadyEvent,
+  ConversationSearchHit,
   ExtensionInfo,
   ExtensionPackage,
   FastVibeModel,
@@ -39,16 +40,17 @@ import type {
   ThinkingTiming,
   TuiRun,
   WorkspaceSnapshot,
-  MultiRunRequest,
-  MultiRunResult,
   ModelPrice,
   NativeProviderConfig,
   PermissionQuestion,
 } from "@shared/types";
+import { parseCompactCommand } from "@shared/slash";
 import { ConversationCatalog } from "../engine/conversation-catalog";
+import { searchConversationContent } from "../engine/conversation-search";
 import { readDefaultModel } from "../engine/app-settings";
 import { mapEngineMessages } from "../engine/map-messages";
 import { ReasoningStore } from "../engine/reasoning-store";
+import { usageLedgerFor, type UsageLedger } from "../engine/usage-ledger";
 import {
   addNativeProvider as addNativeProviderConfig,
   addProvider as addProviderConfig,
@@ -66,12 +68,13 @@ import {
   updateProvider as updateProviderConfig,
   usableProviders,
 } from "../engine/providers";
+import { importCcSwitch, scanCcSwitch } from "../engine/cc-switch";
 import { catalogPrice } from "../engine/models-dev";
 import { priceUsage } from "../engine/pricing";
 import { getFastVibePaths, type FastVibePaths } from "../engine/paths";
 import { McpManager, type McpServerConfig, type McpServerStatus } from "./mcp-manager";
 import { SkillManager } from "./skill-manager";
-import { builtinExtensionPaths, ExtensionManager } from "./extension-manager";
+import { builtinExtensionPaths, builtinSkillPaths, ExtensionManager } from "./extension-manager";
 import { createTuiWidget, renderExtensionMessage, renderTuiComponent, type TuiComponent } from "./tui-bridge";
 
 type ManagedSession = { conversationId: string; cwd: string; session: AgentSession; extensions: LoadExtensionsResult; unsubscribe: () => void };
@@ -148,6 +151,22 @@ function isUserEngineMessage(message: unknown): message is Record<string, unknow
   return typeof message === "object" && message !== null && (message as { role?: unknown }).role === "user";
 }
 
+function isAssistantEngineMessage(message: unknown): message is Record<string, unknown> {
+  return typeof message === "object" && message !== null && (message as { role?: unknown }).role === "assistant";
+}
+
+function isToolCallPart(type: string): boolean {
+  return type === "toolCall" || type === "tool_use" || type === "tool_call" || type === "toolcall";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function num(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
 /** Host adapter backed by pi-coding-agent. It keeps one AgentSession per conversation in one Node process. */
 export class PiProcessManager {
   #paths: FastVibePaths;
@@ -185,6 +204,8 @@ export class PiProcessManager {
   #reasoningRun = new Map<string, ReasoningRun>();
   /** Bounds of finished blocks, so a reloaded transcript keeps showing them. */
   #reasoning: ReasoningStore;
+  /** Append-only record of finalized turns, so 使用统计 survives session deletion. */
+  #usage: UsageLedger;
   #interruptMode: "immediate" | "wait" = "immediate";
   #mcp: McpManager;
   #skills: SkillManager;
@@ -195,6 +216,7 @@ export class PiProcessManager {
     this.#paths = getFastVibePaths();
     this.#catalog = new ConversationCatalog(this.#paths.conversationsFile, this.#paths.scratchDir);
     this.#reasoning = new ReasoningStore(this.#paths.reasoningFile);
+    this.#usage = usageLedgerFor(this.#paths.usageLedgerFile);
     this.#mcp = new McpManager(this.#paths.mcpFile);
     this.#skills = new SkillManager(this.#paths.agentDir, this.#paths.skillsDir);
     this.#extensions = new ExtensionManager(this.#paths.agentDir, this.#paths.scratchDir);
@@ -203,7 +225,10 @@ export class PiProcessManager {
   }
 
   listWorkspace(): WorkspaceSnapshot { return this.#catalog.snapshot(); }
-  flush(): void { this.#catalog.flush(); this.#reasoning.flush(); }
+  searchConversations(query: string): Promise<ConversationSearchHit[]> {
+    return searchConversationContent(query, this.#catalog.list());
+  }
+  flush(): void { this.#catalog.flush(); this.#reasoning.flush(); this.#usage.flush(); }
   get status(): EngineStatus { return this.#status; }
   get cwd(): string { return this.#cwd; }
   onStatus(listener: (status: EngineStatus) => void): () => void { this.#statusListeners.add(listener); return () => this.#statusListeners.delete(listener); }
@@ -216,9 +241,11 @@ export class PiProcessManager {
       this.#cwd = cwd;
       this.#setStatus({ state: "starting", cwd });
       await Promise.all(
-        this.#catalog.takeSideChats().map((item) =>
-          item.sessionFile ? unlink(item.sessionFile).catch(() => undefined) : Promise.resolve(),
-        ),
+        this.#catalog.takeSideChats().map(async (item) => {
+          if (!item.sessionFile) return;
+          await this.#usage.capture(item.sessionFile);
+          await unlink(item.sessionFile).catch(() => undefined);
+        }),
       );
       const keys = await loadProviderKeys(this.#paths);
       const providers = usableProviders(this.#paths, keys);
@@ -276,6 +303,7 @@ export class PiProcessManager {
 
   async prompt(message: string, options?: { streamingBehavior?: "steer" | "followUp"; images?: Array<{ type: "image"; data: string; mimeType: string }> }): Promise<void> {
     const session = await this.#active();
+    if (await this.#compactIfCommand(session, message)) return;
     if (this.#activeId) await this.#flushModelRebind(this.#activeId);
     // The UI marks a run finished the moment `agent_end` arrives, but the SDK
     // keeps `isStreaming` true until its listeners and auto-compaction settle.
@@ -290,6 +318,7 @@ export class PiProcessManager {
     if (!conversation) throw new Error("conversation not found");
     await this.#ensureReady();
     const managed = await this.#ensureSession(conversation);
+    if (await this.#compactIfCommand(managed.session, message)) return;
     await this.#flushModelRebind(id);
     await this.#promptWhenIdle(managed.session, message);
   }
@@ -317,6 +346,7 @@ export class PiProcessManager {
       title: title?.trim() || "辅助对话",
     });
     const managed = await this.#ensureSession(conversation);
+    managed.session.setSessionName(conversation.title);
     if (previous) {
       const prior = this.#sessions.get(previous);
       if (prior) this.#activate(prior);
@@ -409,8 +439,9 @@ export class PiProcessManager {
     const managed = this.#sessions.get(this.#activeId ?? "");
     const promptCommands = session.promptTemplates.map((item) => ({ name: item.name, description: item.description, source: "prompt" }));
     const extensionCommands = managed?.extensions.extensions.flatMap((extension) => [...extension.commands.values()].map((command) => ({ name: command.name, description: command.description, source: "extension" }))) ?? [];
+    const builtins: SlashCommand[] = [{ name: "compact", description: "压缩当前会话的上下文", source: "builtin" }];
     const unique = new Map<string, SlashCommand>();
-    for (const command of [...promptCommands, ...extensionCommands]) unique.set(command.name, command);
+    for (const command of [...promptCommands, ...extensionCommands, ...builtins]) unique.set(command.name, command);
     return [...unique.values()];
   }
   async getExtensions(): Promise<ExtensionInfo[]> {
@@ -456,35 +487,6 @@ export class PiProcessManager {
       return this.#openFresh(conversation);
   }
 
-  async multiRun(request: MultiRunRequest): Promise<MultiRunResult> {
-    await this.#ensureReady();
-    const prompt = request.prompt.trim();
-    const models = request.models.slice(0, 5);
-    if (!prompt || models.length === 0) throw new Error("并行运行需要提示词和至少一个模型");
-    const previous = this.#catalog.activeId;
-    const conversationIds: string[] = [];
-    await Promise.all(models.map(async (selection, index) => {
-      const model = this.#models?.find(selection.provider, selection.modelId);
-      if (!model) throw new Error(`模型不存在: ${selection.provider}/${selection.modelId}`);
-      const conversation = this.#catalog.create(request.project);
-      if (request.isolate && request.project) {
-        const workspace = await this.#createWorktree(request.project, conversation.id, request.name ?? model.id);
-        this.#catalog.update(conversation.id, { cwd: workspace.path, worktree: workspace });
-      }
-      const managed = await this.#ensureSession(this.#catalog.get(conversation.id)!);
-      await managed.session.setModel(model);
-      const suffix = models.length > 1 ? ` · ${model.id}` : "";
-      const title = request.name?.trim() ? `${request.name.trim()}${suffix}` : `并行运行 ${index + 1}${suffix}`;
-      this.#catalog.update(conversation.id, { title, preview: prompt.slice(0, 80) });
-      conversationIds.push(conversation.id);
-      await this.#flushModelRebind(conversation.id);
-      await managed.session.prompt(prompt);
-    }));
-    if (previous && this.#catalog.get(previous)) this.#catalog.setActive(previous);
-    else if (conversationIds[0]) this.#catalog.setActive(conversationIds[0]);
-    return { ...this.#catalog.snapshot(), conversationIds };
-  }
-
   async openConversation(id: string): Promise<ConversationOpenResult> {
       const conversation = this.#catalog.get(id);
       if (!conversation) throw new Error("conversation not found");
@@ -498,13 +500,27 @@ export class PiProcessManager {
       return this.#opened(updated, messages, state);
   }
 
-  renameConversation(id: string, title: string): WorkspaceSnapshot { const trimmed = title.trim(); if (trimmed) { this.#catalog.update(id, { title: trimmed }); const active = this.#sessions.get(id); if (active) active.session.setSessionName(trimmed); } return this.#catalog.snapshot(); }
+  renameConversation(id: string, title: string): WorkspaceSnapshot {
+    const trimmed = title.trim();
+    if (trimmed) {
+      this.#catalog.update(id, { title: trimmed, titleManual: true });
+      const active = this.#sessions.get(id);
+      if (active) active.session.setSessionName(trimmed);
+    }
+    return this.#catalog.snapshot();
+  }
   async deleteConversation(id: string): Promise<ConversationDeleteResult> {
     const children = this.#catalog.listAll().filter((item) => item.parentId === id && item.kind === "side-chat");
     for (const child of children) await this.deleteConversation(child.id);
     const wasActive = this.#catalog.activeId === id;
     const removed = this.#catalog.remove(id);
-    if (removed?.sessionFile) await unlink(removed.sessionFile).catch(() => undefined);
+    if (removed?.sessionFile) {
+      // Fold the transcript into the usage ledger *before* unlinking it: a turn the
+      // live hook never saw (history from before the ledger existed, or a run that
+      // ended outside this process) still counts after the file is gone.
+      await this.#usage.capture(removed.sessionFile);
+      await unlink(removed.sessionFile).catch(() => undefined);
+    }
     if (removed?.worktree) await this.#removeWorktree(removed.worktree.path);
     const managed = this.#sessions.get(id);
     if (managed) {
@@ -534,10 +550,20 @@ export class PiProcessManager {
     }
     return this.#catalog.snapshot();
   }
-  recordPrompt(id: string, text: string): WorkspaceSnapshot { const preview = text.trim().slice(0, 80); const current = this.#catalog.get(id); const title = current?.title && current.title !== "新会话" && current.title !== "新任务" ? current.title : preview.slice(0, 24) || "新会话"; this.#catalog.update(id, { title, preview }); const active = this.#sessions.get(id); if (active) active.session.setSessionName(title); return this.#catalog.snapshot(); }
+  recordPrompt(id: string, text: string): WorkspaceSnapshot {
+    const preview = text.trim().slice(0, 80);
+    const current = this.#catalog.get(id);
+    const keepTitle =
+      Boolean(current?.titleManual) ||
+      Boolean(current?.title && current.title !== "新会话" && current.title !== "新任务");
+    const title = keepTitle && current?.title ? current.title : preview.slice(0, 24) || "新会话";
+    this.#catalog.update(id, { title, preview });
+    // Leave `sessionName` empty so the session-title extension can generate one.
+    return this.#catalog.snapshot();
+  }
   addProject(cwd: string): ProjectAddResult { const project = this.#catalog.ensureProject(cwd); if (!project) throw new Error("invalid project"); return { ...this.#catalog.snapshot(), project }; }
   renameProject(cwd: string, name: string): WorkspaceSnapshot { this.#catalog.renameProject(cwd, name); return this.#catalog.snapshot(); }
-  async removeProject(cwd: string): Promise<ConversationDeleteResult> { const wasActive = this.#catalog.get(this.#catalog.activeId ?? "")?.project === cwd; const removed = this.#catalog.removeProject(cwd); await Promise.all(removed.map(async (item) => { if (item.sessionFile) await unlink(item.sessionFile).catch(() => undefined); if (item.worktree) await this.#removeWorktree(item.worktree.path); const managed = this.#sessions.get(item.id); if (managed) { managed.unsubscribe(); await managed.session.dispose(); this.#sessions.delete(item.id); } })); return { ...this.#catalog.snapshot(), nextId: wasActive ? (this.#catalog.activeId ?? null) : null }; }
+  async removeProject(cwd: string): Promise<ConversationDeleteResult> { const wasActive = this.#catalog.get(this.#catalog.activeId ?? "")?.project === cwd; const removed = this.#catalog.removeProject(cwd); await Promise.all(removed.map(async (item) => { if (item.sessionFile) { await this.#usage.capture(item.sessionFile); await unlink(item.sessionFile).catch(() => undefined); } if (item.worktree) await this.#removeWorktree(item.worktree.path); const managed = this.#sessions.get(item.id); if (managed) { managed.unsubscribe(); await managed.session.dispose(); this.#sessions.delete(item.id); } })); return { ...this.#catalog.snapshot(), nextId: wasActive ? (this.#catalog.activeId ?? null) : null }; }
   async loadMessages(): Promise<ChatMessage[]> { return this.#messages(await this.#active()); }
   /**
    * An unconfigured engine legitimately has zero models, so report that rather than
@@ -567,6 +593,8 @@ export class PiProcessManager {
   async refreshProviderModels(id: string): Promise<ProviderModel[]> { return refreshProviderModels(this.#paths, id); }
   async saveFastVibe(apiKey: string, models: ProviderModel[]): Promise<ProviderConfig[]> { await saveFastVibeConfig(this.#paths, apiKey, models); await this.reloadProviders(); return this.listProviders(); }
   async addProvider(draft: { name: string; baseUrl: string; apiKey: string; api?: import("@shared/types").ProviderApi }, models: ProviderModel[]): Promise<ProviderConfig[]> { await addProviderConfig(this.#paths, draft, models); await this.reloadProviders(); return this.listProviders(); }
+  async scanCcSwitch() { return scanCcSwitch(this.#paths); }
+  async importCcSwitch(ids: string[]): Promise<ProviderConfig[]> { await importCcSwitch(this.#paths, ids); await this.reloadProviders(); return this.listProviders(); }
   async updateProvider(id: string, patch: { name?: string; baseUrl?: string; api?: string; enabled?: boolean; models?: ProviderModel[]; apiKey?: string }): Promise<ProviderConfig[]> { updateProviderConfig(this.#paths, id, { name: patch.name, baseUrl: patch.baseUrl?.trim().replace(/\/+$/, ""), api: patch.api, enabled: patch.enabled, models: patch.models }); if (patch.apiKey !== undefined) { const env = providerKeyEnv(this.#paths, id); if (env) await setProviderKey(this.#paths, env, patch.apiKey); } await this.reloadProviders(); return this.listProviders(); }
   async removeProvider(id: string): Promise<ProviderConfig[]> { await removeProviderConfig(this.#paths, id); await this.reloadProviders(); return this.listProviders(); }
   /**
@@ -677,6 +705,11 @@ export class PiProcessManager {
     return { cancelled: false };
   }
 
+  /**
+   * Worktree isolation is kept even though its only caller (the parallel-run
+   * dialog) is gone: `Conversation.worktree` and `#removeWorktree` still clean up
+   * conversations an earlier build isolated, so new creation stays next to them.
+   */
   async #createWorktree(project: string, id: string, label: string): Promise<{ path: string; branch: string }> {
     const root = (await execFileAsync("git", ["-C", project, "rev-parse", "--show-toplevel"], { timeout: 5000 })).stdout.trim();
     if (!root) throw new Error("无法识别 Git 项目");
@@ -746,13 +779,14 @@ export class PiProcessManager {
     if (!this.#runtime || !this.#models) throw new Error("engine not ready");
     const settingsManager = SettingsManager.create(cwd, this.#paths.agentDir);
     // A loader we own lets us splice in FastVibe's built-in extensions
-    // (`plan`, `goal`) alongside whatever the user installed. `createAgentSession`
+    // (`plan`, `goal`, `todo`, session-title) alongside whatever the user installed. `createAgentSession`
     // only auto-reloads a loader it creates, so reload ours before handing it over.
     const resourceLoader = new DefaultResourceLoader({
       cwd,
       agentDir: this.#paths.agentDir,
       settingsManager,
       additionalExtensionPaths: builtinExtensionPaths(),
+      additionalSkillPaths: builtinSkillPaths(),
     });
     await resourceLoader.reload();
     const result = await createAgentSession({
@@ -819,6 +853,14 @@ export class PiProcessManager {
       // per assistant message (its request start), so this is the only chance to
       // record how long a block thought before the block is folded into the entry.
       this.#timeReasoning(conversation.id, event, result.session, now);
+      // File the finished turn in the usage ledger, so 使用统计 outlives the transcript
+      // if this conversation is later deleted.
+      if (event.type === "message_end" && isAssistantEngineMessage(event.message)) {
+        this.#recordUsage(event.message, result.session, now);
+      }
+      if (event.type === "session_info_changed") {
+        this.#applySessionTitle(conversation.id, event.name);
+      }
       // Broadcast run start/end for every conversation, active or not, so the
       // sidebar keeps showing which chats are still working after the user
       // switches away or starts a new one. `agent_end` is the authoritative end:
@@ -886,6 +928,18 @@ export class PiProcessManager {
     return managed;
   }
   #emit(event: Record<string, unknown>): void { for (const listener of this.#eventListeners) listener(event); }
+  /**
+   * The session-title extension names a chat via `setSessionName`. Apply it to
+   * the catalog unless the user already renamed this conversation by hand.
+   */
+  #applySessionTitle(id: string, name: string | undefined): void {
+    const title = name?.trim();
+    if (!title) return;
+    const current = this.#catalog.get(id);
+    if (!current || current.titleManual || current.title === title) return;
+    this.#catalog.update(id, { title });
+    this.#emit({ type: "conversation_renamed", conversationId: id, title, snapshot: this.#catalog.snapshot() });
+  }
   /** True when the active conversation has a run in flight (`agent_end` clears it). */
   #isLive(): boolean { return this.#activeId !== null && this.#running.get(this.#activeId) === true; }
   /**
@@ -895,8 +949,20 @@ export class PiProcessManager {
    * "after completion" throws "Agent is already processing".
    */
   async #promptWhenIdle(session: AgentSession, message: string, images?: Array<{ type: "image"; data: string; mimeType: string }>): Promise<void> {
+    if (await this.#compactIfCommand(session, message)) return;
     if (session.isStreaming) await session.agent.waitForIdle();
     await session.prompt(message, { images });
+  }
+  /**
+   * `/compact` is a TUI builtin, not an SDK prompt. Intercept it so the composer
+   * slash palette (and a typed `/compact keep X`) actually compact instead of
+   * sending the slash line to the model.
+   */
+  async #compactIfCommand(session: AgentSession, message: string): Promise<boolean> {
+    const command = parseCompactCommand(message);
+    if (!command) return false;
+    await session.compact(command.instructions);
+    return true;
   }
   #timingFor(id: string): RunTiming {
     let timing = this.#timing.get(id);
@@ -969,6 +1035,66 @@ export class PiProcessManager {
   /** The block currently being streamed, if any — the renderer derives its elapsed time from it. */
   #liveThinkingBlock(conversationId: string): ThinkingTiming | undefined {
     return this.#reasoningRun.get(conversationId)?.blocks.at(-1);
+  }
+
+  /**
+   * File a finished assistant turn in the usage ledger.
+   *
+   * The ledger exists so 使用统计 does not change when a conversation is deleted: the
+   * transcript that would otherwise be the record is unlinked, so each turn is copied
+   * here as it lands. `at` is the message's own timestamp (request start), matching what
+   * `parseSessionTurns` reads out of the transcript, and the entry id is resolved a
+   * microtask later because the SDK appends the entry once its listeners return.
+   */
+  #recordUsage(
+    message: unknown,
+    session: AgentSession,
+    now: number,
+  ): void {
+    if (!isAssistantEngineMessage(message)) return;
+    // Keep an untyped handle for the identity comparison: `message` narrows to a record
+    // above, while the stored entry's `message` stays an `AgentMessage`.
+    const messageRef: unknown = message;
+    const sessionId = session.sessionId;
+    if (!sessionId) return;
+    const usage = isRecord(message.usage) ? message.usage : undefined;
+    const input = num(usage?.input);
+    const output = num(usage?.output);
+    const cacheRead = num(usage?.cacheRead);
+    const cacheWrite = num(usage?.cacheWrite);
+    const reported = usage ? num(usage.totalTokens) : 0;
+    const cost = usage && isRecord(usage.cost) ? num(usage.cost.total) : 0;
+    const at = num(message.timestamp) || now;
+    const provider = typeof message.provider === "string" ? message.provider : "未知";
+    const model = typeof message.model === "string" ? message.model : "未知";
+    let toolCalls = 0;
+    if (Array.isArray(message.content)) {
+      for (const part of message.content) {
+        if (isRecord(part) && isToolCallPart(String(part.type ?? ""))) toolCalls += 1;
+      }
+    }
+    queueMicrotask(() => {
+      const entry = [...session.sessionManager.getEntries()]
+        .reverse()
+        .find((item) => item.type === "message" && item.message === messageRef);
+      if (!entry) return;
+      this.#usage.record([
+        {
+          sessionId,
+          entryId: entry.id,
+          provider,
+          model,
+          at,
+          input,
+          output,
+          cacheRead,
+          cacheWrite,
+          tokens: reported || input + output + cacheRead + cacheWrite,
+          cost,
+          toolCalls,
+        },
+      ]);
+    });
   }
 
   #clearWidget(key: string): void {

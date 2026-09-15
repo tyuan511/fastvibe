@@ -1,10 +1,12 @@
 import { memo, useCallback, useEffect, useRef, useState, type JSX } from "react";
+import { motion } from "motion/react";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { AlertCircleIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PanelRightCloseIcon, PanelRightOpenIcon } from "@hugeicons/core-free-icons";
-import { useMatch, useNavigate } from "react-router";
+import { AlertCircleIcon, MessageSquarePlusIcon, PanelLeftOpenIcon, PanelRightOpenIcon } from "@hugeicons/core-free-icons";
+import { useLocation, useMatch, useNavigate, useNavigationType } from "react-router";
 import { useShallow } from "zustand/react/shallow";
 import { Composer } from "@/components/chat/composer";
 import { ExtensionNotices, ExtensionWidgets, GoalPanel } from "@/components/chat/extension-surface";
+import { TodoPanel } from "@/components/chat/todo-list";
 import { MessageList } from "@/components/chat/message-list";
 import { NewSessionHero, SuggestionChips } from "@/components/chat/new-session";
 import { PermissionDialog } from "@/components/chat/permission-dialog";
@@ -12,8 +14,10 @@ import { PermissionPanel, type PermissionResponse } from "@/components/chat/perm
 import { usagePercent } from "@/components/chat/session-controls";
 import { Sidebar } from "@/components/layout/sidebar";
 import { SidePane } from "@/components/layout/side-pane";
-import { PluginMarketDialog } from "@/components/layout/plugin-market-dialog";
-import { SessionSwitcher } from "@/components/layout/session-switcher";
+import { handleBrowserRequest } from "@/components/layout/side-pane-browser";
+import { PANEL_COLLAPSE_TRANSITION } from "@/components/layout/collapsible-panel";
+import { CommandPalette } from "@/components/layout/command-palette";
+import { UpdateBanner } from "@/components/layout/update-banner";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/icon-button";
@@ -37,7 +41,11 @@ import type {
   SlashCommand,
   WorkspaceSnapshot,
 } from "@shared/types";
+import { parseCompactCommand } from "@shared/slash";
+import { conversationIdFromHash, conversationIdFromPath, conversationPath, workspacePath } from "@/lib/routes";
 import { useSidePaneStore } from "@/stores/side-pane";
+import { useAppShortcuts, useShortcutLabel } from "@/lib/use-shortcuts";
+import { useArchivedIds } from "@/stores/archive";
 
 /**
  * macOS renders the window controls as an overlay (`hiddenInset`), so the top
@@ -117,6 +125,13 @@ const MessageThread = memo(function MessageThread({
 export function App(): JSX.Element {
   // Applies light/dark theme selection (and reacts to OS changes in system mode).
   useThemeSync();
+  useEffect(() => {
+    return window.fastvibe.browser.onRequest(({ id, request }) => {
+      void handleBrowserRequest(request)
+        .then((result) => window.fastvibe.browser.respond({ id, ok: true, result }))
+        .catch((error: unknown) => window.fastvibe.browser.respond({ id, ok: false, error: error instanceof Error ? error.message : String(error) }));
+    });
+  }, []);
   const status = useSessionStore((state) => state.status);
   const session = useSessionStore((state) => state.session);
   const models = useSessionStore((state) => state.models);
@@ -180,7 +195,10 @@ export function App(): JSX.Element {
   const pendingPermissionRef = useRef<{ request: PermissionRequest; activeId: string | null } | null>(null);
   // Settings lives at #/settings/<section>; no match means we are in the app.
   const settingsMatch = useMatch("/settings/*");
+  const location = useLocation();
+  const navigationType = useNavigationType();
   const navigate = useNavigate();
+  const initialLocationKey = useRef(location.key);
   const settingsOpen = Boolean(settingsMatch);
   // The wildcard is "" for a bare /settings and the section name otherwise.
   const routeSection = settingsMatch?.params["*"] || undefined;
@@ -192,8 +210,7 @@ export function App(): JSX.Element {
   useEffect(() => {
     if (settingsOpen && !settingsSection) navigate("/settings/general", { replace: true });
   }, [settingsOpen, settingsSection, navigate]);
-  const [switcherOpen, setSwitcherOpen] = useState(false);
-  const [marketOpen, setMarketOpen] = useState(false);
+  const [commandOpen, setCommandOpen] = useState(false);
   // `getStatus()` is async, so until it resolves the store still holds the "idle"
   // placeholder. Track whether the real status has landed: the shell shows the F
   // loader (and keeps the boot splash up) until it has.
@@ -212,10 +229,15 @@ export function App(): JSX.Element {
     dismissBootLoader();
   }, [engineKnown, status.state]);
   const paneCollapsed = useSidePaneStore((state) => state.collapsed);
+  const paneMaximized = useSidePaneStore((state) => state.maximized);
   const togglePane = useSidePaneStore((state) => state.toggle);
   const settings = useSettingsStore((state) => state.settings);
   const updateSettings = useSettingsStore((state) => state.update);
   const sidebarCollapsed = settings.sidebarCollapsed ?? false;
+  const archivedIds = useArchivedIds();
+  const toggleSidebarShortcut = useShortcutLabel("toggleSidebar");
+  const toggleSidePaneShortcut = useShortcutLabel("toggleSidePane");
+  const newChatShortcut = useShortcutLabel("newChat");
 
   useEffect(() => {
     void window.fastvibe.engine.getStatus().then((next) => {
@@ -230,14 +252,22 @@ export function App(): JSX.Element {
       .catch(() => undefined);
     void window.fastvibe.conversations.list().then((snapshot) => {
       applySnapshot(snapshot);
-      const pending = snapshot.activeId;
+      const pending = conversationIdFromHash() ?? snapshot.activeId;
       if (
         pending &&
         useSessionStore.getState().status.state === "ready" &&
         !useSessionStore.getState().activeId
       ) {
         restoreId.current = null;
-        void window.fastvibe.conversations.open(pending).then(applyOpen).catch(() => undefined);
+        void window.fastvibe.conversations
+          .open(pending)
+          .then((opened) => {
+            applyOpen(opened);
+            if (!window.location.hash.includes("/settings") && conversationIdFromHash() !== pending) {
+              navigate(conversationPath(pending), { replace: true });
+            }
+          })
+          .catch(() => undefined);
       } else {
         restoreId.current = pending ?? null;
       }
@@ -259,7 +289,11 @@ export function App(): JSX.Element {
       // An extension command replaced the session (plan-mode's fresh handoff):
       // follow the conversation the engine created and seeded.
       if (event.type === "conversation_opened" && event.result && typeof event.result === "object") {
-        applyOpen(event.result as ConversationOpenResult);
+        const opened = event.result as ConversationOpenResult;
+        applyOpen(opened);
+        if (conversationIdFromHash() !== opened.conversation.id) {
+          navigate(conversationPath(opened.conversation.id));
+        }
         return;
       }
       const conversationId = typeof event.conversationId === "string" ? event.conversationId : null;
@@ -267,6 +301,9 @@ export function App(): JSX.Element {
       // which chats are working, even while the user is looking at another one.
       if (event.type === "conversation_running" && conversationId) {
         useSessionStore.getState().setConversationRunning(conversationId, event.running === true);
+      }
+      if (event.type === "conversation_renamed" && event.snapshot && typeof event.snapshot === "object") {
+        useSessionStore.getState().applySnapshot(event.snapshot as WorkspaceSnapshot);
       }
       const currentId = useSessionStore.getState().activeId;
       if (conversationId && currentId && conversationId !== currentId) {
@@ -296,7 +333,12 @@ export function App(): JSX.Element {
               "stopReason" in item &&
               (item as { stopReason?: unknown }).stopReason === "error",
           );
-        if (!failed) {
+        // A cancelled/failed compact only exists on the live card; reloading would
+        // drop it because the engine never wrote a compaction entry.
+        const compactFailed =
+          (event.type === "compaction_end" || event.type === "auto_compaction_end") &&
+          (event.aborted === true || Boolean(event.errorMessage));
+        if (!failed && !compactFailed) {
           void window.fastvibe.engine.getMessages().then(setMessages).catch(() => undefined);
         }
         refreshStats();
@@ -344,37 +386,77 @@ export function App(): JSX.Element {
     };
   }, [applyEvent, applySnapshot, setSession, setStatus]);
 
-  useEffect(() => {
-    function onKey(event: KeyboardEvent): void {
-      // Esc during a run stops it — but never while an extension prompt owns the
-      // keyboard: there Esc cancels the prompt, which must not also kill the run.
-      if (event.key === "Escape" && useSessionStore.getState().streaming && !useSessionStore.getState().permission) {
-        event.preventDefault();
-        document.querySelector<HTMLButtonElement>('[aria-label="停止"]')?.click();
+  function listedChatIds(): string[] {
+    return conversations
+      .filter((item) => item.preview && !archivedIds.has(item.id))
+      .sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id))
+      .map((item) => item.id);
+  }
+
+  function cycleChat(delta: number): boolean {
+    const ids = listedChatIds();
+    if (ids.length === 0) return false;
+    const current = useSessionStore.getState().activeId;
+    const index = current ? ids.indexOf(current) : -1;
+    const next = ids[(index + delta + ids.length) % ids.length];
+    if (!next || next === current) return false;
+    void handleOpen(next);
+    return true;
+  }
+
+  useAppShortcuts({
+    commandPalette: () => setCommandOpen((open) => !open),
+    settings: () => {
+      if (!settingsOpen) navigate("/settings/general");
+    },
+    newWindow: () => {
+      void window.fastvibe.app.newWindow();
+    },
+    newChat: () => {
+      setCommandOpen(false);
+      void handleNewChat();
+    },
+    openFolder: () => {
+      setCommandOpen(false);
+      if (settingsOpen) navigate(workspacePath(activeId));
+      void handleAddProject();
+    },
+    focusComposer: () => {
+      setCommandOpen(false);
+      if (settingsOpen) navigate(workspacePath(activeId));
+      setComposerFocus((value) => value + 1);
+    },
+    send: (event) => {
+      const target = event.target;
+      if (target instanceof HTMLElement) {
+        const tag = target.tagName;
+        if (tag === "INPUT" || tag === "SELECT" || target.isContentEditable) return false;
       }
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        setSwitcherOpen(true);
-      }
-      if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === "n") {
-        event.preventDefault();
-        void window.fastvibe.app.newWindow();
-      }
-      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-        event.preventDefault();
-        const send =
-          document.querySelector<HTMLButtonElement>('[aria-label="发送"]') ??
-          document.querySelector<HTMLButtonElement>('[aria-label="加入队列"]');
-        send?.click();
-      }
-      if (event.ctrlKey && event.altKey && event.key.toLowerCase() === "b") {
-        event.preventDefault();
-        useSidePaneStore.getState().toggle();
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
+      const send =
+        document.querySelector<HTMLButtonElement>('[aria-label="发送"]') ??
+        document.querySelector<HTMLButtonElement>('[aria-label="加入队列"]');
+      if (!send || send.disabled) return false;
+      send.click();
+    },
+    stop: () => {
+      // Esc during a run stops it — but never while an overlay owns the keyboard:
+      // command palette, settings, or an extension prompt (there Esc cancels).
+      if (commandOpen || settingsOpen) return false;
+      const store = useSessionStore.getState();
+      if (!store.streaming || store.permission) return false;
+      document.querySelector<HTMLButtonElement>('[aria-label="停止"]')?.click();
+    },
+    prevChat: () => {
+      setCommandOpen(false);
+      return cycleChat(-1);
+    },
+    nextChat: () => {
+      setCommandOpen(false);
+      return cycleChat(1);
+    },
+    toggleSidebar: () => updateSettings({ sidebarCollapsed: !sidebarCollapsed }),
+    toggleSidePane: () => togglePane(),
+  });
 
   useEffect(() => {
     if (status.state !== "ready") return;
@@ -435,7 +517,12 @@ export function App(): JSX.Element {
       restoreId.current = null;
       void window.fastvibe.conversations
         .open(pending)
-        .then(applyOpen)
+        .then((opened) => {
+          applyOpen(opened);
+          if (!window.location.hash.includes("/settings") && conversationIdFromHash() !== pending) {
+            navigate(conversationPath(pending), { replace: true });
+          }
+        })
         .catch(() => undefined);
     }
   }, [setModels, setSession, status.state]);
@@ -525,6 +612,13 @@ export function App(): JSX.Element {
     refreshStats();
   }
 
+  /** Push or replace the conversation URL so back/forward walk real history. */
+  function revealConversation(id: string, replace = false): void {
+    const path = conversationPath(id);
+    if (location.pathname === path) return;
+    navigate(path, { replace });
+  }
+
   function applyList(snapshot: WorkspaceSnapshot): void {
     applySnapshot(snapshot);
   }
@@ -533,11 +627,24 @@ export function App(): JSX.Element {
     const text = draft.trim();
     const currentAttachments = useSessionStore.getState().attachments;
     if ((!text && currentAttachments.length === 0) || !canChat) return;
+    const compact = parseCompactCommand(text);
+    if (compact) {
+      if (!activeId) return;
+      setDraft("");
+      try {
+        await window.fastvibe.engine.compact(compact.instructions);
+        void window.fastvibe.engine.getState().then(setSession).catch(() => undefined);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+      return;
+    }
     let conversationId = activeId;
     if (!conversationId) {
       const created = await window.fastvibe.conversations.create(active?.project);
       applyOpen(created);
       conversationId = created.conversation.id;
+      revealConversation(conversationId);
     }
     setDraft("");
     const promptText = text || currentAttachments.map((item) => item.name).join("、");
@@ -753,31 +860,47 @@ export function App(): JSX.Element {
         setMessages([]);
         setDraft(readDrafts()[current.id] ?? "");
         setError(null);
+        revealConversation(current.id);
         return;
       }
       const previousId = activeId;
       const created = await window.fastvibe.conversations.create(project);
       applyOpen(created);
+      revealConversation(created.conversation.id);
       await discardDraft(previousId);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
   }
 
-  async function handleOpen(id: string): Promise<void> {
+  async function handleOpen(id: string, source: "user" | "history" = "user"): Promise<void> {
     const store = useSessionStore.getState();
     // Re-opening the active chat is pointless once it has content or a reply is
     // streaming, but it is how an empty/failed conversation gets retried.
-    if (id === store.activeId && (store.messages.length > 0 || store.streaming)) return;
+    if (id === store.activeId && (store.messages.length > 0 || store.streaming)) {
+      if (source === "user") revealConversation(id);
+      return;
+    }
     const previousId = store.activeId;
     try {
       const opened = await window.fastvibe.conversations.open(id);
       applyOpen(opened);
+      if (source === "user") revealConversation(id);
       if (previousId && previousId !== id) await discardDraft(previousId);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
   }
+
+  // Back/forward (and the mouse side buttons) POP the hash history. Open the
+  // conversation the URL now names, without pushing another entry.
+  useEffect(() => {
+    if (location.key === initialLocationKey.current) return;
+    if (navigationType !== "POP") return;
+    const id = conversationIdFromPath(location.pathname);
+    if (!id || id === useSessionStore.getState().activeId) return;
+    void handleOpen(id, "history");
+  }, [location.key, location.pathname, navigationType]);
 
   async function handleAddProject(): Promise<void> {
     try {
@@ -812,8 +935,10 @@ export function App(): JSX.Element {
       applyList(result);
       if (result.nextId) {
         applyOpen(await window.fastvibe.conversations.open(result.nextId));
+        revealConversation(result.nextId, true);
       } else if (active?.project === cwd) {
         resetConversation();
+        if (location.pathname.startsWith("/c/")) navigate("/", { replace: true });
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -842,8 +967,13 @@ export function App(): JSX.Element {
     applyList(result);
     if (ids.includes(activeId ?? "") && deleted.length > 0) {
       // The chat on screen was deleted: fall through to whatever the catalog promoted.
-      if (result.nextId) applyOpen(await window.fastvibe.conversations.open(result.nextId));
-      else resetConversation();
+      if (result.nextId) {
+        applyOpen(await window.fastvibe.conversations.open(result.nextId));
+        revealConversation(result.nextId, true);
+      } else {
+        resetConversation();
+        if (location.pathname.startsWith("/c/")) navigate("/", { replace: true });
+      }
     }
     return { deleted, error };
   }
@@ -856,7 +986,9 @@ export function App(): JSX.Element {
   async function handleSetProject(project: string | null): Promise<void> {
     try {
       if (!activeId) {
-        applyOpen(await window.fastvibe.conversations.create(project ?? undefined));
+        const created = await window.fastvibe.conversations.create(project ?? undefined);
+        applyOpen(created);
+        revealConversation(created.conversation.id);
         return;
       }
       const snapshot = await window.fastvibe.conversations.setProject(activeId, project);
@@ -909,26 +1041,31 @@ export function App(): JSX.Element {
   // A fresh conversation swaps the transcript for the centred greeting hero.
   const showHero = empty && !loading;
 
-  const bannerNode = banner ? (
-    <div className="mx-auto mb-2 w-full max-w-3xl px-6">
-      <Alert variant="destructive">
-        <HugeiconsIcon strokeWidth={2} icon={AlertCircleIcon} />
-        <AlertTitle>出了点问题</AlertTitle>
-        <AlertDescription>{banner}</AlertDescription>
-        {status.state === "missing" || status.state === "error" ? (
-          <AlertAction>
-            <Button
-              size="xs"
-              variant="outline"
-              onClick={() => void window.fastvibe.engine.start(status.cwd)}
-            >
-              重试
-            </Button>
-          </AlertAction>
-        ) : null}
-      </Alert>
-    </div>
-  ) : null;
+  const bannerNode = (
+    <>
+      {banner ? (
+        <div className="mx-auto mb-2 w-full max-w-3xl px-6">
+          <Alert variant="destructive">
+            <HugeiconsIcon strokeWidth={2} icon={AlertCircleIcon} />
+            <AlertTitle>出了点问题</AlertTitle>
+            <AlertDescription>{banner}</AlertDescription>
+            {status.state === "missing" || status.state === "error" ? (
+              <AlertAction>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  onClick={() => void window.fastvibe.engine.start(status.cwd)}
+                >
+                  重试
+                </Button>
+              </AlertAction>
+            ) : null}
+          </Alert>
+        </div>
+      ) : null}
+      <UpdateBanner />
+    </>
+  );
 
   // The composer's `/` palette: one entry per installed skill, then the engine's
   // own commands (extension commands, prompt templates, …). `getCommands()` does
@@ -950,6 +1087,7 @@ export function App(): JSX.Element {
       value={draft}
       disabled={!canChat}
       streaming={streaming}
+      compacting={compacting}
       placeholder={canChat ? "随心输入" : "准备中…"}
       models={models}
       model={session?.model}
@@ -1018,43 +1156,65 @@ export function App(): JSX.Element {
         onRemoveProject={(cwd) => void handleRemoveProject(cwd)}
         onRevealProject={(cwd) => void window.fastvibe.workspace.reveal(cwd)}
         onOpenSettings={() => navigate("/settings/general")}
-        onOpenMarket={() => setMarketOpen(true)}
+        onOpenMarket={() => navigate("/settings/extensions")}
+        onSearch={() => setCommandOpen(true)}
       />
-      <main className="flex min-w-0 flex-1 flex-col">
-        <header
-          className={cn(
-            "drag-region flex h-11 items-center justify-between pr-4",
-            // The collapsed sidebar otherwise exposes the traffic lights under
-            // the toggle: inset the bar on macOS so the control and title clear
-            // them, with a little breathing room before the first control.
-            sidebarCollapsed && IS_MAC ? "pl-22" : "pl-4",
-          )}
+      <main className={cn("flex min-w-0 flex-1 flex-col", !paneCollapsed && paneMaximized && "hidden")}>
+        <motion.header
+          initial={false}
+          // Expanded: the collapse control lives on the sidebar, next to the
+          // traffic lights. Collapsed: inset this bar on macOS so the expand
+          // control, title and lights share one vertically centred row.
+          animate={{ paddingLeft: sidebarCollapsed && IS_MAC ? "5.5rem" : "1rem" }}
+          transition={PANEL_COLLAPSE_TRANSITION}
+          className="drag-region flex h-11 items-center justify-between pr-4"
         >
-          <div className="no-drag flex min-w-0 items-center gap-1">
-            <IconButton
-              size="icon-sm"
-              variant="ghost"
-              label={sidebarCollapsed ? "展开侧边栏" : "收起侧边栏"}
-              onClick={() => updateSettings({ sidebarCollapsed: !sidebarCollapsed })}
-            >
-              <HugeiconsIcon strokeWidth={2} icon={sidebarCollapsed ? PanelLeftOpenIcon : PanelLeftCloseIcon} />
-            </IconButton>
+          <div className="no-drag flex min-w-0 flex-1 items-center gap-1 pr-3">
+            {sidebarCollapsed ? (
+              <div className="flex items-center gap-1">
+                <IconButton
+                  size="icon-sm"
+                  variant="ghost"
+                  label="展开侧边栏"
+                  shortcut={toggleSidebarShortcut}
+                  onClick={() => updateSettings({ sidebarCollapsed: false })}
+                >
+                  <HugeiconsIcon strokeWidth={2} icon={PanelLeftOpenIcon} />
+                </IconButton>
+                <IconButton
+                  size="icon-sm"
+                  variant="ghost"
+                  label="新对话"
+                  shortcut={newChatShortcut}
+                  onClick={() => void handleNewChat()}
+                >
+                  <HugeiconsIcon strokeWidth={2} icon={MessageSquarePlusIcon} />
+                </IconButton>
+              </div>
+            ) : null}
+            {sidebarCollapsed && !isNewSession ? (
+              <span className="mx-1.5 h-4 w-px shrink-0 bg-border" aria-hidden />
+            ) : null}
             {isNewSession ? null : (
-              <div className="truncate text-[12.5px] text-muted-foreground">{headerTitle}</div>
+              <h1 className="min-w-0 truncate text-sm font-semibold text-foreground" title={headerTitle}>
+                {headerTitle}
+              </h1>
             )}
           </div>
-          <div className="no-drag flex items-center gap-1">
-            <IconButton
-              size="icon-sm"
-              variant="ghost"
-              label={paneCollapsed ? "展开侧边面板" : "收起侧边面板"}
-              shortcut="⌃⌥B"
-              onClick={togglePane}
-            >
-              <HugeiconsIcon strokeWidth={2} icon={paneCollapsed ? PanelRightOpenIcon : PanelRightCloseIcon} />
-            </IconButton>
-          </div>
-        </header>
+          {paneCollapsed ? (
+            <div className="no-drag flex items-center">
+              <IconButton
+                size="icon-sm"
+                variant="ghost"
+                label="展开侧边面板"
+                shortcut={toggleSidePaneShortcut}
+                onClick={togglePane}
+              >
+                <HugeiconsIcon strokeWidth={2} icon={PanelRightOpenIcon} />
+              </IconButton>
+            </div>
+          ) : null}
+        </motion.header>
         {showHero ? (
           // New conversation: the greeting hero sits above the composer and the
           // suggestion chips below it, with the group centred like the reference.
@@ -1063,6 +1223,7 @@ export function App(): JSX.Element {
             <NewSessionHero />
             <ExtensionWidgets className="pb-2" />
             <GoalPanel className="pb-2" disabled={streaming} />
+            <TodoPanel className="pb-2" />
             {composerSlot}
             <SuggestionChips onSelect={setDraft} />
           </div>
@@ -1080,6 +1241,7 @@ export function App(): JSX.Element {
             {bannerNode}
             <ExtensionWidgets className="pb-2" />
             <GoalPanel className="pb-2" disabled={streaming} />
+            <TodoPanel className="pb-2" />
             {composerSlot}
           </>
         )}
@@ -1089,11 +1251,19 @@ export function App(): JSX.Element {
         project={active?.project}
         parentId={activeId ?? undefined}
         canSideChat={Boolean(activeId && hasTranscript)}
+        onNewChat={() => void handleNewChat()}
         onError={setError}
       />
       <SettingsDialog
         open={settingsOpen}
-        onOpenChange={(open) => navigate(open ? "/settings/general" : "/")}
+        onOpenChange={(open) => {
+          if (open) {
+            navigate("/settings/general");
+            return;
+          }
+          if ((window.history.state?.idx ?? 0) > 0) navigate(-1);
+          else navigate(workspacePath(activeId), { replace: true });
+        }}
         section={settingsSection}
         models={models}
         onDeleteConversations={handleDeleteConversations}
@@ -1102,15 +1272,16 @@ export function App(): JSX.Element {
           void window.fastvibe.engine.getState().then(setSession).catch(() => undefined);
         }}
       />
-      <PluginMarketDialog open={marketOpen} onOpenChange={setMarketOpen} />
-      <SessionSwitcher
-        open={switcherOpen}
+      <CommandPalette
+        open={commandOpen}
         conversations={conversations}
         projects={projects}
         activeId={activeId}
-        running={running}
-        onOpenChange={setSwitcherOpen}
-        onSelect={(id) => void handleOpen(id)}
+        onOpenChange={setCommandOpen}
+        onSelectChat={(id) => void handleOpen(id)}
+        onNewChat={() => void handleNewChat()}
+        onAddProject={() => void handleAddProject()}
+        onOpenSettings={(section) => navigate(`/settings/${section}`)}
       />
       <PermissionDialog
         key={pendingDialog?.id ?? "permission"}

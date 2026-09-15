@@ -11,6 +11,14 @@ import {
   Search01Icon,
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -38,17 +46,7 @@ import {
   InputGroupAddon,
   InputGroupInput,
 } from "@/components/ui/input-group";
-import {
-  Item,
-  ItemActions,
-  ItemContent,
-  ItemDescription,
-  ItemGroup,
-  ItemMedia,
-  ItemTitle,
-} from "@/components/ui/item";
 import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { IconButton } from "@/components/icon-button";
 import type { SkillDraft, SkillInfo } from "@shared/types";
@@ -135,22 +133,19 @@ export function SkillsSettings(): JSX.Element {
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
-        <InputGroup className="w-64 rounded-full">
-          <InputGroupAddon>
-            <HugeiconsIcon strokeWidth={2} icon={Search01Icon} />
-          </InputGroupAddon>
-          <InputGroupInput
-            value={query}
-            placeholder="搜索技能..."
-            onChange={(event) => setQuery(event.target.value)}
-          />
-        </InputGroup>
-      </div>
-
       <div className="flex items-center justify-between gap-3">
-        <span className="text-[13px] font-medium">已安装 {skills.length}</span>
+        <span className="text-sm font-medium">已安装 {skills.length}</span>
         <div className="flex items-center gap-1.5">
+          <InputGroup className="h-8 w-56 rounded-full">
+            <InputGroupAddon>
+              <HugeiconsIcon strokeWidth={2} icon={Search01Icon} />
+            </InputGroupAddon>
+            <InputGroupInput
+              value={query}
+              placeholder="搜索技能..."
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          </InputGroup>
           <DropdownMenu>
             <DropdownMenuTrigger render={<Button size="icon-sm" variant="outline" />}>
               <HugeiconsIcon strokeWidth={2} icon={MoreHorizontalIcon} />
@@ -180,14 +175,15 @@ export function SkillsSettings(): JSX.Element {
       </div>
 
       {visible.length ? (
-        <ItemGroup className="gap-0! overflow-hidden rounded-xl bg-muted">
-          {visible.map((skill, index) => (
-            <div key={`${skill.scope}:${skill.filePath}`}>
-              {index > 0 ? <Separator /> : null}
-              <SkillRow skill={skill} onRemove={() => void remove(skill.name)} />
-            </div>
+        <div className="grid gap-2.5 sm:grid-cols-2">
+          {visible.map((skill) => (
+            <SkillCard
+              key={`${skill.scope}:${skill.filePath}`}
+              skill={skill}
+              onRemove={() => void remove(skill.name)}
+            />
           ))}
-        </ItemGroup>
+        </div>
       ) : (
         <Empty className="border border-dashed border-border py-10">
           <EmptyHeader>
@@ -216,26 +212,39 @@ export function SkillsSettings(): JSX.Element {
   );
 }
 
-function SkillRow({ skill, onRemove }: { skill: SkillInfo; onRemove: () => void }): JSX.Element {
+function SkillCard({ skill, onRemove }: { skill: SkillInfo; onRemove: () => void }): JSX.Element {
+  const scopeLabel =
+    skill.scope === "project" ? "项目" : skill.scope === "temporary" ? "临时" : "全局";
   return (
-    <Item size="sm" className="rounded-none px-3 py-2.5">
-      <ItemMedia className="self-center translate-y-0">
-        <span className="flex size-9 items-center justify-center rounded-full bg-background text-muted-foreground">
-          <HugeiconsIcon strokeWidth={2} icon={MagicWand02Icon} className="size-4" />
-        </span>
-      </ItemMedia>
-      <ItemContent className="min-w-0">
-        <ItemTitle className="font-medium">{skill.name}</ItemTitle>
-        <ItemDescription className="line-clamp-1">{skill.description}</ItemDescription>
-      </ItemContent>
-      {skill.removable ? (
-        <ItemActions>
-          <IconButton label="删除技能" size="icon-xs" variant="ghost" onClick={onRemove}>
-            <HugeiconsIcon strokeWidth={2} icon={Delete02Icon} />
-          </IconButton>
-        </ItemActions>
-      ) : null}
-    </Item>
+    <Card size="sm" className="gap-3 transition-colors hover:ring-foreground/20">
+      <CardHeader>
+        <div className="flex min-w-0 items-start gap-2.5">
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
+            <HugeiconsIcon strokeWidth={2} icon={MagicWand02Icon} className="size-4" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <CardTitle title={skill.name} className="truncate">
+              {skill.name}
+            </CardTitle>
+            <div className="mt-1">
+              <Badge variant="secondary">{scopeLabel}</Badge>
+            </div>
+          </div>
+        </div>
+        {skill.removable ? (
+          <CardAction>
+            <IconButton label="删除技能" size="icon-xs" variant="ghost" onClick={onRemove}>
+              <HugeiconsIcon strokeWidth={2} icon={Delete02Icon} />
+            </IconButton>
+          </CardAction>
+        ) : null}
+      </CardHeader>
+      <CardContent>
+        <p className="line-clamp-2 min-h-10 text-sm leading-5 text-muted-foreground">
+          {skill.description}
+        </p>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -274,7 +283,7 @@ function AddSkillDialog({
                 placeholder="my-skill"
                 onChange={(event) => onPatch({ name: event.target.value })}
               />
-              <p className="text-[11px] text-muted-foreground">小写字母、数字和连字符</p>
+              <p className="text-xs text-muted-foreground">小写字母、数字和连字符</p>
             </div>
             <div className="space-y-1.5">
               <Label>说明</Label>

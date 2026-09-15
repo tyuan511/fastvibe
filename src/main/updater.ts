@@ -1,0 +1,260 @@
+import { spawn } from "node:child_process";
+import { accessSync, constants, existsSync } from "node:fs";
+import { join } from "node:path";
+import { app, ipcMain, Notification, type BrowserWindow } from "electron";
+import electronUpdater from "electron-updater";
+import type { ProgressInfo, UpdateDownloadedEvent, UpdateInfo } from "electron-updater";
+
+const { autoUpdater } = electronUpdater;
+import { Ipc, type AppUpdateState } from "@shared/ipc";
+
+const CHECK_DELAY_MS = 8_000;
+
+/**
+ * Squirrel.Mac (electron-updater's native installer) only accepts a Developer ID
+ * Apple trusts. A homemade/ad-hoc signature fails SecStaticCodeCheckValidity, so
+ * unsigned Mac builds replace the .app after quit instead of calling quitAndInstall.
+ */
+const MAC_INSTALL_SCRIPT = [
+  "set -eu",
+  'pid="$1"',
+  'zip="$2"',
+  'app="$3"',
+  'while kill -0 "$pid" 2>/dev/null; do sleep 0.2; done',
+  "sleep 0.4",
+  'tmp="$(mktemp -d -t fastvibe-update)"',
+  'trap \'rm -rf "$tmp"\' EXIT',
+  'ditto -x -k "$zip" "$tmp"',
+  'new_app=""',
+  'for candidate in "$tmp"/*.app "$tmp"/*/*.app; do',
+  '  if [ -d "$candidate" ]; then new_app="$candidate"; break; fi',
+  "done",
+  'if [ -z "$new_app" ] || [ ! -d "$new_app" ]; then exit 1; fi',
+  'xattr -cr "$new_app" || true',
+  'old="${app}.old"',
+  'staging="${app}.new"',
+  'rm -rf "$old" "$staging"',
+  'ditto "$new_app" "$staging"',
+  'xattr -cr "$staging" || true',
+  'mv "$app" "$old"',
+  'if mv "$staging" "$app"; then rm -rf "$old"; else mv "$old" "$app" || true; exit 1; fi',
+  'xattr -cr "$app" 2>/dev/null || osascript -e "do shell script \\"xattr -cr \\" & quoted form of \\"$app\\" with administrator privileges"',
+  // `open` re-applies Gatekeeper on unsigned apps; launch the binary instead.
+  'exe="$app/Contents/MacOS/$(basename "$app" .app)"',
+  'if [ -x "$exe" ]; then nohup "$exe" >/dev/null 2>&1 & else open "$app"; fi',
+].join("\n");
+
+let windows: () => Iterable<BrowserWindow> = () => [];
+let state: AppUpdateState = {
+  status: "idle",
+  currentVersion: "0.0.0",
+};
+let pendingInstall = false;
+let scheduled = false;
+let manualCheck = false;
+let downloadedFile: string | undefined;
+
+function setState(patch: Partial<AppUpdateState>): void {
+  state = { ...state, ...patch };
+  for (const window of windows()) {
+    if (!window.isDestroyed()) window.webContents.send(Ipc.updateState, state);
+  }
+}
+
+function notesOf(info: UpdateInfo): string | undefined {
+  const raw = info.releaseNotes;
+  if (typeof raw === "string") {
+    const text = raw.trim();
+    return text || undefined;
+  }
+  if (Array.isArray(raw)) {
+    const text = raw
+      .map((item) => (typeof item.note === "string" ? item.note : ""))
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+    return text || undefined;
+  }
+  return undefined;
+}
+
+function notifyDownloaded(version: string): void {
+  const focused = [...windows()].some((window) => !window.isDestroyed() && window.isFocused());
+  if (focused || !Notification.isSupported()) return;
+  new Notification({ title: "FastVibe", body: `版本 ${version} 已下载，重启即可更新。` }).show();
+}
+
+function macAppBundle(): string | null {
+  if (process.platform !== "darwin" || !app.isPackaged) return null;
+  const bundle = join(process.execPath, "..", "..", "..");
+  return bundle.endsWith(".app") ? bundle : null;
+}
+
+function canReplaceMacApp(): { ok: true; bundle: string } | { ok: false; error: string } {
+  const bundle = macAppBundle();
+  if (!bundle) return { ok: false, error: "当前不是可更新的打包应用" };
+  if (bundle.startsWith("/Volumes/")) {
+    return { ok: false, error: "请先将 FastVibe 拖到「应用程序」文件夹，再安装更新" };
+  }
+  try {
+    accessSync(bundle, constants.W_OK);
+  } catch {
+    return { ok: false, error: "没有权限替换当前应用，请把它放到「应用程序」文件夹后再更新" };
+  }
+  return { ok: true, bundle };
+}
+
+function spawnMacInstaller(zipPath: string, appBundle: string): void {
+  if (!existsSync(zipPath)) return;
+  spawn("/bin/bash", ["-c", MAC_INSTALL_SCRIPT, "fastvibe-update", String(process.pid), zipPath, appBundle], {
+    detached: true,
+    stdio: "ignore",
+  }).unref();
+}
+
+async function checkForUpdates(manual: boolean): Promise<AppUpdateState> {
+  if (!app.isPackaged) return state;
+  manualCheck = manual;
+  try {
+    await autoUpdater.checkForUpdates();
+  } catch (error) {
+    if (manual) {
+      setState({
+        status: "error",
+        error: error instanceof Error ? error.message : String(error),
+        progress: undefined,
+      });
+    }
+  } finally {
+    manualCheck = false;
+  }
+  return state;
+}
+
+async function downloadUpdate(): Promise<AppUpdateState> {
+  if (!app.isPackaged) return state;
+  try {
+    await autoUpdater.downloadUpdate();
+  } catch (error) {
+    setState({
+      status: "error",
+      error: error instanceof Error ? error.message : String(error),
+      progress: undefined,
+    });
+  }
+  return state;
+}
+
+/**
+ * After engine teardown: install a downloaded update.
+ * Windows/Linux use electron-updater. macOS swaps the .app (no Developer ID).
+ */
+export function applyPendingInstall(): boolean {
+  if (process.platform === "darwin") {
+    if (state.status === "downloaded" && downloadedFile) {
+      const check = canReplaceMacApp();
+      if (check.ok) spawnMacInstaller(downloadedFile, check.bundle);
+    }
+    return false;
+  }
+  if (!pendingInstall) return false;
+  autoUpdater.quitAndInstall();
+  return true;
+}
+
+export function registerUpdater(getWindows: () => Iterable<BrowserWindow>): void {
+  windows = getWindows;
+  state = {
+    status: app.isPackaged ? "idle" : "disabled",
+    currentVersion: app.getVersion(),
+  };
+
+  ipcMain.handle(Ipc.updateGetState, () => state);
+  ipcMain.handle(Ipc.updateCheck, () => checkForUpdates(true));
+  ipcMain.handle(Ipc.updateDownload, () => downloadUpdate());
+  ipcMain.handle(Ipc.updateInstall, () => {
+    if (state.status !== "downloaded") return state;
+    if (process.platform === "darwin") {
+      const check = canReplaceMacApp();
+      if (!check.ok) {
+        setState({ status: "error", error: check.error });
+        return state;
+      }
+    }
+    pendingInstall = true;
+    app.quit();
+    return state;
+  });
+
+  if (!app.isPackaged) return;
+
+  autoUpdater.autoDownload = true;
+  // Squirrel.Mac would try to apply the zip and fail without a Developer ID.
+  autoUpdater.autoInstallOnAppQuit = process.platform !== "darwin";
+  autoUpdater.allowPrerelease = false;
+  // GitHub release assets do not serve reliable HTTP range requests.
+  autoUpdater.disableDifferentialDownload = true;
+
+  autoUpdater.on("checking-for-update", () => {
+    setState({ status: "checking", error: undefined });
+  });
+  autoUpdater.on("update-available", (info) => {
+    setState({
+      status: "available",
+      availableVersion: info.version,
+      releaseNotes: notesOf(info),
+      error: undefined,
+    });
+  });
+  autoUpdater.on("update-not-available", () => {
+    setState({
+      status: "not-available",
+      availableVersion: undefined,
+      progress: undefined,
+      error: undefined,
+    });
+  });
+  autoUpdater.on("download-progress", (progress: ProgressInfo) => {
+    setState({
+      status: "downloading",
+      progress: {
+        percent: progress.percent,
+        bytesPerSecond: progress.bytesPerSecond,
+        transferred: progress.transferred,
+        total: progress.total,
+      },
+    });
+  });
+  autoUpdater.on("update-downloaded", (info: UpdateDownloadedEvent) => {
+    downloadedFile = info.downloadedFile;
+    setState({
+      status: "downloaded",
+      availableVersion: info.version,
+      releaseNotes: notesOf(info),
+      progress: undefined,
+      error: undefined,
+    });
+    notifyDownloaded(info.version);
+  });
+  autoUpdater.on("error", (error) => {
+    const noisy = manualCheck || state.status === "available" || state.status === "downloading";
+    if (!noisy) {
+      setState({ status: "idle", error: undefined, progress: undefined });
+      return;
+    }
+    setState({
+      status: "error",
+      error: error instanceof Error ? error.message : String(error),
+      progress: undefined,
+    });
+  });
+}
+
+/** One delayed check after launch (or when the user turns auto-check back on). */
+export function scheduleUpdateCheck(enabled: boolean): void {
+  if (!app.isPackaged || !enabled || scheduled) return;
+  scheduled = true;
+  setTimeout(() => {
+    void checkForUpdates(false);
+  }, CHECK_DELAY_MS);
+}

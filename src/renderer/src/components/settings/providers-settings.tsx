@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useState, type JSX } from "react";
+import { useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Add01Icon,
+  ArrowDown01Icon,
   ArrowLeft01Icon,
   BoxesIcon,
   CpuIcon,
   Delete02Icon,
+  Download01Icon,
   Loading03Icon,
   PencilEdit02Icon,
   RefreshIcon,
@@ -38,7 +40,7 @@ import {
 import { cleanError } from "@/lib/ipc-error";
 import { providerLabel } from "@/lib/provider-label";
 import { cn } from "@/lib/utils";
-import { PROVIDER_APIS, type NativeProviderConfig, type ProviderApi, type ProviderConfig, type ProviderModel } from "@shared/types";
+import { PROVIDER_APIS, type CcSwitchCandidate, type CcSwitchScan, type NativeProviderConfig, type ProviderApi, type ProviderConfig, type ProviderModel } from "@shared/types";
 import { ModelDetailDialog, type ModelDetailTarget } from "./model-detail-dialog";
 import { ModelPicker } from "./model-picker";
 
@@ -102,6 +104,7 @@ export function ProvidersSettings({ onChanged }: { onChanged: () => void }): JSX
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [add, setAdd] = useState<AddState | null>(null);
+  const [ccSwitchOpen, setCcSwitchOpen] = useState(false);
   const [picker, setPicker] = useState<PickerState | null>(null);
   const [detail, setDetail] = useState<ModelDetailTarget | null>(null);
 
@@ -166,7 +169,7 @@ export function ProvidersSettings({ onChanged }: { onChanged: () => void }): JSX
           <div className="p-2">
             {builtin ? (
               <div className="mb-3">
-                <p className="px-2 pb-1 text-[11px] font-medium text-muted-foreground">内置</p>
+                <p className="px-2 pb-1 text-xs font-medium text-muted-foreground">内置</p>
                 <ProviderNavItem
                   provider={builtin}
                   selected={selected?.id === builtin.id}
@@ -176,7 +179,7 @@ export function ProvidersSettings({ onChanged }: { onChanged: () => void }): JSX
             ) : null}
             {nativeProviders.length ? (
               <div className="mb-3">
-                <p className="px-2 pb-1 text-[11px] font-medium text-muted-foreground">供应商</p>
+                <p className="px-2 pb-1 text-xs font-medium text-muted-foreground">供应商</p>
                 <div className="space-y-0.5">
                   {nativeProviders.map((provider) => (
                     <ProviderNavItem
@@ -189,7 +192,7 @@ export function ProvidersSettings({ onChanged }: { onChanged: () => void }): JSX
                 </div>
               </div>
             ) : null}
-            <p className="px-2 pb-1 text-[11px] font-medium text-muted-foreground">自定义供应商</p>
+            <p className="px-2 pb-1 text-xs font-medium text-muted-foreground">自定义供应商</p>
             <div className="space-y-0.5">
               {customs.map((provider) => (
                 <ProviderNavItem
@@ -201,11 +204,19 @@ export function ProvidersSettings({ onChanged }: { onChanged: () => void }): JSX
               ))}
               <button
                 type="button"
-                className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-[13px] text-muted-foreground hover:bg-muted/60"
+                className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-sm text-muted-foreground hover:bg-muted/60"
                 onClick={() => setAdd({ ...EMPTY_ADD, selected: new Set() })}
               >
                 <HugeiconsIcon strokeWidth={2} icon={Add01Icon} className="size-3.5" />
                 添加供应商
+              </button>
+              <button
+                type="button"
+                className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-sm text-muted-foreground hover:bg-muted/60"
+                onClick={() => setCcSwitchOpen(true)}
+              >
+                <HugeiconsIcon strokeWidth={2} icon={Download01Icon} className="size-3.5" />
+                从 CC Switch 导入
               </button>
             </div>
           </div>
@@ -235,6 +246,18 @@ export function ProvidersSettings({ onChanged }: { onChanged: () => void }): JSX
           <p className="py-10 text-center text-xs text-muted-foreground">选择一个供应商</p>
         )}
       </div>
+
+      <CcSwitchImportDialog
+        open={ccSwitchOpen}
+        onClose={() => setCcSwitchOpen(false)}
+        onImported={async (next) => {
+          setProviders(next);
+          const created = next.filter((item) => item.kind !== "builtin").at(-1);
+          if (created) setSelectedId(created.id);
+          onChanged();
+          setCcSwitchOpen(false);
+        }}
+      />
 
       <AddProviderDialog
         state={add}
@@ -283,7 +306,7 @@ function ProviderNavItem({
     <button
       type="button"
       className={cn(
-        "flex h-8 w-full items-center gap-2 rounded-lg px-2 text-[13px]",
+        "flex h-8 w-full items-center gap-2 rounded-lg px-2 text-sm",
         selected ? "bg-muted font-medium" : "hover:bg-muted/60",
         !provider.enabled && "opacity-60",
       )}
@@ -381,7 +404,7 @@ function ProviderDetail({
             <Input
               autoFocus
               value={name}
-              className="h-8 max-w-56 text-[13px] font-medium"
+              className="h-8 max-w-56 text-sm font-medium"
               onChange={(event) => setName(event.target.value)}
               onBlur={() => {
                 setEditingName(false);
@@ -397,7 +420,7 @@ function ProviderDetail({
               }}
             />
           ) : (
-            <h3 className="truncate text-[15px] font-medium">{providerLabel(provider.name || provider.id)}</h3>
+            <h3 className="truncate text-base font-medium">{providerLabel(provider.name || provider.id)}</h3>
           )}
           {editable && !editingName ? (
             <Button size="icon-xs" variant="ghost" onClick={() => setEditingName(true)} aria-label="重命名">
@@ -439,7 +462,7 @@ function ProviderDetail({
 
       {native ? (
         <Field label="Base URL">
-          <p className="flex h-8 items-center rounded-lg border border-dashed border-border px-3 text-[13px] text-muted-foreground">
+          <p className="flex h-8 items-center rounded-lg border border-dashed border-border px-3 text-sm text-muted-foreground">
             {provider.baseUrl}
           </p>
         </Field>
@@ -447,7 +470,7 @@ function ProviderDetail({
 
       {native ? (
         <Field label="API 格式">
-          <p className="flex h-8 items-center rounded-lg border border-dashed border-border px-3 text-[13px] text-muted-foreground">
+          <p className="flex h-8 items-center rounded-lg border border-dashed border-border px-3 text-sm text-muted-foreground">
             {provider.api}
           </p>
         </Field>
@@ -475,7 +498,7 @@ function ProviderDetail({
                 ))}
               </SelectContent>
             </Select>
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               供应商的默认协议；个别模型可在模型详情里单独指定。
             </p>
           </div>
@@ -521,7 +544,7 @@ function ProviderDetail({
 
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <Label className="text-[12px] font-normal text-muted-foreground">模型列表</Label>
+          <Label className="text-xs font-normal text-muted-foreground">模型列表</Label>
           <div className="flex items-center gap-1">
             {canManageModels ? (
               <Button size="icon-xs" variant="ghost" onClick={onAddModels} aria-label="同步模型">
@@ -536,7 +559,7 @@ function ProviderDetail({
               <div key={model.id} className="flex items-center gap-2 px-3 py-2">
                 <button
                   type="button"
-                  className="min-w-0 flex-1 truncate text-left text-[13px]"
+                  className="min-w-0 flex-1 truncate text-left text-sm"
                   onClick={() => onEditModel(model)}
                 >
                   {model.name || model.id}
@@ -547,7 +570,7 @@ function ProviderDetail({
                     {PROVIDER_API_SHORT[model.api]}
                   </Badge>
                 ) : null}
-                <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">
+                <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
                   {contextLabel(model.contextWindow)}
                 </span>
                 <Button size="icon-xs" variant="ghost" onClick={() => onEditModel(model)} aria-label="模型详情">
@@ -581,9 +604,148 @@ function ProviderDetail({
 function Field({ label, children }: { label: string; children: JSX.Element }): JSX.Element {
   return (
     <div className="space-y-1.5">
-      <Label className="text-[12px] font-normal text-muted-foreground">{label}</Label>
+      <Label className="text-xs font-normal text-muted-foreground">{label}</Label>
       {children}
     </div>
+  );
+}
+
+function CcSwitchImportDialog({
+  open,
+  onClose,
+  onImported,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onImported: (next: ProviderConfig[]) => Promise<void>;
+}): JSX.Element {
+  const [scan, setScan] = useState<CcSwitchScan | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    setScan(null);
+    void window.fastvibe.providers
+      .scanCcSwitch()
+      .then((next) => {
+        if (cancelled) return;
+        setScan(next);
+        setSelected(new Set(next.candidates.filter((item) => item.importable).map((item) => item.id)));
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(cleanError(err));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  const importable = scan?.candidates.filter((item) => item.importable) ?? [];
+  const chosen = importable.filter((item) => selected.has(item.id));
+
+  function toggle(item: CcSwitchCandidate): void {
+    if (!item.importable) return;
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(item.id)) next.delete(item.id);
+      else next.add(item.id);
+      return next;
+    });
+  }
+
+  async function importSelected(): Promise<void> {
+    if (chosen.length === 0) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onImported(await window.fastvibe.providers.importCcSwitch(chosen.map((item) => item.id)));
+    } catch (err) {
+      setError(cleanError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(next) => !next && !busy && onClose()}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>从 CC Switch 导入</DialogTitle>
+          <DialogDescription>
+            读取 ~/.cc-switch 里带 API 密钥的供应商，写入 FastVibe。密钥不会显示在界面上。
+          </DialogDescription>
+        </DialogHeader>
+        {loading ? (
+          <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
+            <HugeiconsIcon strokeWidth={2} icon={Loading03Icon} className="size-4 animate-spin" />
+            正在读取 CC Switch…
+          </div>
+        ) : !scan?.found ? (
+          <p className="py-6 text-sm text-muted-foreground">
+            未找到 CC Switch 数据库（{scan?.path || "~/.cc-switch/cc-switch.db"}）。
+          </p>
+        ) : scan.candidates.length === 0 ? (
+          <p className="py-6 text-sm text-muted-foreground">
+            没有可导入的供应商。需要 CC Switch 里带 API 密钥的自定义供应商，官方登录项会跳过。
+          </p>
+        ) : (
+          <div className="max-h-72 overflow-y-auto">
+            {scan.candidates.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                disabled={!item.importable}
+                className={cn(
+                  "flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left",
+                  item.importable ? "hover:bg-muted" : "opacity-55",
+                  selected.has(item.id) && item.importable && "bg-muted",
+                )}
+                onClick={() => toggle(item)}
+              >
+                <span
+                  className={cn(
+                    "flex size-4 shrink-0 items-center justify-center rounded-[4px] border",
+                    selected.has(item.id) && item.importable ? "border-primary bg-primary text-primary-foreground" : "border-input",
+                  )}
+                >
+                  {selected.has(item.id) && item.importable ? (
+                    <HugeiconsIcon strokeWidth={2} icon={Tick02Icon} className="size-3" />
+                  ) : null}
+                </span>
+                <span className="min-w-0 flex-1 overflow-hidden">
+                  <span className="block truncate text-sm">{item.name}</span>
+                  <span className="block truncate text-xs text-muted-foreground">
+                    {item.appLabel}
+                    {item.baseUrl ? ` · ${item.baseUrl.replace(/^https?:\/\//, "")}` : ""}
+                    {item.modelCount ? ` · ${item.modelCount} 个模型` : ""}
+                  </span>
+                </span>
+                {item.reason ? <span className="shrink-0 text-xs text-muted-foreground">{item.reason}</span> : null}
+              </button>
+            ))}
+          </div>
+        )}
+        {error ? <p className="text-xs text-destructive">{error}</p> : null}
+        <DialogFooter>
+          <Button variant="outline" disabled={busy} onClick={onClose}>
+            取消
+          </Button>
+          <Button disabled={busy || chosen.length === 0} onClick={() => void importSelected()}>
+            {busy ? <HugeiconsIcon strokeWidth={2} icon={Loading03Icon} className="size-3.5 animate-spin" /> : null}
+            导入 {chosen.length > 0 ? chosen.length : ""} 个供应商
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -614,7 +776,7 @@ function AddProviderDialog({
   return (
     <Dialog open={state !== null} onOpenChange={(open) => !open && onClose()}>
       {/* Width is fixed per view so switching source tabs never resizes the dialog. */}
-      <DialogContent className={cn("overflow-hidden", state?.candidates ? "sm:max-w-2xl" : "sm:max-w-md")}>
+      <DialogContent className={cn(state?.candidates ? "overflow-hidden sm:max-w-2xl" : "overflow-visible sm:max-w-md")}>
         <DialogHeader>
           <DialogTitle>{state?.candidates ? "选择模型" : "添加供应商"}</DialogTitle>
           <DialogDescription>
@@ -642,7 +804,7 @@ function AddProviderDialog({
                   key={mode}
                   type="button"
                   className={cn(
-                    "min-w-0 flex-1 truncate rounded-md px-2 py-1 text-[12.5px]",
+                    "min-w-0 flex-1 truncate rounded-md px-2 py-1 text-xs",
                     state.mode === mode ? "bg-background font-medium shadow-sm" : "text-muted-foreground",
                   )}
                   onClick={() => setMode(mode)}
@@ -687,7 +849,7 @@ function AddProviderDialog({
                 type="password"
                 autoComplete="off"
                 value={state.apiKey}
-                placeholder={native ? "粘贴该供应商的 API 密钥" : ""}
+                placeholder={native ? "粘贴该供应商的 API 密钥" : "sk-......"}
                 onChange={(event) => onPatch({ apiKey: event.target.value })}
               />
             </Field>
@@ -724,9 +886,9 @@ function AddProviderDialog({
 }
 
 /**
- * The pi-coding-agent built-in providers. Their model lists come from the SDK, so
- * this is a local list — no request, no key — which lets the user pick models and
- * paste a key in either order.
+ * The pi-coding-agent built-in providers as a searchable dropdown. Their model
+ * lists come from the SDK, so this is a local list — no request, no key — which
+ * lets the user pick a provider and paste a key in either order.
  */
 function NativeProviderPicker({
   providers,
@@ -739,7 +901,9 @@ function NativeProviderPicker({
   value: string | null;
   onSelect: (id: string) => void;
 }): JSX.Element {
+  const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const rootRef = useRef<HTMLDivElement>(null);
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     const matched = q
@@ -748,59 +912,109 @@ function NativeProviderPicker({
     // API-key providers first so OAuth/cloud ones don't occupy the top of an A–Z list.
     return [...matched].sort((a, b) => Number(b.supported) - Number(a.supported) || a.name.localeCompare(b.name));
   }, [providers, query]);
+  const selected = providers.find((provider) => provider.id === value);
+
+  function close(): void {
+    setOpen(false);
+    setQuery("");
+  }
+
+  useEffect(() => {
+    if (!open) return undefined;
+    function onPointerDown(event: PointerEvent): void {
+      if (rootRef.current?.contains(event.target as Node)) return;
+      close();
+    }
+    function onKeyDown(event: KeyboardEvent): void {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      close();
+    }
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [open]);
 
   return (
-    <div className="flex min-w-0 flex-col gap-2">
-      <div className="relative min-w-0">
-        <HugeiconsIcon strokeWidth={2} icon={Search01Icon} className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          value={query}
-          placeholder="搜索内置供应商"
-          className="h-8 pl-8 text-xs"
-          onChange={(event) => setQuery(event.target.value)}
-        />
-      </div>
-      <ScrollArea className="h-56 min-w-0 overflow-hidden rounded-lg border border-border">
-        {filtered.length === 0 ? (
-          <p className="py-10 text-center text-xs text-muted-foreground">没有匹配的供应商</p>
-        ) : (
-          <div className="divide-y divide-border">
-            {filtered.map((provider) => {
-              const added = addedIds.includes(provider.id);
-              const disabled = !provider.supported || added;
-              return (
-                <button
-                  key={provider.id}
-                  type="button"
-                  disabled={disabled}
-                  className={cn(
-                    "flex w-full min-w-0 items-center gap-2.5 px-3 py-2 text-left",
-                    disabled ? "opacity-55" : "hover:bg-muted/50",
-                    value === provider.id && "bg-muted/60",
-                  )}
-                  onClick={() => onSelect(provider.id)}
-                >
-                  <HugeiconsIcon strokeWidth={2} icon={CpuIcon} className="size-3.5 shrink-0 text-muted-foreground" />
-                  <span className="min-w-0 flex-1 overflow-hidden">
-                    <span className="block truncate text-[12.5px] font-medium">{provider.name}</span>
-                    <span className="block truncate text-[11px] text-muted-foreground">
-                      {!provider.supported
-                        ? provider.unsupportedReason
-                        : added
-                          ? "已添加"
-                          : `${provider.models.length} 个模型`}
-                    </span>
-                  </span>
-                  {value === provider.id ? (
-                    <HugeiconsIcon strokeWidth={2} icon={Tick02Icon} className="size-3.5 shrink-0" />
-                  ) : null}
-                </button>
-              );
-            })}
+    <Field label="供应商">
+      <div ref={rootRef} className="relative">
+        <Button
+          type="button"
+          variant="outline"
+          aria-expanded={open}
+          className="h-8 w-full min-w-0 justify-between px-2.5 font-normal"
+          onClick={() => (open ? close() : setOpen(true))}
+        >
+          <span className={cn("min-w-0 truncate", !selected && "text-muted-foreground")}>
+            {selected ? selected.name : "选择内置供应商"}
+          </span>
+          <HugeiconsIcon strokeWidth={2} icon={ArrowDown01Icon} className="size-3.5 shrink-0 text-muted-foreground" />
+        </Button>
+        {open ? (
+          <div className="absolute top-[calc(100%+0.375rem)] left-0 z-50 w-full rounded-lg bg-popover p-1 shadow-md ring-1 ring-foreground/10">
+            <div className="relative mb-0.5 px-0.5 pt-0.5">
+              <HugeiconsIcon
+                strokeWidth={2}
+                icon={Search01Icon}
+                className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
+              />
+              <Input
+                autoFocus
+                value={query}
+                placeholder="搜索内置供应商"
+                className="h-7 rounded-md border-0 bg-transparent pl-6.5 text-sm shadow-none focus-visible:ring-0"
+                onChange={(event) => setQuery(event.target.value)}
+              />
+            </div>
+            <div className="max-h-52 overflow-y-auto">
+              {filtered.length === 0 ? (
+                <p className="px-2 py-1.5 text-sm text-muted-foreground">没有匹配的供应商</p>
+              ) : (
+                filtered.map((provider) => {
+                  const added = addedIds.includes(provider.id);
+                  const disabled = !provider.supported || added;
+                  return (
+                    <button
+                      key={provider.id}
+                      type="button"
+                      disabled={disabled}
+                      className={cn(
+                        "flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left",
+                        disabled ? "opacity-55" : "hover:bg-muted",
+                        value === provider.id && "bg-muted",
+                      )}
+                      onClick={() => {
+                        onSelect(provider.id);
+                        close();
+                      }}
+                    >
+                      <HugeiconsIcon strokeWidth={2} icon={CpuIcon} className="size-3.5 shrink-0 text-muted-foreground" />
+                      <span className="min-w-0 flex-1 overflow-hidden">
+                        <span className="block truncate text-sm">{provider.name}</span>
+                        <span className="block truncate text-xs text-muted-foreground">
+                          {!provider.supported
+                            ? provider.unsupportedReason
+                            : added
+                              ? "已添加"
+                              : `${provider.models.length} 个模型`}
+                        </span>
+                      </span>
+                      {value === provider.id ? (
+                        <HugeiconsIcon strokeWidth={2} icon={Tick02Icon} className="size-3.5 shrink-0" />
+                      ) : null}
+                    </button>
+                  );
+                })
+              )}
+            </div>
           </div>
-        )}
-      </ScrollArea>
-    </div>
+        ) : null}
+      </div>
+    </Field>
   );
 }
 
@@ -1004,12 +1218,12 @@ async function saveAdd(
       add.mode === "native"
         ? await window.fastvibe.providers.addNative({ id: add.nativeId!, apiKey: add.apiKey.trim(), models })
         : await window.fastvibe.providers.add({
-            name: add.name.trim(),
-            baseUrl: add.baseUrl.trim(),
-            apiKey: add.apiKey.trim(),
-            api: add.api,
-            models,
-          });
+          name: add.name.trim(),
+          baseUrl: add.baseUrl.trim(),
+          apiKey: add.apiKey.trim(),
+          api: add.api,
+          models,
+        });
     setAdd(null);
     await onSaved(next);
   } catch (err) {

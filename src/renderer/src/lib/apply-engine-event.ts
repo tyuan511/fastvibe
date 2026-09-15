@@ -1,4 +1,4 @@
-import type { ChatMessage, EngineEvent, ToolCallBlock } from "@shared/types";
+import type { ChatMessage, CompactInfo, CompactReason, EngineEvent, ToolCallBlock } from "@shared/types";
 
 export type ApplyResult = {
   messages: ChatMessage[];
@@ -91,6 +91,44 @@ function withAssistant(messages: ChatMessage[]): { list: ChatMessage[]; assistan
 
 function appendMessage(messages: ChatMessage[], message: ChatMessage): ChatMessage[] {
   return [...messages, message];
+}
+
+const COMPACT_REASONS = new Set<CompactReason>(["manual", "threshold", "overflow"]);
+
+function compactReason(event: EngineEvent): CompactReason | undefined {
+  const reason = asString(event.reason);
+  return reason && COMPACT_REASONS.has(reason as CompactReason) ? (reason as CompactReason) : undefined;
+}
+
+function compactFromEnd(event: EngineEvent): { compact: CompactInfo; summary: string } {
+  const result = isRecord(event.result) ? event.result : undefined;
+  const error = asString(event.errorMessage);
+  const status: CompactInfo["status"] =
+    event.aborted === true ? "aborted" : error ? "error" : "done";
+  return {
+    compact: {
+      status,
+      reason: compactReason(event),
+      tokensBefore: typeof result?.tokensBefore === "number" ? result.tokensBefore : undefined,
+      tokensAfter: typeof result?.estimatedTokensAfter === "number" ? result.estimatedTokensAfter : undefined,
+      error: status === "error" ? error : undefined,
+    },
+    summary: status === "done" ? (asString(result?.summary) ?? "") : "",
+  };
+}
+
+function compactMessage(compact: CompactInfo, summary = ""): ChatMessage {
+  const text = compact.status === "error" ? (compact.error ?? "") : summary;
+  return {
+    id: crypto.randomUUID(),
+    role: "system",
+    text,
+    tools: [],
+    parts: text ? [{ kind: "text", text }] : [],
+    createdAt: Date.now(),
+    kind: "compact",
+    compact,
+  };
 }
 
 /**
@@ -315,28 +353,26 @@ export function applyEngineEvent(
 
   if (type === "compaction_start" || type === "auto_compaction_start") {
     return {
-      messages: appendMessage(next, {
-        id: crypto.randomUUID(),
-        role: "system",
-        text: "正在压缩上下文…",
-        tools: [],
-        parts: [{ kind: "text", text: "正在压缩上下文…" }],
-        createdAt: Date.now(),
-        kind: "compact",
-      }),
+      messages: appendMessage(next, compactMessage({ status: "running", reason: compactReason(event) })),
       streaming: nextStreaming,
     };
   }
 
   if (type === "compaction_end" || type === "auto_compaction_end") {
+    const { compact, summary } = compactFromEnd(event);
     const last = next.at(-1);
     if (last?.kind === "compact") {
-      const text = event.aborted === true ? "上下文压缩已取消。" : "上下文已压缩。";
+      const text = compact.status === "error" ? (compact.error ?? "") : summary;
       const list = next.slice();
-      list[list.length - 1] = { ...last, text, parts: [{ kind: "text", text }] };
+      list[list.length - 1] = {
+        ...last,
+        text,
+        parts: text ? [{ kind: "text", text }] : [],
+        compact,
+      };
       return { messages: list, streaming: nextStreaming };
     }
-    return { messages: next, streaming: nextStreaming };
+    return { messages: appendMessage(next, compactMessage(compact, summary)), streaming: nextStreaming };
   }
 
   if (type === "todo_reminder" || type === "todo_auto_clear") {

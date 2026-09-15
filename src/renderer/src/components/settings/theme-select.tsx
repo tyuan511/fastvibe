@@ -33,10 +33,10 @@ export function ThemeSelect({
 
   return (
     <Select items={items} value={value} onValueChange={(next) => onChange(next as ThemeId)}>
-      <SelectTrigger size="sm" className="w-52">
+      <SelectTrigger size="sm" className="w-44">
         <span className="flex min-w-0 items-center gap-2">
           <ThemeSwatch theme={current} />
-          <SelectValue />
+          <SelectValue className="truncate" />
         </span>
       </SelectTrigger>
       <SelectContent>
@@ -46,7 +46,7 @@ export function ThemeSelect({
               <ThemeSwatch theme={theme} />
               <span className="flex flex-col">
                 <span>{theme.label}</span>
-                <span className="text-[10.5px] text-muted-foreground">{theme.source}</span>
+                <span className="text-xs text-muted-foreground">{theme.source}</span>
               </span>
             </span>
           </SelectItem>

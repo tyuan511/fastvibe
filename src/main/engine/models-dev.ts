@@ -199,10 +199,11 @@ function decodeCost(cost: CostTuple | undefined): ModelPrice {
 
 /**
  * Translate the catalog's effort values into pi levels. `off` is deliberately absent:
- * it is not a capability the catalog reports but the absence of thinking, so the
- * effort menus add it and `models.json` never marks it unsupported. `xhigh` and `max`
- * are only offered by pi when the model maps them explicitly, so those mappings are
- * recorded even when the provider names the level the same way.
+ * it is not a capability the catalog reports but the absence of thinking, and FastVibe
+ * never requests it, because an upstream whose model reasons by default rejects the
+ * parameter. `xhigh` and `max` are only offered by pi when the model maps them
+ * explicitly, so those mappings are recorded even when the provider names the level
+ * the same way.
  */
 function decodeEfforts(levels: string[] | null): {
   thinkingLevels?: ProviderModel["thinkingLevels"];

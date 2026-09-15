@@ -9,6 +9,7 @@ import { useSessionStore } from "@/stores/session";
 import { useSettingsStore } from "@/stores/settings";
 import { useSidePaneStore, type SidePaneTab } from "@/stores/side-pane";
 import type { ChatAttachment } from "@shared/types";
+import { parseCompactCommand } from "@shared/slash";
 
 function SideChatEmpty(): JSX.Element {
   return (
@@ -16,8 +17,8 @@ function SideChatEmpty(): JSX.Element {
       <div className="flex size-10 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
         <HugeiconsIcon strokeWidth={2} icon={MessageSquareIcon} className="size-5" />
       </div>
-      <h2 className="mt-3 text-[15px] font-semibold tracking-tight">辅助对话</h2>
-      <p className="mt-1 max-w-[16rem] text-[13px] leading-5 text-muted-foreground">
+      <h2 className="mt-3 text-base font-semibold tracking-tight">辅助对话</h2>
+      <p className="mt-1 max-w-[16rem] text-sm leading-5 text-muted-foreground">
         针对当前任务单独提问，回复只留在这里，不会写入主对话。
       </p>
     </div>
@@ -70,6 +71,15 @@ export function SidePaneChat({
     const text = tab.draft?.trim();
     const id = tab.conversationId;
     if (!text || !id || tab.streaming) return;
+    if (parseCompactCommand(text)) {
+      patchTab(tab.id, { draft: "" });
+      try {
+        await window.fastvibe.engine.promptConversation(id, text);
+      } catch {
+        patchTab(tab.id, { draft: text });
+      }
+      return;
+    }
     const user = {
       id: crypto.randomUUID(),
       role: "user" as const,

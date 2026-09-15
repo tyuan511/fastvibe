@@ -36,8 +36,12 @@ const LEVEL_CLASSES = [
   "bg-emerald-600 dark:bg-emerald-400/90",
 ];
 
-const CELL = 10;
-const GAP = 2;
+/*
+ * Grid geometry, in rem so the heat map tracks the 界面字号 scale. The cell is one
+ * `text-xs` line (0.75rem) tall/wide so the caption and gutter labels fit it.
+ */
+const CELL = 0.75;
+const GAP = 0.125;
 const WEEKDAYS = ["一", "", "三", "", "五", "", "日"];
 
 export function UsageSettings(): JSX.Element {
@@ -134,33 +138,33 @@ export function UsageSettings(): JSX.Element {
       <section className="rounded-xl border border-border bg-card p-4">
         <header className="mb-3 flex flex-wrap items-end justify-between gap-2">
           <div>
-            <h3 className="text-[13px] font-medium">活跃状态</h3>
-            <p className="mt-0.5 text-[11.5px] text-muted-foreground">
+            <h3 className="text-sm font-medium">活跃状态</h3>
+            <p className="mt-0.5 text-xs text-muted-foreground">
               {stats
                 ? `${stats.from} ~ ${stats.to} · ${stats.sessions} 个会话`
                 : "按天统计的请求 / Token 活跃度"}
             </p>
           </div>
-          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <span>少</span>
             {LEVEL_CLASSES.map((tone, index) => (
-              <span key={index} className={cn("size-2.5 rounded-[2px]", tone)} />
+              <span key={index} className={cn("size-3 rounded-[2px]", tone)} />
             ))}
             <span>多</span>
           </div>
         </header>
         {failed ? (
-          <p className="py-6 text-center text-[12px] text-muted-foreground">无法读取使用统计。</p>
+          <p className="py-6 text-center text-xs text-muted-foreground">无法读取使用统计。</p>
         ) : stats ? (
           <Heatmap stats={stats} metric={metric} dimmed={loading} />
         ) : (
-          <div className="h-[110px] animate-pulse rounded-lg bg-muted/40" />
+          <div className="h-27.5 animate-pulse rounded-lg bg-muted/40" />
         )}
       </section>
 
       {stats && stats.models.length > 0 ? (
         <section className="space-y-2">
-          <h3 className="px-1 text-[13px] font-medium">模型用量</h3>
+          <h3 className="px-1 text-sm font-medium">模型用量</h3>
           <div className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">
             {stats.models.map((model) => {
               const share = stats.totals.tokens > 0 ? model.tokens / stats.totals.tokens : 0;
@@ -168,12 +172,12 @@ export function UsageSettings(): JSX.Element {
                 <div key={`${model.provider}/${model.model}`} className="px-4 py-3">
                   <div className="flex items-center justify-between gap-4">
                     <div className="min-w-0">
-                      <p className="truncate text-[12.5px] font-medium">{model.model}</p>
-                      <p className="truncate text-[11px] text-muted-foreground">{providerLabel(model.provider)}</p>
+                      <p className="truncate text-xs font-medium">{model.model}</p>
+                      <p className="truncate text-xs text-muted-foreground">{providerLabel(model.provider)}</p>
                     </div>
                     <div className="shrink-0 text-right">
-                      <p className="text-[12.5px] tabular-nums">{formatTokens(model.tokens)}</p>
-                      <p className="text-[11px] text-muted-foreground tabular-nums">
+                      <p className="text-xs tabular-nums">{formatTokens(model.tokens)}</p>
+                      <p className="text-xs text-muted-foreground tabular-nums">
                         {formatCount(model.requests)} 次 · {formatCost(model.cost)}
                       </p>
                     </div>
@@ -201,9 +205,9 @@ function StatCard({
   return (
     <Card size="sm" className="gap-0.5 py-3">
       <div className="px-3">
-        <p className="text-[11.5px] text-muted-foreground">{label}</p>
-        <p className="mt-1 text-[20px] leading-none font-semibold tabular-nums">{value}</p>
-        {hint ? <p className="mt-1.5 truncate text-[11px] text-muted-foreground">{hint}</p> : null}
+        <p className="text-xs text-muted-foreground">{label}</p>
+        <p className="mt-1 text-xl leading-none font-semibold tabular-nums">{value}</p>
+        {hint ? <p className="mt-1.5 truncate text-xs text-muted-foreground">{hint}</p> : null}
       </div>
     </Card>
   );
@@ -257,19 +261,19 @@ function Heatmap({
         className="w-fit"
         style={{
           display: "grid",
-          gridTemplateColumns: `auto repeat(${weeks.length}, ${CELL}px)`,
-          columnGap: GAP,
-          rowGap: GAP,
+          gridTemplateColumns: `auto repeat(${weeks.length}, ${CELL}rem)`,
+          columnGap: `${GAP}rem`,
+          rowGap: `${GAP}rem`,
         }}
       >
         <div />
         {months.map((month, index) => (
           // Every caption still consumes its weeks so the header row keeps the
-          // grid aligned; a month owning a single 10px column is left blank
-          // instead of clipping the glyph.
+          // grid aligned; a month owning a single column is left blank instead of
+          // clipping the glyph.
           <div
             key={index}
-            className="h-[14px] self-end text-[10px] leading-[14px] whitespace-nowrap text-muted-foreground"
+            className="self-end text-xs leading-none whitespace-nowrap text-muted-foreground"
             style={{ gridColumn: `span ${Math.max(1, month.cols)}` }}
           >
             {month.cols >= 2 ? month.label : ""}
@@ -277,7 +281,7 @@ function Heatmap({
         ))}
         {WEEKDAYS.map((label, dayIndex) => (
           <Fragment key={label || dayIndex}>
-            <div className="w-3 pr-0.5 text-right text-[9px] leading-[10px] text-muted-foreground">
+            <div className="w-3 pr-0.5 text-right text-xs leading-none text-muted-foreground">
               {label}
             </div>
             {weeks.map((week, weekIndex) => {
@@ -285,14 +289,14 @@ function Heatmap({
               const day = cell?.inRange ? dayMap.get(cell.key) : undefined;
               const value = valueOf(day);
               if (!cell || !cell.inRange) {
-                return <div key={weekIndex} className="size-2.5" />;
+                return <div key={weekIndex} className="size-3" />;
               }
               return (
                 <Tooltip key={weekIndex}>
                   <TooltipTrigger
                     render={
                       <div
-                        className={cn("size-2.5 rounded-[2px]", LEVEL_CLASSES[level(value)])}
+                        className={cn("size-3 rounded-[2px]", LEVEL_CLASSES[level(value)])}
                         aria-label={cell.key}
                       />
                     }

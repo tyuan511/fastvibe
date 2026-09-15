@@ -112,7 +112,7 @@ export function GitBranchChip({
             variant="ghost"
             size="sm"
             aria-label={`当前分支 ${status.branch}`}
-            className="h-7 max-w-56 gap-1 rounded-full px-2 text-[13px] font-normal text-muted-foreground transition-colors hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground"
+            className="h-7 max-w-56 gap-1 rounded-full px-2 text-sm font-normal text-muted-foreground transition-colors hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground"
           />
         }
       >
@@ -124,17 +124,17 @@ export function GitBranchChip({
         align="start"
         side="top"
         sideOffset={12}
-        className="w-[280px] gap-0 rounded-xl p-1 shadow-lg"
+        className="w-70 gap-0 rounded-xl p-1 shadow-lg"
       >
         {creating ? (
           <div className="p-1">
-            <div className="px-2 pb-1 pt-0.5 text-[11px] font-medium text-muted-foreground">新分支名称</div>
+            <div className="px-2 pb-1 pt-0.5 text-xs font-medium text-muted-foreground">新分支名称</div>
             <Input
               autoFocus
               value={newName}
               placeholder="例如 feature/login"
               disabled={busy}
-              className="h-7 rounded-md text-[13px]"
+              className="h-7 rounded-md text-sm"
               onChange={(event) => setNewName(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
@@ -152,7 +152,7 @@ export function GitBranchChip({
                 type="button"
                 variant="ghost"
                 size="sm"
-                className="h-6 rounded-full px-2 text-[12.5px] font-normal text-muted-foreground"
+                className="h-6 rounded-full px-2 text-xs font-normal text-muted-foreground"
                 onClick={() => setCreating(false)}
               >
                 取消
@@ -160,7 +160,7 @@ export function GitBranchChip({
               <Button
                 type="button"
                 size="sm"
-                className="h-6 rounded-full px-2 text-[12.5px]"
+                className="h-6 rounded-full px-2 text-xs"
                 disabled={busy || !newName.trim()}
                 onClick={() => void createAndCheckout()}
               >
@@ -180,14 +180,14 @@ export function GitBranchChip({
                 autoFocus
                 value={query}
                 placeholder="搜索分支"
-                className="h-7 rounded-md border-0 bg-transparent pl-6.5 text-[13px] shadow-none focus-visible:ring-0"
+                className="h-7 rounded-md border-0 bg-transparent pl-6.5 text-sm shadow-none focus-visible:ring-0"
                 onChange={(event) => setQuery(event.target.value)}
               />
             </div>
-            <div className="px-2 py-0.5 text-[11px] font-medium text-muted-foreground">分支</div>
+            <div className="px-2 py-0.5 text-xs font-medium text-muted-foreground">分支</div>
             <div className="max-h-52 overflow-y-auto">
               {branches === null ? (
-                <div className="px-2 py-1.5 text-[13px] text-muted-foreground">读取分支…</div>
+                <div className="px-2 py-1.5 text-sm text-muted-foreground">读取分支…</div>
               ) : filtered.length > 0 ? (
                 filtered.map((item) => (
                   <button
@@ -195,7 +195,7 @@ export function GitBranchChip({
                     type="button"
                     disabled={busy}
                     className={cn(
-                      "flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-[13px] transition-colors hover:bg-muted disabled:opacity-60",
+                      "flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm transition-colors hover:bg-muted disabled:opacity-60",
                       item.current && "bg-muted font-medium",
                     )}
                     onClick={() => {
@@ -218,14 +218,14 @@ export function GitBranchChip({
                   </button>
                 ))
               ) : (
-                <div className="px-2 py-1.5 text-[13px] text-muted-foreground">没有匹配的分支</div>
+                <div className="px-2 py-1.5 text-sm text-muted-foreground">没有匹配的分支</div>
               )}
             </div>
-            {error ? <div className="px-2 pb-1 text-[12px] text-destructive">{error}</div> : null}
+            {error ? <div className="px-2 pb-1 text-xs text-destructive">{error}</div> : null}
             <div className="my-0.5 border-t border-border" />
             <button
               type="button"
-              className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-[13px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
               onClick={() => {
                 setNewName(query.trim());
                 setQuery("");

@@ -265,6 +265,17 @@ export const MESSAGES: ChatMessage[] = [
     createdAt: NOW - 21 * MINUTE,
   },
   {
+    id: "msg-compact",
+    role: "system",
+    text:
+      "User asked to add a system-following theme mode in Settings. Located theme-select and themes.ts, then added a themeMode setting (light / dark / system) persisted in settings.json. useThemeSync now listens to prefers-color-scheme when mode is system.",
+    tools: [],
+    parts: [],
+    createdAt: NOW - 20 * MINUTE,
+    kind: "compact",
+    compact: { status: "done", reason: "threshold", tokensBefore: 128_000, tokensAfter: 24_400 },
+  },
+  {
     id: "msg-u2",
     role: "user",
     text: "顺便加个 ⌘J 快捷键，快速在亮色和暗色之间切换。",
@@ -309,12 +320,12 @@ export const STATS: SessionStats = {
 };
 
 export const MODELS: FastVibeModel[] = [
-  { provider: "fastvibe", providerName: "FastVibe", id: "deepseek-flash", name: "DeepSeek Flash", thinkingLevels: ["off", "low", "medium", "high"] },
-  { provider: "fastvibe", providerName: "FastVibe", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5", thinkingLevels: ["off", "low", "medium", "high"] },
-  { provider: "fastvibe", providerName: "FastVibe", id: "claude-opus-4-1", name: "Claude Opus 4.1", thinkingLevels: ["off", "low", "medium", "high"] },
-  { provider: "fastvibe", providerName: "FastVibe", id: "gpt-5", name: "GPT-5", thinkingLevels: ["off", "minimal", "low", "medium", "high"] },
-  { provider: "fastvibe", providerName: "FastVibe", id: "gemini-2.5-pro", name: "Gemini 2.5 Pro", thinkingLevels: ["off", "low", "medium", "high"] },
-  { provider: "deepseek", providerName: "DeepSeek", id: "deepseek-chat", name: "DeepSeek V3.2", thinkingLevels: ["off", "low", "medium", "high"] },
+  { provider: "fastvibe", providerName: "FastVibe", id: "deepseek-flash", name: "DeepSeek Flash", thinkingLevels: ["low", "medium", "high"] },
+  { provider: "fastvibe", providerName: "FastVibe", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5", thinkingLevels: ["low", "medium", "high"] },
+  { provider: "fastvibe", providerName: "FastVibe", id: "claude-opus-4-1", name: "Claude Opus 4.1", thinkingLevels: ["low", "medium", "high"] },
+  { provider: "fastvibe", providerName: "FastVibe", id: "gpt-5", name: "GPT-5", thinkingLevels: ["minimal", "low", "medium", "high"] },
+  { provider: "fastvibe", providerName: "FastVibe", id: "gemini-2.5-pro", name: "Gemini 2.5 Pro", thinkingLevels: ["low", "medium", "high"] },
+  { provider: "deepseek", providerName: "DeepSeek", id: "deepseek-chat", name: "DeepSeek V3.2", thinkingLevels: ["low", "medium", "high"] },
 ];
 
 export const COMMANDS: SlashCommand[] = [
@@ -358,7 +369,9 @@ export const INSTALLED_PACKAGES: ExtensionPackage[] = [
   { source: "npm:@narumitw/pi-plan-mode", scope: "user", installedPath: "/Users/dev/FastVibe/runtime/engine/agent/packages/pi-plan-mode", builtin: false, loaded: true, commands: 2, tools: 1 },
   { source: "builtin:plan", scope: "user", builtin: true, loaded: true, commands: 1, tools: 1 },
   { source: "builtin:goal", scope: "user", builtin: true, loaded: true, commands: 1, tools: 1 },
+  { source: "builtin:todo", scope: "user", builtin: true, loaded: true, commands: 0, tools: 1 },
   { source: "builtin:permission-sandbox", scope: "user", builtin: true, loaded: true, commands: 0, tools: 0 },
+  { source: "builtin:session-title", scope: "user", builtin: true, loaded: true, commands: 0, tools: 0 },
 ];
 
 export const MARKET_PACKAGES: MarketPackage[] = [

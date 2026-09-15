@@ -26,6 +26,7 @@ Runtime data lives under the app userData directory:
   runtime/engine/
     agent/sessions       session transcripts, passed to the SDK's SessionManager
     reasoning.json       thinking-block start/end times Main timed from the live stream
+    usage-ledger.jsonl   append-only record of finalized turns, so 使用统计 survives deletion
     wt                   git worktrees for isolated conversations
     scratch              workspace for conversations not bound to a project
 ```
@@ -66,9 +67,11 @@ and the future project file tree.
   surface loads these icons.
 - The right pane's **文件** tab (`components/layout/side-pane-files.tsx`) is the
   consumer: a lazily-loaded project tree (`workspace:read-dir`, hiding `.git` and
-  `node_modules`) that swaps to a file preview. Clicking a file anywhere in a
-  conversation routes through `openPreview` → `openFilePreview`, so it opens in
-  this same view rather than a separate tab.
+  `node_modules`). Narrow panes swap between the tree and a file preview; when
+  the pane is wide enough (`@min-[32rem]/files`) the preview sits on the left
+  and the tree stays on the right. Clicking a file anywhere in a conversation
+  routes through `openPreview` → `openFilePreview`, so it opens in this same
+  view rather than a separate tab.
 
 ### Code highlighting
 
@@ -109,6 +112,27 @@ The app ships light **and** dark themes; never assume light.
 - To add a theme, append a `ThemeSeed` to `SEEDS` in `themes.ts` and list its id in
   `LIGHT_THEME_IDS` / `DARK_THEME_IDS`. No CSS changes required.
 
+### Type scale & interface size
+
+- **Use Tailwind's own `text-*` utilities** (`text-xs` / `text-sm` / `text-base` /
+  `text-xl` / `text-2xl`), never arbitrary `text-[13px]` values. shadcn Nova's
+  primitives are authored against that same scale, so product code that invents
+  its own sizes drifts away from the components it composes. Conversation text is
+  `text-sm`: the message body **and** everything a tool call renders (the summary
+  row, output/parameter blocks, diffs, thinking, todo and question cards) so the
+  transcript reads at one size. `text-xs` is for chrome — timestamps, chips,
+  badges, menus, dense stats.
+- Sizes are **rem-based** and the root font size is a setting: 通用 → 外观 →
+  界面字号 writes `--ui-root-font-size` inline on `<html>`, and `html { font-size:
+  var(--ui-root-font-size, 16px) }` turns that one number into an interface-wide
+  scale (`applyUiFontSize` in `themes.ts`, called from `useThemeSync` and before
+  mount in `main.tsx`). At the 16px default the `text-sm` body is 14px. Fixed px
+  sizes do **not** follow it — prefer Tailwind spacing/`rem` (e.g. `h-3.5`, `w-70`)
+  over `h-[14px]` for anything that must scale.
+- Two exceptions need px by nature: xterm's `fontSize` (derived from the resolved
+  root size in `side-pane-terminal.tsx`) and container-query breakpoints, which are
+  written in `rem` (`min-[27.5rem]`) so they track the setting too.
+
 ## Routing
 
 `react-router` with **`HashRouter`** (wrapped in `src/renderer/src/main.tsx`). The
@@ -116,10 +140,13 @@ production renderer is loaded over `file://` via `window.loadFile`, so path-base
 history has nothing to fall back to — a reload on `/settings/providers` would 404.
 
 - `#/` — the workspace shell (sidebar + thread + composer). Always mounted.
+- `#/c/<id>` — a conversation. Switching chats, new chats, and the sidebar's
+  back/forward buttons walk this as real HashRouter history (mouse side buttons too).
 - `#/settings/<section>` — a settings pane, rendered **over** the shell so app state
   survives. Sections come from `SETTINGS_SECTIONS` in `settings-dialog.tsx`
-  (currently `general | chat | archived | usage | providers | mcp | skills | extensions | about`);
+  (currently `general | shortcuts | archived | usage | providers | mcp | skills | extensions | about`);
   `App.tsx` derives the valid set from that export, so adding a pane needs no routing change.
+  Section switches `replace`; opening settings pushes, so back returns to the chat.
 - Unknown or missing sections normalise to `#/settings/general` via a redirect effect
   in `App.tsx`.
 - To deep-link into a pane, `navigate("/settings/providers")`. The composer's
@@ -174,6 +201,13 @@ refreshes its metadata without reverting the edits.
 `off | minimal | low | medium | high | xhigh | max`. models.dev's effort values map
 onto it one-to-one (`models-dev.ts`), recording the provider value in `effortMap`
 (pi's `thinkingLevelMap`) wherever the names differ.
+**`off` is never offered.** The engine's set contains it, but asking an upstream to
+*disable* thinking is rejected by models that reason by default, so no menu in the app
+offers it (`THINKING_EFFORT_LEVELS` is what gets stored, tuned and listed) and
+`settings.thinkingLevel: "off"` from an older build is dropped on load — 跟随模型默认
+is the "leave the parameter alone" choice. `THINKING_LABELS.off` stays so the composer
+can still name a session the engine reports as off (a non-reasoning model, a restored
+transcript).
 `renderModelsJson` then writes a `thinkingLevelMap` for any model the user tuned:
 unchecked levels become `null` (the engine clamps instead of sending a rejected
 parameter), `xhigh` and `max` always carry a mapping because pi only offers either
@@ -185,14 +219,19 @@ engine is gone because the SDK never read them.
 ## Plugins & extensions
 
 FastVibe hosts pi extensions (the SDK's plugin system) and bridges their
-terminal-only surface onto the GUI. Three **built-in** extensions ship with the app
-(`resources/extensions/plan.ts`, `goal.ts`, `permission-sandbox.ts`); anything else
+terminal-only surface onto the GUI. Five **built-in** extensions ship with the app
+(`resources/extensions/plan.ts`, `goal.ts`, `todo.ts`, `permission-sandbox.ts`, `session-title.ts`); anything else
 the user installs at runtime via 设置 → 插件, which writes to the isolated `agentDir`
 (`ExtensionManager` → SDK `DefaultPackageManager`), never `~/.pi`.
 
 - **Built-ins** — `plan.ts` and `goal.ts` are FastVibe's own replacements for the
   `@narumitw/pi-plan-mode` / `pi-goal-x` packages (deliberately not bundled as
-  dependencies). Only `/plan` and `/goal` are registered.
+  dependencies). Only `/plan` and `/goal` are registered. `todo.ts` is always on
+  (no slash command): the model replaces the whole list each call.
+  `session-title.ts` is also always on: the first user prompt is summarised into
+  a short title via a fire-and-forget `modelRegistry.complete` call, then
+  `pi.setSessionName`. Manual sidebar renames set `titleManual` so they are not
+  overwritten. Parallel runs and side chats name the session up front and are skipped.
   - **Plan** narrows the active tools to the read-only set (`read/grep/find/ls`)
     and, on each plan turn, appends a planning instruction on `before_agent_start`.
     Entering the mode lazily registers and enables a `question` tool (removed again
@@ -216,6 +255,16 @@ the user installs at runtime via 设置 → 插件, which writes to the isolated
     from the palette without an objective) only arms the mode: it publishes a
     `goal-armed` status that the composer shows as a badge next to plan mode's, and
     the objective is taken from the user's next message in `before_agent_start`.
+  - **Todo** is Claude Code's TodoWrite as a pi tool (`todo`). The model submits
+    the complete list every time (`pending` / `in_progress` / `completed` /
+    `cancelled`; at most one `in_progress`). State is stored in tool-result
+    `details` and reconstructed on `session_start` / `session_tree`, so a branch
+    sees the list from that point in history. Unfinished items are injected on
+    `before_agent_start` so they survive compaction. The transcript already
+    renders a tool named `todo` as a checklist card; `TodoPanel` above the
+    composer reads `latestTodos` from the thread and hides once every item is
+    done or cancelled. The sandbox treats `todo` as read-only, so `ask` mode
+    does not confirm it.
 - **Permission sandbox** — `permission-sandbox.ts` is the enforcement half of the
   composer's three modes (`ask` 请求批准 / `smart` 帮我批准 / `full` 完全访问权限).
   It hooks `tool_call`, classifies each call (network rules, out-of-workspace
@@ -329,6 +378,32 @@ pnpm shadcn add <component> -y
   `extraResources`. If the snapshot is missing, models fall back to defaults
   (128K context / 8192 output / text-only) and the settings About page shows it as missing.
 - Run `pnpm sync:models -- --force` before a release to refresh the snapshot.
+
+## Usage statistics (使用统计)
+
+Settings → 使用统计 (`components/settings/usage-settings.tsx`) is fed by
+`collectUsageStats` (`src/main/engine/usage-stats.ts`) over the `stats:usage` channel.
+
+- **Two sources, one union.** The pane is rebuilt from the engine's session
+  transcripts, *plus* `usage-ledger.jsonl`. Deleting a conversation unlinks its
+  transcript (`PiProcessManager.deleteConversation`), which used to silently rewrite
+  history; the ledger is what keeps it. A live transcript is the primary source and the
+  ledger only adds turns whose file is gone; the two are deduplicated by
+  `sessionId` + entry id (`turnKey`). Branching is safe because FastVibe branches in
+  place (`navigateTree`) and never calls the SDK's `createBranchedSession`, so a session
+  id — and therefore the key — is stable.
+- **The ledger stores raw usage, never a price.** `UsageLedger` (`usage-ledger.ts`)
+  appends one line per finalized assistant turn (tokens, model, engine-reported cost,
+  timestamp, tool-call count) as the turn lands, and `capture()` folds a whole
+  transcript in before it is unlinked (pre-ledger history included). `usage-stats.ts`
+  re-prices every turn at read time against the *current* price table, so a provider
+  edit re-prices the ledger and the transcripts alike; storing a price would freeze it.
+- **The ledger is a supplement, not the source of truth.** Tokens and cost are always
+  recomputed from raw fields, and `parseSessionTurns` is memoised on `mtimeMs` + `size`.
+  If the ledger is missing or corrupt, statistics simply fall back to the transcripts —
+  they are never *less* correct than before, only less complete after a deletion.
+- Appends are synchronous (one line per turn) so a capture that precedes an `unlink` is
+  durable before the file disappears; `flush()` is a no-op kept for the shutdown path.
 
 ## Product constraints
 

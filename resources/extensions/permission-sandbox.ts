@@ -38,7 +38,7 @@ const MODE_DESCRIPTIONS: Record<PermissionMode, string> = {
 };
 
 /** Tools with no side effects; they are never worth a confirmation. */
-const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
+const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls", "todo"]);
 
 /** Built-in tools this extension knows how to classify. */
 const KNOWN_TOOLS = new Set(["read", "write", "edit", "bash", "powershell", "grep", "find", "ls"]);

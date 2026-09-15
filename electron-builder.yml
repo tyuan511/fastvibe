@@ -5,29 +5,34 @@ copyright: Copyright © 2026 FastVibe
 directories:
   buildResources: resources
   output: release
+  # Two-package.json layout. `scripts/stage-app.mjs` copies only package.json +
+  # out/ here so the asar cannot pick up src/, docs/, tarballs, or other repo
+  # files. Production node_modules are still collected from the project.
+  app: build/app
 
+# Staging is already an allowlist. Ignore-only globs still add `**/*`, which is
+# safe here. Production node_modules are always collected on top of this list.
 files:
-  - "!**/.vscode/*"
-  - "!src/**"
-  - "!scripts/**"
-  - "!docs/**"
-  - "!brand/**"
-  - "!resources/**"
-  - "!electron.vite.config.{js,ts,mjs,cjs}"
-  - "!vite.config.ts"
-  - "!components.json"
-  - "!pnpm-lock.yaml"
-  - "!pnpm-workspace.yaml"
-  - "!{.env,.env.*,.npmrc}"
-  - "!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}"
+  - "**/*"
   - "!**/*.map"
+  # Non-runtime files inside production dependencies. Brace form is what
+  # electron-builder's minimatch actually excludes.
+  - "!**/node_modules/**/{docs,doc,example,examples,test,tests,__tests__,powered-test,coverage,.github}{,/**/*}"
+  - "!**/node_modules/**/*.{test,spec}.{js,cjs,mjs,ts}"
+  - "!**/node_modules/node-pty/{src,deps,scripts,third_party}{,/**/*}"
+  - "!**/node_modules/koffi/{src,doc,vendor}{,/**/*}"
+  - "!**/node_modules/@earendil-works/pi-coding-agent/{docs,examples,dist/bundle}{,/**/*}"
+  - "!**/node_modules/openai/src{,/**/*}"
+  - "!**/node_modules/@anthropic-ai/sdk/src{,/**/*}"
+  - "!**/node_modules/@mistralai/mistralai/{src,tests,examples}{,/**/*}"
+  - "!**/node_modules/@google/genai/dist/web{,/**/*}"
 
 # Runtime assets are looked up under process.resourcesPath (src/main/index.ts,
 # src/main/engine/models-dev.ts), so they must live outside the asar archive.
 extraResources:
   - from: resources/models-dev
     to: models-dev
-  # Built-in pi extensions (`/plan`, `/goal`) are loaded by path at runtime, so
+  # Built-in pi extensions (`/plan`, `/goal`, todo, session-title) are loaded by path at runtime, so
   # they must stay outside the asar archive.
   - from: resources/extensions
     to: extensions
@@ -36,26 +41,46 @@ extraResources:
   - from: resources/icon.png
     to: icon.png
 
-# Native addons and wasm assets cannot be loaded from inside an asar archive.
+# Only unpack what cannot load from asar. Unpacking a whole package (koffi,
+# node-pty, …) would leave every other-arch binary uncompressed on disk.
 asarUnpack:
   - "**/*.node"
-  - node_modules/node-pty/**
-  - node_modules/koffi/**
-  - node_modules/@silvia-odwyer/photon-node/**
-  - node_modules/@mariozechner/clipboard/**
-  - node_modules/@mariozechner/clipboard-*/**
+  - "**/*.wasm"
+  - "**/node-pty/prebuilds/**"
 
 # node-pty / koffi / photon ship N-API prebuilds that already work in Electron.
 # Avoid running node-gyp against a toolchain the CI image may not have.
 npmRebuild: false
+
+# Chromium ships ~45 MB of locale.pak files; the UI is zh-CN with English fallback.
+electronLanguages:
+  - en
+  - zh_CN
+  - zh_TW
 
 mac:
   icon: resources/icon.icns
   category: public.app-category.developer-tools
   # Local builds must never sign: without this, electron-builder discovers a
   # Developer ID in the login keychain and signs/notarizes the dev build.
+  # Packaged Mac updates do not go through Squirrel.Mac (that needs a Developer
+  # ID Apple trusts); the app swaps the .app from the GitHub zip instead.
   identity: null
   notarize: false
+  files:
+    - "!**/node_modules/node-pty/prebuilds/{win32,linux}-*/**"
+    - "!**/node_modules/node-pty/prebuilds/darwin-!(${arch}){,/**/*}"
+    - "!**/node_modules/koffi/build/koffi/{win32,linux,freebsd,openbsd,musl}_*/**"
+    - "!**/node_modules/koffi/build/koffi/darwin_!(${arch}){,/**/*}"
+    - "!**/node_modules/@earendil-works/pi-tui/native/{win32,linux}{,/**/*}"
+    - "!**/node_modules/@earendil-works/pi-tui/native/darwin/src{,/**/*}"
+    - "!**/node_modules/@earendil-works/pi-tui/native/darwin/{build.sh,README.md}"
+    - "!**/node_modules/@earendil-works/pi-tui/native/darwin/prebuilds/darwin-!(${arch}){,/**/*}"
+    - "!**/node_modules/@mariozechner/clipboard-{win32,linux}-*/**"
+    # Keep universal as the cross-arch fallback (CI builds x64 on arm64 macos
+    # runners, which may not have clipboard-darwin-x64 installed). Drop the
+    # other arch's package; the loader tries universal first, then ${arch}.
+    - "!**/node_modules/@mariozechner/clipboard-darwin-!(${arch}|universal){,/**/*}"
   target:
     - target: dmg
       arch:
@@ -68,6 +93,17 @@ mac:
 
 win:
   icon: resources/icon.png
+  files:
+    - "!**/node_modules/node-pty/prebuilds/{darwin,linux}-*/**"
+    - "!**/node_modules/node-pty/prebuilds/win32-!(${arch}){,/**/*}"
+    - "!**/node_modules/koffi/build/koffi/{darwin,linux,freebsd,openbsd,musl}_*/**"
+    - "!**/node_modules/koffi/build/koffi/win32_!(${arch}){,/**/*}"
+    - "!**/node_modules/@earendil-works/pi-tui/native/{darwin,linux}{,/**/*}"
+    - "!**/node_modules/@earendil-works/pi-tui/native/win32/src{,/**/*}"
+    - "!**/node_modules/@earendil-works/pi-tui/native/win32/{build.mjs,README.md}"
+    - "!**/node_modules/@earendil-works/pi-tui/native/win32/prebuilds/win32-!(${arch}){,/**/*}"
+    - "!**/node_modules/@mariozechner/clipboard-{darwin,linux}-*/**"
+    - "!**/node_modules/@mariozechner/clipboard-win32-!(${arch}*){,/**/*}"
   target:
     - target: nsis
       arch:
@@ -80,6 +116,21 @@ nsis:
 linux:
   icon: resources/icon.png
   category: Development
+  files:
+    - "!**/node_modules/node-pty/prebuilds/{darwin,win32}-*/**"
+    - "!**/node_modules/node-pty/prebuilds/linux-!(${arch}){,/**/*}"
+    - "!**/node_modules/koffi/build/koffi/{darwin,win32,freebsd,openbsd,musl}_*/**"
+    - "!**/node_modules/koffi/build/koffi/linux_!(${arch}){,/**/*}"
+    - "!**/node_modules/@earendil-works/pi-tui/native/{darwin,win32}{,/**/*}"
+    - "!**/node_modules/@mariozechner/clipboard-{darwin,win32}-*/**"
+    - "!**/node_modules/@mariozechner/clipboard-linux-!(${arch}*){,/**/*}"
   target:
     - AppImage
     - deb
+
+# Baked into app-update.yml so electron-updater can find GitHub releases.
+# Packaging still uses `--publish never`; CI uploads assets via action-gh-release.
+publish:
+  provider: github
+  owner: tyuan511
+  repo: fastvibe

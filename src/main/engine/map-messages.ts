@@ -40,6 +40,22 @@ export function mapEngineMessages(
       });
       continue;
     }
+    if (message.role === "compactionSummary") {
+      const summary = typeof message.summary === "string" ? message.summary : "";
+      const tokensBefore = typeof message.tokensBefore === "number" ? message.tokensBefore : undefined;
+      const createdAt = typeof message.timestamp === "number" ? message.timestamp : Date.now();
+      output.push({
+        id: idOf?.(entry) ?? `compact:${createdAt}`,
+        role: "system",
+        text: summary,
+        tools: [],
+        parts: summary ? [{ kind: "text", text: summary }] : [],
+        createdAt,
+        kind: "compact",
+        compact: { status: "done", tokensBefore },
+      });
+      continue;
+    }
     if (message.role === "toolResult") {
       const id = String(message.toolCallId ?? "");
       const result = toolText(message.content ?? message.result ?? message.output);

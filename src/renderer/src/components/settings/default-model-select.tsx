@@ -67,7 +67,7 @@ export function DefaultModelSelect({
     <DropdownMenu>
       <DropdownMenuTrigger
         render={
-          <Button variant="outline" size="sm" className="max-w-56 gap-1.5 font-normal">
+          <Button variant="outline" size="sm" className="w-44 justify-between gap-1.5 font-normal">
             <span className="truncate">{label}</span>
             <HugeiconsIcon strokeWidth={2} icon={ArrowDown01Icon} className="size-3.5 shrink-0" />
           </Button>

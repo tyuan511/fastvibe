@@ -22,6 +22,8 @@ export type FastVibePaths = {
   settingsFile: string;
   /** Per-thinking-block durations, which the engine's transcripts do not record. */
   reasoningFile: string;
+  /** Append-only record of finalized turns, so 使用统计 survives session deletion. */
+  usageLedgerFile: string;
 };
 
 export function getFastVibePaths(): FastVibePaths {
@@ -54,5 +56,6 @@ export function getFastVibePaths(): FastVibePaths {
     mcpFile: join(userData, "mcp.json"),
     settingsFile: join(userData, "settings.json"),
     reasoningFile: join(runtimeRoot, "reasoning.json"),
+    usageLedgerFile: join(runtimeRoot, "usage-ledger.jsonl"),
   };
 }

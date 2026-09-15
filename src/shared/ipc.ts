@@ -47,7 +47,7 @@ export const Ipc = {
   conversationsDelete: "conversations:delete",
   conversationsRecordPrompt: "conversations:record-prompt",
   conversationsSetProject: "conversations:set-project",
-  conversationsMultiRun: "conversations:multi-run",
+  conversationsSearch: "conversations:search",
   conversationReady: "conversations:ready",
   projectsAdd: "projects:add",
   projectsRename: "projects:rename",
@@ -73,6 +73,11 @@ export const Ipc = {
   workspaceTerminalResize: "workspace:terminal-resize",
   workspaceTerminalKill: "workspace:terminal-kill",
   workspaceTerminalData: "workspace:terminal-data",
+  /** Main-process browser-use bridge (extension tool ↔ renderer webview). */
+  browserRequest: "browser:request",
+  browserResponse: "browser:response",
+  browserListProfiles: "browser:list-profiles",
+  browserImportProfile: "browser:import-profile",
   enginePromptConversation: "engine:prompt-conversation",
   engineGetConversationMessages: "engine:get-conversation-messages",
   conversationsCreateSide: "conversations:create-side",
@@ -83,6 +88,11 @@ export const Ipc = {
   settingsGetSync: "settings:get-sync",
   settingsSet: "settings:set",
   settingsClear: "settings:clear",
+  updateGetState: "update:get-state",
+  updateCheck: "update:check",
+  updateDownload: "update:download",
+  updateInstall: "update:install",
+  updateState: "update:state",
   providersList: "providers:list",
   providersNative: "providers:native",
   providersFetch: "providers:fetch",
@@ -93,6 +103,8 @@ export const Ipc = {
   providersRemove: "providers:remove",
   providersRefresh: "providers:refresh",
   providersTest: "providers:test",
+  providersCcSwitchScan: "providers:cc-switch-scan",
+  providersCcSwitchImport: "providers:cc-switch-import",
 } as const;
 
 export type AppInfo = {
@@ -106,6 +118,32 @@ export type AppInfo = {
     generatedAt: number;
     path: string;
   };
+};
+
+export type AppUpdateStatus =
+  | "idle"
+  | "disabled"
+  | "checking"
+  | "available"
+  | "not-available"
+  | "downloading"
+  | "downloaded"
+  | "error";
+
+export type AppUpdateProgress = {
+  percent: number;
+  bytesPerSecond: number;
+  transferred: number;
+  total: number;
+};
+
+export type AppUpdateState = {
+  status: AppUpdateStatus;
+  currentVersion: string;
+  availableVersion?: string;
+  releaseNotes?: string;
+  progress?: AppUpdateProgress;
+  error?: string;
 };
 
 export type GitStatus = {

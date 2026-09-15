@@ -1,4 +1,14 @@
-import { memo, useEffect, useRef, useState, type JSX } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type JSX,
+  type MutableRefObject,
+} from "react";
+import { motion, useMotionValue, useReducedMotion, useSpring, useTransform, type MotionValue } from "motion/react";
 import { useMessageScroller } from "@/components/ui/message-scroller";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -39,6 +49,43 @@ function densityOf(count: number): { hit: string; bar: string; gap: string } {
   return { hit: "h-px", bar: "h-px", gap: "gap-0" };
 }
 
+/**
+ * Dock magnification.
+ *
+ * Hovering the rail grows the ticks near the pointer the way the macOS Dock grows
+ * its icons: the tick under the cursor is full length and its neighbours taper off
+ * with distance. A tick's length is a pure function of how far the cursor is along
+ * the rail — not of which tick happens to be hovered — so the lens follows the
+ * pointer instead of snapping between marks.
+ */
+const DOCK = {
+  /** Length at rest, and under the pointer. */
+  rest: 8,
+  full: 30,
+  /** Rested length of the current turn's tick, a little longer than the rest. */
+  activeRest: 14,
+  /** Ticks within this many px of the pointer grow at all. */
+  reach: 90,
+  /** Falloff: 1 at the pointer, 0 at `reach`. Higher = tighter spotlight. */
+  falloff: 2,
+  /** Pointer follow: stiff enough to feel attached, springy enough to float. */
+  follow: { stiffness: 520, damping: 34, mass: 0.7 },
+  /** Rest-to-magnified blend on hover in/out. */
+  hover: { stiffness: 320, damping: 30 },
+} as const;
+
+/** Gutter that holds the longest tick plus its left padding. The nav is always
+ *  this wide, so hovering never shifts the transcript or reflows the marks. */
+const RAIL_WIDTH = 44;
+
+/** A tick's length in px for a pointer that many px away along the rail. */
+function dockWidth(distance: number, base: number): number {
+  if (distance >= DOCK.reach) return base;
+  const t = 1 - distance / DOCK.reach;
+  const eased = Math.pow(t, DOCK.falloff);
+  return base + (DOCK.full - base) * eased;
+}
+
 function sameMarkers(a: TurnMarker[], b: TurnMarker[]): boolean {
   if (a === b) return true;
   if (a.length !== b.length) return false;
@@ -66,23 +113,46 @@ function Tick({
   active,
   hit,
   bar,
+  pointerY,
+  hover,
+  centers,
+  tickRef,
 }: {
   marker: TurnMarker;
   index: number;
   active: boolean;
   hit: string;
   bar: string;
+  /** Smoothed pointer position down the rail, in viewport px. */
+  pointerY: MotionValue<number>;
+  /** 0 at rest, 1 while the rail is hovered. */
+  hover: MotionValue<number>;
+  /** Measured tick centres, shared with the rail so nothing measures per frame. */
+  centers: MutableRefObject<number[]>;
+  tickRef: (element: HTMLButtonElement | null) => void;
 }): JSX.Element {
   const { scrollToMessage } = useMessageScroller();
+
+  // Length is a function of the pointer's distance from this tick's centre. Both
+  // motion values are read inside so motion re-runs this on every frame without a
+  // React render; the centre comes from the rail's cached layout measurement.
+  const width = useTransform(() => {
+    const base = active ? DOCK.activeRest : DOCK.rest;
+    const y = pointerY.get();
+    const distance = Math.abs(y - (centers.current[index] ?? 0));
+    return base + (dockWidth(distance, base) - base) * hover.get();
+  });
+
   return (
     <Tooltip>
       <TooltipTrigger
         render={
           <button
+            ref={tickRef}
             type="button"
             aria-label={`第 ${index + 1} 轮 · ${marker.prompt}`}
             aria-current={active ? "true" : undefined}
-            className={cn("group/tick flex w-6 items-center justify-start", hit)}
+            className={cn("group/tick flex w-full items-center justify-start", hit)}
             onClick={(event) => {
               // Drop focus so the tooltip does not linger over the destination.
               event.currentTarget.blur();
@@ -91,14 +161,15 @@ function Tick({
           />
         }
       >
-        <span
+        <motion.span
           className={cn(
-            // Short ticks that grow on hover: the rail reads as a quiet scale,
-            // and only the turn you are on claims a longer line.
-            "block rounded-full transition-[width,background-color] duration-150",
+            // The rail is a quiet scale at rest; the dock grows the ticks near the
+            // pointer. Width is a motion value, so no CSS width transition here.
+            "block rounded-full",
             bar,
-            active ? "w-3.5 bg-foreground" : "w-2 bg-muted-foreground/35 group-hover/tick:w-3 group-hover/tick:bg-muted-foreground",
+            active ? "bg-foreground" : "bg-muted-foreground/35 group-hover/tick:bg-muted-foreground",
           )}
+          style={{ width }}
         />
       </TooltipTrigger>
       <TooltipContent
@@ -107,9 +178,9 @@ function Tick({
         sideOffset={10}
         className="w-80 max-w-80 flex-col items-stretch px-3 py-2.5"
       >
-        <p className="line-clamp-2 text-[12.5px] leading-5 font-medium text-foreground">{marker.prompt}</p>
+        <p className="line-clamp-2 text-xs leading-5 font-medium text-foreground">{marker.prompt}</p>
         {marker.reply ? (
-          <p className="mt-1 line-clamp-3 text-[12px] leading-5 text-muted-foreground">{marker.reply}</p>
+          <p className="mt-1 line-clamp-3 text-xs leading-5 text-muted-foreground">{marker.reply}</p>
         ) : null}
       </TooltipContent>
     </Tooltip>
@@ -184,17 +255,85 @@ export const TurnRail = memo(function TurnRail({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rowKey]);
 
+  // Raw pointer position, then a spring on top so a tick's length eases toward the
+  // cursor instead of tracking it rigidly; reset to the rail's centre on leave.
+  const pointerY = useMotionValue(0);
+  const smoothY = useSpring(pointerY, DOCK.follow);
+  const hoverRaw = useMotionValue(0);
+  const hover = useSpring(hoverRaw, DOCK.hover);
+  // Under `prefers-reduced-motion` the lens is off: on hover every tick keeps its
+  // rest length, which is still a legible hover cue and the tooltip does the rest.
+  const reduced = useReducedMotion();
+
+  // Tick centres in viewport px, measured once per layout instead of per frame.
+  // The rail is vertically centred and static between layouts, so only a resize or
+  // a change in turn count invalidates it.
+  const centers = useRef<number[]>([]);
+  const tickNodes = useRef<Array<HTMLButtonElement | null>>([]);
+  const measure = useCallback((): void => {
+    tickNodes.current.forEach((node, index) => {
+      if (!node) return;
+      const rect = node.getBoundingClientRect();
+      centers.current[index] = rect.top + rect.height / 2;
+    });
+  }, []);
+
+  useLayoutEffect(() => {
+    measure();
+  });
+
+  useEffect(() => {
+    const node = navRef.current;
+    if (!node || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => measure());
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [measure]);
+
   const { hit, bar, gap } = densityOf(markers.length);
 
   return (
     <nav
       ref={navRef}
       aria-label="轮次导航"
-      className="pointer-events-none absolute inset-y-0 left-0 z-20 hidden w-9 flex-col justify-center @min-[58rem]/thread:flex"
+      className="pointer-events-none absolute inset-y-0 left-0 z-20 hidden flex-col justify-center @min-[58rem]/thread:flex"
+      style={{ width: RAIL_WIDTH }}
     >
-      <div className={cn("pointer-events-auto flex max-h-[86%] flex-col items-start overflow-hidden py-1 pl-2.5", gap)}>
+      <div
+        className={cn(
+          // Full width of the fixed gutter so every tick's `w-full` resolves to the
+          // same track even as its own bar grows, and the group never reflows.
+          "pointer-events-auto relative flex w-full max-h-[86%] flex-col items-start py-1 pl-2.5",
+          gap,
+        )}
+        onPointerMove={(event) => pointerY.set(event.clientY)}
+        onPointerEnter={() => hoverRaw.set(reduced ? 0 : 1)}
+        onPointerLeave={() => {
+          hoverRaw.set(0);
+          // Park the pointer on the rail's centre so the ticks retract evenly
+          // instead of all easing toward whichever tick was last under the cursor.
+          const node = navRef.current;
+          if (node) {
+            const rect = node.getBoundingClientRect();
+            pointerY.set(rect.top + rect.height / 2);
+          }
+        }}
+      >
         {markers.map((marker, index) => (
-          <Tick key={marker.id} marker={marker} index={index} active={index === active} hit={hit} bar={bar} />
+          <Tick
+            key={marker.id}
+            marker={marker}
+            index={index}
+            active={index === active}
+            hit={hit}
+            bar={bar}
+            pointerY={smoothY}
+            hover={hover}
+            centers={centers}
+            tickRef={(node) => {
+              tickNodes.current[index] = node;
+            }}
+          />
         ))}
       </div>
     </nav>

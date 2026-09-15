@@ -96,10 +96,12 @@ export function findNativeProvider(id: string): NativeProvider | undefined {
  */
 function toProviderModel(model: Model<Api>): ProviderModel {
   // Keep only levels the shared vocabulary knows, so a future pi level cannot leak
-  // into `models.json` / the composer before FastVibe has a label for it.
+  // into `models.json` / the composer before FastVibe has a label for it. `off` is
+  // dropped with them: the SDK reports it for every model, but requesting it is what
+  // makes a reason-by-default upstream answer with a 400.
   const supported = new Set<string>(THINKING_LEVELS);
   const levels = getSupportedThinkingLevels(model).filter((level): level is ThinkingLevel =>
-    supported.has(level),
+    supported.has(level) && level !== "off",
   );
   return {
     id: model.id,
@@ -108,9 +110,9 @@ function toProviderModel(model: Model<Api>): ProviderModel {
     maxTokens: model.maxTokens,
     reasoning: model.reasoning,
     input: [...model.input],
-    // A non-reasoning model reports `["off"]`; treat that as "no explicit levels"
-    // so the composer keeps its default effort menu, matching the models.dev path.
-    thinkingLevels: levels.length > 1 ? levels : undefined,
+    // A non-reasoning model reports only `["off"]`, which leaves nothing here, so the
+    // composer keeps its default effort menu, matching the models.dev path.
+    thinkingLevels: levels.length > 0 ? levels : undefined,
     // The SDK's built-ins carry list prices too, so the model dialog can show the
     // same numbers the app prices a run with.
     cost: hasPricing(model.cost) ? { ...model.cost } : undefined,

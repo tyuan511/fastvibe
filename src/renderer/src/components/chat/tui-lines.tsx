@@ -61,7 +61,7 @@ function runStyle(run: TuiRun): CSSProperties {
  */
 export function TuiLines({ runs, className }: { runs: TuiRun[][]; className?: string }): JSX.Element {
   return (
-    <div className={cn("font-mono text-[11.5px] leading-4", className)}>
+    <div className={cn("font-mono text-sm leading-5", className)}>
       {runs.map((line, index) => (
         <div key={index} className="whitespace-pre">
           {line.length === 0

@@ -16,6 +16,8 @@ export type TodoItem = {
   id: string;
   content: string;
   status: TodoStatus;
+  /** Present-continuous label shown while the item is in_progress. */
+  activeForm?: string;
 };
 
 export type CompactTodos = {
@@ -52,10 +54,12 @@ function fromUnknown(value: unknown, index: number): TodoItem | null {
   if (!record) return null;
   const content = asText(record.content) || asText(record.title) || asText(record.text) || asText(record.task);
   if (!content) return null;
+  const activeForm = asText(record.activeForm) || asText(record.active_form);
   return {
     id: asText(record.id) || String(index),
     content,
     status: normalizeStatus(record.status, record.done ?? record.completed),
+    ...(activeForm ? { activeForm } : {}),
   };
 }
 
@@ -93,6 +97,8 @@ export function parseToolTodos(tool: ToolCallBlock): TodoItem[] {
   return [];
 }
 
+const EMPTY_TODOS: TodoItem[] = [];
+
 /** Latest todo list in the transcript — the agent's current plan. */
 export function latestTodos(messages: ChatMessage[]): TodoItem[] {
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -104,7 +110,7 @@ export function latestTodos(messages: ChatMessage[]): TodoItem[] {
       if (todos.length > 0) return todos;
     }
   }
-  return [];
+  return EMPTY_TODOS;
 }
 
 /**

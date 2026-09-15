@@ -61,7 +61,7 @@ export function collectChangedFiles(tools: ToolCallBlock[]): ChangedFile[] {
 function FileChip({ file }: { file: ChangedFile }): JSX.Element {
   const name = fileName(file.path);
   return (
-    <span className="inline-flex h-7 max-w-56 items-center gap-1.5 rounded-full border border-border bg-muted/40 pr-2 pl-1.5 text-[11.5px]">
+    <span className="inline-flex h-7 max-w-56 items-center gap-1.5 rounded-full border border-border bg-muted/40 pr-2 pl-1.5 text-xs">
       <FileIcon name={name} />
       <span title={file.path} className="min-w-0 truncate text-foreground">
         {name}
@@ -87,7 +87,7 @@ export function TurnFileChips({ files, className }: { files: ChangedFile[]; clas
       {collapsible ? (
         <button
           type="button"
-          className="inline-flex h-7 shrink-0 items-center rounded-full px-2 text-[11.5px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          className="inline-flex h-7 shrink-0 items-center rounded-full px-2 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           onClick={() => setOpen((value) => !value)}
         >
           {open ? "收起" : `展开 ${files.length}`}

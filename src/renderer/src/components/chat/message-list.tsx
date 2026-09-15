@@ -17,6 +17,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { FLoader } from "@/components/f-loader";
 import { groupMessageRows, groupParts, mergeAssistantRun, type MessageRow, type RenderPart } from "@/lib/group-parts";
 import type { ChatAttachment, ChatMessage } from "@shared/types";
+import { ImagePreview } from "@/components/image-preview";
 import { AttachmentChip } from "./attachment-chip";
 import { collectChangedFiles, TurnFileChips } from "./file-chips";
 import { MarkdownView } from "./markdown-view";
@@ -24,6 +25,7 @@ import { NewSessionHero } from "./new-session";
 import { ThinkingBlock } from "./thinking-block";
 import { ToolCard } from "./tool-card";
 import { ToolGroupRow } from "./tool-group";
+import { CompactNotice } from "./compact-notice";
 import { TuiLines } from "./tui-lines";
 import { TurnRail, type TurnMarker } from "./turn-rail";
 
@@ -38,16 +40,39 @@ function formatTime(timestamp: number): string {
 }
 
 function AttachmentStrip({ items }: { items: ChatAttachment[] }): JSX.Element {
+  const [preview, setPreview] = useState<ChatAttachment | null>(null);
+  const previewSrc = preview?.dataUrl ?? "";
+
   return (
-    <div className="mb-1.5 flex flex-wrap justify-end gap-1.5">
-      {items.map((item) => (
-        <AttachmentChip
-          key={item.id}
-          item={item}
-          onOpen={item.path ? () => void window.fastvibe.workspace.reveal(item.path!) : undefined}
-        />
-      ))}
-    </div>
+    <>
+      <div className="mb-1.5 flex flex-wrap justify-end gap-1.5">
+        {items.map((item) => {
+          const previewable = item.kind === "image" && Boolean(item.dataUrl);
+          return (
+            <AttachmentChip
+              key={item.id}
+              item={item}
+              className={previewable ? "cursor-zoom-in" : undefined}
+              onOpen={
+                previewable
+                  ? () => setPreview(item)
+                  : item.path
+                    ? () => void window.fastvibe.workspace.reveal(item.path!)
+                    : undefined
+              }
+            />
+          );
+        })}
+      </div>
+      <ImagePreview
+        src={previewSrc}
+        alt={preview?.name}
+        open={Boolean(previewSrc)}
+        onOpenChange={(open) => {
+          if (!open) setPreview(null);
+        }}
+      />
+    </>
   );
 }
 
@@ -124,10 +149,17 @@ function WorkingStatus({ message }: { message: ChatMessage }): JSX.Element | nul
   const running = message.tools.find((tool) => tool.status === "running");
   if (running) return null;
   if (message.thinking) return null;
+  // The run is between tool calls or about to write, so this row is the only thing
+  // in the reply. It stays in the same inline icon + shimmering-label shape as the
+  // thinking block and tool rows — a chip here would be the one bordered box in a
+  // transcript of quiet rows — but at the reading size and the emphasis shade, so
+  // "still working" is legible where a line of 12.5px grey was not.
   return (
-    <div className="flex items-center gap-2 text-[12.5px] text-muted-foreground">
-      <Spinner className="size-3.5" />
-      {message.tools.length > 0 ? "继续工作" : "正在工作"}
+    <div className="flex items-center gap-2 text-sm">
+      <Spinner className="size-4 text-muted-foreground" />
+      <span className="animated-gradient-text animated-gradient-text-emphasis font-medium">
+        {message.tools.length > 0 ? "继续工作" : "正在工作"}
+      </span>
     </div>
   );
 }
@@ -157,6 +189,13 @@ function ChatMessageRowImpl({
   const parts = useMemo(() => groupParts(message), [message]);
 
   if (message.role === "system") {
+    if (message.kind === "compact") {
+      return (
+        <div className="flex w-full max-w-2xl flex-col py-1">
+          <CompactNotice message={message} />
+        </div>
+      );
+    }
     // An extension custom message: the plugin's own renderer produced these runs.
     if (message.kind === "custom" && message.runs && message.runs.length > 0) {
       return (
@@ -170,10 +209,7 @@ function ChatMessageRowImpl({
     return (
       <div className="flex justify-center py-1">
         <Bubble variant="muted" align="start">
-          <BubbleContent className="chat-markdown text-[12px]">
-            {message.kind === "compact" ? "压缩 · " : ""}
-            {message.text}
-          </BubbleContent>
+          <BubbleContent className="chat-markdown text-xs">{message.text}</BubbleContent>
         </Bubble>
       </div>
     );
@@ -209,7 +245,7 @@ function ChatMessageRowImpl({
           variant={isUser ? "secondary" : "ghost"}
           align={isUser ? "end" : "start"}
         >
-          <BubbleContent className="chat-markdown text-[13.5px] leading-6">
+          <BubbleContent className="chat-markdown text-sm leading-6">
             <MarkdownView text={part.text} />
             {streaming && isTail ? <span className="chat-caret" aria-hidden /> : null}
           </BubbleContent>
@@ -241,14 +277,19 @@ function ChatMessageRowImpl({
 
         {message.error ? (
           <Bubble variant="destructive" align="start">
-            <BubbleContent className="flex items-start gap-2 text-[13px] leading-5">
+            <BubbleContent className="flex items-start gap-2 text-sm leading-5">
               <HugeiconsIcon strokeWidth={2} icon={AlertCircleIcon} className="mt-0.5 size-3.5 shrink-0" />
               <span className="min-w-0 whitespace-pre-wrap wrap-break-word">{message.error}</span>
             </BubbleContent>
           </Bubble>
         ) : null}
 
-        {changedFiles.length > 0 ? (
+        {/*
+         * Withhold the turn's file chips until the run ends. Mid-run they grow as
+         * each write/edit lands, reflowing the thread and showing a half-finished
+         * change set.
+         */}
+        {!streaming && changedFiles.length > 0 ? (
           <div className="w-full max-w-2xl pt-1">
             <TurnFileChips files={changedFiles} />
           </div>
@@ -458,7 +499,7 @@ export function MessageList({
     return (
       <div className="flex h-full flex-col items-center justify-center gap-4">
         <FLoader className="size-12" />
-        <p className="text-[13px] text-muted-foreground">正在准备工作区…</p>
+        <p className="text-sm text-muted-foreground">正在准备工作区…</p>
       </div>
     );
   }
@@ -492,12 +533,13 @@ export function MessageList({
                       messageId={row.id}
                       className={
                         // A prompt rises to the top edge and stays there while its own
-                        // reply is read; the next turn's prompt pushes it away. The
-                        // opaque background hides the reply sliding underneath, and
+                        // reply is read; the next turn's prompt pushes it away. Solid
+                        // fill keeps the bubble readable; the fade below lets the
+                        // reply dissolve instead of clipping on a hard edge.
                         // `content-visibility` would take the sticky element out of
                         // the scroll flow.
                         isUser
-                          ? "sticky top-0 z-10 bg-background pt-2 [content-visibility:visible]"
+                          ? "relative sticky top-0 z-10 bg-background pt-2 [content-visibility:visible]"
                           : undefined
                       }
                     >
@@ -509,6 +551,12 @@ export function MessageList({
                         showThinking={showThinking}
                         showTimestamp={showTimestamp}
                       />
+                      {isUser ? (
+                        <div
+                          aria-hidden
+                          className="pointer-events-none absolute inset-x-0 top-full h-12 bg-gradient-to-b from-background to-background/0"
+                        />
+                      ) : null}
                     </MessageScrollerItem>
                   );
                 })}

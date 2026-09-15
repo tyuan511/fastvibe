@@ -5,8 +5,9 @@ import { IconButton } from "@/components/icon-button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { FileIcon } from "@/components/file-icon";
 import { PreviewBody } from "@/components/chat/preview-panel";
+import { cn } from "@/lib/utils";
 import { useSidePaneStore, type SidePaneTab } from "@/stores/side-pane";
-import type { DirEntry } from "@shared/types";
+import type { DirEntry, FilePreview } from "@shared/types";
 
 type DirMap = Record<string, DirEntry[]>;
 
@@ -14,11 +15,26 @@ function baseName(path: string): string {
   return path.split("/").filter(Boolean).pop() ?? path;
 }
 
+/** Directories between `cwd` and `filePath` that the tree must expand to reveal the file. */
+function ancestorDirs(cwd: string, filePath: string): string[] {
+  const dirs: string[] = [];
+  let current = filePath;
+  while (true) {
+    const slash = current.lastIndexOf("/");
+    if (slash <= 0) break;
+    current = current.slice(0, slash);
+    if (current.length < cwd.length || current === cwd) break;
+    dirs.push(current);
+  }
+  return dirs;
+}
+
 /**
  * The right pane's project file view: a lazily-loaded directory tree of the
- * active workspace by default, swapping to a file preview once a file is picked
- * (here or from a chat file chip). The preview is stored on the tab, so a chat
- * click focuses the same view.
+ * active workspace. Narrow panes swap between the tree and a file preview;
+ * when the pane is wide enough the preview sits on the left and the tree stays
+ * on the right. The preview is stored on the tab, so a chat click focuses the
+ * same view.
  */
 export function SidePaneFiles({
   tab,
@@ -55,6 +71,25 @@ export function SidePaneFiles({
     reset(cwd);
   }, [cwd, reset]);
 
+  useEffect(() => {
+    const path = tab.path;
+    if (!cwd || !path) return;
+    const dirs = ancestorDirs(cwd, path);
+    if (dirs.length === 0) return;
+    setExpanded((prev) => {
+      let changed = false;
+      const next = new Set(prev);
+      for (const dir of dirs) {
+        if (!next.has(dir)) {
+          next.add(dir);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+    for (const dir of dirs) void loadDir(dir);
+  }, [cwd, tab.path, loadDir]);
+
   function toggleDir(path: string): void {
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -74,81 +109,113 @@ export function SidePaneFiles({
     }
   }
 
-  if (tab.preview) {
-    const preview = tab.preview;
-    return (
-      <div className="flex min-h-0 flex-1 flex-col">
-        <div className="flex h-10 shrink-0 items-center gap-1.5 border-b border-border px-2">
-          <IconButton
-            size="icon-xs"
-            variant="ghost"
-            label="返回目录树"
-            onClick={() => patchTab(tab.id, { path: undefined, preview: undefined })}
-          >
-            <HugeiconsIcon strokeWidth={2} icon={ArrowLeft01Icon} />
-          </IconButton>
-          <FileIcon name={baseName(preview.path)} />
-          <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium" title={preview.path}>
-            {preview.name}
-          </span>
-          {preview.kind !== "error" ? (
-            <IconButton
-              size="icon-xs"
-              variant="ghost"
-              label="在访达中显示"
-              onClick={() => void window.fastvibe.workspace.reveal(preview.path)}
-            >
-              <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} />
-            </IconButton>
-          ) : null}
-        </div>
-        <ScrollArea className="min-h-0 flex-1">
-          <div className="p-3">
-            <PreviewBody preview={preview} />
-          </div>
-        </ScrollArea>
-      </div>
-    );
+  function clearPreview(): void {
+    patchTab(tab.id, { path: undefined, preview: undefined });
   }
 
   if (!cwd) {
+    if (tab.preview) {
+      return <FilePreviewPane preview={tab.preview} onBack={clearPreview} />;
+    }
     return (
-      <div className="flex min-h-0 flex-1 items-center justify-center px-8 text-center text-[12.5px] leading-5 text-muted-foreground">
+      <div className="flex min-h-0 flex-1 items-center justify-center px-8 text-center text-xs leading-5 text-muted-foreground">
         当前对话未绑定项目，绑定项目后即可浏览文件。
       </div>
     );
   }
 
+  const preview = tab.preview;
+
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="@container/files flex min-h-0 flex-1 flex-col">
+      <div className="flex min-h-0 flex-1 flex-col @min-[32rem]/files:flex-row">
+        {preview ? (
+          <FilePreviewPane preview={preview} onBack={clearPreview} backClassName="@min-[32rem]/files:hidden" />
+        ) : (
+          <div className="hidden min-h-0 min-w-0 flex-1 items-center justify-center px-8 text-center text-xs leading-5 text-muted-foreground @min-[32rem]/files:flex">
+            选择文件以预览
+          </div>
+        )}
+        <div
+          className={cn(
+            "min-h-0 flex-col @min-[32rem]/files:w-[min(14rem,40%)] @min-[32rem]/files:min-w-36 @min-[32rem]/files:flex-none @min-[32rem]/files:border-l @min-[32rem]/files:border-border",
+            preview ? "hidden @min-[32rem]/files:flex" : "flex flex-1",
+          )}
+        >
+          <div className="flex h-10 shrink-0 items-center gap-1.5 border-b border-border px-2">
+            <FileIcon name={baseName(cwd)} kind="folder" />
+            <span className="min-w-0 flex-1 truncate text-xs font-medium" title={cwd}>
+              {baseName(cwd)}
+            </span>
+            <IconButton
+              size="icon-xs"
+              variant="ghost"
+              label="在访达中显示"
+              onClick={() => void window.fastvibe.workspace.reveal(cwd)}
+            >
+              <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} />
+            </IconButton>
+            <IconButton size="icon-xs" variant="ghost" label="刷新" onClick={() => reset(cwd)}>
+              <HugeiconsIcon strokeWidth={2} icon={RefreshIcon} />
+            </IconButton>
+          </div>
+          <ScrollArea className="min-h-0 flex-1">
+            <div className="py-1.5">
+              <TreeLevel
+                dir={cwd}
+                depth={0}
+                children={children}
+                expanded={expanded}
+                selected={preview?.path}
+                onToggle={toggleDir}
+                onOpen={openFile}
+              />
+            </div>
+          </ScrollArea>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FilePreviewPane({
+  preview,
+  onBack,
+  backClassName,
+}: {
+  preview: FilePreview;
+  onBack: () => void;
+  backClassName?: string;
+}): JSX.Element {
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="flex h-10 shrink-0 items-center gap-1.5 border-b border-border px-2">
-        <FileIcon name={baseName(cwd)} kind="folder" />
-        <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium" title={cwd}>
-          {baseName(cwd)}
-        </span>
         <IconButton
           size="icon-xs"
           variant="ghost"
-          label="在访达中显示"
-          onClick={() => void window.fastvibe.workspace.reveal(cwd)}
+          label="返回目录树"
+          className={backClassName}
+          onClick={onBack}
         >
-          <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} />
+          <HugeiconsIcon strokeWidth={2} icon={ArrowLeft01Icon} />
         </IconButton>
-        <IconButton size="icon-xs" variant="ghost" label="刷新" onClick={() => reset(cwd)}>
-          <HugeiconsIcon strokeWidth={2} icon={RefreshIcon} />
-        </IconButton>
+        <FileIcon name={baseName(preview.path)} />
+        <span className="min-w-0 flex-1 truncate text-xs font-medium" title={preview.path}>
+          {preview.name}
+        </span>
+        {preview.kind !== "error" ? (
+          <IconButton
+            size="icon-xs"
+            variant="ghost"
+            label="在访达中显示"
+            onClick={() => void window.fastvibe.workspace.reveal(preview.path)}
+          >
+            <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} />
+          </IconButton>
+        ) : null}
       </div>
       <ScrollArea className="min-h-0 flex-1">
-        <div className="py-1.5">
-          <TreeLevel
-            dir={cwd}
-            depth={0}
-            children={children}
-            expanded={expanded}
-            onToggle={toggleDir}
-            onOpen={openFile}
-          />
-        </div>
+        <PreviewBody preview={preview} />
       </ScrollArea>
     </div>
   );
@@ -159,6 +226,7 @@ function TreeLevel({
   depth,
   children,
   expanded,
+  selected,
   onToggle,
   onOpen,
 }: {
@@ -166,6 +234,7 @@ function TreeLevel({
   depth: number;
   children: DirMap;
   expanded: Set<string>;
+  selected?: string;
   onToggle: (path: string) => void;
   onOpen: (path: string) => void;
 }): JSX.Element {
@@ -175,11 +244,16 @@ function TreeLevel({
       {entries.map((entry) => {
         const isDir = entry.kind === "directory";
         const open = isDir && expanded.has(entry.path);
+        const active = !isDir && selected === entry.path;
         return (
           <div key={entry.path}>
             <button
               type="button"
-              className="flex h-7 w-full items-center gap-1.5 pr-2 text-left text-[12.5px] text-foreground transition-colors hover:bg-muted"
+              aria-current={active ? "true" : undefined}
+              className={cn(
+                "flex h-7 w-full items-center gap-1.5 pr-2 text-left text-xs text-foreground transition-colors hover:bg-muted",
+                active && "bg-muted",
+              )}
               style={{ paddingLeft: 8 + depth * 12 }}
               title={entry.path}
               onClick={() => (isDir ? onToggle(entry.path) : onOpen(entry.path))}
@@ -193,6 +267,7 @@ function TreeLevel({
                 depth={depth + 1}
                 children={children}
                 expanded={expanded}
+                selected={selected}
                 onToggle={onToggle}
                 onOpen={onOpen}
               />

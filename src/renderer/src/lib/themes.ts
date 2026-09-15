@@ -611,6 +611,29 @@ export const DEFAULT_LIGHT_THEME: ThemeId = "github-light";
 export const DEFAULT_DARK_THEME: ThemeId = "github-dark";
 export const DEFAULT_THEME_MODE: ThemeMode = "system";
 
+/**
+ * Default 界面字号 in px — the root font size. At the 16px default the body text
+ * (`text-sm`, 0.875rem) renders at 14px, which is the app's intended look.
+ */
+export const DEFAULT_UI_FONT_SIZE = 16;
+/** The 界面字号 picker's range, in px of root font size; `settings.ts` accepts the same. */
+export const UI_FONT_SIZE_MIN = 12;
+export const UI_FONT_SIZE_MAX = 20;
+export const UI_FONT_SIZE_STEP = 1;
+
+/**
+ * Apply the 界面字号 setting.
+ *
+ * Every size in the app is a rem-based Tailwind `text-*` utility, so the root
+ * font size is the single scale factor for the whole interface: at 16px the body
+ * text (`text-sm`) is 14px, at 18px it is 15.75px, and every other size — captions,
+ * tool output, spacing written in rem — moves with it.
+ */
+export function applyUiFontSize(size: number): void {
+  const clamped = Math.round(Math.min(UI_FONT_SIZE_MAX, Math.max(UI_FONT_SIZE_MIN, size)));
+  document.documentElement.style.setProperty("--ui-root-font-size", `${clamped}px`);
+}
+
 export function themesFor(kind: ThemeKind): ThemeDefinition[] {
   return (kind === "dark" ? DARK_THEME_IDS : LIGHT_THEME_IDS).map((id) => THEMES[id]);
 }

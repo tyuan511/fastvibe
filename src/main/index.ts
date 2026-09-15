@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, Notification, protocol, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, Notification, protocol, session, shell } from "electron";
 import { statSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -24,9 +24,12 @@ import {
   registerFileIconScheme,
 } from "./engine/file-icons";
 import { collectUsageStats } from "./engine/usage-stats";
+import { applyPendingInstall, registerUpdater, scheduleUpdateCheck } from "./updater";
 import { PiProcessManager } from "./pi/process-manager";
 import { fetchPackageCatalog } from "./pi/package-catalog";
 import { TerminalSessions } from "./engine/terminal-sessions";
+import { attachBrowserRenderer, installBrowserGlobal, respondBrowserRequest } from "./pi/browser-bridge";
+import { importBrowserProfile, listBrowserProfiles } from "./engine/browser-profiles";
 import type { ProviderModel, UsageRange } from "@shared/types";
 import type { GitBranch, GitDiffSource, GitStatus } from "@shared/ipc";
 
@@ -92,6 +95,7 @@ function createWindow(): void {
     shell.openExternal(details.url);
     return { action: "deny" };
   });
+  attachBrowserRenderer(window.webContents);
 
   if (process.env.ELECTRON_RENDERER_URL) {
     window.loadURL(process.env.ELECTRON_RENDERER_URL);
@@ -108,6 +112,16 @@ function broadcastStatus(): void {
 }
 
 function registerIpc(): void {
+  ipcMain.on(Ipc.browserResponse, (_event, payload: { id: string; ok: boolean; result?: unknown; error?: string }) => {
+    respondBrowserRequest(payload);
+  });
+  ipcMain.handle(Ipc.browserListProfiles, () => listBrowserProfiles());
+  ipcMain.handle(Ipc.browserImportProfile, async (_event, payload: { profile: import("@shared/types").BrowserProfileInfo }) => {
+    if (!payload?.profile?.cookiePath) throw new Error("浏览器配置文件无效");
+    const allowed = (await listBrowserProfiles()).find((profile) => profile.id === payload.profile.id && profile.cookiePath === payload.profile.cookiePath);
+    if (!allowed) throw new Error("浏览器配置文件未通过校验，请重新打开导入列表");
+    return importBrowserProfile(allowed, (cookie) => session.fromPartition("persist:fastvibe-browser").cookies.set(cookie));
+  });
   ipcMain.handle(Ipc.engineGetStatus, () => engine.status);
 
   ipcMain.handle(Ipc.engineStart, async (_event, payload?: { cwd?: string }) => {
@@ -201,7 +215,9 @@ function registerIpc(): void {
     return engine.getSubagentMessages(payload.subagentId);
   });
 
-  ipcMain.handle(Ipc.conversationsMultiRun, async (_event, payload: import("@shared/types").MultiRunRequest) => engine.multiRun(payload));
+  ipcMain.handle(Ipc.conversationsSearch, (_event, payload: { query?: string }) => {
+    return engine.searchConversations(payload?.query ?? "");
+  });
 
   ipcMain.handle(
     Ipc.enginePermissionRespond,
@@ -314,6 +330,12 @@ function registerIpc(): void {
   });
   ipcMain.handle(Ipc.providersRefresh, async (_event, payload: { id: string }) => {
     return engine.refreshProviderModels(payload.id);
+  });
+  ipcMain.handle(Ipc.providersCcSwitchScan, async () => {
+    return engine.scanCcSwitch();
+  });
+  ipcMain.handle(Ipc.providersCcSwitchImport, async (_event, payload: { ids: string[] }) => {
+    return engine.importCcSwitch(payload.ids);
   });
 
   ipcMain.handle(Ipc.conversationsList, () => engine.listWorkspace());
@@ -535,6 +557,7 @@ function registerIpc(): void {
     applyNativeTheme(payload);
     applyPermissionMode(payload);
     paintWindows(windows);
+    scheduleUpdateCheck(payload.autoCheckUpdates !== false);
   });
   ipcMain.handle(Ipc.settingsClear, () => {
     const paths = getFastVibePaths();
@@ -558,12 +581,15 @@ function registerIpc(): void {
 }
 
 app.whenReady().then(async () => {
+  installBrowserGlobal();
   applyAppIcon();
   const startupSettings = readAppSettings(getFastVibePaths());
   applyNativeTheme(startupSettings);
   applyPermissionMode(startupSettings);
   registerFileIconProtocol();
   registerIpc();
+  registerUpdater(() => windows);
+  scheduleUpdateCheck(startupSettings.autoCheckUpdates !== false);
 
   engine.onStatus(() => broadcastStatus());
   engine.onConversationReady((payload) => {
@@ -604,7 +630,7 @@ app.on("before-quit", (event) => {
   void engine.stop().finally(() => {
     terminals.dispose();
     engine.flush();
-    app.quit();
+    if (!applyPendingInstall()) app.quit();
   });
 });
 

@@ -7,14 +7,25 @@ import type { ExtensionPackage } from "@shared/types";
 /**
  * FastVibe's own extensions. They are plain files shipped outside the asar
  * archive (`resources/extensions`, copied to `resourcesPath/extensions`) and
- * loaded through the SDK's jiti loader, so `/plan` and `/goal` work on a fresh
- * install with no network and no npm package.
+ * loaded through the SDK's jiti loader, so `/plan`, `/goal`, the todo tool
+ * and auto session titles work on a fresh install with no network and no npm package.
  */
 export const BUILTIN_EXTENSIONS: Array<{ source: string; file: string }> = [
   { source: "fastvibe:plan", file: "plan.ts" },
   { source: "fastvibe:goal", file: "goal.ts" },
+  { source: "fastvibe:todo", file: "todo.ts" },
   { source: "fastvibe:permission-sandbox", file: "permission-sandbox.ts" },
+  { source: "fastvibe:session-title", file: "session-title.ts" },
+  { source: "fastvibe:browser-use", file: "browser-use.ts" },
 ];
+
+export function builtinSkillPaths(): string[] {
+  const dir = app.isPackaged
+    ? join(process.resourcesPath, "skills")
+    : join(__dirname, "../../resources/skills");
+  const path = join(dir, "browser-use", "SKILL.md");
+  return existsSync(path) ? [path] : [];
+}
 
 /** Absolute paths to the built-in extension entry points. */
 export function builtinExtensionPaths(): string[] {

@@ -128,6 +128,20 @@ export type ChatMessage = {
   attachments?: ChatAttachment[];
   /** Model/request failure for this assistant turn. Absent on success or user abort. */
   error?: string;
+  /** Present when `kind` is `"compact"`: running / finished / cancelled compaction. */
+  compact?: CompactInfo;
+};
+
+export type CompactReason = "manual" | "threshold" | "overflow";
+
+export type CompactStatus = "running" | "done" | "aborted" | "error";
+
+export type CompactInfo = {
+  status: CompactStatus;
+  reason?: CompactReason;
+  tokensBefore?: number;
+  tokensAfter?: number;
+  error?: string;
 };
 
 export type SlashCommand = {
@@ -263,6 +277,23 @@ export type FilePreview =
   | { kind: "code"; path: string; name: string; language: string; text: string }
   | { kind: "binary"; path: string; name: string; size: number }
   | { kind: "error"; path: string; name: string; message: string };
+
+/** A local Chromium profile that can be used as the source for browser data import. */
+export type BrowserProfileInfo = {
+  id: string;
+  browser: string;
+  name: string;
+  path: string;
+  cookiePath: string;
+};
+
+export type BrowserImportResult = {
+  browser: string;
+  profile: string;
+  cookies: number;
+  encryptedCookiesSkipped: number;
+  message: string;
+};
 
 /** Transient extension notice, surfaced from `ctx.ui.notify()`. */
 export type ExtensionNoticeLevel = "info" | "warning" | "error";
@@ -412,6 +443,24 @@ export type ProviderConfig = {
   models: ProviderModel[];
 };
 
+/** A provider CC Switch can hand FastVibe. Keys stay in Main. */
+export type CcSwitchCandidate = {
+  id: string;
+  name: string;
+  appLabel: string;
+  baseUrl: string;
+  api: ProviderApi;
+  modelCount: number;
+  importable: boolean;
+  reason?: string;
+};
+
+export type CcSwitchScan = {
+  found: boolean;
+  path: string;
+  candidates: CcSwitchCandidate[];
+};
+
 /** A pi-coding-agent built-in provider offered in 添加供应商. */
 export type NativeProviderConfig = {
   id: string;
@@ -478,15 +527,16 @@ export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhig
 export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 
 /**
- * The levels a model can actually be *tuned* for, i.e. everything but `off`.
- * `off` is not a model capability — it is simply not thinking, which every provider
- * accepts — so it is never stored per model and never marked unsupported; the effort
- * menus add it themselves.
+ * The levels a model can actually be tuned for, i.e. everything but `off`. `off` is
+ * deliberately not among them: FastVibe never asks a provider to *disable* thinking.
+ * A model that thinks by default 400s on `reasoning: false` / `thinking: disabled`,
+ * and the engine's own default already covers "the model decides", so the option is
+ * not stored per model, not mapped in `models.json` and not offered in any menu.
  */
 export const THINKING_EFFORT_LEVELS: ThinkingLevel[] = ["minimal", "low", "medium", "high", "xhigh", "max"];
 
 /** Effort menu a model without its own levels falls back to. */
-export const DEFAULT_THINKING_LEVELS: ThinkingLevel[] = ["off", "low", "medium", "high"];
+export const DEFAULT_THINKING_LEVELS: ThinkingLevel[] = ["low", "medium", "high"];
 
 /** Input modality bits shared by `ProviderModel.input` and the engine's `models.json`. */
 export const INPUT_MODALITIES = ["text", "image", "video", "file"] as const;
@@ -521,6 +571,15 @@ export type Conversation = {
   kind?: "side-chat";
   /** Parent conversation for a side-chat tab. */
   parentId?: string;
+  /** User chose this title; do not replace it with an auto-generated one. */
+  titleManual?: boolean;
+};
+
+/** A conversation whose transcript matched a command-palette query. */
+export type ConversationSearchHit = {
+  id: string;
+  /** Short excerpt around the first match, for the palette's secondary line. */
+  snippet?: string;
 };
 
 export type WorkspaceSnapshot = {
@@ -534,18 +593,6 @@ export type ConversationOpenResult = WorkspaceSnapshot & {
   messages: ChatMessage[];
   state: EngineSessionState | null;
   status: EngineStatus;
-};
-
-export type MultiRunRequest = {
-  project?: string;
-  prompt: string;
-  models: Array<{ provider: string; modelId: string }>;
-  name?: string;
-  isolate?: boolean;
-};
-
-export type MultiRunResult = WorkspaceSnapshot & {
-  conversationIds: string[];
 };
 
 /** Pushed when a conversation finishes initialising in the background. */

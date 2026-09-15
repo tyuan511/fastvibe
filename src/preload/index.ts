@@ -4,6 +4,7 @@ import type {
   ChatMessage,
   ConversationDeleteResult,
   ConversationOpenResult,
+  ConversationSearchHit,
   ConversationReadyEvent,
   DirEntry,
   FastVibeModel,
@@ -16,14 +17,13 @@ import type {
   ProviderConfig,
   ProviderModel,
   NativeProviderConfig,
+  CcSwitchScan,
   SlashCommand,
   FilePreview,
   SubagentInfo,
   UsageRange,
   UsageStats,
   WorkspaceSnapshot,
-  MultiRunRequest,
-  MultiRunResult,
   ExtensionInfo,
   ExtensionPackage,
   FileIconMapping,
@@ -31,8 +31,17 @@ import type {
   McpServerStatus,
   SkillDraft,
   SkillInfo,
+  BrowserImportResult,
+  BrowserProfileInfo,
 } from "@shared/types";
-import type { GitBranch, GitDiffSource, GitStatus, TerminalDataEvent, TerminalSessionInfo } from "@shared/ipc";
+import type {
+  AppUpdateState,
+  GitBranch,
+  GitDiffSource,
+  GitStatus,
+  TerminalDataEvent,
+  TerminalSessionInfo,
+} from "@shared/ipc";
 
 const api = {
   engine: {
@@ -150,6 +159,10 @@ const api = {
     remove: (id: string): Promise<ProviderConfig[]> => ipcRenderer.invoke(Ipc.providersRemove, { id }),
     refresh: (id: string): Promise<ProviderModel[]> =>
       ipcRenderer.invoke(Ipc.providersRefresh, { id }),
+    scanCcSwitch: (): Promise<CcSwitchScan> =>
+      ipcRenderer.invoke(Ipc.providersCcSwitchScan),
+    importCcSwitch: (ids: string[]): Promise<ProviderConfig[]> =>
+      ipcRenderer.invoke(Ipc.providersCcSwitchImport, { ids }),
   },
   conversations: {
     list: (): Promise<WorkspaceSnapshot> => ipcRenderer.invoke(Ipc.conversationsList),
@@ -165,10 +178,10 @@ const api = {
       ipcRenderer.invoke(Ipc.conversationsRecordPrompt, { id, text }),
     setProject: (id: string, project: string | null): Promise<WorkspaceSnapshot> =>
       ipcRenderer.invoke(Ipc.conversationsSetProject, { id, project }),
-    multiRun: (request: MultiRunRequest): Promise<MultiRunResult> =>
-      ipcRenderer.invoke(Ipc.conversationsMultiRun, request),
     createSide: (payload: { project?: string; parentId?: string; title?: string }): Promise<ConversationOpenResult> =>
       ipcRenderer.invoke(Ipc.conversationsCreateSide, payload),
+    search: (query: string): Promise<ConversationSearchHit[]> =>
+      ipcRenderer.invoke(Ipc.conversationsSearch, { query }),
   },
   projects: {
     add: (): Promise<ProjectAddResult | null> => ipcRenderer.invoke(Ipc.projectsAdd),
@@ -215,6 +228,17 @@ const api = {
     getInfo: (): Promise<import("@shared/ipc").AppInfo> => ipcRenderer.invoke(Ipc.appGetInfo),
     newWindow: (): Promise<void> => ipcRenderer.invoke(Ipc.windowNew),
   },
+  updater: {
+    getState: (): Promise<AppUpdateState> => ipcRenderer.invoke(Ipc.updateGetState),
+    check: (): Promise<AppUpdateState> => ipcRenderer.invoke(Ipc.updateCheck),
+    download: (): Promise<AppUpdateState> => ipcRenderer.invoke(Ipc.updateDownload),
+    install: (): Promise<AppUpdateState> => ipcRenderer.invoke(Ipc.updateInstall),
+    onState: (listener: (state: AppUpdateState) => void): (() => void) => {
+      const handler = (_event: unknown, payload: AppUpdateState): void => listener(payload);
+      ipcRenderer.on(Ipc.updateState, handler);
+      return () => ipcRenderer.removeListener(Ipc.updateState, handler);
+    },
+  },
   settings: {
     /**
      * Snapshot captured in the preload world before the page runs, so the
@@ -227,6 +251,18 @@ const api = {
   },
   stats: {
     usage: (range: UsageRange): Promise<UsageStats> => ipcRenderer.invoke(Ipc.statsUsage, { range }),
+  },
+  browser: {
+    listProfiles: (): Promise<BrowserProfileInfo[]> => ipcRenderer.invoke(Ipc.browserListProfiles),
+    importProfile: (profile: BrowserProfileInfo): Promise<BrowserImportResult> => ipcRenderer.invoke(Ipc.browserImportProfile, { profile }),
+    onRequest: (listener: (payload: { id: string; request: { action: string; tabId?: string; url?: string; selector?: string; text?: string; key?: string; script?: string } }) => void): (() => void) => {
+      const handler = (_event: unknown, payload: { id: string; request: { action: string; tabId?: string; url?: string; selector?: string; text?: string; key?: string; script?: string } }): void => listener(payload);
+      ipcRenderer.on(Ipc.browserRequest, handler);
+      return () => ipcRenderer.removeListener(Ipc.browserRequest, handler);
+    },
+    respond: (payload: { id: string; ok: boolean; result?: unknown; error?: string }): void => {
+      ipcRenderer.send(Ipc.browserResponse, payload);
+    },
   },
 };
 

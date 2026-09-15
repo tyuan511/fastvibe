@@ -210,7 +210,7 @@ export function SubagentBrowser({
           </button>
         ))}
       </div>
-      <ScrollArea className="h-[420px] min-w-0 flex-1 rounded-lg border border-border">
+      <ScrollArea className="h-105 min-w-0 flex-1 rounded-lg border border-border">
         <div className="p-2">
           <MessageList messages={messages} streaming={Boolean(active && streams[active]?.length)} />
         </div>

@@ -174,7 +174,9 @@ const api = {
     getExtensions: async () => [
       { path: "resources/extensions/plan.ts", name: "plan", commands: 1, tools: 1 },
       { path: "resources/extensions/goal.ts", name: "goal", commands: 1, tools: 0 },
+      { path: "resources/extensions/todo.ts", name: "todo", commands: 0, tools: 1 },
       { path: "resources/extensions/permission-sandbox.ts", name: "permission-sandbox", commands: 0, tools: 0 },
+      { path: "resources/extensions/session-title.ts", name: "session-title", commands: 0, tools: 0 },
     ],
     listExtensionPackages: async () => INSTALLED_PACKAGES,
     installExtensionPackage: async () => INSTALLED_PACKAGES,
@@ -227,6 +229,8 @@ const api = {
     update: async () => PROVIDERS,
     remove: async () => PROVIDERS,
     refresh: async () => PROVIDERS[0].models,
+    scanCcSwitch: async () => ({ found: false, path: "", candidates: [] }),
+    importCcSwitch: async () => PROVIDERS,
   },
   conversations: {
     list: async () => snapshot(),
@@ -236,8 +240,14 @@ const api = {
     delete: async () => ({ ...snapshot(), nextId: CONVERSATIONS[0].id }),
     recordPrompt: async () => snapshot(),
     setProject: async () => snapshot(),
-    multiRun: async () => ({ ...snapshot(), conversationIds: CONVERSATIONS.map((item) => item.id) }),
     createSide: async () => openResult(CONVERSATIONS[0].id),
+    search: async (query: string) => {
+      const needle = query.trim().toLowerCase();
+      if (needle.length < 2) return [];
+      return CONVERSATIONS.filter((item) => `${item.title} ${item.preview ?? ""}`.toLowerCase().includes(needle)).map(
+        (item) => ({ id: item.id, snippet: item.preview }),
+      );
+    },
   },
   projects: {
     add: async () => null,
@@ -254,13 +264,15 @@ const api = {
       cwd,
       isRepository: true,
       branch: "feat/theme-mode",
-      changed: 2,
-      staged: 0,
+      changed: 4,
+      staged: 1,
       ahead: 1,
       behind: 0,
       files: [
-        { path: "src/renderer/src/components/settings/settings-dialog.tsx", index: " ", worktree: "M" },
+        { path: "src/renderer/src/components/settings/theme-select.tsx", index: "M", worktree: " " },
+        { path: "src/renderer/src/components/layout/side-pane-git.tsx", index: " ", worktree: "M" },
         { path: "src/renderer/src/App.tsx", index: " ", worktree: "M" },
+        { path: "src/renderer/src/lib/themes.ts", index: "?", worktree: "?" },
       ],
     }),
     openTerminal: async () => undefined,
@@ -269,7 +281,19 @@ const api = {
     gitCreateBranch: async (cwd: string) => api.workspace.gitStatus(cwd),
     gitStage: async (cwd: string) => api.workspace.gitStatus(cwd),
     gitCommit: async (cwd: string) => api.workspace.gitStatus(cwd),
-    gitDiff: async () => "",
+    gitDiff: async (_cwd: string, path?: string) => {
+      const file = path?.split("/").pop() ?? "file.tsx";
+      return `@@ -12,8 +12,11 @@ export function Example(): JSX.Element {
+   return (
+     <div className="flex items-center gap-2">
+-      <span className="text-xs text-muted-foreground">${file}</span>
++      <FileIcon name="${file}" />
++      <span className="min-w-0 truncate text-xs font-medium">${file}</span>
+     </div>
+   );
+ }
+`;
+    },
     gitUnstage: async (cwd: string) => api.workspace.gitStatus(cwd),
     gitDiscard: async (cwd: string) => api.workspace.gitStatus(cwd),
     gitPull: async (cwd: string) => api.workspace.gitStatus(cwd),
@@ -293,6 +317,12 @@ const api = {
   stats: {
     usage: async () => USAGE,
   },
+  // The browser-use bridge is main-process driven: in the preview nothing ever
+  // requests a browser action, so `onRequest` just returns its unsubscribe.
+  browser: {
+    onRequest: () => () => undefined,
+    respond: () => undefined,
+  },
 };
 
 window.fastvibe = api as unknown as typeof window.fastvibe;
@@ -301,10 +331,14 @@ installIconRewrite();
 
 /* ------------------------------------------------------------------ layout tweaks */
 
-if (pane === "files" || pane === "preview") {
+if (pane === "files" || pane === "preview" || pane === "git") {
   window.setTimeout(() => {
     void import("@/stores/side-pane").then(({ useSidePaneStore }) => {
       const store = useSidePaneStore.getState();
+      if (pane === "git") {
+        store.openGit();
+        return;
+      }
       store.openFiles();
       if (pane === "preview") {
         store.openFilePreview(previewFor(`${PREVIEW_CWD}/src/renderer/src/components/settings/theme-select.tsx`));
@@ -314,7 +348,8 @@ if (pane === "files" || pane === "preview") {
 }
 
 if (dialog === "market") {
-  // The market is local dialog state, not a route, so drive it through the DOM.
+  // Sidebar 「插件」 routes to Settings → 插件; open the catalog tab.
+  window.location.hash = "#/settings/extensions";
   const clickByText = (text: string, root: ParentNode = document): boolean => {
     const target = [...root.querySelectorAll<HTMLElement>("button")].find((node) =>
       (node.textContent ?? "").includes(text),
@@ -322,8 +357,7 @@ if (dialog === "market") {
     target?.click();
     return Boolean(target);
   };
-  window.setTimeout(() => clickByText("插件市场"), 700);
-  window.setTimeout(() => clickByText("官方市场"), 1400);
+  window.setTimeout(() => clickByText("官方市场"), 800);
 }
 
 if (expand === "tools") {

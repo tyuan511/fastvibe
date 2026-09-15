@@ -42,9 +42,8 @@ export function greetingForHour(hour: number): string {
 }
 
 /**
- * Faint brand watermark. The outline F is an evenodd filled path (the “stroke”
- * is the filled region), tinted with the theme foreground so it stays subtle
- * in both light and dark.
+ * Faint brand watermark. The mark is rendered as a thin outline and tinted with
+ * the theme foreground so it stays subtle in both light and dark.
  */
 function FWatermark(): JSX.Element {
   return (
@@ -55,9 +54,12 @@ function FWatermark(): JSX.Element {
       className="absolute left-0 top-0 size-[28rem] translate-y-1/2 text-foreground opacity-[0.10] dark:opacity-[0.12] [mask-image:linear-gradient(to_bottom,black_0%,black_22%,transparent_50%)] [-webkit-mask-image:linear-gradient(to_bottom,black_0%,black_22%,transparent_50%)]"
     >
       <path
-        fill="currentColor"
-        fillRule="evenodd"
         d={F_MARK_FILL}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.5"
+        strokeLinejoin="round"
+        vectorEffect="non-scaling-stroke"
       />
     </svg>
     </div>
@@ -69,7 +71,7 @@ export function NewSessionHero(): JSX.Element {
   return (
     <div className="relative flex flex-col items-center">
       <FWatermark />
-      <h2 className="relative z-10 text-[26px] font-semibold tracking-tight">
+      <h2 className="relative z-10 text-2xl font-semibold tracking-tight">
         {greetingForHour(new Date().getHours())}
       </h2>
     </div>

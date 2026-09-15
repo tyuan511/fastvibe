@@ -1,14 +1,16 @@
 import { create } from "zustand";
-import { THINKING_LEVELS, type EngineModel, type PermissionMode, type QueueBehavior, type ThinkingLevel } from "@shared/types";
+import { THINKING_EFFORT_LEVELS, type EngineModel, type PermissionMode, type QueueBehavior, type ThinkingLevel } from "@shared/types";
 import {
   DEFAULT_DARK_THEME,
   DEFAULT_LIGHT_THEME,
   DEFAULT_THEME_MODE,
+  DEFAULT_UI_FONT_SIZE,
   isThemeId,
   isThemeMode,
   type ThemeId,
   type ThemeMode,
 } from "@/lib/themes";
+import { sanitizeShortcutOverrides, type ShortcutOverrides } from "@/lib/shortcuts";
 
 const KEY = "fastvibe.settings";
 
@@ -22,6 +24,8 @@ export type AppSettings = {
   showTimestamps: boolean;
   compactCode: boolean;
   sendOnEnter: boolean;
+  /** When true, the packaged app checks for updates after launch. */
+  autoCheckUpdates: boolean;
   /**
    * Provider/model a brand-new conversation starts on. Persisted like every other
    * preference and read by the engine when it creates a session — the SDK's own
@@ -35,6 +39,11 @@ export type AppSettings = {
   lightTheme: ThemeId;
   /** Theme used while in dark mode. */
   darkTheme: ThemeId;
+  /**
+   * 界面字号: the root font size in px (default 16). Body text (`text-sm`) renders
+   * at 14px there; every other rem-based size scales with it — see `applyUiFontSize`.
+   */
+  uiFontSize: number;
   /**
    * Workspace sidebar width in px. Absent until the user resizes, so an older
    * install can still migrate its localStorage-only value.
@@ -55,6 +64,19 @@ export type AppSettings = {
    * kept it in localStorage and are migrated once in `stores/archive.ts`.
    */
   archivedConversations?: string[];
+  /**
+   * Manually dragged sidebar order, keyed by section (`pinned`, `recent`, or
+   * `project:<cwd>`). Each value is that section's own id list, so reordering one
+   * project never disturbs 置顶, 最近 or another project. A conversation missing
+   * from its section's list keeps the section's default position (creation order,
+   * or pin time for 置顶).
+   */
+  sidebarOrder?: Record<string, string[]>;
+  /**
+   * Shortcut overrides keyed by command id. Absent keys keep the catalog default;
+   * `null` unbinds. Only deviations are stored so a later default change still lands.
+   */
+  shortcuts?: ShortcutOverrides;
 };
 
 const DEFAULTS: AppSettings = {
@@ -70,6 +92,8 @@ const DEFAULTS: AppSettings = {
   themeMode: DEFAULT_THEME_MODE,
   lightTheme: DEFAULT_LIGHT_THEME,
   darkTheme: DEFAULT_DARK_THEME,
+  uiFontSize: DEFAULT_UI_FONT_SIZE,
+  autoCheckUpdates: true,
 };
 
 /** Drop malformed persisted theme values so a stale id can never crash the app. */
@@ -78,12 +102,18 @@ function sanitize(parsed: Partial<AppSettings>): Partial<AppSettings> {
   if (!isThemeMode(next.themeMode)) delete next.themeMode;
   if (!isThemeId(next.lightTheme)) delete next.lightTheme;
   if (!isThemeId(next.darkTheme)) delete next.darkTheme;
+  if (!isFontSize(next.uiFontSize)) delete next.uiFontSize;
   if (!isThinkingLevel(next.thinkingLevel)) delete next.thinkingLevel;
   if (!isEngineModel(next.defaultModel)) delete next.defaultModel;
   if (!isFiniteNumber(next.sidebarWidth)) delete next.sidebarWidth;
   if (typeof next.sidebarCollapsed !== "boolean") delete next.sidebarCollapsed;
   if (!isFiniteNumber(next.sidePaneWidth)) delete next.sidePaneWidth;
   if (!isIdList(next.archivedConversations)) delete next.archivedConversations;
+  if (!isIdListMap(next.sidebarOrder)) delete next.sidebarOrder;
+  if (typeof next.autoCheckUpdates !== "boolean") delete next.autoCheckUpdates;
+  const shortcuts = sanitizeShortcutOverrides(next.shortcuts);
+  if (shortcuts) next.shortcuts = shortcuts;
+  else delete next.shortcuts;
   return next;
 }
 
@@ -91,13 +121,33 @@ function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
-/** A level the engine cannot request would be clamped to `off`, so it never persists. */
+/** Accept 12–20 px, the range the 界面字号 picker offers; anything else resets. */
+function isFontSize(value: unknown): value is number {
+  return isFiniteNumber(value) && value >= 12 && value <= 20;
+}
+
+/**
+ * A level the engine cannot request would be clamped to `off`, so it never persists.
+ * `off` itself is rejected: a setting saved before 关闭推理 was dropped as an option
+ * would otherwise keep sending a parameter some models 400 on, so it resets to the
+ * default (跟随模型默认).
+ */
 function isThinkingLevel(value: unknown): value is ThinkingLevel | "auto" {
-  return value === "auto" || (typeof value === "string" && (THINKING_LEVELS as readonly string[]).includes(value));
+  return value === "auto" || (typeof value === "string" && (THINKING_EFFORT_LEVELS as readonly string[]).includes(value));
 }
 
 function isIdList(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+/** Section-keyed id lists (`sidebarOrder`); any malformed entry drops the whole map. */
+function isIdListMap(value: unknown): value is Record<string, string[]> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.values(value).every(isIdList)
+  );
 }
 
 /** A half-written `defaultModel` must never reach the engine's model lookup. */

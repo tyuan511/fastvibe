@@ -1,14 +1,15 @@
 import type { JSX } from "react";
-import { F_MARK_LINE, F_MARK_VIEWBOX } from "@/lib/f-mark";
+import fMark from "@/assets/f-mark.png";
 import { cn } from "@/lib/utils";
 
 /**
- * The FastVibe F traced as a single SVG stroke — the app's global loading mark.
+ * The FastVibe mark breathing under a soft halo — the app's global loading mark.
  *
- * It draws the glyph's outer contour (see `f-mark.ts`) with a dash animation, so
- * the line grows, holds, then erases. Colour rides `currentColor`, so it follows
- * whatever theme the caller is in. `index.html` paints the same mark before the
- * bundle runs; `dismissBootLoader()` hands that node off to this one.
+ * The mark is the shipped app icon with its background stripped, so the brand
+ * gradient survives; the halo is a blurred radial disc behind it, which keeps the
+ * loader legible on both the light and the dark background. `index.html` paints
+ * the same mark in its boot splash, so `dismissBootLoader()` hands the screen off
+ * with a fade instead of restarting the animation.
  */
 export function FLoader({
   className,
@@ -19,14 +20,9 @@ export function FLoader({
   label?: string;
 }): JSX.Element {
   return (
-    <svg
-      viewBox={F_MARK_VIEWBOX}
-      role="status"
-      aria-label={label}
-      fill="none"
-      className={cn("block size-11 text-muted-foreground", className)}
-    >
-      <path className="fv-loader-path" pathLength={1} d={F_MARK_LINE} />
-    </svg>
+    <span role="status" aria-label={label} className={cn("fv-loader size-11", className)}>
+      <span className="fv-loader-glow" aria-hidden="true" />
+      <img className="fv-loader-mark" src={fMark} alt="" aria-hidden="true" draggable={false} />
+    </span>
   );
 }

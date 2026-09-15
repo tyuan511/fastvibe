@@ -269,18 +269,9 @@ export function applyProviders(paths: FastVibePaths): FastVibeModel[] {
       providerName: provider.name,
       id: model.id,
       name: model.name,
-      thinkingLevels: withOff(model.thinkingLevels),
+      thinkingLevels: model.thinkingLevels,
     })),
   );
-}
-
-/**
- * The composer's effort menu always starts with 关闭推理: `off` is not a model
- * capability but the absence of thinking, so it is added here rather than stored.
- */
-function withOff(levels: ProviderModel["thinkingLevels"]): ProviderModel["thinkingLevels"] {
-  if (!levels || levels.length === 0 || levels.includes("off")) return levels;
-  return ["off", ...levels];
 }
 
 /**
@@ -345,7 +336,8 @@ function renderModelsJson(providers: StoredProvider[]): string {
 /**
  * pi's `thinkingLevelMap` for one model: an effort the user unchecked is mapped to
  * `null` (unsupported), so the engine clamps a request for it instead of sending a
- * parameter the upstream rejects. `off` is never mapped — see `THINKING_EFFORT_LEVELS`.
+ * parameter the upstream rejects. `off` is never mapped — see `THINKING_EFFORT_LEVELS`,
+ * and note that FastVibe never requests it at all.
  * A level whose provider name differs keeps its provider value. `xhigh` and `max` are
  * special: pi offers either only when the model maps it, so a checked one must carry a
  * mapping, and an unchecked one is written as `null` like everything else.

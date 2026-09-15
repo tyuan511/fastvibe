@@ -26,10 +26,21 @@ const ROW_STYLE: Record<DiffLine["kind"], string> = {
 };
 
 /** Line-numbered diff with a left colour bar, standing in for a full editor view. */
-export const DiffView = memo(function DiffView({ text }: { text: string }): JSX.Element {
+export const DiffView = memo(function DiffView({
+  text,
+  className,
+}: {
+  text: string;
+  className?: string;
+}): JSX.Element {
   const lines = text.replace(/\n$/, "").split("\n");
   return (
-    <div className="mt-1.5 max-h-80 overflow-auto rounded-md border border-border bg-background font-mono text-[11px] leading-5 select-text">
+    <div
+      className={cn(
+        "mt-1.5 max-h-80 overflow-auto rounded-md border border-border bg-background font-mono text-sm leading-5 select-text",
+        className,
+      )}
+    >
       {lines.map((line, index) => {
         const { kind, marker, text: body } = classify(line);
         return (

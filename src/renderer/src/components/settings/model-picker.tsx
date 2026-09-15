@@ -66,7 +66,7 @@ export function ModelPicker({
         <Button size="xs" variant="outline" onClick={() => onSelectedChange(new Set())}>
           清空
         </Button>
-        <span className="shrink-0 text-[11px] text-muted-foreground">
+        <span className="shrink-0 text-xs text-muted-foreground">
           已选 {selected.size}/{models.length}
         </span>
       </div>
@@ -98,10 +98,10 @@ export function ModelPicker({
                     {checked ? <HugeiconsIcon strokeWidth={2} icon={Tick02Icon} className="size-3" /> : null}
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[12.5px] font-medium">{model.name || model.id}</span>
-                    <span className="block truncate text-[11px] text-muted-foreground">{model.id}</span>
+                    <span className="block truncate text-xs font-medium">{model.name || model.id}</span>
+                    <span className="block truncate text-xs text-muted-foreground">{model.id}</span>
                   </span>
-                  <span className="hidden shrink-0 items-center gap-1 text-[10.5px] text-muted-foreground sm:flex">
+                  <span className="hidden shrink-0 items-center gap-1 text-xs text-muted-foreground sm:flex">
                     {model.reasoning ? <Badge variant="secondary">推理</Badge> : null}
                     <span>{inputSummary(model)}</span>
                     <span>{Math.round(model.contextWindow / 1000)}K</span>

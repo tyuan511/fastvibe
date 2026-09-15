@@ -7,6 +7,9 @@ const shared = resolve("src/shared");
 
 export default defineConfig({
   main: {
+    // Only production dependencies are externalized. Renderer packages live in
+    // devDependencies so Vite bundles them and electron-builder does not pack
+    // the 100 MB+ icon/UI trees into the asar.
     plugins: [externalizeDepsPlugin()],
     resolve: {
       alias: {

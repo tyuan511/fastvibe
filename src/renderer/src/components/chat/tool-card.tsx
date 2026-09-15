@@ -54,16 +54,16 @@ function TerminalPanel({ command, output, running }: { command: string; output: 
     <div className="mb-1 space-y-3 rounded-xl border border-border bg-muted/30 px-4 py-3">
       <div className="flex items-start gap-2">
         <span className="shrink-0 text-muted-foreground">$</span>
-        <pre className="min-w-0 flex-1 truncate font-mono text-[12px] whitespace-pre-wrap break-words text-foreground">
+        <pre className="min-w-0 flex-1 truncate font-mono text-sm whitespace-pre-wrap break-words text-foreground">
           {unwrapShellCommand(command)}
         </pre>
       </div>
       {output.trim() ? (
-        <pre className="max-h-72 overflow-auto font-mono text-[11px] leading-5 whitespace-pre-wrap break-words text-muted-foreground select-text">
+        <pre className="max-h-72 overflow-auto font-mono text-sm leading-5 whitespace-pre-wrap break-words text-muted-foreground select-text">
           {trim(output)}
         </pre>
       ) : !running ? (
-        <p className="font-mono text-[11px] text-muted-foreground">没有输出。</p>
+        <p className="font-mono text-sm text-muted-foreground">没有输出。</p>
       ) : null}
     </div>
   );
@@ -71,9 +71,9 @@ function TerminalPanel({ command, output, running }: { command: string; output: 
 
 function OutputBlock({ text }: { text: string }): JSX.Element {
   const body = trim(text);
-  if (!body) return <p className="text-[11.5px] text-muted-foreground">没有输出。</p>;
+  if (!body) return <p className="text-sm text-muted-foreground">没有输出。</p>;
   return (
-    <pre className="max-h-72 overflow-auto rounded-md border border-border bg-muted/40 p-2 font-mono text-[11px] leading-5 text-muted-foreground select-text">
+    <pre className="max-h-72 overflow-auto rounded-md border border-border bg-muted/40 p-2 font-mono text-sm leading-5 text-muted-foreground select-text">
       {body}
     </pre>
   );
@@ -85,8 +85,8 @@ function Parameters({ args }: { args: unknown }): JSX.Element | null {
   if (!text || text === "{}") return null;
   return (
     <div className="flex flex-col gap-1">
-      <p className="text-[10.5px] font-medium tracking-wide text-muted-foreground uppercase">参数</p>
-      <pre className="max-h-60 overflow-auto rounded-md border border-border bg-muted/40 p-2 font-mono text-[11px] leading-5 text-muted-foreground select-text">
+      <p className="text-sm font-medium tracking-wide text-muted-foreground uppercase">参数</p>
+      <pre className="max-h-60 overflow-auto rounded-md border border-border bg-muted/40 p-2 font-mono text-sm leading-5 text-muted-foreground select-text">
         {trim(text)}
       </pre>
     </div>
@@ -99,14 +99,14 @@ function FileActions({ path }: { path: string }): JSX.Element {
     <div className="flex flex-wrap items-center gap-3">
       <button
         type="button"
-        className="font-mono text-[11px] text-muted-foreground underline-offset-2 hover:underline"
+        className="font-mono text-sm text-muted-foreground underline-offset-2 hover:underline"
         onClick={() => void window.fastvibe.workspace.reveal(path)}
       >
         {displayPath(path, cwd)}
       </button>
       <button
         type="button"
-        className="text-[11px] text-muted-foreground underline-offset-2 hover:underline"
+        className="text-sm text-muted-foreground underline-offset-2 hover:underline"
         onClick={() => void useSessionStore.getState().openPreview(path)}
       >
         预览

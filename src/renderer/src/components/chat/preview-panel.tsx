@@ -33,9 +33,7 @@ export function PreviewPanel({
         </IconButton>
       </div>
       <ScrollArea className="min-h-0 flex-1">
-        <div className="p-3">
-          <PreviewBody preview={preview} />
-        </div>
+        <PreviewBody preview={preview} />
       </ScrollArea>
     </aside>
   );
@@ -43,13 +41,13 @@ export function PreviewPanel({
 
 export function PreviewBody({ preview }: { preview: FilePreview }): JSX.Element {
   if (preview.kind === "error") {
-    return <p className="text-sm text-destructive">{preview.message}</p>;
+    return <p className="px-3 py-3 text-sm text-destructive">{preview.message}</p>;
   }
   if (preview.kind === "binary") {
-    return <p className="text-sm text-muted-foreground">文件过大（{Math.round(preview.size / 1024)} KB），请在访达中打开。</p>;
+    return <p className="px-3 py-3 text-sm text-muted-foreground">文件过大（{Math.round(preview.size / 1024)} KB），请在访达中打开。</p>;
   }
   if (preview.kind === "image") {
-    return <img src={preview.dataUrl} alt={preview.name} className="max-w-full rounded-lg border border-border" />;
+    return <img src={preview.dataUrl} alt={preview.name} className="max-w-full" />;
   }
   if (preview.kind === "pdf") {
     return (
@@ -62,7 +60,7 @@ export function PreviewBody({ preview }: { preview: FilePreview }): JSX.Element 
   }
   if (preview.kind === "markdown") {
     return (
-      <div className="chat-markdown text-sm">
+      <div className="chat-markdown px-3 py-3 text-sm">
         <MarkdownView text={preview.text} />
       </div>
     );
@@ -80,7 +78,7 @@ export function PreviewBody({ preview }: { preview: FilePreview }): JSX.Element 
   if (preview.kind === "csv") {
     return (
       <div className="overflow-x-auto rounded-lg border border-border">
-        <table className="w-full border-collapse text-left text-xs">
+        <table className="w-full border-collapse text-left">
           <tbody>
             {preview.rows.map((row, index) => (
               <tr key={index}>
@@ -119,7 +117,7 @@ function CodePreview({
   const html = useHighlightedCode(text, language);
   const lineCount = text.split("\n").length;
   return (
-    <div className="code-shiki overflow-x-auto rounded-lg bg-muted/50 text-[12px] leading-5">
+    <div className="code-shiki overflow-x-auto bg-muted/50 text-xs leading-5">
       <div className="flex min-w-full">
         {showLineNumbers ? (
           <div

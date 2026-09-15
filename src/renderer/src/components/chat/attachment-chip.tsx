@@ -45,7 +45,7 @@ export function AttachmentChip({
   );
 
   const shell = cn(
-    "group/chip flex items-center gap-1.5 rounded-lg border border-border bg-muted/50 py-1 pl-1 pr-1.5 text-[11px]",
+    "group/chip flex items-center gap-1.5 rounded-lg border border-border bg-muted/50 py-1 pl-1 pr-1.5 text-xs",
     onOpen && "text-left transition-colors hover:bg-muted",
     className,
   );

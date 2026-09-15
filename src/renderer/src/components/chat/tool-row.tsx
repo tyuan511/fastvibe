@@ -103,7 +103,7 @@ export function ToolRow({
       <button
         type="button"
         title={title ?? subject}
-        className="min-w-0 max-w-full shrink cursor-pointer truncate font-mono text-[11.5px] text-foreground underline-offset-2 hover:underline"
+        className="min-w-0 max-w-full shrink cursor-pointer truncate font-mono text-sm text-foreground underline-offset-2 hover:underline"
         onClick={(event) => {
           event.preventDefault();
           event.stopPropagation();
@@ -113,7 +113,7 @@ export function ToolRow({
         {subject}
       </button>
     ) : subject ? (
-      <span className="min-w-0 truncate font-mono text-[11.5px] text-foreground">{subject}</span>
+      <span className="min-w-0 truncate font-mono text-sm text-foreground">{subject}</span>
     ) : null;
 
   const summary = (
@@ -124,7 +124,7 @@ export function ToolRow({
       </span>
       {subjectNode}
       {context ? (
-        <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground/60">{context}</span>
+        <span className="min-w-0 truncate font-mono text-sm text-muted-foreground/60">{context}</span>
       ) : null}
       {error ? <FailureHint error={error} /> : null}
       {trailing}
@@ -136,7 +136,7 @@ export function ToolRow({
       data-slot="tool-row"
       data-tool-id={persistKey}
       data-running={running ? "true" : undefined}
-      className="group/tool-summary flex w-full min-w-0 items-center gap-2 text-left text-[12.5px]"
+      className="group/tool-summary flex w-full min-w-0 items-center gap-2 text-left text-sm"
       title={title ?? subject}
     >
       {summary}
@@ -173,20 +173,20 @@ function FailureHint({ error }: { error: string }): JSX.Element {
   const trimmed = error.trim();
   const text = trimmed.length > 4000 ? `${trimmed.slice(0, 4000)}\n…` : trimmed;
 
-  if (!text) return <span className="shrink-0 text-[11.5px] text-destructive">执行失败</span>;
+  if (!text) return <span className="shrink-0 text-sm text-destructive">执行失败</span>;
 
   return (
     <Tooltip>
       <TooltipTrigger
         render={
-          <span className="shrink-0 cursor-help text-[11.5px] text-destructive underline decoration-dotted underline-offset-2">
+          <span className="shrink-0 cursor-help text-sm text-destructive underline decoration-dotted underline-offset-2">
             执行失败
           </span>
         }
       />
       <TooltipContent side="top" align="start" className="max-w-96">
         <div className="flex max-w-96 items-start gap-2">
-          <span className="line-clamp-6 min-w-0 flex-1 text-[11.5px] whitespace-pre-wrap break-words">
+          <span className="line-clamp-6 min-w-0 flex-1 text-sm whitespace-pre-wrap break-words">
             {text}
           </span>
           <button

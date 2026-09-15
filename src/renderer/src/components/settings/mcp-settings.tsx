@@ -105,7 +105,7 @@ export function McpSettings(): JSX.Element {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <span className="text-[12.5px] font-medium text-muted-foreground">已配置</span>
+        <span className="text-xs font-medium text-muted-foreground">已配置</span>
         <Button size="xs" variant="outline" onClick={() => { setError(null); setDraft({ ...EMPTY_DRAFT }); }}>
           <HugeiconsIcon strokeWidth={2} icon={Add01Icon} />
           添加服务器
@@ -157,8 +157,8 @@ function ServerRow({
     <div className="flex items-center gap-3 rounded-lg border border-border/70 px-3 py-2.5">
       <HugeiconsIcon strokeWidth={2} icon={Plug01Icon} className="size-4 text-muted-foreground" />
       <div className="min-w-0 flex-1">
-        <p className="truncate text-[13px] font-medium">{server.name}</p>
-        <p className="truncate text-[11px] text-muted-foreground" title={server.error ?? undefined}>
+        <p className="truncate text-sm font-medium">{server.name}</p>
+        <p className="truncate text-xs text-muted-foreground" title={server.error ?? undefined}>
           {server.error ??
             (server.transport === "stdio"
               ? `${server.command ?? ""} ${(server.args ?? []).join(" ")}`

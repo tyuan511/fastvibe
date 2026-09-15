@@ -1,17 +1,22 @@
-import { useEffect, useMemo, useRef, type JSX } from "react";
+import { useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Add01Icon,
-  BrowserIcon,
   Cancel01Icon,
+  ChromeIcon,
   File01Icon,
   Folder01Icon,
   GitCompareIcon,
-  GlobeIcon,
   MessageSquareIcon,
+  ExpandIcon,
+  MessageSquarePlusIcon,
+  MinimizeScreenIcon,
+  PanelLeftOpenIcon,
+  PanelRightCloseIcon,
   TerminalIcon,
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
+import { IconButton } from "@/components/icon-button";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -26,6 +31,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { ResizeHandle } from "@/components/resize-handle";
+import { CollapsiblePanel } from "@/components/layout/collapsible-panel";
+import { useShortcutLabel } from "@/lib/use-shortcuts";
+import { useSettingsStore } from "@/stores/settings";
 import { MIN_WIDTH, useSidePaneStore, type SidePaneTab } from "@/stores/side-pane";
 import { releaseBrowser, SidePaneBrowser } from "./side-pane-browser";
 import { SidePaneChat } from "./side-pane-chat";
@@ -33,13 +41,98 @@ import { SidePaneFiles } from "./side-pane-files";
 import { SidePaneGit } from "./side-pane-git";
 import { releaseTerminal, SidePaneTerminal } from "./side-pane-terminal";
 
+const IS_MAC = typeof navigator !== "undefined" && /mac/i.test(navigator.userAgent);
+
+function CollapseButton(): JSX.Element {
+  const setCollapsed = useSidePaneStore((state) => state.setCollapsed);
+  const shortcut = useShortcutLabel("toggleSidePane");
+  return (
+    <IconButton
+      size="icon-sm"
+      variant="ghost"
+      className="no-drag shrink-0 text-muted-foreground"
+      label="收起侧边面板"
+      shortcut={shortcut}
+      onClick={() => setCollapsed(true)}
+    >
+      <HugeiconsIcon strokeWidth={2} icon={PanelRightCloseIcon} />
+    </IconButton>
+  );
+}
+
+function SidebarCollapsedChrome({ onNewChat }: { onNewChat: () => void }): JSX.Element {
+  const updateSettings = useSettingsStore((state) => state.update);
+  const toggleSidebarShortcut = useShortcutLabel("toggleSidebar");
+  const newChatShortcut = useShortcutLabel("newChat");
+  return (
+    <div className="no-drag flex shrink-0 items-center gap-1">
+      <IconButton
+        size="icon-sm"
+        variant="ghost"
+        className="text-muted-foreground"
+        label="展开侧边栏"
+        shortcut={toggleSidebarShortcut}
+        onClick={() => updateSettings({ sidebarCollapsed: false })}
+      >
+        <HugeiconsIcon strokeWidth={2} icon={PanelLeftOpenIcon} />
+      </IconButton>
+      <IconButton
+        size="icon-sm"
+        variant="ghost"
+        className="text-muted-foreground"
+        label="新对话"
+        shortcut={newChatShortcut}
+        onClick={onNewChat}
+      >
+        <HugeiconsIcon strokeWidth={2} icon={MessageSquarePlusIcon} />
+      </IconButton>
+      <span className="mx-1.5 h-4 w-px shrink-0 bg-border" aria-hidden />
+    </div>
+  );
+}
+
+function MaximizeButton(): JSX.Element {
+  const maximized = useSidePaneStore((state) => state.maximized);
+  const toggleMaximized = useSidePaneStore((state) => state.toggleMaximized);
+  return (
+    <IconButton
+      size="icon-sm"
+      variant="ghost"
+      className="no-drag shrink-0 text-muted-foreground"
+      label={maximized ? "还原侧边面板" : "最大化侧边面板"}
+      onClick={toggleMaximized}
+    >
+      <HugeiconsIcon strokeWidth={2} icon={maximized ? MinimizeScreenIcon : ExpandIcon} />
+    </IconButton>
+  );
+}
+
 function tabIcon(type: SidePaneTab["type"]) {
   if (type === "git") return GitCompareIcon;
   if (type === "terminal") return TerminalIcon;
-  if (type === "browser") return GlobeIcon;
+  if (type === "browser") return ChromeIcon;
   if (type === "selection-side-chat") return MessageSquareIcon;
   if (type === "files") return Folder01Icon;
   return File01Icon;
+}
+
+function BrowserTabIcon({ src }: { src?: string | null }): JSX.Element {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    setFailed(false);
+  }, [src]);
+  if (src && !failed) {
+    return (
+      <img
+        src={src}
+        alt=""
+        className="size-3.5 shrink-0 rounded-sm"
+        referrerPolicy="no-referrer"
+        onError={() => setFailed(true)}
+      />
+    );
+  }
+  return <HugeiconsIcon strokeWidth={2} icon={ChromeIcon} className="size-3.5 shrink-0" />;
 }
 
 export function SidePane({
@@ -47,16 +140,21 @@ export function SidePane({
   project,
   parentId,
   canSideChat,
+  onNewChat,
   onError,
 }: {
   cwd?: string;
   project?: string;
   parentId?: string;
   canSideChat: boolean;
+  onNewChat: () => void;
   onError: (message: string) => void;
-}): JSX.Element | null {
+}): JSX.Element {
   const collapsed = useSidePaneStore((state) => state.collapsed);
+  const maximized = useSidePaneStore((state) => state.maximized);
+  const sidebarCollapsed = useSettingsStore((state) => state.settings.sidebarCollapsed ?? false);
   const width = useSidePaneStore((state) => state.width);
+  const leadWithSidebarChrome = maximized && sidebarCollapsed;
   const tabs = useSidePaneStore((state) => state.tabs);
   const activeTabId = useSidePaneStore((state) => state.activeTabId);
   const setWidth = useSidePaneStore((state) => state.setWidth);
@@ -75,6 +173,9 @@ export function SidePane({
   // Set once the drag has crossed the minimum, so collapsing fires a single
   // store write instead of one per mousemove until the drag ends.
   const collapsing = useRef(false);
+  const tabsViewportRef = useRef<HTMLDivElement>(null);
+  // Live splitter drags skip the spring so the edge tracks the pointer.
+  const [resizing, setResizing] = useState(false);
 
   const visibleTabs = useMemo(
     () => tabs.filter((item) => item.type !== "selection-side-chat" || (parentId && item.parentSessionId === parentId)),
@@ -90,6 +191,17 @@ export function SidePane({
     if (active) activate(active.id);
   }, [activate, active, activeTabId, visibleTabs]);
 
+  useEffect(() => {
+    if (!active?.id) return;
+    const viewport = tabsViewportRef.current;
+    const tab = viewport?.querySelector(`[data-side-pane-tab-id="${CSS.escape(active.id)}"]`);
+    if (!viewport || !(tab instanceof HTMLElement)) return;
+    const tabRect = tab.getBoundingClientRect();
+    const viewRect = viewport.getBoundingClientRect();
+    if (tabRect.left < viewRect.left) viewport.scrollLeft += tabRect.left - viewRect.left;
+    else if (tabRect.right > viewRect.right) viewport.scrollLeft += tabRect.right - viewRect.right;
+  }, [active?.id]);
+
   function disposeTab(tab: SidePaneTab): void {
     if (tab.type === "terminal") releaseTerminal(tab.id);
     if (tab.type === "browser") releaseBrowser(tab.id);
@@ -102,6 +214,7 @@ export function SidePane({
     const tab = tabs.find((item) => item.id === id);
     if (tab) disposeTab(tab);
     closeTab(id);
+    if (visibleTabs.filter((item) => item.id !== id).length === 0) setCollapsed(true);
   }
 
   function closeOthers(id: string): void {
@@ -117,9 +230,8 @@ export function SidePane({
       disposeTab(tab);
       closeTab(tab.id);
     }
+    setCollapsed(true);
   }
-
-  if (collapsed) return null;
 
   const cards = [
     canSideChat && parentId
@@ -133,16 +245,26 @@ export function SidePane({
     { id: "files", label: "文件", icon: Folder01Icon, onOpen: openFiles },
     hasReviewTab ? null : { id: "review", label: "审查", icon: GitCompareIcon, onOpen: openGit },
     { id: "terminal", label: "终端", icon: TerminalIcon, onOpen: () => openTerminal(cwd) },
-    { id: "browser", label: "浏览器", icon: BrowserIcon, onOpen: () => openBrowser() },
+    { id: "browser", label: "浏览器", icon: ChromeIcon, onOpen: () => openBrowser() },
   ].filter((item): item is NonNullable<typeof item> => item !== null);
 
   return (
-    <aside className="relative flex shrink-0 flex-col border-l border-border bg-background" style={{ width }}>
+    <CollapsiblePanel collapsed={collapsed} width={width} side="right" instant={resizing} maximized={maximized}>
+    <aside
+      className={cn(
+        "relative flex h-full min-h-0 w-full flex-col bg-background",
+        // Maximized, the conversation column is gone and this pane sits against
+        // the sidebar — keep only the sidebar's trailing border, not both.
+        !maximized && "border-l border-border",
+      )}
+    >
+      {maximized ? null : (
       <ResizeHandle
         side="left"
         onDragStart={() => {
           startWidth.current = width;
           collapsing.current = false;
+          setResizing(true);
         }}
         onDrag={(delta) => {
           const next = startWidth.current - delta;
@@ -158,19 +280,40 @@ export function SidePane({
           const max = Math.round(window.innerWidth * 0.65);
           setWidth(Math.min(max, next));
         }}
-        onDragEnd={() => persistWidth()}
+        onDragEnd={() => {
+          setResizing(false);
+          persistWidth();
+        }}
       />
+      )}
       {visibleTabs.length > 0 ? (
-        <div className="flex h-12 items-center gap-1 border-b border-border px-2">
-          <div data-side-pane-tabs-viewport="" className="flex min-w-0 flex-1 gap-1 overflow-x-auto">
+        <div
+          className={cn(
+            "flex h-11 shrink-0 items-center gap-1 overflow-hidden border-b border-border px-2",
+            leadWithSidebarChrome && IS_MAC && "pl-22",
+          )}
+        >
+          {leadWithSidebarChrome ? <SidebarCollapsedChrome onNewChat={onNewChat} /> : null}
+          <div className="flex min-w-0 flex-1 items-center gap-1">
+          <div
+            ref={tabsViewportRef}
+            data-side-pane-tabs-viewport=""
+            className="no-scrollbar flex h-7 min-w-0 items-center gap-1 overflow-x-auto overflow-y-hidden overscroll-x-contain scroll-fade-x"
+            onWheel={(event) => {
+              const node = event.currentTarget;
+              if (node.scrollWidth <= node.clientWidth) return;
+              if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+              node.scrollLeft += event.deltaY;
+            }}
+          >
             {visibleTabs.map((tab) => (
               <ContextMenu key={tab.id}>
-                <ContextMenuTrigger className="min-w-0">
+                <ContextMenuTrigger className="min-w-0 shrink-0">
                   <button
                     type="button"
                     data-side-pane-tab-id={tab.id}
                     className={cn(
-                      "inline-flex h-7 max-w-40 min-w-15 flex-[1_1_9.75rem] items-center gap-1.5 overflow-hidden rounded-lg border border-transparent px-1.5 text-xs font-medium whitespace-nowrap text-muted-foreground hover:bg-muted",
+                      "inline-flex h-7 max-w-40 min-w-15 items-center gap-1.5 overflow-hidden rounded-lg border border-transparent px-1.5 text-xs font-medium whitespace-nowrap text-muted-foreground hover:bg-muted",
                       tab.id === active?.id && "bg-muted text-foreground",
                     )}
                     onClick={() => activate(tab.id)}
@@ -181,7 +324,11 @@ export function SidePane({
                       }
                     }}
                   >
-                    <HugeiconsIcon strokeWidth={2} icon={tabIcon(tab.type)} className="size-3.5 shrink-0" />
+                    {tab.type === "browser" ? (
+                      <BrowserTabIcon src={tab.faviconUrl} />
+                    ) : (
+                      <HugeiconsIcon strokeWidth={2} icon={tabIcon(tab.type)} className="size-3.5 shrink-0" />
+                    )}
                     <span className="min-w-0 flex-1 truncate text-left">{tab.title}</span>
                     <span
                       role="presentation"
@@ -206,7 +353,7 @@ export function SidePane({
             ))}
           </div>
           <DropdownMenu>
-            <DropdownMenuTrigger render={<Button size="icon-xs" variant="outline" aria-label="新增标签" />}>
+            <DropdownMenuTrigger render={<Button size="icon-xs" variant="outline" className="shrink-0" aria-label="新增标签" />}>
               <HugeiconsIcon strokeWidth={2} icon={Add01Icon} />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-44">
@@ -231,13 +378,30 @@ export function SidePane({
                 终端
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => openBrowser()}>
-                <HugeiconsIcon strokeWidth={2} icon={GlobeIcon} />
+                <HugeiconsIcon strokeWidth={2} icon={ChromeIcon} />
                 浏览器
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+          </div>
+          <MaximizeButton />
+          <CollapseButton />
         </div>
-      ) : null}
+      ) : (
+        <div
+          className={cn(
+            "drag-region flex h-11 shrink-0 items-center gap-0.5 px-2",
+            leadWithSidebarChrome ? "justify-between" : "justify-end",
+            leadWithSidebarChrome && IS_MAC && "pl-22",
+          )}
+        >
+          {leadWithSidebarChrome ? <SidebarCollapsedChrome onNewChat={onNewChat} /> : null}
+          <div className="flex items-center gap-0.5">
+            <MaximizeButton />
+            <CollapseButton />
+          </div>
+        </div>
+      )}
       {visibleTabs.length === 0 ? (
         <div className="side-pane-open-tab-shell flex min-h-0 flex-1 flex-col bg-background">
           <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-5 py-10">
@@ -285,5 +449,6 @@ export function SidePane({
         </div>
       )}
     </aside>
+    </CollapsiblePanel>
   );
 }

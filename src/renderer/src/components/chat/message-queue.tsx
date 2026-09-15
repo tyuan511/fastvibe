@@ -77,7 +77,7 @@ export function MessageQueue({
       )}
     >
       {pauseReason ? (
-        <div className="mb-1 flex min-h-8 items-center gap-2 rounded-lg bg-muted/50 px-2.5 py-1.5 text-[12.5px]">
+        <div className="mb-1 flex min-h-8 items-center gap-2 rounded-lg bg-muted/50 px-2.5 py-1.5 text-xs">
           <HugeiconsIcon
             strokeWidth={2}
             icon={Alert02Icon}
@@ -96,7 +96,7 @@ export function MessageQueue({
         </div>
       ) : null}
       {hint ? (
-        <p className="px-2.5 pb-1 text-[11.5px] text-muted-foreground">{hint}</p>
+        <p className="px-2.5 pb-1 text-xs text-muted-foreground">{hint}</p>
       ) : null}
       <ul className="space-y-0.5">
         {items.map((item, index) => (
@@ -119,10 +119,10 @@ export function MessageQueue({
             >
               <HugeiconsIcon strokeWidth={2} icon={DragDropVerticalIcon} className="size-3.5" />
             </span>
-            <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-[11px] font-medium tabular-nums text-muted-foreground">
+            <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium tabular-nums text-muted-foreground">
               {index + 1}
             </span>
-            <span className="min-w-0 flex-1 truncate text-[13px] text-foreground" title={item.text}>
+            <span className="min-w-0 flex-1 truncate text-sm text-foreground" title={item.text}>
               {item.text}
             </span>
             <Button

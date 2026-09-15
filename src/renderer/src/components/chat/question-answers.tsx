@@ -43,17 +43,17 @@ export function QuestionAnswers({ tool, running }: { tool: ToolCallBlock; runnin
       {questions.map((item, index) => (
         <div key={index} className="flex flex-col gap-1">
           <div className="flex items-start gap-2">
-            <span className="mt-0.5 shrink-0 text-[11px] text-muted-foreground">{index + 1}.</span>
-            <span className="text-[12.5px] leading-5 text-foreground">{item.question}</span>
+            <span className="mt-0.5 shrink-0 text-sm text-muted-foreground">{index + 1}.</span>
+            <span className="text-sm leading-5 text-foreground">{item.question}</span>
           </div>
           {item.answer ? (
             <div className="flex items-center gap-1.5 pl-5">
               <HugeiconsIcon strokeWidth={2} icon={Tick02Icon} className="size-3 shrink-0 text-success" />
-              <span className="text-[12.5px] leading-5 text-foreground">{item.answer}</span>
-              {item.source === "custom" ? <span className="text-[11px] text-muted-foreground">自行输入</span> : null}
+              <span className="text-sm leading-5 text-foreground">{item.answer}</span>
+              {item.source === "custom" ? <span className="text-sm text-muted-foreground">自行输入</span> : null}
             </div>
           ) : (
-            <p className="pl-5 text-[11.5px] text-muted-foreground">{running ? "等待回答…" : "未回答"}</p>
+            <p className="pl-5 text-sm text-muted-foreground">{running ? "等待回答…" : "未回答"}</p>
           )}
         </div>
       ))}

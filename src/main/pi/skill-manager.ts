@@ -3,6 +3,7 @@ import { cp, mkdir, rm, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { DefaultResourceLoader, loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
 import type { SkillDraft, SkillInfo } from "@shared/types";
+import { builtinSkillPaths } from "./extension-manager";
 
 const NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
@@ -23,6 +24,7 @@ export class SkillManager {
       noPromptTemplates: true,
       noThemes: true,
       noContextFiles: true,
+      additionalSkillPaths: builtinSkillPaths(),
     });
     await loader.reload();
     return loader.getSkills().skills.map((skill) => ({

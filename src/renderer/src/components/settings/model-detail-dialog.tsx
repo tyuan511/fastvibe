@@ -49,8 +49,8 @@ const SOURCE_LABELS: Record<string, string> = {
 
 const MODALITY_KEYS = ["image", "video", "file"] as const;
 
-/** Model without recorded levels: assume what the composer falls back to, minus `off`. */
-const DEFAULT_EFFORTS = DEFAULT_THINKING_LEVELS.filter((level) => level !== "off");
+/** Model without recorded levels: assume what the composer falls back to. */
+const DEFAULT_EFFORTS = DEFAULT_THINKING_LEVELS;
 
 /**
  * Everything the dialog can assert about a model: whether it reasons, and which inputs
@@ -179,7 +179,7 @@ export function ModelDetailDialog({
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>模型详情</DialogTitle>
-          <DialogDescription className="truncate font-mono text-[11px]">{model?.id ?? ""}</DialogDescription>
+          <DialogDescription className="truncate font-mono text-xs">{model?.id ?? ""}</DialogDescription>
         </DialogHeader>
 
         {/* Scrolls only when the window is short, so the dialog never runs off screen. */}
@@ -190,7 +190,7 @@ export function ModelDetailDialog({
                 value={name}
                 disabled={!editable}
                 placeholder={model.id}
-                className="h-8 text-[13px]"
+                className="h-8 text-sm"
                 onChange={(event) => setName(event.target.value)}
               />
             </Row>
@@ -205,7 +205,7 @@ export function ModelDetailDialog({
                   value={api}
                   onValueChange={(value) => setApi(value ?? INHERIT_API)}
                 >
-                  <SelectTrigger size="sm" className="w-full text-[12.5px]">
+                  <SelectTrigger size="sm" className="w-full text-xs">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -228,7 +228,7 @@ export function ModelDetailDialog({
                   value={context}
                   disabled={!editable}
                   inputMode="numeric"
-                  className="h-8 text-[13px] tabular-nums"
+                  className="h-8 text-sm tabular-nums"
                   onChange={(event) => setContext(event.target.value)}
                 />
               </Row>
@@ -237,7 +237,7 @@ export function ModelDetailDialog({
                   value={output}
                   disabled={!editable}
                   inputMode="numeric"
-                  className="h-8 text-[13px] tabular-nums"
+                  className="h-8 text-sm tabular-nums"
                   onChange={(event) => setOutput(event.target.value)}
                 />
               </Row>
@@ -255,7 +255,7 @@ export function ModelDetailDialog({
                   />
                 ))}
               </div>
-              <p className="text-[11px] text-muted-foreground">推理与图片输入会写入引擎配置，视频、文件仅作记录。</p>
+              <p className="text-xs text-muted-foreground">推理与图片输入会写入引擎配置，视频、文件仅作记录。</p>
             </Row>
 
             <Row label="思考强度">
@@ -278,8 +278,8 @@ export function ModelDetailDialog({
                 ))}
               </div>
               {editable && !reasoning ? (
-                <p className="text-[11px] text-muted-foreground">
-                  勾选「推理」后可选择强度；不勾选则等同于关闭推理。
+                <p className="text-xs text-muted-foreground">
+                  勾选「推理」后可选择强度；不勾选则该模型不发送思考参数。
                 </p>
               ) : null}
             </Row>
@@ -288,7 +288,7 @@ export function ModelDetailDialog({
               <Prices model={model} />
             </Row>
 
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               参数来源：{SOURCE_LABELS[model.source ?? ""] ?? "未知"}
             </p>
           </div>
@@ -314,7 +314,7 @@ export function ModelDetailDialog({
 function Row({ label, children }: { label: string; children: ReactNode }): JSX.Element {
   return (
     <div className="space-y-1.5">
-      <Label className="text-[12px] font-normal text-muted-foreground">{label}</Label>
+      <Label className="text-xs font-normal text-muted-foreground">{label}</Label>
       {children}
     </div>
   );
@@ -322,7 +322,7 @@ function Row({ label, children }: { label: string; children: ReactNode }): JSX.E
 
 function ReadValue({ children }: { children: ReactNode }): JSX.Element {
   return (
-    <div className="flex h-8 items-center rounded-lg border border-dashed border-border px-3 text-[12.5px] text-muted-foreground">
+    <div className="flex h-8 items-center rounded-lg border border-dashed border-border px-3 text-xs text-muted-foreground">
       {children}
     </div>
   );
@@ -340,7 +340,7 @@ function CheckItem({
   onToggle: (on: boolean) => void;
 }): JSX.Element {
   return (
-    <Label className={cn("gap-1.5 text-[12.5px] font-normal", disabled && "text-muted-foreground")}>
+    <Label className={cn("gap-1.5 text-xs font-normal", disabled && "text-muted-foreground")}>
       <Checkbox checked={checked} disabled={disabled} onCheckedChange={(value) => onToggle(value === true)} />
       {label}
     </Label>
@@ -368,8 +368,8 @@ function Prices({ model }: { model: ProviderModel }): JSX.Element {
 function PriceTable({ label, cost, first }: { label: string; cost: ModelCost; first?: boolean }): JSX.Element {
   return (
     <div className="space-y-1 pt-1">
-      <p className={cn("text-[11px]", first ? "text-foreground" : "text-warning")}>{label}</p>
-      <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[12px] tabular-nums">
+      <p className={cn("text-xs", first ? "text-foreground" : "text-warning")}>{label}</p>
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs tabular-nums">
         <PriceLine label="输入" value={cost.input} />
         <PriceLine label="输出" value={cost.output} />
         <PriceLine label="缓存读" value={cost.cacheRead} />

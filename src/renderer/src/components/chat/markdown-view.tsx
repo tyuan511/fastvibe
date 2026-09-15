@@ -24,13 +24,13 @@ const CodeBlock = memo(function CodeBlock({ language, code }: { language?: strin
   return (
     <div className="my-2 overflow-hidden rounded-lg border border-border bg-muted/40">
       <div className="flex items-center justify-between border-b border-border px-2 py-1">
-        <span className="text-[11px] font-medium text-muted-foreground">{language || "code"}</span>
+        <span className="text-xs font-medium text-muted-foreground">{language || "code"}</span>
         <Button size="xs" variant="ghost" onClick={() => void copy()}>
           {copied ? <HugeiconsIcon strokeWidth={2} icon={Tick02Icon} /> : <HugeiconsIcon strokeWidth={2} icon={Copy01Icon} />}
           {copied ? "已复制" : "复制"}
         </Button>
       </div>
-      <div className="code-shiki overflow-x-auto p-3 text-[12px] leading-5">
+      <div className="code-shiki overflow-x-auto p-3 text-sm leading-5">
         {html ? (
           <div dangerouslySetInnerHTML={{ __html: html }} />
         ) : (
@@ -75,7 +75,7 @@ export const MarkdownView = memo(function MarkdownView({ text }: { text: string 
         ),
         table: ({ children }) => (
           <div className="my-2 overflow-x-auto rounded-lg border border-border">
-            <table className="w-full min-w-96 border-collapse text-left text-xs">{children}</table>
+            <table className="w-full min-w-96 border-collapse text-left">{children}</table>
           </div>
         ),
         th: ({ children }) => (

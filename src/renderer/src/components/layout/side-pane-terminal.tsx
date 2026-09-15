@@ -2,7 +2,17 @@ import { useEffect, useRef, type JSX } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { useSidePaneStore } from "@/stores/side-pane";
+import { useSettingsStore } from "@/stores/settings";
 import "@xterm/xterm/css/xterm.css";
+
+/**
+ * Terminal font follows the 界面字号 preference. xterm's canvas needs a plain px
+ * number, so resolve the root size from <html> (the setting writes it inline).
+ */
+function rootFontSize(): number {
+  const size = Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
+  return Number.isFinite(size) && size > 0 ? size : 16;
+}
 
 type Entry = {
   term: Terminal;
@@ -52,6 +62,7 @@ export function SidePaneTerminal({
   visible: boolean;
 }): JSX.Element {
   const patchTab = useSidePaneStore((state) => state.patchTab);
+  const uiFontSize = useSettingsStore((state) => state.settings.uiFontSize);
   const box = useRef<HTMLDivElement>(null);
   const visibleRef = useRef(visible);
   visibleRef.current = visible;
@@ -84,7 +95,7 @@ export function SidePaneTerminal({
     host.className = "h-full min-h-0 w-full overflow-hidden";
     mount.appendChild(host);
     const term = new Terminal({
-      fontSize: 13,
+      fontSize: Math.round(rootFontSize() * (13 / 16)),
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
       theme: readTheme(),
       cursorBlink: true,
@@ -189,6 +200,19 @@ export function SidePaneTerminal({
       if (created.host.parentElement === mount) getStash().appendChild(created.host);
     };
   }, [cwd, patchTab, tabId]);
+
+  // 界面字号 changed: resize the existing terminal instead of rebuilding it.
+  useEffect(() => {
+    const entry = registry.get(tabId);
+    if (!entry) return;
+    entry.term.options.fontSize = Math.round(rootFontSize() * (13 / 16));
+    try {
+      entry.fit.fit();
+    } catch {
+      // ignore
+    }
+    if (entry.sessionId) void window.fastvibe.workspace.terminalResize(entry.sessionId, entry.term.cols, entry.term.rows);
+  }, [uiFontSize, tabId]);
 
   return <div ref={box} className="h-full min-h-0 w-full bg-[var(--code-bg)] p-2" />;
 }

@@ -5,6 +5,17 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/*
+ * Interface scale ----------------------------------------------------------------
+ * The 界面字号 setting writes `--ui-root-font-size` inline on <html>. Every size in
+ * the app is a rem-based Tailwind `text-*` utility (body copy is `text-sm`), so the
+ * root font size is the single knob that scales the whole interface. The 16px
+ * fallback is Tailwind's baseline, i.e. a 14px body.
+ */
+html {
+  font-size: var(--ui-root-font-size, 16px);
+}
+
 :root {
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
@@ -215,6 +226,14 @@ body {
   transform: translateZ(0);
 }
 
+/* The transcript's run state ("正在工作") sits alone in an empty reply, so it needs
+   to read at a glance: same wave, but running on the foreground token instead of
+   the softer muted one the row-level shimmers use. */
+.animated-gradient-text-emphasis {
+  --animated-gradient-text-strong: var(--foreground);
+  --animated-gradient-text-soft: color-mix(in oklab, var(--foreground) 26%, transparent);
+}
+
 @keyframes gradient-flow {
   0% {
     background-position: 100% 0;
@@ -244,39 +263,62 @@ body {
 }
 
 /* F loader -------------------------------------------------------------------
-   The brand F traced as one SVG stroke, shared by the React <FLoader> and the
-   pre-JS boot splash in index.html. The splash inlines its own copy of these
+   The brand mark breathing under a soft halo, shared by the React <FLoader> and
+   the pre-JS boot splash in index.html. The splash inlines its own copy of these
    rules because it has to animate before this stylesheet exists (in dev it is
-   injected by JS), so keep the two in sync. */
-.fv-loader-path {
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 30;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-dasharray: 1;
-  animation: fv-loader-trace 2.4s ease-in-out infinite;
+   injected by JS), so keep the two in sync.
+
+   The wrapper owns the size (callers pass `size-*`); the mark fills it and the
+   halo bleeds past its edges. */
+.fv-loader {
+  position: relative;
+  display: grid;
+  place-items: center;
 }
 
-@keyframes fv-loader-trace {
-  0% {
-    stroke-dashoffset: 1;
-  }
-  55% {
-    stroke-dashoffset: 0;
-  }
-  80% {
-    stroke-dashoffset: 0;
-  }
+.fv-loader-glow {
+  position: absolute;
+  inset: -18%;
+  border-radius: 9999px;
+  background: radial-gradient(circle, rgba(109, 124, 255, 0.45), rgba(109, 124, 255, 0) 68%);
+  filter: blur(6px);
+  animation: fv-loader-halo 3.6s cubic-bezier(0.37, 0, 0.63, 1) infinite;
+}
+
+.fv-loader-mark {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  animation: fv-loader-breathe 3.6s cubic-bezier(0.37, 0, 0.63, 1) infinite;
+}
+
+@keyframes fv-loader-breathe {
+  0%,
   100% {
-    stroke-dashoffset: -1;
+    transform: scale(0.95);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+}
+
+@keyframes fv-loader-halo {
+  0%,
+  100% {
+    opacity: 0.4;
+    transform: scale(0.93);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.08);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .fv-loader-path {
+  .fv-loader-mark,
+  .fv-loader-glow {
     animation: none;
-    stroke-dashoffset: 0;
   }
 }
 

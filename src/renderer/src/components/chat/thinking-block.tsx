@@ -122,14 +122,14 @@ export const ThinkingBlock = memo(function ThinkingBlock({
       <CollapsibleTrigger
         className={cn(
           "group/reasoning inline-flex min-w-0 max-w-full cursor-pointer items-center gap-2 self-start",
-          "text-left text-[12.5px] transition-colors",
+          "text-left text-sm transition-colors",
           "rounded-sm focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
         )}
       >
         <HugeiconsIcon
           strokeWidth={2}
           icon={BrainIcon}
-          className={cn("size-4 shrink-0", active ? "text-muted-foreground" : "text-muted-foreground/60")}
+          className={cn("size-4 shrink-0 text-muted-foreground")}
         />
         <span className="shrink-0 whitespace-nowrap">
           {active ? (
@@ -143,7 +143,7 @@ export const ThinkingBlock = memo(function ThinkingBlock({
           <>
             <span className="shrink-0 text-muted-foreground/40">·</span>
             <span
-              className="min-w-0 flex-1 overflow-hidden text-[11.5px] whitespace-nowrap text-muted-foreground/60"
+              className="min-w-0 flex-1 overflow-hidden text-sm whitespace-nowrap text-muted-foreground/60"
               style={{ WebkitMaskImage: TICKER_MASK, maskImage: TICKER_MASK }}
             >
               <span key={ticker.key} className="reasoning-line inline-block">
@@ -174,7 +174,7 @@ export const ThinkingBlock = memo(function ThinkingBlock({
             style={bodyMask ? { WebkitMaskImage: bodyMask, maskImage: bodyMask } : undefined}
             className={cn(
               "ml-2 max-h-60 overflow-auto border-l border-border pl-3.5",
-              "text-[12px] leading-5 whitespace-pre-wrap break-words text-muted-foreground/80 select-text",
+              "text-sm leading-5 whitespace-pre-wrap break-words text-muted-foreground/80 select-text",
             )}
           >
             {thinking}

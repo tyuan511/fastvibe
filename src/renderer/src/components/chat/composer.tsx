@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type JSX, type KeyboardEvent, type ReactNode } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Add01Icon, ArrowDown01Icon, ArrowUp02Icon, AttachmentIcon, Cancel01Icon, ChartHistogramIcon, Folder01Icon, HandIcon, MagicWand02Icon, Search01Icon, ShieldAlertIcon, ShieldCheckIcon, SparklesIcon, SquareIcon, Tick02Icon } from "@hugeicons/core-free-icons";
+import { Add01Icon, ArrowDown01Icon, ArrowUp02Icon, AttachmentIcon, Cancel01Icon, ChartHistogramIcon, Folder01Icon, HandIcon, MagicWand02Icon, ScissorIcon, Search01Icon, ShieldAlertIcon, ShieldCheckIcon, SparklesIcon, SquareIcon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/icon-button";
 import {
@@ -34,11 +34,14 @@ import type {
   SlashCommand,
   ThinkingLevel,
 } from "@shared/types";
-import { DEFAULT_THINKING_LEVELS } from "@shared/types";
+import { DEFAULT_THINKING_LEVELS, THINKING_LEVELS } from "@shared/types";
 import { filesToAttachments } from "@/lib/attachments";
 import { THINKING_LABELS } from "@/lib/thinking-levels";
 import { useGitStatus } from "@/lib/use-git-status";
 import { cn } from "@/lib/utils";
+import { matchChord, resolveBinding } from "@/lib/shortcuts";
+import { useShortcutLabel } from "@/lib/use-shortcuts";
+import { useSettingsStore } from "@/stores/settings";
 import { GitBranchChip } from "./git-branch-chip";
 import { AttachmentChip } from "./attachment-chip";
 import { MessageQueue } from "./message-queue";
@@ -63,6 +66,7 @@ const PERMISSION_DESCRIPTIONS: Record<PermissionMode, string> = {
  */
 const COMMAND_ICONS: Record<string, typeof SparklesIcon> = {
   skill: MagicWand02Icon,
+  builtin: ScissorIcon,
 };
 
 /**
@@ -209,10 +213,10 @@ function ContextUsagePanel({
     <div className="space-y-2.5">
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <span className="text-[13px] font-medium">上下文窗口</span>
+          <span className="text-sm font-medium">上下文窗口</span>
           <span
             className={cn(
-              "text-[13px] font-semibold tabular-nums",
+              "text-sm font-semibold tabular-nums",
               clamped >= 90 ? "text-destructive" : clamped >= 70 ? "text-warning" : "text-foreground",
             )}
           >
@@ -222,7 +226,7 @@ function ContextUsagePanel({
         <div className="h-1.5 overflow-hidden rounded-full bg-muted">
           <div className={cn("h-full rounded-full transition-[width]", barColor)} style={{ width: `${clamped}%` }} />
         </div>
-        <div className="flex items-center justify-between text-[11.5px] text-muted-foreground">
+        <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span className="tabular-nums">已用 {formatCount(used)}</span>
           <span className="tabular-nums">
             剩余 {formatCount(remaining)} / {formatCount(windowTokens)}
@@ -233,11 +237,11 @@ function ContextUsagePanel({
       {stats ? (
         <>
           <Separator />
-          <div className="flex items-center gap-1.5 text-[11px] font-medium tracking-wide text-muted-foreground">
+          <div className="flex items-center gap-1.5 text-xs font-medium tracking-wide text-muted-foreground">
             <HugeiconsIcon strokeWidth={2} icon={ChartHistogramIcon} className="size-3.5" />
             轮次统计
           </div>
-          <dl className="space-y-1.5 text-[12px]">
+          <dl className="space-y-1.5 text-xs">
             <StatRow label="回答速度" value={formatSpeed(output, timing?.modelMs)} />
             <StatRow label="模型耗时" value={formatDuration(timing?.modelMs)} />
             <StatRow label="工具耗时" value={formatDuration(timing?.toolMs)} />
@@ -260,6 +264,7 @@ export function Composer({
   value,
   disabled,
   streaming,
+  compacting = false,
   placeholder,
   models,
   model,
@@ -300,6 +305,8 @@ export function Composer({
   value: string;
   disabled: boolean;
   streaming: boolean;
+  /** Compaction is in flight: the stop button aborts it the same way it aborts a run. */
+  compacting?: boolean;
   placeholder?: string;
   models: FastVibeModel[];
   model?: { provider: string; id: string };
@@ -351,6 +358,9 @@ export function Composer({
   const [projectOpen, setProjectOpen] = useState(false);
   const [projectQuery, setProjectQuery] = useState("");
   const histDraft = useRef("");
+  const sendBinding = useSettingsStore((state) => resolveBinding("send", state.settings.shortcuts));
+  const sendShortcut = useShortcutLabel("send");
+  const stopShortcut = useShortcutLabel("stop");
 
   // The composer survives session switches, so a plain autoFocus never re-fires.
   // A changing signal (new chat, app launch) pulls focus back to the input.
@@ -452,8 +462,19 @@ export function Composer({
       }
     }
 
-    if (event.key === "Enter" && !event.shiftKey) {
-      if (!sendOnEnter && !event.metaKey && !event.ctrlKey) return;
+    if (sendBinding && matchChord(event.nativeEvent, sendBinding)) {
+      event.preventDefault();
+      submit();
+      return;
+    }
+    if (
+      sendOnEnter &&
+      event.key === "Enter" &&
+      !event.shiftKey &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.altKey
+    ) {
       event.preventDefault();
       submit();
     }
@@ -468,10 +489,13 @@ export function Composer({
 
   const selected = model ? modelKey(model) : undefined;
   const selectedModel = models.find((item) => model && modelKey(item) === selected);
+  // The menu only ever offers levels FastVibe is willing to request, i.e. never `off`.
+  // The chip still names whatever the session is actually on — a restored conversation
+  // or a model that does not think at all reports `off`, and saying 低 there would lie.
   const thinkingOptions = selectedModel?.thinkingLevels?.length
     ? selectedModel.thinkingLevels
     : DEFAULT_THINKING_LEVELS;
-  const thinkingValue = thinkingOptions.includes(thinkingLevel as ThinkingLevel)
+  const thinkingValue = (THINKING_LEVELS as readonly string[]).includes(thinkingLevel ?? "")
     ? (thinkingLevel as ThinkingLevel)
     : thinkingOptions[0];
   const modelsByProvider = useMemo(() => {
@@ -593,7 +617,7 @@ export function Composer({
                 render={
                   <button
                     type="button"
-                    className="group flex h-7 max-w-56 items-center gap-1.5 rounded-full px-2 text-[13px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground"
+                    className="group flex h-7 max-w-56 items-center gap-1.5 rounded-full px-2 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground"
                   />
                 }
               >
@@ -613,14 +637,14 @@ export function Composer({
                 <span className="max-w-44 truncate">{project ? projects.find((item) => item.cwd === project)?.name ?? workspaceLabel : "选择项目"}</span>
                 <HugeiconsIcon strokeWidth={1.8} icon={ArrowDown01Icon} className="size-3 shrink-0" />
               </PopoverTrigger>
-              <PopoverContent align="start" side="top" sideOffset={12} className="w-[280px] gap-0 rounded-xl p-1 shadow-lg">
+              <PopoverContent align="start" side="top" sideOffset={12} className="w-70 gap-0 rounded-xl p-1 shadow-lg">
                 <div className="relative mb-0.5 px-0.5 pt-0.5">
                   <HugeiconsIcon strokeWidth={2} icon={Search01Icon} className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
                   <Input
                     autoFocus
                     value={projectQuery}
                     placeholder="搜索项目"
-                    className="h-7 rounded-md border-0 bg-transparent pl-6.5 text-[13px] shadow-none focus-visible:ring-0"
+                    className="h-7 rounded-md border-0 bg-transparent pl-6.5 text-sm shadow-none focus-visible:ring-0"
                     onChange={(event) => setProjectQuery(event.target.value)}
                   />
                 </div>
@@ -630,7 +654,7 @@ export function Composer({
                       key={item.cwd}
                       type="button"
                       className={cn(
-                        "flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-[13px] transition-colors hover:bg-muted",
+                        "flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm transition-colors hover:bg-muted",
                         item.cwd === project && "bg-muted font-medium",
                       )}
                       onClick={() => {
@@ -642,13 +666,13 @@ export function Composer({
                       <span className="truncate">{item.name}</span>
                     </button>
                   )) : (
-                    <div className="px-2 py-1.5 text-[13px] text-muted-foreground">没有匹配的项目</div>
+                    <div className="px-2 py-1.5 text-sm text-muted-foreground">没有匹配的项目</div>
                   )}
                 </div>
                 <div className="my-0.5 border-t border-border" />
                 <button
                   type="button"
-                  className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-[13px] text-muted-foreground hover:bg-muted hover:text-foreground"
+                  className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
                   onClick={() => {
                     setProjectOpen(false);
                     onPickWorkspace();
@@ -713,7 +737,7 @@ export function Composer({
           disabled={disabled}
           placeholder={streaming ? "继续输入以排队后续修改" : placeholder ?? "随心输入"}
           className={cn(
-            "field-sizing-content max-h-56 min-h-[52px] resize-none border-0 bg-transparent px-4 text-[13.5px] leading-6 shadow-none focus-visible:ring-0 disabled:bg-transparent disabled:opacity-100 dark:bg-transparent",
+            "field-sizing-content max-h-56 min-h-13 resize-none border-0 bg-transparent px-4 text-sm leading-6 shadow-none focus-visible:ring-0 disabled:bg-transparent disabled:opacity-100 dark:bg-transparent",
             attachments.length > 0 ? "pt-2" : "pt-3.5",
           )}
           onChange={(event) => handleChange(event.target.value)}
@@ -738,12 +762,12 @@ export function Composer({
               render={
                 <Chip className="text-warning hover:bg-warning/10 hover:text-warning">
                   <HugeiconsIcon strokeWidth={2} icon={ShieldAlertIcon} className="size-4" />
-                  <span className="hidden @min-[440px]/composer:inline">{PERMISSION_LABELS[permissionMode]}</span>
+                  <span className="hidden @min-[27.5rem]/composer:inline">{PERMISSION_LABELS[permissionMode]}</span>
                   <HugeiconsIcon strokeWidth={2} icon={ArrowDown01Icon} className="size-3" />
                 </Chip>
               }
             />
-            <DropdownMenuContent align="start" className="w-[300px] min-w-[300px] p-1">
+            <DropdownMenuContent align="start" className="w-75 min-w-75 p-1">
               <DropdownMenuGroup>
                 <DropdownMenuLabel className="px-1.5 py-1 text-xs text-muted-foreground">
                   应如何批准 FastVibe 操作？
@@ -767,8 +791,8 @@ export function Composer({
                     >
                       <HugeiconsIcon strokeWidth={2} icon={modeIcon} className="mt-0.5 size-3.5 shrink-0" />
                       <span className="min-w-0">
-                        <span className="block text-[13px] font-medium leading-4">{PERMISSION_LABELS[mode]}</span>
-                        <span className="mt-0.5 block text-[11px] font-normal leading-3.5 text-muted-foreground">
+                        <span className="block text-sm font-medium leading-4">{PERMISSION_LABELS[mode]}</span>
+                        <span className="mt-0.5 block text-xs font-normal leading-3.5 text-muted-foreground">
                           {PERMISSION_DESCRIPTIONS[mode]}
                         </span>
                       </span>
@@ -784,7 +808,7 @@ export function Composer({
           <div className="flex-1" />
 
           {contextUsedPercent != null && contextWindow > 0 ? (
-            <span className="hidden @min-[440px]/composer:contents">
+            <span className="hidden @min-[27.5rem]/composer:contents">
               <Popover>
                 <PopoverTrigger
                   render={
@@ -875,7 +899,7 @@ export function Composer({
             </DropdownMenu>
           </div>
 
-          <span className="hidden @min-[440px]/composer:contents">
+          <span className="hidden @min-[27.5rem]/composer:contents">
             <DropdownMenu>
               <DropdownMenuTrigger
                 render={
@@ -902,25 +926,13 @@ export function Composer({
             </DropdownMenu>
           </span>
 
-          {streaming && hasContent ? (
+          {(compacting || (streaming && !hasContent)) ? (
             <IconButton
               size="icon-sm"
-              variant="default"
-              className="rounded-full"
-              label="加入队列"
-              disabled={disabled}
-              onClick={submit}
-            >
-              <HugeiconsIcon strokeWidth={2} icon={ArrowUp02Icon} />
-            </IconButton>
-          ) : null}
-
-          {streaming ? (
-            <IconButton
-              size="icon-sm"
-              variant="secondary"
+              variant="destructive"
               className="rounded-full"
               label="停止"
+              shortcut={stopShortcut}
               onClick={onAbort}
             >
               <HugeiconsIcon strokeWidth={2} icon={SquareIcon} className="size-3.5 fill-current" />
@@ -930,7 +942,8 @@ export function Composer({
               size="icon-sm"
               variant="default"
               className="rounded-full"
-              label="发送"
+              label={streaming ? "加入队列" : "发送"}
+              shortcut={sendShortcut}
               disabled={disabled || !hasContent}
               onClick={submit}
             >

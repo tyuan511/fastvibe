@@ -140,14 +140,14 @@ export function ArchivedSettings({
 
   return (
     <div className="space-y-4">
-      <p className="px-1 text-[11.5px] leading-4 text-muted-foreground">
+      <p className="px-1 text-xs leading-4 text-muted-foreground">
         归档只是把对话从侧边栏收起，内容仍保存在磁盘上；删除会连同会话记录一起移除，无法恢复。
       </p>
 
       {notice ? (
         <Alert variant={notice.kind === "error" ? "destructive" : "default"} className="px-3 py-2">
           <HugeiconsIcon strokeWidth={2} icon={notice.kind === "error" ? AlertCircleIcon : ArchiveRestoreIcon} />
-          <AlertDescription className="text-[12px]">{notice.text}</AlertDescription>
+          <AlertDescription className="text-xs">{notice.text}</AlertDescription>
         </Alert>
       ) : null}
 
@@ -164,14 +164,14 @@ export function ArchivedSettings({
       ) : (
         <>
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <Label className="gap-2 text-[12.5px] font-normal text-muted-foreground">
+            <Label className="gap-2 text-xs font-normal text-muted-foreground">
               <Checkbox
                 checked={allSelected}
                 disabled={busy}
                 onCheckedChange={(checked) => setSelected(checked ? new Set(ids) : new Set())}
               />
               全选
-              <span className="text-[11.5px]">已选 {selectedIds.length} / {items.length}</span>
+              <span className="text-xs">已选 {selectedIds.length} / {items.length}</span>
             </Label>
             <div className="flex items-center gap-2">
               <Button
@@ -207,8 +207,8 @@ export function ArchivedSettings({
                     onCheckedChange={(checked) => toggle(item.id, checked)}
                   />
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-[13px]">{item.title}</p>
-                    <p className="mt-0.5 truncate text-[11.5px] text-muted-foreground">
+                    <p className="truncate text-sm">{item.title}</p>
+                    <p className="mt-0.5 truncate text-xs text-muted-foreground">
                       {project?.name ?? "无项目"} · {formatRelativeTime(item.updatedAt)}
                     </p>
                   </div>

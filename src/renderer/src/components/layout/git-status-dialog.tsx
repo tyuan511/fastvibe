@@ -32,12 +32,12 @@ export function GitStatusDialog({ open, status, branches, diffPath, diffText, on
               return <button type="button" key={`${file.index}${file.worktree}:${file.path}`} className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-xs text-left hover:bg-accent/60" onClick={() => onDiff?.(file.path)}>
                 {added ? <HugeiconsIcon strokeWidth={2} icon={Add01Icon} className="size-3.5 text-success" /> : staged ? <HugeiconsIcon strokeWidth={2} icon={Tick02Icon} className="size-3.5 text-info" /> : <HugeiconsIcon strokeWidth={2} icon={MinusSignIcon} className="size-3.5 text-warning" />}
                 <span className="min-w-0 flex-1 truncate font-mono">{file.path}</span>
-                <span className="text-[10px] text-muted-foreground">{file.index}{file.worktree}</span>
+                <span className="text-xs text-muted-foreground">{file.index}{file.worktree}</span>
               </button>;
             }) : <p className="px-3 py-8 text-center text-xs text-muted-foreground">工作区干净</p>}
           </div>
         </ScrollArea>
-        {diffText ? <div className="border-t border-border bg-muted/30 p-3"><p className="mb-2 text-[11px] font-medium text-muted-foreground">{diffPath ?? "diff"}</p><pre className="max-h-48 overflow-auto whitespace-pre-wrap font-mono text-[10px] leading-4">{diffText}</pre></div> : null}
+        {diffText ? <div className="border-t border-border bg-muted/30 p-3"><p className="mb-2 text-xs font-medium text-muted-foreground">{diffPath ?? "diff"}</p><pre className="max-h-48 overflow-auto whitespace-pre-wrap font-mono text-xs leading-4">{diffText}</pre></div> : null}
         {status?.isRepository && onStageAll && onCommit ? <div className="flex gap-2 border-t border-border px-4 py-3"><Button size="sm" variant="outline" onClick={onStageAll}>暂存全部</Button><Input value={message} placeholder="提交信息" className="h-8 text-xs" onChange={(event) => setMessage(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && message.trim()) { onCommit(message.trim()); setMessage(""); } }} /><Button size="sm" disabled={!message.trim()} onClick={() => { onCommit(message.trim()); setMessage(""); }}>提交</Button></div> : null}
         {status?.cwd && (onOpenTerminal || onPull || onPush) ? <div className="flex justify-end gap-2 border-t border-border px-4 py-3">{onPull ? <Button size="sm" variant="outline" onClick={onPull}><HugeiconsIcon strokeWidth={2} icon={ArrowDown02Icon} className="size-3.5" />拉取</Button> : null}{onPush ? <Button size="sm" variant="outline" onClick={onPush}><HugeiconsIcon strokeWidth={2} icon={ArrowUp02Icon} className="size-3.5" />推送</Button> : null}{onOpenTerminal ? <Button size="sm" variant="outline" onClick={onOpenTerminal}><HugeiconsIcon strokeWidth={2} icon={TerminalIcon} className="size-3.5" />打开终端</Button> : null}</div> : null}
       </DialogContent>

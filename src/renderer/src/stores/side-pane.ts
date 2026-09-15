@@ -15,6 +15,7 @@ export type SidePaneTab = {
   cwd?: string;
   sessionId?: string;
   url?: string;
+  faviconUrl?: string | null;
   ordinal?: number;
   parentSessionId?: string;
   conversationId?: string;
@@ -81,11 +82,15 @@ function upsert(tabs: SidePaneTab[], tab: SidePaneTab): SidePaneTab[] {
 
 type SidePaneStore = {
   collapsed: boolean;
+  /** Right pane fills the shell and the conversation column is hidden. */
+  maximized: boolean;
   width: number;
   tabs: SidePaneTab[];
   activeTabId: string | null;
   setCollapsed: (collapsed: boolean) => void;
+  setMaximized: (maximized: boolean) => void;
   toggle: () => void;
+  toggleMaximized: () => void;
   /** Live width while dragging; call `persistWidth` when the drag ends. */
   setWidth: (width: number) => void;
   /** Write the current width to settings.json and the first-paint cache. */
@@ -96,7 +101,7 @@ type SidePaneStore = {
   closeAll: () => void;
   openGit: () => void;
   openTerminal: (cwd?: string) => void;
-  openBrowser: (url?: string) => void;
+  openBrowser: (url?: string) => string;
   openSideChat: (parentSessionId: string, ordinal: number) => void;
   /** Open (or focus) the project file view, starting on the directory tree. */
   openFiles: () => void;
@@ -171,6 +176,7 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
 
   return {
   collapsed: readCollapsed(),
+  maximized: false,
   width: readWidth(),
   tabs: [],
   activeTabId: null,
@@ -180,9 +186,14 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
     } catch {
       // ignore
     }
-    set({ collapsed });
+    set({ collapsed, maximized: collapsed ? false : get().maximized });
   },
+  setMaximized: (maximized) => set({ maximized: maximized && !get().collapsed }),
   toggle: () => get().setCollapsed(!get().collapsed),
+  toggleMaximized: () => {
+    if (get().collapsed) get().setCollapsed(false);
+    get().setMaximized(!get().maximized);
+  },
   setWidth: (width) => set({ width: Math.max(MIN_WIDTH, Math.round(width)) }),
   persistWidth: () => {
     const width = get().width;
@@ -199,14 +210,14 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
       const tabs = state.tabs.filter((item) => item.id !== id);
       const activeTabId =
         state.activeTabId === id ? (tabs.at(-1)?.id ?? null) : state.activeTabId;
-      return { tabs, activeTabId, collapsed: tabs.length === 0 ? state.collapsed : state.collapsed };
+      return { tabs, activeTabId, collapsed: tabs.length === 0 ? true : state.collapsed, maximized: tabs.length === 0 ? false : state.maximized };
     }),
   closeOthers: (id) =>
     set((state) => {
       const tabs = state.tabs.filter((item) => item.id === id);
       return { tabs, activeTabId: tabs[0]?.id ?? null };
     }),
-  closeAll: () => set({ tabs: [], activeTabId: null }),
+  closeAll: () => set({ tabs: [], activeTabId: null, collapsed: true, maximized: false }),
   openGit: () =>
     set((state) => {
       const existing = state.tabs.find((item) => item.type === "git");
@@ -224,10 +235,12 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
       };
       return { tabs: [...state.tabs, tab], activeTabId: tab.id, collapsed: false };
     }),
-  openBrowser: (url) =>
+  openBrowser: (url) => {
+    let tabId = "";
     set((state) => {
       const existing = state.tabs.find((item) => item.type === "browser" && !url);
       if (existing && !url) {
+        tabId = existing.id;
         return { activeTabId: existing.id, collapsed: false };
       }
       const tab: SidePaneTab = {
@@ -237,8 +250,11 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
         title: "浏览器",
         url: url?.trim() || "https://fastvibe.dev",
       };
+      tabId = tab.id;
       return { tabs: [...state.tabs, tab], activeTabId: tab.id, collapsed: false };
-    }),
+    });
+    return tabId;
+  },
   openSideChat: (parentSessionId, ordinal) =>
     set((state) => {
       if (!parentSessionId) return state;

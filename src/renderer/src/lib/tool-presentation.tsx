@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { BotIcon, FileCodeIcon, FileMinusIcon, FilePlusIcon, FileTextIcon, FolderTreeIcon, ListChecksIcon, MessageQuestionIcon, Plug01Icon, Search01Icon, SparklesIcon, SquareTerminalIcon, Wrench01Icon } from "@hugeicons/core-free-icons";
+import { BotIcon, ChromeIcon, FileCodeIcon, FileMinusIcon, FilePlusIcon, FileTextIcon, FolderTreeIcon, ListChecksIcon, MessageQuestionIcon, Plug01Icon, Search01Icon, SparklesIcon, SquareTerminalIcon, Wrench01Icon } from "@hugeicons/core-free-icons";
 import type { ToolCallBlock } from "@shared/types";
 import { parseToolTodos } from "./todos";
 import { displayPath } from "./workspace-path";
@@ -26,6 +26,7 @@ export type ToolFamily =
   | "todo"
   | "question"
   | "mcp"
+  | "browser"
   | "other";
 
 export type ToolView = {
@@ -86,6 +87,7 @@ const LABELS: Record<ToolFamily, { running: string; done: string }> = {
   todo: { running: "正在更新待办", done: "待办" },
   question: { running: "正在询问", done: "询问" },
   mcp: { running: "正在调用", done: "工具调用" },
+  browser: { running: "正在操作浏览器", done: "浏览器" },
   other: { running: "正在运行", done: "工具调用" },
 };
 
@@ -102,6 +104,7 @@ const ICONS: Record<ToolFamily, ReactNode> = {
   todo: <HugeiconsIcon strokeWidth={2} icon={ListChecksIcon} className="size-3.5" />,
   question: <HugeiconsIcon strokeWidth={2} icon={MessageQuestionIcon} className="size-3.5" />,
   mcp: <HugeiconsIcon strokeWidth={2} icon={Plug01Icon} className="size-3.5" />,
+  browser: <HugeiconsIcon strokeWidth={2} icon={ChromeIcon} className="size-3.5" />,
   other: <HugeiconsIcon strokeWidth={2} icon={Wrench01Icon} className="size-3.5" />,
 };
 
@@ -114,6 +117,7 @@ export function familyOf(name: string): ToolFamily {
   const key = name.trim().toLowerCase();
   if (!key) return "other";
   if (key.startsWith("mcp") || key.includes("__")) return "mcp";
+  if (key.startsWith("browser_")) return "browser";
   if (/^(read|read_file|readfile|view|cat)$/.test(key)) return "read";
   if (/^(edit|edit_file|editfile|apply_patch|applypatch|patch|str_replace|strreplace)$/.test(key)) return "edit";
   if (/^(write|write_file|writefile|create_file|createfile|create)$/.test(key)) return "write";
@@ -212,11 +216,19 @@ export function describeTool(tool: ToolCallBlock, cwd?: string): ToolView {
           todos.find((item) => item.status !== "completed" && item.status !== "cancelled") ??
           todos.at(-1);
         const count = `${done}/${todos.length}`;
-        view.subject = current ? `${count} · ${current.content}` : count;
-        view.title = current?.content ?? count;
+        const label =
+          current?.status === "in_progress" && current.activeForm ? current.activeForm : current?.content;
+        view.subject = current ? `${count} · ${label}` : count;
+        view.title = label ?? count;
       } else {
         view.subject = tool.name;
       }
+      return view;
+    }
+    case "browser": {
+      const target = argString(tool.args, ["url", "text", "selector", "tabId", "key"]);
+      view.subject = target || tool.name.replace(/^browser_/, "");
+      view.title = target || tool.name;
       return view;
     }
     default: {

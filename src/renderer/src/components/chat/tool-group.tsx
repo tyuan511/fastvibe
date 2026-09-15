@@ -7,7 +7,7 @@ import { ToolRow } from "./tool-row";
 
 function DiffStat({ added, removed }: { added: number; removed: number }): JSX.Element {
   return (
-    <span className="shrink-0 font-mono text-[11px]">
+    <span className="shrink-0 font-mono text-sm">
       <span className="text-success">+{added}</span> <span className="text-destructive">−{removed}</span>
     </span>
   );

@@ -32,7 +32,7 @@ const CONFIRM_OPTIONS: Array<{ label: string; description: string; response: Pic
 
 /** Borderless inline input used for free-form answers, mirroring zcode's custom-answer row. */
 const INLINE_INPUT =
-  "h-auto min-h-5 rounded-none border-transparent bg-transparent px-0 py-0 text-[13px] font-medium leading-5 shadow-none focus-visible:border-transparent focus-visible:ring-0 md:text-[13px]";
+  "h-auto min-h-5 rounded-none border-transparent bg-transparent px-0 py-0 text-sm font-medium leading-5 shadow-none focus-visible:border-transparent focus-visible:ring-0 md:text-sm";
 
 /**
  * Inline prompt panel for extension dialogs, occupying the composer's slot at the
@@ -93,10 +93,10 @@ function PanelShell({
             className={cn("mt-0.5 size-3.5 shrink-0", tone === "warning" ? "text-warning" : "text-primary")}
           />
           <div className="min-w-0 flex-1">
-            {meta ? <p className="mb-0.5 truncate text-[11px] font-medium text-muted-foreground">{meta}</p> : null}
-            <p className="whitespace-pre-wrap break-words text-[13px] font-medium leading-[18px] text-foreground">{title}</p>
+            {meta ? <p className="mb-0.5 truncate text-sm font-medium text-muted-foreground">{meta}</p> : null}
+            <p className="whitespace-pre-wrap break-words text-sm font-medium leading-4.5 text-foreground">{title}</p>
             {message ? (
-              <p className="mt-0.5 max-h-44 overflow-y-auto whitespace-pre-wrap break-words text-[12.5px] leading-[18px] text-muted-foreground">
+              <p className="mt-0.5 max-h-44 overflow-y-auto whitespace-pre-wrap break-words text-sm leading-4.5 text-muted-foreground">
                 {/* Collapse blank lines so a multi-paragraph plugin message stays dense. */}
                 {message.replace(/\n{2,}/g, "\n").trim()}
               </p>
@@ -106,7 +106,7 @@ function PanelShell({
         </div>
         {children}
         <div className="flex items-center justify-between gap-3 px-0.5">
-          <p className="flex min-w-0 items-center gap-2 text-[12px] text-muted-foreground">
+          <p className="flex min-w-0 items-center gap-2 text-sm text-muted-foreground">
             <HugeiconsIcon strokeWidth={2} icon={CornerDownLeftIcon} className="size-3.5 shrink-0 text-foreground" />
             <span className="truncate">{hint}</span>
           </p>
@@ -146,12 +146,12 @@ function OptionRow({
         selected ? "bg-accent" : "hover:bg-accent",
       )}
     >
-      <span className={cn("w-4 shrink-0 self-center text-[12.5px] font-medium", selected ? "text-foreground" : "text-muted-foreground")}>
+      <span className={cn("w-4 shrink-0 self-center text-sm font-medium", selected ? "text-foreground" : "text-muted-foreground")}>
         {index + 1}.
       </span>
       <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 gap-y-0.5">
-        <span className="text-[13px] font-medium leading-5 text-foreground">{label}</span>
-        {description ? <span className="text-[12px] font-normal leading-4 text-muted-foreground">{description}</span> : null}
+        <span className="text-sm font-medium leading-5 text-foreground">{label}</span>
+        {description ? <span className="text-sm font-normal leading-4 text-muted-foreground">{description}</span> : null}
       </span>
     </button>
   );
@@ -192,7 +192,7 @@ function CustomInputRow({
       )}
     >
       {index !== undefined ? (
-        <span className={cn("w-4 shrink-0 self-center text-[12.5px] font-medium", hasValue ? "text-foreground" : "text-muted-foreground")}>
+        <span className={cn("w-4 shrink-0 self-center text-sm font-medium", hasValue ? "text-foreground" : "text-muted-foreground")}>
           {index}.
         </span>
       ) : null}
@@ -282,7 +282,7 @@ function SelectPanel({ request, onRespond }: { request: PermissionRequest; onRes
       }
     >
       {options.length === 0 ? (
-        <p className="px-1 text-[12.5px] text-muted-foreground">没有可选项。</p>
+        <p className="px-1 text-sm text-muted-foreground">没有可选项。</p>
       ) : (
         <div role="listbox" aria-label={request.title || "需要你的选择"} className="flex max-h-72 flex-col gap-0.5 overflow-y-auto">
           {options.map((option, index) => (
@@ -564,7 +564,7 @@ function QuestionsPanel({ request, onRespond }: { request: PermissionRequest; on
             >
               <HugeiconsIcon strokeWidth={2} icon={ArrowLeft01Icon} />
             </Button>
-            <span className="min-w-9 text-center text-[12px] font-medium tabular-nums text-muted-foreground">
+            <span className="min-w-9 text-center text-sm font-medium tabular-nums text-muted-foreground">
               {index + 1} / {count}
             </span>
             <Button

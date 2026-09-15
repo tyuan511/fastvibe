@@ -47,12 +47,12 @@ function StatusBadge({
   return (
     <span
       className={cn(
-        "inline-flex h-7 min-w-0 max-w-40 shrink items-center gap-1 rounded-full border pr-1 pl-2 text-[11.5px]",
+        "inline-flex h-7 min-w-0 max-w-40 shrink items-center gap-1 rounded-full border pr-1 pl-2 text-xs",
         className,
       )}
     >
       <HugeiconsIcon strokeWidth={2} icon={icon} className="size-3.5 shrink-0" />
-      <span title={label} className="hidden min-w-0 flex-1 truncate @min-[440px]/composer:inline">
+      <span title={label} className="hidden min-w-0 flex-1 truncate @min-[27.5rem]/composer:inline">
         {label}
       </span>
       <button
@@ -154,11 +154,11 @@ export function GoalPanel({ className, disabled }: { className?: string; disable
       <div className="rounded-xl border border-border bg-card px-3 py-2.5">
         <div className="flex items-center gap-2">
           <HugeiconsIcon strokeWidth={2} icon={Target01Icon} className="size-4 shrink-0 text-primary" />
-          <span className="text-[13px] font-medium">目标</span>
+          <span className="text-sm font-medium">目标</span>
           <Badge variant="secondary" className={meta.className}>
             {meta.label}
           </Badge>
-          <span className="text-[11px] text-muted-foreground">
+          <span className="text-xs text-muted-foreground">
             第 {goal.round} 轮{goal.max ? ` / ${goal.max}` : ""}
           </span>
           <div className="flex-1" />
@@ -194,7 +194,7 @@ export function GoalPanel({ className, disabled }: { className?: string; disable
             清除
           </Button>
         </div>
-        <p className={cn("mt-1.5 text-[12.5px] leading-5 text-muted-foreground", !expanded && "line-clamp-2")}>
+        <p className={cn("mt-1.5 text-xs leading-5 text-muted-foreground", !expanded && "line-clamp-2")}>
           {goal.objective}
         </p>
       </div>
@@ -218,7 +218,7 @@ export function ExtensionWidgets({ className }: { className?: string }): JSX.Ele
   return (
     <div className={cn("mx-auto w-full max-w-3xl space-y-1.5 px-6", className)}>
       {statusEntries.map(([key, text]) => (
-        <div key={key} className="flex items-center gap-2 text-[12px] text-muted-foreground">
+        <div key={key} className="flex items-center gap-2 text-xs text-muted-foreground">
           <HugeiconsIcon strokeWidth={2} icon={InformationSquareIcon} className="size-3.5 shrink-0" />
           <span className="min-w-0 truncate">{text}</span>
         </div>
@@ -226,7 +226,7 @@ export function ExtensionWidgets({ className }: { className?: string }): JSX.Ele
       {widgetEntries.map((widget) => (
         <div
           key={widget.key}
-          className="overflow-x-auto rounded-xl border border-border bg-card px-3 py-2 font-mono text-[11.5px] leading-4 text-muted-foreground"
+          className="overflow-x-auto rounded-xl border border-border bg-card px-3 py-2 font-mono text-xs leading-4 text-muted-foreground"
         >
           {widget.runs && widget.runs.length > 0 ? (
             <TuiLines runs={widget.runs} />
@@ -261,7 +261,7 @@ export function ExtensionNotices(): JSX.Element | null {
         <div
           key={notice.id}
           className={cn(
-            "pointer-events-auto flex items-start gap-2 rounded-xl border border-border bg-popover px-3 py-2 text-[12.5px] shadow-sm",
+            "pointer-events-auto flex items-start gap-2 rounded-xl border border-border bg-popover px-3 py-2 text-xs shadow-sm",
             notice.level === "error" && "border-destructive/40 text-destructive",
             notice.level === "warning" && "text-warning",
           )}

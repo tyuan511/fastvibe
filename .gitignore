@@ -2,10 +2,12 @@ node_modules
 out
 dist
 dist-electron
+build
 release
 .DS_Store
 *.log
 *.tsbuildinfo
+*.tgz
 .env
 .env.*
 .firecrawl

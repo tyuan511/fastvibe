@@ -1,15 +1,35 @@
-import { useEffect, useState, type JSX } from "react";
+import { useCallback, useEffect, useMemo, useState, type JSX } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
-  Add01Icon,
+  ArrowLeft01Icon,
+  ArrowRight01Icon,
+  CheckmarkCircle02Icon,
+  Clock01Icon,
   Delete02Icon,
+  Download01Icon,
+  File01Icon,
+  GithubIcon,
   Loading03Icon,
+  NpmIcon,
   PackageIcon,
+  PaintBrushIcon,
   PuzzleIcon,
   RefreshIcon,
+  Search01Icon,
+  SparklesIcon,
+  Store01Icon,
+  UserIcon,
 } from "@hugeicons/core-free-icons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import {
   Empty,
   EmptyDescription,
@@ -19,31 +39,86 @@ import {
 } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import {
-  Item,
-  ItemActions,
-  ItemContent,
-  ItemDescription,
-  ItemGroup,
-  ItemMedia,
-  ItemTitle,
-} from "@/components/ui/item";
-import { Separator } from "@/components/ui/separator";
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { IconButton } from "@/components/icon-button";
-import type { ExtensionInfo, ExtensionPackage } from "@shared/types";
+import { formatRelativeTime } from "@/lib/time";
+import { cn } from "@/lib/utils";
+import type {
+  ExtensionInfo,
+  ExtensionPackage,
+  MarketPackage,
+  MarketPackagePage,
+  MarketPackageQuery,
+} from "@shared/types";
+
+const TYPE_LABELS: Record<string, string> = {
+  extension: "扩展",
+  skill: "技能",
+  theme: "主题",
+  prompt: "提示词",
+  package: "插件",
+};
+
+const TYPE_FILTERS: Record<string, string> = {
+  "": "全部类型",
+  extension: "扩展",
+  skill: "技能",
+  theme: "主题",
+  prompt: "提示词",
+};
+
+const SORT_FILTERS: Record<string, string> = {
+  downloads: "下载最多",
+  recent: "最近发布",
+  name: "按名称",
+};
+
+/** `npm:@scope/name@1.0` → `@scope/name`; `npm:name` → `name`. */
+function packageName(source: string): string {
+  const withoutScheme = source.replace(/^(npm|git):/, "");
+  const withoutVersion = withoutScheme.replace(/@[\d^~>=][^/]*$/, "");
+  return withoutVersion.split("/").slice(-2).join("/");
+}
+
+function formatDownloads(value?: number): string | null {
+  if (!value || value <= 0) return null;
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M/mo`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K/mo`;
+  return `${value}/mo`;
+}
 
 /**
- * Plugins are pi packages installed into FastVibe's isolated agentDir. Installing
- * one pulls its npm dependencies and registers its extension entry points, which
- * the next session (or an idle reload) picks up as slash commands, tools and UI.
+ * Plugins are pi packages from pi.dev's catalog, installed into FastVibe's
+ * isolated agentDir — never the user's `~/.pi`.
  */
 export function ExtensionsSettings(): JSX.Element {
+  const [tab, setTab] = useState<"installed" | "market">("installed");
   const [packages, setPackages] = useState<ExtensionPackage[]>([]);
   const [loaded, setLoaded] = useState<ExtensionInfo[]>([]);
-  const [source, setSource] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [installedBusy, setInstalledBusy] = useState(false);
+  const [page, setPage] = useState<MarketPackagePage | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [query, setQuery] = useState("");
+  const [search, setSearch] = useState("");
+  const [type, setType] = useState("");
+  const [sort, setSort] = useState<NonNullable<MarketPackageQuery["sort"]>>("downloads");
+  const [pageIndex, setPageIndex] = useState(1);
+  const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function refresh(): Promise<void> {
+  const installedNames = useMemo(
+    () => new Set(packages.map((item) => packageName(item.source))),
+    [packages],
+  );
+
+  const refreshInstalled = useCallback(async (): Promise<void> => {
+    setInstalledBusy(true);
     try {
       const [next, extensions] = await Promise.all([
         window.fastvibe.engine.listExtensionPackages(),
@@ -53,168 +128,503 @@ export function ExtensionsSettings(): JSX.Element {
       setLoaded(extensions);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "无法读取插件列表");
+      setError(err instanceof Error ? err.message : "无法读取已安装插件");
+    } finally {
+      setInstalledBusy(false);
     }
-  }
-
-  useEffect(() => {
-    void refresh();
   }, []);
 
-  async function install(): Promise<void> {
-    const value = source.trim();
-    if (!value) return;
-    setBusy(true);
+  useEffect(() => {
+    void refreshInstalled();
+  }, [refreshInstalled]);
+
+  // Debounce the search box so typing does not fire a catalog request per key.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setSearch(query);
+      setPageIndex(1);
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [query]);
+
+  useEffect(() => {
+    if (tab !== "market") return;
+    let cancelled = false;
+    setLoading(true);
+    void window.fastvibe.engine
+      .listMarketPackages({ query: search, type, sort, page: pageIndex })
+      .then((result) => {
+        if (cancelled) return;
+        setPage(result);
+        setError(null);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : "无法加载插件市场");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [tab, search, type, sort, pageIndex]);
+
+  async function installFromMarket(item: MarketPackage): Promise<void> {
+    if (pending || installedNames.has(item.name)) return;
+    setPending(item.name);
     try {
-      setPackages(await window.fastvibe.engine.installExtensionPackage(value));
-      setSource("");
-      await refresh();
+      setPackages(await window.fastvibe.engine.installExtensionPackage(`npm:${item.name}`));
+      setError(null);
+      await refreshInstalled();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "安装失败，请检查包名与网络");
+      setError(err instanceof Error ? err.message : "安装失败，请检查网络后重试");
     } finally {
-      setBusy(false);
+      setPending(null);
     }
   }
 
-  async function remove(target: string): Promise<void> {
-    setBusy(true);
+  async function remove(item: ExtensionPackage): Promise<void> {
+    if (pending || item.builtin) return;
+    setPending(item.source);
     try {
-      setPackages(await window.fastvibe.engine.removeExtensionPackage(target));
-      await refresh();
+      setPackages(await window.fastvibe.engine.removeExtensionPackage(item.source));
+      setError(null);
+      await refreshInstalled();
     } catch (err) {
       setError(err instanceof Error ? err.message : "卸载失败，请重试");
     } finally {
-      setBusy(false);
+      setPending(null);
     }
   }
 
+  const total = page?.total;
+  const busy = Boolean(pending) || installedBusy;
+
   return (
     <div className="space-y-4">
-      <p className="text-[12.5px] leading-5 text-muted-foreground">
-        插件是 pi 包，安装到 FastVibe 独立的数据目录，不写入你自己的 <code>~/.pi</code>
+      <p className="text-xs leading-5 text-muted-foreground">
+        来自 pi.dev 的插件目录，安装到 FastVibe 独立的数据目录，不写入你自己的 <code>~/.pi</code>
         。安装后其命令、工具与状态会出现在对话中。
       </p>
 
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-[13px] font-medium">已安装 {packages.length}</span>
-        <IconButton
-          label="刷新"
-          size="icon-sm"
-          variant="outline"
-          disabled={busy}
-          onClick={() => void refresh()}
-        >
-          <HugeiconsIcon strokeWidth={2} icon={RefreshIcon} />
-        </IconButton>
-      </div>
+      <Tabs
+        value={tab}
+        onValueChange={(value) => setTab(value as "installed" | "market")}
+      >
+        <div className="flex items-center justify-between gap-3">
+          <TabsList>
+            <TabsTrigger value="installed" className="px-3">
+              已安装{packages.length ? ` ${packages.length}` : ""}
+            </TabsTrigger>
+            <TabsTrigger value="market" className="px-3">
+              官方市场
+            </TabsTrigger>
+          </TabsList>
+          {tab === "installed" ? (
+            <IconButton
+              label="刷新"
+              size="icon-sm"
+              variant="outline"
+              disabled={installedBusy}
+              onClick={() => void refreshInstalled()}
+            >
+              <HugeiconsIcon strokeWidth={2} icon={RefreshIcon} className="size-3.5" />
+            </IconButton>
+          ) : null}
+        </div>
 
-      {packages.length ? (
-        <ItemGroup className="gap-0! overflow-hidden rounded-xl bg-muted">
-          {packages.map((item, index) => {
-            // The loader reports the extension file path, which lives under the
-            // package's own node_modules directory, so match on the path not name.
-            const state = loaded.find((entry) => entry.path.includes(packageName(item.source)));
-            return (
-              <div key={item.source}>
-                {index > 0 ? <Separator /> : null}
-                <PackageRow
-                  item={item}
-                  loaded={state && !state.error}
-                  error={state?.error}
-                  onRemove={() => void remove(item.source)}
-                  busy={busy}
-                />
-              </div>
-            );
-          })}
-        </ItemGroup>
-      ) : (
-        <Empty className="border border-dashed border-border py-10">
-          <EmptyHeader>
-            <EmptyMedia variant="icon">
-              <HugeiconsIcon strokeWidth={2} icon={PuzzleIcon} />
-            </EmptyMedia>
-            <EmptyTitle>尚未安装插件</EmptyTitle>
-            <EmptyDescription>在下方输入 npm 包名安装，例如 npm:pi-web-access</EmptyDescription>
-          </EmptyHeader>
-        </Empty>
-      )}
+        <TabsContent value="installed" className="flex flex-col gap-3">
+          <InstalledList
+            packages={packages}
+            loaded={loaded}
+            pending={pending}
+            busy={busy}
+            onRemove={(item) => void remove(item)}
+          />
+        </TabsContent>
 
-      <div className="flex items-center gap-2">
-        <Input
-          value={source}
-          placeholder="npm:pi-web-access 或 git:github.com/user/repo"
-          disabled={busy}
-          onChange={(event) => setSource(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              void install();
-            }
-          }}
-        />
-        <Button disabled={busy || !source.trim()} onClick={() => void install()}>
-          {busy ? (
-            <HugeiconsIcon strokeWidth={2} icon={Loading03Icon} className="size-3.5 animate-spin" />
-          ) : (
-            <HugeiconsIcon strokeWidth={2} icon={Add01Icon} />
-          )}
-          安装
-        </Button>
-      </div>
+        <TabsContent value="market" className="flex flex-col gap-3">
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1">
+              <HugeiconsIcon
+                strokeWidth={2}
+                icon={Search01Icon}
+                className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
+              />
+              <Input
+                value={query}
+                placeholder="搜索插件名称或作者"
+                className="pl-8"
+                onChange={(event) => setQuery(event.target.value)}
+              />
+            </div>
+            <Select
+              items={TYPE_FILTERS}
+              value={type}
+              onValueChange={(value) => {
+                setType(value as string);
+                setPageIndex(1);
+              }}
+            >
+              <SelectTrigger size="sm" className="w-28">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {Object.entries(TYPE_FILTERS).map(([value, label]) => (
+                  <SelectItem key={value} value={value}>
+                    {label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select
+              items={SORT_FILTERS}
+              value={sort}
+              onValueChange={(value) => {
+                setSort(value as NonNullable<MarketPackageQuery["sort"]>);
+                setPageIndex(1);
+              }}
+            >
+              <SelectTrigger size="sm" className="w-28">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {Object.entries(SORT_FILTERS).map(([value, label]) => (
+                  <SelectItem key={value} value={value}>
+                    {label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <MarketList
+            page={page}
+            loading={loading}
+            pending={pending}
+            installed={installedNames}
+            onInstall={(item) => void installFromMarket(item)}
+          />
+
+          <div className="flex items-center justify-between text-sm text-muted-foreground">
+            <span>
+              {total ? `共 ${total.toLocaleString()} 个插件` : page ? `${page.packages.length} 个结果` : ""}
+            </span>
+            <div className="flex items-center gap-1">
+              <IconButton
+                label="上一页"
+                size="icon-xs"
+                variant="ghost"
+                disabled={loading || pageIndex <= 1}
+                onClick={() => setPageIndex((value) => Math.max(1, value - 1))}
+              >
+                <HugeiconsIcon strokeWidth={2} icon={ArrowLeft01Icon} className="size-3.5" />
+              </IconButton>
+              <span>{pageIndex}</span>
+              <IconButton
+                label="下一页"
+                size="icon-xs"
+                variant="ghost"
+                disabled={loading || !page?.totalPages || pageIndex >= page.totalPages}
+                onClick={() => setPageIndex((value) => value + 1)}
+              >
+                <HugeiconsIcon strokeWidth={2} icon={ArrowRight01Icon} className="size-3.5" />
+              </IconButton>
+            </div>
+          </div>
+        </TabsContent>
+      </Tabs>
 
       {error ? <p className="text-xs text-destructive">{error}</p> : null}
     </div>
   );
 }
 
-function PackageRow({
-  item,
-  loaded,
-  error,
-  busy,
-  onRemove,
-}: {
-  item: ExtensionPackage;
-  loaded?: boolean;
-  error?: string;
-  busy: boolean;
-  onRemove: () => void;
-}): JSX.Element {
+const TYPE_ICONS: Record<string, typeof PackageIcon> = {
+  extension: PuzzleIcon,
+  skill: SparklesIcon,
+  theme: PaintBrushIcon,
+  prompt: File01Icon,
+  package: PackageIcon,
+};
+
+const TYPE_TONES: Record<string, string> = {
+  extension: "bg-info/10 text-info",
+  skill: "bg-warning/10 text-warning",
+  theme: "bg-success/10 text-success",
+  prompt: "bg-primary/10 text-primary",
+  package: "bg-muted text-muted-foreground",
+};
+
+/** Type-tinted avatar so a card's kind reads before its text does. */
+function PackageAvatar({ types }: { types: string[] }): JSX.Element {
+  const primary = types[0] ?? "package";
   return (
-    <Item size="sm" className="rounded-none px-3 py-2.5">
-      <ItemMedia className="self-center translate-y-0">
-        <span className="flex size-9 items-center justify-center rounded-full bg-background text-muted-foreground">
-          <HugeiconsIcon strokeWidth={2} icon={PackageIcon} className="size-4" />
-        </span>
-      </ItemMedia>
-      <ItemContent className="min-w-0">
-        <ItemTitle className="flex items-center gap-1.5 font-medium">
-          <span className="truncate">{packageName(item.source)}</span>
-          {item.builtin ? <Badge variant="secondary">内置</Badge> : null}
-          {error ? <Badge variant="destructive">加载失败</Badge> : loaded ? <Badge variant="secondary">已加载</Badge> : null}
-        </ItemTitle>
-        <ItemDescription className="line-clamp-1">{item.source}</ItemDescription>
-        {error ? <ItemDescription className="line-clamp-2 text-destructive">{error}</ItemDescription> : null}
-      </ItemContent>
-      <ItemActions>
-        <IconButton
-          label="卸载插件"
-          size="icon-xs"
-          variant="ghost"
-          disabled={busy}
-          onClick={onRemove}
-        >
-          <HugeiconsIcon strokeWidth={2} icon={Delete02Icon} />
-        </IconButton>
-      </ItemActions>
-    </Item>
+    <span
+      className={cn(
+        "flex size-9 shrink-0 items-center justify-center rounded-lg",
+        TYPE_TONES[primary] ?? "bg-muted text-muted-foreground",
+      )}
+    >
+      <HugeiconsIcon strokeWidth={1.8} icon={TYPE_ICONS[primary] ?? PackageIcon} className="size-4.5" />
+    </span>
   );
 }
 
-/** `npm:@scope/name@1.0` → `@scope/name`; `npm:name` → `name`. */
-function packageName(source: string): string {
-  const withoutScheme = source.replace(/^(npm|git):/, "");
-  const withoutVersion = withoutScheme.replace(/@[\d^~>=][^/]*$/, "");
-  return withoutVersion.split("/").slice(-2).join("/");
+function TypeBadge({ type }: { type: string }): JSX.Element {
+  return (
+    <Badge variant="secondary" className="h-4.5 rounded-md px-1.5 text-xs font-normal">
+      {TYPE_LABELS[type] ?? type}
+    </Badge>
+  );
+}
+
+function MetaLink({
+  label,
+  href,
+  icon,
+}: {
+  label: string;
+  href: string;
+  icon: typeof NpmIcon;
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      className="inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-xs text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
+      onClick={(event) => {
+        event.stopPropagation();
+        window.open(href, "_blank");
+      }}
+    >
+      <HugeiconsIcon strokeWidth={2} icon={icon} className="size-3.5" />
+      {label}
+    </button>
+  );
+}
+
+function InstalledList({
+  packages,
+  loaded,
+  pending,
+  busy,
+  onRemove,
+}: {
+  packages: ExtensionPackage[];
+  loaded: ExtensionInfo[];
+  pending: string | null;
+  busy: boolean;
+  onRemove: (item: ExtensionPackage) => void;
+}): JSX.Element {
+  if (packages.length === 0) {
+    return (
+      <Empty className="border border-dashed border-border py-10">
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <HugeiconsIcon strokeWidth={2} icon={PackageIcon} />
+          </EmptyMedia>
+          <EmptyTitle>尚未安装插件</EmptyTitle>
+          <EmptyDescription>切换到「官方市场」浏览并安装</EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    );
+  }
+  return (
+    <div className="grid gap-2.5 sm:grid-cols-2">
+      {packages.map((item) => {
+        // The loader reports the extension file path, which lives under the
+        // package's own node_modules directory, so match on the path not name.
+        const state = loaded.find((entry) => entry.path.includes(packageName(item.source)));
+        return (
+          <Card key={item.source} size="sm">
+            <CardHeader>
+              <div className="flex min-w-0 items-center gap-2.5">
+                <span
+                  className={cn(
+                    "flex size-9 shrink-0 items-center justify-center rounded-lg",
+                    item.builtin ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground",
+                  )}
+                >
+                  <HugeiconsIcon strokeWidth={1.8} icon={PackageIcon} className="size-4.5" />
+                </span>
+                <div className="min-w-0">
+                  <CardTitle
+                    title={packageName(item.source)}
+                    className="line-clamp-2 break-words text-base leading-5"
+                  >
+                    {packageName(item.source)}
+                  </CardTitle>
+                  <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                    {item.builtin ? "随应用内置" : item.source}
+                  </p>
+                </div>
+              </div>
+              <CardAction className="flex items-center gap-1.5">
+                {item.builtin ? (
+                  <Badge variant="secondary" className="h-4.5 rounded-md px-1.5 text-xs font-normal">
+                    内置
+                  </Badge>
+                ) : null}
+                {state?.error ? (
+                  <Badge variant="destructive" className="h-4.5 rounded-md px-1.5 text-xs font-normal">
+                    加载失败
+                  </Badge>
+                ) : state ? (
+                  <Badge variant="secondary" className="h-4.5 rounded-md px-1.5 text-xs font-normal">
+                    已加载
+                  </Badge>
+                ) : null}
+                {item.builtin ? null : (
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    disabled={busy || pending === item.source}
+                    onClick={() => onRemove(item)}
+                  >
+                    {pending === item.source ? (
+                      <HugeiconsIcon strokeWidth={2} icon={Loading03Icon} className="size-3.5 animate-spin" />
+                    ) : (
+                      <HugeiconsIcon strokeWidth={2} icon={Delete02Icon} />
+                    )}
+                    卸载
+                  </Button>
+                )}
+              </CardAction>
+            </CardHeader>
+            {state?.error ? (
+              <CardContent>
+                <p className="line-clamp-2 text-xs text-destructive">{state.error}</p>
+              </CardContent>
+            ) : null}
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
+function MarketList({
+  page,
+  loading,
+  pending,
+  installed,
+  onInstall,
+}: {
+  page: MarketPackagePage | null;
+  loading: boolean;
+  pending: string | null;
+  installed: Set<string>;
+  onInstall: (item: MarketPackage) => void;
+}): JSX.Element {
+  if (loading && !page) {
+    return (
+      <div className="flex items-center justify-center py-16 text-muted-foreground">
+        <HugeiconsIcon strokeWidth={2} icon={Loading03Icon} className="size-5 animate-spin" />
+      </div>
+    );
+  }
+  if (page && page.packages.length === 0) {
+    return (
+      <Empty className="border border-dashed border-border py-10">
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <HugeiconsIcon strokeWidth={2} icon={Store01Icon} />
+          </EmptyMedia>
+          <EmptyTitle>没有匹配的插件</EmptyTitle>
+          <EmptyDescription>换个关键词或类型试试</EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    );
+  }
+  return (
+    <div className={cn("grid gap-2.5 sm:grid-cols-2", loading && "opacity-60")}>
+      {page?.packages.map((item) => {
+        const isInstalled = installed.has(item.name);
+        const isPending = pending === item.name;
+        const downloads = formatDownloads(item.downloads);
+        return (
+          <Card key={item.name} size="sm">
+            <CardHeader>
+              <div className="flex min-w-0 items-start gap-2.5">
+                <PackageAvatar types={item.types} />
+                <div className="min-w-0 flex-1">
+                  <CardTitle
+                    title={item.name}
+                    className="line-clamp-2 break-words text-base leading-5"
+                  >
+                    {item.name}
+                  </CardTitle>
+                  <div className="mt-1 flex flex-wrap items-center gap-1">
+                    {item.types.slice(0, 2).map((entry) => (
+                      <TypeBadge key={entry} type={entry} />
+                    ))}
+                    {item.version ? (
+                      <span className="text-xs text-muted-foreground">v{item.version}</span>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+              <CardAction>
+                {isInstalled ? (
+                  <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                    <HugeiconsIcon strokeWidth={2} icon={CheckmarkCircle02Icon} className="size-3.5 text-success" />
+                    已安装
+                  </span>
+                ) : (
+                  <Button
+                    size="xs"
+                    variant="secondary"
+                    disabled={pending !== null}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onInstall(item);
+                    }}
+                  >
+                    {isPending ? (
+                      <HugeiconsIcon strokeWidth={2} icon={Loading03Icon} className="size-3.5 animate-spin" />
+                    ) : (
+                      <HugeiconsIcon strokeWidth={2} icon={Download01Icon} />
+                    )}
+                    安装
+                  </Button>
+                )}
+              </CardAction>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-2">
+              <p className="line-clamp-2 min-h-10 text-sm leading-5 text-muted-foreground">
+                {item.description}
+              </p>
+              <div className="flex min-w-0 items-center gap-2.5 text-xs text-muted-foreground">
+                {item.author ? (
+                  <span className="inline-flex min-w-0 items-center gap-1">
+                    <HugeiconsIcon strokeWidth={2} icon={UserIcon} className="size-3 shrink-0" />
+                    <span className="truncate">{item.author}</span>
+                  </span>
+                ) : null}
+                {downloads ? (
+                  <span className="inline-flex shrink-0 items-center gap-1">
+                    <HugeiconsIcon strokeWidth={2} icon={Download01Icon} className="size-3" />
+                    {downloads}
+                  </span>
+                ) : null}
+                {item.updatedAt ? (
+                  <span className="inline-flex shrink-0 items-center gap-1">
+                    <HugeiconsIcon strokeWidth={2} icon={Clock01Icon} className="size-3" />
+                    {formatRelativeTime(item.updatedAt)}
+                  </span>
+                ) : null}
+              </div>
+            </CardContent>
+            {item.npmUrl || item.repoUrl ? (
+              <CardFooter className="gap-0.5 py-2">
+                {item.npmUrl ? <MetaLink label="npm" href={item.npmUrl} icon={NpmIcon} /> : null}
+                {item.repoUrl ? <MetaLink label="仓库" href={item.repoUrl} icon={GithubIcon} /> : null}
+              </CardFooter>
+            ) : null}
+          </Card>
+        );
+      })}
+    </div>
+  );
 }
