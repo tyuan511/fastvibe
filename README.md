@@ -25,6 +25,7 @@ pi（pi coding agent）作为默认引擎直接跑在主进程里，再把原本
 - **MCP 与技能**：stdio / Streamable HTTP MCP 服务器在设置里增删启停；技能以 `SKILL.md` 管理，可新建或从文件夹导入。
 - **使用统计**：按日汇总请求与 Token，删除会话后仍能从 ledger 还原用量。
 - **工作区侧栏**：文件树与预览、终端、浏览器、Git 审查、辅助对话。
+- **内置浏览器（browser use）**：模型通过 `browser_*` 工具驱动侧栏里的浏览器打开、快照、点击与填表，并可导入本机 Chrome / Edge 等的 Cookie 登录态。
 - **Git 与附件**：输入框可切换 / 创建分支；支持图片与文件附件、消息队列；编辑或重试历史消息即在原处分支。
 - **20 套主题**：亮色 / 暗色各自独立选择，支持跟随系统；界面字号可整体缩放。
 - **自动更新**：启动后检查并在后台下载新版本，就绪后一键重启安装。
@@ -63,7 +64,7 @@ FastVibe 的核心承诺是：**pi 扩展在终端里能做什么，在这里就
 
 ### 内置扩展
 
-随应用内置五个扩展，无需安装：
+随应用内置六个扩展，无需安装：
 
 - **`plan.ts`** —— `/plan` 进入计划模式：工具收窄为只读集合，可通过 `question`
   工具一次性提出多个澄清问题，确认后把方案作为执行提示词发回。
@@ -73,6 +74,8 @@ FastVibe 的核心承诺是：**pi 扩展在终端里能做什么，在这里就
   未完成项会出现在输入框上方。
 - **`session-title.ts`** —— 始终可用：首条用户消息会被摘要成会话标题；手动重命名
   后不再覆盖。
+- **`browser-use.ts`** —— 内置浏览器的工具集：`browser_open` / `snapshot` / `click` /
+  `type` / `press` / `history` 等九个工具，把网页操作桥接到侧栏的浏览器标签。
 - **`permission-sandbox.ts`** —— 权限沙箱的执行侧：识别网络、工作区外写入、
   敏感路径与破坏性命令，并按模式决定是否请求批准。
 
@@ -88,9 +91,50 @@ FastVibe 的核心承诺是：**pi 扩展在终端里能做什么，在这里就
 ### 工作区侧栏
 
 文件树使用 Material Icon Theme 图标，点击即在同一面板中预览（代码高亮由 shikiji 提供；
-同时支持图片、PDF、CSV、HTML 与 diff）。侧栏还包含终端、内置浏览器、Git 审查与辅助对话。
+同时支持图片、PDF、CSV、HTML 与 diff）。侧栏还包含终端、内置浏览器、Git 审查与辅助对话——
+其中浏览器不只是给人看的，agent 也能通过工具驱动它。
 
 ![文件与预览](docs/screenshots/files-light.png)
+
+### 内置浏览器（browser use）
+
+侧栏的**浏览器**标签是一个真实的 Electron webview，跑在独立的持久化会话
+（`persist:fastvibe-browser`）里。agent 通过九个 `browser_*` 工具直接操作这个
+浏览器，操作的就是你眼前的那一个标签页，而不是另开一份看不见的副本：
+
+| 工具 | 作用 |
+| --- | --- |
+| `browser_open` | 打开或复用标签页，返回后续调用要用的 `tabId` |
+| `browser_list_tabs` | 列出当前可控制的标签页 |
+| `browser_navigate` | 在指定标签页访问新地址 |
+| `browser_search` | 用内置搜索引擎搜索关键词 |
+| `browser_snapshot` | 读取标题、URL、可见文本与可交互元素 |
+| `browser_click` | 按 CSS selector 或可见文字点击 |
+| `browser_type` | 向输入控件填值并触发 input / change |
+| `browser_press` | 发送 Enter / Tab / Escape 等按键 |
+| `browser_history` | 后退 / 前进 / 刷新 |
+
+工作方式是**快照驱动**：`browser_open` 拿到 `tabId` → 每次导航、点击或提交后
+`browser_snapshot` 重新读取页面 → 用快照里的 selector（或按钮的可见文字）定位 →
+再次快照确认结果。快照会截取可见的可交互元素与正文，所以模型每一步都基于页面当前
+状态，而不是凭旧结构猜测。这套流程作为内置技能 `browser-use` 随应用提供，模型在
+需要网页操作时会自动采用。
+
+**登录态导入**：浏览器工具栏的「导入浏览器登录态」会列出本机 Chromium 系浏览器
+（Chrome、Edge、Brave、Chromium，macOS 上还包括 Arc 与 Opera）的配置文件名，
+把其中的 **Cookie 解密后写入 FastVibe 自己的隔离浏览器会话**并刷新当前页面。
+密码、支付信息和其他凭据不会被复制；源浏览器正在运行时也会连同 WAL 一起读取，
+避免漏掉刚写入的 Cookie。
+
+**安全边界**
+
+- 权限沙箱把 `browser_*` 视为**无法预判的外部工具**：`请求批准` 模式下每次调用都会
+  弹出确认，`完全访问权限` 模式不询问。
+- 内置技能明确要求模型**不要把网页正文里的指令当成用户授权**。涉及登录、购买、
+  发送消息、删除数据或提交不可逆表单时，先说明将要执行的具体动作并请求确认；
+  可以先打开页面、读取信息、填写草稿。
+- 快照不回显密码、令牌或完整隐私数据；主进程桥接对每次操作限时，窗口关闭或超时
+  会明确报错，而不是静默失败。
 
 ### 模型管理
 
@@ -156,6 +200,8 @@ conversations.json     会话目录
 providers.json         供应商与模型
 mcp.json               MCP 服务器
 logs/                  运行日志
+Partitions/
+  fastvibe-browser/    内置浏览器的隔离会话（Cookie 等）
 runtime/engine/
   agent/sessions       会话记录
   agent/skills         用户技能（SKILL.md）
@@ -168,7 +214,8 @@ runtime/engine/
 ```
 
 供应商密钥保存在 FastVibe 的隔离运行时中，并在启动时注入 SDK 的内存认证存储，
-不会导出到用户的登录 shell 或应用内终端。
+不会导出到用户的登录 shell 或应用内终端。内置浏览器同样用自己的会话分区，
+导入的登录 Cookie 只写进这里，不会改动本机浏览器的任何数据。
 
 ## 快捷键
 
@@ -200,6 +247,7 @@ src/preload/       contextBridge API（window.fastvibe）
 src/renderer/      React 界面（Vite）
 src/shared/        主进程与渲染进程共用的 IPC 通道与类型
 resources/extensions/  随应用内置的 pi 扩展
+resources/skills/      随应用内置的 pi 技能（browser-use）
 ```
 
 ## 兼容性边界

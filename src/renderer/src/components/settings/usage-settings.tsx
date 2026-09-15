@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState, type JSX, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type JSX, type ReactNode } from "react";
 import { Card } from "@/components/ui/card";
 import {
   Select,
@@ -27,21 +27,25 @@ const METRIC_ITEMS: Record<HeatMetric, string> = {
   tokens: "按 Token",
 };
 
-/** GitHub-style intensity ramp; level 0 is an empty day. */
+/** GitHub-style intensity ramp off the theme's own success token; level 0 is an empty day. */
 const LEVEL_CLASSES = [
-  "bg-muted",
-  "bg-emerald-500/25 dark:bg-emerald-400/25",
-  "bg-emerald-500/45 dark:bg-emerald-400/45",
-  "bg-emerald-500/70 dark:bg-emerald-400/65",
-  "bg-emerald-600 dark:bg-emerald-400/90",
+  "bg-muted/60",
+  "bg-success/20",
+  "bg-success/40",
+  "bg-success/65",
+  "bg-success",
 ];
 
 /*
- * Grid geometry, in rem so the heat map tracks the 界面字号 scale. The cell is one
- * `text-xs` line (0.75rem) tall/wide so the caption and gutter labels fit it.
+ * Grid geometry, in rem so the heat map tracks the 界面字号 scale. `CELL` is a *cap*,
+ * not a fixed size: the columns are `1fr` under a max-width, so a 365-day window
+ * shrinks its cells to fit instead of overflowing the pane into a scrollbar. A short
+ * range stops at the cap rather than stretching into a few giant squares.
  */
 const CELL = 0.75;
 const GAP = 0.125;
+/** The widest caption the header ever renders, used as an off-screen ruler. */
+const MONTH_RULER = "12月";
 const WEEKDAYS = ["一", "", "三", "", "五", "", "日"];
 
 export function UsageSettings(): JSX.Element {
@@ -148,7 +152,7 @@ export function UsageSettings(): JSX.Element {
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <span>少</span>
             {LEVEL_CLASSES.map((tone, index) => (
-              <span key={index} className={cn("size-3 rounded-[2px]", tone)} />
+              <span key={index} className={cn("size-3 rounded-[3px]", tone)} />
             ))}
             <span>多</span>
           </div>
@@ -231,6 +235,44 @@ function Heatmap({
 
   const { weeks, months } = useMemo(() => buildCalendar(stats.from, stats.to), [stats.from, stats.to]);
 
+  /*
+   * Cells are `1fr`, so how much room a month caption actually has is only known once
+   * the grid has been laid out. `getComputedStyle` resolves the tracks to real pixels
+   * and an off-screen ruler measures the widest caption, which is what decides whether
+   * a label fits its span — at a year of columns in a narrow pane it does not, and
+   * clipped captions used to read as 「9月10月11月」.
+   */
+  const gridRef = useRef<HTMLDivElement>(null);
+  const rulerRef = useRef<HTMLSpanElement>(null);
+  const [fit, setFit] = useState({ column: 0, gap: 0, label: 0 });
+  useLayoutEffect(() => {
+    const node = gridRef.current;
+    const ruler = rulerRef.current;
+    if (!node || !ruler) return undefined;
+    const measure = (): void => {
+      const styles = getComputedStyle(node);
+      const tracks = styles.gridTemplateColumns.split(" ").map(Number.parseFloat).filter(Number.isFinite);
+      // Track 0 is the weekday gutter; every `1fr` track after it is the same width.
+      const column = tracks.length > 1 ? tracks[1] : 0;
+      const gap = Number.parseFloat(styles.columnGap) || 0;
+      const label = ruler.getBoundingClientRect().width;
+      setFit((current) =>
+        current.column === column && current.gap === gap && current.label === label
+          ? current
+          : { column, gap, label },
+      );
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [weeks.length]);
+
+  /** A caption is shown only when its span can hold the text without clipping. */
+  const captionFits = (cols: number): boolean =>
+    cols * (fit.column + fit.gap) - fit.gap >= fit.label;
+
   const valueOf = (day: UsageDay | undefined): number =>
     day ? (metric === "requests" ? day.requests : day.tokens) : 0;
 
@@ -255,28 +297,41 @@ function Heatmap({
 
   // One grid owns every row: the weekday gutter, the month captions and the cells
   // share the same tracks, so a caption can never drift onto the first cell row.
+  //
+  // No `overflow-x-auto` here on purpose. Columns are `1fr` and the whole grid is
+  // capped at the width it would have at `CELL`, so the widest range (a year, ~53
+  // columns) compresses to the pane instead of scrolling it.
   return (
-    <div className={cn("overflow-x-auto pb-1 transition-opacity", dimmed && "opacity-50")}>
+    <div className={cn("transition-opacity", dimmed && "opacity-50")}>
       <div
-        className="w-fit"
+        ref={gridRef}
+        className="grid"
         style={{
-          display: "grid",
-          gridTemplateColumns: `auto repeat(${weeks.length}, ${CELL}rem)`,
+          gridTemplateColumns: `auto repeat(${weeks.length}, minmax(0, 1fr))`,
           columnGap: `${GAP}rem`,
           rowGap: `${GAP}rem`,
+          maxWidth: `${weeks.length * (CELL + GAP)}rem`,
         }}
       >
         <div />
+        {/* Off-screen ruler, absolutely placed so it never participates in layout. */}
+        <span
+          ref={rulerRef}
+          aria-hidden
+          className="invisible absolute text-xs leading-none whitespace-nowrap"
+        >
+          {MONTH_RULER}
+        </span>
         {months.map((month, index) => (
-          // Every caption still consumes its weeks so the header row keeps the
-          // grid aligned; a month owning a single column is left blank instead of
-          // clipping the glyph.
+          // Every caption still consumes its weeks so the header row keeps the grid
+          // aligned, and one that cannot hold its label renders blank rather than a
+          // half-clipped 「9…」 among the readable months.
           <div
             key={index}
-            className="self-end text-xs leading-none whitespace-nowrap text-muted-foreground"
+            className="min-w-0 overflow-hidden self-end text-xs leading-none whitespace-nowrap text-muted-foreground"
             style={{ gridColumn: `span ${Math.max(1, month.cols)}` }}
           >
-            {month.cols >= 2 ? month.label : ""}
+            {captionFits(month.cols) ? month.label : ""}
           </div>
         ))}
         {WEEKDAYS.map((label, dayIndex) => (
@@ -289,14 +344,18 @@ function Heatmap({
               const day = cell?.inRange ? dayMap.get(cell.key) : undefined;
               const value = valueOf(day);
               if (!cell || !cell.inRange) {
-                return <div key={weekIndex} className="size-3" />;
+                return <div key={weekIndex} aria-hidden className="aspect-square w-full" />;
               }
               return (
                 <Tooltip key={weekIndex}>
                   <TooltipTrigger
                     render={
                       <div
-                        className={cn("size-3 rounded-[2px]", LEVEL_CLASSES[level(value)])}
+                        className={cn(
+                          "aspect-square w-full rounded-[3px] transition-shadow",
+                          LEVEL_CLASSES[level(value)],
+                          "hover:ring-1 hover:ring-foreground/25",
+                        )}
                         aria-label={cell.key}
                       />
                     }
