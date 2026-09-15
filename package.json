@@ -4,7 +4,10 @@
   "private": true,
   "license": "MIT",
   "description": "Desktop client for agent work, code, and cowork",
-  "author": "FastVibe",
+  "author": {
+    "name": "FastVibe",
+    "email": "dev@fastvibe.dev"
+  },
   "homepage": "https://fastvibe.dev",
   "repository": {
     "type": "git",
