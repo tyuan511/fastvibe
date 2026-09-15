@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState, type JSX, type KeyboardEvent } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Add01Icon, Archive04Icon, Cancel01Icon, Delete02Icon, Folder01Icon, Folder02Icon, FolderRootIcon, MessageSquarePlusIcon, MoreHorizontalIcon, PencilEdit02Icon, PinIcon, Search01Icon, Settings01Icon } from "@hugeicons/core-free-icons";
+import { Add01Icon, Archive04Icon, Cancel01Icon, Delete02Icon, Folder01Icon, Folder02Icon, FolderRootIcon, MessageSquarePlusIcon, MoreHorizontalIcon, PencilEdit02Icon, PinIcon, Search01Icon, Settings01Icon, Store01Icon } from "@hugeicons/core-free-icons";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -30,20 +30,35 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Spinner } from "@/components/ui/spinner";
 import { ResizeHandle } from "@/components/resize-handle";
-import appIcon from "@/assets/app-icon.png";
+import { AppLogo } from "@/components/app-logo";
 import { cn } from "@/lib/utils";
-import { clampSidebarWidth, readSidebarWidth, writeSidebarWidth } from "@/lib/sidebar-width";
+import { clampSidebarWidth, readSidebarWidth, writeSidebarWidth, SIDEBAR_MIN_WIDTH } from "@/lib/sidebar-width";
+import { archiveConversations, useArchivedIds } from "@/stores/archive";
+import { useSettingsStore } from "@/stores/settings";
 import type { Conversation, Project } from "@shared/types";
 
 const COLLAPSED_KEY = "fastvibe.sidebar.collapsed";
 const PINNED_KEY = "fastvibe.sidebar.pinned";
-const ARCHIVED_KEY = "fastvibe.sidebar.archived";
 
 type RenameTarget = { type: "session"; id: string } | { type: "project"; cwd: string };
 /** Only projects can be removed; sessions are archived, never deleted. */
 type DeleteTarget = { type: "project"; cwd: string; title: string };
+
+function SessionBusyMark(): JSX.Element {
+  return (
+    <span className="flex size-3.5 shrink-0 items-center justify-center" role="status" aria-label="运行中">
+      <svg
+        viewBox="0 0 16 16"
+        className="size-3 animate-[spin_0.7s_linear_infinite] text-muted-foreground"
+        fill="none"
+      >
+        <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.5" opacity="0.15" />
+        <path d="M14 8a6 6 0 0 0-6-6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      </svg>
+    </span>
+  );
+}
 
 function readIdSet(key: string): Set<string> {
   try {
@@ -158,7 +173,7 @@ export function Sidebar({
   projects,
   conversations,
   activeId,
-  streaming,
+  running,
   onNewChat,
   onOpen,
   onAddProject,
@@ -167,11 +182,12 @@ export function Sidebar({
   onRemoveProject,
   onRevealProject,
   onOpenSettings,
+  onOpenMarket,
 }: {
   projects: Project[];
   conversations: Conversation[];
   activeId: string | null;
-  streaming: boolean;
+  running: Record<string, boolean>;
   onNewChat: (cwd?: string) => void;
   onOpen: (id: string) => void;
   onAddProject: () => void;
@@ -180,16 +196,23 @@ export function Sidebar({
   onRemoveProject: (cwd: string) => void;
   onRevealProject: (cwd: string) => void;
   onOpenSettings: () => void;
-}): JSX.Element {
+  onOpenMarket: () => void;
+}): JSX.Element | null {
   const [query, setQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [width, setWidth] = useState(readSidebarWidth);
+  const sidebarCollapsed = useSettingsStore((state) => state.settings.sidebarCollapsed ?? false);
+  const updateSettings = useSettingsStore((state) => state.update);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => readIdSet(COLLAPSED_KEY));
   const [pinned, setPinned] = useState<Record<string, number>>(() => readPinned());
-  const [archived, setArchived] = useState<Set<string>>(() => readIdSet(ARCHIVED_KEY));
+  // Shared with Settings → 归档对话, where archived chats can be restored or deleted.
+  const archived = useArchivedIds();
   const [renaming, setRenaming] = useState<RenameTarget | null>(null);
   const [pendingDelete, setPendingDelete] = useState<DeleteTarget | null>(null);
   const startWidth = useRef(width);
+  // Set once the drag has crossed the minimum, so the collapsing branch fires a
+  // single settings write instead of one per mousemove until the drag ends.
+  const collapsing = useRef(false);
 
   /** Live width while dragging; only written to disk once the drag ends. */
   function applyWidth(next: number): void {
@@ -216,18 +239,15 @@ export function Sidebar({
     });
   }
 
-  /** Archived conversations are hidden from every list until a restore surface exists. */
+  /** Archived conversations are hidden from every list: Settings → 归档对话 manages them. */
   function archiveSession(id: string): void {
-    setArchived((prev) => {
-      const next = new Set(prev);
-      next.add(id);
-      persistIdSet(ARCHIVED_KEY, next);
-      return next;
-    });
+    archiveConversations(id);
   }
 
   function sortSessions(items: Conversation[]): Conversation[] {
-    return [...items].sort((a, b) => b.updatedAt - a.updatedAt);
+    // Creation order, not activity order: opening or renaming a chat must not
+    // make it jump to the top of the list.
+    return [...items].sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id));
   }
 
   const q = query.trim().toLowerCase();
@@ -238,7 +258,7 @@ export function Sidebar({
     );
     const filtered = q ? items.filter((item) => matchesSession(item, q)) : items;
     return [...filtered].sort(
-      (a, b) => (pinned[b.id] ?? 0) - (pinned[a.id] ?? 0) || b.updatedAt - a.updatedAt,
+      (a, b) => (pinned[b.id] ?? 0) - (pinned[a.id] ?? 0) || b.createdAt - a.createdAt || a.id.localeCompare(b.id),
     );
   }, [conversations, pinned, archived, q]);
 
@@ -280,7 +300,9 @@ export function Sidebar({
     const active = item.id === activeId;
     const renamingThis = renaming?.type === "session" && renaming.id === item.id;
     const isPinned = pinned[item.id] !== undefined;
-    const showSpinner = active && streaming;
+    // The per-conversation map survives switching/new chats, so a session that is
+    // still working keeps its spinner even when it is not the active one.
+    const showSpinner = running[item.id] === true;
     return (
       <ContextMenu key={item.id}>
         <ContextMenuTrigger className="w-full">
@@ -292,7 +314,7 @@ export function Sidebar({
             onClick={() => onOpen(item.id)}
           >
             {/* Reserved slot keeps session titles aligned with project names. */}
-            {showSpinner ? <Spinner className="size-4 shrink-0" /> : <span className="size-4 shrink-0" />}
+            {showSpinner ? <SessionBusyMark /> : <span className="size-3.5 shrink-0" />}
             {renamingThis ? (
               <InlineRename
                 value={item.title}
@@ -317,7 +339,7 @@ export function Sidebar({
                     }}
                     onPointerDown={(event) => event.stopPropagation()}
                   >
-                    <HugeiconsIcon strokeWidth={2} icon={PinIcon} className={cn(isPinned && "fill-current")} />
+                    <HugeiconsIcon strokeWidth={2} icon={PinIcon} className={cn("size-3.5", isPinned && "fill-current")} />
                   </IconButton>
                   <IconButton
                     size="icon-xs"
@@ -330,7 +352,7 @@ export function Sidebar({
                     }}
                     onPointerDown={(event) => event.stopPropagation()}
                   >
-                    <HugeiconsIcon strokeWidth={2} icon={Archive04Icon} />
+                    <HugeiconsIcon strokeWidth={2} icon={Archive04Icon} className="size-3.5" />
                   </IconButton>
                 </div>
               </>
@@ -348,6 +370,10 @@ export function Sidebar({
     );
   }
 
+  // Collapsed (dragged below the minimum width, or via the header toggle): the
+  // sidebar is removed from the layout rather than shrunk to a sliver.
+  if (sidebarCollapsed) return null;
+
   return (
     <aside
       className="relative flex shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground"
@@ -357,16 +383,32 @@ export function Sidebar({
         side="right"
         onDragStart={() => {
           startWidth.current = width;
+          collapsing.current = false;
         }}
-        onDrag={(delta) => applyWidth(startWidth.current + delta)}
-        onDragEnd={(delta) => writeSidebarWidth(startWidth.current + delta)}
+        onDrag={(delta) => {
+          const next = startWidth.current + delta;
+          // Dragging past the minimum collapses the sidebar instead of clamping
+          // to it; the header toggle (or dragging back out) restores the width.
+          if (next < SIDEBAR_MIN_WIDTH) {
+            if (!collapsing.current) {
+              collapsing.current = true;
+              updateSettings({ sidebarCollapsed: true });
+            }
+            return;
+          }
+          applyWidth(next);
+        }}
+        onDragEnd={(delta) => {
+          const next = startWidth.current + delta;
+          if (next >= SIDEBAR_MIN_WIDTH) writeSidebarWidth(next);
+        }}
       />
       <div className="drag-region h-10" />
 
       <div className="no-drag px-2">
         <div className="flex h-8 items-center justify-between">
           <div className="flex items-center gap-2 px-2">
-            <img src={appIcon} alt="" className="size-5 rounded-md" />
+            <AppLogo className="size-5 shrink-0 rounded-md" />
             <span className="text-[13px] font-semibold tracking-tight">FastVibe</span>
           </div>
           <div className="flex items-center gap-0.5">
@@ -403,8 +445,16 @@ export function Sidebar({
             className="flex h-8 w-full items-center gap-2.5 rounded-md px-2 text-[13px] hover:bg-sidebar-accent/50"
             onClick={() => onNewChat()}
           >
-            <HugeiconsIcon strokeWidth={2} icon={MessageSquarePlusIcon} className="size-4 text-muted-foreground" />
+            <HugeiconsIcon strokeWidth={2} icon={MessageSquarePlusIcon} className="size-3.5 text-muted-foreground" />
             新对话
+          </button>
+          <button
+            type="button"
+            className="flex h-8 w-full items-center gap-2.5 rounded-md px-2 text-[13px] hover:bg-sidebar-accent/50"
+            onClick={onOpenMarket}
+          >
+            <HugeiconsIcon strokeWidth={2} icon={Store01Icon} className="size-3.5 text-muted-foreground" />
+            插件市场
           </button>
         </div>
       </div>
@@ -427,7 +477,7 @@ export function Sidebar({
                 className="text-muted-foreground opacity-0 transition-opacity focus-visible:opacity-100 group-hover/section:opacity-100"
                 onClick={onAddProject}
               >
-                <HugeiconsIcon strokeWidth={2} icon={Add01Icon} />
+                <HugeiconsIcon strokeWidth={2} icon={Add01Icon} className="size-3.5" />
               </IconButton>
             }
           >
@@ -451,9 +501,9 @@ export function Sidebar({
                         <div className="group/project flex h-8 items-center gap-0.5 rounded-md pr-1 pl-2 hover:bg-sidebar-accent/50">
                           <CollapsibleTrigger className="flex min-w-0 flex-1 items-center gap-2.5 text-left text-[13px]">
                             {open ? (
-                              <HugeiconsIcon strokeWidth={2} icon={Folder02Icon} className="size-4 shrink-0 text-muted-foreground" />
+                              <HugeiconsIcon strokeWidth={2} icon={Folder02Icon} className="size-3.5 shrink-0 text-muted-foreground" />
                             ) : (
-                              <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} className="size-4 shrink-0 text-muted-foreground" />
+                              <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} className="size-3.5 shrink-0 text-muted-foreground" />
                             )}
                             {renamingProject ? (
                               <InlineRename
@@ -475,7 +525,7 @@ export function Sidebar({
                                 onClick={(event) => event.stopPropagation()}
                                 onPointerDown={(event) => event.stopPropagation()}
                               >
-                                <HugeiconsIcon strokeWidth={2} icon={MoreHorizontalIcon} />
+                                <HugeiconsIcon strokeWidth={2} icon={MoreHorizontalIcon} className="size-3.5" />
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end" className="w-40 min-w-40">
                                 <DropdownMenuItem onClick={() => onNewChat(group.cwd)}>
@@ -513,7 +563,7 @@ export function Sidebar({
                                 onNewChat(group.cwd);
                               }}
                             >
-                              <HugeiconsIcon strokeWidth={2} icon={PencilEdit02Icon} />
+                              <HugeiconsIcon strokeWidth={2} icon={PencilEdit02Icon} className="size-3.5" />
                             </IconButton>
                           </div>
                         </div>
@@ -539,7 +589,7 @@ export function Sidebar({
                       <div className="space-y-0.5">
                         {group.items.length === 0 ? (
                           <p className="flex h-8 items-center gap-2.5 pl-2 text-[12px] text-muted-foreground">
-                            <span className="size-4 shrink-0" />
+                            <span className="size-3.5 shrink-0" />
                             暂无对话
                           </p>
                         ) : (
@@ -568,7 +618,7 @@ export function Sidebar({
           className="flex h-8 w-full items-center gap-2.5 rounded-md px-2 text-[13px] hover:bg-sidebar-accent/50"
           onClick={onOpenSettings}
         >
-          <HugeiconsIcon strokeWidth={2} icon={Settings01Icon} className="size-4 text-muted-foreground" />
+          <HugeiconsIcon strokeWidth={2} icon={Settings01Icon} className="size-3.5 text-muted-foreground" />
           设置
         </button>
       </div>

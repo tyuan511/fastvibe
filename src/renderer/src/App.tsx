@@ -1,34 +1,50 @@
-import { useEffect, useMemo, useRef, useState, type JSX } from "react";
+import { memo, useCallback, useEffect, useRef, useState, type JSX } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { AlertCircleIcon, PanelRightCloseIcon, PanelRightOpenIcon } from "@hugeicons/core-free-icons";
+import { AlertCircleIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PanelRightCloseIcon, PanelRightOpenIcon } from "@hugeicons/core-free-icons";
 import { useMatch, useNavigate } from "react-router";
+import { useShallow } from "zustand/react/shallow";
 import { Composer } from "@/components/chat/composer";
+import { ExtensionNotices, ExtensionWidgets, GoalPanel } from "@/components/chat/extension-surface";
 import { MessageList } from "@/components/chat/message-list";
 import { NewSessionHero, SuggestionChips } from "@/components/chat/new-session";
 import { PermissionDialog } from "@/components/chat/permission-dialog";
+import { PermissionPanel, type PermissionResponse } from "@/components/chat/permission-panel";
 import { usagePercent } from "@/components/chat/session-controls";
-import { SummaryPanel } from "@/components/chat/summary-panel";
 import { Sidebar } from "@/components/layout/sidebar";
 import { SidePane } from "@/components/layout/side-pane";
+import { PluginMarketDialog } from "@/components/layout/plugin-market-dialog";
 import { SessionSwitcher } from "@/components/layout/session-switcher";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/icon-button";
 import { attachmentPromptSuffix, attachmentsToImages } from "@/lib/attachments";
+import { dismissBootLoader } from "@/lib/boot-loader";
+import { cn } from "@/lib/utils";
 
 import { SettingsDialog, SETTINGS_SECTIONS, type SectionId } from "@/components/settings/settings-dialog";
+import type { DeleteConversationsResult } from "@/components/settings/archived-settings";
 import { useSessionStore } from "@/stores/session";
 import { useSettingsStore } from "@/stores/settings";
 import { useThemeSync } from "@/lib/use-theme";
 import type {
   ChatAttachment,
   ChatMessage,
+  ConversationDeleteResult,
   ConversationOpenResult,
   PermissionRequest,
   QueuedPrompt,
+  SkillInfo,
+  SlashCommand,
   WorkspaceSnapshot,
 } from "@shared/types";
 import { useSidePaneStore } from "@/stores/side-pane";
+
+/**
+ * macOS renders the window controls as an overlay (`hiddenInset`), so the top
+ * bar has to clear them when the sidebar — which normally covers them — is
+ * collapsed.
+ */
+const IS_MAC = typeof navigator !== "undefined" && /mac/i.test(navigator.userAgent);
 
 function permissionKey(request: PermissionRequest): string {
   return `${request.method}:${request.title ?? ""}:${request.message ?? ""}`;
@@ -57,6 +73,47 @@ function writeDraft(id: string | null, text: string): void {
   }
 }
 
+/** Pull the active conversation's turn statistics into the store. */
+function refreshStats(): void {
+  void window.fastvibe.engine
+    .getStats()
+    .then((stats) => useSessionStore.getState().setStats(stats))
+    .catch(() => undefined);
+}
+
+/**
+ * Subscribes to the transcript itself so a streamed token re-renders only the
+ * message list — not the whole shell (sidebar, composer, side pane). App used to
+ * read `messages` directly, which re-rendered the entire tree on every token.
+ */
+const MessageThread = memo(function MessageThread({
+  loading,
+  onRetry,
+  onEdit,
+  showThinking,
+  showTimestamp,
+}: {
+  loading: boolean;
+  onRetry: (message: ChatMessage) => void;
+  onEdit: (message: ChatMessage) => void;
+  showThinking: boolean;
+  showTimestamp: boolean;
+}): JSX.Element {
+  const messages = useSessionStore((state) => state.messages);
+  const streaming = useSessionStore((state) => state.streaming);
+  return (
+    <MessageList
+      messages={messages}
+      streaming={streaming}
+      loading={loading}
+      onRetry={onRetry}
+      onEdit={onEdit}
+      showThinking={showThinking}
+      showTimestamp={showTimestamp}
+    />
+  );
+});
+
 export function App(): JSX.Element {
   // Applies light/dark theme selection (and reacts to OS changes in system mode).
   useThemeSync();
@@ -66,13 +123,30 @@ export function App(): JSX.Element {
   const projects = useSessionStore((state) => state.projects);
   const conversations = useSessionStore((state) => state.conversations);
   const activeId = useSessionStore((state) => state.activeId);
-  const messages = useSessionStore((state) => state.messages);
+  // `messages` is intentionally not subscribed here: the array changes on every
+  // streamed token. Derive only the stable facts the shell needs, and let
+  // `MessageThread` read the transcript itself.
+  const empty = useSessionStore((state) => state.messages.length === 0);
+  const inputHistory = useSessionStore(
+    useShallow((state) =>
+      state.messages
+        .filter((item) => item.role === "user")
+        .map((item) => item.text)
+        .filter(Boolean),
+    ),
+  );
+  const hasTranscript = useSessionStore((state) =>
+    state.messages.some((item) => item.role === "user" || item.role === "assistant"),
+  );
   const streaming = useSessionStore((state) => state.streaming);
+  const running = useSessionStore((state) => state.running);
+  const stats = useSessionStore((state) => state.stats);
   const draft = useSessionStore((state) => state.draft);
   const error = useSessionStore((state) => state.error);
   const setStatus = useSessionStore((state) => state.setStatus);
   const setSession = useSessionStore((state) => state.setSession);
   const setModels = useSessionStore((state) => state.setModels);
+  const setStats = useSessionStore((state) => state.setStats);
   const applySnapshot = useSessionStore((state) => state.applySnapshot);
   const setActiveId = useSessionStore((state) => state.setActiveId);
   const setMessages = useSessionStore((state) => state.setMessages);
@@ -84,14 +158,11 @@ export function App(): JSX.Element {
   const dropEmptyAssistant = useSessionStore((state) => state.dropEmptyAssistant);
   const resetConversation = useSessionStore((state) => state.resetConversation);
   const commands = useSessionStore((state) => state.commands);
-  const subagents = useSessionStore((state) => state.subagents);
   const permission = useSessionStore((state) => state.permission);
-  const runMode = useSessionStore((state) => state.runMode);
   const compacting = useSessionStore((state) => state.compacting);
   const setCommands = useSessionStore((state) => state.setCommands);
   const setSubagents = useSessionStore((state) => state.setSubagents);
   const setPermission = useSessionStore((state) => state.setPermission);
-  const setRunMode = useSessionStore((state) => state.setRunMode);
   const attachments = useSessionStore((state) => state.attachments);
   const queued = useSessionStore((state) => state.queued);
   const permissionAlways = useSessionStore((state) => state.permissionAlways);
@@ -99,13 +170,14 @@ export function App(): JSX.Element {
   const queuePause = useSessionStore((state) => state.queuePause);
   const enqueue = useSessionStore((state) => state.enqueue);
   const removeQueued = useSessionStore((state) => state.removeQueued);
+  const moveQueued = useSessionStore((state) => state.moveQueued);
   const prependQueued = useSessionStore((state) => state.prependQueued);
   const clearQueued = useSessionStore((state) => state.clearQueued);
   const setQueuePause = useSessionStore((state) => state.setQueuePause);
   const rememberPermission = useSessionStore((state) => state.rememberPermission);
-  const subagentStreams = useSessionStore((state) => state.subagentStreams);
   const restoreId = useRef<string | null>(null);
   const draining = useRef(false);
+  const pendingPermissionRef = useRef<{ request: PermissionRequest; activeId: string | null } | null>(null);
   // Settings lives at #/settings/<section>; no match means we are in the app.
   const settingsMatch = useMatch("/settings/*");
   const navigate = useNavigate();
@@ -121,18 +193,41 @@ export function App(): JSX.Element {
     if (settingsOpen && !settingsSection) navigate("/settings/general", { replace: true });
   }, [settingsOpen, settingsSection, navigate]);
   const [switcherOpen, setSwitcherOpen] = useState(false);
+  const [marketOpen, setMarketOpen] = useState(false);
+  // `getStatus()` is async, so until it resolves the store still holds the "idle"
+  // placeholder. Track whether the real status has landed: the shell shows the F
+  // loader (and keeps the boot splash up) until it has.
+  const [engineKnown, setEngineKnown] = useState(false);
+  // Bumped whenever a fresh conversation is started so the composer grabs focus.
+  const [composerFocus, setComposerFocus] = useState(0);
+  // Skills the engine can load, surfaced by the composer's 技能 picker. Refetched
+  // after 设置 → 技能 closes so a newly added skill shows up without a restart.
+  const [skills, setSkills] = useState<SkillInfo[]>([]);
+
+  // Hand the pre-JS boot splash off to the shell only once the engine has settled.
+  // While it is still starting, the static splash *is* the app's loader, so fading
+  // it earlier would flash a second loader (or a still-empty shell) underneath it.
+  useEffect(() => {
+    if (!engineKnown || status.state === "starting") return;
+    dismissBootLoader();
+  }, [engineKnown, status.state]);
   const paneCollapsed = useSidePaneStore((state) => state.collapsed);
   const togglePane = useSidePaneStore((state) => state.toggle);
   const settings = useSettingsStore((state) => state.settings);
   const updateSettings = useSettingsStore((state) => state.update);
-  // Stable identity so the composer does not re-render on every streamed token.
-  const inputHistory = useMemo(
-    () => messages.filter((item) => item.role === "user").map((item) => item.text).filter(Boolean),
-    [messages],
-  );
+  const sidebarCollapsed = settings.sidebarCollapsed ?? false;
 
   useEffect(() => {
-    void window.fastvibe.engine.getStatus().then(setStatus);
+    void window.fastvibe.engine.getStatus().then((next) => {
+      setStatus(next);
+      setEngineKnown(true);
+    });
+    // A fresh window has no run history: ask the engine which conversations are
+    // still working so their spinners survive a reload.
+    void window.fastvibe.engine
+      .getRunning()
+      .then((ids) => useSessionStore.getState().setRunningConversations(ids))
+      .catch(() => undefined);
     void window.fastvibe.conversations.list().then((snapshot) => {
       applySnapshot(snapshot);
       const pending = snapshot.activeId;
@@ -153,13 +248,26 @@ export function App(): JSX.Element {
     // events will replace it).
     const offReady = window.fastvibe.engine.onConversationReady((payload) => {
       const store = useSessionStore.getState();
+      // Seed the sidebar's run indicator even for conversations that are not on screen.
+      store.setConversationRunning(payload.id, payload.state?.isStreaming ?? false);
       if (store.activeId !== payload.id || store.streaming) return;
       store.setMessages(payload.messages);
       store.setSession(payload.state);
       store.setStatus(payload.status);
     });
     const offEvent = window.fastvibe.engine.onEvent((event) => {
+      // An extension command replaced the session (plan-mode's fresh handoff):
+      // follow the conversation the engine created and seeded.
+      if (event.type === "conversation_opened" && event.result && typeof event.result === "object") {
+        applyOpen(event.result as ConversationOpenResult);
+        return;
+      }
       const conversationId = typeof event.conversationId === "string" ? event.conversationId : null;
+      // Run state is broadcast for every conversation so the sidebar keeps showing
+      // which chats are working, even while the user is looking at another one.
+      if (event.type === "conversation_running" && conversationId) {
+        useSessionStore.getState().setConversationRunning(conversationId, event.running === true);
+      }
       const currentId = useSessionStore.getState().activeId;
       if (conversationId && currentId && conversationId !== currentId) {
         useSidePaneStore.getState().applyConversationEvent(conversationId, event);
@@ -175,12 +283,24 @@ export function App(): JSX.Element {
         event.type === "auto_compaction_end"
       ) {
         void window.fastvibe.engine.getState().then(setSession).catch(() => undefined);
-        void window.fastvibe.engine.getMessages().then(setMessages).catch(() => undefined);
-      } else if (
-        event.type === "model_changed" ||
-        event.type === "thinking_level_changed" ||
-        event.type === "goal_updated"
-      ) {
+        // A failed turn is already on the optimistic assistant. Reloading here races
+        // auto-retry (which drops the error message from engine state) and would
+        // blank the bubble we just filled in.
+        const failed =
+          event.type === "agent_end" &&
+          Array.isArray(event.messages) &&
+          event.messages.some(
+            (item) =>
+              item &&
+              typeof item === "object" &&
+              "stopReason" in item &&
+              (item as { stopReason?: unknown }).stopReason === "error",
+          );
+        if (!failed) {
+          void window.fastvibe.engine.getMessages().then(setMessages).catch(() => undefined);
+        }
+        refreshStats();
+      } else if (event.type === "model_changed" || event.type === "thinking_level_changed") {
         void window.fastvibe.engine.getState().then(setSession).catch(() => undefined);
       }
       if (event.type === "available_commands_update") {
@@ -196,6 +316,8 @@ export function App(): JSX.Element {
         void window.fastvibe.engine.getSubagents().then(setSubagents).catch(() => undefined);
       }
       if (event.type === "tool_execution_end" || event.type === "toolcall_end") {
+        // Tool time and token totals advance during a run; keep the popover live.
+        refreshStats();
         const name = String(event.toolName ?? event.name ?? "");
         const args = event.args ?? event.arguments;
         const path =
@@ -224,7 +346,9 @@ export function App(): JSX.Element {
 
   useEffect(() => {
     function onKey(event: KeyboardEvent): void {
-      if (event.key === "Escape" && useSessionStore.getState().streaming) {
+      // Esc during a run stops it — but never while an extension prompt owns the
+      // keyboard: there Esc cancels the prompt, which must not also kill the run.
+      if (event.key === "Escape" && useSessionStore.getState().streaming && !useSessionStore.getState().permission) {
         event.preventDefault();
         document.querySelector<HTMLButtonElement>('[aria-label="停止"]')?.click();
       }
@@ -250,12 +374,6 @@ export function App(): JSX.Element {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
-
-  useEffect(() => {
-    setRunMode(settings.runMode);
-    // apply persisted preferences once on mount
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -295,6 +413,7 @@ export function App(): JSX.Element {
       .getState()
       .then(setSession)
       .catch(() => undefined);
+    refreshStats();
     // The model list is expensive (~1.5s in the engine) and only changes when
     // providers change, so fetch it once rather than on every engine start.
     if (useSessionStore.getState().models.length === 0) {
@@ -329,6 +448,34 @@ export function App(): JSX.Element {
     setPermission(null);
   }, [permission, permissionAlways, setPermission, settings.permissionMode]);
 
+  // Shared by the inline panel (confirm/select/input/questions) and the modal (editor).
+  const handlePermissionRespond = useCallback(
+    (payload: PermissionResponse) => {
+      if (payload.always && permission) rememberPermission(permissionKey(permission));
+      pendingPermissionRef.current = null;
+      void window.fastvibe.engine.respondPermission(payload);
+      setPermission(null);
+    },
+    [permission, rememberPermission, setPermission],
+  );
+
+  // An engine prompt is only answerable while its conversation is on screen.
+  // A switch (or a new chat, which resets the store) unmounts the panel, so the
+  // request has to be answered for the engine — the tool hook is parked on it,
+  // and leaving it pending pins the run as "running" forever.
+  useEffect(() => {
+    if (permission) {
+      pendingPermissionRef.current = { request: permission, activeId: useSessionStore.getState().activeId };
+    }
+  }, [permission]);
+  useEffect(() => {
+    const pending = pendingPermissionRef.current;
+    if (!pending || pending.activeId === activeId) return;
+    pendingPermissionRef.current = null;
+    void window.fastvibe.engine.respondPermission({ id: pending.request.id, cancelled: true });
+    setPermission(null);
+  }, [activeId, setPermission]);
+
   // Sending is allowed while the engine is still coming up: the prompt waits
   // behind initialisation, which the user experiences as reply latency. `needsAuth`
   // is deliberately included — no provider is a normal first-run state, not a
@@ -344,7 +491,7 @@ export function App(): JSX.Element {
     status.state === "missing" || status.state === "error"
       ? "暂时无法开始对话，请稍后重试。"
       : error
-        ? "发送失败，请稍后重试。"
+        ? error
         : null;
   // Unbound conversations run in a hidden scratch dir, so never surface that path.
   const workspaceLabel = activeProject?.name ?? "无项目";
@@ -352,6 +499,17 @@ export function App(): JSX.Element {
   useEffect(() => {
     writeDraft(activeId, draft);
   }, [activeId, draft]);
+
+  // The composer's `/` palette lists skills: re-list when 设置 → 技能 is left (the
+  // shell stays mounted behind that route) and when the conversation switches,
+  // since project skills are discovered from the active workspace.
+  useEffect(() => {
+    if (settingsOpen) return;
+    void window.fastvibe.engine
+      .listSkills()
+      .then(setSkills)
+      .catch(() => undefined);
+  }, [settingsOpen, active?.project]);
 
   function applyOpen(result: ConversationOpenResult): void {
     applySnapshot(result);
@@ -362,23 +520,13 @@ export function App(): JSX.Element {
     setDraft(readDrafts()[result.conversation.id] ?? "");
     setError(null);
     clearQueued();
+    // Drop the previous chat's numbers before the new ones arrive.
+    useSessionStore.getState().setStats(null);
+    refreshStats();
   }
 
   function applyList(snapshot: WorkspaceSnapshot): void {
     applySnapshot(snapshot);
-  }
-
-  function wrapPrompt(text: string): string {
-    if (text.startsWith("/")) return text;
-    if (runMode === "plan") {
-      const has = commands.some((item) => item.name === "plan" || item.name === "skill:plan");
-      return has ? `/plan ${text}` : `请先制定可执行计划，列出步骤后再动手。任务：\n${text}`;
-    }
-    if (runMode === "goal") {
-      const has = commands.some((item) => item.name === "goal" || item.name === "skill:goal");
-      return has ? `/goal ${text}` : `请进入目标模式：拆解目标、持续执行直到完成，并在过程中更新进度。目标：\n${text}`;
-    }
-    return text;
   }
 
   async function handleSubmit(): Promise<void> {
@@ -429,7 +577,7 @@ export function App(): JSX.Element {
     files: ChatAttachment[],
     mode: "prompt" | "steer",
   ): Promise<void> {
-    const payload = `${wrapPrompt(text || "请查看附件")}${attachmentPromptSuffix(files)}`;
+    const payload = `${text || "请查看附件"}${attachmentPromptSuffix(files)}`;
     const images = attachmentsToImages(files);
     if (mode === "steer") await window.fastvibe.engine.steer(payload, images);
     else await window.fastvibe.engine.prompt(payload, { images });
@@ -502,40 +650,61 @@ export function App(): JSX.Element {
     }
   }
 
+  // Each dispatch resolves only once its whole run finishes, so drain the queue in
+  // a loop. A one-shot effect would stop after the first item: resetting `draining`
+  // in `.finally` does not re-render, so the next queued message would never fire.
   useEffect(() => {
     if (streaming || queuePause || queued.length === 0 || draining.current) return;
-    const next = queued[0];
     draining.current = true;
-    void drainQueued(next).finally(() => {
-      draining.current = false;
-    });
+    void (async () => {
+      try {
+        for (;;) {
+          const state = useSessionStore.getState();
+          if (state.queuePause || state.queued.length === 0 || state.streaming) break;
+          await drainQueued(state.queued[0]);
+        }
+      } finally {
+        draining.current = false;
+      }
+    })();
   }, [streaming, queuePause, queued]);
 
-  async function handleRetry(message: ChatMessage): Promise<void> {
+  // Stable identities so the memoised transcript rows do not re-render (or hold a
+  // stale closure) when unrelated shell state changes.
+  const handleRetry = useCallback(async (message: ChatMessage): Promise<void> => {
+    const current = useSessionStore.getState();
     const source =
       message.role === "user"
         ? message
-        : [...messages].reverse().find((item) => item.role === "user" && item.createdAt <= message.createdAt);
+        : [...current.messages].reverse().find((item) => item.role === "user" && item.createdAt <= message.createdAt);
     const text = source?.text?.trim();
     if (!text || !canChat) return;
-    if (streaming) {
+    if (current.streaming) {
       try {
         await window.fastvibe.engine.abort();
       } catch {
         // ignore
       }
     }
+    // Retry replaces its turn rather than appending a second copy: drop the source
+    // user message and everything after it, then send it again. Branching rewinds
+    // the engine to the same point; if the id cannot be resolved locally the trim
+    // still keeps the transcript from stacking a duplicate.
+    const sourceIndex = source ? current.messages.findIndex((item) => item.id === source.id) : -1;
+    const trimmed = sourceIndex >= 0 ? current.messages.slice(0, sourceIndex) : current.messages;
     if (source?.id) {
       try {
         setMessages(await window.fastvibe.engine.branch(source.id));
       } catch {
-        // local-only ids cannot branch
+        setMessages(trimmed);
       }
+    } else {
+      setMessages(trimmed);
     }
     setDraft("");
     addUserMessage(text, source?.attachments);
     try {
-      await window.fastvibe.engine.prompt(wrapPrompt(text), {
+      await window.fastvibe.engine.prompt(text, {
         images: source?.attachments ? attachmentsToImages(source.attachments) : undefined,
       });
       void window.fastvibe.engine.getState().then(setSession).catch(() => undefined);
@@ -543,18 +712,21 @@ export function App(): JSX.Element {
       dropEmptyAssistant();
       setError(err instanceof Error ? err.message : String(err));
     }
-  }
+  }, [canChat, setMessages, setDraft, addUserMessage, dropEmptyAssistant, setError, setSession]);
 
-  async function handleEdit(message: ChatMessage): Promise<void> {
+  const handleEdit = useCallback(async (message: ChatMessage): Promise<void> => {
     if (message.id) {
       try {
         setMessages(await window.fastvibe.engine.branch(message.id));
       } catch {
-        // ignore
+        // A turn sent in this window has no session entry yet: rewrite it by
+        // dropping it (and its reply) locally, matching what branching would do.
+        const index = useSessionStore.getState().messages.findIndex((item) => item.id === message.id);
+        if (index >= 0) setMessages(useSessionStore.getState().messages.slice(0, index));
       }
     }
     setDraft(message.text);
-  }
+  }, [setMessages, setDraft]);
 
   async function discardDraft(id: string | null | undefined): Promise<void> {
     if (!id) return;
@@ -569,6 +741,7 @@ export function App(): JSX.Element {
 
   /** Empty chats stay off the sidebar until the first prompt is sent. */
   async function handleNewChat(project?: string): Promise<void> {
+    setComposerFocus((value) => value + 1);
     try {
       const current = conversations.find((item) => item.id === activeId);
       if (current && !current.preview) {
@@ -648,6 +821,34 @@ export function App(): JSX.Element {
   }
 
   /**
+   * Delete conversations from Settings → 归档对话. Returns the ids the engine really
+   * deleted, so the pane only un-archives those; failures are reported back (and
+   * shown in the shell banner) instead of being silently dropped.
+   */
+  async function handleDeleteConversations(ids: string[]): Promise<DeleteConversationsResult> {
+    const deleted: string[] = [];
+    let error: string | undefined;
+    let result: ConversationDeleteResult | null = null;
+    for (const id of ids) {
+      try {
+        result = await window.fastvibe.conversations.delete(id);
+        deleted.push(id);
+      } catch (err) {
+        error = err instanceof Error ? err.message : String(err);
+      }
+    }
+    if (error) setError(error);
+    if (!result) return { deleted, error };
+    applyList(result);
+    if (ids.includes(activeId ?? "") && deleted.length > 0) {
+      // The chat on screen was deleted: fall through to whatever the catalog promoted.
+      if (result.nextId) applyOpen(await window.fastvibe.conversations.open(result.nextId));
+      else resetConversation();
+    }
+    return { deleted, error };
+  }
+
+  /**
    * Bind the active conversation to a project, or clear it to "无项目". A new
    * session has no conversation row yet, so picking a project creates one —
    * unbound sessions stay hidden from the sidebar until their first prompt.
@@ -697,17 +898,16 @@ export function App(): JSX.Element {
     }
   }
 
-  const headerTitle = active
-    ? [activeProject?.name, active.title].filter(Boolean).join(" / ")
-    : "新会话";
+  const headerTitle = active ? active.title : "新会话";
   // A conversation with no preview yet is still a "new session": it has no title
   // or content to put in the top bar, so the bar is dropped and the project
   // binding is surfaced above the composer instead.
   const isNewSession = !active?.preview;
-  // `needsAuth` is not a loading state, so the spinner only covers a real start.
-  const loading = status.state === "starting" && messages.length === 0;
+  // `needsAuth` is not a loading state, so the F only covers a real start — plus
+  // the window before `getStatus()` lands, which the boot splash is already covering.
+  const loading = empty && (!engineKnown || status.state === "starting");
   // A fresh conversation swaps the transcript for the centred greeting hero.
-  const showHero = messages.length === 0 && !loading;
+  const showHero = empty && !loading;
 
   const bannerNode = banner ? (
     <div className="mx-auto mb-2 w-full max-w-3xl px-6">
@@ -730,6 +930,21 @@ export function App(): JSX.Element {
     </div>
   ) : null;
 
+  // The composer's `/` palette: one entry per installed skill, then the engine's
+  // own commands (extension commands, prompt templates, …). `getCommands()` does
+  // not enumerate skill commands yet, so those are appended here.
+  const engineCommandNames = new Set(commands.map((command) => command.name));
+  const paletteCommands: SlashCommand[] = [
+    ...skills
+      .filter((item) => !engineCommandNames.has(`skill:${item.name}`))
+      .map((item) => ({
+        name: `skill:${item.name}`,
+        description: item.description,
+        source: "skill",
+      })),
+    ...commands,
+  ];
+
   const composer = (
     <Composer
       value={draft}
@@ -743,7 +958,7 @@ export function App(): JSX.Element {
       projects={projects}
       project={active?.project}
       newSession={isNewSession}
-      commands={commands}
+      commands={paletteCommands}
       permissionMode={settings.permissionMode}
       onPermissionModeChange={(mode) => updateSettings({ permissionMode: mode })}
       queued={queued}
@@ -752,6 +967,7 @@ export function App(): JSX.Element {
       history={inputHistory}
       contextPercent={usagePercent(session)}
       contextUsage={session?.contextUsage}
+      stats={stats}
       onChange={setDraft}
       onSubmit={() => void handleSubmit()}
       onAbort={() => void handleAbort()}
@@ -763,10 +979,28 @@ export function App(): JSX.Element {
       onRemoveQueued={handleRemoveQueued}
       onEditQueued={handleEditQueued}
       onSendQueuedNow={(id) => void handleSendQueuedNow(id)}
+      onReorderQueued={moveQueued}
       onResumeQueue={() => setQueuePause(null)}
       sendOnEnter={settings.sendOnEnter}
+      focusSignal={composerFocus}
       onManageModels={() => navigate("/settings/providers")}
     />
+  );
+
+  // An extension prompt takes over the composer's slot instead of opening a modal
+  // (see PermissionPanel): `confirm` approvals, the agent's `select`/`input`
+  // questions, and the paged `questions` form render inline; only `editor`
+  // (multi-line prefill) stays a dialog. `full`/remembered approvals are answered
+  // by the effect above, so they never reach the panel.
+  const confirmAutoApproved =
+    permission?.method === "confirm" &&
+    (settings.permissionMode === "full" || permissionAlways.includes(permissionKey(permission)));
+  const pendingPanel = permission && permission.method !== "editor" && !confirmAutoApproved ? permission : null;
+  const pendingDialog = permission && permission.method === "editor" ? permission : null;
+  const composerSlot = pendingPanel ? (
+    <PermissionPanel key={pendingPanel.id} request={pendingPanel} onRespond={handlePermissionRespond} />
+  ) : (
+    composer
   );
 
   return (
@@ -775,7 +1009,7 @@ export function App(): JSX.Element {
         projects={projects}
         conversations={conversations}
         activeId={activeId}
-        streaming={streaming}
+        running={running}
         onNewChat={(cwd) => void handleNewChat(cwd)}
         onOpen={(id) => void handleOpen(id)}
         onAddProject={() => void handleAddProject()}
@@ -784,10 +1018,31 @@ export function App(): JSX.Element {
         onRemoveProject={(cwd) => void handleRemoveProject(cwd)}
         onRevealProject={(cwd) => void window.fastvibe.workspace.reveal(cwd)}
         onOpenSettings={() => navigate("/settings/general")}
+        onOpenMarket={() => setMarketOpen(true)}
       />
       <main className="flex min-w-0 flex-1 flex-col">
-        <header className="drag-region flex h-11 items-center justify-between px-4">
-          {isNewSession ? <div /> : <div className="no-drag ml-2 truncate text-[12.5px] text-muted-foreground">{headerTitle}</div>}
+        <header
+          className={cn(
+            "drag-region flex h-11 items-center justify-between pr-4",
+            // The collapsed sidebar otherwise exposes the traffic lights under
+            // the toggle: inset the bar on macOS so the control and title clear
+            // them, with a little breathing room before the first control.
+            sidebarCollapsed && IS_MAC ? "pl-22" : "pl-4",
+          )}
+        >
+          <div className="no-drag flex min-w-0 items-center gap-1">
+            <IconButton
+              size="icon-sm"
+              variant="ghost"
+              label={sidebarCollapsed ? "展开侧边栏" : "收起侧边栏"}
+              onClick={() => updateSettings({ sidebarCollapsed: !sidebarCollapsed })}
+            >
+              <HugeiconsIcon strokeWidth={2} icon={sidebarCollapsed ? PanelLeftOpenIcon : PanelLeftCloseIcon} />
+            </IconButton>
+            {isNewSession ? null : (
+              <div className="truncate text-[12.5px] text-muted-foreground">{headerTitle}</div>
+            )}
+          </div>
           <div className="no-drag flex items-center gap-1">
             <IconButton
               size="icon-sm"
@@ -806,31 +1061,26 @@ export function App(): JSX.Element {
           <div className="flex min-h-0 w-full flex-1 flex-col items-center justify-center gap-6">
             {bannerNode}
             <NewSessionHero />
-            {composer}
+            <ExtensionWidgets className="pb-2" />
+            <GoalPanel className="pb-2" disabled={streaming} />
+            {composerSlot}
             <SuggestionChips onSelect={setDraft} />
           </div>
         ) : (
           <>
             <div className="relative min-h-0 flex-1">
-              <MessageList
-                messages={messages}
-                streaming={streaming}
+              <MessageThread
                 loading={loading}
-                onRetry={(message) => void handleRetry(message)}
-                onEdit={(message) => void handleEdit(message)}
+                onRetry={handleRetry}
+                onEdit={handleEdit}
                 showThinking={settings.showThinking}
                 showTimestamp={settings.showTimestamps}
               />
-              <SummaryPanel
-                messages={messages}
-                streaming={streaming}
-                runMode={runMode}
-                subagents={subagents}
-                streams={subagentStreams}
-              />
             </div>
             {bannerNode}
-            {composer}
+            <ExtensionWidgets className="pb-2" />
+            <GoalPanel className="pb-2" disabled={streaming} />
+            {composerSlot}
           </>
         )}
       </main>
@@ -838,36 +1088,36 @@ export function App(): JSX.Element {
         cwd={activeProject?.cwd}
         project={active?.project}
         parentId={activeId ?? undefined}
-        messages={messages}
-        canSideChat={Boolean(activeId && messages.some((item) => item.role === "user" || item.role === "assistant"))}
+        canSideChat={Boolean(activeId && hasTranscript)}
         onError={setError}
       />
       <SettingsDialog
         open={settingsOpen}
         onOpenChange={(open) => navigate(open ? "/settings/general" : "/")}
         section={settingsSection}
+        models={models}
+        onDeleteConversations={handleDeleteConversations}
         onProvidersChanged={() => {
           void window.fastvibe.engine.getModels().then(setModels).catch(() => undefined);
           void window.fastvibe.engine.getState().then(setSession).catch(() => undefined);
         }}
       />
+      <PluginMarketDialog open={marketOpen} onOpenChange={setMarketOpen} />
       <SessionSwitcher
         open={switcherOpen}
         conversations={conversations}
         projects={projects}
         activeId={activeId}
+        running={running}
         onOpenChange={setSwitcherOpen}
         onSelect={(id) => void handleOpen(id)}
       />
       <PermissionDialog
-        key={permission?.id ?? "permission"}
-        request={permission}
-        onRespond={(payload) => {
-          if (payload.always && permission) rememberPermission(permissionKey(permission));
-          void window.fastvibe.engine.respondPermission(payload);
-          setPermission(null);
-        }}
+        key={pendingDialog?.id ?? "permission"}
+        request={pendingDialog}
+        onRespond={handlePermissionRespond}
       />
+      <ExtensionNotices />
     </div>
   );
 }

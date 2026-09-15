@@ -12,8 +12,8 @@
 import { useSettingsStore } from "@/stores/settings";
 
 const WIDTH_KEY = "fastvibe.sidebar.width";
-const MIN_WIDTH = 200;
-const DEFAULT_WIDTH = 256;
+const MIN_WIDTH = 280;
+const DEFAULT_WIDTH = 288;
 const MAX_WIDTH = 480;
 
 /** Never let the sidebar eat more than this share of the window. */

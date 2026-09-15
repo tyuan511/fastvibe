@@ -1,6 +1,6 @@
-import { getSupportedThinkingLevels, type Api, type Model } from "@mariozechner/pi-ai";
-import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
-import type { ProviderModel } from "@shared/types";
+import { getSupportedThinkingLevels, type Api, type Model } from "@earendil-works/pi-ai";
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
+import { THINKING_LEVELS, type ProviderModel, type ThinkingLevel } from "@shared/types";
 
 /**
  * pi-coding-agent's own built-in provider catalog.
@@ -13,8 +13,9 @@ import type { ProviderModel } from "@shared/types";
  * key, so the settings UI can offer these before the user has configured anything.
  *
  * Native providers are **never** written to `models.json`. Their credential lives
- * in `AuthStorage` under the provider id, and their models already exist in the
- * registry. Writing them out would be actively harmful: `models.json` resolves
+ * in the engine's in-memory credential overlay under the provider id, and their
+ * models already exist in the catalog. Writing them out would be actively harmful:
+ * `models.json` resolves
  * `apiKey` as an environment-variable name, so an unresolvable name is sent as the
  * literal bearer token (`Authorization: Bearer FASTVIBE_KEY_OPENAI`).
  */
@@ -52,16 +53,17 @@ let cached: NativeProvider[] | null = null;
 export function listNativeProviders(): NativeProvider[] {
   if (cached) return cached;
 
-  const registry = ModelRegistry.inMemory(AuthStorage.inMemory());
-  const grouped = new Map<string, { api: string; baseUrl: string; models: ProviderModel[] }>();
+  const grouped = new Map<string, { name: string; api: string; baseUrl: string; models: ProviderModel[] }>();
 
-  for (const model of registry.getAll()) {
-    const entry = grouped.get(model.provider) ?? { api: "", baseUrl: "", models: [] };
-    // Every model of a provider shares its api/baseUrl; the first one seen defines it.
-    if (!entry.api) entry.api = model.api;
-    if (!entry.baseUrl) entry.baseUrl = model.baseUrl;
-    entry.models.push(toProviderModel(model));
-    grouped.set(model.provider, entry);
+  for (const provider of builtinProviders()) {
+    const entry = grouped.get(provider.id) ?? { name: provider.name, api: "", baseUrl: "", models: [] };
+    for (const model of provider.getModels()) {
+      // Every model of a provider shares its api/baseUrl; the first one seen defines it.
+      if (!entry.api) entry.api = model.api;
+      if (!entry.baseUrl) entry.baseUrl = model.baseUrl;
+      entry.models.push(toProviderModel(model));
+    }
+    grouped.set(provider.id, entry);
   }
 
   cached = [...grouped.entries()]
@@ -69,7 +71,7 @@ export function listNativeProviders(): NativeProvider[] {
       const reason = UNSUPPORTED[id];
       return {
         id,
-        name: registry.getProviderDisplayName(id),
+        name: entry.name,
         api: entry.api,
         baseUrl: entry.baseUrl,
         models: entry.models.sort((a, b) => a.name.localeCompare(b.name)),
@@ -93,7 +95,12 @@ export function findNativeProvider(id: string): NativeProvider | undefined {
  * matches what the provider actually accepts.
  */
 function toProviderModel(model: Model<Api>): ProviderModel {
-  const levels = getSupportedThinkingLevels(model);
+  // Keep only levels the shared vocabulary knows, so a future pi level cannot leak
+  // into `models.json` / the composer before FastVibe has a label for it.
+  const supported = new Set<string>(THINKING_LEVELS);
+  const levels = getSupportedThinkingLevels(model).filter((level): level is ThinkingLevel =>
+    supported.has(level),
+  );
   return {
     id: model.id,
     name: model.name,
@@ -104,8 +111,16 @@ function toProviderModel(model: Model<Api>): ProviderModel {
     // A non-reasoning model reports `["off"]`; treat that as "no explicit levels"
     // so the composer keeps its default effort menu, matching the models.dev path.
     thinkingLevels: levels.length > 1 ? levels : undefined,
+    // The SDK's built-ins carry list prices too, so the model dialog can show the
+    // same numbers the app prices a run with.
+    cost: hasPricing(model.cost) ? { ...model.cost } : undefined,
     source: "native",
   };
+}
+
+/** The SDK defaults an unknown price to all zeros, which means "no information". */
+function hasPricing(cost: Model<Api>["cost"]): boolean {
+  return cost.input > 0 || cost.output > 0 || cost.cacheRead > 0 || cost.cacheWrite > 0;
 }
 
 /** The subset of a native provider's models the user chose to keep. */

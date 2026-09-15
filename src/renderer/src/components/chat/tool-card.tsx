@@ -3,8 +3,10 @@ import { Spinner } from "@/components/ui/spinner";
 import type { ToolCallBlock } from "@shared/types";
 import { useSessionStore } from "@/stores/session";
 import { asRecord, argString, describeTool, familyOf, unwrapShellCommand } from "@/lib/tool-presentation";
+import { displayPath, useWorkspacePath } from "@/lib/workspace-path";
 import { parseToolTodos } from "@/lib/todos";
 import { DiffView } from "./diff-view";
+import { QuestionAnswers } from "./question-answers";
 import { TodoChecklist } from "./todo-list";
 import { ToolRow } from "./tool-row";
 
@@ -92,6 +94,7 @@ function Parameters({ args }: { args: unknown }): JSX.Element | null {
 }
 
 function FileActions({ path }: { path: string }): JSX.Element {
+  const cwd = useWorkspacePath();
   return (
     <div className="flex flex-wrap items-center gap-3">
       <button
@@ -99,7 +102,7 @@ function FileActions({ path }: { path: string }): JSX.Element {
         className="font-mono text-[11px] text-muted-foreground underline-offset-2 hover:underline"
         onClick={() => void window.fastvibe.workspace.reveal(path)}
       >
-        {path}
+        {displayPath(path, cwd)}
       </button>
       <button
         type="button"
@@ -113,9 +116,12 @@ function FileActions({ path }: { path: string }): JSX.Element {
 }
 
 function ToolDetail({ tool, running }: { tool: ToolCallBlock; running: boolean }): JSX.Element {
-  const view = describeTool(tool);
+  const cwd = useWorkspacePath();
+  const view = describeTool(tool, cwd);
   const path = argString(tool.args, FILE_PATH_KEYS);
   const diff = diffText(tool);
+
+  if (view.family === "question") return <QuestionAnswers tool={tool} running={running} />;
 
   if (view.family === "todo") {
     const todos = parseToolTodos(tool);
@@ -154,7 +160,8 @@ export const ToolCard = memo(function ToolCard({
   tool: ToolCallBlock;
   showIcon?: boolean;
 }): JSX.Element {
-  const view = describeTool(tool);
+  const cwd = useWorkspacePath();
+  const view = describeTool(tool, cwd);
   const running = tool.status === "running";
   // read / search / list are single-line rows in zcode: the subject opens the file
   // viewer instead of expanding an inline body.
@@ -163,6 +170,7 @@ export const ToolCard = memo(function ToolCard({
   const hasDetail =
     view.family === "terminal" ||
     view.family === "todo" ||
+    view.family === "question" ||
     Boolean(tool.result?.length) ||
     Boolean(diffText(tool)) ||
     (tool.args !== undefined && !inline);

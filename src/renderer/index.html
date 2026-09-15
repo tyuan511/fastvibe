@@ -4,14 +4,111 @@
     <meta charset="UTF-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'"
+      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: fastvibe-icon:; connect-src 'self'"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Light/dark tiles follow the OS scheme; icon.png is the no-media fallback. -->
+    <link rel="icon" type="image/png" href="/icon-light.png" media="(prefers-color-scheme: light)" />
+    <link rel="icon" type="image/png" href="/icon-dark.png" media="(prefers-color-scheme: dark)" />
     <link rel="icon" type="image/png" href="/icon.png" />
     <title>FastVibe</title>
+    <style>
+      /*
+       * Boot splash.
+       *
+       * Painted from the raw document so the F mark is already animating before the
+       * module bundle runs — in dev the app stylesheet only arrives with JS, so a
+       * rule in index.css would land too late. `dismissBootLoader()` fades this
+       * node out once the shell is ready; it is never unmounted, so the stroke
+       * animation runs continuously across the JS boundary and the hand-off is a
+       * single opacity transition rather than a restart.
+       *
+       * The loader rules below are duplicated for the React <FLoader> in index.css
+       * (which cannot be relied on pre-JS); keep the two in sync.
+       */
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+
+      /*
+       * Un-themed first paint. index.css defaults to light, but Electron mirrors
+       * the persisted theme into prefers-color-scheme, so match that here until
+       * applyTheme() stamps data-theme and installs the real tokens.
+       */
+      html:not([data-theme]) {
+        color-scheme: light;
+        --background: #ffffff;
+        --muted-foreground: #59636e;
+      }
+      @media (prefers-color-scheme: dark) {
+        html:not([data-theme]) {
+          color-scheme: dark;
+          --background: #0d1117;
+          --muted-foreground: #9198a1;
+        }
+      }
+
+      #fastvibe-boot {
+        position: fixed;
+        inset: 0;
+        z-index: 100;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--background, #ffffff);
+        color: var(--muted-foreground, #9198a1);
+        transition: opacity 220ms ease;
+      }
+      #fastvibe-boot[data-dismissed] {
+        opacity: 0;
+        pointer-events: none;
+      }
+      #fastvibe-boot svg {
+        display: block;
+        width: 88px;
+        height: 88px;
+      }
+
+      .fv-loader-path {
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 30;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-dasharray: 1;
+        animation: fv-loader-trace 2.4s ease-in-out infinite;
+      }
+      @keyframes fv-loader-trace {
+        0% {
+          stroke-dashoffset: 1;
+        }
+        55% {
+          stroke-dashoffset: 0;
+        }
+        80% {
+          stroke-dashoffset: 0;
+        }
+        100% {
+          stroke-dashoffset: -1;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .fv-loader-path {
+          animation: none;
+          stroke-dashoffset: 0;
+        }
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>
+    <div id="fastvibe-boot" role="status" aria-label="正在加载 FastVibe">
+      <svg viewBox="178 161 800 800" fill="none" aria-hidden="true">
+        <path class="fv-loader-path" pathLength="1" d="M567.24 386.5C562 407.59 556.75 428.67 551.5 449.76C560.87 448.39 569.98 445.75 579.5 444.92C593.1 443.73 606.87 444.18 620.5 444.19C639.83 444.19 659.17 444.13 678.5 444.25C711.16 444.45 743.84 443.92 776.5 444.26C793.49 444.43 810.51 444.43 827.5 444.23C835.14 444.14 843.76 444.45 845.84 453.55C847.34 460.08 844.44 467.09 842.7 473.32C838.09 489.8 831.41 505.99 823.73 521.25C796 576.35 750.38 617.22 686.47 620.63C660.19 622.03 632.87 620.69 606.5 620.42C594.48 620.29 581.29 618.86 569.5 621.36C565.68 636.85 562.88 652.63 559.61 668.25C554.19 694.16 547.97 720.05 541.29 745.67C529.99 789.04 518.86 826.28 490.5 861.99C477.35 878.55 460.04 891.6 442.32 902.82C426.8 912.64 408.94 919.65 391.38 924.8C366.58 932.08 340.31 936 314.5 937.07C292.55 937.98 270.66 938.16 248.69 937.55C241.79 937.36 228.69 938.7 222.84 935.63C215.49 931.77 214.31 922.12 219.17 915.7C224.44 908.76 230.86 902.62 236.36 895.84C249.23 879.95 262.09 863.91 273.35 846.82C289.95 821.61 306.01 796.03 319.45 768.94C328.02 751.69 335.2 733.65 342.31 715.75C347.81 701.93 352.76 687.87 357.28 673.7C359.09 668.02 361.28 662.36 362.31 656.5C345.76 650.21 334.77 647.95 320.49 636.02C300.93 619.68 289.73 595.03 290.7 569.5C291.41 550.55 297.54 529.01 301.85 510.46C307.9 484.47 313.83 458.46 319.9 432.46C324.26 413.79 328.32 395.09 333.06 376.5C338.78 354.1 343.42 331.07 353.6 310.1C384.87 245.69 442.98 203.96 513.51 192.11C539.7 187.71 566.02 187.7 592.5 187.64C611.17 187.6 629.83 187.3 648.5 187.27C692.5 187.21 736.5 185.85 780.5 186.1C818.48 186.31 856.51 185.37 894.5 185.09C903.83 185.02 913.17 184.86 922.5 184.83C927.42 184.81 932.7 184.51 936.71 187.82C941.06 191.42 941.8 197.18 940.76 202.46C938.62 213.35 932.2 224.24 927.81 234.38C908.66 278.64 881.57 322.86 840.83 350.35C823.59 361.98 804.43 371.28 784.31 376.7C761.09 382.95 737.35 383.12 713.5 383.24C687.5 383.36 661.5 383.36 635.5 383.31C613.1 383.27 589.21 381.28 567.24 386.5Z" />
+      </svg>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -115,7 +115,7 @@ export function SidePaneChat({
           hideProjectPicker
           commands={commands}
           permissionMode={settings.permissionMode}
-          onPermissionModeChange={(mode) => updateSettings({ permissionMode: mode })}
+          onPermissionModeChange={(next) => updateSettings({ permissionMode: next })}
           queued={[]}
           queuePause={null}
           attachments={attachments}
@@ -142,6 +142,7 @@ export function SidePaneChat({
           onRemoveQueued={() => undefined}
           onEditQueued={() => undefined}
           onSendQueuedNow={() => undefined}
+          onReorderQueued={() => undefined}
           onResumeQueue={() => undefined}
           sendOnEnter={settings.sendOnEnter}
         />

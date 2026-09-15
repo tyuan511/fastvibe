@@ -5,6 +5,7 @@ import {
   BrowserIcon,
   Cancel01Icon,
   File01Icon,
+  Folder01Icon,
   GitCompareIcon,
   GlobeIcon,
   MessageSquareIcon,
@@ -28,16 +29,16 @@ import { ResizeHandle } from "@/components/resize-handle";
 import { MIN_WIDTH, useSidePaneStore, type SidePaneTab } from "@/stores/side-pane";
 import { releaseBrowser, SidePaneBrowser } from "./side-pane-browser";
 import { SidePaneChat } from "./side-pane-chat";
-import { SidePaneCode } from "./side-pane-code";
+import { SidePaneFiles } from "./side-pane-files";
 import { SidePaneGit } from "./side-pane-git";
 import { releaseTerminal, SidePaneTerminal } from "./side-pane-terminal";
-import type { ChatMessage } from "@shared/types";
 
 function tabIcon(type: SidePaneTab["type"]) {
   if (type === "git") return GitCompareIcon;
   if (type === "terminal") return TerminalIcon;
   if (type === "browser") return GlobeIcon;
   if (type === "selection-side-chat") return MessageSquareIcon;
+  if (type === "files") return Folder01Icon;
   return File01Icon;
 }
 
@@ -45,14 +46,12 @@ export function SidePane({
   cwd,
   project,
   parentId,
-  messages,
   canSideChat,
   onError,
 }: {
   cwd?: string;
   project?: string;
   parentId?: string;
-  messages: ChatMessage[];
   canSideChat: boolean;
   onError: (message: string) => void;
 }): JSX.Element | null {
@@ -61,16 +60,21 @@ export function SidePane({
   const tabs = useSidePaneStore((state) => state.tabs);
   const activeTabId = useSidePaneStore((state) => state.activeTabId);
   const setWidth = useSidePaneStore((state) => state.setWidth);
+  const setCollapsed = useSidePaneStore((state) => state.setCollapsed);
   const persistWidth = useSidePaneStore((state) => state.persistWidth);
   const activate = useSidePaneStore((state) => state.activate);
   const closeTab = useSidePaneStore((state) => state.close);
   const openGit = useSidePaneStore((state) => state.openGit);
   const openTerminal = useSidePaneStore((state) => state.openTerminal);
   const openBrowser = useSidePaneStore((state) => state.openBrowser);
+  const openFiles = useSidePaneStore((state) => state.openFiles);
   const openSideChat = useSidePaneStore((state) => state.openSideChat);
   const nextSideChatOrdinal = useSidePaneStore((state) => state.nextSideChatOrdinal);
   const hasReviewTab = useSidePaneStore((state) => state.tabs.some((item) => item.type === "git"));
   const startWidth = useRef(width);
+  // Set once the drag has crossed the minimum, so collapsing fires a single
+  // store write instead of one per mousemove until the drag ends.
+  const collapsing = useRef(false);
 
   const visibleTabs = useMemo(
     () => tabs.filter((item) => item.type !== "selection-side-chat" || (parentId && item.parentSessionId === parentId)),
@@ -126,6 +130,7 @@ export function SidePane({
           onOpen: () => openSideChat(parentId, nextSideChatOrdinal(parentId)),
         }
       : null,
+    { id: "files", label: "文件", icon: Folder01Icon, onOpen: openFiles },
     hasReviewTab ? null : { id: "review", label: "审查", icon: GitCompareIcon, onOpen: openGit },
     { id: "terminal", label: "终端", icon: TerminalIcon, onOpen: () => openTerminal(cwd) },
     { id: "browser", label: "浏览器", icon: BrowserIcon, onOpen: () => openBrowser() },
@@ -137,10 +142,21 @@ export function SidePane({
         side="left"
         onDragStart={() => {
           startWidth.current = width;
+          collapsing.current = false;
         }}
         onDrag={(delta) => {
+          const next = startWidth.current - delta;
+          // Dragging past the minimum width collapses the pane instead of
+          // clamping to it; the header toggle reopens it at the stored width.
+          if (next < MIN_WIDTH) {
+            if (!collapsing.current) {
+              collapsing.current = true;
+              setCollapsed(true);
+            }
+            return;
+          }
           const max = Math.round(window.innerWidth * 0.65);
-          setWidth(Math.min(max, Math.max(MIN_WIDTH, startWidth.current - delta)));
+          setWidth(Math.min(max, next));
         }}
         onDragEnd={() => persistWidth()}
       />
@@ -200,6 +216,10 @@ export function SidePane({
                   辅助对话
                 </DropdownMenuItem>
               ) : null}
+              <DropdownMenuItem onClick={openFiles}>
+                <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} />
+                文件
+              </DropdownMenuItem>
               {hasReviewTab ? null : (
                 <DropdownMenuItem onClick={openGit}>
                   <HugeiconsIcon strokeWidth={2} icon={GitCompareIcon} />
@@ -245,18 +265,19 @@ export function SidePane({
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col">
-          {active?.type === "git" ? <SidePaneGit cwd={cwd} messages={messages} onError={onError} /> : null}
-          {active?.type === "code-viewer" && active.preview ? <SidePaneCode preview={active.preview} /> : null}
+          {active?.type === "git" ? <SidePaneGit cwd={cwd} onError={onError} /> : null}
           {active?.type === "selection-side-chat" && parentId ? (
             <SidePaneChat tab={active} project={project} parentId={parentId} />
           ) : null}
           {tabs.map((tab) =>
-            tab.type === "terminal" || tab.type === "browser" ? (
+            tab.type === "terminal" || tab.type === "browser" || tab.type === "files" ? (
               <div key={tab.id} hidden={tab.id !== activeTabId} className="flex min-h-0 flex-1 flex-col">
                 {tab.type === "terminal" ? (
                   <SidePaneTerminal tabId={tab.id} cwd={tab.cwd ?? cwd} sessionId={tab.sessionId} visible={tab.id === activeTabId} />
-                ) : (
+                ) : tab.type === "browser" ? (
                   <SidePaneBrowser tabId={tab.id} url={tab.url ?? "https://fastvibe.dev"} visible={tab.id === activeTabId} />
+                ) : (
+                  <SidePaneFiles tab={tab} cwd={cwd} onError={onError} />
                 )}
               </div>
             ) : null,

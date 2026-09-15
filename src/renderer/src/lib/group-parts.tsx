@@ -29,7 +29,7 @@ export type ToolGroup = {
 
 export type RenderPart =
   | { kind: "text"; text: string }
-  | { kind: "thinking"; text: string }
+  | Extract<MessagePart, { kind: "thinking" }>
   | { kind: "tool"; tool: ToolCallBlock }
   | { kind: "group"; group: ToolGroup };
 
@@ -58,10 +58,20 @@ function groupKindOf(tool: ToolCallBlock): ToolGroupKind | null {
  * tools arrives as several messages. They are a single visual turn: merge them so
  * the transcript shows one block with one copy/retry footer instead of a footer per
  * round-trip.
+ *
+ * Cached on the last message's identity: `applyEngineEvent` clones only the message
+ * being streamed into, so a finished row keeps the same final message object and can
+ * be served from here instead of re-merged (and re-diffed) on every token.
  */
+const mergedRuns = new WeakMap<ChatMessage, ChatMessage>();
+
 export function mergeAssistantRun(messages: ChatMessage[]): ChatMessage {
   const first = messages[0];
   if (messages.length === 1) return first;
+
+  const key = messages[messages.length - 1];
+  const cached = mergedRuns.get(key);
+  if (cached) return cached;
 
   const tools = new Map<string, ToolCallBlock>();
   const parts: MessagePart[] = [];
@@ -84,13 +94,17 @@ export function mergeAssistantRun(messages: ChatMessage[]): ChatMessage {
     if (message.thinking) thoughts.push(message.thinking);
   }
 
-  return {
+  const error = [...messages].reverse().find((item) => item.error)?.error;
+  const merged: ChatMessage = {
     ...first,
     text: texts.join("\n\n"),
     thinking: thoughts.length > 0 ? thoughts.join("\n\n") : undefined,
     tools: [...tools.values()],
     parts,
+    error,
   };
+  mergedRuns.set(key, merged);
+  return merged;
 }
 
 export type MessageRow = {
@@ -162,6 +176,7 @@ function exploreSummary(tools: ToolCallBlock[]): string {
 function changeStat(tools: ToolCallBlock[]): { added: number; removed: number } {
   return tools.reduce(
     (total, tool) => {
+      if (tool.status === "error") return total;
       const stat = diffStat(toolDiff(tool) ?? tool.result);
       return { added: total.added + stat.added, removed: total.removed + stat.removed };
     },
@@ -199,9 +214,15 @@ function buildGroup(kind: ToolGroupKind, tools: ToolCallBlock[]): ToolGroup {
 /**
  * Walk the message in order and fold adjacent tools of the same group kind.
  * Anything that is not a tool (prose, thinking) breaks the run, which keeps the
- * narrative sequence the engine produced.
+ * narrative sequence the engine produced. Cached on the merged message's identity,
+ * so unchanged rows skip the `diffStat`/summary work on every streamed token.
  */
+const groupedParts = new WeakMap<ChatMessage, RenderPart[]>();
+
 export function groupParts(message: ChatMessage): RenderPart[] {
+  const cached = groupedParts.get(message);
+  if (cached) return cached;
+
   const byId = new Map(message.tools.map((tool) => [tool.id, tool]));
   const output: RenderPart[] = [];
   let pendingKind: ToolGroupKind | null = null;
@@ -236,5 +257,6 @@ export function groupParts(message: ChatMessage): RenderPart[] {
     }
   }
   flush();
+  groupedParts.set(message, output);
   return output;
 }

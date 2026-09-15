@@ -1,8 +1,14 @@
-import { useState, type JSX } from "react";
+import { useState, type DragEvent, type JSX } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Cancel01Icon, PencilEdit02Icon, PlayIcon } from "@hugeicons/core-free-icons";
+import {
+  Alert02Icon,
+  ArrowUp02Icon,
+  Cancel01Icon,
+  DragDropVerticalIcon,
+  PencilEdit02Icon,
+} from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { IconButton } from "@/components/icon-button";
 import { cn } from "@/lib/utils";
 import type { QueuePauseReason, QueuedPrompt } from "@shared/types";
 
@@ -12,9 +18,9 @@ const PAUSE_COPY: Record<QueuePauseReason, string> = {
 };
 
 /**
- * Follow-up queue stacked on the composer, matching zcode's `S0e` layout:
- * a rounded-top tray that tucks under the input card, one row per pending
- * message, with send-now / edit / remove.
+ * Follow-up queue stacked on the composer: a rounded-top tray that tucks under
+ * the input card, one numbered row per pending message. Rows are drag-and-drop
+ * reorderable so the user can reshuffle what gets sent next.
  */
 export function MessageQueue({
   items,
@@ -23,6 +29,7 @@ export function MessageQueue({
   onRemove,
   onEdit,
   onSendNow,
+  onReorder,
   onResume,
 }: {
   items: QueuedPrompt[];
@@ -31,9 +38,12 @@ export function MessageQueue({
   onRemove: (id: string) => void;
   onEdit: (id: string) => void;
   onSendNow: (id: string) => void;
+  onReorder: (fromId: string, toId: string) => void;
   onResume: () => void;
 }): JSX.Element | null {
   const [hint, setHint] = useState<string | null>(null);
+  const [dragId, setDragId] = useState<string | null>(null);
+
   if (items.length === 0) return null;
 
   function handleEdit(id: string): void {
@@ -45,22 +55,40 @@ export function MessageQueue({
     onEdit(id);
   }
 
+  function handleDragStart(event: DragEvent<HTMLLIElement>, id: string): void {
+    setDragId(id);
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", id);
+  }
+
+  function handleDragOver(event: DragEvent<HTMLLIElement>, id: string): void {
+    if (!dragId) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    if (dragId !== id) onReorder(dragId, id);
+  }
+
   return (
     <div
       data-queue-count={items.length}
       className={cn(
-        "relative z-0 w-full overflow-hidden rounded-t-2xl border border-border bg-card p-1",
-        "-mb-7 pb-7",
+        "relative z-0 w-full overflow-hidden rounded-t-2xl border border-border bg-card p-1.5",
+        "-mb-7 pb-9",
       )}
     >
       {pauseReason ? (
-        <div className="mb-1 flex min-h-10 items-center gap-3 rounded-xl border border-border/70 bg-muted/40 px-3 py-2 text-[12.5px] text-foreground">
-          <span className="min-w-0 flex-1">{PAUSE_COPY[pauseReason]}</span>
+        <div className="mb-1 flex min-h-8 items-center gap-2 rounded-lg bg-muted/50 px-2.5 py-1.5 text-[12.5px]">
+          <HugeiconsIcon
+            strokeWidth={2}
+            icon={Alert02Icon}
+            className="size-3.5 shrink-0 text-warning"
+          />
+          <span className="min-w-0 flex-1 truncate text-foreground">{PAUSE_COPY[pauseReason]}</span>
           <Button
             type="button"
-            variant="ghost"
-            size="sm"
-            className="shrink-0 text-muted-foreground hover:text-foreground"
+            variant="outline"
+            size="xs"
+            className="shrink-0"
             onClick={onResume}
           >
             继续
@@ -68,59 +96,63 @@ export function MessageQueue({
         </div>
       ) : null}
       {hint ? (
-        <p className="mb-1 px-2.5 text-[11.5px] text-muted-foreground">{hint}</p>
+        <p className="px-2.5 pb-1 text-[11.5px] text-muted-foreground">{hint}</p>
       ) : null}
       <ul className="space-y-0.5">
-        {items.map((item) => (
+        {items.map((item, index) => (
           <li
             key={item.id}
-            className="relative flex items-center gap-2 rounded-xl px-1.5 py-1 pr-1 transition-colors hover:bg-muted/40"
+            draggable
+            onDragStart={(event) => handleDragStart(event, item.id)}
+            onDragOver={(event) => handleDragOver(event, item.id)}
+            onDrop={(event) => event.preventDefault()}
+            onDragEnd={() => setDragId(null)}
+            className={cn(
+              "group/queue flex h-8 items-center gap-1.5 rounded-lg py-0 pr-1 pl-1.5 transition-colors hover:bg-muted/60",
+              dragId === item.id && "opacity-50",
+            )}
           >
-            <span className="flex min-w-0 flex-1 items-center gap-2 truncate text-[12.5px] text-foreground" title={item.text}>
-              <span className="truncate">{item.text}</span>
+            <span
+              aria-hidden
+              title="拖动调整顺序"
+              className="flex size-5 shrink-0 cursor-grab items-center justify-center text-muted-foreground/40 transition-colors group-hover/queue:text-muted-foreground active:cursor-grabbing"
+            >
+              <HugeiconsIcon strokeWidth={2} icon={DragDropVerticalIcon} className="size-3.5" />
+            </span>
+            <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-[11px] font-medium tabular-nums text-muted-foreground">
+              {index + 1}
+            </span>
+            <span className="min-w-0 flex-1 truncate text-[13px] text-foreground" title={item.text}>
+              {item.text}
             </span>
             <Button
               type="button"
-              variant="secondary"
-              size="sm"
-              className="h-7 gap-1"
+              variant="ghost"
+              size="xs"
+              className="gap-1 text-muted-foreground group-hover/queue:text-foreground"
               onClick={() => onSendNow(item.id)}
             >
-              <HugeiconsIcon strokeWidth={2} icon={PlayIcon} className="size-3.5" />
+              <HugeiconsIcon strokeWidth={2} icon={ArrowUp02Icon} className="size-3.5" />
               立即
             </Button>
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label="编辑"
-                    onClick={() => handleEdit(item.id)}
-                  >
-                    <HugeiconsIcon strokeWidth={2} icon={PencilEdit02Icon} className="size-4" />
-                  </Button>
-                }
-              />
-              <TooltipContent>编辑</TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label="移除待发送消息"
-                    onClick={() => onRemove(item.id)}
-                  >
-                    <HugeiconsIcon strokeWidth={2} icon={Cancel01Icon} className="size-4" />
-                  </Button>
-                }
-              />
-              <TooltipContent>移除待发送消息</TooltipContent>
-            </Tooltip>
+            <IconButton
+              variant="ghost"
+              size="icon-xs"
+              label="编辑"
+              className="text-muted-foreground hover:text-foreground"
+              onClick={() => handleEdit(item.id)}
+            >
+              <HugeiconsIcon strokeWidth={2} icon={PencilEdit02Icon} className="size-3.5" />
+            </IconButton>
+            <IconButton
+              variant="ghost"
+              size="icon-xs"
+              label="移除待发送消息"
+              className="text-muted-foreground hover:text-foreground"
+              onClick={() => onRemove(item.id)}
+            >
+              <HugeiconsIcon strokeWidth={2} icon={Cancel01Icon} className="size-3.5" />
+            </IconButton>
           </li>
         ))}
       </ul>

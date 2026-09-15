@@ -1,10 +1,9 @@
 import { useEffect, useState, type JSX, type ReactNode } from "react";
 import { useNavigate } from "react-router";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Analytics01Icon, ArrowLeft01Icon, BoxesIcon, Folder01Icon, InformationCircleIcon, MessageSquareIcon, Plug01Icon, RotateCcwIcon, Search01Icon, Settings02Icon, SparklesIcon } from "@hugeicons/core-free-icons";
+import { Analytics01Icon, Archive04Icon, ArrowLeft01Icon, BoxesIcon, Folder01Icon, InformationCircleIcon, MessageSquareIcon, Plug01Icon, PuzzleIcon, RotateCcwIcon, Settings02Icon, SparklesIcon } from "@hugeicons/core-free-icons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -16,34 +15,27 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import type { AppInfo } from "@shared/ipc";
-import type { ThinkingLevel } from "@shared/types";
+import type { EngineModel, FastVibeModel, ThinkingLevel } from "@shared/types";
 import { useSettingsStore } from "@/stores/settings";
 import type { ThemeMode } from "@/lib/themes";
 import { readSidebarWidth } from "@/lib/sidebar-width";
 import { cn } from "@/lib/utils";
 import { ProvidersSettings } from "./providers-settings";
+import { ArchivedSettings, type DeleteConversationsResult } from "./archived-settings";
+import { DefaultModelSelect } from "./default-model-select";
+import { ExtensionsSettings } from "./extensions-settings";
 import { McpSettings } from "./mcp-settings";
 import { SkillsSettings } from "./skills-settings";
+import { THINKING_MENU_LABELS } from "@/lib/thinking-levels";
 import { ThemeSelect } from "./theme-select";
 import { UsageSettings } from "./usage-settings";
 
-const THINKING_LABELS: Record<ThinkingLevel | "auto", string> = {
-  auto: "跟随模型默认",
-  off: "关闭推理",
-  minimal: "极低",
-  low: "低",
-  medium: "中",
-  high: "高",
-  xhigh: "极高",
-  max: "最大",
-};
-
 const QUEUE_ITEMS = { followUp: "完成后执行", steer: "立即打断" };
 const INTERRUPT_ITEMS = { immediate: "立即打断", wait: "等回合结束" };
-const THINKING_ITEMS = THINKING_LABELS;
+const THINKING_ITEMS = THINKING_MENU_LABELS;
 const THEME_MODE_ITEMS = { system: "跟随系统", light: "亮色", dark: "暗色" };
 
-export type SectionId = "general" | "chat" | "usage" | "providers" | "mcp" | "skills" | "about";
+export type SectionId = "general" | "chat" | "archived" | "usage" | "providers" | "mcp" | "skills" | "extensions" | "about";
 
 /** Also drives the router's /settings/:section validation. */
 export const SETTINGS_SECTIONS: Array<{
@@ -55,6 +47,7 @@ export const SETTINGS_SECTIONS: Array<{
     items: [
       { id: "general", label: "通用", icon: <HugeiconsIcon strokeWidth={2} icon={Settings02Icon} /> },
       { id: "chat", label: "对话", icon: <HugeiconsIcon strokeWidth={2} icon={MessageSquareIcon} /> },
+      { id: "archived", label: "归档对话", icon: <HugeiconsIcon strokeWidth={2} icon={Archive04Icon} /> },
       { id: "usage", label: "使用统计", icon: <HugeiconsIcon strokeWidth={2} icon={Analytics01Icon} /> },
     ],
   },
@@ -64,6 +57,7 @@ export const SETTINGS_SECTIONS: Array<{
       { id: "providers", label: "模型管理", icon: <HugeiconsIcon strokeWidth={2} icon={BoxesIcon} /> },
       { id: "mcp", label: "MCP 工具", icon: <HugeiconsIcon strokeWidth={2} icon={Plug01Icon} /> },
       { id: "skills", label: "技能", icon: <HugeiconsIcon strokeWidth={2} icon={SparklesIcon} /> },
+      { id: "extensions", label: "插件", icon: <HugeiconsIcon strokeWidth={2} icon={PuzzleIcon} /> },
     ],
   },
   {
@@ -117,11 +111,17 @@ export function SettingsDialog({
   open,
   onOpenChange,
   onProvidersChanged,
+  onDeleteConversations,
+  models = [],
   section: controlledSection,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onProvidersChanged?: () => void;
+  /** Deletes conversations for Settings → 归档对话, then re-syncs the shell. */
+  onDeleteConversations?: (ids: string[]) => Promise<DeleteConversationsResult>;
+  /** Model catalog, for the 默认模型 picker. */
+  models?: FastVibeModel[];
   /** Active sub-route, e.g. "providers". */
   section?: SectionId;
 }): JSX.Element | null {
@@ -130,7 +130,6 @@ export function SettingsDialog({
   const reset = useSettingsStore((state) => state.reset);
   const navigate = useNavigate();
   const [section, setSection] = useState<SectionId>(controlledSection ?? "general");
-  const [query, setQuery] = useState("");
   const [info, setInfo] = useState<AppInfo | null>(null);
   // The conversation sidebar is resizable; match whatever width it currently has.
   const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
@@ -158,12 +157,6 @@ export function SettingsDialog({
 
   if (!open) return null;
 
-  const q = query.trim().toLowerCase();
-  const visibleSections = SETTINGS_SECTIONS.map((group) => ({
-    ...group,
-    items: group.items.filter((item) => !q || item.label.toLowerCase().includes(q)),
-  })).filter((group) => group.items.length > 0);
-
   return (
     <div className="fixed inset-0 z-50 flex bg-background">
       <aside
@@ -175,24 +168,15 @@ export function SettingsDialog({
           <Button
             variant="ghost"
             size="sm"
-            className="w-full justify-start gap-2.5 text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
+            className="h-8 w-full justify-start gap-2.5 rounded-md px-2 text-[13px] text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
             onClick={() => onOpenChange(false)}
           >
             <HugeiconsIcon strokeWidth={2} icon={ArrowLeft01Icon} className="size-4" />
             返回应用
           </Button>
-          <div className="relative mt-2">
-            <HugeiconsIcon strokeWidth={2} icon={Search01Icon} className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={query}
-              placeholder="搜索设置"
-              className="h-8 pl-8 text-xs"
-              onChange={(event) => setQuery(event.target.value)}
-            />
-          </div>
         </div>
         <ScrollArea className="min-h-0 flex-1 px-2 py-3">
-          {visibleSections.map((group) => (
+          {SETTINGS_SECTIONS.map((group) => (
             <div key={group.group} className="mb-3">
               <p className="px-2 pb-1 text-[11px] font-medium text-muted-foreground">{group.group}</p>
               <div className="space-y-0.5">
@@ -270,6 +254,17 @@ export function SettingsDialog({
               </Group>
               <Group title="通用">
                 <Row
+                  title="默认模型"
+                  description="新开会话默认使用的模型"
+                  control={
+                    <DefaultModelSelect
+                      models={models}
+                      value={settings.defaultModel}
+                      onChange={(model: EngineModel | undefined) => update({ defaultModel: model })}
+                    />
+                  }
+                />
+                <Row
                   title="默认推理强度"
                   description="模型不支持所选档位时会自动回退"
                   control={
@@ -282,9 +277,9 @@ export function SettingsDialog({
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {(Object.keys(THINKING_LABELS) as Array<keyof typeof THINKING_LABELS>).map((key) => (
+                        {(Object.keys(THINKING_MENU_LABELS) as Array<keyof typeof THINKING_MENU_LABELS>).map((key) => (
                           <SelectItem key={key} value={key}>
-                            {THINKING_LABELS[key]}
+                            {THINKING_MENU_LABELS[key]}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -377,10 +372,12 @@ export function SettingsDialog({
           ) : null}
 
           {section === "providers" ? <ProvidersSettings onChanged={() => onProvidersChanged?.()} /> : null}
+          {section === "archived" ? <ArchivedSettings onDeleteConversations={onDeleteConversations} /> : null}
           {section === "usage" ? <UsageSettings /> : null}
 
           {section === "mcp" ? <McpSettings /> : null}
           {section === "skills" ? <SkillsSettings /> : null}
+          {section === "extensions" ? <ExtensionsSettings /> : null}
 
           {section === "about" ? (
             <div className="space-y-6">

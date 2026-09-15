@@ -1,11 +1,45 @@
-import type { ChatAttachment, ChatMessage, MessagePart, ToolCallBlock } from "@shared/types";
+import type { ChatAttachment, ChatMessage, MessagePart, ThinkingTiming, ToolCallBlock, TuiRun } from "@shared/types";
 
-export function mapEngineMessages(raw: unknown): ChatMessage[] {
+/**
+ * `idOf` resolves the stable session-tree entry id for a raw engine message. The
+ * engine's plain message objects carry no id, so without it every mapping minted a
+ * fresh random id and the renderer could never branch (edit/retry) back into the
+ * session tree.
+ *
+ * `timings` carries the thinking bounds Main timed while the reply streamed, keyed
+ * by that same entry id; the transcript itself has no per-block timing, so without
+ * it a reloaded block could only say 「思考」 with no duration.
+ */
+export function mapEngineMessages(
+  raw: unknown,
+  idOf?: (message: unknown) => string | undefined,
+  timings?: ReadonlyMap<string, ThinkingTiming[]>,
+  customRuns?: (message: Record<string, unknown>) => TuiRun[][] | undefined,
+): ChatMessage[] {
   if (!Array.isArray(raw)) return [];
   const output: ChatMessage[] = [];
   for (const entry of raw) {
     const message = unwrapMessage(entry);
     if (!message) continue;
+    // Extension custom messages carry a `customType` and a plugin renderer. Hidden
+    // ones (`display: false`) are context injections and never belong in the thread.
+    if (message.role === "custom") {
+      if (message.display === false) continue;
+      const customType = typeof message.customType === "string" ? message.customType : undefined;
+      const { text, parts } = extractContent(message.content);
+      output.push({
+        id: idOf?.(entry) ?? String(message.id ?? crypto.randomUUID()),
+        role: "system",
+        text,
+        tools: [],
+        parts,
+        createdAt: typeof message.timestamp === "number" ? message.timestamp : Date.now(),
+        kind: "custom",
+        customType,
+        runs: customRuns?.(message),
+      });
+      continue;
+    }
     if (message.role === "toolResult") {
       const id = String(message.toolCallId ?? "");
       const result = toolText(message.content ?? message.result ?? message.output);
@@ -22,9 +56,12 @@ export function mapEngineMessages(raw: unknown): ChatMessage[] {
     }
     const role = message.role === "assistant" || message.role === "system" ? message.role : "user";
     const { text, thinking, tools, attachments, parts } = extractContent(message.content);
-    if (!text && !thinking && tools.length === 0 && attachments.length === 0 && role !== "assistant") continue;
+    const id = idOf?.(entry) ?? String(message.id ?? crypto.randomUUID());
+    applyThinkingTimings(parts, id ? timings?.get(id) : undefined);
+    const error = assistantError(message);
+    if (!text && !thinking && tools.length === 0 && attachments.length === 0 && !error && role !== "assistant") continue;
     output.push({
-        id: String(message.id ?? crypto.randomUUID()),
+        id,
         role,
         text,
         thinking,
@@ -33,9 +70,32 @@ export function mapEngineMessages(raw: unknown): ChatMessage[] {
         createdAt: typeof message.timestamp === "number" ? message.timestamp : Date.now(),
         kind: role === "system" ? "notice" : "message",
         attachments: attachments.length > 0 ? attachments : undefined,
+        error,
       });
   }
   return output;
+}
+
+/** Hand each measured block to the thinking part it belongs to, in content order. */
+function applyThinkingTimings(parts: MessagePart[], timings: ThinkingTiming[] | undefined): void {
+  if (!timings || timings.length === 0) return;
+  let index = 0;
+  for (const part of parts) {
+    if (part.kind !== "thinking") continue;
+    const timing = timings[index];
+    index += 1;
+    if (!timing) continue;
+    part.startedAt = timing.startedAt;
+    if (timing.endedAt !== undefined) part.endedAt = timing.endedAt;
+  }
+}
+
+/** Surface a failed model request as an error on the assistant turn.
+ *  User aborts (`stopReason: "aborted"`) stay silent — they already stopped on purpose. */
+function assistantError(message: Record<string, unknown>): string | undefined {
+  if (message.role !== "assistant" || message.stopReason !== "error") return undefined;
+  const text = typeof message.errorMessage === "string" ? message.errorMessage.trim() : "";
+  return text || "请求失败";
 }
 
 function unwrapMessage(entry: unknown): Record<string, unknown> | null {

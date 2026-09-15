@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { chmod, readFile, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { PROVIDER_APIS, type FastVibeModel, type NativeProviderConfig, type ProviderApi, type ProviderConfig, type ProviderModel } from "@shared/types";
-import { enrichModel, loadModelsDev, type ModelsDevIndex } from "./models-dev";
+import { INPUT_MODALITIES, PROVIDER_APIS, THINKING_EFFORT_LEVELS, type CostTier, type FastVibeModel, type ModelCost, type ModelPrice, type NativeProviderConfig, type ProviderApi, type ProviderConfig, type ProviderModel, type ThinkingLevel } from "@shared/types";
+import { catalogPrice, enrichModel, loadModelsDev, type ModelsDevIndex } from "./models-dev";
 import { findNativeProvider, listNativeProviders, selectedNativeModels } from "./native-providers";
 import type { FastVibePaths } from "./paths";
 
@@ -28,16 +28,30 @@ type StoredProvider = {
 };
 
 type ProvidersFile = {
-  version: 1;
+  version: number;
   providers: StoredProvider[];
 };
 
+/**
+ * On-disk schema version. 2 made the builtin provider's protocol user-selectable — in
+ * v1 the code pinned it, so a v1 entry's `api` is the old default rather than a choice
+ * and is migrated to the current one (see `normalizeFastVibe`).
+ */
+const PROVIDERS_VERSION = 2;
+
+const COST_KEYS: Array<keyof ModelCost> = ["input", "output", "cacheRead", "cacheWrite"];
+
+/**
+ * The FastVibe gateway speaks the OpenAI Responses API by default. Models that only
+ * exist behind `/chat/completions` (or a different protocol entirely) carry their own
+ * `ProviderModel.api`, which overrides this per model in `models.json`.
+ */
 const FASTVIBE_DEFAULT: StoredProvider = {
   id: FASTVIBE_PROVIDER_ID,
   kind: "builtin",
   name: "FastVibe",
   baseUrl: FASTVIBE_API_BASE,
-  api: "openai-completions",
+  api: "openai-responses",
   apiKeyEnv: FASTVIBE_API_KEY_ENV,
   enabled: true,
   models: [],
@@ -51,7 +65,11 @@ export function readProviders(paths: FastVibePaths): StoredProvider[] {
   try {
     const parsed = JSON.parse(readFileSync(paths.providersFile, "utf8")) as ProvidersFile;
     if (!parsed || !Array.isArray(parsed.providers)) return [normalizeFastVibe(null)];
-    return ensureFastVibe(parsed.providers.filter(isStoredProvider).map(hydrateProvider).filter(isLiveProvider));
+    const legacy = !(typeof parsed.version === "number" && parsed.version >= PROVIDERS_VERSION);
+    return ensureFastVibe(
+      parsed.providers.filter(isStoredProvider).map(hydrateProvider).filter(isLiveProvider),
+      legacy,
+    );
   } catch {
     // No providers.json yet: FastVibe exists but has no models until the user connects.
     return [normalizeFastVibe(null)];
@@ -68,20 +86,29 @@ function isLiveProvider(provider: StoredProvider): boolean {
 }
 
 function writeProviders(paths: FastVibePaths, providers: StoredProvider[]): void {
-  const payload: ProvidersFile = { version: 1, providers };
+  const payload: ProvidersFile = {
+    version: PROVIDERS_VERSION,
+    providers: providers.map((provider) => ({ ...provider, models: hydrateModels(provider.models) })),
+  };
   writeFileSync(paths.providersFile, `${JSON.stringify(payload, null, 2)}\n`);
 }
 
-function ensureFastVibe(list: StoredProvider[]): StoredProvider[] {
+function ensureFastVibe(list: StoredProvider[], legacy: boolean): StoredProvider[] {
   const existing = list.find((item) => item.id === FASTVIBE_PROVIDER_ID);
-  const fastvibe = normalizeFastVibe(existing ?? null);
+  const fastvibe = normalizeFastVibe(existing ?? null, legacy);
   const others = list.filter((item) => item.id !== FASTVIBE_PROVIDER_ID);
   return [fastvibe, ...others];
 }
 
-function normalizeFastVibe(existing: StoredProvider | null): StoredProvider {
+/**
+ * The builtin provider keeps the user's choice of protocol, but its identity and
+ * endpoint are code-owned. `legacy` marks a file written before the protocol was
+ * selectable, where the stored `api` was the code's default and not a decision.
+ */
+function normalizeFastVibe(existing: StoredProvider | null, legacy = false): StoredProvider {
   return {
     ...FASTVIBE_DEFAULT,
+    api: !legacy && isProviderApi(existing?.api) ? existing.api : FASTVIBE_DEFAULT.api,
     models: existing?.models ?? [],
     enabled: existing?.enabled ?? true,
   };
@@ -222,7 +249,7 @@ function extractModelList(payload: unknown): unknown[] {
  * Native providers are excluded from the file on purpose: the SDK already knows
  * their endpoint, api and models, and a `models.json` entry would make it resolve
  * `apiKey` as an env-var name — sending the literal name as the bearer token when
- * that name is not exported. Their credentials go to `AuthStorage` instead.
+ * that name is not exported. Their credentials go to the engine credential overlay instead.
  */
 export function applyProviders(paths: FastVibePaths): FastVibeModel[] {
   const usable = readProviders(paths).filter(
@@ -239,11 +266,45 @@ export function applyProviders(paths: FastVibePaths): FastVibeModel[] {
   return connected.flatMap((provider) =>
     provider.models.map((model) => ({
       provider: provider.id,
+      providerName: provider.name,
       id: model.id,
       name: model.name,
-      thinkingLevels: model.thinkingLevels,
+      thinkingLevels: withOff(model.thinkingLevels),
     })),
   );
+}
+
+/**
+ * The composer's effort menu always starts with 关闭推理: `off` is not a model
+ * capability but the absence of thinking, so it is added here rather than stored.
+ */
+function withOff(levels: ProviderModel["thinkingLevels"]): ProviderModel["thinkingLevels"] {
+  if (!levels || levels.length === 0 || levels.includes("off")) return levels;
+  return ["off", ...levels];
+}
+
+/**
+ * Compatibility pins for one model, derived from the api it will actually be
+ * streamed with. Model level rather than provider level on purpose: a provider whose
+ * models are split across protocols (FastVibe's Responses default plus a few
+ * `/chat/completions` models) would otherwise leak the chat-completions pin onto its
+ * siblings, and `parseModels` merges model compat over provider compat anyway.
+ *
+ * Every provider written here is an OpenAI-compatible endpoint behind a base URL the
+ * SDK does not recognise, so pi-ai cannot tell whether the upstream accepts the
+ * OpenAI `developer` role that replaced `system`. Unknown URLs default to
+ * `supportsDeveloperRole: true`, which silently 400s on upstreams that only speak
+ * `system` (e.g. Qwen via the FastVibe gateway). `system` is accepted everywhere, so
+ * pin it for chat-completions models instead of risking an opaque 400. The Responses
+ * API sends the system prompt as `instructions` and ignores the pin.
+ */
+function modelCompat(api: string, model: ProviderModel): Record<string, unknown> | undefined {
+  if (api !== "openai-completions") return undefined;
+  const compat: Record<string, unknown> = { supportsDeveloperRole: false };
+  // GLM/Z.AI upstreams take a top-level `enable_thinking` instead of
+  // `reasoning_effort`; unknown gateways are never auto-detected as `zai`.
+  if (model.thinkingFormat === "zai") compat.thinkingFormat = "zai";
+  return compat;
 }
 
 function renderModelsJson(providers: StoredProvider[]): string {
@@ -256,21 +317,56 @@ function renderModelsJson(providers: StoredProvider[]): string {
       api: provider.api,
       apiKey: provider.apiKeyEnv,
       authHeader: true,
-      models: provider.models.map((model) => ({
-        id: model.id,
-        name: model.name,
-        contextWindow: model.contextWindow,
-        maxTokens: model.maxTokens,
-        reasoning: model.reasoning,
-        input: engineInputs(model.input),
-      })),
+      models: provider.models.map((model) => {
+        const compat = modelCompat(model.api ?? provider.api, model);
+        const thinking = thinkingLevelMap(model);
+        return {
+          id: model.id,
+          name: model.name,
+          contextWindow: model.contextWindow,
+          maxTokens: model.maxTokens,
+          reasoning: model.reasoning,
+          input: engineInputs(model.input),
+          // Omitted when the model inherits the provider's api, which keeps
+          // `models.json` a faithful mirror of what the user configured.
+          ...(model.api ? { api: model.api } : {}),
+          ...(compat ? { compat } : {}),
+          ...(thinking ? { thinkingLevelMap: thinking } : {}),
+          // Only real prices: the engine's own default is all zeros, so writing the
+          // same zeros back would just bloat the file.
+          ...(model.cost ? { cost: model.cost } : {}),
+        };
+      }),
     };
   }
   return `${JSON.stringify(result, null, 2)}\n`;
 }
 
 /**
- * Providers that have a stored key and so should reach `AuthStorage`.
+ * pi's `thinkingLevelMap` for one model: an effort the user unchecked is mapped to
+ * `null` (unsupported), so the engine clamps a request for it instead of sending a
+ * parameter the upstream rejects. `off` is never mapped — see `THINKING_EFFORT_LEVELS`.
+ * A level whose provider name differs keeps its provider value. `xhigh` and `max` are
+ * special: pi offers either only when the model maps it, so a checked one must carry a
+ * mapping, and an unchecked one is written as `null` like everything else.
+ */
+function thinkingLevelMap(model: ProviderModel): Record<string, string | null> | undefined {
+  if (!model.reasoning || !model.thinkingLevels) return undefined;
+  const allowed = new Set<ThinkingLevel>(model.thinkingLevels);
+  const map: Record<string, string | null> = {};
+  for (const level of THINKING_EFFORT_LEVELS) {
+    if (!allowed.has(level)) {
+      map[level] = null;
+      continue;
+    }
+    const providerValue = model.effortMap?.[level] ?? (level === "xhigh" || level === "max" ? level : undefined);
+    if (providerValue) map[level] = providerValue;
+  }
+  return Object.keys(map).length > 0 ? map : undefined;
+}
+
+/**
+ * Providers that have a stored key and so should reach the engine credential overlay.
  *
  * Native providers are included even though they hold no `models.json` models —
  * their models come from the SDK registry, and requiring a non-empty `models` here
@@ -394,11 +490,20 @@ export function updateProvider(
   const index = providers.findIndex((provider) => provider.id === id);
   if (index < 0) return;
   const current = providers[index];
-  const next = { ...current, ...patch };
+  // IPC callers build the whole patch object (`{ name, baseUrl, api, enabled, models }`),
+  // so the keys they did not touch arrive present but `undefined`. Spreading those in
+  // verbatim blanks the field, and `JSON.stringify` then drops the key from the file
+  // entirely — a rename would erase `baseUrl`/`models` and the provider would fail
+  // validation on the next read and disappear. Only defined values may win.
+  const next = { ...current };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value !== undefined) (next as Record<string, unknown>)[key] = value;
+  }
   if (id === FASTVIBE_PROVIDER_ID) {
+    // Identity and endpoint stay code-owned; the protocol is the user's to pick.
     next.name = FASTVIBE_DEFAULT.name;
     next.baseUrl = FASTVIBE_DEFAULT.baseUrl;
-    next.api = FASTVIBE_DEFAULT.api;
+    if (!isProviderApi(next.api)) next.api = FASTVIBE_DEFAULT.api;
   }
   if (current.kind === "native") {
     // Identity and endpoint stay pinned to the SDK; only enablement and the
@@ -415,10 +520,15 @@ export function updateProvider(
   writeProviders(paths, providers);
 }
 
-export function removeProvider(paths: FastVibePaths, id: string): void {
+export async function removeProvider(paths: FastVibePaths, id: string): Promise<void> {
   if (id === FASTVIBE_PROVIDER_ID) return;
-  const providers = readProviders(paths).filter((provider) => provider.id !== id);
-  writeProviders(paths, providers);
+  const providers = readProviders(paths);
+  const removed = providers.find((provider) => provider.id === id);
+  if (!removed) return;
+  writeProviders(paths, providers.filter((provider) => provider.id !== id));
+  // The credential lives in its own env file, so dropping the entry would otherwise
+  // strand `FASTVIBE_KEY_…` there forever.
+  await setProviderKey(paths, removed.apiKeyEnv, "");
 }
 
 function uniqueProviderId(providers: StoredProvider[], name: string): string {
@@ -449,52 +559,162 @@ export async function refreshProviderModels(
 
 /* ---------------- helpers ---------------- */
 
-function hydrateProvider(value: StoredProvider): StoredProvider {
+/** What a stored entry may look like on disk: only the id is guaranteed. */
+type StoredProviderInput = Partial<StoredProvider> & { id: string };
+
+function hydrateProvider(value: StoredProviderInput): StoredProvider {
   const kind: StoredProvider["kind"] =
     value.kind === "native" || value.kind === "builtin" ? value.kind : "custom";
+  // Every field is repaired rather than trusted: a partially written entry must stay
+  // visible (and repairable) instead of being filtered out and silently lost.
+  const base: StoredProvider = {
+    id: value.id,
+    kind,
+    name: typeof value.name === "string" && value.name.trim() ? value.name : value.id,
+    baseUrl: typeof value.baseUrl === "string" ? value.baseUrl : "",
+    api: isProviderApi(value.api) ? value.api : "openai-completions",
+    apiKeyEnv:
+      typeof value.apiKeyEnv === "string" && value.apiKeyEnv ? value.apiKeyEnv : nativeKeyEnv(value.id),
+    enabled: value.enabled !== false,
+    models: hydrateModels(value.models),
+  };
 
   if (kind === "native") {
     // The SDK is the source of truth for a native provider's identity and endpoint.
     const native = findNativeProvider(value.id);
-    if (!native) return { ...value, kind, enabled: value.enabled !== false };
+    if (!native) return base;
     // Intersect with the catalog: an SDK upgrade can retire a model, and a stale
     // selection would otherwise surface in the composer and then fail to resolve.
     const live = new Set(native.models.map((model) => model.id));
     return {
-      ...value,
-      kind,
+      ...base,
       name: native.name,
       baseUrl: native.baseUrl,
       api: native.api,
-      enabled: value.enabled !== false,
-      models: value.models.filter((model) => live.has(model.id)),
+      models: base.models.filter((model) => live.has(model.id)),
     };
   }
 
-  return {
-    ...value,
-    kind,
-    api: isProviderApi(value.api) ? value.api : "openai-completions",
-    enabled: value.enabled !== false,
-  };
+  return base;
 }
 
 export function nativeKeyEnv(id: string): string {
   return `FASTVIBE_KEY_${id.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
 }
 
+/**
+ * Repair a stored model list. Everything but the override fields is passed through — a
+ * model that lost metadata is still usable — while a value the engine would reject is
+ * dropped so the model falls back to its provider's defaults instead of invalidating
+ * `models.json` (one bad value makes the SDK discard every custom provider).
+ */
+function hydrateModels(value: unknown): ProviderModel[] {
+  if (!Array.isArray(value)) return [];
+  const models: ProviderModel[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry)) continue;
+    const id = entry.id;
+    if (typeof id !== "string" || !id) continue;
+    const { api, cost, costTiers, effortMap, thinkingLevels, input, ...rest } = entry;
+    const model = rest as unknown as ProviderModel;
+    // `features` was dropped from the model record; a legacy entry still carries it, and
+    // deleting it here keeps the next write from copying a dead field forward.
+    delete (model as unknown as Record<string, unknown>).features;
+    if (isProviderApi(api)) model.api = api;
+    // A stored price is kept — native providers carry the SDK's richer list — but a
+    // model persisted before pricing existed (the snapshot's v2 fields) has none, and
+    // without one `models.json` hands the engine an all-zero price, which is why
+    // `usage.cost` in every transcript came back as $0. Prices are not editable, so
+    // back-filling from the bundled catalog is what makes 费用/统计 add up.
+    const stored = isModelCost(cost) ? { cost, costTiers: hydrateCostTiers(costTiers) } : catalogPrice(id);
+    model.cost = stored?.cost;
+    // The ladder rides alongside the flat price the engine reads: pi cannot bill a
+    // long-context step itself, so FastVibe picks the tier when it reports money.
+    model.costTiers = stored?.costTiers;
+    model.thinkingLevels = hydrateThinkingLevels(thinkingLevels);
+    model.effortMap = hydrateEffortMap(effortMap);
+    model.input = INPUT_MODALITIES.filter((item) => Array.isArray(input) && input.includes(item));
+    if (model.input.length === 0) model.input = ["text"];
+    // A marker, not a payload: only `true` is meaningful.
+    if (model.edited !== true) delete model.edited;
+    models.push(model);
+  }
+  return models;
+}
+
+/**
+ * A stored level list is intersected with the tunable levels, in the engine's order:
+ * a level this build cannot express must not reach the effort menu, and the menu
+ * renders in list order.
+ */
+function hydrateThinkingLevels(value: unknown): ThinkingLevel[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const levels = THINKING_EFFORT_LEVELS.filter((level) => value.includes(level));
+  return levels.length > 0 ? levels : undefined;
+}
+
+function hydrateEffortMap(value: unknown): ProviderModel["effortMap"] {
+  if (!isRecord(value)) return undefined;
+  const map: NonNullable<ProviderModel["effortMap"]> = {};
+  for (const level of THINKING_EFFORT_LEVELS) {
+    const providerValue = value[level];
+    if (typeof providerValue === "string" && providerValue) map[level] = providerValue;
+  }
+  return Object.keys(map).length > 0 ? map : undefined;
+}
+
+/**
+ * A stored ladder, repaired per row. A row the engine could not use is dropped rather
+ * than rejecting the whole price: the entry tier still bills a run, and one malformed
+ * step must not silently price every long request at $0.
+ */
+function hydrateCostTiers(value: unknown): CostTier[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const tiers: CostTier[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry)) continue;
+    const over = entry.over;
+    const cost = entry.cost;
+    if (typeof over !== "number" || !Number.isFinite(over) || over <= 0) continue;
+    if (!isModelCost(cost)) continue;
+    tiers.push({ over, cost });
+  }
+  return tiers.length > 0 ? tiers.sort((a, b) => a.over - b.over) : undefined;
+}
+
+function isModelCost(value: unknown): value is ModelCost {
+  if (!isRecord(value)) return false;
+  return COST_KEYS.every((key) => {
+    const price = value[key];
+    return typeof price === "number" && Number.isFinite(price) && price >= 0;
+  });
+}
+
+/**
+ * Every configured model's price, keyed `provider/model` and then by bare model id.
+ * Both keys because a transcript records the model id verbatim while the provider that
+ * served it may have been renamed or removed before the report is read.
+ */
+export function modelPriceIndex(paths: FastVibePaths): Map<string, ModelPrice> {
+  const index = new Map<string, ModelPrice>();
+  for (const provider of readProviders(paths)) {
+    for (const model of provider.models) {
+      const price: ModelPrice = { cost: model.cost, costTiers: model.costTiers };
+      index.set(`${provider.id}/${model.id}`, price);
+      if (!index.has(model.id)) index.set(model.id, price);
+    }
+  }
+  return index;
+}
+
 function isProviderApi(value: unknown): value is ProviderApi {
   return typeof value === "string" && (PROVIDER_APIS as readonly string[]).includes(value);
 }
 
-function isStoredProvider(value: unknown): value is StoredProvider {
-  return (
-    isRecord(value) &&
-    typeof value.id === "string" &&
-    typeof value.baseUrl === "string" &&
-    typeof value.apiKeyEnv === "string" &&
-    Array.isArray(value.models)
-  );
+function isStoredProvider(value: unknown): value is StoredProviderInput {
+  // An id is the only thing a stored entry must have; everything else is repaired by
+  // `hydrateProvider`, so a provider that lost a field on write cannot lose its entry.
+  return isRecord(value) && typeof value.id === "string" && value.id.length > 0;
 }
 
 function unquote(value: string): string {

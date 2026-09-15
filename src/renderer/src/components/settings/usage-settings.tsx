@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/select";
 import { Progress } from "@/components/ui/progress";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { providerLabel } from "@/lib/provider-label";
 import { cn } from "@/lib/utils";
 import type { UsageDay, UsageRange, UsageStats } from "@shared/types";
 
@@ -168,7 +169,7 @@ export function UsageSettings(): JSX.Element {
                   <div className="flex items-center justify-between gap-4">
                     <div className="min-w-0">
                       <p className="truncate text-[12.5px] font-medium">{model.model}</p>
-                      <p className="truncate text-[11px] text-muted-foreground">{model.provider}</p>
+                      <p className="truncate text-[11px] text-muted-foreground">{providerLabel(model.provider)}</p>
                     </div>
                     <div className="shrink-0 text-right">
                       <p className="text-[12.5px] tabular-nums">{formatTokens(model.tokens)}</p>

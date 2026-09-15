@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { ProviderModel } from "@shared/types";
+import { THINKING_EFFORT_LEVELS, type CostTier, type ModelPrice, type ProviderModel, type ThinkingLevel } from "@shared/types";
 
 /**
  * models.dev metadata, pre-indexed at build time by `scripts/sync-models-dev.mjs`.
@@ -8,6 +8,12 @@ import type { ProviderModel } from "@shared/types";
  * The bundled artifact is a compact snapshot: `m` holds unique models as tuples and
  * `x` maps every alias to an index in `m`, so lookups are a single Map hit.
  */
+/** `[over, input, output, cacheRead, cacheWrite]` — one step of a price ladder. */
+type CostTierTuple = [number, number, number, number, number];
+
+/** `[input, output, cacheRead, cacheWrite, tiers?]` per million tokens. */
+type CostTuple = [number, number, number, number, CostTierTuple[]?];
+
 type ModelTuple = [
   id: string,
   name: string,
@@ -16,6 +22,8 @@ type ModelTuple = [
   /** text=1 image=2 video=4 file=8 */
   inputMask: number,
   thinkingLevels: string[] | null,
+  /** v4 onward. A `v <= 3` snapshot keeps the retired feature mask in this slot. */
+  cost?: CostTuple,
 ];
 
 type BundledIndex = {
@@ -36,6 +44,11 @@ export type ModelMeta = {
   reasoning: boolean;
   input: string[];
   thinkingLevels?: ProviderModel["thinkingLevels"];
+  cost?: ProviderModel["cost"];
+  /** Long-context price ladder; absent when the model charges one flat rate. */
+  costTiers?: CostTier[];
+  /** Provider-side names for levels pi calls something else. */
+  effortMap?: ProviderModel["effortMap"];
   source: "models.dev";
 };
 
@@ -49,7 +62,7 @@ export type ModelsDevStats = {
 
 const DEFAULT_CONTEXT = 128_000;
 const DEFAULT_MAX_TOKENS = 8192;
-const EFFORT_ORDER = ["minimal", "low", "medium", "high", "xhigh", "max"];
+const EFFORT_ORDER: readonly ThinkingLevel[] = THINKING_EFFORT_LEVELS;
 const INPUT_DECODE: Array<[number, string]> = [
   [1, "text"],
   [2, "image"],
@@ -135,7 +148,7 @@ export function loadModelsDev(): ModelsDevIndex {
 }
 
 function decode(bundled: BundledIndex): Map<string, ModelMeta> {
-  const models = bundled.m.map(toMeta);
+  const models = bundled.m.map((tuple) => toMeta(tuple, bundled.v));
   const index = new Map<string, ModelMeta>();
   for (const [alias, position] of Object.entries(bundled.x)) {
     const meta = models[position];
@@ -144,20 +157,85 @@ function decode(bundled: BundledIndex): Map<string, ModelMeta> {
   return index;
 }
 
-function toMeta(tuple: ModelTuple): ModelMeta {
+/**
+ * Where `cost` sits in a tuple. A `v <= 3` snapshot keeps the retired feature bitmask in
+ * the slot the price occupies from v4 on, so reading by version stops a stale bundled
+ * index from decoding a mask as prices.
+ */
+function costSlot(version: number): number {
+  return version >= 4 ? 6 : 7;
+}
+
+function toMeta(tuple: ModelTuple, version: number): ModelMeta {
   const [, , contextWindow, maxTokens, inputMask, levels] = tuple;
   const input = INPUT_DECODE.filter(([bit]) => inputMask & bit).map(([, name]) => name);
-  const efforts = levels
-    ?.filter((level) => EFFORT_ORDER.includes(level))
-    .sort((a, b) => EFFORT_ORDER.indexOf(a) - EFFORT_ORDER.indexOf(b))
-    .map((level) => level as NonNullable<ProviderModel["thinkingLevels"]>[number]);
+  const efforts = decodeEfforts(levels);
+  const pricing = decodeCost((tuple as unknown[])[costSlot(version)] as CostTuple | undefined);
   return {
     contextWindow: contextWindow > 0 ? contextWindow : DEFAULT_CONTEXT,
     maxTokens: maxTokens > 0 ? maxTokens : DEFAULT_MAX_TOKENS,
-    reasoning: efforts != null && efforts.length > 0,
+    reasoning: efforts.thinkingLevels !== undefined,
     input: input.length > 0 ? input : ["text"],
-    thinkingLevels: efforts && efforts.length > 0 ? efforts : undefined,
+    thinkingLevels: efforts.thinkingLevels,
+    cost: pricing.cost,
+    costTiers: pricing.costTiers,
+    effortMap: efforts.effortMap,
     source: "models.dev",
+  };
+}
+
+/** A v1/v2 tuple ends after the four prices; v3 appends the long-context ladder. */
+function decodeCost(cost: CostTuple | undefined): ModelPrice {
+  if (!cost) return {};
+  const [input, output, cacheRead, cacheWrite, tiers] = cost;
+  return {
+    cost: { input, output, cacheRead, cacheWrite },
+    costTiers: tiers?.map(([over, tierInput, tierOutput, tierCacheRead, tierCacheWrite]) => ({
+      over,
+      cost: { input: tierInput, output: tierOutput, cacheRead: tierCacheRead, cacheWrite: tierCacheWrite },
+    })),
+  };
+}
+
+/**
+ * Translate the catalog's effort values into pi levels. `off` is deliberately absent:
+ * it is not a capability the catalog reports but the absence of thinking, so the
+ * effort menus add it and `models.json` never marks it unsupported. `xhigh` and `max`
+ * are only offered by pi when the model maps them explicitly, so those mappings are
+ * recorded even when the provider names the level the same way.
+ */
+function decodeEfforts(levels: string[] | null): {
+  thinkingLevels?: ProviderModel["thinkingLevels"];
+  effortMap?: ProviderModel["effortMap"];
+} {
+  if (!levels || levels.length === 0) return {};
+  const seen: ThinkingLevel[] = [];
+  const effortMap: NonNullable<ProviderModel["effortMap"]> = {};
+  for (const raw of levels) {
+    const level = raw as ThinkingLevel;
+    if (!EFFORT_ORDER.includes(level) || seen.includes(level)) continue;
+    seen.push(level);
+  }
+  if (seen.length === 0) return {};
+  seen.sort((a, b) => EFFORT_ORDER.indexOf(a) - EFFORT_ORDER.indexOf(b));
+  if (seen.includes("xhigh")) effortMap.xhigh ??= "xhigh";
+  if (seen.includes("max")) effortMap.max ??= "max";
+  return {
+    thinkingLevels: seen,
+    effortMap: Object.keys(effortMap).length > 0 ? effortMap : undefined,
+  };
+}
+
+/**
+ * The bundled catalog's price for one model id, by itself — no provider needed. Used to * back-fill models stored before pricing existed and to price transcripts whose model is
+ * no longer configured. `undefined` means "the catalog did not say", not "free".
+ */
+export function catalogPrice(id: string): ModelPrice | undefined {
+  const meta = loadModelsDev().lookup(id);
+  if (!meta?.cost) return undefined;
+  return {
+    cost: { ...meta.cost },
+    costTiers: meta.costTiers?.map((tier) => ({ over: tier.over, cost: { ...tier.cost } })),
   };
 }
 
@@ -173,6 +251,9 @@ export function enrichModel(index: ModelsDevIndex, id: string, name: string): Pr
       reasoning: meta.reasoning,
       input: meta.input,
       thinkingLevels: meta.thinkingLevels,
+      cost: meta.cost,
+      costTiers: meta.costTiers,
+      effortMap: meta.effortMap,
       source: "models.dev",
     };
   }

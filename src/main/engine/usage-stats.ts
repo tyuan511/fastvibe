@@ -1,6 +1,7 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type {
+  ModelPrice,
   UsageDay,
   UsageMetrics,
   UsageModelBreakdown,
@@ -8,7 +9,10 @@ import type {
   UsageStats,
   UsageTotals,
 } from "@shared/types";
+import { catalogPrice } from "./models-dev";
 import type { FastVibePaths } from "./paths";
+import { priceUsage } from "./pricing";
+import { modelPriceIndex } from "./providers";
 
 /**
  * Usage statistics are derived from the engine's append-only session transcripts
@@ -39,6 +43,8 @@ type ModelBucket = {
 type FileUsage = {
   mtimeMs: number;
   size: number;
+  /** The price table the cost was computed against — see `collectUsageStats`. */
+  priceKey: string;
   days: Map<string, Metrics>;
   models: Map<string, ModelBucket>;
   earliest: string;
@@ -51,7 +57,14 @@ export async function collectUsageStats(
   range: UsageRange = "30d",
 ): Promise<UsageStats> {
   const files = await listSessionFiles(paths.sessionsDir);
-  const parsed = await Promise.all(files.map((file) => parseSessionFile(file).catch(() => null)));
+  const prices = modelPriceIndex(paths);
+  // Cost is derived from the current price table, not stored in the transcript alone, so
+  // the cache key covers both: editing a provider must not leave yesterday's totals in
+  // place for transcripts that have not grown since.
+  const priceKey = await priceStamp(paths.providersFile);
+  const parsed = await Promise.all(
+    files.map((file) => parseSessionFile(file, prices, priceKey).catch(() => null)),
+  );
 
   let earliest = "";
   for (const item of parsed) {
@@ -131,10 +144,16 @@ async function listSessionFiles(root: string): Promise<string[]> {
   return files;
 }
 
-async function parseSessionFile(file: string): Promise<FileUsage> {
+async function parseSessionFile(
+  file: string,
+  prices: Map<string, ModelPrice>,
+  priceKey: string,
+): Promise<FileUsage> {
   const info = await stat(file);
   const cached = cache.get(file);
-  if (cached && cached.mtimeMs === info.mtimeMs && cached.size === info.size) return cached;
+  if (cached && cached.mtimeMs === info.mtimeMs && cached.size === info.size && cached.priceKey === priceKey) {
+    return cached;
+  }
 
   const text = await readFile(file, "utf8");
   const days = new Map<string, Metrics>();
@@ -188,8 +207,17 @@ async function parseSessionFile(file: string): Promise<FileUsage> {
       isRecord(message.usage) && num(message.usage.totalTokens)
         ? num(message.usage.totalTokens)
         : input + output + cacheRead + cacheWrite;
-    const cost =
+
+    const provider = typeof message.provider === "string" ? message.provider : current?.provider ?? "未知";
+    const model = typeof message.model === "string" ? message.model : current?.model ?? "未知";
+    const reportedCost =
       isRecord(message.usage) && isRecord(message.usage.cost) ? num(message.usage.cost.total) : 0;
+    // A transcript written before the engine had a price for its model records an
+    // all-zero cost even though the tokens are real. Re-price those from the model's
+    // own ladder, so 统计 covers work already done instead of staying blank.
+    const usage = { input, output, cacheRead, cacheWrite };
+    const price = prices.get(`${provider}/${model}`) ?? prices.get(model) ?? catalogPrice(model);
+    const cost = reportedCost > 0 ? reportedCost : (price && priceUsage(price, usage)) || 0;
 
     day.input += input;
     day.output += output;
@@ -198,8 +226,6 @@ async function parseSessionFile(file: string): Promise<FileUsage> {
     day.tokens += tokens;
     day.cost += cost;
 
-    const provider = typeof message.provider === "string" ? message.provider : current?.provider ?? "未知";
-    const model = typeof message.model === "string" ? message.model : current?.model ?? "未知";
     const key = `${provider}/${model}`;
     let bucket = models.get(key);
     if (!bucket) {
@@ -217,7 +243,7 @@ async function parseSessionFile(file: string): Promise<FileUsage> {
     bucketDay.cost += cost;
   }
 
-  const result: FileUsage = { mtimeMs: info.mtimeMs, size: info.size, days, models, earliest };
+  const result: FileUsage = { mtimeMs: info.mtimeMs, size: info.size, priceKey, days, models, earliest };
   cache.set(file, result);
   return result;
 }
@@ -297,6 +323,19 @@ function sumDays(days: Map<string, Metrics>): Metrics {
 
 function isToolCallType(type: string): boolean {
   return type === "toolCall" || type === "tool_use" || type === "tool_call" || type === "toolcall";
+}
+
+/**
+ * Identity of the price table a run of parsing used: the file prices are read from, and
+ * when it was written. `providers.json` is the only place the app's prices change, and a
+ * missing file is a legitimate "not configured yet" state rather than an error.
+ */
+async function priceStamp(providersFile: string): Promise<string> {
+  try {
+    return `${providersFile}:${(await stat(providersFile)).mtimeMs}`;
+  } catch {
+    return `${providersFile}:missing`;
+  }
 }
 
 function num(value: unknown): number {

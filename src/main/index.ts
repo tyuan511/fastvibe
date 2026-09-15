@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, Notification, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, Notification, protocol, shell } from "electron";
 import { statSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -6,9 +6,11 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { Ipc } from "@shared/ipc";
 import { readFilePreview } from "./engine/file-preview";
+import { readWorkspaceDir } from "./engine/workspace-fs";
 import { loadModelsDev } from "./engine/models-dev";
 import {
   applyNativeTheme,
+  applyPermissionMode,
   clearAppSettings,
   paintWindows,
   readAppSettings,
@@ -16,8 +18,14 @@ import {
   writeAppSettings,
 } from "./engine/app-settings";
 import { getFastVibePaths } from "./engine/paths";
+import {
+  getFileIconMapping,
+  registerFileIconProtocol,
+  registerFileIconScheme,
+} from "./engine/file-icons";
 import { collectUsageStats } from "./engine/usage-stats";
 import { PiProcessManager } from "./pi/process-manager";
+import { fetchPackageCatalog } from "./pi/package-catalog";
 import { TerminalSessions } from "./engine/terminal-sessions";
 import type { ProviderModel, UsageRange } from "@shared/types";
 import type { GitBranch, GitDiffSource, GitStatus } from "@shared/ipc";
@@ -25,6 +33,14 @@ import type { GitBranch, GitDiffSource, GitStatus } from "@shared/ipc";
 const execFileAsync = promisify(execFile);
 
 app.setName("FastVibe");
+
+// Privileged schemes must be declared before the app is ready.
+registerFileIconScheme();
+
+// Extensions are TypeScript modules jiti compiles at load time. Its on-disk cache
+// cannot be written inside the packaged asar, so turn it off there; dev keeps the
+// cache for faster reloads.
+if (app.isPackaged) process.env.JITI_FS_CACHE = "false";
 
 const engine = new PiProcessManager();
 const terminals = new TerminalSessions();
@@ -150,6 +166,19 @@ function registerIpc(): void {
     return engine.getCommands();
   });
   ipcMain.handle(Ipc.engineGetExtensions, async () => engine.getExtensions());
+  ipcMain.handle(Ipc.engineListExtensionPackages, async () => engine.listExtensionPackages());
+  ipcMain.handle(
+    Ipc.engineInstallExtensionPackage,
+    async (_event, payload: { source: string }) => engine.installExtensionPackage(payload.source),
+  );
+  ipcMain.handle(
+    Ipc.engineRemoveExtensionPackage,
+    async (_event, payload: { source: string }) => engine.removeExtensionPackage(payload.source),
+  );
+  ipcMain.handle(
+    Ipc.engineListMarketPackages,
+    async (_event, payload: import("@shared/types").MarketPackageQuery) => fetchPackageCatalog(payload),
+  );
   ipcMain.handle(Ipc.engineListMcpServers, async () => engine.listMcpServers());
   ipcMain.handle(Ipc.engineSaveMcpServers, async (_event, payload: { configs: import("@shared/types").McpServerConfig[] }) => engine.saveMcpServers(payload.configs));
   ipcMain.handle(Ipc.engineListSkills, async () => engine.listSkills());
@@ -187,6 +216,10 @@ function registerIpc(): void {
 
   ipcMain.handle(Ipc.engineGetState, async () => {
     return engine.getState();
+  });
+
+  ipcMain.handle(Ipc.engineGetRunning, async () => {
+    return engine.getRunningConversations();
   });
 
   ipcMain.handle(Ipc.engineGetModels, async () => {
@@ -332,31 +365,18 @@ function registerIpc(): void {
     if (!payload.path) return { kind: "error", path: "", name: "", message: "路径无效" };
     return readFilePreview(payload.path);
   });
+  ipcMain.handle(Ipc.workspaceFileIcons, () => getFileIconMapping());
+  ipcMain.handle(Ipc.workspaceReadDir, (_event, payload: { path: string }) => {
+    try {
+      return readWorkspaceDir(payload.path);
+    } catch {
+      return [];
+    }
+  });
   ipcMain.handle(Ipc.workspaceGitStatus, async (_event, payload: { cwd: string }): Promise<GitStatus> => {
     const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
-    const empty: GitStatus = { cwd, isRepository: false, changed: 0, staged: 0, files: [] };
-    if (!cwd) return empty;
-    try {
-      const { stdout } = await execFileAsync("git", ["-C", cwd, "status", "--short", "--branch"], { timeout: 5000, maxBuffer: 256 * 1024 });
-      const lines = stdout.split(/\r?\n/).filter(Boolean);
-      const header = lines.shift() ?? "";
-      if (!header.startsWith("## ")) return empty;
-      const branchText = header.slice(3).split("...")[0].trim();
-      const ahead = Number(header.match(/ahead (\d+)/)?.[1] ?? 0);
-      const behind = Number(header.match(/behind (\d+)/)?.[1] ?? 0);
-      let changed = 0;
-      let staged = 0;
-      const files: GitStatus["files"] = [];
-      for (const line of lines) {
-        if (line.length < 2) continue;
-        changed += 1;
-        if (line[0] !== " " && line[0] !== "?") staged += 1;
-        files.push({ index: line[0] === "?" ? "?" : line[0], worktree: line[1] ?? " ", path: line.slice(3).trim() });
-      }
-      return { cwd, isRepository: true, branch: branchText || undefined, changed, staged, ahead, behind, files };
-    } catch {
-      return empty;
-    }
+    if (!cwd) return { cwd, isRepository: false, changed: 0, staged: 0, files: [] };
+    return readGitStatus(cwd);
   });
   ipcMain.handle(Ipc.workspaceOpenTerminal, async (_event, payload: { cwd: string }): Promise<void> => {
     const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
@@ -513,12 +533,14 @@ function registerIpc(): void {
     const paths = getFastVibePaths();
     writeAppSettings(paths, payload);
     applyNativeTheme(payload);
+    applyPermissionMode(payload);
     paintWindows(windows);
   });
   ipcMain.handle(Ipc.settingsClear, () => {
     const paths = getFastVibePaths();
     clearAppSettings(paths);
     applyNativeTheme({});
+    applyPermissionMode({});
     paintWindows(windows);
   });
 
@@ -537,7 +559,10 @@ function registerIpc(): void {
 
 app.whenReady().then(async () => {
   applyAppIcon();
-  applyNativeTheme(readAppSettings(getFastVibePaths()));
+  const startupSettings = readAppSettings(getFastVibePaths());
+  applyNativeTheme(startupSettings);
+  applyPermissionMode(startupSettings);
+  registerFileIconProtocol();
   registerIpc();
 
   engine.onStatus(() => broadcastStatus());
@@ -583,6 +608,17 @@ app.on("before-quit", (event) => {
   });
 });
 
+/**
+ * `git status --short --branch` heads with `## main...origin/main [ahead 1]`,
+ * `## No commits yet on main` in a fresh repo, and `## HEAD (no branch)` when
+ * detached. Strip the decorations so the UI can print a bare ref name.
+ */
+function parseBranchHeader(header: string): string | undefined {
+  const text = header.split("...")[0].trim();
+  const name = (text.match(/^No commits yet on (.+)$/)?.[1] ?? text).replace(/ \(no branch\)$/, "").trim();
+  return name || undefined;
+}
+
 async function readGitStatus(cwd: string): Promise<GitStatus> {
   const empty: GitStatus = { cwd, isRepository: false, changed: 0, staged: 0, files: [] };
   try {
@@ -590,11 +626,19 @@ async function readGitStatus(cwd: string): Promise<GitStatus> {
     const lines = stdout.split(/\r?\n/).filter(Boolean);
     const header = lines.shift() ?? "";
     if (!header.startsWith("## ")) return empty;
-    const branch = header.slice(3).split("...")[0].trim();
+    const branch = parseBranchHeader(header.slice(3));
     const ahead = Number(header.match(/ahead (\d+)/)?.[1] ?? 0);
     const behind = Number(header.match(/behind (\d+)/)?.[1] ?? 0);
-    const files = lines.filter((line) => line.length >= 2).map((line) => ({ index: line[0] === "?" ? "?" : line[0], worktree: line[1] ?? " ", path: line.slice(3).trim() }));
-    return { cwd, isRepository: true, branch: branch || undefined, changed: files.length, staged: files.filter((file) => file.index !== " " && file.index !== "?").length, ahead, behind, files };
+    let changed = 0;
+    let staged = 0;
+    const files: GitStatus["files"] = [];
+    for (const line of lines) {
+      if (line.length < 2) continue;
+      changed += 1;
+      if (line[0] !== " " && line[0] !== "?") staged += 1;
+      files.push({ index: line[0] === "?" ? "?" : line[0], worktree: line[1] ?? " ", path: line.slice(3).trim() });
+    }
+    return { cwd, isRepository: true, branch, changed, staged, ahead, behind, files };
   } catch {
     return empty;
   }

@@ -13,9 +13,19 @@ export type EngineModel = {
 };
 
 export type SessionStats = {
-  tokens?: { input?: number; output?: number; total?: number };
+  tokens?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    total?: number;
+  };
   cost?: number;
   toolCalls?: number;
+  /** Number of model steps (assistant turns) taken in this conversation. */
+  steps?: number;
+  /** Wall-clock time in milliseconds: whole request vs. model generation vs. tools. */
+  timing?: { totalMs: number; modelMs: number; toolMs: number };
 };
 
 export type ContextUsage = {
@@ -67,6 +77,15 @@ export type ToolCallBlock = {
 };
 
 /**
+ * Wall-clock bounds of one thinking block, measured by Main as it streamed. The
+ * engine's transcript records a single request-start timestamp per assistant
+ * message, so these bounds are the only record of how long a block thought — and
+ * because they are instants rather than a duration, the elapsed time can be
+ * recomputed at any point (including while the block is still open, from `now`).
+ */
+export type ThinkingTiming = { startedAt: number; endedAt?: number };
+
+/**
  * A message's content in the order the engine produced it. The SDK returns an
  * ordered `content[]` of text / thinking / toolCall parts, and models routinely
  * interleave them ("I'll look at X" → read → "now fix Y" → edit). Flattening that
@@ -74,7 +93,7 @@ export type ToolCallBlock = {
  */
 export type MessagePart =
   | { kind: "text"; text: string }
-  | { kind: "thinking"; text: string }
+  | ({ kind: "thinking"; text: string } & Partial<ThinkingTiming>)
   | { kind: "tool"; toolId: string };
 
 export type PromptImage = {
@@ -101,8 +120,14 @@ export type ChatMessage = {
   /** Interleaved render order. Optional so sessions persisted before this field still load. */
   parts?: MessagePart[];
   createdAt: number;
-  kind?: "message" | "notice" | "compact" | "goal";
+  kind?: "message" | "notice" | "compact" | "custom";
+  /** Extension custom message (`pi.sendMessage`): the plugin's own type id. */
+  customType?: string;
+  /** Structured spans of the extension's registered message renderer. */
+  runs?: TuiRun[][];
   attachments?: ChatAttachment[];
+  /** Model/request failure for this assistant turn. Absent on success or user abort. */
+  error?: string;
 };
 
 export type SlashCommand = {
@@ -125,6 +150,77 @@ export type ExtensionInfo = {
   commands: number;
   tools: number;
   error?: string;
+};
+
+/**
+ * A pi package installed into FastVibe's isolated agentDir (see ExtensionManager).
+ * `source` is the pi package spec (`npm:<name>`, `git:<url>`, …) as written to the
+ * SDK's own settings.json — never FastVibe's `settings.json`.
+ */
+export type ExtensionPackage = {
+  source: string;
+  scope: "user" | "project";
+  installedPath?: string;
+  /** Bundled with FastVibe and auto-installed on first launch. */
+  builtin: boolean;
+  /** True while a configured package's extension files load in the active session. */
+  loaded?: boolean;
+  commands?: number;
+  tools?: number;
+  error?: string;
+};
+
+/** One entry of pi's public package catalog (https://pi.dev/packages). */
+export type MarketPackage = {
+  name: string;
+  description: string;
+  author?: string;
+  types: string[];
+  downloads?: number;
+  /** Epoch millis of the last publish, from the card's `data-package-date`. */
+  updatedAt?: number;
+  version?: string;
+  npmUrl?: string;
+  repoUrl?: string;
+};
+
+export type MarketPackageQuery = {
+  query?: string;
+  /** extension | skill | theme | prompt; empty means all. */
+  type?: string;
+  sort?: "downloads" | "recent" | "name";
+  page?: number;
+};
+
+export type MarketPackagePage = {
+  packages: MarketPackage[];
+  query: string;
+  type: string;
+  sort: string;
+  page: number;
+  total?: number;
+  totalPages?: number;
+};
+
+/**
+ * Lookup tables from the Material Icon Theme package: names/extensions map to an
+ * icon name served under the `fastvibe-icon` scheme. `file`/`folder` are fallbacks.
+ */
+/** One entry in a directory listing for the right-hand file tree. */
+export type DirEntry = {
+  name: string;
+  path: string;
+  kind: "file" | "directory";
+};
+
+export type FileIconMapping = {
+  /** Lowercased extension (may contain dots, e.g. `d.ts`) → icon name. */
+  fileExtensions: Record<string, string>;
+  /** Lowercased file name → icon name. */
+  fileNames: Record<string, string>;
+  file: string;
+  folder: string;
+  folderExpanded: string;
 };
 
 export type McpServerConfig = {
@@ -168,13 +264,66 @@ export type FilePreview =
   | { kind: "binary"; path: string; name: string; size: number }
   | { kind: "error"; path: string; name: string; message: string };
 
-export type PermissionRequest = {
+/** Transient extension notice, surfaced from `ctx.ui.notify()`. */
+export type ExtensionNoticeLevel = "info" | "warning" | "error";
+
+export type ExtensionNotice = {
   id: string;
-  method: "confirm" | "select" | "input" | "editor";
-  title?: string;
-  message?: string;
+  message: string;
+  level: ExtensionNoticeLevel;
+  createdAt: number;
+};
+
+/**
+ * One styled span of a TUI line. `fg`/`bg` are pi theme color names resolved to
+ * the app's semantic tokens; `color`/`bgColor` are raw CSS fallbacks for colors
+ * the theme has no name for (e.g. a plugin's own chalk output).
+ */
+export type TuiRun = {
+  text: string;
+  fg?: string;
+  bg?: string;
+  color?: string;
+  bgColor?: string;
+  bold?: boolean;
+  dim?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  strike?: boolean;
+};
+
+/**
+ * A widget an extension set via `ctx.ui.setWidget()`. String arrays carry `lines`;
+ * a pi-tui component factory is rendered host-side into `runs` so the GUI shows
+ * the same dashboard the terminal would.
+ */
+export type ExtensionWidget = {
+  key: string;
+  lines: string[];
+  runs?: TuiRun[][];
+  placement?: string;
+};
+
+/** One entry of a `questions` prompt (FastVibe's single-panel multi-question UI). */
+export type PermissionQuestion = {
+  question: string;
+  header?: string;
   options?: string[];
   optionDetails?: Array<{ description?: string }>;
+  allowOther?: boolean;
+};
+
+export type PermissionRequest = {
+  id: string;
+  method: "confirm" | "select" | "input" | "editor" | "questions";
+  title?: string;
+  message?: string;
+  /** Placeholder for `input` dialogs. */
+  placeholder?: string;
+  options?: string[];
+  optionDetails?: Array<{ description?: string }>;
+  /** Multi-question payload for `method: "questions"`. */
+  questions?: PermissionQuestion[];
   timeout?: number;
 };
 
@@ -189,8 +338,6 @@ export type QueuedPrompt = {
   attachments?: ChatAttachment[];
 };
 
-export type RunMode = "agent" | "plan" | "goal";
-
 export type EngineEvent = {
   type: string;
   [key: string]: unknown;
@@ -204,6 +351,32 @@ export type ProviderModel = {
   reasoning: boolean;
   input: string[];
   thinkingLevels?: ThinkingLevel[];
+  /**
+   * Per-model streaming API. Absent means "inherit the provider's api" — a gateway
+   * can serve `/chat/completions` and `/responses` models under one base URL, so a
+   * single provider-level api is not always enough.
+   */
+  api?: ProviderApi;
+  /**
+   * Provider-side value for a thinking level, i.e. pi-ai's `thinkingLevelMap`. Only
+   * set where the provider names a level differently — and, because pi only offers
+   * `xhigh`/`max` when mapped, it always carries an entry for those two levels.
+   */
+  effortMap?: Partial<Record<ThinkingLevel, string>>;
+  /** Price per million tokens, as reported by models.dev. Absent means unknown. */
+  cost?: ModelCost;
+  /**
+   * Long-context price steps, ascending. `cost` is the entry price — what a request
+   * whose prompt fits the first threshold pays — and each tier replaces it once the
+   * prompt grows past its `over`. Empty for the (majority) models with a flat price.
+   */
+  costTiers?: CostTier[];
+  /**
+   * Set when the user tuned a model (name, protocol, context, output) in the edit
+   * dialog. A later 同步模型 keeps those fields instead of restoring the fetched
+   * values, so a re-fetch cannot silently undo the edit.
+   */
+  edited?: boolean;
   thinkingFormat?: "openai" | "zai";
   /**
    * Where the metadata came from. `native` is a pi-coding-agent built-in model
@@ -259,14 +432,66 @@ export type ProviderDraft = {
 
 export type ModelCandidate = ProviderModel;
 
+/** Price per million tokens. Written to `models.json`, where the engine prices a run. */
+export type ModelCost = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+};
+
+/**
+ * One step of a long-context price ladder: a request whose prompt exceeds `over`
+ * tokens is billed at `cost` instead of the model's entry price.
+ */
+export type CostTier = {
+  /** Prompt-token threshold (input plus both cache buckets) the step starts above. */
+  over: number;
+  cost: ModelCost;
+};
+
+/**
+ * A model's list price: the entry price plus any long-context ladder. Everything the
+ * app needs to price a turn, and the shape `priceUsage` takes.
+ */
+export type ModelPrice = {
+  cost?: ModelCost;
+  costTiers?: CostTier[];
+};
+
 export type FastVibeModel = {
   provider: string;
+  /** Display name of the provider, e.g. `FastVibe` / `Packy`. */
+  providerName: string;
   id: string;
   name: string;
   thinkingLevels?: ThinkingLevel[];
 };
 
-export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+/**
+ * The thinking levels this app can request, matching pi-ai's own set. `xhigh` and
+ * `max` are the two top levels: pi only offers either when the model maps it, so
+ * both always carry an `effortMap` entry (see `providers.ts`).
+ */
+export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
+export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
+
+/**
+ * The levels a model can actually be *tuned* for, i.e. everything but `off`.
+ * `off` is not a model capability — it is simply not thinking, which every provider
+ * accepts — so it is never stored per model and never marked unsupported; the effort
+ * menus add it themselves.
+ */
+export const THINKING_EFFORT_LEVELS: ThinkingLevel[] = ["minimal", "low", "medium", "high", "xhigh", "max"];
+
+/** Effort menu a model without its own levels falls back to. */
+export const DEFAULT_THINKING_LEVELS: ThinkingLevel[] = ["off", "low", "medium", "high"];
+
+/** Input modality bits shared by `ProviderModel.input` and the engine's `models.json`. */
+export const INPUT_MODALITIES = ["text", "image", "video", "file"] as const;
+
+export type InputModality = (typeof INPUT_MODALITIES)[number];
 
 export type PermissionMode = "ask" | "smart" | "full";
 
@@ -285,6 +510,10 @@ export type Conversation = {
   project?: string;
   sessionFile?: string;
   sessionId?: string;
+  /** When the conversation was first created. Drives sidebar order, which must not
+   *  change when a chat is merely opened, renamed, or updated. */
+  createdAt: number;
+  /** Last mutation time (title, project, session file, …). Not used for ordering. */
   updatedAt: number;
   preview?: string;
   worktree?: { path: string; branch: string };

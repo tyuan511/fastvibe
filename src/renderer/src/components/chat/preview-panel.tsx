@@ -4,7 +4,7 @@ import { Cancel01Icon, Folder01Icon } from "@hugeicons/core-free-icons";
 import { IconButton } from "@/components/icon-button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { FilePreview } from "@shared/types";
-import { highlightCode } from "@/lib/highlight";
+import { useHighlightedCode } from "@/lib/highlight";
 import { MarkdownView } from "./markdown-view";
 
 export function PreviewPanel({
@@ -97,30 +97,48 @@ export function PreviewBody({ preview }: { preview: FilePreview }): JSX.Element 
     );
   }
   if (preview.kind === "diff") {
-    return (
-      <pre className="overflow-x-auto rounded-lg bg-muted/50 p-3 font-mono text-[12px] leading-5">
-        {preview.text.split("\n").map((line, index) => (
-          <div
-            key={index}
-            className={
-              line.startsWith("+")
-                ? "text-success"
-                : line.startsWith("-")
-                  ? "text-destructive"
-                  : line.startsWith("@@")
-                    ? "text-info"
-                    : "text-muted-foreground"
-            }
-          >
-            {line || " "}
-          </div>
-        ))}
-      </pre>
-    );
+    return <CodePreview text={preview.text} language="diff" showLineNumbers={false} />;
   }
+  return <CodePreview text={preview.text} language={preview.language} />;
+}
+
+/**
+ * One code block, highlighted with shikiji once it resolves (plain until then).
+ * A non-selectable gutter of line numbers is sticky at the left edge, so the
+ * numbers stay put while wide lines scroll under them.
+ */
+function CodePreview({
+  text,
+  language,
+  showLineNumbers = true,
+}: {
+  text: string;
+  language?: string;
+  showLineNumbers?: boolean;
+}): JSX.Element {
+  const html = useHighlightedCode(text, language);
+  const lineCount = text.split("\n").length;
   return (
-    <pre className="overflow-x-auto rounded-lg bg-muted/50 p-3 font-mono text-[12px] leading-5">
-      <code dangerouslySetInnerHTML={{ __html: highlightCode(preview.text) }} />
-    </pre>
+    <div className="code-shiki overflow-x-auto rounded-lg bg-muted/50 text-[12px] leading-5">
+      <div className="flex min-w-full">
+        {showLineNumbers ? (
+          <div
+            aria-hidden
+            className="sticky left-0 z-10 shrink-0 select-none border-r border-border bg-[color-mix(in_oklab,var(--muted)_50%,var(--background))] py-3 pl-3 pr-2 text-right font-mono tabular-nums text-muted-foreground"
+          >
+            {Array.from({ length: lineCount }, (_, index) => (
+              <div key={index}>{index + 1}</div>
+            ))}
+          </div>
+        ) : null}
+        <div className="min-w-0 flex-1 px-3 py-3">
+          {html ? (
+            <div dangerouslySetInnerHTML={{ __html: html }} />
+          ) : (
+            <pre className="font-mono">{text}</pre>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }

@@ -3,7 +3,7 @@ import { applyEngineEvent } from "@/lib/apply-engine-event";
 import { useSettingsStore } from "@/stores/settings";
 import type { ChatMessage, EngineEvent, FilePreview } from "@shared/types";
 
-export type SidePaneTabType = "git" | "terminal" | "browser" | "selection-side-chat" | "code-viewer";
+export type SidePaneTabType = "git" | "terminal" | "browser" | "selection-side-chat" | "files";
 
 export type SidePaneTab = {
   id: string;
@@ -25,7 +25,7 @@ export type SidePaneTab = {
 
 const WIDTH_KEY = "fastvibe.side-pane.width";
 const COLLAPSED_KEY = "fastvibe.side-pane.collapsed";
-const MIN_WIDTH = 240;
+const MIN_WIDTH = 280;
 const DEFAULT_WIDTH = 380;
 
 /**
@@ -98,14 +98,78 @@ type SidePaneStore = {
   openTerminal: (cwd?: string) => void;
   openBrowser: (url?: string) => void;
   openSideChat: (parentSessionId: string, ordinal: number) => void;
-  openCodeViewer: (preview: FilePreview) => void;
+  /** Open (or focus) the project file view, starting on the directory tree. */
+  openFiles: () => void;
+  /** Open the file view focused on one file's preview. */
+  openFilePreview: (preview: FilePreview) => void;
   patchTab: (id: string, patch: Partial<SidePaneTab>) => void;
   applyConversationEvent: (conversationId: string, event: EngineEvent) => void;
   nextSideChatOrdinal: (parentSessionId?: string) => number;
   hasReviewTab: () => boolean;
 };
 
-export const useSidePaneStore = create<SidePaneStore>((set, get) => ({
+/**
+ * Side-chat transcripts receive the same per-token stream as the main thread.
+ * Coalesce those events into one update at a capped ~30fps cadence, keyed by the
+ * pane's conversation, so a running side chat cannot starve the main thread either.
+ */
+const COALESCED_EVENTS = new Set([
+  "message_update",
+  "tool_execution_update",
+  "tool_execution_start",
+  "tool_execution_end",
+  "toolcall_start",
+  "toolcall_end",
+  "subagent_event",
+]);
+
+/** Same ~30fps cap as the main transcript (see `stores/session.ts`). */
+const STREAM_FLUSH_MS = 32;
+
+export const useSidePaneStore = create<SidePaneStore>((set, get) => {
+  const queued = new Map<string, EngineEvent[]>();
+  let timer: number | null = null;
+  let lastFlush = 0;
+
+  const clearTimer = (): void => {
+    if (timer !== null) {
+      window.clearTimeout(timer);
+      timer = null;
+    }
+  };
+
+  const flushQueued = (): void => {
+    clearTimer();
+    if (queued.size === 0) return;
+    lastFlush = Date.now();
+    const batch = new Map(queued);
+    queued.clear();
+    set((state) => {
+      let tabs = state.tabs;
+      for (const [conversationId, events] of batch) {
+        const index = tabs.findIndex((item) => item.conversationId === conversationId);
+        if (index < 0) continue;
+        const tab = tabs[index];
+        let messages = tab.messages ?? [];
+        let streaming = tab.streaming ?? false;
+        for (const event of events) {
+          const applied = applyEngineEvent(messages, event, streaming);
+          messages = applied.messages;
+          streaming = applied.streaming;
+        }
+        tabs = tabs.slice();
+        tabs[index] = { ...tab, messages, streaming };
+      }
+      return tabs === state.tabs ? state : { tabs };
+    });
+  };
+
+  const scheduleFlush = (): void => {
+    if (timer !== null) return;
+    timer = window.setTimeout(flushQueued, Math.max(0, STREAM_FLUSH_MS - (Date.now() - lastFlush)));
+  };
+
+  return {
   collapsed: readCollapsed(),
   width: readWidth(),
   tabs: [],
@@ -191,24 +255,41 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => ({
       };
       return { tabs: [...state.tabs, tab], activeTabId: tab.id, collapsed: false };
     }),
-  openCodeViewer: (preview) =>
+  openFiles: () =>
     set((state) => {
-      const existing = state.tabs.find((item) => item.type === "code-viewer" && item.path === preview.path);
-      const tab: SidePaneTab = {
-        id: existing?.id ?? `code-viewer:${preview.path}`,
-        type: "code-viewer",
-        openedAt: existing?.openedAt ?? Date.now(),
-        title: preview.name,
-        path: preview.path,
-        preview,
-      };
+      const existing = state.tabs.find((item) => item.type === "files");
+      const tab: SidePaneTab =
+        existing ?? { id: "files", type: "files", openedAt: Date.now(), title: "文件" };
+      return { tabs: upsert(state.tabs, tab), activeTabId: tab.id, collapsed: false };
+    }),
+  openFilePreview: (preview) =>
+    set((state) => {
+      const existing = state.tabs.find((item) => item.type === "files");
+      const tab: SidePaneTab = existing
+        ? { ...existing, path: preview.path, preview }
+        : {
+            id: "files",
+            type: "files",
+            openedAt: Date.now(),
+            title: "文件",
+            path: preview.path,
+            preview,
+          };
       return { tabs: upsert(state.tabs, tab), activeTabId: tab.id, collapsed: false };
     }),
   patchTab: (id, patch) =>
     set((state) => ({
       tabs: state.tabs.map((item) => (item.id === id ? { ...item, ...patch } : item)),
     })),
-  applyConversationEvent: (conversationId, event) =>
+  applyConversationEvent: (conversationId, event) => {
+    if (COALESCED_EVENTS.has(event.type)) {
+      const list = queued.get(conversationId);
+      if (list) list.push(event);
+      else queued.set(conversationId, [event]);
+      scheduleFlush();
+      return;
+    }
+    flushQueued();
     set((state) => {
       const tab = state.tabs.find((item) => item.conversationId === conversationId);
       if (!tab) return state;
@@ -220,7 +301,8 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => ({
             : item,
         ),
       };
-    }),
+    });
+  },
   nextSideChatOrdinal: (parentSessionId?: string) => {
     const ordinals = get()
       .tabs.filter(
@@ -231,7 +313,8 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => ({
     return (ordinals.length ? Math.max(...ordinals) : 0) + 1;
   },
   hasReviewTab: () => get().tabs.some((item) => item.type === "git"),
-}));
+  };
+});
 
 migrateWidth();
 

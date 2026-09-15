@@ -7,14 +7,14 @@ import {
   CpuIcon,
   Delete02Icon,
   Loading03Icon,
-  PencilIcon,
+  PencilEdit02Icon,
   RefreshIcon,
   Search01Icon,
   Tick02Icon,
   ViewIcon,
   ViewOffSlashIcon,
 } from "@hugeicons/core-free-icons";
-import appIcon from "@/assets/app-icon.png";
+import { AppLogo } from "@/components/app-logo";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -35,14 +35,24 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { cleanError } from "@/lib/ipc-error";
+import { providerLabel } from "@/lib/provider-label";
 import { cn } from "@/lib/utils";
 import { PROVIDER_APIS, type NativeProviderConfig, type ProviderApi, type ProviderConfig, type ProviderModel } from "@shared/types";
+import { ModelDetailDialog, type ModelDetailTarget } from "./model-detail-dialog";
 import { ModelPicker } from "./model-picker";
 
 const PROVIDER_API_ITEMS: Record<ProviderApi, string> = {
   "openai-completions": "OpenAI Chat Completions (/chat/completions)",
   "openai-responses": "OpenAI Responses (/responses)",
   "anthropic-messages": "Anthropic Messages (/v1/messages)",
+};
+
+/** Short label for a model's pinned protocol, where the row is too narrow for the full one. */
+const PROVIDER_API_SHORT: Record<ProviderApi, string> = {
+  "openai-completions": "Chat Completions",
+  "openai-responses": "Responses",
+  "anthropic-messages": "Messages",
 };
 
 /** `native` = a pi-coding-agent built-in provider configured with an API key. */
@@ -93,6 +103,7 @@ export function ProvidersSettings({ onChanged }: { onChanged: () => void }): JSX
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [add, setAdd] = useState<AddState | null>(null);
   const [picker, setPicker] = useState<PickerState | null>(null);
+  const [detail, setDetail] = useState<ModelDetailTarget | null>(null);
 
   async function refresh(): Promise<ProviderConfig[]> {
     const next = await window.fastvibe.providers.list();
@@ -115,6 +126,23 @@ export function ProvidersSettings({ onChanged }: { onChanged: () => void }): JSX
     setError(null);
     onChanged();
     return next;
+  }
+
+  /**
+   * Apply an edited model back into its provider. The whole model is replaced (not
+   * merged) so clearing a protocol pin or a name is a real change, and the updated
+   * provider is re-selected from the result.
+   */
+  async function saveDetail(next: ProviderModel): Promise<void> {
+    const provider = providers.find((item) => item.id === detail?.providerId);
+    if (!provider) throw new Error("供应商不存在");
+    await mutate(() =>
+      window.fastvibe.providers.update({
+        id: provider.id,
+        models: provider.models.map((item) => (item.id === next.id ? next : item)),
+      }),
+    );
+    setDetail(null);
   }
 
   const builtin = providers.find((item) => item.kind === "builtin");
@@ -192,6 +220,7 @@ export function ProvidersSettings({ onChanged }: { onChanged: () => void }): JSX
             onError={setError}
             onConnectFastVibe={(apiKey) => void startConnect(selected, apiKey, setPicker, setError)}
             onAddModels={() => void startAddModels(selected, setPicker, setError)}
+            onEditModel={(model) => setDetail({ providerId: selected.id, model })}
             onChanged={async (next) => {
               setProviders(next);
               onChanged();
@@ -230,6 +259,13 @@ export function ProvidersSettings({ onChanged }: { onChanged: () => void }): JSX
         onClose={() => setPicker(null)}
         onSave={() => void savePicker(picker, providers, setPicker, mutate)}
       />
+
+      <ModelDetailDialog
+        target={detail}
+        provider={providers.find((item) => item.id === detail?.providerId)}
+        onClose={() => setDetail(null)}
+        onSave={saveDetail}
+      />
     </div>
   );
 }
@@ -254,13 +290,13 @@ function ProviderNavItem({
       onClick={onSelect}
     >
       {provider.kind === "builtin" ? (
-        <img src={appIcon} alt="" className="size-4 rounded-[4px]" />
+        <AppLogo className="size-4 shrink-0 rounded-[4px]" />
       ) : provider.kind === "native" ? (
         <HugeiconsIcon strokeWidth={2} icon={CpuIcon} className="size-3.5 text-muted-foreground" />
       ) : (
         <HugeiconsIcon strokeWidth={2} icon={BoxesIcon} className="size-3.5 text-muted-foreground" />
       )}
-      <span className="min-w-0 flex-1 truncate text-left">{provider.name}</span>
+      <span className="min-w-0 flex-1 truncate text-left">{providerLabel(provider.name || provider.id)}</span>
       <span className={cn("size-1.5 shrink-0 rounded-full", provider.hasKey ? "bg-success" : "bg-muted-foreground/35")} />
     </button>
   );
@@ -271,6 +307,7 @@ function ProviderDetail({
   onError,
   onConnectFastVibe,
   onAddModels,
+  onEditModel,
   onChanged,
   onRemoved,
 }: {
@@ -278,6 +315,8 @@ function ProviderDetail({
   onError: (message: string | null) => void;
   onConnectFastVibe: (apiKey: string) => void;
   onAddModels: () => void;
+  /** Opens 模型详情 for one entry of the model list. */
+  onEditModel: (model: ProviderModel) => void;
   onChanged: (next: ProviderConfig[]) => Promise<void>;
   onRemoved: (next: ProviderConfig[]) => Promise<void>;
 }): JSX.Element {
@@ -358,11 +397,11 @@ function ProviderDetail({
               }}
             />
           ) : (
-            <h3 className="truncate text-[15px] font-medium">{provider.name}</h3>
+            <h3 className="truncate text-[15px] font-medium">{providerLabel(provider.name || provider.id)}</h3>
           )}
           {editable && !editingName ? (
             <Button size="icon-xs" variant="ghost" onClick={() => setEditingName(true)} aria-label="重命名">
-              <HugeiconsIcon strokeWidth={2} icon={PencilIcon} />
+              <HugeiconsIcon strokeWidth={2} icon={PencilEdit02Icon} />
             </Button>
           ) : null}
           {provider.enabled ? (
@@ -414,25 +453,32 @@ function ProviderDetail({
         </Field>
       ) : (
         <Field label="API 格式">
-          <Select
-            items={PROVIDER_API_ITEMS}
-            value={provider.api}
-            onValueChange={(value) => {
-              if (editable) void save({ api: value as ProviderApi });
-            }}
-            disabled={!editable}
-          >
-            <SelectTrigger className="w-full max-w-md">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {PROVIDER_APIS.map((api) => (
-                <SelectItem key={api} value={api}>
-                  {PROVIDER_API_ITEMS[api]}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <div className="space-y-1.5">
+            {/* The builtin provider's protocol is the user's choice too; only an SDK
+                built-in is pinned, because its api comes from the registry. */}
+            <Select
+              items={PROVIDER_API_ITEMS}
+              value={provider.api}
+              disabled={saving}
+              onValueChange={(value) => {
+                if (value) void save({ api: value as ProviderApi });
+              }}
+            >
+              <SelectTrigger className="w-full max-w-md">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {PROVIDER_APIS.map((api) => (
+                  <SelectItem key={api} value={api}>
+                    {PROVIDER_API_ITEMS[api]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-[11px] text-muted-foreground">
+              供应商的默认协议；个别模型可在模型详情里单独指定。
+            </p>
+          </div>
         </Field>
       )}
 
@@ -488,11 +534,25 @@ function ProviderDetail({
           <div className="divide-y divide-border overflow-hidden rounded-lg border border-border">
             {provider.models.map((model) => (
               <div key={model.id} className="flex items-center gap-2 px-3 py-2">
-                <span className="min-w-0 flex-1 truncate text-[13px]">{model.name || model.id}</span>
-                <span className="flex shrink-0 items-center gap-1">
-                  {model.input.includes("image") ? <Badge variant="secondary">视觉</Badge> : null}
-                  <Badge variant="outline">{contextLabel(model.contextWindow)}</Badge>
+                <button
+                  type="button"
+                  className="min-w-0 flex-1 truncate text-left text-[13px]"
+                  onClick={() => onEditModel(model)}
+                >
+                  {model.name || model.id}
+                </button>
+                {/* Only a pinned protocol is worth a chip; the inherited one is the norm. */}
+                {model.api ? (
+                  <Badge variant="secondary" className="shrink-0 font-normal">
+                    {PROVIDER_API_SHORT[model.api]}
+                  </Badge>
+                ) : null}
+                <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">
+                  {contextLabel(model.contextWindow)}
                 </span>
+                <Button size="icon-xs" variant="ghost" onClick={() => onEditModel(model)} aria-label="模型详情">
+                  <HugeiconsIcon strokeWidth={2} icon={PencilEdit02Icon} />
+                </Button>
                 <Button size="icon-xs" variant="ghost" onClick={() => void removeModel(model.id)} aria-label="移除模型">
                   <HugeiconsIcon strokeWidth={2} icon={Delete02Icon} />
                 </Button>
@@ -553,7 +613,8 @@ function AddProviderDialog({
 
   return (
     <Dialog open={state !== null} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className={cn("overflow-hidden", state?.candidates ? "sm:max-w-2xl" : native ? "sm:max-w-md" : "sm:max-w-sm")}>
+      {/* Width is fixed per view so switching source tabs never resizes the dialog. */}
+      <DialogContent className={cn("overflow-hidden", state?.candidates ? "sm:max-w-2xl" : "sm:max-w-md")}>
         <DialogHeader>
           <DialogTitle>{state?.candidates ? "选择模型" : "添加供应商"}</DialogTitle>
           <DialogDescription>
@@ -760,7 +821,7 @@ function ModelPickDialog({
     <Dialog open={state !== null} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>{state?.kind === "connect" ? "选择模型" : `管理模型 · ${provider?.name ?? ""}`}</DialogTitle>
+          <DialogTitle>{state?.kind === "connect" ? "选择模型" : `管理模型 · ${providerLabel(provider?.name || provider?.id)}`}</DialogTitle>
           <DialogDescription>
             {state?.candidates ? `已拉取 ${state.candidates.length} 个模型，勾选后加入。` : "正在拉取模型列表…"}
           </DialogDescription>
@@ -965,8 +1026,31 @@ async function savePicker(
   if (!picker?.candidates) return;
   const models = picker.candidates.filter((item) => picker.selected.has(item.id));
   const provider = providers.find((item) => item.id === picker.providerId);
+  const existing = new Map((provider?.models ?? []).map((item) => [item.id, item]));
   const missing = (provider?.models ?? []).filter((item) => !picker.candidates!.some((candidate) => candidate.id === item.id));
-  const nextModels = [...models, ...missing];
+  const nextModels = [...models, ...missing].map((model) => {
+    const stored = existing.get(model.id);
+    // A re-fetched model list has no memory of the per-model protocol pin, so carry
+    // the stored override over instead of silently resetting the model to the
+    // provider's api.
+    if (!stored?.edited) return stored?.api ? { ...model, api: stored.api } : model;
+    // A model tuned in 模型详情 keeps its choices; only the fetched metadata is refreshed.
+    return {
+      ...model,
+      name: stored.name,
+      contextWindow: stored.contextWindow,
+      maxTokens: stored.maxTokens,
+      reasoning: stored.reasoning,
+      input: stored.input,
+      thinkingLevels: stored.thinkingLevels,
+      // Prices are not editable but they are metadata: a model id the catalog does not
+      // know keeps the price it was stored with instead of losing it on the next sync.
+      cost: stored.cost ?? model.cost,
+      costTiers: stored.costTiers ?? model.costTiers,
+      edited: true,
+      ...(stored.api ? { api: stored.api } : {}),
+    };
+  });
   setPicker((current) => (current ? { ...current, busy: true, error: null } : current));
   try {
     if (picker.kind === "connect" && picker.apiKey) {
@@ -983,9 +1067,4 @@ async function savePicker(
 function contextLabel(tokens: number): string {
   if (tokens >= 1_000_000) return `${Math.round(tokens / 1_000_000)}M`;
   return `${Math.round(tokens / 1000)}K`;
-}
-
-function cleanError(err: unknown): string {
-  const raw = err instanceof Error ? err.message : "操作失败，请重试";
-  return raw.replace(/^Error invoking remote method '[^']+':\s*/, "");
 }

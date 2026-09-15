@@ -4,6 +4,7 @@ import { CommandIcon, Folder01Icon } from "@hugeicons/core-free-icons";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Spinner } from "@/components/ui/spinner";
 import type { Conversation, Project } from "@shared/types";
 
 export function SessionSwitcher({
@@ -11,6 +12,7 @@ export function SessionSwitcher({
   conversations,
   projects,
   activeId,
+  running,
   onOpenChange,
   onSelect,
 }: {
@@ -18,6 +20,7 @@ export function SessionSwitcher({
   conversations: Conversation[];
   projects: Project[];
   activeId: string | null;
+  running: Record<string, boolean>;
   onOpenChange: (open: boolean) => void;
   onSelect: (id: string) => void;
 }): JSX.Element {
@@ -46,7 +49,13 @@ export function SessionSwitcher({
           <div className="p-2">
             {filtered.length === 0 ? <p className="px-3 py-8 text-center text-xs text-muted-foreground">没有匹配的会话</p> : filtered.map((item) => (
               <button key={item.id} type="button" className={`flex w-full items-start gap-3 rounded-lg px-3 py-2.5 text-left transition-colors ${item.id === activeId ? "bg-accent" : "hover:bg-accent/60"}`} onClick={() => { onSelect(item.id); close(); }}>
-                <span className="mt-0.5 size-2 shrink-0 rounded-full bg-muted-foreground/40" />
+                <span className="mt-0.5 flex size-2 shrink-0 items-center justify-center">
+                  {running[item.id] ? (
+                    <Spinner className="size-3" />
+                  ) : (
+                    <span className="size-2 rounded-full bg-muted-foreground/40" />
+                  )}
+                </span>
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-sm font-medium">{item.title || "新会话"}</span>
                   <span className="mt-0.5 flex items-center gap-1 truncate text-xs text-muted-foreground">

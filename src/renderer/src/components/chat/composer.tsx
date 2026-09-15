@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type JSX, type KeyboardEvent, type ReactNode } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Add01Icon, ArrowDown01Icon, ArrowUp02Icon, AttachmentIcon, Cancel01Icon, Folder01Icon, HandIcon, Mic01Icon, Search01Icon, Settings02Icon, ShieldAlertIcon, ShieldCheckIcon, SparklesIcon, SquareIcon } from "@hugeicons/core-free-icons";
+import { Add01Icon, ArrowDown01Icon, ArrowUp02Icon, AttachmentIcon, Cancel01Icon, ChartHistogramIcon, Folder01Icon, HandIcon, MagicWand02Icon, Search01Icon, ShieldAlertIcon, ShieldCheckIcon, SparklesIcon, SquareIcon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/icon-button";
 import {
@@ -13,11 +13,15 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Separator } from "@/components/ui/separator";
 import type {
   ChatAttachment,
   ContextUsage,
@@ -26,22 +30,19 @@ import type {
   PermissionMode,
   QueuePauseReason,
   QueuedPrompt,
+  SessionStats,
   SlashCommand,
   ThinkingLevel,
 } from "@shared/types";
+import { DEFAULT_THINKING_LEVELS } from "@shared/types";
 import { filesToAttachments } from "@/lib/attachments";
+import { THINKING_LABELS } from "@/lib/thinking-levels";
+import { useGitStatus } from "@/lib/use-git-status";
 import { cn } from "@/lib/utils";
+import { GitBranchChip } from "./git-branch-chip";
+import { AttachmentChip } from "./attachment-chip";
 import { MessageQueue } from "./message-queue";
-
-const THINKING_LABELS: Record<ThinkingLevel, string> = {
-  off: "关闭推理",
-  minimal: "极低",
-  low: "低",
-  medium: "中",
-  high: "高",
-  xhigh: "极高",
-  max: "最大",
-};
+import { ExtensionStatusBadges } from "./extension-surface";
 
 const PERMISSION_LABELS: Record<PermissionMode, string> = {
   ask: "请求批准",
@@ -55,10 +56,30 @@ const PERMISSION_DESCRIPTIONS: Record<PermissionMode, string> = {
   full: "可不受限制地访问互联网和你电脑上的任何文件",
 };
 
-const FALLBACK_THINKING: ThinkingLevel[] = ["off", "low", "medium", "high", "max"];
+/**
+ * Icons for the slash palette. Skills are offered alongside the engine's own
+ * commands, and each kind gets a glyph so the list is scannable: `/skill:<name>`
+ * forces a skill.
+ */
+const COMMAND_ICONS: Record<string, typeof SparklesIcon> = {
+  skill: MagicWand02Icon,
+};
+
+/**
+ * Extension commands that are state toggles rather than prompts. Picking one from
+ * the palette fires it immediately (the mode badge flips) instead of parking the
+ * command in the draft for a second Enter. A bare `/goal` only arms goal mode; the
+ * user's next message becomes the objective.
+ */
+const INSTANT_COMMANDS = new Set(["plan", "goal"]);
 
 function modelKey(model: { provider: string; id: string }): string {
   return `${model.provider}/${model.id}`;
+}
+
+function providerLabel(model: FastVibeModel): string {
+  // `custom-<slug>` is the internal id namespace, never a display name.
+  return model.providerName || model.provider.replace(/^custom-/, "");
 }
 
 function Chip({
@@ -122,6 +143,119 @@ function ContextUsageRing({ percent }: { percent: number }): JSX.Element {
   );
 }
 
+/** Compact `45.5K` / `1.2M` counts for the statistics rows. */
+function formatCount(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return "—";
+  const abs = Math.abs(value);
+  if (abs >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (abs >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
+  return String(Math.round(value));
+}
+
+function formatDuration(ms: number | null | undefined): string {
+  if (ms == null || !Number.isFinite(ms) || ms <= 0) return "—";
+  if (ms < 10_000) return `${(ms / 1000).toFixed(1)}s`;
+  const total = Math.round(ms / 1000);
+  if (total < 60) return `${total}s`;
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  if (hours > 0) return `${hours}h${String(minutes).padStart(2, "0")}m`;
+  return `${minutes}m${String(seconds).padStart(2, "0")}s`;
+}
+
+function formatSpeed(tokens: number, ms: number | undefined): string {
+  if (!ms || ms <= 0 || tokens <= 0) return "—";
+  return `~${Math.round(tokens / (ms / 1000))} tok/s`;
+}
+
+function StatRow({ label, value, className }: { label: string; value: string; className?: string }): JSX.Element {
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className={cn("font-medium tabular-nums", className)}>{value}</dd>
+    </div>
+  );
+}
+
+/**
+ * The context ring's popover: context-window usage on top, then the current
+ * conversation's turn statistics (speed, timing, tokens, cache hit, cost).
+ */
+function ContextUsagePanel({
+  percent,
+  used,
+  window: windowTokens,
+  stats,
+}: {
+  percent: number;
+  used: number | null;
+  window: number;
+  stats?: SessionStats | null;
+}): JSX.Element {
+  const clamped = Math.min(100, Math.max(0, percent));
+  const barColor = clamped >= 90 ? "bg-destructive" : clamped >= 70 ? "bg-warning" : "bg-primary";
+  const remaining = Math.max(0, windowTokens - (used ?? 0));
+
+  const tokens = stats?.tokens;
+  const input = tokens?.input ?? 0;
+  const output = tokens?.output ?? 0;
+  const cacheRead = tokens?.cacheRead ?? 0;
+  const timing = stats?.timing;
+  const cacheBase = input + cacheRead;
+  const cacheHit = cacheBase > 0 ? Math.round((cacheRead / cacheBase) * 100) : null;
+
+  return (
+    <div className="space-y-2.5">
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <span className="text-[13px] font-medium">上下文窗口</span>
+          <span
+            className={cn(
+              "text-[13px] font-semibold tabular-nums",
+              clamped >= 90 ? "text-destructive" : clamped >= 70 ? "text-warning" : "text-foreground",
+            )}
+          >
+            {percent}%
+          </span>
+        </div>
+        <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+          <div className={cn("h-full rounded-full transition-[width]", barColor)} style={{ width: `${clamped}%` }} />
+        </div>
+        <div className="flex items-center justify-between text-[11.5px] text-muted-foreground">
+          <span className="tabular-nums">已用 {formatCount(used)}</span>
+          <span className="tabular-nums">
+            剩余 {formatCount(remaining)} / {formatCount(windowTokens)}
+          </span>
+        </div>
+      </div>
+
+      {stats ? (
+        <>
+          <Separator />
+          <div className="flex items-center gap-1.5 text-[11px] font-medium tracking-wide text-muted-foreground">
+            <HugeiconsIcon strokeWidth={2} icon={ChartHistogramIcon} className="size-3.5" />
+            轮次统计
+          </div>
+          <dl className="space-y-1.5 text-[12px]">
+            <StatRow label="回答速度" value={formatSpeed(output, timing?.modelMs)} />
+            <StatRow label="模型耗时" value={formatDuration(timing?.modelMs)} />
+            <StatRow label="工具耗时" value={formatDuration(timing?.toolMs)} />
+            <StatRow label="步骤" value={stats.steps != null ? String(stats.steps) : "—"} />
+            <StatRow label="Token" value={`${formatCount(input)} ↑ · ${formatCount(output)} ↓`} />
+            <StatRow
+              label="缓存命中率"
+              value={cacheHit != null ? `${cacheHit}%` : "—"}
+              className={cacheHit != null && cacheHit > 0 ? "text-success" : undefined}
+            />
+            <StatRow label="费用" value={`$${(stats.cost ?? 0).toFixed(3)}`} />
+          </dl>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 export function Composer({
   value,
   disabled,
@@ -143,6 +277,7 @@ export function Composer({
   history,
   contextPercent,
   contextUsage,
+  stats,
   onChange,
   onSubmit,
   onAbort,
@@ -156,8 +291,10 @@ export function Composer({
   onRemoveQueued,
   onEditQueued,
   onSendQueuedNow,
+  onReorderQueued,
   onResumeQueue,
   sendOnEnter = true,
+  focusSignal,
   className,
 }: {
   value: string;
@@ -183,6 +320,8 @@ export function Composer({
   history: string[];
   contextPercent?: number | null;
   contextUsage?: ContextUsage | null;
+  /** Turn statistics for the active conversation; shown under the context ring. */
+  stats?: SessionStats | null;
   onChange: (value: string) => void;
   onSubmit: () => void;
   onAbort: () => void;
@@ -196,8 +335,11 @@ export function Composer({
   onRemoveQueued: (id: string) => void;
   onEditQueued: (id: string) => void;
   onSendQueuedNow: (id: string) => void;
+  onReorderQueued: (fromId: string, toId: string) => void;
   onResumeQueue: () => void;
   sendOnEnter?: boolean;
+  /** Increment to move the caret into the textarea (new sessions focus the composer). */
+  focusSignal?: number;
   className?: string;
 }): JSX.Element {
   const fileRef = useRef<HTMLInputElement>(null);
@@ -209,42 +351,21 @@ export function Composer({
   const [projectOpen, setProjectOpen] = useState(false);
   const [projectQuery, setProjectQuery] = useState("");
   const histDraft = useRef("");
-  const recognitionRef = useRef<{ start: () => void; stop: () => void; onresult: ((event: unknown) => void) | null; onend: (() => void) | null } | null>(null);
-  const voiceBaseRef = useRef("");
-  const [listening, setListening] = useState(false);
 
-  useEffect(() => () => {
-    recognitionRef.current?.stop();
-    recognitionRef.current = null;
-  }, []);
-
-  function toggleVoice(): void {
-    if (listening) {
-      recognitionRef.current?.stop();
-      return;
-    }
-    const Speech = (window as unknown as { SpeechRecognition?: new () => typeof recognitionRef.current; webkitSpeechRecognition?: new () => typeof recognitionRef.current }).SpeechRecognition
-      ?? (window as unknown as { webkitSpeechRecognition?: new () => typeof recognitionRef.current }).webkitSpeechRecognition;
-    if (!Speech) return;
-    const recognition = new Speech() as NonNullable<typeof recognitionRef.current>;
-    voiceBaseRef.current = value;
-    recognition.onresult = (event) => {
-      const result = event as { results?: ArrayLike<{ 0?: { transcript?: string }; isFinal?: boolean }> };
-      const transcript = Array.from(result.results ?? []).map((item) => item[0]?.transcript ?? "").join("");
-      if (transcript) onChange(`${voiceBaseRef.current}${voiceBaseRef.current && !voiceBaseRef.current.endsWith(" ") ? " " : ""}${transcript}`);
-    };
-    recognition.onend = () => { setListening(false); recognitionRef.current = null; };
-    recognitionRef.current = recognition;
-    setListening(true);
-    recognition.start();
-  }
+  // The composer survives session switches, so a plain autoFocus never re-fires.
+  // A changing signal (new chat, app launch) pulls focus back to the input.
+  useEffect(() => {
+    if (focusSignal === undefined) return;
+    const frame = requestAnimationFrame(() => textareaRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [focusSignal]);
 
   const slash = useMemo(() => {
     if (slashDismissed || !/^\/[^\s]*$/.test(value)) return [];
     const q = value.slice(1).toLowerCase();
     return commands
       .filter((item) => {
-        const hay = `${item.name} ${(item.aliases ?? []).join(" ")}`.toLowerCase();
+        const hay = `${item.name} ${item.description ?? ""} ${(item.aliases ?? []).join(" ")}`.toLowerCase();
         return !q || hay.includes(q);
       })
       .slice(0, 8);
@@ -254,8 +375,18 @@ export function Composer({
     setSlashIndex(0);
   }, [value]);
 
-  function applySlash(name: string): void {
-    onChange(`/${name} `);
+  function applySlash(command: SlashCommand): void {
+    // Toggles like `/plan` act the moment they are chosen: clear the draft and run
+    // the command so the mode badge appears below the composer, instead of leaving
+    // `/plan` in the box for the user to send.
+    if (command.source === "extension" && INSTANT_COMMANDS.has(command.name)) {
+      onChange("");
+      setSlashDismissed(true);
+      void window.fastvibe.engine.prompt(`/${command.name}`).catch(() => undefined);
+      requestAnimationFrame(() => textareaRef.current?.focus());
+      return;
+    }
+    onChange(`/${command.name} `);
     setSlashDismissed(true);
   }
 
@@ -275,7 +406,11 @@ export function Composer({
       }
       if (event.key === "Tab" || event.key === "Enter") {
         event.preventDefault();
-        applySlash(slash[slashIndex]?.name ?? slash[0].name);
+        const item = slash[slashIndex] ?? slash[0];
+        // While the palette is open Enter/Tab confirms the highlighted suggestion.
+        // A state toggle runs at once; anything else lands in the draft so its
+        // arguments can be typed, and a second Enter sends it.
+        applySlash(item);
         return;
       }
       if (event.key === "Escape") {
@@ -335,23 +470,40 @@ export function Composer({
   const selectedModel = models.find((item) => model && modelKey(item) === selected);
   const thinkingOptions = selectedModel?.thinkingLevels?.length
     ? selectedModel.thinkingLevels
-    : FALLBACK_THINKING;
+    : DEFAULT_THINKING_LEVELS;
   const thinkingValue = thinkingOptions.includes(thinkingLevel as ThinkingLevel)
     ? (thinkingLevel as ThinkingLevel)
     : thinkingOptions[0];
-  const modelLabel = selectedModel?.name || selectedModel?.id || "选择模型";
+  const modelsByProvider = useMemo(() => {
+    const groups: { id: string; name: string; models: FastVibeModel[] }[] = [];
+    const index = new Map<string, number>();
+    for (const item of models) {
+      const existing = index.get(item.provider);
+      if (existing === undefined) {
+        index.set(item.provider, groups.length);
+        groups.push({ id: item.provider, name: providerLabel(item), models: [item] });
+      } else {
+        groups[existing].models.push(item);
+      }
+    }
+    return groups;
+  }, [models]);
   const hasContent = Boolean(value.trim() || attachments.length > 0);
   const filteredProjects = useMemo(() => {
     const query = projectQuery.trim().toLowerCase();
     if (!query) return projects;
     return projects.filter((item) => `${item.name} ${item.cwd}`.toLowerCase().includes(query));
   }, [projectQuery, projects]);
-
-  function formatTokens(value: number | null | undefined): string {
-    if (value == null || !Number.isFinite(value)) return "—";
-    if (value >= 1000) return `${Math.round(value / 1000)}k`;
-    return String(Math.round(value));
-  }
+  // `project` is the workspace cwd, so it is also what git answers for. The
+  // refresh key covers both a finished turn (the agent may have committed or
+  // created a branch) and an explicit switch from the branch picker.
+  const [gitEpoch, setGitEpoch] = useState(0);
+  const gitStatus = useGitStatus(project, `${streaming ? "streaming" : "idle"}:${gitEpoch}`);
+  const git = gitStatus?.isRepository && gitStatus.branch ? gitStatus : null;
+  // Project/branch chips only belong to an empty conversation. Once a message
+  // has been sent the top bar carries the title, so the chips are dropped.
+  const showWorkspace = Boolean(newSession);
+  const showProjectPicker = showWorkspace && !hideProjectPicker;
 
   const contextUsed = contextUsage?.tokens ?? (
     contextUsage?.contextWindow && typeof contextPercent === "number"
@@ -388,7 +540,7 @@ export function Composer({
 
   return (
     <div
-      className={cn("mx-auto w-full max-w-3xl px-6 pb-5", className)}
+      className={cn("@container/composer mx-auto w-full max-w-3xl px-6 pb-5", className)}
       onDragOver={(event) => {
         event.preventDefault();
         setDragging(true);
@@ -405,17 +557,21 @@ export function Composer({
               role="option"
               aria-selected={index === slashIndex}
               className={cn(
-                "flex w-full items-start gap-2 px-3 py-2 text-left text-sm",
+                "flex w-full items-center gap-2 px-3 py-2 text-left text-sm",
                 index === slashIndex ? "bg-muted" : "hover:bg-muted/60",
               )}
               onMouseEnter={() => setSlashIndex(index)}
-              onClick={() => applySlash(item.name)}
+              onClick={() => applySlash(item)}
             >
-              <HugeiconsIcon strokeWidth={2} icon={SparklesIcon} className="mt-0.5 size-3.5 text-muted-foreground" />
-              <span className="min-w-0">
-                <span className="font-medium">/{item.name}</span>
+              <HugeiconsIcon
+                strokeWidth={2}
+                icon={COMMAND_ICONS[item.source ?? ""] ?? SparklesIcon}
+                className="size-3.5 shrink-0 text-muted-foreground"
+              />
+              <span className="flex min-w-0 flex-1 items-baseline gap-2">
+                <span className="shrink-0 font-medium">/{item.name}</span>
                 {item.description ? (
-                  <span className="ml-2 text-xs text-muted-foreground">{item.description}</span>
+                  <span className="min-w-0 truncate text-xs text-muted-foreground">{item.description}</span>
                 ) : null}
               </span>
             </button>
@@ -423,114 +579,91 @@ export function Composer({
         </div>
       ) : null}
 
-      {attachments.length > 0 ? (
-        <div className="mb-2 flex flex-wrap gap-1.5">
-          {attachments.map((item) => (
-            <span
-              key={item.id}
-              className="flex items-center gap-1 rounded-md border border-border bg-muted/50 px-1.5 py-1 text-[11px]"
-            >
-              {item.kind === "image" && item.dataUrl ? (
-                <img src={item.dataUrl} alt="" className="size-6 rounded object-cover" />
-              ) : null}
-              <span className="max-w-28 truncate">{item.name}</span>
-              <button
-                type="button"
-                className="text-muted-foreground hover:text-foreground"
-                onClick={() => onAttachmentsChange(attachments.filter((entry) => entry.id !== item.id))}
-              >
-                ×
-              </button>
-            </span>
-          ))}
-        </div>
-      ) : null}
-
-      {!hideProjectPicker && (newSession || !project) ? (
-        <div className="mb-1.5 ml-1 flex items-center gap-1">
-        <Popover
-          open={projectOpen}
-          onOpenChange={(open) => {
-            setProjectOpen(open);
-            if (!open) setProjectQuery("");
-          }}
-        >
-          <PopoverTrigger
-            render={
-              <button
-                type="button"
-                className={cn(
-                  "group flex h-8 items-center gap-1.5 rounded-full px-2.5 text-[13px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
-                  project && "bg-muted/70 text-foreground",
-                )}
-              />
-            }
-          >
-            <span
-              className={cn("relative size-4 shrink-0", project && "cursor-pointer rounded-full hover:bg-muted-foreground/20")}
-              aria-label={project ? "清除项目" : undefined}
-              title={project ? "清除项目" : undefined}
-              onClick={project ? (event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                onSelectProject(null);
-              } : undefined}
-            >
-              <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} className={cn("absolute inset-0 size-4 transition-opacity", project && "group-hover:opacity-0")} />
-              {project ? <HugeiconsIcon strokeWidth={2} icon={Cancel01Icon} className="absolute inset-0 size-4 opacity-0 transition-opacity group-hover:opacity-100" /> : null}
-            </span>
-            <span className="max-w-48 truncate">{project ? projects.find((item) => item.cwd === project)?.name ?? workspaceLabel : "选择项目"}</span>
-            {!project ? (
-              <HugeiconsIcon strokeWidth={2} icon={ArrowDown01Icon} className="size-3.5" />
-            ) : null}
-          </PopoverTrigger>
-          <PopoverContent align="start" side="top" sideOffset={6} className="w-[300px] gap-0 rounded-2xl p-1.5 shadow-lg">
-            <div className="relative mb-0.5">
-              <HugeiconsIcon strokeWidth={2} icon={Search01Icon} className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                autoFocus
-                value={projectQuery}
-                placeholder="搜索项目"
-                className="h-8 rounded-lg border-0 bg-transparent pl-7 text-sm shadow-none focus-visible:ring-0"
-                onChange={(event) => setProjectQuery(event.target.value)}
-              />
-            </div>
-            <div className="max-h-52 overflow-y-auto">
-              {filteredProjects.length > 0 ? filteredProjects.map((item) => (
-                <button
-                  key={item.cwd}
-                  type="button"
-                  className={cn(
-                    "flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-sm transition-colors hover:bg-muted",
-                    item.cwd === project && "bg-muted font-medium",
-                  )}
-                  onClick={() => {
-                    onSelectProject(item.cwd);
-                    setProjectOpen(false);
-                  }}
-                >
-                  <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} className="size-4 shrink-0 text-muted-foreground" />
-                  <span className="truncate">{item.name}</span>
-                </button>
-              )) : (
-                <div className="px-2 py-2 text-sm text-muted-foreground">没有匹配的项目</div>
-              )}
-            </div>
-            <div className="my-0.5 border-t border-border" />
-            <button
-              type="button"
-              className="flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
-              onClick={() => {
-                setProjectOpen(false);
-                onPickWorkspace();
+      {showWorkspace && (showProjectPicker || git) ? (
+        <div className="mb-2 flex items-center gap-0.5 px-1.5">
+          {showProjectPicker ? (
+            <Popover
+              open={projectOpen}
+              onOpenChange={(open) => {
+                setProjectOpen(open);
+                if (!open) setProjectQuery("");
               }}
             >
-              <HugeiconsIcon strokeWidth={2} icon={Add01Icon} className="size-4" />
-              <span>新建项目</span>
-            </button>
-          </PopoverContent>
-        </Popover>
-      </div>
+              <PopoverTrigger
+                render={
+                  <button
+                    type="button"
+                    className="group flex h-7 max-w-56 items-center gap-1.5 rounded-full px-2 text-[13px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground"
+                  />
+                }
+              >
+                <span
+                  className={cn("relative size-3.5 shrink-0", project && "cursor-pointer rounded-full hover:bg-muted-foreground/20")}
+                  aria-label={project ? "清除项目" : undefined}
+                  title={project ? "清除项目" : undefined}
+                  onClick={project ? (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onSelectProject(null);
+                  } : undefined}
+                >
+                  <HugeiconsIcon strokeWidth={1.8} icon={Folder01Icon} className={cn("absolute inset-0 size-3.5 transition-opacity", project && "group-hover:opacity-0")} />
+                  {project ? <HugeiconsIcon strokeWidth={1.8} icon={Cancel01Icon} className="absolute inset-0 size-3.5 opacity-0 transition-opacity group-hover:opacity-100" /> : null}
+                </span>
+                <span className="max-w-44 truncate">{project ? projects.find((item) => item.cwd === project)?.name ?? workspaceLabel : "选择项目"}</span>
+                <HugeiconsIcon strokeWidth={1.8} icon={ArrowDown01Icon} className="size-3 shrink-0" />
+              </PopoverTrigger>
+              <PopoverContent align="start" side="top" sideOffset={12} className="w-[280px] gap-0 rounded-xl p-1 shadow-lg">
+                <div className="relative mb-0.5 px-0.5 pt-0.5">
+                  <HugeiconsIcon strokeWidth={2} icon={Search01Icon} className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    autoFocus
+                    value={projectQuery}
+                    placeholder="搜索项目"
+                    className="h-7 rounded-md border-0 bg-transparent pl-6.5 text-[13px] shadow-none focus-visible:ring-0"
+                    onChange={(event) => setProjectQuery(event.target.value)}
+                  />
+                </div>
+                <div className="max-h-52 overflow-y-auto">
+                  {filteredProjects.length > 0 ? filteredProjects.map((item) => (
+                    <button
+                      key={item.cwd}
+                      type="button"
+                      className={cn(
+                        "flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-[13px] transition-colors hover:bg-muted",
+                        item.cwd === project && "bg-muted font-medium",
+                      )}
+                      onClick={() => {
+                        onSelectProject(item.cwd);
+                        setProjectOpen(false);
+                      }}
+                    >
+                      <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} className="size-3.5 shrink-0 text-muted-foreground" />
+                      <span className="truncate">{item.name}</span>
+                    </button>
+                  )) : (
+                    <div className="px-2 py-1.5 text-[13px] text-muted-foreground">没有匹配的项目</div>
+                  )}
+                </div>
+                <div className="my-0.5 border-t border-border" />
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-[13px] text-muted-foreground hover:bg-muted hover:text-foreground"
+                  onClick={() => {
+                    setProjectOpen(false);
+                    onPickWorkspace();
+                  }}
+                >
+                  <HugeiconsIcon strokeWidth={2} icon={Add01Icon} className="size-3.5" />
+                  <span>新建项目</span>
+                </button>
+              </PopoverContent>
+            </Popover>
+          ) : null}
+          {git ? (
+            <GitBranchChip status={git} onBranchChange={() => setGitEpoch((value) => value + 1)} />
+          ) : null}
+        </div>
       ) : null}
 
       <MessageQueue
@@ -540,6 +673,7 @@ export function Composer({
         onRemove={onRemoveQueued}
         onEdit={onEditQueued}
         onSendNow={onSendQueuedNow}
+        onReorder={onReorderQueued}
         onResume={onResumeQueue}
       />
 
@@ -559,13 +693,29 @@ export function Composer({
             event.target.value = "";
           }}
         />
+
+        {attachments.length > 0 ? (
+          <div className="flex flex-wrap gap-1.5 px-3 pt-3">
+            {attachments.map((item) => (
+              <AttachmentChip
+                key={item.id}
+                item={item}
+                onRemove={() => onAttachmentsChange(attachments.filter((entry) => entry.id !== item.id))}
+              />
+            ))}
+          </div>
+        ) : null}
+
         <Textarea
           ref={textareaRef}
           rows={1}
           value={value}
           disabled={disabled}
           placeholder={streaming ? "继续输入以排队后续修改" : placeholder ?? "随心输入"}
-          className="field-sizing-content max-h-56 min-h-[52px] resize-none border-0 bg-transparent px-4 pt-3.5 text-[13.5px] leading-6 shadow-none focus-visible:ring-0 disabled:bg-transparent disabled:opacity-100 dark:bg-transparent"
+          className={cn(
+            "field-sizing-content max-h-56 min-h-[52px] resize-none border-0 bg-transparent px-4 text-[13.5px] leading-6 shadow-none focus-visible:ring-0 disabled:bg-transparent disabled:opacity-100 dark:bg-transparent",
+            attachments.length > 0 ? "pt-2" : "pt-3.5",
+          )}
           onChange={(event) => handleChange(event.target.value)}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
@@ -582,23 +732,13 @@ export function Composer({
           >
             <HugeiconsIcon strokeWidth={2} icon={AttachmentIcon} />
           </IconButton>
-          <IconButton
-            size="icon-sm"
-            variant="ghost"
-            className={cn("rounded-full text-muted-foreground", listening && "bg-destructive/10 text-destructive")}
-            label={listening ? "停止语音输入" : "语音输入"}
-            disabled={disabled}
-            onClick={toggleVoice}
-          >
-            <HugeiconsIcon strokeWidth={2} icon={Mic01Icon} />
-          </IconButton>
 
           <DropdownMenu>
             <DropdownMenuTrigger
               render={
                 <Chip className="text-warning hover:bg-warning/10 hover:text-warning">
                   <HugeiconsIcon strokeWidth={2} icon={ShieldAlertIcon} className="size-4" />
-                  {PERMISSION_LABELS[permissionMode]}
+                  <span className="hidden @min-[440px]/composer:inline">{PERMISSION_LABELS[permissionMode]}</span>
                   <HugeiconsIcon strokeWidth={2} icon={ArrowDown01Icon} className="size-3" />
                 </Chip>
               }
@@ -619,6 +759,7 @@ export function Composer({
                     <DropdownMenuRadioItem
                       key={mode}
                       value={mode}
+                      closeOnClick
                       className={cn(
                         "items-start gap-1.5 rounded-lg px-1.5 py-1.5 pr-7",
                         mode === permissionMode && "text-warning focus:text-warning",
@@ -638,89 +779,128 @@ export function Composer({
             </DropdownMenuContent>
           </DropdownMenu>
 
+          <ExtensionStatusBadges disabled={streaming} />
+
           <div className="flex-1" />
 
           {contextUsedPercent != null && contextWindow > 0 ? (
-            <div className="group relative">
-              <div className="pointer-events-none absolute bottom-[calc(100%+12px)] right-0 z-20 w-48 rounded-2xl border border-border bg-popover px-4 py-3 text-center text-sm shadow-lg opacity-0 transition-opacity group-hover:opacity-100">
-                <div className="font-semibold text-muted-foreground">上下文窗口：</div>
-                <div className="mt-1 leading-5">
-                  {contextUsedPercent}% 已用（剩余 {Math.max(0, 100 - contextUsedPercent)}%）
-                </div>
-                <div className="leading-5">已用 {formatTokens(contextUsed)} 标记，共 {formatTokens(contextWindow)}</div>
-              </div>
-              <button
-                type="button"
-                className="flex size-7 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                aria-label="查看上下文窗口使用情况"
-              >
+            <span className="hidden @min-[440px]/composer:contents">
+              <Popover>
+                <PopoverTrigger
+                  render={
+                    <button
+                      type="button"
+                      className="flex size-7 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground"
+                      aria-label="查看上下文与轮次统计"
+                    />
+                  }
+                >
                   <ContextUsageRing percent={contextUsedPercent} />
-              </button>
-            </div>
+                </PopoverTrigger>
+                <PopoverContent side="top" align="end" sideOffset={10} className="w-72 gap-0 p-3.5">
+                  <ContextUsagePanel
+                    percent={contextUsedPercent}
+                    used={contextUsed}
+                    window={contextWindow}
+                    stats={stats}
+                  />
+                </PopoverContent>
+              </Popover>
+            </span>
           ) : null}
 
           <div className="relative">
             <DropdownMenu>
               <DropdownMenuTrigger
                 render={
-                  <Chip className="max-w-52">
-                    <span className="truncate">{modelLabel}</span>
+                  <Chip className="max-w-40 @min-[22rem]/composer:max-w-72">
+                    <span className="truncate">
+                      {selectedModel ? (
+                        <>
+                          <span className="hidden @min-[40rem]/composer:inline">
+                            {providerLabel(selectedModel)}/{selectedModel.id}
+                          </span>
+                          <span className="@min-[40rem]/composer:hidden">
+                            {selectedModel.name || selectedModel.id}
+                          </span>
+                        </>
+                      ) : (
+                        "选择模型"
+                      )}
+                    </span>
                     <HugeiconsIcon strokeWidth={2} icon={ArrowDown01Icon} className="size-3" />
                   </Chip>
                 }
               />
-              <DropdownMenuContent align="end" className="max-h-80 w-64 min-w-64 overflow-y-auto">
-                <DropdownMenuGroup>
-                  <DropdownMenuLabel>模型</DropdownMenuLabel>
-                  {models.length === 0 ? (
-                    <DropdownMenuLabel className="font-normal text-muted-foreground">
-                      还没有可用的模型
-                    </DropdownMenuLabel>
-                  ) : (
-                    models.map((item) => (
-                      <DropdownMenuCheckboxItem
-                        key={modelKey(item)}
-                        checked={modelKey(item) === selected}
-                        onCheckedChange={() => onModelChange(item.provider, item.id)}
-                      >
-                        <span className="truncate">{item.name || item.id}</span>
-                      </DropdownMenuCheckboxItem>
-                    ))
-                  )}
-                </DropdownMenuGroup>
+              <DropdownMenuContent align="end" className="min-w-44">
+                {models.length === 0 ? (
+                  <DropdownMenuLabel className="font-normal text-muted-foreground">
+                    还没有可用的模型
+                  </DropdownMenuLabel>
+                ) : (
+                  modelsByProvider.map((group) => {
+                    const selectedInGroup = group.models.some((item) => modelKey(item) === selected);
+                    return (
+                      <DropdownMenuSub key={group.id}>
+                        <DropdownMenuSubTrigger>
+                          <span className="flex min-w-0 flex-1 items-center">
+                            <span className="min-w-0 truncate">{group.name}</span>
+                            <span className="ml-auto flex size-4 shrink-0 items-center justify-center">
+                              {selectedInGroup ? (
+                                <HugeiconsIcon icon={Tick02Icon} strokeWidth={2} className="size-4" />
+                              ) : null}
+                            </span>
+                          </span>
+                        </DropdownMenuSubTrigger>
+                        <DropdownMenuSubContent align="start" side="right" className="min-w-52">
+                          {group.models.map((item) => (
+                            <DropdownMenuCheckboxItem
+                              key={modelKey(item)}
+                              checked={modelKey(item) === selected}
+                              onCheckedChange={() => onModelChange(item.provider, item.id)}
+                            >
+                              <span className="truncate">{item.name || item.id}</span>
+                            </DropdownMenuCheckboxItem>
+                          ))}
+                        </DropdownMenuSubContent>
+                      </DropdownMenuSub>
+                    );
+                  })
+                )}
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={onManageModels}>
-                  <HugeiconsIcon strokeWidth={2} icon={Settings02Icon} className="size-3.5" />
                   {models.length === 0 ? "添加模型" : "管理模型"}
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
 
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <Chip>
-                  {THINKING_LABELS[thinkingValue]}
-                  <HugeiconsIcon strokeWidth={2} icon={ArrowDown01Icon} className="size-3" />
-                </Chip>
-              }
-            />
-            <DropdownMenuContent align="end" className="w-36 min-w-36">
-              <DropdownMenuGroup>
-                <DropdownMenuLabel>推理强度</DropdownMenuLabel>
-                {thinkingOptions.map((level) => (
-                  <DropdownMenuCheckboxItem
-                    key={level}
-                    checked={level === thinkingValue}
-                    onCheckedChange={() => onThinkingChange(level)}
-                  >
-                    {THINKING_LABELS[level]}
-                  </DropdownMenuCheckboxItem>
-                ))}
-              </DropdownMenuGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <span className="hidden @min-[440px]/composer:contents">
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Chip>
+                    {THINKING_LABELS[thinkingValue]}
+                    <HugeiconsIcon strokeWidth={2} icon={ArrowDown01Icon} className="size-3" />
+                  </Chip>
+                }
+              />
+              <DropdownMenuContent align="end" className="w-36 min-w-36">
+                <DropdownMenuGroup>
+                  <DropdownMenuLabel>推理强度</DropdownMenuLabel>
+                  {thinkingOptions.map((level) => (
+                    <DropdownMenuCheckboxItem
+                      key={level}
+                      checked={level === thinkingValue}
+                      onCheckedChange={() => onThinkingChange(level)}
+                    >
+                      {THINKING_LABELS[level]}
+                    </DropdownMenuCheckboxItem>
+                  ))}
+                </DropdownMenuGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </span>
 
           {streaming && hasContent ? (
             <IconButton

@@ -1,14 +1,15 @@
-import { memo, useState, type JSX, type ReactNode } from "react";
+import { memo, useDeferredValue, useState, type JSX, type ReactNode } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Copy01Icon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
-import { highlightCode } from "@/lib/highlight";
+import { useHighlightedCode } from "@/lib/highlight";
 import { useSessionStore } from "@/stores/session";
 
-function CodeBlock({ language, code }: { language?: string; code: string }): JSX.Element {
+const CodeBlock = memo(function CodeBlock({ language, code }: { language?: string; code: string }): JSX.Element {
   const [copied, setCopied] = useState(false);
+  const html = useHighlightedCode(code, language);
 
   async function copy(): Promise<void> {
     try {
@@ -29,18 +30,25 @@ function CodeBlock({ language, code }: { language?: string; code: string }): JSX
           {copied ? "已复制" : "复制"}
         </Button>
       </div>
-      <pre className="overflow-x-auto p-3 text-[12px] leading-5">
-        <code className="font-mono" dangerouslySetInnerHTML={{ __html: highlightCode(code) }} />
-      </pre>
+      <div className="code-shiki overflow-x-auto p-3 text-[12px] leading-5">
+        {html ? (
+          <div dangerouslySetInnerHTML={{ __html: html }} />
+        ) : (
+          <pre className="font-mono">{code}</pre>
+        )}
+      </div>
     </div>
   );
-}
+});
 
 /**
  * Memoised on `text`: without this, every streamed token re-parsed the markdown
  * of every message already on screen.
  */
 export const MarkdownView = memo(function MarkdownView({ text }: { text: string }): JSX.Element {
+  // Re-parsing the whole answer on every streamed token is O(n²); keep the urgent
+  // UI (spinner, scroll) responsive and let React apply the markdown at lower priority.
+  const deferred = useDeferredValue(text);
   return (
     <Markdown
       remarkPlugins={[remarkGfm]}
@@ -88,7 +96,7 @@ export const MarkdownView = memo(function MarkdownView({ text }: { text: string 
         ),
       }}
     >
-      {text}
+      {deferred}
     </Markdown>
   );
 });

@@ -51,6 +51,18 @@
   --code-string: oklch(0.48 0.12 145);
   --code-comment: oklch(0.55 0 0);
   --code-number: oklch(0.5 0.12 40);
+  /* Map shikiji's CSS-variables theme onto the code tokens above. */
+  --shiki-foreground: var(--foreground);
+  --shiki-background: transparent;
+  --shiki-token-comment: var(--code-comment);
+  --shiki-token-keyword: var(--code-keyword);
+  --shiki-token-string: var(--code-string);
+  --shiki-token-string-expression: var(--code-string);
+  --shiki-token-constant: var(--code-number);
+  --shiki-token-function: var(--code-keyword);
+  --shiki-token-parameter: var(--code-number);
+  --shiki-token-punctuation: var(--muted-foreground);
+  --shiki-token-link: var(--code-string);
 }
 
 @theme inline {
@@ -231,6 +243,43 @@ body {
   }
 }
 
+/* F loader -------------------------------------------------------------------
+   The brand F traced as one SVG stroke, shared by the React <FLoader> and the
+   pre-JS boot splash in index.html. The splash inlines its own copy of these
+   rules because it has to animate before this stylesheet exists (in dev it is
+   injected by JS), so keep the two in sync. */
+.fv-loader-path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 30;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 1;
+  animation: fv-loader-trace 2.4s ease-in-out infinite;
+}
+
+@keyframes fv-loader-trace {
+  0% {
+    stroke-dashoffset: 1;
+  }
+  55% {
+    stroke-dashoffset: 0;
+  }
+  80% {
+    stroke-dashoffset: 0;
+  }
+  100% {
+    stroke-dashoffset: -1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fv-loader-path {
+    animation: none;
+    stroke-dashoffset: 0;
+  }
+}
+
 .chat-markdown p {
   margin: 0.4em 0;
 }
@@ -315,10 +364,18 @@ body {
   }
 }
 
-.tok-keyword { color: var(--code-keyword); font-weight: 600; }
-.tok-string { color: var(--code-string); }
-.tok-comment { color: var(--code-comment); font-style: italic; }
-.tok-number { color: var(--code-number); }
+/* shikiji renders a whole <pre class="shiki">; strip its chrome so the
+   surrounding card or preview panel keeps its own background and padding. */
+.code-shiki pre {
+  margin: 0;
+  background: transparent !important;
+  font-size: inherit;
+  line-height: inherit;
+}
+.code-shiki code {
+  font-family: inherit;
+  font-variant-ligatures: none;
+}
 
 .dark {
   --background: oklch(0.145 0 0);

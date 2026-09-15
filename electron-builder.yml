@@ -1,0 +1,85 @@
+appId: dev.fastvibe.desktop
+productName: FastVibe
+copyright: Copyright © 2026 FastVibe
+
+directories:
+  buildResources: resources
+  output: release
+
+files:
+  - "!**/.vscode/*"
+  - "!src/**"
+  - "!scripts/**"
+  - "!docs/**"
+  - "!brand/**"
+  - "!resources/**"
+  - "!electron.vite.config.{js,ts,mjs,cjs}"
+  - "!vite.config.ts"
+  - "!components.json"
+  - "!pnpm-lock.yaml"
+  - "!pnpm-workspace.yaml"
+  - "!{.env,.env.*,.npmrc}"
+  - "!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}"
+  - "!**/*.map"
+
+# Runtime assets are looked up under process.resourcesPath (src/main/index.ts,
+# src/main/engine/models-dev.ts), so they must live outside the asar archive.
+extraResources:
+  - from: resources/models-dev
+    to: models-dev
+  # Built-in pi extensions (`/plan`, `/goal`) are loaded by path at runtime, so
+  # they must stay outside the asar archive.
+  - from: resources/extensions
+    to: extensions
+  - from: resources/icon.icns
+    to: icon.icns
+  - from: resources/icon.png
+    to: icon.png
+
+# Native addons and wasm assets cannot be loaded from inside an asar archive.
+asarUnpack:
+  - "**/*.node"
+  - node_modules/node-pty/**
+  - node_modules/koffi/**
+  - node_modules/@silvia-odwyer/photon-node/**
+  - node_modules/@mariozechner/clipboard/**
+  - node_modules/@mariozechner/clipboard-*/**
+
+# node-pty / koffi / photon ship N-API prebuilds that already work in Electron.
+# Avoid running node-gyp against a toolchain the CI image may not have.
+npmRebuild: false
+
+mac:
+  icon: resources/icon.icns
+  category: public.app-category.developer-tools
+  # Local builds must never sign: without this, electron-builder discovers a
+  # Developer ID in the login keychain and signs/notarizes the dev build.
+  identity: null
+  notarize: false
+  target:
+    - target: dmg
+      arch:
+        - arm64
+        - x64
+    - target: zip
+      arch:
+        - arm64
+        - x64
+
+win:
+  icon: resources/icon.png
+  target:
+    - target: nsis
+      arch:
+        - x64
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+
+linux:
+  icon: resources/icon.png
+  category: Development
+  target:
+    - AppImage
+    - deb

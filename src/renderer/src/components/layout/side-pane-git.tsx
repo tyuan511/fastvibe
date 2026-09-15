@@ -12,7 +12,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { DiffView } from "@/components/chat/diff-view";
+import { readGitStatus } from "@/lib/use-git-status";
 import { cn } from "@/lib/utils";
+import { useSessionStore } from "@/stores/session";
 import type { ChatMessage } from "@shared/types";
 import type { GitDiffSource, GitStatus } from "@shared/ipc";
 
@@ -35,10 +37,11 @@ function filesForSource(status: GitStatus | null, source: GitDiffSource, lastTur
   });
 }
 
-function lastTurnPaths(messages: ChatMessage[]): string[] {
+function computeLastTurnPaths(messages: ChatMessage[]): string[] {
   const paths = new Set<string>();
   for (const message of messages) {
     for (const tool of message.tools) {
+      if (tool.status === "error") continue;
       if (!/write|edit|apply|create/i.test(tool.name)) continue;
       const args = tool.args && typeof tool.args === "object" ? (tool.args as Record<string, unknown>) : {};
       const path = String(args.path ?? args.file_path ?? args.filename ?? "");
@@ -48,15 +51,27 @@ function lastTurnPaths(messages: ChatMessage[]): string[] {
   return [...paths];
 }
 
+const lastTurnCache = new WeakMap<ChatMessage, string[]>();
+
+/** Cached on the trailing message's identity so streaming doesn't rescan the transcript. */
+function lastTurnPaths(messages: ChatMessage[]): string[] {
+  const key = messages[messages.length - 1];
+  if (!key) return [];
+  const cached = lastTurnCache.get(key);
+  if (cached) return cached;
+  const paths = computeLastTurnPaths(messages);
+  lastTurnCache.set(key, paths);
+  return paths;
+}
+
 export function SidePaneGit({
   cwd,
-  messages,
   onError,
 }: {
   cwd?: string;
-  messages: ChatMessage[];
   onError: (message: string) => void;
 }): JSX.Element {
+  const messages = useSessionStore((state) => state.messages);
   const [status, setStatus] = useState<GitStatus | null>(null);
   const [source, setSource] = useState<GitDiffSource>("unstaged");
   const [selected, setSelected] = useState<string>();
@@ -71,7 +86,7 @@ export function SidePaneGit({
       return;
     }
     try {
-      setStatus(await window.fastvibe.workspace.gitStatus(cwd));
+      setStatus(await readGitStatus(cwd, true));
     } catch (error) {
       onError(error instanceof Error ? error.message : "无法读取 Git 状态");
     }

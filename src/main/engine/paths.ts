@@ -20,6 +20,8 @@ export type FastVibePaths = {
   mcpFile: string;
   /** Renderer UI preferences (theme, chat behaviour, …). */
   settingsFile: string;
+  /** Per-thinking-block durations, which the engine's transcripts do not record. */
+  reasoningFile: string;
 };
 
 export function getFastVibePaths(): FastVibePaths {
@@ -51,5 +53,6 @@ export function getFastVibePaths(): FastVibePaths {
     providersFile: join(userData, "providers.json"),
     mcpFile: join(userData, "mcp.json"),
     settingsFile: join(userData, "settings.json"),
+    reasoningFile: join(runtimeRoot, "reasoning.json"),
   };
 }

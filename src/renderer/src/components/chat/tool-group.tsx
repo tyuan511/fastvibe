@@ -1,6 +1,7 @@
 import { memo, type JSX } from "react";
 import type { ToolGroup } from "@/lib/group-parts";
 import { describeTool } from "@/lib/tool-presentation";
+import { useWorkspacePath } from "@/lib/workspace-path";
 import { ToolCard } from "./tool-card";
 import { ToolRow } from "./tool-row";
 
@@ -20,8 +21,9 @@ function DiffStat({ added, removed }: { added: number; removed: number }): JSX.E
  * run is still in flight.
  */
 export const ToolGroupRow = memo(function ToolGroupRow({ group }: { group: ToolGroup }): JSX.Element {
+  const cwd = useWorkspacePath();
   const last = group.tools.at(-1);
-  const live = group.running && last ? describeTool(last) : undefined;
+  const live = group.running && last ? describeTool(last, cwd) : undefined;
   const subject = live ? live.label : group.summary;
   const context = live ? live.subject : undefined;
 

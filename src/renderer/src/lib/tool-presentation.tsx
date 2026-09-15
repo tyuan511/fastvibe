@@ -1,8 +1,9 @@
 import type { ReactNode } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { BotIcon, FileCodeIcon, FileMinusIcon, FilePlusIcon, FileTextIcon, FolderTreeIcon, ListChecksIcon, Plug01Icon, Search01Icon, SparklesIcon, SquareTerminalIcon, Wrench01Icon } from "@hugeicons/core-free-icons";
+import { BotIcon, FileCodeIcon, FileMinusIcon, FilePlusIcon, FileTextIcon, FolderTreeIcon, ListChecksIcon, MessageQuestionIcon, Plug01Icon, Search01Icon, SparklesIcon, SquareTerminalIcon, Wrench01Icon } from "@hugeicons/core-free-icons";
 import type { ToolCallBlock } from "@shared/types";
 import { parseToolTodos } from "./todos";
+import { displayPath } from "./workspace-path";
 
 /**
  * Tool presentation, modelled on zcode's tool-call language.
@@ -23,6 +24,7 @@ export type ToolFamily =
   | "skill"
   | "agent"
   | "todo"
+  | "question"
   | "mcp"
   | "other";
 
@@ -82,6 +84,7 @@ const LABELS: Record<ToolFamily, { running: string; done: string }> = {
   skill: { running: "正在运行技能", done: "技能" },
   agent: { running: "子智能体运行中", done: "子智能体" },
   todo: { running: "正在更新待办", done: "待办" },
+  question: { running: "正在询问", done: "询问" },
   mcp: { running: "正在调用", done: "工具调用" },
   other: { running: "正在运行", done: "工具调用" },
 };
@@ -97,6 +100,7 @@ const ICONS: Record<ToolFamily, ReactNode> = {
   skill: <HugeiconsIcon strokeWidth={2} icon={SparklesIcon} className="size-3.5" />,
   agent: <HugeiconsIcon strokeWidth={2} icon={BotIcon} className="size-3.5" />,
   todo: <HugeiconsIcon strokeWidth={2} icon={ListChecksIcon} className="size-3.5" />,
+  question: <HugeiconsIcon strokeWidth={2} icon={MessageQuestionIcon} className="size-3.5" />,
   mcp: <HugeiconsIcon strokeWidth={2} icon={Plug01Icon} className="size-3.5" />,
   other: <HugeiconsIcon strokeWidth={2} icon={Wrench01Icon} className="size-3.5" />,
 };
@@ -120,11 +124,26 @@ export function familyOf(name: string): ToolFamily {
   if (key.includes("skill")) return "skill";
   if (/^(task|agent|subagent|dispatch|delegate)/.test(key)) return "agent";
   if (key.includes("todo")) return "todo";
+  if (/^(question|ask_user|askuser|questionnaire)$/.test(key)) return "question";
   return "other";
 }
 
-/** Fold the summary into a verb + object + muted context, as zcode does. */
-export function describeTool(tool: ToolCallBlock): ToolView {
+/** Entries of a `question` tool call's `questions` array, for the summary row. */
+export function questionItems(args: unknown): Array<Record<string, unknown>> {
+  const list = asRecord(args)?.questions;
+  if (!Array.isArray(list)) return [];
+  return list.filter((item): item is Record<string, unknown> => asRecord(item) !== null);
+}
+
+/**
+ * Fold the summary into a verb + object + muted context, as zcode does.
+ *
+ * `cwd` is the conversation's working directory: the engine addresses files
+ * absolutely, and every path printed here is shortened to its project-relative
+ * form so the row names the file's place in the project instead of the user's home
+ * directory. Callers pass the value from `useWorkspacePath()`.
+ */
+export function describeTool(tool: ToolCallBlock, cwd?: string): ToolView {
   const family = familyOf(tool.name);
   const labels = LABELS[family];
   const running = tool.status === "running";
@@ -139,16 +158,17 @@ export function describeTool(tool: ToolCallBlock): ToolView {
     case "delete": {
       const path = argString(tool.args, FILE_PATH_KEYS);
       if (path) {
-        view.subject = basename(path);
-        view.context = dirname(path);
-        view.title = path;
+        const shown = displayPath(path, cwd);
+        view.subject = basename(shown);
+        view.context = dirname(shown);
+        view.title = shown;
       } else {
         view.subject = tool.name;
       }
       return view;
     }
     case "search": {
-      const query = argString(tool.args, SEARCH_KEYS);
+      const query = displayPath(argString(tool.args, SEARCH_KEYS), cwd);
       const glob = argString(tool.args, ["glob"]);
       view.subject = query || tool.name;
       view.context = glob || undefined;
@@ -156,7 +176,7 @@ export function describeTool(tool: ToolCallBlock): ToolView {
       return view;
     }
     case "list": {
-      const path = argString(tool.args, ["path", "dir", "directory", "pattern"]);
+      const path = displayPath(argString(tool.args, ["path", "dir", "directory", "pattern"]), cwd);
       view.subject = path || ".";
       view.title = path || tool.name;
       return view;
@@ -171,6 +191,14 @@ export function describeTool(tool: ToolCallBlock): ToolView {
       const name = argString(tool.args, ["skill", "name", "command"]);
       view.subject = name || tool.name;
       view.title = name || tool.name;
+      return view;
+    }
+    case "question": {
+      const items = questionItems(tool.args);
+      const first = typeof items[0]?.question === "string" ? (items[0].question as string).trim() : "";
+      view.subject = first || "澄清问题";
+      view.context = items.length > 1 ? `共 ${items.length} 个问题` : undefined;
+      view.title = first || tool.name;
       return view;
     }
     case "todo": {
@@ -200,8 +228,8 @@ export function describeTool(tool: ToolCallBlock): ToolView {
 }
 
 /** Single-line command/prose summary used by group rows. */
-export function toolSubject(tool: ToolCallBlock): string {
-  const view = describeTool(tool);
+export function toolSubject(tool: ToolCallBlock, cwd?: string): string {
+  const view = describeTool(tool, cwd);
   return [view.subject, view.context].filter(Boolean).join(" · ") || tool.name;
 }
 

@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { cp, mkdir, rm, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
-import { DefaultResourceLoader, loadSkillsFromDir } from "@mariozechner/pi-coding-agent";
+import { DefaultResourceLoader, loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
 import type { SkillDraft, SkillInfo } from "@shared/types";
 
 const NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;

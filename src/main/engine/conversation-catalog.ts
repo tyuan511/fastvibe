@@ -34,11 +34,11 @@ export class ConversationCatalog {
   }
 
   list(): Conversation[] {
-    return this.#items.filter((item) => item.kind !== "side-chat").sort((a, b) => b.updatedAt - a.updatedAt);
+    return this.#items.filter((item) => item.kind !== "side-chat").sort(byCreatedDesc);
   }
 
   listAll(): Conversation[] {
-    return [...this.#items].sort((a, b) => b.updatedAt - a.updatedAt);
+    return [...this.#items].sort(byCreatedDesc);
   }
 
   /** Drop auxiliary chats that have no open tab (they are not shown in the tree). */
@@ -121,6 +121,7 @@ export class ConversationCatalog {
     const id = session?.sessionId || randomUUID();
     const bound = normalizeProject(project);
     if (bound) this.ensureProject(bound);
+    const now = Date.now();
     const conversation: Conversation = {
       id,
       title: options?.title?.trim() || "新会话",
@@ -129,7 +130,8 @@ export class ConversationCatalog {
       sessionFile: session?.sessionFile,
       sessionId: session?.sessionId,
       worktree: session?.worktree,
-      updatedAt: Date.now(),
+      createdAt: now,
+      updatedAt: now,
       kind: options?.kind,
       parentId: options?.parentId,
       preview: options?.kind === "side-chat" ? options.title?.trim() || "辅助对话" : undefined,
@@ -151,7 +153,8 @@ export class ConversationCatalog {
     const index = this.#items.findIndex((item) => item.id === id);
     if (index < 0) return undefined;
     const current = this.#items[index];
-    const next = { ...current, ...patch, id, updatedAt: Date.now() };
+    // `createdAt` is immutable: it is the sidebar's sort key.
+    const next = { ...current, ...patch, id, createdAt: current.createdAt, updatedAt: Date.now() };
     if ("project" in patch) {
       next.project = normalizeProject(patch.project);
       next.cwd = next.project ?? this.#scratchRoot;
@@ -203,7 +206,9 @@ export class ConversationCatalog {
       if (isRecord(parsed) && typeof parsed.version === "number") {
         const legacy = parsed.version < 2;
         const rawItems = (Array.isArray(parsed.conversations) ? parsed.conversations : []).filter(isConversation);
-        this.#items = legacy ? rawItems.map((item) => this.#migrateLegacy(item)) : rawItems;
+        // Catalogs written before `createdAt` existed fall back to `updatedAt`,
+        // which is the best available proxy for creation order.
+        this.#items = legacy ? rawItems.map((item) => this.#migrateLegacy(item)) : rawItems.map(withCreatedAt);
         this.#projects = Array.isArray(parsed.projects)
           ? parsed.projects.filter(isProject)
           : projectsFromConversations(this.#items);
@@ -231,11 +236,11 @@ export class ConversationCatalog {
    */
   #migrateLegacy(item: Conversation): Conversation {
     const legacyProject = normalizeProject(item.cwd);
-    return {
+    return withCreatedAt({
       ...item,
       project: legacyProject,
       cwd: legacyProject ?? this.#scratchRoot,
-    };
+    });
   }
 
   /**
@@ -292,6 +297,17 @@ function projectsFromConversations(conversations: Conversation[]): Project[] {
 function normalizeProject(value: string | undefined | null): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+/** Newest-created first, with a stable id tiebreak for same-millisecond creates. */
+function byCreatedDesc(a: Conversation, b: Conversation): number {
+  return b.createdAt - a.createdAt || a.id.localeCompare(b.id);
+}
+
+/** Backfill `createdAt` on catalogs persisted before the field existed. */
+function withCreatedAt(item: Conversation): Conversation {
+  if (typeof item.createdAt === "number") return item;
+  return { ...item, createdAt: typeof item.updatedAt === "number" ? item.updatedAt : Date.now() };
 }
 
 function isConversation(value: unknown): value is Conversation {

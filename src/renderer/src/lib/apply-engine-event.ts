@@ -13,6 +13,13 @@ function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+/** User aborts stay silent; only `stopReason: "error"` becomes a visible failure. */
+function errorFromAssistant(value: unknown): string | undefined {
+  if (!isRecord(value) || value.stopReason !== "error") return undefined;
+  const text = typeof value.errorMessage === "string" ? value.errorMessage.trim() : "";
+  return text || "请求失败";
+}
+
 function toolText(value: unknown): string | undefined {
   if (typeof value === "string") return value;
   if (!isRecord(value)) {
@@ -97,7 +104,9 @@ function appendDelta(message: ChatMessage, kind: "text" | "thinking", delta: str
   const last = parts.at(-1);
   if (last?.kind === kind) {
     const text = `${last.text}${delta}`;
-    parts[parts.length - 1] = kind === "text" ? { kind: "text", text } : { kind: "thinking", text };
+    // `{...last}` keeps a thinking part's measured bounds; Main re-sends them on
+    // every delta, but the part must not depend on that to stay timed.
+    parts[parts.length - 1] = kind === "text" ? { kind: "text", text } : { ...last, text };
     return;
   }
   parts.push(kind === "text" ? { kind: "text", text: delta } : { kind: "thinking", text: delta });
@@ -108,6 +117,21 @@ function pushToolPart(message: ChatMessage, toolId: string): void {
   const parts = (message.parts ??= []);
   if (parts.some((part) => part.kind === "tool" && part.toolId === toolId)) return;
   parts.push({ kind: "tool", toolId });
+}
+
+/**
+ * Mirror the bounds Main measured for the block being streamed onto the thinking
+ * part currently being written. The part is the trailing one only while its deltas
+ * are arriving, so a text/tool delta that follows simply finds nothing to stamp.
+ */
+function stampThinkingTiming(message: ChatMessage, event: Record<string, unknown>): void {
+  const startedAt = typeof event.thinkingStartedAt === "number" ? event.thinkingStartedAt : undefined;
+  const endedAt = typeof event.thinkingEndedAt === "number" ? event.thinkingEndedAt : undefined;
+  if (startedAt === undefined && endedAt === undefined) return;
+  const part = message.parts?.at(-1);
+  if (!part || part.kind !== "thinking") return;
+  if (startedAt !== undefined) part.startedAt = startedAt;
+  if (endedAt !== undefined) part.endedAt = endedAt;
 }
 
 function upsertTool(message: ChatMessage, patch: Partial<ToolCallBlock> & { id: string }): void {
@@ -165,6 +189,23 @@ export function applyEngineEvent(
   let nextStreaming = streaming;
   const type = event.type;
 
+  // The engine persisted the optimistic user turn and handed back its session
+  // entry id. Adopt it so the row can branch (retry / edit) later; the message
+  // itself is unchanged. Optimistic turns are minted with a `local:` id.
+  if (type === "user_message_persisted") {
+    const entryId = asString(event.entryId);
+    if (entryId) {
+      for (let index = next.length - 1; index >= 0; index -= 1) {
+        if (next[index].role !== "user" || !next[index].id.startsWith("local:")) continue;
+        const list = next.slice();
+        list[index] = { ...next[index], id: entryId };
+        next = list;
+        break;
+      }
+    }
+    return { messages: next, streaming: nextStreaming };
+  }
+
   // Lazily materialise the trailing assistant only for events that write to it.
   let assistant: ChatMessage | undefined;
   const ensureAssistant = (): ChatMessage => {
@@ -176,8 +217,24 @@ export function applyEngineEvent(
   };
 
   if (type === "agent_start" || type === "turn_start") {
-    ensureAssistant();
+    // A new turn replaces a previous failure (including auto-retry). Keep the
+    // bubble, but drop the stale error so the working state can take over.
+    const target = ensureAssistant();
+    if (target.error) target.error = undefined;
     return { messages: next, streaming: true };
+  }
+
+  if (type === "message_end") {
+    const error = errorFromAssistant(event.message);
+    if (error) {
+      const last = next.at(-1);
+      if (last?.role === "assistant") {
+        const list = next.slice();
+        list[list.length - 1] = { ...last, error };
+        return { messages: list, streaming: nextStreaming };
+      }
+    }
+    return { messages: next, streaming: nextStreaming };
   }
 
   if (type === "turn_end") {
@@ -186,10 +243,41 @@ export function applyEngineEvent(
     // immediately feeds the tool results back into another turn. Clearing the
     // working state here made the footer, caret and "working" row blink once per
     // tool call. Only `agent_end` closes the run.
+    const error = errorFromAssistant(event.message);
+    if (error) {
+      const last = next.at(-1);
+      if (last?.role === "assistant") {
+        const list = next.slice();
+        list[list.length - 1] = { ...last, error };
+        return { messages: list, streaming: nextStreaming };
+      }
+    }
     return { messages: next, streaming: nextStreaming };
   }
 
   if (type === "agent_end") {
+    const lastEngine = Array.isArray(event.messages) ? event.messages.at(-1) : undefined;
+    const error = errorFromAssistant(lastEngine);
+    if (error) {
+      const last = next.at(-1);
+      if (last?.role === "assistant") {
+        const list = next.slice();
+        list[list.length - 1] = { ...last, error: last.error ?? error };
+        return { messages: list, streaming: false };
+      }
+      return {
+        messages: appendMessage(next, {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          text: "",
+          tools: [],
+          parts: [],
+          createdAt: Date.now(),
+          error,
+        }),
+        streaming: false,
+      };
+    }
     return { messages: next, streaming: false };
   }
 
@@ -270,25 +358,6 @@ export function applyEngineEvent(
     };
   }
 
-  if (type === "goal_updated") {
-    const text = asString(event.goal) ?? asString(event.message) ?? toolText(event.data);
-    if (text) {
-      return {
-        messages: appendMessage(next, {
-          id: crypto.randomUUID(),
-          role: "system",
-          text,
-          tools: [],
-          parts: [{ kind: "text", text }],
-          createdAt: Date.now(),
-          kind: "goal",
-        }),
-        streaming: nextStreaming,
-      };
-    }
-    return { messages: next, streaming: nextStreaming };
-  }
-
   if (type === "message_update") {
     const inner = isRecord(event.assistantMessageEvent) ? event.assistantMessageEvent : null;
     const innerType = asString(inner?.type);
@@ -350,6 +419,58 @@ export function applyEngineEvent(
       // is about to execute tools and start another turn, so the working state has
       // to survive it — otherwise it flips off and on at every tool boundary.
       if (asString(inner.reason) !== "toolUse") nextStreaming = false;
+    }
+    if (innerType === "error") {
+      nextStreaming = false;
+      const aborted =
+        asString(inner.reason) === "aborted" ||
+        (isRecord(inner.error) && inner.error.stopReason === "aborted") ||
+        (isRecord(inner.message) && inner.message.stopReason === "aborted");
+      if (!aborted) {
+        const error =
+          errorFromAssistant(inner.error) ??
+          errorFromAssistant(inner.message) ??
+          asString(inner.errorMessage) ??
+          "请求失败";
+        ensureAssistant().error = error;
+      }
+    }
+    // After the inner event, so a freshly opened thinking part is the one stamped.
+    const trailing = next.at(-1);
+    if (trailing?.role === "assistant") stampThinkingTiming(trailing, event);
+    return { messages: next, streaming: nextStreaming };
+  }
+
+  if (type === "auto_retry_start") {
+    const error = asString(event.errorMessage);
+    const last = next.at(-1);
+    if (last?.role === "assistant") {
+      const attempt = typeof event.attempt === "number" ? event.attempt : 1;
+      const maxAttempts = typeof event.maxAttempts === "number" ? event.maxAttempts : undefined;
+      const delayMs = typeof event.delayMs === "number" ? event.delayMs : undefined;
+      const retry =
+        maxAttempts != null
+          ? `请求失败，正在重试（${attempt}/${maxAttempts}）${delayMs ? `，${Math.round(delayMs / 1000)} 秒后重试` : ""}${error ? `：${error}` : ""}`
+          : `请求失败，正在重试${error ? `：${error}` : ""}`;
+      const list = next.slice();
+      list[list.length - 1] = { ...last, error: retry };
+      return { messages: list, streaming: true };
+    }
+    return { messages: next, streaming: true };
+  }
+
+  if (type === "auto_retry_end") {
+    const last = next.at(-1);
+    if (last?.role === "assistant" && event.success === true) {
+      const list = next.slice();
+      list[list.length - 1] = { ...last, error: undefined };
+      return { messages: list, streaming: nextStreaming };
+    }
+    if (last?.role === "assistant" && event.success === false) {
+      const error = asString(event.finalError) ?? last.error ?? "请求失败";
+      const list = next.slice();
+      list[list.length - 1] = { ...last, error };
+      return { messages: list, streaming: false };
     }
     return { messages: next, streaming: nextStreaming };
   }

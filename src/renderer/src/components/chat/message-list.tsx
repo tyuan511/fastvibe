@@ -1,6 +1,6 @@
-import { useMemo, useState, type JSX } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Copy01Icon, PencilIcon, RotateCcwIcon, Tick02Icon } from "@hugeicons/core-free-icons";
+import { AlertCircleIcon, Copy01Icon, PencilEdit02Icon, RotateCcwIcon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Message, MessageContent, MessageFooter, MessageGroup } from "@/components/ui/message";
 import {
@@ -10,39 +10,43 @@ import {
   MessageScrollerItem,
   MessageScrollerProvider,
   MessageScrollerViewport,
+  useMessageScroller,
 } from "@/components/ui/message-scroller";
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { cn } from "@/lib/utils";
-import { groupMessageRows, groupParts, mergeAssistantRun, type RenderPart } from "@/lib/group-parts";
+import { FLoader } from "@/components/f-loader";
+import { groupMessageRows, groupParts, mergeAssistantRun, type MessageRow, type RenderPart } from "@/lib/group-parts";
 import type { ChatAttachment, ChatMessage } from "@shared/types";
+import { AttachmentChip } from "./attachment-chip";
+import { collectChangedFiles, TurnFileChips } from "./file-chips";
 import { MarkdownView } from "./markdown-view";
 import { NewSessionHero } from "./new-session";
 import { ThinkingBlock } from "./thinking-block";
 import { ToolCard } from "./tool-card";
 import { ToolGroupRow } from "./tool-group";
+import { TuiLines } from "./tui-lines";
+import { TurnRail, type TurnMarker } from "./turn-rail";
 
 function formatTime(timestamp: number): string {
-  return new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  // 24-hour clock in the reader's own time zone; `h23` avoids locales that render
+  // midnight as 24:00 under a bare `hour12: false`.
+  return new Date(timestamp).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  });
 }
 
 function AttachmentStrip({ items }: { items: ChatAttachment[] }): JSX.Element {
   return (
     <div className="mb-1.5 flex flex-wrap justify-end gap-1.5">
-      {items.map((item) =>
-        item.kind === "image" && item.dataUrl ? (
-          <img key={item.id} src={item.dataUrl} alt={item.name} className="max-h-36 rounded-lg border border-border" />
-        ) : (
-          <button
-            key={item.id}
-            type="button"
-            className="rounded-md border border-border bg-background px-2 py-1 text-[11px]"
-            onClick={() => item.path && void window.fastvibe.workspace.reveal(item.path)}
-          >
-            {item.name}
-          </button>
-        ),
-      )}
+      {items.map((item) => (
+        <AttachmentChip
+          key={item.id}
+          item={item}
+          onOpen={item.path ? () => void window.fastvibe.workspace.reveal(item.path!) : undefined}
+        />
+      ))}
     </div>
   );
 }
@@ -80,46 +84,37 @@ function MessageActions({
   onRetry,
   onEdit,
   showTimestamp,
-  visible,
 }: {
   message: ChatMessage;
   onRetry?: (message: ChatMessage) => void;
   onEdit?: (message: ChatMessage) => void;
   showTimestamp: boolean;
-  visible: boolean;
 }): JSX.Element {
   const [copied, setCopied] = useState(false);
   return (
-    <MessageFooter
-      className={cn(
-        "gap-1 px-0 transition-opacity",
-        visible ? "opacity-100" : "opacity-0 group-hover/row:opacity-100 focus-within:opacity-100",
-      )}
-    >
+    <MessageFooter className="gap-1 px-0 opacity-0 transition-opacity group-hover/row:opacity-100 focus-within:opacity-100">
       {showTimestamp ? <span className="tabular-nums">{formatTime(message.createdAt)}</span> : null}
       {message.text ? (
-        <>
-          <ActionButton
-            label="复制"
-            onClick={() => {
-              void navigator.clipboard.writeText(message.text);
-              setCopied(true);
-              window.setTimeout(() => setCopied(false), 1000);
-            }}
-          >
-            {copied ? <HugeiconsIcon strokeWidth={2} icon={Tick02Icon} className="size-3.5" /> : <HugeiconsIcon strokeWidth={2} icon={Copy01Icon} className="size-3.5" />}
-          </ActionButton>
-          {message.role === "user" && onEdit ? (
-            <ActionButton label="编辑" onClick={() => onEdit(message)}>
-              <HugeiconsIcon strokeWidth={2} icon={PencilIcon} className="size-3.5" />
-            </ActionButton>
-          ) : null}
-          {onRetry ? (
-            <ActionButton label="重试" onClick={() => onRetry(message)}>
-              <HugeiconsIcon strokeWidth={2} icon={RotateCcwIcon} className="size-3.5" />
-            </ActionButton>
-          ) : null}
-        </>
+        <ActionButton
+          label="复制"
+          onClick={() => {
+            void navigator.clipboard.writeText(message.text);
+            setCopied(true);
+            window.setTimeout(() => setCopied(false), 1000);
+          }}
+        >
+          {copied ? <HugeiconsIcon strokeWidth={2} icon={Tick02Icon} className="size-3.5" /> : <HugeiconsIcon strokeWidth={2} icon={Copy01Icon} className="size-3.5" />}
+        </ActionButton>
+      ) : null}
+      {message.role === "user" && onEdit ? (
+        <ActionButton label="编辑" onClick={() => onEdit(message)}>
+          <HugeiconsIcon strokeWidth={2} icon={PencilEdit02Icon} className="size-3.5" />
+        </ActionButton>
+      ) : null}
+      {onRetry ? (
+        <ActionButton label="重试" onClick={() => onRetry(message)}>
+          <HugeiconsIcon strokeWidth={2} icon={RotateCcwIcon} className="size-3.5" />
+        </ActionButton>
       ) : null}
     </MessageFooter>
   );
@@ -142,10 +137,9 @@ function PartSlot({ children }: { children: JSX.Element }): JSX.Element {
   return <div className="flex w-full max-w-2xl flex-col">{children}</div>;
 }
 
-function ChatMessageRow({
+function ChatMessageRowImpl({
   messages,
   streaming,
-  last,
   onRetry,
   onEdit,
   showThinking,
@@ -153,7 +147,6 @@ function ChatMessageRow({
 }: {
   messages: ChatMessage[];
   streaming: boolean;
-  last: boolean;
   onRetry?: (message: ChatMessage) => void;
   onEdit?: (message: ChatMessage) => void;
   showThinking: boolean;
@@ -164,11 +157,21 @@ function ChatMessageRow({
   const parts = useMemo(() => groupParts(message), [message]);
 
   if (message.role === "system") {
+    // An extension custom message: the plugin's own renderer produced these runs.
+    if (message.kind === "custom" && message.runs && message.runs.length > 0) {
+      return (
+        <div className="flex justify-center py-1">
+          <div className="w-full max-w-3xl overflow-x-auto rounded-xl border border-border bg-card px-3 py-2">
+            <TuiLines runs={message.runs} />
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="flex justify-center py-1">
-        <Bubble variant={message.kind === "goal" ? "secondary" : "muted"} align="start">
+        <Bubble variant="muted" align="start">
           <BubbleContent className="chat-markdown text-[12px]">
-            {message.kind === "goal" ? "目标 · " : message.kind === "compact" ? "压缩 · " : ""}
+            {message.kind === "compact" ? "压缩 · " : ""}
             {message.text}
           </BubbleContent>
         </Bubble>
@@ -178,6 +181,11 @@ function ChatMessageRow({
 
   const isUser = message.role === "user";
   const hasText = parts.some((part) => part.kind === "text" && part.text);
+  // Files this agent run wrote, surfaced as a chip row under the reply.
+  const changedFiles = useMemo(
+    () => (isUser ? [] : collectChangedFiles(message.tools)),
+    [isUser, message.tools],
+  );
 
   const renderPart = (part: RenderPart, index: number): JSX.Element | null => {
     const isTail = index === parts.length - 1;
@@ -185,7 +193,12 @@ function ChatMessageRow({
       if (!showThinking) return null;
       return (
         <PartSlot key={`thinking-${index}`}>
-          <ThinkingBlock thinking={part.text} active={streaming && isTail} />
+          <ThinkingBlock
+            thinking={part.text}
+            startedAt={part.startedAt}
+            endedAt={part.endedAt}
+            active={streaming && isTail}
+          />
         </PartSlot>
       );
     }
@@ -224,7 +237,22 @@ function ChatMessageRow({
 
         {parts.map(renderPart)}
 
-        {streaming && !hasText ? <WorkingStatus message={message} /> : null}
+        {streaming && !hasText && !message.error ? <WorkingStatus message={message} /> : null}
+
+        {message.error ? (
+          <Bubble variant="destructive" align="start">
+            <BubbleContent className="flex items-start gap-2 text-[13px] leading-5">
+              <HugeiconsIcon strokeWidth={2} icon={AlertCircleIcon} className="mt-0.5 size-3.5 shrink-0" />
+              <span className="min-w-0 whitespace-pre-wrap wrap-break-word">{message.error}</span>
+            </BubbleContent>
+          </Bubble>
+        ) : null}
+
+        {changedFiles.length > 0 ? (
+          <div className="w-full max-w-2xl pt-1">
+            <TurnFileChips files={changedFiles} />
+          </div>
+        ) : null}
 
         {/*
          * Withhold the toolbar while this row is streaming. It used to stay mounted
@@ -240,12 +268,153 @@ function ChatMessageRow({
             onRetry={onRetry}
             onEdit={onEdit}
             showTimestamp={showTimestamp}
-            visible={last}
           />
         )}
       </MessageContent>
     </Message>
   );
+}
+
+/**
+ * A row only changes when the engine clones one of its messages (the one being
+ * streamed into). Compare the message list by identity so finished rows skip
+ * re-rendering entirely on each streamed token; the handlers are semantically
+ * stable, so their per-render identity is intentionally ignored.
+ */
+function sameMessages(a: ChatMessage[], b: ChatMessage[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let index = 0; index < a.length; index += 1) {
+    if (a[index] !== b[index]) return false;
+  }
+  return true;
+}
+
+const ChatMessageRow = memo(ChatMessageRowImpl, (prev, next) => {
+  return (
+    prev.streaming === next.streaming &&
+    prev.showThinking === next.showThinking &&
+    prev.showTimestamp === next.showTimestamp &&
+    prev.onRetry === next.onRetry &&
+    prev.onEdit === next.onEdit &&
+    sameMessages(prev.messages, next.messages)
+  );
+});
+
+const PROMPT_LIMIT = 140;
+const REPLY_LIMIT = 180;
+
+/** Collapse to a single line and clip, so a mark's preview always fits its card. */
+function clip(text: string, limit: number): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > limit ? `${flat.slice(0, limit)}…` : flat;
+}
+
+/**
+ * The reply preview stops as soon as it has enough characters, so this stays cheap
+ * on every streamed token — merging the whole run would re-join the entire answer
+ * just to throw it away.
+ */
+function replyPreview(row: MessageRow | undefined): string {
+  if (!row || row.messages[0].role !== "assistant") return "";
+  let text = "";
+  for (const message of row.messages) {
+    if (!message.text) continue;
+    text = text ? `${text} ${message.text}` : message.text;
+    if (text.length > REPLY_LIMIT) break;
+  }
+  return clip(text, REPLY_LIMIT);
+}
+
+/** One mark per turn: a user prompt plus the reply it produced. */
+function turnMarkers(rows: MessageRow[]): { markers: TurnMarker[]; rowIds: string[] } {
+  const markers: TurnMarker[] = [];
+  const rowIds = rows.map((row) => row.id);
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index];
+    if (row.messages[0].role !== "user") continue;
+    markers.push({
+      id: row.id,
+      rowIndex: index,
+      prompt: clip(row.messages[0].text, PROMPT_LIMIT),
+      reply: replyPreview(rows[index + 1]),
+    });
+  }
+  return { markers, rowIds };
+}
+
+/**
+ * Jump back to the live edge whenever the reader sends a new prompt. `autoScroll`
+ * only keeps following while they are already at the bottom, so a reader who had
+ * scrolled up would otherwise stay parked in history when they hit send.
+ */
+function FollowLatest({ messages }: { messages: ChatMessage[] }): null {
+  const { scrollToEnd } = useMessageScroller();
+  const lastUserId = useMemo(() => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      if (messages[index].role === "user") return messages[index].id;
+    }
+    return null;
+  }, [messages]);
+  const seenUserId = useRef<string | null>(lastUserId);
+
+  useEffect(() => {
+    if (lastUserId && lastUserId !== seenUserId.current) scrollToEnd();
+    seenUserId.current = lastUserId;
+  }, [lastUserId, scrollToEnd]);
+
+  return null;
+}
+
+/**
+ * One user prompt plus the reply it produced — the scope the prompt sticks within.
+ * Turns are the unit of the sticky prompt: `position: sticky` only holds a prompt
+ * down while its own turn is on screen, so the next turn's prompt pushes it away
+ * instead of the first prompt in the thread staying pinned forever.
+ */
+type Turn = { id: string; rows: MessageRow[] };
+
+function groupTurns(rows: MessageRow[]): Turn[] {
+  const turns: Turn[] = [];
+  for (const row of rows) {
+    const current = turns.at(-1);
+    if (row.messages[0].role !== "user" && current) current.rows.push(row);
+    else turns.push({ id: row.id, rows: [row] });
+  }
+  return turns;
+}
+
+/**
+ * The scroller reads *any* wheel as "the reader took over" and drops out of
+ * `following-bottom`; it only re-arms on a scroll event that lands within its 8px
+ * bottom threshold. A wheel that cannot move the viewport therefore kills the
+ * follow with no scroll event left to restore it — a fling that has already hit
+ * the bottom keeps firing momentum wheels against an unchanged `scrollTop`, and a
+ * wheel at an idle bottom does the same. The reply then streams off-screen while
+ * the reader believes they are still following it. Swallow those no-op wheels in
+ * the capture phase, ahead of the scroller's own handler, so the intent never
+ * registers. Nothing is `preventDefault`ed: the native scroll, the overscroll
+ * behaviour and every wheel that can actually move the viewport are untouched.
+ */
+const NO_ROOM_SLACK = 2;
+
+function useNoOpWheelGuard(): (node: HTMLDivElement | null) => void {
+  const detach = useRef<(() => void) | null>(null);
+  return useCallback((node: HTMLDivElement | null) => {
+    // React can hand a ref callback a new element without pairing it with a null
+    // first, and the scroller merges refs without honouring a returned cleanup, so
+    // re-attaching is what unwires the node we were watching before.
+    detach.current?.();
+    detach.current = null;
+    if (!node) return;
+    const onWheel = (event: WheelEvent): void => {
+      if (event.deltaY <= 0) return;
+      if (node.scrollHeight - node.clientHeight - node.scrollTop > NO_ROOM_SLACK) return;
+      event.stopPropagation();
+    };
+    node.addEventListener("wheel", onWheel, { capture: true, passive: true });
+    detach.current = () => node.removeEventListener("wheel", onWheel, { capture: true });
+  }, []);
 }
 
 export function MessageList({
@@ -269,12 +438,27 @@ export function MessageList({
 }): JSX.Element {
   // One row per user prompt and per assistant reply, not per engine message.
   const rows = useMemo(() => groupMessageRows(messages), [messages]);
+  // Retry/edit rewind the conversation, so they are only offered on the newest
+  // prompt: an older turn's actions would silently discard everything after it.
+  const lastUserRowId = useMemo(() => {
+    for (let index = rows.length - 1; index >= 0; index -= 1) {
+      if (rows[index].messages[0].role === "user") return rows[index].id;
+    }
+    return null;
+  }, [rows]);
+  const { markers, rowIds } = useMemo(() => turnMarkers(rows), [rows]);
+  // Turns scope the sticky prompt; the flat index still decides which row streams.
+  const turns = useMemo(() => groupTurns(rows), [rows]);
+  const rowIndex = useMemo(() => new Map(rows.map((row, index) => [row.id, index])), [rows]);
+  // A ref callback, not a ref object: the scroller only mounts once the thread has
+  // rows, which is long after an effect keyed on a ref object would have run.
+  const guardViewport = useNoOpWheelGuard();
 
   if (messages.length === 0 && loading) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 text-muted-foreground">
-        <Spinner className="size-4" />
-        <p className="text-[13px]">正在准备工作区…</p>
+      <div className="flex h-full flex-col items-center justify-center gap-4">
+        <FLoader className="size-12" />
+        <p className="text-[13px] text-muted-foreground">正在准备工作区…</p>
       </div>
     );
   }
@@ -289,33 +473,54 @@ export function MessageList({
   }
 
   return (
-    <MessageScrollerProvider>
-      <MessageScroller>
-        <MessageScrollerViewport className="scrollbar-thumb-scrollbar">
+    <MessageScrollerProvider autoScroll>
+      {/* Named container: the rail is only worth showing when the gutter beside the
+          message column can hold it. */}
+      <MessageScroller className="@container/thread">
+        <MessageScrollerViewport ref={guardViewport} className="scrollbar-thumb-scrollbar">
           <MessageScrollerContent className="mx-auto w-full max-w-3xl px-6 py-6">
-            <MessageGroup className="gap-5">
-              {rows.map((row, index) => (
-                <MessageScrollerItem
-                  key={row.id}
-                  id={row.id}
-                  scrollAnchor={index === rows.length - 1}
-                >
-                  <ChatMessageRow
-                    messages={row.messages}
-                    streaming={streaming && index === rows.length - 1 && row.messages[0].role === "assistant"}
-                    last={index === rows.length - 1}
-                    onRetry={onRetry}
-                    onEdit={onEdit}
-                    showThinking={showThinking}
-                    showTimestamp={showTimestamp}
-                  />
-                </MessageScrollerItem>
-              ))}
-            </MessageGroup>
+            {turns.map((turn) => (
+              <MessageGroup key={turn.id} className="gap-5">
+                {turn.rows.map((row) => {
+                  const index = rowIndex.get(row.id) ?? 0;
+                  const isUser = row.messages[0].role === "user";
+                  const amendable = row.id === lastUserRowId;
+                  return (
+                    <MessageScrollerItem
+                      key={row.id}
+                      id={row.id}
+                      messageId={row.id}
+                      className={
+                        // A prompt rises to the top edge and stays there while its own
+                        // reply is read; the next turn's prompt pushes it away. The
+                        // opaque background hides the reply sliding underneath, and
+                        // `content-visibility` would take the sticky element out of
+                        // the scroll flow.
+                        isUser
+                          ? "sticky top-0 z-10 bg-background pt-2 [content-visibility:visible]"
+                          : undefined
+                      }
+                    >
+                      <ChatMessageRow
+                        messages={row.messages}
+                        streaming={streaming && index === rows.length - 1 && !isUser}
+                        onRetry={amendable ? onRetry : undefined}
+                        onEdit={amendable ? onEdit : undefined}
+                        showThinking={showThinking}
+                        showTimestamp={showTimestamp}
+                      />
+                    </MessageScrollerItem>
+                  );
+                })}
+              </MessageGroup>
+            ))}
           </MessageScrollerContent>
         </MessageScrollerViewport>
+        {/* A single turn has nothing to navigate between. */}
+        {markers.length > 1 ? <TurnRail markers={markers} rowIds={rowIds} /> : null}
         <MessageScrollerButton />
       </MessageScroller>
+      <FollowLatest messages={messages} />
     </MessageScrollerProvider>
   );
 }

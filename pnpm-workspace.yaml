@@ -1,7 +1,29 @@
+# Keep the default virtual store: electron-builder's pnpm collector resolves each
+# dependency from the path `pnpm list` reports, and under `nodeLinker: hoisted`
+# pnpm still reports `.pnpm/...` paths that no longer exist, so every dependency
+# silently falls back to the hoisted top-level copy (e.g. pi-coding-agent gets
+# minimatch@3 instead of the @10 it imports).
+
+# pnpm 11 merges onlyBuiltDependencies into allowBuilds. Every dependency with a
+# build script must be listed or strictDepBuilds aborts the install.
 allowBuilds:
+  '@google/genai': false
   electron: true
+  electron-winstaller: false
   esbuild: true
+  koffi: false
   node-pty: true
-onlyBuiltDependencies:
-  - electron
-  - esbuild
+  protobufjs: false
+
+# Pin the pi runtime to the exact SDK version FastVibe ships so the host and any
+# extension loaded into it share one pi-tui/pi-ai instance.
+overrides:
+  '@earendil-works/pi-ai': 0.85.1
+  '@earendil-works/pi-coding-agent': 0.85.1
+  '@earendil-works/pi-tui': 0.85.1
+
+peerDependencyRules:
+  allowedVersions:
+    '@earendil-works/pi-ai': '0.85.1'
+    '@earendil-works/pi-coding-agent': '0.85.1'
+    '@earendil-works/pi-tui': '0.85.1'

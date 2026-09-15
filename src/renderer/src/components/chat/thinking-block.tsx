@@ -19,8 +19,8 @@ function lastLine(text: string): { key: string; text: string } | null {
   return null;
 }
 
-function secondsSince(startedAt: number): number {
-  return Math.max(1, Math.ceil((Date.now() - startedAt) / 1000));
+function secondsSince(startedAt: number, endedAt: number): number {
+  return Math.max(1, Math.ceil((endedAt - startedAt) / 1000));
 }
 
 /**
@@ -30,36 +30,39 @@ function secondsSince(startedAt: number): number {
  * 「正在思考」 and a rolling ticker of the newest line, so progress stays legible
  * without a wall of text. Once settled it reads 「思考 · 持续了 N 秒」 and the full
  * transcript stays one click away.
+ *
+ * The elapsed time is derived from the bounds Main measured (`startedAt` / `endedAt`)
+ * rather than counted here, so it survives a remount — session switch, `agent_end`
+ * reload, app restart — and an open block keeps counting from its real start.
  */
 export const ThinkingBlock = memo(function ThinkingBlock({
   thinking,
+  startedAt,
+  endedAt,
   active,
 }: {
   thinking: string;
+  startedAt?: number;
+  endedAt?: number;
   active: boolean;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
-  const [elapsed, setElapsed] = useState<number | null>(null);
-  const startedAt = useRef<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
   const bodyRef = useRef<HTMLDivElement>(null);
   const [mask, setMask] = useState({ top: false, bottom: false });
 
-  // Timing only: start on the first active render, freeze the total when it ends.
+  // Re-read the clock once a second while the block is open and on screen; a closed
+  // block is a function of its bounds and needs no timer. Gating on `active` also
+  // freezes a block whose end never arrived (a turn cut off mid-thought) instead of
+  // letting it tick up forever.
   useEffect(() => {
-    if (active) {
-      startedAt.current ??= Date.now();
-      setElapsed(secondsSince(startedAt.current));
-      const timer = window.setInterval(() => {
-        if (startedAt.current !== null) setElapsed(secondsSince(startedAt.current));
-      }, 1000);
-      return () => window.clearInterval(timer);
-    }
-    if (startedAt.current !== null) {
-      setElapsed(secondsSince(startedAt.current));
-      startedAt.current = null;
-    }
-    return undefined;
-  }, [active]);
+    if (!active || startedAt === undefined || endedAt !== undefined) return undefined;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [active, startedAt, endedAt]);
+
+  const elapsed = startedAt === undefined ? null : secondsSince(startedAt, endedAt ?? now);
 
   // Fold the transcript away when the user did not open it themselves.
   const interacted = useRef(false);

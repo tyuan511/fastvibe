@@ -5,6 +5,7 @@ import type {
   ConversationDeleteResult,
   ConversationOpenResult,
   ConversationReadyEvent,
+  DirEntry,
   FastVibeModel,
   SessionStats,
   EngineSessionState,
@@ -24,6 +25,8 @@ import type {
   MultiRunRequest,
   MultiRunResult,
   ExtensionInfo,
+  ExtensionPackage,
+  FileIconMapping,
   McpServerConfig,
   McpServerStatus,
   SkillDraft,
@@ -51,6 +54,14 @@ const api = {
       ipcRenderer.invoke(Ipc.engineCompact, { customInstructions }),
     getCommands: (): Promise<SlashCommand[]> => ipcRenderer.invoke(Ipc.engineGetCommands),
     getExtensions: (): Promise<ExtensionInfo[]> => ipcRenderer.invoke(Ipc.engineGetExtensions),
+    listExtensionPackages: (): Promise<ExtensionPackage[]> =>
+      ipcRenderer.invoke(Ipc.engineListExtensionPackages),
+    installExtensionPackage: (source: string): Promise<ExtensionPackage[]> =>
+      ipcRenderer.invoke(Ipc.engineInstallExtensionPackage, { source }),
+    removeExtensionPackage: (source: string): Promise<ExtensionPackage[]> =>
+      ipcRenderer.invoke(Ipc.engineRemoveExtensionPackage, { source }),
+    listMarketPackages: (query?: import("@shared/types").MarketPackageQuery): Promise<import("@shared/types").MarketPackagePage> =>
+      ipcRenderer.invoke(Ipc.engineListMarketPackages, query),
     listMcpServers: (): Promise<McpServerStatus[]> => ipcRenderer.invoke(Ipc.engineListMcpServers),
     saveMcpServers: (configs: McpServerConfig[]): Promise<McpServerStatus[]> => ipcRenderer.invoke(Ipc.engineSaveMcpServers, { configs }),
     listSkills: (): Promise<SkillInfo[]> => ipcRenderer.invoke(Ipc.engineListSkills),
@@ -65,9 +76,12 @@ const api = {
       confirmed?: boolean;
       value?: string;
       cancelled?: boolean;
+      /** Answers for a `questions` prompt, positionally matching its question list. */
+      answers?: Array<string | null>;
     }): Promise<void> => ipcRenderer.invoke(Ipc.enginePermissionRespond, payload),
     newSession: (): Promise<void> => ipcRenderer.invoke(Ipc.engineNewSession),
     getState: (): Promise<EngineSessionState> => ipcRenderer.invoke(Ipc.engineGetState),
+    getRunning: (): Promise<string[]> => ipcRenderer.invoke(Ipc.engineGetRunning),
     getModels: (): Promise<FastVibeModel[]> => ipcRenderer.invoke(Ipc.engineGetModels),
     setModel: (provider: string, modelId: string): Promise<EngineSessionState> =>
       ipcRenderer.invoke(Ipc.engineSetModel, { provider, modelId }),
@@ -168,6 +182,8 @@ const api = {
       ipcRenderer.invoke(Ipc.workspacePick),
     reveal: (cwd: string): Promise<void> => ipcRenderer.invoke(Ipc.workspaceReveal, { cwd }),
     preview: (path: string): Promise<FilePreview> => ipcRenderer.invoke(Ipc.workspacePreview, { path }),
+    fileIcons: (): Promise<FileIconMapping> => ipcRenderer.invoke(Ipc.workspaceFileIcons),
+    readDir: (path: string): Promise<DirEntry[]> => ipcRenderer.invoke(Ipc.workspaceReadDir, { path }),
     gitStatus: (cwd: string): Promise<GitStatus> => ipcRenderer.invoke(Ipc.workspaceGitStatus, { cwd }),
     openTerminal: (cwd: string): Promise<void> => ipcRenderer.invoke(Ipc.workspaceOpenTerminal, { cwd }),
     gitBranches: (cwd: string): Promise<GitBranch[]> => ipcRenderer.invoke(Ipc.workspaceGitBranches, { cwd }),

@@ -58,7 +58,9 @@ async function main() {
 
   const { models, aliases } = buildIndex(catalog);
   const index = {
-    v: 1,
+    // 1 = context/output/input/efforts, 2 = + cost, 3 = + cost tiers,
+    // 4 = dropped the feature bitmask the UI no longer records
+    v: 4,
     t: Date.now(),
     s: SOURCE_URL,
     c: models.length,
@@ -126,6 +128,7 @@ function toEntry(id, model) {
     : model.reasoning
       ? ["low", "medium", "high"]
       : null;
+  const cost = toCost(model.cost);
   const tuple = [
     id,
     model.name ?? id,
@@ -133,21 +136,80 @@ function toEntry(id, model) {
     positive(model.limit?.output),
     mask,
     levels && levels.length > 0 ? levels : null,
+    cost,
   ];
-  return { id, name: model.name ?? id, tuple, scoreValue: scoreOf(id, model, mask, levels) };
+  return { id, name: model.name ?? id, tuple, scoreValue: scoreOf(id, model, mask, levels, cost) };
+}
+
+/**
+ * Per-million-token prices as `[input, output, cacheRead, cacheWrite, tiers?]`, or null
+ * when the catalog has no pricing (or only zeros, which carries no information).
+ *
+ * The first four values are the entry price — what a request at or below the first
+ * threshold pays. `tiers` is the long-context ladder, `[[over, input, output,
+ * cacheRead, cacheWrite], …]` ascending by `over`, and is omitted for the majority of
+ * models that charge one flat rate.
+ */
+function toCost(cost) {
+  if (!cost || typeof cost !== "object") return null;
+  const base = [cost.input, cost.output, cost.cache_read, cost.cache_write].map(nonNegative);
+  if (!base.some((value) => value > 0)) return null;
+  const tiers = toTiers(cost, base);
+  return tiers.length > 0 ? [...base, tiers] : base;
+}
+
+/**
+ * The context ladder, normalised to full four-field rows. A tier that omits a field
+ * (e.g. `cache_write` on an Anthropic model) keeps the entry price for it rather than
+ * reading as free. `context_over_200k` is the older single-threshold spelling of the
+ * same thing and is only consulted for models the catalog has not moved to `tiers`.
+ */
+function toTiers(cost, base) {
+  const rows = Array.isArray(cost.tiers)
+    ? cost.tiers.map((tier) => ({ over: positive(tier?.tier?.size), price: tier }))
+    : cost.context_over_200k
+      ? [{ over: 200_000, price: cost.context_over_200k }]
+      : [];
+  return rows
+    .filter((row) => row.over > 0 && row.price && typeof row.price === "object")
+    .map((row) => [
+      row.over,
+      priceOr(row.price.input, base[0]),
+      priceOr(row.price.output, base[1]),
+      priceOr(row.price.cache_read, base[2]),
+      priceOr(row.price.cache_write, base[3]),
+    ])
+    .sort((a, b) => a[0] - b[0]);
+}
+
+function priceOr(value, fallback) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : fallback;
 }
 
 function score(entry) {
   return entry.scoreValue;
 }
 
-function scoreOf(id, model, mask, levels) {
+function scoreOf(id, model, mask, levels, cost) {
   let value = 0;
   if (levels && levels.length > 0) value += 8;
   if (model.reasoning === true) value += 4;
   value += popcount(mask);
   if (positive(model.limit?.context) >= 200_000) value += 1;
-  return value;
+  // The catalog lists the same model under many resellers. At equal capability,
+  // prefer the entry whose price list is complete, since that is what the UI shows.
+  // `cost` may carry the tier ladder in slot 4, which must not count as a price.
+  const prices = cost ? cost.slice(0, 4) : null;
+  if (prices && prices.every((field) => field > 0)) value += 1;
+  // Capability is weighted double so a declared context ladder can only break an exact
+  // tie. The vendor's own entry is the one that prices long context (its resellers
+  // mostly copy the base rate and drop the ladder), and without it nothing can price a
+  // request above the threshold.
+  return value * 2 + (hasTierLadder(cost) ? 1 : 0);
+}
+
+function hasTierLadder(cost) {
+  return Array.isArray(cost) && Array.isArray(cost[4]) && cost[4].length > 0;
 }
 
 function aliasKeys(id, name) {
@@ -178,6 +240,10 @@ function stripDate(key) {
 
 function positive(value) {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+function nonNegative(value) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
 }
 
 function popcount(value) {

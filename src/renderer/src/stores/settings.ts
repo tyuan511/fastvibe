@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { PermissionMode, QueueBehavior, RunMode, ThinkingLevel } from "@shared/types";
+import { THINKING_LEVELS, type EngineModel, type PermissionMode, type QueueBehavior, type ThinkingLevel } from "@shared/types";
 import {
   DEFAULT_DARK_THEME,
   DEFAULT_LIGHT_THEME,
@@ -13,7 +13,6 @@ import {
 const KEY = "fastvibe.settings";
 
 export type AppSettings = {
-  runMode: RunMode;
   permissionMode: PermissionMode;
   thinkingLevel: ThinkingLevel | "auto";
   queueBehavior: QueueBehavior;
@@ -23,6 +22,13 @@ export type AppSettings = {
   showTimestamps: boolean;
   compactCode: boolean;
   sendOnEnter: boolean;
+  /**
+   * Provider/model a brand-new conversation starts on. Persisted like every other
+   * preference and read by the engine when it creates a session — the SDK's own
+   * `defaultProvider`/`defaultModel` keys cannot hold it, because `setModel`
+   * rewrites them to the last used model on every switch.
+   */
+  defaultModel?: EngineModel;
   /** Whether the active theme follows the OS or is pinned light/dark. */
   themeMode: ThemeMode;
   /** Theme used while in light mode. */
@@ -34,12 +40,24 @@ export type AppSettings = {
    * install can still migrate its localStorage-only value.
    */
   sidebarWidth?: number;
+  /**
+   * Whether the workspace sidebar is collapsed. Set when the user drags the
+   * splitter below the minimum width (or presses the header toggle), so the
+   * collapsed state survives a restart.
+   */
+  sidebarCollapsed?: boolean;
   /** Right-hand side pane width in px; same lifecycle as `sidebarWidth`. */
   sidePaneWidth?: number;
+  /**
+   * Conversations the user archived, in archive order. Archived chats are hidden
+   * from the sidebar and managed from Settings → 归档对话. Persisted with the other
+   * preferences so the list survives the dev/packaged origin switch; older builds
+   * kept it in localStorage and are migrated once in `stores/archive.ts`.
+   */
+  archivedConversations?: string[];
 };
 
 const DEFAULTS: AppSettings = {
-  runMode: "agent",
   permissionMode: "full",
   thinkingLevel: "auto",
   queueBehavior: "followUp",
@@ -60,13 +78,33 @@ function sanitize(parsed: Partial<AppSettings>): Partial<AppSettings> {
   if (!isThemeMode(next.themeMode)) delete next.themeMode;
   if (!isThemeId(next.lightTheme)) delete next.lightTheme;
   if (!isThemeId(next.darkTheme)) delete next.darkTheme;
+  if (!isThinkingLevel(next.thinkingLevel)) delete next.thinkingLevel;
+  if (!isEngineModel(next.defaultModel)) delete next.defaultModel;
   if (!isFiniteNumber(next.sidebarWidth)) delete next.sidebarWidth;
+  if (typeof next.sidebarCollapsed !== "boolean") delete next.sidebarCollapsed;
   if (!isFiniteNumber(next.sidePaneWidth)) delete next.sidePaneWidth;
+  if (!isIdList(next.archivedConversations)) delete next.archivedConversations;
   return next;
 }
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
+}
+
+/** A level the engine cannot request would be clamped to `off`, so it never persists. */
+function isThinkingLevel(value: unknown): value is ThinkingLevel | "auto" {
+  return value === "auto" || (typeof value === "string" && (THINKING_LEVELS as readonly string[]).includes(value));
+}
+
+function isIdList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+/** A half-written `defaultModel` must never reach the engine's model lookup. */
+function isEngineModel(value: unknown): value is EngineModel {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Partial<EngineModel>;
+  return Boolean(candidate.provider) && Boolean(candidate.id);
 }
 
 function peekLocal(): Partial<AppSettings> {
