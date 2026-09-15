@@ -17,7 +17,14 @@ files:
   - "!**/*.map"
   # Non-runtime files inside production dependencies. Brace form is what
   # electron-builder's minimatch actually excludes.
-  - "!**/node_modules/**/{docs,doc,example,examples,test,tests,__tests__,powered-test,coverage,.github}{,/**/*}"
+  #
+  # These globs are anchored to the *package root* on purpose: an unanchored
+  # `**/node_modules/**/doc` also strips nested runtime directories, and `yaml`
+  # ships its real code in `dist/doc` (`composer.js` requires `../doc/directives.js`),
+  # which crashed the packaged app on launch. Package-root docs/tests/examples are
+  # still dropped.
+  - "!**/node_modules/*/{docs,doc,example,examples,test,tests,__tests__,powered-test,coverage,.github}{,/**/*}"
+  - "!**/node_modules/@*/*/{docs,doc,example,examples,test,tests,__tests__,powered-test,coverage,.github}{,/**/*}"
   - "!**/node_modules/**/*.{test,spec}.{js,cjs,mjs,ts}"
   - "!**/node_modules/node-pty/{src,deps,scripts,third_party}{,/**/*}"
   - "!**/node_modules/koffi/{src,doc,vendor}{,/**/*}"
