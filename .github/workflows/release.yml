@@ -68,7 +68,11 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           draft: false
-          generate_release_notes: true
+          # Only one matrix leg may generate the notes. `action-gh-release` appends
+          # freshly generated notes to an existing release's body, so three legs
+          # publishing the same tag stack the changelog three times over. The other
+          # legs pass no body and keep whatever is already there.
+          generate_release_notes: ${{ matrix.platform == 'mac' }}
           fail_on_unmatched_files: false
           files: |
             release/*.dmg
