@@ -344,6 +344,8 @@ export type BrowserProfileInfo = {
  * `ref` is stamped by a snapshot (`data-fv-ref`), `newTab` forces a second tab
  * instead of navigating the one on screen, and `timeoutMs` is the main-process
  * bridge's budget for the whole round trip.
+ * `conversationId` is stamped by the host so a background chat's `browser_open`
+ * lands in that chat's side pane instead of hijacking the one on screen.
  */
 export type BrowserRequest = {
   action: string;
@@ -356,6 +358,7 @@ export type BrowserRequest = {
   script?: string;
   newTab?: boolean;
   timeoutMs?: number;
+  conversationId?: string;
 };
 
 export type BrowserImportResult = {
@@ -494,7 +497,7 @@ export type ProviderModel = {
 };
 
 /** Streaming APIs offered in settings; values match pi-coding-agent's `api` field. */
-export const PROVIDER_APIS = ["openai-completions", "openai-responses", "anthropic-messages"] as const;
+export const PROVIDER_APIS = ["openai-completions", "openai-responses", "anthropic-messages", "google-generative-ai"] as const;
 
 export type ProviderApi = (typeof PROVIDER_APIS)[number];
 
@@ -647,6 +650,11 @@ export type Conversation = {
   /** Last mutation time (title, project, session file, …). Not used for ordering. */
   updatedAt: number;
   preview?: string;
+  /**
+   * Set when the chat was imported from another agent, so re-importing the same
+   * foreign session is recognisable instead of silently duplicating it.
+   */
+  importedFrom?: { source: ImportSourceId; sourceId: string };
   worktree?: { path: string; branch: string };
   /** Hidden from the left sidebar; lives in the right side pane. */
   kind?: "side-chat";
@@ -739,4 +747,69 @@ export type UsageStats = {
   models: UsageModelBreakdown[];
   /** Session transcripts that contributed to the totals. */
   sessions: number;
+};
+
+/**
+ * The other agents FastVibe can pull sessions from. Deliberately a closed list:
+ * each id has a hand-written adapter, and the 导入 pane names them by product
+ * (Claude Code, Codex, …) rather than by file format.
+ */
+export type ImportSourceId = "claude-code" | "codex" | "opencode" | "pi";
+
+/** What one adapter found on disk. Absent/empty sources still render, with a reason. */
+export type ImportSourceStatus = {
+  id: ImportSourceId;
+  /** Product name, shown next to the brand mark. */
+  name: string;
+  /** Where sessions were looked for, so an empty row can say why. */
+  root: string;
+  sessionCount: number;
+  /** Newest session timestamp in the source, if any. */
+  latestAt?: number;
+  /** Set when the source cannot be read at all (not installed, unreadable). */
+  reason?: string;
+};
+
+/** One importable session, as listed in the picker. */
+export type ImportCandidate = {
+  /** Id inside the source; with `source` it is the re-import key. */
+  id: string;
+  source: ImportSourceId;
+  title: string;
+  /** Original working directory, which may no longer exist. */
+  cwd?: string;
+  createdAt: number;
+  updatedAt: number;
+  /** Messages the session would import, when the source can say so cheaply. Absent for
+   * Codex, where counting means parsing 1000+ rollouts. */
+  messageCount?: number;
+  /** Transcript size on disk. Absent for opencode, whose payload size cannot be summed
+   * without reading every part blob — a cost the settings list must not pay. */
+  bytes?: number;
+  /** Already imported into FastVibe once. */
+  imported: boolean;
+  /** Non-fatal caveat, e.g. 已跳过子 agent 轨迹. */
+  note?: string;
+};
+
+/** Outcome for a single session. Failures are per-session, never all-or-nothing. */
+export type ImportOutcome = {
+  id: string;
+  title: string;
+  ok: boolean;
+  /** Written user/assistant/toolResult entries. */
+  messages?: number;
+  /** What the adapter dropped, for the report. */
+  skipped?: string[];
+  /** Where the session landed: the original project, or the scratch workspace. */
+  cwd?: string;
+  conversationId?: string;
+  error?: string;
+};
+
+export type ImportRunResult = {
+  source: ImportSourceId;
+  outcomes: ImportOutcome[];
+  /** The refreshed catalog, so the shell's sidebar picks the new chats up. */
+  snapshot: WorkspaceSnapshot;
 };

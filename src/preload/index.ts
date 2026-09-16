@@ -27,6 +27,10 @@ import type {
   ExtensionInfo,
   ExtensionPackage,
   FileIconMapping,
+  ImportCandidate,
+  ImportRunResult,
+  ImportSourceId,
+  ImportSourceStatus,
   McpServerConfig,
   McpServerStatus,
   SkillDraft,
@@ -114,6 +118,12 @@ const api = {
     setFollowUpMode: (mode: "all" | "one-at-a-time"): Promise<EngineSessionState> =>
       ipcRenderer.invoke(Ipc.engineSetFollowUp, { mode }),
     exportHtml: (): Promise<string | undefined> => ipcRenderer.invoke(Ipc.engineExportHtml),
+    /** 设置 → 导入: the other agents on this machine and their sessions. */
+    importSources: (): Promise<ImportSourceStatus[]> => ipcRenderer.invoke(Ipc.engineImportSources),
+    importCandidates: (source: ImportSourceId): Promise<ImportCandidate[]> =>
+      ipcRenderer.invoke(Ipc.engineImportCandidates, { source }),
+    importSessions: (source: ImportSourceId, ids: string[]): Promise<ImportRunResult> =>
+      ipcRenderer.invoke(Ipc.engineImportSessions, { source, ids }),
     promptConversation: (id: string, message: string): Promise<void> =>
       ipcRenderer.invoke(Ipc.enginePromptConversation, { id, message }),
     getConversationMessages: (id: string): Promise<ChatMessage[]> =>
@@ -142,8 +152,8 @@ const api = {
       apiKey: string;
       models: ProviderModel[];
     }): Promise<ProviderConfig[]> => ipcRenderer.invoke(Ipc.providersAddNative, payload),
-    fetch: (baseUrl: string, apiKey: string): Promise<ProviderModel[]> =>
-      ipcRenderer.invoke(Ipc.providersFetch, { baseUrl, apiKey }),
+    fetch: (baseUrl: string, apiKey: string, api?: string): Promise<ProviderModel[]> =>
+      ipcRenderer.invoke(Ipc.providersFetch, { baseUrl, apiKey, api }),
     saveFastVibe: (apiKey: string, models: ProviderModel[]): Promise<ProviderConfig[]> =>
       ipcRenderer.invoke(Ipc.providersSaveFastVibe, { apiKey, models }),
     add: (payload: {

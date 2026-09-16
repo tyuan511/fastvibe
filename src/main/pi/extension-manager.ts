@@ -7,8 +7,8 @@ import type { ExtensionPackage } from "@shared/types";
 /**
  * FastVibe's own extensions. They are plain files shipped outside the asar
  * archive (`resources/extensions`, copied to `resourcesPath/extensions`) and
- * loaded through the SDK's jiti loader, so `/plan`, `/goal`, the todo tool
- * and auto session titles work on a fresh install with no network and no npm package.
+ * loaded through the SDK's jiti loader, so `/plan`, `/goal`, the todo tool,
+ * web search and auto session titles work on a fresh install with no network and no npm package.
  */
 export const BUILTIN_EXTENSIONS: Array<{ source: string; file: string }> = [
   { source: "fastvibe:plan", file: "plan.ts" },
@@ -17,6 +17,7 @@ export const BUILTIN_EXTENSIONS: Array<{ source: string; file: string }> = [
   { source: "fastvibe:permission-sandbox", file: "permission-sandbox.ts" },
   { source: "fastvibe:session-title", file: "session-title.ts" },
   { source: "fastvibe:browser-use", file: "browser-use.ts" },
+  { source: "fastvibe:web-search", file: "web-search.ts" },
   { source: "fastvibe:subagent-team", file: "subagent/index.ts" },
 ];
 

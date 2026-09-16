@@ -144,7 +144,7 @@ history has nothing to fall back to — a reload on `/settings/providers` would 
   back/forward buttons walk this as real HashRouter history (mouse side buttons too).
 - `#/settings/<section>` — a settings pane, rendered **over** the shell so app state
   survives. Sections come from `SETTINGS_SECTIONS` in `settings-dialog.tsx`
-  (currently `general | shortcuts | archived | usage | providers | mcp | skills | extensions | about`);
+  (currently `general | shortcuts | archived | usage | providers | mcp | skills | extensions | import | about`);
   `App.tsx` derives the valid set from that export, so adding a pane needs no routing change.
   Section switches `replace`; opening settings pushes, so back returns to the chat.
 - Unknown or missing sections normalise to `#/settings/general` via a redirect effect
@@ -254,9 +254,9 @@ engine is gone because the SDK never read them.
 ## Plugins & extensions
 
 FastVibe hosts pi extensions (the SDK's plugin system) and bridges their
-terminal-only surface onto the GUI. Seven **built-in** extensions ship with the app
+terminal-only surface onto the GUI. Eight **built-in** extensions ship with the app
 (`resources/extensions/plan.ts`, `goal.ts`, `todo.ts`, `permission-sandbox.ts`, `session-title.ts`,
-`browser-use.ts`, `subagent/index.ts`); anything else
+`browser-use.ts`, `web-search.ts`, `subagent/index.ts`); anything else
 the user installs at runtime via 设置 → 插件, which writes to the isolated `agentDir`
 (`ExtensionManager` → SDK `DefaultPackageManager`), never `~/.pi`.
 
@@ -418,6 +418,12 @@ the user installs at runtime via 设置 → 插件, which writes to the isolated
     dropped from the registry and its pane tab closed — so the model's next `browser_open` mints a
     fresh webview rather than retrying a corpse. `tabId` is optional everywhere: an omitted id
     means the current tab, and a stale id with exactly one tab open is adopted with a `note`.
+- **Web search** — `web-search.ts` registers a client `web_search` tool only while the
+  session model speaks `openai-responses`. Execute opens a *side* `{baseUrl}/responses`
+  request with the hosted `{ type: "web_search" }` tool (auth from `modelRegistry`); it is
+  **not** injected into the main conversation, because pi-ai cannot parse `web_search_call`.
+  Completions / Messages models drop it from the active set. The sandbox treats it as
+  network (`ask` confirms, `smart` does not). Do not vendor `pi-web-search`.
 - **Loading** — `src/main/pi/extension-manager.ts` resolves the built-in entry
   points (from `resources/extensions` in dev, `resourcesPath/extensions` packaged;
   `electron-builder.yml` copies them via `extraResources`) and `#createSession`
@@ -522,6 +528,55 @@ pnpm shadcn add <component> -y
   `extraResources`. If the snapshot is missing, models fall back to defaults
   (128K context / 8192 output / text-only) and the settings About page shows it as missing.
 - Run `pnpm sync:models -- --force` before a release to refresh the snapshot.
+
+## 从其他 Agent 导入（设置 → 导入）
+
+设置 → 导入 lists the sibling coding agents on this machine — **pi coding agent, Claude Code,
+Codex, opencode** — as four rows (brand mark, name, an 导入 button). Picking a row opens a
+multi-select picker of that agent's sessions; nothing is imported until the user confirms.
+`docs/import-from-other-agents.md` is the format dossier behind every adapter.
+
+- **One adapter per source, one writer for all of them** (`src/main/engine/import/`):
+  `sources/*.ts` translate a foreign store into the intermediate form in `types.ts` and stop;
+  `writer.ts` is the only place that knows the pi v3 transcript contract, and
+  `runner.ts` drives scan → read → write → register. Adding an agent means one adapter file
+  plus a line in `adapters.ts` — nothing else in the app learns how many sources exist.
+- **The writer is where the contract lives, and it is not negotiable.** The first line must
+  be the `session` header with `version: 3` (otherwise the SDK rejects the file, or a
+  migration pass rewrites every entry id); entries form a linear `parentId` chain in file
+  order, because the reader takes the *last* entry as the leaf; and a tool result is written
+  **immediately after** the assistant that made the call. That last one is not cosmetic: the
+  first converter appended results at the end of the file, the SDK still built a context with
+  no errors, and the failure only appeared when the user continued the chat and the provider
+  rejected a `tool_use` with no `tool_result`. A call with no recorded output gets a
+  synthesised error result for the same reason. Foreign thinking blocks are written **without**
+  their signature — replaying another provider's signature is rejected, and an unsigned
+  thinking block is what makes pi fall back to plain text.
+- **Import copies, never links.** A deleted conversation unlinks its `sessionFile`, so a chat
+  pointing at `~/.claude` would destroy the user's real data. Every foreign root is opened
+  read-only (Codex/opencode SQLite via `node:sqlite` `{ readOnly: true }`; the opencode DB is
+  copied aside only when a live WAL refuses the read) and each session is converted into
+  FastVibe's own `runtime/engine/agent/sessions`.
+- **Candidates are only as expensive as they must be.** The picker must open instantly, so
+  `importCandidates` skips what it cannot get cheaply: Codex leaves `messageCount` undefined
+  rather than counting 1000+ rollouts (that alone cost 4.5s), and opencode reports a message
+  count instead of summing `LENGTH(data)` over 81k part blobs (2.6s). Codex is enumerated from
+  `state_*.sqlite:threads`, opencode from its own DB, the other two by directory listing.
+- **Per-session outcomes, never all-or-nothing.** These stores are full of pruned rollouts and
+  half-written files, so a failure is collected and shown as a reason next to that row. The
+  report also lists what a conversion dropped (injected context, subagent sidechains,
+  compaction markers — never written as real `compaction` entries, which would hide earlier
+  messages from both the model and the thread).
+- **The catalog write is flushed before success is reported.** `ConversationCatalog` coalesces
+  writes on a 40 ms debounce, so `importSessions` calls `flush()` once at the end — after the
+  pane says 已导入, the chats survive a crash.
+- **`importedFrom: { source, sourceId }`** on the `Conversation` is the re-import key: the
+  picker marks sessions already taken, and the same session imported twice is visible as such
+  rather than silently duplicated. Imported chats are registered **not activated**
+  (`activate: false`) so a twelve-session import does not walk the user through twelve tabs,
+  and `titleManual` protects the name that came from the other agent.
+- **Icons** are the four brands from LobeHub (`components/agent-brand-icon.tsx`), inlined as
+  `currentColor` paths rather than `<img>` so they follow the active theme.
 
 ## Usage statistics (使用统计)
 

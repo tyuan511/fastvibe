@@ -1,8 +1,10 @@
-import type { ChatMessage, ConversationOpenResult, EngineStatus, WorkspaceSnapshot } from "@shared/types";
+import type { ChatMessage, ConversationOpenResult, EngineStatus, ImportSourceId, WorkspaceSnapshot } from "@shared/types";
 import type { AppInfo, GitStatus } from "@shared/ipc";
 import {
   COMMANDS,
   CONVERSATIONS,
+  IMPORT_CANDIDATES,
+  IMPORT_SOURCES,
   INSTALLED_PACKAGES,
   MARKET_PACKAGES,
   MCP_SERVERS,
@@ -198,6 +200,25 @@ const api = {
     createSkill: async () => SKILLS,
     importSkill: async () => SKILLS,
     removeSkill: async () => SKILLS,
+    importSources: async () => IMPORT_SOURCES,
+    importCandidates: async (source: ImportSourceId) =>
+      IMPORT_CANDIDATES.map((candidate) => ({ ...candidate, source })),
+    importSessions: async (_source: ImportSourceId, ids: string[]) => ({
+      source: "claude-code" as ImportSourceId,
+      outcomes: ids.map((id) => {
+        const candidate = IMPORT_CANDIDATES.find((item) => item.id === id);
+        return {
+          id,
+          title: candidate?.title ?? id,
+          ok: true,
+          messages: (candidate?.messageCount ?? 0) * 2,
+          skipped: ["已跳过 4 条子 agent 消息", "已跳过 2 条系统注入消息"],
+          cwd: candidate?.cwd,
+          conversationId: `imported-${id}`,
+        };
+      }),
+      snapshot: { projects: PROJECTS, conversations: CONVERSATIONS, activeId: CONVERSATIONS[0]?.id },
+    }),
     getSubagents: async () => [],
     getSubagentMessages: async (): Promise<ChatMessage[]> => [],
     respondPermission: async () => undefined,
@@ -402,3 +423,4 @@ if (theme === "light" || theme === "dark") {
     });
   }, 200);
 }
+

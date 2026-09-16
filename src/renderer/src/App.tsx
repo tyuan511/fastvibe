@@ -1535,6 +1535,7 @@ export function App(): JSX.Element {
         section={settingsSection}
         models={models}
         onDeleteConversations={handleDeleteConversations}
+        onImported={(snapshot) => applySnapshot(snapshot)}
         onProvidersChanged={() => {
           void window.fastvibe.engine.getModels().then(setModels).catch(() => undefined);
           void window.fastvibe.engine.getState().then(setSession).catch(() => undefined);

@@ -1,7 +1,7 @@
 import { useEffect, useState, type JSX, type ReactNode } from "react";
 import { useNavigate } from "react-router";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Analytics01Icon, Archive04Icon, ArrowLeft01Icon, BoxesIcon, Folder01Icon, InformationCircleIcon, KeyboardIcon, Plug01Icon, PuzzleIcon, RotateCcwIcon, Settings02Icon, SparklesIcon } from "@hugeicons/core-free-icons";
+import { Analytics01Icon, Archive04Icon, ArrowLeft01Icon, BoxesIcon, Folder01Icon, ImportIcon, InformationCircleIcon, KeyboardIcon, Plug01Icon, PuzzleIcon, RotateCcwIcon, Settings02Icon, SparklesIcon } from "@hugeicons/core-free-icons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import type { AppInfo } from "@shared/ipc";
-import type { EngineModel, FastVibeModel, PermissionMode } from "@shared/types";
+import type { EngineModel, FastVibeModel, ImportRunResult, PermissionMode, WorkspaceSnapshot } from "@shared/types";
 import { useSettingsStore } from "@/stores/settings";
 import { PERMISSION_DESCRIPTIONS, PERMISSION_MODE_ITEMS, PERMISSION_MODES } from "@/lib/permission-modes";
 import type { ThemeMode } from "@/lib/themes";
@@ -24,6 +24,7 @@ import { readSidebarWidth } from "@/lib/sidebar-width";
 import { cn } from "@/lib/utils";
 import { ProvidersSettings } from "./providers-settings";
 import { ArchivedSettings, type DeleteConversationsResult } from "./archived-settings";
+import { ImportSettings } from "./import-settings";
 import { DefaultModelSelect } from "./default-model-select";
 import { ExtensionsSettings } from "./extensions-settings";
 import { McpSettings } from "./mcp-settings";
@@ -47,7 +48,7 @@ function uiFontSizeValues(): number[] {
 }
 for (const size of uiFontSizeValues()) UI_FONT_SIZE_ITEMS[String(size)] = `${size}px`;
 
-export type SectionId = "general" | "shortcuts" | "archived" | "usage" | "providers" | "mcp" | "skills" | "extensions" | "about";
+export type SectionId = "general" | "shortcuts" | "archived" | "usage" | "providers" | "mcp" | "skills" | "extensions" | "import" | "about";
 
 /** Also drives the router's /settings/:section validation. */
 export const SETTINGS_SECTIONS: Array<{
@@ -70,6 +71,7 @@ export const SETTINGS_SECTIONS: Array<{
       { id: "mcp", label: "MCP 工具", icon: <HugeiconsIcon strokeWidth={2} icon={Plug01Icon} /> },
       { id: "skills", label: "技能", icon: <HugeiconsIcon strokeWidth={2} icon={SparklesIcon} /> },
       { id: "extensions", label: "插件", icon: <HugeiconsIcon strokeWidth={2} icon={PuzzleIcon} /> },
+      { id: "import", label: "导入", icon: <HugeiconsIcon strokeWidth={2} icon={ImportIcon} /> },
     ],
   },
   {
@@ -124,6 +126,7 @@ export function SettingsDialog({
   onOpenChange,
   onProvidersChanged,
   onDeleteConversations,
+  onImported,
   models = [],
   section: controlledSection,
 }: {
@@ -132,6 +135,8 @@ export function SettingsDialog({
   onProvidersChanged?: () => void;
   /** Deletes conversations for Settings → 归档对话, then re-syncs the shell. */
   onDeleteConversations?: (ids: string[]) => Promise<DeleteConversationsResult>;
+  /** Sessions imported in Settings → 导入, so the sidebar picks the new chats up. */
+  onImported?: (snapshot: WorkspaceSnapshot, result: ImportRunResult) => void;
   /** Model catalog, for the 默认模型 picker. */
   models?: FastVibeModel[];
   /** Active sub-route, e.g. "providers". */
@@ -447,6 +452,7 @@ export function SettingsDialog({
           {section === "mcp" ? <McpSettings /> : null}
           {section === "skills" ? <SkillsSettings /> : null}
           {section === "extensions" ? <ExtensionsSettings /> : null}
+          {section === "import" ? <ImportSettings onImported={onImported} /> : null}
 
           {section === "about" ? (
             <div className="space-y-6">

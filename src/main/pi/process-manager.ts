@@ -47,10 +47,20 @@ import type {
   MessagePart,
   NativeProviderConfig,
   PermissionQuestion,
+  ImportCandidate,
+  ImportRunResult,
+  ImportSourceId,
+  ImportSourceStatus,
 } from "@shared/types";
 import { parseCompactCommand } from "@shared/slash";
 import { ConversationCatalog } from "../engine/conversation-catalog";
 import { searchConversationContent } from "../engine/conversation-search";
+import {
+  importSessions as runImport,
+  keyOf,
+  scanImportCandidates,
+  scanImportSources,
+} from "../engine/import/runner";
 import { readAutoCompact, readDefaultModel } from "../engine/app-settings";
 import { mapEngineMessages } from "../engine/map-messages";
 import { ReasoningStore } from "../engine/reasoning-store";
@@ -79,6 +89,7 @@ import { getFastVibePaths, type FastVibePaths } from "../engine/paths";
 import { McpManager, type McpServerConfig, type McpServerStatus } from "./mcp-manager";
 import { SkillManager } from "./skill-manager";
 import { builtinExtensionFile, builtinExtensionPaths, builtinSkillPaths, ExtensionManager } from "./extension-manager";
+import { bindBrowserConversation } from "./browser-bridge";
 import { createTuiWidget, renderExtensionMessage, renderTuiComponent, type TuiComponent } from "./tui-bridge";
 
 type ManagedSession = { conversationId: string; cwd: string; session: AgentSession; extensions: LoadExtensionsResult; unsubscribe: () => void };
@@ -687,6 +698,33 @@ export class PiProcessManager {
   async createSkill(draft: SkillDraft): Promise<SkillInfo[]> { const skills = await this.#skills.create(this.#cwd, draft); await this.#reloadSkills(); return skills; }
   async importSkill(sourceDir: string): Promise<SkillInfo[]> { const skills = await this.#skills.importFrom(this.#cwd, sourceDir); await this.#reloadSkills(); return skills; }
   async removeSkill(name: string): Promise<SkillInfo[]> { const skills = await this.#skills.remove(this.#cwd, name); await this.#reloadSkills(); return skills; }
+
+  /**
+   * Other agents on this machine that FastVibe can pull sessions from (设置 → 导入).
+   *
+   * Scanning happens per pane open and is read-only throughout: the other agents' data
+   * directories are never written to, and every import is a *copy* of the converted
+   * transcript into FastVibe's own sessions directory — see
+   * `docs/import-from-other-agents.md`.
+   */
+  async importSources(): Promise<ImportSourceStatus[]> { return scanImportSources(); }
+
+  async importCandidates(source: ImportSourceId): Promise<ImportCandidate[]> {
+    return scanImportCandidates(source, this.#importedKeys());
+  }
+
+  async importSessions(source: ImportSourceId, ids: string[]): Promise<ImportRunResult> {
+    return runImport({ paths: this.#paths, catalog: this.#catalog, source, ids });
+  }
+
+  /** Sessions already imported, keyed `source:sourceId`, so the picker can mark them. */
+  #importedKeys(): Set<string> {
+    const keys = new Set<string>();
+    for (const conversation of this.#catalog.listAll()) {
+      if (conversation.importedFrom) keys.add(keyOf(conversation.importedFrom.source, conversation.importedFrom.sourceId));
+    }
+    return keys;
+  }
   async getSubagentMessages(subagentId: string): Promise<ChatMessage[]> {
     const live = this.#subagentSessions.get(subagentId);
     if (live) return mapEngineMessages(live.messages);
@@ -904,7 +942,7 @@ export class PiProcessManager {
   async listProviders(): Promise<ProviderConfig[]> { return listProviderConfigs(this.#paths, await loadProviderKeys(this.#paths)); }
   async listNativeProviders(): Promise<NativeProviderConfig[]> { return nativeProviderCatalog(); }
   async addNativeProvider(id: string, apiKey: string, models: ProviderModel[]): Promise<ProviderConfig[]> { await addNativeProviderConfig(this.#paths, id, apiKey, models); await this.reloadProviders(); return this.listProviders(); }
-  async fetchModels(baseUrl: string, apiKey: string): Promise<ProviderModel[]> { return fetchProviderModels(baseUrl, apiKey); }
+  async fetchModels(baseUrl: string, apiKey: string, api?: string): Promise<ProviderModel[]> { return fetchProviderModels(baseUrl, apiKey, api); }
   async refreshProviderModels(id: string): Promise<ProviderModel[]> { return refreshProviderModels(this.#paths, id); }
   async saveFastVibe(apiKey: string, models: ProviderModel[]): Promise<ProviderConfig[]> { await saveFastVibeConfig(this.#paths, apiKey, models); await this.reloadProviders(); return this.listProviders(); }
   async addProvider(draft: { name: string; baseUrl: string; apiKey: string; api?: import("@shared/types").ProviderApi }, models: ProviderModel[]): Promise<ProviderConfig[]> { await addProviderConfig(this.#paths, draft, models); await this.reloadProviders(); return this.listProviders(); }
@@ -1116,7 +1154,7 @@ export class PiProcessManager {
     if (!this.#runtime || !this.#models) throw new Error("engine not ready");
     const settingsManager = SettingsManager.create(cwd, this.#paths.agentDir);
     // A loader we own lets us splice in FastVibe's built-in extensions
-    // (`plan`, `goal`, `todo`, session-title) alongside whatever the user installed. `createAgentSession`
+    // (`plan`, `goal`, `todo`, session-title, web-search) alongside whatever the user installed. `createAgentSession`
     // only auto-reloads a loader it creates, so reload ours before handing it over.
     const resourceLoader = new DefaultResourceLoader({
       cwd,
@@ -1125,7 +1163,8 @@ export class PiProcessManager {
       additionalExtensionPaths: builtinExtensionPaths(),
       additionalSkillPaths: builtinSkillPaths(),
     });
-    await resourceLoader.reload();
+    // browser-use closes over the conversation id at factory time, which is this reload.
+    await bindBrowserConversation(conversation.id, () => resourceLoader.reload());
     const result = await createAgentSession({
       cwd,
       agentDir: this.#paths.agentDir,

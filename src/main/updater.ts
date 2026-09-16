@@ -192,8 +192,10 @@ export function registerUpdater(getWindows: () => Iterable<BrowserWindow>): void
   // Squirrel.Mac would try to apply the zip and fail without a Developer ID.
   autoUpdater.autoInstallOnAppQuit = process.platform !== "darwin";
   autoUpdater.allowPrerelease = false;
-  // GitHub release assets do not serve reliable HTTP range requests.
-  autoUpdater.disableDifferentialDownload = true;
+  // Blockmap delta over HTTP Range. GitHub's release CDN (`release-assets.githubusercontent.com`)
+  // now returns 206 / Accept-Ranges, and the GitHub provider already disables multipart ranges.
+  // A failed delta falls back to a full download; first update after a fresh install is always full
+  // (no cached previous zip/installer — AppImage is the exception, it diffs against the running file).
 
   autoUpdater.on("checking-for-update", () => {
     setState({ status: "checking", error: undefined });

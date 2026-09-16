@@ -33,7 +33,7 @@ import { fetchPackageCatalog } from "./pi/package-catalog";
 import { TerminalSessions } from "./engine/terminal-sessions";
 import { attachBrowserRenderer, installBrowserGlobal, respondBrowserRequest } from "./pi/browser-bridge";
 import { importBrowserProfile, listBrowserProfiles } from "./engine/browser-profiles";
-import type { ProviderModel, UsageRange } from "@shared/types";
+import type { ImportSourceId, ProviderModel, UsageRange } from "@shared/types";
 import type { GitBranch, GitDiffSource, GitStatus } from "@shared/ipc";
 
 const execFileAsync = promisify(execFile);
@@ -298,6 +298,15 @@ function registerIpc(): void {
     if (path) await shell.openPath(path);
     return path;
   });
+  // 设置 → 导入. Read-only scans of the other agents' data plus an explicit import;
+  // nothing here runs on the live engine, so a scan cannot disturb the chat in flight.
+  ipcMain.handle(Ipc.engineImportSources, async () => engine.importSources());
+  ipcMain.handle(Ipc.engineImportCandidates, async (_event, payload: { source: ImportSourceId }) =>
+    engine.importCandidates(payload.source),
+  );
+  ipcMain.handle(Ipc.engineImportSessions, async (_event, payload: { source: ImportSourceId; ids: string[] }) =>
+    engine.importSessions(payload.source, payload.ids),
+  );
 
   ipcMain.handle(Ipc.providersList, async () => {
     return engine.listProviders();
@@ -313,8 +322,8 @@ function registerIpc(): void {
   );
   ipcMain.handle(
     Ipc.providersFetch,
-    async (_event, payload: { baseUrl: string; apiKey: string }) => {
-      return engine.fetchModels(payload.baseUrl, payload.apiKey);
+    async (_event, payload: { baseUrl: string; apiKey: string; api?: import("@shared/types").ProviderApi }) => {
+      return engine.fetchModels(payload.baseUrl, payload.apiKey, payload.api);
     },
   );
   ipcMain.handle(

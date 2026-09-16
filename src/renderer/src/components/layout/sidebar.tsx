@@ -69,6 +69,8 @@ const IS_MAC = typeof navigator !== "undefined" && /mac/i.test(navigator.userAge
 
 const COLLAPSED_KEY = "fastvibe.sidebar.collapsed";
 const PINNED_KEY = "fastvibe.sidebar.pinned";
+/** Default visible chats under each project; the rest sit behind 展开显示. */
+const PROJECT_SESSION_LIMIT = 5;
 
 /** Section key for the project list itself, as opposed to a project's chats. */
 const PROJECTS_SECTION = "projects";
@@ -375,6 +377,7 @@ function SessionRowContent({
   isPinned,
   showSpinner,
   renamingThis,
+  leadSlot = true,
   onOpen,
   onTogglePin,
   onArchive,
@@ -386,6 +389,8 @@ function SessionRowContent({
   isPinned: boolean;
   showSpinner: boolean;
   renamingThis: boolean;
+  /** Reserve the folder-icon column so titles line up with project names. Off for 聊天. */
+  leadSlot?: boolean;
   onOpen: () => void;
   onTogglePin: () => void;
   onArchive: () => void;
@@ -400,11 +405,14 @@ function SessionRowContent({
       )}
       onClick={onOpen}
     >
-      {/* Leading slot: the busy mark while running, otherwise an empty spacer of the
-          same width so session titles stay aligned with project names. */}
-      <span className="flex size-3.5 shrink-0 items-center justify-center">
-        {showSpinner ? <RunningMark /> : null}
-      </span>
+      {/* Project chats keep an empty folder-icon column so titles line up with
+          the group name. 聊天 has no parent icon, so titles sit flush left;
+          the busy mark still occupies that column while a run is in flight. */}
+      {leadSlot || showSpinner ? (
+        <span className="flex size-3.5 shrink-0 items-center justify-center">
+          {showSpinner ? <RunningMark /> : null}
+        </span>
+      ) : null}
       {renamingThis ? (
         <InlineRename value={item.title} onSubmit={onRename} onCancel={onCancelRename} />
       ) : (
@@ -481,6 +489,7 @@ function DraggableSession({
   isPinned,
   showSpinner,
   renamingThis,
+  leadSlot,
   onOpen,
   onTogglePin,
   onArchive,
@@ -493,6 +502,7 @@ function DraggableSession({
   isPinned: boolean;
   showSpinner: boolean;
   renamingThis: boolean;
+  leadSlot?: boolean;
   onOpen: () => void;
   onTogglePin: () => void;
   onArchive: () => void;
@@ -522,6 +532,7 @@ function DraggableSession({
             isPinned={isPinned}
             showSpinner={showSpinner}
             renamingThis={renamingThis}
+            leadSlot={leadSlot}
             onOpen={onOpen}
             onTogglePin={onTogglePin}
             onArchive={onArchive}
@@ -584,6 +595,7 @@ export function Sidebar({
   const toggleSidebarShortcut = useShortcutLabel("toggleSidebar");
   const { canBack, canForward, back, forward } = useHistoryNav();
   const [collapsed, setCollapsed] = useState<Set<string>>(() => readIdSet(COLLAPSED_KEY));
+  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => new Set());
   const [pinned, setPinned] = useState<Record<string, number>>(() => readPinned());
   // Shared with Settings → 归档对话, where archived chats can be restored or deleted.
   const archived = useArchivedIds();
@@ -759,12 +771,12 @@ export function Sidebar({
     const next = arrayMove(section.ids, from, to);
     // Projects are persisted in the catalog; every conversation section keeps its
     // order under its own `sidebarOrder` key, so a drag inside one list cannot
-    // disturb 置顶, 最近 or any other project.
+    // disturb 置顶, 聊天 or any other project.
     if (section.key === PROJECTS_SECTION) onReorderProjects(next);
     else updateSettings({ sidebarOrder: { ...(sidebarOrder ?? {}), [section.key]: next } });
   }
 
-  function renderSession(item: Conversation): JSX.Element {
+  function renderSession(item: Conversation, leadSlot = true): JSX.Element {
     return (
       <DraggableSession
         key={item.id}
@@ -773,6 +785,7 @@ export function Sidebar({
         isPinned={pinned[item.id] !== undefined}
         showSpinner={running[item.id] === true}
         renamingThis={renaming?.type === "session" && renaming.id === item.id}
+        leadSlot={leadSlot}
         onOpen={() => onOpen(item.id)}
         onTogglePin={() => togglePinned(item.id)}
         onArchive={() => onArchive(item.id)}
@@ -786,8 +799,48 @@ export function Sidebar({
     );
   }
 
-  function renderSessionList(items: Conversation[]): JSX.Element {
-    return <div className="space-y-0.5">{items.map((item) => renderSession(item))}</div>;
+  function renderSessionList(items: Conversation[], leadSlot = true): JSX.Element {
+    return <div className="space-y-0.5">{items.map((item) => renderSession(item, leadSlot))}</div>;
+  }
+
+  function toggleProjectExpanded(cwd: string): void {
+    setExpandedProjects((prev) => {
+      const next = new Set(prev);
+      if (next.has(cwd)) next.delete(cwd);
+      else next.add(cwd);
+      return next;
+    });
+  }
+
+  function renderProjectSessions(cwd: string, items: Conversation[]): JSX.Element {
+    if (items.length === 0) {
+      return (
+        <p className="flex h-8 items-center gap-2.5 pl-2 text-xs text-muted-foreground">
+          <span className="size-3.5 shrink-0" />
+          暂无对话
+        </p>
+      );
+    }
+    const expanded = expandedProjects.has(cwd);
+    const limited = items.length > PROJECT_SESSION_LIMIT;
+    const visible = limited && !expanded ? items.slice(0, PROJECT_SESSION_LIMIT) : items;
+    return (
+      <>
+        {renderSessionList(visible)}
+        {limited ? (
+          <div className="flex h-8 items-center gap-2.5 pr-1 pl-2">
+            <span className="size-3.5 shrink-0" />
+            <button
+              type="button"
+              className="text-xs text-muted-foreground hover:text-sidebar-accent-foreground"
+              onClick={() => toggleProjectExpanded(cwd)}
+            >
+              {expanded ? "收起显示" : "展开显示"}
+            </button>
+          </div>
+        ) : null}
+      </>
+    );
   }
 
   const dragSection = drag?.section ?? null;
@@ -965,26 +1018,29 @@ export function Sidebar({
                       onReveal={() => onRevealProject(group.cwd)}
                       onRemove={() => setPendingDelete({ type: "project", cwd: group.cwd, title: group.name })}
                     >
-                      {group.items.length === 0 ? (
-                        <p className="flex h-8 items-center gap-2.5 pl-2 text-xs text-muted-foreground">
-                          <span className="size-3.5 shrink-0" />
-                          暂无对话
-                        </p>
-                      ) : (
-                        renderSessionList(group.items)
-                      )}
+                      {renderProjectSessions(group.cwd, group.items)}
                     </DraggableProject>
                   );
                 })}
               </div>
             )}
 
-            {recent.length > 0 ? (
-              <>
-                <SectionLabel>最近</SectionLabel>
-                {renderSessionList(recent)}
-              </>
-            ) : null}
+            <SectionLabel
+              action={
+                <IconButton
+                  size="icon-xs"
+                  variant="ghost"
+                  label="新建会话"
+                  className="text-muted-foreground opacity-0 transition-opacity focus-visible:opacity-100 group-hover/section:opacity-100"
+                  onClick={() => onNewChat()}
+                >
+                  <HugeiconsIcon strokeWidth={2} icon={PencilEdit02Icon} className="size-3.5" />
+                </IconButton>
+              }
+            >
+              聊天
+            </SectionLabel>
+            {recent.length > 0 ? renderSessionList(recent, false) : null}
           </div>
         </ScrollArea>
         {drop ? <DropLine rect={drop.rect} edge={drop.edge} /> : null}

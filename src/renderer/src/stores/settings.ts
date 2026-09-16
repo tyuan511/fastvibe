@@ -81,7 +81,7 @@ export type AppSettings = {
   /**
    * Manually dragged sidebar order, keyed by section (`pinned`, `recent`, or
    * `project:<cwd>`). Each value is that section's own id list, so reordering one
-   * project never disturbs 置顶, 最近 or another project. A conversation missing
+   * project never disturbs 置顶, 聊天 or another project. A conversation missing
    * from its section's list keeps the section's default position (creation order,
    * or pin time for 置顶).
    */

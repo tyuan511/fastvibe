@@ -9,6 +9,7 @@ import {
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useSessionStore } from "@/stores/session";
 import { useSidePaneStore } from "@/stores/side-pane";
 import type { BrowserImportResult, BrowserProfileInfo, BrowserRequest } from "@shared/types";
 
@@ -56,16 +57,60 @@ type Entry = {
 type Injected = { ok: boolean; value?: unknown; error?: string };
 
 const registry = new Map<string, Entry>();
-let stash: HTMLDivElement | null = null;
+let park: HTMLDivElement | null = null;
 
-function getStash(): HTMLDivElement {
-  if (!stash) {
-    stash = document.createElement("div");
-    stash.setAttribute("data-side-pane-browser-stash", "");
-    stash.style.display = "none";
-    document.body.appendChild(stash);
+/**
+ * Off-screen but laid-out home for webviews that are not on screen: a background
+ * chat's browser-use must create a guest without opening the current pane, and a
+ * conversation switch must keep that guest alive for later tool calls.
+ * `display: none` is not enough — a detached or hidden `<webview>` never mints a
+ * Chromium guest, which is what made every later GUEST_VIEW_MANAGER_CALL fail.
+ */
+function getPark(): HTMLDivElement {
+  if (!park) {
+    park = document.createElement("div");
+    park.setAttribute("data-side-pane-browser-park", "");
+    park.style.cssText = "position:fixed;left:-10000px;top:0;width:1024px;height:768px;overflow:hidden;pointer-events:none;";
+    document.body.appendChild(park);
   }
-  return stash;
+  return park;
+}
+
+/** Side-chat tools belong on the parent conversation's pane, not a hidden scope. */
+function paneConversationId(conversationId?: string): string | undefined {
+  if (!conversationId) return undefined;
+  const conversation = useSessionStore.getState().conversations.find((item) => item.id === conversationId);
+  return conversation?.parentId || conversationId;
+}
+
+function createGuest(tabId: string, url: string): Entry {
+  const host = document.createElement("div");
+  host.className = "h-full min-h-0 w-full";
+  host.style.width = "100%";
+  host.style.height = "100%";
+  const view = document.createElement("webview") as Guest;
+  view.setAttribute("allowpopups", "true");
+  view.setAttribute("partition", "persist:fastvibe-browser");
+  view.style.width = "100%";
+  view.style.height = "100%";
+  view.style.backgroundColor = "#fff";
+  let resolveReady!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    resolveReady = resolve;
+  });
+  view.addEventListener("dom-ready", () => resolveReady());
+  host.appendChild(view);
+  const entry: Entry = { id: tabId, host, view, ready };
+  registry.set(tabId, entry);
+  // Mount before assigning src. A detached `<webview>` can accept the property
+  // but never creates a guest.
+  getPark().appendChild(host);
+  view.src = normalizeUrl(url);
+  return entry;
+}
+
+function ensureGuest(tabId: string, url: string): Entry {
+  return registry.get(tabId) ?? createGuest(tabId, url);
 }
 
 const SEARCH_ENGINE = "https://www.google.com/search?q=";
@@ -90,8 +135,11 @@ function safe<T>(read: () => T, fallback: T): T {
   }
 }
 
-/** Tab ids the extension can legitimately address right now. */
-function openTabIds(): string[] {
+/** Tab ids this conversation (or the pane on screen) can legitimately address. */
+function openTabIds(conversationId?: string): string[] {
+  const paneId = paneConversationId(conversationId);
+  const scoped = useSidePaneStore.getState().browserTabIds(paneId).filter((id) => registry.has(id));
+  if (scoped.length > 0 || paneId) return scoped;
   return [...registry.keys()];
 }
 
@@ -102,11 +150,13 @@ type Resolved = { entry: Entry; note?: string };
  * closed the tab, or the app retired it), and refusing the call makes the model
  * re-open a page it already has, so an only open tab is adopted instead — with a
  * note in the result saying so. An omitted id means "the tab I have open last".
+ * Background chats only see their own tabs, so they cannot drive another chat's page.
  */
-function resolveEntry(tabId?: string): Resolved {
-  const direct = tabId ? registry.get(tabId) : undefined;
+function resolveEntry(tabId?: string, conversationId?: string): Resolved {
+  const ids = openTabIds(conversationId);
+  const allowed = new Set(ids);
+  const direct = tabId && allowed.has(tabId) ? registry.get(tabId) : undefined;
   if (direct) return { entry: direct };
-  const ids = openTabIds();
   if (ids.length === 0) throw new Error("内置浏览器还没有打开任何标签页，请先调用 browser_open");
   if (!tabId) return { entry: registry.get(ids[ids.length - 1]) as Entry, note: "未指定 tabId，已使用最近打开的标签页" };
   if (ids.length === 1) return { entry: registry.get(ids[0]) as Entry, note: `标签页 ${tabId} 已不存在，已在当前唯一的标签页上执行` };
@@ -122,19 +172,6 @@ function retire(tabId: string): void {
   if (!registry.has(tabId)) return;
   releaseBrowser(tabId);
   useSidePaneStore.getState().close(tabId);
-}
-
-function waitForEntry(tabId: string, timeout = 5_000): Promise<Entry> {
-  const started = Date.now();
-  return new Promise((resolve, reject) => {
-    const tick = (): void => {
-      const entry = registry.get(tabId);
-      if (entry) return resolve(entry);
-      if (Date.now() - started >= timeout) return reject(new Error("浏览器标签页尚未准备好"));
-      window.setTimeout(tick, 50);
-    };
-    tick();
-  });
 }
 
 async function execute(entry: Entry, code: string): Promise<unknown> {
@@ -395,15 +432,10 @@ const SNAPSHOT_BODY = `
  */
 async function openBrowserTab(request: BrowserAutomationRequest): Promise<unknown> {
   const store = useSidePaneStore.getState();
-  const reusable = request.newTab ? undefined : store.tabs.find((tab) => tab.type === "browser");
-  const tabId = reusable?.id ?? store.openBrowser(request.newTab ? request.url : undefined);
-  let entry: Entry;
-  try {
-    entry = await waitForEntry(tabId);
-  } catch (error) {
-    retire(tabId);
-    throw new Error(`内置浏览器标签页未能创建：${error instanceof Error ? error.message : String(error)}`);
-  }
+  const paneId = paneConversationId(request.conversationId);
+  const reusable = request.newTab ? undefined : store.browserTabIds(paneId)[0];
+  const tabId = reusable ?? store.openBrowser(request.newTab ? request.url : undefined, paneId);
+  const entry = ensureGuest(tabId, request.url ?? "https://fastvibe.dev");
   await waitForReady(entry);
   if (!(await ensureAlive(entry))) {
     retire(tabId);
@@ -424,14 +456,17 @@ async function openBrowserTab(request: BrowserAutomationRequest): Promise<unknow
 export async function handleBrowserRequest(request: BrowserAutomationRequest): Promise<unknown> {
   if (request.action === "open") return openBrowserTab(request);
   if (request.action === "list") {
-    return [...registry.entries()].map(([tabId, entry]) => ({
-      tabId,
-      url: safe(() => entry.view.getURL(), ""),
-      title: safe(() => entry.view.getTitle(), ""),
-      alive: guestAlive(entry),
-    }));
+    return openTabIds(request.conversationId).map((tabId) => {
+      const entry = registry.get(tabId);
+      return {
+        tabId,
+        url: entry ? safe(() => entry.view.getURL(), "") : "",
+        title: entry ? safe(() => entry.view.getTitle(), "") : "",
+        alive: entry ? guestAlive(entry) : false,
+      };
+    });
   }
-  const { entry, note } = resolveEntry(request.tabId);
+  const { entry, note } = resolveEntry(request.tabId, request.conversationId);
   // GUEST_VIEW_MANAGER_CALL rejects calls made before the guest has reached
   // dom-ready. This also covers a tool call issued immediately after opening
   // a tab, before React has observed the first navigation event.
@@ -620,30 +655,7 @@ export function SidePaneBrowser({
   useEffect(() => {
     const mount = box.current;
     if (!mount) return;
-    let entry = registry.get(tabId);
-    if (!entry) {
-      const host = document.createElement("div");
-      host.className = "h-full min-h-0 w-full";
-      const view = document.createElement("webview") as Guest;
-      view.setAttribute("allowpopups", "true");
-      view.setAttribute("partition", "persist:fastvibe-browser");
-      view.style.width = "100%";
-      view.style.height = "100%";
-      view.style.backgroundColor = "#fff";
-      let resolveReady!: () => void;
-      const ready = new Promise<void>((resolve) => {
-        resolveReady = resolve;
-      });
-      view.addEventListener("dom-ready", () => resolveReady());
-      host.appendChild(view);
-      entry = { id: tabId, host, view, ready };
-      registry.set(tabId, entry);
-      // Mount the guest before assigning src. A detached <webview> can accept
-      // the property but never creates a guest, which later makes every
-      // GUEST_VIEW_MANAGER_CALL fail and leaves the registry without a usable tab.
-      mount.appendChild(host);
-      view.src = normalizeUrl(initialUrl.current);
-    }
+    const entry = ensureGuest(tabId, initialUrl.current);
     guest.current = entry.view;
     if (entry.host.parentElement !== mount) mount.appendChild(entry.host);
 
@@ -678,7 +690,7 @@ export function SidePaneBrowser({
       view.removeEventListener("page-favicon-updated", onFavicon);
       view.removeEventListener("did-start-loading", onStart);
       view.removeEventListener("did-stop-loading", onStop);
-      if (entry && entry.host.parentElement === mount) getStash().appendChild(entry.host);
+      if (entry.host.parentElement === mount) getPark().appendChild(entry.host);
     };
   }, [patchTab, tabId]);
 

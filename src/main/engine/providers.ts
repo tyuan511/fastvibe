@@ -184,37 +184,81 @@ export function nativeProviderCatalog(): NativeProviderConfig[] {
 export async function fetchProviderModels(
   baseUrl: string,
   apiKey: string,
+  api?: string,
 ): Promise<ProviderModel[]> {
   const base = baseUrl.trim().replace(/\/+$/, "");
   if (!/^https?:\/\//.test(base)) throw new Error("Base URL 需以 http(s):// 开头");
 
+  const listed = api === "google-generative-ai"
+    ? await fetchGeminiModels(base, apiKey)
+    : await fetchOpenAiStyleModels(base, apiKey);
+  if (listed.length === 0) throw new Error("没有返回任何模型");
+
+  const index = loadModelsDev();
+  const seen = new Set<string>();
+  const models: ProviderModel[] = [];
+  for (const entry of listed) {
+    if (!entry.id || seen.has(entry.id)) continue;
+    seen.add(entry.id);
+    models.push(enrichOne(index, entry.id, entry.name));
+  }
+  return models;
+}
+
+type ListedModel = { id: string; name: string };
+
+async function fetchOpenAiStyleModels(base: string, apiKey: string): Promise<ListedModel[]> {
+  return listedFromUnknown(await getJson(`${base}/models`, {
+    Authorization: `Bearer ${apiKey}`,
+    "x-api-key": apiKey,
+  }));
+}
+
+/**
+ * Gemini's list is `GET /v1beta/models?key=` with `{ models: [{ name: "models/gemini-…" }] }`,
+ * not OpenAI's `{ data: [{ id }] }`. Auth is `x-goog-api-key` / `?key=`; Bearer is sent too
+ * because some native-protocol relays only accept it.
+ */
+async function fetchGeminiModels(base: string, apiKey: string): Promise<ListedModel[]> {
+  const headers = {
+    "x-goog-api-key": apiKey,
+    Authorization: `Bearer ${apiKey}`,
+  };
+  const collected: ListedModel[] = [];
+  let pageToken = "";
+  for (let page = 0; page < 20; page++) {
+    const url = new URL(`${base}/models`);
+    url.searchParams.set("key", apiKey);
+    url.searchParams.set("pageSize", "100");
+    if (pageToken) url.searchParams.set("pageToken", pageToken);
+    const payload = await getJson(url.toString(), headers);
+    const batch = listedFromGemini(payload);
+    // A relay that chats Gemini-native but lists models OpenAI-style: empty Gemini parse,
+    // then the generic extractor, stripping the `models/` prefix either way.
+    if (batch.length === 0 && page === 0) {
+      const fallback = listedFromUnknown(payload).map((item) => ({
+        ...item,
+        id: stripGeminiModelPrefix(item.id),
+      }));
+      if (fallback.length > 0) return fallback;
+    }
+    collected.push(...batch);
+    pageToken = isRecord(payload) && typeof payload.nextPageToken === "string" ? payload.nextPageToken : "";
+    if (!pageToken) break;
+  }
+  return collected;
+}
+
+async function getJson(url: string, headers: Record<string, string>): Promise<unknown> {
   let response: Response;
   try {
-    response = await fetch(`${base}/models`, {
-      headers: { Authorization: `Bearer ${apiKey}`, "x-api-key": apiKey },
-      signal: AbortSignal.timeout(20_000),
-    });
+    response = await fetch(url, { headers, signal: AbortSignal.timeout(20_000) });
   } catch {
     throw new Error("无法连接该供应商，请检查 Base URL");
   }
   if (response.status === 401 || response.status === 403) throw new Error("密钥无效或无权访问");
   if (!response.ok) throw new Error(`拉取模型失败（${response.status}）`);
-
-  const payload: unknown = await response.json();
-  const raw = extractModelList(payload);
-  if (raw.length === 0) throw new Error("没有返回任何模型");
-
-  const index = loadModelsDev();
-  const seen = new Set<string>();
-  const models: ProviderModel[] = [];
-  for (const entry of raw) {
-    const id = typeof entry === "string" ? entry : isRecord(entry) ? String(entry.id ?? entry.model ?? "") : "";
-    if (!id || seen.has(id)) continue;
-    seen.add(id);
-    const apiName = isRecord(entry) ? String(entry.name ?? entry.display_name ?? "") : "";
-    models.push(enrichOne(index, id, apiName));
-  }
-  return models;
+  return response.json();
 }
 
 /**
@@ -229,6 +273,37 @@ function enrichOne(index: ModelsDevIndex, id: string, apiName: string): Provider
 
 function inferThinkingFormat(id: string): ProviderModel["thinkingFormat"] {
   return /glm|zai|z-ai/i.test(id) ? "zai" : "openai";
+}
+
+function listedFromGemini(payload: unknown): ListedModel[] {
+  const models = isRecord(payload) && Array.isArray(payload.models) ? payload.models : [];
+  const out: ListedModel[] = [];
+  for (const entry of models) {
+    if (!isRecord(entry)) continue;
+    const methods = Array.isArray(entry.supportedGenerationMethods) ? entry.supportedGenerationMethods : null;
+    // Proxies often omit the field; only skip when it is present and not a chat model.
+    if (methods && !methods.includes("generateContent")) continue;
+    const id = stripGeminiModelPrefix(String(entry.name ?? entry.id ?? ""));
+    if (!id) continue;
+    out.push({ id, name: String(entry.displayName ?? entry.display_name ?? "") });
+  }
+  return out;
+}
+
+function listedFromUnknown(payload: unknown): ListedModel[] {
+  const raw = extractModelList(payload);
+  const out: ListedModel[] = [];
+  for (const entry of raw) {
+    const id = typeof entry === "string" ? entry : isRecord(entry) ? String(entry.id ?? entry.model ?? "") : "";
+    if (!id) continue;
+    const name = isRecord(entry) ? String(entry.name ?? entry.display_name ?? "") : "";
+    out.push({ id, name });
+  }
+  return out;
+}
+
+function stripGeminiModelPrefix(id: string): string {
+  return id.replace(/^models\//, "");
 }
 
 function extractModelList(payload: unknown): unknown[] {
@@ -307,7 +382,8 @@ function renderModelsJson(providers: StoredProvider[]): string {
       baseUrl: provider.baseUrl,
       api: provider.api,
       apiKey: provider.apiKeyEnv,
-      authHeader: true,
+      // Gemini authenticates with `x-goog-api-key` via the SDK client, not Bearer.
+      authHeader: provider.api !== "google-generative-ai",
       models: provider.models.map((model) => {
         const compat = modelCompat(model.api ?? provider.api, model);
         const thinking = thinkingLevelMap(model);
@@ -584,7 +660,7 @@ export async function refreshProviderModels(
   if (!provider) throw new Error("供应商不存在");
   if (provider.kind === "native") return findNativeProvider(id)?.models ?? [];
   const keys = await loadProviderKeys(paths);
-  return fetchProviderModels(provider.baseUrl, keys[provider.apiKeyEnv] ?? "");
+  return fetchProviderModels(provider.baseUrl, keys[provider.apiKeyEnv] ?? "", provider.api);
 }
 
 /* ---------------- helpers ---------------- */

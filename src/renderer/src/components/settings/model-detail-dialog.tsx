@@ -39,6 +39,7 @@ const API_LABELS: Record<ProviderApi, string> = {
   "openai-completions": "Chat Completions",
   "openai-responses": "Responses",
   "anthropic-messages": "Messages",
+  "google-generative-ai": "Gemini",
 };
 
 const SOURCE_LABELS: Record<string, string> = {

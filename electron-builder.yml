@@ -39,7 +39,7 @@ files:
 extraResources:
   - from: resources/models-dev
     to: models-dev
-  # Built-in pi extensions (`/plan`, `/goal`, todo, session-title) are loaded by path at runtime, so
+  # Built-in pi extensions (`/plan`, `/goal`, todo, session-title, web-search) are loaded by path at runtime, so
   # they must stay outside the asar archive.
   - from: resources/extensions
     to: extensions

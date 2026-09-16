@@ -40,6 +40,9 @@ const MODE_DESCRIPTIONS: Record<PermissionMode, string> = {
 /** Tools with no side effects; they are never worth a confirmation. */
 const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls", "todo"]);
 
+/** Built-in network lookup; `ask` confirms it, `smart` does not. */
+const NETWORK_TOOLS = new Set(["web_search"]);
+
 /** Built-in tools this extension knows how to classify. */
 const KNOWN_TOOLS = new Set(["read", "write", "edit", "bash", "powershell", "grep", "find", "ls"]);
 
@@ -139,6 +142,17 @@ function matchedLabels(rules: Array<{ label: string; pattern: RegExp }>, text: s
 /** Classify a tool call, or `null` when it can never need a confirmation. */
 function assess(toolName: string, input: unknown, cwd: string): Assessment | null {
   if (READ_ONLY_TOOLS.has(toolName)) return null;
+
+  if (NETWORK_TOOLS.has(toolName)) {
+    return {
+      action: "搜索网络",
+      detail: firstLine(inputString(input, "query") || toolName),
+      network: true,
+      external: false,
+      risks: [],
+      opaque: false,
+    };
+  }
 
   if (toolName === "bash" || toolName === "powershell") {
     const command = inputString(input, "command");

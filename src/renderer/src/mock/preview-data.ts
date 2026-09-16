@@ -1,5 +1,7 @@
 import type {
   ChatMessage,
+  ImportCandidate,
+  ImportSourceStatus,
   Conversation,
   DirEntry,
   EngineSessionState,
@@ -567,3 +569,70 @@ export function previewFor(path: string): FilePreview {
     text: `# ${name}\n\n这是 **${name}** 的预览。\n\n- 支持 Markdown 渲染\n- 支持代码高亮与图片、PDF\n`,
   };
 }
+
+/** 设置 → 导入: four sources, one of them unavailable, so the pane shows both states. */
+export const IMPORT_SOURCES: ImportSourceStatus[] = [
+  { id: "claude-code", name: "Claude Code", root: "~/.claude/projects", sessionCount: 18, latestAt: NOW - 2 * HOUR },
+  { id: "codex", name: "Codex", root: "~/.codex", sessionCount: 42, latestAt: NOW - 25 * MINUTE },
+  { id: "opencode", name: "opencode", root: "~/.local/share/opencode", sessionCount: 7, latestAt: NOW - 3 * DAY },
+  { id: "pi", name: "pi coding agent", root: "~/.pi/agent/sessions", sessionCount: 0, reason: "未找到数据目录" },
+];
+
+export const IMPORT_CANDIDATES: ImportCandidate[] = [
+  {
+    id: "claude-code:f27c296d",
+    source: "claude-code",
+    title: "重构文件预览的尺寸计算",
+    cwd: "/Users/yuantang/code/matpool/matpilot",
+    createdAt: NOW - 3 * HOUR,
+    updatedAt: NOW - 2 * HOUR,
+    messageCount: 84,
+    bytes: 1_820_416,
+    imported: false,
+  },
+  {
+    id: "claude-code:8f4fe7f3",
+    source: "claude-code",
+    title: "OpenCode provider 配置",
+    cwd: "/Users/yuantang/code/apifuck",
+    createdAt: NOW - 12 * DAY,
+    updatedAt: NOW - 12 * DAY + 40 * MINUTE,
+    messageCount: 30,
+    bytes: 2_184_877,
+    imported: true,
+  },
+  {
+    id: "claude-code:3e13ca73",
+    source: "claude-code",
+    title: "思考块时长统计与折叠",
+    cwd: "/Users/yuantang/Library/Application Support/Claude/scratch-workspaces/b442a2b6/526af9ed",
+    createdAt: NOW - 20 * DAY,
+    updatedAt: NOW - 20 * DAY + 90 * MINUTE,
+    messageCount: 52,
+    bytes: 620_544,
+    note: "含子 agent 轨迹，导入时会跳过",
+    imported: false,
+  },
+  {
+    id: "claude-code:a91f07",
+    source: "claude-code",
+    title: "回归：会话运行中状态推断",
+    cwd: "/Users/yuantang/code/matpool/matcloud-fe-new",
+    createdAt: NOW - 45 * DAY,
+    updatedAt: NOW - 44 * DAY,
+    messageCount: 1204,
+    bytes: 16_240_000,
+    note: "会话较长，导入后建议先压缩上下文",
+    imported: false,
+  },
+  {
+    id: "claude-code:b6a28e5c",
+    source: "claude-code",
+    title: "(空)",
+    createdAt: NOW - 60 * DAY,
+    updatedAt: NOW - 60 * DAY,
+    messageCount: 2,
+    bytes: 6_144,
+    imported: false,
+  },
+];

@@ -48,6 +48,7 @@ const PROVIDER_API_ITEMS: Record<ProviderApi, string> = {
   "openai-completions": "OpenAI Chat Completions (/chat/completions)",
   "openai-responses": "OpenAI Responses (/responses)",
   "anthropic-messages": "Anthropic Messages (/v1/messages)",
+  "google-generative-ai": "Google Gemini (/v1beta)",
 };
 
 /** Short label for a model's pinned protocol, where the row is too narrow for the full one. */
@@ -55,6 +56,7 @@ const PROVIDER_API_SHORT: Record<ProviderApi, string> = {
   "openai-completions": "Chat Completions",
   "openai-responses": "Responses",
   "anthropic-messages": "Messages",
+  "google-generative-ai": "Gemini",
 };
 
 /** `native` = a pi-coding-agent built-in provider configured with an API key. */
@@ -832,7 +834,11 @@ function AddProviderDialog({
                   <Input autoFocus value={state.name} placeholder="例如 OpenRouter" onChange={(event) => onPatch({ name: event.target.value })} />
                 </Field>
                 <Field label="Base URL">
-                  <Input value={state.baseUrl} placeholder="https://api.example.com/v1" onChange={(event) => onPatch({ baseUrl: event.target.value })} />
+                  <Input
+                    value={state.baseUrl}
+                    placeholder={state.api === "google-generative-ai" ? "https://generativelanguage.googleapis.com/v1beta" : "https://api.example.com/v1"}
+                    onChange={(event) => onPatch({ baseUrl: event.target.value })}
+                  />
                 </Field>
                 <Field label="API 格式">
                   <Select items={PROVIDER_API_ITEMS} value={state.api} onValueChange={(value) => onPatch({ api: value as ProviderApi })}>
@@ -1090,7 +1096,7 @@ async function startConnect(
     error: null,
   });
   try {
-    const models = await window.fastvibe.providers.fetch(provider.baseUrl, apiKey);
+    const models = await window.fastvibe.providers.fetch(provider.baseUrl, apiKey, provider.api);
     setPicker({
       kind: "connect",
       providerId: provider.id,
@@ -1190,7 +1196,7 @@ async function fetchAddCandidates(
   }
   setAdd({ ...add, busy: true, error: null });
   try {
-    const models = await window.fastvibe.providers.fetch(add.baseUrl, add.apiKey);
+    const models = await window.fastvibe.providers.fetch(add.baseUrl, add.apiKey, add.api);
     setAdd({
       ...add,
       candidates: models,

@@ -171,7 +171,9 @@ type SidePaneStore = {
   closeAll: () => void;
   openGit: () => void;
   openTerminal: (cwd?: string) => void;
-  openBrowser: (url?: string) => string;
+  openBrowser: (url?: string, conversationId?: string) => string;
+  /** Browser tab ids in one conversation's pane (the active chat when omitted). */
+  browserTabIds: (conversationId?: string) => string[];
   openSideChat: (parentSessionId: string, ordinal: number) => void;
   /** Open (or focus) the project file view, starting on the directory tree. */
   openFiles: () => void;
@@ -458,21 +460,29 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
     set((state) => writeScope(state, scopeKeyOf(state), { ...scopeOf(state), activeTabId: id }, { collapsed: false })),
   close: (id) =>
     set((state) => {
-      const scope = scopeOf(state);
-      const tabs = scope.tabs.filter((item) => item.id !== id);
-      const activeTabId = scope.activeTabId === id ? (tabs.at(-1)?.id ?? null) : scope.activeTabId;
-      const empty = tabs.length === 0;
-      return writeScope(
-        state,
-        scopeKeyOf(state),
-        {
-          tabs,
-          activeTabId,
-          maximized: empty ? false : scope.maximized,
-          collapsed: empty ? true : scope.collapsed,
-        },
-        empty ? { collapsed: true, maximized: false } : undefined,
-      );
+      // Browser tabs of a background chat live in that chat's scope; retiring one
+      // must not look only at the pane on screen (and must not collapse it).
+      const activeKey = scopeKeyOf(state);
+      const keys = [activeKey, ...Object.keys(state.scopes).filter((key) => key !== activeKey)];
+      for (const key of keys) {
+        const scope = key === activeKey ? scopeOf(state) : state.scopes[key];
+        if (!scope?.tabs.some((item) => item.id === id)) continue;
+        const tabs = scope.tabs.filter((item) => item.id !== id);
+        const activeTabId = scope.activeTabId === id ? (tabs.at(-1)?.id ?? null) : scope.activeTabId;
+        const empty = tabs.length === 0;
+        return writeScope(
+          state,
+          key,
+          {
+            tabs,
+            activeTabId,
+            maximized: empty ? false : scope.maximized,
+            collapsed: empty ? true : scope.collapsed,
+          },
+          key === activeKey && empty ? { collapsed: true, maximized: false } : undefined,
+        );
+      }
+      return state;
     }),
   closeOthers: (id) =>
     set((state) => {
@@ -521,15 +531,19 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
         { collapsed: false },
       );
     }),
-  openBrowser: (url) => {
+  openBrowser: (url, conversationId) => {
     let tabId = "";
     set((state) => {
-      const key = scopeKeyOf(state);
-      const scope = scopeOf(state);
+      // A background chat's browser belongs in that chat's pane, the same way a
+      // delegated run does: writing to the active scope would flash the current
+      // conversation's side pane and then lose the tab on the next scope swap.
+      const key = conversationId ?? scopeKeyOf(state);
+      const scope = state.scopes[key] ?? EMPTY_SCOPE;
       const existing = url ? undefined : scope.tabs.find((item) => item.type === "browser");
+      const focus = key === scopeKeyOf(state) ? { collapsed: false } : undefined;
       if (existing) {
         tabId = existing.id;
-        return writeScope(state, key, { ...scope, activeTabId: existing.id }, { collapsed: false });
+        return writeScope(state, key, { ...scope, activeTabId: existing.id, collapsed: false }, focus);
       }
       const tab: SidePaneTab = {
         id: `browser:${uid()}`,
@@ -537,13 +551,14 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
         openedAt: Date.now(),
         title: "浏览器",
         url: url?.trim() || "https://fastvibe.dev",
+        conversationId: key === DRAFT_SCOPE ? undefined : key,
       };
       tabId = tab.id;
       return writeScope(
         state,
         key,
-        { ...scope, tabs: [...scope.tabs, tab], activeTabId: tab.id },
-        { collapsed: false },
+        { ...scope, tabs: [...scope.tabs, tab], activeTabId: tab.id, collapsed: false },
+        focus,
       );
     });
     return tabId;
@@ -672,6 +687,12 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
         maximized: active.maximized,
       };
     });
+  },
+  browserTabIds: (conversationId) => {
+    const state = get();
+    const key = conversationId ?? scopeKeyOf(state);
+    const scope = state.scopes[key] ?? (key === scopeKeyOf(state) ? scopeOf(state) : EMPTY_SCOPE);
+    return scope.tabs.filter((item) => item.type === "browser").map((item) => item.id);
   },
   filesPreviewPath: () => scopeOf(get()).tabs.find((item) => item.type === "files")?.path,
   nextSideChatOrdinal: (parentSessionId?: string) => {

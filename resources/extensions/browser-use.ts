@@ -12,6 +12,7 @@ type BrowserRequest = {
   script?: string;
   newTab?: boolean;
   timeoutMs?: number;
+  conversationId?: string;
 };
 
 type BrowserBridge = (request: BrowserRequest) => Promise<unknown>;
@@ -22,9 +23,9 @@ function bridge(): BrowserBridge {
   return handler as BrowserBridge;
 }
 
-async function call(action: string, params: Omit<BrowserRequest, "action"> = {}): Promise<any> {
-  const result = await bridge()({ action, ...params });
-  return { content: [{ type: "text", text: typeof result === "string" ? result : JSON.stringify(result, null, 2) }], details: result };
+function boundConversationId(): string | undefined {
+  const value = (globalThis as Record<string, unknown>).__fastvibeBrowserConversationId;
+  return typeof value === "string" && value ? value : undefined;
 }
 
 const TAB_ID = (required: boolean) => {
@@ -39,6 +40,13 @@ const LOAD_TIMEOUT = 45_000;
 
 /** Browser-use tools backed by FastVibe's side-pane Electron webview. */
 export default function browserUse(pi: ExtensionAPI): void {
+  // Closed over at factory time: the host stamps the conversation around reload,
+  // and execute() must not read the global later (another session may have loaded).
+  const conversationId = boundConversationId();
+  async function call(action: string, params: Omit<BrowserRequest, "action"> = {}): Promise<any> {
+    const result = await bridge()({ action, ...params, conversationId });
+    return { content: [{ type: "text", text: typeof result === "string" ? result : JSON.stringify(result, null, 2) }], details: result };
+  }
   pi.registerTool({
     name: "browser_open",
     label: "打开浏览器",

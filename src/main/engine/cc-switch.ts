@@ -180,7 +180,7 @@ function extract(
     return {
       baseUrl: stripSlash(str(env?.GOOGLE_GEMINI_BASE_URL) || str(env?.GEMINI_BASE_URL)),
       apiKey: firstNonEmpty(env, ["GEMINI_API_KEY", "GOOGLE_API_KEY"]),
-      api: "openai-completions",
+      api: "google-generative-ai",
       models: unique([str(env?.GEMINI_MODEL)]),
     };
   }
@@ -238,7 +238,7 @@ function extract(
 
 async function resolveModels(draft: Draft): Promise<ProviderModel[]> {
   try {
-    const fetched = await fetchProviderModels(draft.baseUrl, draft.apiKey);
+    const fetched = await fetchProviderModels(draft.baseUrl, draft.apiKey, draft.api);
     if (fetched.length > 0) return fetched;
   } catch {
     // Fall back to whatever CC Switch already recorded.
@@ -292,6 +292,14 @@ function apiFromFormat(raw: string, fallback: ProviderApi): ProviderApi {
   if (value === "openai_responses" || value === "openai-responses") return "openai-responses";
   if (value === "anthropic" || value === "anthropic_messages" || value === "anthropic-messages") {
     return "anthropic-messages";
+  }
+  if (
+    value === "google" ||
+    value === "gemini" ||
+    value === "google_generative_ai" ||
+    value === "google-generative-ai"
+  ) {
+    return "google-generative-ai";
   }
   return fallback;
 }
