@@ -113,6 +113,9 @@ export function SidePaneChat({
           messages={messages}
           streaming={streaming}
           loading={!tab.conversationId}
+          // A 辅助对话 is a normal transcript with its own composer, so it follows the
+          // same 折叠运行过程 preference as the main thread.
+          collapseRuns={settings.collapseRuns}
           emptyState={<SideChatEmpty />}
         />
       </div>

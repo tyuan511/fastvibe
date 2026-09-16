@@ -231,22 +231,39 @@ connected a send needs no extra step: the new session resolves its own model
 conversation existed (the model/thinking chips, 自动压缩 read in `#createSession`) is
 adopted by the session that appears.
 
-**A switch is drawn in the transcript as a divider** (`A/x → B/y`), from the
-`model_change` entry the SDK appends to the session tree on every switch. It is a
-**`{ kind: "model" }` MessagePart, not a row**: the entry is anchored to the last
-*completed* message, so a switch made while a reply was streaming belongs *between that
-reply's parts* — a row of its own would split the merged run into two blocks (and two
-footers). `#insertModelSwitches` (`src/main/pi/process-manager.ts`) walks
-`sessionManager.getBranch()` and splices the part in at that boundary — the end of the
-preceding assistant, else the start of the message that follows it; a `model_change`
-with no message before it is the model the session was *created* on, not a switch, and
-is dropped. `#useModel` also emits `model_changed` (carrying both sides) so the part can
-be spliced in live rather than only on the next transcript read — at the part index the
-engine's current message began at, which `apply-engine-event.ts` tracks as
-`partBoundary` (`stores/session.ts`). Re-picking the model already selected returns
-early instead of appending an entry, so 「A/x → A/x」 never reaches the transcript, and a
-provider edit's forced fallback model goes through the same path (it *is* a switch the
-user did not ask for, and the transcript says so).
+**A switch is drawn in the transcript as a divider only where the new model actually
+runs** — a quiet rule reading 「模型已切换至 provider/model」, naming the model the reply
+came from rather than the pair it moved between. Picking a model is not using one: the
+SDK writes a `model_change` entry the instant the pick is made, so drawing from the
+entry alone put a divider on the screen for a switch that no reply had run on yet (or
+one reverted before the next prompt). The divider is therefore tied to the reply:
+
+- It is a **`{ kind: "model" }` MessagePart, not a row**. Consecutive engine messages
+  of one reply are merged into a single row, so a switch made while a reply was
+  streaming belongs *between that reply's parts* — a row of its own would split the
+  merged run into two blocks (and two footers).
+- `#announceModelUse` (`src/main/pi/process-manager.ts`) emits `model_changed` from the
+  assistant `message_start` whose `provider`/`model` differs from the last assistant
+  message already in the transcript, so the part is spliced in live as the new model
+  starts answering, at the part index the engine's current message began at —
+  `apply-engine-event.ts` tracks it as `partBoundary` (`stores/session.ts`). Picking A,
+  then B, then A again before sending announces nothing, and `#useModel` itself no
+  longer emits anything (nor does the renderer re-read the transcript after a pick).
+- `#insertModelSwitches` derives the dividers from the **replies**, not from the
+  `model_change` entries: it walks `sessionManager.getBranch()` and inserts one at the
+  start of every assistant message whose `provider`/`model` differs from the previous
+  assistant message's — the same slot the live event uses, so a reload and the stream
+  agree. The entry alone cannot say this: it is anchored to the last completed message,
+  which during a run sits *before* the reply still streaming, so a switch made mid-run
+  would appear one round-trip early. A pick that no reply followed draws nothing, and
+  so does `A→B→A` before sending — no reply ever ran on B. Re-picking the model already
+  selected returns early, and a provider edit's forced fallback model goes through the
+  same path (it *is* a switch the user did not ask for, announced when the next reply
+  runs on it).
+- A leading divider stays **outside** 折叠运行过程's fold (`foldHead` in
+  `components/chat/message-list.tsx`): which model answered is not process, and hiding
+  it inside 「用时 …」 buries the one fact the divider exists to state. A divider spliced
+  mid-run does still fold with the rest of the run it sits in.
 
 Only `models.json` is written; the `models.yml` / `config.yml` pair from the old RPC
 engine is gone because the SDK never read them.
@@ -322,7 +339,7 @@ the user installs at runtime via 设置 → 插件, which writes to the isolated
       uses the same helpers, so the transcript and the panel cannot drift apart. The sandbox treats `todo` as read-only, so `ask` mode
     does not confirm it.
 - **Permission sandbox** — `permission-sandbox.ts` is the enforcement half of the
-  composer's three modes (`ask` 请求批准 / `smart` 帮我批准 / `full` 完全访问权限).
+  composer's three modes (`ask` 请求批准 / `smart` 帮我批准 / `full` 完全访问).
   It hooks `tool_call`, classifies each call (network rules, out-of-workspace
   writes, sensitive paths, destructive shell patterns) and asks through
   `ctx.ui.confirm`, which the host renders as the inline `PermissionPanel` (a
@@ -415,9 +432,29 @@ the user installs at runtime via 设置 → 插件, which writes to the isolated
   - **Reuse, not sprawl.** `browser_open` navigates the tab already on screen (one Chromium guest
     per call made later calls slow and timeout-prone); `newTab: true` is the escape hatch. A
     click/keypress is awaited through its possible navigation, and a dead guest is retired —
-    dropped from the registry and its pane tab closed — so the model's next `browser_open` mints a
-    fresh webview rather than retrying a corpse. `tabId` is optional everywhere: an omitted id
-    means the current tab, and a stale id with exactly one tab open is adopted with a `note`.
+    dropped from the registry and its pane tab closed. **A dead tab is never a tool error.**
+    The browser is a shared side-pane resource the user can close or crash at any moment, so
+    retiring one is an internal detail: the request that found it mints a replacement, resumes
+    the page that tab was last on (tracked as `Entry.url`, updated by every navigation,
+    load, history move and the pane's own address bar) and runs its action there, replying with
+    a `note` — `browser_open` does the same in place, so the model is never asked to call it
+    again. Only a tab whose replacement cannot be created (a webview that will not come up at
+    all) is reported as an error. `tabId` is optional everywhere: an
+    omitted id means the current tab, and a stale id with exactly one tab open is adopted with a
+    `note`.
+  - **A guest is never re-parented.** Chromium tears the guest down when its `<webview>`
+    element is moved in the DOM — every call after that fails with `Invalid guestInstanceId`,
+    and re-assigning `src` does not bring it back. So every guest's host lives in one layer
+    (`getLayer`) that is attached to `document.body` once and only *positioned*: stretched
+    over the tab's viewport while that tab is on screen, parked off-screen otherwise
+    (`showGuest` / `parkGuest`, never `appendChild`). The park/edit-run design this replaced
+    moved the host out of the park when the pane mounted it, so the guest died on open,
+    `usable()` retired the fresh tab, and retiring the last tab collapsed the pane — the
+    闪一下 the side pane did when a tool opened the browser. The layer follows the pane's
+    collapse spring through its clipping ancestor's rect and leaves the pane's splitter
+    clickable (`SPLITTER_GUTTER`); a parked or momentarily zero-sized guest stays found
+    (`guestAlive` probes `getURL`), which is what keeps browser-use in a background chat
+    working.
 - **Web search** — `web-search.ts` registers a client `web_search` tool only while the
   session model speaks `openai-responses`. Execute opens a *side* `{baseUrl}/responses`
   request with the hosted `{ type: "web_search" }` tool (auth from `modelRegistry`); it is
@@ -532,9 +569,16 @@ pnpm shadcn add <component> -y
 ## 从其他 Agent 导入（设置 → 导入）
 
 设置 → 导入 lists the sibling coding agents on this machine — **pi coding agent, Claude Code,
-Codex, opencode** — as four rows (brand mark, name, an 导入 button). Picking a row opens a
+Codex, opencode** — one row each (brand mark, name, an 导入 button). Picking a row opens a
 multi-select picker of that agent's sessions; nothing is imported until the user confirms.
 `docs/import-from-other-agents.md` is the format dossier behind every adapter.
+
+- **An absent agent gets no row.** `scanImportSources` skips any source whose data root does
+  not exist, so a machine without pi or opencode installed shows only the two rows that can
+  actually do something — a row whose only possible message is 「未找到数据目录」 is noise. A
+  source that *is* installed but holds no sessions still gets a row (it says 没有找到会话):
+  that is a state the user would otherwise go hunting for in the file system. If every source
+  is absent the pane says so once instead of listing four disabled rows.
 
 - **One adapter per source, one writer for all of them** (`src/main/engine/import/`):
   `sources/*.ts` translate a foreign store into the intermediate form in `types.ts` and stop;
@@ -567,6 +611,16 @@ multi-select picker of that agent's sessions; nothing is imported until the user
   report also lists what a conversion dropped (injected context, subagent sidechains,
   compaction markers — never written as real `compaction` entries, which would hide earlier
   messages from both the model and the thread).
+- **Archived sessions are folded, not dropped.** `threads.archived` (Codex, plus the
+  `archived_sessions/` directory on the walk fallback) and `session.time_archived` (opencode)
+  travel through the adapter as `archived` and reach the picker as one boolean — on the
+  author's corpus 62 of 88 Codex threads are archived, so listing them beside live work buries
+  it. The picker hides them behind a 显示已归档 switch and badges the rows; the source row
+  carries `archivedCount` so the count is visible while they are hidden. The select-all
+  checkbox carries the count in its own label (`全选（已选/可见）`, not a separate 已选
+  readout) and is scoped to the rows on screen; folding the archived away also drops them
+  from the selection, so that number always matches what would actually be imported. pi and
+  Claude Code have no such notion and their switch stays disabled.
 - **The catalog write is flushed before success is reported.** `ConversationCatalog` coalesces
   writes on a 40 ms debounce, so `importSessions` calls `flush()` once at the end — after the
   pane says 已导入, the chats survive a crash.
@@ -658,6 +712,15 @@ means either: an agent **run** and a **compaction**.
   queue drain). `streaming ⇒ working` always: a run is a subset of working, and a
   `conversation_running: false` for the chat on screen clears `streaming` in the same batch,
   so the two can never be seen to contradict each other.
+- **The transcript's working row is gated on the reply's tail, not on whether it has text.**
+  `WorkingStatus` (`components/chat/message-list.tsx`) renders 「正在工作 / 继续工作」 while `streaming`
+  and *nothing live is at the end of the reply* — where 「live」 means a trailing text part (its caret
+  blinks), a trailing thinking block (it shimmers 正在思考), or any tool still `running` (its spinner).
+  The old gate was `!hasText`, which showed the row only in a reply that had not written a word yet:
+  a run that had already produced prose then went quiet for the whole tool→model boundary, because
+  the tool cards had settled and the next token had not arrived — a transcript of finished rows that
+  read as a hang. The point is that a live element is *last*, so a reply whose text is followed by a
+  running tool still shows only the spinner.
 - **Main owns the renderer's mark.** `conversation_running` is sent on every change (for
   background chats too), and only Main may lower it. A transcript read must not: `setMessages`
   leaves the run flags alone, because `reloadActiveMessages()` fires at every `agent_end` /
@@ -674,6 +737,81 @@ A compaction's own payloads only reach the renderer while its conversation is on
 it has no transcript entry until the summary lands — so `#messages()` re-serves the running
 「正在压缩上下文」 card from `#compacting` for an in-flight compaction. Without it, switching
 away and back mid-compaction lost the card until the summary was finally written.
+
+## 折叠运行过程（设置 → 对话）
+
+`settings.collapseRuns` (设置 → 对话, on by default) folds a finished run's thinking and tool
+calls behind one collapsed 「用时 …」 row, leaving the reply written after the last tool call on
+screen. It is modelled on zcode's turn-history fold, including its rule that the fold is gated
+on the turn's own terminal state.
+
+- **The row is only drawn when the run is settled *and* wrote an answer — i.e. when the fold
+  can actually happen.** A run still in flight, one that stopped on a tool call, and a failed
+  one all render the plain transcript, with no 「用时」 row at all. That is the point: such a row
+  could not be collapsed (it would hide the run's only output), and a header that cannot be
+  collapsed over content the reader is watching reads as broken. zcode draws one there but
+  labels it 「工作中/已停止」; hiding it is the simpler answer.
+- **Nothing is folded mid-run, because the final answer is not knowable mid-stream.** The model
+  may write prose, call another tool, then write again, so any rule keyed on 「the tail part is
+  text」 guesses and unfolds again at the next tool call. Settling — `streaming` going false — is
+  the confirmation, and it is the same verdict the sidebar's 运行中 mark uses (`agent_settled`).
+- **The settled split is anchored on the last process part, not on 「the last text」.** `cut =
+  index + 1` for the last part whose kind is `thinking` / `tool` / `group`; everything up to and
+  including it folds, everything after it is the answer. That point is a fact already on screen,
+  so the split needs no guess even for a reply whose prose arrived in several pieces.
+- **Both halves must be non-empty.** A reply that never thought or called a tool has nothing to
+  hide; one with no prose after its last tool call has no answer to leave out. Either way there
+  is no fold, and a body that would render nothing (only hidden thinking) folds nothing either.
+- **It is a render-time view, not a transcript change.** `RunCollapse`
+  (`components/chat/run-collapse.tsx`) wraps the parts `groupParts` already produced, so
+  the fold re-uses the same thinking / tool-card / model-divider renderers as the unfolded
+  transcript, and toggling the setting needs no engine round-trip.
+- **The header's 用时 and the footer's 耗时 are two different numbers, on purpose.** 耗时 is the
+  turn's total, first round-trip's request start (`createdAt`) to the instant its last entry was
+  persisted (`completedAt`, added by `sessionCompletionTimes` in `process-manager.ts`). 用时 is
+  the work the fold hides: the same start, but ending where the reply's **final message began**
+  (`messages[last].createdAt`). An engine message is one model request, so that boundary is
+  exactly where the last tool call finished — the answer's own generation is not part of the
+  process. A run that produced everything in a single request has no boundary to measure and
+  falls back to that request's span. Both survive a reload, and because the fold only exists
+  once the run has settled there is no live-ticking case. Both go through `formatDuration`
+  (`lib/time.ts`), the app's only duration format (`3分钟 41秒`), so the two numbers read in one
+  notation — a compact `3m41s` beside a `3分钟 41秒` was two spellings of the same unit. The
+  compact formatter it replaced is gone, and `formatDuration` returns `""` for a null span, so
+  the statistics popover spells out its own `—`.
+- **Collapsed by default, and entirely the reader's afterwards** — nothing re-folds it under
+  them. The main thread takes the setting as a `MessageList` prop (like `showThinking` /
+  `showTimestamp`) so the memoised rows can skip re-rendering on each streamed token; the
+  辅助对话 and 子 Agent panes read it from the settings store, because they are not memoised
+  against a token stream the same way.
+
+## 思考耗时（思考块的「持续了 N 秒」）
+
+A thinking block's duration is measured, not derived from the transcript: pi records one timestamp
+per message (its request start), so Main times each block as it streams and files the bounds in
+`runtime/engine/reasoning.json`, keyed by the session entry id the message becomes
+(`ReasoningStore`, `#timeReasoning`). `#messages` hands those bounds to `mapEngineMessages`, which
+stamps them onto the thinking parts, and the renderer derives the elapsed value at render time —
+which is why an open block keeps counting from its real start across a chat switch or a reload.
+
+The bounds can be missing, and the transcript must still say something:
+
+- **A provider that never opens with `thinking_start`.** `#timeReasoning` opens a block on
+  `thinking_start`, so a stream that only ever sends `thinking_delta` used to leave `blocks` empty
+  — and at `message_end` the message was filed with nothing. The whole run then read 「思考」 with
+  no duration, in every reload, forever. Blocks are now opened lazily on the first delta (and for
+  a second segment that arrives with no start event), so this cannot happen again. Real sessions
+  in the wild have this shape: one had 229 thinking messages with no bounds at all.
+- **Transcripts written before, or by a path that does not time them.** A delegated run's
+  transcript (`getSubagentMessages`, the live `subagent_event` stream) and an imported chat carry
+  no bounds at all.
+
+So `ChatMessageRow` falls back to the span of the **round-trip the block came from**
+(`messages[].createdAt` → `completedAt`) whenever a thinking part has no bounds of its own: the
+row then reports that whole request's time, an upper bound rather than the thought alone, instead
+of a bare 「思考」. Measured bounds always win. The owner lookup is a `Map<MessagePart, ChatMessage>`
+built from the row's messages, which works because `mergeAssistantRun` passes thinking parts
+through by reference.
 
 ## 运行时保持唤醒
 

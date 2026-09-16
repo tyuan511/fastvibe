@@ -1,10 +1,10 @@
 import { existsSync } from "node:fs";
-import { copyFile, mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { readdir, readFile, stat } from "node:fs/promises";
+import { homedir } from "node:os";
 import { basename, join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import type { ImportedItem, ImportedSession, ImportedToolCall, ImportedUsage, ImportAdapter, ImportCandidateInfo } from "../types";
 import { asArray, asNumber, asRecord, asString, clipToolText, excerpt, toMillis } from "../io";
+import { disposeImportDatabases, openReadOnlyDatabase } from "../sqlite";
 
 /**
  * opencode (sst/opencode) — `~/.local/share/opencode`.
@@ -58,7 +58,9 @@ export const opencodeAdapter: ImportAdapter = {
     return readDatabase(id);
   },
 
-  dispose: disposeOpencodeCopy,
+  // Shared with the zcode adapter: both read a WAL database that their agent is still
+  // writing, so both may have had to copy it aside (see `../sqlite.ts`).
+  dispose: disposeImportDatabases,
 };
 
 // ---------------------------------------------------------------------------
@@ -80,73 +82,8 @@ type StatRow = { session_id: string; c: number };
 type MessageRow = { id: string; time_created: number; data: string };
 type PartRow = { message_id: string; time_created: number; data: string };
 
-/**
- * Copy the live database (plus its WAL sidecars) somewhere private, then open the copy
- * read-only.
- *
- * A read-only open of the live file can throw `SQLITE_BUSY` while opencode is running,
- * and WAL mode needs write access to the `-shm` sidecar even for reads. Copying first is
- * the only way to read a session consistently without touching the user's data root, so
- * it is done deliberately here and the temp directory is removed in `finally`. The copy
- * includes `-wal`/`-shm` so recently committed turns (which may not be checkpointed into
- * the main file yet) are visible.
- */
-/**
- * Open the session database without disturbing whoever else has it open.
- *
- * Two facts drive this. opencode keeps a WAL, so an ordinary read-only handle on the
- * live file is *usually* fine and costs nothing — but a checkpoint in flight can throw
- * `SQLITE_BUSY`. And the file is large (2.8 GB in the author's corpus), so copying it is
- * a last resort, not the default: doing that per call made a ten-session import spend
- * half a minute copying the same bytes.
- *
- * So: try the live file read-only; only on failure copy it (with its `-wal`/`-shm`)
- * aside and open that. A successful copy is cached for the lifetime of the run and
- * removed by `dispose()`, because `scan()` and every `read()` would otherwise repeat it.
- */
-let cachedCopy: { dir: string; db: DatabaseSync } | undefined;
-
-async function openDatabase(): Promise<{ db: DatabaseSync; close: () => Promise<void> }> {
-  if (cachedCopy) return { db: cachedCopy.db, close: async () => undefined };
-  try {
-    const db = new DatabaseSync(DB_FILE, { readOnly: true });
-    db.prepare("SELECT 1").get();
-    return { db, close: async () => db.close() };
-  } catch {
-    // Locked or mid-checkpoint: fall through to the copy.
-  }
-  const dir = await mkdtemp(join(tmpdir(), "fastvibe-import-"));
-  const copy = join(dir, basename(DB_FILE));
-  await copyFile(DB_FILE, copy);
-  for (const suffix of ["-wal", "-shm"]) {
-    await copyFile(`${DB_FILE}${suffix}`, `${copy}${suffix}`).catch(() => undefined);
-  }
-  let db: DatabaseSync;
-  try {
-    db = new DatabaseSync(copy, { readOnly: true });
-  } catch (error) {
-    await rm(dir, { recursive: true, force: true }).catch(() => undefined);
-    throw error;
-  }
-  cachedCopy = { dir, db };
-  return { db, close: async () => undefined };
-}
-
-/** Drop the cached copy (if one was needed). Called once an import run finishes. */
-export async function disposeOpencodeCopy(): Promise<void> {
-  const cached = cachedCopy;
-  cachedCopy = undefined;
-  if (!cached) return;
-  try {
-    cached.db.close();
-  } catch {
-    // Already closed — the copy is disposable either way.
-  }
-  await rm(cached.dir, { recursive: true, force: true }).catch(() => undefined);
-}
-
 async function scanDatabase(): Promise<ImportCandidateInfo[]> {
-  const handle = await openDatabase();
+  const handle = await openReadOnlyDatabase(DB_FILE);
   try {
     const sessions = handle.db
       .prepare(
@@ -171,8 +108,6 @@ async function scanDatabase(): Promise<ImportCandidateInfo[]> {
       const count = stats.get(row.id) ?? 0;
       const notes: string[] = [];
       if (row.parent_id) notes.push("子会话（subagent）");
-      // An archived session is still importable; the note only warns that opencode hid it.
-      if (row.time_archived) notes.push("已归档");
       return {
         id: row.id,
         title: row.title?.trim() || row.id,
@@ -180,6 +115,7 @@ async function scanDatabase(): Promise<ImportCandidateInfo[]> {
         createdAt: row.time_created,
         updatedAt: row.time_updated,
         messageCount: count,
+        archived: row.time_archived !== null,
         note: notes.length ? notes.join("、") : undefined,
       };
     });
@@ -190,7 +126,7 @@ async function scanDatabase(): Promise<ImportCandidateInfo[]> {
 
 async function readDatabase(id: string): Promise<ImportedSession> {
   if (!existsSync(DB_FILE)) throw new Error("未找到 opencode 数据库");
-  const handle = await openDatabase();
+  const handle = await openReadOnlyDatabase(DB_FILE);
   try {
     const session = handle.db
       .prepare("SELECT id, title, directory, parent_id, time_created, time_updated, time_archived, model, NULL AS worktree FROM session WHERE id = ?")

@@ -39,6 +39,7 @@ import { filesToAttachments } from "@/lib/attachments";
 import { THINKING_LABELS } from "@/lib/thinking-levels";
 import { useGitStatus } from "@/lib/use-git-status";
 import { cn } from "@/lib/utils";
+import { formatDuration } from "@/lib/time";
 import { matchChord, resolveBinding } from "@/lib/shortcuts";
 import { useShortcutLabel } from "@/lib/use-shortcuts";
 import { PERMISSION_DESCRIPTIONS, PERMISSION_LABELS, PERMISSION_MODES } from "@/lib/permission-modes";
@@ -145,18 +146,6 @@ function formatCount(value: number | null | undefined): string {
   return String(Math.round(value));
 }
 
-function formatDuration(ms: number | null | undefined): string {
-  if (ms == null || !Number.isFinite(ms) || ms <= 0) return "—";
-  if (ms < 10_000) return `${(ms / 1000).toFixed(1)}s`;
-  const total = Math.round(ms / 1000);
-  if (total < 60) return `${total}s`;
-  const hours = Math.floor(total / 3600);
-  const minutes = Math.floor((total % 3600) / 60);
-  const seconds = total % 60;
-  if (hours > 0) return `${hours}h${String(minutes).padStart(2, "0")}m`;
-  return `${minutes}m${String(seconds).padStart(2, "0")}s`;
-}
-
 function formatSpeed(tokens: number, ms: number | undefined): string {
   if (!ms || ms <= 0 || tokens <= 0) return "—";
   return `~${Math.round(tokens / (ms / 1000))} tok/s`;
@@ -232,8 +221,8 @@ function ContextUsagePanel({
           </div>
           <dl className="space-y-1.5 text-xs">
             <StatRow label="回答速度" value={formatSpeed(output, timing?.modelMs)} />
-            <StatRow label="模型耗时" value={formatDuration(timing?.modelMs)} />
-            <StatRow label="工具耗时" value={formatDuration(timing?.toolMs)} />
+            <StatRow label="模型耗时" value={formatDuration(timing?.modelMs) || "—"} />
+            <StatRow label="工具耗时" value={formatDuration(timing?.toolMs) || "—"} />
             <StatRow label="步骤" value={stats.steps != null ? String(stats.steps) : "—"} />
             <StatRow label="Token" value={`${formatCount(input)} ↑ · ${formatCount(output)} ↓`} />
             <StatRow
@@ -769,7 +758,13 @@ export function Composer({
           <DropdownMenu>
             <DropdownMenuTrigger
               render={
-                <Chip className="text-warning hover:bg-warning/10 hover:text-warning">
+                <Chip
+                  className={
+                    permissionMode === "full"
+                      ? "text-destructive hover:bg-destructive/10 hover:text-destructive"
+                      : undefined
+                  }
+                >
                   <HugeiconsIcon strokeWidth={2} icon={ShieldAlertIcon} className="size-4" />
                   <span className="hidden @min-[27.5rem]/composer:inline">{PERMISSION_LABELS[permissionMode]}</span>
                   <HugeiconsIcon strokeWidth={2} icon={ArrowDown01Icon} className="size-3" />
@@ -795,7 +790,8 @@ export function Composer({
                       closeOnClick
                       className={cn(
                         "items-start gap-1.5 rounded-lg px-1.5 py-1.5 pr-7",
-                        mode === permissionMode && "text-warning focus:text-warning",
+                        mode === permissionMode &&
+                        mode === "full" && "text-destructive focus:text-destructive",
                       )}
                     >
                       <HugeiconsIcon strokeWidth={2} icon={modeIcon} className="mt-0.5 size-3.5 shrink-0" />

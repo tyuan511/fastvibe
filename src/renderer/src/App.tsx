@@ -159,12 +159,14 @@ const MessageThread = memo(function MessageThread({
   onEdit,
   showThinking,
   showTimestamp,
+  collapseRuns,
 }: {
   loading: boolean;
   onRetry: (message: ChatMessage) => void;
   onEdit: (message: ChatMessage) => void;
   showThinking: boolean;
   showTimestamp: boolean;
+  collapseRuns: boolean;
 }): JSX.Element {
   const messages = useSessionStore((state) => state.messages);
   const streaming = useSessionStore((state) => state.streaming);
@@ -177,6 +179,7 @@ const MessageThread = memo(function MessageThread({
       onEdit={onEdit}
       showThinking={showThinking}
       showTimestamp={showTimestamp}
+      collapseRuns={collapseRuns}
     />
   );
 });
@@ -1254,12 +1257,10 @@ export function App(): JSX.Element {
         next = await window.fastvibe.engine.setThinking(levels.includes("high") ? "high" : levels[0]);
       }
       setSession(next);
-      // The divider is drawn from the engine's own `model_change` entry, so a
-      // transcript read is the authoritative version of it: the live `model_changed`
-      // event places it as it happens, and while nothing is in flight the transcript
-      // is settled enough to simply be re-read. Kept off mid-run, where the engine's
-      // message list does not yet contain the reply being streamed.
-      if (next.running !== true) reloadActiveMessages();
+      // Deliberately no transcript re-read here. Nothing about the chat changed yet —
+      // the pick is announced as a divider only when a reply actually runs on it (Main
+      // emits `model_changed` from the assistant `message_start`), so reading the
+      // transcript now would only invite a divider for a switch that has not happened.
     } catch {
       setError("切换模型失败，请稍后重试。");
     }
@@ -1499,6 +1500,7 @@ export function App(): JSX.Element {
                 onEdit={handleEdit}
                 showThinking={settings.showThinking}
                 showTimestamp={settings.showTimestamps}
+                collapseRuns={settings.collapseRuns}
               />
             </div>
             {/* Everything under the transcript shares its column: the transcript's

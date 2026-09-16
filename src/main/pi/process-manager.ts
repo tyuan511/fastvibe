@@ -44,7 +44,6 @@ import type {
   TuiRun,
   WorkspaceSnapshot,
   ModelPrice,
-  MessagePart,
   NativeProviderConfig,
   PermissionQuestion,
   ImportCandidate,
@@ -199,6 +198,33 @@ function slimStreamEvent(event: Record<string, unknown>): Record<string, unknown
     return summary ? { ...rest, message: summary } : rest;
   }
   return event;
+}
+function sessionEntryIds(session: AgentSession): Map<unknown, string> {
+  const ids = new Map<unknown, string>();
+  for (const entry of session.sessionManager.getEntries()) {
+    if (entry.type === "message") ids.set(entry.message, entry.id);
+  }
+  return ids;
+}
+
+/**
+ * The instant each message's session entry was persisted, keyed by entry id.
+ *
+ * An entry is appended once its message has finished streaming, so its timestamp is
+ * the reply's *end* — the engine's own message timestamp is only the request start.
+ * That is what lets a reply's footer report when it finished and how long it took.
+ * User and tool-result entries are written at the same instant they happened, so the
+ * distinction only matters for an assistant reply (`mapEngineMessages` applies it
+ * there alone).
+ */
+function sessionCompletionTimes(session: AgentSession): Map<string, number> {
+  const times = new Map<string, number>();
+  for (const entry of session.sessionManager.getEntries()) {
+    if (entry.type !== "message") continue;
+    const at = Date.parse(entry.timestamp);
+    if (Number.isFinite(at)) times.set(entry.id, at);
+  }
+  return times;
 }
 
 function isUserEngineMessage(message: unknown): message is Record<string, unknown> {
@@ -727,7 +753,19 @@ export class PiProcessManager {
   }
   async getSubagentMessages(subagentId: string): Promise<ChatMessage[]> {
     const live = this.#subagentSessions.get(subagentId);
-    if (live) return mapEngineMessages(live.messages);
+    if (live) {
+      // The live pane draws the store's per-run stream, not this, but the mapping
+      // still carries the entry ids and completion times so a mid-run read agrees
+      // with the cached transcript written at the end.
+      const entryIds = sessionEntryIds(live);
+      return mapEngineMessages(
+        live.messages,
+        (message) => entryIds.get(message),
+        undefined,
+        undefined,
+        sessionCompletionTimes(live),
+      );
+    }
     return this.#subagentMessages.get(subagentId)?.slice() ?? [];
   }
   async getSubagents(): Promise<SubagentInfo[]> {
@@ -862,30 +900,59 @@ export class PiProcessManager {
     if (current && current.provider === model.provider && current.id === model.id) {
       return this.#state(session, this.#activeId ?? undefined);
     }
-    await this.#useModel(session, this.#activeId ?? undefined, model);
+    await this.#useModel(session, model);
     return this.#state(session, this.#activeId ?? undefined);
   }
   /**
-   * Switch one session's model, and tell the renderer where the switch landed.
+   * Switch one session's model.
    *
-   * The SDK records it as a `model_change` session entry, which the transcript turns
-   * into a divider — but only when the transcript is next re-read, so a switch made
-   * mid-run would stay invisible until the run ended. The event carries the same two
-   * sides so the divider can be drawn in place as it happens.
+   * The SDK records the pick as a `model_change` session entry, but nothing is
+   * announced from here: choosing a model is not using one, and a divider drawn on
+   * the pick said a switch had happened in the conversation while the next reply was
+   * still free to be written by the previous model (or the pick to be reverted).
+   * `#announceModelUse` emits it from the assistant `message_start` that actually
+   * runs on the new model, which is the moment the divider is true.
    */
   async #useModel(
     session: AgentSession,
-    conversationId: string | undefined,
     model: Parameters<AgentSession["setModel"]>[0],
   ): Promise<void> {
-    const previous = session.model;
     await session.setModel(model);
-    this.#emit({
-      type: "model_changed",
-      conversationId,
-      model: { provider: model.provider, id: model.id },
-      ...(previous ? { previous: { provider: previous.provider, id: previous.id } } : {}),
-    });
+  }
+  /**
+   * Announce a model switch at the moment the new model actually answers.
+   *
+   * The transcript can say *where* a switch sits in the branch, but not whether it was
+   * ever used: a `model_change` entry is written the instant the pick is made, so a
+   * switch that nothing followed (or one reverted before the next prompt) drew a
+   * divider for a run that never happened. The reply carries its own `provider`/`model`,
+   * so the announcement is made from the assistant `message_start` — and the model to
+   * compare against is the last assistant message already in the transcript, which
+   * makes picking A, then B, then A again before sending announce nothing at all.
+   *
+   * The first reply of a conversation has no predecessor and is not a switch — the
+   * model it starts on is the one the chat was created with, and it is already named
+   * on the composer's chip.
+   */
+  #announceModelUse(
+    conversationId: string,
+    session: AgentSession,
+    message: Record<string, unknown>,
+  ): void {
+    const provider = typeof message.provider === "string" ? message.provider : undefined;
+    const id = typeof message.model === "string" ? message.model : undefined;
+    if (!provider || !id) return;
+    let previous: EngineModel | undefined;
+    for (let index = session.messages.length - 1; index >= 0; index -= 1) {
+      const item: unknown = session.messages[index];
+      if (!isRecord(item) || item.role !== "assistant") continue;
+      if (typeof item.provider !== "string" || typeof item.model !== "string") break;
+      previous = { provider: item.provider, id: item.model };
+      break;
+    }
+    if (!previous) return;
+    if (previous.provider === provider && previous.id === id) return;
+    this.#emit({ type: "model_changed", conversationId, model: { provider, id }, previous });
   }
   async setInterruptMode(mode: "immediate" | "wait"): Promise<EngineSessionState> { this.#interruptMode = mode; return this.getState(); }
   async setSteeringMode(mode: "all" | "one-at-a-time"): Promise<EngineSessionState> { (await this.#active()).setSteeringMode(mode); return this.getState(); }
@@ -1237,6 +1304,13 @@ export class PiProcessManager {
       if (event.type === "message_end" && isAssistantEngineMessage(event.message)) {
         this.#recordUsage(event.message, result.session, now);
       }
+      // A model switch is announced when the new model actually starts answering, not
+      // when it was picked: `#announceModelUse` compares this reply against the last
+      // one in the transcript before the payload is forwarded, so the renderer's
+      // divider lands on the reply that runs on the new model.
+      if (event.type === "message_start" && isAssistantEngineMessage(event.message)) {
+        this.#announceModelUse(conversation.id, result.session, event.message);
+      }
       if (event.type === "session_info_changed") {
         this.#applySessionTitle(conversation.id, event.name);
       }
@@ -1482,7 +1556,14 @@ export class PiProcessManager {
       const inner = event.assistantMessageEvent.type;
       if (inner === "thinking_start") {
         run.blocks.push({ startedAt: now });
-      } else if (inner !== "thinking_delta") {
+      } else if (inner === "thinking_delta") {
+        // Not every provider opens with `thinking_start`. Without this a stream of deltas
+        // would leave `blocks` empty, and the message would be filed with no bounds at all —
+        // that transcript then reads 「思考」 with no duration, forever, in every reload.
+        // A second segment that arrives with no start event opens its own block too.
+        const open = run.blocks.at(-1);
+        if (!open || open.endedAt !== undefined) run.blocks.push({ startedAt: now });
+      } else {
         // `thinking_end` is authoritative; the content that follows a block would
         // only be reached without one if a provider skipped the end event.
         this.#closeThinkingBlock(run, now);
@@ -1715,8 +1796,14 @@ export class PiProcessManager {
       if (session.model) usedModel = `${session.model.provider}/${session.model.id}`;
       // `message_end` is slimmed for IPC, so the live stream is the only in-flight
       // transcript; persist the mapped session here so a tab opened after the run
-      // still has the full reply (tools and parts included).
-      this.#subagentMessages.set(subagentId, mapEngineMessages(messages));
+      // still has the full reply (tools and parts included). The sub-session is
+      // in-memory, but its entries still carry the persist instant, so a completed
+      // pane's footer reads the same as a persisted transcript's.
+      const subEntryIds = sessionEntryIds(session);
+      this.#subagentMessages.set(
+        subagentId,
+        mapEngineMessages(messages, (message) => subEntryIds.get(message), undefined, undefined, sessionCompletionTimes(session)),
+      );
     }
     stopReason = thrown ? "error" : summary.stopReason;
     errorMessage = thrown ?? summary.errorMessage;
@@ -1877,8 +1964,43 @@ export class PiProcessManager {
       if (!renderer) return undefined;
       return renderExtensionMessage(renderer, message, this.#widgetWidth);
     };
-    const messages = mapEngineMessages(session.messages, (message) => entryIds.get(message), timings, renderCustom);
+    const messages = mapEngineMessages(
+      session.messages,
+      (message) => entryIds.get(message),
+      timings,
+      renderCustom,
+      sessionCompletionTimes(session),
+    );
     this.#insertModelSwitches(session, messages);
+    // The SDK keeps the reply in flight in `agent.state.streamingMessage` and only
+    // pushes it into `agent.state.messages` on `message_end`. A read taken mid-run
+    // therefore ends at the user prompt with no trailing assistant row — and the
+    // renderer draws 「正在工作」 on that row (its live caret too), so a chat switched
+    // away from and back looked idle with its streamed text gone until the next event
+    // landed: the optimistic bubble `addUserMessage` made is replaced by this read.
+    // Append the reply being streamed, so the transcript says what the composer and
+    // the sidebar already do. An empty stand-in covers the window before the first
+    // `message_start` (run start, or an auto-retry backoff).
+    if (conversationId && this.#running.get(conversationId) === true && !this.#compacting.has(conversationId)) {
+      const [inFlight] = mapEngineMessages(session.state.streamingMessage ? [session.state.streamingMessage] : []);
+      if (inFlight?.role === "assistant") {
+        messages.push({
+          ...inFlight,
+          id: `running:${conversationId}`,
+          // `mapEngineMessages` is a transcript reader, so it marks every tool call
+          // `done`. This one is still forming its arguments — the assistant message
+          // has not ended, so none of its tools can have executed yet.
+          tools: inFlight.tools.map((tool) => ({ ...tool, status: "running" as const })),
+        });
+      } else if (messages.at(-1)?.role !== "assistant") {
+        // Between the run starting and the first `message_start` — the window a
+        // prompt sits in right after it is sent — there is no partial to show, so
+        // stand in the empty bubble the run is about to stream into. An assistant
+        // already on the end means a reply (or an auto-retry's failure) is what the
+        // transcript should show for the rest of the run, not a second working row.
+        messages.push({ id: `running:${conversationId}`, role: "assistant", text: "", tools: [], parts: [], createdAt: Date.now() });
+      }
+    }
     // A compaction has no transcript entry until it lands, and its own payload only
     // reaches the renderer while this conversation is on screen. Serving the running
     // card from here is what makes it survive a chat switch (or a window reload)
@@ -1898,54 +2020,46 @@ export class PiProcessManager {
     return messages;
   }
   /**
-   * Fold the session's `model_change` entries into the transcript as divider parts.
+   * Fold model switches into the transcript as divider parts, where the replies show them.
    *
-   * The SDK writes one of these on every switch, anchored to the last *completed*
-   * message — so a switch made while a reply was streaming belongs between that
-   * reply's parts, not after the turn. The divider therefore goes at the end of the
-   * preceding assistant (which is where the following message's parts begin, and the
-   * same place the live event puts it), else at the start of the message that follows
-   * it. A `model_change` with no message before it is not a switch at all: it is the
-   * model the session was created on, and the composer's chip already says so.
+   * A switch is drawn only where it was *used*, so the reply is the source of truth: every
+   * assistant message carries the `provider`/`model` that produced it, which makes two
+   * consecutive replies on different models a switch — and a pick that nothing followed (or
+   * one reverted before the next prompt) no switch at all. The `model_change` entry the SDK
+   * writes on the pick is deliberately *not* consulted: it is anchored to the last completed
+   * message, which during a run sits *before* the reply still streaming, so the entry alone
+   * cannot say which reply the new model actually wrote.
+   *
+   * The part is unshifted onto the first reply the new model produced — the same slot the
+   * live `model_changed` splice uses, since the transcript reload and the live stream have to
+   * agree. Consecutive engine messages of one reply are merged into a single row by the
+   * renderer, so a switch made mid-run still lands *between that reply's parts* rather than
+   * between turns.
    */
   #insertModelSwitches(session: AgentSession, messages: ChatMessage[]): void {
     if (messages.length === 0) return;
     const indexById = new Map(messages.map((message, index) => [message.id, index]));
     let previous: EngineModel | undefined;
-    let anchor: number | null = null;
-    let pending: Array<{ from?: EngineModel; to: EngineModel }> = [];
     for (const entry of session.sessionManager.getBranch()) {
-      if (entry.type === "model_change") {
-        const to: EngineModel = { provider: entry.provider, id: entry.modelId };
-        const from = previous;
-        previous = to;
-        if (anchor === null) continue;
-        if (messages[anchor].role === "assistant") {
-          (messages[anchor].parts ??= []).push({ kind: "model", from, to });
-        } else {
-          pending.push({ from, to });
-        }
-        continue;
-      }
       if (entry.type !== "message") continue;
+      const raw: unknown = entry.message;
+      if (!isRecord(raw) || raw.role !== "assistant") continue;
+      // A reply that does not name its model (nothing the engine produces is silent
+      // about this, but an imported transcript can be) is transparent: it draws no
+      // divider, and does not become the model the next reply is compared against.
+      if (typeof raw.provider !== "string" || typeof raw.model !== "string") continue;
+      const model: EngineModel = { provider: raw.provider, id: raw.model };
+      const from = previous;
+      // Recorded before the on-screen check below: a reply summarised away by a
+      // compaction still moves the sequence on, so the divider that finally shows
+      // names the model it really followed.
+      previous = model;
+      if (!from || (from.provider === model.provider && from.id === model.id)) continue;
       const index = indexById.get(entry.id);
       // Not on screen: summarised away by a compaction, or on another branch.
       if (index === undefined) continue;
-      // A system row (a notice, the compaction card) draws no parts, so a divider
-      // handed to one would be invisible. They are transparent here: the divider
-      // attaches to the prompt or reply around them.
-      if (messages[index].role === "system") continue;
-      if (pending.length > 0) {
-        const parts = (messages[index].parts ??= []);
-        parts.unshift(...pending.map((item): MessagePart => ({ kind: "model", ...item })));
-        pending = [];
-      }
-      anchor = index;
-    }
-    // A switch recorded before the session produced anything else (the reply it
-    // precedes has not started yet) trails the message it followed.
-    if (anchor !== null) {
-      for (const item of pending) (messages[anchor].parts ??= []).push({ kind: "model", ...item });
+      if (messages[index].role !== "assistant") continue;
+      (messages[index].parts ??= []).unshift({ kind: "model", from, to: model });
     }
   }
   /**
@@ -2049,7 +2163,7 @@ export class PiProcessManager {
     fallback ??= registry.getAvailable()[0];
     if (!fallback) return;
     try {
-      await this.#useModel(session, id, fallback);
+      await this.#useModel(session, fallback);
     } catch {
       // No credential for the replacement either: leave the session alone. The next
       // request reports it and the composer offers 「添加模型」.

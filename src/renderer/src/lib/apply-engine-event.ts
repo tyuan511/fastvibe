@@ -24,7 +24,9 @@ export type ApplyResult = {
    * engine has settled so far, which is where the next assistant message's content
    * begins. Returned on every event where an engine message starts or ends, so the
    * caller can keep it across streamed deltas — while the parts of the message in
-   * flight grow, the boundary must not move.
+   * flight grow, the boundary must not move. `model_changed` is emitted from the
+   * assistant `message_start` the new model is about to run, so the boundary at that
+   * moment is exactly where the divider belongs: the top of that reply.
    */
   partBoundary?: number;
 };
@@ -480,9 +482,12 @@ function applyEvent(
   }
 
   if (type === "model_changed") {
-    // A switch made while a reply is streaming: the SDK anchors its `model_change`
-    // entry to the last completed message, so the divider goes where the message in
-    // flight began — the same slot the transcript puts it in when it is re-read.
+    // Main emits this from the assistant `message_start` the new model is about to
+    // run — picking a model is not using one, so a switch that no reply ever followed
+    // is never announced. The boundary at that instant is the end of everything
+    // settled, so the divider opens the reply the new model is about to write; a
+    // switch made mid-run lands between the run's parts, the same slot the transcript
+    // puts it in when it is re-read.
     const to = asEngineModel(event.model);
     if (!to) return { messages: next, streaming: nextStreaming };
     const from = asEngineModel(event.previous);
@@ -630,7 +635,15 @@ function applyEvent(
       // Closes one assistant message, not the run. A `toolUse` stop means the agent
       // is about to execute tools and start another turn, so the working state has
       // to survive it — otherwise it flips off and on at every tool boundary.
-      if (asString(inner.reason) !== "toolUse") nextStreaming = false;
+      const reason = asString(inner.reason);
+      if (reason !== "toolUse") nextStreaming = false;
+      // A terminal round-trip ends the reply: stamp the finish so the footer can
+      // report the end time and the duration. `toolUse` is deliberately excluded —
+      // the reply continues into another round-trip, so its real end is later.
+      // Main's transcript read re-stamps this authoritatively from the session
+      // entry and a failed turn keeps the optimistic bubble (the reload is skipped
+      // to preserve the error), so that path is covered below.
+      if (reason !== "toolUse") ensureAssistant().completedAt = Date.now();
     }
     if (innerType === "error") {
       nextStreaming = false;
@@ -638,6 +651,10 @@ function applyEvent(
         asString(inner.reason) === "aborted" ||
         (isRecord(inner.error) && inner.error.stopReason === "aborted") ||
         (isRecord(inner.message) && inner.message.stopReason === "aborted");
+      // The round-trip stopped here — a failure or a user abort is still an end, and
+      // a failed turn never gets the authoritative transcript re-stamp (the reload is
+      // skipped so the error bubble survives), so this is the only reading it gets.
+      ensureAssistant().completedAt = Date.now();
       if (!aborted) {
         const error =
           errorFromAssistant(inner.error) ??

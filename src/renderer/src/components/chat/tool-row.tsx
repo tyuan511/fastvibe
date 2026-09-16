@@ -123,24 +123,22 @@ export function ToolRow({
         {label}
       </span>
       {subjectNode}
-      {context || error || trailing ? (
-        /*
-         * The trail owns the leftover width and is the only half of the row that
-         * really truncates. A zero basis keeps it out of the row's flex base sum, so
-         * the name in front of it is never shaved — with both halves shrinkable, the
-         * overflow is split in proportion to content width, and a fraction of a pixel
-         * is all `text-overflow: ellipsis` needs to swallow the whole subject
-         * (「终端 正. cd /Applications/…」). Once the row is genuinely too narrow for
-         * the name, the name shrinks on its own: the trail has no basis left to give.
-         */
-        <span className="flex min-w-0 flex-1 items-center gap-2">
-          {context ? (
-            <span className="min-w-0 truncate font-mono text-sm text-muted-foreground/60">{context}</span>
-          ) : null}
-          {error ? <FailureHint error={error} /> : null}
-          {trailing}
-        </span>
+      {/*
+       * The trailing context owns the leftover width: it is the only flexible item,
+       * and the only one that truncates. Everything after it — the failure badge and
+       * the caller's chip — keeps its intrinsic width as a direct child of the row.
+       *
+       * They used to share one `flex-1` wrapper, and since its flex basis was zero it
+       * took none of the shrinkage: on a tight row it collapsed to 0px while its
+       * `shrink-0` children kept painting, so 「执行失败」 spilled out of the box and
+       * landed under the hover chevron. A status the reader needs must not be a
+       * passenger of the box that is allowed to disappear.
+       */}
+      {context ? (
+        <span className="min-w-0 flex-1 truncate font-mono text-sm text-muted-foreground/60">{context}</span>
       ) : null}
+      {error ? <FailureHint error={error} /> : null}
+      {trailing}
     </>
   );
 

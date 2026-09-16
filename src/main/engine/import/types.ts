@@ -60,7 +60,17 @@ export type ImportedItem =
       provider?: string;
       usage?: ImportedUsage;
       at: number;
-    };
+    }
+  /**
+   * The model changed at this point in the conversation.
+   *
+   * Written as a `model_change` entry, which is a switch the engine records itself —
+   * the transcript draws it as a divider (`A/x → B/y`). Sources that keep a per-message
+   * model (zcode does) must emit one only where the model actually *changed*: an entry
+   * before every message would draw a divider before every message, and re-picking the
+   * same model is deliberately a no-op in the engine too.
+   */
+  | { kind: "switch"; provider: string; model: string; at: number };
 
 /** A source that can be scanned and read. Both methods must treat foreign data as read-only. */
 export type ImportAdapter = {
@@ -92,5 +102,8 @@ export type ImportCandidateInfo = {
   messageCount?: number;
   /** Transcript bytes on disk, when the source knows it without reading every payload. */
   bytes?: number;
+  /** The source agent's own archived flag. Absent for the sources that have no such
+   * notion (pi, Claude Code), never a guess. */
+  archived?: boolean;
   note?: string;
 };

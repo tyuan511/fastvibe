@@ -30,7 +30,7 @@ const SETTING_KEYWORDS: Record<SectionId, string> = {
   mcp: "工具",
   skills: "skill",
   extensions: "扩展 市场",
-  import: "导入 迁移 claude codex opencode pi 会话",
+  import: "导入 迁移 claude codex opencode zcode pi 会话",
   about: "版本",
 };
 

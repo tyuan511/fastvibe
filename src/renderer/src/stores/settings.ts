@@ -24,7 +24,7 @@ export type AppSettings = {
   permissionMode: PermissionMode;
   /**
    * 默认权限模式: what a launch starts on (设置 → 通用 → 默认权限模式). Separate from the
-   * live mode so escalating one run to 完全访问权限 in the composer cannot silently carry
+   * live mode so escalating one run to 完全访问 in the composer cannot silently carry
    * over to the next launch.
    */
   defaultPermissionMode: PermissionMode;
@@ -34,6 +34,11 @@ export type AppSettings = {
   interruptMode: "immediate" | "wait";
   showThinking: boolean;
   showTimestamps: boolean;
+  /**
+   * 折叠运行过程: fold each reply's process (thinking, tools, intermediate prose)
+   * into one 「用时 …」 block, leaving only the final summary text on screen.
+   */
+  collapseRuns: boolean;
   /** When true, an agent run holds the machine awake (`powerSaveBlocker`). */
   keepAwake: boolean;
   compactCode: boolean;
@@ -102,6 +107,7 @@ const DEFAULTS: AppSettings = {
   interruptMode: "immediate",
   showThinking: true,
   showTimestamps: true,
+  collapseRuns: true,
   keepAwake: true,
   compactCode: false,
   sendOnEnter: true,
@@ -130,6 +136,7 @@ function sanitize(parsed: Partial<AppSettings>): Partial<AppSettings> {
   if (!isIdListMap(next.sidebarOrder)) delete next.sidebarOrder;
   if (typeof next.autoCheckUpdates !== "boolean") delete next.autoCheckUpdates;
   if (typeof next.keepAwake !== "boolean") delete next.keepAwake;
+  if (typeof next.collapseRuns !== "boolean") delete next.collapseRuns;
   const shortcuts = sanitizeShortcutOverrides(next.shortcuts);
   if (shortcuts) next.shortcuts = shortcuts;
   else delete next.shortcuts;

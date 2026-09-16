@@ -339,7 +339,7 @@ function q8e(intl, statuses) {
 ```
 
 - 流式中且未展开：label 是 `.animated-gradient-text` 的「正在思考」
-- 已结束：`思考 · 持续了 12 秒`（三段分别为 `font-medium` / `·` / `font-normal`，同色 subtlest）
+- 已结束：`思考 · 12 秒`（三段分别为 `font-medium` / `·` / `font-normal`，同色 subtlest）
 - duration 由数据层给：`Math.max(1, Math.ceil(durationMs / 1000))`，**最小 1 秒**
 - **ticker**：流式中且收起时，在 label 右侧展示推理文本的**最后一行非空内容**，带 `y: 0.55em → 0` 的滚入动画；左右各 16px 渐隐遮罩（`linear-gradient(to right, transparent 0, black 16px, black calc(100% - 16px), transparent 100%)`）在溢出时启用。这样"思考进度"可见，却不需要展开一大块文字。
 
@@ -597,12 +597,12 @@ function groupParts(parts: MessagePart[]): RenderPart[] { ... }
 | 正文颜色 | `text-muted-foreground` | `text-muted-foreground/80`，12px/20px |
 | 收起态 | 流式时自动展开，塞满文字 | **默认收起**，流式时标签右侧滚动**末行 ticker** |
 | 流式标签 | spinner + 「思考中 · 3s」 | `.animated-gradient-text` 的「正在思考」 |
-| 结束标签 | 「思考完成 · 1s」 | 「思考 · 持续了 N 秒」 |
+| 结束标签 | 「思考完成 · 1s」 | 「思考 · N 秒」 |
 | 箭头 | 常显 | hover 才现形（`group/reasoning`） |
 | 滚动 | 硬边裁剪 | 上下 24px 渐隐遮罩 |
 | 图标 | `BrainIcon` 14px | `BrainIcon` 16px |
 
-**一处偏离 zcode**：duration 未知时（历史回放没有 `durationMs`），zcode 显示「持续了几秒」。但 FastVibe 不持久化耗时，**所有历史推理块**都会命中这个回退，满屏重复「持续了几秒」。因此改为**只显示「思考」**；只有真正测到耗时的块才带 `· 持续了 N 秒`。
+**一处偏离 zcode**：duration 未知时（历史回放没有 `durationMs`），zcode 显示「持续了几秒」。但 FastVibe 不持久化耗时，**所有历史推理块**都会命中这个回退，满屏重复「持续了几秒」。因此改为**只显示「思考」**；只有真正测到耗时的块才带 `· N 秒`。
 
 `.animated-gradient-text` 按 zcode 原样实现（§2.7）：同色相、`background-size: 300% 100%`、`gradient-flow 4s linear infinite`、soft = strong 的 22% alpha。工具行的运行态标签也换用它（zcode 里两者本就是同一个 class）。
 

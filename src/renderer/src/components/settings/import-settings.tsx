@@ -13,6 +13,7 @@ import { IconButton } from "@/components/icon-button";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -22,8 +23,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import type {
   ImportCandidate,
@@ -115,23 +118,37 @@ export function ImportSettings({
             </p>
           ) : null}
 
-          <div className="divide-y divide-border overflow-hidden rounded-lg border border-border">
-            {(sources ?? []).map((source) => (
-              <SourceRow
-                key={source.id}
-                source={source}
-                onOpen={() => setActive(source)}
-              />
-            ))}
-            {sources !== null && sources.length === 0 ? (
-              <p className="px-3 py-6 text-center text-xs text-muted-foreground">没有可用的来源</p>
-            ) : null}
-          </div>
+          {/* 
+            * The list is only drawn when it has rows: every source FastVibe knows about
+            * is absent — or the scan is still running — and an empty bordered box would
+            * read as a rendering bug. `sources === null` (still scanning) and `[]` (nothing
+            * installed) therefore both fall through to a message of their own.
+            */}
+          {sources && sources.length > 0 ? (
+            <div className="divide-y divide-border overflow-hidden rounded-lg border border-border">
+              {sources.map((source) => (
+                <SourceRow
+                  key={source.id}
+                  source={source}
+                  onOpen={() => setActive(source)}
+                />
+              ))}
+            </div>
+          ) : null}
+
+          {sources !== null && sources.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-border px-3 py-8 text-center">
+              <p className="text-sm">未检测到可导入的会话</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                本机未找到 pi、Claude Code、Codex、opencode 或 zcode 的数据目录
+              </p>
+            </div>
+          ) : null}
 
           {sources === null ? (
             <p className="flex items-center gap-2 text-xs text-muted-foreground">
               <Spinner className="size-3.5" />
-              正在读取 ~/.pi、~/.claude、~/.codex 与 opencode 的数据…
+              正在读取 ~/.pi、~/.claude、~/.codex、opencode 与 zcode 的数据…
             </p>
           ) : null}
         </CardContent>
@@ -171,7 +188,9 @@ function SourceRow({
         <div className="truncate text-xs text-muted-foreground">
           {source.reason
             ? source.reason
-            : `${source.sessionCount} 个会话${source.latestAt ? ` · 最近 ${formatDay(source.latestAt)}` : ""}`}
+            : `${source.sessionCount} 个会话${source.latestAt ? ` · 最近 ${formatDay(source.latestAt)}` : ""}${
+                source.archivedCount ? ` · 含 ${source.archivedCount} 个已归档` : ""
+              }`}
         </div>
       </div>
       <Button size="sm" variant="outline" disabled={unavailable} onClick={onOpen}>
@@ -193,6 +212,7 @@ function ImportPickerDialog({
   const [candidates, setCandidates] = useState<ImportCandidate[] | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [query, setQuery] = useState("");
+  const [showArchived, setShowArchived] = useState(false);
   const [running, setRunning] = useState(false);
   const [outcomes, setOutcomes] = useState<ImportOutcome[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -215,15 +235,28 @@ function ImportPickerDialog({
   }, [source.id]);
 
   const needle = query.trim().toLowerCase();
+  const archivedCount = (candidates ?? []).filter((candidate) => candidate.archived).length;
+  const archivedIds = useMemo(
+    () => new Set((candidates ?? []).filter((candidate) => candidate.archived).map((candidate) => candidate.id)),
+    [candidates],
+  );
+  // Archived sessions are the source agent's own leftovers — Codex hides 62 of 88 in the
+  // author's corpus — so they are folded away rather than listed beside live work. The
+  // switch is the only way they reappear, and a search looks in what is shown.
   const visible = useMemo(() => {
     if (!candidates) return [];
-    if (!needle) return candidates;
-    return candidates.filter((candidate) =>
-      `${candidate.title} ${candidate.cwd ?? ""}`.toLowerCase().includes(needle),
-    );
-  }, [candidates, needle]);
+    return candidates.filter((candidate) => {
+      if (candidate.archived && !showArchived) return false;
+      if (!needle) return true;
+      return `${candidate.title} ${candidate.cwd ?? ""}`.toLowerCase().includes(needle);
+    });
+  }, [candidates, needle, showArchived]);
 
-  const selectedVisible = visible.filter((candidate) => selected.has(candidate.id)).length;
+  // Within `visible`, not the whole candidate list: the label reads 全选（x/y）beside a
+  // list of y rows, and a selection hidden by the search box or by 显示已归档 must not make
+  // x exceed y.
+  const selectedCount = visible.filter((candidate) => selected.has(candidate.id)).length;
+  const allVisibleSelected = visible.length > 0 && visible.every((candidate) => selected.has(candidate.id));
 
   function toggle(id: string, next: boolean): void {
     setSelected((current) => {
@@ -234,7 +267,15 @@ function ImportPickerDialog({
     });
   }
 
-  function toggleAll(next: boolean): void {
+  /**
+   * 「Select what is on screen」, not 「select everything」: with the archived folded away
+   * or a search narrowing the list, a select-all that ticked hidden rows would import
+   * sessions the user never saw, and the count beside it would disagree with the list.
+   *
+   * Only the visible rows are touched in either direction — a selection made under one
+   * search survives the next one, and clearing visible rows never drops the rest.
+   */
+  function selectAllVisible(next: boolean): void {
     setSelected((current) => {
       const copy = new Set(current);
       for (const candidate of visible) {
@@ -291,9 +332,23 @@ function ImportPickerDialog({
         ) : (
           // Same shape as the model picker: a searched, multi-select list with a fixed
           // height, so the dialog never jumps around as a source's list loads.
-          <div className="flex min-h-0 min-w-0 flex-col gap-2">
-            <div className="flex min-w-0 items-center gap-2">
-              <div className="relative min-w-0 flex-1">
+          <div className="flex min-h-0 min-w-0 flex-col gap-3">
+            {/* The control row is only the two controls that act on the list, sitting at
+                opposite ends of it. The count rides in the checkbox's own label — an
+                unticked box already means "nothing selected", so 清空 needs no button of
+                its own. The search box is a fixed, modest width rather than `flex-1`: the
+                dialog is wide and a full-width field for a one-line filter reads as the
+                page's main input. */}
+            <div className="flex min-w-0 items-center justify-between gap-3">
+              <Label className="shrink-0 gap-2 text-xs font-normal text-muted-foreground tabular-nums">
+                <Checkbox
+                  checked={allVisibleSelected}
+                  disabled={visible.length === 0}
+                  onCheckedChange={(checked) => selectAllVisible(checked === true)}
+                />
+                全选（{selectedCount}/{visible.length}）
+              </Label>
+              <div className="relative w-56 max-w-full min-w-0 shrink">
                 <HugeiconsIcon
                   strokeWidth={2}
                   icon={Search01Icon}
@@ -306,15 +361,6 @@ function ImportPickerDialog({
                   onChange={(event) => setQuery(event.target.value)}
                 />
               </div>
-              <Button size="xs" variant="outline" onClick={() => toggleAll(true)}>
-                全选
-              </Button>
-              <Button size="xs" variant="outline" onClick={() => setSelected(new Set())}>
-                清空
-              </Button>
-              <span className="shrink-0 text-xs text-muted-foreground">
-                已选 {selected.size}/{visible.length}
-              </span>
             </div>
 
             <ScrollArea className="h-80 rounded-lg border border-border">
@@ -325,7 +371,11 @@ function ImportPickerDialog({
                 </div>
               ) : visible.length === 0 ? (
                 <p className="py-10 text-center text-xs text-muted-foreground">
-                  {needle ? "没有匹配的会话" : "没有可导入的会话"}
+                  {needle
+                    ? "没有匹配的会话"
+                    : archivedCount > 0
+                      ? "只剩已归档会话，打开「显示已归档」查看"
+                      : "没有可导入的会话"}
                 </p>
               ) : (
                 <div className="divide-y divide-border">
@@ -340,6 +390,29 @@ function ImportPickerDialog({
                 </div>
               )}
             </ScrollArea>
+
+            {/* A display option for the list, not an action on the selection, so it sits
+                under the list rather than in the row above it (where it crowded 全选 and
+                the search box). Always rendered: a disabled switch is how a source with
+                no notion of archiving (pi, Claude Code) says so. The switch is not wrapped
+                in a `<label>` — Base UI renders it as a `button`, which a label may not
+                contain. */}
+            <span className="flex shrink-0 items-center justify-end gap-2 text-xs text-muted-foreground">
+              显示已归档{archivedCount > 0 ? `（${archivedCount}）` : ""}
+              <Switch
+                checked={showArchived}
+                disabled={archivedCount === 0}
+                onCheckedChange={(next) => {
+                  setShowArchived(next);
+                  // What is hidden is not what gets imported: folding the archived rows
+                  // away drops them from the selection too, so the count beside 全选
+                  // never claims rows the user can no longer see.
+                  if (!next) {
+                    setSelected((current) => new Set([...current].filter((id) => !archivedIds.has(id))));
+                  }
+                }}
+              />
+            </span>
           </div>
         )}
 
@@ -350,6 +423,10 @@ function ImportPickerDialog({
           </p>
         ) : null}
 
+        {/* 取消 and 导入 split the row evenly — both carry `flex-1`, so they always take
+            an equal share of the footer whatever else is in it. `sm:flex-1` rather than
+            `flex-1`: below `sm` the footer stacks into a column, where a flex share of an
+            auto-height container would collapse both buttons. */}
         <DialogFooter>
           {outcomes ? (
             <Button size="sm" onClick={onClose}>
@@ -357,10 +434,15 @@ function ImportPickerDialog({
             </Button>
           ) : (
             <>
-              <Button size="sm" variant="ghost" disabled={running} onClick={onClose}>
+              <Button size="sm" variant="ghost" className="sm:flex-1" disabled={running} onClick={onClose}>
                 取消
               </Button>
-              <Button size="sm" disabled={running || selected.size === 0} onClick={() => void run()}>
+              <Button
+                size="sm"
+                className="sm:flex-1"
+                disabled={running || selected.size === 0}
+                onClick={() => void run()}
+              >
                 {running ? <Spinner className="size-3.5" /> : null}
                 {running ? "正在导入…" : `导入 ${selected.size} 个会话`}
               </Button>
@@ -406,6 +488,7 @@ function CandidateRow({
         </span>
         <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
           <span>{formatDay(candidate.updatedAt)}</span>
+          {candidate.archived ? <Badge variant="outline">已归档</Badge> : null}
           {candidate.messageCount !== undefined ? <span>· {candidate.messageCount} 条消息</span> : null}
           {candidate.bytes !== undefined ? <span>· {formatBytes(candidate.bytes)}</span> : null}
           {candidate.cwd ? <span className="truncate">· {shortenPath(candidate.cwd)}</span> : null}

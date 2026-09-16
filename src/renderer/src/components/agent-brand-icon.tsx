@@ -33,6 +33,14 @@ const PATHS: Record<ImportSourceId, JSX.Element> = {
       </path>
     </>
   ),
+  // z.ai's mark, drawn on its native 30×30 grid and scaled onto the shared 24×24 one.
+  "zcode": (
+    <g transform="scale(0.8)">
+      <path d="M15.47 7.1l-1.3 1.85c-.2.29-.54.47-.9.47h-7.1V7.09h9.3z"></path>
+      <path d="M24.3 7.1L13.14 22.91H5.7L16.86 7.1h7.44z"></path>
+      <path d="M14.53 22.91l1.31-1.86c.2-.29.54-.47.9-.47h7.09v2.33h-9.3z"></path>
+    </g>
+  ),
   "pi": (
     <>
       <path d="M1 1h16.5v11H12v5.5H6.5V23H1V1zm5.5 5.5V12H12V6.5H6.5z">

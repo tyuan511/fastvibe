@@ -12,7 +12,7 @@ import type { PermissionMode } from "@shared/types";
  *
  *   ask    请求批准    外部文件写入 + 联网 + 风险操作都询问
  *   smart  帮我批准    只询问检测到的风险操作（含外部文件写入）
- *   full   完全访问权限 不询问
+ *   full   完全访问 不询问
  *
  * The active mode is read from `FASTVIBE_PERMISSION_MODE`, which the Electron
  * main process keeps in sync with `settings.json`. It is re-read on every tool
@@ -28,7 +28,7 @@ const MODE_ENV = "FASTVIBE_PERMISSION_MODE";
 const MODE_LABELS: Record<PermissionMode, string> = {
   ask: "请求批准",
   smart: "帮我批准",
-  full: "完全访问权限",
+  full: "完全访问",
 };
 
 const MODE_DESCRIPTIONS: Record<PermissionMode, string> = {
@@ -219,7 +219,7 @@ function describeCommand(mode: PermissionMode): string {
     "沙箱规则：",
     "· 请求批准：外部文件写入、联网、风险操作、外部工具都询问。",
     "· 帮我批准：仅在检测到风险操作时询问（含外部文件写入）。",
-    "· 完全访问权限：不询问。",
+    "· 完全访问：不询问。",
     "",
     "在输入框的权限菜单中切换模式。",
   ].join("\n");
@@ -251,7 +251,7 @@ export default function permissionSandbox(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("permissions", {
-    description: "查看当前权限模式（请求批准 / 帮我批准 / 完全访问权限）",
+    description: "查看当前权限模式（请求批准 / 帮我批准 / 完全访问）",
     handler: async (_args, ctx) => {
       ctx.ui.notify(describeCommand(currentMode()), "info");
     },

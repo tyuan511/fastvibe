@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useRef, useState, type JSX } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { ArrowRight01Icon, Brain03Icon } from "@hugeicons/core-free-icons";
+import { ArrowRight01Icon, BrainIcon } from "@hugeicons/core-free-icons";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 
@@ -28,7 +28,7 @@ function secondsSince(startedAt: number, endedAt: number): number {
  *
  * Collapsed by default: while the model thinks, the header carries a shimmering
  * 「正在思考」 and a rolling ticker of the newest line, so progress stays legible
- * without a wall of text. Once settled it reads 「思考 · 持续了 N 秒」 and the full
+ * without a wall of text. Once settled it reads 「思考 · N 秒」 and the full
  * transcript stays one click away.
  *
  * The elapsed time is derived from the bounds Main measured (`startedAt` / `endedAt`)
@@ -128,7 +128,7 @@ export const ThinkingBlock = memo(function ThinkingBlock({
       >
         <HugeiconsIcon
           strokeWidth={2}
-          icon={Brain03Icon}
+          icon={BrainIcon}
           className={cn("size-4 shrink-0 text-muted-foreground")}
         />
         <span className="shrink-0 whitespace-nowrap">
@@ -185,14 +185,14 @@ export const ThinkingBlock = memo(function ThinkingBlock({
   );
 });
 
-/** 「思考 · 持续了 N 秒」; without a measured duration, just 「思考」. */
+/** 「思考 · N 秒」; without a measured duration, just 「思考」. */
 function SettledLabel({ elapsed }: { elapsed: number | null }): JSX.Element {
   if (elapsed === null) return <span className="font-medium text-muted-foreground">思考</span>;
   return (
     <span className="inline-flex items-center gap-2">
       <span className="font-medium text-muted-foreground">思考</span>
       <span className="font-normal text-muted-foreground/40">·</span>
-      <span className="font-normal text-muted-foreground/60">持续了 {elapsed} 秒</span>
+      <span className="font-normal text-muted-foreground/60">{elapsed} 秒</span>
     </span>
   );
 }

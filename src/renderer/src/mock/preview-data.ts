@@ -193,6 +193,36 @@ const TYPECHECK_TOOL: ToolCallBlock = {
 ✓ 类型检查通过，0 个错误（node · web）`,
 };
 
+const FAILED_TERMINAL: ToolCallBlock = {
+  id: "tool-bash-fail",
+  name: "bash",
+  args: {
+    command: "cd /Users/dev/code/fastvibe && node /tmp/fvcheck/run.mjs 2>&1 | tail -20",
+  },
+  status: "error",
+  result:
+    "node:internal/modules/cjs/loader:1215\n" +
+    "  throw err;\n" +
+    "  ^\n\n" +
+    "Error: Cannot find module '/tmp/fvcheck/run.mjs' imported from /Users/dev/code/fastvibe/[eval]\n" +
+    "    at finalizeResolution (node:internal/modules/esm/resolve:283:11)\n" +
+    "    at moduleResolve (node:internal/modules/esm/resolve:924:10)\n" +
+    "    at defaultResolve (node:internal/modules/esm/resolve:1065:11)\n" +
+    "    at ModuleLoader.#resolve (node:internal/modules/esm/loader:690:31)\n" +
+    "    at ModuleLoader.resolve (node:internal/modules/esm/loader:559:15) {" +
+    "\n  code: 'ERR_MODULE_NOT_FOUND'\n}",
+};
+
+const FAILED_BUILD: ToolCallBlock = {
+  id: "tool-build-fail",
+  name: "bash",
+  args: { command: "cd /Users/dev/code/fastvibe && npx electron-vite build 2>&1 | tail -5" },
+  status: "error",
+  result: "error during build:\nError: Could not resolve \"./missing\" from src/renderer/src/App.tsx",
+};
+
+/* A failing `bash` call with a command too long for the row, so the preview
+ * harness exercises the failure badge in the case that used to break it. */
 const THINKING =
   "用户想要主题能跟随系统。先确认现有的 themeMode 值域（light / dark / system），以及设置页里到底暴露了哪些入口，避免重复实现。";
 
@@ -223,6 +253,7 @@ export const MESSAGES: ChatMessage[] = [
       { kind: "tool", toolId: "tool-read-themes" },
     ],
     createdAt: NOW - 23 * MINUTE,
+    completedAt: NOW - 22.4 * MINUTE,
   },
   {
     id: "msg-a2",
@@ -248,6 +279,7 @@ export const MESSAGES: ChatMessage[] = [
       { kind: "tool", toolId: "tool-typecheck" },
     ],
     createdAt: NOW - 22 * MINUTE,
+    completedAt: NOW - 21.2 * MINUTE,
   },
   {
     id: "msg-a3",
@@ -271,6 +303,7 @@ export const MESSAGES: ChatMessage[] = [
       },
     ],
     createdAt: NOW - 21 * MINUTE,
+    completedAt: NOW - 20.6 * MINUTE,
   },
   {
     id: "msg-compact",
@@ -294,11 +327,28 @@ export const MESSAGES: ChatMessage[] = [
   {
     id: "msg-a4",
     role: "assistant",
-    text: "好的，我在应用层注册一个全局快捷键。",
-    tools: [EDIT_SHORTCUT],
+    text: "好的，我在应用层注册一个全局快捷键，并顺手跑一遍验证脚本。",
+    tools: [EDIT_SHORTCUT, FAILED_TERMINAL],
     parts: [
-      { kind: "text", text: "好的，我在应用层注册一个全局快捷键。" },
+      { kind: "text", text: "好的，我在应用层注册一个全局快捷键，并顺手跑一遍验证脚本。" },
       { kind: "tool", toolId: "tool-edit-shortcut" },
+      { kind: "tool", toolId: "tool-bash-fail" },
+    ],
+    createdAt: NOW - 3 * MINUTE,
+    completedAt: NOW - 2.7 * MINUTE,
+  },
+  // One engine message per model round-trip: the second one carries the answer, so the fold's
+  // 用时 (work up to this message) and the footer's 耗时 (the whole turn) differ.
+  {
+    id: "msg-a5",
+    role: "assistant",
+    text:
+      "已注册：`⌘J` 会在亮色 / 暗色之间切换；当前若处于「跟随系统」，会先固定为此刻生效的主题再切换。" +
+      "输入框内按 `⌘J` 也不会被吞掉。",
+    tools: [FAILED_BUILD],
+    parts: [
+      { kind: "thinking", text: "脚本没找到，换成直接构建一遍看看。", startedAt: NOW - 2.6 * MINUTE, endedAt: NOW - 2.5 * MINUTE },
+      { kind: "tool", toolId: "tool-build-fail" },
       {
         kind: "text",
         text:
@@ -306,7 +356,8 @@ export const MESSAGES: ChatMessage[] = [
           "输入框内按 `⌘J` 也不会被吞掉。",
       },
     ],
-    createdAt: NOW - 3 * MINUTE,
+    createdAt: NOW - 2.7 * MINUTE,
+    completedAt: NOW - 2.4 * MINUTE,
   },
 ];
 
@@ -570,12 +621,16 @@ export function previewFor(path: string): FilePreview {
   };
 }
 
-/** 设置 → 导入: four sources, one of them unavailable, so the pane shows both states. */
+/**
+ * 设置 → 导入: three sources, one of them installed but empty, so the pane's two states
+ * (a countable row, a 没有找到会话 row) are both represented. `pi` is deliberately absent
+ * here — that is exactly what "not installed" now looks like.
+ */
 export const IMPORT_SOURCES: ImportSourceStatus[] = [
-  { id: "claude-code", name: "Claude Code", root: "~/.claude/projects", sessionCount: 18, latestAt: NOW - 2 * HOUR },
-  { id: "codex", name: "Codex", root: "~/.codex", sessionCount: 42, latestAt: NOW - 25 * MINUTE },
-  { id: "opencode", name: "opencode", root: "~/.local/share/opencode", sessionCount: 7, latestAt: NOW - 3 * DAY },
-  { id: "pi", name: "pi coding agent", root: "~/.pi/agent/sessions", sessionCount: 0, reason: "未找到数据目录" },
+  { id: "claude-code", name: "Claude Code", sessionCount: 18, latestAt: NOW - 2 * HOUR },
+  { id: "codex", name: "Codex", sessionCount: 42, archivedCount: 9, latestAt: NOW - 25 * MINUTE },
+  { id: "opencode", name: "opencode", sessionCount: 0, reason: "没有找到会话" },
+  { id: "zcode", name: "zcode", sessionCount: 6, latestAt: NOW - 5 * HOUR },
 ];
 
 export const IMPORT_CANDIDATES: ImportCandidate[] = [
@@ -633,6 +688,39 @@ export const IMPORT_CANDIDATES: ImportCandidate[] = [
     updatedAt: NOW - 60 * DAY,
     messageCount: 2,
     bytes: 6_144,
+    imported: false,
+  },
+  {
+    id: "codex:live-1",
+    source: "codex",
+    title: "排查 browser_click 命中失败",
+    cwd: "/Users/yuantang/code/fastvibe",
+    createdAt: NOW - 40 * MINUTE,
+    updatedAt: NOW - 25 * MINUTE,
+    bytes: 3_100_000,
+    imported: false,
+  },
+  {
+    id: "codex:live-2",
+    source: "codex",
+    title: "git worktree 并发冲突",
+    cwd: "/Users/yuantang/code/fastvibe",
+    createdAt: NOW - 4 * DAY,
+    updatedAt: NOW - 4 * DAY + 50 * MINUTE,
+    bytes: 1_240_000,
+    note: "消息数为估算值",
+    imported: false,
+  },
+  {
+    id: "codex:arch-1",
+    source: "codex",
+    title: "旧版队列实现的调研",
+    cwd: "/Users/yuantang/code/apifuck",
+    createdAt: NOW - 90 * DAY,
+    updatedAt: NOW - 88 * DAY,
+    messageCount: 41,
+    bytes: 940_000,
+    archived: true,
     imported: false,
   },
 ];

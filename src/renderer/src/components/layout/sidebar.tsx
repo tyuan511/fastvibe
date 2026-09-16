@@ -50,6 +50,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ResizeHandle } from "@/components/resize-handle";
 import { CollapsiblePanel } from "@/components/layout/collapsible-panel";
 import { AppLogo } from "@/components/app-logo";
@@ -276,18 +277,32 @@ function DraggableProject({
               )}
               {...listeners}
             >
-              <CollapsibleTrigger className="flex min-w-0 flex-1 items-center gap-2.5 text-left text-sm">
-                <HugeiconsIcon
-                  strokeWidth={2}
-                  icon={open ? Folder02Icon : Folder01Icon}
-                  className="size-3.5 shrink-0 text-muted-foreground"
-                />
-                {renaming ? (
-                  <InlineRename value={name} onSubmit={onRename} onCancel={onCancelRename} />
-                ) : (
-                  <span className="truncate">{name}</span>
+              {/* The name is truncated to the sidebar width, so the header doubles
+                  as the project's full path on hover. Skipped while renaming — a
+                  tooltip over the inline input would cover what is being typed. */}
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <CollapsibleTrigger className="flex min-w-0 flex-1 items-center gap-2.5 text-left text-sm" />
+                  }
+                >
+                  <HugeiconsIcon
+                    strokeWidth={2}
+                    icon={open ? Folder02Icon : Folder01Icon}
+                    className="size-3.5 shrink-0 text-muted-foreground"
+                  />
+                  {renaming ? (
+                    <InlineRename value={name} onSubmit={onRename} onCancel={onCancelRename} />
+                  ) : (
+                    <span className="truncate">{name}</span>
+                  )}
+                </TooltipTrigger>
+                {renaming ? null : (
+                  <TooltipContent side="right" align="center" className="max-w-96">
+                    <span className="font-mono break-all">{cwd}</span>
+                  </TooltipContent>
                 )}
-              </CollapsibleTrigger>
+              </Tooltip>
               <div className="flex shrink-0 items-center gap-0.5 opacity-0 group-hover/project:opacity-100 focus-within:opacity-100 has-[[aria-expanded=true]]:opacity-100">
                 <DropdownMenu>
                   <DropdownMenuTrigger
@@ -406,19 +421,26 @@ function SessionRowContent({
       onClick={onOpen}
     >
       {/* Project chats keep an empty folder-icon column so titles line up with
-          the group name. 聊天 has no parent icon, so titles sit flush left;
-          the busy mark still occupies that column while a run is in flight. */}
-      {leadSlot || showSpinner ? (
-        <span className="flex size-3.5 shrink-0 items-center justify-center">
-          {showSpinner ? <RunningMark /> : null}
-        </span>
-      ) : null}
+          the group name. 聊天 has no parent icon, so titles sit flush left. */}
+      {leadSlot ? <span className="size-3.5 shrink-0" /> : null}
       {renamingThis ? (
         <InlineRename value={item.title} onSubmit={onRename} onCancel={onCancelRename} />
       ) : (
         <>
+          {/* The title spans whatever the trailing slot leaves. Idle the slot collapses
+              to nothing and the title takes the whole row; the busy mark stands in the
+              last action button's place (each is the last flex child, so both sit flush
+              against the row's padding and share one centre) and the hover actions
+              replace it rather than stack after it. The actions are also the keyboard
+              route; the context menu behind the row is the pointer one. */}
           <span className="min-w-0 flex-1 truncate">{item.title}</span>
-          <div className="flex shrink-0 items-center gap-0.5 opacity-0 group-hover/session:opacity-100 focus-within:opacity-100">
+          <div className="flex shrink-0 items-center gap-0.5">
+            {showSpinner ? (
+              <span className="flex size-6 items-center justify-center group-hover/session:hidden group-focus-within/session:hidden">
+                <RunningMark />
+              </span>
+            ) : null}
+            <div className="hidden items-center gap-0.5 group-hover/session:flex group-focus-within/session:flex">
               <IconButton
                 size="icon-xs"
                 variant="ghost"
@@ -446,6 +468,7 @@ function SessionRowContent({
                 <HugeiconsIcon strokeWidth={2} icon={Archive04Icon} className="size-3.5" />
               </IconButton>
             </div>
+          </div>
         </>
       )}
     </div>
@@ -974,7 +997,7 @@ export function Sidebar({
             {pinnedItems.length > 0 ? (
               <>
                 <SectionLabel>已置顶</SectionLabel>
-                {renderSessionList(pinnedItems)}
+                {renderSessionList(pinnedItems, false)}
               </>
             ) : null}
 

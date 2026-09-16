@@ -14,9 +14,10 @@ import {
 } from "@/components/ui/message-scroller";
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { formatDuration } from "@/lib/time";
 import { FLoader } from "@/components/f-loader";
-import { groupMessageRows, groupParts, mergeAssistantRun, type MessageRow, type RenderPart } from "@/lib/group-parts";
-import type { ChatAttachment, ChatMessage } from "@shared/types";
+import { groupMessageRows, groupParts, mergeAssistantRun, resolveParts, type MessageRow, type RenderPart } from "@/lib/group-parts";
+import type { ChatAttachment, ChatMessage, MessagePart } from "@shared/types";
 import { ImagePreview } from "@/components/image-preview";
 import { AttachmentChip } from "./attachment-chip";
 import { collectChangedFiles, TurnFileChips } from "./file-chips";
@@ -27,6 +28,7 @@ import { ToolCard } from "./tool-card";
 import { ToolGroupRow } from "./tool-group";
 import { CompactNotice } from "./compact-notice";
 import { ModelChangeNotice } from "./model-change-notice";
+import { RunCollapse } from "./run-collapse";
 import { TuiLines } from "./tui-lines";
 import { TurnRail, type TurnMarker } from "./turn-rail";
 
@@ -110,16 +112,33 @@ function MessageActions({
   onRetry,
   onEdit,
   showTimestamp,
+  elapsed,
 }: {
   message: ChatMessage;
   onRetry?: (message: ChatMessage) => void;
   onEdit?: (message: ChatMessage) => void;
   showTimestamp: boolean;
+  /** The whole turn's span, when the footer is the one reporting it. */
+  elapsed?: number;
 }): JSX.Element {
   const [copied, setCopied] = useState(false);
+  // A reply's footer reports when it *finished* and how long the whole turn took; the engine
+  // only stores the request start, so the end comes from Main's entry timing and a reply still
+  // streaming (or one read back from before that timing existed) falls back to the start time
+  // alone. That total is a different number from the fold header's 用时, which measures only the
+  // work the fold hides — so both are shown, and they read in the same spoken form so the two
+  // are comparable at a glance.
+  const ended = message.completedAt ?? message.createdAt;
   return (
     <MessageFooter className="gap-1 px-0 opacity-0 transition-opacity group-hover/row:opacity-100 focus-within:opacity-100">
-      {showTimestamp ? <span className="tabular-nums">{formatTime(message.createdAt)}</span> : null}
+      {showTimestamp ? (
+        <span className="tabular-nums">
+          {formatTime(ended)}
+          {elapsed !== undefined && elapsed > 0 ? (
+            <span className="text-muted-foreground/60"> · 耗时 {formatDuration(elapsed)}</span>
+          ) : null}
+        </span>
+      ) : null}
       {message.text ? (
         <ActionButton
           label="复制"
@@ -146,10 +165,7 @@ function MessageActions({
   );
 }
 
-function WorkingStatus({ message }: { message: ChatMessage }): JSX.Element | null {
-  const running = message.tools.find((tool) => tool.status === "running");
-  if (running) return null;
-  if (message.thinking) return null;
+function WorkingStatus({ message }: { message: ChatMessage }): JSX.Element {
   // The run is between tool calls or about to write, so this row is the only thing
   // in the reply. It stays in the same inline icon + shimmering-label shape as the
   // thinking block and tool rows — a chip here would be the one bordered box in a
@@ -231,6 +247,7 @@ function ChatMessageRowImpl({
   onEdit,
   showThinking,
   showTimestamp,
+  collapseRuns,
 }: {
   messages: ChatMessage[];
   streaming: boolean;
@@ -238,10 +255,90 @@ function ChatMessageRowImpl({
   onEdit?: (message: ChatMessage) => void;
   showThinking: boolean;
   showTimestamp: boolean;
+  collapseRuns: boolean;
 }): JSX.Element {
   // A reply spans several engine messages; render it as one block with one footer.
   const message = useMemo(() => mergeAssistantRun(messages), [messages]);
   const parts = useMemo(() => groupParts(message), [message]);
+
+  // 折叠运行过程: a finished run's work — thinking, tool calls, and the prose it wrote along
+  // the way — goes behind one collapsed 「用时 …」 row, and the reply written after the last
+  // tool call stays out as the answer.
+  //
+  // Decided only once the run is over, and only when it produced both halves: something to
+  // hide and an answer to leave on screen. A run still in flight, one that stopped on a tool
+  // call, and a failed one all draw the plain transcript instead — a 「用时」 row that cannot
+  // be collapsed, sitting over content the reader is watching, reads as broken (zcode gates
+  // its fold the same way, off the turn's terminal state).
+  //
+  // The split is anchored on where the last process part ended, not on 「the last text」:
+  // which prose will turn out to be the answer cannot be known while it streams, but where
+  // the last tool call ended is already on screen.
+
+  // The run's own span: the first round-trip's request start to the instant its last entry was
+  // persisted. This is the turn's total, and it is what the footer reports as 耗时.
+  const runMs =
+    message.completedAt === undefined
+      ? undefined
+      : Math.max(0, message.completedAt - message.createdAt);
+
+  // What the fold hides took until the reply's *final* message began — the work before the
+  // answer, since the answer's own generation is not part of the process the fold stands for.
+  // That makes 用时 and the footer's 耗时 two different numbers, which is the point of having
+  // both. An engine message is one model request, so its request start is where the previous
+  // work — every tool call the turn made — had finished. A run that produced everything in a
+  // single request has no such boundary to measure, so it falls back to that request's span.
+  const workMs = useMemo(() => {
+    if (runMs === undefined) return undefined;
+    if (messages.length <= 1) return runMs;
+    const split = Math.max(0, messages[messages.length - 1].createdAt - message.createdAt);
+    return split > 0 ? split : runMs;
+  }, [message.createdAt, messages, runMs]);
+
+  // A thinking block's measured bounds are the only record of how long it thought, and they can
+  // legitimately be missing — a transcript from a build that did not time them, a delegated
+  // run's, an imported one. Fall back to the span of the round-trip the block came from, so the
+  // row still reports a time instead of a bare 「思考」. The number is then that whole request's,
+  // an upper bound rather than the thought alone, which is why the measured bounds win.
+  const thinkingOwner = useMemo(() => {
+    const owners = new Map<MessagePart, ChatMessage>();
+    for (const item of messages) {
+      if (item.role !== "assistant") continue;
+      for (const part of resolveParts(item)) if (part.kind === "thinking") owners.set(part, item);
+    }
+    return owners;
+  }, [messages]);
+
+  const fold = useMemo(() => {
+    if (!collapseRuns || message.role !== "assistant") return null;
+    if (streaming || message.error) return null;
+    // No measured end (a transcript written before Main timed entries) means no 用时.
+    if (workMs === undefined) return null;
+    let cut = 0;
+    for (let index = 0; index < parts.length; index += 1) {
+      const kind = parts[index].kind;
+      if (kind === "thinking" || kind === "tool" || kind === "group") cut = index + 1;
+    }
+    // Nothing to put in the block (a reply that never thought or called a tool).
+    if (cut === 0) return null;
+    // A body that would render nothing (only hidden thinking) is an empty box.
+    if (!parts.slice(0, cut).some((part) => part.kind !== "thinking" || showThinking)) return null;
+    // No prose after the last tool call: the run wrote no answer, so there is nothing to
+    // leave on screen and folding would hide its only output.
+    if (!parts.slice(cut).some((part) => part.kind === "text")) return null;
+    return { cut, durationMs: workMs };
+  }, [collapseRuns, message.error, message.role, parts, showThinking, streaming, workMs]);
+
+  // A leading 「模型已切换至 …」 divider stays outside the fold. It says which model the
+  // reply came from — the one fact about the run that is not process — and burying it
+  // behind a collapsed 「用时 …」 after the run settles loses it exactly when the reader
+  // is scrolling back through finished turns to find it.
+  const foldHead = useMemo(() => {
+    if (!fold) return 0;
+    let index = 0;
+    while (index < fold.cut && parts[index]?.kind === "model") index += 1;
+    return index;
+  }, [fold, parts]);
 
   if (message.role === "system") {
     if (message.kind === "compact") {
@@ -271,7 +368,26 @@ function ChatMessageRowImpl({
   }
 
   const isUser = message.role === "user";
-  const hasText = parts.some((part) => part.kind === "text" && part.text);
+  // Outside the `renderPart` closure: it is a fact about the reply, not about one
+  // part, and the row's working marker below is the only consumer.
+  //
+  // Whether the tail of the reply already says "still going". A tool call in flight
+  // carries its own spinner, an open thinking block shimmers 「正在思考」, and a
+  // trailing text part blinks the caret — so when one of those is on screen the row
+  // would just be a second, redundant marker. Everything else — the wait after a
+  // tool returns, before its result is fed back and the model writes its next
+  // token — has no live element at all, and the settled tool cards above read as a
+  // hang. The gate is the *tail*, not "the reply has no text yet": once a run has
+  // written a sentence, every later tool→model boundary was silent.
+  //
+  // The tool check is over the whole reply, not just the last part, because a run of
+  // sibling tools renders as one `group` part whose summary row shimmers on its own
+  // — the spinner lives inside the folded children, so the part alone cannot say.
+  const lastPart = parts.at(-1);
+  const liveTail =
+    lastPart?.kind === "text" ||
+    (showThinking && lastPart?.kind === "thinking") ||
+    message.tools.some((tool) => tool.status === "running");
   // Files this agent run wrote, surfaced as a chip row under the reply.
   const changedFiles = useMemo(
     () => (isUser ? [] : collectChangedFiles(message.tools)),
@@ -282,12 +398,17 @@ function ChatMessageRowImpl({
     const isTail = index === parts.length - 1;
     if (part.kind === "thinking") {
       if (!showThinking) return null;
+      const owner = thinkingOwner.get(part);
+      const fallback =
+        owner && owner.completedAt !== undefined
+          ? { startedAt: owner.createdAt, endedAt: owner.completedAt }
+          : undefined;
       return (
         <PartSlot key={`thinking-${index}`}>
           <ThinkingBlock
             thinking={part.text}
-            startedAt={part.startedAt}
-            endedAt={part.endedAt}
+            startedAt={part.startedAt ?? fallback?.startedAt}
+            endedAt={part.endedAt ?? fallback?.endedAt}
             active={streaming && isTail}
           />
         </PartSlot>
@@ -315,7 +436,7 @@ function ChatMessageRowImpl({
     }
     if (part.kind === "model") {
       // A transcript-level rule, so it spans the column instead of the reply's cap.
-      return <ModelChangeNotice key={`model-${index}`} from={part.from} to={part.to} />;
+      return <ModelChangeNotice key={`model-${index}`} to={part.to} />;
     }
     return (
       <PartSlot key={part.group.id}>
@@ -329,9 +450,19 @@ function ChatMessageRowImpl({
       <MessageContent className={isUser ? "items-end" : "items-start"}>
         {message.attachments?.length ? <AttachmentStrip items={message.attachments} /> : null}
 
-        {parts.map(renderPart)}
+        {foldHead > 0 ? parts.slice(0, foldHead).map((part, index) => renderPart(part, index)) : null}
 
-        {streaming && !hasText && !message.error ? <WorkingStatus message={message} /> : null}
+        {fold && foldHead < fold.cut ? (
+          <RunCollapse durationMs={fold.durationMs}>
+            {parts.slice(foldHead, fold.cut).map((part, index) => renderPart(part, foldHead + index))}
+          </RunCollapse>
+        ) : null}
+
+        {(fold ? parts.slice(fold.cut) : parts).map((part, index) =>
+          renderPart(part, fold ? fold.cut + index : index),
+        )}
+
+        {streaming && !message.error && !liveTail ? <WorkingStatus message={message} /> : null}
 
         {message.error ? (
           <Bubble variant="destructive" align="start">
@@ -367,6 +498,7 @@ function ChatMessageRowImpl({
             onRetry={onRetry}
             onEdit={onEdit}
             showTimestamp={showTimestamp}
+            elapsed={runMs}
           />
         )}
       </MessageContent>
@@ -394,6 +526,7 @@ const ChatMessageRow = memo(ChatMessageRowImpl, (prev, next) => {
     prev.streaming === next.streaming &&
     prev.showThinking === next.showThinking &&
     prev.showTimestamp === next.showTimestamp &&
+    prev.collapseRuns === next.collapseRuns &&
     prev.onRetry === next.onRetry &&
     prev.onEdit === next.onEdit &&
     sameMessages(prev.messages, next.messages)
@@ -601,6 +734,7 @@ function ThreadRow({
   onEdit,
   showThinking,
   showTimestamp,
+  collapseRuns,
 }: {
   row: MessageRow;
   last: boolean;
@@ -610,6 +744,7 @@ function ThreadRow({
   onEdit?: (message: ChatMessage) => void;
   showThinking: boolean;
   showTimestamp: boolean;
+  collapseRuns: boolean;
 }): JSX.Element {
   const isUser = row.messages[0].role === "user";
   const { ref, pinned } = usePinnedPrompt();
@@ -628,6 +763,7 @@ function ThreadRow({
         onEdit={amendable ? onEdit : undefined}
         showThinking={showThinking}
         showTimestamp={showTimestamp}
+        collapseRuns={collapseRuns}
       />
       {isUser && pinned ? (
         <div
@@ -647,6 +783,7 @@ export function MessageList({
   onEdit,
   showThinking = true,
   showTimestamp = true,
+  collapseRuns = false,
   emptyState,
 }: {
   messages: ChatMessage[];
@@ -656,6 +793,8 @@ export function MessageList({
   onEdit?: (message: ChatMessage) => void;
   showThinking?: boolean;
   showTimestamp?: boolean;
+  /** Fold each reply's process into one 「用时 …」 block (设置 → 对话). */
+  collapseRuns?: boolean;
   emptyState?: JSX.Element | null;
 }): JSX.Element {
   // One row per user prompt and per assistant reply, not per engine message.
@@ -714,6 +853,7 @@ export function MessageList({
                     onEdit={onEdit}
                     showThinking={showThinking}
                     showTimestamp={showTimestamp}
+                    collapseRuns={collapseRuns}
                   />
                 ))}
               </MessageGroup>

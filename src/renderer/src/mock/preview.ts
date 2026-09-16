@@ -63,6 +63,7 @@ const initialSettings: Record<string, unknown> = {
   interruptMode: "immediate",
   showThinking: true,
   showTimestamps: true,
+  collapseRuns: params.get("collapse") !== "off",
   sendOnEnter: true,
   themeMode: theme === "light" || theme === "dark" ? theme : "system",
   lightTheme: "github-light",
@@ -202,7 +203,10 @@ const api = {
     removeSkill: async () => SKILLS,
     importSources: async () => IMPORT_SOURCES,
     importCandidates: async (source: ImportSourceId) =>
-      IMPORT_CANDIDATES.map((candidate) => ({ ...candidate, source })),
+      IMPORT_CANDIDATES.filter((candidate) => candidate.source === source).map((candidate) => ({
+        ...candidate,
+        source,
+      })),
     importSessions: async (_source: ImportSourceId, ids: string[]) => ({
       source: "claude-code" as ImportSourceId,
       outcomes: ids.map((id) => {
@@ -396,6 +400,15 @@ if (dialog === "market") {
 if (expand === "tools") {
   window.setTimeout(() => {
     document.querySelectorAll<HTMLElement>('[data-slot="tool-row"]').forEach((row) => {
+      row.closest("button")?.click();
+    });
+  }, 1500);
+}
+
+if (expand === "run") {
+  // 折叠运行过程: open every folded run so its process is visible in a screenshot.
+  window.setTimeout(() => {
+    document.querySelectorAll<HTMLElement>('[data-slot="run-collapse"]').forEach((row) => {
       row.closest("button")?.click();
     });
   }, 1500);

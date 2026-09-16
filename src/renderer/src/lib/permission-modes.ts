@@ -7,7 +7,7 @@ import type { PermissionMode } from "@shared/types";
 export const PERMISSION_LABELS: Record<PermissionMode, string> = {
   ask: "请求批准",
   smart: "帮我批准",
-  full: "完全访问权限",
+  full: "完全访问",
 };
 
 /** One-line explanation of what each mode asks about; the composer's menu shows it. */

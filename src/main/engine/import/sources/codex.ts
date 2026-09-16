@@ -206,7 +206,7 @@ async function scanIndexed(rows: ThreadRow[]): Promise<ImportCandidateInfo[]> {
       createdAt: toMillis(row.created_at_ms) ?? toMillis(row.created_at) ?? Math.floor(mtime),
       updatedAt: toMillis(row.updated_at_ms) ?? toMillis(row.updated_at) ?? Math.floor(mtime),
       bytes: size,
-      note: indexedNote(row),
+      archived: row.archived === 1,
     });
   }
   return candidates.sort((a, b) => b.updatedAt - a.updatedAt);
@@ -218,10 +218,6 @@ function pickIndexedTitle(row: ThreadRow): string {
   const name = row.name?.trim();
   if (name) return name;
   return excerpt(row.first_user_message ?? row.title ?? row.preview ?? "");
-}
-
-function indexedNote(row: ThreadRow): string | undefined {
-  return row.archived === 1 ? "归档会话" : undefined;
 }
 
 async function scanDirectory(): Promise<ImportCandidateInfo[]> {
@@ -277,6 +273,9 @@ async function summarizeRollout(file: string): Promise<ImportCandidateInfo | und
     updatedAt: summary.lastAt || summary.createdAt || Math.floor(mtime),
     messageCount: summary.messages,
     bytes: size,
+    // The walk fallback has no `threads` row, but the directory the rollout lives in
+    // is the same signal: everything under `archived_sessions/` is archived.
+    archived: file.startsWith(ARCHIVED_DIR),
     note: summary.capped ? "消息数为估算值" : undefined,
   };
 }

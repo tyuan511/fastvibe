@@ -33,6 +33,7 @@ export type SidePaneTab = {
   preview?: FilePreview;
   cwd?: string;
   sessionId?: string;
+  /** Empty for a tab that was opened without a URL: the pane shows a blank page. */
   url?: string;
   faviconUrl?: string | null;
   ordinal?: number;
@@ -166,7 +167,12 @@ type SidePaneStore = {
   /** Write the current width to settings.json and the first-paint cache. */
   persistWidth: () => void;
   activate: (id: string) => void;
-  close: (id: string) => void;
+  /**
+   * Close a tab. `collapse` (default `true`) also hides a pane the tab left empty;
+   * an internal retire passes `false` so replacing a dead tab in place cannot
+   * flash the pane shut around the replacement.
+   */
+  close: (id: string, options?: { collapse?: boolean }) => void;
   closeOthers: (id: string) => void;
   closeAll: () => void;
   openGit: () => void;
@@ -458,8 +464,9 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
   },
   activate: (id) =>
     set((state) => writeScope(state, scopeKeyOf(state), { ...scopeOf(state), activeTabId: id }, { collapsed: false })),
-  close: (id) =>
+  close: (id, options) =>
     set((state) => {
+      const collapse = options?.collapse !== false;
       // Browser tabs of a background chat live in that chat's scope; retiring one
       // must not look only at the pane on screen (and must not collapse it).
       const activeKey = scopeKeyOf(state);
@@ -469,7 +476,7 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
         if (!scope?.tabs.some((item) => item.id === id)) continue;
         const tabs = scope.tabs.filter((item) => item.id !== id);
         const activeTabId = scope.activeTabId === id ? (tabs.at(-1)?.id ?? null) : scope.activeTabId;
-        const empty = tabs.length === 0;
+        const empty = tabs.length === 0 && collapse;
         return writeScope(
           state,
           key,
@@ -550,7 +557,8 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
         type: "browser",
         openedAt: Date.now(),
         title: "浏览器",
-        url: url?.trim() || "https://fastvibe.dev",
+        // No URL means an empty tab: the pane opens blank and waits for the user.
+        url: url?.trim() || "",
         conversationId: key === DRAFT_SCOPE ? undefined : key,
       };
       tabId = tab.id;

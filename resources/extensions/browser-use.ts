@@ -51,7 +51,7 @@ export default function browserUse(pi: ExtensionAPI): void {
     name: "browser_open",
     label: "打开浏览器",
     description:
-      "打开内置浏览器标签页并访问网址，返回 tabId（后续操作的默认目标）。默认复用已经打开的标签页——它会被导航到新网址，不会重复新建；只有确实需要同时保留两个页面时才传 newTab: true。",
+      "打开内置浏览器标签页并访问网址，返回 tabId（后续操作的默认目标）。省略 url 时会打开一个空白页——不会替你访问任何站点。默认复用已经打开的标签页——它会被导航到新网址，不会重复新建；只有确实需要同时保留两个页面时才传 newTab: true。",
     promptSnippet: "打开内置浏览器并访问网址",
     parameters: Type.Object({
       url: Type.Optional(Type.String({ description: "网址或搜索词，可省略" })),

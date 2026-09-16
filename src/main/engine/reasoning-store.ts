@@ -7,7 +7,7 @@ import type { ThinkingTiming } from "@shared/types";
  * The engine's transcript records one timestamp per assistant message — the moment
  * the request started — so a block's thinking time cannot be recovered from it.
  * Main therefore times the live blocks and keeps their `[startedAt, endedAt]` here,
- * which is what lets a reloaded (or re-opened) transcript still read 「持续了 N 秒」
+ * which is what lets a reloaded (or re-opened) transcript still read 「N 秒」
  * instead of falling back to a bare 「思考」.
  *
  * Bounds rather than a duration: the elapsed value is derived at render time, so the

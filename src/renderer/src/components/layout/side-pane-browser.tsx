@@ -51,29 +51,121 @@ type Entry = {
   view: Guest;
   /** The guest cannot executeJavaScript until its first dom-ready event. */
   ready: Promise<void>;
+  /**
+   * Last page this tab was known to be on. A tab whose guest died can no longer
+   * answer `getURL`, and its replacement has to resume the same page — otherwise an
+   * auto-recovered call would quietly answer from the wrong document.
+   */
+  url: string;
 };
 
 /** How the injected page scripts report success and failure. */
 type Injected = { ok: boolean; value?: unknown; error?: string };
 
 const registry = new Map<string, Entry>();
-let park: HTMLDivElement | null = null;
 
 /**
- * Off-screen but laid-out home for webviews that are not on screen: a background
- * chat's browser-use must create a guest without opening the current pane, and a
- * conversation switch must keep that guest alive for later tool calls.
- * `display: none` is not enough — a detached or hidden `<webview>` never mints a
- * Chromium guest, which is what made every later GUEST_VIEW_MANAGER_CALL fail.
+ * The one container every browser guest lives in.
+ *
+ * A `<webview>` may not be moved in the DOM: re-parenting it tears the guest down
+ * (Chromium invalidates the guest instance and never re-attaches it), so a guest
+ * that was created off-screen and then "moved into" the pane arrived dead — which
+ * is exactly what opening the browser from a tool did. The dead tab was retired by
+ * `usable()`, retiring the last tab collapsed the pane, and the user saw the pane
+ * flash open and close.
+ *
+ * So guests are never moved. The layer is created once, attached to `document.body`
+ * and *positioned*: parked off-screen while its tab is not the one on screen, and
+ * stretched over that tab's viewport while it is. A parked host stays laid out — a
+ * hidden or detached `<webview>` never mints a guest — so browser-use in a
+ * background chat, or on a collapsed pane, keeps working without showing anything.
  */
-function getPark(): HTMLDivElement {
-  if (!park) {
-    park = document.createElement("div");
-    park.setAttribute("data-side-pane-browser-park", "");
-    park.style.cssText = "position:fixed;left:-10000px;top:0;width:1024px;height:768px;overflow:hidden;pointer-events:none;";
-    document.body.appendChild(park);
+let layer: HTMLDivElement | null = null;
+/** The tab whose guest currently owns the viewport (null: the layer is parked). */
+let owner: string | null = null;
+
+const PARKED_LAYER =
+  "position:fixed;left:-10000px;top:0;width:1024px;height:768px;overflow:hidden;pointer-events:none;z-index:5;";
+const SHOWN_HOST = "position:absolute;left:0;top:0;width:100%;height:100%;";
+const HIDDEN_HOST = "position:absolute;left:-20000px;top:0;width:1024px;height:768px;";
+/** The pane's splitter (`w-1`) hugs its leading edge; leave it clickable. */
+const SPLITTER_GUTTER = 4;
+
+function getLayer(): HTMLDivElement {
+  if (!layer) {
+    layer = document.createElement("div");
+    layer.setAttribute("data-side-pane-browser-layer", "");
+    layer.style.cssText = PARKED_LAYER;
+    document.body.appendChild(layer);
   }
-  return park;
+  return layer;
+}
+
+/**
+ * The pane animates by clipping a fixed-width frame, so the browser viewport's own
+ * rect never changes while the panel opens. The nearest clipping ancestor is what
+ * makes the guest follow the animation instead of appearing at full width over the
+ * conversation column.
+ */
+function clipAncestor(node: HTMLElement): HTMLElement | null {
+  for (let el = node.parentElement; el; el = el.parentElement) {
+    const style = getComputedStyle(el);
+    if (style.overflowX === "hidden" || style.overflowY === "hidden") return el;
+  }
+  return null;
+}
+
+/** The part of the browser viewport actually on screen, splitter left alone. */
+function visibleRect(
+  node: HTMLElement,
+  clip: HTMLElement | null,
+): { left: number; top: number; width: number; height: number } {
+  const box = node.getBoundingClientRect();
+  let left = box.left + SPLITTER_GUTTER;
+  let right = box.right;
+  let top = box.top;
+  let bottom = box.bottom;
+  if (clip) {
+    const frame = clip.getBoundingClientRect();
+    // While the pane slides open the clip is still left of the frame it will settle
+    // at; never let the guest paint over the conversation column.
+    left = Math.max(left, frame.left);
+    right = Math.min(right, frame.right);
+    top = Math.max(top, frame.top);
+    bottom = Math.min(bottom, frame.bottom);
+  }
+  return {
+    left,
+    top,
+    width: Math.max(0, right - left),
+    height: Math.max(0, bottom - top),
+  };
+}
+
+/**
+ * Stretch the layer over one guest's viewport and bring that guest forward. Only
+ * CSS changes here — the `<webview>` itself is never re-parented.
+ */
+function showGuest(entry: Entry, rect: { left: number; top: number; width: number; height: number }): void {
+  const node = getLayer();
+  if (owner !== entry.id) {
+    owner = entry.id;
+    for (const item of registry.values()) {
+      item.host.style.cssText = item === entry ? SHOWN_HOST : HIDDEN_HOST;
+    }
+  }
+  node.style.left = `${Math.round(rect.left)}px`;
+  node.style.top = `${Math.round(rect.top)}px`;
+  node.style.width = `${Math.round(rect.width)}px`;
+  node.style.height = `${Math.round(rect.height)}px`;
+  node.style.pointerEvents = "auto";
+}
+
+/** Stop showing a guest, but only if it is the one that owns the viewport. */
+function parkGuest(tabId: string): void {
+  if (owner !== tabId) return;
+  owner = null;
+  if (layer) layer.style.cssText = PARKED_LAYER;
 }
 
 /** Side-chat tools belong on the parent conversation's pane, not a hidden scope. */
@@ -86,8 +178,7 @@ function paneConversationId(conversationId?: string): string | undefined {
 function createGuest(tabId: string, url: string): Entry {
   const host = document.createElement("div");
   host.className = "h-full min-h-0 w-full";
-  host.style.width = "100%";
-  host.style.height = "100%";
+  host.style.cssText = HIDDEN_HOST;
   const view = document.createElement("webview") as Guest;
   view.setAttribute("allowpopups", "true");
   view.setAttribute("partition", "persist:fastvibe-browser");
@@ -100,12 +191,13 @@ function createGuest(tabId: string, url: string): Entry {
   });
   view.addEventListener("dom-ready", () => resolveReady());
   host.appendChild(view);
-  const entry: Entry = { id: tabId, host, view, ready };
+  const href = normalizeUrl(url);
+  const entry: Entry = { id: tabId, host, view, ready, url: href };
   registry.set(tabId, entry);
   // Mount before assigning src. A detached `<webview>` can accept the property
   // but never creates a guest.
-  getPark().appendChild(host);
-  view.src = normalizeUrl(url);
+  getLayer().appendChild(host);
+  view.src = href;
   return entry;
 }
 
@@ -115,9 +207,12 @@ function ensureGuest(tabId: string, url: string): Entry {
 
 const SEARCH_ENGINE = "https://www.google.com/search?q=";
 
+/** What an address-less tab loads: an empty page, never a site the app picked. */
+const BLANK_PAGE = "about:blank";
+
 function normalizeUrl(value: string): string {
   const trimmed = value.trim();
-  if (!trimmed) return "https://fastvibe.dev";
+  if (!trimmed) return BLANK_PAGE;
   if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return trimmed;
   // Treat spaces, CJK text, and bare words as a search query. Host-like input
   // (including localhost and IPv4) remains a direct navigation.
@@ -133,6 +228,24 @@ function safe<T>(read: () => T, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+/**
+ * Keep `entry.url` current, as best a guest that may already be gone can answer.
+ * A blank page clears it: "no page" is what a recovery, a reload or a bare
+ * `browser_open` should act on, not the site the tab happened to be on before.
+ */
+function rememberUrl(entry: Entry): void {
+  const href = safe(() => entry.view.getURL(), "");
+  if (href && href !== BLANK_PAGE) entry.url = href;
+  else if (href === BLANK_PAGE) entry.url = "";
+}
+
+/** Attach a note to a result the model reads, leaving its shape otherwise alone. */
+function withNote(value: unknown, note?: string): unknown {
+  return note && value && typeof value === "object"
+    ? { ...(value as Record<string, unknown>), note }
+    : value;
 }
 
 /** Tab ids this conversation (or the pane on screen) can legitimately address. */
@@ -164,14 +277,39 @@ function resolveEntry(tabId?: string, conversationId?: string): Resolved {
 }
 
 /**
- * Retire a tab whose guest can no longer run scripts: drop it from the registry
- * and close its pane tab, so the next `browser_open` mints a fresh webview instead
- * of reusing a corpse.
+ * A tab whose guest is gone. The tab is retired before this is thrown, so the request
+ * that found it can finish on a replacement instead of handing the model an error it
+ * can only answer by calling `browser_open` again.
+ */
+class TabGoneError extends Error {
+  constructor(
+    readonly tabId: string,
+    readonly url: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "TabGoneError";
+  }
+}
+
+/**
+ * Retire a tab whose guest can no longer run scripts: drop it from the registry and
+ * close its pane tab. A webview whose guest is gone never comes back, so the next call
+ * that addresses the tab mints a replacement rather than retrying a corpse.
  */
 function retire(tabId: string): void {
   if (!registry.has(tabId)) return;
   releaseBrowser(tabId);
-  useSidePaneStore.getState().close(tabId);
+  // Never collapses: the caller is about to mint a replacement, and collapsing the
+  // pane around it (then expanding again) is the flash this path must not produce.
+  useSidePaneStore.getState().close(tabId, { collapse: false });
+}
+
+/** Retire a tab whose guest is gone, and report it so the caller can replace it. */
+function gone(entry: Entry): TabGoneError {
+  const url = entry.url;
+  retire(entry.id);
+  return new TabGoneError(entry.id, url, "浏览器标签页已失效");
 }
 
 async function execute(entry: Entry, code: string): Promise<unknown> {
@@ -182,16 +320,17 @@ async function execute(entry: Entry, code: string): Promise<unknown> {
     const message = error instanceof Error ? error.message : String(error);
     // Electron reports a rejected injection with this opaque text when the script
     // never compiles or the guest is gone — the page ran no line of it. Keep the
-    // real reason in the console and give the model something it can act on.
+    // real reason in the console; `TabGoneError` lets the request retry on a fresh tab.
     if (/Script failed to execute/i.test(message)) {
       console.error("[browser-use] injected script was rejected by the guest", error, code);
       // Patient: a script interrupted by its own navigation is not a dead tab.
-      if (!(await ensureAlive(entry))) retire(entry.id);
-      throw new Error("浏览器脚本未能在页面中执行（标签页可能已失效），请重新调用 browser_open 后再试");
+      if (await ensureAlive(entry)) {
+        throw new Error("浏览器页面脚本执行失败（页面可能正在跳转），请重新调用 browser_snapshot 确认页面状态");
+      }
+      throw gone(entry);
     }
     if (/GUEST_VIEW_MANAGER_CALL|destroyed|was disposed|Render frame/i.test(message)) {
-      retire(entry.id);
-      throw new Error("浏览器标签页已失效，请重新调用 browser_open 打开一个标签页");
+      throw gone(entry);
     }
     throw new Error(`浏览器脚本执行失败：${message}`);
   }
@@ -221,6 +360,20 @@ async function ensureAlive(entry: Entry): Promise<boolean> {
     await new Promise((resolve) => window.setTimeout(resolve, 150));
   }
   return false;
+}
+
+/**
+ * A tab a request can actually run on: the guest reached dom-ready, and it still
+ * answers. A guest that never gets there is as dead as one that threw, and either way
+ * the caller's answer is a replacement tab — never an error.
+ */
+async function usable(entry: Entry): Promise<boolean> {
+  try {
+    await waitForReady(entry);
+  } catch {
+    return false;
+  }
+  return ensureAlive(entry);
 }
 
 /**
@@ -260,10 +413,16 @@ async function act(
   try {
     outcome = (await inject(entry, body)) as Record<string, unknown>;
   } catch (error) {
-    if (!(await navigated)) throw error;
+    // A navigation that destroyed the guest is the click having worked; anything else,
+    // including a tab that is gone for good, must reach the caller.
+    if (error instanceof TabGoneError || !(await navigated)) throw error;
     outcome = fallback;
   }
-  return { ...outcome, navigated: await navigated, url: safe(() => entry.view.getURL(), "") };
+  // Read the URL after the navigation settles, so a click that moved the page reports
+  // (and remembers) where it landed rather than the document it left.
+  const navigatedTo = await navigated;
+  rememberUrl(entry);
+  return { ...outcome, navigated: navigatedTo, url: entry.url };
 }
 
 type LoadOutcome = { loaded: boolean; settled: boolean; error?: string };
@@ -433,23 +592,46 @@ const SNAPSHOT_BODY = `
 async function openBrowserTab(request: BrowserAutomationRequest): Promise<unknown> {
   const store = useSidePaneStore.getState();
   const paneId = paneConversationId(request.conversationId);
-  const reusable = request.newTab ? undefined : store.browserTabIds(paneId)[0];
-  const tabId = reusable ?? store.openBrowser(request.newTab ? request.url : undefined, paneId);
-  const entry = ensureGuest(tabId, request.url ?? "https://fastvibe.dev");
-  await waitForReady(entry);
-  if (!(await ensureAlive(entry))) {
+  const url = request.url ?? "";
+  // A pane tab can outlive its Chromium guest (the page crashed, the guest was torn
+  // down between turns). The caller asked for this page either way, so a dead tab is
+  // replaced here and the call finishes — no error for the model to recover from.
+  let tabId = "";
+  let entry: Entry | undefined;
+  let reused = false;
+  let replaced = false;
+  for (let attempt = 0; attempt < 2 && !entry; attempt++) {
+    const existing = request.newTab || replaced ? undefined : store.browserTabIds(paneId)[0];
+    reused = Boolean(existing);
+    tabId = existing ?? store.openBrowser(url, paneId);
+    const candidate = ensureGuest(tabId, url);
+    if (await usable(candidate)) {
+      entry = candidate;
+      break;
+    }
     retire(tabId);
-    throw new Error("内置浏览器标签页已失效，已关闭该标签页；请重新调用 browser_open");
+    replaced = true;
   }
-  if (!request.url) return { tabId, url: safe(() => entry.view.getURL(), "") };
+  if (!entry) throw new Error("内置浏览器无法创建可用的标签页，请稍后重试");
+  const note = replaced ? "原标签页已失效，已自动打开一个可用标签页" : undefined;
+  if (!request.url) {
+    // No URL asked for: the tab is (or was just made) an empty page. An already-open
+    // tab is left where it is — this pane is shared with the user, and clearing a page
+    // they are reading to satisfy a bare `browser_open` would be a worse surprise than
+    // reusing it. The reply says which page the tab is actually on.
+    rememberUrl(entry);
+    return withNote({ tabId, url: entry.url || BLANK_PAGE }, note);
+  }
   // A tab the store minted with this URL is already loading it; a reused tab (or one
   // opened without a URL) is navigated here.
-  if (request.newTab && !reusable) {
+  if (request.newTab && !reused) {
     await waitForNavigation(entry.view);
-    return { tabId, url: safe(() => entry.view.getURL(), ""), loaded: true, settled: true };
+    rememberUrl(entry);
+    return withNote({ tabId, url: entry.url, loaded: true, settled: true }, note);
   }
   const outcome = await loadUrl(entry.view, normalizeUrl(request.url));
-  return { tabId, url: safe(() => entry.view.getURL(), ""), ...outcome };
+  rememberUrl(entry);
+  return withNote({ tabId, url: entry.url, ...outcome }, note);
 }
 
 /** Handle browser-use requests arriving from the main-process extension tool. */
@@ -469,10 +651,51 @@ export async function handleBrowserRequest(request: BrowserAutomationRequest): P
   const { entry, note } = resolveEntry(request.tabId, request.conversationId);
   // GUEST_VIEW_MANAGER_CALL rejects calls made before the guest has reached
   // dom-ready. This also covers a tool call issued immediately after opening
-  // a tab, before React has observed the first navigation event.
-  await waitForReady(entry);
-  const outcome = await dispatch(request, entry);
-  return note && outcome && typeof outcome === "object" ? { ...(outcome as Record<string, unknown>), note } : outcome;
+  // a tab, before React has observed the first navigation event. A guest that never
+  // reaches it is dead: retire it and answer on a replacement below.
+  let target = entry;
+  let recovery: string | undefined;
+  if (!(await usable(entry))) {
+    target = await replace(entry.id, entry.url, request);
+    recovery = "原标签页已失效，已自动在新标签页中恢复该页面";
+  }
+  let outcome: unknown;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      outcome = await dispatch(request, target);
+      break;
+    } catch (error) {
+      if (!(error instanceof TabGoneError)) throw error;
+      // The tab the model addressed is retired by now, but the call still means the
+      // same page: mint the replacement, land it back on that page and run the action
+      // there. Failing here would only make the model call `browser_open` and start over.
+      if (attempt > 0) throw new Error("内置浏览器标签页反复失效，自动重建后仍未成功，请稍后重试");
+      target = await replace(error.tabId, error.url, request);
+      recovery = "原标签页已失效，已自动在新标签页中恢复该页面并重试";
+    }
+  }
+  return withNote(outcome, [note, recovery].filter(Boolean).join("；") || undefined);
+}
+
+/**
+ * Mint a fresh tab that resumes a page whose tab is gone, and make sure it can be
+ * driven. Used both when the addressed tab was already known dead and when it died
+ * under a request; both cases answer on the replacement rather than failing.
+ */
+async function replace(tabId: string, url: string, request: BrowserAutomationRequest): Promise<Entry> {
+  if (registry.has(tabId)) retire(tabId);
+  const paneId = paneConversationId(request.conversationId);
+  const entry = ensureGuest(useSidePaneStore.getState().openBrowser(url, paneId), url);
+  // `dom-ready` is the fresh document the src navigation produced, so the retry
+  // injects into the resumed page rather than the one that is on its way out. A guest
+  // that never gets there is dead too — this is the one failure worth reporting, since
+  // a second tab that cannot start means the webview itself is not coming up.
+  if (await usable(entry)) {
+    rememberUrl(entry);
+    return entry;
+  }
+  retire(entry.id);
+  throw new Error("内置浏览器无法创建可用的标签页（当前 Electron 的 webview 可能未启用），请稍后重试");
 }
 
 /** The actions that address an already-open tab. */
@@ -483,6 +706,7 @@ async function dispatch(request: BrowserAutomationRequest, entry: Entry): Promis
       if (!request.url) throw new Error("navigate 需要 url");
       const url = normalizeUrl(request.url);
       const outcome = await loadUrl(view, url);
+      rememberUrl(entry);
       return { tabId: entry.id, url, ...outcome };
     }
     case "search": {
@@ -490,22 +714,29 @@ async function dispatch(request: BrowserAutomationRequest, entry: Entry): Promis
       const query = request.text || request.url || "";
       const url = normalizeUrl(query);
       const outcome = await loadUrl(view, url);
+      rememberUrl(entry);
       return { tabId: entry.id, query, url, ...outcome };
     }
     case "back":
       if (!safe(() => view.canGoBack(), false)) return { ok: false, error: "没有可后退的历史记录" };
       { const navigated = waitForNavigation(view); view.goBack(); await navigated; }
-      return { ok: true, url: safe(() => view.getURL(), "") };
+      rememberUrl(entry);
+      return { ok: true, url: entry.url };
     case "forward":
       if (!safe(() => view.canGoForward(), false)) return { ok: false, error: "没有可前进的历史记录" };
       { const navigated = waitForNavigation(view); view.goForward(); await navigated; }
-      return { ok: true, url: safe(() => view.getURL(), "") };
+      rememberUrl(entry);
+      return { ok: true, url: entry.url };
     case "reload": {
-      const outcome = await loadUrl(view, safe(() => view.getURL(), ""), 20_000);
-      return { ok: outcome.loaded, url: safe(() => view.getURL(), ""), ...outcome };
+      const outcome = await loadUrl(view, entry.url || BLANK_PAGE, 20_000);
+      rememberUrl(entry);
+      return { ok: outcome.loaded, url: entry.url, ...outcome };
     }
-    case "snapshot":
-      return { tabId: entry.id, ...((await inject(entry, SNAPSHOT_BODY)) as Record<string, unknown>) };
+    case "snapshot": {
+      const result = (await inject(entry, SNAPSHOT_BODY)) as Record<string, unknown>;
+      rememberUrl(entry);
+      return { tabId: entry.id, ...result };
+    }
     case "click": {
       if (!request.selector && !request.ref && !request.text) throw new Error("click 需要 selector、ref 或 text");
       return act(
@@ -608,6 +839,8 @@ export function releaseBrowser(tabId: string): void {
   const entry = registry.get(tabId);
   if (!entry) return;
   registry.delete(tabId);
+  // The layer must stop claiming a viewport on behalf of a tab that is gone.
+  parkGuest(tabId);
   entry.view.remove();
   entry.host.remove();
 }
@@ -648,16 +881,17 @@ export function SidePaneBrowser({
     setCanGoBack(safe(() => view.canGoBack(), false));
     setCanGoForward(safe(() => view.canGoForward(), false));
     if (href !== "about:blank") {
+      // The user's own address-bar navigation counts too: it is what a recovery
+      // would have to resume.
+      const entry = registry.get(tabId);
+      if (entry) entry.url = href;
       patchTab(tabId, { url: href, title: title || href.replace(/^https?:\/\//, "") });
     }
   }
 
   useEffect(() => {
-    const mount = box.current;
-    if (!mount) return;
     const entry = ensureGuest(tabId, initialUrl.current);
     guest.current = entry.view;
-    if (entry.host.parentElement !== mount) mount.appendChild(entry.host);
 
     const view = entry.view;
     const onInPageNav = (): void => sync(view);
@@ -690,9 +924,42 @@ export function SidePaneBrowser({
       view.removeEventListener("page-favicon-updated", onFavicon);
       view.removeEventListener("did-start-loading", onStart);
       view.removeEventListener("did-stop-loading", onStop);
-      if (entry.host.parentElement === mount) getPark().appendChild(entry.host);
     };
   }, [patchTab, tabId]);
+
+  const collapsed = useSidePaneStore((state) => state.collapsed);
+
+  /**
+   * Put this guest's layer over the tab's viewport while it is the one on screen,
+   * and park it otherwise. The guest itself is never moved (see `getLayer`).
+   *
+   * The pane clips a fixed-width frame rather than resizing it, so the viewport has
+   * to be observed through that frame's clip: the observer watches the clipping
+   * ancestor so the guest follows the collapse spring frame by frame.
+   */
+  useEffect(() => {
+    const entry = registry.get(tabId);
+    const mount = box.current;
+    if (!visible || collapsed || !entry || !mount) {
+      parkGuest(tabId);
+      return;
+    }
+    const clip = clipAncestor(mount);
+    const place = (): void => {
+      const node = box.current;
+      if (node) showGuest(entry, visibleRect(node, clip));
+    };
+    place();
+    const observer = new ResizeObserver(place);
+    observer.observe(mount);
+    if (clip) observer.observe(clip);
+    window.addEventListener("resize", place);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", place);
+      parkGuest(tabId);
+    };
+  }, [collapsed, tabId, visible]);
 
   function go(next = draft): void {
     const href = normalizeUrl(next);

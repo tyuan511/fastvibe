@@ -91,12 +91,12 @@ export function applyPermissionMode(settings: PersistedSettings): void {
  *
  * `permissionMode` is the *live* mode the composer's chip switches, and the composer
  * writes it back to `settings.json`, so on its own it would let one escalated
- * session (完全访问权限) outlive the app. Startup therefore re-seeds the live value
+ * session (完全访问) outlive the app. Startup therefore re-seeds the live value
  * from the default and stores the result, which is what the renderer reads through
  * `settings:get-sync` — sandbox env and chip agree from the first frame.
  *
  * An install from before the setting existed, or one with a corrupt file, lands on
- * 帮我批准 rather than the old hard-coded 完全访问权限.
+ * 帮我批准 rather than the old hard-coded 完全访问.
  */
 export function applyStartupPermissionMode(paths: FastVibePaths): void {
   const settings = readAppSettings(paths);

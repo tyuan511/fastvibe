@@ -16,6 +16,7 @@
 | **Claude Code** | `~/.claude/projects/<encoded-cwd>/<sid>.jsonl` | 目录扫描 | ★★ | **v1 必做**（格式最清晰，含 thinking / usage / 项目路径） |
 | **Codex CLI** | `~/.codex/sessions/**/rollout-*.jsonl` + `state_5.sqlite:threads` | SQLite `threads` 表（理想） | ★★★ | **v1 必做**（三代格式要兼容；`exec` 工具是程序化包装） |
 | **opencode** | `opencode.db`（SQLite：session/message/part） | `session` 表 | ★★★ | **v2**（SQLite + JSON 双份历史，需只读打开） |
+| **zcode** | `~/.zcode/cli/db/db.sqlite`（SQLite：session/message/part，opencode 同构） | `session` 表 | ★★★ | **已完成**（顺序必须用 `sequence`，见 §4.5） |
 | **Gemini CLI** | `~/.gemini/tmp/<projectKey>/chats/session-*.json` | 目录 + `projects.json` | ★★ | **v2**（字段少，一次成型） |
 | **Cursor** | `state.vscdb → cursorDiskKV`（`composerData:<uuid>`） | `composerHeaders` 表 | ★★★★ | **不建议**（本机几乎为空；新版历史多在服务端） |
 | Antigravity | `~/.gemini/antigravity/**` protobuf | 无 | ★★★★★ | 不做 |
@@ -193,6 +194,7 @@ interface ImportSource {
 ### 4.3 Codex CLI
 
 - 根：`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`（1167 个）+ `~/.codex/archived_sessions/*.jsonl`（983 个）。
+- **归档会话照常扫描，但不默认展示。** `threads.archived` 是权威标记（本机 88 条线程里 62 条已归档；目录扫描兑底时 `archived_sessions/` 下的路径等价），adapter 把它原样传成 `archived`，picker 折叠在「显示已归档」后面。而 opencode 同理用 `session.time_archived`。两个来源都不因此少报会话数：来源行里的 `archivedCount` 会说明其中多少个在开关后面。
 - **枚举用 `state_5.sqlite` 的 `threads` 表**（本机 894 线程）——这是唯一现成的索引，字段正好齐全：
   `id, rollout_path, created_at/updated_at(秒), created_at_ms/updated_at_ms, cwd, title, preview, name, first_user_message, model, reasoning_effort, model_provider, git_branch, git_sha, tokens_used, archived, source, cli_version, thread_source`。
   回退（DB 缺失/版本不同）：扫 `rollout-*.jsonl` + `session_index.jsonl`（`{id, thread_name, updated_at}` 1017 行）+ `history.jsonl`（`{session_id, ts, text}` 220 行）。
@@ -254,7 +256,25 @@ part(id, message_id, session_id, time_created, time_updated, data)  -- data 是 
   - 大体积来自 `event` 表（与导入无关，不要 `select *`）。
   - `permission[]`、`revert`、`summary.*`、`snapshot` 与 FastVibe 的权限模型不对应，丢弃并在导入报告里列出。
 
-### 4.5 Gemini CLI
+### 4.5 zcode（z.ai 官方 CLI）
+
+- 根：`~/.zcode/cli/db/db.sqlite`（SQLite）。**schema 是 opencode 的**（`session` / `message` / `part`，`data` 是 JSON 文本），读取形态与 §4.4 一致；不是 opencode 的数据根，两者互不影响。
+- 本机实测 24 session / 20 主会话 / 444 message / 1511 part；`session.time_archived` 全为 NULL。
+- **顺序必须用 `sequence`，不能用 `(time_created, id)`。** `message` / `part` 都有 `sequence` 列（trigger 自动填充），而 zcode 会**重写 `time_created`**：实测 1511 个 part 里有 360 个、444 个 message 里有 12 个，按时间排出的顺序与它们被写下的顺序不同——`step-start` 被挪到末尾、`text` 排在 `reasoning` 之前、`tool` 排在 `text` 之后。按时间排序的会话会读成一段自相矛盾的回复。`sequence` 在会话内是连续的（0..n-1），且 session 内的 message、message 内的 part 各自独立。
+  - 旧库可能没有 `sequence` 列 → 用 `PRAGMA table_info` 探测，缺失时退回 `rowid`（插入序），**不要**退回 `time_created`。
+- **`semantics.transcriptVisibility` 决定用户看没看见。** zcode 把自身的注入（`todo_reminder` / `system_reminder` / `background_notification`，本机 30 条）以及「仅供模型可见」的子 agent / 分支上下文（`uiVisibility: hidden`，本机 16 条）都存成普通 user / assistant 消息，只有 `visible` 的才是用户看过的对话。
+  - 旧写法 `metadata.visibility` 作为兜底；两者都没有 → 视为可见（该字段出现之前的消息是展示过的）。
+  - **不要把 `compaction` part 写成 `compaction` 条目**（同 §5.4）：引擎会用压缩条目构建上下文，写进去会让标记之前的历史对模型和线程同时消失。
+- `assistant` 的 `timeline_event` 行是 zcode 自己的转录标记（`timeline` part 挂在它身上，`timelineType: model_change` 带 `fromModel` / `toModel`）。该行本身没有内容，跳过；**模型切换改由 assistant 消息上的 `modelID` 变化重建**（本机 3 个会话真的换了模型）。
+- 映射：user 正文来自其 `text` part；assistant 的 `text` / `reasoning` / `tool` part 对应文本 / thinking / 工具调用（`tool{callID,tool,state{status,input,output,error,time}}`，输出在 `state.output`）；`file` part 只是路径引用，无法内联成图片，计入报告。
+- usage：`tokens.input` **已含**缓存 token（OpenAI 的原始约定），必须减掉 `cache.read` / `cache.write` 才是 pi 的 `input`；`tokens.reasoning` 是 `output` 的子集，**不要重复相加**（§4.4 opencode 的注释同理）。
+- 坑：
+  - `providerID` 是内部 UUID，库里没有任何地方能把它解析成可读名字 → 所有模型一律记为 provider `zcode`，否则「使用统计」的模型明细会读出一串 UUID。
+  - 数据库可能在 zcode 运行时被锁 → 只读打开，`SQLITE_BUSY` 时复制 db + `-wal` / `-shm` 到临时目录（与 opencode 共用 `src/main/engine/import/sqlite.ts`）。
+  - `part.session_id` 已填充，但读取仍走 `part JOIN message ON m.id = p.message_id`，不依赖旧库可能没填的列。
+  - **picker 的消息数与实际导入数必须一致。** 本机 24 个 session 里有 1 个（`selection_side_chat`）全部消息都是 `hidden`，导入它只会得到一个空会话；`scan()` 按同一个 keep 规则计数并直接不出行，其余 23 个的数字与写出结果逐条相等（用 `EXISTS` 子查询，4ms）。
+
+### 4.6 Gemini CLI
 
 - 根：`~/.gemini/tmp/<projectKey>/chats/session-<ts>-<hash>.json`；`projectKey` 由 `~/.gemini/projects.json` 的 `{cwd: name}` 反查，查不到就是哈希目录（cwd 不可知）。
 - 结构：`{sessionId, projectHash, startTime, lastUpdated, messages[]}`；
@@ -262,7 +282,7 @@ part(id, message_id, session_id, time_created, time_updated, data)  -- data 是 
   - 映射：`user→user`；`gemini→assistant`（`thoughts[].description` → thinking）；`info/error` 丢弃；`tokens` → usage（`UNVERIFIED`：字段细分未在本机样本中观察到）；`toolCalls`（工具调用字段名 `UNVERIFIED`，本机 3 个样本均无工具调用）→ 需在实现时用真实数据补齐。
   - 无 usage 的会话 tokens 记为 0，统计里会显示为 0 成本——需在导入报告里说明。
 
-### 4.6 Cursor（不建议）
+### 4.7 Cursor（不建议）
 
 - `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`：`ItemTable` + `composerHeaders(composerId, workspaceId, createdAt, isSubagent, value)` + `cursorDiskKV`（`composerData:<uuid>` 是 JSON，`bubbleId:<composerId>:<bubbleId>` 是逐条消息）。
 - 本机实测 `cursorDiskKV` 只有 5 行、`composerHeaders` 只有 3 行，且唯一的 `composerData` 是 `empty-state-draft`（空会话）——该安装的聊天历史不落在本地（云端/其他 profile）。键名与结构未文档化，且随版本变动；投入产出比最差，**明确列为不支持**并在 UI 说明原因。
@@ -295,7 +315,9 @@ part(id, message_id, session_id, time_created, time_updated, data)  -- data 是 
 **四步**：
 
 1. **发现**（只读）：并行扫描各来源根，产出 `来源 / 会话数 / 最近时间 / 占用体积 / 不可用原因（未安装、格式过新…）`。失败不报错、逐项给状态（与「首启路径上没有错误」一致）。
+   - **数据目录不存在 → 不出行**：`scanImportSources` 直接跳过根目录不存在的来源。本机只装了其中一两个 agent 是常态，而这样的行除了「未找到数据目录」没有别的可说，列着只是噪声；四个都缺时面板统一说一句。但**装了却没会话仍然出行**（显示「没有找到会话」），因为那是用户会去文件系统里找的状态。
 2. **选择**：按来源分组的会话列表（标题、cwd、时间、消息数、估算 token、是否已导入）。支持「最近 N 个 / 全选 / 按项目筛选」，默认**不勾选**。
+   - **归档会话默认折叠**：Codex 的 `threads.archived`、opencode 的 `session.time_archived` 是来源 agent 自己对「隐藏」的判断，本机语料里已归档的比在用的还多（Codex 62/88），与其混在列表里不如默认收起。开关旁带数量，打开始从同一份候选列表过滤（不重新扫描）；收起时会把已归档行从选择里一并去掉，「全选（已选/可见）」只作用于当前可见的行 —— 否则括里的数字会与实际导入的内容不一致。pi / Claude Code 没有归档概念，开关置灰。
 3. **导入**：串行执行（避免瞬时磁盘 IO 峰值），逐条进度；单个失败不影响其余，失败项给出原因。
 4. **报告**：成功 N / 跳过 M / 失败 K，逐项列出跳过原因（注入消息、子 agent、附件、未知工具）与原 cwd 是否已被替换为 scratch。报告可复制。
 
@@ -312,8 +334,8 @@ part(id, message_id, session_id, time_created, time_updated, data)  -- data 是 
 | 阶段 | 内容 | 出口 |
 | --- | --- | --- |
 | **I1**（先做） | IR + 写出器 + `pi` / `claude-code` adapter + 设置页「发现→选择→导入→报告」+ 单测（fixture 每个来源 1 个真实会话） | 导入后可打开、继续对话、计入使用统计；`pnpm typecheck` 通过 |
-| **I2** | `codex`（三代格式）+ `opencode`（DB 优先、JSON 兜底）+ `gemini` | 同上，含 SQLite 只读与锁重试 |
-| **I3** | 去重幂等、来源徽标、compaction 映射、token 超限引导、导入报告导出 | 边界可解释 |
+| **I2** | `codex`（三代格式）+ `opencode`（DB 优先、JSON 兜底）+ `zcode` | 同上，含 SQLite 只读与锁重试 |
+| **I3** | `gemini`、去重幂等、来源徽标、compaction 映射、token 超限引导、导入报告导出 | 边界可解释 |
 | **不做** | Cursor / Antigravity / 凭证类文件 | UI 中「不支持」并说明原因 |
 
 **验收清单**（每条都能自动测）：
@@ -368,7 +390,7 @@ append 一轮后: 54 entries; version 仍为 3; 末行仍可解析   ← 继续�
 
 ## 10. 实施记录（已完成）
 
-四个来源（pi / Claude Code / Codex / opencode）已按本问实施，代码在 `src/main/engine/import/`，三处与本问初稿不同：
+四个来源（pi / Claude Code / Codex / opencode）已按本问实施，代码在 `src/main/engine/import/`，三处与本问初稿不同（第五个来源 zcode 后来按同一契约加入，见 §4.5 与文末）：
 
 1. **工具结果的顺序由写出器保证，不由 adapter 保证**（R6）。初稿把 `toolResult` 写成独立的 IR 条目，意味着每个 adapter 必须自己把它插到正确位置——而这正是最容易静默出错的地方。现在 `ImportedToolCall` 自带 `result`，IR 里根本没有"独立的工具结果"这种东西：**顺序错误在写出口变为了不可能**，adapter 无法弄错。
 2. **`messageCount` / `bytes` 改为可选**。picker 打开必须是毫秒级，而"统计一个来源的消息数"在两个来源上恰好很贵：Codex 要读 1000+ 个 rollout（4.6s），opencode 要对 81k 个 part blob 求 `LENGTH(data)` 和（2.6s）。现在 Codex 只给大小（扫描 48ms）、opencode 只给消息数（扫描 67ms），其余两者都给。
@@ -382,6 +404,8 @@ append 一轮后: 54 entries; version 仍为 3; 末行仍可解析   ← 继续�
 | Claude Code | 12 | 60ms | 464 条消息 | 232 |
 | Codex | 1006 | 48ms | 3652 条消息（26.9 MB） | 1796 |
 | opencode | 557 | 67ms | 1745 条消息 | 867 |
+
+`zcode` 后来按同一份契约加入（`src/main/engine/import/sources/zcode.ts`），本机语料 23 个候选、扫描 6ms、单会话读取 4ms、共 725 条消息，工具调用 / 工具结果 1:1 配对，零悬空调用，3 处模型切换能还原成分隔条。它同时暴露了四条只属于该源的规则，见 §4.5。
 
 每个导入都通过了 §7 的全部断言：header `version: 3`、id 唯一、`parentId` 线性链、`ctx` 消息数与写入数一致、0 悬空工具调用、0 签名、工具结果与其调用相邻、末行可解析、可继续对话（append 后仍为 v3）、计入使用统计、写出的文件全在 FastVibe 目录内、`conversations.json` 重载后 `importedFrom` 仍在、重复扫描会标记已导入。
 

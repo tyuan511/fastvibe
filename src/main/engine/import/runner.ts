@@ -15,24 +15,29 @@ import { writeImportedSession, type WrittenSession } from "./writer";
  * `register` callback.
  */
 
-/** What each source looks like right now, for the four rows in the 导入 pane. */
+/** What each source looks like right now, for the rows in the 导入 pane. */
 export async function scanImportSources(): Promise<ImportSourceStatus[]> {
   const statuses: ImportSourceStatus[] = [];
   for (const adapter of IMPORT_ADAPTERS) {
+    if (!existsSync(adapter.root)) {
+      // Not installed, or never run. Nothing to offer and nothing to explain, so the
+      // source is left out entirely: a row that can only ever say 「未找到数据目录」 is
+      // noise on the common machine where one or two of the four agents are absent.
+      // An agent that *is* installed but has no sessions still gets a row — there the
+      // empty state is news the user would otherwise go looking for.
+      continue;
+    }
     const status: ImportSourceStatus = {
       id: adapter.id,
       name: adapter.name,
-      root: adapter.root,
       sessionCount: 0,
     };
-    if (!existsSync(adapter.root)) {
-      // Not installed, or never run: a state to show, not an error to raise.
-      statuses.push({ ...status, reason: "未找到数据目录" });
-      continue;
-    }
     try {
       const candidates = await adapter.scan();
       status.sessionCount = candidates.length;
+      // Counted separately so the row can say how many are behind the 显示已归档 switch
+      // without the pane ever having to scan for itself.
+      status.archivedCount = candidates.filter((candidate) => candidate.archived).length;
       status.latestAt = candidates.reduce<number | undefined>(
         (latest, candidate) => (latest === undefined || candidate.updatedAt > latest ? candidate.updatedAt : latest),
         undefined,
@@ -75,6 +80,7 @@ export async function scanImportCandidates(
         updatedAt: candidate.updatedAt,
         messageCount: candidate.messageCount,
         bytes: candidate.bytes,
+        archived: candidate.archived,
         imported: importedKeys.has(keyOf(adapter.id, candidate.id)),
         note: noteFor(candidate.note, candidate.messageCount, candidate.bytes),
       }))

@@ -423,6 +423,16 @@ export function SettingsDialog({
                   }
                 />
                 <Row
+                  title="折叠运行过程"
+                  description="思考与工具调用收进一个「用时」块，只留最后的回答文字；展开可回看过程"
+                  control={
+                    <Switch
+                      checked={settings.collapseRuns}
+                      onCheckedChange={(checked) => update({ collapseRuns: checked })}
+                    />
+                  }
+                />
+                <Row
                   title="显示思考过程"
                   control={
                     <Switch

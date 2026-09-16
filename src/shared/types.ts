@@ -125,11 +125,14 @@ export type MessagePart =
   | { kind: "text"; text: string }
   | ({ kind: "thinking"; text: string } & Partial<ThinkingTiming>)
   /**
-   * A model switch, drawn as a divider. It is a *part* rather than a row of its own
-   * because a switch lands mid-reply as often as between turns: the SDK records the
-   * `model_change` entry after the last completed message, so the divider belongs
-   * between two parts of the reply that spans the switch — and a row would split that
-   * reply into two blocks (two footers), while a part keeps it one turn.
+   * A model switch, drawn as a divider reading 「模型已切换至 <to>」. It is a *part*
+   * rather than a row of its own because a switch lands mid-reply as often as between
+   * turns: consecutive engine messages of one reply are merged into a single row, so the
+   * divider belongs between two parts of the reply that spans the switch — and a row
+   * would split that reply into two blocks (two footers), while a part keeps it one turn.
+   * It exists only where the new model actually ran, and both sides are derived from the
+   * replies themselves (`#insertModelSwitches` / `#announceModelUse` in
+   * `src/main/pi/process-manager.ts`), so a pick that no reply followed draws nothing.
    */
   | { kind: "model"; from?: EngineModel; to: EngineModel }
   | { kind: "tool"; toolId: string };
@@ -157,6 +160,13 @@ export type ChatMessage = {
   tools: ToolCallBlock[];
   /** Interleaved render order. Optional so sessions persisted before this field still load. */
   parts?: MessagePart[];
+  /**
+   * The engine records one timestamp per message — the moment the *request* started
+   * — so `createdAt` is when a reply began, not when it finished. This is that
+   * completion instant, measured when the message was persisted to its session
+   * entry, so a footer can report the end time and the elapsed duration.
+   */
+  completedAt?: number;
   createdAt: number;
   kind?: "message" | "notice" | "compact" | "custom";
   /** Extension custom message (`pi.sendMessage`): the plugin's own type id. */
@@ -754,16 +764,27 @@ export type UsageStats = {
  * each id has a hand-written adapter, and the 导入 pane names them by product
  * (Claude Code, Codex, …) rather than by file format.
  */
-export type ImportSourceId = "claude-code" | "codex" | "opencode" | "pi";
+export type ImportSourceId = "claude-code" | "codex" | "opencode" | "zcode" | "pi";
 
-/** What one adapter found on disk. Absent/empty sources still render, with a reason. */
+/**
+ * What one adapter found on disk.
+ *
+ * A source whose data root is absent is not in the list at all, so every entry here is
+ * something the user can actually import from (`sessionCount` may still be 0). There is
+ * deliberately no `root` field: it existed only so an absent row could say where it had
+ * looked, and that row no longer exists.
+ */
 export type ImportSourceStatus = {
   id: ImportSourceId;
   /** Product name, shown next to the brand mark. */
   name: string;
-  /** Where sessions were looked for, so an empty row can say why. */
-  root: string;
   sessionCount: number;
+  /**
+   * How many of `sessionCount` the source itself marks as archived. Those are still
+   * importable but the picker folds them away by default, so the row says how many
+   * are behind the 显示已归档 switch.
+   */
+  archivedCount?: number;
   /** Newest session timestamp in the source, if any. */
   latestAt?: number;
   /** Set when the source cannot be read at all (not installed, unreadable). */
@@ -788,6 +809,9 @@ export type ImportCandidate = {
   bytes?: number;
   /** Already imported into FastVibe once. */
   imported: boolean;
+  /** Hidden by its source agent (Codex 归档, opencode time_archived). Folded away in
+   * the picker unless 显示已归档 is on. */
+  archived?: boolean;
   /** Non-fatal caveat, e.g. 已跳过子 agent 轨迹. */
   note?: string;
 };

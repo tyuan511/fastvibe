@@ -42,7 +42,14 @@ function TooltipContent({
         alignOffset={alignOffset}
         side={side}
         sideOffset={sideOffset}
-        className="isolate z-50"
+        // A trigger that leaves the layout while its tooltip is closing (the
+        // sidebar's hover actions are `hidden`, i.e. `display: none`) stops being
+        // measurable, so the library parks the closing popup at the viewport origin
+        // and paints it there for the whole exit animation - a tooltip flashing in
+        // the top-left corner. It flags that state `data-anchor-hidden` and otherwise
+        // leaves it alone, so hide it here: there is nothing left to point at, and
+        // the exit fades a popup that is no longer on screen.
+        className="isolate z-50 data-[anchor-hidden]:hidden"
       >
         <TooltipPrimitive.Popup
           data-slot="tooltip-content"

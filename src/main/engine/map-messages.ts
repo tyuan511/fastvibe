@@ -9,12 +9,17 @@ import type { ChatAttachment, ChatMessage, MessagePart, ThinkingTiming, ToolCall
  * `timings` carries the thinking bounds Main timed while the reply streamed, keyed
  * by that same entry id; the transcript itself has no per-block timing, so without
  * it a reloaded block could only say 「思考」 with no duration.
+ *
+ * `completedAtOf` is the instant each message's session entry was persisted — the end
+ * of the reply, since the engine stamps a message with its *request* start and only
+ * appends the entry once streaming is over. Keyed by the same entry id.
  */
 export function mapEngineMessages(
   raw: unknown,
   idOf?: (message: unknown) => string | undefined,
   timings?: ReadonlyMap<string, ThinkingTiming[]>,
   customRuns?: (message: Record<string, unknown>) => TuiRun[][] | undefined,
+  completedAtOf?: ReadonlyMap<string, number>,
 ): ChatMessage[] {
   if (!Array.isArray(raw)) return [];
   const output: ChatMessage[] = [];
@@ -84,6 +89,9 @@ export function mapEngineMessages(
         tools,
         parts,
         createdAt: typeof message.timestamp === "number" ? message.timestamp : Date.now(),
+        // Only a reply has an end distinct from its start; a user row's entry is
+        // written at send time, so its timestamp already is the whole story.
+        completedAt: role === "assistant" ? (id ? completedAtOf?.get(id) : undefined) : undefined,
         kind: role === "system" ? "notice" : "message",
         attachments: attachments.length > 0 ? attachments : undefined,
         error,

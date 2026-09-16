@@ -102,6 +102,12 @@ export function writeImportedSession(
   }
 
   for (const item of session.items) {
+    if (item.kind === "switch") {
+      // The same `model_change` entry the SDK appends on a live model switch, so the
+      // reader turns it into the same divider an imported chat's own switch would draw.
+      push({ type: "model_change", at: item.at, provider: item.provider, modelId: item.model });
+      continue;
+    }
     if (item.kind === "user") {
       const images = item.images ?? [];
       const content: unknown[] = [];

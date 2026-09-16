@@ -96,6 +96,10 @@ export function mergeAssistantRun(messages: ChatMessage[]): ChatMessage {
   }
 
   const error = [...messages].reverse().find((item) => item.error)?.error;
+  // The row ends when its final round-trip does. Deliberately not a search back
+  // through the run: an open round-trip has no end yet, and borrowing the previous
+  // one's would report a stale finish time the moment it is read mid-stream.
+  const completedAt = messages[messages.length - 1]?.completedAt;
   const merged: ChatMessage = {
     ...first,
     text: texts.join("\n\n"),
@@ -103,6 +107,7 @@ export function mergeAssistantRun(messages: ChatMessage[]): ChatMessage {
     tools: [...tools.values()],
     parts,
     error,
+    completedAt,
   };
   mergedRuns.set(key, merged);
   return merged;
