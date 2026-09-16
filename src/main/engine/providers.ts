@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { chmod, readFile, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { INPUT_MODALITIES, PROVIDER_APIS, THINKING_EFFORT_LEVELS, type CostTier, type FastVibeModel, type ModelCost, type ModelPrice, type NativeProviderConfig, type ProviderApi, type ProviderConfig, type ProviderModel, type ThinkingLevel } from "@shared/types";
@@ -415,7 +415,7 @@ export async function addProvider(
   models: ProviderModel[],
 ): Promise<string> {
   const providers = readProviders(paths);
-  const id = uniqueProviderId(providers, draft.name);
+  const id = uniqueProviderId(providers, draft.name, draft.baseUrl);
   const apiKeyEnv = nativeKeyEnv(id);
   providers.push({
     id,
@@ -523,11 +523,49 @@ export async function removeProvider(paths: FastVibePaths, id: string): Promise<
   await setProviderKey(paths, removed.apiKeyEnv, "");
 }
 
-function uniqueProviderId(providers: StoredProvider[], name: string): string {
-  const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "provider";
+function uniqueProviderId(providers: StoredProvider[], name: string, baseUrl: string): string {
+  // Minted once, at creation, and then it is the provider's identity for good: the id
+  // namespaces `models.json`, becomes the credential's env-var segment (`nativeKeyEnv`),
+  // and is what every turn writes into the transcript — the SDK restores a conversation's
+  // model by looking up `getModel(message.provider, message.model)` from it. So it has to
+  // be ASCII, readable, and stable.
+  //
+  // The name is the best source when it has ASCII (`Packy` → `custom-packy`), but a name
+  // is not required to have any — a Chinese provider name slugged to the empty string and
+  // fell back to the literal `provider`, leaving such a provider called `custom-provider`
+  // in the transcript and, once that leaked into 使用统计, a row labelled 「provider」.
+  // Fall back to the endpoint's host next (that is the provider's real, stable identity),
+  // and to a hash of the name only when neither yields anything usable.
+  const slug =
+    slugify(name) ||
+    slugify(hostLabel(baseUrl)) ||
+    createHash("sha1").update(name.trim()).digest("hex").slice(0, 6);
   let id = `custom-${slug}`;
   while (providers.some((provider) => provider.id === id)) id = `custom-${slug}-${randomUUID().slice(0, 4)}`;
   return id;
+}
+
+/** ASCII, env-safe segment: `My Gateway` → `my-gateway`. */
+function slugify(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+/**
+ * The operator's name as read off an endpoint: `cihai.wujie-ops.com` → `cihai`.
+ * Generic service prefixes are skipped so `api.openai.com` names the company rather than
+ * the subdomain, and the shape of the host is only a guess anyway — this is a readable
+ * id, not a verified brand name.
+ */
+function hostLabel(baseUrl: string): string {
+  const generic = new Set(["api", "www", "gateway", "gw", "llm", "chat", "proxy", "v1"]);
+  const trimmed = baseUrl.trim();
+  if (!trimmed) return "";
+  try {
+    const url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`);
+    return url.hostname.split(".").find((label) => label && !generic.has(label)) ?? "";
+  } catch {
+    return "";
+  }
 }
 
 export function providerKeyEnv(paths: FastVibePaths, id: string): string | undefined {

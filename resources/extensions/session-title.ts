@@ -18,6 +18,7 @@ const INSTRUCTIONS = [
   "- no quotes, trailing punctuation, or emoji",
   "- same language as the user",
   "- no leading labels like Title: or 标题：",
+  "- output the title alone: no preamble, no reasoning, no explanation",
 ].join("\n");
 
 function hasUserMessages(ctx: ExtensionContext): boolean {
@@ -33,12 +34,36 @@ function clip(text: string, max: number): string {
   return text.length <= max ? text : text.slice(0, max).trim();
 }
 
+/**
+ * Normalize a model reply into a candidate title, without truncating it.
+ * Whether it is short enough to be a title is decided by `apply`.
+ */
 function cleanTitle(raw: string): string {
   let text = raw.trim().split(/\r?\n/, 1)[0] ?? "";
   text = text.replace(/^["「『“']+|["」』”']+$/g, "").trim();
   text = text.replace(/^(title|标题)\s*[:：]\s*/i, "").trim();
   text = text.replace(/[\s.。!！?？,，;；:：]+$/g, "").trim();
-  return clip(text, MAX_TITLE);
+  return text;
+}
+
+/** True when a text block is the model's running commentary rather than its answer. */
+function isCommentary(signature: string | undefined): boolean {
+  if (!signature) return false;
+  try {
+    return (JSON.parse(signature) as { phase?: unknown }).phase === "commentary";
+  } catch {
+    return false;
+  }
+}
+
+/** The model's answer text, dropping commentary blocks when the provider tags them. */
+function answerText(content: readonly { type: string; text?: string; textSignature?: string }[]): string {
+  const text = content.filter(
+    (block): block is { type: "text"; text: string; textSignature?: string } =>
+      block.type === "text" && typeof block.text === "string",
+  );
+  const final = text.filter((block) => !isCommentary(block.textSignature));
+  return (final.length > 0 ? final : text).map((block) => block.text).join("");
 }
 
 function promptText(raw: string): string {
@@ -54,6 +79,10 @@ export default function sessionTitle(pi: ExtensionAPI): void {
   const apply = (name: string): void => {
     const title = cleanTitle(name);
     if (!title) return;
+    // A model that ignores the instruction and answers in prose produces no
+    // title. Clipping a sentence to MAX_TITLE yields garbage like
+    // "We need answer user's re", so refuse it and keep the host fallback.
+    if (title.length > MAX_TITLE) return;
     // A rename that landed while we were generating wins.
     if (pi.getSessionName()) return;
     pi.setSessionName(title);
@@ -69,19 +98,17 @@ export default function sessionTitle(pi: ExtensionAPI): void {
           messages: [
             {
               role: "user",
-              content: `${INSTRUCTIONS}\n\n<message>\n${prompt}\n</message>`,
+              content: `${INSTRUCTIONS}\n\n<message>\n${prompt}\n</message>\n\nTitle:`,
               timestamp: Date.now(),
             },
           ],
         },
         { maxTokens: 128, cacheRetention: "none", timeoutMs: 20_000 },
       );
-      if (response.stopReason === "error") return;
-      const text = response.content
-        .filter((block): block is { type: "text"; text: string } => block.type === "text")
-        .map((block) => block.text)
-        .join("");
-      apply(text);
+      // Only a naturally finished reply is a title; "length"/"aborted" means
+      // the model was still rambling when it was cut off.
+      if (response.stopReason !== "stop") return;
+      apply(answerText(response.content));
     } catch {
       // Keep the host's truncated-prompt title.
     }

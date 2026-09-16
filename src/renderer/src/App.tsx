@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useRef, useState, type JSX } from "react";
 import { motion } from "motion/react";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { AlertCircleIcon, MessageSquarePlusIcon, PanelLeftOpenIcon, PanelRightOpenIcon } from "@hugeicons/core-free-icons";
+import { AlertCircleIcon, MessageSquarePlusIcon, PanelLeftOpenIcon, PanelRightOpenIcon, Settings01Icon } from "@hugeicons/core-free-icons";
 import { useLocation, useMatch, useNavigate, useNavigationType } from "react-router";
 import { useShallow } from "zustand/react/shallow";
 import { Composer } from "@/components/chat/composer";
@@ -27,7 +27,7 @@ import { cn } from "@/lib/utils";
 
 import { SettingsDialog, SETTINGS_SECTIONS, type SectionId } from "@/components/settings/settings-dialog";
 import type { DeleteConversationsResult } from "@/components/settings/archived-settings";
-import { useSessionStore } from "@/stores/session";
+import { useConversationWorking, useSessionStore, working } from "@/stores/session";
 import { useSettingsStore } from "@/stores/settings";
 import { useThemeSync } from "@/lib/use-theme";
 import type {
@@ -35,6 +35,7 @@ import type {
   ChatMessage,
   ConversationDeleteResult,
   ConversationOpenResult,
+  FastVibeModel,
   PermissionRequest,
   QueuedPrompt,
   SkillInfo,
@@ -83,10 +84,68 @@ function writeDraft(id: string | null, text: string): void {
 
 /** Pull the active conversation's turn statistics into the store. */
 function refreshStats(): void {
+  const id = useSessionStore.getState().activeId;
+  // With no conversation on screen the engine's active one is not ours to report:
+  // its statistics would land on the empty hero as if they were this chat's.
+  if (!id) return;
   void window.fastvibe.engine
     .getStats()
-    .then((stats) => useSessionStore.getState().setStats(stats))
+    .then((stats) => {
+      // Statistics are conversation-scoped but carry no id of their own, so the
+      // answer is only good for the chat that was on screen when it was asked for.
+      if (useSessionStore.getState().activeId === id) useSessionStore.getState().setStats(stats);
+    })
     .catch(() => undefined);
+}
+
+/**
+ * Re-read the engine's session state for the conversation on screen.
+ *
+ * The reply is one IPC hop behind the user, who may have opened another chat in
+ * the meantime: the state is dropped unless its conversation is still the one on
+ * screen. Without the check a finished chat could adopt the answer meant for the
+ * one that was just left — and the sidebar would light it up as 运行中.
+ */
+function reloadActiveState(): void {
+  const id = useSessionStore.getState().activeId;
+  if (!id) return;
+  void window.fastvibe.engine
+    .getState()
+    .then((next) => {
+      if (useSessionStore.getState().activeId === id) useSessionStore.getState().setSession(next);
+    })
+    .catch(() => undefined);
+}
+
+/** Same attribution rule as `reloadActiveState`, for the transcript itself. */
+function reloadActiveMessages(): void {
+  const id = useSessionStore.getState().activeId;
+  // `getMessages` answers for whatever conversation the *engine* has active. With
+  // none on screen — the hero after 归档, or a window that never opened a chat —
+  // that transcript belongs to someone else and must not be painted here.
+  if (!id) return;
+  void window.fastvibe.engine
+    .getMessages()
+    .then((messages) => {
+      if (useSessionStore.getState().activeId === id) useSessionStore.getState().setMessages(messages, id);
+    })
+    .catch(() => undefined);
+}
+
+/**
+ * The models this install can actually chat with.
+ *
+ * The store holds the list the engine reported once ready and after every 供应商 edit,
+ * so a send normally costs nothing; an empty list is re-checked against the engine,
+ * because "no models" is the one condition that has to stop a prompt before a
+ * conversation is created only for it to fail.
+ */
+async function availableModels(): Promise<FastVibeModel[]> {
+  const cached = useSessionStore.getState().models;
+  if (cached.length > 0) return cached;
+  const next = await window.fastvibe.engine.getModels().catch((): FastVibeModel[] => []);
+  useSessionStore.getState().setModels(next);
+  return next;
 }
 
 /**
@@ -154,6 +213,11 @@ export function App(): JSX.Element {
     state.messages.some((item) => item.role === "user" || item.role === "assistant"),
   );
   const streaming = useSessionStore((state) => state.streaming);
+  // The busy mark for this chat, exactly as the sidebar draws it (`running[id]`, a run
+  // or a compaction). Displays read this one; `streaming` is left to the two places
+  // where the subject is a *run*: the transcript's caret/working row, and whether a
+  // send is queued or starts a turn.
+  const conversationWorking = useConversationWorking();
   const running = useSessionStore((state) => state.running);
   const stats = useSessionStore((state) => state.stats);
   const draft = useSessionStore((state) => state.draft);
@@ -174,7 +238,6 @@ export function App(): JSX.Element {
   const resetConversation = useSessionStore((state) => state.resetConversation);
   const commands = useSessionStore((state) => state.commands);
   const permission = useSessionStore((state) => state.permission);
-  const compacting = useSessionStore((state) => state.compacting);
   const setCommands = useSessionStore((state) => state.setCommands);
   const setSubagents = useSessionStore((state) => state.setSubagents);
   const setPermission = useSessionStore((state) => state.setPermission);
@@ -187,6 +250,9 @@ export function App(): JSX.Element {
   const removeQueued = useSessionStore((state) => state.removeQueued);
   const setQueuedOrder = useSessionStore((state) => state.setQueuedOrder);
   const prependQueued = useSessionStore((state) => state.prependQueued);
+  const markQueuedSending = useSessionStore((state) => state.markQueuedSending);
+  const unmarkQueuedSending = useSessionStore((state) => state.unmarkQueuedSending);
+  const unmarkAllQueuedSending = useSessionStore((state) => state.unmarkAllQueuedSending);
   const clearQueued = useSessionStore((state) => state.clearQueued);
   const setQueuePause = useSessionStore((state) => state.setQueuePause);
   const runInterrupted = useSessionStore((state) => state.runInterrupted);
@@ -221,6 +287,9 @@ export function App(): JSX.Element {
   // Skills the engine can load, surfaced by the composer's 技能 picker. Refetched
   // after 设置 → 技能 closes so a newly added skill shows up without a restart.
   const [skills, setSkills] = useState<SkillInfo[]>([]);
+  // Set when a send was refused because no model is configured: the composer's own
+  // menu is the fix, so the shell says so and offers the way there.
+  const [needsModel, setNeedsModel] = useState(false);
 
   // Hand the pre-JS boot splash off to the shell only once the engine has settled.
   // While it is still starting, the static splash *is* the app's loader, so fading
@@ -280,9 +349,12 @@ export function App(): JSX.Element {
     const offReady = window.fastvibe.engine.onConversationReady((payload) => {
       const store = useSessionStore.getState();
       // Seed the sidebar's run indicator even for conversations that are not on screen.
-      store.setConversationRunning(payload.id, payload.state?.isStreaming ?? false);
+      // `working` unions the two things the mark covers — a run (`running`, which now
+      // spans the whole run: `agent_start` through `agent_settled`, retries and
+      // auto-compaction included) and the compaction that can run with no run at all.
+      store.setConversationRunning(payload.id, working(payload.state));
       if (store.activeId !== payload.id || store.streaming) return;
-      store.setMessages(payload.messages);
+      store.setMessages(payload.messages, payload.id);
       store.setSession(payload.state);
       store.setStatus(payload.status);
     });
@@ -325,6 +397,7 @@ export function App(): JSX.Element {
               conversationId: typeof event.conversationId === "string" ? event.conversationId : info?.conversationId,
               title: info?.name || info?.agent,
               status: typeof event.status === "string" ? event.status : info?.status,
+              brief: info?.detail,
             });
           }
           void window.fastvibe.engine.getSubagents().then(setSubagents).catch(() => undefined);
@@ -344,7 +417,7 @@ export function App(): JSX.Element {
         event.type === "compaction_end" ||
         event.type === "auto_compaction_end"
       ) {
-        void window.fastvibe.engine.getState().then(setSession).catch(() => undefined);
+        reloadActiveState();
         // A failed turn is already on the optimistic assistant. Reloading here races
         // auto-retry (which drops the error message from engine state) and would
         // blank the bubble we just filled in.
@@ -363,12 +436,10 @@ export function App(): JSX.Element {
         const compactFailed =
           (event.type === "compaction_end" || event.type === "auto_compaction_end") &&
           (event.aborted === true || Boolean(event.errorMessage));
-        if (!failed && !compactFailed) {
-          void window.fastvibe.engine.getMessages().then(setMessages).catch(() => undefined);
-        }
+        if (!failed && !compactFailed) reloadActiveMessages();
         refreshStats();
       } else if (event.type === "model_changed" || event.type === "thinking_level_changed") {
-        void window.fastvibe.engine.getState().then(setSession).catch(() => undefined);
+        reloadActiveState();
       }
       if (event.type === "available_commands_update") {
         const raw = Array.isArray(event.commands) ? event.commands : [];
@@ -463,11 +534,15 @@ export function App(): JSX.Element {
       send.click();
     },
     stop: () => {
-      // Esc during a run stops it — but never while an overlay owns the keyboard:
-      // command palette, settings, or an extension prompt (there Esc cancels).
+      // Esc while the chat is working stops it — but never while an overlay owns the
+      // keyboard: command palette, settings, or an extension prompt (there Esc cancels).
+      // The gate is the same busy mark the stop button itself is drawn from (`working`),
+      // read fresh here: this handler is registered once, and a chat that is compacting
+      // has something to stop even though no run is streaming.
       if (commandOpen || settingsOpen) return false;
       const store = useSessionStore.getState();
-      if (!store.streaming || store.permission) return false;
+      const busy = Boolean(store.activeId && store.running[store.activeId]);
+      if (!busy || store.permission) return false;
       document.querySelector<HTMLButtonElement>('[aria-label="停止"]')?.click();
     },
     prevChat: () => {
@@ -604,10 +679,16 @@ export function App(): JSX.Element {
       .catch(() => undefined);
   }, [settingsOpen, active?.project]);
 
+  // The nudge exists to explain a refused send — once a model is configured there is
+  // nothing left to explain, and 供应商 hands the refreshed list over itself.
+  useEffect(() => {
+    if (models.length > 0) setNeedsModel(false);
+  }, [models.length]);
+
   function applyOpen(result: ConversationOpenResult): void {
     applySnapshot(result);
     setActiveId(result.conversation.id);
-    setMessages(result.messages);
+    setMessages(result.messages, result.conversation.id);
     setSession(result.state);
     setStatus(result.status);
     setDraft(readDrafts()[result.conversation.id] ?? "");
@@ -646,6 +727,12 @@ export function App(): JSX.Element {
       }
       return;
     }
+    // Nothing to run a turn on: keep the draft and ask for a model. Creating the
+    // conversation first would leave a chat whose prompt the engine then refuses.
+    if ((await availableModels()).length === 0) {
+      setNeedsModel(true);
+      return;
+    }
     let conversationId = activeId;
     if (!conversationId) {
       const created = await window.fastvibe.conversations.create(active?.project);
@@ -659,10 +746,23 @@ export function App(): JSX.Element {
     applyList(nextList);
     if (streaming) {
       if (settings.queueBehavior === "steer") {
+        const id = crypto.randomUUID();
+        const payload = `${text || "请查看附件"}${attachmentPromptSuffix(currentAttachments)}`;
+        enqueue({
+          id,
+          text: promptText,
+          behavior: "steer",
+          attachments: currentAttachments,
+          sending: true,
+          sentText: payload,
+        });
         setAttachments([]);
+        setQueuePause(null);
         try {
-          await dispatchPrompt(text, currentAttachments, "steer");
+          await window.fastvibe.engine.steer(payload, attachmentsToImages(currentAttachments));
+          void window.fastvibe.engine.getState().then(setSession).catch(() => undefined);
         } catch (err) {
+          unmarkQueuedSending(id);
           setError(err instanceof Error ? err.message : String(err));
         }
       } else {
@@ -714,31 +814,59 @@ export function App(): JSX.Element {
     }
   }
 
-  function handleRemoveQueued(id: string): void {
+  async function replaceEngineSteering(exceptId?: string): Promise<void> {
+    const remaining = useSessionStore
+      .getState()
+      .queued.filter((item) => item.sending && item.id !== exceptId);
+    try {
+      await window.fastvibe.engine.replaceSteering(
+        remaining.map((item) => ({
+          text: item.sentText ?? item.text,
+          images: attachmentsToImages(item.attachments ?? []),
+        })),
+      );
+    } catch {
+      // The engine may already have drained the item; the tray still updates.
+    }
+  }
+
+  async function handleRemoveQueued(id: string): Promise<void> {
+    const item = useSessionStore.getState().queued.find((entry) => entry.id === id);
+    if (item?.sending) await replaceEngineSteering(id);
     removeQueued(id);
   }
 
   function handleEditQueued(id: string): void {
     const item = useSessionStore.getState().queued.find((entry) => entry.id === id);
-    if (!item || draft.trim()) return;
+    if (!item || item.sending || draft.trim()) return;
     removeQueued(id);
     setDraft(item.text);
     if (item.attachments?.length) setAttachments(item.attachments);
   }
 
+  async function handleRecallQueued(id: string): Promise<void> {
+    const item = useSessionStore.getState().queued.find((entry) => entry.id === id);
+    if (!item?.sending) return;
+    await replaceEngineSteering(id);
+    unmarkQueuedSending(id);
+  }
+
   async function handleSendQueuedNow(id: string): Promise<void> {
     const item = useSessionStore.getState().queued.find((entry) => entry.id === id);
-    if (!item) return;
-    removeQueued(id);
+    if (!item || item.sending) return;
     if (useSessionStore.getState().streaming) {
+      const payload = `${item.text || "请查看附件"}${attachmentPromptSuffix(item.attachments ?? [])}`;
+      markQueuedSending(id, payload);
       try {
-        await dispatchPrompt(item.text, item.attachments ?? [], "steer");
+        await window.fastvibe.engine.steer(payload, attachmentsToImages(item.attachments ?? []));
+        void window.fastvibe.engine.getState().then(setSession).catch(() => undefined);
       } catch (err) {
-        prependQueued(item);
+        unmarkQueuedSending(id);
         setError(err instanceof Error ? err.message : String(err));
       }
       return;
     }
+    removeQueued(id);
     addUserMessage(item.text, item.attachments);
     try {
       await dispatchPrompt(item.text, item.attachments ?? [], "prompt");
@@ -758,6 +886,7 @@ export function App(): JSX.Element {
       } catch {
         // older engines may not support clear_queue
       }
+      unmarkAllQueuedSending();
       await window.fastvibe.engine.abort();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -791,14 +920,16 @@ export function App(): JSX.Element {
   // a loop. A one-shot effect would stop after the first item: resetting `draining`
   // in `.finally` does not re-render, so the next queued message would never fire.
   useEffect(() => {
-    if (streaming || queuePause || queued.length === 0 || draining.current) return;
+    if (streaming || queuePause || !queued.some((item) => !item.sending) || draining.current) return;
     draining.current = true;
     void (async () => {
       try {
         for (;;) {
           const state = useSessionStore.getState();
-          if (state.queuePause || state.queued.length === 0 || state.streaming) break;
-          await drainQueued(state.queued[0]);
+          if (state.queuePause || state.streaming) break;
+          const next = state.queued.find((item) => !item.sending);
+          if (!next) break;
+          await drainQueued(next);
         }
       } finally {
         draining.current = false;
@@ -810,6 +941,7 @@ export function App(): JSX.Element {
   // stale closure) when unrelated shell state changes.
   const handleRetry = useCallback(async (message: ChatMessage): Promise<void> => {
     const current = useSessionStore.getState();
+    const owner = current.activeId;
     const source =
       message.role === "user"
         ? message
@@ -823,6 +955,10 @@ export function App(): JSX.Element {
         // ignore
       }
     }
+    // Every step below acts on whatever conversation the engine has active, and a
+    // branch/send is a round trip the user can switch chats in the middle of. Bail
+    // out rather than rewind (and re-send into) a chat they moved to.
+    if (useSessionStore.getState().activeId !== owner) return;
     // Retry replaces its turn rather than appending a second copy: drop the source
     // user message and everything after it, then send it again. Branching rewinds
     // the engine to the same point; if the id cannot be resolved locally the trim
@@ -831,12 +967,14 @@ export function App(): JSX.Element {
     const trimmed = sourceIndex >= 0 ? current.messages.slice(0, sourceIndex) : current.messages;
     if (source?.id) {
       try {
-        setMessages(await window.fastvibe.engine.branch(source.id));
+        const branch = await window.fastvibe.engine.branch(source.id);
+        if (useSessionStore.getState().activeId !== owner) return;
+        setMessages(branch, owner ?? undefined);
       } catch {
-        setMessages(trimmed);
+        setMessages(trimmed, owner ?? undefined);
       }
     } else {
-      setMessages(trimmed);
+      setMessages(trimmed, owner ?? undefined);
     }
     setDraft("");
     addUserMessage(text, source?.attachments);
@@ -852,14 +990,21 @@ export function App(): JSX.Element {
   }, [canChat, setMessages, setDraft, addUserMessage, dropEmptyAssistant, setError, setSession]);
 
   const handleEdit = useCallback(async (message: ChatMessage): Promise<void> => {
+    const owner = useSessionStore.getState().activeId;
     if (message.id) {
       try {
-        setMessages(await window.fastvibe.engine.branch(message.id));
+        const branch = await window.fastvibe.engine.branch(message.id);
+        // Branching rewrites the engine's active session; if the user switched
+        // chats while it ran, the result no longer describes the chat on screen.
+        if (useSessionStore.getState().activeId !== owner) return;
+        setMessages(branch, owner ?? undefined);
       } catch {
         // A turn sent in this window has no session entry yet: rewrite it by
         // dropping it (and its reply) locally, matching what branching would do.
-        const index = useSessionStore.getState().messages.findIndex((item) => item.id === message.id);
-        if (index >= 0) setMessages(useSessionStore.getState().messages.slice(0, index));
+        const current = useSessionStore.getState();
+        if (current.activeId !== owner) return;
+        const index = current.messages.findIndex((item) => item.id === message.id);
+        if (index >= 0) setMessages(current.messages.slice(0, index), owner ?? undefined);
       }
     }
     setDraft(message.text);
@@ -888,7 +1033,7 @@ export function App(): JSX.Element {
           void window.fastvibe.engine.getStatus().then(setStatus).catch(() => undefined);
           void window.fastvibe.engine.getState().then(setSession).catch(() => undefined);
         }
-        setMessages([]);
+        setMessages([], current.id);
         setDraft(readDrafts()[current.id] ?? "");
         setError(null);
         revealConversation(current.id);
@@ -1109,6 +1254,12 @@ export function App(): JSX.Element {
         next = await window.fastvibe.engine.setThinking(levels.includes("high") ? "high" : levels[0]);
       }
       setSession(next);
+      // The divider is drawn from the engine's own `model_change` entry, so a
+      // transcript read is the authoritative version of it: the live `model_changed`
+      // event places it as it happens, and while nothing is in flight the transcript
+      // is settled enough to simply be re-read. Kept off mid-run, where the engine's
+      // message list does not yet contain the reply being streamed.
+      if (next.running !== true) reloadActiveMessages();
     } catch {
       setError("切换模型失败，请稍后重试。");
     }
@@ -1136,6 +1287,20 @@ export function App(): JSX.Element {
 
   const bannerNode = (
     <>
+      {needsModel ? (
+        <div className="mx-auto mb-2 w-full max-w-3xl px-6">
+          <Alert>
+            <HugeiconsIcon strokeWidth={2} icon={Settings01Icon} />
+            <AlertTitle>还没有配置模型</AlertTitle>
+            <AlertDescription>先连接一个模型供应商，然后就可以开始对话了。</AlertDescription>
+            <AlertAction>
+              <Button size="xs" variant="outline" onClick={() => navigate("/settings/providers")}>
+                去设置
+              </Button>
+            </AlertAction>
+          </Alert>
+        </div>
+      ) : null}
       {banner ? (
         <div className="mx-auto mb-2 w-full max-w-3xl px-6">
           <Alert variant="destructive">
@@ -1180,7 +1345,7 @@ export function App(): JSX.Element {
       value={draft}
       disabled={!canChat}
       streaming={streaming}
-      compacting={compacting}
+      working={conversationWorking}
       placeholder={canChat ? "随心输入" : "准备中…"}
       models={models}
       model={session?.model}
@@ -1207,9 +1372,10 @@ export function App(): JSX.Element {
       onModelChange={(provider, modelId) => void handleModelChange(provider, modelId)}
       onThinkingChange={(level) => void handleThinkingChange(level)}
       onAttachmentsChange={setAttachments}
-      onRemoveQueued={handleRemoveQueued}
+      onRemoveQueued={(id) => void handleRemoveQueued(id)}
       onEditQueued={handleEditQueued}
       onSendQueuedNow={(id) => void handleSendQueuedNow(id)}
+      onRecallQueued={(id) => void handleRecallQueued(id)}
       onReorderQueued={setQueuedOrder}
       onResumeQueue={() => setQueuePause(null)}
       runInterrupted={runInterrupted !== null}
@@ -1319,7 +1485,7 @@ export function App(): JSX.Element {
             {bannerNode}
             <NewSessionHero />
             <ExtensionWidgets className="pb-2" />
-            <GoalPanel className="pb-2" disabled={streaming} />
+            <GoalPanel className="pb-2" disabled={conversationWorking} />
             <TodoPanel className="pb-2" />
             {composerSlot}
             <SuggestionChips onSelect={setDraft} />
@@ -1341,7 +1507,7 @@ export function App(): JSX.Element {
             <div className="transcript-gutter overflow-hidden">
               {bannerNode}
               <ExtensionWidgets className="pb-2" />
-              <GoalPanel className="pb-2" disabled={streaming} />
+              <GoalPanel className="pb-2" disabled={conversationWorking} />
               <TodoPanel className="pb-2" />
               {composerSlot}
             </div>

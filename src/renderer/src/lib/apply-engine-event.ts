@@ -1,4 +1,13 @@
-import type { ChatMessage, CompactInfo, CompactReason, EngineEvent, ToolCallBlock } from "@shared/types";
+import type {
+  ChatAttachment,
+  ChatMessage,
+  CompactInfo,
+  CompactReason,
+  EngineEvent,
+  EngineModel,
+  MessagePart,
+  ToolCallBlock,
+} from "@shared/types";
 
 export type ApplyResult = {
   messages: ChatMessage[];
@@ -10,6 +19,14 @@ export type ApplyResult = {
    * conversation.
    */
   interrupted?: "aborted" | "error";
+  /**
+   * Part index a model switch recorded *now* belongs at: the end of everything the
+   * engine has settled so far, which is where the next assistant message's content
+   * begins. Returned on every event where an engine message starts or ends, so the
+   * caller can keep it across streamed deltas — while the parts of the message in
+   * flight grow, the boundary must not move.
+   */
+  partBoundary?: number;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -19,6 +36,95 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
+
+/** Does the transcript already hold an optimistic user row awaiting its session id? */
+export function lastUserIsLocal(messages: ChatMessage[]): boolean {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].role !== "user") continue;
+    return messages[index].id.startsWith("local:");
+  }
+  return false;
+}
+
+/** Text of a user `message_start` the engine just injected, if any. */
+export function userMessageText(event: EngineEvent): string | undefined {
+  if (event.type !== "message_start") return undefined;
+  const message = isRecord(event.message) ? event.message : undefined;
+  if (!message || message.role !== "user") return undefined;
+  return contentText(message.content);
+}
+
+function contentText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) => {
+      if (typeof part === "string") return part;
+      if (isRecord(part) && typeof part.text === "string") return part.text;
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function userRowFromEngine(message: Record<string, unknown>): ChatMessage {
+  const text = contentText(message.content);
+  const attachments: ChatAttachment[] = [];
+  if (Array.isArray(message.content)) {
+    for (const part of message.content) {
+      if (!isRecord(part) || part.type !== "image" || typeof part.data !== "string") continue;
+      const mimeType = typeof part.mimeType === "string" ? part.mimeType : "image/png";
+      attachments.push({
+        id: crypto.randomUUID(),
+        kind: "image",
+        name: "image",
+        mimeType,
+        dataUrl: `data:${mimeType};base64,${part.data}`,
+      });
+    }
+  }
+  return {
+    id: `local:${crypto.randomUUID()}`,
+    role: "user",
+    text,
+    tools: [],
+    parts: text ? [{ kind: "text", text }] : [],
+    createdAt: typeof message.timestamp === "number" ? message.timestamp : Date.now(),
+    attachments: attachments.length > 0 ? attachments : undefined,
+  };
+}
+
+function asEngineModel(value: unknown): EngineModel | undefined {
+  if (!isRecord(value)) return undefined;
+  const provider = asString(value.provider);
+  const id = asString(value.id);
+  return provider && id ? { provider, id } : undefined;
+}
+
+/** Parts already in the trailing assistant — the reply being streamed into, if any. */
+function trailingParts(messages: ChatMessage[]): number {
+  const last = messages.at(-1);
+  return last?.role === "assistant" ? (last.parts?.length ?? 0) : 0;
+}
+
+/**
+ * Events after which everything the engine has produced so far is settled, so a
+ * switch recorded at that moment belongs at the end of it — the next engine message
+ * has either just finished or is about to start. Deliberately excludes the events
+ * that append content (deltas, tool-call starts): those must not move the boundary,
+ * since the divider lands *before* the content of the message in flight.
+ */
+const MESSAGE_BOUNDARY_EVENTS = new Set([
+  "agent_start",
+  "agent_settled",
+  "turn_start",
+  "message_start",
+  "message_end",
+  "turn_end",
+  "agent_end",
+  "tool_execution_start",
+  "tool_execution_end",
+]);
 
 /** User aborts stay silent; only `stopReason: "error"` becomes a visible failure. */
 function errorFromAssistant(value: unknown): string | undefined {
@@ -229,6 +335,18 @@ export function applyEngineEvent(
   messages: ChatMessage[],
   event: EngineEvent,
   streaming: boolean,
+  boundary = 0,
+): ApplyResult {
+  const result = applyEvent(messages, event, streaming, boundary);
+  if (!MESSAGE_BOUNDARY_EVENTS.has(String(event.type))) return result;
+  return { ...result, partBoundary: trailingParts(result.messages) };
+}
+
+function applyEvent(
+  messages: ChatMessage[],
+  event: EngineEvent,
+  streaming: boolean,
+  boundary: number,
 ): ApplyResult {
   let next = messages;
   let nextStreaming = streaming;
@@ -249,6 +367,16 @@ export function applyEngineEvent(
       }
     }
     return { messages: next, streaming: nextStreaming };
+  }
+
+  // A user turn the engine injected itself — a steer delivered between turns.
+  // The composer's own prompt is already on screen as a `local:` row, so that
+  // echo is skipped; `user_message_persisted` adopts its session id.
+  if (type === "message_start") {
+    const message = isRecord(event.message) ? event.message : undefined;
+    if (message?.role !== "user") return { messages: next, streaming: nextStreaming };
+    if (lastUserIsLocal(next)) return { messages: next, streaming: nextStreaming };
+    return { messages: appendMessage(next, userRowFromEngine(message)), streaming: nextStreaming };
   }
 
   // Lazily materialise the trailing assistant only for events that write to it.
@@ -315,7 +443,7 @@ export function applyEngineEvent(
       if (last?.role === "assistant") {
         const list = next.slice();
         list[list.length - 1] = { ...last, error: last.error ?? error };
-        return { messages: list, streaming: false, interrupted };
+        return { messages: list, streaming: nextStreaming, interrupted };
       }
       return {
         messages: appendMessage(next, {
@@ -327,17 +455,43 @@ export function applyEngineEvent(
           createdAt: Date.now(),
           error,
         }),
-        streaming: false,
+        streaming: nextStreaming,
         interrupted,
       };
     }
-    return { messages: next, streaming: false, interrupted };
+    // Deliberately still working: `agent_end` is not the end of the run. The SDK
+    // fires it before it retries (`willRetry`), compacts, or continues with messages
+    // an `agent_end` handler queued — and only `agent_settled` says that whole
+    // post-run sequence is finished. Clearing the run here made the caret, the
+    // working row and the sidebar go idle for the length of a retry backoff.
+    return { messages: next, streaming: nextStreaming, interrupted };
+  }
+
+  if (type === "agent_settled") {
+    // The run (retries, auto-compaction and continuations included) has finished.
+    return { messages: next, streaming: false };
   }
 
   if (type === "prompt_result") {
     if (event.agentInvoked === false) {
       return { messages: next, streaming: false };
     }
+    return { messages: next, streaming: nextStreaming };
+  }
+
+  if (type === "model_changed") {
+    // A switch made while a reply is streaming: the SDK anchors its `model_change`
+    // entry to the last completed message, so the divider goes where the message in
+    // flight began — the same slot the transcript puts it in when it is re-read.
+    const to = asEngineModel(event.model);
+    if (!to) return { messages: next, streaming: nextStreaming };
+    const from = asEngineModel(event.previous);
+    // Nothing on screen to annotate: a switch made before the conversation has any
+    // content would otherwise open the thread with a divider.
+    if (next.length === 0) return { messages: next, streaming: nextStreaming };
+    const target = ensureAssistant();
+    const parts: MessagePart[] = (target.parts ??= []);
+    parts.splice(Math.max(0, Math.min(boundary, parts.length)), 0, { kind: "model", from, to });
     return { messages: next, streaming: nextStreaming };
   }
 
@@ -367,6 +521,13 @@ export function applyEngineEvent(
   }
 
   if (type === "compaction_start" || type === "auto_compaction_start") {
+    // A compaction that was already in flight when this conversation was (re)loaded
+    // is already on screen — the engine re-serves its running card — so a retry
+    // updates that card's reason instead of stacking a second one on top of it.
+    const last = next.at(-1);
+    if (last?.kind === "compact" && last.compact?.status === "running") {
+      return { messages: next, streaming: nextStreaming };
+    }
     return {
       messages: appendMessage(next, compactMessage({ status: "running", reason: compactReason(event) })),
       streaming: nextStreaming,

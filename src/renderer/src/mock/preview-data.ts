@@ -236,6 +236,12 @@ export const MESSAGES: ChatMessage[] = [
           "现有的 `themeMode` 已经支持 `light | dark | system`，但「通用」页里只暴露了亮色 / 暗色两个主题，" +
           "缺少切换模式的入口。我在「外观」分组补一个「主题模式」下拉。",
       },
+      // A switch made mid-reply: the divider sits between the reply's own blocks.
+      {
+        kind: "model",
+        from: { provider: "fastvibe", id: "claude-sonnet-4-5" },
+        to: { provider: "deepseek", id: "deepseek-chat" },
+      },
       { kind: "tool", toolId: "tool-edit-settings" },
       { kind: "tool", toolId: "tool-typecheck" },
     ],
@@ -303,7 +309,8 @@ export const MESSAGES: ChatMessage[] = [
 ];
 
 export const SESSION: EngineSessionState = {
-  model: { provider: "fastvibe", id: "deepseek-flash" },
+  // The model the divider's last switch landed on, so the chip and the transcript agree.
+  model: { provider: "deepseek", id: "deepseek-chat" },
   thinkingLevel: "high",
   isStreaming: false,
   messageCount: MESSAGES.length,

@@ -1,18 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { WebContents } from "electron";
 import { Ipc } from "@shared/ipc";
+import type { BrowserRequest } from "@shared/types";
 
-/** The small, JSON-serialisable protocol shared by the browser-use extension and renderer. */
-export type BrowserRequest = {
-  action: string;
-  tabId?: string;
-  url?: string;
-  selector?: string;
-  text?: string;
-  key?: string;
-  script?: string;
-  timeoutMs?: number;
-};
+/** The protocol shared by the browser-use extension and the renderer. */
+export type { BrowserRequest };
 
 type BrowserResponse = { id: string; ok: boolean; result?: unknown; error?: string };
 

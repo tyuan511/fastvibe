@@ -6,6 +6,7 @@ import {
   Cancel01Icon,
   DragDropVerticalIcon,
   PencilEdit02Icon,
+  Undo02Icon,
 } from "@hugeicons/core-free-icons";
 import {
   DndContext,
@@ -30,6 +31,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import { IconButton } from "@/components/icon-button";
 import { cn } from "@/lib/utils";
 import type { QueuePauseReason, QueuedPrompt } from "@shared/types";
@@ -54,6 +56,7 @@ function QueueRowContent({
   overlay,
   onEdit,
   onSendNow,
+  onRecall,
   onRemove,
 }: {
   item: QueuedPrompt;
@@ -61,8 +64,10 @@ function QueueRowContent({
   overlay?: boolean;
   onEdit: () => void;
   onSendNow: () => void;
+  onRecall: () => void;
   onRemove: () => void;
 }): JSX.Element {
+  const sending = Boolean(item.sending);
   return (
     <div
       className={cn(
@@ -74,10 +79,19 @@ function QueueRowContent({
     >
       <span
         aria-hidden
-        title="拖动调整顺序"
-        className="flex size-5 shrink-0 cursor-grab items-center justify-center text-muted-foreground/40 transition-colors group-hover/queue:text-muted-foreground active:cursor-grabbing"
+        title={sending ? undefined : "拖动调整顺序"}
+        className={cn(
+          "flex size-5 shrink-0 items-center justify-center text-muted-foreground/40",
+          sending
+            ? "cursor-default"
+            : "cursor-grab transition-colors group-hover/queue:text-muted-foreground active:cursor-grabbing",
+        )}
       >
-        <HugeiconsIcon strokeWidth={2} icon={DragDropVerticalIcon} className="size-3.5" />
+        {sending ? (
+          <Spinner className="size-3.5 text-muted-foreground" />
+        ) : (
+          <HugeiconsIcon strokeWidth={2} icon={DragDropVerticalIcon} className="size-3.5" />
+        )}
       </span>
       <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium tabular-nums text-muted-foreground">
         {index + 1}
@@ -85,7 +99,32 @@ function QueueRowContent({
       <span className="min-w-0 flex-1 truncate text-sm text-foreground" title={item.text}>
         {item.text}
       </span>
-      {overlay ? null : (
+      {sending && !overlay ? (
+        <span className="shrink-0 text-xs text-muted-foreground">发送中</span>
+      ) : null}
+      {overlay ? null : sending ? (
+        <>
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            className="gap-1 text-muted-foreground group-hover/queue:text-foreground"
+            onClick={onRecall}
+          >
+            <HugeiconsIcon strokeWidth={2} icon={Undo02Icon} className="size-3.5" />
+            撤回
+          </Button>
+          <IconButton
+            variant="ghost"
+            size="icon-xs"
+            label="删除"
+            className="text-muted-foreground hover:text-foreground"
+            onClick={onRemove}
+          >
+            <HugeiconsIcon strokeWidth={2} icon={Cancel01Icon} className="size-3.5" />
+          </IconButton>
+        </>
+      ) : (
         <>
           <Button
             type="button"
@@ -131,16 +170,19 @@ function SortableQueueRow({
   index,
   onEdit,
   onSendNow,
+  onRecall,
   onRemove,
 }: {
   item: QueuedPrompt;
   index: number;
   onEdit: () => void;
   onSendNow: () => void;
+  onRecall: () => void;
   onRemove: () => void;
 }): JSX.Element {
   const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: item.id,
+    disabled: Boolean(item.sending),
     transition: REORDER_TRANSITION,
   });
   const style = {
@@ -152,8 +194,15 @@ function SortableQueueRow({
     zIndex: isDragging ? 10 : undefined,
   };
   return (
-    <li ref={setNodeRef} style={style} {...listeners} className="touch-pan-y">
-      <QueueRowContent item={item} index={index} onEdit={onEdit} onSendNow={onSendNow} onRemove={onRemove} />
+    <li ref={setNodeRef} style={style} {...(item.sending ? {} : listeners)} className="touch-pan-y">
+      <QueueRowContent
+        item={item}
+        index={index}
+        onEdit={onEdit}
+        onSendNow={onSendNow}
+        onRecall={onRecall}
+        onRemove={onRemove}
+      />
     </li>
   );
 }
@@ -170,6 +219,7 @@ export function MessageQueue({
   onRemove,
   onEdit,
   onSendNow,
+  onRecall,
   onReorder,
   onResume,
 }: {
@@ -179,6 +229,7 @@ export function MessageQueue({
   onRemove: (id: string) => void;
   onEdit: (id: string) => void;
   onSendNow: (id: string) => void;
+  onRecall: (id: string) => void;
   /** Persist the full id order the drag produced. */
   onReorder: (ids: string[]) => void;
   onResume: () => void;
@@ -272,6 +323,7 @@ export function MessageQueue({
                 index={index}
                 onEdit={() => handleEdit(item.id)}
                 onSendNow={() => onSendNow(item.id)}
+                onRecall={() => onRecall(item.id)}
                 onRemove={() => onRemove(item.id)}
               />
             ))}
@@ -279,7 +331,7 @@ export function MessageQueue({
         </SortableContext>
         <DragOverlay dropAnimation={DROP_ANIMATION}>
           {activeItem ? (
-            <QueueRowContent overlay item={activeItem} index={activeIndex} onEdit={() => undefined} onSendNow={() => undefined} onRemove={() => undefined} />
+            <QueueRowContent overlay item={activeItem} index={activeIndex} onEdit={() => undefined} onSendNow={() => undefined} onRecall={() => undefined} onRemove={() => undefined} />
           ) : null}
         </DragOverlay>
       </DndContext>

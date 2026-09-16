@@ -253,7 +253,7 @@ export function Composer({
   value,
   disabled,
   streaming,
-  compacting = false,
+  working,
   placeholder,
   models,
   model,
@@ -285,6 +285,7 @@ export function Composer({
   onRemoveQueued,
   onEditQueued,
   onSendQueuedNow,
+  onRecallQueued,
   onReorderQueued,
   onResumeQueue,
   runInterrupted = false,
@@ -295,9 +296,20 @@ export function Composer({
 }: {
   value: string;
   disabled: boolean;
+  /**
+   * A run is in flight for this conversation, so a send is *queued* rather than
+   * started as a fresh turn. This is the flag the send path itself uses (the send
+   * button's label and the placeholder describe where the message will go), not the
+   * busy mark — see `working`.
+   */
   streaming: boolean;
-  /** Compaction is in flight: the stop button aborts it the same way it aborts a run. */
-  compacting?: boolean;
+  /**
+   * 「this conversation is still working」 — the same verdict the sidebar's 运行中 mark
+   * carries: a run (through its retries and the compaction that follows it) *or* a
+   * compaction with no run at all. Drives the stop button and the badges, so a chat
+   * is never shown as busy in one place and idle in another.
+   */
+  working: boolean;
   placeholder?: string;
   models: FastVibeModel[];
   model?: { provider: string; id: string };
@@ -333,6 +345,7 @@ export function Composer({
   onRemoveQueued: (id: string) => void;
   onEditQueued: (id: string) => void;
   onSendQueuedNow: (id: string) => void;
+  onRecallQueued: (id: string) => void;
   onReorderQueued: (ids: string[]) => void;
   onResumeQueue: () => void;
   /** The last run stopped early (user abort or failure): offer a resume control. */
@@ -692,6 +705,7 @@ export function Composer({
         onRemove={onRemoveQueued}
         onEdit={onEditQueued}
         onSendNow={onSendQueuedNow}
+        onRecall={onRecallQueued}
         onReorder={onReorderQueued}
         onResume={onResumeQueue}
       />
@@ -798,7 +812,7 @@ export function Composer({
             </DropdownMenuContent>
           </DropdownMenu>
 
-          <ExtensionStatusBadges disabled={streaming} />
+          <ExtensionStatusBadges disabled={working} />
 
           <div className="flex-1" />
 
@@ -844,7 +858,11 @@ export function Composer({
                           </span>
                         </>
                       ) : (
-                        "选择模型"
+                        // With nothing configured the chip is the way in, so it says what
+                        // it is for instead of offering a choice that cannot be made.
+                        <span className={models.length === 0 ? "text-muted-foreground" : undefined}>
+                          {models.length === 0 ? "添加模型" : "选择模型"}
+                        </span>
                       )}
                     </span>
                     <HugeiconsIcon strokeWidth={2} icon={ArrowDown01Icon} className="size-3" />
@@ -921,7 +939,10 @@ export function Composer({
             </DropdownMenu>
           </span>
 
-          {(compacting || (streaming && !hasContent)) ? (
+          {/* A run and a compaction are stopped the same way, so the mark that decides
+              whether there is something to stop is `working`, not `streaming`: a manual
+              `/compact` has no run behind it and used to leave nothing to click. */}
+          {(working && !hasContent) ? (
             <IconButton
               size="icon-sm"
               variant="destructive"

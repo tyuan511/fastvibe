@@ -20,6 +20,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type {
   ChatMessage,
+  CompactReason,
   Conversation,
   ConversationDeleteResult,
   ConversationOpenResult,
@@ -28,6 +29,7 @@ import type {
   ExtensionInfo,
   ExtensionPackage,
   FastVibeModel,
+  EngineModel,
   EngineSessionState,
   EngineStatus,
   ProjectAddResult,
@@ -42,13 +44,14 @@ import type {
   TuiRun,
   WorkspaceSnapshot,
   ModelPrice,
+  MessagePart,
   NativeProviderConfig,
   PermissionQuestion,
 } from "@shared/types";
 import { parseCompactCommand } from "@shared/slash";
 import { ConversationCatalog } from "../engine/conversation-catalog";
 import { searchConversationContent } from "../engine/conversation-search";
-import { readDefaultModel } from "../engine/app-settings";
+import { readAutoCompact, readDefaultModel } from "../engine/app-settings";
 import { mapEngineMessages } from "../engine/map-messages";
 import { ReasoningStore } from "../engine/reasoning-store";
 import { usageLedgerFor, type UsageLedger } from "../engine/usage-ledger";
@@ -195,6 +198,19 @@ function isAssistantEngineMessage(message: unknown): message is Record<string, u
   return typeof message === "object" && message !== null && (message as { role?: unknown }).role === "assistant";
 }
 
+const COMPACT_REASONS: ReadonlySet<string> = new Set<CompactReason>(["manual", "threshold", "overflow"]);
+
+/**
+ * Why a `compaction_start` event compacted, when it is a reason the card knows.
+ *
+ * The transcript's card labels 接近上限 / 超出窗口, so the engine has to carry the
+ * reason it later serves with the running card it rebuilds on re-open.
+ */
+function compactReasonOf(event: { reason?: unknown }): CompactReason | undefined {
+  const reason = typeof (event as { reason?: unknown }).reason === "string" ? (event as { reason: string }).reason : undefined;
+  return reason && COMPACT_REASONS.has(reason) ? (reason as CompactReason) : undefined;
+}
+
 /**
  * Roll a throwaway subagent session's transcript into the accounting the tool
  * card shows. Tokens come from each assistant message; the final stop reason and
@@ -268,8 +284,41 @@ export class PiProcessManager {
   #sessionPromises = new Map<string, Promise<ManagedSession>>();
   /** Last known running state per conversation, so every change is broadcast exactly once. */
   #running = new Map<string, boolean>();
+  /**
+   * Conversations with a compaction in flight, and why it was started.
+   *
+   * The SDK compacts *inside* a run after a turn overflowed, and it also compacts on
+   * demand with no run at all (`/compact`, and the threshold check a fresh prompt
+   * runs before it is sent). The second kind is the reason this map exists: there is
+   * no run flag to speak for it, and the renderer still has to know the conversation
+   * is busy — and to show the 正在压缩上下文 card again after a chat switch or a
+   * reload. It also covers the window before `compaction_start` lands, which opens
+   * after the SDK has already prepared the summary request.
+   */
+  #compacting = new Map<string, CompactReason | undefined>();
+  /**
+   * The last 「this conversation is working」 value the renderer was told.
+   *
+   * `conversation_running` carries the union of a run and a compaction, so what to
+   * broadcast is compared against this — not against `#running`, which knows only
+   * half of it.
+   */
+  #busyBroadcast = new Map<string, boolean>();
   /** Conversations whose session must be re-pointed at the reloaded model registry once its run lands. */
   #modelDirty = new Set<string>();
+  /**
+   * Model and thinking level the user picked while no conversation existed.
+   *
+   * The empty hero offers the composer's model and thinking chips before anything has
+   * been sent, and there is no session to bind the choice to. Refusing the switch
+   * would leave the first pick a new user makes — the one that decides what they are
+   * about to talk to — as an error banner, so hold it here instead and adopt it into
+   * the session that pick is about (the next one created). Kept as a reference rather
+   * than a `Model`, so a provider edit between the pick and the first prompt cannot
+   * pin a stale object.
+   */
+  #pendingModel: EngineModel | undefined;
+  #pendingThinking: string | undefined;
   /** Per-conversation timings for the composer's turn statistics. */
   #timing = new Map<string, RunTiming>();
   /** Live thinking blocks per conversation; filed against the entry when it lands. */
@@ -365,10 +414,12 @@ export class PiProcessManager {
       this.#activeId = null;
       // Tell the UI every tracked conversation stopped, so no stale spinner
       // survives an engine stop/restart.
-      for (const [id, running] of this.#running) {
-        if (running) this.#emit({ type: "conversation_running", conversationId: id, running: false });
+      for (const [id, busy] of this.#busyBroadcast) {
+        if (busy) this.#emit({ type: "conversation_running", conversationId: id, running: false });
       }
       this.#running.clear();
+      this.#compacting.clear();
+      this.#busyBroadcast.clear();
       this.#timing.clear();
       await Promise.all(
         [...this.#subagentSessions.values()].map(async (session) => {
@@ -392,11 +443,12 @@ export class PiProcessManager {
     const session = await this.#active();
     if (await this.#compactIfCommand(session, message)) return;
     if (this.#activeId) await this.#flushModelRebind(this.#activeId);
-    // The UI marks a run finished the moment `agent_end` arrives, but the SDK
-    // keeps `isStreaming` true until its listeners and auto-compaction settle.
-    // A plain prompt in that window would throw "Agent is already processing",
-    // so wait it out — the caller already decided the run is over.
-    if (session.isStreaming && !options?.streamingBehavior) await session.agent.waitForIdle();
+    // A caller may consider the run over and still land inside the settle window —
+    // an `agent_end` the SDK is about to retry, compact, or continue. The session is
+    // not idle across any of it, and a plain prompt there throws ("Agent is already
+    // processing"; "Cannot submit a prompt while compaction is in progress" for a
+    // standalone `/compact`, which has no run at all), so wait it out.
+    if (!session.isIdle && !options?.streamingBehavior) await session.waitForIdle();
     await session.prompt(message, options);
   }
 
@@ -412,12 +464,12 @@ export class PiProcessManager {
 
   async getConversationMessages(id: string): Promise<ChatMessage[]> {
     const managed = this.#sessions.get(id);
-    if (managed) return this.#messages(managed.session);
+    if (managed) return this.#messages(managed.session, id);
     const conversation = this.#catalog.get(id);
     if (!conversation) return [];
     await this.#ensureReady();
     const created = await this.#ensureSession(conversation);
-    return this.#messages(created.session);
+    return this.#messages(created.session, id);
   }
 
   async createSideConversation(project?: string, parentId?: string, title?: string): Promise<ConversationOpenResult> {
@@ -439,17 +491,18 @@ export class PiProcessManager {
       if (prior) this.#activate(prior);
       else this.#catalog.setActive(previous);
     }
-    const state = this.#state(managed.session);
+    const state = this.#state(managed.session, conversation.id);
     const updated =
       this.#catalog.update(conversation.id, { sessionFile: state.sessionFile, sessionId: state.sessionId }) ?? conversation;
     return this.#opened(updated, [], state);
   }
   async steer(message: string, images?: Array<{ type: "image"; data: string; mimeType: string }>): Promise<void> {
     const session = await this.#active();
-    // Steering is only drained between turns of a live run. `session.isStreaming`
-    // still reads true while the SDK settles after `agent_end`, and a steer parked
-    // in that window is never delivered — so trust our own run flag, and fall back
-    // to a fresh turn whenever the run has already ended (or never started).
+    // Steering is only drained between turns of a live run. `#isLive()` spans the
+    // whole run — including the window between an `agent_end` and the `agent_start`
+    // the SDK still owes it (a retry, a compaction, a queued continuation) — so a
+    // steer parked in that window is picked up by that continuation rather than
+    // being sent to a runtime that has already stopped.
     if (!this.#isLive()) {
       await this.#promptWhenIdle(session, message, images);
       return;
@@ -459,6 +512,18 @@ export class PiProcessManager {
       return;
     }
     await session.steer(message, images);
+  }
+  /**
+   * Rebuild the engine's steering queue from the items FastVibe still wants
+   * injected. Used when the user 撤回 / 删除 a 发送中 row: the SDK has no
+   * per-message cancel, so we clear and re-steer the survivors.
+   */
+  async replaceSteering(
+    items: Array<{ text: string; images?: Array<{ type: "image"; data: string; mimeType: string }> }>,
+  ): Promise<void> {
+    const session = await this.#active();
+    session.clearQueue();
+    for (const item of items) await session.steer(item.text, item.images);
   }
   async followUp(message: string, images?: Array<{ type: "image"; data: string; mimeType: string }>): Promise<void> {
     const session = await this.#active();
@@ -472,7 +537,7 @@ export class PiProcessManager {
     // A `tool_call` hook may be parked on an extension UI prompt (permission
     // sandbox / question tool). Resolve those before aborting: the hook cannot
     // observe the abort signal while it awaits `ctx.ui.confirm`, so leaving the
-    // promise pending would hang the tool, keep `agent_end` from firing and pin
+    // promise pending would hang the tool, keep the run from ever settling and pin
     // the conversation as "running" forever.
     this.#resolvePendingUi();
     const session = await this.#active();
@@ -491,14 +556,18 @@ export class PiProcessManager {
     }
   }
   /**
-   * Resume the interrupted turn without a new user message. `agent.continue()`
-   * re-enters the loop from the transcript's last user/tool-result message, so a run
-   * a user aborted or that failed mid-turn picks up where it stopped.
+   * Resume the interrupted turn without a new user message. The loop re-enters from
+   * the transcript's last user/tool-result message, so a run a user aborted or that
+   * failed mid-turn picks up where it stopped.
    *
-   * The SDK's own auto-retry first drops the trailing errored assistant message from
-   * agent state: `continue()` rejects a transcript whose last message is an
-   * assistant, and that message is deliberately kept out of the transcript so the
-   * resumed turn does not stack on top of a failed one.
+   * The trailing errored assistant message is dropped from agent state first: a
+   * continuation rejects a transcript whose last message is an assistant, and that
+   * failed attempt is deliberately kept out of the running transcript so the resumed
+   * turn does not stack on top of it.
+   *
+   * The resume goes through the SDK's run wrapper, not the bare `agent.continue()`
+   * loop — see `#runContinuation`. A resume is half a turn, but it is still a *run*,
+   * and the events only that wrapper emits are what every watcher reads.
    *
    * Engine-side queued messages are cleared first — the renderer owns the follow-up
    * queue and drains it itself, so a resume must not silently flush it.
@@ -514,7 +583,32 @@ export class PiProcessManager {
         session.agent.state.messages = messages.slice(0, -1);
       }
     }
-    await session.agent.continue();
+    await this.#runContinuation(session);
+  }
+  /**
+   * Drive a resumed turn the way the SDK drives a run.
+   *
+   * `agent.continue()` is a bare loop: a run's *lifecycle* lives one level up, in the
+   * SDK's own run wrapper, which is what emits `agent_settled` — the only event that
+   * ends a run, and the one Main, the sidebar's 运行中 mark, 运行时保持唤醒 and the
+   * composer's 停止/继续 control all key off — and what applies the post-run policy
+   * (auto-retry and its backoff, auto-compaction, continuations an extension queued).
+   * Calling the raw loop instead broke a resumed run in two ways at once: nothing ever
+   * cleared the run flag, so the conversation stayed 运行中 until some *unrelated* run
+   * settled it; and its own `agent_end` reported `willRetry: true` for a retry that
+   * nothing would perform, which told the renderer the failure was transient — so a
+   * 502 mid-resume left the composer stuck on 停止 with no 继续 button at all.
+   *
+   * An empty message list is the continuation: the loop still starts from the
+   * transcript's last user/tool-result message, with everything the SDK wraps around a
+   * run kept intact. The wrapper is private (0.85.1 has no public entry point for
+   * continuing an interrupted turn), hence the cast — so a version that renames it must
+   * fail loudly here rather than silently go back to driving runs by hand.
+   */
+  async #runContinuation(session: AgentSession): Promise<void> {
+    const run = (session as unknown as { _runAgentPrompt?: (messages: unknown[]) => Promise<void> })._runAgentPrompt;
+    if (typeof run !== "function") throw new Error("当前引擎版本不支持继续运行");
+    await run.call(session, []);
   }
 
   async clearQueue(): Promise<{ steering: string[]; followUp: string[] }> { return (await this.#active()).clearQueue(); }
@@ -562,7 +656,10 @@ export class PiProcessManager {
     return total;
   }
   async compact(customInstructions?: string): Promise<EngineSessionState> { await (await this.#active()).compact(customInstructions); return this.getState(); }  async getCommands(): Promise<SlashCommand[]> {
-    const session = await this.#active();
+    // Commands come from the session's prompt templates and extensions, so an empty
+    // hero has none to list rather than an error to report.
+    const session = await this.#activeSession();
+    if (!session) return [];
     const managed = this.#sessions.get(this.#activeId ?? "");
     const promptCommands = session.promptTemplates.map((item) => ({ name: item.name, description: item.description, source: "prompt" }));
     const extensionCommands = managed?.extensions.extensions.flatMap((extension) => [...extension.commands.values()].map((command) => ({ name: command.name, description: command.description, source: "extension" }))) ?? [];
@@ -591,6 +688,8 @@ export class PiProcessManager {
   async importSkill(sourceDir: string): Promise<SkillInfo[]> { const skills = await this.#skills.importFrom(this.#cwd, sourceDir); await this.#reloadSkills(); return skills; }
   async removeSkill(name: string): Promise<SkillInfo[]> { const skills = await this.#skills.remove(this.#cwd, name); await this.#reloadSkills(); return skills; }
   async getSubagentMessages(subagentId: string): Promise<ChatMessage[]> {
+    const live = this.#subagentSessions.get(subagentId);
+    if (live) return mapEngineMessages(live.messages);
     return this.#subagentMessages.get(subagentId)?.slice() ?? [];
   }
   async getSubagents(): Promise<SubagentInfo[]> {
@@ -625,8 +724,8 @@ export class PiProcessManager {
       this.#catalog.setActive(id);
       const managed = await this.#ensureSession(conversation);
       this.#activate(managed);
-      const state = this.#state(managed.session);
-      const messages = this.#messages(managed.session);
+      const state = this.#state(managed.session, id);
+      const messages = this.#messages(managed.session, id);
       const updated = this.#catalog.update(id, { sessionFile: state.sessionFile, sessionId: state.sessionId }) ?? conversation;
       return this.#opened(updated, messages, state);
   }
@@ -659,7 +758,7 @@ export class PiProcessManager {
       await managed.session.dispose();
       this.#sessions.delete(id);
     }
-    this.#running.delete(id);
+    this.#clearBusy(id);
     this.#timing.delete(id);
     return { ...this.#catalog.snapshot(), nextId: wasActive ? (this.#catalog.activeId ?? null) : null };
   }
@@ -674,6 +773,8 @@ export class PiProcessManager {
       await managed.session.dispose();
       this.#sessions.delete(id);
     }
+    // The session is gone, so no `agent_settled` will ever arrive for it.
+    this.#clearBusy(id);
     if (this.#activeId === id) {
       await this.#ensureReady();
       const reopened = await this.#ensureSession(updated);
@@ -695,8 +796,8 @@ export class PiProcessManager {
   addProject(cwd: string): ProjectAddResult { const project = this.#catalog.ensureProject(cwd); if (!project) throw new Error("invalid project"); return { ...this.#catalog.snapshot(), project }; }
   renameProject(cwd: string, name: string): WorkspaceSnapshot { this.#catalog.renameProject(cwd, name); return this.#catalog.snapshot(); }
   reorderProjects(cwds: string[]): WorkspaceSnapshot { this.#catalog.reorderProjects(cwds); return this.#catalog.snapshot(); }
-  async removeProject(cwd: string): Promise<ConversationDeleteResult> { const wasActive = this.#catalog.get(this.#catalog.activeId ?? "")?.project === cwd; const removed = this.#catalog.removeProject(cwd); await Promise.all(removed.map(async (item) => { if (item.sessionFile) { await this.#usage.capture(item.sessionFile); await unlink(item.sessionFile).catch(() => undefined); } if (item.worktree) await this.#removeWorktree(item.worktree.path); const managed = this.#sessions.get(item.id); if (managed) { managed.unsubscribe(); await managed.session.dispose(); this.#sessions.delete(item.id); } })); return { ...this.#catalog.snapshot(), nextId: wasActive ? (this.#catalog.activeId ?? null) : null }; }
-  async loadMessages(): Promise<ChatMessage[]> { return this.#messages(await this.#active()); }
+  async removeProject(cwd: string): Promise<ConversationDeleteResult> { const wasActive = this.#catalog.get(this.#catalog.activeId ?? "")?.project === cwd; const removed = this.#catalog.removeProject(cwd); await Promise.all(removed.map(async (item) => { if (item.sessionFile) { await this.#usage.capture(item.sessionFile); await unlink(item.sessionFile).catch(() => undefined); } if (item.worktree) await this.#removeWorktree(item.worktree.path); const managed = this.#sessions.get(item.id); if (managed) { managed.unsubscribe(); await managed.session.dispose(); this.#sessions.delete(item.id); } this.#clearBusy(item.id); })); return { ...this.#catalog.snapshot(), nextId: wasActive ? (this.#catalog.activeId ?? null) : null }; }
+  async loadMessages(): Promise<ChatMessage[]> { const session = await this.#active(); return this.#messages(session, this.#activeId ?? undefined); }
   /**
    * An unconfigured engine legitimately has zero models, so report that rather than
    * throwing "engine not ready" at the composer's model menu.
@@ -707,16 +808,98 @@ export class PiProcessManager {
     await this.#ensureReady();
     return this.#modelsCache ?? [];
   }
-  async setModel(provider: string, modelId: string): Promise<EngineSessionState> { await this.#ensureReady(); const model = this.#models?.find(provider, modelId); if (!model) throw new Error("模型不存在"); await (await this.#active()).setModel(model); return this.getState(); }
+  async setModel(provider: string, modelId: string): Promise<EngineSessionState> {
+    await this.#ensureReady();
+    const model = this.#models?.find(provider, modelId);
+    if (!model) throw new Error("模型不存在");
+    const session = await this.#activeSession();
+    if (!session) {
+      this.#pendingModel = { provider, id: modelId };
+      return this.#draftState();
+    }
+    // Re-picking what is already selected is not a switch. The SDK appends a
+    // `model_change` entry regardless, and the transcript draws a divider for every
+    // one of them — 「A/x → A/x」 for a choice the user never changed.
+    const current = session.model;
+    if (current && current.provider === model.provider && current.id === model.id) {
+      return this.#state(session, this.#activeId ?? undefined);
+    }
+    await this.#useModel(session, this.#activeId ?? undefined, model);
+    return this.#state(session, this.#activeId ?? undefined);
+  }
+  /**
+   * Switch one session's model, and tell the renderer where the switch landed.
+   *
+   * The SDK records it as a `model_change` session entry, which the transcript turns
+   * into a divider — but only when the transcript is next re-read, so a switch made
+   * mid-run would stay invisible until the run ended. The event carries the same two
+   * sides so the divider can be drawn in place as it happens.
+   */
+  async #useModel(
+    session: AgentSession,
+    conversationId: string | undefined,
+    model: Parameters<AgentSession["setModel"]>[0],
+  ): Promise<void> {
+    const previous = session.model;
+    await session.setModel(model);
+    this.#emit({
+      type: "model_changed",
+      conversationId,
+      model: { provider: model.provider, id: model.id },
+      ...(previous ? { previous: { provider: previous.provider, id: previous.id } } : {}),
+    });
+  }
   async setInterruptMode(mode: "immediate" | "wait"): Promise<EngineSessionState> { this.#interruptMode = mode; return this.getState(); }
   async setSteeringMode(mode: "all" | "one-at-a-time"): Promise<EngineSessionState> { (await this.#active()).setSteeringMode(mode); return this.getState(); }
   async setFollowUpMode(mode: "all" | "one-at-a-time"): Promise<EngineSessionState> { (await this.#active()).setFollowUpMode(mode); return this.getState(); }
   async exportHtml(): Promise<string | undefined> { return (await this.#active()).exportToHtml(); }
-  async setAutoCompaction(enabled: boolean): Promise<EngineSessionState> { (await this.#active()).setAutoCompactionEnabled(enabled); return this.getState(); }
-  async setThinkingLevel(level: string): Promise<EngineSessionState> { (await this.#active()).setThinkingLevel(level as any); return this.getState(); }
-  async getState(): Promise<EngineSessionState> { return this.#state(await this.#active()); }
-  /** Conversation ids with a run in flight, for the sidebar's run indicators. */
-  getRunningConversations(): string[] { return [...this.#running].filter(([, running]) => running).map(([id]) => id); }
+  async setAutoCompaction(enabled: boolean): Promise<EngineSessionState> {
+    // The preference is already in FastVibe's settings (`settings.json`), and every new
+    // session reads it there, so on the empty hero there is nothing to apply it to yet.
+    const session = await this.#activeSession();
+    if (!session) return this.#draftState();
+    session.setAutoCompactionEnabled(enabled);
+    return this.#state(session, this.#activeId ?? undefined);
+  }
+  async setThinkingLevel(level: string): Promise<EngineSessionState> {
+    const session = await this.#activeSession();
+    if (!session) {
+      this.#pendingThinking = level;
+      return this.#draftState();
+    }
+    session.setThinkingLevel(level as ThinkingLevel);
+    return this.#state(session, this.#activeId ?? undefined);
+  }
+  async getState(): Promise<EngineSessionState> {
+    const session = await this.#activeSession();
+    return session ? this.#state(session, this.#activeId ?? undefined) : this.#draftState();
+  }
+  /** Conversation ids with work in flight (a run or a compaction), for the sidebar's indicators. */
+  getRunningConversations(): string[] {
+    return [...new Set([...this.#running.keys(), ...this.#compacting.keys()])].filter((id) => this.#busy(id));
+  }
+  /**
+   * Whether a conversation is still working: a run in flight, or a compaction.
+   *
+   * The sidebar's 运行中 mark and 运行时保持唤醒 both read this, so a chat that
+   * compacts in the background stays visibly busy instead of looking idle.
+   */
+  #busy(id: string): boolean { return this.#running.get(id) === true || this.#compacting.has(id); }
+  /**
+   * Drop every trace of a conversation's work when its session is thrown away.
+   *
+   * A session discarded mid-run (or mid-compaction) never emits `agent_settled`, so
+   * without this the chat keeps spinning in the sidebar — and 运行时保持唤醒 never
+   * releases — after it was deleted, re-homed onto another project, or had its
+   * project removed.
+   */
+  #clearBusy(id: string): void {
+    const wasBusy = this.#busyBroadcast.get(id) === true;
+    this.#running.delete(id);
+    this.#compacting.delete(id);
+    this.#busyBroadcast.delete(id);
+    if (wasBusy) this.#emit({ type: "conversation_running", conversationId: id, running: false });
+  }
 
   async listProviders(): Promise<ProviderConfig[]> { return listProviderConfigs(this.#paths, await loadProviderKeys(this.#paths)); }
   async listNativeProviders(): Promise<NativeProviderConfig[]> { return nativeProviderCatalog(); }
@@ -811,7 +994,7 @@ export class PiProcessManager {
     });
     this.#catalog.setActive(conversation.id);
     this.#activate(managed);
-    const state = this.#state(managed.session);
+    const state = this.#state(managed.session, conversation.id);
     const updated = this.#catalog.update(conversation.id, { sessionFile: state.sessionFile, sessionId: state.sessionId }) ?? conversation;
     this.#emit({ type: "conversation_opened", result: this.#opened(updated, [], state) });
     if (options?.withSession) await options.withSession(managed.session.createReplacedSessionContext());
@@ -829,8 +1012,8 @@ export class PiProcessManager {
     this.#catalog.setActive(conversation.id);
     const managed = await this.#ensureSession(conversation);
     this.#activate(managed);
-    const state = this.#state(managed.session);
-    const messages = this.#messages(managed.session);
+    const state = this.#state(managed.session, conversation.id);
+    const messages = this.#messages(managed.session, conversation.id);
     const updated = this.#catalog.update(conversation.id, { sessionFile: state.sessionFile, sessionId: state.sessionId }) ?? conversation;
     this.#emit({ type: "conversation_opened", result: this.#opened(updated, messages, state) });
     if (options?.withSession) await options.withSession(managed.session.createReplacedSessionContext());
@@ -878,11 +1061,33 @@ export class PiProcessManager {
     const managed = await this.#sessionIfReady(conversation);
     if (!managed) return this.#opened(conversation, [], null);
     this.#activate(managed);
-    const state = this.#state(managed.session);
+    const state = this.#state(managed.session, conversation.id);
     const updated = this.#catalog.update(conversation.id, { sessionFile: state.sessionFile, sessionId: state.sessionId }) ?? conversation;
     return this.#opened(updated, [], state);
   }
-  async #active(): Promise<AgentSession> { await this.#ensureReady(); const active = this.#activeId ? this.#sessions.get(this.#activeId) : undefined; if (active) return active.session; const conversation = this.#catalog.activeId ? this.#catalog.get(this.#catalog.activeId) : undefined; if (!conversation) throw new Error("no active conversation"); const managed = await this.#ensureSession(conversation); this.#activate(managed); return managed.session; }
+  /**
+   * The session the composer is talking about, or null when there is no conversation.
+   *
+   * Everything that acts *on a conversation* needs a session and may keep failing
+   * loudly through `#active()`; the composer's model and thinking chips are not among
+   * them — the empty hero offers both before anything exists to bind them to. Callers
+   * of this method decide what a missing conversation means for them.
+   */
+  async #activeSession(): Promise<AgentSession | null> {
+    await this.#ensureReady();
+    const active = this.#activeId ? this.#sessions.get(this.#activeId) : undefined;
+    if (active) return active.session;
+    const conversation = this.#catalog.activeId ? this.#catalog.get(this.#catalog.activeId) : undefined;
+    if (!conversation) return null;
+    const managed = await this.#ensureSession(conversation);
+    this.#activate(managed);
+    return managed.session;
+  }
+  async #active(): Promise<AgentSession> {
+    const session = await this.#activeSession();
+    if (!session) throw new Error("no active conversation");
+    return session;
+  }
   async #ensureSession(conversation: Conversation): Promise<ManagedSession> {
     const existing = this.#sessions.get(conversation.id);
     if (existing) return existing;
@@ -938,7 +1143,10 @@ export class PiProcessManager {
       mode: "rpc",
       uiContext: this.#extensionUi(conversation.id),
       commandContextActions: {
-        waitForIdle: () => result.session.agent.waitForIdle(),
+        // The session's own idle, as the SDK's print mode passes it: the agent is idle
+        // between an `agent_end` and the retry/compaction it still owes the run, and a
+        // plugin that takes that for 「done」 would poke a session mid-run.
+        waitForIdle: () => result.session.waitForIdle(),
         newSession: (options) => this.#extensionNewSession(conversation.id, options),
         // FastVibe branches in place (`navigateTree`); a separate fork file is not
         // tracked by the catalog, so report cancellation rather than half-create one.
@@ -993,19 +1201,47 @@ export class PiProcessManager {
       if (event.type === "session_info_changed") {
         this.#applySessionTitle(conversation.id, event.name);
       }
-      // Broadcast run start/end for every conversation, active or not, so the
+      // Broadcast work start/end for every conversation, active or not, so the
       // sidebar keeps showing which chats are still working after the user
-      // switches away or starts a new one. `agent_end` is the authoritative end:
-      // `session.isStreaming` only flips false after its listeners settle.
+      // switches away or starts a new one.
+      //
+      // A run ends at `agent_settled`, not at `agent_end`. The SDK emits `agent_end`
+      // before it does any of the things it still owes the same run: retrying a
+      // failed request (after an exponential backoff), auto-compacting, or
+      // continuing with messages an `agent_end` handler queued — each of which then
+      // starts another `agent_start` inside the *same* run. Taking `agent_end` for the
+      // end dropped the chat to 空闲 for the whole backoff/compaction window and
+      // re-lit it when the next attempt began. `agent_settled` is emitted exactly
+      // once, after that whole post-run sequence has finished (it flips the SDK's own
+      // `_isAgentRunActive`, which `session.isIdle` reports), so it is the only event
+      // that means this conversation is really idle again.
       const running =
-        event.type === "agent_end"
-          ? false
-          : event.type === "agent_start" || event.type === "turn_start"
-            ? true
+        event.type === "agent_start" || event.type === "turn_start"
+          ? true
+          : event.type === "agent_settled"
+            ? false
             : undefined;
-      if (running !== undefined && this.#running.get(conversation.id) !== running) {
-        this.#running.set(conversation.id, running);
-        this.#emit({ type: "conversation_running", conversationId: conversation.id, running });
+      // A compaction counts as work too, and this is the only chance to notice it:
+      // a background conversation's payloads are dropped downstream, so nothing
+      // else would tell the renderer that chat is busy (or that its card is back).
+      // Widened to `string`: the SDK spells these `compaction_*`, the renderer still
+      // handles the older `auto_compaction_*`, and both have to be tracked here.
+      const eventType: string = event.type;
+      let compactionTouched = false;
+      if (eventType === "compaction_start" || eventType === "auto_compaction_start") {
+        this.#compacting.set(conversation.id, compactReasonOf(event as { reason?: unknown }));
+        compactionTouched = true;
+      } else if (eventType === "compaction_end" || eventType === "auto_compaction_end") {
+        this.#compacting.delete(conversation.id);
+        compactionTouched = true;
+      }
+      if (running !== undefined) this.#running.set(conversation.id, running);
+      if (running !== undefined || compactionTouched) {
+        const busy = this.#busy(conversation.id);
+        if (this.#busyBroadcast.get(conversation.id) !== busy) {
+          this.#busyBroadcast.set(conversation.id, busy);
+          this.#emit({ type: "conversation_running", conversationId: conversation.id, running: busy });
+        }
       }
       // A user turn has no id of its own; the session entry that stores it does.
       // The renderer's optimistic copy needs that id to branch (retry / edit) back
@@ -1043,17 +1279,26 @@ export class PiProcessManager {
         this.#emit(payload);
         return;
       }
-      if (event.type === "agent_end") {
+      // 「任务已完成」 rides the same verdict as the sidebar mark: an `agent_end` that
+      // is about to retry, compact or continue is not a finished run.
+      if (event.type === "agent_settled") {
         this.#emit({ type: "conversation_activity", conversationId: conversation.id, title: this.#catalog.get(conversation.id)?.title ?? "会话", status: "completed" });
       }
     });
     this.#sessions.set(conversation.id, managed);
+    // 自动压缩 is FastVibe's setting, but the engine keeps it in its own settings file
+    // and the renderer's boot-time call cannot reach a session that does not exist yet
+    // (a brand-new install has no conversation at launch) — so the preference is picked
+    // up here, where every conversation passes. Skipped when it already matches, since
+    // writing it touches the file.
+    const autoCompact = readAutoCompact(this.#paths);
+    if (result.session.autoCompactionEnabled !== autoCompact) result.session.setAutoCompactionEnabled(autoCompact);
     // A conversation with no history yet starts on the user's pinned 默认模型.
     if (result.session.messages.length === 0) await this.#applyPreferredModel(result.session);
     const payload: ConversationReadyEvent = {
       id: conversation.id,
-      messages: this.#messages(result.session),
-      state: this.#state(result.session),
+      messages: this.#messages(result.session, conversation.id),
+      state: this.#state(result.session, conversation.id),
       status: this.#status,
     };
     for (const listener of this.#readyListeners) listener(payload);
@@ -1105,23 +1350,18 @@ export class PiProcessManager {
       name: typeof event.name === "string" ? event.name : previous?.name,
       description: typeof event.description === "string" ? event.description : previous?.description,
       mode: typeof event.mode === "string" ? event.mode : previous?.mode,
-      status: status ?? (nestedType === "agent_end" ? "completed" : "running"),
+      // A delegated run ends the same way the parent one does: `agent_end` only means
+      // the SDK is about to retry / compact / continue it, so the tab reports 已完成
+      // (and stamps `endedAt`) on `agent_settled`. The runner's own lifecycle event
+      // lands after the session settles and stays the final word.
+      status: status ?? (nestedType === "agent_settled" ? "completed" : "running"),
       detail: typeof event.detail === "string" ? event.detail : typeof event.progress === "string" ? event.progress : previous?.detail,
       progress: typeof event.progress === "number" ? event.progress : previous?.progress,
       startedAt: previous?.startedAt ?? now,
-      endedAt: nestedType === "agent_end" || status === "completed" || status === "error" ? now : previous?.endedAt,
+      endedAt: nestedType === "agent_settled" || status === "completed" || status === "error" ? now : previous?.endedAt,
       error: typeof event.error === "string" ? event.error : previous?.error,
     };
     this.#subagents.set(id, next);
-    if (nested && nestedType === "message_end" && nested.message && typeof nested.message === "object") {
-      const message = nested.message as Record<string, unknown>;
-      const text = typeof message.content === "string" ? message.content : typeof message.text === "string" ? message.text : "";
-      if (text) {
-        const item: ChatMessage = { id: `${id}-${now}`, role: "assistant", text, tools: [], createdAt: now };
-        const list = this.#subagentMessages.get(id) ?? [];
-        this.#subagentMessages.set(id, [...list, item].slice(-200));
-      }
-    }
   }
   /**
    * The session-title extension names a chat via `setSessionName`. Apply it to
@@ -1135,17 +1375,19 @@ export class PiProcessManager {
     this.#catalog.update(id, { title });
     this.#emit({ type: "conversation_renamed", conversationId: id, title, snapshot: this.#catalog.snapshot() });
   }
-  /** True when the active conversation has a run in flight (`agent_end` clears it). */
+  /** True when the active conversation has a run in flight (`agent_settled` clears it). */
   #isLive(): boolean { return this.#activeId !== null && this.#running.get(this.#activeId) === true; }
   /**
-   * Send a plain turn, first waiting out any run the SDK still reports as
-   * streaming (it flips `isStreaming` only after `agent_end` listeners and
-   * auto-compaction settle). Without this a follow-up that the UI considers
-   * "after completion" throws "Agent is already processing".
+   * Send a plain turn, first waiting out anything the session still has in flight.
+   *
+   * `session.waitForIdle()`, not `agent.waitForIdle()`: the agent is idle between an
+   * `agent_end` and the retry/compaction/continuation it still owes the run, while the
+   * *session* is not — and prompting then throws ("Agent is already processing", or
+   * "Cannot submit a prompt while compaction is in progress" for a manual `/compact`).
    */
   async #promptWhenIdle(session: AgentSession, message: string, images?: Array<{ type: "image"; data: string; mimeType: string }>): Promise<void> {
     if (await this.#compactIfCommand(session, message)) return;
-    if (session.isStreaming) await session.agent.waitForIdle();
+    if (!session.isIdle) await session.waitForIdle();
     await session.prompt(message, { images });
   }
   /**
@@ -1361,13 +1603,16 @@ export class PiProcessManager {
     });
     await loader.reload();
 
-    // The user's 「默认模型」 (设置 → 供应商) is the model for every delegated run,
-    // independent of which model the parent chat happens to be on. Falls back to the
-    // parent session's model only when that preference is unset or unusable.
+    // A delegated run uses the model its parent chat is on. Delegation is a tool
+    // call inside that conversation, and a run on a *different* gateway than the one
+    // the user just proved works fails on its own — the user's 「默认模型」
+    // (设置 → 供应商) is a preference for a fresh chat's model chip, not a second
+    // opinion about which vendor the current conversation should talk to. It is kept
+    // as the fallback for a parent that has no usable model of its own.
     const preferred = readDefaultModel(this.#paths);
     const model = this.#resolveSubagentModel(
-      preferred ? `${preferred.provider}/${preferred.id}` : undefined,
       request.fallbackModel ?? request.model,
+      preferred ? `${preferred.provider}/${preferred.id}` : undefined,
     );
     const tools =
       request.tools && request.tools.length > 0
@@ -1429,6 +1674,10 @@ export class PiProcessManager {
       messages = session.messages.slice();
       summary = summarizeSubagentMessages(messages);
       if (session.model) usedModel = `${session.model.provider}/${session.model.id}`;
+      // `message_end` is slimmed for IPC, so the live stream is the only in-flight
+      // transcript; persist the mapped session here so a tab opened after the run
+      // still has the full reply (tools and parts included).
+      this.#subagentMessages.set(subagentId, mapEngineMessages(messages));
     }
     stopReason = thrown ? "error" : summary.stopReason;
     errorMessage = thrown ?? summary.errorMessage;
@@ -1448,13 +1697,12 @@ export class PiProcessManager {
   }
 
   /**
-   * Resolve a subagent's model: the pin (the user's 默认模型), else the fallback
-   * (the parent session's model).
+   * Resolve a subagent's model: the preferred spec first, else the fallback.
    *
-   * A pin is only honored when this install can actually authenticate it: the
-   * catalog (`getAll()`) carries every reseller's models, and a pin that points at
+   * A spec is only honored when this install can actually authenticate it: the
+   * catalog (`getAll()`) carries every reseller's models, and a spec that points at
    * an unreachable vendor would otherwise be picked and fail the whole delegation
-   * with "No API key found". A pin may omit its provider; an id with no usable auth
+   * with "No API key found". A spec may omit its provider; an id with no usable auth
    * falls back instead of failing.
    */
   #resolveSubagentModel(spec?: string, fallback?: string): ReturnType<ModelRegistry["find"]> {
@@ -1467,9 +1715,13 @@ export class PiProcessManager {
       const slash = value.indexOf("/");
       const direct = slash > 0 ? registry.find(value.slice(0, slash), value.slice(slash + 1)) : undefined;
       if (usable(direct)) return direct;
-      // Bare ids (`claude-haiku-4-5`) resolve against the authenticated models only,
-      // so a role's vendor default can never outrank the user's working model.
-      return registry.getAvailable().find((item) => item.id === value);
+      // A bare id (`claude-haiku-4-5`) resolves against the authenticated models only,
+      // so a role's vendor default can never outrank the user's working model. The id
+      // is re-checked for auth: `find`/`getAvailable` can surface a vendor entry whose
+      // provider has no key in *this* install, which is exactly the "No API key found
+      // for anthropic" failure a role's `model:` line used to cause.
+      const bare = registry.getAvailable().find((item) => item.id === value);
+      return usable(bare) ? bare : undefined;
     };
     return bySpec(spec) ?? bySpec(fallback);
   }
@@ -1551,14 +1803,23 @@ export class PiProcessManager {
       pending.resolve(pending.fallback);
     }
   }
-  #activate(managed: ManagedSession): void { this.#activeId = managed.conversationId; this.#cwd = managed.cwd; this.#catalog.setActive(managed.conversationId); this.#setStatus({ state: "ready", cwd: managed.cwd }); }
+  #activate(managed: ManagedSession): void {
+    this.#activeId = managed.conversationId;
+    this.#cwd = managed.cwd;
+    this.#catalog.setActive(managed.conversationId);
+    // The user is looking at a conversation now, so a pick made when none existed has
+    // been adopted (`#createSession`) or is stale (an already-running chat keeps its
+    // own model) — either way it must not leak into the next new session.
+    this.#clearPendingPick();
+    this.#setStatus({ state: "ready", cwd: managed.cwd });
+  }
   /**
    * The engine's message list carries no ids of its own; the session entry that
    * owns each message does. Reuse those entry ids so the renderer can branch
    * (edit / retry) at the exact point in the session tree, which is also what
    * makes a retry replace its original turn instead of stacking a second copy.
    */
-  #messages(session: AgentSession): ChatMessage[] {
+  #messages(session: AgentSession, conversationId: string | undefined): ChatMessage[] {
     const entryIds = new Map<unknown, string>();
     const timings = new Map<string, ThinkingTiming[]>();
     for (const entry of session.sessionManager.getEntries()) {
@@ -1577,7 +1838,76 @@ export class PiProcessManager {
       if (!renderer) return undefined;
       return renderExtensionMessage(renderer, message, this.#widgetWidth);
     };
-    return mapEngineMessages(session.messages, (message) => entryIds.get(message), timings, renderCustom);
+    const messages = mapEngineMessages(session.messages, (message) => entryIds.get(message), timings, renderCustom);
+    this.#insertModelSwitches(session, messages);
+    // A compaction has no transcript entry until it lands, and its own payload only
+    // reaches the renderer while this conversation is on screen. Serving the running
+    // card from here is what makes it survive a chat switch (or a window reload)
+    // instead of vanishing until the summary is finally written.
+    if (conversationId && this.#compacting.has(conversationId)) {
+      messages.push({
+        id: `compact:${conversationId}`,
+        role: "system",
+        text: "",
+        tools: [],
+        parts: [],
+        createdAt: Date.now(),
+        kind: "compact",
+        compact: { status: "running", reason: this.#compacting.get(conversationId) },
+      });
+    }
+    return messages;
+  }
+  /**
+   * Fold the session's `model_change` entries into the transcript as divider parts.
+   *
+   * The SDK writes one of these on every switch, anchored to the last *completed*
+   * message — so a switch made while a reply was streaming belongs between that
+   * reply's parts, not after the turn. The divider therefore goes at the end of the
+   * preceding assistant (which is where the following message's parts begin, and the
+   * same place the live event puts it), else at the start of the message that follows
+   * it. A `model_change` with no message before it is not a switch at all: it is the
+   * model the session was created on, and the composer's chip already says so.
+   */
+  #insertModelSwitches(session: AgentSession, messages: ChatMessage[]): void {
+    if (messages.length === 0) return;
+    const indexById = new Map(messages.map((message, index) => [message.id, index]));
+    let previous: EngineModel | undefined;
+    let anchor: number | null = null;
+    let pending: Array<{ from?: EngineModel; to: EngineModel }> = [];
+    for (const entry of session.sessionManager.getBranch()) {
+      if (entry.type === "model_change") {
+        const to: EngineModel = { provider: entry.provider, id: entry.modelId };
+        const from = previous;
+        previous = to;
+        if (anchor === null) continue;
+        if (messages[anchor].role === "assistant") {
+          (messages[anchor].parts ??= []).push({ kind: "model", from, to });
+        } else {
+          pending.push({ from, to });
+        }
+        continue;
+      }
+      if (entry.type !== "message") continue;
+      const index = indexById.get(entry.id);
+      // Not on screen: summarised away by a compaction, or on another branch.
+      if (index === undefined) continue;
+      // A system row (a notice, the compaction card) draws no parts, so a divider
+      // handed to one would be invisible. They are transparent here: the divider
+      // attaches to the prompt or reply around them.
+      if (messages[index].role === "system") continue;
+      if (pending.length > 0) {
+        const parts = (messages[index].parts ??= []);
+        parts.unshift(...pending.map((item): MessagePart => ({ kind: "model", ...item })));
+        pending = [];
+      }
+      anchor = index;
+    }
+    // A switch recorded before the session produced anything else (the reply it
+    // precedes has not started yet) trails the message it followed.
+    if (anchor !== null) {
+      for (const item of pending) (messages[anchor].parts ??= []).push({ kind: "model", ...item });
+    }
   }
   /**
    * Force the SDK to write the session file.
@@ -1602,7 +1932,22 @@ export class PiProcessManager {
       // Best effort: never let a disk hiccup break a run.
     }
   }
-  #state(session: AgentSession): EngineSessionState { const model = session.model; const usage = session.getContextUsage(); return { model: model ? { provider: model.provider, id: model.id } : undefined, thinkingLevel: session.thinkingLevel, isStreaming: session.isStreaming, isCompacting: session.isCompacting, interruptMode: this.#interruptMode, sessionFile: session.sessionFile, sessionId: session.sessionId, sessionName: session.sessionName, messageCount: session.messages.length, queuedMessageCount: session.pendingMessageCount, autoCompactionEnabled: session.autoCompactionEnabled, steeringMode: session.steeringMode, followUpMode: session.followUpMode, contextUsage: usage ? { tokens: usage.tokens, contextWindow: usage.contextWindow, percent: usage.percent } : undefined }; }
+  /**
+   * Snapshot one session for the composer and the sidebar.
+   *
+   * `conversationId` is carried so a reply that lands after the user switched
+   * chats can still be attributed. `running` is the engine's own run flag (see the
+   * event listener in `#ensureSession`), which now spans exactly the same window as
+   * `session.isStreaming` — from the first `agent_start` to `agent_settled` — so a
+   * state reply read mid-retry reports the chat as working, not idle.
+   *
+   * `running` is the run alone. A compaction is its own flag (`isCompacting`),
+   * because the composer stops a run and a compaction the same way but the
+   * sidebar's 运行中 covers both — the renderer unions them (`working`).
+   */
+  #state(session: AgentSession, conversationId: string | undefined): EngineSessionState { const model = session.model; const usage = session.getContextUsage(); return { conversationId, running: conversationId ? this.#running.get(conversationId) === true : false, model: model ? { provider: model.provider, id: model.id } : undefined, thinkingLevel: session.thinkingLevel, isStreaming: session.isStreaming, isCompacting: session.isCompacting, interruptMode: this.#interruptMode, sessionFile: session.sessionFile, sessionId: session.sessionId, sessionName: session.sessionName, messageCount: session.messages.length, queuedMessageCount: session.pendingMessageCount, autoCompactionEnabled: session.autoCompactionEnabled, steeringMode: session.steeringMode, followUpMode: session.followUpMode, contextUsage: usage ? { tokens: usage.tokens, contextWindow: usage.contextWindow, percent: usage.percent } : undefined }; }
+  /** State for the empty hero: no session exists, so only the composer's own picks are known. */
+  #draftState(): EngineSessionState { return { model: this.#pendingModel, thinkingLevel: this.#pendingThinking, isStreaming: false, running: false, interruptMode: this.#interruptMode }; }
   #opened(conversation: Conversation, messages: ChatMessage[], state: EngineSessionState | null): ConversationOpenResult { return { ...this.#catalog.snapshot(), conversation, messages, state, status: this.#status }; }
 
   /**
@@ -1665,7 +2010,7 @@ export class PiProcessManager {
     fallback ??= registry.getAvailable()[0];
     if (!fallback) return;
     try {
-      await session.setModel(fallback);
+      await this.#useModel(session, id, fallback);
     } catch {
       // No credential for the replacement either: leave the session alone. The next
       // request reports it and the composer offers 「添加模型」.
@@ -1673,7 +2018,8 @@ export class PiProcessManager {
   }
 
   /**
-   * Apply the user's pinned 「默认模型」 to a conversation that has no history yet.
+   * Apply the model and thinking level a brand-new conversation should start on: the
+   * pick the user made while none existed, else the pinned 「默认模型」.
    *
    * The preference lives in FastVibe's own settings file: the SDK's
    * `defaultProvider`/`defaultModel` keys cannot hold it, because `AgentSession.setModel`
@@ -1682,15 +2028,29 @@ export class PiProcessManager {
    * place rather than blocking the session.
    */
   async #applyPreferredModel(session: AgentSession): Promise<void> {
+    const pending = this.#pendingModel;
+    const thinking = this.#pendingThinking;
     const pinned = readDefaultModel(this.#paths);
-    if (!pinned) return;
-    const model = this.#models?.find(pinned.provider, pinned.id);
-    if (!model) return;
-    try {
-      await session.setModel(model);
-    } catch {
-      // No credential for it any more (or the model went away): keep the default.
+    this.#clearPendingPick();
+    // The pick made on the hero wins; the pin is both its fallback and the normal path
+    // for a conversation that starts with nothing pre-picked.
+    const model =
+      (pending ? this.#models?.find(pending.provider, pending.id) : undefined) ??
+      (pinned ? this.#models?.find(pinned.provider, pinned.id) : undefined);
+    if (model) {
+      try {
+        await session.setModel(model);
+      } catch {
+        // No credential for it any more (or the model went away): keep the default.
+      }
     }
+    // `setModel` re-clamps the level to the new model, so the pick lands after it.
+    if (thinking) session.setThinkingLevel(thinking as ThinkingLevel);
+  }
+
+  #clearPendingPick(): void {
+    this.#pendingModel = undefined;
+    this.#pendingThinking = undefined;
   }
 
   #setStatus(status: EngineStatus): void { this.#status = status; for (const listener of this.#statusListeners) listener(status); }

@@ -19,6 +19,7 @@ import {
   writeAppSettings,
 } from "./engine/app-settings";
 import { getFastVibePaths } from "./engine/paths";
+import { applyShellPath } from "./engine/shell-path";
 import { applyKeepAwake, clearRunningConversations, setConversationRunning } from "./engine/keep-awake";
 import {
   getFileIconMapping,
@@ -38,6 +39,10 @@ import type { GitBranch, GitDiffSource, GitStatus } from "@shared/ipc";
 const execFileAsync = promisify(execFile);
 
 app.setName("FastVibe");
+
+// GUI-launched Electron inherits a stub PATH. Fill in Homebrew / user bins
+// before any agent session, MCP stdio server or in-app terminal is spawned.
+applyShellPath();
 
 // Privileged schemes must be declared before the app is ready.
 registerFileIconScheme();
@@ -177,6 +182,18 @@ function registerIpc(): void {
   ipcMain.handle(Ipc.engineClearQueue, async () => {
     return engine.clearQueue();
   });
+
+  ipcMain.handle(
+    Ipc.engineReplaceSteering,
+    async (
+      _event,
+      payload: {
+        items: Array<{ text: string; images?: Array<{ type: "image"; data: string; mimeType: string }> }>;
+      },
+    ) => {
+      await engine.replaceSteering(payload.items);
+    },
+  );
 
   ipcMain.handle(Ipc.engineCompact, async (_event, payload?: { customInstructions?: string }) => {
     return engine.compact(payload?.customInstructions);

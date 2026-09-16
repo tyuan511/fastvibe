@@ -33,6 +33,7 @@ import type {
   SkillInfo,
   BrowserImportResult,
   BrowserProfileInfo,
+  BrowserRequest,
 } from "@shared/types";
 import type {
   AppUpdateState,
@@ -61,6 +62,9 @@ const api = {
     continue: (): Promise<void> => ipcRenderer.invoke(Ipc.engineContinue),
     clearQueue: (): Promise<{ steering: string[]; followUp: string[] }> =>
       ipcRenderer.invoke(Ipc.engineClearQueue),
+    replaceSteering: (
+      items: Array<{ text: string; images?: PromptImage[] }>,
+    ): Promise<void> => ipcRenderer.invoke(Ipc.engineReplaceSteering, { items }),
     compact: (customInstructions?: string): Promise<EngineSessionState> =>
       ipcRenderer.invoke(Ipc.engineCompact, { customInstructions }),
     getCommands: (): Promise<SlashCommand[]> => ipcRenderer.invoke(Ipc.engineGetCommands),
@@ -260,8 +264,8 @@ const api = {
   browser: {
     listProfiles: (): Promise<BrowserProfileInfo[]> => ipcRenderer.invoke(Ipc.browserListProfiles),
     importProfile: (profile: BrowserProfileInfo): Promise<BrowserImportResult> => ipcRenderer.invoke(Ipc.browserImportProfile, { profile }),
-    onRequest: (listener: (payload: { id: string; request: { action: string; tabId?: string; url?: string; selector?: string; text?: string; key?: string; script?: string } }) => void): (() => void) => {
-      const handler = (_event: unknown, payload: { id: string; request: { action: string; tabId?: string; url?: string; selector?: string; text?: string; key?: string; script?: string } }): void => listener(payload);
+    onRequest: (listener: (payload: { id: string; request: BrowserRequest }) => void): (() => void) => {
+      const handler = (_event: unknown, payload: { id: string; request: BrowserRequest }): void => listener(payload);
       ipcRenderer.on(Ipc.browserRequest, handler);
       return () => ipcRenderer.removeListener(Ipc.browserRequest, handler);
     },

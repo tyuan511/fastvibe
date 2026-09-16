@@ -177,7 +177,9 @@ export function UsageSettings(): JSX.Element {
                   <div className="flex items-center justify-between gap-4">
                     <div className="min-w-0">
                       <p className="truncate text-xs font-medium">{model.model}</p>
-                      <p className="truncate text-xs text-muted-foreground">{providerLabel(model.provider)}</p>
+                      <p className="truncate text-xs text-muted-foreground">
+                        {model.providerName?.trim() || providerLabel(model.provider)}
+                      </p>
                     </div>
                     <div className="shrink-0 text-right">
                       <p className="text-xs tabular-nums">{formatTokens(model.tokens)}</p>

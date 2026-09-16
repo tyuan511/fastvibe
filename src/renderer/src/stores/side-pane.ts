@@ -13,6 +13,15 @@ export type SubagentTabInit = {
   title?: string;
   /** Live run status (`running` / `completed` / `error`). */
   status?: string;
+  /**
+   * The delegated brief, pinned on the tab.
+   *
+   * The pane draws it as the run's opening user message. It is stored here — not
+   * only read back off `subagents` — because that list is replaced wholesale by
+   * every `getSubagents` snapshot: a pane that derived its brief from it blanked
+   * (and re-rendered its whole transcript) whenever an entry was momentarily absent.
+   */
+  brief?: string;
 };
 
 export type SidePaneTab = {
@@ -38,6 +47,8 @@ export type SidePaneTab = {
   subagentConversationId?: string;
   /** Live status of that run, mirrored into the tab title. */
   subagentStatus?: string;
+  /** The delegated brief; the pane renders it as the run's opening user message. */
+  subagentBrief?: string;
 };
 
 /**
@@ -234,6 +245,7 @@ function upsertSubagentTab(tabs: SidePaneTab[], subagentId: string, init?: Subag
     // time (`subagentStatus`), so a re-title from the tool card cannot clobber it.
     title: init?.title || existing?.title || "子 Agent",
     subagentStatus: init?.status ?? existing?.subagentStatus,
+    subagentBrief: init?.brief || existing?.subagentBrief,
   };
 }
 
@@ -598,7 +610,8 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
         existing &&
         existing.title === tab.title &&
         existing.subagentConversationId === tab.subagentConversationId &&
-        existing.subagentStatus === tab.subagentStatus
+        existing.subagentStatus === tab.subagentStatus &&
+        existing.subagentBrief === tab.subagentBrief
       ) {
         return state;
       }

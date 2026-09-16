@@ -153,8 +153,16 @@ export function GoalPanel({ className, disabled }: { className?: string; disable
     <div className={cn("mx-auto w-full max-w-3xl px-6", className)}>
       <div className="rounded-xl border border-border bg-card px-3 py-2.5">
         <div className="flex items-center gap-2">
-          <HugeiconsIcon strokeWidth={2} icon={Target01Icon} className="size-4 shrink-0 text-primary" />
-          <span className="text-sm font-medium">目标</span>
+          {/* The target glyph names the panel — 「目标」 only restated the icon that
+              already leads the row (and read larger than the chrome beside it). */}
+          <span
+            role="img"
+            aria-label="目标"
+            title="目标"
+            className="flex size-4 shrink-0 items-center justify-center text-primary"
+          >
+            <HugeiconsIcon strokeWidth={2} icon={Target01Icon} className="size-4" />
+          </span>
           <Badge variant="secondary" className={meta.className}>
             {meta.label}
           </Badge>

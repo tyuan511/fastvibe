@@ -87,6 +87,28 @@ export function parseToolTodos(tool: ToolCallBlock): TodoItem[] {
   return [];
 }
 
+/** The item the agent is on: what is `in_progress`, else the next `pending` one. */
+export function activeTodo(items: TodoItem[]): TodoItem | undefined {
+  return items.find((item) => item.status === "in_progress") ?? items.find((item) => item.status === "pending");
+}
+
+/**
+ * 1-based position of the item in play, for the `n/N` every todo surface shows.
+ * The leading number names *which* step the agent is on, not how many it has
+ * ticked off: `1/N` from the first moment rather than sitting at `0/N` (and, on
+ * a plan worked back-to-front, understating progress) until that step closes.
+ */
+export function todoPosition(items: TodoItem[]): number {
+  const active = activeTodo(items);
+  return active ? items.indexOf(active) + 1 : items.length;
+}
+
+/** 1-based position of a known item, falling back to the end of the list. */
+export function todoIndexOf(items: TodoItem[], item: TodoItem | undefined): number {
+  const index = item ? items.indexOf(item) : -1;
+  return index >= 0 ? index + 1 : items.length;
+}
+
 const EMPTY_TODOS: TodoItem[] = [];
 
 /** Latest todo list in the transcript — the agent's current plan. */

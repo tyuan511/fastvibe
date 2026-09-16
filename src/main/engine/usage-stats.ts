@@ -12,7 +12,7 @@ import type {
 import { catalogPrice } from "./models-dev";
 import type { FastVibePaths } from "./paths";
 import { priceUsage } from "./pricing";
-import { modelPriceIndex } from "./providers";
+import { modelPriceIndex, readProviders } from "./providers";
 import { parseSessionTurns, turnKey, usageLedgerFor, type UsageTurn } from "./usage-ledger";
 
 /**
@@ -44,6 +44,13 @@ export async function collectUsageStats(
 ): Promise<UsageStats> {
   const files = await listSessionFiles(paths.sessionsDir);
   const prices = modelPriceIndex(paths);
+  // A turn records only its provider *id* (`fastvibe`, or the internal
+  // `custom-<slug>` of a user-added provider), which is not a name a user should ever
+  // read — and a custom provider whose name has no ASCII collapses to the slug
+  // `provider`, so the id alone reads as the literal word. Resolve the display name
+  // from the provider catalog as the pane is built; without this the id would leak
+  // straight into 模型用量.
+  const providerNames = new Map(readProviders(paths).map((provider) => [provider.id, provider.name]));
   const parsed = await Promise.all(files.map((file) => parseSessionTurns(file).catch(() => null)));
 
   // A transcript on disk wins over the ledger for the same turn; either way the key is
@@ -109,7 +116,12 @@ export async function collectUsageStats(
   const modelList: UsageModelBreakdown[] = [...models.values()]
     .map((bucket) => {
       const metrics = sumDays(bucket.days);
-      return { provider: bucket.provider, model: bucket.model, ...metrics };
+      return {
+        provider: bucket.provider,
+        providerName: providerNames.get(bucket.provider),
+        model: bucket.model,
+        ...metrics,
+      };
     })
     .sort((a, b) => b.tokens - a.tokens || b.requests - a.requests)
     .slice(0, 12);

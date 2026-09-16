@@ -169,6 +169,7 @@ function SubagentPanel({ tool }: { tool: ToolCallBlock }): JSX.Element {
                 conversationId: state?.conversationId,
                 title: entry.agent,
                 status: state?.status,
+                brief: entry.task ?? state?.detail,
               })
             }
           >

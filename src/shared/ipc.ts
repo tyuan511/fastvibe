@@ -8,6 +8,7 @@ export const Ipc = {
   engineAbort: "engine:abort",
   engineContinue: "engine:continue",
   engineClearQueue: "engine:clear-queue",
+  engineReplaceSteering: "engine:replace-steering",
   engineCompact: "engine:compact",
   engineGetCommands: "engine:get-commands",
   engineGetExtensions: "engine:get-extensions",

@@ -192,35 +192,41 @@ export function ProvidersSettings({ onChanged }: { onChanged: () => void }): JSX
                 </div>
               </div>
             ) : null}
-            <p className="px-2 pb-1 text-xs font-medium text-muted-foreground">自定义供应商</p>
-            <div className="space-y-0.5">
-              {customs.map((provider) => (
-                <ProviderNavItem
-                  key={provider.id}
-                  provider={provider}
-                  selected={selected?.id === provider.id}
-                  onSelect={() => setSelectedId(provider.id)}
-                />
-              ))}
-              <button
-                type="button"
-                className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-sm text-muted-foreground hover:bg-muted/60"
-                onClick={() => setAdd({ ...EMPTY_ADD, selected: new Set() })}
-              >
-                <HugeiconsIcon strokeWidth={2} icon={Add01Icon} className="size-3.5" />
-                添加供应商
-              </button>
-              <button
-                type="button"
-                className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-sm text-muted-foreground hover:bg-muted/60"
-                onClick={() => setCcSwitchOpen(true)}
-              >
-                <HugeiconsIcon strokeWidth={2} icon={Download01Icon} className="size-3.5" />
-                从 CC Switch 导入
-              </button>
-            </div>
+            {customs.length ? (
+              <div>
+                <p className="px-2 pb-1 text-xs font-medium text-muted-foreground">自定义供应商</p>
+                <div className="space-y-0.5">
+                  {customs.map((provider) => (
+                    <ProviderNavItem
+                      key={provider.id}
+                      provider={provider}
+                      selected={selected?.id === provider.id}
+                      onSelect={() => setSelectedId(provider.id)}
+                    />
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
         </ScrollArea>
+        <div className="shrink-0 space-y-0.5 border-t border-border p-2">
+          <button
+            type="button"
+            className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-sm text-muted-foreground hover:bg-muted/60"
+            onClick={() => setAdd({ ...EMPTY_ADD, selected: new Set() })}
+          >
+            <HugeiconsIcon strokeWidth={2} icon={Add01Icon} className="size-3.5" />
+            添加供应商
+          </button>
+          <button
+            type="button"
+            className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-sm text-muted-foreground hover:bg-muted/60"
+            onClick={() => setCcSwitchOpen(true)}
+          >
+            <HugeiconsIcon strokeWidth={2} icon={Download01Icon} className="size-3.5" />
+            从 CC Switch 导入
+          </button>
+        </div>
       </aside>
 
       <div className="min-w-0 flex-1 p-5">

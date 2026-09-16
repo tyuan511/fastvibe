@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState, type JSX } from "react";
+import { memo, useEffect, useMemo, useState, type JSX } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { BotIcon } from "@hugeicons/core-free-icons";
-import { SidePaneChat } from "@/components/layout/side-pane-chat";
+import { MessageList } from "@/components/chat/message-list";
 import { useSessionStore } from "@/stores/session";
+import { useSettingsStore } from "@/stores/settings";
 import type { ChatMessage } from "@shared/types";
 import type { SidePaneTab } from "@/stores/side-pane";
 
@@ -25,64 +26,97 @@ function SubagentEmpty(): JSX.Element {
  * (`subagent:<toolCallId>:<index>`), so parallel/chain runs — and runs from
  * different conversations — never share a view.
  *
- * The transcript reads like any chat: the delegated brief as the opening user
- * message, then the role's own assistant turns. Only the assistant side streams
- * (Main slims the sub-session's `message_end` down to failures), so the brief is
- * rebuilt here from the run's `detail`.
+ * Read-only: no composer, no abort. The transcript matches the main thread —
+ * same `MessageList`, same follow-the-bottom scroller — with the delegated brief
+ * as the opening user message (the sub-session's live stream never includes that
+ * user turn) followed by the role's own assistant turns.
+ *
+ * Everything the pane draws is derived from two stable sources: the run's tab
+ * (which pins the brief) and the store's per-run stream. Nothing here reads
+ * `subagents` for its content — that list is replaced on every `getSubagents`
+ * snapshot, and deriving the brief from it blanked the transcript mid-flight.
  */
-export function SidePaneSubagent({ tab }: { tab: SidePaneTab }): JSX.Element {
-  const subagents = useSessionStore((state) => state.subagents);
-  const streams = useSessionStore((state) => state.subagentStreams);
+export const SidePaneSubagent = memo(function SidePaneSubagent({ tab }: { tab: SidePaneTab }): JSX.Element {
   const subagentId = tab.subagentId ?? null;
+  const active = useSessionStore((state) =>
+    subagentId ? state.subagents.find((item) => item.id === subagentId) : undefined,
+  );
+  const streamed = useSessionStore((state) => (subagentId ? state.subagentStreams[subagentId] : undefined));
+  const showThinking = useSettingsStore((state) => state.settings.showThinking);
+  const showTimestamp = useSettingsStore((state) => state.settings.showTimestamps);
   const [loaded, setLoaded] = useState<ChatMessage[] | null>(null);
 
-  const active = subagentId ? subagents.find((item) => item.id === subagentId) : undefined;
-  const streamed = subagentId ? streams[subagentId] : undefined;
+  const task = (tab.subagentBrief ?? active?.detail ?? "").trim();
+  // `tab.openedAt` keeps the value defined, so the brief's identity never changes
+  // when the engine's snapshot finally carries the run's real `startedAt`.
+  const startedAt = active?.startedAt ?? tab.openedAt;
+  const status = active?.status;
+  const running = status === "running";
 
-  // A run that finished before its tab was opened has no live stream to replay;
-  // pull its cached transcript once. `loaded` (even empty) marks it as fetched.
   useEffect(() => {
     setLoaded(null);
-    if (!subagentId || streamed?.length) return;
+  }, [subagentId]);
+
+  // Pull the cached transcript exactly once, when the run is over. Reading it while
+  // the run was live mixed a mid-flight snapshot into the growing stream and swapped
+  // the whole list — the pane flickered, and the authoritative mapping is only
+  // written at the end anyway.
+  useEffect(() => {
+    if (!subagentId || running) return;
     let cancelled = false;
     void window.fastvibe.engine
       .getSubagentMessages(subagentId)
       .then((result) => {
-        if (!cancelled) setLoaded(result);
+        if (!cancelled && result.length > 0) setLoaded(result);
       })
-      .catch(() => {
-        if (!cancelled) setLoaded([]);
-      });
+      .catch(() => undefined);
     return () => {
       cancelled = true;
     };
-    // `streamed` is intentionally not a dependency: a late live stream should not
-    // re-trigger the cache read, and the tab id changing resets it explicitly.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [subagentId]);
+  }, [subagentId, running]);
 
-  const messages = useMemo(() => {
-    const body = streamed ?? loaded ?? [];
-    const task = active?.detail?.trim();
-    if (!task) return body;
-    const brief: ChatMessage = {
-      id: `${subagentId}:brief`,
+  const brief = useMemo<ChatMessage | null>(() => {
+    if (!task) return null;
+    return {
+      id: `${subagentId ?? tab.id}:brief`,
       role: "user",
       text: task,
       tools: [],
-      createdAt: active?.startedAt ?? body[0]?.createdAt ?? 0,
+      parts: [{ kind: "text", text: task }],
+      createdAt: startedAt,
     };
-    return [brief, ...body];
-  }, [active?.detail, active?.startedAt, loaded, streamed, subagentId]);
+  }, [startedAt, subagentId, tab.id, task]);
+
+  const body = (running ? streamed : loaded ?? streamed) ?? [];
+  const messages = useMemo(() => {
+    // The cached transcript repeats the delegated turn the engine stored; the brief
+    // already stands for it.
+    if (body.some((item) => item.role === "user")) return body;
+    return brief ? [brief, ...body] : body;
+  }, [body, brief]);
+
+  // Decided here rather than left to `MessageList`: the empty state and the scroller
+  // are different trees, and flipping between them on every transient change is what
+  // reads as flicker.
+  if (messages.length === 0) return <SubagentEmpty />;
 
   return (
-    <SidePaneChat
-      tab={tab}
-      readOnly
-      messages={messages}
-      streaming={active?.status === "running"}
-      emptyState={<SubagentEmpty />}
-      placeholder="子 Agent 只读"
-    />
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="min-h-0 flex-1">
+        <MessageList
+          messages={messages}
+          streaming={running}
+          showThinking={showThinking}
+          showTimestamp={showTimestamp}
+        />
+      </div>
+    </div>
   );
-}
+}, (prev, next) =>
+  prev.tab.id === next.tab.id &&
+  prev.tab.subagentId === next.tab.subagentId &&
+  // The brief arrives with a later `registerSubagent` when the tool card is what
+  // opened the tab, and it is what the pane draws as the run's opening message.
+  prev.tab.subagentBrief === next.tab.subagentBrief &&
+  prev.tab.openedAt === next.tab.openedAt,
+);

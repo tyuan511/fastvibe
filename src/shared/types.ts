@@ -47,9 +47,39 @@ export type TodoPhase = {
 };
 
 export type EngineSessionState = {
+  /**
+   * Which conversation this snapshot describes.
+   *
+   * A state reply travels one IPC hop, so it can arrive after the user opened
+   * another chat. The renderer keys its sidebar run map per conversation and
+   * refuses to let a reply speak for a chat it does not belong to.
+   */
+  conversationId?: string;
   model?: EngineModel;
   thinkingLevel?: string;
   isStreaming: boolean;
+  /**
+   * The engine's own run flag: true from the run's first `agent_start` to the
+   * `agent_settled` that closes its whole post-run sequence.
+   *
+   * `agent_end` is deliberately *not* the end of it: the SDK fires that event before
+   * it retries a failed request (after an exponential backoff), auto-compacts, or
+   * continues with messages an `agent_end` handler queued — and each of those starts
+   * another `agent_start` inside the same run. Ending the flag at `agent_end`
+   * reported a chat as idle for the whole retry/compaction window and re-lit it when
+   * the next attempt began.
+   *
+   * A compaction is reported separately (`isCompacting`): it is work too, and the
+   * sidebar's 运行中 mark covers both, so the renderer unions them.
+   */
+  running?: boolean;
+  /**
+   * A compaction of this conversation is in flight.
+   *
+   * The SDK also compacts with no run at all (`/compact`, and the threshold check a
+   * fresh prompt runs before it is sent), so this is what says a chat the run flag
+   * does not cover is still busy.
+   */
   isCompacting?: boolean;
   sessionFile?: string;
   sessionId?: string;
@@ -94,6 +124,14 @@ export type ThinkingTiming = { startedAt: number; endedAt?: number };
 export type MessagePart =
   | { kind: "text"; text: string }
   | ({ kind: "thinking"; text: string } & Partial<ThinkingTiming>)
+  /**
+   * A model switch, drawn as a divider. It is a *part* rather than a row of its own
+   * because a switch lands mid-reply as often as between turns: the SDK records the
+   * `model_change` entry after the last completed message, so the divider belongs
+   * between two parts of the reply that spans the switch — and a row would split that
+   * reply into two blocks (two footers), while a part keeps it one turn.
+   */
+  | { kind: "model"; from?: EngineModel; to: EngineModel }
   | { kind: "tool"; toolId: string };
 
 export type PromptImage = {
@@ -297,6 +335,29 @@ export type BrowserProfileInfo = {
   cookiePath: string;
 };
 
+/**
+ * One browser-use request. The tool schema in the `browser-use` extension, the
+ * main-process bridge and the side pane's webview all speak exactly this, so a
+ * new field has to be added here once — a copy that lags behind is what made
+ * `ref` / `newTab` reach the renderer untyped.
+ *
+ * `ref` is stamped by a snapshot (`data-fv-ref`), `newTab` forces a second tab
+ * instead of navigating the one on screen, and `timeoutMs` is the main-process
+ * bridge's budget for the whole round trip.
+ */
+export type BrowserRequest = {
+  action: string;
+  tabId?: string;
+  url?: string;
+  selector?: string;
+  ref?: string;
+  text?: string;
+  key?: string;
+  script?: string;
+  newTab?: boolean;
+  timeoutMs?: number;
+};
+
 export type BrowserImportResult = {
   browser: string;
   profile: string;
@@ -379,6 +440,10 @@ export type QueuedPrompt = {
   text: string;
   behavior: QueueBehavior;
   attachments?: ChatAttachment[];
+  /** Handed to the engine as a steer; waiting to be injected into the live run. */
+  sending?: boolean;
+  /** Exact payload passed to `engine.steer`, used to match delivery. */
+  sentText?: string;
 };
 
 export type EngineEvent = {
@@ -652,7 +717,13 @@ export type UsageTotals = UsageMetrics & {
 };
 
 export type UsageModelBreakdown = UsageMetrics & {
+  /** Provider id, e.g. `fastvibe` / `custom-provider`. What the transcript recorded. */
   provider: string;
+  /**
+   * The provider's display name, resolved from `providers.json` at read time.
+   * Absent when the provider that served these turns no longer exists.
+   */
+  providerName?: string;
   model: string;
 };
 

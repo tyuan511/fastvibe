@@ -41,6 +41,17 @@ export function readDefaultModel(paths: FastVibePaths): EngineModel | undefined 
   return { provider, id };
 }
 
+/**
+ * 自动压缩 (设置 → 通用): whether the engine may compact a conversation on its own.
+ *
+ * The engine seeds `compaction.enabled` from its own settings file, which FastVibe
+ * does not own, so a new session reads the preference through here instead.
+ */
+export function readAutoCompact(paths: FastVibePaths): boolean {
+  const value = readAppSettings(paths).autoCompact;
+  return typeof value === "boolean" ? value : true;
+}
+
 export function writeAppSettings(paths: FastVibePaths, settings: PersistedSettings): void {
   const payload: SettingsFile = { version: VERSION, settings };
   writeFileSync(paths.settingsFile, `${JSON.stringify(payload, null, 2)}\n`);

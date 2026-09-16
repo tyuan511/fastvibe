@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type JSX, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type JSX } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { MessageSquareIcon } from "@hugeicons/core-free-icons";
 import { useNavigate } from "react-router";
@@ -8,7 +8,7 @@ import { usagePercent } from "@/components/chat/session-controls";
 import { useSessionStore } from "@/stores/session";
 import { useSettingsStore } from "@/stores/settings";
 import { useSidePaneStore, type SidePaneTab } from "@/stores/side-pane";
-import type { ChatAttachment, ChatMessage } from "@shared/types";
+import type { ChatAttachment } from "@shared/types";
 import { parseCompactCommand } from "@shared/slash";
 
 function SideChatEmpty(): JSX.Element {
@@ -29,25 +29,10 @@ export function SidePaneChat({
   tab,
   project,
   parentId,
-  readOnly = false,
-  messages: messagesProp,
-  streaming: streamingProp,
-  header,
-  emptyState,
-  placeholder,
 }: {
   tab: SidePaneTab;
   project?: string;
   parentId?: string;
-  /** Auxiliary chats accept input; the subagent pane reuses this surface read-only. */
-  readOnly?: boolean;
-  /** Override the tab's message list (a subagent is not a conversation). */
-  messages?: ChatMessage[];
-  streaming?: boolean;
-  /** Optional chrome above the transcript, e.g. a subagent picker. */
-  header?: ReactNode;
-  emptyState?: JSX.Element;
-  placeholder?: string;
 }): JSX.Element {
   const patchTab = useSidePaneStore((state) => state.patchTab);
   const navigate = useNavigate();
@@ -58,15 +43,21 @@ export function SidePaneChat({
   const settings = useSettingsStore((state) => state.settings);
   const updateSettings = useSettingsStore((state) => state.update);
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
-  const messages = messagesProp ?? tab.messages ?? [];
-  const streaming = streamingProp ?? Boolean(tab.streaming);
+  const messages = tab.messages ?? [];
+  const streaming = Boolean(tab.streaming);
+  // The busy mark for the conversation this tab shows — the same per-conversation map
+  // the sidebar draws its spinner from, so the stop button here cannot disagree with
+  // the mark next to this chat's title.
+  const conversationWorking = useSessionStore((state) =>
+    tab.conversationId ? state.running[tab.conversationId] === true : streaming,
+  );
   const history = useMemo(
     () => messages.filter((item) => item.role === "user").map((item) => item.text).filter(Boolean),
     [messages],
   );
 
   useEffect(() => {
-    if (readOnly || tab.conversationId || !parentId) return;
+    if (tab.conversationId || !parentId) return;
     let cancelled = false;
     void window.fastvibe.conversations
       .createSide({ parentId, title: tab.title })
@@ -81,12 +72,12 @@ export function SidePaneChat({
     return () => {
       cancelled = true;
     };
-  }, [parentId, patchTab, readOnly, tab.conversationId, tab.id, tab.title]);
+  }, [parentId, patchTab, tab.conversationId, tab.id, tab.title]);
 
   async function send(): Promise<void> {
     const text = tab.draft?.trim();
     const id = tab.conversationId;
-    if (readOnly || !text || !id || tab.streaming) return;
+    if (!text || !id || tab.streaming) return;
     if (parseCompactCommand(text)) {
       patchTab(tab.id, { draft: "" });
       try {
@@ -117,22 +108,22 @@ export function SidePaneChat({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {header}
       <div className="min-h-0 flex-1">
         <MessageList
           messages={messages}
           streaming={streaming}
-          loading={!readOnly && !tab.conversationId}
-          emptyState={emptyState ?? <SideChatEmpty />}
+          loading={!tab.conversationId}
+          emptyState={<SideChatEmpty />}
         />
       </div>
       <div className="px-3 pb-3">
         <Composer
           className="px-0 pb-0"
           value={tab.draft ?? ""}
-          disabled={readOnly || !tab.conversationId}
+          disabled={!tab.conversationId}
           streaming={streaming}
-          placeholder={placeholder ?? "随心输入"}
+          working={conversationWorking}
+          placeholder="随心输入"
           models={models}
           model={session?.model}
           thinkingLevel={session?.thinkingLevel}
@@ -150,10 +141,10 @@ export function SidePaneChat({
           contextPercent={usagePercent(session)}
           contextUsage={session?.contextUsage}
           onChange={(value) => {
-            if (!readOnly) patchTab(tab.id, { draft: value });
+            patchTab(tab.id, { draft: value });
           }}
           onSubmit={() => {
-            if (!readOnly) void send();
+            void send();
           }}
           onAbort={() => undefined}
           onPickWorkspace={() => undefined}
@@ -173,6 +164,7 @@ export function SidePaneChat({
           onRemoveQueued={() => undefined}
           onEditQueued={() => undefined}
           onSendQueuedNow={() => undefined}
+          onRecallQueued={() => undefined}
           onReorderQueued={() => undefined}
           onResumeQueue={() => undefined}
           sendOnEnter={settings.sendOnEnter}

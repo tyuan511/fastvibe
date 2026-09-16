@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { BotIcon, ChromeIcon, FileCodeIcon, FileMinusIcon, FilePlusIcon, FileTextIcon, FolderTreeIcon, ListChecksIcon, MessageQuestionIcon, Plug01Icon, Search01Icon, SparklesIcon, SquareTerminalIcon, Wrench01Icon } from "@hugeicons/core-free-icons";
 import type { ToolCallBlock } from "@shared/types";
-import { parseToolTodos } from "./todos";
+import { activeTodo, parseToolTodos, todoIndexOf } from "./todos";
 import { displayPath } from "./workspace-path";
 
 /**
@@ -211,11 +211,9 @@ export function describeTool(tool: ToolCallBlock, cwd?: string): ToolView {
         const done = todos.filter((item) => item.status === "completed").length;
         const allDone = done === todos.length;
         view.label = running || !allDone ? "正在更新待办" : "已更新待办";
-        const current =
-          todos.find((item) => item.status === "in_progress") ??
-          todos.find((item) => item.status !== "completed" && item.status !== "cancelled") ??
-          todos.at(-1);
-        const count = `${done}/${todos.length}`;
+        const current = activeTodo(todos) ?? todos.at(-1);
+        // Position in the list, not the completed count — see `todoPosition`.
+        const count = `${todoIndexOf(todos, current)}/${todos.length}`;
         const label =
           current?.status === "in_progress" && current.activeForm ? current.activeForm : current?.content;
         view.subject = current ? `${count} · ${label}` : count;

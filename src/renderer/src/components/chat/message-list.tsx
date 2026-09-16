@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type JSX } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { AlertCircleIcon, Copy01Icon, PencilEdit02Icon, RotateCcwIcon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
@@ -26,6 +26,7 @@ import { ThinkingBlock } from "./thinking-block";
 import { ToolCard } from "./tool-card";
 import { ToolGroupRow } from "./tool-group";
 import { CompactNotice } from "./compact-notice";
+import { ModelChangeNotice } from "./model-change-notice";
 import { TuiLines } from "./tui-lines";
 import { TurnRail, type TurnMarker } from "./turn-rail";
 
@@ -169,6 +170,60 @@ function PartSlot({ children }: { children: JSX.Element }): JSX.Element {
   return <div className="flex w-full max-w-2xl flex-col">{children}</div>;
 }
 
+/**
+ * User prompts clamp to two lines so a sticky turn header stays compact. The
+ * expand control only appears when the prompt actually overflows that cap.
+ */
+function UserPromptBubble({ text }: { text: string }): JSX.Element {
+  const [expanded, setExpanded] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+  const bodyRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    setExpanded(false);
+  }, [text]);
+
+  useLayoutEffect(() => {
+    const node = bodyRef.current;
+    if (!node) return;
+
+    const measure = (): void => {
+      if (expanded) {
+        const lineHeight = Number.parseFloat(getComputedStyle(node).lineHeight);
+        const cap = (Number.isFinite(lineHeight) && lineHeight > 0 ? lineHeight : 24) * 2;
+        setOverflows(node.scrollHeight > cap + 1);
+        return;
+      }
+      setOverflows(node.scrollHeight > node.clientHeight + 1);
+    };
+
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [text, expanded]);
+
+  return (
+    <Bubble variant="secondary" align="end">
+      <BubbleContent className="chat-markdown text-sm leading-6">
+        <div ref={bodyRef} className={expanded ? undefined : "line-clamp-2"}>
+          <MarkdownView text={text} />
+        </div>
+        {overflows ? (
+          <button
+            type="button"
+            className="mt-1 text-xs leading-4 text-muted-foreground transition-colors hover:text-foreground"
+            aria-expanded={expanded}
+            onClick={() => setExpanded((value) => !value)}
+          >
+            {expanded ? "收起" : "展开"}
+          </button>
+        ) : null}
+      </BubbleContent>
+    </Bubble>
+  );
+}
+
 function ChatMessageRowImpl({
   messages,
   streaming,
@@ -239,12 +294,11 @@ function ChatMessageRowImpl({
       );
     }
     if (part.kind === "text") {
+      if (isUser) {
+        return <UserPromptBubble key={`text-${index}`} text={part.text} />;
+      }
       return (
-        <Bubble
-          key={`text-${index}`}
-          variant={isUser ? "secondary" : "ghost"}
-          align={isUser ? "end" : "start"}
-        >
+        <Bubble key={`text-${index}`} variant="ghost" align="start">
           <BubbleContent className="chat-markdown text-sm leading-6">
             <MarkdownView text={part.text} />
             {streaming && isTail ? <span className="chat-caret" aria-hidden /> : null}
@@ -258,6 +312,10 @@ function ChatMessageRowImpl({
           <ToolCard tool={part.tool} />
         </PartSlot>
       );
+    }
+    if (part.kind === "model") {
+      // A transcript-level rule, so it spans the column instead of the reply's cap.
+      return <ModelChangeNotice key={`model-${index}`} from={part.from} to={part.to} />;
     }
     return (
       <PartSlot key={part.group.id}>

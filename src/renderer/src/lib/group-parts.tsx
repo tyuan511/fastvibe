@@ -30,6 +30,7 @@ export type ToolGroup = {
 export type RenderPart =
   | { kind: "text"; text: string }
   | Extract<MessagePart, { kind: "thinking" }>
+  | Extract<MessagePart, { kind: "model" }>
   | { kind: "tool"; tool: ToolCallBlock }
   | { kind: "group"; group: ToolGroup };
 

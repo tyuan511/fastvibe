@@ -166,6 +166,7 @@ const api = {
     stop: async () => status,
     prompt: async () => undefined,
     steer: async () => undefined,
+    replaceSteering: async () => undefined,
     followUp: async () => undefined,
     abort: async () => undefined,
     continue: async () => undefined,
@@ -216,7 +217,12 @@ const api = {
     exportHtml: async () => undefined,
     promptConversation: async () => undefined,
     getConversationMessages: async (): Promise<ChatMessage[]> => [],
-    onEvent: () => () => undefined,
+    onEvent: (listener: (event: unknown) => void) => {
+      // Exposed so the harness can replay engine events from the page console (a
+      // model switch, a streamed token) instead of only rendering a fixture thread.
+      (window as unknown as { __engineEvent?: (event: unknown) => void }).__engineEvent = listener;
+      return () => undefined;
+    },
     onStatus: () => () => undefined,
     onConversationReady: () => () => undefined,
   },
