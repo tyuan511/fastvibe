@@ -207,6 +207,12 @@ export function SubagentBrowser({
             <span className="truncate text-muted-foreground">
               {agent.status || agent.detail || "运行中"}
             </span>
+            {agent.progress != null ? (
+              <span className="mt-1 h-1 overflow-hidden rounded-full bg-muted">
+                <span className="block h-full bg-primary" style={{ width: `${Math.max(0, Math.min(100, agent.progress))}%` }} />
+              </span>
+            ) : null}
+            {agent.error ? <span className="truncate text-destructive">{agent.error}</span> : null}
           </button>
         ))}
       </div>

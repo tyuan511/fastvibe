@@ -153,9 +153,19 @@ export type SlashCommand = {
 
 export type SubagentInfo = {
   id: string;
+  /** The conversation whose tool call spawned this run; scopes it to its own pane. */
+  conversationId?: string;
+  /** Stable role identifier when this run comes from a built-in agent. */
+  agent?: string;
   name?: string;
+  description?: string;
+  mode?: "single" | "parallel" | "chain" | string;
   status?: string;
   detail?: string;
+  progress?: number;
+  startedAt?: number;
+  endedAt?: number;
+  error?: string;
 };
 
 export type ExtensionInfo = {
@@ -346,7 +356,9 @@ export type PermissionQuestion = {
 
 export type PermissionRequest = {
   id: string;
-  method: "confirm" | "select" | "input" | "editor" | "questions";
+  /** Conversation that owns the blocking extension request. */
+  conversationId?: string;
+  method: "confirm" | "select" | "input" | "editor" | "questions" | "custom";
   title?: string;
   message?: string;
   /** Placeholder for `input` dialogs. */
@@ -548,6 +560,10 @@ export type PermissionMode = "ask" | "smart" | "full";
 export type Project = {
   cwd: string;
   name: string;
+  /** When the project was first added. Drives the sidebar's default order, which
+   *  must not change when a chat inside it is opened, renamed, or updated. */
+  createdAt: number;
+  /** Last mutation time (rename, new conversation, …). Not used for ordering. */
   updatedAt: number;
 };
 

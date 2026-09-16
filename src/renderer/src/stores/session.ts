@@ -45,6 +45,8 @@ type SessionStore = {
   commands: SlashCommand[];
   subagents: SubagentInfo[];
   permission: PermissionRequest | null;
+  /** Blocking extension prompts retained while another conversation is active. */
+  pendingPermissions: Record<string, PermissionRequest>;
   /** Transient notices from extension `ctx.ui.notify()`. */
   notices: ExtensionNotice[];
   /** Extension status entries (`ctx.ui.setStatus`), keyed by the extension's key. */
@@ -54,6 +56,12 @@ type SessionStore = {
   attachments: ChatAttachment[];
   queued: QueuedPrompt[];
   queuePause: QueuePauseReason | null;
+  /**
+   * How the last run ended early, if it did: `error` (failure) or `aborted` (the
+   * user stopped it). Cleared when a new run starts. Drives the composer's resume
+   * control — a half-finished reply can be continued without retyping anything.
+   */
+  runInterrupted: "aborted" | "error" | null;
   permissionAlways: string[];
   preview: FilePreview | null;
   subagentStreams: Record<string, ChatMessage[]>;
@@ -75,11 +83,13 @@ type SessionStore = {
   setAttachments: (attachments: ChatAttachment[]) => void;
   enqueue: (item: QueuedPrompt) => void;
   removeQueued: (id: string) => void;
-  /** Drag-to-reorder: place `fromId` at `toId`'s position, shifting the rest. */
-  moveQueued: (fromId: string, toId: string) => void;
+  /** Drag-to-reorder: persist the full id order the sortable list produced. */
+  setQueuedOrder: (ids: string[]) => void;
   prependQueued: (item: QueuedPrompt) => void;
   clearQueued: () => void;
   setQueuePause: (reason: QueuePauseReason | null) => void;
+  /** Clear the interrupted-run marker once a resume (or fresh prompt) takes over. */
+  setRunInterrupted: (reason: "aborted" | "error" | null) => void;
   rememberPermission: (key: string) => void;
   setPreview: (preview: FilePreview | null) => void;
   openPreview: (path: string) => Promise<void>;
@@ -145,6 +155,7 @@ function parsePermission(event: EngineEvent): PermissionRequest | null {
   if (!id) return null;
   return {
     id,
+    conversationId: typeof event.conversationId === "string" ? event.conversationId : undefined,
     method,
     title: typeof event.title === "string" ? event.title : undefined,
     message: typeof event.message === "string" ? event.message : undefined,
@@ -228,12 +239,34 @@ function reduceEvents(state: SessionStore, events: EngineEvent[]): Partial<Sessi
   let extensionStatus = state.extensionStatus;
   let extensionWidgets = state.extensionWidgets;
   let draft = state.draft;
+  let pendingPermissions = state.pendingPermissions;
+  let queuePause = state.queuePause;
+  let runInterrupted = state.runInterrupted;
   for (const event of events) {
     const applied = applyEngineEvent(messages, event, streaming);
     messages = applied.messages;
     streaming = applied.streaming;
+    if (applied.interrupted) {
+      // A run that stopped early may have queued follow-ups. Hold them: the reply is
+      // half-written, so silently sending the rest of the queue would continue from a
+      // broken turn. The composer shows a resume control instead.
+      runInterrupted = applied.interrupted;
+      if (state.queued.length > 0) {
+        queuePause = applied.interrupted === "error" ? "error" : "stopped";
+      }
+    } else if (event.type === "agent_start" || event.type === "turn_start") {
+      // A new run (resume, retry, or fresh prompt) clears the interrupted state.
+      runInterrupted = null;
+    }
     const parsed = parsePermission(event);
-    if (parsed) permission = parsed;
+    if (parsed) {
+      const conversationId = parsed.conversationId ?? state.activeId ?? "__active__";
+      // Keep one request per conversation. A later request from the same session
+      // supersedes a stale one, while requests from background sessions remain
+      // available when the user switches back to them.
+      pendingPermissions = { ...pendingPermissions, [conversationId]: parsed };
+      if (!parsed.conversationId || parsed.conversationId === state.activeId) permission = parsed;
+    }
     const ui = applyExtensionUi(event, { notices, extensionStatus, extensionWidgets, draft });
     if (ui.notices) notices = ui.notices;
     if (ui.extensionStatus) extensionStatus = ui.extensionStatus;
@@ -255,12 +288,15 @@ function reduceEvents(state: SessionStore, events: EngineEvent[]): Partial<Sessi
     running: activeRunning(state, streaming),
     compacting,
     permission,
+    pendingPermissions,
     notices,
     extensionStatus,
     extensionWidgets,
     draft,
     subagents,
     subagentStreams,
+    queuePause,
+    runInterrupted,
   };
 }
 
@@ -317,12 +353,14 @@ export const useSessionStore = create<SessionStore>((set) => {
   commands: [],
   subagents: [],
   permission: null,
+  pendingPermissions: {},
   notices: [],
   extensionStatus: {},
   extensionWidgets: {},
   attachments: [],
   queued: [],
   queuePause: null,
+  runInterrupted: null,
   permissionAlways: [],
   preview: null,
   subagentStreams: {},
@@ -344,14 +382,30 @@ export const useSessionStore = create<SessionStore>((set) => {
       projects: snapshot.projects,
       conversations: snapshot.conversations,
     }),
-  setActiveId: (activeId) => set({ activeId }),
+  setActiveId: (activeId) => {
+    // The right pane is conversation-bound: switching chats swaps its tabs, its
+    // active tab and its collapsed/maximized state onto the incoming chat.
+    useSidePaneStore.getState().setScope(activeId);
+    set((state) => ({
+      activeId,
+      permission: activeId ? state.pendingPermissions[activeId] ?? null : null,
+    }));
+  },
   setMessages: (messages) =>
     set((state) => ({ messages, streaming: false, running: activeRunning(state, false) })),
   setDraft: (draft) => set({ draft }),
   setError: (error) => set({ error }),
   setCommands: (commands) => set({ commands }),
   setSubagents: (subagents) => set({ subagents }),
-  setPermission: (permission) => set({ permission }),
+  setPermission: (permission) => set((state) => {
+    const pendingPermissions = { ...state.pendingPermissions };
+    const conversationId = permission?.conversationId ?? state.activeId;
+    if (conversationId) {
+      if (permission) pendingPermissions[conversationId] = permission;
+      else delete pendingPermissions[conversationId];
+    }
+    return { permission, pendingPermissions };
+  }),
   dismissNotice: (id) => set((state) => ({ notices: state.notices.filter((item) => item.id !== id) })),
   addUserMessage: (text, attachments) =>
     set((state) => {
@@ -407,25 +461,33 @@ export const useSessionStore = create<SessionStore>((set) => {
   setAttachments: (attachments) => set({ attachments }),
   enqueue: (item) => set((state) => ({ queued: [...state.queued, item] })),
   removeQueued: (id) => set((state) => ({ queued: state.queued.filter((item) => item.id !== id) })),
-  moveQueued: (fromId, toId) =>
+  setQueuedOrder: (ids) =>
     set((state) => {
-      const from = state.queued.findIndex((item) => item.id === fromId);
-      const to = state.queued.findIndex((item) => item.id === toId);
-      if (from < 0 || to < 0 || from === to) return state;
-      const next = state.queued.slice();
-      const [moved] = next.splice(from, 1);
-      next.splice(to, 0, moved);
-      return { queued: next };
+      const rank = new Map(ids.map((id, index) => [id, index]));
+      // Unknown ids keep their relative order at the end, so a stale drop can't drop items.
+      const queued = [...state.queued].sort((a, b) => {
+        const left = rank.get(a.id);
+        const right = rank.get(b.id);
+        if (left === undefined && right === undefined) return 0;
+        if (left === undefined) return 1;
+        if (right === undefined) return -1;
+        return left - right;
+      });
+      return { queued };
     }),
   prependQueued: (item) => set((state) => ({ queued: [item, ...state.queued] })),
   clearQueued: () => set({ queued: [], queuePause: null }),
   setQueuePause: (queuePause) => set({ queuePause }),
+  setRunInterrupted: (runInterrupted) => set({ runInterrupted }),
   rememberPermission: (key) =>
     set((state) =>
       state.permissionAlways.includes(key) ? state : { permissionAlways: [...state.permissionAlways, key] },
     ),
   setPreview: (preview) => set({ preview }),
   openPreview: async (path) => {
+    // The open file lives on the *conversation's* files tab, so the same file can be
+    // previewed in two chats without one suppressing the other. The session-level
+    // `preview` field is kept for callers that only want the last preview read.
     try {
       const preview = await window.fastvibe.workspace.preview(path);
       set({ preview });
@@ -450,7 +512,8 @@ export const useSessionStore = create<SessionStore>((set) => {
     flushQueued();
     set((state) => reduceEvents(state, [event]));
   },
-  resetConversation: () =>
+  resetConversation: () => {
+    useSidePaneStore.getState().setScope(null);
     set({
       messages: [],
       streaming: false,
@@ -460,6 +523,7 @@ export const useSessionStore = create<SessionStore>((set) => {
       error: null,
       activeId: null,
       permission: null,
+      pendingPermissions: {},
       notices: [],
       extensionStatus: {},
       extensionWidgets: {},
@@ -468,7 +532,9 @@ export const useSessionStore = create<SessionStore>((set) => {
       preview: null,
       queued: [],
       queuePause: null,
-    }),
+      runInterrupted: null,
+    });
+  },
   setStreaming: (streaming) =>
     set((state) => ({ streaming, running: activeRunning(state, streaming) })),
   setConversationRunning: (id, running) =>
@@ -484,18 +550,22 @@ function upsertSubagent(list: SubagentInfo[], event: EngineEvent): SubagentInfo[
   if (event.type !== "subagent_lifecycle" && event.type !== "subagent_progress") return list;
   const id = typeof event.subagentId === "string" ? event.subagentId : typeof event.id === "string" ? event.id : "";
   if (!id) return list;
+  const previous = list.find((item) => item.id === id);
   const next: SubagentInfo = {
     id,
-    name: typeof event.name === "string" ? event.name : list.find((item) => item.id === id)?.name,
-    status: typeof event.status === "string" ? event.status : list.find((item) => item.id === id)?.status,
+    conversationId:
+      typeof event.conversationId === "string" ? event.conversationId : previous?.conversationId,
+    agent: typeof event.agent === "string" ? event.agent : previous?.agent,
+    name: typeof event.name === "string" ? event.name : previous?.name,
+    status: typeof event.status === "string" ? event.status : previous?.status,
     detail:
       typeof event.detail === "string"
         ? event.detail
         : typeof event.progress === "string"
           ? event.progress
-          : list.find((item) => item.id === id)?.detail,
+          : previous?.detail,
   };
-  if (list.some((item) => item.id === id)) {
+  if (previous) {
     return list.map((item) => (item.id === id ? { ...item, ...next } : item));
   }
   return [next, ...list];

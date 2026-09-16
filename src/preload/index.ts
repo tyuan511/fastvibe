@@ -57,6 +57,8 @@ const api = {
     followUp: (message: string, images?: PromptImage[]): Promise<void> =>
       ipcRenderer.invoke(Ipc.engineFollowUp, { message, images }),
     abort: (): Promise<void> => ipcRenderer.invoke(Ipc.engineAbort),
+    /** Resume the interrupted turn from the transcript, with no new user message. */
+    continue: (): Promise<void> => ipcRenderer.invoke(Ipc.engineContinue),
     clearQueue: (): Promise<{ steering: string[]; followUp: string[] }> =>
       ipcRenderer.invoke(Ipc.engineClearQueue),
     compact: (customInstructions?: string): Promise<EngineSessionState> =>
@@ -189,6 +191,9 @@ const api = {
       ipcRenderer.invoke(Ipc.projectsRename, { cwd, name }),
     remove: (cwd: string): Promise<ConversationDeleteResult> =>
       ipcRenderer.invoke(Ipc.projectsRemove, { cwd }),
+    /** Persist a drag-reordered project list; the new order is the sidebar order. */
+    reorder: (cwds: string[]): Promise<WorkspaceSnapshot> =>
+      ipcRenderer.invoke(Ipc.projectsReorder, { cwds }),
   },
   workspace: {
     pick: (): Promise<{ cwd: string; status: EngineStatus } | null> =>

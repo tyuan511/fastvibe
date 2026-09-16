@@ -2,18 +2,19 @@ import { useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Add01Icon,
+  ArrowExpand02Icon,
+  ArrowShrink01Icon,
   Cancel01Icon,
   ChromeIcon,
   File01Icon,
   Folder01Icon,
   GitCompareIcon,
   MessageSquareIcon,
-  ExpandIcon,
   MessageSquarePlusIcon,
-  MinimizeScreenIcon,
   PanelLeftOpenIcon,
   PanelRightCloseIcon,
   TerminalIcon,
+  BotIcon,
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/icon-button";
@@ -33,15 +34,32 @@ import { cn } from "@/lib/utils";
 import { ResizeHandle } from "@/components/resize-handle";
 import { CollapsiblePanel } from "@/components/layout/collapsible-panel";
 import { useShortcutLabel } from "@/lib/use-shortcuts";
+import { useSessionStore } from "@/stores/session";
 import { useSettingsStore } from "@/stores/settings";
-import { MIN_WIDTH, useSidePaneStore, type SidePaneTab } from "@/stores/side-pane";
+import { MIN_WIDTH, useSidePaneStore, type SidePaneTab, subagentTabLabel } from "@/stores/side-pane";
 import { releaseBrowser, SidePaneBrowser } from "./side-pane-browser";
 import { SidePaneChat } from "./side-pane-chat";
 import { SidePaneFiles } from "./side-pane-files";
 import { SidePaneGit } from "./side-pane-git";
+import { SidePaneSubagent } from "./side-pane-subagent";
 import { releaseTerminal, SidePaneTerminal } from "./side-pane-terminal";
 
 const IS_MAC = typeof navigator !== "undefined" && /mac/i.test(navigator.userAgent);
+
+/**
+ * Release everything a set of pane tabs owns. Called when tabs are closed and when
+ * a whole conversation's pane state is dropped (chat deleted or archived), so a
+ * shell or browser view never outlives the tab that showed it.
+ */
+export function disposeSidePaneTabs(tabs: SidePaneTab[]): void {
+  for (const tab of tabs) {
+    if (tab.type === "terminal") releaseTerminal(tab.id);
+    if (tab.type === "browser") releaseBrowser(tab.id);
+    if (tab.type === "selection-side-chat" && tab.conversationId) {
+      void window.fastvibe.conversations.delete(tab.conversationId).catch(() => undefined);
+    }
+  }
+}
 
 function CollapseButton(): JSX.Element {
   const setCollapsed = useSidePaneStore((state) => state.setCollapsed);
@@ -102,12 +120,13 @@ function MaximizeButton(): JSX.Element {
       label={maximized ? "还原侧边面板" : "最大化侧边面板"}
       onClick={toggleMaximized}
     >
-      <HugeiconsIcon strokeWidth={2} icon={maximized ? MinimizeScreenIcon : ExpandIcon} />
+      <HugeiconsIcon strokeWidth={2} icon={maximized ? ArrowShrink01Icon : ArrowExpand02Icon} />
     </IconButton>
   );
 }
 
 function tabIcon(type: SidePaneTab["type"]) {
+  if (type === "subagent") return BotIcon;
   if (type === "git") return GitCompareIcon;
   if (type === "terminal") return TerminalIcon;
   if (type === "browser") return ChromeIcon;
@@ -166,6 +185,14 @@ export function SidePane({
   const openTerminal = useSidePaneStore((state) => state.openTerminal);
   const openBrowser = useSidePaneStore((state) => state.openBrowser);
   const openFiles = useSidePaneStore((state) => state.openFiles);
+  const openSubagent = useSidePaneStore((state) => state.openSubagent);
+  const subagents = useSessionStore((state) => state.subagents);
+  // The most recent delegated run under the active chat, so the "子 Agent" entry
+  // has something concrete to open (each run keeps its own tab).
+  const latestSubagent = useMemo(
+    () => subagents.find((item) => !parentId || item.conversationId === parentId) ?? null,
+    [parentId, subagents],
+  );
   const openSideChat = useSidePaneStore((state) => state.openSideChat);
   const nextSideChatOrdinal = useSidePaneStore((state) => state.nextSideChatOrdinal);
   const hasReviewTab = useSidePaneStore((state) => state.tabs.some((item) => item.type === "git"));
@@ -178,7 +205,14 @@ export function SidePane({
   const [resizing, setResizing] = useState(false);
 
   const visibleTabs = useMemo(
-    () => tabs.filter((item) => item.type !== "selection-side-chat" || (parentId && item.parentSessionId === parentId)),
+    () =>
+      tabs.filter((item) => {
+        // Aux chats and delegated runs belong to the chat on screen: a parent's
+        // tab bar must not list another conversation's subagents.
+        if (item.type === "selection-side-chat") return Boolean(parentId && item.parentSessionId === parentId);
+        if (item.type === "subagent") return !parentId || item.subagentConversationId === parentId;
+        return true;
+      }),
     [parentId, tabs],
   );
   const active = useMemo(
@@ -202,32 +236,24 @@ export function SidePane({
     else if (tabRect.right > viewRect.right) viewport.scrollLeft += tabRect.right - viewRect.right;
   }, [active?.id]);
 
-  function disposeTab(tab: SidePaneTab): void {
-    if (tab.type === "terminal") releaseTerminal(tab.id);
-    if (tab.type === "browser") releaseBrowser(tab.id);
-    if (tab.type === "selection-side-chat" && tab.conversationId) {
-      void window.fastvibe.conversations.delete(tab.conversationId).catch(() => undefined);
-    }
-  }
-
   function close(id: string): void {
     const tab = tabs.find((item) => item.id === id);
-    if (tab) disposeTab(tab);
+    if (tab) disposeSidePaneTabs([tab]);
     closeTab(id);
     if (visibleTabs.filter((item) => item.id !== id).length === 0) setCollapsed(true);
   }
 
   function closeOthers(id: string): void {
+    disposeSidePaneTabs(visibleTabs.filter((item) => item.id !== id));
     for (const tab of visibleTabs) {
       if (tab.id === id) continue;
-      disposeTab(tab);
       closeTab(tab.id);
     }
   }
 
   function closeAll(): void {
+    disposeSidePaneTabs(visibleTabs);
     for (const tab of visibleTabs) {
-      disposeTab(tab);
       closeTab(tab.id);
     }
     setCollapsed(true);
@@ -243,6 +269,19 @@ export function SidePane({
         }
       : null,
     { id: "files", label: "文件", icon: Folder01Icon, onOpen: openFiles },
+    latestSubagent
+      ? {
+          id: "subagent",
+          label: "子 Agent",
+          icon: BotIcon,
+          onOpen: () =>
+            openSubagent(latestSubagent.id, {
+              conversationId: latestSubagent.conversationId,
+              title: latestSubagent.name || latestSubagent.agent,
+              status: latestSubagent.status,
+            }),
+        }
+      : null,
     hasReviewTab ? null : { id: "review", label: "审查", icon: GitCompareIcon, onOpen: openGit },
     { id: "terminal", label: "终端", icon: TerminalIcon, onOpen: () => openTerminal(cwd) },
     { id: "browser", label: "浏览器", icon: ChromeIcon, onOpen: () => openBrowser() },
@@ -329,7 +368,9 @@ export function SidePane({
                     ) : (
                       <HugeiconsIcon strokeWidth={2} icon={tabIcon(tab.type)} className="size-3.5 shrink-0" />
                     )}
-                    <span className="min-w-0 flex-1 truncate text-left">{tab.title}</span>
+                    <span className="min-w-0 flex-1 truncate text-left">
+                      {tab.type === "subagent" ? subagentTabLabel(tab) : tab.title}
+                    </span>
                     <span
                       role="presentation"
                       className="rounded-sm p-0.5 hover:bg-background"
@@ -366,6 +407,20 @@ export function SidePane({
               <DropdownMenuItem onClick={openFiles}>
                 <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} />
                 文件
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={!latestSubagent}
+                onClick={() =>
+                  latestSubagent &&
+                  openSubagent(latestSubagent.id, {
+                    conversationId: latestSubagent.conversationId,
+                    title: latestSubagent.name || latestSubagent.agent,
+                    status: latestSubagent.status,
+                  })
+                }
+              >
+                <HugeiconsIcon strokeWidth={2} icon={BotIcon} />
+                子 Agent
               </DropdownMenuItem>
               {hasReviewTab ? null : (
                 <DropdownMenuItem onClick={openGit}>
@@ -433,15 +488,15 @@ export function SidePane({
           {active?.type === "selection-side-chat" && parentId ? (
             <SidePaneChat tab={active} project={project} parentId={parentId} />
           ) : null}
-          {tabs.map((tab) =>
-            tab.type === "terminal" || tab.type === "browser" || tab.type === "files" ? (
+          {visibleTabs.map((tab) =>
+            tab.type === "terminal" || tab.type === "browser" || tab.type === "files" || tab.type === "subagent" ? (
               <div key={tab.id} hidden={tab.id !== activeTabId} className="flex min-h-0 flex-1 flex-col">
                 {tab.type === "terminal" ? (
                   <SidePaneTerminal tabId={tab.id} cwd={tab.cwd ?? cwd} sessionId={tab.sessionId} visible={tab.id === activeTabId} />
                 ) : tab.type === "browser" ? (
                   <SidePaneBrowser tabId={tab.id} url={tab.url ?? "https://fastvibe.dev"} visible={tab.id === activeTabId} />
                 ) : (
-                  <SidePaneFiles tab={tab} cwd={cwd} onError={onError} />
+                  tab.type === "files" ? <SidePaneFiles tab={tab} cwd={cwd} onError={onError} /> : <SidePaneSubagent tab={tab} />
                 )}
               </div>
             ) : null,

@@ -34,6 +34,13 @@ pi（pi coding agent）作为默认引擎直接跑在主进程里，再把原本
 
 FastVibe 的核心承诺是：**pi 扩展在终端里能做什么，在这里就能做什么。**
 
+> **兼容限制：`ctx.ui.custom()` 不支持。** FastVibe 不会尝试在 GUI 中模拟任意
+> pi-tui 全屏组件、原始键盘事件、鼠标事件或自定义 overlay。扩展调用此 API 会收到
+> 明确的错误，而不是得到一个空结果或永远等待。请将交互改写为 pi 提供的语义 API：
+> `ctx.ui.select`、`confirm`、`input`、`editor` 或 `questions`。`setWidget` 和
+> `registerMessageRenderer` 仍支持只读的文本 / 组件渲染，但组件内部的 TUI 交互不会
+> 被 FastVibe 接管。依赖 `ctx.ui.custom()` 才能工作的插件会被标记为未兼容。
+
 - 引擎是 `@earendil-works/pi-coding-agent`，通过 `createAgentSession` 编程式启动；
   `agentDir`、`sessionManager`、`settingsManager` 全部指向 FastVibe 自己的目录。
 - 扩展以 `mode: "rpc"` 绑定（而非默认的 `print`），所以依赖 TUI 的插件不会拒绝运行。
@@ -252,11 +259,11 @@ resources/skills/      随应用内置的 pi 技能（browser-use）
 
 ## 兼容性边界
 
-pi 扩展能通过 `ctx.mode` / `ctx.hasUI` 自行降级，以下纯终端能力仍在补齐中：
+pi 扩展能通过 `ctx.mode` / `ctx.hasUI` 自行降级，以下纯终端能力不由 FastVibe 接管：
 
 - `registerShortcut` 注册的快捷键尚未转发到界面。
 - `registerEntryRenderer` 的自定义条目暂未合并进会话视图。
-- `ctx.ui.custom()` 的全屏交互组件仍返回 `undefined`。
+- `ctx.ui.custom()` 的全屏交互组件不支持，调用会收到明确错误；请使用 `select`、`confirm`、`input`、`editor` 或 `questions`。
 - `registerMarkdownTransformer`、`setEditorComponent`、`addAutocompleteProvider`、主题选择暂为空实现。
 
 ## 许可

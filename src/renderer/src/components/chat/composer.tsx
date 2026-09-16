@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type JSX, type KeyboardEvent, type ReactNode } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Add01Icon, ArrowDown01Icon, ArrowUp02Icon, AttachmentIcon, Cancel01Icon, ChartHistogramIcon, Folder01Icon, HandIcon, MagicWand02Icon, ScissorIcon, Search01Icon, ShieldAlertIcon, ShieldCheckIcon, SparklesIcon, SquareIcon, Tick02Icon } from "@hugeicons/core-free-icons";
+import { Add01Icon, ArrowDown01Icon, ArrowUp02Icon, AttachmentIcon, Cancel01Icon, ChartHistogramIcon, Folder01Icon, HandIcon, MagicWand02Icon, PlayIcon, ScissorIcon, Search01Icon, ShieldAlertIcon, ShieldCheckIcon, SparklesIcon, SquareIcon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/icon-button";
 import {
@@ -41,23 +41,12 @@ import { useGitStatus } from "@/lib/use-git-status";
 import { cn } from "@/lib/utils";
 import { matchChord, resolveBinding } from "@/lib/shortcuts";
 import { useShortcutLabel } from "@/lib/use-shortcuts";
+import { PERMISSION_DESCRIPTIONS, PERMISSION_LABELS, PERMISSION_MODES } from "@/lib/permission-modes";
 import { useSettingsStore } from "@/stores/settings";
 import { GitBranchChip } from "./git-branch-chip";
 import { AttachmentChip } from "./attachment-chip";
 import { MessageQueue } from "./message-queue";
 import { ExtensionStatusBadges } from "./extension-surface";
-
-const PERMISSION_LABELS: Record<PermissionMode, string> = {
-  ask: "请求批准",
-  smart: "帮我批准",
-  full: "完全访问权限",
-};
-
-const PERMISSION_DESCRIPTIONS: Record<PermissionMode, string> = {
-  ask: "编辑外部文件和使用互联网时始终询问",
-  smart: "仅对检测到的风险操作请求批准",
-  full: "可不受限制地访问互联网和你电脑上的任何文件",
-};
 
 /**
  * Icons for the slash palette. Skills are offered alongside the engine's own
@@ -298,6 +287,8 @@ export function Composer({
   onSendQueuedNow,
   onReorderQueued,
   onResumeQueue,
+  runInterrupted = false,
+  onResumeRun,
   sendOnEnter = true,
   focusSignal,
   className,
@@ -342,8 +333,12 @@ export function Composer({
   onRemoveQueued: (id: string) => void;
   onEditQueued: (id: string) => void;
   onSendQueuedNow: (id: string) => void;
-  onReorderQueued: (fromId: string, toId: string) => void;
+  onReorderQueued: (ids: string[]) => void;
   onResumeQueue: () => void;
+  /** The last run stopped early (user abort or failure): offer a resume control. */
+  runInterrupted?: boolean;
+  /** Continue the interrupted turn from the transcript, with no new user message. */
+  onResumeRun?: () => void;
   sendOnEnter?: boolean;
   /** Increment to move the caret into the textarea (new sessions focus the composer). */
   focusSignal?: number;
@@ -777,7 +772,7 @@ export function Composer({
                 value={permissionMode}
                 onValueChange={(value) => onPermissionModeChange(value as PermissionMode)}
               >
-                {(["ask", "smart", "full"] as PermissionMode[]).map((mode) => {
+                {PERMISSION_MODES.map((mode) => {
                   const modeIcon = mode === "ask" ? HandIcon : mode === "smart" ? ShieldAlertIcon : ShieldCheckIcon;
                   return (
                     <DropdownMenuRadioItem
@@ -936,6 +931,18 @@ export function Composer({
               onClick={onAbort}
             >
               <HugeiconsIcon strokeWidth={2} icon={SquareIcon} className="size-3.5 fill-current" />
+            </IconButton>
+          ) : runInterrupted && !hasContent ? (
+            // An interrupted run leaves the caret empty; the primary action resumes
+            // the turn instead of sending, so a follow-up is never sent in its place.
+            <IconButton
+              size="icon-sm"
+              variant="default"
+              className="rounded-full"
+              label="继续"
+              onClick={() => onResumeRun?.()}
+            >
+              <HugeiconsIcon strokeWidth={2} icon={PlayIcon} className="size-3.5 fill-current" />
             </IconButton>
           ) : (
             <IconButton

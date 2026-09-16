@@ -4,6 +4,7 @@ import { unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { InMemoryCredentialStore, InMemoryModelsStore } from "@earendil-works/pi-ai";
+import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -74,13 +75,52 @@ import { priceUsage } from "../engine/pricing";
 import { getFastVibePaths, type FastVibePaths } from "../engine/paths";
 import { McpManager, type McpServerConfig, type McpServerStatus } from "./mcp-manager";
 import { SkillManager } from "./skill-manager";
-import { builtinExtensionPaths, builtinSkillPaths, ExtensionManager } from "./extension-manager";
+import { builtinExtensionFile, builtinExtensionPaths, builtinSkillPaths, ExtensionManager } from "./extension-manager";
 import { createTuiWidget, renderExtensionMessage, renderTuiComponent, type TuiComponent } from "./tui-bridge";
 
 type ManagedSession = { conversationId: string; cwd: string; session: AgentSession; extensions: LoadExtensionsResult; unsubscribe: () => void };
 /** SDK UI context plus FastVibe's single-panel multi-question prompt. */
 type FastVibeExtensionUIContext = ExtensionUIContext & {
   questions(title: string, questions: PermissionQuestion[], opts?: { timeout?: number }): Promise<Array<string | null> | undefined>;
+  /**
+   * Run one subagent role on a throwaway in-process session. Injected here so the
+   * built-in subagent extension has a runner on the embedded engine, which ships
+   * no `pi` CLI to spawn (see `resources/extensions/subagent/index.ts`).
+   */
+  runSubagent(request: SubagentHostRequest): Promise<SubagentHostResponse>;
+};
+
+type SubagentHostUsage = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cost: number;
+  contextTokens: number;
+  turns: number;
+};
+
+type SubagentHostRequest = {
+  /** `${parentToolCallId}:${index}` — the same id the tool-call tracker mints. */
+  subagentId: string;
+  agent: string;
+  task: string;
+  systemPrompt: string;
+  tools?: string[];
+  model?: string;
+  fallbackModel?: string;
+  thinkingLevel?: ThinkingLevel;
+  cwd: string;
+  signal?: AbortSignal;
+};
+
+type SubagentHostResponse = {
+  messages: unknown[];
+  exitCode: number;
+  usage: SubagentHostUsage;
+  model?: string;
+  stopReason?: string;
+  errorMessage?: string;
 };
 /** The command-capable context bound to a replacement session (`withSession` callbacks). */
 type ReplacementContext = ReturnType<AgentSession["createReplacedSessionContext"]>;
@@ -155,6 +195,38 @@ function isAssistantEngineMessage(message: unknown): message is Record<string, u
   return typeof message === "object" && message !== null && (message as { role?: unknown }).role === "assistant";
 }
 
+/**
+ * Roll a throwaway subagent session's transcript into the accounting the tool
+ * card shows. Tokens come from each assistant message; the final stop reason and
+ * error come from the last one that set them.
+ */
+function summarizeSubagentMessages(messages: unknown[]): {
+  usage: SubagentHostUsage;
+  stopReason?: string;
+  errorMessage?: string;
+} {
+  const usage: SubagentHostUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 };
+  let stopReason: string | undefined;
+  let errorMessage: string | undefined;
+  for (const raw of messages) {
+    if (!isRecord(raw) || raw.role !== "assistant") continue;
+    usage.turns += 1;
+    const messageUsage = isRecord(raw.usage) ? raw.usage : undefined;
+    if (messageUsage) {
+      usage.input += num(messageUsage.input);
+      usage.output += num(messageUsage.output);
+      usage.cacheRead += num(messageUsage.cacheRead);
+      usage.cacheWrite += num(messageUsage.cacheWrite);
+      usage.cost += isRecord(messageUsage.cost) ? num(messageUsage.cost.total) : num(messageUsage.cost);
+      const total = num(messageUsage.totalTokens);
+      if (total) usage.contextTokens = total;
+    }
+    if (typeof raw.stopReason === "string") stopReason = raw.stopReason;
+    if (typeof raw.errorMessage === "string") errorMessage = raw.errorMessage;
+  }
+  return { usage, stopReason, errorMessage };
+}
+
 function isToolCallPart(type: string): boolean {
   return type === "toolCall" || type === "tool_use" || type === "tool_call" || type === "toolcall";
 }
@@ -184,7 +256,7 @@ export class PiProcessManager {
   /** Every configured model's price ladder, refreshed whenever the registry is. */
   #prices: Map<string, ModelPrice> = new Map();
   #operation: Promise<unknown> = Promise.resolve();
-  #pendingUi = new Map<string, { resolve: (value: unknown) => void; fallback: unknown }>();
+  #pendingUi = new Map<string, { resolve: (value: unknown) => void; fallback: unknown; conversationId: string }>();
   /** Live component-factory widgets: re-rendered on a timer so a dashboard stays current. */
   #widgetTimers = new Map<string, NodeJS.Timeout>();
   /** Created component instances, kept so a dashboard's internal state survives a redraw. */
@@ -211,6 +283,11 @@ export class PiProcessManager {
   #skills: SkillManager;
   /** pi package installs (extensions), kept in the isolated agentDir. */
   #extensions: ExtensionManager;
+  /** Live subagent registry and bounded transcript cache. */
+  #subagents = new Map<string, SubagentInfo>();
+  #subagentMessages = new Map<string, ChatMessage[]>();
+  /** In-flight subagent sessions, keyed by subagent id, so `stop()` can dispose them. */
+  #subagentSessions = new Map<string, AgentSession>();
 
   constructor() {
     this.#paths = getFastVibePaths();
@@ -293,6 +370,16 @@ export class PiProcessManager {
       }
       this.#running.clear();
       this.#timing.clear();
+      await Promise.all(
+        [...this.#subagentSessions.values()].map(async (session) => {
+          try {
+            session.dispose();
+          } catch {
+            // Already torn down by its runner; nothing left to release.
+          }
+        }),
+      );
+      this.#subagentSessions.clear();
       await Promise.all(sessions.map(async (item) => { item.unsubscribe(); this.#persist(item.session); await item.session.dispose(); }));
       this.#models = null;
       this.#runtime = null;
@@ -388,8 +475,48 @@ export class PiProcessManager {
     // promise pending would hang the tool, keep `agent_end` from firing and pin
     // the conversation as "running" forever.
     this.#resolvePendingUi();
-    await (await this.#active()).abort();
+    const session = await this.#active();
+    const timeout = new Promise<never>((_, reject) => {
+      const timer = setTimeout(() => reject(new Error("停止运行超时；会话仍可能在后台运行")), 15_000);
+      timer.unref?.();
+    });
+    try {
+      await Promise.race([session.abort(), timeout]);
+    } catch (error) {
+      // Do not report idle after an uncertain abort. The caller can reopen the
+      // session, while the explicit error prevents a follow-up prompt from being
+      // sent to a runtime whose termination was not confirmed.
+      this.#setStatus({ state: "error", cwd: this.#cwd, message: error instanceof Error ? error.message : "停止运行失败" });
+      throw error;
+    }
   }
+  /**
+   * Resume the interrupted turn without a new user message. `agent.continue()`
+   * re-enters the loop from the transcript's last user/tool-result message, so a run
+   * a user aborted or that failed mid-turn picks up where it stopped.
+   *
+   * The SDK's own auto-retry first drops the trailing errored assistant message from
+   * agent state: `continue()` rejects a transcript whose last message is an
+   * assistant, and that message is deliberately kept out of the transcript so the
+   * resumed turn does not stack on top of a failed one.
+   *
+   * Engine-side queued messages are cleared first — the renderer owns the follow-up
+   * queue and drains it itself, so a resume must not silently flush it.
+   */
+  async continueTurn(): Promise<void> {
+    this.#resolvePendingUi();
+    const session = await this.#active();
+    const messages = session.agent.state.messages;
+    const last = messages[messages.length - 1];
+    if (last?.role === "assistant") {
+      const stopReason = (last as { stopReason?: string }).stopReason;
+      if (stopReason === "error" || stopReason === "aborted" || stopReason === "length") {
+        session.agent.state.messages = messages.slice(0, -1);
+      }
+    }
+    await session.agent.continue();
+  }
+
   async clearQueue(): Promise<{ steering: string[]; followUp: string[] }> { return (await this.#active()).clearQueue(); }
   async branch(entryId: string): Promise<ChatMessage[]> { await (await this.#active()).navigateTree(entryId); return this.loadMessages(); }
 
@@ -463,8 +590,12 @@ export class PiProcessManager {
   async createSkill(draft: SkillDraft): Promise<SkillInfo[]> { const skills = await this.#skills.create(this.#cwd, draft); await this.#reloadSkills(); return skills; }
   async importSkill(sourceDir: string): Promise<SkillInfo[]> { const skills = await this.#skills.importFrom(this.#cwd, sourceDir); await this.#reloadSkills(); return skills; }
   async removeSkill(name: string): Promise<SkillInfo[]> { const skills = await this.#skills.remove(this.#cwd, name); await this.#reloadSkills(); return skills; }
-  async getSubagentMessages(_subagentId: string): Promise<ChatMessage[]> { return []; }
-  async getSubagents(): Promise<SubagentInfo[]> { return []; }
+  async getSubagentMessages(subagentId: string): Promise<ChatMessage[]> {
+    return this.#subagentMessages.get(subagentId)?.slice() ?? [];
+  }
+  async getSubagents(): Promise<SubagentInfo[]> {
+    return [...this.#subagents.values()].sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
+  }
   respondPermission(payload: { id: string; confirmed?: boolean; value?: string; cancelled?: boolean; answers?: Array<string | null> }): void {
     const pending = this.#pendingUi.get(payload.id);
     if (!pending) return;
@@ -563,6 +694,7 @@ export class PiProcessManager {
   }
   addProject(cwd: string): ProjectAddResult { const project = this.#catalog.ensureProject(cwd); if (!project) throw new Error("invalid project"); return { ...this.#catalog.snapshot(), project }; }
   renameProject(cwd: string, name: string): WorkspaceSnapshot { this.#catalog.renameProject(cwd, name); return this.#catalog.snapshot(); }
+  reorderProjects(cwds: string[]): WorkspaceSnapshot { this.#catalog.reorderProjects(cwds); return this.#catalog.snapshot(); }
   async removeProject(cwd: string): Promise<ConversationDeleteResult> { const wasActive = this.#catalog.get(this.#catalog.activeId ?? "")?.project === cwd; const removed = this.#catalog.removeProject(cwd); await Promise.all(removed.map(async (item) => { if (item.sessionFile) { await this.#usage.capture(item.sessionFile); await unlink(item.sessionFile).catch(() => undefined); } if (item.worktree) await this.#removeWorktree(item.worktree.path); const managed = this.#sessions.get(item.id); if (managed) { managed.unsubscribe(); await managed.session.dispose(); this.#sessions.delete(item.id); } })); return { ...this.#catalog.snapshot(), nextId: wasActive ? (this.#catalog.activeId ?? null) : null }; }
   async loadMessages(): Promise<ChatMessage[]> { return this.#messages(await this.#active()); }
   /**
@@ -804,7 +936,7 @@ export class PiProcessManager {
       // status, widgets and session replacement, so TUI-aware plugins (plan mode,
       // goals) take their non-terminal code paths instead of refusing to run.
       mode: "rpc",
-      uiContext: this.#extensionUi(),
+      uiContext: this.#extensionUi(conversation.id),
       commandContextActions: {
         waitForIdle: () => result.session.agent.waitForIdle(),
         newSession: (options) => this.#extensionNewSession(conversation.id, options),
@@ -927,7 +1059,70 @@ export class PiProcessManager {
     for (const listener of this.#readyListeners) listener(payload);
     return managed;
   }
-  #emit(event: Record<string, unknown>): void { for (const listener of this.#eventListeners) listener(event); }
+  #emit(event: Record<string, unknown>): void {
+    this.#trackSubagentEvent(event);
+    for (const listener of this.#eventListeners) listener(event);
+  }
+  #trackSubagentEvent(event: Record<string, unknown>): void {
+    const type = typeof event.type === "string" ? event.type : "";
+    if (type === "tool_execution_start" || type === "toolcall_start") {
+      const toolName = String(event.toolName ?? event.name ?? "").toLowerCase();
+      if (toolName === "subagent") {
+        const args = (event.args ?? event.arguments) as Record<string, unknown> | undefined;
+        const callId = String(event.toolCallId ?? event.tool_call_id ?? event.id ?? randomUUID());
+        const conversationId = typeof event.conversationId === "string" ? event.conversationId : undefined;
+        const entries: Array<{ agent: string; task?: string; mode: string }> = [];
+        if (typeof args?.agent === "string") entries.push({ agent: args.agent, task: typeof args.task === "string" ? args.task : undefined, mode: "single" });
+        if (Array.isArray(args?.tasks)) for (const item of args.tasks) if (item && typeof item === "object" && typeof (item as Record<string, unknown>).agent === "string") entries.push({ agent: String((item as Record<string, unknown>).agent), task: typeof (item as Record<string, unknown>).task === "string" ? String((item as Record<string, unknown>).task) : undefined, mode: "parallel" });
+        if (Array.isArray(args?.chain)) for (const item of args.chain) if (item && typeof item === "object" && typeof (item as Record<string, unknown>).agent === "string") entries.push({ agent: String((item as Record<string, unknown>).agent), task: typeof (item as Record<string, unknown>).task === "string" ? String((item as Record<string, unknown>).task) : undefined, mode: "chain" });
+        for (const [index, item] of entries.entries()) {
+          const id = `${callId}:${index}`;
+          this.#subagents.set(id, { id, conversationId, agent: item.agent, name: item.agent, mode: item.mode, status: "running", detail: item.task, startedAt: Date.now() });
+        }
+      }
+      return;
+    }
+    if (type === "tool_execution_end" || type === "toolcall_end") {
+      const toolName = String(event.toolName ?? event.name ?? "").toLowerCase();
+      if (toolName === "subagent") {
+        const callId = String(event.toolCallId ?? event.tool_call_id ?? event.id ?? "");
+        for (const [id, item] of this.#subagents) if (id.startsWith(`${callId}:`)) this.#subagents.set(id, { ...item, status: event.isError ? "error" : "completed", endedAt: Date.now(), error: event.isError ? String(event.error ?? "执行失败") : item.error });
+      }
+      return;
+    }
+    if (type !== "subagent_lifecycle" && type !== "subagent_progress" && type !== "subagent_event") return;
+    const id = typeof event.subagentId === "string" ? event.subagentId : typeof event.id === "string" ? event.id : "";
+    if (!id) return;
+    const previous = this.#subagents.get(id);
+    const status = typeof event.status === "string" ? event.status : previous?.status;
+    const nested = event.event && typeof event.event === "object" ? event.event as Record<string, unknown> : undefined;
+    const nestedType = typeof nested?.type === "string" ? nested.type : "";
+    const now = Date.now();
+    const next: SubagentInfo = {
+      ...previous,
+      id,
+      agent: typeof event.agent === "string" ? event.agent : previous?.agent,
+      name: typeof event.name === "string" ? event.name : previous?.name,
+      description: typeof event.description === "string" ? event.description : previous?.description,
+      mode: typeof event.mode === "string" ? event.mode : previous?.mode,
+      status: status ?? (nestedType === "agent_end" ? "completed" : "running"),
+      detail: typeof event.detail === "string" ? event.detail : typeof event.progress === "string" ? event.progress : previous?.detail,
+      progress: typeof event.progress === "number" ? event.progress : previous?.progress,
+      startedAt: previous?.startedAt ?? now,
+      endedAt: nestedType === "agent_end" || status === "completed" || status === "error" ? now : previous?.endedAt,
+      error: typeof event.error === "string" ? event.error : previous?.error,
+    };
+    this.#subagents.set(id, next);
+    if (nested && nestedType === "message_end" && nested.message && typeof nested.message === "object") {
+      const message = nested.message as Record<string, unknown>;
+      const text = typeof message.content === "string" ? message.content : typeof message.text === "string" ? message.text : "";
+      if (text) {
+        const item: ChatMessage = { id: `${id}-${now}`, role: "assistant", text, tools: [], createdAt: now };
+        const list = this.#subagentMessages.get(id) ?? [];
+        this.#subagentMessages.set(id, [...list, item].slice(-200));
+      }
+    }
+  }
   /**
    * The session-title extension names a chat via `setSessionName`. Apply it to
    * the catalog unless the user already renamed this conversation by hand.
@@ -1114,22 +1309,23 @@ export class PiProcessManager {
    * `renderTuiWidget` and poll, since the component refreshes itself through the
    * TUI it was handed — which is a stub here. An unchanged frame is not re-sent.
    */
-  #setComponentWidget(key: string, factory: unknown, placement: string | undefined): void {
-    this.#clearWidget(key);
+  #setComponentWidget(conversationId: string, key: string, factory: unknown, placement: string | undefined): void {
+    const scopedKey = `${conversationId}:${key}`;
+    this.#clearWidget(scopedKey);
     const component = createTuiWidget(factory);
     if (!component) return;
-    this.#widgetComponents.set(key, component);
+    this.#widgetComponents.set(scopedKey, component);
     const draw = (): void => {
       const runs = renderTuiComponent(component, this.#widgetWidth);
       const signature = JSON.stringify(runs);
-      if (this.#widgetSignature.get(key) === signature) return;
-      this.#widgetSignature.set(key, signature);
-      this.#emit({ type: "extension_ui_request", id: randomUUID(), method: "setWidget", widgetKey: key, widgetRuns: runs, widgetPlacement: placement });
+      if (this.#widgetSignature.get(scopedKey) === signature) return;
+      this.#widgetSignature.set(scopedKey, signature);
+      this.#emit({ type: "extension_ui_request", id: randomUUID(), conversationId, method: "setWidget", widgetKey: key, widgetRuns: runs, widgetPlacement: placement });
     };
     draw();
     const timer = setInterval(draw, 1000);
     timer.unref?.();
-    this.#widgetTimers.set(key, timer);
+    this.#widgetTimers.set(scopedKey, timer);
   }
 
   /**
@@ -1137,7 +1333,152 @@ export class PiProcessManager {
    * prompt. The built-in `question` tool feature-detects it and falls back to
    * sequential `select`/`input` on hosts that do not provide it (real pi/TUI).
    */
-  #extensionUi(): FastVibeExtensionUIContext {
+  /**
+   * Run one subagent role to completion on a throwaway session.
+   *
+   * The whole point is context isolation: the role gets its own session, its own
+   * system prompt and only the tools its definition allows, and streams its
+   * events back under `subagent_event` so the right pane can show the transcript.
+   * A throwaway `DefaultResourceLoader` loads no FastVibe extension (no recursion,
+   * no plan/goal) except the permission sandbox, so a delegated `bash`/`edit` is
+   * still gated by the user's current mode.
+   */
+  async #runSubagent(conversationId: string, request: SubagentHostRequest): Promise<SubagentHostResponse> {
+    if (!this.#runtime || !this.#models) throw new Error("engine not ready");
+    const cwd = request.cwd || this.#cwd;
+    const settingsManager = SettingsManager.create(cwd, this.#paths.agentDir);
+    const sandbox = builtinExtensionFile("permission-sandbox.ts");
+    const loader = new DefaultResourceLoader({
+      cwd,
+      agentDir: this.#paths.agentDir,
+      settingsManager,
+      noExtensions: true,
+      noThemes: true,
+      noPromptTemplates: true,
+      noSkills: true,
+      ...(sandbox ? { additionalExtensionPaths: [sandbox] } : {}),
+      ...(request.systemPrompt.trim() ? { appendSystemPrompt: [request.systemPrompt] } : {}),
+    });
+    await loader.reload();
+
+    // The user's 「默认模型」 (设置 → 供应商) is the model for every delegated run,
+    // independent of which model the parent chat happens to be on. Falls back to the
+    // parent session's model only when that preference is unset or unusable.
+    const preferred = readDefaultModel(this.#paths);
+    const model = this.#resolveSubagentModel(
+      preferred ? `${preferred.provider}/${preferred.id}` : undefined,
+      request.fallbackModel ?? request.model,
+    );
+    const tools =
+      request.tools && request.tools.length > 0
+        ? request.tools
+        : ["read", "bash", "edit", "write", "grep", "find", "ls"];
+    const { subagentId } = request;
+    const lifecycle = (status: string, error?: string): void => {
+      this.#emit({ type: "subagent_lifecycle", subagentId, conversationId, agent: request.agent, name: request.agent, status, detail: request.task, ...(error ? { error } : {}) });
+    };
+    lifecycle("running");
+
+    let session: AgentSession | undefined;
+    let unsubscribe: (() => void) | undefined;
+    const onAbort = (): void => {
+      void session?.abort().catch(() => undefined);
+    };
+    let thrown: string | undefined;
+    let stopReason: string | undefined;
+    let errorMessage: string | undefined;
+    let messages: unknown[] = [];
+    let summary = summarizeSubagentMessages([]);
+    let usedModel = model ? `${model.provider}/${model.id}` : undefined;
+    try {
+      const created = await createAgentSession({
+        cwd,
+        agentDir: this.#paths.agentDir,
+        modelRuntime: this.#runtime,
+        sessionManager: SessionManager.inMemory(cwd),
+        settingsManager,
+        resourceLoader: loader,
+        tools,
+        ...(model ? { model } : {}),
+        ...(request.thinkingLevel ? { thinkingLevel: request.thinkingLevel } : {}),
+      });
+      session = created.session;
+      // Bind the parent's UI so the sandbox's `confirm` renders in the same
+      // composer panel as a main-tool approval, and `hasUI` is true for the hook.
+      await session.bindExtensions({ mode: "rpc", uiContext: this.#extensionUi(conversationId) });
+      this.#subagentSessions.set(subagentId, session);
+      unsubscribe = session.subscribe((event) => {
+        this.#emit({
+          type: "subagent_event",
+          subagentId,
+          conversationId,
+          event: slimStreamEvent(event as unknown as Record<string, unknown>),
+        });
+      });
+      if (request.signal) {
+        if (request.signal.aborted) onAbort();
+        else request.signal.addEventListener("abort", onAbort, { once: true });
+      }
+      await session.prompt(request.task);
+    } catch (error) {
+      thrown = error instanceof Error ? error.message : String(error);
+    }
+    request.signal?.removeEventListener("abort", onAbort);
+    unsubscribe?.();
+    if (session) {
+      messages = session.messages.slice();
+      summary = summarizeSubagentMessages(messages);
+      if (session.model) usedModel = `${session.model.provider}/${session.model.id}`;
+    }
+    stopReason = thrown ? "error" : summary.stopReason;
+    errorMessage = thrown ?? summary.errorMessage;
+    const failed = stopReason === "error" || stopReason === "aborted";
+    lifecycle(failed ? "error" : "completed", errorMessage);
+    this.#subagentSessions.delete(subagentId);
+    session?.dispose();
+
+    return {
+      messages,
+      exitCode: failed ? 1 : 0,
+      usage: summary.usage,
+      model: usedModel,
+      stopReason,
+      errorMessage,
+    };
+  }
+
+  /**
+   * Resolve a subagent's model: the pin (the user's 默认模型), else the fallback
+   * (the parent session's model).
+   *
+   * A pin is only honored when this install can actually authenticate it: the
+   * catalog (`getAll()`) carries every reseller's models, and a pin that points at
+   * an unreachable vendor would otherwise be picked and fail the whole delegation
+   * with "No API key found". A pin may omit its provider; an id with no usable auth
+   * falls back instead of failing.
+   */
+  #resolveSubagentModel(spec?: string, fallback?: string): ReturnType<ModelRegistry["find"]> {
+    const registry = this.#models;
+    if (!registry) return undefined;
+    const usable = (model: ReturnType<ModelRegistry["find"]>) =>
+      Boolean(model) && registry.hasConfiguredAuth(model!);
+    const bySpec = (value?: string): ReturnType<ModelRegistry["find"]> => {
+      if (!value) return undefined;
+      const slash = value.indexOf("/");
+      const direct = slash > 0 ? registry.find(value.slice(0, slash), value.slice(slash + 1)) : undefined;
+      if (usable(direct)) return direct;
+      // Bare ids (`claude-haiku-4-5`) resolve against the authenticated models only,
+      // so a role's vendor default can never outrank the user's working model.
+      return registry.getAvailable().find((item) => item.id === value);
+    };
+    return bySpec(spec) ?? bySpec(fallback);
+  }
+
+  #extensionUi(conversationId: string): FastVibeExtensionUIContext {
+    // Keep the editor mirror per extension session. This is useful to plugins that
+    // compose a prompt in several calls, while the renderer remains the source of
+    // truth for normal composer typing.
+    let editorText = "";
     const dialog = <T>(method: string, request: Record<string, unknown>, fallback: T, timeout?: number): Promise<T> => {
       const id = randomUUID();
       return new Promise<T>((resolve) => {
@@ -1145,45 +1486,49 @@ export class PiProcessManager {
           this.#pendingUi.delete(id);
           resolve(fallback);
         }, timeout) : undefined;
-        this.#pendingUi.set(id, { fallback, resolve: (value) => { if (timer) clearTimeout(timer); resolve(value as T); } });
-        this.#emit({ type: "extension_ui_request", id, method, ...request });
+        this.#pendingUi.set(id, { fallback, conversationId, resolve: (value) => { if (timer) clearTimeout(timer); resolve(value as T); } });
+        this.#emit({ type: "extension_ui_request", id, conversationId, method, ...request });
       });
     };
     return {
       select: (title, options, opts) => dialog<string | undefined>("select", { title, options, timeout: opts?.timeout }, undefined, opts?.timeout),
       questions: (title, questions, opts) =>
         dialog<Array<string | null> | undefined>("questions", { title, questions, timeout: opts?.timeout }, undefined, opts?.timeout),
+      runSubagent: (request) => this.#runSubagent(conversationId, request),
       confirm: (title, message, opts) => dialog("confirm", { title, message, timeout: opts?.timeout }, false, opts?.timeout),
       input: (title, placeholder, opts) => dialog("input", { title, placeholder, timeout: opts?.timeout }, undefined, opts?.timeout),
       editor: (title, prefill) => dialog("editor", { title, prefill }, undefined),
-      notify: (message, type) => { this.#emit({ type: "extension_ui_request", id: randomUUID(), method: "notify", message, notifyType: type }); },
+      notify: (message, type) => { this.#emit({ type: "extension_ui_request", id: randomUUID(), conversationId, method: "notify", message, notifyType: type }); },
       onTerminalInput: () => () => undefined,
-      setStatus: (key, text) => { this.#emit({ type: "extension_ui_request", id: randomUUID(), method: "setStatus", statusKey: key, statusText: text }); },
+      setStatus: (key, text) => { this.#emit({ type: "extension_ui_request", id: randomUUID(), conversationId, method: "setStatus", statusKey: key, statusText: text }); },
       setWorkingMessage: () => undefined,
       setWorkingVisible: () => undefined,
       setWorkingIndicator: () => undefined,
       setHiddenThinkingLabel: () => undefined,
       setWidget: (key, content, options) => {
         const placement = options?.placement;
+        const scopedKey = `${conversationId}:${key}`;
         if (content === undefined) {
-          this.#clearWidget(key);
-          this.#emit({ type: "extension_ui_request", id: randomUUID(), method: "setWidget", widgetKey: key, widgetPlacement: placement });
+          this.#clearWidget(scopedKey);
+          this.#emit({ type: "extension_ui_request", id: randomUUID(), conversationId, method: "setWidget", widgetKey: key, widgetPlacement: placement });
           return;
         }
         if (Array.isArray(content)) {
-          this.#clearWidget(key);
-          this.#emit({ type: "extension_ui_request", id: randomUUID(), method: "setWidget", widgetKey: key, widgetLines: content, widgetPlacement: placement });
+          this.#clearWidget(scopedKey);
+          this.#emit({ type: "extension_ui_request", id: randomUUID(), conversationId, method: "setWidget", widgetKey: key, widgetLines: content, widgetPlacement: placement });
           return;
         }
-        this.#setComponentWidget(key, content, placement);
+        this.#setComponentWidget(conversationId, key, content, placement);
       },
       setFooter: () => undefined,
       setHeader: () => undefined,
-      setTitle: (title) => { this.#emit({ type: "extension_ui_request", id: randomUUID(), method: "setTitle", title }); },
-      custom: async <T>() => undefined as T,
-      pasteToEditor: (text) => { this.#emit({ type: "extension_ui_request", id: randomUUID(), method: "set_editor_text", text }); },
-      setEditorText: (text) => { this.#emit({ type: "extension_ui_request", id: randomUUID(), method: "set_editor_text", text }); },
-      getEditorText: () => "",
+      setTitle: (title) => { this.#emit({ type: "extension_ui_request", id: randomUUID(), conversationId, method: "setTitle", title }); },
+      custom: async <T>() => {
+        throw new Error("FastVibe 不支持 ctx.ui.custom()；请使用 ctx.ui.select()、confirm()、input()、editor() 或 questions()");
+      },
+      pasteToEditor: (text) => { editorText = text; this.#emit({ type: "extension_ui_request", id: randomUUID(), conversationId, method: "set_editor_text", text }); },
+      setEditorText: (text) => { editorText = text; this.#emit({ type: "extension_ui_request", id: randomUUID(), conversationId, method: "set_editor_text", text }); },
+      getEditorText: () => editorText,
       addAutocompleteProvider: () => undefined,
       setEditorComponent: () => undefined,
       getEditorComponent: () => undefined,

@@ -13,7 +13,7 @@ import { PermissionDialog } from "@/components/chat/permission-dialog";
 import { PermissionPanel, type PermissionResponse } from "@/components/chat/permission-panel";
 import { usagePercent } from "@/components/chat/session-controls";
 import { Sidebar } from "@/components/layout/sidebar";
-import { SidePane } from "@/components/layout/side-pane";
+import { SidePane, disposeSidePaneTabs } from "@/components/layout/side-pane";
 import { handleBrowserRequest } from "@/components/layout/side-pane-browser";
 import { PANEL_COLLAPSE_TRANSITION } from "@/components/layout/collapsible-panel";
 import { CommandPalette } from "@/components/layout/command-palette";
@@ -45,7 +45,7 @@ import { parseCompactCommand } from "@shared/slash";
 import { conversationIdFromHash, conversationIdFromPath, conversationPath, workspacePath } from "@/lib/routes";
 import { useSidePaneStore } from "@/stores/side-pane";
 import { useAppShortcuts, useShortcutLabel } from "@/lib/use-shortcuts";
-import { useArchivedIds } from "@/stores/archive";
+import { archiveConversations, archivedIdList, useArchivedIds } from "@/stores/archive";
 
 /**
  * macOS renders the window controls as an overlay (`hiddenInset`), so the top
@@ -185,14 +185,15 @@ export function App(): JSX.Element {
   const queuePause = useSessionStore((state) => state.queuePause);
   const enqueue = useSessionStore((state) => state.enqueue);
   const removeQueued = useSessionStore((state) => state.removeQueued);
-  const moveQueued = useSessionStore((state) => state.moveQueued);
+  const setQueuedOrder = useSessionStore((state) => state.setQueuedOrder);
   const prependQueued = useSessionStore((state) => state.prependQueued);
   const clearQueued = useSessionStore((state) => state.clearQueued);
   const setQueuePause = useSessionStore((state) => state.setQueuePause);
+  const runInterrupted = useSessionStore((state) => state.runInterrupted);
+  const setRunInterrupted = useSessionStore((state) => state.setRunInterrupted);
   const rememberPermission = useSessionStore((state) => state.rememberPermission);
   const restoreId = useRef<string | null>(null);
   const draining = useRef(false);
-  const pendingPermissionRef = useRef<{ request: PermissionRequest; activeId: string | null } | null>(null);
   // Settings lives at #/settings/<section>; no match means we are in the app.
   const settingsMatch = useMatch("/settings/*");
   const location = useLocation();
@@ -306,6 +307,30 @@ export function App(): JSX.Element {
         useSessionStore.getState().applySnapshot(event.snapshot as WorkspaceSnapshot);
       }
       const currentId = useSessionStore.getState().activeId;
+      // Subagent traffic feeds the shared subagent store, not a conversation, and a
+      // parent run keeps streaming after the user switches chats: apply it before
+      // the focus routing so every run's tab stays live either way. Each run owns a
+      // tab (`subagent:<toolCallId>:<index>`), keyed to the conversation that
+      // spawned it, so two chats delegating at once never share a view.
+      if (event.type === "subagent_event" || event.type === "subagent_lifecycle" || event.type === "subagent_progress") {
+        applyEvent(event);
+        // A lifecycle event is where a run gets its tab (created, not focused).
+        // Per-token `subagent_event`s only feed the transcript, which the session
+        // store already keys by run id — no side-pane write per token.
+        if (event.type !== "subagent_event") {
+          const subagentId = typeof event.subagentId === "string" ? event.subagentId : "";
+          if (subagentId) {
+            const info = useSessionStore.getState().subagents.find((item) => item.id === subagentId);
+            useSidePaneStore.getState().registerSubagent(subagentId, {
+              conversationId: typeof event.conversationId === "string" ? event.conversationId : info?.conversationId,
+              title: info?.name || info?.agent,
+              status: typeof event.status === "string" ? event.status : info?.status,
+            });
+          }
+          void window.fastvibe.engine.getSubagents().then(setSubagents).catch(() => undefined);
+        }
+        return;
+      }
       if (conversationId && currentId && conversationId !== currentId) {
         useSidePaneStore.getState().applyConversationEvent(conversationId, event);
         return;
@@ -354,9 +379,6 @@ export function App(): JSX.Element {
           }),
         );
       }
-      if (event.type === "subagent_lifecycle" || event.type === "subagent_progress") {
-        void window.fastvibe.engine.getSubagents().then(setSubagents).catch(() => undefined);
-      }
       if (event.type === "tool_execution_end" || event.type === "toolcall_end") {
         // Tool time and token totals advance during a run; keep the popover live.
         refreshStats();
@@ -374,8 +396,10 @@ export function App(): JSX.Element {
         // Only surface files the agent wrote to: auto-previewing every `read`
         // fired an IPC file read plus a full app re-render on the hottest path.
         if (path && /write|edit|apply|create/i.test(name)) {
+          // De-dupe against the *active chat's* file view, so a write in one
+          // conversation still reveals the file when another one previews it too.
           const store = useSessionStore.getState();
-          if (store.preview?.path !== path) void store.openPreview(path);
+          if (useSidePaneStore.getState().filesPreviewPath() !== path) void store.openPreview(path);
         }
       }
     });
@@ -539,29 +563,11 @@ export function App(): JSX.Element {
   const handlePermissionRespond = useCallback(
     (payload: PermissionResponse) => {
       if (payload.always && permission) rememberPermission(permissionKey(permission));
-      pendingPermissionRef.current = null;
       void window.fastvibe.engine.respondPermission(payload);
       setPermission(null);
     },
     [permission, rememberPermission, setPermission],
   );
-
-  // An engine prompt is only answerable while its conversation is on screen.
-  // A switch (or a new chat, which resets the store) unmounts the panel, so the
-  // request has to be answered for the engine — the tool hook is parked on it,
-  // and leaving it pending pins the run as "running" forever.
-  useEffect(() => {
-    if (permission) {
-      pendingPermissionRef.current = { request: permission, activeId: useSessionStore.getState().activeId };
-    }
-  }, [permission]);
-  useEffect(() => {
-    const pending = pendingPermissionRef.current;
-    if (!pending || pending.activeId === activeId) return;
-    pendingPermissionRef.current = null;
-    void window.fastvibe.engine.respondPermission({ id: pending.request.id, cancelled: true });
-    setPermission(null);
-  }, [activeId, setPermission]);
 
   // Sending is allowed while the engine is still coming up: the prompt waits
   // behind initialisation, which the user experiences as reply latency. `needsAuth`
@@ -607,6 +613,7 @@ export function App(): JSX.Element {
     setDraft(readDrafts()[result.conversation.id] ?? "");
     setError(null);
     clearQueued();
+    setRunInterrupted(null);
     // Drop the previous chat's numbers before the new ones arrive.
     useSessionStore.getState().setStats(null);
     refreshStats();
@@ -671,6 +678,9 @@ export function App(): JSX.Element {
       return;
     }
     addUserMessage(promptText, currentAttachments);
+    // A fresh prompt supersedes an interrupted turn: drop the resume affordance now
+    // so the button does not linger until the engine's `agent_start` lands.
+    setRunInterrupted(null);
     try {
       await dispatchPrompt(text, currentAttachments, "prompt");
     } catch (err) {
@@ -753,6 +763,26 @@ export function App(): JSX.Element {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setStreaming(false);
+      void window.fastvibe.engine.getState().then(setSession).catch(() => undefined);
+    }
+  }
+
+  /**
+   * Continue the interrupted turn. The engine re-enters the loop from the transcript
+   * (no new user message), and the queue stays held: resume must not flush queued
+   * follow-ups onto a half-finished reply. Once the resumed run starts, `agent_start`
+   * clears `runInterrupted` and unpauses nothing — the queue only resumes when the
+   * user explicitly continues it (or a later clean turn ends).
+   */
+  async function handleResumeRun(): Promise<void> {
+    if (!canChat) return;
+    setRunInterrupted(null);
+    try {
+      await window.fastvibe.engine.continue();
+    } catch (err) {
+      setRunInterrupted("error");
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
       void window.fastvibe.engine.getState().then(setSession).catch(() => undefined);
     }
   }
@@ -841,6 +871,7 @@ export function App(): JSX.Element {
     if (!item || item.preview) return;
     try {
       applyList(await window.fastvibe.conversations.delete(id));
+      disposeSidePaneTabs(useSidePaneStore.getState().forgetScope(id));
     } catch {
       // Draft cleanup is best-effort.
     }
@@ -921,6 +952,37 @@ export function App(): JSX.Element {
     }
   }
 
+  /**
+   * 归档 only hides the chat from every list; the transcript stays on disk. When the
+   * chat being archived is the one on screen it has to leave the screen too —
+   * otherwise the sidebar loses a row while the thread it points at stays open.
+   * Follow the newest chat still listed, or fall back to a fresh session.
+   */
+  async function handleArchiveSession(id: string): Promise<void> {
+    archiveConversations(id);
+    // An archived chat is hidden from every list, so its pane state goes with it:
+    // the tabs' shells and browser views must not outlive the chat they served.
+    disposeSidePaneTabs(useSidePaneStore.getState().forgetScope(id));
+    if (id !== useSessionStore.getState().activeId) return;
+    const hidden = new Set(archivedIdList());
+    hidden.add(id);
+    const next = conversations
+      .filter((item) => item.preview && !hidden.has(item.id))
+      .sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id))[0];
+    if (next) {
+      try {
+        applyOpen(await window.fastvibe.conversations.open(next.id));
+        revealConversation(next.id, true);
+        return;
+      } catch {
+        // Fall through: the archived chat must not stay on screen even if the
+        // replacement cannot be opened.
+      }
+    }
+    resetConversation();
+    if (location.pathname.startsWith("/c/")) navigate("/", { replace: true });
+  }
+
   async function handleRenameProject(cwd: string, name: string): Promise<void> {
     try {
       applyList(await window.fastvibe.projects.rename(cwd, name));
@@ -929,10 +991,40 @@ export function App(): JSX.Element {
     }
   }
 
+  /**
+   * Persist a drag-reordered project list. The catalog owns the order (unlike the
+   * conversation sections, which live in `sidebarOrder`), so the drop is applied to
+   * the store first — otherwise dnd-kit resets its transforms before the IPC reply
+   * lands and the rows visibly snap back — then written through.
+   */
+  async function handleReorderProjects(cwds: string[]): Promise<void> {
+    const { projects: current, conversations: list, activeId: currentActiveId } = useSessionStore.getState();
+    const rank = new Map(cwds.map((cwd, index) => [cwd, index]));
+    const reordered = [...current].sort((a, b) => {
+      const left = rank.get(a.cwd);
+      const right = rank.get(b.cwd);
+      if (left === undefined && right === undefined) return 0;
+      if (left === undefined) return 1;
+      if (right === undefined) return -1;
+      return left - right;
+    });
+    const restore = { projects: current, conversations: list, activeId: currentActiveId ?? undefined };
+    applySnapshot({ ...restore, projects: reordered });
+    try {
+      applyList(await window.fastvibe.projects.reorder(cwds));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      applySnapshot(restore);
+    }
+  }
+
   async function handleRemoveProject(cwd: string): Promise<void> {
     try {
+      // The catalog drops the project's conversations with it; their panes go too.
+      const doomed = useSessionStore.getState().conversations.filter((item) => item.project === cwd).map((item) => item.id);
       const result = await window.fastvibe.projects.remove(cwd);
       applyList(result);
+      for (const id of doomed) disposeSidePaneTabs(useSidePaneStore.getState().forgetScope(id));
       if (result.nextId) {
         applyOpen(await window.fastvibe.conversations.open(result.nextId));
         revealConversation(result.nextId, true);
@@ -958,6 +1050,7 @@ export function App(): JSX.Element {
       try {
         result = await window.fastvibe.conversations.delete(id);
         deleted.push(id);
+        disposeSidePaneTabs(useSidePaneStore.getState().forgetScope(id));
       } catch (err) {
         error = err instanceof Error ? err.message : String(err);
       }
@@ -1117,8 +1210,10 @@ export function App(): JSX.Element {
       onRemoveQueued={handleRemoveQueued}
       onEditQueued={handleEditQueued}
       onSendQueuedNow={(id) => void handleSendQueuedNow(id)}
-      onReorderQueued={moveQueued}
+      onReorderQueued={setQueuedOrder}
       onResumeQueue={() => setQueuePause(null)}
+      runInterrupted={runInterrupted !== null}
+      onResumeRun={() => void handleResumeRun()}
       sendOnEnter={settings.sendOnEnter}
       focusSignal={composerFocus}
       onManageModels={() => navigate("/settings/providers")}
@@ -1150,11 +1245,13 @@ export function App(): JSX.Element {
         running={running}
         onNewChat={(cwd) => void handleNewChat(cwd)}
         onOpen={(id) => void handleOpen(id)}
+        onArchive={(id) => void handleArchiveSession(id)}
         onAddProject={() => void handleAddProject()}
         onRenameSession={(id, title) => void handleRenameSession(id, title)}
         onRenameProject={(cwd, name) => void handleRenameProject(cwd, name)}
         onRemoveProject={(cwd) => void handleRemoveProject(cwd)}
         onRevealProject={(cwd) => void window.fastvibe.workspace.reveal(cwd)}
+        onReorderProjects={(cwds) => void handleReorderProjects(cwds)}
         onOpenSettings={() => navigate("/settings/general")}
         onOpenMarket={() => navigate("/settings/extensions")}
         onSearch={() => setCommandOpen(true)}
@@ -1238,11 +1335,16 @@ export function App(): JSX.Element {
                 showTimestamp={settings.showTimestamps}
               />
             </div>
-            {bannerNode}
-            <ExtensionWidgets className="pb-2" />
-            <GoalPanel className="pb-2" disabled={streaming} />
-            <TodoPanel className="pb-2" />
-            {composerSlot}
+            {/* Everything under the transcript shares its column: the transcript's
+                scroller reserves a scrollbar gutter, so this box reserves the same one
+                (`transcript-gutter`) and both columns land on the same edges. */}
+            <div className="transcript-gutter overflow-hidden">
+              {bannerNode}
+              <ExtensionWidgets className="pb-2" />
+              <GoalPanel className="pb-2" disabled={streaming} />
+              <TodoPanel className="pb-2" />
+              {composerSlot}
+            </div>
           </>
         )}
       </main>

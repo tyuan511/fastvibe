@@ -60,6 +60,7 @@ export function PermissionPanel({ request, onRespond }: { request: PermissionReq
   }
 }
 
+
 /** Shared card: warning tone for approvals, primary tone for questions. */
 function PanelShell({
   tone,

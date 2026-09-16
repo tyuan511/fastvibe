@@ -2,6 +2,7 @@ import { memo, type JSX } from "react";
 import { Spinner } from "@/components/ui/spinner";
 import type { ToolCallBlock } from "@shared/types";
 import { useSessionStore } from "@/stores/session";
+import { useSidePaneStore } from "@/stores/side-pane";
 import { asRecord, argString, describeTool, familyOf, unwrapShellCommand } from "@/lib/tool-presentation";
 import { displayPath, useWorkspacePath } from "@/lib/workspace-path";
 import { parseToolTodos } from "@/lib/todos";
@@ -115,6 +116,76 @@ function FileActions({ path }: { path: string }): JSX.Element {
   );
 }
 
+type SubagentEntry = { agent: string; task?: string };
+
+/** Flatten any of the three subagent modes into the runs the host will spawn. */
+function subagentEntries(args: unknown): SubagentEntry[] {
+  const record = asRecord(args);
+  if (!record) return [];
+  const entries: SubagentEntry[] = [];
+  if (typeof record.agent === "string")
+    entries.push({ agent: record.agent, task: typeof record.task === "string" ? record.task : undefined });
+  for (const key of ["tasks", "chain"]) {
+    if (!Array.isArray(record[key])) continue;
+    for (const item of record[key] as unknown[]) {
+      const entry = asRecord(item);
+      if (typeof entry?.agent === "string")
+        entries.push({ agent: entry.agent, task: typeof entry.task === "string" ? entry.task : undefined });
+    }
+  }
+  return entries;
+}
+
+const SUBAGENT_STATUS: Record<string, string> = {
+  running: "运行中",
+  completed: "已完成",
+  error: "失败",
+};
+
+/**
+ * A delegated role is not a parameter list to inspect — it is a conversation. So
+ * instead of dumping the tool's raw JSON, show one row per spawned run. The whole
+ * row opens that run's own read-only tab in the right pane; status trails the row
+ * (no button, no chevron) so the eye lands on the brief.
+ */
+function SubagentPanel({ tool }: { tool: ToolCallBlock }): JSX.Element {
+  const subagents = useSessionStore((state) => state.subagents);
+  const openSubagent = useSidePaneStore((state) => state.openSubagent);
+  const entries = subagentEntries(tool.args);
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      {entries.map((entry, index) => {
+        const id = `${tool.id}:${index}`;
+        const state = subagents.find((item) => item.id === id);
+        const status = state?.status ? SUBAGENT_STATUS[state.status] ?? state.status : undefined;
+        return (
+          <button
+            key={id}
+            type="button"
+            className="flex w-full min-w-0 cursor-pointer items-center gap-2 rounded-lg border border-border px-2.5 py-2 text-left hover:bg-muted/50"
+            onClick={() =>
+              openSubagent(id, {
+                conversationId: state?.conversationId,
+                title: entry.agent,
+                status: state?.status,
+              })
+            }
+          >
+            <span className="shrink-0 font-mono text-sm text-foreground">{entry.agent}</span>
+            {entry.task ? (
+              <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">{entry.task}</span>
+            ) : (
+              <span className="min-w-0 flex-1" />
+            )}
+            {status ? <span className="shrink-0 text-xs text-muted-foreground">{status}</span> : null}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function ToolDetail({ tool, running }: { tool: ToolCallBlock; running: boolean }): JSX.Element {
   const cwd = useWorkspacePath();
   const view = describeTool(tool, cwd);
@@ -122,6 +193,8 @@ function ToolDetail({ tool, running }: { tool: ToolCallBlock; running: boolean }
   const diff = diffText(tool);
 
   if (view.family === "question") return <QuestionAnswers tool={tool} running={running} />;
+
+  if (view.family === "agent") return <SubagentPanel tool={tool} />;
 
   if (view.family === "todo") {
     const todos = parseToolTodos(tool);
@@ -171,10 +244,12 @@ export const ToolCard = memo(function ToolCard({
     view.family === "terminal" ||
     view.family === "todo" ||
     view.family === "question" ||
+    view.family === "agent" ||
     Boolean(tool.result?.length) ||
     Boolean(diffText(tool)) ||
     (tool.args !== undefined && !inline);
-
+  // A subagent tool row expands into its runs; each row in that panel is itself
+  // the doorway to that run's tab (see SubagentPanel).
   return (
     <ToolRow
       icon={running ? <Spinner className="size-3" /> : view.icon}

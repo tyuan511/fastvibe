@@ -32,8 +32,8 @@ export const PREVIEW_CWD = "/Users/dev/code/fastvibe";
 export const SECOND_CWD = "/Users/dev/code/paper-trail";
 
 export const PROJECTS: Project[] = [
-  { cwd: PREVIEW_CWD, name: "fastvibe", updatedAt: NOW - 2 * MINUTE },
-  { cwd: SECOND_CWD, name: "paper-trail", updatedAt: NOW - 3 * DAY },
+  { cwd: PREVIEW_CWD, name: "fastvibe", createdAt: NOW - 12 * DAY, updatedAt: NOW - 2 * MINUTE },
+  { cwd: SECOND_CWD, name: "paper-trail", createdAt: NOW - 30 * DAY, updatedAt: NOW - 3 * DAY },
 ];
 
 export const CONVERSATIONS: Conversation[] = [

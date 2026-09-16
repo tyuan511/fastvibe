@@ -168,6 +168,7 @@ const api = {
     steer: async () => undefined,
     followUp: async () => undefined,
     abort: async () => undefined,
+    continue: async () => undefined,
     clearQueue: async () => ({ steering: [], followUp: [] }),
     compact: async () => SESSION,
     getCommands: async () => COMMANDS,
@@ -253,6 +254,11 @@ const api = {
     add: async () => null,
     rename: async () => snapshot(),
     remove: async () => ({ ...snapshot(), nextId: null }),
+    reorder: async (cwds: string[]) => {
+      const rank = new Map(cwds.map((cwd, index) => [cwd, index]));
+      PROJECTS.sort((a, b) => (rank.get(a.cwd) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b.cwd) ?? Number.MAX_SAFE_INTEGER));
+      return snapshot();
+    },
   },
   workspace: {
     pick: async () => null,

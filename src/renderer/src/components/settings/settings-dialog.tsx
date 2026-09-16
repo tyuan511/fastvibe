@@ -15,8 +15,9 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import type { AppInfo } from "@shared/ipc";
-import type { EngineModel, FastVibeModel } from "@shared/types";
+import type { EngineModel, FastVibeModel, PermissionMode } from "@shared/types";
 import { useSettingsStore } from "@/stores/settings";
+import { PERMISSION_DESCRIPTIONS, PERMISSION_MODE_ITEMS, PERMISSION_MODES } from "@/lib/permission-modes";
 import type { ThemeMode } from "@/lib/themes";
 import { UI_FONT_SIZE_MAX, UI_FONT_SIZE_MIN, UI_FONT_SIZE_STEP } from "@/lib/themes";
 import { readSidebarWidth } from "@/lib/sidebar-width";
@@ -328,6 +329,42 @@ export function SettingsDialog({
                         ))}
                       </SelectContent>
                     </Select>
+                  }
+                />
+                <Row
+                  title="默认权限模式"
+                  description={`${PERMISSION_DESCRIPTIONS[settings.defaultPermissionMode]}；启动时默认使用，输入框上方可临时切换`}
+                  control={
+                    <Select
+                      items={PERMISSION_MODE_ITEMS}
+                      value={settings.defaultPermissionMode}
+                      onValueChange={(value) =>
+                        // Also retarget the live mode, so changing the default from here
+                        // does not leave the running session on the old mode.
+                        update({ defaultPermissionMode: value as PermissionMode, permissionMode: value as PermissionMode })
+                      }
+                    >
+                      <SelectTrigger size="sm" className="w-44">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {PERMISSION_MODES.map((mode) => (
+                          <SelectItem key={mode} value={mode}>
+                            {PERMISSION_MODE_ITEMS[mode]}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  }
+                />
+                <Row
+                  title="运行时保持唤醒"
+                  description="Agent 运行期间阻止系统休眠，回合结束后恢复"
+                  control={
+                    <Switch
+                      checked={settings.keepAwake}
+                      onCheckedChange={(checked) => update({ keepAwake: checked })}
+                    />
                   }
                 />
               </Group>

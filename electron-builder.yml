@@ -43,6 +43,8 @@ extraResources:
   # they must stay outside the asar archive.
   - from: resources/extensions
     to: extensions
+  - from: resources/agents
+    to: agents
   - from: resources/icon.icns
     to: icon.icns
   - from: resources/icon.png

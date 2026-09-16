@@ -231,6 +231,31 @@ export function describeTool(tool: ToolCallBlock, cwd?: string): ToolView {
       view.title = target || tool.name;
       return view;
     }
+    case "agent": {
+      const args = asRecord(tool.args);
+      const names: string[] = [];
+      if (typeof args?.agent === "string") names.push(args.agent);
+      for (const key of ["tasks", "chain"]) {
+        if (Array.isArray(args?.[key])) for (const item of args[key] as unknown[]) {
+          const record = asRecord(item);
+          if (typeof record?.agent === "string") names.push(record.agent);
+        }
+      }
+      // A wide fan-out (say five scouts) would otherwise repeat the role five times
+      // and push the count off screen. Collapse to at most two distinct roles plus a
+      // count; the expanded panel lists every run.
+      const counts = new Map<string, number>();
+      for (const name of names) counts.set(name, (counts.get(name) ?? 0) + 1);
+      const distinct = [...counts.entries()];
+      const shown = distinct
+        .slice(0, 2)
+        .map(([name, count]) => (count > 1 ? `${name} ×${count}` : name))
+        .join(", ");
+      const compact = distinct.length > 2 ? `${shown} 等 ${names.length} 个` : shown;
+      view.subject = compact || "子 Agent";
+      view.title = names.join(", ") || tool.name;
+      return view;
+    }
     default: {
       view.subject = tool.name;
       view.title = tool.name;

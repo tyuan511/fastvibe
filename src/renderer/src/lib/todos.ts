@@ -20,16 +20,6 @@ export type TodoItem = {
   activeForm?: string;
 };
 
-export type CompactTodos = {
-  compact: boolean;
-  preceding: TodoItem[];
-  focus: TodoItem[];
-  following: TodoItem[];
-};
-
-const FOCUS = 3;
-const COMPACT_LIMIT = 6;
-
 function asText(value: unknown): string {
   return typeof value === "string" && value.trim() ? value.trim() : "";
 }
@@ -111,25 +101,4 @@ export function latestTodos(messages: ChatMessage[]): TodoItem[] {
     }
   }
   return EMPTY_TODOS;
-}
-
-/**
- * zcode's status-panel folding: ≤6 items stay open; longer lists keep 3
- * around the in-progress (or first unfinished) item and tuck the rest.
- */
-export function compactTodos(items: TodoItem[]): CompactTodos {
-  if (items.length <= COMPACT_LIMIT) {
-    return { compact: false, preceding: [], focus: items, following: [] };
-  }
-  const inProgress = items.findIndex((item) => item.status === "in_progress");
-  const firstOpen = items.findIndex((item) => item.status !== "completed" && item.status !== "cancelled");
-  const anchor = inProgress >= 0 ? inProgress : firstOpen >= 0 ? firstOpen : Math.max(0, items.length - FOCUS);
-  const start = Math.max(0, Math.min(anchor, items.length - FOCUS));
-  const end = Math.min(items.length, start + FOCUS);
-  return {
-    compact: true,
-    preceding: items.slice(0, start),
-    focus: items.slice(start, end),
-    following: items.slice(end),
-  };
 }

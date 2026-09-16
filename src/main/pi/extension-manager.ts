@@ -17,7 +17,18 @@ export const BUILTIN_EXTENSIONS: Array<{ source: string; file: string }> = [
   { source: "fastvibe:permission-sandbox", file: "permission-sandbox.ts" },
   { source: "fastvibe:session-title", file: "session-title.ts" },
   { source: "fastvibe:browser-use", file: "browser-use.ts" },
+  { source: "fastvibe:subagent-team", file: "subagent/index.ts" },
 ];
+
+/** Roles available to the built-in team orchestrator. Kept data-only so the
+ * renderer and future schedulers can advertise capabilities without loading an
+ * extension or starting a process. */
+export const BUILTIN_AGENTS = [
+  { id: "scout", name: "代码侦察员", description: "快速定位文件、入口和依赖，输出可交接的结构化上下文。", tools: ["read", "grep", "find", "ls"] },
+  { id: "planner", name: "方案规划员", description: "把需求拆成可执行步骤、风险和验证条件。", tools: ["read", "grep", "find", "ls"] },
+  { id: "worker", name: "实现工程师", description: "在隔离上下文中完成代码修改并运行验证。", tools: ["read", "grep", "find", "ls", "edit", "write", "bash"] },
+  { id: "reviewer", name: "审查员", description: "检查实现、回归风险和测试覆盖，给出可操作反馈。", tools: ["read", "grep", "find", "ls", "bash"] },
+] as const;
 
 export function builtinSkillPaths(): string[] {
   const dir = app.isPackaged
@@ -27,12 +38,22 @@ export function builtinSkillPaths(): string[] {
   return existsSync(path) ? [path] : [];
 }
 
-/** Absolute paths to the built-in extension entry points. */
-export function builtinExtensionPaths(): string[] {
-  const dir = app.isPackaged
+/** Directory holding FastVibe's built-in extension entry points (outside the asar). */
+function extensionsDir(): string {
+  return app.isPackaged
     ? join(process.resourcesPath, "extensions")
     : join(__dirname, "../../resources/extensions");
-  const paths = BUILTIN_EXTENSIONS.map((item) => join(dir, item.file));
+}
+
+/** Absolute path to one built-in extension entry point, or null when absent. */
+export function builtinExtensionFile(file: string): string | null {
+  const path = join(extensionsDir(), file);
+  return existsSync(path) ? path : null;
+}
+
+/** Absolute paths to the built-in extension entry points. */
+export function builtinExtensionPaths(): string[] {
+  const paths = BUILTIN_EXTENSIONS.map((item) => join(extensionsDir(), item.file));
   return paths.filter((path) => existsSync(path));
 }
 

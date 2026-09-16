@@ -219,8 +219,9 @@ engine is gone because the SDK never read them.
 ## Plugins & extensions
 
 FastVibe hosts pi extensions (the SDK's plugin system) and bridges their
-terminal-only surface onto the GUI. Five **built-in** extensions ship with the app
-(`resources/extensions/plan.ts`, `goal.ts`, `todo.ts`, `permission-sandbox.ts`, `session-title.ts`); anything else
+terminal-only surface onto the GUI. Seven **built-in** extensions ship with the app
+(`resources/extensions/plan.ts`, `goal.ts`, `todo.ts`, `permission-sandbox.ts`, `session-title.ts`,
+`browser-use.ts`, `subagent/index.ts`); anything else
 the user installs at runtime via 设置 → 插件, which writes to the isolated `agentDir`
 (`ExtensionManager` → SDK `DefaultPackageManager`), never `~/.pi`.
 
@@ -263,7 +264,13 @@ the user installs at runtime via 设置 → 插件, which writes to the isolated
     `before_agent_start` so they survive compaction. The transcript already
     renders a tool named `todo` as a checklist card; `TodoPanel` above the
     composer reads `latestTodos` from the thread and hides once every item is
-    done or cancelled. The sandbox treats `todo` as read-only, so `ask` mode
+    done or cancelled. It is folded by default — one header line carrying the
+    counts and the single in-progress item (else the next pending one), with the
+    whole checklist (`TodoRow compact`, one line per item, capped and scrollable)
+    behind a `Collapsible`. While an item is `in_progress` the header's leading
+    glyph and that item's leading glyph are `RunningMark`
+    (`components/running-mark.tsx`) — the same sweeping-arc mark the sidebar puts
+    on a running conversation, shared so "a run is in flight" reads identically. The sandbox treats `todo` as read-only, so `ask` mode
     does not confirm it.
 - **Permission sandbox** — `permission-sandbox.ts` is the enforcement half of the
   composer's three modes (`ask` 请求批准 / `smart` 帮我批准 / `full` 完全访问权限).
@@ -276,6 +283,62 @@ the user installs at runtime via 设置 → 插件, which writes to the isolated
   startup and on every settings write; the extension re-reads it per tool call, so a
   mode change lands in a running session. It is a standalone jiti module, so it
   reads no FastVibe internals — keep new rules in the file itself.
+  Two settings keys feed it: `defaultPermissionMode` (设置 → 通用 → 默认权限模式, default
+  `smart` 帮我批准) is what a launch starts on, while `permissionMode` is the live mode the
+  composer's chip switches. Main resolves the two at startup —
+  `applyStartupPermissionMode` (`engine/app-settings.ts`) re-seeds the live value from the
+  default, writes it back to `settings.json` and exports it — so one session escalated to
+  `full` cannot outlive the app, and the sandbox env cannot disagree with the chip. An
+  absent or malformed value anywhere means `smart`, never `full`.
+- **Subagent** — `subagent/index.ts` registers a `subagent` tool that delegates a
+  self-contained task to a role defined by a markdown file under
+  `resources/extensions/subagent/agents/*.md`: `scout`, `planner`, `worker`,
+  `reviewer` (user roles under `getAgentDir()/agents` are merged in). Because the
+  SDK omits custom tools from the system prompt unless they declare it, the tool sets
+  `promptSnippet` + `promptGuidelines` and lists the discovered roles in its
+  `description` — that is what makes the main agent aware it can delegate. Modes are
+  single / parallel (≤8) / chain (`{previous}`), and each spawned run gets an id of
+  `${toolCallId}:${index}`.
+  - **In-process runner, no child process.** The app embeds the SDK and excludes
+    `pi-coding-agent/dist/bundle` from the archive, and a second process would not
+    have the in-memory provider credentials either. So delegation runs on the
+    host's own engine: Main injects `runSubagent` on the extension UI context
+    (`FastVibeExtensionUIContext`, next to the `questions` bridge) and the tool
+    requires it — there is **no `spawn("pi")` fallback** (`runSingleAgent` fails
+    fast when the bridge is absent). `#runSubagent` creates a throwaway
+    `createAgentSession` (`SessionManager.inMemory`), with `noExtensions: true`
+    plus the permission sandbox as its only extension, appends the role's system
+    prompt through the resource loader, restricts tools to the agent's list, and
+    binds the parent conversation's UI context so a delegated `bash`/`edit` still
+    confirms through the same composer panel.
+  - **Model selection.** Delegation does not inherit whatever model the parent chat
+    is on: every run uses the user's 「默认模型」 from settings (设置 → 供应商,
+    `readDefaultModel` → `settings.defaultModel`) — the same preference a fresh
+    conversation starts on — so a cheap orchestrator model can drive an expensive
+    worker, or vice versa. The parent session's model is the fallback when that
+    preference is unset. Role files deliberately carry no `model:` line. Whichever
+    pin wins, `#resolveSubagentModel` only accepts it when
+    `ModelRegistry.hasConfiguredAuth` says this install can authenticate it — the
+    catalog (`getAll()`) holds every reseller's models, so a pinned
+    `claude-sonnet-4-5` on a gateway with no Anthropic key would otherwise win and
+    fail with “No API key found”. Bare ids resolve against `getAvailable()` only.
+  - **Renderer.** The sub-session's engine events are re-emitted as
+    `subagent_event` / `subagent_lifecycle` (see `#trackSubagentEvent`), which the
+    renderer folds into `session.subagents` + `subagentStreams`; `App.tsx` applies
+    them regardless of which conversation is focused, so a backgrounded run keeps
+    updating. **One run, one right-pane tab**: `registerSubagent` mints
+    `subagent:<toolCallId>:<index>` on lifecycle, tagged with the owning
+    `conversationId`, and `SidePane` only lists tabs belonging to the chat on
+    screen — parallel/chain runs and runs from different chats never share a view.
+    A `subagent` tool card does not dump its parameters — it lists the spawned
+    runs (role · brief · status, the whole row opening that run's tab; no
+    「查看对话」 button). The collapsed row summarises the fan-out rather than
+    listing every run — at most two distinct roles plus a count (`scout ×5`,
+    `scout, planner 等 4 个`) — and expanding it reveals each run. A run's tab is
+    `SidePaneChat` with the composer disabled and no chrome above the thread: the
+    delegated brief is rendered as the opening user message (rebuilt from the run's
+    `detail`, since the sub-session never streams its user turn), followed by the
+    role's own assistant turns. The tab is titled `role · 运行中/已完成/失败`.
 - **Loading** — `src/main/pi/extension-manager.ts` resolves the built-in entry
   points (from `resources/extensions` in dev, `resourcesPath/extensions` packaged;
   `electron-builder.yml` copies them via `extraResources`) and `#createSession`
@@ -404,6 +467,21 @@ Settings → 使用统计 (`components/settings/usage-settings.tsx`) is fed by
   they are never *less* correct than before, only less complete after a deletion.
 - Appends are synchronous (one line per turn) so a capture that precedes an `unlink` is
   durable before the file disappears; `flush()` is a no-op kept for the shutdown path.
+
+## 运行时保持唤醒
+
+Settings → 通用 → 运行时保持唤醒 (`settings.keepAwake`, on by default) holds the machine
+awake while an agent run is in flight.
+
+- `src/main/engine/keep-awake.ts` owns a single `powerSaveBlocker` and is the only place
+  that starts or stops it. Two inputs decide the state: the preference, and whether
+  anything is streaming — so turning the switch off mid-run releases it at once, and the
+  last run to finish releases it while the switch stays on.
+- It blocks `prevent-app-suspension`, not `prevent-display-sleep`: the run survives, the
+  screen may still dim. A late-night run should not light the room.
+- Runs are tracked per conversation id from the engine's `conversation_running` event,
+  which is broadcast for background chats too, so a session the user switched away from
+  still counts. `before-quit` clears the set.
 
 ## Product constraints
 

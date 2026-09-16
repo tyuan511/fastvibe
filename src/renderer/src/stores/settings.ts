@@ -10,18 +10,32 @@ import {
   type ThemeId,
   type ThemeMode,
 } from "@/lib/themes";
+import { isPermissionMode } from "@/lib/permission-modes";
 import { sanitizeShortcutOverrides, type ShortcutOverrides } from "@/lib/shortcuts";
 
 const KEY = "fastvibe.settings";
 
 export type AppSettings = {
+  /**
+   * The mode the sandbox enforces right now; the composer's chip is its view. Written
+   * by the composer, and re-seeded from `defaultPermissionMode` by Main on every launch
+   * (`applyStartupPermissionMode`) so an escalated session does not outlive the app.
+   */
   permissionMode: PermissionMode;
+  /**
+   * 默认权限模式: what a launch starts on (设置 → 通用 → 默认权限模式). Separate from the
+   * live mode so escalating one run to 完全访问权限 in the composer cannot silently carry
+   * over to the next launch.
+   */
+  defaultPermissionMode: PermissionMode;
   thinkingLevel: ThinkingLevel | "auto";
   queueBehavior: QueueBehavior;
   autoCompact: boolean;
   interruptMode: "immediate" | "wait";
   showThinking: boolean;
   showTimestamps: boolean;
+  /** When true, an agent run holds the machine awake (`powerSaveBlocker`). */
+  keepAwake: boolean;
   compactCode: boolean;
   sendOnEnter: boolean;
   /** When true, the packaged app checks for updates after launch. */
@@ -80,13 +94,15 @@ export type AppSettings = {
 };
 
 const DEFAULTS: AppSettings = {
-  permissionMode: "full",
+  permissionMode: "smart",
+  defaultPermissionMode: "smart",
   thinkingLevel: "auto",
   queueBehavior: "followUp",
   autoCompact: true,
   interruptMode: "immediate",
   showThinking: true,
   showTimestamps: true,
+  keepAwake: true,
   compactCode: false,
   sendOnEnter: true,
   themeMode: DEFAULT_THEME_MODE,
@@ -99,6 +115,8 @@ const DEFAULTS: AppSettings = {
 /** Drop malformed persisted theme values so a stale id can never crash the app. */
 function sanitize(parsed: Partial<AppSettings>): Partial<AppSettings> {
   const next = { ...parsed };
+  if (!isPermissionMode(next.permissionMode)) delete next.permissionMode;
+  if (!isPermissionMode(next.defaultPermissionMode)) delete next.defaultPermissionMode;
   if (!isThemeMode(next.themeMode)) delete next.themeMode;
   if (!isThemeId(next.lightTheme)) delete next.lightTheme;
   if (!isThemeId(next.darkTheme)) delete next.darkTheme;
@@ -111,6 +129,7 @@ function sanitize(parsed: Partial<AppSettings>): Partial<AppSettings> {
   if (!isIdList(next.archivedConversations)) delete next.archivedConversations;
   if (!isIdListMap(next.sidebarOrder)) delete next.sidebarOrder;
   if (typeof next.autoCheckUpdates !== "boolean") delete next.autoCheckUpdates;
+  if (typeof next.keepAwake !== "boolean") delete next.keepAwake;
   const shortcuts = sanitizeShortcutOverrides(next.shortcuts);
   if (shortcuts) next.shortcuts = shortcuts;
   else delete next.shortcuts;

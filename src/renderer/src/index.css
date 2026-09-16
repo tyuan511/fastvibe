@@ -137,6 +137,25 @@ body {
   user-select: none;
 }
 
+/*
+ * Chat gutter -------------------------------------------------------------------
+ * The transcript scrolls inside a `scrollbar-gutter: stable` box, so its content
+ * column is narrower than the pane by the scrollbar width — which is why the
+ * transcript and the composer used to sit a few pixels apart: 内容和 composer 的
+ * 边缘因为滚动条错开了。 This utility mirrors that reservation on a box that never
+ * scrolls, so the composer stack shares the transcript's column exactly.
+ *
+ * Both elements must carry the same class: the browser — not a hard-coded number —
+ * decides the width, and only equal `scrollbar-width` + `scrollbar-gutter` values
+ * reserve equal widths. `overflow: hidden` is what turns the plain wrapper into a
+ * scroll container at all, and it never clips because the wrapper only ever holds
+ * its own content.
+ */
+@utility transcript-gutter {
+  scrollbar-width: thin;
+  scrollbar-gutter: stable;
+}
+
 /* Scrollbars -----------------------------------------------------------------
    Slim, rounded thumbs with a transparent track, so the scrollbar reads as part
    of the surface instead of a chrome bar. Chromium paints these through the

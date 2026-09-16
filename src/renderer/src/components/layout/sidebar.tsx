@@ -1,22 +1,25 @@
-import { useCallback, useMemo, useRef, useState, type CSSProperties, type JSX, type KeyboardEvent } from "react";
+import { useCallback, useMemo, useRef, useState, type JSX, type KeyboardEvent } from "react";
+import { createPortal } from "react-dom";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Add01Icon, Archive04Icon, ArrowLeft01Icon, ArrowRight01Icon, Delete02Icon, DragDropVerticalIcon, Folder01Icon, Folder02Icon, FolderRootIcon, MessageSquarePlusIcon, MoreHorizontalIcon, PanelLeftCloseIcon, PencilEdit02Icon, PinIcon, PuzzleIcon, Search01Icon, Settings01Icon } from "@hugeicons/core-free-icons";
+import { Add01Icon, Archive04Icon, ArrowLeft01Icon, ArrowRight01Icon, Delete02Icon, Folder01Icon, Folder02Icon, FolderRootIcon, MessageSquarePlusIcon, MoreHorizontalIcon, PanelLeftCloseIcon, PencilEdit02Icon, PinIcon, PuzzleIcon, Search01Icon, Settings01Icon } from "@hugeicons/core-free-icons";
 import {
   DndContext,
   DragOverlay,
   PointerSensor,
   closestCenter,
   defaultDropAnimationSideEffects,
+  useDraggable,
+  useDroppable,
   useSensor,
   useSensors,
   type CollisionDetection,
   type DragEndEvent,
+  type DragMoveEvent,
   type DragStartEvent,
   type DropAnimation,
 } from "@dnd-kit/core";
 import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
-import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
+import { arrayMove } from "@dnd-kit/sortable";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -28,6 +31,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { RunningMark } from "@/components/running-mark";
 import { IconButton } from "@/components/icon-button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
@@ -51,7 +55,7 @@ import { CollapsiblePanel } from "@/components/layout/collapsible-panel";
 import { AppLogo } from "@/components/app-logo";
 import { cn } from "@/lib/utils";
 import { clampSidebarWidth, readSidebarWidth, writeSidebarWidth, SIDEBAR_MIN_WIDTH } from "@/lib/sidebar-width";
-import { archiveConversations, useArchivedIds } from "@/stores/archive";
+import { useArchivedIds } from "@/stores/archive";
 import { useSettingsStore } from "@/stores/settings";
 import { useShortcutLabel } from "@/lib/use-shortcuts";
 import { useHistoryNav } from "@/lib/use-history-nav";
@@ -66,32 +70,33 @@ const IS_MAC = typeof navigator !== "undefined" && /mac/i.test(navigator.userAge
 const COLLAPSED_KEY = "fastvibe.sidebar.collapsed";
 const PINNED_KEY = "fastvibe.sidebar.pinned";
 
+/** Section key for the project list itself, as opposed to a project's chats. */
+const PROJECTS_SECTION = "projects";
+
 type RenameTarget = { type: "session"; id: string } | { type: "project"; cwd: string };
 /** Only projects can be removed; sessions are archived, never deleted. */
 type DeleteTarget = { type: "project"; cwd: string; title: string };
 
-/** Slow, ease-out settle for displaced rows so a drop glides instead of snapping. */
-const REORDER_TRANSITION = { duration: 220, easing: "cubic-bezier(0.2, 0, 0, 1)" };
+/** What the active drag is moving: the row id and the list it belongs to. */
+type ActiveDrag = { id: string; section: DragSection };
+
+/** Settle animation for the floating row when the drop lands. */
 const DROP_ANIMATION: DropAnimation = {
-  duration: 250,
+  duration: 200,
   easing: "cubic-bezier(0.2, 0, 0, 1)",
-  sideEffects: defaultDropAnimationSideEffects({ styles: { active: { opacity: "0.4" } } }),
+  sideEffects: defaultDropAnimationSideEffects({ styles: { active: { opacity: "0" } } }),
 };
 
-function SessionBusyMark(): JSX.Element {
-  return (
-    <span className="flex size-3.5 shrink-0 items-center justify-center" role="status" aria-label="运行中">
-      <svg
-        viewBox="0 0 16 16"
-        className="size-3 animate-[spin_0.7s_linear_infinite] text-muted-foreground"
-        fill="none"
-      >
-        <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.5" opacity="0.15" />
-        <path d="M14 8a6 6 0 0 0-6-6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-      </svg>
-    </span>
-  );
-}
+/** A reorderable list: its section key and the row ids in display order. */
+type DragSection = { key: string; ids: string[] };
+/**
+ * Where the active drag would land: the section it would join and the insert index
+ * (0..n) within it, plus the target row's viewport rect so the line can be painted
+ * above the drag overlay. Dragging never moves rows live — the source row just fades
+ * and a primary line marks the position.
+ */
+type DropRect = { top: number; bottom: number; left: number; width: number };
+type DropIndicator = { key: string; index: number; edge: "above" | "below"; rect: DropRect };
 
 function readIdSet(key: string): Set<string> {
   try {
@@ -199,6 +204,150 @@ function SectionLabel({
 }
 
 /**
+ * The primary insertion line. It is a fixed-position portal painted above the drag
+ * overlay (`zIndex` 999), so the floating row can never cover the line it aims at.
+ */
+function DropLine({ rect, edge }: { rect: DropRect; edge: "above" | "below" }): JSX.Element {
+  const top = edge === "above" ? rect.top : rect.bottom;
+  return createPortal(
+    <div
+      aria-hidden
+      className="pointer-events-none fixed z-[1000] h-0.5 rounded-full bg-primary"
+      style={{ top: top - 1, left: rect.left + 4, width: Math.max(0, rect.width - 8) }}
+    />,
+    document.body,
+  );
+}
+
+/**
+ * One draggable project. The listeners sit on the header row only — the sessions
+ * inside are draggable too, and spreading them on the wrapper would start a project
+ * drag from every session pointerdown. The header row is also the droppable, so a
+ * drop targets another project's header rather than its whole (tall) expanded group.
+ */
+function DraggableProject({
+  cwd,
+  name,
+  open,
+  renaming,
+  onOpenChange,
+  onNewChat,
+  onStartRename,
+  onRename,
+  onCancelRename,
+  onReveal,
+  onRemove,
+  children,
+}: {
+  cwd: string;
+  name: string;
+  open: boolean;
+  renaming: boolean;
+  onOpenChange: (open: boolean) => void;
+  onNewChat: () => void;
+  onStartRename: () => void;
+  onRename: (name: string) => void;
+  onCancelRename: () => void;
+  onReveal: () => void;
+  onRemove: () => void;
+  children: React.ReactNode;
+}): JSX.Element {
+  const { listeners, setNodeRef: setDraggableRef, setActivatorNodeRef, isDragging } = useDraggable({ id: cwd });
+  const { setNodeRef: setDroppableRef } = useDroppable({ id: cwd });
+  return (
+    <div className="relative">
+      <Collapsible open={open} onOpenChange={onOpenChange}>
+        <ContextMenu>
+          <ContextMenuTrigger className="w-full">
+            {/* Both refs sit on the header row: the droppable so the above/below
+                midpoint tracks a 32px row, and the draggable so the active rect used
+                for that midpoint is the header rather than the whole expanded group. */}
+            <div
+              ref={(node) => {
+                setDraggableRef(node);
+                setDroppableRef(node);
+                setActivatorNodeRef(node);
+              }}
+              className={cn(
+                "group/project flex h-8 touch-pan-y items-center gap-0.5 rounded-md pr-1 pl-2 transition-opacity hover:bg-sidebar-accent/50",
+                isDragging && "opacity-40",
+              )}
+              {...listeners}
+            >
+              <CollapsibleTrigger className="flex min-w-0 flex-1 items-center gap-2.5 text-left text-sm">
+                <HugeiconsIcon
+                  strokeWidth={2}
+                  icon={open ? Folder02Icon : Folder01Icon}
+                  className="size-3.5 shrink-0 text-muted-foreground"
+                />
+                {renaming ? (
+                  <InlineRename value={name} onSubmit={onRename} onCancel={onCancelRename} />
+                ) : (
+                  <span className="truncate">{name}</span>
+                )}
+              </CollapsibleTrigger>
+              <div className="flex shrink-0 items-center gap-0.5 opacity-0 group-hover/project:opacity-100 focus-within:opacity-100 has-[[aria-expanded=true]]:opacity-100">
+                <DropdownMenu>
+                  <DropdownMenuTrigger
+                    render={<Button size="icon-xs" variant="ghost" className="text-muted-foreground" />}
+                    onClick={(event) => event.stopPropagation()}
+                    onPointerDown={(event) => event.stopPropagation()}
+                  >
+                    <HugeiconsIcon strokeWidth={2} icon={MoreHorizontalIcon} className="size-3.5" />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-40 min-w-40">
+                    <DropdownMenuItem onClick={onNewChat}>
+                      <HugeiconsIcon strokeWidth={2} icon={Add01Icon} />
+                      新建对话
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={onStartRename}>
+                      <HugeiconsIcon strokeWidth={2} icon={PencilEdit02Icon} />
+                      重命名
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={onReveal}>
+                      <HugeiconsIcon strokeWidth={2} icon={FolderRootIcon} />
+                      在访达中显示
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem variant="destructive" onClick={onRemove}>
+                      <HugeiconsIcon strokeWidth={2} icon={Delete02Icon} />
+                      从列表移除
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                <IconButton
+                  size="icon-xs"
+                  variant="ghost"
+                  className="text-muted-foreground"
+                  label="新建会话"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onOpenChange(true);
+                    onNewChat();
+                  }}
+                >
+                  <HugeiconsIcon strokeWidth={2} icon={PencilEdit02Icon} className="size-3.5" />
+                </IconButton>
+              </div>
+            </div>
+          </ContextMenuTrigger>
+          <ContextMenuContent className="w-40">
+            <ContextMenuItem onClick={onNewChat}>新建对话</ContextMenuItem>
+            <ContextMenuItem onClick={onStartRename}>重命名</ContextMenuItem>
+            <ContextMenuItem onClick={onReveal}>在访达中显示</ContextMenuItem>
+            <ContextMenuSeparator />
+            <ContextMenuItem variant="destructive" onClick={onRemove}>
+              从列表移除
+            </ContextMenuItem>
+          </ContextMenuContent>
+        </ContextMenu>
+        <CollapsibleContent>{children}</CollapsibleContent>
+      </Collapsible>
+    </div>
+  );
+}
+
+/**
  * Manual order wins for conversations the user has dragged; everything else keeps
  * the section's default sort and floats to the top, so a freshly created (or newly
  * pinned) chat appears first until it is dragged into place.
@@ -219,14 +368,13 @@ function sectionKey(kind: "pinned" | "recent" | "project", cwd?: string): string
   return kind === "project" ? `project:${cwd ?? ""}` : kind;
 }
 
-/** The visual body of one conversation row, shared by the sortable list and the drag overlay. */
+/** The visual body of one conversation row. */
 function SessionRowContent({
   item,
   active,
   isPinned,
   showSpinner,
   renamingThis,
-  overlay,
   onOpen,
   onTogglePin,
   onArchive,
@@ -238,7 +386,6 @@ function SessionRowContent({
   isPinned: boolean;
   showSpinner: boolean;
   renamingThis: boolean;
-  overlay?: boolean;
   onOpen: () => void;
   onTogglePin: () => void;
   onArchive: () => void;
@@ -250,33 +397,20 @@ function SessionRowContent({
       className={cn(
         "group/session flex h-8 cursor-pointer items-center gap-2.5 rounded-md pr-1 pl-2 text-sm transition-colors",
         active ? "bg-sidebar-accent text-sidebar-accent-foreground" : "hover:bg-sidebar-accent/50",
-        overlay && "bg-sidebar-accent text-sidebar-accent-foreground shadow-lg ring-1 ring-border",
       )}
       onClick={onOpen}
     >
-      {/* Leading slot: the busy mark, or the drag affordance on hover. Keeping it
-          fixed-width leaves session titles aligned with project names. */}
+      {/* Leading slot: the busy mark while running, otherwise an empty spacer of the
+          same width so session titles stay aligned with project names. */}
       <span className="flex size-3.5 shrink-0 items-center justify-center">
-        {showSpinner ? (
-          <SessionBusyMark />
-        ) : (
-          <HugeiconsIcon
-            strokeWidth={2}
-            icon={DragDropVerticalIcon}
-            className={cn(
-              "size-3.5 text-muted-foreground transition-opacity",
-              overlay ? "opacity-70" : "opacity-0 group-hover/session:opacity-70",
-            )}
-          />
-        )}
+        {showSpinner ? <RunningMark /> : null}
       </span>
       {renamingThis ? (
         <InlineRename value={item.title} onSubmit={onRename} onCancel={onCancelRename} />
       ) : (
         <>
           <span className="min-w-0 flex-1 truncate">{item.title}</span>
-          {overlay ? null : (
-            <div className="flex shrink-0 items-center gap-0.5 opacity-0 group-hover/session:opacity-100 focus-within:opacity-100">
+          <div className="flex shrink-0 items-center gap-0.5 opacity-0 group-hover/session:opacity-100 focus-within:opacity-100">
               <IconButton
                 size="icon-xs"
                 variant="ghost"
@@ -304,7 +438,6 @@ function SessionRowContent({
                 <HugeiconsIcon strokeWidth={2} icon={Archive04Icon} className="size-3.5" />
               </IconButton>
             </div>
-          )}
         </>
       )}
     </div>
@@ -312,11 +445,37 @@ function SessionRowContent({
 }
 
 /**
- * One draggable conversation. dnd-kit's transform/transition animate the neighbours
- * out of the way while `DragOverlay` follows the pointer, so the row itself is
- * hidden during the drag and the overlay carries the moving chrome.
+ * The floating copy of a conversation that follows the pointer while dragging. It is
+ * chrome-only (no interactions) and carries the app's elevation so the row reads as
+ * "picked up" rather than as part of the list.
  */
-function SortableSession({
+function LiftedSessionRow({ item, width }: { item: Conversation; width: number }): JSX.Element {
+  return (
+    <div style={{ width }} className="bg-sidebar">
+      <div className="flex h-8 cursor-grabbing items-center gap-2.5 rounded-md border border-sidebar-border bg-sidebar-accent px-2 text-sm text-sidebar-accent-foreground shadow-lg">
+        <span className="min-w-0 flex-1 truncate">{item.title}</span>
+      </div>
+    </div>
+  );
+}
+
+/** The floating copy of a project header that follows the pointer while dragging. */
+function LiftedProjectRow({ name, width }: { name: string; width: number }): JSX.Element {
+  return (
+    <div style={{ width }} className="bg-sidebar">
+      <div className="flex h-8 cursor-grabbing items-center gap-2.5 rounded-md border border-sidebar-border bg-sidebar-accent px-2 text-sm text-sidebar-accent-foreground shadow-lg">
+        <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} className="size-3.5 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 flex-1 truncate">{name}</span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * One draggable conversation. Nothing moves live: the row fades out while it is in
+ * flight and a drop line marks where it will land (see `DropLine`).
+ */
+function DraggableSession({
   item,
   active,
   isPinned,
@@ -341,22 +500,20 @@ function SortableSession({
   onRename: (title: string) => void;
   onCancelRename: () => void;
 }): JSX.Element {
-  const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-    id: item.id,
-    transition: REORDER_TRANSITION,
-  });
-  const style: CSSProperties = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    // The overlay draws the moving row; the source only holds its place.
-    opacity: isDragging ? 0 : undefined,
-    position: "relative",
-    zIndex: isDragging ? 10 : undefined,
-  };
+  const { listeners, setNodeRef, isDragging } = useDraggable({ id: item.id });
+  const { setNodeRef: setDroppableRef } = useDroppable({ id: item.id });
   return (
     // pan-y lets a touchscreen scroll the list; mouse drag is unaffected (the
     // PointerSensor only needs `touch-action` for touch pointers).
-    <div ref={setNodeRef} style={style} {...listeners} className="touch-pan-y">
+    <div
+      ref={(node) => {
+        setNodeRef(node);
+        setDroppableRef(node);
+      }}
+      {...listeners}
+      className="relative touch-pan-y"
+    >
+      <div className={cn("transition-opacity", isDragging && "opacity-40")}>
       <ContextMenu>
         <ContextMenuTrigger className="w-full">
           <SessionRowContent
@@ -378,6 +535,7 @@ function SortableSession({
           <ContextMenuItem onClick={onArchive}>归档</ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
+      </div>
     </div>
   );
 }
@@ -389,11 +547,13 @@ export function Sidebar({
   running,
   onNewChat,
   onOpen,
+  onArchive,
   onAddProject,
   onRenameSession,
   onRenameProject,
   onRemoveProject,
   onRevealProject,
+  onReorderProjects,
   onOpenSettings,
   onOpenMarket,
   onSearch,
@@ -404,11 +564,15 @@ export function Sidebar({
   running: Record<string, boolean>;
   onNewChat: (cwd?: string) => void;
   onOpen: (id: string) => void;
+  /** Hides the chat from every list; the shell also closes it when it is on screen. */
+  onArchive: (id: string) => void;
   onAddProject: () => void;
   onRenameSession: (id: string, title: string) => void;
   onRenameProject: (cwd: string, name: string) => void;
   onRemoveProject: (cwd: string) => void;
   onRevealProject: (cwd: string) => void;
+  /** Persists a drag-reordered project list; the catalog owns the order. */
+  onReorderProjects: (cwds: string[]) => void;
   onOpenSettings: () => void;
   onOpenMarket: () => void;
   onSearch: () => void;
@@ -425,7 +589,8 @@ export function Sidebar({
   const archived = useArchivedIds();
   const [renaming, setRenaming] = useState<RenameTarget | null>(null);
   const [pendingDelete, setPendingDelete] = useState<DeleteTarget | null>(null);
-  const [activeDragId, setActiveDragId] = useState<string | null>(null);
+  const [drop, setDrop] = useState<DropIndicator | null>(null);
+  const [drag, setDrag] = useState<ActiveDrag | null>(null);
   const startWidth = useRef(width);
   // Set once the drag has crossed the minimum, so the collapsing branch fires a
   // single settings write instead of one per mousemove until the drag ends.
@@ -461,11 +626,6 @@ export function Sidebar({
       persistPinned(next);
       return next;
     });
-  }
-
-  /** Archived conversations are hidden from every list: Settings → 归档对话 manages them. */
-  function archiveSession(id: string): void {
-    archiveConversations(id);
   }
 
   function sortSessions(items: Conversation[]): Conversation[] {
@@ -517,24 +677,29 @@ export function Sidebar({
     return applyManualOrder(sortSessions(unbound), sidebarOrder?.[sectionKey("recent")]);
   }, [conversations, pinned, archived, sidebarOrder]);
 
-  // Maps every rendered conversation to the section it lives in, so a drag can only
-  // ever reorder within its own list and the drop is scoped to those siblings.
+  // Maps every draggable row to the section it lives in, so a drag can only ever
+  // reorder within its own list. Projects are one list of their own, under `projects`.
   const sections = useMemo(() => {
-    const map = new Map<string, { key: string; items: Conversation[] }>();
-    const record = (key: string, items: Conversation[]): void => {
-      for (const item of items) map.set(item.id, { key, items });
+    const map = new Map<string, DragSection>();
+    const record = (key: string, ids: string[]): void => {
+      const section: DragSection = { key, ids };
+      for (const id of ids) map.set(id, section);
     };
-    record(sectionKey("pinned"), pinnedItems);
-    for (const group of groups) record(group.key, group.items);
-    record(sectionKey("recent"), recent);
+    record(sectionKey("pinned"), pinnedItems.map((item) => item.id));
+    for (const group of groups) record(group.key, group.items.map((item) => item.id));
+    record(sectionKey("recent"), recent.map((item) => item.id));
+    record(PROJECTS_SECTION, groups.map((group) => group.cwd));
     return map;
   }, [pinnedItems, groups, recent]);
 
+  // Rows are the droppables; a drag only considers the rows of its own section, so
+  // the insertion line can never appear in another list. `closestCenter` over the
+  // rows' own rects keeps the target stable as the pointer moves.
   const collisionDetection = useCallback<CollisionDetection>(
     (args) => {
       const section = sections.get(String(args.active.id));
-      if (!section) return closestCenter(args);
-      const allowed = new Set(section.items.map((item) => item.id));
+      if (!section) return [];
+      const allowed = new Set(section.ids);
       return closestCenter({
         ...args,
         droppableContainers: args.droppableContainers.filter((container) => allowed.has(String(container.id))),
@@ -544,31 +709,64 @@ export function Sidebar({
   );
 
   function handleDragStart(event: DragStartEvent): void {
-    setActiveDragId(String(event.active.id));
+    const section = sections.get(String(event.active.id));
+    if (!section) return;
+    setDrag({ id: String(event.active.id), section });
+    setDrop(null);
+  }
+
+  /** Turn the row under the pointer into an insert position. The dragged row's centre
+   *  compared to the target row's centre decides whether the line sits above or below,
+   *  so the index is expressed in the current (unmoving) list. A position that would
+   *  leave the list unchanged (the dragged row's own slot, above or below) is not a
+   *  real drop, so it reports no indicator and draws no line.
+   */
+  function indicatorFor(event: DragMoveEvent | DragEndEvent): DropIndicator | null {
+    const section = sections.get(String(event.active.id));
+    if (!section || !event.over) return null;
+    const overIndex = section.ids.indexOf(String(event.over.id));
+    if (overIndex < 0) return null;
+    const overRect = event.over.rect;
+    const activeRect = event.active.rect.current.translated;
+    const activeMiddle = activeRect ? activeRect.top + activeRect.height / 2 : overRect.top;
+    const below = activeMiddle > overRect.top + overRect.height / 2;
+    const index = below ? overIndex + 1 : overIndex;
+    const from = section.ids.indexOf(String(event.active.id));
+    // `index === from` is just above the source and `index === from + 1` just below
+    // it; both resolve back to the same slot, so the drag would be a no-op.
+    if (from >= 0 && (index === from || index === from + 1)) return null;
+    return {
+      key: section.key,
+      index,
+      edge: below ? "below" : "above",
+      rect: { top: overRect.top, bottom: overRect.bottom, left: overRect.left, width: overRect.width },
+    };
   }
 
   function handleDragEnd(event: DragEndEvent): void {
-    setActiveDragId(null);
-    const { active, over } = event;
-    if (!over || active.id === over.id) return;
-    const section = sections.get(String(active.id));
+    const indicator = indicatorFor(event);
+    setDrag(null);
+    setDrop(null);
+    if (!indicator) return;
+    const section = sections.get(String(event.active.id));
     if (!section) return;
-    const ids = section.items.map((item) => item.id);
-    const from = ids.indexOf(String(active.id));
-    const to = ids.indexOf(String(over.id));
-    if (from < 0 || to < 0) return;
-    // Persist only this section's list under its own key, so a drag inside one
-    // project cannot disturb 置顶, 最近 or any other project.
-    updateSettings({
-      sidebarOrder: { ...(sidebarOrder ?? {}), [section.key]: arrayMove(ids, from, to) },
-    });
+    const from = section.ids.indexOf(String(event.active.id));
+    if (from < 0) return;
+    // The indicator counts insert positions in the current list, so dropping below
+    // the source itself shifts by one once the source is lifted out.
+    const to = indicator.index > from ? indicator.index - 1 : indicator.index;
+    if (to === from) return;
+    const next = arrayMove(section.ids, from, to);
+    // Projects are persisted in the catalog; every conversation section keeps its
+    // order under its own `sidebarOrder` key, so a drag inside one list cannot
+    // disturb 置顶, 最近 or any other project.
+    if (section.key === PROJECTS_SECTION) onReorderProjects(next);
+    else updateSettings({ sidebarOrder: { ...(sidebarOrder ?? {}), [section.key]: next } });
   }
-
-  const activeItem = activeDragId ? conversations.find((item) => item.id === activeDragId) ?? null : null;
 
   function renderSession(item: Conversation): JSX.Element {
     return (
-      <SortableSession
+      <DraggableSession
         key={item.id}
         item={item}
         active={item.id === activeId}
@@ -577,7 +775,7 @@ export function Sidebar({
         renamingThis={renaming?.type === "session" && renaming.id === item.id}
         onOpen={() => onOpen(item.id)}
         onTogglePin={() => togglePinned(item.id)}
-        onArchive={() => archiveSession(item.id)}
+        onArchive={() => onArchive(item.id)}
         onStartRename={() => setRenaming({ type: "session", id: item.id })}
         onRename={(title) => {
           onRenameSession(item.id, title);
@@ -587,6 +785,14 @@ export function Sidebar({
       />
     );
   }
+
+  function renderSessionList(items: Conversation[]): JSX.Element {
+    return <div className="space-y-0.5">{items.map((item) => renderSession(item))}</div>;
+  }
+
+  const dragSection = drag?.section ?? null;
+  const draggingItem = dragSection && drag ? conversations.find((item) => item.id === drag.id) ?? null : null;
+  const draggingProject = dragSection?.key === PROJECTS_SECTION && drag ? groups.find((group) => group.cwd === drag.id) ?? null : null;
 
   // Collapsed (dragged below the minimum width, or via the header toggle): the
   // sidebar clips to width 0 rather than shrinking to a sliver. The inner
@@ -663,8 +869,12 @@ export function Sidebar({
         collisionDetection={collisionDetection}
         modifiers={[restrictToVerticalAxis]}
         onDragStart={handleDragStart}
+        onDragMove={(event) => setDrop(indicatorFor(event))}
         onDragEnd={handleDragEnd}
-        onDragCancel={() => setActiveDragId(null)}
+        onDragCancel={() => {
+          setDrag(null);
+          setDrop(null);
+        }}
       >
         <div className="no-drag px-2">
           <div className="flex h-8 items-center justify-between">
@@ -711,9 +921,7 @@ export function Sidebar({
             {pinnedItems.length > 0 ? (
               <>
                 <SectionLabel>已置顶</SectionLabel>
-                <SortableContext items={pinnedItems.map((item) => item.id)} strategy={verticalListSortingStrategy}>
-                  <div className="space-y-0.5">{pinnedItems.map((item) => renderSession(item))}</div>
-                </SortableContext>
+                {renderSessionList(pinnedItems)}
               </>
             ) : null}
 
@@ -736,119 +944,36 @@ export function Sidebar({
               <p className="px-2 py-2 text-xs text-muted-foreground">还没有项目</p>
             ) : (
               <div className="space-y-0.5">
-                {groups.map((group) => {
+                {groups.map((group, index) => {
                   const open = !collapsed.has(group.cwd);
                   const renamingProject = renaming?.type === "project" && renaming.cwd === group.cwd;
                   return (
-                    <Collapsible
+                    <DraggableProject
                       key={group.cwd}
+                      cwd={group.cwd}
+                      name={group.name}
                       open={open}
+                      renaming={renamingProject}
                       onOpenChange={(next) => setOpen(group.cwd, next)}
+                      onNewChat={() => onNewChat(group.cwd)}
+                      onStartRename={() => setRenaming({ type: "project", cwd: group.cwd })}
+                      onRename={(next) => {
+                        onRenameProject(group.cwd, next);
+                        setRenaming(null);
+                      }}
+                      onCancelRename={() => setRenaming(null)}
+                      onReveal={() => onRevealProject(group.cwd)}
+                      onRemove={() => setPendingDelete({ type: "project", cwd: group.cwd, title: group.name })}
                     >
-                      <ContextMenu>
-                        <ContextMenuTrigger className="w-full">
-                          <div className="group/project flex h-8 items-center gap-0.5 rounded-md pr-1 pl-2 hover:bg-sidebar-accent/50">
-                            <CollapsibleTrigger className="flex min-w-0 flex-1 items-center gap-2.5 text-left text-sm">
-                              {open ? (
-                                <HugeiconsIcon strokeWidth={2} icon={Folder02Icon} className="size-3.5 shrink-0 text-muted-foreground" />
-                              ) : (
-                                <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} className="size-3.5 shrink-0 text-muted-foreground" />
-                              )}
-                              {renamingProject ? (
-                                <InlineRename
-                                  value={group.name}
-                                  onSubmit={(name) => {
-                                    onRenameProject(group.cwd, name);
-                                    setRenaming(null);
-                                  }}
-                                  onCancel={() => setRenaming(null)}
-                                />
-                              ) : (
-                                <span className="truncate">{group.name}</span>
-                              )}
-                            </CollapsibleTrigger>
-                            <div className="flex shrink-0 items-center gap-0.5 opacity-0 group-hover/project:opacity-100 focus-within:opacity-100 has-[[aria-expanded=true]]:opacity-100">
-                              <DropdownMenu>
-                                <DropdownMenuTrigger
-                                  render={<Button size="icon-xs" variant="ghost" className="text-muted-foreground" />}
-                                  onClick={(event) => event.stopPropagation()}
-                                  onPointerDown={(event) => event.stopPropagation()}
-                                >
-                                  <HugeiconsIcon strokeWidth={2} icon={MoreHorizontalIcon} className="size-3.5" />
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end" className="w-40 min-w-40">
-                                  <DropdownMenuItem onClick={() => onNewChat(group.cwd)}>
-                                    <HugeiconsIcon strokeWidth={2} icon={Add01Icon} />
-                                    新建对话
-                                  </DropdownMenuItem>
-                                  <DropdownMenuItem onClick={() => setRenaming({ type: "project", cwd: group.cwd })}>
-                                    <HugeiconsIcon strokeWidth={2} icon={PencilEdit02Icon} />
-                                    重命名
-                                  </DropdownMenuItem>
-                                  <DropdownMenuItem onClick={() => onRevealProject(group.cwd)}>
-                                    <HugeiconsIcon strokeWidth={2} icon={FolderRootIcon} />
-                                    在访达中显示
-                                  </DropdownMenuItem>
-                                  <DropdownMenuSeparator />
-                                  <DropdownMenuItem
-                                    variant="destructive"
-                                    onClick={() =>
-                                      setPendingDelete({ type: "project", cwd: group.cwd, title: group.name })
-                                    }
-                                  >
-                                    <HugeiconsIcon strokeWidth={2} icon={Delete02Icon} />
-                                    从列表移除
-                                  </DropdownMenuItem>
-                                </DropdownMenuContent>
-                              </DropdownMenu>
-                              <IconButton
-                                size="icon-xs"
-                                variant="ghost"
-                                className="text-muted-foreground"
-                                label="新建会话"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  setOpen(group.cwd, true);
-                                  onNewChat(group.cwd);
-                                }}
-                              >
-                                <HugeiconsIcon strokeWidth={2} icon={PencilEdit02Icon} className="size-3.5" />
-                              </IconButton>
-                            </div>
-                          </div>
-                        </ContextMenuTrigger>
-                        <ContextMenuContent className="w-40">
-                          <ContextMenuItem onClick={() => onNewChat(group.cwd)}>新建对话</ContextMenuItem>
-                          <ContextMenuItem onClick={() => setRenaming({ type: "project", cwd: group.cwd })}>
-                            重命名
-                          </ContextMenuItem>
-                          <ContextMenuItem onClick={() => onRevealProject(group.cwd)}>在访达中显示</ContextMenuItem>
-                          <ContextMenuSeparator />
-                          <ContextMenuItem
-                            variant="destructive"
-                            onClick={() =>
-                              setPendingDelete({ type: "project", cwd: group.cwd, title: group.name })
-                            }
-                          >
-                            从列表移除
-                          </ContextMenuItem>
-                        </ContextMenuContent>
-                      </ContextMenu>
-                      <CollapsibleContent>
-                        <SortableContext items={group.items.map((item) => item.id)} strategy={verticalListSortingStrategy}>
-                          <div className="space-y-0.5">
-                            {group.items.length === 0 ? (
-                              <p className="flex h-8 items-center gap-2.5 pl-2 text-xs text-muted-foreground">
-                                <span className="size-3.5 shrink-0" />
-                                暂无对话
-                              </p>
-                            ) : (
-                              group.items.map((item) => renderSession(item))
-                            )}
-                          </div>
-                        </SortableContext>
-                      </CollapsibleContent>
-                    </Collapsible>
+                      {group.items.length === 0 ? (
+                        <p className="flex h-8 items-center gap-2.5 pl-2 text-xs text-muted-foreground">
+                          <span className="size-3.5 shrink-0" />
+                          暂无对话
+                        </p>
+                      ) : (
+                        renderSessionList(group.items)
+                      )}
+                    </DraggableProject>
                   );
                 })}
               </div>
@@ -857,30 +982,17 @@ export function Sidebar({
             {recent.length > 0 ? (
               <>
                 <SectionLabel>最近</SectionLabel>
-                <SortableContext items={recent.map((item) => item.id)} strategy={verticalListSortingStrategy}>
-                  <div className="space-y-0.5">{recent.map((item) => renderSession(item))}</div>
-                </SortableContext>
+                {renderSessionList(recent)}
               </>
             ) : null}
           </div>
         </ScrollArea>
+        {drop ? <DropLine rect={drop.rect} edge={drop.edge} /> : null}
         <DragOverlay dropAnimation={DROP_ANIMATION}>
-          {activeItem ? (
-            <div style={{ width: width - 16 }}>
-              <SessionRowContent
-                overlay
-                item={activeItem}
-                active
-                isPinned={pinned[activeItem.id] !== undefined}
-                showSpinner={running[activeItem.id] === true}
-                renamingThis={false}
-                onOpen={() => undefined}
-                onTogglePin={() => undefined}
-                onArchive={() => undefined}
-                onRename={() => undefined}
-                onCancelRename={() => undefined}
-              />
-            </div>
+          {draggingProject ? (
+            <LiftedProjectRow name={draggingProject.name} width={width - 16} />
+          ) : draggingItem ? (
+            <LiftedSessionRow item={draggingItem} width={width - 16} />
           ) : null}
         </DragOverlay>
       </DndContext>

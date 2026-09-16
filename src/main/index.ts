@@ -11,6 +11,7 @@ import { loadModelsDev } from "./engine/models-dev";
 import {
   applyNativeTheme,
   applyPermissionMode,
+  applyStartupPermissionMode,
   clearAppSettings,
   paintWindows,
   readAppSettings,
@@ -18,6 +19,7 @@ import {
   writeAppSettings,
 } from "./engine/app-settings";
 import { getFastVibePaths } from "./engine/paths";
+import { applyKeepAwake, clearRunningConversations, setConversationRunning } from "./engine/keep-awake";
 import {
   getFileIconMapping,
   registerFileIconProtocol,
@@ -168,6 +170,10 @@ function registerIpc(): void {
     await engine.abort();
   });
 
+  ipcMain.handle(Ipc.engineContinue, async () => {
+    await engine.continueTurn();
+  });
+
   ipcMain.handle(Ipc.engineClearQueue, async () => {
     return engine.clearQueue();
   });
@@ -221,7 +227,7 @@ function registerIpc(): void {
 
   ipcMain.handle(
     Ipc.enginePermissionRespond,
-    (_event, payload: { id: string; confirmed?: boolean; value?: string; cancelled?: boolean }) => {
+    (_event, payload: { id: string; confirmed?: boolean; value?: string; cancelled?: boolean; answers?: Array<string | null> }) => {
       engine.respondPermission(payload);
     },
   );
@@ -370,6 +376,9 @@ function registerIpc(): void {
   });
   ipcMain.handle(Ipc.projectsRemove, async (_event, payload: { cwd: string }) => {
     return engine.removeProject(payload.cwd);
+  });
+  ipcMain.handle(Ipc.projectsReorder, (_event, payload: { cwds: string[] }) => {
+    return engine.reorderProjects(Array.isArray(payload?.cwds) ? payload.cwds : []);
   });
   ipcMain.handle(Ipc.workspaceReveal, async (_event, payload: { cwd: string }) => {
     if (!payload.cwd) return;
@@ -556,6 +565,7 @@ function registerIpc(): void {
     writeAppSettings(paths, payload);
     applyNativeTheme(payload);
     applyPermissionMode(payload);
+    applyKeepAwake(payload);
     paintWindows(windows);
     scheduleUpdateCheck(payload.autoCheckUpdates !== false);
   });
@@ -564,6 +574,7 @@ function registerIpc(): void {
     clearAppSettings(paths);
     applyNativeTheme({});
     applyPermissionMode({});
+    applyKeepAwake({});
     paintWindows(windows);
   });
 
@@ -585,7 +596,8 @@ app.whenReady().then(async () => {
   applyAppIcon();
   const startupSettings = readAppSettings(getFastVibePaths());
   applyNativeTheme(startupSettings);
-  applyPermissionMode(startupSettings);
+  applyStartupPermissionMode(getFastVibePaths());
+  applyKeepAwake(startupSettings);
   registerFileIconProtocol();
   registerIpc();
   registerUpdater(() => windows);
@@ -605,6 +617,11 @@ app.whenReady().then(async () => {
     }
     if (event.type === "extension_ui_request") {
       void engine.handleExtensionUi(event);
+    }
+    // 运行时保持唤醒: the engine broadcasts run start/end for every conversation,
+    // active or not, so a background chat keeps the machine up too.
+    if (event.type === "conversation_running") {
+      setConversationRunning(String(event.conversationId ?? ""), event.running === true);
     }
     for (const window of windows) window.webContents.send(Ipc.event, event);
   });
@@ -629,6 +646,7 @@ app.on("before-quit", (event) => {
   stopping = true;
   void engine.stop().finally(() => {
     terminals.dispose();
+    clearRunningConversations();
     engine.flush();
     if (!applyPendingInstall()) app.quit();
   });

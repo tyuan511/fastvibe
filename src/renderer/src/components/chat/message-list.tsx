@@ -458,6 +458,129 @@ function useNoOpWheelGuard(): (node: HTMLDivElement | null) => void {
   }, []);
 }
 
+/** Sticky rows land on the pixel; anything smaller is sub-pixel jitter. */
+const PIN_SLACK = 1;
+
+/** Nearest scrollable ancestor — the thread viewport a prompt pins inside. */
+function scrollParent(node: HTMLElement): HTMLElement | null {
+  for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+    const overflow = getComputedStyle(parent).overflowY;
+    if (overflow === "auto" || overflow === "scroll") return parent;
+  }
+  return null;
+}
+
+/**
+ * Whether a sticky prompt is currently covering the thread.
+ *
+ * `position: sticky` reports nothing when it engages, so the geometry is read
+ * instead: a pinned row has been pushed below the top of its containing block (its
+ * turn) *and* sits on the scrollport's top edge. The class alone cannot decide it —
+ * a prompt that merely happens to be first in a thread that never scrolled is
+ * covering nothing, and feathering its edge would wash out the first line of the
+ * reply underneath it.
+ */
+function usePinnedPrompt(): { ref: (node: HTMLDivElement | null) => void; pinned: boolean } {
+  const [pinned, setPinned] = useState(false);
+  const detach = useRef<(() => void) | null>(null);
+
+  const ref = useCallback((node: HTMLDivElement | null) => {
+    // React can hand a ref callback a new node without pairing it with a null
+    // first, so re-attaching is what unwires the previous node.
+    detach.current?.();
+    detach.current = null;
+    if (!node) return;
+    const turn = node.parentElement;
+    const scroller = scrollParent(node);
+    if (!turn || !scroller) return;
+
+    let frame = 0;
+    const measure = (): void => {
+      frame = 0;
+      const top = node.getBoundingClientRect().top;
+      const edge = scroller.getBoundingClientRect().top;
+      const next =
+        Math.abs(top - edge) <= PIN_SLACK && top > turn.getBoundingClientRect().top + PIN_SLACK;
+      setPinned((current) => (current === next ? current : next));
+    };
+    // One read per frame: every row hears the scroll, measure once.
+    const schedule = (): void => {
+      if (!frame) frame = requestAnimationFrame(measure);
+    };
+
+    scroller.addEventListener("scroll", schedule, { passive: true });
+    // The turn also moves with no scroll event of its own: content streaming into an
+    // earlier turn grows the scroller's content, and a resize moves the top edge.
+    const observer = new ResizeObserver(schedule);
+    observer.observe(scroller);
+    const content = scroller.firstElementChild;
+    if (content) observer.observe(content);
+    schedule();
+
+    detach.current = () => {
+      scroller.removeEventListener("scroll", schedule);
+      observer.disconnect();
+      if (frame) cancelAnimationFrame(frame);
+    };
+  }, []);
+
+  return { ref, pinned };
+}
+
+/**
+ * One transcript row. User prompts rise to the top edge and stay there while their
+ * own reply is read; the next turn's prompt pushes them away. The solid fill keeps
+ * the bubble readable, and a short scrim feathers the seam — but only while the
+ * prompt is actually covering something, so a reply's first line is never dimmed at
+ * rest. `content-visibility` would take the sticky element out of the scroll flow.
+ */
+function ThreadRow({
+  row,
+  last,
+  streaming,
+  amendable,
+  onRetry,
+  onEdit,
+  showThinking,
+  showTimestamp,
+}: {
+  row: MessageRow;
+  last: boolean;
+  streaming: boolean;
+  amendable: boolean;
+  onRetry?: (message: ChatMessage) => void;
+  onEdit?: (message: ChatMessage) => void;
+  showThinking: boolean;
+  showTimestamp: boolean;
+}): JSX.Element {
+  const isUser = row.messages[0].role === "user";
+  const { ref, pinned } = usePinnedPrompt();
+
+  return (
+    <MessageScrollerItem
+      ref={isUser ? ref : undefined}
+      id={row.id}
+      messageId={row.id}
+      className={isUser ? "relative sticky top-0 z-10 bg-background pt-2 [content-visibility:visible]" : undefined}
+    >
+      <ChatMessageRow
+        messages={row.messages}
+        streaming={streaming && last && !isUser}
+        onRetry={amendable ? onRetry : undefined}
+        onEdit={amendable ? onEdit : undefined}
+        showThinking={showThinking}
+        showTimestamp={showTimestamp}
+      />
+      {isUser && pinned ? (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 top-full h-6 bg-gradient-to-b from-background to-background/0"
+        />
+      ) : null}
+    </MessageScrollerItem>
+  );
+}
+
 export function MessageList({
   messages,
   streaming,
@@ -522,44 +645,19 @@ export function MessageList({
           <MessageScrollerContent className="mx-auto w-full max-w-3xl px-6 py-6">
             {turns.map((turn) => (
               <MessageGroup key={turn.id} className="gap-5">
-                {turn.rows.map((row) => {
-                  const index = rowIndex.get(row.id) ?? 0;
-                  const isUser = row.messages[0].role === "user";
-                  const amendable = row.id === lastUserRowId;
-                  return (
-                    <MessageScrollerItem
-                      key={row.id}
-                      id={row.id}
-                      messageId={row.id}
-                      className={
-                        // A prompt rises to the top edge and stays there while its own
-                        // reply is read; the next turn's prompt pushes it away. Solid
-                        // fill keeps the bubble readable; the fade below lets the
-                        // reply dissolve instead of clipping on a hard edge.
-                        // `content-visibility` would take the sticky element out of
-                        // the scroll flow.
-                        isUser
-                          ? "relative sticky top-0 z-10 bg-background pt-2 [content-visibility:visible]"
-                          : undefined
-                      }
-                    >
-                      <ChatMessageRow
-                        messages={row.messages}
-                        streaming={streaming && index === rows.length - 1 && !isUser}
-                        onRetry={amendable ? onRetry : undefined}
-                        onEdit={amendable ? onEdit : undefined}
-                        showThinking={showThinking}
-                        showTimestamp={showTimestamp}
-                      />
-                      {isUser ? (
-                        <div
-                          aria-hidden
-                          className="pointer-events-none absolute inset-x-0 top-full h-12 bg-gradient-to-b from-background to-background/0"
-                        />
-                      ) : null}
-                    </MessageScrollerItem>
-                  );
-                })}
+                {turn.rows.map((row) => (
+                  <ThreadRow
+                    key={row.id}
+                    row={row}
+                    last={(rowIndex.get(row.id) ?? 0) === rows.length - 1}
+                    streaming={streaming}
+                    amendable={row.id === lastUserRowId}
+                    onRetry={onRetry}
+                    onEdit={onEdit}
+                    showThinking={showThinking}
+                    showTimestamp={showTimestamp}
+                  />
+                ))}
               </MessageGroup>
             ))}
           </MessageScrollerContent>

@@ -100,7 +100,10 @@ function getColorIndex(): ColorIndex {
   return index;
 }
 
-export type TuiComponent = { render(width: number): string[]; dispose?(): void };
+export type TuiComponent = {
+  render(width: number): string[];
+  dispose?(): void;
+};
 
 /**
  * Instantiate a widget factory against a stub TUI. The widget only reads

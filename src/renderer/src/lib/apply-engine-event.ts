@@ -3,6 +3,13 @@ import type { ChatMessage, CompactInfo, CompactReason, EngineEvent, ToolCallBloc
 export type ApplyResult = {
   messages: ChatMessage[];
   streaming: boolean;
+  /**
+   * Set on `agent_end` when the run stopped early: a failure (`error`) or a user
+   * abort (`aborted`). The caller keeps the follow-up queue paused and offers to
+   * resume the turn instead of draining the queue onto a half-finished
+   * conversation.
+   */
+  interrupted?: "aborted" | "error";
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -296,12 +303,19 @@ export function applyEngineEvent(
   if (type === "agent_end") {
     const lastEngine = Array.isArray(event.messages) ? event.messages.at(-1) : undefined;
     const error = errorFromAssistant(lastEngine);
+    // A run that failed or was aborted stopped before the model finished; a clean
+    // turn ends with `stopReason` `stop`/`toolUse`/`length`. When the engine is about
+    // to auto-retry (`willRetry`), this is a transient failure the SDK is already
+    // recovering from, so it is not a terminal interruption.
+    const stopReason = isRecord(lastEngine) ? asString(lastEngine.stopReason) : undefined;
+    const interrupted: ApplyResult["interrupted"] =
+      event.willRetry === true ? undefined : error ? "error" : stopReason === "aborted" ? "aborted" : undefined;
     if (error) {
       const last = next.at(-1);
       if (last?.role === "assistant") {
         const list = next.slice();
         list[list.length - 1] = { ...last, error: last.error ?? error };
-        return { messages: list, streaming: false };
+        return { messages: list, streaming: false, interrupted };
       }
       return {
         messages: appendMessage(next, {
@@ -314,9 +328,10 @@ export function applyEngineEvent(
           error,
         }),
         streaming: false,
+        interrupted,
       };
     }
-    return { messages: next, streaming: false };
+    return { messages: next, streaming: false, interrupted };
   }
 
   if (type === "prompt_result") {

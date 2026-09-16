@@ -54,8 +54,13 @@ export class ConversationCatalog {
     return removed;
   }
 
+  /**
+   * Projects in the order the sidebar shows them: newest added first, unless the
+   * user dragged them around, in which case the stored array order wins.
+   * Never sorted by `updatedAt` — activity in a project must not move it.
+   */
   listProjects(): Project[] {
-    return [...this.#projects].sort((a, b) => b.updatedAt - a.updatedAt);
+    return [...this.#projects];
   }
 
   get(id: string): Conversation | undefined {
@@ -84,11 +89,32 @@ export class ConversationCatalog {
     const project: Project = {
       cwd: path,
       name: basename(path) || path,
+      createdAt: Date.now(),
       updatedAt: Date.now(),
     };
     this.#projects = [project, ...this.#projects];
     this.#write();
     return project;
+  }
+
+  /**
+   * Persist a drag-reordered project list. Unknown cwds are ignored and any project
+   * the renderer omitted keeps its relative position at the end, so a stale drag
+   * can never drop a project.
+   */
+  reorderProjects(cwds: string[]): Project[] {
+    const rank = new Map<string, number>();
+    cwds.forEach((cwd, index) => rank.set(cwd, index));
+    this.#projects = [...this.#projects].sort((a, b) => {
+      const left = rank.get(a.cwd);
+      const right = rank.get(b.cwd);
+      if (left === undefined && right === undefined) return 0;
+      if (left === undefined) return 1;
+      if (right === undefined) return -1;
+      return left - right;
+    });
+    this.#write();
+    return this.listProjects();
   }
 
   renameProject(cwd: string, name: string): Project | undefined {
@@ -198,7 +224,7 @@ export class ConversationCatalog {
       if (Array.isArray(parsed)) {
         // v0: a bare array; every non-empty cwd was a project.
         this.#items = parsed.filter(isConversation).map((item) => this.#migrateLegacy(item));
-        this.#projects = projectsFromConversations(this.#items);
+        this.#projects = projectsFromConversations(this.#items).sort(byProjectCreatedDesc);
         this.#activeId = this.#items[0]?.id;
         this.#write();
         return;
@@ -209,20 +235,28 @@ export class ConversationCatalog {
         // Catalogs written before `createdAt` existed fall back to `updatedAt`,
         // which is the best available proxy for creation order.
         this.#items = legacy ? rawItems.map((item) => this.#migrateLegacy(item)) : rawItems.map(withCreatedAt);
-        this.#projects = Array.isArray(parsed.projects)
-          ? parsed.projects.filter(isProject)
-          : projectsFromConversations(this.#items);
+        // Projects written before `createdAt` existed were displayed by activity, not
+        // by add time, so their stored order is not the user's order: backfill the
+        // timestamp and restore newest-added-first once. A catalog that already
+        // carries `createdAt` keeps its stored order, which is the drag order.
+        const storedProjects = Array.isArray(parsed.projects) ? parsed.projects.filter(isProject) : null;
+        const needsProjectMigration = storedProjects ? storedProjects.some((item) => !hasCreatedAt(item)) : true;
+        this.#projects = (storedProjects ?? projectsFromConversations(this.#items)).map((item) =>
+          withProjectCreatedAt(item, this.#items),
+        );
         for (const item of this.#items) {
           if (item.project && !this.#projects.some((project) => project.cwd === item.project)) {
             this.#projects.push({
               cwd: item.project,
               name: basename(item.project) || item.project,
+              createdAt: item.createdAt,
               updatedAt: item.updatedAt,
             });
           }
         }
+        if (needsProjectMigration) this.#projects.sort(byProjectCreatedDesc);
         this.#activeId = typeof parsed.activeId === "string" ? parsed.activeId : this.#items[0]?.id;
-        if (legacy) this.#write();
+        if (legacy || needsProjectMigration) this.#write();
         return;
       }
     } catch {
@@ -283,15 +317,38 @@ function projectsFromConversations(conversations: Conversation[]): Project[] {
     const project = item.project;
     if (!project) continue;
     const existing = map.get(project);
-    if (!existing || item.updatedAt > existing.updatedAt) {
+    // The oldest chat in a project is the best available proxy for when it was added.
+    if (!existing) {
       map.set(project, {
         cwd: project,
-        name: existing?.name || basename(project) || project,
+        name: basename(project) || project,
+        createdAt: item.createdAt,
         updatedAt: item.updatedAt,
       });
+      continue;
     }
+    existing.createdAt = Math.min(existing.createdAt, item.createdAt);
+    existing.updatedAt = Math.max(existing.updatedAt, item.updatedAt);
   }
   return [...map.values()];
+}
+
+function hasCreatedAt(project: Project): boolean {
+  return typeof project.createdAt === "number";
+}
+
+/** Backfill `createdAt` on projects persisted before the field existed. */
+function withProjectCreatedAt(project: Project, conversations: Conversation[]): Project {
+  if (hasCreatedAt(project)) return project;
+  const earliest = conversations
+    .filter((item) => item.project === project.cwd)
+    .reduce<number | undefined>((min, item) => (min === undefined || item.createdAt < min ? item.createdAt : min), undefined);
+  return { ...project, createdAt: earliest ?? project.updatedAt };
+}
+
+/** Newest-added first, with a stable cwd tiebreak for same-millisecond adds. */
+function byProjectCreatedDesc(a: Project, b: Project): number {
+  return b.createdAt - a.createdAt || a.cwd.localeCompare(b.cwd);
 }
 
 function normalizeProject(value: string | undefined | null): string | undefined {
