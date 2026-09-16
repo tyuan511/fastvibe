@@ -15,6 +15,9 @@ allowBuilds:
   node-pty: true
   protobufjs: false
 
+minimumReleaseAgeExclude:
+  - electron@44.4.0
+
 # Pin the pi runtime to the exact SDK version FastVibe ships so the host and any
 # extension loaded into it share one pi-tui/pi-ai instance.
 overrides:
