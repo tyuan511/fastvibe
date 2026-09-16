@@ -3,7 +3,9 @@ out
 dist
 dist-electron
 build
-release
+# electron-builder's output dir only. Anchored: a bare `release` also swallowed
+# `.agents/skills/release/`, so the release skill could not be committed.
+/release/
 .DS_Store
 *.log
 *.tsbuildinfo
