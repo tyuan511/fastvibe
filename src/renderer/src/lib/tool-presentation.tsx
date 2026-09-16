@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { BotIcon, ChromeIcon, FileCodeIcon, FileMinusIcon, FilePlusIcon, FileTextIcon, FolderTreeIcon, ListChecksIcon, MessageQuestionIcon, Plug01Icon, Search01Icon, SparklesIcon, SquareTerminalIcon, Wrench01Icon } from "@hugeicons/core-free-icons";
+import { BotIcon, ChromeIcon, FileEditIcon, FileMinusIcon, FilePlusIcon, FileTextIcon, FolderTreeIcon, ListChecksIcon, MessageQuestionIcon, Plug01Icon, Search01Icon, SparklesIcon, SquareTerminalIcon, Wrench01Icon } from "@hugeicons/core-free-icons";
 import type { ToolCallBlock } from "@shared/types";
 import { activeTodo, parseToolTodos, todoIndexOf } from "./todos";
 import { displayPath } from "./workspace-path";
@@ -93,7 +93,7 @@ const LABELS: Record<ToolFamily, { running: string; done: string }> = {
 
 const ICONS: Record<ToolFamily, ReactNode> = {
   read: <HugeiconsIcon strokeWidth={2} icon={FileTextIcon} className="size-3.5" />,
-  edit: <HugeiconsIcon strokeWidth={2} icon={FileCodeIcon} className="size-3.5" />,
+  edit: <HugeiconsIcon strokeWidth={2} icon={FileEditIcon} className="size-3.5" />,
   write: <HugeiconsIcon strokeWidth={2} icon={FilePlusIcon} className="size-3.5" />,
   delete: <HugeiconsIcon strokeWidth={2} icon={FileMinusIcon} className="size-3.5" />,
   search: <HugeiconsIcon strokeWidth={2} icon={Search01Icon} className="size-3.5" />,

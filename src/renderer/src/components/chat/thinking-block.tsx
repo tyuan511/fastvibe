@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useRef, useState, type JSX } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { ArrowRight01Icon, BrainIcon } from "@hugeicons/core-free-icons";
+import { ArrowRight01Icon, Brain03Icon } from "@hugeicons/core-free-icons";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 
@@ -128,7 +128,7 @@ export const ThinkingBlock = memo(function ThinkingBlock({
       >
         <HugeiconsIcon
           strokeWidth={2}
-          icon={BrainIcon}
+          icon={Brain03Icon}
           className={cn("size-4 shrink-0 text-muted-foreground")}
         />
         <span className="shrink-0 whitespace-nowrap">

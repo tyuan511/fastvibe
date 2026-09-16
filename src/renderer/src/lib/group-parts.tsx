@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { FileCodeIcon, FolderSearchIcon, SquareTerminalIcon } from "@hugeicons/core-free-icons";
+import { FileEditIcon, FolderSearchIcon, SquareTerminalIcon } from "@hugeicons/core-free-icons";
 import type { ChatMessage, MessagePart, ToolCallBlock } from "@shared/types";
 import { asRecord, familyOf, type ToolFamily } from "./tool-presentation";
 
@@ -42,7 +42,7 @@ const GROUP_MEMBERS: Record<ToolGroupKind, ToolFamily[]> = {
 
 const GROUP_STYLE: Record<ToolGroupKind, { label: string; icon: ReactNode }> = {
   explore: { label: "查阅", icon: <HugeiconsIcon strokeWidth={2} icon={FolderSearchIcon} className="size-3.5" /> },
-  changes: { label: "更改", icon: <HugeiconsIcon strokeWidth={2} icon={FileCodeIcon} className="size-3.5" /> },
+  changes: { label: "更改", icon: <HugeiconsIcon strokeWidth={2} icon={FileEditIcon} className="size-3.5" /> },
   terminal: { label: "终端", icon: <HugeiconsIcon strokeWidth={2} icon={SquareTerminalIcon} className="size-3.5" /> },
 };
 
