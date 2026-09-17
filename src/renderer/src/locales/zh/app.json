@@ -10,10 +10,6 @@
     "disconnected": "未连接"
   },
   "update": {
-    "readyTitle": "新版本已就绪",
-    "readyDesc": "FastVibe {{version}} 已下载，安装需要重启应用。",
-    "later": "稍后",
-    "installNow": "立即安装",
     "sidebarUpdate": "更新",
     "sidebarRestart": "重启",
     "sidebarUpdateTitle": "更新到 FastVibe {{version}}",

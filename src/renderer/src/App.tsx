@@ -17,7 +17,6 @@ import { SidePane, disposeSidePaneTabs } from "@/components/layout/side-pane";
 import { handleBrowserRequest } from "@/components/layout/side-pane-browser";
 import { PANEL_COLLAPSE_TRANSITION } from "@/components/layout/collapsible-panel";
 import { CommandPalette } from "@/components/layout/command-palette";
-import { UpdateBanner } from "@/components/layout/update-banner";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/icon-button";
@@ -1367,7 +1366,6 @@ export function App(): JSX.Element {
           </Alert>
         </div>
       ) : null}
-      <UpdateBanner />
     </>
   );
 

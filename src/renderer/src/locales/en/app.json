@@ -10,10 +10,6 @@
     "disconnected": "Disconnected"
   },
   "update": {
-    "readyTitle": "Update ready",
-    "readyDesc": "FastVibe {{version}} has been downloaded. Installing requires a restart.",
-    "later": "Later",
-    "installNow": "Install now",
     "sidebarUpdate": "Update",
     "sidebarRestart": "Restart",
     "sidebarUpdateTitle": "Update to FastVibe {{version}}",
