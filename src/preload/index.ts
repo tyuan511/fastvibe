@@ -47,6 +47,7 @@ import type {
   GitDiffSource,
   GitStatus,
   TerminalDataEvent,
+  WindowChromeState,
   TerminalSessionInfo,
 } from "@shared/ipc";
 
@@ -262,6 +263,11 @@ const api = {
   },
   app: {
     getInfo: (): Promise<import("@shared/ipc").AppInfo> => ipcRenderer.invoke(Ipc.appGetInfo),
+    /**
+     * Read before paint, so the shell can decide whether it draws a title bar
+     * (`lib/platform.ts`) instead of guessing from the user agent.
+     */
+    platform: process.platform,
     log: (payload: import("@shared/ipc").AppLogPayload): void => {
       ipcRenderer.send(Ipc.appLog, payload);
     },
@@ -269,6 +275,18 @@ const api = {
     updateModelsDev: (): Promise<import("@shared/ipc").AppModelsDevInfo> =>
       ipcRenderer.invoke(Ipc.modelsDevUpdate),
     newWindow: (): Promise<void> => ipcRenderer.invoke(Ipc.windowNew),
+  },
+  /** The hand-drawn title bar's window controls (Windows / Linux only). */
+  window: {
+    minimize: (): Promise<void> => ipcRenderer.invoke(Ipc.windowMinimize),
+    toggleMaximize: (): Promise<void> => ipcRenderer.invoke(Ipc.windowToggleMaximize),
+    close: (): Promise<void> => ipcRenderer.invoke(Ipc.windowClose),
+    isMaximized: (): Promise<boolean> => ipcRenderer.invoke(Ipc.windowIsMaximized),
+    onState: (listener: (state: WindowChromeState) => void): (() => void) => {
+      const handler = (_event: unknown, payload: WindowChromeState): void => listener(payload);
+      ipcRenderer.on(Ipc.windowState, handler);
+      return () => ipcRenderer.removeListener(Ipc.windowState, handler);
+    },
   },
   updater: {
     getState: (): Promise<AppUpdateState> => ipcRenderer.invoke(Ipc.updateGetState),

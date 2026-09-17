@@ -43,8 +43,7 @@ import { SidePaneFiles } from "./side-pane-files";
 import { SidePaneGit } from "./side-pane-git";
 import { SidePaneSubagent } from "./side-pane-subagent";
 import { releaseTerminal, SidePaneTerminal } from "./side-pane-terminal";
-
-const IS_MAC = typeof navigator !== "undefined" && /mac/i.test(navigator.userAgent);
+import { HAS_CUSTOM_TITLE_BAR, IS_MAC } from "@/lib/platform";
 
 /**
  * Release everything a set of pane tabs owns. Called when tabs are closed and when
@@ -86,16 +85,20 @@ function SidebarCollapsedChrome({ onNewChat }: { onNewChat: () => void }): JSX.E
   const newChatShortcut = useShortcutLabel("newChat");
   return (
     <div className="no-drag flex shrink-0 items-center gap-1">
-      <IconButton
-        size="icon-sm"
-        variant="ghost"
-        className="text-muted-foreground"
-        label={t("pane.expandSidebar")}
-        shortcut={toggleSidebarShortcut}
-        onClick={() => updateSettings({ sidebarCollapsed: false })}
-      >
-        <HugeiconsIcon strokeWidth={2} icon={PanelLeftOpenIcon} />
-      </IconButton>
+      {/* With a title bar of its own the sidebar's toggle is up there, on screen at
+          the same time as this row — one control, one place. */}
+      {HAS_CUSTOM_TITLE_BAR ? null : (
+        <IconButton
+          size="icon-sm"
+          variant="ghost"
+          className="text-muted-foreground"
+          label={t("pane.expandSidebar")}
+          shortcut={toggleSidebarShortcut}
+          onClick={() => updateSettings({ sidebarCollapsed: false })}
+        >
+          <HugeiconsIcon strokeWidth={2} icon={PanelLeftOpenIcon} />
+        </IconButton>
+      )}
       <IconButton
         size="icon-sm"
         variant="ghost"

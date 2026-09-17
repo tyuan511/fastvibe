@@ -58,17 +58,12 @@ import { SidebarUpdateButton } from "@/components/layout/sidebar-update-button";
 import { AppLogo } from "@/components/app-logo";
 import { cn } from "@/lib/utils";
 import { clampSidebarWidth, readSidebarWidth, writeSidebarWidth, SIDEBAR_MIN_WIDTH } from "@/lib/sidebar-width";
+import { HAS_CUSTOM_TITLE_BAR, IS_MAC } from "@/lib/platform";
 import { useArchivedIds } from "@/stores/archive";
 import { useSettingsStore } from "@/stores/settings";
 import { useShortcutLabel } from "@/lib/use-shortcuts";
 import { useHistoryNav } from "@/lib/use-history-nav";
 import type { Conversation, Project } from "@shared/types";
-
-/**
- * macOS traffic lights overlay the sidebar's title bar (`hiddenInset`). Inset
- * the collapse control so it sits on the same row, just past the lights.
- */
-const IS_MAC = typeof navigator !== "undefined" && /mac/i.test(navigator.userAgent);
 
 const COLLAPSED_KEY = "fastvibe.sidebar.collapsed";
 const PINNED_KEY = "fastvibe.sidebar.pinned";
@@ -650,6 +645,7 @@ export function Sidebar({
   const updateSettings = useSettingsStore((state) => state.update);
   const toggleSidebarShortcut = useShortcutLabel("toggleSidebar");
   const { canBack, canForward, back, forward } = useHistoryNav();
+  const searchShortcut = useShortcutLabel("commandPalette");
   const [collapsed, setCollapsed] = useState<Set<string>>(() => readIdSet(COLLAPSED_KEY));
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => new Set());
   const [pinned, setPinned] = useState<Record<string, number>>(() => readPinned());
@@ -935,43 +931,43 @@ export function Sidebar({
           if (next >= SIDEBAR_MIN_WIDTH) writeSidebarWidth(next);
         }}
       />
-      <div
-        className={cn(
-          "drag-region flex h-11 shrink-0 items-center gap-0.5",
-          IS_MAC ? "pl-22" : "pl-2",
-        )}
-      >
-        <IconButton
-          size="icon-sm"
-          variant="ghost"
-          className="no-drag text-muted-foreground"
-          label={t("sidebar.collapseSidebar")}
-          shortcut={toggleSidebarShortcut}
-          onClick={() => updateSettings({ sidebarCollapsed: true })}
-        >
-          <HugeiconsIcon strokeWidth={2} icon={PanelLeftCloseIcon} />
-        </IconButton>
-        <IconButton
-          size="icon-sm"
-          variant="ghost"
-          className="no-drag text-muted-foreground"
-          label={t("sidebar.back")}
-          disabled={!canBack}
-          onClick={back}
-        >
-          <HugeiconsIcon strokeWidth={2} icon={ArrowLeft01Icon} />
-        </IconButton>
-        <IconButton
-          size="icon-sm"
-          variant="ghost"
-          className="no-drag text-muted-foreground"
-          label={t("sidebar.forward")}
-          disabled={!canForward}
-          onClick={forward}
-        >
-          <HugeiconsIcon strokeWidth={2} icon={ArrowRight01Icon} />
-        </IconButton>
-      </div>
+      {/* The title row exists to sit around macOS' traffic lights; where the window
+          has a title bar of its own, those controls (and the brand under them) are
+          up there instead and the sidebar simply starts. */}
+      {HAS_CUSTOM_TITLE_BAR ? null : (
+        <div className={cn("drag-region flex h-11 shrink-0 items-center gap-0.5", IS_MAC ? "pl-22" : "pl-2")}>
+          <IconButton
+            size="icon-sm"
+            variant="ghost"
+            className="no-drag text-muted-foreground"
+            label={t("sidebar.collapseSidebar")}
+            shortcut={toggleSidebarShortcut}
+            onClick={() => updateSettings({ sidebarCollapsed: true })}
+          >
+            <HugeiconsIcon strokeWidth={2} icon={PanelLeftCloseIcon} />
+          </IconButton>
+          <IconButton
+            size="icon-sm"
+            variant="ghost"
+            className="no-drag text-muted-foreground"
+            label={t("sidebar.back")}
+            disabled={!canBack}
+            onClick={back}
+          >
+            <HugeiconsIcon strokeWidth={2} icon={ArrowLeft01Icon} />
+          </IconButton>
+          <IconButton
+            size="icon-sm"
+            variant="ghost"
+            className="no-drag text-muted-foreground"
+            label={t("sidebar.forward")}
+            disabled={!canForward}
+            onClick={forward}
+          >
+            <HugeiconsIcon strokeWidth={2} icon={ArrowRight01Icon} />
+          </IconButton>
+        </div>
+      )}
 
       <DndContext
         sensors={sensors}
@@ -985,27 +981,29 @@ export function Sidebar({
           setDrop(null);
         }}
       >
-        <div className="no-drag px-2">
-          <div className="flex h-8 items-center justify-between">
-            <div className="flex items-center gap-2 px-2">
-              <AppLogo className="size-5 shrink-0 rounded-md" />
-              <span className="text-sm font-semibold tracking-tight">FastVibe</span>
+        <div className={cn("no-drag px-2", HAS_CUSTOM_TITLE_BAR && "pt-2")}>
+          {HAS_CUSTOM_TITLE_BAR ? null : (
+            <div className="flex h-8 items-center justify-between">
+              <div className="flex items-center gap-2 px-2">
+                <AppLogo className="size-5 shrink-0 rounded-md" />
+                <span className="text-sm font-semibold tracking-tight">FastVibe</span>
+              </div>
+              <div className="flex items-center gap-0.5">
+                <IconButton
+                  size="icon-sm"
+                  variant="ghost"
+                  className="text-muted-foreground"
+                  label={t("sidebar.search")}
+                  shortcut={searchShortcut}
+                  onClick={onSearch}
+                >
+                  <HugeiconsIcon strokeWidth={2} icon={Search01Icon} />
+                </IconButton>
+              </div>
             </div>
-            <div className="flex items-center gap-0.5">
-              <IconButton
-                size="icon-sm"
-                variant="ghost"
-                className="text-muted-foreground"
-                label={t("sidebar.search")}
-                shortcut={typeof navigator !== "undefined" && /mac/i.test(navigator.userAgent) ? "⌘K" : "Ctrl+K"}
-                onClick={onSearch}
-              >
-                <HugeiconsIcon strokeWidth={2} icon={Search01Icon} />
-              </IconButton>
-            </div>
-          </div>
+          )}
 
-          <div className="mt-1 space-y-0.5">
+          <div className={cn("space-y-0.5", HAS_CUSTOM_TITLE_BAR ? null : "mt-1")}>
             <button
               type="button"
               className="flex h-8 w-full items-center gap-2.5 rounded-md px-2 text-sm hover:bg-sidebar-accent/50"

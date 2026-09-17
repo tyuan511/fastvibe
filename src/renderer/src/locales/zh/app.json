@@ -100,5 +100,11 @@
     "removeProjectDesc": "「{{name}}」下的对话会从列表中移除，不会删除磁盘上的项目文件。",
     "cancel": "取消",
     "removeAction": "移除"
+  },
+  "titleBar": {
+    "minimize": "最小化",
+    "maximize": "最大化",
+    "restore": "还原",
+    "close": "关闭"
   }
 }

@@ -100,5 +100,11 @@
     "removeProjectDesc": "Chats under “{{name}}” will leave the list. Files on disk are not deleted.",
     "cancel": "Cancel",
     "removeAction": "Remove"
+  },
+  "titleBar": {
+    "minimize": "Minimize",
+    "maximize": "Maximize",
+    "restore": "Restore",
+    "close": "Close"
   }
 }

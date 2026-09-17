@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, Notification, protocol, session, shell } from "electron";
+import type { WebContents } from "electron";
 import { statSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -79,6 +80,14 @@ function applyAppIcon(): void {
   }
 }
 
+/**
+ * macOS keeps its own traffic lights, inset into the app's first row
+ * (`hiddenInset`). Windows and Linux have no such thing to inset, so the window
+ * ships with no chrome at all and the renderer draws the whole title bar — logo,
+ * history and its own minimise/maximise/close (`components/layout/title-bar.tsx`).
+ */
+const IS_MAC = process.platform === "darwin";
+
 function createWindow(): void {
   const window = new BrowserWindow({
     width: 1280,
@@ -88,8 +97,12 @@ function createWindow(): void {
     title: "FastVibe",
     icon: resolveAppIcon(),
     backgroundColor: windowBackgroundColor(),
-    titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
-    trafficLightPosition: { x: 16, y: 16 },
+    // A frameless Linux window is the predictable spelling of the same thing
+    // across window managers; on Windows `hidden` keeps the native thick frame,
+    // so the window still resizes, snaps and casts a shadow.
+    frame: process.platform === "linux" ? false : undefined,
+    titleBarStyle: IS_MAC ? "hiddenInset" : "hidden",
+    trafficLightPosition: IS_MAC ? { x: 16, y: 16 } : undefined,
     show: false,
       webPreferences: {
         preload: join(__dirname, "../preload/index.mjs"),
@@ -101,6 +114,14 @@ function createWindow(): void {
   });
 
   window.on("ready-to-show", () => window.show());
+  // The title bar's maximise control swaps its glyph on this; Main owns the truth
+  // because the OS can also maximise the window (snap, double-click, a WM key).
+  const sendWindowState = (): void => {
+    if (window.isDestroyed()) return;
+    window.webContents.send(Ipc.windowState, { maximized: window.isMaximized() });
+  };
+  window.on("maximize", sendWindowState);
+  window.on("unmaximize", sendWindowState);
   window.on("closed", () => {
     windows.delete(window);
     if (mainWindow === window) mainWindow = windows.values().next().value ?? null;
@@ -635,6 +656,24 @@ function registerIpc(): void {
   ipcMain.handle(Ipc.windowNew, () => {
     createWindow();
   });
+
+  // Window controls for the hand-drawn title bar (Windows / Linux only). They act
+  // on the window that asked, so a second window is not steered from the first.
+  const senderWindow = (event: { sender: WebContents }): BrowserWindow | null =>
+    BrowserWindow.fromWebContents(event.sender);
+  ipcMain.handle(Ipc.windowMinimize, (event) => {
+    senderWindow(event)?.minimize();
+  });
+  ipcMain.handle(Ipc.windowToggleMaximize, (event) => {
+    const window = senderWindow(event);
+    if (!window) return;
+    if (window.isMaximized()) window.unmaximize();
+    else window.maximize();
+  });
+  ipcMain.handle(Ipc.windowClose, (event) => {
+    senderWindow(event)?.close();
+  });
+  ipcMain.handle(Ipc.windowIsMaximized, (event) => senderWindow(event)?.isMaximized() ?? false);
 
   ipcMain.on(Ipc.settingsGetSync, (event) => {
     event.returnValue = readAppSettings(getFastVibePaths());

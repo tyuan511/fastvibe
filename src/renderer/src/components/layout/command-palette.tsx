@@ -17,9 +17,9 @@ import { i18n } from "@/lib/i18n";
 import { SETTINGS_SECTIONS, settingsSectionLabel, type SectionId } from "@/components/settings/settings-dialog";
 import { useArchivedIds } from "@/stores/archive";
 import { useShortcutLabel } from "@/lib/use-shortcuts";
+import { IS_MAC } from "@/lib/platform";
 import type { Conversation, ConversationSearchHit, Project } from "@shared/types";
 
-const IS_MAC = typeof navigator !== "undefined" && /mac/i.test(navigator.userAgent);
 const MOD = IS_MAC ? "⌘" : "Ctrl+";
 
 function settingKeywords(id: SectionId): string {

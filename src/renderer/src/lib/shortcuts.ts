@@ -1,6 +1,5 @@
 import { i18n } from "@/lib/i18n";
-
-const IS_MAC = typeof navigator !== "undefined" && /mac/i.test(navigator.userAgent);
+import { IS_MAC } from "@/lib/platform";
 
 /** Display order of the shortcut groups; labels come from `shortcutGroupLabel`. */
 export const SHORTCUT_GROUPS = ["general", "chat", "view"] as const;

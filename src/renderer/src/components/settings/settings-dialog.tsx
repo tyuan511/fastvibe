@@ -22,6 +22,7 @@ import { PERMISSION_MODES, permissionDescription, permissionLabel, permissionMod
 import type { ThemeMode } from "@/lib/themes";
 import { UI_FONT_SIZE_MAX, UI_FONT_SIZE_MIN, UI_FONT_SIZE_STEP } from "@/lib/themes";
 import { readSidebarWidth } from "@/lib/sidebar-width";
+import { HAS_CUSTOM_TITLE_BAR } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import { ProvidersSettings } from "./providers-settings";
 import { ArchivedSettings, type DeleteConversationsResult } from "./archived-settings";
@@ -162,12 +163,14 @@ export function SettingsDialog({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex bg-background">
+    <div className={cn("fixed inset-x-0 bottom-0 z-50 flex bg-background", HAS_CUSTOM_TITLE_BAR ? "top-11" : "top-0")}>
       <aside
         className="flex shrink-0 flex-col border-r border-border bg-sidebar"
         style={{ width: sidebarWidth }}
       >
-        <div className="drag-region h-11 shrink-0" />
+        {/* Under a title bar of our own this row is the bar's job; the pane itself
+            starts at the top. On macOS it is the traffic lights' clearance. */}
+        {HAS_CUSTOM_TITLE_BAR ? null : <div className="drag-region h-11 shrink-0" />}
         <div className="no-drag px-2 pt-1">
           <Button
             variant="ghost"

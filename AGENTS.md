@@ -141,7 +141,9 @@ The app ships light **and** dark themes; never assume light.
   Night Owl, Gruvbox, Monokai, Rosé Pine, Ayu, Everforest, Solarized, Quiet Light.
   Each theme is a compact `ThemeSeed`; `buildTokens` derives the full
   shadcn / Base UI token set from it (`--background`, `--primary`, `--sidebar-*`,
-  `--warning/--success/--info`, `--code-*`, …).
+  `--warning/--success/--info`, `--code-*`, …), plus `--destructive-foreground` for the text
+  drawn on a filled destructive surface (the title bar's close button), which every theme wants
+  the same near-white.
 - `applyTheme` writes every token as an **inline** custom property on `<html>` and
   toggles the `dark` class. Inline properties outrank the `.dark` fallback block in
   `index.css`; the `dark` class keeps Tailwind `dark:` variants working. `App.tsx`
@@ -228,6 +230,42 @@ history has nothing to fall back to — a reload on `/settings/providers` would 
   `SettingsRow`): a card of label + one-line description + control on the right, with a
   divider between rows. A pane that hand-rolls its own row drifts in padding, type
   scale and control alignment — 关于's cells did, and had to be rebuilt on these.
+
+## 标题栏（Windows / Linux）
+
+macOS insets its traffic lights into the app's own first row (`titleBarStyle: "hiddenInset"`),
+so the sidebar's `h-11` row is built around them: the clearance, then 收起侧边栏 /
+后退 / 前进, with the logo and wordmark on the row below. Neither of the other two has anything
+to inset, and a native title bar above an app that already has a top row is two bars with one of
+them empty.
+
+So on Windows and Linux FastVibe draws the whole bar itself
+(`components/layout/title-bar.tsx`): the brand, those same three controls, 搜索, and minimise /
+maximise / close — one `h-11` row above the sidebar/main split, whose single switch is
+`HAS_CUSTOM_TITLE_BAR` (`lib/platform.ts`). A bar **spanning the window**, rather than controls
+floated over whichever row happens to reach the top-right corner, is what keeps the window
+controls out of the side pane's tab strip: the split layout below simply starts at y=44.
+
+- **Main goes frameless.** `titleBarStyle: "hidden"` (plus `frame: false` on Linux, where the
+  window manager is the unpredictable part), so the native bar is gone and ours is the only one.
+  The controls are hand-drawn rather than `titleBarOverlay`'s native ones: those cannot be
+  previewed in a browser, cannot follow the theme, and would land on the tab strip anyway. Main
+  exposes `window:minimize` / `window:toggle-maximize` / `window:close` — each acting on the
+  window that asked — plus a `window:state` push, because the OS can maximise too (snap,
+  double-click, a window-manager key), so the glyph is not derivable from our own clicks.
+- **The platform comes from the preload, not the user agent.** `app.platform` is a plain string on
+  the bridge, read before the first paint, and every `IS_MAC` in the renderer — keybinding labels
+  included — now reads it through `lib/platform.ts`.
+- **Nothing the macOS layout keeps in the sidebar is drawn twice.** Where the bar exists, the
+  sidebar's title row and its logo row are gone and the logo/搜索 live in the bar instead;
+  `SidebarCollapsedChrome` drops its toggle and the main header its 展开侧边栏 button, because the
+  bar is on screen in both sidebar states.
+- **The settings pane starts below the bar** (`top-11`) and drops its own traffic-light spacer:
+  the window controls have to stay reachable from settings, and its content must not slide under
+  them.
+- **Preview**: `mock.html?platform=win32` (`src/renderer/src/mock/preview.ts`, which also stubs
+  the window API) renders the whole thing in a browser — how the layout was checked without a
+  Windows machine.
 
 ## Providers
 

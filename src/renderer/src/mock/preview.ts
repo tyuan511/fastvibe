@@ -37,6 +37,16 @@ const pane = params.get("pane");
 const scroll = params.get("scroll");
 const dialog = params.get("dialog");
 const expand = params.get("expand");
+/** `?sidebar=collapsed` renders the rail-less layout the title bar's toggle produces. */
+const sidebar = params.get("sidebar");
+/** `?maximize=1` hands the whole window to the side pane, with the sidebar as asked. */
+const maximize = params.get("maximize") === "1";
+/**
+ * `?platform=win32|linux` renders the shell as it is packaged there: without
+ * macOS' traffic lights, so with the title bar the app draws for itself
+ * (`lib/platform.ts`). Defaults to macOS, the layout the app is developed on.
+ */
+const platform = params.get("platform") ?? "darwin";
 
 // Reset persisted UI state so the harness always starts from the same layout.
 try {
@@ -69,7 +79,7 @@ const initialSettings: Record<string, unknown> = {
   lightTheme: "github-light",
   darkTheme: "tokyo-night",
   sidebarWidth: 264,
-  sidebarCollapsed: false,
+  sidebarCollapsed: sidebar === "collapsed",
   sidePaneWidth: 384,
 };
 
@@ -97,7 +107,7 @@ const APP_INFO: AppInfo = {
   version: "0.1.0",
   userData: "/Users/dev/Library/Application Support/FastVibe",
   runtimeRoot: "/Users/dev/Library/Application Support/FastVibe/runtime/engine",
-  platform: "darwin",
+  platform,
   modelsDev: { models: 1_284, aliases: 3_910, generatedAt: Date.now() - 36 * 60 * 60 * 1000, path: "resources/models-dev/index.json" },
 };
 
@@ -342,6 +352,8 @@ const api = {
     onTerminalData: () => () => undefined,
   },
   app: {
+    /** Read by `lib/platform.ts` before the first paint; `?platform=` overrides it. */
+    platform,
     getInfo: async () => APP_INFO,
     log: () => undefined,
     exportLogs: async () => "/Users/dev/Downloads/fastvibe-logs-preview.zip",
@@ -355,6 +367,16 @@ const api = {
     load: async () => initialSettings,
     save: async () => undefined,
     clear: async () => undefined,
+  },
+  // The window controls of a hand-drawn title bar (`?platform=win32`): there is no
+  // window in the browser, so they only have to be present and inert. State starts
+  // unmaximised and never changes, which is what the fixtures render.
+  window: {
+    minimize: async () => undefined,
+    toggleMaximize: async () => undefined,
+    close: async () => undefined,
+    isMaximized: async () => false,
+    onState: () => () => undefined,
   },
   stats: {
     usage: async () => USAGE,
@@ -382,6 +404,7 @@ if (pane === "files" || pane === "preview" || pane === "git") {
         return;
       }
       store.openFiles();
+      if (maximize) store.toggleMaximized();
       if (pane === "preview") {
         store.openFilePreview(previewFor(`${PREVIEW_CWD}/src/renderer/src/components/settings/theme-select.tsx`));
       }

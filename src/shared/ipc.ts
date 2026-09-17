@@ -93,6 +93,12 @@ export const Ipc = {
   modelsDevUpdate: "models-dev:update",
   statsUsage: "stats:usage",
   windowNew: "window:new",
+  /** Window controls for the hand-drawn title bar (Windows / Linux). */
+  windowMinimize: "window:minimize",
+  windowToggleMaximize: "window:toggle-maximize",
+  windowClose: "window:close",
+  windowIsMaximized: "window:is-maximized",
+  windowState: "window:state",
   settingsGet: "settings:get",
   settingsGetSync: "settings:get-sync",
   settingsSet: "settings:set",
@@ -189,6 +195,13 @@ export type GitDiffSource = "unstaged" | "staged" | "branch" | "last-turn";
 export type TerminalSessionInfo = { id: string; cwd: string };
 
 export type TerminalDataEvent = { id: string; data?: string; exited?: boolean };
+
+/**
+ * Pushed whenever the window's maximised state changes, so the title bar's control
+ * can swap between 最大化 and 还原 — the OS can maximise too (snap, double-click, a
+ * window-manager key), so the renderer cannot derive this from its own clicks.
+ */
+export type WindowChromeState = { maximized: boolean };
 
 export type PromptRequest = {
   message: string;

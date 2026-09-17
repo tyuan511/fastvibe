@@ -17,6 +17,8 @@ import { SidePane, disposeSidePaneTabs } from "@/components/layout/side-pane";
 import { handleBrowserRequest } from "@/components/layout/side-pane-browser";
 import { PANEL_COLLAPSE_TRANSITION } from "@/components/layout/collapsible-panel";
 import { CommandPalette } from "@/components/layout/command-palette";
+import { TitleBar } from "@/components/layout/title-bar";
+import { HAS_CUSTOM_TITLE_BAR, IS_MAC } from "@/lib/platform";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/icon-button";
@@ -48,13 +50,6 @@ import { conversationIdFromHash, conversationIdFromPath, conversationPath, works
 import { useSidePaneStore } from "@/stores/side-pane";
 import { useAppShortcuts, useShortcutLabel } from "@/lib/use-shortcuts";
 import { archiveConversations, archivedIdList, useArchivedIds } from "@/stores/archive";
-
-/**
- * macOS renders the window controls as an overlay (`hiddenInset`), so the top
- * bar has to clear them when the sidebar — which normally covers them — is
- * collapsed.
- */
-const IS_MAC = typeof navigator !== "undefined" && /mac/i.test(navigator.userAgent);
 
 function permissionKey(request: PermissionRequest): string {
   return `${request.method}:${request.title ?? ""}:${request.message ?? ""}`;
@@ -1447,128 +1442,139 @@ export function App(): JSX.Element {
   );
 
   return (
-    <div className="flex h-full bg-background">
-      <Sidebar
-        projects={projects}
-        conversations={conversations}
-        activeId={activeId}
-        running={running}
-        onNewChat={(cwd) => void handleNewChat(cwd)}
-        onOpen={(id) => void handleOpen(id)}
-        onArchive={(id) => void handleArchiveSession(id)}
-        onAddProject={() => void handleAddProject()}
-        onRenameSession={(id, title) => void handleRenameSession(id, title)}
-        onRenameProject={(cwd, name) => void handleRenameProject(cwd, name)}
-        onRemoveProject={(cwd) => void handleRemoveProject(cwd)}
-        onRevealProject={(cwd) => void window.fastvibe.workspace.reveal(cwd)}
-        onReorderProjects={(cwds) => void handleReorderProjects(cwds)}
-        onOpenSettings={() => navigate("/settings/general")}
-        onOpenMarket={() => navigate("/settings/extensions")}
-        onSearch={() => setCommandOpen(true)}
-      />
-      <main className={cn("flex min-w-0 flex-1 flex-col", !paneCollapsed && paneMaximized && "hidden")}>
-        <motion.header
-          initial={false}
-          // Expanded: the collapse control lives on the sidebar, next to the
-          // traffic lights. Collapsed: inset this bar on macOS so the expand
-          // control, title and lights share one vertically centred row.
-          animate={{ paddingLeft: sidebarCollapsed && IS_MAC ? "5.5rem" : "1rem" }}
-          transition={PANEL_COLLAPSE_TRANSITION}
-          className="drag-region flex h-11 items-center justify-between pr-4"
-        >
-          <div className="no-drag flex min-w-0 flex-1 items-center gap-1 pr-3">
-            {sidebarCollapsed ? (
-              <div className="flex items-center gap-1">
+    <div className="flex h-full flex-col bg-background">
+      {/* Windows and Linux draw the window's own bar here, above the split, so the
+          controls the OS used to provide are never missing and never fight the
+          sidebar or the right pane for the window's top-right corner. */}
+      {HAS_CUSTOM_TITLE_BAR ? <TitleBar onSearch={() => setCommandOpen(true)} /> : null}
+      <div className="flex min-h-0 flex-1">
+        <Sidebar
+          projects={projects}
+          conversations={conversations}
+          activeId={activeId}
+          running={running}
+          onNewChat={(cwd) => void handleNewChat(cwd)}
+          onOpen={(id) => void handleOpen(id)}
+          onArchive={(id) => void handleArchiveSession(id)}
+          onAddProject={() => void handleAddProject()}
+          onRenameSession={(id, title) => void handleRenameSession(id, title)}
+          onRenameProject={(cwd, name) => void handleRenameProject(cwd, name)}
+          onRemoveProject={(cwd) => void handleRemoveProject(cwd)}
+          onRevealProject={(cwd) => void window.fastvibe.workspace.reveal(cwd)}
+          onReorderProjects={(cwds) => void handleReorderProjects(cwds)}
+          onOpenSettings={() => navigate("/settings/general")}
+          onOpenMarket={() => navigate("/settings/extensions")}
+          onSearch={() => setCommandOpen(true)}
+        />
+        <main className={cn("flex min-w-0 flex-1 flex-col", !paneCollapsed && paneMaximized && "hidden")}>
+          <motion.header
+            initial={false}
+            // Expanded: the collapse control lives on the sidebar, next to the
+            // traffic lights — or in the window's title bar, where there is one.
+            // Collapsed: inset this bar on macOS so the expand control, title and
+            // lights share one vertically centred row.
+            animate={{ paddingLeft: sidebarCollapsed && IS_MAC ? "5.5rem" : "1rem" }}
+            transition={PANEL_COLLAPSE_TRANSITION}
+            className="drag-region flex h-11 items-center justify-between pr-4"
+          >
+            <div className="no-drag flex min-w-0 flex-1 items-center gap-1 pr-3">
+              {sidebarCollapsed ? (
+                <div className="flex items-center gap-1">
+                  {/* With a title bar of our own the sidebar's toggle lives up there,
+                      on the same screen as this one; two of them read as a bug. */}
+                  {HAS_CUSTOM_TITLE_BAR ? null : (
+                    <IconButton
+                      size="icon-sm"
+                      variant="ghost"
+                      label={t("workspace.expandSidebar")}
+                      shortcut={toggleSidebarShortcut}
+                      onClick={() => updateSettings({ sidebarCollapsed: false })}
+                    >
+                      <HugeiconsIcon strokeWidth={2} icon={PanelLeftOpenIcon} />
+                    </IconButton>
+                  )}
+                  <IconButton
+                    size="icon-sm"
+                    variant="ghost"
+                    label={t("workspace.newChat")}
+                    shortcut={newChatShortcut}
+                    onClick={() => void handleNewChat()}
+                  >
+                    <HugeiconsIcon strokeWidth={2} icon={MessageSquarePlusIcon} />
+                  </IconButton>
+                </div>
+              ) : null}
+              {sidebarCollapsed && !isNewSession ? (
+                <span className="mx-1.5 h-4 w-px shrink-0 bg-border" aria-hidden />
+              ) : null}
+              {isNewSession ? null : (
+                <h1 className="min-w-0 truncate text-sm font-semibold text-foreground" title={headerTitle}>
+                  {headerTitle}
+                </h1>
+              )}
+            </div>
+            {paneCollapsed ? (
+              <div className="no-drag flex items-center">
                 <IconButton
                   size="icon-sm"
                   variant="ghost"
-                  label={t("workspace.expandSidebar")}
-                  shortcut={toggleSidebarShortcut}
-                  onClick={() => updateSettings({ sidebarCollapsed: false })}
+                  label={t("workspace.expandSidePane")}
+                  shortcut={toggleSidePaneShortcut}
+                  onClick={togglePane}
                 >
-                  <HugeiconsIcon strokeWidth={2} icon={PanelLeftOpenIcon} />
-                </IconButton>
-                <IconButton
-                  size="icon-sm"
-                  variant="ghost"
-                  label={t("workspace.newChat")}
-                  shortcut={newChatShortcut}
-                  onClick={() => void handleNewChat()}
-                >
-                  <HugeiconsIcon strokeWidth={2} icon={MessageSquarePlusIcon} />
+                  <HugeiconsIcon strokeWidth={2} icon={PanelRightOpenIcon} />
                 </IconButton>
               </div>
             ) : null}
-            {sidebarCollapsed && !isNewSession ? (
-              <span className="mx-1.5 h-4 w-px shrink-0 bg-border" aria-hidden />
-            ) : null}
-            {isNewSession ? null : (
-              <h1 className="min-w-0 truncate text-sm font-semibold text-foreground" title={headerTitle}>
-                {headerTitle}
-              </h1>
-            )}
-          </div>
-          {paneCollapsed ? (
-            <div className="no-drag flex items-center">
-              <IconButton
-                size="icon-sm"
-                variant="ghost"
-                label={t("workspace.expandSidePane")}
-                shortcut={toggleSidePaneShortcut}
-                onClick={togglePane}
-              >
-                <HugeiconsIcon strokeWidth={2} icon={PanelRightOpenIcon} />
-              </IconButton>
-            </div>
-          ) : null}
-        </motion.header>
-        {showHero ? (
-          // New conversation: the greeting hero sits above the composer and the
-          // suggestion chips below it, with the group centred like the reference.
-          <div className="flex min-h-0 w-full flex-1 flex-col items-center justify-center gap-6">
-            {bannerNode}
-            <NewSessionHero />
-            <ExtensionWidgets className="pb-2" />
-            <GoalPanel className="pb-2" disabled={conversationWorking} />
-            <TodoPanel className="pb-2" />
-            {composerSlot}
-            {/* The suggestion chips write the draft, which a model-less composer refuses to
-                type — offering them there would fill a box the user cannot send from. */}
-            {hasModel ? <SuggestionChips onSelect={setDraft} /> : null}
-          </div>
-        ) : (
-          <>
-            <div className="relative min-h-0 flex-1">
-              <MessageThread
-                loading={loading}
-                onRetry={handleRetry}
-                onEdit={handleEdit}
-                showThinking={settings.showThinking}
-                showTimestamp={settings.showTimestamps}
-                collapseRuns={settings.collapseRuns}
-              />
-            </div>
-            {/* Everything under the transcript shares its column: the transcript's
-                scroller reserves a scrollbar gutter, so this box reserves the same one
-                (`transcript-gutter`) and both columns land on the same edges. */}
-            <div className="transcript-gutter overflow-hidden">
+          </motion.header>
+          {showHero ? (
+            // New conversation: the greeting hero sits above the composer and the
+            // suggestion chips below it, with the group centred like the reference.
+            <div className="flex min-h-0 w-full flex-1 flex-col items-center justify-center gap-6">
               {bannerNode}
+              <NewSessionHero />
               <ExtensionWidgets className="pb-2" />
               <GoalPanel className="pb-2" disabled={conversationWorking} />
               <TodoPanel className="pb-2" />
               {composerSlot}
+              {/* The suggestion chips write the draft, which a model-less composer refuses to
+                  type — offering them there would fill a box the user cannot send from. */}
+              {hasModel ? <SuggestionChips onSelect={setDraft} /> : null}
             </div>
-          </>
-        )}
-      </main>
-      <SidePane
-        cwd={activeProject?.cwd}
-        project={active?.project}
-        parentId={activeId ?? undefined}
-        canSideChat={Boolean(activeId && hasTranscript)}
-        onNewChat={() => void handleNewChat()}
-        onError={setError}
-      />
+          ) : (
+            <>
+              <div className="relative min-h-0 flex-1">
+                <MessageThread
+                  loading={loading}
+                  onRetry={handleRetry}
+                  onEdit={handleEdit}
+                  showThinking={settings.showThinking}
+                  showTimestamp={settings.showTimestamps}
+                  collapseRuns={settings.collapseRuns}
+                />
+              </div>
+              {/* Everything under the transcript shares its column: the transcript's
+                  scroller reserves a scrollbar gutter, so this box reserves the same one
+                  (`transcript-gutter`) and both columns land on the same edges. */}
+              <div className="transcript-gutter overflow-hidden">
+                {bannerNode}
+                <ExtensionWidgets className="pb-2" />
+                <GoalPanel className="pb-2" disabled={conversationWorking} />
+                <TodoPanel className="pb-2" />
+                {composerSlot}
+              </div>
+            </>
+          )}
+        </main>
+        <SidePane
+          cwd={activeProject?.cwd}
+          project={active?.project}
+          parentId={activeId ?? undefined}
+          canSideChat={Boolean(activeId && hasTranscript)}
+          onNewChat={() => void handleNewChat()}
+          onError={setError}
+        />
+      </div>
       <SettingsDialog
         open={settingsOpen}
         onOpenChange={(open) => {

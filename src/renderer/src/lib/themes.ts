@@ -115,6 +115,7 @@ function buildTokens(seed: ThemeSeed): ThemeTokens {
     accent: seed.muted,
     "accent-foreground": seed.fg,
     destructive: seed.destructive,
+    "destructive-foreground": "oklch(0.985 0 0)",
     border: seed.border,
     input: seed.border,
     ring: seed.accent,
