@@ -25,9 +25,9 @@
     "hoursAgo_other": "{{count}} 小时前"
   },
   "duration": {
-    "hours": "{{count}}小时",
-    "minutes": "{{count}}分钟",
-    "seconds": "{{count}}秒"
+    "hours": "{{n}}小时",
+    "minutes": "{{n}}分钟",
+    "seconds": "{{n}}秒"
   },
   "errors": {
     "generic": "操作失败，请重试",

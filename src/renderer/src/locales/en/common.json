@@ -25,9 +25,9 @@
     "hoursAgo_other": "{{count}} hours ago"
   },
   "duration": {
-    "hours": "{{count}}h",
-    "minutes": "{{count}}m",
-    "seconds": "{{count}}s"
+    "hours": "{{n}}h",
+    "minutes": "{{n}}m",
+    "seconds": "{{n}}s"
   },
   "errors": {
     "generic": "Something went wrong. Please try again.",
