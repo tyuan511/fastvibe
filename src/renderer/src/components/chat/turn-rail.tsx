@@ -8,6 +8,7 @@ import {
   type JSX,
   type MutableRefObject,
 } from "react";
+import { useTranslation } from "react-i18next";
 import { motion, useMotionValue, useReducedMotion, useSpring, useTransform, type MotionValue } from "motion/react";
 import { useMessageScroller } from "@/components/ui/message-scroller";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -131,6 +132,7 @@ function Tick({
   centers: MutableRefObject<number[]>;
   tickRef: (element: HTMLButtonElement | null) => void;
 }): JSX.Element {
+  const { t } = useTranslation("chat");
   const { scrollToMessage } = useMessageScroller();
 
   // Length is a function of the pointer's distance from this tick's centre. Both
@@ -150,7 +152,7 @@ function Tick({
           <button
             ref={tickRef}
             type="button"
-            aria-label={`第 ${index + 1} 轮 · ${marker.prompt}`}
+            aria-label={t("turns.turn", { n: index + 1, prompt: marker.prompt })}
             aria-current={active ? "true" : undefined}
             className={cn("group/tick flex w-full items-center justify-start", hit)}
             onClick={(event) => {
@@ -196,6 +198,7 @@ export const TurnRail = memo(function TurnRail({
    *  prompts, so a reply at the top edge still resolves to its turn. */
   rowIds: string[];
 }): JSX.Element {
+  const { t } = useTranslation("chat");
   const navRef = useRef<HTMLElement | null>(null);
   const [active, setActive] = useState(-1);
 
@@ -295,7 +298,7 @@ export const TurnRail = memo(function TurnRail({
   return (
     <nav
       ref={navRef}
-      aria-label="轮次导航"
+      aria-label={t("turns.nav")}
       className="pointer-events-none absolute inset-y-0 left-0 z-20 hidden flex-col justify-center @min-[58rem]/thread:flex"
       style={{ width: RAIL_WIDTH }}
     >

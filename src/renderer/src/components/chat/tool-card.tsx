@@ -1,4 +1,6 @@
 import { memo, type JSX } from "react";
+import { useTranslation } from "react-i18next";
+import { i18n } from "@/lib/i18n";
 import { Spinner } from "@/components/ui/spinner";
 import type { ToolCallBlock } from "@shared/types";
 import { useSessionStore } from "@/stores/session";
@@ -7,13 +9,15 @@ import { asRecord, argString, describeTool, familyOf, unwrapShellCommand } from 
 import { displayPath, useWorkspacePath } from "@/lib/workspace-path";
 import { parseToolTodos } from "@/lib/todos";
 import { DiffView } from "./diff-view";
+import { MarkdownView } from "./markdown-view";
 import { QuestionAnswers } from "./question-answers";
 import { TodoChecklist } from "./todo-list";
 import { ToolRow } from "./tool-row";
 
 const RESULT_LIMIT = 4000;
 
-/** Tools that render as a single line whose subject opens the viewer (zcode: read/search/list). */
+/** Tools that render as a single line whose subject opens the viewer (zcode: read/search/list).
+ *  `web_search` is not in this set: its result (summary + sources) is the card body. */
 const INLINE_FAMILIES = new Set(["read", "search", "list"]);
 
 const FILE_PATH_KEYS = ["path", "file_path", "filePath", "filename", "file", "target_file", "target"];
@@ -51,6 +55,7 @@ function trim(text: string): string {
 
 /** Terminal output panel: `$ command` header, then stdout (zcode's `nG` layout). */
 function TerminalPanel({ command, output, running }: { command: string; output: string; running: boolean }): JSX.Element {
+  const { t } = useTranslation("chat");
   return (
     <div className="mb-1 space-y-3 rounded-xl border border-border bg-muted/30 px-4 py-3">
       <div className="flex items-start gap-2">
@@ -64,15 +69,79 @@ function TerminalPanel({ command, output, running }: { command: string; output: 
           {trim(output)}
         </pre>
       ) : !running ? (
-        <p className="font-mono text-sm text-muted-foreground">没有输出。</p>
+        <p className="font-mono text-sm text-muted-foreground">{t("tools.noOutput")}</p>
+      ) : null}
+    </div>
+  );
+}
+
+type WebSource = { title: string; url: string };
+
+function webSources(tool: ToolCallBlock): WebSource[] {
+  const list = asRecord(tool.details)?.sources;
+  if (!Array.isArray(list)) return [];
+  const sources: WebSource[] = [];
+  const seen = new Set<string>();
+  for (const item of list) {
+    const row = asRecord(item);
+    const url = typeof row?.url === "string" ? row.url.trim() : "";
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    const title = typeof row?.title === "string" && row.title.trim() ? row.title.trim() : url;
+    sources.push({ title, url });
+  }
+  return sources;
+}
+
+/** `web-search.ts` appends a `## 来源` markdown block; drop it when sources render separately. */
+function webResultBody(text: string, hasSources: boolean): string {
+  const body = text.trim();
+  if (!hasSources) return body;
+  return body.replace(/\n+## (?:来源|Sources)\n[\s\S]*$/, "").trim();
+}
+
+function WebSearchPanel({ tool, running }: { tool: ToolCallBlock; running: boolean }): JSX.Element {
+  const { t } = useTranslation("chat");
+  const sources = webSources(tool);
+  const body = webResultBody(tool.result ?? "", sources.length > 0);
+  if (!body && sources.length === 0) {
+    return <p className="text-sm text-muted-foreground">{running ? t("tools.searching") : t("tools.noOutput")}</p>;
+  }
+  return (
+    <div className="flex flex-col gap-2">
+      {body ? (
+        <div className="max-h-72 overflow-auto text-sm leading-5 text-muted-foreground [&_a]:text-foreground [&_a]:underline-offset-2 hover:[&_a]:underline">
+          <MarkdownView text={body} />
+        </div>
+      ) : null}
+      {sources.length > 0 ? (
+        <div className="flex flex-col gap-1">
+          <p className="text-xs font-medium tracking-wide text-muted-foreground">{t("tools.sources")}</p>
+          <ul className="flex flex-col gap-1">
+            {sources.map((source) => (
+              <li key={source.url} className="min-w-0">
+                <a
+                  href={source.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  title={source.url}
+                  className="block truncate text-sm text-foreground underline-offset-2 hover:underline"
+                >
+                  {source.title}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </div>
       ) : null}
     </div>
   );
 }
 
 function OutputBlock({ text }: { text: string }): JSX.Element {
+  const { t } = useTranslation("chat");
   const body = trim(text);
-  if (!body) return <p className="text-sm text-muted-foreground">没有输出。</p>;
+  if (!body) return <p className="text-sm text-muted-foreground">{t("tools.noOutput")}</p>;
   return (
     <pre className="max-h-72 overflow-auto rounded-md border border-border bg-muted/40 p-2 font-mono text-sm leading-5 text-muted-foreground select-text">
       {body}
@@ -81,12 +150,13 @@ function OutputBlock({ text }: { text: string }): JSX.Element {
 }
 
 function Parameters({ args }: { args: unknown }): JSX.Element | null {
+  const { t } = useTranslation("chat");
   if (args === undefined || args === null) return null;
   const text = asText(args).trim();
   if (!text || text === "{}") return null;
   return (
     <div className="flex flex-col gap-1">
-      <p className="text-sm font-medium tracking-wide text-muted-foreground uppercase">参数</p>
+      <p className="text-sm font-medium tracking-wide text-muted-foreground uppercase">{t("tools.params")}</p>
       <pre className="max-h-60 overflow-auto rounded-md border border-border bg-muted/40 p-2 font-mono text-sm leading-5 text-muted-foreground select-text">
         {trim(text)}
       </pre>
@@ -95,6 +165,7 @@ function Parameters({ args }: { args: unknown }): JSX.Element | null {
 }
 
 function FileActions({ path }: { path: string }): JSX.Element {
+  const { t } = useTranslation("chat");
   const cwd = useWorkspacePath();
   return (
     <div className="flex flex-wrap items-center gap-3">
@@ -110,7 +181,7 @@ function FileActions({ path }: { path: string }): JSX.Element {
         className="text-sm text-muted-foreground underline-offset-2 hover:underline"
         onClick={() => void useSessionStore.getState().openPreview(path)}
       >
-        预览
+        {t("tools.preview")}
       </button>
     </div>
   );
@@ -136,11 +207,12 @@ function subagentEntries(args: unknown): SubagentEntry[] {
   return entries;
 }
 
-const SUBAGENT_STATUS: Record<string, string> = {
-  running: "运行中",
-  completed: "已完成",
-  error: "失败",
-};
+function subagentStatusLabel(status: string): string {
+  if (status === "running" || status === "completed" || status === "error") {
+    return i18n.t(`chat:tools.${status}`) as string;
+  }
+  return status;
+}
 
 /**
  * A delegated role is not a parameter list to inspect — it is a conversation. So
@@ -158,7 +230,7 @@ function SubagentPanel({ tool }: { tool: ToolCallBlock }): JSX.Element {
       {entries.map((entry, index) => {
         const id = `${tool.id}:${index}`;
         const state = subagents.find((item) => item.id === id);
-        const status = state?.status ? SUBAGENT_STATUS[state.status] ?? state.status : undefined;
+        const status = state?.status ? subagentStatusLabel(state.status) : undefined;
         return (
           <button
             key={id}
@@ -194,6 +266,8 @@ function ToolDetail({ tool, running }: { tool: ToolCallBlock; running: boolean }
   const diff = diffText(tool);
 
   if (view.family === "question") return <QuestionAnswers tool={tool} running={running} />;
+
+  if (view.family === "web") return <WebSearchPanel tool={tool} running={running} />;
 
   if (view.family === "agent") return <SubagentPanel tool={tool} />;
 
@@ -245,6 +319,7 @@ export const ToolCard = memo(function ToolCard({
     view.family === "terminal" ||
     view.family === "todo" ||
     view.family === "question" ||
+    view.family === "web" ||
     view.family === "agent" ||
     Boolean(tool.result?.length) ||
     Boolean(diffText(tool)) ||

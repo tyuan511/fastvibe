@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { uiText } from "../ui-text";
 import type { ImportCandidate, ImportOutcome, ImportRunResult, ImportSourceId, ImportSourceStatus, WorkspaceSnapshot } from "@shared/types";
 import type { ConversationCatalog } from "../conversation-catalog";
 import type { FastVibePaths } from "../paths";
@@ -42,9 +43,9 @@ export async function scanImportSources(): Promise<ImportSourceStatus[]> {
         (latest, candidate) => (latest === undefined || candidate.updatedAt > latest ? candidate.updatedAt : latest),
         undefined,
       );
-      if (candidates.length === 0) status.reason = "没有找到会话";
+      if (candidates.length === 0) status.reason = uiText("没有找到会话", "No sessions found");
     } catch (error) {
-      status.reason = error instanceof Error ? error.message : "读取失败";
+      status.reason = error instanceof Error ? error.message : uiText("读取失败", "Failed to read");
     } finally {
       // Release whatever the scan opened before the pane's next refresh.
       await adapter.dispose?.().catch(() => undefined);
@@ -67,7 +68,7 @@ export async function scanImportCandidates(
   importedKeys: ReadonlySet<string>,
 ): Promise<ImportCandidate[]> {
   const adapter = importAdapter(source);
-  if (!adapter) throw new Error(`不支持的来源：${source}`);
+  if (!adapter) throw new Error(uiText(`不支持的来源：${source}`, `Unsupported source: ${source}`));
   try {
     const candidates = await adapter.scan();
     return candidates
@@ -98,7 +99,7 @@ export async function scanImportCandidates(
 function noteFor(note: string | undefined, messageCount: number | undefined, bytes: number | undefined): string | undefined {
   const parts = note ? [note] : [];
   if ((messageCount !== undefined && messageCount > LARGE_MESSAGES) || (bytes !== undefined && bytes > LARGE_BYTES)) {
-    parts.push("会话较长，导入后建议先压缩上下文");
+    parts.push(uiText("会话较长，导入后建议先压缩上下文", "This session is long; compact after import"));
   }
   return parts.length ? parts.join("；") : undefined;
 }
@@ -118,7 +119,7 @@ export async function importSessions(options: {
   ids: string[];
 }): Promise<ImportRunResult> {
   const adapter = importAdapter(options.source);
-  if (!adapter) throw new Error(`不支持的来源：${options.source}`);
+  if (!adapter) throw new Error(uiText(`不支持的来源：${options.source}`, `Unsupported source: ${options.source}`));
   const outcomes: ImportOutcome[] = [];
   let snapshot: WorkspaceSnapshot | undefined;
   try {

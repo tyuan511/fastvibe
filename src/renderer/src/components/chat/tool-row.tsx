@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type JSX, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { ArrowRight01Icon, Copy01Icon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -180,18 +181,19 @@ export function ToolRow({
 
 /** Failure badge with the engine's message on hover, and a copy affordance. */
 function FailureHint({ error }: { error: string }): JSX.Element {
+  const { t } = useTranslation("chat");
   const [copied, setCopied] = useState(false);
   const trimmed = error.trim();
   const text = trimmed.length > 4000 ? `${trimmed.slice(0, 4000)}\n…` : trimmed;
 
-  if (!text) return <span className="shrink-0 text-sm text-destructive">执行失败</span>;
+  if (!text) return <span className="shrink-0 text-sm text-destructive">{t("tools.failed")}</span>;
 
   return (
     <Tooltip>
       <TooltipTrigger
         render={
           <span className="shrink-0 cursor-help text-sm text-destructive underline decoration-dotted underline-offset-2">
-            执行失败
+            {t("tools.failed")}
           </span>
         }
       />
@@ -203,7 +205,7 @@ function FailureHint({ error }: { error: string }): JSX.Element {
           <button
             type="button"
             className="shrink-0 rounded p-0.5 text-muted-foreground hover:text-foreground"
-            aria-label={copied ? "已复制" : "复制"}
+            aria-label={copied ? t("tools.copied") : t("tools.copy")}
             onClick={(event) => {
               event.preventDefault();
               event.stopPropagation();

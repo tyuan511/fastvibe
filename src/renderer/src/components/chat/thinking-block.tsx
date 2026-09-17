@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState, type JSX } from "react";
+import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { ArrowRight01Icon, BrainIcon } from "@hugeicons/core-free-icons";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -46,6 +47,7 @@ export const ThinkingBlock = memo(function ThinkingBlock({
   endedAt?: number;
   active: boolean;
 }): JSX.Element {
+  const { t } = useTranslation("chat");
   const [open, setOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -133,7 +135,7 @@ export const ThinkingBlock = memo(function ThinkingBlock({
         />
         <span className="shrink-0 whitespace-nowrap">
           {active ? (
-            <span className="animated-gradient-text font-medium">正在思考</span>
+            <span className="animated-gradient-text font-medium">{t("thinking.running")}</span>
           ) : (
             <SettledLabel elapsed={elapsed} />
           )}
@@ -187,12 +189,13 @@ export const ThinkingBlock = memo(function ThinkingBlock({
 
 /** 「思考 · N 秒」; without a measured duration, just 「思考」. */
 function SettledLabel({ elapsed }: { elapsed: number | null }): JSX.Element {
-  if (elapsed === null) return <span className="font-medium text-muted-foreground">思考</span>;
+  const { t } = useTranslation("chat");
+  if (elapsed === null) return <span className="font-medium text-muted-foreground">{t("thinking.done")}</span>;
   return (
     <span className="inline-flex items-center gap-2">
-      <span className="font-medium text-muted-foreground">思考</span>
+      <span className="font-medium text-muted-foreground">{t("thinking.done")}</span>
       <span className="font-normal text-muted-foreground/40">·</span>
-      <span className="font-normal text-muted-foreground/60">{elapsed} 秒</span>
+      <span className="font-normal text-muted-foreground/60">{t("thinking.seconds", { n: elapsed })}</span>
     </span>
   );
 }

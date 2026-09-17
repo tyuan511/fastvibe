@@ -1,12 +1,11 @@
+import { i18n } from "@/lib/i18n";
+
 const IS_MAC = typeof navigator !== "undefined" && /mac/i.test(navigator.userAgent);
 
-export const SHORTCUT_GROUPS = [
-  { id: "general", label: "通用" },
-  { id: "chat", label: "对话" },
-  { id: "view", label: "视图" },
-] as const;
+/** Display order of the shortcut groups; labels come from `shortcutGroupLabel`. */
+export const SHORTCUT_GROUPS = ["general", "chat", "view"] as const;
 
-export type ShortcutGroupId = (typeof SHORTCUT_GROUPS)[number]["id"];
+export type ShortcutGroupId = (typeof SHORTCUT_GROUPS)[number];
 
 export type ShortcutId =
   | "commandPalette"
@@ -25,26 +24,40 @@ export type ShortcutId =
 export type ShortcutDef = {
   id: ShortcutId;
   group: ShortcutGroupId;
-  label: string;
-  description?: string;
   default: string;
 };
 
-/** Catalog is the single source of truth: defaults, labels, and settings rows. */
+/** Catalog is the single source of truth for defaults and settings rows. Names are
+ * translated through `shortcutLabel` / `shortcutDescription` so the catalog itself
+ * stays language-free. */
 export const SHORTCUT_CATALOG: ShortcutDef[] = [
-  { id: "commandPalette", group: "general", label: "命令面板", description: "搜索对话、操作和设置", default: "mod+k" },
-  { id: "settings", group: "general", label: "打开设置", default: "mod+," },
-  { id: "newWindow", group: "general", label: "新建窗口", default: "mod+shift+n" },
-  { id: "newChat", group: "chat", label: "新对话", default: "mod+n" },
-  { id: "openFolder", group: "chat", label: "打开文件夹", default: "mod+o" },
-  { id: "focusComposer", group: "chat", label: "聚焦输入框", default: "mod+l" },
-  { id: "send", group: "chat", label: "发送消息", description: "始终发送；回车发送可单独开关", default: "mod+enter" },
-  { id: "stop", group: "chat", label: "停止生成", default: "escape" },
-  { id: "prevChat", group: "chat", label: "上一个对话", default: "mod+[" },
-  { id: "nextChat", group: "chat", label: "下一个对话", default: "mod+]" },
-  { id: "toggleSidebar", group: "view", label: "切换侧边栏", default: "mod+b" },
-  { id: "toggleSidePane", group: "view", label: "切换侧边面板", default: "mod+j" },
+  { id: "commandPalette", group: "general", default: "mod+k" },
+  { id: "settings", group: "general", default: "mod+," },
+  { id: "newWindow", group: "general", default: "mod+shift+n" },
+  { id: "newChat", group: "chat", default: "mod+n" },
+  { id: "openFolder", group: "chat", default: "mod+o" },
+  { id: "focusComposer", group: "chat", default: "mod+l" },
+  { id: "send", group: "chat", default: "mod+enter" },
+  { id: "stop", group: "chat", default: "escape" },
+  { id: "prevChat", group: "chat", default: "mod+[" },
+  { id: "nextChat", group: "chat", default: "mod+]" },
+  { id: "toggleSidebar", group: "view", default: "mod+b" },
+  { id: "toggleSidePane", group: "view", default: "mod+j" },
 ];
+
+export function shortcutGroupLabel(group: ShortcutGroupId): string {
+  return i18n.t(`common:shortcuts.group.${group}`) as string;
+}
+
+export function shortcutLabel(id: ShortcutId): string {
+  return i18n.t(`common:shortcuts.${id}`) as string;
+}
+
+/** Optional second line; only some commands carry one. */
+export function shortcutDescription(id: ShortcutId): string | undefined {
+  const key = `common:shortcuts.${id}Desc`;
+  return i18n.exists(key) ? (i18n.t(key) as string) : undefined;
+}
 
 const SHORTCUT_IDS = new Set<string>(SHORTCUT_CATALOG.map((item) => item.id));
 const DEFAULT_BY_ID = new Map(SHORTCUT_CATALOG.map((item) => [item.id, item.default]));
@@ -187,9 +200,9 @@ export function formatChord(raw: string, mac = IS_MAC): string {
 
 export function chordUsable(chord: KeyChord): string | null {
   const hasModifier = Boolean(chord.mod || chord.ctrl || chord.alt);
-  if (!hasModifier && !BARE_KEYS.has(chord.key)) return "快捷键需要包含修饰键";
+  if (!hasModifier && !BARE_KEYS.has(chord.key)) return i18n.t("common:shortcuts.needModifier") as string;
   const serialized = serializeChord(chord);
-  if (RESERVED.has(serialized)) return "系统保留快捷键";
+  if (RESERVED.has(serialized)) return i18n.t("common:shortcuts.reserved") as string;
   return null;
 }
 

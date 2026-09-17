@@ -1,4 +1,5 @@
 import { useState, type JSX, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { ArrowRight01Icon } from "@hugeicons/core-free-icons";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -25,6 +26,7 @@ export function RunCollapse({
   durationMs: number;
   children: ReactNode;
 }): JSX.Element {
+  const { t } = useTranslation("chat");
   const [open, setOpen] = useState(false);
 
   return (
@@ -44,7 +46,7 @@ export function RunCollapse({
             "focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
           )}
         >
-          <span className="truncate">用时 {formatDuration(durationMs)}</span>
+          <span className="truncate">{t("run.duration", { duration: formatDuration(durationMs) })}</span>
           <HugeiconsIcon
             strokeWidth={2}
             aria-hidden

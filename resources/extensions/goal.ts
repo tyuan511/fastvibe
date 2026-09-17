@@ -20,6 +20,8 @@ const ARMED_STATUS_KEY = "goal-armed";
 const COMPLETE_MARKER = "GOAL_COMPLETE";
 const MAX_ROUNDS = 40;
 const OFF = new Set(["clear", "off", "none", "reset"]);
+const T = (zh: string, en: string): string => (process.env.FASTVIBE_UI_LANGUAGE === "en" ? en : zh);
+const A = (zh: string, en: string): string => (process.env.FASTVIBE_AI_LANGUAGE === "en" ? en : zh);
 
 type GoalState = "running" | "paused" | "complete";
 
@@ -80,7 +82,7 @@ export default function goalMode(pi: ExtensionAPI): void {
       }
       if (command === "pause") {
         if (!objective) {
-          ctx.ui.notify("尚未设置目标。", "warning");
+          ctx.ui.notify(T("尚未设置目标。", "No goal is set."), "warning");
           return;
         }
         status = "paused";
@@ -90,7 +92,7 @@ export default function goalMode(pi: ExtensionAPI): void {
       }
       if (command === "resume") {
         if (!objective) {
-          ctx.ui.notify("尚未设置目标。", "warning");
+          ctx.ui.notify(T("尚未设置目标。", "No goal is set."), "warning");
           return;
         }
         if (status === "paused") {
@@ -156,14 +158,14 @@ export default function goalMode(pi: ExtensionAPI): void {
       status = "complete";
       completed = false;
       publish(ctx);
-      ctx.ui.notify("目标已完成。", "info");
+      ctx.ui.notify(T("目标已完成。", "Goal complete."), "info");
       return;
     }
     round += 1;
     if (round >= MAX_ROUNDS) {
       status = "paused";
       publish(ctx);
-      ctx.ui.notify(`已达到最大轮次 ${MAX_ROUNDS}，目标已暂停。`, "warning");
+      ctx.ui.notify(T(`已达到最大轮次 ${MAX_ROUNDS}，目标已暂停。`, `Reached the round cap (${MAX_ROUNDS}); goal paused.`), "warning");
       return;
     }
     publish(ctx);

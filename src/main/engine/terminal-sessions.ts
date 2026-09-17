@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { IPty } from "node-pty";
+import { uiText } from "./ui-text";
 
 type Session = {
   id: string;
@@ -13,17 +14,35 @@ type Session = {
   kill: () => void;
 };
 
-function loadPty(): typeof import("node-pty") | null {
+/**
+ * Zip extract / asar unpack often drops +x on node-pty's spawn-helper. node-pty
+ * already rewrites `app.asar` → `app.asar.unpacked` when it execs the helper;
+ * chmod must target that same real path, not the asar virtual one.
+ */
+function unpackAsarPath(filePath: string): string {
+  return filePath
+    .replace(/app\.asar(?!\.unpacked)/, "app.asar.unpacked")
+    .replace(/node_modules\.asar(?!\.unpacked)/, "node_modules.asar.unpacked");
+}
+
+function ensureSpawnHelper(ptyEntry: string): void {
+  if (process.platform === "win32") return;
+  try {
+    chmodSync(
+      unpackAsarPath(join(dirname(ptyEntry), "../prebuilds", `${process.platform}-${process.arch}`, "spawn-helper")),
+      0o755,
+    );
+  } catch {
+    // read-only install (a mounted DMG, etc.)
+  }
+}
+
+function loadPty(): { module: typeof import("node-pty"); entry: string } | null {
   try {
     const require = createRequire(import.meta.url);
-    const resolved = require.resolve("node-pty");
-    const helper = join(dirname(resolved), "../prebuilds", `${process.platform}-${process.arch}`, "spawn-helper");
-    try {
-      chmodSync(helper, 0o755);
-    } catch {
-      // ignore
-    }
-    return require("node-pty") as typeof import("node-pty");
+    const entry = require.resolve("node-pty");
+    ensureSpawnHelper(entry);
+    return { module: require("node-pty") as typeof import("node-pty"), entry };
   } catch {
     return null;
   }
@@ -31,7 +50,7 @@ function loadPty(): typeof import("node-pty") | null {
 
 const pty = loadPty();
 
-/** Side-pane shells. Prefer node-pty (zcode), fall back to `script` if the native addon fails. */
+/** Side-pane shells. Prefer node-pty; unix `script` is a last-resort PTY on Linux only. */
 export class TerminalSessions {
   #sessions = new Map<string, Session>();
   #listeners = new Set<(event: { id: string; data?: string; exited?: boolean }) => void>();
@@ -48,6 +67,7 @@ export class TerminalSessions {
     const shell = process.env.SHELL || (process.platform === "win32" ? "cmd.exe" : "/bin/zsh");
     if (pty) {
       try {
+        ensureSpawnHelper(pty.entry);
         const session = this.#startPty(id, cwd, shell, cols, rows);
         this.#sessions.set(id, session);
         return { id, cwd };
@@ -55,7 +75,11 @@ export class TerminalSessions {
         // fall through
       }
     }
-    this.#sessions.set(id, this.#startScript(id, cwd, shell));
+    if (process.platform === "win32" || process.platform === "linux") {
+      this.#sessions.set(id, this.#startScript(id, cwd, shell));
+      return { id, cwd };
+    }
+    this.#sessions.set(id, this.#startFailed(id, cwd));
     return { id, cwd };
   }
 
@@ -80,7 +104,7 @@ export class TerminalSessions {
   }
 
   #startPty(id: string, cwd: string, shell: string, cols: number, rows: number): Session {
-    const term: IPty = pty!.spawn(shell, [], {
+    const term: IPty = pty!.module.spawn(shell, [], {
       name: "xterm-256color",
       cols,
       rows,
@@ -105,15 +129,10 @@ export class TerminalSessions {
     const child: ChildProcessWithoutNullStreams =
       process.platform === "win32"
         ? spawnProcess(shell, [], { cwd, env: process.env, windowsHide: true })
-        : process.platform === "linux"
-          ? spawnProcess("script", ["-qfc", `${shell} -i`, "/dev/null"], {
-              cwd,
-              env: { ...process.env, TERM: "xterm-256color" },
-            })
-          : spawnProcess("script", ["-q", "/dev/null", shell, "-i"], {
-              cwd,
-              env: { ...process.env, TERM: "xterm-256color" },
-            });
+        : spawnProcess("script", ["-qfc", `${shell} -i`, "/dev/null"], {
+            cwd,
+            env: { ...process.env, TERM: "xterm-256color" },
+          });
     child.stdout.on("data", (chunk: Buffer) => this.#emit({ id, data: chunk.toString("utf8") }));
     child.stderr.on("data", (chunk: Buffer) => this.#emit({ id, data: chunk.toString("utf8") }));
     child.on("close", () => {
@@ -133,6 +152,27 @@ export class TerminalSessions {
       },
       resize: () => undefined,
       kill: () => child.kill(),
+    };
+  }
+
+  /**
+   * macOS `script` calls tcgetattr on a pipe and dies with "Operation not
+   * supported on socket". If node-pty cannot spawn, surface that instead of
+   * pretending the fallback worked.
+   */
+  #startFailed(id: string, cwd: string): Session {
+    const message = uiText("无法启动终端", "Failed to start terminal");
+    setImmediate(() => {
+      this.#emit({ id, data: `\r\n${message}\r\n` });
+      this.#sessions.delete(id);
+      this.#emit({ id, exited: true });
+    });
+    return {
+      id,
+      cwd,
+      write: () => undefined,
+      resize: () => undefined,
+      kill: () => undefined,
     };
   }
 

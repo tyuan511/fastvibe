@@ -1,4 +1,5 @@
 import { useEffect, useState, type JSX } from "react";
+import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Add01Icon,
@@ -54,6 +55,7 @@ import type { SkillDraft, SkillInfo } from "@shared/types";
 const EMPTY_DRAFT: SkillDraft = { name: "", description: "", body: "" };
 
 export function SkillsSettings(): JSX.Element {
+  const { t } = useTranslation("settings");
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [query, setQuery] = useState("");
   const [draft, setDraft] = useState<SkillDraft | null>(null);
@@ -93,7 +95,7 @@ export function SkillsSettings(): JSX.Element {
       setError(null);
       setDraft(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "添加失败，请重试");
+      setError(err instanceof Error ? err.message : t("skills.addFailed"));
     } finally {
       setSaving(false);
     }
@@ -108,7 +110,7 @@ export function SkillsSettings(): JSX.Element {
         setError(null);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "导入失败，请重试");
+      setError(err instanceof Error ? err.message : t("skills.importFailed"));
     } finally {
       setSaving(false);
     }
@@ -120,7 +122,7 @@ export function SkillsSettings(): JSX.Element {
       setSkills(await window.fastvibe.engine.removeSkill(name));
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "删除失败，请重试");
+      setError(err instanceof Error ? err.message : t("skills.deleteFailed"));
     } finally {
       setSaving(false);
     }
@@ -134,7 +136,7 @@ export function SkillsSettings(): JSX.Element {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3">
-        <span className="text-sm font-medium">已安装 {skills.length}</span>
+        <span className="text-sm font-medium">{t("skills.installed", { count: skills.length })}</span>
         <div className="flex items-center gap-1.5">
           <InputGroup className="h-8 w-56 rounded-full">
             <InputGroupAddon>
@@ -142,24 +144,24 @@ export function SkillsSettings(): JSX.Element {
             </InputGroupAddon>
             <InputGroupInput
               value={query}
-              placeholder="搜索技能..."
+              placeholder={t("skills.search")}
               onChange={(event) => setQuery(event.target.value)}
             />
           </InputGroup>
           <DropdownMenu>
             <DropdownMenuTrigger render={<Button size="icon-sm" variant="outline" />}>
               <HugeiconsIcon strokeWidth={2} icon={MoreHorizontalIcon} />
-              <span className="sr-only">更多</span>
+              <span className="sr-only">{t("skills.more")}</span>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem disabled={saving} onClick={() => void importSkill()}>
                 <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} />
-                导入文件夹
+                {t("skills.importFolder")}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
           <IconButton
-            label="刷新"
+            label={t("skills.refresh")}
             size="icon-sm"
             variant="outline"
             disabled={saving}
@@ -169,7 +171,7 @@ export function SkillsSettings(): JSX.Element {
           </IconButton>
           <Button size="sm" disabled={saving} onClick={openCreate}>
             <HugeiconsIcon strokeWidth={2} icon={Add01Icon} />
-            新建
+            {t("skills.create")}
           </Button>
         </div>
       </div>
@@ -190,9 +192,9 @@ export function SkillsSettings(): JSX.Element {
             <EmptyMedia variant="icon">
               <HugeiconsIcon strokeWidth={2} icon={MagicWand02Icon} />
             </EmptyMedia>
-            <EmptyTitle>{skills.length ? "没有匹配的技能" : "尚未安装技能"}</EmptyTitle>
+            <EmptyTitle>{skills.length ? t("skills.noneMatch") : t("skills.none")}</EmptyTitle>
             <EmptyDescription>
-              {skills.length ? "试试其他关键词" : "新建或导入文件夹后会出现在这里"}
+              {skills.length ? t("skills.tryOther") : t("skills.emptyHint")}
             </EmptyDescription>
           </EmptyHeader>
         </Empty>
@@ -213,8 +215,13 @@ export function SkillsSettings(): JSX.Element {
 }
 
 function SkillCard({ skill, onRemove }: { skill: SkillInfo; onRemove: () => void }): JSX.Element {
+  const { t } = useTranslation("settings");
   const scopeLabel =
-    skill.scope === "project" ? "项目" : skill.scope === "temporary" ? "临时" : "全局";
+    skill.scope === "project"
+      ? t("skills.scopeProject")
+      : skill.scope === "temporary"
+        ? t("skills.scopeTemporary")
+        : t("skills.scopeGlobal");
   return (
     <Card size="sm" className="gap-3 transition-colors hover:ring-foreground/20">
       <CardHeader>
@@ -233,7 +240,7 @@ function SkillCard({ skill, onRemove }: { skill: SkillInfo; onRemove: () => void
         </div>
         {skill.removable ? (
           <CardAction>
-            <IconButton label="删除技能" size="icon-xs" variant="ghost" onClick={onRemove}>
+            <IconButton label={t("skills.delete")} size="icon-xs" variant="ghost" onClick={onRemove}>
               <HugeiconsIcon strokeWidth={2} icon={Delete02Icon} />
             </IconButton>
           </CardAction>
@@ -265,40 +272,41 @@ function AddSkillDialog({
   onClose: () => void;
   onSubmit: () => void;
 }): JSX.Element {
+  const { t } = useTranslation("settings");
   return (
     <Dialog open={draft !== null} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>添加技能</DialogTitle>
-          <DialogDescription>写入 FastVibe 的全局技能目录，新会话会自动加载。</DialogDescription>
+          <DialogTitle>{t("skills.dialogTitle")}</DialogTitle>
+          <DialogDescription>{t("skills.dialogDesc")}</DialogDescription>
         </DialogHeader>
 
         {draft ? (
           <div className="space-y-3">
             <div className="space-y-1.5">
-              <Label>名称</Label>
+              <Label>{t("skills.name")}</Label>
               <Input
                 autoFocus
                 value={draft.name}
                 placeholder="my-skill"
                 onChange={(event) => onPatch({ name: event.target.value })}
               />
-              <p className="text-xs text-muted-foreground">小写字母、数字和连字符</p>
+              <p className="text-xs text-muted-foreground">{t("skills.nameHint")}</p>
             </div>
             <div className="space-y-1.5">
-              <Label>说明</Label>
+              <Label>{t("skills.description")}</Label>
               <Textarea
                 value={draft.description}
-                placeholder="这个技能做什么，以及何时使用"
+                placeholder={t("skills.descriptionPlaceholder")}
                 className="min-h-16 resize-y"
                 onChange={(event) => onPatch({ description: event.target.value })}
               />
             </div>
             <div className="space-y-1.5">
-              <Label>指令</Label>
+              <Label>{t("skills.instructions")}</Label>
               <Textarea
                 value={draft.body}
-                placeholder="完整步骤、命令和注意事项。相对路径相对于技能目录。"
+                placeholder={t("skills.instructionsPlaceholder")}
                 className="min-h-32 resize-y"
                 onChange={(event) => onPatch({ body: event.target.value })}
               />
@@ -310,11 +318,11 @@ function AddSkillDialog({
 
         <DialogFooter className="gap-2">
           <Button variant="outline" onClick={onClose}>
-            取消
+            {t("skills.cancel")}
           </Button>
           <Button disabled={!valid || saving} onClick={onSubmit}>
             {saving ? <HugeiconsIcon strokeWidth={2} icon={Loading03Icon} className="size-3.5 animate-spin" /> : null}
-            添加
+            {t("skills.add")}
           </Button>
         </DialogFooter>
       </DialogContent>

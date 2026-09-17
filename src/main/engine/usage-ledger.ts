@@ -116,8 +116,8 @@ export async function parseSessionTurns(file: string): Promise<ParsedSession> {
     turns.push({
       sessionId,
       entryId,
-      provider: typeof message.provider === "string" ? message.provider : current?.provider ?? "未知",
-      model: typeof message.model === "string" ? message.model : current?.model ?? "未知",
+      provider: typeof message.provider === "string" ? message.provider : current?.provider ?? "unknown",
+      model: typeof message.model === "string" ? message.model : current?.model ?? "unknown",
       at,
       input,
       output,
@@ -242,8 +242,8 @@ function cleanTurn(value: unknown): UsageTurn | undefined {
   return {
     sessionId,
     entryId,
-    provider: typeof value.provider === "string" ? value.provider : "未知",
-    model: typeof value.model === "string" ? value.model : "未知",
+    provider: typeof value.provider === "string" ? value.provider : "unknown",
+    model: typeof value.model === "string" ? value.model : "unknown",
     at: num(value.at),
     input: num(value.input),
     output: num(value.output),

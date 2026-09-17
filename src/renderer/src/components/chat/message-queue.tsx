@@ -1,4 +1,6 @@
 import { useEffect, useState, type JSX } from "react";
+import { useTranslation } from "react-i18next";
+import { i18n } from "@/lib/i18n";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Alert02Icon,
@@ -36,10 +38,9 @@ import { IconButton } from "@/components/icon-button";
 import { cn } from "@/lib/utils";
 import type { QueuePauseReason, QueuedPrompt } from "@shared/types";
 
-const PAUSE_COPY: Record<QueuePauseReason, string> = {
-  stopped: "由于你中断了当前响应，队列已暂停",
-  error: "由于当前响应出错，队列已暂停（内容未丢失）",
-};
+function pauseCopy(reason: QueuePauseReason): string {
+  return i18n.t(`chat:queue.${reason}`) as string;
+}
 
 /** Slow, ease-out settle for rows displaced by a drag, matching the sidebar. */
 const REORDER_TRANSITION = { duration: 200, easing: "cubic-bezier(0.2, 0, 0, 1)" };
@@ -67,6 +68,7 @@ function QueueRowContent({
   onRecall: () => void;
   onRemove: () => void;
 }): JSX.Element {
+  const { t } = useTranslation("chat");
   const sending = Boolean(item.sending);
   return (
     <div
@@ -79,7 +81,7 @@ function QueueRowContent({
     >
       <span
         aria-hidden
-        title={sending ? undefined : "拖动调整顺序"}
+        title={sending ? undefined : t("queue.reorder")}
         className={cn(
           "flex size-5 shrink-0 items-center justify-center text-muted-foreground/40",
           sending
@@ -100,7 +102,7 @@ function QueueRowContent({
         {item.text}
       </span>
       {sending && !overlay ? (
-        <span className="shrink-0 text-xs text-muted-foreground">发送中</span>
+        <span className="shrink-0 text-xs text-muted-foreground">{t("queue.sending")}</span>
       ) : null}
       {overlay ? null : sending ? (
         <>
@@ -112,12 +114,12 @@ function QueueRowContent({
             onClick={onRecall}
           >
             <HugeiconsIcon strokeWidth={2} icon={Undo02Icon} className="size-3.5" />
-            撤回
+            {t("queue.recall")}
           </Button>
           <IconButton
             variant="ghost"
             size="icon-xs"
-            label="删除"
+            label={t("queue.delete")}
             className="text-muted-foreground hover:text-foreground"
             onClick={onRemove}
           >
@@ -134,12 +136,12 @@ function QueueRowContent({
             onClick={onSendNow}
           >
             <HugeiconsIcon strokeWidth={2} icon={ArrowUp02Icon} className="size-3.5" />
-            立即
+            {t("queue.now")}
           </Button>
           <IconButton
             variant="ghost"
             size="icon-xs"
-            label="编辑"
+            label={t("queue.edit")}
             className="text-muted-foreground hover:text-foreground"
             onClick={onEdit}
           >
@@ -148,7 +150,7 @@ function QueueRowContent({
           <IconButton
             variant="ghost"
             size="icon-xs"
-            label="移除待发送消息"
+            label={t("queue.remove")}
             className="text-muted-foreground hover:text-foreground"
             onClick={onRemove}
           >
@@ -234,6 +236,7 @@ export function MessageQueue({
   onReorder: (ids: string[]) => void;
   onResume: () => void;
 }): JSX.Element | null {
+  const { t } = useTranslation("chat");
   const [hint, setHint] = useState<string | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
   const sensors = useSensors(
@@ -251,7 +254,7 @@ export function MessageQueue({
 
   function handleEdit(id: string): void {
     if (draft.trim()) {
-      setHint("请先发送或清空当前草稿，再编辑队列消息。");
+      setHint(t("queue.draftBusy"));
       return;
     }
     setHint(null);
@@ -291,7 +294,7 @@ export function MessageQueue({
             icon={Alert02Icon}
             className="size-3.5 shrink-0 text-warning"
           />
-          <span className="min-w-0 flex-1 truncate text-foreground">{PAUSE_COPY[pauseReason]}</span>
+          <span className="min-w-0 flex-1 truncate text-foreground">{pauseCopy(pauseReason)}</span>
           <Button
             type="button"
             variant="outline"
@@ -299,7 +302,7 @@ export function MessageQueue({
             className="shrink-0"
             onClick={onResume}
           >
-            继续发送
+            {t("queue.continue")}
           </Button>
         </div>
       ) : null}

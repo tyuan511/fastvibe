@@ -1,4 +1,6 @@
 import { type JSX } from "react";
+import { useTranslation } from "react-i18next";
+import { i18n } from "@/lib/i18n";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Bug01Icon, Compass01Icon, MagicWand02Icon, ShieldCheckIcon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
@@ -9,36 +11,38 @@ import { F_MARK_FILL } from "@/lib/f-mark";
  * (rather than inside MessageList) so the same list feeds the hero and the chip
  * row that sits below the input box.
  */
-export const NEW_SESSION_SUGGESTIONS: Array<{ icon: JSX.Element; label: string; prompt: string }> = [
-  {
-    icon: <HugeiconsIcon strokeWidth={2} icon={Compass01Icon} />,
-    label: "探索代码",
-    prompt: "请探索这个项目，说明它的结构、主要模块和它们之间的关系。",
-  },
-  {
-    icon: <HugeiconsIcon strokeWidth={2} icon={MagicWand02Icon} />,
-    label: "构建功能",
-    prompt: "帮我构建一个新功能：",
-  },
-  {
-    icon: <HugeiconsIcon strokeWidth={2} icon={ShieldCheckIcon} />,
-    label: "审查代码",
-    prompt: "请审查最近的代码改动，指出问题和改进建议。",
-  },
-  {
-    icon: <HugeiconsIcon strokeWidth={2} icon={Bug01Icon} />,
-    label: "修复问题",
-    prompt: "帮我定位并修复这个问题：",
-  },
-];
+export function newSessionSuggestions(): Array<{ icon: JSX.Element; label: string; prompt: string }> {
+  return [
+    {
+      icon: <HugeiconsIcon strokeWidth={2} icon={Compass01Icon} />,
+      label: i18n.t("chat:newSession.explore") as string,
+      prompt: i18n.t("chat:newSession.explorePrompt") as string,
+    },
+    {
+      icon: <HugeiconsIcon strokeWidth={2} icon={MagicWand02Icon} />,
+      label: i18n.t("chat:newSession.build") as string,
+      prompt: i18n.t("chat:newSession.buildPrompt") as string,
+    },
+    {
+      icon: <HugeiconsIcon strokeWidth={2} icon={ShieldCheckIcon} />,
+      label: i18n.t("chat:newSession.review") as string,
+      prompt: i18n.t("chat:newSession.reviewPrompt") as string,
+    },
+    {
+      icon: <HugeiconsIcon strokeWidth={2} icon={Bug01Icon} />,
+      label: i18n.t("chat:newSession.fix") as string,
+      prompt: i18n.t("chat:newSession.fixPrompt") as string,
+    },
+  ];
+}
 
 /** Warm, time-aware greeting. Pure so it stays easy to reason about and reuse. */
 export function greetingForHour(hour: number): string {
-  if (hour >= 5 && hour < 11) return "早上好呀，新的一天开始啦";
-  if (hour >= 11 && hour < 13) return "中午好呀，记得好好吃饭";
-  if (hour >= 13 && hour < 18) return "下午好呀，继续加油";
-  if (hour >= 18 && hour < 23) return "晚上好呀，今天辛苦啦";
-  return "夜深啦，早点休息呀";
+  if (hour >= 5 && hour < 11) return i18n.t("chat:newSession.morning") as string;
+  if (hour >= 11 && hour < 13) return i18n.t("chat:newSession.noon") as string;
+  if (hour >= 13 && hour < 18) return i18n.t("chat:newSession.afternoon") as string;
+  if (hour >= 18 && hour < 23) return i18n.t("chat:newSession.evening") as string;
+  return i18n.t("chat:newSession.night") as string;
 }
 
 /**
@@ -68,6 +72,7 @@ function FWatermark(): JSX.Element {
 
 /** Watermark + greeting, shown above the composer on a brand-new conversation. */
 export function NewSessionHero(): JSX.Element {
+  useTranslation("chat");
   return (
     <div className="relative flex flex-col items-center">
       <FWatermark />
@@ -80,9 +85,10 @@ export function NewSessionHero(): JSX.Element {
 
 /** Compact suggestion pills, rendered under the composer like the reference. */
 export function SuggestionChips({ onSelect }: { onSelect: (prompt: string) => void }): JSX.Element {
+  useTranslation("chat");
   return (
     <div className="flex flex-wrap items-center justify-center gap-2 px-6">
-      {NEW_SESSION_SUGGESTIONS.map((item) => (
+      {newSessionSuggestions().map((item) => (
         <Button
           key={item.label}
           type="button"

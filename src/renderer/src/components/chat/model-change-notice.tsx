@@ -1,4 +1,5 @@
 import type { JSX } from "react";
+import { useTranslation } from "react-i18next";
 import type { EngineModel, FastVibeModel } from "@shared/types";
 import { providerLabel } from "@/lib/provider-label";
 import { useSessionStore } from "@/stores/session";
@@ -25,13 +26,14 @@ function label(model: EngineModel | undefined, models: FastVibeModel[]): string 
  * the only thing the reader needs from it (the previous one was already on the chip).
  */
 export function ModelChangeNotice({ to }: { to: EngineModel }): JSX.Element {
+  const { t } = useTranslation("chat");
   const models = useSessionStore((state) => state.models);
   const current = label(to, models);
   return (
     <div className="flex w-full items-center gap-3 py-1 text-xs text-muted-foreground/60">
       <span aria-hidden className="h-px min-w-4 flex-1 bg-border" />
       <span className="flex min-w-0 items-center gap-1.5">
-        <span className="shrink-0">模型已切换至</span>
+        <span className="shrink-0">{t("model.switched")}</span>
         <span className="max-w-40 truncate font-medium text-muted-foreground/80">{current}</span>
       </span>
       <span aria-hidden className="h-px min-w-4 flex-1 bg-border" />

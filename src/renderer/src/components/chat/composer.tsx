@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type JSX, type KeyboardEvent, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Add01Icon, ArrowDown01Icon, ArrowUp02Icon, AttachmentIcon, Cancel01Icon, ChartHistogramIcon, Folder01Icon, HandIcon, MagicWand02Icon, PlayIcon, ScissorIcon, Search01Icon, ShieldAlertIcon, ShieldCheckIcon, SparklesIcon, SquareIcon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
@@ -36,13 +37,13 @@ import type {
 } from "@shared/types";
 import { DEFAULT_THINKING_LEVELS, THINKING_LEVELS } from "@shared/types";
 import { filesToAttachments } from "@/lib/attachments";
-import { THINKING_LABELS } from "@/lib/thinking-levels";
+import { thinkingLabel } from "@/lib/thinking-levels";
 import { useGitStatus } from "@/lib/use-git-status";
 import { cn } from "@/lib/utils";
 import { formatDuration } from "@/lib/time";
 import { matchChord, resolveBinding } from "@/lib/shortcuts";
 import { useShortcutLabel } from "@/lib/use-shortcuts";
-import { PERMISSION_DESCRIPTIONS, PERMISSION_LABELS, PERMISSION_MODES } from "@/lib/permission-modes";
+import { permissionDescription, permissionLabel, PERMISSION_MODES } from "@/lib/permission-modes";
 import { useSettingsStore } from "@/stores/settings";
 import { GitBranchChip } from "./git-branch-chip";
 import { AttachmentChip } from "./attachment-chip";
@@ -175,6 +176,7 @@ function ContextUsagePanel({
   window: number;
   stats?: SessionStats | null;
 }): JSX.Element {
+  const { t } = useTranslation("chat");
   const clamped = Math.min(100, Math.max(0, percent));
   const barColor = clamped >= 90 ? "bg-destructive" : clamped >= 70 ? "bg-warning" : "bg-primary";
   const remaining = Math.max(0, windowTokens - (used ?? 0));
@@ -191,7 +193,7 @@ function ContextUsagePanel({
     <div className="space-y-2.5">
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <span className="text-sm font-medium">上下文窗口</span>
+          <span className="text-sm font-medium">{t("composer.contextWindow")}</span>
           <span
             className={cn(
               "text-sm font-semibold tabular-nums",
@@ -205,9 +207,9 @@ function ContextUsagePanel({
           <div className={cn("h-full rounded-full transition-[width]", barColor)} style={{ width: `${clamped}%` }} />
         </div>
         <div className="flex items-center justify-between text-xs text-muted-foreground">
-          <span className="tabular-nums">已用 {formatCount(used)}</span>
+          <span className="tabular-nums">{t("composer.used", { count: formatCount(used) })}</span>
           <span className="tabular-nums">
-            剩余 {formatCount(remaining)} / {formatCount(windowTokens)}
+            {t("composer.remaining", { remaining: formatCount(remaining), window: formatCount(windowTokens) })}
           </span>
         </div>
       </div>
@@ -217,20 +219,20 @@ function ContextUsagePanel({
           <Separator />
           <div className="flex items-center gap-1.5 text-xs font-medium tracking-wide text-muted-foreground">
             <HugeiconsIcon strokeWidth={2} icon={ChartHistogramIcon} className="size-3.5" />
-            轮次统计
+            {t("composer.turnStats")}
           </div>
           <dl className="space-y-1.5 text-xs">
-            <StatRow label="回答速度" value={formatSpeed(output, timing?.modelMs)} />
-            <StatRow label="模型耗时" value={formatDuration(timing?.modelMs) || "—"} />
-            <StatRow label="工具耗时" value={formatDuration(timing?.toolMs) || "—"} />
-            <StatRow label="步骤" value={stats.steps != null ? String(stats.steps) : "—"} />
+            <StatRow label={t("composer.speed")} value={formatSpeed(output, timing?.modelMs)} />
+            <StatRow label={t("composer.modelTime")} value={formatDuration(timing?.modelMs) || "—"} />
+            <StatRow label={t("composer.toolTime")} value={formatDuration(timing?.toolMs) || "—"} />
+            <StatRow label={t("composer.steps")} value={stats.steps != null ? String(stats.steps) : "—"} />
             <StatRow label="Token" value={`${formatCount(input)} ↑ · ${formatCount(output)} ↓`} />
             <StatRow
-              label="缓存命中率"
+              label={t("composer.cacheHit")}
               value={cacheHit != null ? `${cacheHit}%` : "—"}
               className={cacheHit != null && cacheHit > 0 ? "text-success" : undefined}
             />
-            <StatRow label="费用" value={`$${(stats.cost ?? 0).toFixed(3)}`} />
+            <StatRow label={t("composer.cost")} value={`$${(stats.cost ?? 0).toFixed(3)}`} />
           </dl>
         </>
       ) : null}
@@ -346,6 +348,7 @@ export function Composer({
   focusSignal?: number;
   className?: string;
 }): JSX.Element {
+  const { t } = useTranslation("chat");
   const fileRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [dragging, setDragging] = useState(false);
@@ -461,7 +464,9 @@ export function Composer({
 
     if (sendBinding && matchChord(event.nativeEvent, sendBinding)) {
       event.preventDefault();
-      submit();
+      // A held Enter repeats the keydown: the first one sends, the rest must not
+      // queue the same prompt again.
+      if (!event.repeat) submit();
       return;
     }
     if (
@@ -473,7 +478,7 @@ export function Composer({
       !event.altKey
     ) {
       event.preventDefault();
-      submit();
+      if (!event.repeat) submit();
     }
   }
 
@@ -620,8 +625,8 @@ export function Composer({
               >
                 <span
                   className={cn("relative size-3.5 shrink-0", project && "cursor-pointer rounded-full hover:bg-muted-foreground/20")}
-                  aria-label={project ? "清除项目" : undefined}
-                  title={project ? "清除项目" : undefined}
+                  aria-label={project ? t("composer.clearProject") : undefined}
+                  title={project ? t("composer.clearProject") : undefined}
                   onClick={project ? (event) => {
                     event.preventDefault();
                     event.stopPropagation();
@@ -631,7 +636,7 @@ export function Composer({
                   <HugeiconsIcon strokeWidth={1.8} icon={Folder01Icon} className={cn("absolute inset-0 size-3.5 transition-opacity", project && "group-hover:opacity-0")} />
                   {project ? <HugeiconsIcon strokeWidth={1.8} icon={Cancel01Icon} className="absolute inset-0 size-3.5 opacity-0 transition-opacity group-hover:opacity-100" /> : null}
                 </span>
-                <span className="max-w-44 truncate">{project ? projects.find((item) => item.cwd === project)?.name ?? workspaceLabel : "选择项目"}</span>
+                <span className="max-w-44 truncate">{project ? projects.find((item) => item.cwd === project)?.name ?? workspaceLabel : t("composer.pickProject")}</span>
                 <HugeiconsIcon strokeWidth={1.8} icon={ArrowDown01Icon} className="size-3 shrink-0" />
               </PopoverTrigger>
               <PopoverContent align="start" side="top" sideOffset={12} className="w-70 gap-0 rounded-xl p-1 shadow-lg">
@@ -640,7 +645,7 @@ export function Composer({
                   <Input
                     autoFocus
                     value={projectQuery}
-                    placeholder="搜索项目"
+                    placeholder={t("composer.searchProject")}
                     className="h-7 rounded-md border-0 bg-transparent pl-6.5 text-sm shadow-none focus-visible:ring-0"
                     onChange={(event) => setProjectQuery(event.target.value)}
                   />
@@ -663,7 +668,7 @@ export function Composer({
                       <span className="truncate">{item.name}</span>
                     </button>
                   )) : (
-                    <div className="px-2 py-1.5 text-sm text-muted-foreground">没有匹配的项目</div>
+                    <div className="px-2 py-1.5 text-sm text-muted-foreground">{t("composer.noProject")}</div>
                   )}
                 </div>
                 <div className="my-0.5 border-t border-border" />
@@ -676,7 +681,7 @@ export function Composer({
                   }}
                 >
                   <HugeiconsIcon strokeWidth={2} icon={Add01Icon} className="size-3.5" />
-                  <span>新建项目</span>
+                  <span>{t("composer.newProject")}</span>
                 </button>
               </PopoverContent>
             </Popover>
@@ -733,7 +738,7 @@ export function Composer({
           rows={1}
           value={value}
           disabled={disabled}
-          placeholder={streaming ? "继续输入以排队后续修改" : placeholder ?? "随心输入"}
+          placeholder={streaming ? t("composer.placeholderQueued") : placeholder ?? t("composer.placeholder")}
           className={cn(
             "field-sizing-content max-h-56 min-h-13 resize-none border-0 bg-transparent px-4 text-sm leading-6 shadow-none focus-visible:ring-0 disabled:bg-transparent disabled:opacity-100 dark:bg-transparent",
             attachments.length > 0 ? "pt-2" : "pt-3.5",
@@ -748,7 +753,7 @@ export function Composer({
             size="icon-sm"
             variant="ghost"
             className="rounded-full text-muted-foreground"
-            label="添加附件"
+            label={t("composer.attach")}
             disabled={disabled}
             onClick={() => fileRef.current?.click()}
           >
@@ -766,7 +771,7 @@ export function Composer({
                   }
                 >
                   <HugeiconsIcon strokeWidth={2} icon={ShieldAlertIcon} className="size-4" />
-                  <span className="hidden @min-[27.5rem]/composer:inline">{PERMISSION_LABELS[permissionMode]}</span>
+                  <span className="hidden @min-[27.5rem]/composer:inline">{permissionLabel(permissionMode)}</span>
                   <HugeiconsIcon strokeWidth={2} icon={ArrowDown01Icon} className="size-3" />
                 </Chip>
               }
@@ -774,7 +779,7 @@ export function Composer({
             <DropdownMenuContent align="start" className="w-75 min-w-75 p-1">
               <DropdownMenuGroup>
                 <DropdownMenuLabel className="px-1.5 py-1 text-xs text-muted-foreground">
-                  应如何批准 FastVibe 操作？
+                  {t("composer.permissionAsk")}
                 </DropdownMenuLabel>
               </DropdownMenuGroup>
               <DropdownMenuRadioGroup
@@ -796,9 +801,9 @@ export function Composer({
                     >
                       <HugeiconsIcon strokeWidth={2} icon={modeIcon} className="mt-0.5 size-3.5 shrink-0" />
                       <span className="min-w-0">
-                        <span className="block text-sm font-medium leading-4">{PERMISSION_LABELS[mode]}</span>
+                        <span className="block text-sm font-medium leading-4">{permissionLabel(mode)}</span>
                         <span className="mt-0.5 block text-xs font-normal leading-3.5 text-muted-foreground">
-                          {PERMISSION_DESCRIPTIONS[mode]}
+                          {permissionDescription(mode)}
                         </span>
                       </span>
                     </DropdownMenuRadioItem>
@@ -820,7 +825,7 @@ export function Composer({
                     <button
                       type="button"
                       className="flex size-7 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground"
-                      aria-label="查看上下文与轮次统计"
+                      aria-label={t("composer.contextStats")}
                     />
                   }
                 >
@@ -854,10 +859,11 @@ export function Composer({
                           </span>
                         </>
                       ) : (
-                        // With nothing configured the chip is the way in, so it says what
-                        // it is for instead of offering a choice that cannot be made.
+                        // With nothing configured there is nothing to choose, so the chip
+                        // names what it is for instead — its popover says 暂无模型 and
+                        // hands the user to 供应商.
                         <span className={models.length === 0 ? "text-muted-foreground" : undefined}>
-                          {models.length === 0 ? "添加模型" : "选择模型"}
+                          {models.length === 0 ? t("composer.addModel") : t("composer.pickModel")}
                         </span>
                       )}
                     </span>
@@ -867,9 +873,12 @@ export function Composer({
               />
               <DropdownMenuContent align="end" className="min-w-44">
                 {models.length === 0 ? (
-                  <DropdownMenuLabel className="font-normal text-muted-foreground">
-                    还没有可用的模型
-                  </DropdownMenuLabel>
+                  // `DropdownMenuLabel` is Base UI's `Menu.GroupLabel` and throws out of a
+                  // group — which it did here, unmounting the whole app the moment this
+                  // menu was opened on an install with no models.
+                  <DropdownMenuGroup>
+                    <DropdownMenuLabel className="font-normal text-muted-foreground">{t("composer.noModels")}</DropdownMenuLabel>
+                  </DropdownMenuGroup>
                 ) : (
                   modelsByProvider.map((group) => {
                     const selectedInGroup = group.models.some((item) => modelKey(item) === selected);
@@ -901,9 +910,7 @@ export function Composer({
                   })
                 )}
                 <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={onManageModels}>
-                  {models.length === 0 ? "添加模型" : "管理模型"}
-                </DropdownMenuItem>
+                <DropdownMenuItem onClick={onManageModels}>{t("composer.manageModels")}</DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
@@ -913,21 +920,21 @@ export function Composer({
               <DropdownMenuTrigger
                 render={
                   <Chip>
-                    {THINKING_LABELS[thinkingValue]}
+                    {thinkingLabel(thinkingValue)}
                     <HugeiconsIcon strokeWidth={2} icon={ArrowDown01Icon} className="size-3" />
                   </Chip>
                 }
               />
               <DropdownMenuContent align="end" className="w-36 min-w-36">
                 <DropdownMenuGroup>
-                  <DropdownMenuLabel>推理强度</DropdownMenuLabel>
+                  <DropdownMenuLabel>{t("composer.thinking")}</DropdownMenuLabel>
                   {thinkingOptions.map((level) => (
                     <DropdownMenuCheckboxItem
                       key={level}
                       checked={level === thinkingValue}
                       onCheckedChange={() => onThinkingChange(level)}
                     >
-                      {THINKING_LABELS[level]}
+                      {thinkingLabel(level)}
                     </DropdownMenuCheckboxItem>
                   ))}
                 </DropdownMenuGroup>
@@ -943,7 +950,8 @@ export function Composer({
               size="icon-sm"
               variant="destructive"
               className="rounded-full"
-              label="停止"
+              label={t("composer.stop")}
+              data-fv-action="stop"
               shortcut={stopShortcut}
               onClick={onAbort}
             >
@@ -956,7 +964,7 @@ export function Composer({
               size="icon-sm"
               variant="default"
               className="rounded-full"
-              label="继续"
+              label={t("composer.resume")}
               onClick={() => onResumeRun?.()}
             >
               <HugeiconsIcon strokeWidth={2} icon={PlayIcon} className="size-3.5 fill-current" />
@@ -966,7 +974,8 @@ export function Composer({
               size="icon-sm"
               variant="default"
               className="rounded-full"
-              label={streaming ? "加入队列" : "发送"}
+              label={streaming ? t("composer.queue") : t("composer.send")}
+              data-fv-action="send"
               shortcut={sendShortcut}
               disabled={disabled || !hasContent}
               onClick={submit}

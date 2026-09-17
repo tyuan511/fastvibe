@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState, type JSX } from "react";
+import { useTranslation } from "react-i18next";
+import { i18n } from "@/lib/i18n";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Add01Icon,
@@ -29,18 +31,18 @@ import { useSessionStore } from "@/stores/session";
 import type { ChatMessage } from "@shared/types";
 import type { GitDiffSource, GitStatus } from "@shared/ipc";
 
-const SOURCES: Array<{ id: GitDiffSource; label: string }> = [
-  { id: "unstaged", label: "未暂存" },
-  { id: "staged", label: "已暂存" },
-  { id: "branch", label: "分支" },
-  { id: "last-turn", label: "上一轮" },
-];
-
-const EMPTY_COPY: Record<GitDiffSource, string> = {
-  unstaged: "没有未暂存的改动",
-  staged: "没有已暂存的改动",
-  branch: "没有分支改动",
-  "last-turn": "上一轮没有改动文件",
+const SOURCE_IDS: GitDiffSource[] = ["unstaged", "staged", "branch", "last-turn"];
+const SOURCE_LABEL_KEYS: Record<GitDiffSource, string> = {
+  unstaged: "git.unstaged",
+  staged: "git.staged",
+  branch: "git.branch",
+  "last-turn": "git.lastTurn",
+};
+const EMPTY_KEYS: Record<GitDiffSource, string> = {
+  unstaged: "git.emptyUnstaged",
+  staged: "git.emptyStaged",
+  branch: "git.emptyBranch",
+  "last-turn": "git.emptyLastTurn",
 };
 
 const STATUS_TONE: Record<string, string> = {
@@ -54,16 +56,21 @@ const STATUS_TONE: Record<string, string> = {
   C: "text-info",
 };
 
-const STATUS_LABEL: Record<string, string> = {
-  M: "已修改",
-  T: "类型变更",
-  A: "新增",
-  "?": "未跟踪",
-  D: "已删除",
-  U: "冲突",
-  R: "重命名",
-  C: "复制",
+const STATUS_LABEL_KEYS: Record<string, string> = {
+  M: "git.modified",
+  T: "git.typeChange",
+  A: "git.added",
+  "?": "git.untracked",
+  D: "git.deleted",
+  U: "git.conflict",
+  R: "git.renamed",
+  C: "git.copied",
 };
+
+function statusLabel(code: string): string {
+  const key = STATUS_LABEL_KEYS[code];
+  return key ? (i18n.t(`sidepane:${key}`) as string) : code;
+}
 
 function filesForSource(status: GitStatus | null, source: GitDiffSource, lastTurn: string[]): GitStatus["files"] {
   if (!status) return [];
@@ -215,6 +222,7 @@ function DiffPane({
   onUnstage: () => void;
   onDiscard: () => void;
 }): JSX.Element {
+  const { t } = useTranslation("sidepane");
   const { name } = splitRelPath(file.path, cwd);
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -222,7 +230,7 @@ function DiffPane({
         <IconButton
           size="icon-xs"
           variant="ghost"
-          label="返回文件列表"
+          label={t("git.backToList")}
           className="@min-[32rem]/git:hidden"
           onClick={onBack}
         >
@@ -237,12 +245,12 @@ function DiffPane({
           <span className="shrink-0 text-xs tabular-nums text-destructive">−{patch.removed}</span>
         ) : null}
         {canStage ? (
-          <IconButton size="icon-xs" variant="ghost" label="暂存" disabled={busy} onClick={onStage}>
+          <IconButton size="icon-xs" variant="ghost" label={t("git.stage")} disabled={busy} onClick={onStage}>
             <HugeiconsIcon strokeWidth={2} icon={Add01Icon} />
           </IconButton>
         ) : null}
         {canUnstage ? (
-          <IconButton size="icon-xs" variant="ghost" label="取消暂存" disabled={busy} onClick={onUnstage}>
+          <IconButton size="icon-xs" variant="ghost" label={t("git.unstage")} disabled={busy} onClick={onUnstage}>
             <HugeiconsIcon strokeWidth={2} icon={MinusSignIcon} />
           </IconButton>
         ) : null}
@@ -250,7 +258,7 @@ function DiffPane({
           <IconButton
             size="icon-xs"
             variant="ghost"
-            label="丢弃"
+            label={t("git.discard")}
             className="text-destructive hover:bg-destructive/10 hover:text-destructive"
             disabled={busy}
             onClick={onDiscard}
@@ -261,7 +269,7 @@ function DiffPane({
         <IconButton
           size="icon-xs"
           variant="ghost"
-          label="在访达中显示"
+          label={t("git.reveal")}
           onClick={() => void window.fastvibe.workspace.reveal(resolvePath(cwd, file.path))}
         >
           <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} />
@@ -277,7 +285,7 @@ function DiffPane({
         ) : diff ? (
           <DiffView text={diff} className="mt-0 max-h-none overflow-visible rounded-none border-0" />
         ) : (
-          <p className="px-4 py-10 text-center text-xs leading-5 text-muted-foreground">没有可显示的 diff</p>
+          <p className="px-4 py-10 text-center text-xs leading-5 text-muted-foreground">{t("git.noDiff")}</p>
         )}
       </ScrollArea>
     </div>
@@ -291,6 +299,7 @@ export function SidePaneGit({
   cwd?: string;
   onError: (message: string) => void;
 }): JSX.Element {
+  const { t } = useTranslation("sidepane");
   const messages = useSessionStore((state) => state.messages);
   const [status, setStatus] = useState<GitStatus | null>(null);
   const [source, setSource] = useState<GitDiffSource>("unstaged");
@@ -314,7 +323,7 @@ export function SidePaneGit({
     try {
       setStatus(await readGitStatus(cwd, true));
     } catch (error) {
-      onError(error instanceof Error ? error.message : "无法读取 Git 状态");
+      onError(error instanceof Error ? error.message : t("git.statusFailed"));
     } finally {
       setReloading(false);
     }
@@ -365,7 +374,7 @@ export function SidePaneGit({
         setDiffError(null);
       })
       .catch(() => {
-        if (!cancelled) setDiffError("无法读取 diff");
+        if (!cancelled) setDiffError(t("git.diffFailed"));
       })
       .finally(() => {
         if (!cancelled) setDiffLoading(false);
@@ -376,10 +385,10 @@ export function SidePaneGit({
   }, [cwd, selected, source]);
 
   if (!cwd) {
-    return <GitEmpty icon={GitCompareIcon} title="未绑定项目" description="绑定项目后即可审查工作区改动。" />;
+    return <GitEmpty icon={GitCompareIcon} title={t("git.unboundTitle")} description={t("git.unboundDesc")} />;
   }
   if (status && !status.isRepository) {
-    return <GitEmpty icon={GitBranchIcon} title="不是 Git 仓库" description="打开一个 Git 仓库目录后，这里会展示改动。" />;
+    return <GitEmpty icon={GitBranchIcon} title={t("git.notRepoTitle")} description={t("git.notRepoDesc")} />;
   }
 
   const selectedFile = files.find((file) => file.path === selected);
@@ -402,39 +411,39 @@ export function SidePaneGit({
           <span className="shrink-0 text-xs tabular-nums text-muted-foreground">↑{status.ahead}</span>
         ) : null}
         {status && status.changed > 0 ? (
-          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{status.changed} 个改动</span>
+          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{t("git.changedCount", { count: status.changed })}</span>
         ) : null}
         <IconButton
           size="icon-xs"
           variant="ghost"
-          label="拉取"
+          label={t("git.pull")}
           disabled={busy}
-          onClick={() => void run(() => window.fastvibe.workspace.gitPull(cwd), "拉取失败")}
+          onClick={() => void run(() => window.fastvibe.workspace.gitPull(cwd), t("git.pullFailed"))}
         >
           <HugeiconsIcon strokeWidth={2} icon={ArrowDown02Icon} />
         </IconButton>
         <IconButton
           size="icon-xs"
           variant="ghost"
-          label="推送"
+          label={t("git.push")}
           disabled={busy}
-          onClick={() => void run(() => window.fastvibe.workspace.gitPush(cwd), "推送失败")}
+          onClick={() => void run(() => window.fastvibe.workspace.gitPush(cwd), t("git.pushFailed"))}
         >
           <HugeiconsIcon strokeWidth={2} icon={ArrowUp02Icon} />
         </IconButton>
-        <IconButton size="icon-xs" variant="ghost" label="刷新" disabled={reloading} onClick={() => void reload()}>
+        <IconButton size="icon-xs" variant="ghost" label={t("git.refresh")} disabled={reloading} onClick={() => void reload()}>
           <HugeiconsIcon strokeWidth={2} icon={RefreshIcon} className={cn(reloading && "animate-spin")} />
         </IconButton>
       </div>
 
       <div className="border-b border-border px-2 py-1.5">
         <div className="flex h-8 w-full items-center rounded-lg bg-muted p-[3px]">
-          {SOURCES.map((item) => {
-            const count = counts[item.id];
-            const active = source === item.id;
+          {SOURCE_IDS.map((id) => {
+            const count = counts[id];
+            const active = source === id;
             return (
               <button
-                key={item.id}
+                key={id}
                 type="button"
                 className={cn(
                   "inline-flex h-full min-w-0 flex-1 items-center justify-center gap-1 rounded-md px-1.5 text-xs font-medium whitespace-nowrap transition-colors",
@@ -442,9 +451,9 @@ export function SidePaneGit({
                     ? "bg-background text-foreground shadow-sm dark:bg-input/30"
                     : "text-muted-foreground hover:text-foreground",
                 )}
-                onClick={() => setSource(item.id)}
+                onClick={() => setSource(id)}
               >
-                <span className="truncate">{item.label}</span>
+                <span className="truncate">{t(SOURCE_LABEL_KEYS[id])}</span>
                 {count > 0 ? <span className="tabular-nums text-muted-foreground">{count}</span> : null}
               </button>
             );
@@ -468,7 +477,7 @@ export function SidePaneGit({
               />
               <Input
                 value={query}
-                placeholder="筛选文件"
+                placeholder={t("git.filter")}
                 className="h-7 pl-8 text-xs"
                 onChange={(event) => setQuery(event.target.value)}
               />
@@ -507,7 +516,7 @@ export function SidePaneGit({
                           "w-4 shrink-0 text-center text-xs font-medium tabular-nums",
                           STATUS_TONE[letter] ?? "text-muted-foreground",
                         )}
-                        title={STATUS_LABEL[letter] ?? letter}
+                        title={statusLabel(letter)}
                       >
                         {letter}
                       </span>
@@ -516,7 +525,7 @@ export function SidePaneGit({
                 })
               ) : (
                 <p className="px-2 py-10 text-center text-xs leading-5 text-muted-foreground">
-                  {query.trim() ? "没有匹配的文件" : EMPTY_COPY[source]}
+                  {query.trim() ? t("git.noMatch") : t(EMPTY_KEYS[source])}
                 </p>
               )}
             </div>
@@ -536,13 +545,13 @@ export function SidePaneGit({
             canUnstage={canUnstage}
             canDiscard={canDiscard}
             onBack={() => setSelected(undefined)}
-            onStage={() => void run(() => window.fastvibe.workspace.gitStage(cwd, [selected]), "暂存失败")}
-            onUnstage={() => void run(() => window.fastvibe.workspace.gitUnstage(cwd, [selected]), "取消暂存失败")}
-            onDiscard={() => void run(() => window.fastvibe.workspace.gitDiscard(cwd, [selected]), "丢弃失败")}
+            onStage={() => void run(() => window.fastvibe.workspace.gitStage(cwd, [selected]), t("git.stageFailed"))}
+            onUnstage={() => void run(() => window.fastvibe.workspace.gitUnstage(cwd, [selected]), t("git.unstageFailed"))}
+            onDiscard={() => void run(() => window.fastvibe.workspace.gitDiscard(cwd, [selected]), t("git.discardFailed"))}
           />
         ) : (
           <div className="hidden min-h-0 min-w-0 flex-1 items-center justify-center px-8 text-center text-xs leading-5 text-muted-foreground @min-[32rem]/git:flex">
-            选择文件以查看 Diff
+            {t("git.pickDiff")}
           </div>
         )}
       </div>
@@ -550,7 +559,7 @@ export function SidePaneGit({
       <div className="flex items-center gap-2 border-t border-border px-3 py-2">
         <Input
           value={message}
-          placeholder={status?.staged ? "提交信息" : "暂存后即可提交"}
+          placeholder={status?.staged ? t("git.commitMessage") : t("git.commitAfterStage")}
           className="h-8 min-w-0 flex-1 text-sm"
           disabled={busy}
           onChange={(event) => setMessage(event.target.value)}
@@ -560,7 +569,7 @@ export function SidePaneGit({
               const next = await window.fastvibe.workspace.gitCommit(cwd, message.trim());
               setMessage("");
               return next;
-            }, "提交失败");
+            }, t("git.commitFailed"));
           }}
         />
         <Button
@@ -572,11 +581,11 @@ export function SidePaneGit({
               const next = await window.fastvibe.workspace.gitCommit(cwd, message.trim());
               setMessage("");
               return next;
-            }, "提交失败");
+            }, t("git.commitFailed"));
           }}
         >
           <HugeiconsIcon strokeWidth={2} icon={Tick02Icon} />
-          提交
+          {t("git.commit")}
         </Button>
       </div>
     </div>

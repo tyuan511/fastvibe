@@ -23,6 +23,7 @@ import type {
   WorkspaceSnapshot,
 } from "@shared/types";
 import { applyEngineEvent, lastUserIsLocal, userMessageText } from "@/lib/apply-engine-event";
+import { i18n } from "@/lib/i18n";
 import { useSidePaneStore } from "@/stores/side-pane";
 
 type SessionStore = {
@@ -734,7 +735,7 @@ export const useSessionStore = create<SessionStore>((set, get) => {
         kind: "error",
         path,
         name: path.split("/").at(-1) ?? path,
-        message: error instanceof Error ? error.message : "无法预览",
+        message: error instanceof Error ? error.message : (i18n.t("common:errors.previewFailed") as string),
       };
       set({ preview });
       useSidePaneStore.getState().openFilePreview(preview);

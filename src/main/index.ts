@@ -4,10 +4,11 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { Ipc } from "@shared/ipc";
+import { Ipc, type AppModelsDevInfo } from "@shared/ipc";
 import { readFilePreview } from "./engine/file-preview";
 import { readWorkspaceDir } from "./engine/workspace-fs";
-import { loadModelsDev } from "./engine/models-dev";
+import { loadModelsDev, type ModelsDevStats } from "./engine/models-dev";
+import { updateModelsDevSnapshot } from "./engine/models-dev-update";
 import {
   applyNativeTheme,
   applyPermissionMode,
@@ -19,7 +20,10 @@ import {
   writeAppSettings,
 } from "./engine/app-settings";
 import { getFastVibePaths } from "./engine/paths";
+import { applyLanguages } from "./engine/ai-language";
+import { uiText } from "./engine/ui-text";
 import { applyShellPath } from "./engine/shell-path";
+import { exportLogs, initLogger, log, writeRendererLog } from "./engine/logger";
 import { applyKeepAwake, clearRunningConversations, setConversationRunning } from "./engine/keep-awake";
 import {
   getFileIconMapping,
@@ -46,6 +50,9 @@ applyShellPath();
 
 // Privileged schemes must be declared before the app is ready.
 registerFileIconScheme();
+
+// File logger before anything that can throw: engine construction, IPC, windows.
+initLogger();
 
 // Extensions are TypeScript modules jiti compiles at load time. Its on-disk cache
 // cannot be written inside the packaged asar, so turn it off there; dev keeps the
@@ -102,6 +109,11 @@ function createWindow(): void {
     shell.openExternal(details.url);
     return { action: "deny" };
   });
+  window.webContents.on("preload-error", (_event, path, error) => {
+    log.error(`preload-error path=${path}`, error);
+  });
+  window.webContents.on("unresponsive", () => log.warn("window unresponsive"));
+  window.webContents.on("responsive", () => log.info("window responsive"));
   attachBrowserRenderer(window.webContents);
 
   if (process.env.ELECTRON_RENDERER_URL) {
@@ -112,10 +124,21 @@ function createWindow(): void {
 
   mainWindow = window;
   windows.add(window);
+  log.info("window opened");
 }
 
 function broadcastStatus(): void {
   for (const window of windows) window.webContents.send(Ipc.status, engine.status);
+}
+
+/** The models.dev metadata shape the renderer's 关于 pane reads. */
+function modelsDevInfo(stats: ModelsDevStats): AppModelsDevInfo {
+  return {
+    models: stats.models,
+    aliases: stats.aliases,
+    generatedAt: stats.generatedAt,
+    path: stats.path,
+  };
 }
 
 function registerIpc(): void {
@@ -124,9 +147,9 @@ function registerIpc(): void {
   });
   ipcMain.handle(Ipc.browserListProfiles, () => listBrowserProfiles());
   ipcMain.handle(Ipc.browserImportProfile, async (_event, payload: { profile: import("@shared/types").BrowserProfileInfo }) => {
-    if (!payload?.profile?.cookiePath) throw new Error("浏览器配置文件无效");
+    if (!payload?.profile?.cookiePath) throw new Error(uiText("浏览器配置文件无效", "Invalid browser profile"));
     const allowed = (await listBrowserProfiles()).find((profile) => profile.id === payload.profile.id && profile.cookiePath === payload.profile.cookiePath);
-    if (!allowed) throw new Error("浏览器配置文件未通过校验，请重新打开导入列表");
+    if (!allowed) throw new Error(uiText("浏览器配置文件未通过校验，请重新打开导入列表", "Browser profile failed validation. Open the import list again."));
     return importBrowserProfile(allowed, (cookie) => session.fromPartition("persist:fastvibe-browser").cookies.set(cookie));
   });
   ipcMain.handle(Ipc.engineGetStatus, () => engine.status);
@@ -222,7 +245,7 @@ function registerIpc(): void {
   ipcMain.handle(Ipc.engineCreateSkill, async (_event, payload: import("@shared/types").SkillDraft) => engine.createSkill(payload));
   ipcMain.handle(Ipc.engineImportSkill, async () => {
     const result = await dialog.showOpenDialog({
-      title: "导入技能",
+      title: uiText("导入技能", "Import skill"),
       properties: ["openDirectory"],
     });
     if (result.canceled || !result.filePaths[0]) return null;
@@ -391,7 +414,7 @@ function registerIpc(): void {
   });
   ipcMain.handle(Ipc.projectsAdd, async () => {
     const result = await dialog.showOpenDialog({
-      title: "打开项目",
+      title: uiText("打开项目", "Open project"),
       properties: ["openDirectory", "createDirectory"],
     });
     if (result.canceled || !result.filePaths[0]) return null;
@@ -419,7 +442,7 @@ function registerIpc(): void {
     await shell.openPath(payload.cwd);
   });
   ipcMain.handle(Ipc.workspacePreview, (_event, payload: { path: string }) => {
-    if (!payload.path) return { kind: "error", path: "", name: "", message: "路径无效" };
+    if (!payload.path) return { kind: "error", path: "", name: "", message: uiText("路径无效", "Invalid path") };
     return readFilePreview(payload.path);
   });
   ipcMain.handle(Ipc.workspaceFileIcons, () => getFileIconMapping());
@@ -462,20 +485,20 @@ function registerIpc(): void {
   ipcMain.handle(Ipc.workspaceGitCheckout, async (_event, payload: { cwd: string; branch: string }): Promise<GitStatus> => {
     const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
     const branch = typeof payload.branch === "string" ? payload.branch.trim() : "";
-    if (!cwd || !branch || branch.startsWith("-") || branch.includes("\0")) throw new Error("分支名称无效");
+    if (!cwd || !branch || branch.startsWith("-") || branch.includes("\0")) throw new Error(uiText("分支名称无效", "Invalid branch name"));
     await execFileAsync("git", ["-C", cwd, "switch", branch], { timeout: 10000, maxBuffer: 128 * 1024 });
     return readGitStatus(cwd);
   });
   ipcMain.handle(Ipc.workspaceGitCreateBranch, async (_event, payload: { cwd: string; branch: string }): Promise<GitStatus> => {
     const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
     const branch = typeof payload.branch === "string" ? payload.branch.trim() : "";
-    if (!cwd || !branch || branch.startsWith("-") || branch.includes("\0") || /\s/.test(branch)) throw new Error("分支名称无效");
+    if (!cwd || !branch || branch.startsWith("-") || branch.includes("\0") || /\s/.test(branch)) throw new Error(uiText("分支名称无效", "Invalid branch name"));
     await execFileAsync("git", ["-C", cwd, "switch", "-c", branch], { timeout: 10000, maxBuffer: 128 * 1024 });
     return readGitStatus(cwd);
   });
   ipcMain.handle(Ipc.workspaceGitStage, async (_event, payload: { cwd: string; paths?: string[]; all?: boolean }): Promise<GitStatus> => {
     const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
-    if (!cwd) throw new Error("项目路径无效");
+    if (!cwd) throw new Error(uiText("项目路径无效", "Invalid project path"));
     const paths = Array.isArray(payload.paths) ? payload.paths.filter((item): item is string => typeof item === "string" && item.length > 0 && !item.includes("\0")) : [];
     const args = ["-C", cwd, "add", payload.all || paths.length === 0 ? "-A" : "--", ...paths];
     await execFileAsync("git", args, { timeout: 10000, maxBuffer: 128 * 1024 });
@@ -484,8 +507,8 @@ function registerIpc(): void {
   ipcMain.handle(Ipc.workspaceGitCommit, async (_event, payload: { cwd: string; message: string }): Promise<GitStatus> => {
     const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
     const message = typeof payload.message === "string" ? payload.message.trim() : "";
-    if (!cwd || !message) throw new Error("提交信息不能为空");
-    if (message.length > 5000) throw new Error("提交信息过长");
+    if (!cwd || !message) throw new Error(uiText("提交信息不能为空", "Commit message cannot be empty"));
+    if (message.length > 5000) throw new Error(uiText("提交信息过长", "Commit message is too long"));
     await execFileAsync("git", ["-C", cwd, "commit", "-m", message], { timeout: 30000, maxBuffer: 256 * 1024 });
     return readGitStatus(cwd);
   });
@@ -509,17 +532,17 @@ function registerIpc(): void {
   });
   ipcMain.handle(Ipc.workspaceGitUnstage, async (_event, payload: { cwd: string; paths: string[] }): Promise<GitStatus> => {
     const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
-    if (!cwd) throw new Error("项目路径无效");
+    if (!cwd) throw new Error(uiText("项目路径无效", "Invalid project path"));
     const paths = Array.isArray(payload.paths) ? payload.paths.filter((item): item is string => typeof item === "string" && item.length > 0 && !item.includes("\0")) : [];
-    if (paths.length === 0) throw new Error("没有要取消暂存的文件");
+    if (paths.length === 0) throw new Error(uiText("没有要取消暂存的文件", "No files to unstage"));
     await execFileAsync("git", ["-C", cwd, "restore", "--staged", "--", ...paths], { timeout: 10000, maxBuffer: 128 * 1024 });
     return readGitStatus(cwd);
   });
   ipcMain.handle(Ipc.workspaceGitDiscard, async (_event, payload: { cwd: string; paths: string[] }): Promise<GitStatus> => {
     const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
-    if (!cwd) throw new Error("项目路径无效");
+    if (!cwd) throw new Error(uiText("项目路径无效", "Invalid project path"));
     const paths = Array.isArray(payload.paths) ? payload.paths.filter((item): item is string => typeof item === "string" && item.length > 0 && !item.includes("\0")) : [];
-    if (paths.length === 0) throw new Error("没有要丢弃的文件");
+    if (paths.length === 0) throw new Error(uiText("没有要丢弃的文件", "No files to discard"));
     await execFileAsync("git", ["-C", cwd, "restore", "--worktree", "--source=HEAD", "--", ...paths], { timeout: 10000, maxBuffer: 128 * 1024 }).catch(async () => {
       await execFileAsync("git", ["-C", cwd, "checkout", "--", ...paths], { timeout: 10000, maxBuffer: 128 * 1024 });
     });
@@ -541,9 +564,12 @@ function registerIpc(): void {
   ipcMain.handle(Ipc.workspaceTerminalKill, (_event, payload: { id: string }) => {
     if (payload.id) terminals.kill(payload.id);
   });
-  ipcMain.handle(Ipc.enginePromptConversation, async (_event, payload: { id: string; message: string }) => {
-    await engine.promptConversation(payload.id, payload.message);
-  });
+  ipcMain.handle(
+    Ipc.enginePromptConversation,
+    async (_event, payload: { id: string; message: string; images?: Array<{ type: "image"; data: string; mimeType: string }> }) => {
+      await engine.promptConversation(payload.id, payload.message, payload.images);
+    },
+  );
   ipcMain.handle(Ipc.engineGetConversationMessages, async (_event, payload: { id: string }) => {
     return engine.getConversationMessages(payload.id);
   });
@@ -553,26 +579,37 @@ function registerIpc(): void {
   for (const [channel, command] of [[Ipc.workspaceGitPull, "pull"], [Ipc.workspaceGitPush, "push"]] as const) {
     ipcMain.handle(channel, async (_event, payload: { cwd: string }): Promise<GitStatus> => {
       const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
-      if (!cwd) throw new Error("项目路径无效");
+      if (!cwd) throw new Error(uiText("项目路径无效", "Invalid project path"));
       await execFileAsync("git", ["-C", cwd, command, ...(command === "pull" ? ["--ff-only"] : [])], { timeout: 60000, maxBuffer: 512 * 1024 });
       return readGitStatus(cwd);
     });
   }
   ipcMain.handle(Ipc.appGetInfo, () => {
     const paths = getFastVibePaths();
-    const meta = loadModelsDev().stats;
     return {
       version: app.getVersion(),
       userData: paths.userData,
       runtimeRoot: paths.runtimeRoot,
       platform: process.platform,
-      modelsDev: {
-        models: meta.models,
-        aliases: meta.aliases,
-        generatedAt: meta.generatedAt,
-        path: meta.path,
-      },
+      modelsDev: modelsDevInfo(loadModelsDev().stats),
     };
+  });
+  ipcMain.on(Ipc.appLog, (_event, payload: unknown) => {
+    writeRendererLog(payload);
+  });
+  ipcMain.handle(Ipc.appExportLogs, async (event) => {
+    return exportLogs(BrowserWindow.fromWebContents(event.sender));
+  });
+  /**
+   * Pull the current models.dev catalog (Settings → 关于) and apply it to the running
+   * engine. A refresh that cannot reach the registry has still updated the snapshot,
+   * which is durable and read on the next start, so it is reported as a success rather
+   * than as a failure the user would have to undo.
+   */
+  ipcMain.handle(Ipc.modelsDevUpdate, async () => {
+    const stats = await updateModelsDevSnapshot();
+    await engine.reloadModelMetadata().catch(() => undefined);
+    return modelsDevInfo(stats);
   });
   ipcMain.handle(Ipc.statsUsage, (_event, payload?: { range?: UsageRange }) => {
     return collectUsageStats(getFastVibePaths(), payload?.range ?? "30d");
@@ -591,6 +628,7 @@ function registerIpc(): void {
     writeAppSettings(paths, payload);
     applyNativeTheme(payload);
     applyPermissionMode(payload);
+    applyLanguages(payload);
     applyKeepAwake(payload);
     paintWindows(windows);
     scheduleUpdateCheck(payload.autoCheckUpdates !== false);
@@ -600,13 +638,14 @@ function registerIpc(): void {
     clearAppSettings(paths);
     applyNativeTheme({});
     applyPermissionMode({});
+    applyLanguages({});
     applyKeepAwake({});
     paintWindows(windows);
   });
 
   ipcMain.handle(Ipc.workspacePick, async () => {
     const result = await dialog.showOpenDialog({
-      title: "选择项目",
+      title: uiText("选择项目", "Choose a project"),
       properties: ["openDirectory", "createDirectory"],
     });
     if (result.canceled || !result.filePaths[0]) return null;
@@ -618,11 +657,16 @@ function registerIpc(): void {
 }
 
 app.whenReady().then(async () => {
+  log.info("app ready");
   installBrowserGlobal();
   applyAppIcon();
   const startupSettings = readAppSettings(getFastVibePaths());
   applyNativeTheme(startupSettings);
   applyStartupPermissionMode(getFastVibePaths());
+  // Seed the sandbox/extensions' UI language and the AI 偏好语言 prompt before any
+  // session starts. A first launch has no settings file yet; the renderer writes one
+  // (with the OS-detected language) on boot, which re-applies these.
+  applyLanguages(startupSettings);
   applyKeepAwake(startupSettings);
   registerFileIconProtocol();
   registerIpc();
@@ -639,7 +683,7 @@ app.whenReady().then(async () => {
 
   engine.onEvent((event) => {
     if (event.type === "conversation_activity" && !mainWindow?.isFocused() && Notification.isSupported()) {
-      new Notification({ title: String(event.title ?? "会话"), body: "任务已完成，可以回来查看结果。" }).show();
+      new Notification({ title: String(event.title ?? uiText("会话", "Chat")), body: uiText("任务已完成，可以回来查看结果。", "The task is done. Come back to see the result.") }).show();
     }
     if (event.type === "extension_ui_request") {
       void engine.handleExtensionUi(event);
@@ -670,6 +714,7 @@ app.on("before-quit", (event) => {
   if (stopping) return;
   event.preventDefault();
   stopping = true;
+  log.info("app quitting");
   void engine.stop().finally(() => {
     terminals.dispose();
     clearRunningConversations();

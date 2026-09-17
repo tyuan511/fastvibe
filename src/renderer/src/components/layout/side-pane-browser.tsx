@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type JSX } from "react";
+import { useTranslation } from "react-i18next";
+import { i18n } from "@/lib/i18n";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   ArrowLeft01Icon,
@@ -12,6 +14,10 @@ import { Input } from "@/components/ui/input";
 import { useSessionStore } from "@/stores/session";
 import { useSidePaneStore } from "@/stores/side-pane";
 import type { BrowserImportResult, BrowserProfileInfo, BrowserRequest } from "@shared/types";
+
+function be(key: string, options?: Record<string, unknown>): string {
+  return i18n.t(`sidepane:browser.${key}`, options) as string;
+}
 
 /** Retained as the renderer-side name for the shared browser-use protocol. */
 export type BrowserAutomationRequest = BrowserRequest;
@@ -270,10 +276,10 @@ function resolveEntry(tabId?: string, conversationId?: string): Resolved {
   const allowed = new Set(ids);
   const direct = tabId && allowed.has(tabId) ? registry.get(tabId) : undefined;
   if (direct) return { entry: direct };
-  if (ids.length === 0) throw new Error("内置浏览器还没有打开任何标签页，请先调用 browser_open");
-  if (!tabId) return { entry: registry.get(ids[ids.length - 1]) as Entry, note: "未指定 tabId，已使用最近打开的标签页" };
-  if (ids.length === 1) return { entry: registry.get(ids[0]) as Entry, note: `标签页 ${tabId} 已不存在，已在当前唯一的标签页上执行` };
-  throw new Error(`标签页 ${tabId} 不存在（当前可用：${ids.join("、")}），请用 browser_list_tabs 确认后重试`);
+  if (ids.length === 0) throw new Error(be("noTabs"));
+  if (!tabId) return { entry: registry.get(ids[ids.length - 1]) as Entry, note: be("usedLatest") };
+  if (ids.length === 1) return { entry: registry.get(ids[0]) as Entry, note: be("staleAdopted", { tabId }) };
+  throw new Error(be("missingTab", { tabId, ids: ids.join(", ") }));
 }
 
 /**
@@ -309,11 +315,11 @@ function retire(tabId: string): void {
 function gone(entry: Entry): TabGoneError {
   const url = entry.url;
   retire(entry.id);
-  return new TabGoneError(entry.id, url, "浏览器标签页已失效");
+  return new TabGoneError(entry.id, url, be("tabGone"));
 }
 
 async function execute(entry: Entry, code: string): Promise<unknown> {
-  if (typeof entry.view.executeJavaScript !== "function") throw new Error("当前 Electron 不支持网页脚本执行");
+  if (typeof entry.view.executeJavaScript !== "function") throw new Error(be("noExecute"));
   try {
     return await entry.view.executeJavaScript(code);
   } catch (error) {
@@ -325,14 +331,14 @@ async function execute(entry: Entry, code: string): Promise<unknown> {
       console.error("[browser-use] injected script was rejected by the guest", error, code);
       // Patient: a script interrupted by its own navigation is not a dead tab.
       if (await ensureAlive(entry)) {
-        throw new Error("浏览器页面脚本执行失败（页面可能正在跳转），请重新调用 browser_snapshot 确认页面状态");
+        throw new Error(be("scriptNav"));
       }
       throw gone(entry);
     }
     if (/GUEST_VIEW_MANAGER_CALL|destroyed|was disposed|Render frame/i.test(message)) {
       throw gone(entry);
     }
-    throw new Error(`浏览器脚本执行失败：${message}`);
+    throw new Error(be("scriptFailed", { message }));
   }
 }
 
@@ -387,8 +393,8 @@ async function usable(entry: Entry): Promise<boolean> {
 async function inject(entry: Entry, body: string): Promise<unknown> {
   const code = `(() => { try { const value = (() => { ${body} })(); return { ok: true, value: JSON.parse(JSON.stringify(value === undefined ? null : value)) }; } catch (error) { return { ok: false, error: String((error && error.message) || error) }; } })()`;
   const result = (await execute(entry, code)) as Injected | undefined;
-  if (!result || typeof result !== "object") throw new Error("浏览器页面返回了无效结果，请重试");
-  if (!result.ok) throw new Error(`浏览器操作失败：${result.error ?? "页面脚本报错"}`);
+  if (!result || typeof result !== "object") throw new Error(be("invalidResult"));
+  if (!result.ok) throw new Error(be("opFailed", { error: result.error ?? be("scriptError") }));
   return result.value;
 }
 
@@ -447,7 +453,7 @@ function loadUrl(view: Guest, url: string, timeout = 20_000): Promise<LoadOutcom
     const onFail = (event: Event): void => {
       const detail = event as Event & { errorCode?: number; errorDescription?: string; isMainFrame?: boolean };
       if (detail.isMainFrame === false) return;
-      failure = `${detail.errorDescription ?? "页面加载失败"}（${detail.errorCode ?? "?"}）`;
+      failure = `${detail.errorDescription ?? be("loadFailed")} (${detail.errorCode ?? "?"})`;
     };
     view.addEventListener("did-stop-loading", onStop);
     view.addEventListener("did-fail-load", onFail);
@@ -496,7 +502,7 @@ async function waitForReady(entry: Entry, timeout = 15_000): Promise<void> {  le
     await Promise.race([
       entry.ready,
       new Promise<void>((_, reject) => {
-        timer = window.setTimeout(() => reject(new Error("浏览器页面在等待 dom-ready 时超时")), timeout);
+        timer = window.setTimeout(() => reject(new Error(be("domReadyTimeout"))), timeout);
       }),
     ]);
   } finally {
@@ -520,7 +526,7 @@ const PAGE_HELPERS = `
   const TARGETS = 'a,button,summary,label,[role="button"],[role="link"],[role="tab"],[role="menuitem"],[role="option"],[role="checkbox"],[role="switch"],[contenteditable="true"],input:not([type="hidden"]),textarea,select';
   const resolve = () => {
     if (ref) { const hit = document.querySelector('[data-fv-ref="' + ref + '"]'); if (hit) return hit; }
-    if (selector) { try { const hit = document.querySelector(selector); if (hit) return hit; } catch (error) { throw new Error('selector 无效：' + selector); } }
+    if (selector) { try { const hit = document.querySelector(selector); if (hit) return hit; } catch (error) { throw new Error('invalid selector: ' + selector); } }
     const needle = clean(text).toLowerCase();
     if (!needle) return null;
     const pool = [...document.querySelectorAll(TARGETS)].filter(visible);
@@ -612,8 +618,8 @@ async function openBrowserTab(request: BrowserAutomationRequest): Promise<unknow
     retire(tabId);
     replaced = true;
   }
-  if (!entry) throw new Error("内置浏览器无法创建可用的标签页，请稍后重试");
-  const note = replaced ? "原标签页已失效，已自动打开一个可用标签页" : undefined;
+  if (!entry) throw new Error(be("createFailed"));
+  const note = replaced ? be("replaced") : undefined;
   if (!request.url) {
     // No URL asked for: the tab is (or was just made) an empty page. An already-open
     // tab is left where it is — this pane is shared with the user, and clearing a page
@@ -657,7 +663,7 @@ export async function handleBrowserRequest(request: BrowserAutomationRequest): P
   let recovery: string | undefined;
   if (!(await usable(entry))) {
     target = await replace(entry.id, entry.url, request);
-    recovery = "原标签页已失效，已自动在新标签页中恢复该页面";
+    recovery = be("recovered");
   }
   let outcome: unknown;
   for (let attempt = 0; ; attempt++) {
@@ -669,9 +675,9 @@ export async function handleBrowserRequest(request: BrowserAutomationRequest): P
       // The tab the model addressed is retired by now, but the call still means the
       // same page: mint the replacement, land it back on that page and run the action
       // there. Failing here would only make the model call `browser_open` and start over.
-      if (attempt > 0) throw new Error("内置浏览器标签页反复失效，自动重建后仍未成功，请稍后重试");
+      if (attempt > 0) throw new Error(be("rebuildFailed"));
       target = await replace(error.tabId, error.url, request);
-      recovery = "原标签页已失效，已自动在新标签页中恢复该页面并重试";
+      recovery = be("retryRecovered");
     }
   }
   return withNote(outcome, [note, recovery].filter(Boolean).join("；") || undefined);
@@ -695,7 +701,7 @@ async function replace(tabId: string, url: string, request: BrowserAutomationReq
     return entry;
   }
   retire(entry.id);
-  throw new Error("内置浏览器无法创建可用的标签页（当前 Electron 的 webview 可能未启用），请稍后重试");
+  throw new Error(be("webviewOff"));
 }
 
 /** The actions that address an already-open tab. */
@@ -703,14 +709,14 @@ async function dispatch(request: BrowserAutomationRequest, entry: Entry): Promis
   const view = entry.view;
   switch (request.action) {
     case "navigate": {
-      if (!request.url) throw new Error("navigate 需要 url");
+      if (!request.url) throw new Error(be("needUrl"));
       const url = normalizeUrl(request.url);
       const outcome = await loadUrl(view, url);
       rememberUrl(entry);
       return { tabId: entry.id, url, ...outcome };
     }
     case "search": {
-      if (!request.text && !request.url) throw new Error("search 需要 text");
+      if (!request.text && !request.url) throw new Error(be("needSearch"));
       const query = request.text || request.url || "";
       const url = normalizeUrl(query);
       const outcome = await loadUrl(view, url);
@@ -718,12 +724,12 @@ async function dispatch(request: BrowserAutomationRequest, entry: Entry): Promis
       return { tabId: entry.id, query, url, ...outcome };
     }
     case "back":
-      if (!safe(() => view.canGoBack(), false)) return { ok: false, error: "没有可后退的历史记录" };
+      if (!safe(() => view.canGoBack(), false)) return { ok: false, error: be("noBack") };
       { const navigated = waitForNavigation(view); view.goBack(); await navigated; }
       rememberUrl(entry);
       return { ok: true, url: entry.url };
     case "forward":
-      if (!safe(() => view.canGoForward(), false)) return { ok: false, error: "没有可前进的历史记录" };
+      if (!safe(() => view.canGoForward(), false)) return { ok: false, error: be("noForward") };
       { const navigated = waitForNavigation(view); view.goForward(); await navigated; }
       rememberUrl(entry);
       return { ok: true, url: entry.url };
@@ -738,7 +744,7 @@ async function dispatch(request: BrowserAutomationRequest, entry: Entry): Promis
       return { tabId: entry.id, ...result };
     }
     case "click": {
-      if (!request.selector && !request.ref && !request.text) throw new Error("click 需要 selector、ref 或 text");
+      if (!request.selector && !request.ref && !request.text) throw new Error(be("needClick"));
       return act(
         entry,
         `
@@ -747,7 +753,7 @@ async function dispatch(request: BrowserAutomationRequest, entry: Entry): Promis
         const text = ${JSON.stringify(request.text ?? "")};
         ${PAGE_HELPERS}
         const el = resolve();
-        if (!el) return { clicked: false, error: '未找到可点击的元素', candidates: nearby() };
+        if (!el) return { clicked: false, error: 'No clickable element found', candidates: nearby() };
         el.scrollIntoView({ block: 'center', inline: 'center' });
         if (el.focus) el.focus();
         for (const type of ['pointerover', 'mouseover', 'pointerdown', 'mousedown', 'pointerup', 'mouseup']) {
@@ -757,11 +763,11 @@ async function dispatch(request: BrowserAutomationRequest, entry: Entry): Promis
         el.click();
         return { clicked: true, tag: el.tagName.toLowerCase(), text: label(el).slice(0, 200), href: el.tagName === 'A' ? el.getAttribute('href') || undefined : undefined };
       `,
-        { clicked: true, warning: "点击后页面开始加载，未能取回点击结果" },
+        { clicked: true, warning: be("clickNav") },
       );
     }
     case "type": {
-      if (!request.selector && !request.ref) throw new Error("type 需要 selector 或 ref");
+      if (!request.selector && !request.ref) throw new Error(be("needType"));
       return act(
         entry,
         `
@@ -770,7 +776,7 @@ async function dispatch(request: BrowserAutomationRequest, entry: Entry): Promis
         const text = ${JSON.stringify(request.text ?? "")};
         ${PAGE_HELPERS}
         const el = resolve();
-        if (!el) return { filled: false, error: '未找到输入元素', candidates: nearby() };
+        if (!el) return { filled: false, error: 'No input element found', candidates: nearby() };
         el.scrollIntoView({ block: 'center' });
         el.focus();
         const value = text;
@@ -778,14 +784,14 @@ async function dispatch(request: BrowserAutomationRequest, entry: Entry): Promis
           const wanted = clean(value).toLowerCase();
           const options = [...el.options];
           const option = options.find((item) => item.value.toLowerCase() === wanted || clean(item.text).toLowerCase() === wanted) || options.find((item) => clean(item.text).toLowerCase().includes(wanted));
-          if (!option) return { filled: false, error: 'select 中没有匹配的选项', options: options.slice(0, 30).map((item) => ({ value: item.value, text: clean(item.text) })) };
+          if (!option) return { filled: false, error: 'No matching option in select', options: options.slice(0, 30).map((item) => ({ value: item.value, text: clean(item.text) })) };
           el.value = option.value;
           el.dispatchEvent(new Event('input', { bubbles: true }));
           el.dispatchEvent(new Event('change', { bubbles: true }));
           return { filled: true, tag: 'select', value: el.value };
         }
         if (el.type === 'checkbox' || el.type === 'radio') {
-          const next = !/^(false|0|no|off|否|取消)$/i.test(clean(value));
+          const next = !/^(false|0|no|off)$/i.test(clean(value));
           if (el.checked !== next) {
             el.checked = next;
             el.dispatchEvent(new Event('input', { bubbles: true }));
@@ -799,7 +805,7 @@ async function dispatch(request: BrowserAutomationRequest, entry: Entry): Promis
           el.dispatchEvent(new Event('change', { bubbles: true }));
           return { filled: true, tag: 'contenteditable', value: el.textContent };
         }
-        if (!('value' in el)) return { filled: false, error: '该元素不接受文本输入（' + el.tagName.toLowerCase() + '）' };
+        if (!('value' in el)) return { filled: false, error: 'Element does not accept text (' + el.tagName.toLowerCase() + ')' };
         const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
         const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
         if (setter) setter.call(el, value); else el.value = value;
@@ -807,7 +813,7 @@ async function dispatch(request: BrowserAutomationRequest, entry: Entry): Promis
         el.dispatchEvent(new Event('change', { bubbles: true }));
         return { filled: true, tag: el.tagName.toLowerCase(), value: el.value };
       `,
-        { filled: true, warning: "输入后页面开始加载，未能取回输入结果" },
+        { filled: true, warning: be("typeNav") },
         300,
       );
     }
@@ -824,14 +830,14 @@ async function dispatch(request: BrowserAutomationRequest, entry: Entry): Promis
         for (const type of ['keydown', 'keypress', 'keyup']) target.dispatchEvent(new KeyboardEvent(type, options));
         return { pressed: key, target: target.tagName.toLowerCase() };
       `,
-        { pressed: request.key ?? "Enter", warning: "按键后页面开始加载，未能取回按键结果" },
+        { pressed: request.key ?? "Enter", warning: be("pressNav") },
       );
     }
     case "evaluate":
-      if (!request.script) throw new Error("evaluate 需要 script");
+      if (!request.script) throw new Error(be("needScript"));
       return execute(entry, request.script);
     default:
-      throw new Error(`未知浏览器操作：${request.action}`);
+      throw new Error(be("unknownAction", { action: request.action }));
   }
 }
 
@@ -854,6 +860,7 @@ export function SidePaneBrowser({
   url: string;
   visible: boolean;
 }): JSX.Element {
+  const { t } = useTranslation("sidepane");
   const patchTab = useSidePaneStore((state) => state.patchTab);
   const box = useRef<HTMLDivElement>(null);
   const guest = useRef<Guest | null>(null);
@@ -1002,18 +1009,18 @@ export function SidePaneBrowser({
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-background" aria-hidden={!visible}>
       <form className="relative flex h-12 items-center gap-2 px-3" onSubmit={onSubmit}>
-        <Button type="button" size="icon-xs" variant="ghost" disabled={!canGoBack} title="后退" onClick={() => guest.current?.goBack()}>
+        <Button type="button" size="icon-xs" variant="ghost" disabled={!canGoBack} title={t("browser.back")} onClick={() => guest.current?.goBack()}>
           <HugeiconsIcon strokeWidth={2} icon={ArrowLeft01Icon} />
         </Button>
-        <Button type="button" size="icon-xs" variant="ghost" disabled={!canGoForward} title="前进" onClick={() => guest.current?.goForward()}>
+        <Button type="button" size="icon-xs" variant="ghost" disabled={!canGoForward} title={t("browser.forward")} onClick={() => guest.current?.goForward()}>
           <HugeiconsIcon strokeWidth={2} icon={ArrowRight01Icon} />
         </Button>
-        <Button type="button" size="icon-xs" variant="ghost" title="刷新" onClick={() => guest.current?.reload()}>
+        <Button type="button" size="icon-xs" variant="ghost" title={t("browser.reload")} onClick={() => guest.current?.reload()}>
           <HugeiconsIcon strokeWidth={2} icon={Refresh01Icon} className={loading ? "animate-spin" : undefined} />
         </Button>
         <Input
           value={draft}
-          placeholder="输入网址或搜索内容后回车"
+          placeholder={t("browser.placeholder")}
           className="h-7 flex-1 rounded-lg text-xs"
           spellCheck={false}
           onChange={(event) => setDraft(event.target.value)}
@@ -1022,7 +1029,7 @@ export function SidePaneBrowser({
           type="button"
           size="icon-xs"
           variant="ghost"
-          title="在默认浏览器中打开"
+          title={t("browser.openExternal")}
           onClick={() => {
             const href = safe(() => guest.current?.getURL() ?? "", "") || normalizeUrl(draft);
             if (href && href !== "about:blank") window.open(href, "_blank");
@@ -1030,20 +1037,20 @@ export function SidePaneBrowser({
         >
           <HugeiconsIcon strokeWidth={2} icon={LinkSquare02Icon} />
         </Button>
-        <Button type="button" size="icon-xs" variant="ghost" title="导入其他浏览器登录态" onClick={() => void openImportMenu()}>
+        <Button type="button" size="icon-xs" variant="ghost" title={t("browser.importTitle")} onClick={() => void openImportMenu()}>
           <HugeiconsIcon strokeWidth={2} icon={Upload01Icon} />
         </Button>
         {showImport ? (
           <div className="absolute right-3 top-10 z-30 w-72 rounded-xl border border-border bg-popover p-2 text-popover-foreground shadow-xl">
-            <div className="px-2 pb-2 text-xs font-medium text-muted-foreground">导入浏览器登录态</div>
-            {profiles.length === 0 ? <div className="px-2 py-3 text-xs text-muted-foreground">没有找到可导入的 Chromium 配置文件</div> : null}
+            <div className="px-2 pb-2 text-xs font-medium text-muted-foreground">{t("browser.importHeading")}</div>
+            {profiles.length === 0 ? <div className="px-2 py-3 text-xs text-muted-foreground">{t("browser.noProfiles")}</div> : null}
             {profiles.map((profile) => (
               <button key={profile.id} type="button" disabled={importing} className="flex w-full items-center rounded-lg px-2 py-2 text-left text-xs hover:bg-accent disabled:opacity-50" onClick={() => void importProfile(profile)}>
                 <span className="min-w-0 flex-1 truncate">{profile.browser} · {profile.name}</span>
                 <span className="ml-2 text-muted-foreground">Cookie</span>
               </button>
             ))}
-            <button type="button" className="mt-1 w-full rounded-lg px-2 py-1.5 text-left text-xs text-muted-foreground hover:bg-accent" onClick={() => setShowImport(false)}>取消</button>
+            <button type="button" className="mt-1 w-full rounded-lg px-2 py-1.5 text-left text-xs text-muted-foreground hover:bg-accent" onClick={() => setShowImport(false)}>{t("browser.cancel")}</button>
           </div>
         ) : null}
         {importStatus ? <span className="absolute right-3 top-11 z-20 max-w-72 truncate rounded bg-muted px-2 py-1 text-xs text-muted-foreground">{importStatus}</span> : null}

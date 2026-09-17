@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type JSX } from "react";
+import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { AlertCircleIcon, Archive04Icon, ArchiveRestoreIcon, Delete02Icon } from "@hugeicons/core-free-icons";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -53,6 +54,7 @@ export function ArchivedSettings({
   /** Deletes the given conversations in the engine and re-syncs the shell. */
   onDeleteConversations?: (ids: string[]) => Promise<DeleteConversationsResult>;
 }): JSX.Element {
+  const { t } = useTranslation("settings");
   const conversations = useSessionStore((state) => state.conversations);
   const projects = useSessionStore((state) => state.projects);
   const archived = useArchivedIds();
@@ -89,7 +91,7 @@ export function ArchivedSettings({
 
   function restore(removeIds: string[]): void {
     restoreConversations(removeIds);
-    setNotice(removeIds.length ? { kind: "info", text: `已恢复 ${removeIds.length} 个对话到侧边栏。` } : null);
+    setNotice(removeIds.length ? { kind: "info", text: t("archived.restored", { count: removeIds.length }) } : null);
     setSelected((prev) => {
       const next = new Set(prev);
       for (const id of removeIds) next.delete(id);
@@ -105,7 +107,7 @@ export function ArchivedSettings({
     try {
       const outcome = onDeleteConversations
         ? await onDeleteConversations(removeIds)
-        : { deleted: [], error: "删除接口不可用，请重启应用后重试。" };
+        : { deleted: [], error: t("archived.deleteUnavailable") };
       // Only ids the engine confirmed as deleted leave the archive list: a delete
       // that did not happen must never look like a successful restore.
       if (outcome.deleted.length > 0) {
@@ -118,17 +120,17 @@ export function ArchivedSettings({
       }
       const failed = removeIds.length - outcome.deleted.length;
       if (outcome.deleted.length > 0 && failed === 0) {
-        setNotice({ kind: "info", text: `已删除 ${outcome.deleted.length} 个对话。` });
+        setNotice({ kind: "info", text: t("archived.deleted", { count: outcome.deleted.length }) });
       } else {
         setNotice({
           kind: "error",
-          text: `有 ${failed} 个对话删除失败，仍保留在归档列表。${outcome.error ? `（${outcome.error}）` : ""}`,
+          text: t("archived.deletePartial", { failed, detail: outcome.error ? `（${outcome.error}）` : "" }),
         });
       }
     } catch (err) {
       setNotice({
         kind: "error",
-        text: `删除失败，对话仍保留在归档列表。${err instanceof Error ? `（${err.message}）` : ""}`,
+        text: t("archived.deleteFailed", { detail: err instanceof Error ? `（${err.message}）` : "" }),
       });
     } finally {
       setBusy(false);
@@ -141,7 +143,7 @@ export function ArchivedSettings({
   return (
     <div className="space-y-4">
       <p className="px-1 text-xs leading-4 text-muted-foreground">
-        归档只是把对话从侧边栏收起，内容仍保存在磁盘上；删除会连同会话记录一起移除，无法恢复。
+        {t("archived.intro")}
       </p>
 
       {notice ? (
@@ -157,8 +159,8 @@ export function ArchivedSettings({
             <EmptyMedia variant="icon">
               <HugeiconsIcon strokeWidth={2} icon={Archive04Icon} />
             </EmptyMedia>
-            <EmptyTitle>没有已归档的对话</EmptyTitle>
-            <EmptyDescription>在侧边栏悬停对话点归档图标，或右键选择「归档」。</EmptyDescription>
+            <EmptyTitle>{t("archived.emptyTitle")}</EmptyTitle>
+            <EmptyDescription>{t("archived.emptyDesc")}</EmptyDescription>
           </EmptyHeader>
         </Empty>
       ) : (
@@ -170,8 +172,8 @@ export function ArchivedSettings({
                 disabled={busy}
                 onCheckedChange={(checked) => setSelected(checked ? new Set(ids) : new Set())}
               />
-              全选
-              <span className="text-xs">已选 {selectedIds.length} / {items.length}</span>
+              {t("archived.selectAll")}
+              <span className="text-xs">{t("archived.selected", { selected: selectedIds.length, total: items.length })}</span>
             </Label>
             <div className="flex items-center gap-2">
               <Button
@@ -181,7 +183,7 @@ export function ArchivedSettings({
                 onClick={() => restore(selectedIds)}
               >
                 <HugeiconsIcon strokeWidth={2} icon={ArchiveRestoreIcon} />
-                恢复选中
+                {t("archived.restoreSelected")}
               </Button>
               <Button
                 size="sm"
@@ -190,7 +192,7 @@ export function ArchivedSettings({
                 onClick={() => setConfirm({ kind: "selection", ids: selectedIds })}
               >
                 <HugeiconsIcon strokeWidth={2} icon={Delete02Icon} />
-                删除选中
+                {t("archived.deleteSelected")}
               </Button>
             </div>
           </div>
@@ -203,13 +205,13 @@ export function ArchivedSettings({
                   <Checkbox
                     checked={selected.has(item.id)}
                     disabled={busy}
-                    aria-label={`选择「${item.title}」`}
+                    aria-label={t("archived.selectItem", { title: item.title })}
                     onCheckedChange={(checked) => toggle(item.id, checked)}
                   />
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm">{item.title}</p>
                     <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                      {project?.name ?? "无项目"} · {formatRelativeTime(item.updatedAt)}
+                      {project?.name ?? t("archived.noProject")} · {formatRelativeTime(item.updatedAt)}
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/row:opacity-100">
@@ -217,7 +219,7 @@ export function ArchivedSettings({
                       size="icon-xs"
                       variant="ghost"
                       className="text-muted-foreground"
-                      label="恢复"
+                      label={t("archived.restore")}
                       disabled={busy}
                       onClick={() => restore([item.id])}
                     >
@@ -227,7 +229,7 @@ export function ArchivedSettings({
                       size="icon-xs"
                       variant="ghost"
                       className="text-destructive"
-                      label="删除"
+                      label={t("archived.delete")}
                       disabled={busy}
                       onClick={() => setConfirm({ kind: "single", id: item.id, title: item.title })}
                     >
@@ -245,22 +247,22 @@ export function ArchivedSettings({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {confirm?.kind === "single" ? "删除这个对话？" : `删除选中的 ${pendingCount} 个对话？`}
+              {confirm?.kind === "single" ? t("archived.confirmSingle") : t("archived.confirmMany", { count: pendingCount })}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {confirm?.kind === "single"
-                ? `「${confirm.title}」及其全部消息会从磁盘删除，无法恢复。`
-                : `这 ${pendingCount} 个已归档的对话及其全部消息会从磁盘删除，无法恢复。`}
+                ? t("archived.confirmSingleDesc", { title: confirm.title })
+                : t("archived.confirmManyDesc", { count: pendingCount })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={busy}>取消</AlertDialogCancel>
+            <AlertDialogCancel disabled={busy}>{t("archived.cancel")}</AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
               disabled={busy}
               onClick={() => confirm && void runDelete(confirm)}
             >
-              删除
+              {t("archived.delete")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

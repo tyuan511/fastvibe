@@ -1,4 +1,5 @@
 import { useState, type JSX } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -25,10 +26,11 @@ export function PermissionDialog({
     always?: boolean;
   }) => void;
 }): JSX.Element | null {
+  const { t } = useTranslation("chat");
   const [value, setValue] = useState("");
   if (!request) return null;
 
-  const title = request.title || (request.method === "confirm" ? "需要确认" : "需要你的决定");
+  const title = request.title || (request.method === "confirm" ? t("permission.needConfirm") : t("permission.needDecision"));
 
   return (
     <Dialog
@@ -71,20 +73,20 @@ export function PermissionDialog({
         ) : null}
         <DialogFooter>
           <Button variant="outline" onClick={() => onRespond({ id: request.id, cancelled: true })}>
-            取消
+            {t("permission.cancel")}
           </Button>
           {request.method === "confirm" ? (
             <>
               <Button variant="outline" onClick={() => onRespond({ id: request.id, confirmed: false })}>
-                拒绝
+                {t("permission.deny")}
               </Button>
               <Button variant="outline" onClick={() => onRespond({ id: request.id, confirmed: true, always: true })}>
-                始终允许
+                {t("permission.alwaysAllow")}
               </Button>
-              <Button onClick={() => onRespond({ id: request.id, confirmed: true })}>允许</Button>
+              <Button onClick={() => onRespond({ id: request.id, confirmed: true })}>{t("permission.allow")}</Button>
             </>
           ) : request.method === "input" || request.method === "editor" ? (
-            <Button onClick={() => onRespond({ id: request.id, value })}>提交</Button>
+            <Button onClick={() => onRespond({ id: request.id, value })}>{t("permission.submit")}</Button>
           ) : null}
         </DialogFooter>
       </DialogContent>

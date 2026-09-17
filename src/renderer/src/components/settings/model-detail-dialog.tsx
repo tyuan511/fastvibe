@@ -1,4 +1,6 @@
 import { useEffect, useState, type JSX, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
+import { i18n } from "@/lib/i18n";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -19,7 +21,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cleanError } from "@/lib/ipc-error";
-import { THINKING_LABELS } from "@/lib/thinking-levels";
+import { thinkingLabel } from "@/lib/thinking-levels";
 import { cn } from "@/lib/utils";
 import {
   DEFAULT_THINKING_LEVELS,
@@ -42,11 +44,12 @@ const API_LABELS: Record<ProviderApi, string> = {
   "google-generative-ai": "Gemini",
 };
 
-const SOURCE_LABELS: Record<string, string> = {
-  "models.dev": "models.dev",
-  native: "引擎内置",
-  default: "默认参数",
-};
+function sourceLabel(source: string): string {
+  if (source === "native") return i18n.t("settings:modelDetail.engineBuiltin") as string;
+  if (source === "default") return i18n.t("settings:modelDetail.defaultParams") as string;
+  if (source === "models.dev") return "models.dev";
+  return i18n.t("settings:modelDetail.unknown") as string;
+}
 
 const MODALITY_KEYS = ["image", "video", "file"] as const;
 
@@ -60,10 +63,10 @@ const DEFAULT_EFFORTS = DEFAULT_THINKING_LEVELS;
  * roster rather than written to `models.json`.
  */
 const TRAIT_DEFS = [
-  { key: "reasoning", label: "推理" },
-  { key: "image", label: "图片输入" },
-  { key: "video", label: "视频输入" },
-  { key: "file", label: "文件输入" },
+  { key: "reasoning", labelKey: "modelDetail.reasoning" },
+  { key: "image", labelKey: "modelDetail.image" },
+  { key: "video", labelKey: "modelDetail.video" },
+  { key: "file", labelKey: "modelDetail.file" },
 ] as const;
 
 type TraitKey = (typeof TRAIT_DEFS)[number]["key"];
@@ -99,6 +102,7 @@ export function ModelDetailDialog({
   // A native provider's models live in the SDK registry and `models.json` is never
   // written for it, so its entry cannot carry an override — show it read-only rather
   // than accept edits the engine would discard.
+  const { t } = useTranslation("settings");
   const editable = provider?.kind !== "native" && provider !== undefined;
   const model = target?.model;
 
@@ -142,15 +146,15 @@ export function ModelDetailDialog({
     const contextWindow = Number.parseInt(context.trim(), 10);
     const maxTokens = Number.parseInt(output.trim(), 10);
     if (!Number.isFinite(contextWindow) || contextWindow <= 0) {
-      setError("上下文窗口需为正整数");
+      setError(t("modelDetail.contextInvalid"));
       return;
     }
     if (!Number.isFinite(maxTokens) || maxTokens <= 0) {
-      setError("最大输出需为正整数");
+      setError(t("modelDetail.outputInvalid"));
       return;
     }
     if (reasoning && levels.size === 0) {
-      setError("请至少勾选一个思考强度，或取消「推理」");
+      setError(t("modelDetail.needEffort"));
       return;
     }
 
@@ -179,14 +183,14 @@ export function ModelDetailDialog({
     <Dialog open={target !== null} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>模型详情</DialogTitle>
+          <DialogTitle>{t("modelDetail.title")}</DialogTitle>
           <DialogDescription className="truncate font-mono text-xs">{model?.id ?? ""}</DialogDescription>
         </DialogHeader>
 
         {/* Scrolls only when the window is short, so the dialog never runs off screen. */}
         {model ? (
           <div className="max-h-[min(80vh,40rem)] space-y-3.5 overflow-y-auto">
-            <Row label="显示名称">
+            <Row label={t("modelDetail.displayName")}>
               <Input
                 value={name}
                 disabled={!editable}
@@ -196,11 +200,11 @@ export function ModelDetailDialog({
               />
             </Row>
 
-            <Row label="协议">
+            <Row label={t("modelDetail.protocol")}>
               {editable ? (
                 <Select
                   items={{
-                    [INHERIT_API]: `跟随供应商（${apiLabel(provider?.api ?? "")}）`,
+                    [INHERIT_API]: t("modelDetail.followProvider", { api: apiLabel(provider?.api ?? "") }),
                     ...API_LABELS,
                   }}
                   value={api}
@@ -210,7 +214,7 @@ export function ModelDetailDialog({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value={INHERIT_API}>跟随供应商（{apiLabel(provider?.api ?? "")}）</SelectItem>
+                    <SelectItem value={INHERIT_API}>{t("modelDetail.followProvider", { api: apiLabel(provider?.api ?? "") })}</SelectItem>
                     {PROVIDER_APIS.map((item) => (
                       <SelectItem key={item} value={item}>
                         {API_LABELS[item]}
@@ -224,7 +228,7 @@ export function ModelDetailDialog({
             </Row>
 
             <div className="grid grid-cols-2 gap-3">
-              <Row label="上下文窗口">
+              <Row label={t("modelDetail.context")}>
                 <Input
                   value={context}
                   disabled={!editable}
@@ -233,7 +237,7 @@ export function ModelDetailDialog({
                   onChange={(event) => setContext(event.target.value)}
                 />
               </Row>
-              <Row label="最大输出">
+              <Row label={t("modelDetail.maxOutput")}>
                 <Input
                   value={output}
                   disabled={!editable}
@@ -244,27 +248,27 @@ export function ModelDetailDialog({
               </Row>
             </div>
 
-            <Row label="支持特性">
+            <Row label={t("modelDetail.traits")}>
               <div className="flex flex-wrap gap-x-4 gap-y-2 pt-0.5">
                 {TRAIT_DEFS.map((item) => (
                   <CheckItem
                     key={item.key}
-                    label={item.label}
+                    label={t(item.labelKey)}
                     checked={traits.has(item.key)}
                     disabled={!editable}
                     onToggle={(on) => toggleTrait(item.key, on)}
                   />
                 ))}
               </div>
-              <p className="text-xs text-muted-foreground">推理与图片输入会写入引擎配置，视频、文件仅作记录。</p>
+              <p className="text-xs text-muted-foreground">{t("modelDetail.traitsHint")}</p>
             </Row>
 
-            <Row label="思考强度">
+            <Row label={t("modelDetail.thinking")}>
               <div className="flex flex-wrap gap-x-4 gap-y-2 pt-0.5">
                 {THINKING_EFFORT_LEVELS.map((level) => (
                   <CheckItem
                     key={level}
-                    label={THINKING_LABELS[level]}
+                    label={thinkingLabel(level)}
                     checked={levels.has(level)}
                     disabled={!editable || !reasoning}
                     onToggle={(on) =>
@@ -280,17 +284,17 @@ export function ModelDetailDialog({
               </div>
               {editable && !reasoning ? (
                 <p className="text-xs text-muted-foreground">
-                  勾选「推理」后可选择强度；不勾选则该模型不发送思考参数。
+                  {t("modelDetail.thinkingHint")}
                 </p>
               ) : null}
             </Row>
 
-            <Row label="价格（每百万 tokens）">
+            <Row label={t("modelDetail.price")}>
               <Prices model={model} />
             </Row>
 
             <p className="text-xs text-muted-foreground">
-              参数来源：{SOURCE_LABELS[model.source ?? ""] ?? "未知"}
+              {t("modelDetail.source", { source: sourceLabel(model.source ?? "") })}
             </p>
           </div>
         ) : null}
@@ -299,11 +303,11 @@ export function ModelDetailDialog({
 
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>
-            {editable ? "取消" : "关闭"}
+            {editable ? t("modelDetail.cancel") : t("modelDetail.close")}
           </Button>
           {editable ? (
             <Button onClick={() => void submit()} disabled={busy}>
-              保存
+              {t("modelDetail.save")}
             </Button>
           ) : null}
         </DialogFooter>
@@ -354,27 +358,29 @@ function CheckItem({
  * the number shown first is what most requests actually pay.
  */
 function Prices({ model }: { model: ProviderModel }): JSX.Element {
+  const { t } = useTranslation("settings");
   const cost = model.cost;
   if (!cost) return <ReadValue>—</ReadValue>;
   return (
     <div className="space-y-2">
-      <PriceTable label="每百万 tokens" cost={cost} first />
+      <PriceTable label={t("modelDetail.perMillion")} cost={cost} first />
       {(model.costTiers ?? []).map((tier) => (
-        <PriceTable key={tier.over} label={`超 ${contextLabel(tier.over)} 上下文`} cost={tier.cost} />
+        <PriceTable key={tier.over} label={t("modelDetail.overContext", { size: contextLabel(tier.over) })} cost={tier.cost} />
       ))}
     </div>
   );
 }
 
 function PriceTable({ label, cost, first }: { label: string; cost: ModelCost; first?: boolean }): JSX.Element {
+  const { t } = useTranslation("settings");
   return (
     <div className="space-y-1 pt-1">
       <p className={cn("text-xs", first ? "text-foreground" : "text-warning")}>{label}</p>
       <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs tabular-nums">
-        <PriceLine label="输入" value={cost.input} />
-        <PriceLine label="输出" value={cost.output} />
-        <PriceLine label="缓存读" value={cost.cacheRead} />
-        <PriceLine label="缓存写" value={cost.cacheWrite} />
+        <PriceLine label={t("modelDetail.input")} value={cost.input} />
+        <PriceLine label={t("modelDetail.output")} value={cost.output} />
+        <PriceLine label={t("modelDetail.cacheRead")} value={cost.cacheRead} />
+        <PriceLine label={t("modelDetail.cacheWrite")} value={cost.cacheWrite} />
       </div>
     </div>
   );

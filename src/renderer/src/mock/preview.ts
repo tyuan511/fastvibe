@@ -343,6 +343,11 @@ const api = {
   },
   app: {
     getInfo: async () => APP_INFO,
+    log: () => undefined,
+    exportLogs: async () => "/Users/dev/Downloads/fastvibe-logs-preview.zip",
+    // 关于's metadata refresh: the preview has no upstream to fetch, so it reports the
+    // same fixture catalog with a fresh date.
+    updateModelsDev: async () => ({ ...APP_INFO.modelsDev!, generatedAt: Date.now() }),
     newWindow: async () => undefined,
   },
   settings: {

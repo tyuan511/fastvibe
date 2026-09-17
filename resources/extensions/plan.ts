@@ -15,7 +15,8 @@ import { Type } from "typebox";
  */
 const STATUS_KEY = "plan-mode";
 const QUESTION_TOOL = "question";
-const OTHER_ANSWER = "其他（自行输入）";
+const T = (zh: string, en: string): string => (process.env.FASTVIBE_UI_LANGUAGE === "en" ? en : zh);
+const otherAnswer = (): string => T("其他（自行输入）", "Other (type your own)");
 
 const INSTRUCTIONS = [
   "## Plan mode",
@@ -67,10 +68,10 @@ type QuestionBridge = {
 function registerQuestionTool(pi: ExtensionAPI): void {
   pi.registerTool({
     name: QUESTION_TOOL,
-    label: "询问用户",
+    label: "Ask the user",
     description:
-      "向用户提出一个或多个澄清问题。每个问题可以给出候选选项；allowOther 为 true（默认）时用户也能自行输入。需求不明确、需要用户拍板时使用。",
-    promptSnippet: "向用户提问以澄清需求（支持多个问题，选项或自由输入）",
+      "Ask the user one or more clarifying questions. Each question may offer options; allowOther (default true) also lets them type their own answer. Use when requirements are ambiguous.",
+    promptSnippet: "Ask the user to clarify (multiple questions, options or free-form)",
     promptGuidelines: [
       "Use question when requirements are ambiguous and the user's decision changes the plan; put every clarifying question you need into one call instead of asking across turns.",
     ],
@@ -78,19 +79,19 @@ function registerQuestionTool(pi: ExtensionAPI): void {
     parameters: Type.Object({
       questions: Type.Array(
         Type.Object({
-          question: Type.String({ description: "要问用户的问题" }),
-          header: Type.Optional(Type.String({ description: "该问题的简短标签（可选）" })),
+          question: Type.String({ description: "The question to ask" }),
+          header: Type.Optional(Type.String({ description: "Short label for the question (optional)" })),
           options: Type.Optional(
             Type.Array(
               Type.Object({
-                label: Type.String({ description: "选项标题" }),
-                description: Type.Optional(Type.String({ description: "选项的补充说明" })),
+                label: Type.String({ description: "Option title" }),
+                description: Type.Optional(Type.String({ description: "Extra detail for the option" })),
               }),
             ),
           ),
-          allowOther: Type.Optional(Type.Boolean({ description: "是否允许用户自行输入答案，默认 true" })),
+          allowOther: Type.Optional(Type.Boolean({ description: "Allow a free-form answer; default true" })),
         }),
-        { description: "要问的问题列表（一个或多个）" },
+        { description: "Questions to ask (one or more)" },
       ),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -109,9 +110,9 @@ function registerQuestionTool(pi: ExtensionAPI): void {
         }));
 
       if (items.length === 0) {
-        return { content: [{ type: "text", text: "没有要问的问题。" }], details: { questions: [] } as QuestionDetails };
+        return { content: [{ type: "text", text: T("没有要问的问题。", "No questions to ask.") }], details: { questions: [] } as QuestionDetails };
       }
-      if (!ctx.hasUI) return collect("无法提问：当前会话没有可用的交互界面。", unanswered());
+      if (!ctx.hasUI) return collect(T("无法提问：当前会话没有可用的交互界面。", "Cannot ask: this session has no interactive UI."), unanswered());
 
       // Single-panel multi-question UI when the host offers it (FastVibe).
       const bridge = (ctx.ui as unknown as QuestionBridge).questions;
@@ -123,7 +124,7 @@ function registerQuestionTool(pi: ExtensionAPI): void {
           optionDetails: (item.options ?? []).map((option) => ({ description: option.description })),
           allowOther: item.allowOther ?? true,
         }));
-        const result = await bridge("需要你的回答", specs);
+        const result = await bridge(T("需要你的回答", "Your answer is needed"), specs);
         if (!result) return collect(formatAnswers(unanswered()), unanswered());
         const answers = items.map((item, i): QuestionAnswer => {
           const labels = (item.options ?? []).map((option) => option.label);
@@ -148,7 +149,7 @@ function registerQuestionTool(pi: ExtensionAPI): void {
         }
 
         // A short progress prefix keeps multi-question runs legible in the panel.
-        const title = `${items.length > 1 ? `问题 ${index + 1}/${items.length}：` : ""}${item.question}`;
+        const title = `${items.length > 1 ? T(`问题 ${index + 1}/${items.length}：`, `Question ${index + 1}/${items.length}: `) : ""}${item.question}`;
         let answer: string | null = null;
         let source: QuestionAnswer["source"] = "cancelled";
 
@@ -162,10 +163,10 @@ function registerQuestionTool(pi: ExtensionAPI): void {
           }
         } else {
           const allowOther = item.allowOther ?? true;
-          const choice = await ctx.ui.select(title, allowOther ? [...labels, OTHER_ANSWER] : labels);
+          const choice = await ctx.ui.select(title, allowOther ? [...labels, otherAnswer()] : labels);
           if (choice === undefined) {
             stopped = true;
-          } else if (choice === OTHER_ANSWER) {
+          } else if (choice === otherAnswer()) {
             const text = await ctx.ui.input(title);
             if (text !== undefined && text.trim()) {
               answer = text.trim();
@@ -190,7 +191,7 @@ function registerQuestionTool(pi: ExtensionAPI): void {
 /** Plain-text summary the model reads back. */
 function formatAnswers(answers: QuestionAnswer[]): string {
   return answers
-    .map((item, index) => `Q${index + 1}. ${item.question}\nA${index + 1}. ${item.answer ?? "（用户未回答）"}`)
+    .map((item, index) => `Q${index + 1}. ${item.question}\nA${index + 1}. ${item.answer ?? T("（用户未回答）", "(unanswered)")}`)
     .join("\n\n");
 }
 
@@ -207,7 +208,7 @@ export default function planMode(pi: ExtensionAPI): void {
   let questionRegistered = false;
 
   pi.registerCommand("plan", {
-    description: "进入/退出计划模式（只读探索并制定计划）",
+    description: "Enter/exit plan mode (read-only exploration then a plan)",
     handler: async (_args, ctx) => {
       active = !active;
       if (active) {
@@ -231,7 +232,7 @@ export default function planMode(pi: ExtensionAPI): void {
   pi.on("tool_call", (event) => {
     if (!active) return;
     if (event.toolName === "edit" || event.toolName === "write") {
-      return { block: true, reason: "计划模式已开启：不会修改文件，请先给出计划。" };
+      return { block: true, reason: T("计划模式已开启：不会修改文件，请先给出计划。", "Plan mode is on: files will not be modified. Produce a plan first.") };
     }
   });
 }

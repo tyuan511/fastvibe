@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type JSX, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { Card } from "@/components/ui/card";
 import {
   Select,
@@ -13,19 +14,16 @@ import { providerLabel } from "@/lib/provider-label";
 import { cn } from "@/lib/utils";
 import type { UsageDay, UsageRange, UsageStats } from "@shared/types";
 
-const RANGE_ITEMS: Record<UsageRange, string> = {
-  "7d": "最近 7 天",
-  "30d": "最近 30 天",
-  "90d": "最近 90 天",
-  "365d": "最近一年",
-  all: "全部时间",
+const RANGE_KEYS: UsageRange[] = ["7d", "30d", "90d", "365d", "all"];
+const RANGE_LABEL_KEYS: Record<UsageRange, string> = {
+  "7d": "usage.range7d",
+  "30d": "usage.range30d",
+  "90d": "usage.range90d",
+  "365d": "usage.range365d",
+  all: "usage.rangeAll",
 };
 
 type HeatMetric = "requests" | "tokens";
-const METRIC_ITEMS: Record<HeatMetric, string> = {
-  requests: "按请求数",
-  tokens: "按 Token",
-};
 
 /** GitHub-style intensity ramp off the theme's own success token; level 0 is an empty day. */
 const LEVEL_CLASSES = [
@@ -45,10 +43,13 @@ const LEVEL_CLASSES = [
 const CELL = 0.75;
 const GAP = 0.125;
 /** The widest caption the header ever renders, used as an off-screen ruler. */
-const MONTH_RULER = "12月";
-const WEEKDAYS = ["一", "", "三", "", "五", "", "日"];
-
 export function UsageSettings(): JSX.Element {
+  const { t } = useTranslation("settings");
+  const rangeItems = Object.fromEntries(RANGE_KEYS.map((key) => [key, t(RANGE_LABEL_KEYS[key])])) as Record<UsageRange, string>;
+  const metricItems: Record<HeatMetric, string> = {
+    requests: t("usage.byRequests"),
+    tokens: t("usage.byTokens"),
+  };
   const [range, setRange] = useState<UsageRange>("365d");
   const [metric, setMetric] = useState<HeatMetric>("requests");
   const [stats, setStats] = useState<UsageStats | null>(null);
@@ -82,7 +83,7 @@ export function UsageSettings(): JSX.Element {
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-end gap-2">
         <Select
-          items={METRIC_ITEMS}
+          items={metricItems}
           value={metric}
           onValueChange={(value) => setMetric(value as HeatMetric)}
         >
@@ -90,12 +91,12 @@ export function UsageSettings(): JSX.Element {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="requests">按请求数</SelectItem>
-            <SelectItem value="tokens">按 Token</SelectItem>
+            <SelectItem value="requests">{t("usage.byRequests")}</SelectItem>
+            <SelectItem value="tokens">{t("usage.byTokens")}</SelectItem>
           </SelectContent>
         </Select>
         <Select
-          items={RANGE_ITEMS}
+          items={rangeItems}
           value={range}
           onValueChange={(value) => setRange(value as UsageRange)}
         >
@@ -103,9 +104,9 @@ export function UsageSettings(): JSX.Element {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {(Object.keys(RANGE_ITEMS) as UsageRange[]).map((key) => (
+            {RANGE_KEYS.map((key) => (
               <SelectItem key={key} value={key}>
-                {RANGE_ITEMS[key]}
+                {rangeItems[key]}
               </SelectItem>
             ))}
           </SelectContent>
@@ -114,26 +115,26 @@ export function UsageSettings(): JSX.Element {
 
       <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
         <StatCard
-          label="总请求"
+          label={t("usage.totalRequests")}
           value={totals ? formatCount(totals.requests) : "—"}
-          hint={totals ? `工具调用 ${formatCount(totals.toolCalls)} 次` : undefined}
+          hint={totals ? t("usage.toolCalls", { count: formatCount(totals.toolCalls) }) : undefined}
         />
         <StatCard
-          label="总 Token"
+          label={t("usage.totalTokens")}
           value={totals ? formatTokens(totals.tokens) : "—"}
           hint={
             totals
-              ? `输入 ${formatTokens(totals.input)} · 输出 ${formatTokens(totals.output)}`
+              ? t("usage.io", { input: formatTokens(totals.input), output: formatTokens(totals.output) })
               : undefined
           }
         />
         <StatCard
-          label="预估花费"
+          label={t("usage.estimatedCost")}
           value={totals ? formatCost(totals.cost) : "—"}
-          hint={totals && totals.cacheRead > 0 ? `缓存读取 ${formatTokens(totals.cacheRead)}` : "按供应商返回计费"}
+          hint={totals && totals.cacheRead > 0 ? t("usage.cacheRead", { tokens: formatTokens(totals.cacheRead) }) : t("usage.billedByProvider")}
         />
         <StatCard
-          label="活跃天数"
+          label={t("usage.activeDays")}
           value={totals ? formatCount(totals.activeDays) : "—"}
           hint={stats ? `${stats.from} ~ ${stats.to}` : undefined}
         />
@@ -142,23 +143,23 @@ export function UsageSettings(): JSX.Element {
       <section className="rounded-xl border border-border bg-card p-4">
         <header className="mb-3 flex flex-wrap items-end justify-between gap-2">
           <div>
-            <h3 className="text-sm font-medium">活跃状态</h3>
+            <h3 className="text-sm font-medium">{t("usage.activity")}</h3>
             <p className="mt-0.5 text-xs text-muted-foreground">
               {stats
-                ? `${stats.from} ~ ${stats.to} · ${stats.sessions} 个会话`
-                : "按天统计的请求 / Token 活跃度"}
+                ? t("usage.rangeSessions", { from: stats.from, to: stats.to, sessions: stats.sessions })
+                : t("usage.heatmapHint")}
             </p>
           </div>
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <span>少</span>
+            <span>{t("usage.less")}</span>
             {LEVEL_CLASSES.map((tone, index) => (
               <span key={index} className={cn("size-3 rounded-[3px]", tone)} />
             ))}
-            <span>多</span>
+            <span>{t("usage.more")}</span>
           </div>
         </header>
         {failed ? (
-          <p className="py-6 text-center text-xs text-muted-foreground">无法读取使用统计。</p>
+          <p className="py-6 text-center text-xs text-muted-foreground">{t("usage.loadFailed")}</p>
         ) : stats ? (
           <Heatmap stats={stats} metric={metric} dimmed={loading} />
         ) : (
@@ -168,7 +169,7 @@ export function UsageSettings(): JSX.Element {
 
       {stats && stats.models.length > 0 ? (
         <section className="space-y-2">
-          <h3 className="px-1 text-sm font-medium">模型用量</h3>
+          <h3 className="px-1 text-sm font-medium">{t("usage.byModel")}</h3>
           <div className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">
             {stats.models.map((model) => {
               const share = stats.totals.tokens > 0 ? model.tokens / stats.totals.tokens : 0;
@@ -184,7 +185,7 @@ export function UsageSettings(): JSX.Element {
                     <div className="shrink-0 text-right">
                       <p className="text-xs tabular-nums">{formatTokens(model.tokens)}</p>
                       <p className="text-xs text-muted-foreground tabular-nums">
-                        {formatCount(model.requests)} 次 · {formatCost(model.cost)}
+                        {t("usage.requestsCost", { requests: formatCount(model.requests), cost: formatCost(model.cost) })}
                       </p>
                     </div>
                   </div>
@@ -229,13 +230,18 @@ function Heatmap({
   metric: HeatMetric;
   dimmed: boolean;
 }): JSX.Element {
+  const { t } = useTranslation("settings");
+  const weekdays = t("usage.weekdays", { returnObjects: true }) as string[];
   const dayMap = useMemo(() => {
     const map = new Map<string, UsageDay>();
     for (const day of stats.days) map.set(day.date, day);
     return map;
   }, [stats.days]);
 
-  const { weeks, months } = useMemo(() => buildCalendar(stats.from, stats.to), [stats.from, stats.to]);
+  const { weeks, months } = useMemo(
+    () => buildCalendar(stats.from, stats.to, (month) => t("usage.month", { n: month + 1 })),
+    [stats.from, stats.to, t],
+  );
 
   /*
    * Cells are `1fr`, so how much room a month caption actually has is only known once
@@ -322,7 +328,7 @@ function Heatmap({
           aria-hidden
           className="invisible absolute text-xs leading-none whitespace-nowrap"
         >
-          {MONTH_RULER}
+          {t("usage.monthRuler")}
         </span>
         {months.map((month, index) => (
           // Every caption still consumes its weeks so the header row keeps the grid
@@ -336,7 +342,7 @@ function Heatmap({
             {captionFits(month.cols) ? month.label : ""}
           </div>
         ))}
-        {WEEKDAYS.map((label, dayIndex) => (
+        {weekdays.map((label, dayIndex) => (
           <Fragment key={label || dayIndex}>
             <div className="w-3 pr-0.5 text-right text-xs leading-none text-muted-foreground">
               {label}
@@ -376,11 +382,12 @@ function Heatmap({
 }
 
 function DayTooltip({ date, day }: { date: string; day?: UsageDay }): JSX.Element {
+  const { t } = useTranslation("settings");
   const requests = day?.requests ?? 0;
   return (
     <div className="space-y-0.5">
       <p className="font-medium">{date}</p>
-      <p>{requests > 0 ? `${formatCount(requests)} 次请求` : "没有活动"}</p>
+      <p>{requests > 0 ? t("usage.requests", { count: requests, requests: formatCount(requests) }) : t("usage.noActivity")}</p>
       {day && day.tokens > 0 ? <p>{formatTokens(day.tokens)} Token</p> : null}
       {day && day.cost > 0 ? <p>{formatCost(day.cost)}</p> : null}
     </div>
@@ -390,7 +397,11 @@ function DayTooltip({ date, day }: { date: string; day?: UsageDay }): JSX.Elemen
 type CalendarCell = { key: string; inRange: boolean };
 type CalendarMonth = { label: string; cols: number };
 
-function buildCalendar(from: string, to: string): { weeks: CalendarCell[][]; months: CalendarMonth[] } {
+function buildCalendar(
+  from: string,
+  to: string,
+  monthLabel: (month: number) => string,
+): { weeks: CalendarCell[][]; months: CalendarMonth[] } {
   const start = parseDateKey(from);
   // Monday-first: shift back to the Monday on/before the window start.
   const startDay = (start.getDay() + 6) % 7;
@@ -414,7 +425,7 @@ function buildCalendar(from: string, to: string): { weeks: CalendarCell[][]; mon
     const first = week.find((cell) => cell.inRange) ?? week[0];
     const month = parseDateKey(first.key).getMonth();
     if (month !== previous) {
-      months.push({ label: `${month + 1}月`, cols: 1 });
+      months.push({ label: monthLabel(month), cols: 1 });
       previous = month;
     } else {
       months[months.length - 1].cols += 1;

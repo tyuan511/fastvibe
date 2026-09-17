@@ -1,4 +1,5 @@
 import { type JSX } from "react";
+import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Tick02Icon } from "@hugeicons/core-free-icons";
 import type { ToolCallBlock } from "@shared/types";
@@ -34,6 +35,7 @@ function parse(value: unknown): QuestionAnswer[] {
  * so the questions are visible before the user answers.
  */
 export function QuestionAnswers({ tool, running }: { tool: ToolCallBlock; running: boolean }): JSX.Element | null {
+  const { t } = useTranslation("chat");
   const answered = parse(tool.details);
   const questions = answered.length > 0 ? answered : parse(tool.args);
   if (questions.length === 0) return null;
@@ -50,10 +52,10 @@ export function QuestionAnswers({ tool, running }: { tool: ToolCallBlock; runnin
             <div className="flex items-center gap-1.5 pl-5">
               <HugeiconsIcon strokeWidth={2} icon={Tick02Icon} className="size-3 shrink-0 text-success" />
               <span className="text-sm leading-5 text-foreground">{item.answer}</span>
-              {item.source === "custom" ? <span className="text-sm text-muted-foreground">自行输入</span> : null}
+              {item.source === "custom" ? <span className="text-sm text-muted-foreground">{t("question.custom")}</span> : null}
             </div>
           ) : (
-            <p className="pl-5 text-sm text-muted-foreground">{running ? "等待回答…" : "未回答"}</p>
+            <p className="pl-5 text-sm text-muted-foreground">{running ? t("question.waiting") : t("question.unanswered")}</p>
           )}
         </div>
       ))}

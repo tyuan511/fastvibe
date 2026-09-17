@@ -1,4 +1,6 @@
 import { useMemo, useState, type JSX } from "react";
+import { useTranslation } from "react-i18next";
+import { i18n } from "@/lib/i18n";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Loading03Icon, Search01Icon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { Badge } from "@/components/ui/badge";
@@ -8,19 +10,19 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import type { ProviderModel } from "@shared/types";
 
-const SOURCE_LABEL: Record<string, string> = {
-  "models.dev": "models.dev",
-  native: "内置",
-  default: "默认参数",
-};
+function sourceLabel(source: string): string {
+  if (source === "native") return i18n.t("settings:modelPicker.native") as string;
+  if (source === "default") return i18n.t("settings:modelPicker.defaultParams") as string;
+  return source;
+}
 
 export function inputSummary(model: ProviderModel): string {
   const parts: string[] = [];
-  if (model.input.includes("text")) parts.push("文本");
-  if (model.input.includes("image")) parts.push("图片");
-  if (model.input.includes("video")) parts.push("视频");
-  if (model.input.includes("file")) parts.push("文件");
-  return parts.join(" / ") || "文本";
+  if (model.input.includes("text")) parts.push(i18n.t("settings:modelPicker.text") as string);
+  if (model.input.includes("image")) parts.push(i18n.t("settings:modelPicker.image") as string);
+  if (model.input.includes("video")) parts.push(i18n.t("settings:modelPicker.video") as string);
+  if (model.input.includes("file")) parts.push(i18n.t("settings:modelPicker.file") as string);
+  return parts.join(" / ") || (i18n.t("settings:modelPicker.text") as string);
 }
 
 export function ModelPicker({
@@ -34,6 +36,7 @@ export function ModelPicker({
   onSelectedChange: (next: Set<string>) => void;
   loading?: boolean;
 }): JSX.Element {
+  const { t } = useTranslation("settings");
   const [query, setQuery] = useState("");
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -55,29 +58,29 @@ export function ModelPicker({
           <HugeiconsIcon strokeWidth={2} icon={Search01Icon} className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={query}
-            placeholder="搜索模型"
+            placeholder={t("modelPicker.search")}
             className="h-8 pl-8 text-xs"
             onChange={(event) => setQuery(event.target.value)}
           />
         </div>
         <Button size="xs" variant="outline" onClick={() => onSelectedChange(new Set(filtered.map((m) => m.id)))}>
-          全选
+          {t("modelPicker.selectAll")}
         </Button>
         <Button size="xs" variant="outline" onClick={() => onSelectedChange(new Set())}>
-          清空
+          {t("modelPicker.clear")}
         </Button>
         <span className="shrink-0 text-xs text-muted-foreground">
-          已选 {selected.size}/{models.length}
+          {t("modelPicker.selected", { selected: selected.size, total: models.length })}
         </span>
       </div>
       <ScrollArea className="h-72 rounded-lg border border-border">
         {loading ? (
           <div className="flex h-full items-center justify-center gap-2 py-10 text-xs text-muted-foreground">
             <HugeiconsIcon strokeWidth={2} icon={Loading03Icon} className="size-4 animate-spin" />
-            正在拉取模型列表…
+            {t("modelPicker.loading")}
           </div>
         ) : filtered.length === 0 ? (
-          <p className="py-10 text-center text-xs text-muted-foreground">没有匹配的模型</p>
+          <p className="py-10 text-center text-xs text-muted-foreground">{t("modelPicker.none")}</p>
         ) : (
           <div className="divide-y divide-border">
             {filtered.map((model) => {
@@ -102,10 +105,10 @@ export function ModelPicker({
                     <span className="block truncate text-xs text-muted-foreground">{model.id}</span>
                   </span>
                   <span className="hidden shrink-0 items-center gap-1 text-xs text-muted-foreground sm:flex">
-                    {model.reasoning ? <Badge variant="secondary">推理</Badge> : null}
+                    {model.reasoning ? <Badge variant="secondary">{t("modelPicker.reasoning")}</Badge> : null}
                     <span>{inputSummary(model)}</span>
                     <span>{Math.round(model.contextWindow / 1000)}K</span>
-                    {model.source ? <span>· {SOURCE_LABEL[model.source] ?? model.source}</span> : null}
+                    {model.source ? <span>· {sourceLabel(model.source)}</span> : null}
                   </span>
                 </button>
               );

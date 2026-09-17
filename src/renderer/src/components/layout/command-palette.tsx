@@ -12,7 +12,9 @@ import {
   CommandShortcut,
 } from "@/components/ui/command";
 import { Kbd } from "@/components/ui/kbd";
-import { SETTINGS_SECTIONS, type SectionId } from "@/components/settings/settings-dialog";
+import { useTranslation } from "react-i18next";
+import { i18n } from "@/lib/i18n";
+import { SETTINGS_SECTIONS, settingsSectionLabel, type SectionId } from "@/components/settings/settings-dialog";
 import { useArchivedIds } from "@/stores/archive";
 import { useShortcutLabel } from "@/lib/use-shortcuts";
 import type { Conversation, ConversationSearchHit, Project } from "@shared/types";
@@ -20,33 +22,25 @@ import type { Conversation, ConversationSearchHit, Project } from "@shared/types
 const IS_MAC = typeof navigator !== "undefined" && /mac/i.test(navigator.userAgent);
 const MOD = IS_MAC ? "⌘" : "Ctrl+";
 
-const SETTING_KEYWORDS: Record<SectionId, string> = {
-  // The 对话 pane was folded into 通用, so its keywords live here now.
-  general: "外观 主题 字号 界面 发送 思考 队列 时间戳 打断",
-  shortcuts: "键盘 热键 keymap",
-  archived: "恢复 删除",
-  usage: "token 费用 统计",
-  providers: "供应商 api 密钥 模型",
-  mcp: "工具",
-  skills: "skill",
-  extensions: "扩展 市场",
-  import: "导入 迁移 claude codex opencode zcode pi 会话",
-  about: "版本",
-};
+function settingKeywords(id: SectionId): string {
+  return i18n.t(`app:palette.keywords.${id}`) as string;
+}
 
 type ActionId = "new" | "folder" | "settings" | "extensions";
 
-const ACTIONS: Array<{
+function actionCatalog(): Array<{
   id: ActionId;
   label: string;
   keywords: string;
   icon: typeof MessageSquarePlusIcon;
-}> = [
-  { id: "new", label: "新对话", keywords: "新聊天 新建 新会话", icon: MessageSquarePlusIcon },
-  { id: "folder", label: "打开文件夹", keywords: "打开项目 添加项目 文件夹", icon: Folder01Icon },
-  { id: "settings", label: "设置", keywords: "偏好 通用", icon: Settings01Icon },
-  { id: "extensions", label: "插件", keywords: "扩展 市场", icon: PuzzleIcon },
-];
+}> {
+  return [
+    { id: "new", label: i18n.t("app:palette.newChat") as string, keywords: i18n.t("app:palette.actionKeywords.new") as string, icon: MessageSquarePlusIcon },
+    { id: "folder", label: i18n.t("app:palette.openFolder") as string, keywords: i18n.t("app:palette.actionKeywords.folder") as string, icon: Folder01Icon },
+    { id: "settings", label: i18n.t("app:palette.settings") as string, keywords: i18n.t("app:palette.actionKeywords.settings") as string, icon: Settings01Icon },
+    { id: "extensions", label: i18n.t("app:palette.extensions") as string, keywords: i18n.t("app:palette.actionKeywords.extensions") as string, icon: PuzzleIcon },
+  ];
+}
 
 function matches(haystack: string, needle: string): boolean {
   return haystack.toLowerCase().includes(needle);
@@ -73,6 +67,7 @@ export function CommandPalette({
   onAddProject: () => void;
   onOpenSettings: (section: SectionId) => void;
 }): JSX.Element {
+  const { t, i18n } = useTranslation("app");
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<ConversationSearchHit[]>([]);
   const archived = useArchivedIds();
@@ -141,14 +136,17 @@ export function CommandPalette({
   }, [listed, needle, hitMap, projectNames]);
 
   const actions = useMemo(
-    () => (needle ? ACTIONS.filter((item) => matches(`${item.label} ${item.keywords}`, needle)) : ACTIONS),
-    [needle],
+    () => {
+      const actions = actionCatalog();
+      return needle ? actions.filter((item) => matches(`${item.label} ${item.keywords}`, needle)) : actions;
+    },
+    [needle, i18n.language],
   );
 
   const settings = useMemo(() => {
     if (!needle) return [];
     return SETTINGS_SECTIONS.flatMap((group) => group.items).filter((item) =>
-      matches(`设置 ${item.label} ${item.id} ${SETTING_KEYWORDS[item.id]}`, needle),
+      matches(`${i18n.t("app:palette.settingsPrefix")} ${settingsSectionLabel(item.id)} ${item.id} ${settingKeywords(item.id)}`, needle),
     );
   }, [needle]);
 
@@ -175,8 +173,8 @@ export function CommandPalette({
     <CommandDialog
       open={open}
       onOpenChange={onOpenChange}
-      title="搜索"
-      description="搜索对话、快捷操作和设置"
+      title={t("palette.title")}
+      description={t("palette.description")}
       className="sm:max-w-lg"
     >
       <Command
@@ -190,11 +188,11 @@ export function CommandPalette({
           }
         }}
       >
-        <CommandInput placeholder="搜索聊天" value={query} onValueChange={setQuery} />
+        <CommandInput placeholder={t("palette.placeholder")} value={query} onValueChange={setQuery} />
         <CommandList className="max-h-[min(28rem,60vh)]">
-          {empty ? <CommandEmpty>没有匹配的结果</CommandEmpty> : null}
+          {empty ? <CommandEmpty>{t("palette.empty")}</CommandEmpty> : null}
           {chats.length > 0 ? (
-            <CommandGroup heading="聊天">
+            <CommandGroup heading={t("palette.groupChats")}>
               {chats.map((item, index) => {
                 const project = item.project ? projectNames.get(item.project) : undefined;
                 const snippet = hitMap.get(item.id);
@@ -208,7 +206,7 @@ export function CommandPalette({
                     onSelect={() => selectChat(item.id)}
                     aria-current={item.id === activeId ? "true" : undefined}
                   >
-                    <span className="min-w-0 flex-1 truncate">{item.title || "新会话"}</span>
+                    <span className="min-w-0 flex-1 truncate">{item.title || t("palette.newSession")}</span>
                     {hint ? (
                       <span className="max-w-32 shrink-0 truncate text-xs text-muted-foreground">{hint}</span>
                     ) : null}
@@ -223,7 +221,7 @@ export function CommandPalette({
             </CommandGroup>
           ) : null}
           {actions.length > 0 ? (
-            <CommandGroup heading="快捷操作">
+            <CommandGroup heading={t("palette.groupActions")}>
               {actions.map((item) => (
                 <CommandItem key={item.id} value={`action:${item.id}`} onSelect={() => runAction(item.id)}>
                   <HugeiconsIcon strokeWidth={2} icon={item.icon} className="size-3.5 text-muted-foreground" />
@@ -238,7 +236,7 @@ export function CommandPalette({
             </CommandGroup>
           ) : null}
           {settings.length > 0 ? (
-            <CommandGroup heading="设置">
+            <CommandGroup heading={t("palette.groupSettings")}>
               {settings.map((item) => (
                 <CommandItem
                   key={item.id}
@@ -251,7 +249,7 @@ export function CommandPalette({
                   <span className="flex size-3.5 items-center justify-center text-muted-foreground [&_svg]:size-3.5">
                     {item.icon}
                   </span>
-                  <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                  <span className="min-w-0 flex-1 truncate">{settingsSectionLabel(item.id)}</span>
                 </CommandItem>
               ))}
             </CommandGroup>

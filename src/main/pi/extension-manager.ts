@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { app } from "electron";
 import { DefaultPackageManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { ExtensionPackage } from "@shared/types";
+import { uiText } from "../engine/ui-text";
 
 /**
  * FastVibe's own extensions. They are plain files shipped outside the asar
@@ -14,6 +15,7 @@ export const BUILTIN_EXTENSIONS: Array<{ source: string; file: string }> = [
   { source: "fastvibe:plan", file: "plan.ts" },
   { source: "fastvibe:goal", file: "goal.ts" },
   { source: "fastvibe:todo", file: "todo.ts" },
+  { source: "fastvibe:output-language", file: "output-language.ts" },
   { source: "fastvibe:permission-sandbox", file: "permission-sandbox.ts" },
   { source: "fastvibe:session-title", file: "session-title.ts" },
   { source: "fastvibe:browser-use", file: "browser-use.ts" },
@@ -25,10 +27,10 @@ export const BUILTIN_EXTENSIONS: Array<{ source: string; file: string }> = [
  * renderer and future schedulers can advertise capabilities without loading an
  * extension or starting a process. */
 export const BUILTIN_AGENTS = [
-  { id: "scout", name: "代码侦察员", description: "快速定位文件、入口和依赖，输出可交接的结构化上下文。", tools: ["read", "grep", "find", "ls"] },
-  { id: "planner", name: "方案规划员", description: "把需求拆成可执行步骤、风险和验证条件。", tools: ["read", "grep", "find", "ls"] },
-  { id: "worker", name: "实现工程师", description: "在隔离上下文中完成代码修改并运行验证。", tools: ["read", "grep", "find", "ls", "edit", "write", "bash"] },
-  { id: "reviewer", name: "审查员", description: "检查实现、回归风险和测试覆盖，给出可操作反馈。", tools: ["read", "grep", "find", "ls", "bash"] },
+  { id: "scout", name: "Scout", description: "Quickly locate files, entry points and dependencies; hand off structured context.", tools: ["read", "grep", "find", "ls"] },
+  { id: "planner", name: "Planner", description: "Break a request into executable steps, risks and verification.", tools: ["read", "grep", "find", "ls"] },
+  { id: "worker", name: "Worker", description: "Make the code changes in an isolated context and run verification.", tools: ["read", "grep", "find", "ls", "edit", "write", "bash"] },
+  { id: "reviewer", name: "Reviewer", description: "Check the implementation, regression risk and test coverage; give actionable feedback.", tools: ["read", "grep", "find", "ls", "bash"] },
 ] as const;
 
 export function builtinSkillPaths(): string[] {
@@ -94,7 +96,7 @@ export class ExtensionManager {
 
   async install(source: string): Promise<ExtensionPackage[]> {
     const trimmed = source.trim();
-    if (!trimmed) throw new Error("请输入包名，例如 npm:pi-web-access");
+    if (!trimmed) throw new Error(uiText("请输入包名，例如 npm:pi-web-access", "Enter a package name, e.g. npm:pi-web-access"));
     await this.#manager.installAndPersist(trimmed);
     return this.list();
   }

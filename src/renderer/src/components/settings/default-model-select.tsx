@@ -1,9 +1,11 @@
 import { useMemo, type JSX } from "react";
+import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { ArrowDown01Icon, Tick02Icon } from "@hugeicons/core-free-icons";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -36,6 +38,7 @@ export function DefaultModelSelect({
   value?: EngineModel;
   onChange: (model: EngineModel | undefined) => void;
 }): JSX.Element {
+  const { t } = useTranslation("settings");
   const groups = useMemo(() => {
     const index = new Map<string, { id: string; name: string; models: FastVibeModel[] }>();
     for (const item of models) {
@@ -60,8 +63,8 @@ export function DefaultModelSelect({
   const label = current
     ? `${providerLabel(current.providerName || current.provider)}/${current.id}`
     : value
-      ? `${providerLabel(value.provider)}/${value.id}（已不可用）`
-      : "跟随上次使用";
+      ? t("defaultModel.unavailable", { label: `${providerLabel(value.provider)}/${value.id}` })
+      : t("defaultModel.followLast");
 
   return (
     <DropdownMenu>
@@ -75,16 +78,20 @@ export function DefaultModelSelect({
       />
       <DropdownMenuContent align="end" className="min-w-52">
         <DropdownMenuItem onClick={() => onChange(undefined)}>
-          <span className="min-w-0 flex-1 truncate">跟随上次使用</span>
+          <span className="min-w-0 flex-1 truncate">{t("defaultModel.followLast")}</span>
           <span className="ml-auto flex size-4 shrink-0 items-center justify-center">
             {value ? null : <HugeiconsIcon strokeWidth={2} icon={Tick02Icon} className="size-4" />}
           </span>
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         {models.length === 0 ? (
-          <DropdownMenuLabel className="font-normal text-muted-foreground">
-            还没有可用的模型
-          </DropdownMenuLabel>
+          // A label is Base UI's `Menu.GroupLabel`: bare, it throws
+          // (`MenuGroupContext is missing`) and takes the whole app down.
+          <DropdownMenuGroup>
+            <DropdownMenuLabel className="font-normal text-muted-foreground">
+              {t("defaultModel.empty")}
+            </DropdownMenuLabel>
+          </DropdownMenuGroup>
         ) : (
           groups.map((group) => (
             <DropdownMenuSub key={group.id}>

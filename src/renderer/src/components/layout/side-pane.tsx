@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type JSX } from "react";
+import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Add01Icon,
@@ -35,7 +36,7 @@ import { ResizeHandle } from "@/components/resize-handle";
 import { CollapsiblePanel } from "@/components/layout/collapsible-panel";
 import { useShortcutLabel } from "@/lib/use-shortcuts";
 import { useSettingsStore } from "@/stores/settings";
-import { MIN_WIDTH, useSidePaneStore, type SidePaneTab, subagentTabLabel } from "@/stores/side-pane";
+import { MIN_WIDTH, useSidePaneStore, type SidePaneTab, sidePaneTabTitle } from "@/stores/side-pane";
 import { releaseBrowser, SidePaneBrowser } from "./side-pane-browser";
 import { SidePaneChat } from "./side-pane-chat";
 import { SidePaneFiles } from "./side-pane-files";
@@ -61,6 +62,7 @@ export function disposeSidePaneTabs(tabs: SidePaneTab[]): void {
 }
 
 function CollapseButton(): JSX.Element {
+  const { t } = useTranslation("sidepane");
   const setCollapsed = useSidePaneStore((state) => state.setCollapsed);
   const shortcut = useShortcutLabel("toggleSidePane");
   return (
@@ -68,7 +70,7 @@ function CollapseButton(): JSX.Element {
       size="icon-sm"
       variant="ghost"
       className="no-drag shrink-0 text-muted-foreground"
-      label="收起侧边面板"
+      label={t("pane.collapse")}
       shortcut={shortcut}
       onClick={() => setCollapsed(true)}
     >
@@ -78,6 +80,7 @@ function CollapseButton(): JSX.Element {
 }
 
 function SidebarCollapsedChrome({ onNewChat }: { onNewChat: () => void }): JSX.Element {
+  const { t } = useTranslation("sidepane");
   const updateSettings = useSettingsStore((state) => state.update);
   const toggleSidebarShortcut = useShortcutLabel("toggleSidebar");
   const newChatShortcut = useShortcutLabel("newChat");
@@ -87,7 +90,7 @@ function SidebarCollapsedChrome({ onNewChat }: { onNewChat: () => void }): JSX.E
         size="icon-sm"
         variant="ghost"
         className="text-muted-foreground"
-        label="展开侧边栏"
+        label={t("pane.expandSidebar")}
         shortcut={toggleSidebarShortcut}
         onClick={() => updateSettings({ sidebarCollapsed: false })}
       >
@@ -97,7 +100,7 @@ function SidebarCollapsedChrome({ onNewChat }: { onNewChat: () => void }): JSX.E
         size="icon-sm"
         variant="ghost"
         className="text-muted-foreground"
-        label="新对话"
+        label={t("pane.newChat")}
         shortcut={newChatShortcut}
         onClick={onNewChat}
       >
@@ -109,6 +112,7 @@ function SidebarCollapsedChrome({ onNewChat }: { onNewChat: () => void }): JSX.E
 }
 
 function MaximizeButton(): JSX.Element {
+  const { t } = useTranslation("sidepane");
   const maximized = useSidePaneStore((state) => state.maximized);
   const toggleMaximized = useSidePaneStore((state) => state.toggleMaximized);
   return (
@@ -116,7 +120,7 @@ function MaximizeButton(): JSX.Element {
       size="icon-sm"
       variant="ghost"
       className="no-drag shrink-0 text-muted-foreground"
-      label={maximized ? "还原侧边面板" : "最大化侧边面板"}
+      label={maximized ? t("pane.restore") : t("pane.maximize")}
       onClick={toggleMaximized}
     >
       <HugeiconsIcon strokeWidth={2} icon={maximized ? ArrowShrink01Icon : ArrowExpand02Icon} />
@@ -168,6 +172,7 @@ export function SidePane({
   onNewChat: () => void;
   onError: (message: string) => void;
 }): JSX.Element {
+  const { t } = useTranslation("sidepane");
   const collapsed = useSidePaneStore((state) => state.collapsed);
   const maximized = useSidePaneStore((state) => state.maximized);
   const sidebarCollapsed = useSettingsStore((state) => state.settings.sidebarCollapsed ?? false);
@@ -254,15 +259,15 @@ export function SidePane({
     canSideChat && parentId
       ? {
           id: "selection-side-conversation",
-          label: "辅助对话",
+          label: t("pane.sideChat"),
           icon: MessageSquareIcon,
           onOpen: () => openSideChat(parentId, nextSideChatOrdinal(parentId)),
         }
       : null,
-    { id: "files", label: "文件", icon: Folder01Icon, onOpen: openFiles },
-    hasReviewTab ? null : { id: "review", label: "审查", icon: GitCompareIcon, onOpen: openGit },
-    { id: "terminal", label: "终端", icon: TerminalIcon, onOpen: () => openTerminal(cwd) },
-    { id: "browser", label: "浏览器", icon: ChromeIcon, onOpen: () => openBrowser() },
+    { id: "files", label: t("pane.files"), icon: Folder01Icon, onOpen: openFiles },
+    hasReviewTab ? null : { id: "review", label: t("pane.review"), icon: GitCompareIcon, onOpen: openGit },
+    { id: "terminal", label: t("pane.terminal"), icon: TerminalIcon, onOpen: () => openTerminal(cwd) },
+    { id: "browser", label: t("pane.browser"), icon: ChromeIcon, onOpen: () => openBrowser() },
   ].filter((item): item is NonNullable<typeof item> => item !== null);
 
   return (
@@ -347,7 +352,7 @@ export function SidePane({
                       <HugeiconsIcon strokeWidth={2} icon={tabIcon(tab.type)} className="size-3.5 shrink-0" />
                     )}
                     <span className="min-w-0 flex-1 truncate text-left">
-                      {tab.type === "subagent" ? subagentTabLabel(tab) : tab.title}
+                      {sidePaneTabTitle(tab)}
                     </span>
                     <span
                       role="presentation"
@@ -362,43 +367,43 @@ export function SidePane({
                   </button>
                 </ContextMenuTrigger>
                 <ContextMenuContent>
-                  <ContextMenuItem onClick={() => close(tab.id)}>关闭标签</ContextMenuItem>
+                  <ContextMenuItem onClick={() => close(tab.id)}>{t("pane.closeTab")}</ContextMenuItem>
                   <ContextMenuItem disabled={visibleTabs.length < 2} onClick={() => closeOthers(tab.id)}>
-                    关闭其他标签
+                    {t("pane.closeOthers")}
                   </ContextMenuItem>
-                  <ContextMenuItem onClick={closeAll}>关闭所有标签</ContextMenuItem>
+                  <ContextMenuItem onClick={closeAll}>{t("pane.closeAll")}</ContextMenuItem>
                 </ContextMenuContent>
               </ContextMenu>
             ))}
           </div>
           <DropdownMenu>
-            <DropdownMenuTrigger render={<Button size="icon-xs" variant="outline" className="shrink-0" aria-label="新增标签" />}>
+            <DropdownMenuTrigger render={<Button size="icon-xs" variant="outline" className="shrink-0" aria-label={t("pane.newTab")} />}>
               <HugeiconsIcon strokeWidth={2} icon={Add01Icon} />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-44">
               {canSideChat && parentId ? (
                 <DropdownMenuItem onClick={() => openSideChat(parentId, nextSideChatOrdinal(parentId))}>
                   <HugeiconsIcon strokeWidth={2} icon={MessageSquareIcon} />
-                  辅助对话
+                  {t("pane.sideChat")}
                 </DropdownMenuItem>
               ) : null}
               <DropdownMenuItem onClick={openFiles}>
                 <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} />
-                文件
+                {t("pane.files")}
               </DropdownMenuItem>
               {hasReviewTab ? null : (
                 <DropdownMenuItem onClick={openGit}>
                   <HugeiconsIcon strokeWidth={2} icon={GitCompareIcon} />
-                  审查
+                  {t("pane.review")}
                 </DropdownMenuItem>
               )}
               <DropdownMenuItem onClick={() => openTerminal(cwd)}>
                 <HugeiconsIcon strokeWidth={2} icon={TerminalIcon} />
-                终端
+                {t("pane.terminal")}
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => openBrowser()}>
                 <HugeiconsIcon strokeWidth={2} icon={ChromeIcon} />
-                浏览器
+                {t("pane.browser")}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -426,8 +431,8 @@ export function SidePane({
           <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-5 py-10">
             <div className="side-pane-open-tab-content flex w-full max-w-[20rem] flex-col gap-5">
               <div className="flex flex-col gap-2 text-center">
-                <h2 className="text-xl font-semibold leading-7 text-foreground">打开标签页</h2>
-                <p className="text-sm leading-5 text-muted-foreground">选择要在侧边面板中打开的标签。</p>
+                <h2 className="text-xl font-semibold leading-7 text-foreground">{t("pane.openTabs")}</h2>
+                <p className="text-sm leading-5 text-muted-foreground">{t("pane.openTabsDesc")}</p>
               </div>
               <div className="side-pane-open-tab-list flex w-full flex-col gap-2">
                 {cards.map((card) => (

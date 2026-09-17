@@ -88,6 +88,9 @@ export const Ipc = {
   engineGetConversationMessages: "engine:get-conversation-messages",
   conversationsCreateSide: "conversations:create-side",
   appGetInfo: "app:get-info",
+  appLog: "app:log",
+  appExportLogs: "app:export-logs",
+  modelsDevUpdate: "models-dev:update",
   statsUsage: "stats:usage",
   windowNew: "window:new",
   settingsGet: "settings:get",
@@ -113,17 +116,27 @@ export const Ipc = {
   providersCcSwitchImport: "providers:cc-switch-import",
 } as const;
 
+export type AppModelsDevInfo = {
+  models: number;
+  aliases: number;
+  generatedAt: number;
+  /** The file the metadata was read from (the bundled index, or an updated snapshot). */
+  path: string;
+};
+
 export type AppInfo = {
   version: string;
   userData: string;
   runtimeRoot: string;
   platform: string;
-  modelsDev?: {
-    models: number;
-    aliases: number;
-    generatedAt: number;
-    path: string;
-  };
+  modelsDev?: AppModelsDevInfo;
+};
+
+export type AppLogLevel = "debug" | "info" | "warn" | "error";
+
+export type AppLogPayload = {
+  level: AppLogLevel;
+  message: string;
 };
 
 export type AppUpdateStatus =

@@ -1,4 +1,5 @@
 import { memo, useDeferredValue, useState, type JSX, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -8,6 +9,7 @@ import { useHighlightedCode } from "@/lib/highlight";
 import { useSessionStore } from "@/stores/session";
 
 const CodeBlock = memo(function CodeBlock({ language, code }: { language?: string; code: string }): JSX.Element {
+  const { t } = useTranslation("chat");
   const [copied, setCopied] = useState(false);
   const html = useHighlightedCode(code, language);
 
@@ -27,7 +29,7 @@ const CodeBlock = memo(function CodeBlock({ language, code }: { language?: strin
         <span className="text-xs font-medium text-muted-foreground">{language || "code"}</span>
         <Button size="xs" variant="ghost" onClick={() => void copy()}>
           {copied ? <HugeiconsIcon strokeWidth={2} icon={Tick02Icon} /> : <HugeiconsIcon strokeWidth={2} icon={Copy01Icon} />}
-          {copied ? "已复制" : "复制"}
+          {copied ? t("message.copied") : t("message.copy")}
         </Button>
       </div>
       <div className="code-shiki overflow-x-auto p-3 text-sm leading-5">

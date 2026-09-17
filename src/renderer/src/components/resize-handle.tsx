@@ -8,6 +8,13 @@ import { cn } from "@/lib/utils";
  *
  * Feedback is intentionally quiet — a hairline tint on hover and while dragging
  * — so the splitter never reads as a focus ring.
+ *
+ * `z-20`, not the usual `z-10`: pane content that is itself `z-10` and sticky to
+ * the leading edge (the file preview's line-number gutter, `sticky left-0 z-10`)
+ * paints over a same-level later-in-DOM sibling and ate the whole splitter strip,
+ * so the right pane stopped resizing outside its header. Nothing inside a pane sits
+ * above this except a browser toolbar popover, and those are anchored to the
+ * trailing edge.
  */
 export function ResizeHandle({
   side,
@@ -61,7 +68,7 @@ export function ResizeHandle({
       role="separator"
       aria-orientation="vertical"
       className={cn(
-        "absolute inset-y-0 z-10 w-1 cursor-col-resize transition-colors",
+        "absolute inset-y-0 z-20 w-1 cursor-col-resize transition-colors",
         side === "right" ? "right-0" : "left-0",
         dragging ? "bg-ring/30" : "hover:bg-ring/20",
         className,

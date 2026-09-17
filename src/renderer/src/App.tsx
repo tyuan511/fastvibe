@@ -30,6 +30,8 @@ import type { DeleteConversationsResult } from "@/components/settings/archived-s
 import { useConversationWorking, useSessionStore, working } from "@/stores/session";
 import { useSettingsStore } from "@/stores/settings";
 import { useThemeSync } from "@/lib/use-theme";
+import { useLanguageSync } from "@/lib/use-language";
+import { useTranslation } from "react-i18next";
 import type {
   ChatAttachment,
   ChatMessage,
@@ -187,6 +189,8 @@ const MessageThread = memo(function MessageThread({
 export function App(): JSX.Element {
   // Applies light/dark theme selection (and reacts to OS changes in system mode).
   useThemeSync();
+  useLanguageSync();
+  const { t } = useTranslation("app");
   useEffect(() => {
     return window.fastvibe.browser.onRequest(({ id, request }) => {
       void handleBrowserRequest(request)
@@ -263,6 +267,9 @@ export function App(): JSX.Element {
   const rememberPermission = useSessionStore((state) => state.rememberPermission);
   const restoreId = useRef<string | null>(null);
   const draining = useRef(false);
+  // One send at a time. A second click / Enter while this send is still being handed
+  // over is not a second message — see `handleSubmit`.
+  const submitting = useRef(false);
   // Settings lives at #/settings/<section>; no match means we are in the app.
   const settingsMatch = useMatch("/settings/*");
   const location = useLocation();
@@ -293,6 +300,9 @@ export function App(): JSX.Element {
   // Set when a send was refused because no model is configured: the composer's own
   // menu is the fix, so the shell says so and offers the way there.
   const [needsModel, setNeedsModel] = useState(false);
+  // Whether the engine has answered the model question. Until it does, an empty list
+  // means 还没问到; after that it means the install has no model to chat with.
+  const [modelsLoaded, setModelsLoaded] = useState(false);
 
   // Hand the pre-JS boot splash off to the shell only once the engine has settled.
   // While it is still starting, the static splash *is* the app's loader, so fading
@@ -444,6 +454,14 @@ export function App(): JSX.Element {
       } else if (event.type === "model_changed" || event.type === "thinking_level_changed") {
         reloadActiveState();
       }
+      // The composer's context ring reads `session.contextUsage`, which only a state
+      // reply carries — and the engine derives it from the messages it holds. A run
+      // grows the context at every turn boundary (each LLM round trip, tool calls
+      // included), so the ring has to be re-read there too: only the run boundaries
+      // above did it, which left the ring frozen at whatever the chat was opened with
+      // for the length of a long task. Switching away and back appeared to "fix" it
+      // because `conversations.open` returns a fresh state.
+      if (event.type === "turn_end") reloadActiveState();
       if (event.type === "available_commands_update") {
         const raw = Array.isArray(event.commands) ? event.commands : [];
         setCommands(
@@ -530,9 +548,9 @@ export function App(): JSX.Element {
         const tag = target.tagName;
         if (tag === "INPUT" || tag === "SELECT" || target.isContentEditable) return false;
       }
-      const send =
-        document.querySelector<HTMLButtonElement>('[aria-label="发送"]') ??
-        document.querySelector<HTMLButtonElement>('[aria-label="加入队列"]');
+      // The composer owns the send button; the stable data attribute keeps the shortcut
+      // working whatever language the label is rendered in.
+      const send = document.querySelector<HTMLButtonElement>('[data-fv-action="send"]');
       if (!send || send.disabled) return false;
       send.click();
     },
@@ -546,7 +564,7 @@ export function App(): JSX.Element {
       const store = useSessionStore.getState();
       const busy = Boolean(store.activeId && store.running[store.activeId]);
       if (!busy || store.permission) return false;
-      document.querySelector<HTMLButtonElement>('[aria-label="停止"]')?.click();
+      document.querySelector<HTMLButtonElement>('[data-fv-action="stop"]')?.click();
     },
     prevChat: () => {
       setCommandOpen(false);
@@ -598,13 +616,17 @@ export function App(): JSX.Element {
       .then(setSession)
       .catch(() => undefined);
     refreshStats();
-    // The model list is expensive (~1.5s in the engine) and only changes when
-    // providers change, so fetch it once rather than on every engine start.
+    // The model list only changes when providers change, so fetch it once per engine
+    // start rather than on every status flip. `modelsLoaded` records that the answer
+    // has landed: an empty list then means 没有模型 rather than 还没问到.
     if (useSessionStore.getState().models.length === 0) {
       void window.fastvibe.engine
         .getModels()
         .then(setModels)
-        .catch(() => undefined);
+        .catch(() => undefined)
+        .finally(() => setModelsLoaded(true));
+    } else {
+      setModelsLoaded(true);
     }
     void window.fastvibe.engine
       .getCommands()
@@ -648,24 +670,24 @@ export function App(): JSX.Element {
   );
 
   // Sending is allowed while the engine is still coming up: the prompt waits
-  // behind initialisation, which the user experiences as reply latency. `needsAuth`
-  // is deliberately included — no provider is a normal first-run state, not a
-  // blocker, and the composer's model menu is how you go and configure one.
+  // behind initialisation, which the user experiences as reply latency. A model is
+  // what cannot be waited out — with none there is nothing to send with, so the
+  // composer goes read-only until 设置 → 供应商 gives it one (the model chip's own
+  // popover is that way in).
+  const hasModel = models.length > 0;
   const canChat =
-    status.state === "ready" ||
-    status.state === "starting" ||
-    status.state === "idle" ||
-    status.state === "needsAuth";
+    hasModel &&
+    (status.state === "ready" || status.state === "starting" || status.state === "idle");
   const active = conversations.find((item) => item.id === activeId);
   const activeProject = projects.find((item) => item.cwd === active?.project);
   const banner =
     status.state === "missing" || status.state === "error"
-      ? "暂时无法开始对话，请稍后重试。"
+      ? t("errors.cannotStart")
       : error
         ? error
         : null;
   // Unbound conversations run in a hidden scratch dir, so never surface that path.
-  const workspaceLabel = activeProject?.name ?? "无项目";
+  const workspaceLabel = activeProject?.name ?? t("workspace.noProject");
 
   useEffect(() => {
     writeDraft(activeId, draft);
@@ -715,6 +737,12 @@ export function App(): JSX.Element {
   }
 
   async function handleSubmit(): Promise<void> {
+    // One send owns the composer. Between consuming it and the engine accepting the
+    // prompt there are IPC hops (`availableModels`, `conversations.create`,
+    // `recordPrompt`), and Main can be busy streaming another conversation for tens
+    // or hundreds of ms — a second click or Enter in that window used to send the
+    // same prompt again, without its text (`请查看附件` + the same attachments).
+    if (submitting.current) return;
     const text = draft.trim();
     const currentAttachments = useSessionStore.getState().attachments;
     if ((!text && currentAttachments.length === 0) || !canChat) return;
@@ -730,65 +758,82 @@ export function App(): JSX.Element {
       }
       return;
     }
-    // Nothing to run a turn on: keep the draft and ask for a model. Creating the
-    // conversation first would leave a chat whose prompt the engine then refuses.
-    if ((await availableModels()).length === 0) {
-      setNeedsModel(true);
-      return;
-    }
-    let conversationId = activeId;
-    if (!conversationId) {
-      const created = await window.fastvibe.conversations.create(active?.project);
-      applyOpen(created);
-      conversationId = created.conversation.id;
-      revealConversation(conversationId);
-    }
-    setDraft("");
-    const promptText = text || currentAttachments.map((item) => item.name).join("、");
-    const nextList = await window.fastvibe.conversations.recordPrompt(conversationId, promptText);
-    applyList(nextList);
-    if (streaming) {
-      if (settings.queueBehavior === "steer") {
-        const id = crypto.randomUUID();
-        const payload = `${text || "请查看附件"}${attachmentPromptSuffix(currentAttachments)}`;
-        enqueue({
-          id,
-          text: promptText,
-          behavior: "steer",
-          attachments: currentAttachments,
-          sending: true,
-          sentText: payload,
-        });
-        setAttachments([]);
-        setQueuePause(null);
-        try {
-          await window.fastvibe.engine.steer(payload, attachmentsToImages(currentAttachments));
-          void window.fastvibe.engine.getState().then(setSession).catch(() => undefined);
-        } catch (err) {
-          unmarkQueuedSending(id);
-          setError(err instanceof Error ? err.message : String(err));
-        }
-      } else {
-        enqueue({
-          id: crypto.randomUUID(),
-          text: promptText,
-          behavior: "followUp",
-          attachments: currentAttachments,
-        });
-        setAttachments([]);
-        setQueuePause(null);
-      }
-      return;
-    }
-    addUserMessage(promptText, currentAttachments);
-    // A fresh prompt supersedes an interrupted turn: drop the resume affordance now
-    // so the button does not linger until the engine's `agent_start` lands.
-    setRunInterrupted(null);
+    submitting.current = true;
     try {
-      await dispatchPrompt(text, currentAttachments, "prompt");
+      // Nothing to run a turn on: keep the draft and ask for a model. Creating the
+      // conversation first would leave a chat whose prompt the engine then refuses.
+      if ((await availableModels()).length === 0) {
+        setNeedsModel(true);
+        return;
+      }
+      // The text the engine will actually receive, and therefore also the text the
+      // row shows: they used to differ (file names in the bubble, `请查看附件` in the
+      // engine), so re-reading the transcript silently rewrote the message.
+      const promptText = text || t("composer.seeAttachments");
+      // Consume the composer before any further await: from here the draft and the
+      // attachments belong to this call, so a second click finds an empty composer
+      // (and a disabled send button) instead of re-sending the same prompt without
+      // its text.
+      setDraft("");
+      setAttachments([]);
+      let conversationId = activeId;
+      if (!conversationId) {
+        const created = await window.fastvibe.conversations.create(active?.project);
+        applyOpen(created);
+        conversationId = created.conversation.id;
+        revealConversation(conversationId);
+      }
+      const nextList = await window.fastvibe.conversations.recordPrompt(conversationId, promptText);
+      applyList(nextList);
+      if (streaming) {
+        setQueuePause(null);
+        if (settings.queueBehavior === "steer") {
+          const id = crypto.randomUUID();
+          const payload = `${promptText}${attachmentPromptSuffix(currentAttachments)}`;
+          enqueue({
+            id,
+            text: promptText,
+            behavior: "steer",
+            attachments: currentAttachments,
+            sending: true,
+            sentText: payload,
+          });
+          // Not awaited: `steer()` waits for the run when the engine has already
+          // settled, and the guard must not stay held for the length of a run.
+          void window.fastvibe.engine
+            .steer(payload, attachmentsToImages(currentAttachments))
+            .then(() => window.fastvibe.engine.getState().then(setSession).catch(() => undefined))
+            .catch((err: unknown) => {
+              unmarkQueuedSending(id);
+              setError(err instanceof Error ? err.message : String(err));
+            });
+        } else {
+          enqueue({
+            id: crypto.randomUUID(),
+            text: promptText,
+            behavior: "followUp",
+            attachments: currentAttachments,
+          });
+        }
+        return;
+      }
+      addUserMessage(promptText, currentAttachments);
+      // A fresh prompt supersedes an interrupted turn: drop the resume affordance now
+      // so the button does not linger until the engine's `agent_start` lands.
+      setRunInterrupted(null);
+      // Not awaited either: `prompt()` resolves only when the whole run is over, and
+      // holding the guard until then would refuse every follow-up sent mid-run.
+      void dispatchPrompt(text, currentAttachments, "prompt").catch((err: unknown) => {
+        dropEmptyAssistant();
+        setError(err instanceof Error ? err.message : String(err));
+      });
     } catch (err) {
-      dropEmptyAssistant();
+      // Nothing reached the engine: hand the composer back what this call consumed.
+      setDraft(text);
+      setAttachments(currentAttachments);
       setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      submitting.current = false;
     }
   }
 
@@ -797,7 +842,7 @@ export function App(): JSX.Element {
     files: ChatAttachment[],
     mode: "prompt" | "steer",
   ): Promise<void> {
-    const payload = `${text || "请查看附件"}${attachmentPromptSuffix(files)}`;
+    const payload = `${text || t("composer.seeAttachments")}${attachmentPromptSuffix(files)}`;
     const images = attachmentsToImages(files);
     if (mode === "steer") await window.fastvibe.engine.steer(payload, images);
     else await window.fastvibe.engine.prompt(payload, { images });
@@ -858,7 +903,7 @@ export function App(): JSX.Element {
     const item = useSessionStore.getState().queued.find((entry) => entry.id === id);
     if (!item || item.sending) return;
     if (useSessionStore.getState().streaming) {
-      const payload = `${item.text || "请查看附件"}${attachmentPromptSuffix(item.attachments ?? [])}`;
+      const payload = `${item.text || t("composer.seeAttachments")}${attachmentPromptSuffix(item.attachments ?? [])}`;
       markQueuedSending(id, payload);
       try {
         await window.fastvibe.engine.steer(payload, attachmentsToImages(item.attachments ?? []));
@@ -1262,7 +1307,7 @@ export function App(): JSX.Element {
       // emits `model_changed` from the assistant `message_start`), so reading the
       // transcript now would only invite a divider for a switch that has not happened.
     } catch {
-      setError("切换模型失败，请稍后重试。");
+      setError(t("errors.switchModel"));
     }
   }
 
@@ -1271,17 +1316,17 @@ export function App(): JSX.Element {
       const next = await window.fastvibe.engine.setThinking(level);
       setSession(next);
     } catch {
-      setError("无法设置推理强度。");
+      setError(t("errors.thinking"));
     }
   }
 
-  const headerTitle = active ? active.title : "新会话";
+  const headerTitle = active ? active.title : t("workspace.newSession");
   // A conversation with no preview yet is still a "new session": it has no title
   // or content to put in the top bar, so the bar is dropped and the project
   // binding is surfaced above the composer instead.
   const isNewSession = !active?.preview;
-  // `needsAuth` is not a loading state, so the F only covers a real start — plus
-  // the window before `getStatus()` lands, which the boot splash is already covering.
+  // `loading` is the engine coming up, never the model question — plus the window
+  // before `getStatus()` lands, which the boot splash is already covering.
   const loading = empty && (!engineKnown || status.state === "starting");
   // A fresh conversation swaps the transcript for the centred greeting hero.
   const showHero = empty && !loading;
@@ -1292,11 +1337,11 @@ export function App(): JSX.Element {
         <div className="mx-auto mb-2 w-full max-w-3xl px-6">
           <Alert>
             <HugeiconsIcon strokeWidth={2} icon={Settings01Icon} />
-            <AlertTitle>还没有配置模型</AlertTitle>
-            <AlertDescription>先连接一个模型供应商，然后就可以开始对话了。</AlertDescription>
+            <AlertTitle>{t("alert.noModelTitle")}</AlertTitle>
+            <AlertDescription>{t("alert.noModelDesc")}</AlertDescription>
             <AlertAction>
               <Button size="xs" variant="outline" onClick={() => navigate("/settings/providers")}>
-                去设置
+                {t("alert.goSettings")}
               </Button>
             </AlertAction>
           </Alert>
@@ -1306,7 +1351,7 @@ export function App(): JSX.Element {
         <div className="mx-auto mb-2 w-full max-w-3xl px-6">
           <Alert variant="destructive">
             <HugeiconsIcon strokeWidth={2} icon={AlertCircleIcon} />
-            <AlertTitle>出了点问题</AlertTitle>
+            <AlertTitle>{t("alert.problemTitle")}</AlertTitle>
             <AlertDescription>{banner}</AlertDescription>
             {status.state === "missing" || status.state === "error" ? (
               <AlertAction>
@@ -1315,7 +1360,7 @@ export function App(): JSX.Element {
                   variant="outline"
                   onClick={() => void window.fastvibe.engine.start(status.cwd)}
                 >
-                  重试
+                  {t("alert.retry")}
                 </Button>
               </AlertAction>
             ) : null}
@@ -1347,7 +1392,7 @@ export function App(): JSX.Element {
       disabled={!canChat}
       streaming={streaming}
       working={conversationWorking}
-      placeholder={canChat ? "随心输入" : "准备中…"}
+      placeholder={canChat ? t("composer.ready") : modelsLoaded && !hasModel ? t("composer.needModel") : t("composer.preparing")}
       models={models}
       model={session?.model}
       thinkingLevel={session?.thinkingLevel}
@@ -1439,7 +1484,7 @@ export function App(): JSX.Element {
                 <IconButton
                   size="icon-sm"
                   variant="ghost"
-                  label="展开侧边栏"
+                  label={t("workspace.expandSidebar")}
                   shortcut={toggleSidebarShortcut}
                   onClick={() => updateSettings({ sidebarCollapsed: false })}
                 >
@@ -1448,7 +1493,7 @@ export function App(): JSX.Element {
                 <IconButton
                   size="icon-sm"
                   variant="ghost"
-                  label="新对话"
+                  label={t("workspace.newChat")}
                   shortcut={newChatShortcut}
                   onClick={() => void handleNewChat()}
                 >
@@ -1470,7 +1515,7 @@ export function App(): JSX.Element {
               <IconButton
                 size="icon-sm"
                 variant="ghost"
-                label="展开侧边面板"
+                label={t("workspace.expandSidePane")}
                 shortcut={toggleSidePaneShortcut}
                 onClick={togglePane}
               >
@@ -1489,7 +1534,9 @@ export function App(): JSX.Element {
             <GoalPanel className="pb-2" disabled={conversationWorking} />
             <TodoPanel className="pb-2" />
             {composerSlot}
-            <SuggestionChips onSelect={setDraft} />
+            {/* The suggestion chips write the draft, which a model-less composer refuses to
+                type — offering them there would fill a box the user cannot send from. */}
+            {hasModel ? <SuggestionChips onSelect={setDraft} /> : null}
           </div>
         ) : (
           <>

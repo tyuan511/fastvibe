@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type JSX } from "react";
+import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { AlertCircleIcon, Copy01Icon, PencilEdit02Icon, RotateCcwIcon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
@@ -15,6 +16,8 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatDuration } from "@/lib/time";
+import { stripAttachmentBlock } from "@/lib/attachments";
+import { i18n } from "@/lib/i18n";
 import { FLoader } from "@/components/f-loader";
 import { groupMessageRows, groupParts, mergeAssistantRun, resolveParts, type MessageRow, type RenderPart } from "@/lib/group-parts";
 import type { ChatAttachment, ChatMessage, MessagePart } from "@shared/types";
@@ -121,6 +124,7 @@ function MessageActions({
   /** The whole turn's span, when the footer is the one reporting it. */
   elapsed?: number;
 }): JSX.Element {
+  const { t } = useTranslation("chat");
   const [copied, setCopied] = useState(false);
   // A reply's footer reports when it *finished* and how long the whole turn took; the engine
   // only stores the request start, so the end comes from Main's entry timing and a reply still
@@ -135,15 +139,15 @@ function MessageActions({
         <span className="tabular-nums">
           {formatTime(ended)}
           {elapsed !== undefined && elapsed > 0 ? (
-            <span className="text-muted-foreground/60"> · 耗时 {formatDuration(elapsed)}</span>
+            <span className="text-muted-foreground/60"> · {t("message.elapsed", { duration: formatDuration(elapsed) })}</span>
           ) : null}
         </span>
       ) : null}
       {message.text ? (
         <ActionButton
-          label="复制"
+          label={t("message.copy")}
           onClick={() => {
-            void navigator.clipboard.writeText(message.text);
+            void navigator.clipboard.writeText(stripAttachmentBlock(message.text));
             setCopied(true);
             window.setTimeout(() => setCopied(false), 1000);
           }}
@@ -152,12 +156,12 @@ function MessageActions({
         </ActionButton>
       ) : null}
       {message.role === "user" && onEdit ? (
-        <ActionButton label="编辑" onClick={() => onEdit(message)}>
+        <ActionButton label={t("message.edit")} onClick={() => onEdit(message)}>
           <HugeiconsIcon strokeWidth={2} icon={PencilEdit02Icon} className="size-3.5" />
         </ActionButton>
       ) : null}
       {onRetry ? (
-        <ActionButton label="重试" onClick={() => onRetry(message)}>
+        <ActionButton label={t("message.retry")} onClick={() => onRetry(message)}>
           <HugeiconsIcon strokeWidth={2} icon={RotateCcwIcon} className="size-3.5" />
         </ActionButton>
       ) : null}
@@ -166,6 +170,7 @@ function MessageActions({
 }
 
 function WorkingStatus({ message }: { message: ChatMessage }): JSX.Element {
+  const { t } = useTranslation("chat");
   // The run is between tool calls or about to write, so this row is the only thing
   // in the reply. It stays in the same inline icon + shimmering-label shape as the
   // thinking block and tool rows — a chip here would be the one bordered box in a
@@ -175,7 +180,7 @@ function WorkingStatus({ message }: { message: ChatMessage }): JSX.Element {
     <div className="flex items-center gap-2 text-sm">
       <Spinner className="size-4 text-muted-foreground" />
       <span className="animated-gradient-text animated-gradient-text-emphasis font-medium">
-        {message.tools.length > 0 ? "继续工作" : "正在工作"}
+        {message.tools.length > 0 ? t("message.workingOn") : t("message.working")}
       </span>
     </div>
   );
@@ -190,7 +195,13 @@ function PartSlot({ children }: { children: JSX.Element }): JSX.Element {
  * User prompts clamp to two lines so a sticky turn header stays compact. The
  * expand control only appears when the prompt actually overflows that cap.
  */
-function UserPromptBubble({ text }: { text: string }): JSX.Element {
+function UserPromptBubble({ text: raw }: { text: string }): JSX.Element {
+  const { t } = useTranslation("chat");
+  // A prompt that brought files along carries their paths as a model-facing block.
+  // The chips above the bubble are how the reader sees those attachments, so the
+  // block never reaches the bubble — the engine's copy keeps it, and stripping it
+  // here is what makes the live row and a re-read transcript agree.
+  const text = stripAttachmentBlock(raw);
   const [expanded, setExpanded] = useState(false);
   const [overflows, setOverflows] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -232,7 +243,7 @@ function UserPromptBubble({ text }: { text: string }): JSX.Element {
             aria-expanded={expanded}
             onClick={() => setExpanded((value) => !value)}
           >
-            {expanded ? "收起" : "展开"}
+            {expanded ? t("message.collapse") : t("message.expand")}
           </button>
         ) : null}
       </BubbleContent>
@@ -259,7 +270,10 @@ function ChatMessageRowImpl({
 }): JSX.Element {
   // A reply spans several engine messages; render it as one block with one footer.
   const message = useMemo(() => mergeAssistantRun(messages), [messages]);
-  const parts = useMemo(() => groupParts(message), [message]);
+  // `i18n.language` is part of the dependency list because the folded group summaries
+  // are translated and cached per language: without it a language switch would keep
+  // serving the previous language's summaries.
+  const parts = useMemo(() => groupParts(message), [message, i18n.language]);
 
   // 折叠运行过程: a finished run's work — thinking, tool calls, and the prose it wrote along
   // the way — goes behind one collapsed 「用时 …」 row, and the reply written after the last
@@ -568,7 +582,7 @@ function turnMarkers(rows: MessageRow[]): { markers: TurnMarker[]; rowIds: strin
     markers.push({
       id: row.id,
       rowIndex: index,
-      prompt: clip(row.messages[0].text, PROMPT_LIMIT),
+      prompt: clip(stripAttachmentBlock(row.messages[0].text), PROMPT_LIMIT),
       reply: replyPreview(rows[index + 1]),
     });
   }
@@ -797,6 +811,7 @@ export function MessageList({
   collapseRuns?: boolean;
   emptyState?: JSX.Element | null;
 }): JSX.Element {
+  const { t } = useTranslation("chat");
   // One row per user prompt and per assistant reply, not per engine message.
   const rows = useMemo(() => groupMessageRows(messages), [messages]);
   // Retry/edit rewind the conversation, so they are only offered on the newest
@@ -819,7 +834,7 @@ export function MessageList({
     return (
       <div className="flex h-full flex-col items-center justify-center gap-4">
         <FLoader className="size-12" />
-        <p className="text-sm text-muted-foreground">正在准备工作区…</p>
+        <p className="text-sm text-muted-foreground">{t("message.preparing")}</p>
       </div>
     );
   }

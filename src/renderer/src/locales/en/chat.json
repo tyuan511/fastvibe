@@ -1,0 +1,216 @@
+{
+  "composer": {
+    "contextWindow": "Context window",
+    "used": "Used {{count}}",
+    "remaining": "{{remaining}} / {{window}} left",
+    "turnStats": "Turn stats",
+    "speed": "Reply speed",
+    "modelTime": "Model time",
+    "toolTime": "Tool time",
+    "steps": "Steps",
+    "cacheHit": "Cache hit rate",
+    "cost": "Cost",
+    "clearProject": "Clear project",
+    "pickProject": "Choose a project",
+    "searchProject": "Search projects",
+    "noProject": "No matching projects",
+    "newProject": "New project",
+    "placeholder": "Ask anything",
+    "placeholderQueued": "Keep typing to queue a follow-up",
+    "attach": "Add attachment",
+    "permissionAsk": "How should FastVibe approve actions?",
+    "contextStats": "View context and turn stats",
+    "addModel": "Add a model",
+    "pickModel": "Choose a model",
+    "noModels": "No models",
+    "manageModels": "Manage models",
+    "thinking": "Reasoning",
+    "stop": "Stop",
+    "resume": "Continue",
+    "queue": "Add to queue",
+    "send": "Send",
+    "seeAttachments": "See the attachment"
+  },
+  "newSession": {
+    "explore": "Explore the code",
+    "explorePrompt": "Explore this project and explain its structure, main modules and how they relate.",
+    "build": "Build a feature",
+    "buildPrompt": "Help me build a new feature: ",
+    "review": "Review code",
+    "reviewPrompt": "Review recent code changes and point out issues and improvements.",
+    "fix": "Fix a problem",
+    "fixPrompt": "Help me find and fix this problem: ",
+    "morning": "Good morning — a new day begins",
+    "noon": "Good afternoon — remember to eat",
+    "afternoon": "Good afternoon — keep going",
+    "evening": "Good evening — you did well today",
+    "night": "It's late — get some rest"
+  },
+  "session": {
+    "settings": "Session settings",
+    "session": "Session",
+    "compact": "Compact context",
+    "autoCompact": "Auto-compact",
+    "queueInterrupt": "Queue & interrupt",
+    "waitTurn": "Wait for this turn before interrupting",
+    "steerAll": "Run interrupt messages all at once",
+    "followUpAll": "Run follow-up messages all at once",
+    "viewSubagents": "View subagents",
+    "exportHtml": "Export HTML",
+    "compactTitle": "Compact context",
+    "compactPlaceholder": "Optional: what to keep when compacting",
+    "cancel": "Cancel",
+    "startCompact": "Start compacting",
+    "subagents": "Subagents",
+    "running": "Running"
+  },
+  "queue": {
+    "stopped": "The queue is paused because you interrupted the current reply",
+    "error": "The queue is paused because the current reply failed (nothing was lost)",
+    "reorder": "Drag to reorder",
+    "sending": "Sending",
+    "recall": "Recall",
+    "delete": "Delete",
+    "now": "Now",
+    "edit": "Edit",
+    "remove": "Remove queued message",
+    "draftBusy": "Send or clear the current draft before editing a queued message.",
+    "continue": "Continue sending"
+  },
+  "compact": {
+    "threshold": "Near the limit",
+    "overflow": "Over the window",
+    "running": "Compacting context",
+    "cancelled": "Context compact cancelled",
+    "failed": "Compact failed",
+    "done": "Context compacted"
+  },
+  "thinking": {
+    "running": "Thinking",
+    "done": "Thought",
+    "seconds": "{{n}}s"
+  },
+  "tools": {
+    "failed": "Failed",
+    "copied": "Copied",
+    "copy": "Copy",
+    "noOutput": "No output.",
+    "searching": "Searching…",
+    "sources": "Sources",
+    "params": "Parameters",
+    "preview": "Preview",
+    "running": "Running",
+    "completed": "Done",
+    "error": "Failed"
+  },
+  "run": {
+    "duration": "{{duration}}"
+  },
+  "todo": {
+    "title": "Tasks",
+    "done": "{{done}} / {{total}} done"
+  },
+  "git": {
+    "switchFailed": "Could not switch branch",
+    "createFailed": "Could not create branch",
+    "current": "Current branch {{branch}}",
+    "newName": "New branch name",
+    "namePlaceholder": "e.g. feature/login",
+    "cancel": "Cancel",
+    "createCheckout": "Create and check out",
+    "search": "Search branches",
+    "branches": "Branches",
+    "loading": "Reading branches…",
+    "none": "No matching branches",
+    "createNew": "Create and check out a new branch…"
+  },
+  "plan": {
+    "label": "Plan mode",
+    "exit": "Exit plan mode"
+  },
+  "goal": {
+    "label": "Goal mode",
+    "cancel": "Cancel goal mode",
+    "running": "In progress",
+    "paused": "Paused",
+    "complete": "Done",
+    "title": "Goal",
+    "round": "Round {{round}}",
+    "roundMax": "Round {{round}} / {{max}}",
+    "collapse": "Collapse",
+    "expand": "View",
+    "resume": "Resume",
+    "pause": "Pause",
+    "clear": "Clear"
+  },
+  "notice": {
+    "close": "Dismiss"
+  },
+  "attach": {
+    "remove": "Remove {{name}}"
+  },
+  "turns": {
+    "nav": "Turn navigation",
+    "turn": "Turn {{n}} · {{prompt}}"
+  },
+  "message": {
+    "elapsed": "{{duration}}",
+    "copy": "Copy",
+    "edit": "Edit",
+    "retry": "Retry",
+    "working": "Working",
+    "workingOn": "Still working",
+    "expand": "Expand",
+    "collapse": "Collapse",
+    "preparing": "Preparing workspace…",
+    "copied": "Copied"
+  },
+  "permission": {
+    "needConfirm": "Confirmation needed",
+    "needDecision": "Your decision is needed",
+    "cancel": "Cancel",
+    "deny": "Deny",
+    "alwaysAllow": "Always allow",
+    "allow": "Allow",
+    "submit": "Submit",
+    "approveOnce": "Allow once",
+    "approveOnceDesc": "Run this once",
+    "alwaysDesc": "Remember this action and do not ask again",
+    "denyDesc": "Do not run this action",
+    "needApproval": "Your approval is needed",
+    "needChoice": "Your choice is needed",
+    "needInput": "Your input is needed",
+    "confirm": "Confirm",
+    "noOptions": "No options.",
+    "hintConfirm": "↑↓ to choose · 1–3 shortcuts · Enter to confirm · Esc to deny",
+    "hintSelect": "↑↓ to choose · 1–9 shortcuts · Enter to confirm · Esc to cancel",
+    "hintInput": "Enter to submit · Esc to cancel",
+    "hintTyping": "Enter to submit · Esc to cancel",
+    "hintMulti": "←→ switch questions · ↑↓ options · 1–9 to pick · Enter to confirm · Esc to cancel",
+    "hintSingle": "↑↓ options · 1–9 to pick · Enter to confirm · Esc to cancel",
+    "prev": "Previous",
+    "next": "Next",
+    "continue": "Continue",
+    "placeholder": "Type here",
+    "answerPlaceholder": "Type your answer",
+    "otherPlaceholder": "Type your own",
+    "other": "Other (type your own)"
+  },
+  "question": {
+    "custom": "Typed answer",
+    "waiting": "Waiting for an answer…",
+    "unanswered": "Unanswered"
+  },
+  "files": {
+    "collapse": "Collapse",
+    "expand": "Show {{count}}"
+  },
+  "preview": {
+    "reveal": "Show in Finder",
+    "close": "Close",
+    "tooLarge": "File is too large ({{size}} KB). Open it in Finder."
+  },
+  "model": {
+    "switched": "Model switched to"
+  }
+}

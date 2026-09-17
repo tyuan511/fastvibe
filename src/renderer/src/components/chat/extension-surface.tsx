@@ -1,4 +1,6 @@
 import { useEffect, useState, type JSX } from "react";
+import { useTranslation } from "react-i18next";
+import { i18n } from "@/lib/i18n";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Alert02Icon,
@@ -76,6 +78,7 @@ function StatusBadge({
  * `/goal clear` drops the armed goal.
  */
 export function ExtensionStatusBadges({ disabled }: { disabled?: boolean }): JSX.Element | null {
+  const { t } = useTranslation("chat");
   const planActive = useSessionStore((state) => Boolean(state.extensionStatus["plan-mode"]));
   const goalArmed = useSessionStore((state) => Boolean(state.extensionStatus["goal-armed"]));
   if (!planActive && !goalArmed) return null;
@@ -84,8 +87,8 @@ export function ExtensionStatusBadges({ disabled }: { disabled?: boolean }): JSX
       {planActive ? (
         <StatusBadge
           icon={TaskDaily01Icon}
-          label="计划模式"
-          title="退出计划模式"
+          label={t("plan.label")}
+          title={t("plan.exit")}
           className="border-info/30 bg-info/10 text-info"
           disabled={disabled}
           onClear={() => void runExtensionCommand("/plan")}
@@ -94,8 +97,8 @@ export function ExtensionStatusBadges({ disabled }: { disabled?: boolean }): JSX
       {goalArmed ? (
         <StatusBadge
           icon={Target01Icon}
-          label="目标模式"
-          title="取消目标模式"
+          label={t("goal.label")}
+          title={t("goal.cancel")}
           className="border-primary/30 bg-primary/10 text-primary"
           disabled={disabled}
           onClear={() => void runExtensionCommand("/goal clear")}
@@ -114,11 +117,10 @@ type GoalPayload = {
   max?: number;
 };
 
-const GOAL_STATUS: Record<GoalState, { label: string; className: string }> = {
-  running: { label: "进行中", className: "text-primary" },
-  paused: { label: "已暂停", className: "text-warning" },
-  complete: { label: "已完成", className: "text-success" },
-};
+function goalStatusMeta(status: GoalState): { label: string; className: string } {
+  const className = status === "running" ? "text-primary" : status === "paused" ? "text-warning" : "text-success";
+  return { label: i18n.t(`chat:goal.${status}`) as string, className };
+}
 
 /** The `goal` status is a JSON payload published by the goal extension. */
 function parseGoal(raw?: string): GoalPayload | null {
@@ -144,11 +146,12 @@ function parseGoal(raw?: string): GoalPayload | null {
  * progress, and view / pause / clear actions that dispatch the goal command.
  */
 export function GoalPanel({ className, disabled }: { className?: string; disabled?: boolean }): JSX.Element | null {
+  const { t } = useTranslation("chat");
   const raw = useSessionStore((state) => state.extensionStatus["goal"]);
   const [expanded, setExpanded] = useState(false);
   const goal = parseGoal(raw);
   if (!goal) return null;
-  const meta = GOAL_STATUS[goal.status];
+  const meta = goalStatusMeta(goal.status);
   return (
     <div className={cn("mx-auto w-full max-w-3xl px-6", className)}>
       <div className="rounded-xl border border-border bg-card px-3 py-2.5">
@@ -157,8 +160,8 @@ export function GoalPanel({ className, disabled }: { className?: string; disable
               already leads the row (and read larger than the chrome beside it). */}
           <span
             role="img"
-            aria-label="目标"
-            title="目标"
+            aria-label={t("goal.title")}
+            title={t("goal.title")}
             className="flex size-4 shrink-0 items-center justify-center text-primary"
           >
             <HugeiconsIcon strokeWidth={2} icon={Target01Icon} className="size-4" />
@@ -167,11 +170,11 @@ export function GoalPanel({ className, disabled }: { className?: string; disable
             {meta.label}
           </Badge>
           <span className="text-xs text-muted-foreground">
-            第 {goal.round} 轮{goal.max ? ` / ${goal.max}` : ""}
+            {goal.max ? t("goal.roundMax", { round: goal.round, max: goal.max }) : t("goal.round", { round: goal.round })}
           </span>
           <div className="flex-1" />
           <Button size="xs" variant="ghost" onClick={() => setExpanded((value) => !value)}>
-            {expanded ? "收起" : "查看"}
+            {expanded ? t("goal.collapse") : t("goal.expand")}
           </Button>
           {goal.status === "paused" ? (
             <Button
@@ -180,7 +183,7 @@ export function GoalPanel({ className, disabled }: { className?: string; disable
               disabled={disabled}
               onClick={() => void runExtensionCommand("/goal resume")}
             >
-              继续
+              {t("goal.resume")}
             </Button>
           ) : goal.status === "running" ? (
             <Button
@@ -189,7 +192,7 @@ export function GoalPanel({ className, disabled }: { className?: string; disable
               disabled={disabled}
               onClick={() => void runExtensionCommand("/goal pause")}
             >
-              暂停
+              {t("goal.pause")}
             </Button>
           ) : null}
           <Button
@@ -199,7 +202,7 @@ export function GoalPanel({ className, disabled }: { className?: string; disable
             disabled={disabled}
             onClick={() => void runExtensionCommand("/goal clear")}
           >
-            清除
+            {t("goal.clear")}
           </Button>
         </div>
         <p className={cn("mt-1.5 text-xs leading-5 text-muted-foreground", !expanded && "line-clamp-2")}>
@@ -253,6 +256,7 @@ export function ExtensionWidgets({ className }: { className?: string }): JSX.Ele
 
 /** Transient extension notices (`ctx.ui.notify()`), stacked bottom-right. */
 export function ExtensionNotices(): JSX.Element | null {
+  const { t } = useTranslation("chat");
   const notices = useSessionStore((state) => state.notices);
   const dismissNotice = useSessionStore((state) => state.dismissNotice);
 
@@ -282,7 +286,7 @@ export function ExtensionNotices(): JSX.Element | null {
           <span className="min-w-0 flex-1 whitespace-pre-wrap break-words">{notice.message}</span>
           <button
             type="button"
-            aria-label="关闭通知"
+            aria-label={t("notice.close")}
             className="-mr-1 -mt-0.5 shrink-0 rounded-full p-0.5 text-muted-foreground hover:bg-muted"
             onClick={() => dismissNotice(notice.id)}
           >

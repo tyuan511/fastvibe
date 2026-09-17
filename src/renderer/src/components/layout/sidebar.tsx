@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useRef, useState, type JSX, type KeyboardEvent } from "react";
+import { useTranslation } from "react-i18next";
 import { createPortal } from "react-dom";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Add01Icon, Archive04Icon, ArrowLeft01Icon, ArrowRight01Icon, Delete02Icon, Folder01Icon, Folder02Icon, FolderRootIcon, MessageSquarePlusIcon, MoreHorizontalIcon, PanelLeftCloseIcon, PencilEdit02Icon, PinIcon, PuzzleIcon, Search01Icon, Settings01Icon } from "@hugeicons/core-free-icons";
@@ -53,6 +54,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ResizeHandle } from "@/components/resize-handle";
 import { CollapsiblePanel } from "@/components/layout/collapsible-panel";
+import { SidebarUpdateButton } from "@/components/layout/sidebar-update-button";
 import { AppLogo } from "@/components/app-logo";
 import { cn } from "@/lib/utils";
 import { clampSidebarWidth, readSidebarWidth, writeSidebarWidth, SIDEBAR_MIN_WIDTH } from "@/lib/sidebar-width";
@@ -255,6 +257,7 @@ function DraggableProject({
   onRemove: () => void;
   children: React.ReactNode;
 }): JSX.Element {
+  const { t } = useTranslation("app");
   const { listeners, setNodeRef: setDraggableRef, setActivatorNodeRef, isDragging } = useDraggable({ id: cwd });
   const { setNodeRef: setDroppableRef } = useDroppable({ id: cwd });
   return (
@@ -298,7 +301,7 @@ function DraggableProject({
                   )}
                 </TooltipTrigger>
                 {renaming ? null : (
-                  <TooltipContent side="right" align="center" className="max-w-96">
+                  <TooltipContent side="top" align="start" className="max-w-96">
                     <span className="font-mono break-all">{cwd}</span>
                   </TooltipContent>
                 )}
@@ -315,20 +318,20 @@ function DraggableProject({
                   <DropdownMenuContent align="end" className="w-40 min-w-40">
                     <DropdownMenuItem onClick={onNewChat}>
                       <HugeiconsIcon strokeWidth={2} icon={Add01Icon} />
-                      新建对话
+                      {t("sidebar.newChat")}
                     </DropdownMenuItem>
                     <DropdownMenuItem onClick={onStartRename}>
                       <HugeiconsIcon strokeWidth={2} icon={PencilEdit02Icon} />
-                      重命名
+                      {t("sidebar.rename")}
                     </DropdownMenuItem>
                     <DropdownMenuItem onClick={onReveal}>
                       <HugeiconsIcon strokeWidth={2} icon={FolderRootIcon} />
-                      在访达中显示
+                      {t("sidebar.reveal")}
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem variant="destructive" onClick={onRemove}>
                       <HugeiconsIcon strokeWidth={2} icon={Delete02Icon} />
-                      从列表移除
+                      {t("sidebar.remove")}
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
@@ -336,7 +339,7 @@ function DraggableProject({
                   size="icon-xs"
                   variant="ghost"
                   className="text-muted-foreground"
-                  label="新建会话"
+                  label={t("sidebar.newSession")}
                   onClick={(event) => {
                     event.stopPropagation();
                     onOpenChange(true);
@@ -349,12 +352,12 @@ function DraggableProject({
             </div>
           </ContextMenuTrigger>
           <ContextMenuContent className="w-40">
-            <ContextMenuItem onClick={onNewChat}>新建对话</ContextMenuItem>
-            <ContextMenuItem onClick={onStartRename}>重命名</ContextMenuItem>
-            <ContextMenuItem onClick={onReveal}>在访达中显示</ContextMenuItem>
+            <ContextMenuItem onClick={onNewChat}>{t("sidebar.newChat")}</ContextMenuItem>
+            <ContextMenuItem onClick={onStartRename}>{t("sidebar.rename")}</ContextMenuItem>
+            <ContextMenuItem onClick={onReveal}>{t("sidebar.reveal")}</ContextMenuItem>
             <ContextMenuSeparator />
             <ContextMenuItem variant="destructive" onClick={onRemove}>
-              从列表移除
+              {t("sidebar.remove")}
             </ContextMenuItem>
           </ContextMenuContent>
         </ContextMenu>
@@ -412,6 +415,7 @@ function SessionRowContent({
   onRename: (title: string) => void;
   onCancelRename: () => void;
 }): JSX.Element {
+  const { t } = useTranslation("app");
   return (
     <div
       className={cn(
@@ -445,7 +449,7 @@ function SessionRowContent({
                 size="icon-xs"
                 variant="ghost"
                 className="text-muted-foreground"
-                label={isPinned ? "取消置顶" : "置顶"}
+                label={isPinned ? t("sidebar.unpin") : t("sidebar.pin")}
                 onClick={(event) => {
                   event.stopPropagation();
                   onTogglePin();
@@ -458,7 +462,7 @@ function SessionRowContent({
                 size="icon-xs"
                 variant="ghost"
                 className="text-muted-foreground"
-                label="归档"
+                label={t("sidebar.archive")}
                 onClick={(event) => {
                   event.stopPropagation();
                   onArchive();
@@ -533,6 +537,7 @@ function DraggableSession({
   onRename: (title: string) => void;
   onCancelRename: () => void;
 }): JSX.Element {
+  const { t } = useTranslation("app");
   const { listeners, setNodeRef, isDragging } = useDraggable({ id: item.id });
   const { setNodeRef: setDroppableRef } = useDroppable({ id: item.id });
   return (
@@ -564,9 +569,9 @@ function DraggableSession({
           />
         </ContextMenuTrigger>
         <ContextMenuContent className="w-32">
-          <ContextMenuItem onClick={onTogglePin}>{isPinned ? "取消置顶" : "置顶"}</ContextMenuItem>
-          <ContextMenuItem onClick={onStartRename}>重命名</ContextMenuItem>
-          <ContextMenuItem onClick={onArchive}>归档</ContextMenuItem>
+          <ContextMenuItem onClick={onTogglePin}>{isPinned ? t("sidebar.unpin") : t("sidebar.pin")}</ContextMenuItem>
+          <ContextMenuItem onClick={onStartRename}>{t("sidebar.rename")}</ContextMenuItem>
+          <ContextMenuItem onClick={onArchive}>{t("sidebar.archive")}</ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
       </div>
@@ -611,6 +616,7 @@ export function Sidebar({
   onOpenMarket: () => void;
   onSearch: () => void;
 }): JSX.Element {
+  const { t } = useTranslation("app");
   const [width, setWidth] = useState(readSidebarWidth);
   const sidebarCollapsed = useSettingsStore((state) => state.settings.sidebarCollapsed ?? false);
   const sidebarOrder = useSettingsStore((state) => state.settings.sidebarOrder);
@@ -840,7 +846,7 @@ export function Sidebar({
       return (
         <p className="flex h-8 items-center gap-2.5 pl-2 text-xs text-muted-foreground">
           <span className="size-3.5 shrink-0" />
-          暂无对话
+          {t("sidebar.emptyChats")}
         </p>
       );
     }
@@ -858,7 +864,7 @@ export function Sidebar({
               className="text-xs text-muted-foreground hover:text-sidebar-accent-foreground"
               onClick={() => toggleProjectExpanded(cwd)}
             >
-              {expanded ? "收起显示" : "展开显示"}
+              {expanded ? t("sidebar.collapseMore") : t("sidebar.expandMore")}
             </button>
           </div>
         ) : null}
@@ -912,7 +918,7 @@ export function Sidebar({
           size="icon-sm"
           variant="ghost"
           className="no-drag text-muted-foreground"
-          label="收起侧边栏"
+          label={t("sidebar.collapseSidebar")}
           shortcut={toggleSidebarShortcut}
           onClick={() => updateSettings({ sidebarCollapsed: true })}
         >
@@ -922,7 +928,7 @@ export function Sidebar({
           size="icon-sm"
           variant="ghost"
           className="no-drag text-muted-foreground"
-          label="后退"
+          label={t("sidebar.back")}
           disabled={!canBack}
           onClick={back}
         >
@@ -932,7 +938,7 @@ export function Sidebar({
           size="icon-sm"
           variant="ghost"
           className="no-drag text-muted-foreground"
-          label="前进"
+          label={t("sidebar.forward")}
           disabled={!canForward}
           onClick={forward}
         >
@@ -963,7 +969,7 @@ export function Sidebar({
                 size="icon-sm"
                 variant="ghost"
                 className="text-muted-foreground"
-                label="搜索"
+                label={t("sidebar.search")}
                 shortcut={typeof navigator !== "undefined" && /mac/i.test(navigator.userAgent) ? "⌘K" : "Ctrl+K"}
                 onClick={onSearch}
               >
@@ -979,7 +985,7 @@ export function Sidebar({
               onClick={() => onNewChat()}
             >
               <HugeiconsIcon strokeWidth={2} icon={MessageSquarePlusIcon} className="size-3.5 text-muted-foreground" />
-              新对话
+              {t("workspace.newChat")}
             </button>
             <button
               type="button"
@@ -987,7 +993,7 @@ export function Sidebar({
               onClick={onOpenMarket}
             >
               <HugeiconsIcon strokeWidth={2} icon={PuzzleIcon} className="size-3.5 text-muted-foreground" />
-              插件
+              {t("sidebar.plugins")}
             </button>
           </div>
         </div>
@@ -996,7 +1002,7 @@ export function Sidebar({
           <div className="px-2 pb-2">
             {pinnedItems.length > 0 ? (
               <>
-                <SectionLabel>已置顶</SectionLabel>
+                <SectionLabel>{t("sidebar.pinned")}</SectionLabel>
                 {renderSessionList(pinnedItems, false)}
               </>
             ) : null}
@@ -1006,7 +1012,7 @@ export function Sidebar({
                 <IconButton
                   size="icon-xs"
                   variant="ghost"
-                  label="新项目"
+                  label={t("sidebar.newProject")}
                   className="text-muted-foreground opacity-0 transition-opacity focus-visible:opacity-100 group-hover/section:opacity-100"
                   onClick={onAddProject}
                 >
@@ -1014,10 +1020,10 @@ export function Sidebar({
                 </IconButton>
               }
             >
-              项目
+              {t("sidebar.projects")}
             </SectionLabel>
             {groups.length === 0 ? (
-              <p className="px-2 py-2 text-xs text-muted-foreground">还没有项目</p>
+              <p className="px-2 py-2 text-xs text-muted-foreground">{t("sidebar.noProjects")}</p>
             ) : (
               <div className="space-y-0.5">
                 {groups.map((group, index) => {
@@ -1053,7 +1059,7 @@ export function Sidebar({
                 <IconButton
                   size="icon-xs"
                   variant="ghost"
-                  label="新建会话"
+                  label={t("sidebar.newSession")}
                   className="text-muted-foreground opacity-0 transition-opacity focus-visible:opacity-100 group-hover/section:opacity-100"
                   onClick={() => onNewChat()}
                 >
@@ -1061,7 +1067,7 @@ export function Sidebar({
                 </IconButton>
               }
             >
-              聊天
+              {t("sidebar.chats")}
             </SectionLabel>
             {recent.length > 0 ? renderSessionList(recent, false) : null}
           </div>
@@ -1076,27 +1082,28 @@ export function Sidebar({
         </DragOverlay>
       </DndContext>
 
-      <div className="no-drag p-2">
+      <div className="no-drag flex items-center gap-1 p-2">
         <button
           type="button"
-          className="flex h-8 w-full items-center gap-2.5 rounded-md px-2 text-sm hover:bg-sidebar-accent/50"
+          className="flex h-8 min-w-0 flex-1 items-center gap-2.5 rounded-md px-2 text-sm hover:bg-sidebar-accent/50"
           onClick={onOpenSettings}
         >
           <HugeiconsIcon strokeWidth={2} icon={Settings01Icon} className="size-3.5 text-muted-foreground" />
-          设置
+          {t("palette.settings")}
         </button>
+        <SidebarUpdateButton />
       </div>
 
       <AlertDialog open={pendingDelete !== null} onOpenChange={(open) => !open && setPendingDelete(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>从列表移除项目？</AlertDialogTitle>
+            <AlertDialogTitle>{t("sidebar.removeProjectTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
-              {`「${pendingDelete?.title ?? ""}」下的对话会从列表中移除，不会删除磁盘上的项目文件。`}
+              {t("sidebar.removeProjectDesc", { name: pendingDelete?.title ?? "" })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogCancel>{t("sidebar.cancel")}</AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
               onClick={() => {
@@ -1105,7 +1112,7 @@ export function Sidebar({
                 setPendingDelete(null);
               }}
             >
-              移除
+              {t("sidebar.removeAction")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

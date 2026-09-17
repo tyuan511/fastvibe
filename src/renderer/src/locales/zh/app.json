@@ -1,0 +1,108 @@
+{
+  "running": "运行中",
+  "loading": "加载中",
+  "imagePreview": "图片预览",
+  "clickToClose": "点击空白处或按 Esc 关闭",
+  "status": {
+    "noModel": "暂无模型",
+    "starting": "启动中",
+    "notReady": "未就绪",
+    "disconnected": "未连接"
+  },
+  "update": {
+    "readyTitle": "新版本已就绪",
+    "readyDesc": "FastVibe {{version}} 已下载，安装需要重启应用。",
+    "later": "稍后",
+    "installNow": "立即安装",
+    "sidebarUpdate": "更新",
+    "sidebarRestart": "重启",
+    "sidebarUpdateTitle": "更新到 FastVibe {{version}}",
+    "sidebarRestartTitle": "重启以完成更新到 FastVibe {{version}}"
+  },
+  "errors": {
+    "cannotStart": "暂时无法开始对话，请稍后重试。",
+    "switchModel": "切换模型失败，请稍后重试。",
+    "thinking": "无法设置推理强度。"
+  },
+  "workspace": {
+    "noProject": "无项目",
+    "newSession": "新会话",
+    "expandSidebar": "展开侧边栏",
+    "newChat": "新对话",
+    "expandSidePane": "展开侧边面板"
+  },
+  "alert": {
+    "noModelTitle": "还没有配置模型",
+    "noModelDesc": "先连接一个模型供应商，然后就可以开始对话了。",
+    "goSettings": "去设置",
+    "problemTitle": "出了点问题",
+    "retry": "重试"
+  },
+  "composer": {
+    "ready": "随心输入",
+    "needModel": "添加模型后开始对话",
+    "preparing": "准备中…",
+    "seeAttachments": "请查看附件"
+  },
+  "palette": {
+    "title": "搜索",
+    "description": "搜索对话、快捷操作和设置",
+    "newChat": "新对话",
+    "openFolder": "打开文件夹",
+    "settings": "设置",
+    "extensions": "插件",
+    "placeholder": "搜索聊天",
+    "empty": "没有匹配的结果",
+    "groupChats": "聊天",
+    "groupActions": "快捷操作",
+    "groupSettings": "设置",
+    "newSession": "新会话",
+    "settingsPrefix": "设置",
+    "keywords": {
+      "general": "外观 主题 字号 界面 发送 思考 队列 时间戳 打断 appearance theme font",
+      "shortcuts": "键盘 热键 keymap keyboard shortcuts",
+      "archived": "恢复 删除 archive restore delete",
+      "usage": "token 费用 统计 usage cost",
+      "providers": "供应商 api 密钥 模型 providers models key",
+      "mcp": "工具 mcp tools",
+      "skills": "skill 技能",
+      "extensions": "扩展 市场 extensions plugins",
+      "import": "导入 迁移 claude codex opencode zcode pi 会话 import",
+      "about": "版本 about version"
+    },
+    "actionKeywords": {
+      "new": "新聊天 新建 新会话 new chat",
+      "folder": "打开项目 添加项目 文件夹 open folder project",
+      "settings": "偏好 通用 settings preferences",
+      "extensions": "扩展 市场 extensions plugins"
+    }
+  },
+  "sidebar": {
+    "pinned": "置顶",
+    "chats": "聊天",
+    "archive": "归档",
+    "rename": "重命名",
+    "delete": "删除",
+    "pin": "置顶",
+    "unpin": "取消置顶",
+    "newChat": "新建对话",
+    "newSession": "新建会话",
+    "reveal": "在访达中显示",
+    "remove": "从列表移除",
+    "emptyChats": "暂无对话",
+    "collapseMore": "收起显示",
+    "expandMore": "展开显示",
+    "collapseSidebar": "收起侧边栏",
+    "back": "后退",
+    "forward": "前进",
+    "search": "搜索",
+    "plugins": "插件",
+    "newProject": "新项目",
+    "projects": "项目",
+    "noProjects": "还没有项目",
+    "removeProjectTitle": "从列表移除项目？",
+    "removeProjectDesc": "「{{name}}」下的对话会从列表中移除，不会删除磁盘上的项目文件。",
+    "cancel": "取消",
+    "removeAction": "移除"
+  }
+}

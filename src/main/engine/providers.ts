@@ -438,7 +438,7 @@ function thinkingLevelMap(model: ProviderModel): Record<string, string | null> |
  *
  * Native providers are included even though they hold no `models.json` models —
  * their models come from the SDK registry, and requiring a non-empty `models` here
- * would strand them at `needsAuth` no matter what key the user pasted.
+ * would keep them out of the credential overlay no matter what key the user pasted.
  */
 export function usableProviders(paths: FastVibePaths, keys: Record<string, string>): StoredProvider[] {
   return readProviders(paths).filter(

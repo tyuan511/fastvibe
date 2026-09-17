@@ -23,6 +23,7 @@ Runtime data lives under the app userData directory:
   conversations.json
   providers.json
   mcp.json
+  models-dev.json        models.dev snapshot refreshed from 设置 → 关于, which wins over the bundled one
   runtime/engine/
     agent/sessions       session transcripts, passed to the SDK's SessionManager
     reasoning.json       thinking-block start/end times Main timed from the live stream
@@ -48,6 +49,7 @@ Provider credentials are kept in FastVibe's isolated runtime and injected into t
 
 - Do **not** hand-write files under `src/renderer/src/components/ui/`. If a primitive already exists in shadcn (Button, Input, Textarea, Badge, Message, Bubble, Empty, Item, Alert, …), add it with the CLI and compose it.
 - Product screens (chat thread, workspace chrome, tool cards) live outside `components/ui/` and **compose** shadcn primitives. Custom markup is allowed only when shadcn has no matching primitive.
+- **A group part needs its group.** `DropdownMenuLabel` / `ContextMenuLabel` / `SelectLabel` are Base UI's `Menu.GroupLabel`, which throws `MenuGroupContext is missing` when rendered outside its group; the same applies to the other group-only parts. It is a **render-time** throw, so no typecheck catches it and it does not degrade gracefully — it unmounts the whole tree. That is how the composer's model menu, whose empty state drew a bare label, took FastVibe down the instant it was opened on an install with no models. Wrap every label in `DropdownMenuGroup` / `ContextMenuGroup` / whichever group the surface has.
 - Wrap the tree with `TooltipProvider`.
 - `vite.config.ts` exists so the shadcn CLI can detect Vite. The Electron app builds through `electron.vite.config.ts`.
 
@@ -133,6 +135,34 @@ The app ships light **and** dark themes; never assume light.
   root size in `side-pane-terminal.tsx`) and container-query breakpoints, which are
   written in `rem` (`min-[27.5rem]`) so they track the setting too.
 
+## 语言 / i18n
+
+设置 → 通用 → 语言 has two independent picks, both `zh | en`:
+
+- **界面语言** (`settings.uiLanguage`) drives every string the user reads. The
+  renderer uses **i18next + react-i18next** (`src/renderer/src/lib/i18n.ts`).
+  Namespaces live in `src/renderer/src/locales/{zh,en}/{common,app,chat,settings,sidepane}.json`.
+  Components call `useTranslation("<ns>")`; shared lib modules call `i18n.t` at
+  render/event time so they never freeze the language of module load. `applyUiLanguage`
+  stamps `<html lang>` and is applied pre-mount in `main.tsx` (like the theme) and
+  live via `useLanguageSync`. An existing install without the key keeps 中文; a
+  brand-new install follows the OS locale (`detectSystemLanguage`).
+- **AI 偏好语言** (`settings.aiLanguage`) is injected on every turn by the built-in
+  `output-language` extension (`before_agent_start` appends a language requirement
+  to the system prompt). Main owns the wording (`src/main/engine/ai-language.ts`)
+  and writes it to `FASTVIBE_AI_LANGUAGE_PROMPT`; the extension just appends whatever
+  it finds, re-read per turn so a settings change lands in a running session.
+  Subagent sessions (`noExtensions`) get the same sentence via `appendSystemPrompt`.
+  User-facing engine/extension copy follows `FASTVIBE_UI_LANGUAGE` (`uiText` in
+  `src/main/engine/ui-text.ts`).
+
+Both values are written to `settings.json` with the other prefs. Main syncs the env
+vars on every settings write (`applyLanguages`) and at startup.
+
+Do **not** hardcode user-visible copy in product components. Add a key to the matching
+namespace JSON (zh value byte-identical to the original Chinese) and render it with
+`t(...)`. Language picker labels (`简体中文` / `English`) stay untranslated on purpose.
+
 ## Routing
 
 `react-router` with **`HashRouter`** (wrapped in `src/renderer/src/main.tsx`). The
@@ -151,13 +181,20 @@ history has nothing to fall back to — a reload on `/settings/providers` would 
   in `App.tsx`.
 - To deep-link into a pane, `navigate("/settings/providers")`. The composer's
   「添加模型 / 管理模型」 entry uses this to reach provider configuration.
+- Every pane draws its rows through `settings-group.tsx` (`SettingsGroup` /
+  `SettingsRow`): a card of label + one-line description + control on the right, with a
+  divider between rows. A pane that hand-rolls its own row drifts in padding, type
+  scale and control alignment — 关于's cells did, and had to be rebuilt on these.
 
 ## Providers
 
 FastVibe (`https://fastvibe.dev/v1`) is **one provider among others**, not a forced
-onboarding gate. There is no connect wall: an unconfigured engine reports
-`needsAuth`, the chat surface stays usable, and the composer's model menu links to
-Settings → 供应商. Users can equally add any OpenAI-compatible provider there.
+onboarding gate. There is no connect wall and no separate 「not configured」 engine
+state: an install with no provider boots an ordinary engine whose model list is
+empty, and that empty list is the whole signal. The composer reads it — it goes
+read-only and its placeholder asks for a model — and the model chip's popover says
+暂无模型 above the 管理模型 entry that leads to Settings → 供应商. Users can equally add
+any OpenAI-compatible provider there.
 
 A provider ships **no models** until the user connects it: configuring a provider
 fetches its `/models` list and the user picks which to keep. A provider without an
@@ -182,7 +219,8 @@ mutates the live `AuthStorage` (set/remove keys), rewrites `models.json`, then c
 re-points each idle session at the refreshed `Model` object (`agent.state.model`,
 quietly — a settings edit is not a user model switch and must not append a
 `model_change` entry). A run that is still streaming keeps the config it started
-under and is rebound on `agent_end`. Only a cold engine (`needsAuth`/`idle`) takes
+under and is rebound on `agent_end`. Only a cold engine (no runtime/registry yet —
+the first provider, or `start()` after a crash) takes
 the `start()` path. Do not reintroduce `stop()` + `start()` here: it disposed every
 AgentSession, so a change in Settings → 供应商 aborted the reply in flight.
 
@@ -219,17 +257,33 @@ for the engine to bind the choice to until the first prompt, so `setModel` /
 return a draft `EngineSessionState` — `getState()` reports the same instead of failing
 with 「no active conversation」, and `#applyPreferredModel` adopts the pick into the next
 session created (before the pinned 「默认模型」, which it still falls back to). A pick made
-while no conversation exists is dropped as soon as one is activated.
+while no conversation exists is dropped as soon as one is activated. Nothing may throw
+before that branch is reached: `#activeSession()`'s `#ensureReady()` used to reject with
+「尚未配置模型供应商」 on an unconfigured engine, which made the chips unusable in exactly
+the first-run state they exist for.
 
 **Nothing on the first-run path is an error.** A fresh install has no conversation and
 possibly no provider, and that is a state the composer has to work *in* rather than
-fail in: the model chip reads 「添加模型」 while nothing is configured, and a send with
-no model refuses the prompt — keeping the draft — and points at 设置 → 供应商, instead of
-creating a conversation the engine would then refuse to run. Once a provider is
-connected a send needs no extra step: the new session resolves its own model
-(`findInitialModel`), and every session-scoped choice that could be made before a
-conversation existed (the model/thinking chips, 自动压缩 read in `#createSession`) is
-adopted by the session that appears.
+fail in. There is no status for it: the engine boots normally and the model list being
+empty *is* the signal. `App.tsx` holds the composer read-only on that condition
+(`canChat` needs a model) with a placeholder asking for one, hides the suggestion chips
+that would only fill a box that cannot be sent, and the model chip reads 「添加模型」
+with a popover saying 暂无模型 above 管理模型 → 设置 → 供应商. `handleSubmit`'s refusal
+(a send with no model keeps the draft and raises the 「还没有配置模型」 alert) stays as
+the safety net behind the disabled input — a queued prompt can still drain into it if
+the last provider is removed mid-run. Once a provider is connected a send needs no extra
+step: the new session resolves its own model (`findInitialModel`), and every
+session-scoped choice that could be made before a conversation existed (the
+model/thinking chips, 自动压缩 read in `#createSession`) is adopted by the session that
+appears.
+
+**A conversation can exist before a model does.** The SDK substitutes a placeholder
+model (`provider: "unknown"`, from pi-agent-core's `DEFAULT_MODEL`) on a session that
+has none, so a chat created on a fresh install is a real session with no model rather
+than a refusal: `#state` reports that placeholder as *no* model (otherwise 「unknown」
+would land on the composer's chip), and `#rebindModel` treats it as the 「model is gone」
+case, which is how such a conversation adopts the provider the user connects
+afterwards.
 
 **A switch is drawn in the transcript as a divider only where the new model actually
 runs** — a quiet rule reading 「模型已切换至 provider/model」, naming the model the reply
@@ -271,9 +325,9 @@ engine is gone because the SDK never read them.
 ## Plugins & extensions
 
 FastVibe hosts pi extensions (the SDK's plugin system) and bridges their
-terminal-only surface onto the GUI. Eight **built-in** extensions ship with the app
+terminal-only surface onto the GUI. Nine **built-in** extensions ship with the app
 (`resources/extensions/plan.ts`, `goal.ts`, `todo.ts`, `permission-sandbox.ts`, `session-title.ts`,
-`browser-use.ts`, `web-search.ts`, `subagent/index.ts`); anything else
+`browser-use.ts`, `web-search.ts`, `output-language.ts`, `subagent/index.ts`); anything else
 the user installs at runtime via 设置 → 插件, which writes to the isolated `agentDir`
 (`ExtensionManager` → SDK `DefaultPackageManager`), never `~/.pi`.
 
@@ -285,6 +339,8 @@ the user installs at runtime via 设置 → 插件, which writes to the isolated
   a short title via a fire-and-forget `modelRegistry.complete` call, then
   `pi.setSessionName`. Manual sidebar renames set `titleManual` so they are not
   overwritten. Parallel runs and side chats name the session up front and are skipped.
+  `output-language.ts` is always on: each `before_agent_start` appends the host's
+  AI 偏好语言 requirement (from `FASTVIBE_AI_LANGUAGE_PROMPT`) to the system prompt.
   - **Plan** narrows the active tools to the read-only set (`read/grep/find/ls`)
     and, on each plan turn, appends a planning instruction on `before_agent_start`.
     Entering the mode lazily registers and enables a `question` tool (removed again
@@ -558,10 +614,20 @@ pnpm shadcn add <component> -y
   the bundled catalog for any model that has none. Without that, a `providers.json`
   written before pricing existed leaves `models.json` with no price and every turn is
   billed at $0.
-- `src/main/engine/models-dev.ts` reads only the bundled snapshot. No network access at
-  runtime. `normalizeModelKey` must stay identical to `normalize` in the sync script.
-- Resolution order: `process.resourcesPath/models-dev/index.json` then
-  `resources/models-dev/index.json`. Packaging must copy the directory via
+- `src/main/engine/models-dev.ts` reads the user-updated snapshot first
+  (`models-dev.json` in the app data dir) and the bundled one second, and is otherwise
+  the app's only runtime network call for metadata — always user-initiated, from
+  设置 → 关于 (`models-dev-update.ts`). Deleting the updated file falls back to the copy
+  the app shipped with, and a corrupt one is ignored rather than trusted. Both writers
+  share one encoder (`scripts/models-dev-encode.mjs`, also used by
+  `scripts/sync-models-dev.mjs`), so what 关于 downloads is the format the decoder
+  already reads; a successful update then re-derives `models.json` through
+  `PiProcessManager.reloadModelMetadata()`, which refreshes live sessions like a
+  provider edit but never boots a cold engine. `normalizeModelKey` must stay identical
+  to `normalize` in the sync script.
+- Resolution order: the updated `models-dev.json`, then
+  `process.resourcesPath/models-dev/index.json`, then `resources/models-dev/index.json`.
+  Packaging must copy the directory via
   `extraResources`. If the snapshot is missing, models fall back to defaults
   (128K context / 8192 output / text-only) and the settings About page shows it as missing.
 - Run `pnpm sync:models -- --force` before a release to refresh the snapshot.
@@ -812,6 +878,24 @@ row then reports that whole request's time, an upper bound rather than the thoug
 of a bare 「思考」. Measured bounds always win. The owner lookup is a `Map<MessagePart, ChatMessage>`
 built from the row's messages, which works because `mergeAssistantRun` passes thinking parts
 through by reference.
+
+## 上下文用量（composer 的上下文环）
+
+The composer's context ring and its popover read `session.contextUsage`, which only a state
+reply carries — the engine derives it from the messages it holds (`getContextUsage()`), never
+from an event payload. So it is as fresh as the last `reloadActiveState()`.
+
+- **A run grows the context at every turn boundary, so `turn_end` refreshes it.** `turn_end`
+  fires after each assistant message — every LLM round trip, tool calls included — and the
+  agent immediately feeds the results into the next turn, so the window moves several times
+  per run. Only the run boundaries (`agent_end` / `agent_settled` / compaction ends) used to
+  re-read it, which left the ring frozen at whatever the chat was opened with for the length
+  of a long task. Switching away and back appeared to "fix" it because `conversations.open`
+  answers with a fresh `#state()`.
+- **Not `message_end`.** An assistant message that only requested a tool call has no usage
+  yet, and the tool result that follows does not move the window on its own; refreshing per
+  message would re-read the whole transcript several times a turn for a value that cannot
+  change. `turn_end` is the first point where the turn's usage (and its tool results) are in.
 
 ## 运行时保持唤醒
 

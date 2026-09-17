@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo, useState, type JSX } from "react";
+import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { BotIcon } from "@hugeicons/core-free-icons";
 import { MessageList } from "@/components/chat/message-list";
@@ -8,14 +9,15 @@ import type { ChatMessage } from "@shared/types";
 import type { SidePaneTab } from "@/stores/side-pane";
 
 function SubagentEmpty(): JSX.Element {
+  const { t } = useTranslation("sidepane");
   return (
     <div className="flex h-full flex-col items-center justify-center px-6 text-center">
       <div className="flex size-10 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
         <HugeiconsIcon strokeWidth={2} icon={BotIcon} className="size-5" />
       </div>
-      <h2 className="mt-3 text-base font-semibold tracking-tight">子 Agent</h2>
+      <h2 className="mt-3 text-base font-semibold tracking-tight">{t("subagent.title")}</h2>
       <p className="mt-1 max-w-[16rem] text-sm leading-5 text-muted-foreground">
-        主 Agent 委派子任务时，这里会实时显示它在隔离上下文里的完整对话。
+        {t("subagent.desc")}
       </p>
     </div>
   );

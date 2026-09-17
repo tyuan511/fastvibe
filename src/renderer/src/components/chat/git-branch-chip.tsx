@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type JSX } from "react";
+import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Add01Icon,
@@ -29,6 +30,7 @@ export function GitBranchChip({
   /** Called after a successful switch/create so the caller can re-read status. */
   onBranchChange?: (status: GitStatus) => void;
 }): JSX.Element | null {
+  const { t } = useTranslation("chat");
   const cwd = status.cwd;
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -79,7 +81,7 @@ export function GitBranchChip({
       onBranchChange?.(next);
       setOpen(false);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "切换分支失败");
+      setError(cause instanceof Error ? cause.message : t("git.switchFailed"));
     } finally {
       setBusy(false);
     }
@@ -95,7 +97,7 @@ export function GitBranchChip({
       onBranchChange?.(next);
       setOpen(false);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "创建分支失败");
+      setError(cause instanceof Error ? cause.message : t("git.createFailed"));
     } finally {
       setBusy(false);
     }
@@ -111,7 +113,7 @@ export function GitBranchChip({
             type="button"
             variant="ghost"
             size="sm"
-            aria-label={`当前分支 ${status.branch}`}
+            aria-label={t("git.current", { branch: status.branch })}
             className="h-7 max-w-56 gap-1 rounded-full px-2 text-sm font-normal text-muted-foreground transition-colors hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground"
           />
         }
@@ -128,11 +130,11 @@ export function GitBranchChip({
       >
         {creating ? (
           <div className="p-1">
-            <div className="px-2 pb-1 pt-0.5 text-xs font-medium text-muted-foreground">新分支名称</div>
+            <div className="px-2 pb-1 pt-0.5 text-xs font-medium text-muted-foreground">{t("git.newName")}</div>
             <Input
               autoFocus
               value={newName}
-              placeholder="例如 feature/login"
+              placeholder={t("git.namePlaceholder")}
               disabled={busy}
               className="h-7 rounded-md text-sm"
               onChange={(event) => setNewName(event.target.value)}
@@ -155,7 +157,7 @@ export function GitBranchChip({
                 className="h-6 rounded-full px-2 text-xs font-normal text-muted-foreground"
                 onClick={() => setCreating(false)}
               >
-                取消
+                {t("git.cancel")}
               </Button>
               <Button
                 type="button"
@@ -164,7 +166,7 @@ export function GitBranchChip({
                 disabled={busy || !newName.trim()}
                 onClick={() => void createAndCheckout()}
               >
-                创建并检出
+                {t("git.createCheckout")}
               </Button>
             </div>
           </div>
@@ -179,15 +181,15 @@ export function GitBranchChip({
               <Input
                 autoFocus
                 value={query}
-                placeholder="搜索分支"
+                placeholder={t("git.search")}
                 className="h-7 rounded-md border-0 bg-transparent pl-6.5 text-sm shadow-none focus-visible:ring-0"
                 onChange={(event) => setQuery(event.target.value)}
               />
             </div>
-            <div className="px-2 py-0.5 text-xs font-medium text-muted-foreground">分支</div>
+            <div className="px-2 py-0.5 text-xs font-medium text-muted-foreground">{t("git.branches")}</div>
             <div className="max-h-52 overflow-y-auto">
               {branches === null ? (
-                <div className="px-2 py-1.5 text-sm text-muted-foreground">读取分支…</div>
+                <div className="px-2 py-1.5 text-sm text-muted-foreground">{t("git.loading")}</div>
               ) : filtered.length > 0 ? (
                 filtered.map((item) => (
                   <button
@@ -218,7 +220,7 @@ export function GitBranchChip({
                   </button>
                 ))
               ) : (
-                <div className="px-2 py-1.5 text-sm text-muted-foreground">没有匹配的分支</div>
+                <div className="px-2 py-1.5 text-sm text-muted-foreground">{t("git.none")}</div>
               )}
             </div>
             {error ? <div className="px-2 pb-1 text-xs text-destructive">{error}</div> : null}
@@ -233,7 +235,7 @@ export function GitBranchChip({
               }}
             >
               <HugeiconsIcon strokeWidth={2} icon={Add01Icon} className="size-3.5 shrink-0" />
-              <span>创建并检出新分支...</span>
+              <span>{t("git.createNew")}</span>
             </button>
           </>
         )}

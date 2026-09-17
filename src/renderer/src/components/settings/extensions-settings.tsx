@@ -47,6 +47,8 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { IconButton } from "@/components/icon-button";
+import { useTranslation } from "react-i18next";
+import { i18n } from "@/lib/i18n";
 import { formatRelativeTime } from "@/lib/time";
 import { cn } from "@/lib/utils";
 import type {
@@ -57,27 +59,26 @@ import type {
   MarketPackageQuery,
 } from "@shared/types";
 
-const TYPE_LABELS: Record<string, string> = {
-  extension: "扩展",
-  skill: "技能",
-  theme: "主题",
-  prompt: "提示词",
-  package: "插件",
+const TYPE_KEYS = ["extension", "skill", "theme", "prompt", "package"] as const;
+const TYPE_LABEL_KEYS: Record<string, string> = {
+  extension: "extensions.kindExtension",
+  skill: "extensions.kindSkill",
+  theme: "extensions.kindTheme",
+  prompt: "extensions.kindPrompt",
+  package: "extensions.kindPackage",
+};
+const TYPE_FILTER_KEYS = ["", "extension", "skill", "theme", "prompt"] as const;
+const SORT_FILTER_KEYS = ["downloads", "recent", "name"] as const;
+const SORT_LABEL_KEYS: Record<string, string> = {
+  downloads: "extensions.sortDownloads",
+  recent: "extensions.sortRecent",
+  name: "extensions.sortName",
 };
 
-const TYPE_FILTERS: Record<string, string> = {
-  "": "全部类型",
-  extension: "扩展",
-  skill: "技能",
-  theme: "主题",
-  prompt: "提示词",
-};
-
-const SORT_FILTERS: Record<string, string> = {
-  downloads: "下载最多",
-  recent: "最近发布",
-  name: "按名称",
-};
+function typeLabel(type: string): string {
+  const key = TYPE_LABEL_KEYS[type];
+  return key ? (i18n.t(`settings:${key}`) as string) : type;
+}
 
 /** `npm:@scope/name@1.0` → `@scope/name`; `npm:name` → `name`. */
 function packageName(source: string): string {
@@ -98,6 +99,11 @@ function formatDownloads(value?: number): string | null {
  * isolated agentDir — never the user's `~/.pi`.
  */
 export function ExtensionsSettings(): JSX.Element {
+  const { t } = useTranslation("settings");
+  const typeFilters = Object.fromEntries(
+    TYPE_FILTER_KEYS.map((key) => [key, key ? t(TYPE_LABEL_KEYS[key]) : t("extensions.allTypes")]),
+  );
+  const sortFilters = Object.fromEntries(SORT_FILTER_KEYS.map((key) => [key, t(SORT_LABEL_KEYS[key])]));
   const [tab, setTab] = useState<"installed" | "market">("installed");
   const [packages, setPackages] = useState<ExtensionPackage[]>([]);
   const [loaded, setLoaded] = useState<ExtensionInfo[]>([]);
@@ -128,7 +134,7 @@ export function ExtensionsSettings(): JSX.Element {
       setLoaded(extensions);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "无法读取已安装插件");
+      setError(err instanceof Error ? err.message : t("extensions.listFailed"));
     } finally {
       setInstalledBusy(false);
     }
@@ -160,7 +166,7 @@ export function ExtensionsSettings(): JSX.Element {
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        setError(err instanceof Error ? err.message : "无法加载插件市场");
+        setError(err instanceof Error ? err.message : t("extensions.catalogFailed"));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -178,7 +184,7 @@ export function ExtensionsSettings(): JSX.Element {
       setError(null);
       await refreshInstalled();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "安装失败，请检查网络后重试");
+      setError(err instanceof Error ? err.message : t("extensions.installFailed"));
     } finally {
       setPending(null);
     }
@@ -192,7 +198,7 @@ export function ExtensionsSettings(): JSX.Element {
       setError(null);
       await refreshInstalled();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "卸载失败，请重试");
+      setError(err instanceof Error ? err.message : t("extensions.removeFailed"));
     } finally {
       setPending(null);
     }
@@ -204,8 +210,8 @@ export function ExtensionsSettings(): JSX.Element {
   return (
     <div className="space-y-4">
       <p className="text-xs leading-5 text-muted-foreground">
-        来自 pi.dev 的插件目录，安装到 FastVibe 独立的数据目录，不写入你自己的 <code>~/.pi</code>
-        。安装后其命令、工具与状态会出现在对话中。
+        {t("extensions.introBefore")} <code>~/.pi</code>
+        {t("extensions.introAfter")}
       </p>
 
       <Tabs
@@ -215,15 +221,15 @@ export function ExtensionsSettings(): JSX.Element {
         <div className="flex items-center justify-between gap-3">
           <TabsList>
             <TabsTrigger value="installed" className="px-3">
-              已安装{packages.length ? ` ${packages.length}` : ""}
+              {packages.length ? t("extensions.installedCount", { count: packages.length }) : t("extensions.installed")}
             </TabsTrigger>
             <TabsTrigger value="market" className="px-3">
-              官方市场
+              {t("extensions.marketplace")}
             </TabsTrigger>
           </TabsList>
           {tab === "installed" ? (
             <IconButton
-              label="刷新"
+              label={t("extensions.refresh")}
               size="icon-sm"
               variant="outline"
               disabled={installedBusy}
@@ -254,13 +260,13 @@ export function ExtensionsSettings(): JSX.Element {
               />
               <Input
                 value={query}
-                placeholder="搜索插件名称或作者"
+                placeholder={t("extensions.search")}
                 className="pl-8"
                 onChange={(event) => setQuery(event.target.value)}
               />
             </div>
             <Select
-              items={TYPE_FILTERS}
+              items={typeFilters}
               value={type}
               onValueChange={(value) => {
                 setType(value as string);
@@ -271,7 +277,7 @@ export function ExtensionsSettings(): JSX.Element {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {Object.entries(TYPE_FILTERS).map(([value, label]) => (
+                {Object.entries(typeFilters).map(([value, label]) => (
                   <SelectItem key={value} value={value}>
                     {label}
                   </SelectItem>
@@ -279,7 +285,7 @@ export function ExtensionsSettings(): JSX.Element {
               </SelectContent>
             </Select>
             <Select
-              items={SORT_FILTERS}
+              items={sortFilters}
               value={sort}
               onValueChange={(value) => {
                 setSort(value as NonNullable<MarketPackageQuery["sort"]>);
@@ -290,7 +296,7 @@ export function ExtensionsSettings(): JSX.Element {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {Object.entries(SORT_FILTERS).map(([value, label]) => (
+                {Object.entries(sortFilters).map(([value, label]) => (
                   <SelectItem key={value} value={value}>
                     {label}
                   </SelectItem>
@@ -309,11 +315,11 @@ export function ExtensionsSettings(): JSX.Element {
 
           <div className="flex items-center justify-between text-sm text-muted-foreground">
             <span>
-              {total ? `共 ${total.toLocaleString()} 个插件` : page ? `${page.packages.length} 个结果` : ""}
+              {total ? t("extensions.total", { count: total.toLocaleString() }) : page ? t("extensions.results", { count: page.packages.length }) : ""}
             </span>
             <div className="flex items-center gap-1">
               <IconButton
-                label="上一页"
+                label={t("extensions.prev")}
                 size="icon-xs"
                 variant="ghost"
                 disabled={loading || pageIndex <= 1}
@@ -323,7 +329,7 @@ export function ExtensionsSettings(): JSX.Element {
               </IconButton>
               <span>{pageIndex}</span>
               <IconButton
-                label="下一页"
+                label={t("extensions.next")}
                 size="icon-xs"
                 variant="ghost"
                 disabled={loading || !page?.totalPages || pageIndex >= page.totalPages}
@@ -375,7 +381,7 @@ function PackageAvatar({ types }: { types: string[] }): JSX.Element {
 function TypeBadge({ type }: { type: string }): JSX.Element {
   return (
     <Badge variant="secondary" className="h-4.5 rounded-md px-1.5 text-xs font-normal">
-      {TYPE_LABELS[type] ?? type}
+      {typeLabel(type)}
     </Badge>
   );
 }
@@ -417,6 +423,7 @@ function InstalledList({
   busy: boolean;
   onRemove: (item: ExtensionPackage) => void;
 }): JSX.Element {
+  const { t } = useTranslation("settings");
   if (packages.length === 0) {
     return (
       <Empty className="border border-dashed border-border py-10">
@@ -424,8 +431,8 @@ function InstalledList({
           <EmptyMedia variant="icon">
             <HugeiconsIcon strokeWidth={2} icon={PackageIcon} />
           </EmptyMedia>
-          <EmptyTitle>尚未安装插件</EmptyTitle>
-          <EmptyDescription>切换到「官方市场」浏览并安装</EmptyDescription>
+          <EmptyTitle>{t("extensions.emptyTitle")}</EmptyTitle>
+          <EmptyDescription>{t("extensions.emptyDesc")}</EmptyDescription>
         </EmptyHeader>
       </Empty>
     );
@@ -456,23 +463,23 @@ function InstalledList({
                     {packageName(item.source)}
                   </CardTitle>
                   <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                    {item.builtin ? "随应用内置" : item.source}
+                    {item.builtin ? t("extensions.builtinWithApp") : item.source}
                   </p>
                 </div>
               </div>
               <CardAction className="flex items-center gap-1.5">
                 {item.builtin ? (
                   <Badge variant="secondary" className="h-4.5 rounded-md px-1.5 text-xs font-normal">
-                    内置
+                    {t("extensions.builtin")}
                   </Badge>
                 ) : null}
                 {state?.error ? (
                   <Badge variant="destructive" className="h-4.5 rounded-md px-1.5 text-xs font-normal">
-                    加载失败
+                    {t("extensions.loadFailed")}
                   </Badge>
                 ) : state ? (
                   <Badge variant="secondary" className="h-4.5 rounded-md px-1.5 text-xs font-normal">
-                    已加载
+                    {t("extensions.loaded")}
                   </Badge>
                 ) : null}
                 {item.builtin ? null : (
@@ -487,7 +494,7 @@ function InstalledList({
                     ) : (
                       <HugeiconsIcon strokeWidth={2} icon={Delete02Icon} />
                     )}
-                    卸载
+                    {t("extensions.uninstall")}
                   </Button>
                 )}
               </CardAction>
@@ -517,6 +524,7 @@ function MarketList({
   installed: Set<string>;
   onInstall: (item: MarketPackage) => void;
 }): JSX.Element {
+  const { t } = useTranslation("settings");
   if (loading && !page) {
     return (
       <div className="flex items-center justify-center py-16 text-muted-foreground">
@@ -531,8 +539,8 @@ function MarketList({
           <EmptyMedia variant="icon">
             <HugeiconsIcon strokeWidth={2} icon={Store01Icon} />
           </EmptyMedia>
-          <EmptyTitle>没有匹配的插件</EmptyTitle>
-          <EmptyDescription>换个关键词或类型试试</EmptyDescription>
+          <EmptyTitle>{t("extensions.noneTitle")}</EmptyTitle>
+          <EmptyDescription>{t("extensions.noneDesc")}</EmptyDescription>
         </EmptyHeader>
       </Empty>
     );
@@ -569,7 +577,7 @@ function MarketList({
                 {isInstalled ? (
                   <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
                     <HugeiconsIcon strokeWidth={2} icon={CheckmarkCircle02Icon} className="size-3.5 text-success" />
-                    已安装
+                    {t("extensions.alreadyInstalled")}
                   </span>
                 ) : (
                   <Button
@@ -586,7 +594,7 @@ function MarketList({
                     ) : (
                       <HugeiconsIcon strokeWidth={2} icon={Download01Icon} />
                     )}
-                    安装
+                    {t("extensions.install")}
                   </Button>
                 )}
               </CardAction>
@@ -619,7 +627,7 @@ function MarketList({
             {item.npmUrl || item.repoUrl ? (
               <CardFooter className="gap-0.5 py-2">
                 {item.npmUrl ? <MetaLink label="npm" href={item.npmUrl} icon={NpmIcon} /> : null}
-                {item.repoUrl ? <MetaLink label="仓库" href={item.repoUrl} icon={GithubIcon} /> : null}
+                {item.repoUrl ? <MetaLink label={t("extensions.repo")} href={item.repoUrl} icon={GithubIcon} /> : null}
               </CardFooter>
             ) : null}
           </Card>

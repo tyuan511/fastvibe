@@ -1,0 +1,108 @@
+{
+  "running": "Running",
+  "loading": "Loading",
+  "imagePreview": "Image preview",
+  "clickToClose": "Click outside or press Esc to close",
+  "status": {
+    "noModel": "No model",
+    "starting": "Starting",
+    "notReady": "Not ready",
+    "disconnected": "Disconnected"
+  },
+  "update": {
+    "readyTitle": "Update ready",
+    "readyDesc": "FastVibe {{version}} has been downloaded. Installing requires a restart.",
+    "later": "Later",
+    "installNow": "Install now",
+    "sidebarUpdate": "Update",
+    "sidebarRestart": "Restart",
+    "sidebarUpdateTitle": "Update to FastVibe {{version}}",
+    "sidebarRestartTitle": "Restart to finish updating to FastVibe {{version}}"
+  },
+  "errors": {
+    "cannotStart": "Could not start a chat. Please try again shortly.",
+    "switchModel": "Could not switch model. Please try again shortly.",
+    "thinking": "Could not set the reasoning level."
+  },
+  "workspace": {
+    "noProject": "No project",
+    "newSession": "New chat",
+    "expandSidebar": "Expand sidebar",
+    "newChat": "New chat",
+    "expandSidePane": "Expand side pane"
+  },
+  "alert": {
+    "noModelTitle": "No model configured",
+    "noModelDesc": "Connect a model provider first, then you can start chatting.",
+    "goSettings": "Go to settings",
+    "problemTitle": "Something went wrong",
+    "retry": "Retry"
+  },
+  "composer": {
+    "ready": "Ask anything",
+    "needModel": "Add a model to start chatting",
+    "preparing": "Getting ready…",
+    "seeAttachments": "See the attachment"
+  },
+  "palette": {
+    "title": "Search",
+    "description": "Search chats, actions and settings",
+    "newChat": "New chat",
+    "openFolder": "Open folder",
+    "settings": "Settings",
+    "extensions": "Extensions",
+    "placeholder": "Search chats",
+    "empty": "No matching results",
+    "groupChats": "Chats",
+    "groupActions": "Actions",
+    "groupSettings": "Settings",
+    "newSession": "New chat",
+    "settingsPrefix": "settings",
+    "keywords": {
+      "general": "appearance theme font send thinking queue timestamp interrupt",
+      "shortcuts": "keyboard hotkeys keymap shortcuts",
+      "archived": "restore delete archive",
+      "usage": "token cost usage stats",
+      "providers": "providers api key models",
+      "mcp": "tools mcp",
+      "skills": "skill",
+      "extensions": "extensions plugins marketplace",
+      "import": "import migrate claude codex opencode zcode pi sessions",
+      "about": "version about"
+    },
+    "actionKeywords": {
+      "new": "new chat",
+      "folder": "open folder project",
+      "settings": "preferences settings",
+      "extensions": "extensions plugins marketplace"
+    }
+  },
+  "sidebar": {
+    "pinned": "Pinned",
+    "chats": "Chats",
+    "archive": "Archive",
+    "rename": "Rename",
+    "delete": "Delete",
+    "pin": "Pin",
+    "unpin": "Unpin",
+    "newChat": "New chat",
+    "newSession": "New chat",
+    "reveal": "Show in Finder",
+    "remove": "Remove from list",
+    "emptyChats": "No chats yet",
+    "collapseMore": "Show less",
+    "expandMore": "Show more",
+    "collapseSidebar": "Collapse sidebar",
+    "back": "Back",
+    "forward": "Forward",
+    "search": "Search",
+    "plugins": "Extensions",
+    "newProject": "New project",
+    "projects": "Projects",
+    "noProjects": "No projects yet",
+    "removeProjectTitle": "Remove this project from the list?",
+    "removeProjectDesc": "Chats under “{{name}}” will leave the list. Files on disk are not deleted.",
+    "cancel": "Cancel",
+    "removeAction": "Remove"
+  }
+}

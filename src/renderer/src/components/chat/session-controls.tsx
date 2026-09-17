@@ -1,4 +1,5 @@
 import { useState, type JSX } from "react";
+import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { BotIcon, Download01Icon, MoreHorizontalIcon, ScissorIcon } from "@hugeicons/core-free-icons";
 import { Badge } from "@/components/ui/badge";
@@ -54,6 +55,7 @@ export function SessionMenu({
   onToggleFollowUp: (mode: "all" | "one-at-a-time") => void;
   onExport: () => void;
 }): JSX.Element {
+  const { t } = useTranslation("chat");
   const [compactOpen, setCompactOpen] = useState(false);
   const [compactHint, setCompactHint] = useState("");
   const [agentsOpen, setAgentsOpen] = useState(false);
@@ -63,42 +65,42 @@ export function SessionMenu({
       <DropdownMenu>
         <DropdownMenuTrigger render={<Button size="icon-sm" variant="ghost" />}>
           <HugeiconsIcon strokeWidth={2} icon={MoreHorizontalIcon} />
-          <span className="sr-only">会话设置</span>
+          <span className="sr-only">{t("session.settings")}</span>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-56 min-w-56">
           <DropdownMenuGroup>
-            <DropdownMenuLabel>会话</DropdownMenuLabel>
+            <DropdownMenuLabel>{t("session.session")}</DropdownMenuLabel>
             <DropdownMenuItem onClick={() => setCompactOpen(true)}>
               <HugeiconsIcon strokeWidth={2} icon={ScissorIcon} />
-              压缩上下文
+              {t("session.compact")}
             </DropdownMenuItem>
             <DropdownMenuCheckboxItem
               checked={session?.autoCompactionEnabled ?? true}
               onCheckedChange={(checked) => onToggleAutoCompact(Boolean(checked))}
             >
-              自动压缩
+              {t("session.autoCompact")}
             </DropdownMenuCheckboxItem>
           </DropdownMenuGroup>
           <DropdownMenuSeparator />
           <DropdownMenuGroup>
-            <DropdownMenuLabel>排队与打断</DropdownMenuLabel>
+            <DropdownMenuLabel>{t("session.queueInterrupt")}</DropdownMenuLabel>
             <DropdownMenuCheckboxItem
               checked={session?.interruptMode === "wait"}
               onCheckedChange={(checked) => onToggleInterrupt(checked ? "wait" : "immediate")}
             >
-              打断前等本回合结束
+              {t("session.waitTurn")}
             </DropdownMenuCheckboxItem>
             <DropdownMenuCheckboxItem
               checked={session?.steeringMode === "all"}
               onCheckedChange={(checked) => onToggleSteering(checked ? "all" : "one-at-a-time")}
             >
-              打断消息一次全部执行
+              {t("session.steerAll")}
             </DropdownMenuCheckboxItem>
             <DropdownMenuCheckboxItem
               checked={session?.followUpMode === "all"}
               onCheckedChange={(checked) => onToggleFollowUp(checked ? "all" : "one-at-a-time")}
             >
-              稍后消息一次全部执行
+              {t("session.followUpAll")}
             </DropdownMenuCheckboxItem>
           </DropdownMenuGroup>
           <DropdownMenuSeparator />
@@ -106,7 +108,7 @@ export function SessionMenu({
             {subagents.length > 0 ? (
               <DropdownMenuItem onClick={() => setAgentsOpen(true)}>
                 <HugeiconsIcon strokeWidth={2} icon={BotIcon} />
-                查看子 Agent
+                {t("session.viewSubagents")}
                 <Badge variant="secondary" className="ml-auto">
                   {subagents.length}
                 </Badge>
@@ -114,7 +116,7 @@ export function SessionMenu({
             ) : null}
             <DropdownMenuItem onClick={onExport}>
               <HugeiconsIcon strokeWidth={2} icon={Download01Icon} />
-              导出 HTML
+              {t("session.exportHtml")}
             </DropdownMenuItem>
             {stats?.tokens?.total != null ? (
               <DropdownMenuLabel className="font-normal">
@@ -129,17 +131,17 @@ export function SessionMenu({
       <Dialog open={compactOpen} onOpenChange={setCompactOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>压缩上下文</DialogTitle>
+            <DialogTitle>{t("session.compactTitle")}</DialogTitle>
           </DialogHeader>
           <Textarea
             value={compactHint}
-            placeholder="可选：压缩时希望保留的重点"
+            placeholder={t("session.compactPlaceholder")}
             className="min-h-24"
             onChange={(event) => setCompactHint(event.target.value)}
           />
           <DialogFooter>
             <Button variant="outline" onClick={() => setCompactOpen(false)}>
-              取消
+              {t("session.cancel")}
             </Button>
             <Button
               onClick={() => {
@@ -148,7 +150,7 @@ export function SessionMenu({
                 setCompactHint("");
               }}
             >
-              开始压缩
+              {t("session.startCompact")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -157,7 +159,7 @@ export function SessionMenu({
       <Dialog open={agentsOpen} onOpenChange={setAgentsOpen}>
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
-            <DialogTitle>子 Agent</DialogTitle>
+            <DialogTitle>{t("session.subagents")}</DialogTitle>
           </DialogHeader>
           <SubagentBrowser subagents={subagents} streams={streams} />
         </DialogContent>
@@ -175,6 +177,7 @@ export function SubagentBrowser({
   streams: Record<string, ChatMessage[]>;
   initialId?: string | null;
 }): JSX.Element {
+  const { t } = useTranslation("chat");
   const [active, setActive] = useState<string | null>(initialId ?? subagents[0]?.id ?? null);
   const [loaded, setLoaded] = useState<Record<string, ChatMessage[]>>({});
 
@@ -205,7 +208,7 @@ export function SubagentBrowser({
           >
             <span className="truncate font-medium">{agent.name || agent.id}</span>
             <span className="truncate text-muted-foreground">
-              {agent.status || agent.detail || "运行中"}
+              {agent.status || agent.detail || t("session.running")}
             </span>
             {agent.progress != null ? (
               <span className="mt-1 h-1 overflow-hidden rounded-full bg-muted">

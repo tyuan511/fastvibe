@@ -1,4 +1,5 @@
 import { useRef, type JSX } from "react";
+import { useTranslation } from "react-i18next";
 import {
   Dialog,
   DialogContent,
@@ -22,7 +23,8 @@ export function ImagePreview({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }): JSX.Element {
-  const label = alt?.trim() || "图片预览";
+  const { t } = useTranslation("app");
+  const label = alt?.trim() || t("imagePreview");
   // Keep the last frame so the image does not vanish a tick before the overlay fades.
   const lastSrc = useRef(src);
   if (src) lastSrc.current = src;
@@ -36,7 +38,7 @@ export function ImagePreview({
         className="w-fit max-w-[min(calc(100%-2rem),80rem)] gap-0 bg-transparent p-0 shadow-none ring-0 sm:max-w-[min(calc(100%-2rem),80rem)]"
       >
         <DialogTitle className="sr-only">{label}</DialogTitle>
-        <DialogDescription className="sr-only">点击空白处或按 Esc 关闭</DialogDescription>
+        <DialogDescription className="sr-only">{t("clickToClose")}</DialogDescription>
         {imageSrc ? (
           <img
             src={imageSrc}

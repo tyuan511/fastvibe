@@ -1,4 +1,4 @@
-export type EngineStatusState = "idle" | "starting" | "ready" | "needsAuth" | "error" | "missing";
+export type EngineStatusState = "idle" | "starting" | "ready" | "error" | "missing";
 
 export type EngineStatus = {
   state: EngineStatusState;

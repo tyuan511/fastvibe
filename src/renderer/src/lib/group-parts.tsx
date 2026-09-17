@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { FileEditIcon, FolderSearchIcon, SquareTerminalIcon } from "@hugeicons/core-free-icons";
 import type { ChatMessage, MessagePart, ToolCallBlock } from "@shared/types";
+import { i18n } from "@/lib/i18n";
 import { asRecord, familyOf, type ToolFamily } from "./tool-presentation";
 
 /**
@@ -40,11 +41,16 @@ const GROUP_MEMBERS: Record<ToolGroupKind, ToolFamily[]> = {
   terminal: ["terminal"],
 };
 
-const GROUP_STYLE: Record<ToolGroupKind, { label: string; icon: ReactNode }> = {
-  explore: { label: "查阅", icon: <HugeiconsIcon strokeWidth={2} icon={FolderSearchIcon} className="size-3.5" /> },
-  changes: { label: "更改", icon: <HugeiconsIcon strokeWidth={2} icon={FileEditIcon} className="size-3.5" /> },
-  terminal: { label: "终端", icon: <HugeiconsIcon strokeWidth={2} icon={SquareTerminalIcon} className="size-3.5" /> },
+const GROUP_STYLE: Record<ToolGroupKind, { icon: ReactNode }> = {
+  explore: { icon: <HugeiconsIcon strokeWidth={2} icon={FolderSearchIcon} className="size-3.5" /> },
+  changes: { icon: <HugeiconsIcon strokeWidth={2} icon={FileEditIcon} className="size-3.5" /> },
+  terminal: { icon: <HugeiconsIcon strokeWidth={2} icon={SquareTerminalIcon} className="size-3.5" /> },
 };
+
+/** Category name for a group header; translated when the group is built. */
+function groupKindLabel(kind: ToolGroupKind): string {
+  return i18n.t(`common:group.${kind}`) as string;
+}
 
 function groupKindOf(tool: ToolCallBlock): ToolGroupKind | null {
   const family = familyOf(tool.name);
@@ -173,10 +179,10 @@ function exploreSummary(tools: ToolCallBlock[]): string {
   const list = families.filter((family) => family === "list").length;
   const file = families.filter((family) => family === "read").length;
   const bits: string[] = [];
-  if (search > 0) bits.push(`${search} 个搜索`);
-  if (list > 0) bits.push(`${list} 个列表`);
-  if (file > 0) bits.push(`${file} 个文件`);
-  return bits.join(", ") || `${tools.length} 个操作`;
+  if (search > 0) bits.push(i18n.t("common:group.searches", { count: search }) as string);
+  if (list > 0) bits.push(i18n.t("common:group.lists", { count: list }) as string);
+  if (file > 0) bits.push(i18n.t("common:group.files", { count: file }) as string);
+  return bits.join(", ") || (i18n.t("common:group.operations", { count: tools.length }) as string);
 }
 
 function changeStat(tools: ToolCallBlock[]): { added: number; removed: number } {
@@ -196,7 +202,7 @@ function buildGroup(kind: ToolGroupKind, tools: ToolCallBlock[]): ToolGroup {
   const group: ToolGroup = {
     id: `group:${kind}:${tools[0]?.id ?? "0"}`,
     kind,
-    label: style.label,
+    label: groupKindLabel(kind),
     icon: style.icon,
     summary: "",
     tools,
@@ -208,11 +214,11 @@ function buildGroup(kind: ToolGroupKind, tools: ToolCallBlock[]): ToolGroup {
     group.summary = exploreSummary(tools);
   } else if (kind === "changes") {
     const stat = changeStat(tools);
-    group.summary = `${tools.length} 个文件`;
+    group.summary = i18n.t("common:group.files", { count: tools.length }) as string;
     if (stat.added > 0 || stat.removed > 0) group.stat = stat;
   } else {
-    const commands = `${tools.length} 个命令`;
-    group.summary = failed > 0 ? `${commands}, ${failed} 个失败` : commands;
+    const commands = i18n.t("common:group.commands", { count: tools.length }) as string;
+    group.summary = failed > 0 ? `${commands}, ${i18n.t("common:group.failed", { count: failed })}` : commands;
   }
   return group;
 }
@@ -220,14 +226,17 @@ function buildGroup(kind: ToolGroupKind, tools: ToolCallBlock[]): ToolGroup {
 /**
  * Walk the message in order and fold adjacent tools of the same group kind.
  * Anything that is not a tool (prose, thinking) breaks the run, which keeps the
- * narrative sequence the engine produced. Cached on the merged message's identity,
- * so unchanged rows skip the `diffStat`/summary work on every streamed token.
+ * narrative sequence the engine produced. Cached on the merged message's identity
+ * *and* the active language — the labels inside are translated, so a language switch
+ * must not serve the previous language's summaries back. Callers pass no language:
+ * it is read fresh here, and (because the value is part of the cache key) reading it
+ * per render is what invalidates the cache.
  */
-const groupedParts = new WeakMap<ChatMessage, RenderPart[]>();
+const groupedParts = new WeakMap<ChatMessage, { language: string; parts: RenderPart[] }>();
 
-export function groupParts(message: ChatMessage): RenderPart[] {
+export function groupParts(message: ChatMessage, language: string = i18n.language): RenderPart[] {
   const cached = groupedParts.get(message);
-  if (cached) return cached;
+  if (cached && cached.language === language) return cached.parts;
 
   const byId = new Map(message.tools.map((tool) => [tool.id, tool]));
   const output: RenderPart[] = [];
@@ -263,6 +272,6 @@ export function groupParts(message: ChatMessage): RenderPart[] {
     }
   }
   flush();
-  groupedParts.set(message, output);
+  groupedParts.set(message, { language, parts: output });
   return output;
 }

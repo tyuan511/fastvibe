@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { BotIcon, ChromeIcon, FileEditIcon, FileMinusIcon, FilePlusIcon, FileTextIcon, FolderTreeIcon, ListChecksIcon, MessageQuestionIcon, Plug01Icon, Search01Icon, SparklesIcon, SquareTerminalIcon, Wrench01Icon } from "@hugeicons/core-free-icons";
 import type { ToolCallBlock } from "@shared/types";
+import { i18n } from "@/lib/i18n";
 import { activeTodo, parseToolTodos, todoIndexOf } from "./todos";
 import { displayPath } from "./workspace-path";
 
@@ -19,6 +20,7 @@ export type ToolFamily =
   | "write"
   | "delete"
   | "search"
+  | "web"
   | "list"
   | "terminal"
   | "skill"
@@ -73,23 +75,15 @@ function dirname(path: string): string {
   return parts.length > 0 ? parts.join("/") : "";
 }
 
-/** Progressive and category labels per family, following zcode's verb forms. */
-const LABELS: Record<ToolFamily, { running: string; done: string }> = {
-  read: { running: "正在读取", done: "读取" },
-  edit: { running: "正在编辑", done: "编辑" },
-  write: { running: "正在写入", done: "写入" },
-  delete: { running: "正在删除", done: "删除" },
-  search: { running: "正在搜索", done: "搜索" },
-  list: { running: "正在列出", done: "列出" },
-  terminal: { running: "正在执行", done: "终端" },
-  skill: { running: "正在运行技能", done: "技能" },
-  agent: { running: "子智能体运行中", done: "子智能体" },
-  todo: { running: "正在更新待办", done: "待办" },
-  question: { running: "正在询问", done: "询问" },
-  mcp: { running: "正在调用", done: "工具调用" },
-  browser: { running: "正在操作浏览器", done: "浏览器" },
-  other: { running: "正在运行", done: "工具调用" },
-};
+/** Progressive and category labels per family, following zcode's verb forms.
+ *
+ * Resolved per call rather than stored in a record: a record is built once at
+ * module load and would freeze the language (these strings are rendered during
+ * render, so the current language is the right one).
+ */
+function familyLabel(family: ToolFamily, running: boolean): string {
+  return i18n.t(`common:tool.${family}.${running ? "running" : "done"}`) as string;
+}
 
 const ICONS: Record<ToolFamily, ReactNode> = {
   read: <HugeiconsIcon strokeWidth={2} icon={FileTextIcon} className="size-3.5" />,
@@ -97,6 +91,7 @@ const ICONS: Record<ToolFamily, ReactNode> = {
   write: <HugeiconsIcon strokeWidth={2} icon={FilePlusIcon} className="size-3.5" />,
   delete: <HugeiconsIcon strokeWidth={2} icon={FileMinusIcon} className="size-3.5" />,
   search: <HugeiconsIcon strokeWidth={2} icon={Search01Icon} className="size-3.5" />,
+  web: <HugeiconsIcon strokeWidth={2} icon={Search01Icon} className="size-3.5" />,
   list: <HugeiconsIcon strokeWidth={2} icon={FolderTreeIcon} className="size-3.5" />,
   terminal: <HugeiconsIcon strokeWidth={2} icon={SquareTerminalIcon} className="size-3.5" />,
   skill: <HugeiconsIcon strokeWidth={2} icon={SparklesIcon} className="size-3.5" />,
@@ -122,7 +117,8 @@ export function familyOf(name: string): ToolFamily {
   if (/^(edit|edit_file|editfile|apply_patch|applypatch|patch|str_replace|strreplace)$/.test(key)) return "edit";
   if (/^(write|write_file|writefile|create_file|createfile|create)$/.test(key)) return "write";
   if (/^(delete|delete_file|remove|remove_file|rm)$/.test(key)) return "delete";
-  if (/^(grep|search|search_files|searchfiles|ripgrep|rg|web_search|websearch|fetch|webfetch)$/.test(key)) return "search";
+  if (/^(web_search|websearch)$/.test(key)) return "web";
+  if (/^(grep|search|search_files|searchfiles|ripgrep|rg|fetch|webfetch)$/.test(key)) return "search";
   if (/^(find|glob|ls|list|list_dir|listdir|tree|list_files|listfiles)$/.test(key)) return "list";
   if (/^(bash|shell|shell_exec|shellexec|exec|execute|run_command|runcommand|command|terminal|run)$/.test(key)) return "terminal";
   if (key.includes("skill")) return "skill";
@@ -149,10 +145,9 @@ export function questionItems(args: unknown): Array<Record<string, unknown>> {
  */
 export function describeTool(tool: ToolCallBlock, cwd?: string): ToolView {
   const family = familyOf(tool.name);
-  const labels = LABELS[family];
   const running = tool.status === "running";
-  const label = running ? labels.running : labels.done;
-  const statusLabel = tool.status === "error" ? "执行失败" : undefined;
+  const label = familyLabel(family, running);
+  const statusLabel = tool.status === "error" ? (i18n.t("common:tool.failed") as string) : undefined;
   const view: ToolView = { family, icon: ICONS[family], label, statusLabel, running };
 
   switch (family) {
@@ -179,6 +174,16 @@ export function describeTool(tool: ToolCallBlock, cwd?: string): ToolView {
       view.title = [query, glob].filter(Boolean).join(" · ") || tool.name;
       return view;
     }
+    case "web": {
+      const query = argString(tool.args, ["query", "search_query", "searchQuery"]);
+      view.subject = query || tool.name;
+      view.title = query || tool.name;
+      const sources = asRecord(tool.details)?.sources;
+      if (Array.isArray(sources) && sources.length > 0) {
+        view.context = i18n.t("common:tool.webSources", { count: sources.length }) as string;
+      }
+      return view;
+    }
     case "list": {
       const path = displayPath(argString(tool.args, ["path", "dir", "directory", "pattern"]), cwd);
       view.subject = path || ".";
@@ -200,8 +205,9 @@ export function describeTool(tool: ToolCallBlock, cwd?: string): ToolView {
     case "question": {
       const items = questionItems(tool.args);
       const first = typeof items[0]?.question === "string" ? (items[0].question as string).trim() : "";
-      view.subject = first || "澄清问题";
-      view.context = items.length > 1 ? `共 ${items.length} 个问题` : undefined;
+      view.subject = first || (i18n.t("common:tool.questionFallback") as string);
+      view.context =
+        items.length > 1 ? (i18n.t("common:tool.questionCount", { count: items.length }) as string) : undefined;
       view.title = first || tool.name;
       return view;
     }
@@ -210,7 +216,10 @@ export function describeTool(tool: ToolCallBlock, cwd?: string): ToolView {
       if (todos.length > 0) {
         const done = todos.filter((item) => item.status === "completed").length;
         const allDone = done === todos.length;
-        view.label = running || !allDone ? "正在更新待办" : "已更新待办";
+        view.label =
+          running || !allDone
+            ? (i18n.t("common:tool.todoUpdating") as string)
+            : (i18n.t("common:tool.todoUpdated") as string);
         const current = activeTodo(todos) ?? todos.at(-1);
         // Position in the list, not the completed count — see `todoPosition`.
         const count = `${todoIndexOf(todos, current)}/${todos.length}`;
@@ -249,8 +258,11 @@ export function describeTool(tool: ToolCallBlock, cwd?: string): ToolView {
         .slice(0, 2)
         .map(([name, count]) => (count > 1 ? `${name} ×${count}` : name))
         .join(", ");
-      const compact = distinct.length > 2 ? `${shown} 等 ${names.length} 个` : shown;
-      view.subject = compact || "子 Agent";
+      const compact =
+        distinct.length > 2
+          ? (i18n.t("common:tool.agentMore", { shown, count: names.length }) as string)
+          : shown;
+      view.subject = compact || (i18n.t("common:tool.agentFallback") as string);
       view.title = names.join(", ") || tool.name;
       return view;
     }

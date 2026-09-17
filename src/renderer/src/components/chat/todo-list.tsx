@@ -1,4 +1,5 @@
 import { useMemo, useState, type JSX } from "react";
+import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { ArrowRight01Icon, Cancel01Icon, CircleIcon, ListChecksIcon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { Badge } from "@/components/ui/badge";
@@ -102,6 +103,7 @@ export function TodoChecklist({ items }: { items: TodoItem[] }): JSX.Element {
  * scrollable).
  */
 export function TodoPanel({ className }: { className?: string }): JSX.Element | null {
+  const { t } = useTranslation("chat");
   // Select the transcript itself: `latestTodos` allocates a new array on every
   // call, and Zustand/React's `useSyncExternalStore` treats that as a changed
   // snapshot — "Maximum update depth exceeded" on every paint.
@@ -129,7 +131,7 @@ export function TodoPanel({ className }: { className?: string }): JSX.Element | 
         className="rounded-xl border border-border bg-card"
       >
         <CollapsibleTrigger
-          title="待办"
+          title={t("todo.title")}
           className={cn(
             "flex w-full cursor-pointer items-center gap-2 rounded-xl px-3 py-1.5 text-left transition-colors",
             "hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
@@ -147,7 +149,7 @@ export function TodoPanel({ className }: { className?: string }): JSX.Element | 
               <HugeiconsIcon strokeWidth={2} icon={ListChecksIcon} className="size-4 text-primary" />
             )}
           </span>
-          <Badge variant="secondary" className="shrink-0 text-muted-foreground" title={`已完成 ${done} / ${items.length}`}>
+          <Badge variant="secondary" className="shrink-0 text-muted-foreground" title={t("todo.done", { done, total: items.length })}>
             {todoPosition(items)}/{items.length}
           </Badge>
           {active ? (

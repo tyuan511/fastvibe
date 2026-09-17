@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { applyEngineEvent } from "@/lib/apply-engine-event";
+import { i18n } from "@/lib/i18n";
 import { useSettingsStore } from "@/stores/settings";
 import type { ChatMessage, EngineEvent, FilePreview } from "@shared/types";
 
@@ -231,15 +232,31 @@ function subagentTabId(subagentId: string): string {
 }
 
 const SUBAGENT_TAB_STATUS: Record<string, string> = {
-  running: "运行中",
-  completed: "已完成",
-  error: "失败",
+  running: "tabs.status.running",
+  completed: "tabs.status.completed",
+  error: "tabs.status.error",
 };
 
 /** `子 Agent` tab label: role plus live status, e.g. `scout · 运行中`. */
 export function subagentTabLabel(tab: SidePaneTab): string {
-  const status = tab.subagentStatus ? SUBAGENT_TAB_STATUS[tab.subagentStatus] ?? tab.subagentStatus : undefined;
+  const key = tab.subagentStatus ? SUBAGENT_TAB_STATUS[tab.subagentStatus] : undefined;
+  const status = key ? (i18n.t(`sidepane:${key}`) as string) : tab.subagentStatus;
   return status ? `${tab.title} · ${status}` : tab.title;
+}
+
+/**
+ * The label the tab bar draws for a tab.
+ *
+ * The four singleton tabs (`git` / `terminal` / `browser` / `files`) are named by
+ * their *type* at render time, so switching 界面语言 renames them without closing
+ * anything. A subagent tab keeps the stored role name and appends its live status;
+ * a 辅助对话 tab keeps the conversation's own title, which is real data the engine
+ * was given when the chat was created.
+ */
+export function sidePaneTabTitle(tab: SidePaneTab): string {
+  if (tab.type === "subagent") return subagentTabLabel(tab);
+  if (tab.type === "selection-side-chat") return tab.title;
+  return i18n.t(`sidepane:tabs.${tab.type}`) as string;
 }
 
 /** The single tab that shows one run. */
@@ -251,7 +268,7 @@ function upsertSubagentTab(tabs: SidePaneTab[], subagentId: string, init?: Subag
     subagentConversationId: init?.conversationId ?? existing?.subagentConversationId,
     // The base name stays stable; the tab bar appends the live status at render
     // time (`subagentStatus`), so a re-title from the tool card cannot clobber it.
-    title: init?.title || existing?.title || "子 Agent",
+    title: init?.title || existing?.title || (i18n.t("sidepane:tabs.subagent") as string),
     subagentStatus: init?.status ?? existing?.subagentStatus,
     subagentBrief: init?.brief || existing?.subagentBrief,
   };
@@ -513,7 +530,7 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
     set((state) => {
       const scope = scopeOf(state);
       const existing = scope.tabs.find((item) => item.type === "git");
-      const tab = existing ?? { id: "git", type: "git" as const, openedAt: Date.now(), title: "审查" };
+      const tab = existing ?? { id: "git", type: "git" as const, openedAt: Date.now(), title: i18n.t("sidepane:tabs.git") as string };
       return writeScope(
         state,
         scopeKeyOf(state),
@@ -528,7 +545,7 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
         id: `terminal:${uid()}`,
         type: "terminal",
         openedAt: Date.now(),
-        title: "终端",
+        title: i18n.t("sidepane:tabs.terminal") as string,
         cwd,
       };
       return writeScope(
@@ -556,7 +573,7 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
         id: `browser:${uid()}`,
         type: "browser",
         openedAt: Date.now(),
-        title: "浏览器",
+        title: i18n.t("sidepane:tabs.browser") as string,
         // No URL means an empty tab: the pane opens blank and waits for the user.
         url: url?.trim() || "",
         conversationId: key === DRAFT_SCOPE ? undefined : key,
@@ -579,7 +596,7 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
         id: `selection-side-chat:${uid()}`,
         type: "selection-side-chat",
         openedAt: Date.now(),
-        title: `辅助对话 ${ordinal}`,
+        title: i18n.t("sidepane:tabs.sideChat", { n: ordinal }) as string,
         ordinal,
         parentSessionId,
         messages: [],
@@ -598,7 +615,7 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
       const scope = scopeOf(state);
       const existing = scope.tabs.find((item) => item.type === "files");
       const tab: SidePaneTab =
-        existing ?? { id: "files", type: "files", openedAt: Date.now(), title: "文件" };
+        existing ?? { id: "files", type: "files", openedAt: Date.now(), title: i18n.t("sidepane:tabs.files") as string };
       return writeScope(
         state,
         scopeKeyOf(state),
@@ -650,7 +667,7 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
             id: "files",
             type: "files",
             openedAt: Date.now(),
-            title: "文件",
+            title: i18n.t("sidepane:tabs.files") as string,
             path: preview.path,
             preview,
           };

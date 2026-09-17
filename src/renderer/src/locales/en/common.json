@@ -1,0 +1,160 @@
+{
+  "thinking": {
+    "off": "Reasoning off",
+    "minimal": "Minimal",
+    "low": "Low",
+    "medium": "Medium",
+    "high": "High",
+    "xhigh": "Very high",
+    "max": "Max",
+    "auto": "Model default"
+  },
+  "permission": {
+    "ask": "Ask first",
+    "smart": "Smart",
+    "full": "Full access",
+    "askDesc": "Always ask before editing outside files or using the network",
+    "smartDesc": "Ask only for detected risky operations",
+    "fullDesc": "Unrestricted access to the internet and any file on your computer"
+  },
+  "time": {
+    "justNow": "Just now",
+    "minutesAgo_one": "{{count}} minute ago",
+    "minutesAgo_other": "{{count}} minutes ago",
+    "hoursAgo_one": "{{count}} hour ago",
+    "hoursAgo_other": "{{count}} hours ago"
+  },
+  "duration": {
+    "hours": "{{count}}h",
+    "minutes": "{{count}}m",
+    "seconds": "{{count}}s"
+  },
+  "errors": {
+    "generic": "Something went wrong. Please try again.",
+    "previewFailed": "Preview failed",
+    "requestFailed": "Request failed",
+    "retryingWithBudget": "Request failed; retrying ({{attempt}}/{{maxAttempts}})",
+    "retrying": "Request failed; retrying",
+    "retryAfter": ", retrying in {{seconds}}s",
+    "retryDetail": ": {{error}}"
+  },
+  "notice": {
+    "todoCleared": "Tasks cleared",
+    "todoReminder": "Task reminder"
+  },
+  "tool": {
+    "read": {
+      "running": "Reading",
+      "done": "Read"
+    },
+    "edit": {
+      "running": "Editing",
+      "done": "Edit"
+    },
+    "write": {
+      "running": "Writing",
+      "done": "Write"
+    },
+    "delete": {
+      "running": "Deleting",
+      "done": "Delete"
+    },
+    "search": {
+      "running": "Searching",
+      "done": "Search"
+    },
+    "web": {
+      "running": "Searching the web",
+      "done": "Web search"
+    },
+    "list": {
+      "running": "Listing",
+      "done": "List"
+    },
+    "terminal": {
+      "running": "Running",
+      "done": "Terminal"
+    },
+    "skill": {
+      "running": "Running skill",
+      "done": "Skill"
+    },
+    "agent": {
+      "running": "Subagent running",
+      "done": "Subagent"
+    },
+    "todo": {
+      "running": "Updating tasks",
+      "done": "Tasks"
+    },
+    "question": {
+      "running": "Asking",
+      "done": "Question"
+    },
+    "mcp": {
+      "running": "Calling",
+      "done": "Tool call"
+    },
+    "browser": {
+      "running": "Using the browser",
+      "done": "Browser"
+    },
+    "other": {
+      "running": "Running",
+      "done": "Tool call"
+    },
+    "failed": "Failed",
+    "webSources_one": "{{count}} source",
+    "webSources_other": "{{count}} sources",
+    "questionFallback": "Clarifying question",
+    "questionCount_one": "{{count}} question",
+    "questionCount_other": "{{count}} questions",
+    "todoUpdating": "Updating tasks",
+    "todoUpdated": "Tasks updated",
+    "agentFallback": "Subagent",
+    "agentMore": "{{shown}} +{{count}}"
+  },
+  "group": {
+    "explore": "Explore",
+    "changes": "Changes",
+    "terminal": "Terminal",
+    "searches_one": "{{count}} search",
+    "searches_other": "{{count}} searches",
+    "lists_one": "{{count}} list",
+    "lists_other": "{{count}} lists",
+    "files_one": "{{count}} file",
+    "files_other": "{{count}} files",
+    "operations_one": "{{count}} operation",
+    "operations_other": "{{count}} operations",
+    "commands_one": "{{count}} command",
+    "commands_other": "{{count}} commands",
+    "failed_one": "{{count}} failed",
+    "failed_other": "{{count}} failed"
+  },
+  "shortcuts": {
+    "group": {
+      "general": "General",
+      "chat": "Chat",
+      "view": "View"
+    },
+    "commandPalette": "Command palette",
+    "commandPaletteDesc": "Search chats, actions and settings",
+    "settings": "Open settings",
+    "newWindow": "New window",
+    "newChat": "New chat",
+    "openFolder": "Open folder",
+    "focusComposer": "Focus composer",
+    "send": "Send message",
+    "sendDesc": "Always sends; Enter-to-send is a separate toggle",
+    "stop": "Stop generating",
+    "prevChat": "Previous chat",
+    "nextChat": "Next chat",
+    "toggleSidebar": "Toggle sidebar",
+    "toggleSidePane": "Toggle side pane",
+    "needModifier": "Shortcuts need a modifier key",
+    "reserved": "Reserved by the system"
+  },
+  "attachments": {
+    "seeAttachments": "See the attachment"
+  }
+}

@@ -1,4 +1,5 @@
 import { useEffect, useRef, type JSX } from "react";
+import { i18n } from "@/lib/i18n";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { useSidePaneStore } from "@/stores/side-pane";
@@ -128,7 +129,7 @@ export function SidePaneTerminal({
     const off = window.fastvibe.workspace.onTerminalData((event) => {
       if (event.id !== created.sessionId) return;
       if (event.data) term.write(event.data);
-      if (event.exited) term.write("\r\n会话已结束\r\n");
+      if (event.exited) term.write(`\r\n${i18n.t("sidepane:terminal.ended")}\r\n`);
     });
 
     void window.fastvibe.workspace

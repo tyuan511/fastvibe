@@ -1,5 +1,6 @@
 import type { JSX } from "react";
 import fMark from "@/assets/f-mark.png";
+import { i18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 /**
@@ -13,14 +14,14 @@ import { cn } from "@/lib/utils";
  */
 export function FLoader({
   className,
-  label = "加载中",
+  label,
 }: {
   className?: string;
   /** Accessible name; the mark is decorative chrome when a label is already shown. */
   label?: string;
 }): JSX.Element {
   return (
-    <span role="status" aria-label={label} className={cn("fv-loader size-11", className)}>
+    <span role="status" aria-label={label ?? (i18n.t("app:loading") as string)} className={cn("fv-loader size-11", className)}>
       <span className="fv-loader-glow" aria-hidden="true" />
       <img className="fv-loader-mark" src={fMark} alt="" aria-hidden="true" draggable={false} />
     </span>

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { uiText } from "./ui-text";
 import { readFileSync, writeFileSync } from "node:fs";
 import { basename } from "node:path";
 import type { Conversation, Project, WorkspaceSnapshot } from "@shared/types";
@@ -150,7 +151,7 @@ export class ConversationCatalog {
     const now = Date.now();
     const conversation: Conversation = {
       id,
-      title: options?.title?.trim() || "新会话",
+      title: options?.title?.trim() || uiText("新会话", "New chat"),
       cwd: session?.cwd ?? bound ?? this.#scratchRoot,
       project: bound,
       sessionFile: session?.sessionFile,
@@ -160,7 +161,7 @@ export class ConversationCatalog {
       updatedAt: now,
       kind: options?.kind,
       parentId: options?.parentId,
-      preview: options?.kind === "side-chat" ? options.title?.trim() || "辅助对话" : undefined,
+      preview: options?.kind === "side-chat" ? options.title?.trim() || uiText("辅助对话", "Side chat") : undefined,
     };
     this.#items = [conversation, ...this.#items.filter((item) => item.id !== conversation.id)];
     if (options?.activate !== false) this.#activeId = conversation.id;

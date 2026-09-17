@@ -1,4 +1,5 @@
 import type { JSX } from "react";
+import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Cancel01Icon, Folder01Icon } from "@hugeicons/core-free-icons";
 import { IconButton } from "@/components/icon-button";
@@ -14,6 +15,7 @@ export function PreviewPanel({
   preview: FilePreview;
   onClose: () => void;
 }): JSX.Element {
+  const { t } = useTranslation("chat");
   return (
     <aside className="flex w-[min(28rem,42%)] shrink-0 flex-col border-l border-border bg-background">
       <div className="flex h-12 items-center gap-2 border-b border-border px-3">
@@ -22,13 +24,13 @@ export function PreviewPanel({
           <IconButton
             size="icon-xs"
             variant="ghost"
-            label="在访达中显示"
+            label={t("preview.reveal")}
             onClick={() => void window.fastvibe.workspace.reveal(preview.path)}
           >
             <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} />
           </IconButton>
         ) : null}
-        <IconButton size="icon-xs" variant="ghost" label="关闭" onClick={onClose}>
+        <IconButton size="icon-xs" variant="ghost" label={t("preview.close")} onClick={onClose}>
           <HugeiconsIcon strokeWidth={2} icon={Cancel01Icon} />
         </IconButton>
       </div>
@@ -40,11 +42,12 @@ export function PreviewPanel({
 }
 
 export function PreviewBody({ preview }: { preview: FilePreview }): JSX.Element {
+  const { t } = useTranslation("chat");
   if (preview.kind === "error") {
     return <p className="px-3 py-3 text-sm text-destructive">{preview.message}</p>;
   }
   if (preview.kind === "binary") {
-    return <p className="px-3 py-3 text-sm text-muted-foreground">文件过大（{Math.round(preview.size / 1024)} KB），请在访达中打开。</p>;
+    return <p className="px-3 py-3 text-sm text-muted-foreground">{t("preview.tooLarge", { size: Math.round(preview.size / 1024) })}</p>;
   }
   if (preview.kind === "image") {
     return <img src={preview.dataUrl} alt={preview.name} className="max-w-full" />;

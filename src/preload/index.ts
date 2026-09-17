@@ -124,8 +124,8 @@ const api = {
       ipcRenderer.invoke(Ipc.engineImportCandidates, { source }),
     importSessions: (source: ImportSourceId, ids: string[]): Promise<ImportRunResult> =>
       ipcRenderer.invoke(Ipc.engineImportSessions, { source, ids }),
-    promptConversation: (id: string, message: string): Promise<void> =>
-      ipcRenderer.invoke(Ipc.enginePromptConversation, { id, message }),
+    promptConversation: (id: string, message: string, images?: PromptImage[]): Promise<void> =>
+      ipcRenderer.invoke(Ipc.enginePromptConversation, { id, message, images }),
     getConversationMessages: (id: string): Promise<ChatMessage[]> =>
       ipcRenderer.invoke(Ipc.engineGetConversationMessages, { id }),
     onEvent: (listener: (event: EngineEvent) => void): (() => void) => {
@@ -245,6 +245,12 @@ const api = {
   },
   app: {
     getInfo: (): Promise<import("@shared/ipc").AppInfo> => ipcRenderer.invoke(Ipc.appGetInfo),
+    log: (payload: import("@shared/ipc").AppLogPayload): void => {
+      ipcRenderer.send(Ipc.appLog, payload);
+    },
+    exportLogs: (): Promise<string | undefined> => ipcRenderer.invoke(Ipc.appExportLogs),
+    updateModelsDev: (): Promise<import("@shared/ipc").AppModelsDevInfo> =>
+      ipcRenderer.invoke(Ipc.modelsDevUpdate),
     newWindow: (): Promise<void> => ipcRenderer.invoke(Ipc.windowNew),
   },
   updater: {

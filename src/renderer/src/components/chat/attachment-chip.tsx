@@ -1,4 +1,5 @@
 import type { JSX } from "react";
+import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { AttachmentIcon, Cancel01Icon } from "@hugeicons/core-free-icons";
 import { cn } from "@/lib/utils";
@@ -21,6 +22,7 @@ export function AttachmentChip({
   onOpen?: () => void;
   className?: string;
 }): JSX.Element {
+  const { t } = useTranslation("chat");
   const body = (
     <>
       {item.kind === "image" && item.dataUrl ? (
@@ -35,7 +37,7 @@ export function AttachmentChip({
         <button
           type="button"
           className="flex size-4 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted-foreground/20 hover:text-foreground"
-          aria-label={`移除 ${item.name}`}
+          aria-label={t("attach.remove", { name: item.name })}
           onClick={onRemove}
         >
           <HugeiconsIcon strokeWidth={2} icon={Cancel01Icon} className="size-3" />

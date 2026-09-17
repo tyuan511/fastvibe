@@ -1,11 +1,14 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { THINKING_EFFORT_LEVELS, type CostTier, type ModelPrice, type ProviderModel, type ThinkingLevel } from "@shared/types";
+import { getFastVibePaths } from "./paths";
 
 /**
- * models.dev metadata, pre-indexed at build time by `scripts/sync-models-dev.mjs`.
+ * models.dev metadata, pre-indexed at build time by `scripts/sync-models-dev.mjs` and
+ * refreshable at runtime from Settings → 关于 (`models-dev-update.ts` writes the same
+ * format into the app data directory, which wins over the bundled copy).
  *
- * The bundled artifact is a compact snapshot: `m` holds unique models as tuples and
+ * The artifact is a compact snapshot: `m` holds unique models as tuples and
  * `x` maps every alias to an index in `m`, so lookups are a single Map hit.
  */
 /** `[over, input, output, cacheRead, cacheWrite]` — one step of a price ladder. */
@@ -57,6 +60,7 @@ export type ModelsDevStats = {
   aliases: number;
   generatedAt: number;
   source: string;
+  /** The file the metadata was read from. */
   path: string;
 };
 
@@ -91,6 +95,15 @@ export function bundledIndexPath(): string | null {
   return candidates.find((path) => path.length > 0 && existsSync(path)) ?? null;
 }
 
+/**
+ * The snapshot the user pulled from Settings → 关于. It lives in the app's own data
+ * directory and wins over the bundled copy, so refreshing metadata does not need a new
+ * build of the app; deleting the file falls back to the snapshot the app shipped with.
+ */
+export function localIndexPath(): string {
+  return join(getFastVibePaths().userData, "models-dev.json");
+}
+
 export class ModelsDevIndex {
   #index: Map<string, ModelMeta>;
   readonly stats: ModelsDevStats;
@@ -119,32 +132,40 @@ export class ModelsDevIndex {
 
 let cached: ModelsDevIndex | null = null;
 
+/** Drop the memoised index, so the next read picks up a freshly written snapshot. */
+export function reloadModelsDev(): void {
+  cached = null;
+}
+
 export function loadModelsDev(): ModelsDevIndex {
   if (cached) return cached;
-  const path = bundledIndexPath();
-  if (!path) {
-    cached = new ModelsDevIndex(new Map(), {
-      models: 0,
-      aliases: 0,
-      generatedAt: 0,
-      source: "",
-      path: "",
-    });
-    return cached;
-  }
+  const local = localIndexPath();
+  const bundled = bundledIndexPath();
+  const path = existsSync(local) ? local : bundled;
+  cached = path ? readIndex(path) : new ModelsDevIndex(new Map(), emptyStats());
+  // A corrupt or half-written user snapshot must not cost the app its metadata: the
+  // bundled index is the copy the build actually verified.
+  if (path === local && cached.size === 0 && bundled) cached = readIndex(bundled);
+  return cached;
+}
+
+function readIndex(path: string): ModelsDevIndex {
   try {
-    const bundled = JSON.parse(readFileSync(path, "utf8")) as BundledIndex;
-    cached = new ModelsDevIndex(decode(bundled), {
-      models: bundled.m.length,
-      aliases: Object.keys(bundled.x).length,
-      generatedAt: bundled.t,
-      source: bundled.s,
+    const snapshot = JSON.parse(readFileSync(path, "utf8")) as BundledIndex;
+    return new ModelsDevIndex(decode(snapshot), {
+      models: snapshot.m.length,
+      aliases: Object.keys(snapshot.x).length,
+      generatedAt: snapshot.t,
+      source: snapshot.s,
       path,
     });
   } catch {
-    cached = new ModelsDevIndex(new Map(), { models: 0, aliases: 0, generatedAt: 0, source: "", path });
+    return new ModelsDevIndex(new Map(), emptyStats());
   }
-  return cached;
+}
+
+function emptyStats(): ModelsDevStats {
+  return { models: 0, aliases: 0, generatedAt: 0, source: "", path: "" };
 }
 
 function decode(bundled: BundledIndex): Map<string, ModelMeta> {

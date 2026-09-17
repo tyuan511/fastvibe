@@ -1,0 +1,216 @@
+{
+  "composer": {
+    "contextWindow": "上下文窗口",
+    "used": "已用 {{count}}",
+    "remaining": "剩余 {{remaining}} / {{window}}",
+    "turnStats": "轮次统计",
+    "speed": "回答速度",
+    "modelTime": "模型耗时",
+    "toolTime": "工具耗时",
+    "steps": "步骤",
+    "cacheHit": "缓存命中率",
+    "cost": "费用",
+    "clearProject": "清除项目",
+    "pickProject": "选择项目",
+    "searchProject": "搜索项目",
+    "noProject": "没有匹配的项目",
+    "newProject": "新建项目",
+    "placeholder": "随心输入",
+    "placeholderQueued": "继续输入以排队后续修改",
+    "attach": "添加附件",
+    "permissionAsk": "应如何批准 FastVibe 操作？",
+    "contextStats": "查看上下文与轮次统计",
+    "addModel": "添加模型",
+    "pickModel": "选择模型",
+    "noModels": "暂无模型",
+    "manageModels": "管理模型",
+    "thinking": "推理强度",
+    "stop": "停止",
+    "resume": "继续",
+    "queue": "加入队列",
+    "send": "发送",
+    "seeAttachments": "请查看附件"
+  },
+  "newSession": {
+    "explore": "探索代码",
+    "explorePrompt": "请探索这个项目，说明它的结构、主要模块和它们之间的关系。",
+    "build": "构建功能",
+    "buildPrompt": "帮我构建一个新功能：",
+    "review": "审查代码",
+    "reviewPrompt": "请审查最近的代码改动，指出问题和改进建议。",
+    "fix": "修复问题",
+    "fixPrompt": "帮我定位并修复这个问题：",
+    "morning": "早上好呀，新的一天开始啦",
+    "noon": "中午好呀，记得好好吃饭",
+    "afternoon": "下午好呀，继续加油",
+    "evening": "晚上好呀，今天辛苦啦",
+    "night": "夜深啦，早点休息呀"
+  },
+  "session": {
+    "settings": "会话设置",
+    "session": "会话",
+    "compact": "压缩上下文",
+    "autoCompact": "自动压缩",
+    "queueInterrupt": "排队与打断",
+    "waitTurn": "打断前等本回合结束",
+    "steerAll": "打断消息一次全部执行",
+    "followUpAll": "稍后消息一次全部执行",
+    "viewSubagents": "查看子 Agent",
+    "exportHtml": "导出 HTML",
+    "compactTitle": "压缩上下文",
+    "compactPlaceholder": "可选：压缩时希望保留的重点",
+    "cancel": "取消",
+    "startCompact": "开始压缩",
+    "subagents": "子 Agent",
+    "running": "运行中"
+  },
+  "queue": {
+    "stopped": "由于你中断了当前响应，队列已暂停",
+    "error": "由于当前响应出错，队列已暂停（内容未丢失）",
+    "reorder": "拖动调整顺序",
+    "sending": "发送中",
+    "recall": "撤回",
+    "delete": "删除",
+    "now": "立即",
+    "edit": "编辑",
+    "remove": "移除待发送消息",
+    "draftBusy": "请先发送或清空当前草稿，再编辑队列消息。",
+    "continue": "继续发送"
+  },
+  "compact": {
+    "threshold": "接近上限",
+    "overflow": "超出窗口",
+    "running": "正在压缩上下文",
+    "cancelled": "上下文压缩已取消",
+    "failed": "压缩失败",
+    "done": "上下文已压缩"
+  },
+  "thinking": {
+    "running": "正在思考",
+    "done": "思考",
+    "seconds": "{{n}} 秒"
+  },
+  "tools": {
+    "failed": "执行失败",
+    "copied": "已复制",
+    "copy": "复制",
+    "noOutput": "没有输出。",
+    "searching": "正在搜索…",
+    "sources": "来源",
+    "params": "参数",
+    "preview": "预览",
+    "running": "运行中",
+    "completed": "已完成",
+    "error": "失败"
+  },
+  "run": {
+    "duration": "用时 {{duration}}"
+  },
+  "todo": {
+    "title": "待办",
+    "done": "已完成 {{done}} / {{total}}"
+  },
+  "git": {
+    "switchFailed": "切换分支失败",
+    "createFailed": "创建分支失败",
+    "current": "当前分支 {{branch}}",
+    "newName": "新分支名称",
+    "namePlaceholder": "例如 feature/login",
+    "cancel": "取消",
+    "createCheckout": "创建并检出",
+    "search": "搜索分支",
+    "branches": "分支",
+    "loading": "读取分支…",
+    "none": "没有匹配的分支",
+    "createNew": "创建并检出新分支..."
+  },
+  "plan": {
+    "label": "计划模式",
+    "exit": "退出计划模式"
+  },
+  "goal": {
+    "label": "目标模式",
+    "cancel": "取消目标模式",
+    "running": "进行中",
+    "paused": "已暂停",
+    "complete": "已完成",
+    "title": "目标",
+    "round": "第 {{round}} 轮",
+    "roundMax": "第 {{round}} 轮 / {{max}}",
+    "collapse": "收起",
+    "expand": "查看",
+    "resume": "继续",
+    "pause": "暂停",
+    "clear": "清除"
+  },
+  "notice": {
+    "close": "关闭通知"
+  },
+  "attach": {
+    "remove": "移除 {{name}}"
+  },
+  "turns": {
+    "nav": "轮次导航",
+    "turn": "第 {{n}} 轮 · {{prompt}}"
+  },
+  "message": {
+    "elapsed": "用时 {{duration}}",
+    "copy": "复制",
+    "edit": "编辑",
+    "retry": "重试",
+    "working": "正在工作",
+    "workingOn": "继续工作",
+    "expand": "展开",
+    "collapse": "收起",
+    "preparing": "正在准备工作区…",
+    "copied": "已复制"
+  },
+  "permission": {
+    "needConfirm": "需要确认",
+    "needDecision": "需要你的决定",
+    "cancel": "取消",
+    "deny": "拒绝",
+    "alwaysAllow": "始终允许",
+    "allow": "允许",
+    "submit": "提交",
+    "approveOnce": "允许一次",
+    "approveOnceDesc": "只执行这一次",
+    "alwaysDesc": "记住该操作，之后不再询问",
+    "denyDesc": "不执行该操作",
+    "needApproval": "需要你的批准",
+    "needChoice": "需要你的选择",
+    "needInput": "需要你的输入",
+    "confirm": "确认",
+    "noOptions": "没有可选项。",
+    "hintConfirm": "↑↓ 选择 · 1–3 快捷 · Enter 确认 · Esc 拒绝",
+    "hintSelect": "↑↓ 选择 · 1–9 快捷 · Enter 确定 · Esc 取消",
+    "hintInput": "Enter 提交 · Esc 取消",
+    "hintTyping": "Enter 提交 · Esc 取消",
+    "hintMulti": "←→ 切换问题 · ↑↓ 选项 · 1–9 选择 · Enter 确认 · Esc 取消",
+    "hintSingle": "↑↓ 选项 · 1–9 选择 · Enter 确认 · Esc 取消",
+    "prev": "上一题",
+    "next": "下一题",
+    "continue": "继续",
+    "placeholder": "输入内容",
+    "answerPlaceholder": "输入你的回答",
+    "otherPlaceholder": "自行输入",
+    "other": "其他（自行输入）"
+  },
+  "question": {
+    "custom": "自行输入",
+    "waiting": "等待回答…",
+    "unanswered": "未回答"
+  },
+  "files": {
+    "collapse": "收起",
+    "expand": "展开 {{count}}"
+  },
+  "preview": {
+    "reveal": "在访达中显示",
+    "close": "关闭",
+    "tooLarge": "文件过大（{{size}} KB），请在访达中打开。"
+  },
+  "model": {
+    "switched": "模型已切换至"
+  }
+}

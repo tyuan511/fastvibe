@@ -61,6 +61,8 @@ import {
   scanImportSources,
 } from "../engine/import/runner";
 import { readAutoCompact, readDefaultModel } from "../engine/app-settings";
+import { currentAiLanguageDirective } from "../engine/ai-language";
+import { uiText } from "../engine/ui-text";
 import { mapEngineMessages } from "../engine/map-messages";
 import { ReasoningStore } from "../engine/reasoning-store";
 import { usageLedgerFor, type UsageLedger } from "../engine/usage-ledger";
@@ -412,7 +414,12 @@ export class PiProcessManager {
       );
       const keys = await loadProviderKeys(this.#paths);
       const providers = usableProviders(this.#paths, keys);
-      if (providers.length === 0) { this.#setStatus({ state: "needsAuth", cwd }); return this.#status; }
+      // No provider is a normal first-run state, not a boot failure: `applyProviders`
+      // writes a `models.json` holding none, the registry comes up empty, and anything
+      // that acts on models simply finds none — the composer goes read-only and points
+      // at 设置 → 供应商. Booting used to stop here and report `needsAuth`, which made
+      // every engine call (the model/thinking chips included) throw 「尚未配置模型供应商」
+      // instead of answering with the empty list the UI is built around.
       const applied = applyProviders(this.#paths);
       this.#modelsCache = applied;
       this.#prices = modelPriceIndex(this.#paths);
@@ -489,14 +496,14 @@ export class PiProcessManager {
     await session.prompt(message, options);
   }
 
-  async promptConversation(id: string, message: string): Promise<void> {
+  async promptConversation(id: string, message: string, images?: Array<{ type: "image"; data: string; mimeType: string }>): Promise<void> {
     const conversation = this.#catalog.get(id);
     if (!conversation) throw new Error("conversation not found");
     await this.#ensureReady();
     const managed = await this.#ensureSession(conversation);
     if (await this.#compactIfCommand(managed.session, message)) return;
     await this.#flushModelRebind(id);
-    await this.#promptWhenIdle(managed.session, message);
+    await this.#promptWhenIdle(managed.session, message, images);
   }
 
   async getConversationMessages(id: string): Promise<ChatMessage[]> {
@@ -511,15 +518,15 @@ export class PiProcessManager {
 
   async createSideConversation(project?: string, parentId?: string, title?: string): Promise<ConversationOpenResult> {
     await this.#ensureReady();
-    if (!parentId) throw new Error("辅助对话必须绑定主会话");
+    if (!parentId) throw new Error(uiText("辅助对话必须绑定主会话", "A side chat must be bound to a main session"));
     const parent = this.#catalog.get(parentId);
-    if (!parent || parent.kind === "side-chat") throw new Error("主会话不存在");
+    if (!parent || parent.kind === "side-chat") throw new Error(uiText("主会话不存在", "Main session not found"));
     const previous = this.#activeId;
     const conversation = this.#catalog.create(parent.project, { cwd: parent.cwd }, {
       activate: false,
       kind: "side-chat",
       parentId,
-      title: title?.trim() || "辅助对话",
+      title: title?.trim() || uiText("辅助对话", "Side chat"),
     });
     const managed = await this.#ensureSession(conversation);
     managed.session.setSessionName(conversation.title);
@@ -579,7 +586,7 @@ export class PiProcessManager {
     this.#resolvePendingUi();
     const session = await this.#active();
     const timeout = new Promise<never>((_, reject) => {
-      const timer = setTimeout(() => reject(new Error("停止运行超时；会话仍可能在后台运行")), 15_000);
+      const timer = setTimeout(() => reject(new Error(uiText("停止运行超时；会话仍可能在后台运行", "Stop timed out; the session may still be running in the background"))), 15_000);
       timer.unref?.();
     });
     try {
@@ -588,7 +595,7 @@ export class PiProcessManager {
       // Do not report idle after an uncertain abort. The caller can reopen the
       // session, while the explicit error prevents a follow-up prompt from being
       // sent to a runtime whose termination was not confirmed.
-      this.#setStatus({ state: "error", cwd: this.#cwd, message: error instanceof Error ? error.message : "停止运行失败" });
+      this.#setStatus({ state: "error", cwd: this.#cwd, message: error instanceof Error ? error.message : uiText("停止运行失败", "Failed to stop") });
       throw error;
     }
   }
@@ -644,7 +651,7 @@ export class PiProcessManager {
    */
   async #runContinuation(session: AgentSession): Promise<void> {
     const run = (session as unknown as { _runAgentPrompt?: (messages: unknown[]) => Promise<void> })._runAgentPrompt;
-    if (typeof run !== "function") throw new Error("当前引擎版本不支持继续运行");
+    if (typeof run !== "function") throw new Error(uiText("当前引擎版本不支持继续运行", "This engine version cannot continue a run"));
     await run.call(session, []);
   }
 
@@ -700,7 +707,7 @@ export class PiProcessManager {
     const managed = this.#sessions.get(this.#activeId ?? "");
     const promptCommands = session.promptTemplates.map((item) => ({ name: item.name, description: item.description, source: "prompt" }));
     const extensionCommands = managed?.extensions.extensions.flatMap((extension) => [...extension.commands.values()].map((command) => ({ name: command.name, description: command.description, source: "extension" }))) ?? [];
-    const builtins: SlashCommand[] = [{ name: "compact", description: "压缩当前会话的上下文", source: "builtin" }];
+    const builtins: SlashCommand[] = [{ name: "compact", description: uiText("压缩当前会话的上下文", "Compact this conversation's context"), source: "builtin" }];
     const unique = new Map<string, SlashCommand>();
     for (const command of [...promptCommands, ...extensionCommands, ...builtins]) unique.set(command.name, command);
     return [...unique.values()];
@@ -864,7 +871,7 @@ export class PiProcessManager {
     const keepTitle =
       Boolean(current?.titleManual) ||
       Boolean(current?.title && current.title !== "新会话" && current.title !== "新任务");
-    const title = keepTitle && current?.title ? current.title : preview.slice(0, 24) || "新会话";
+    const title = keepTitle && current?.title ? current.title : preview.slice(0, 24) || uiText("新会话", "New chat");
     this.#catalog.update(id, { title, preview });
     // Leave `sessionName` empty so the session-title extension can generate one.
     return this.#catalog.snapshot();
@@ -875,19 +882,18 @@ export class PiProcessManager {
   async removeProject(cwd: string): Promise<ConversationDeleteResult> { const wasActive = this.#catalog.get(this.#catalog.activeId ?? "")?.project === cwd; const removed = this.#catalog.removeProject(cwd); await Promise.all(removed.map(async (item) => { if (item.sessionFile) { await this.#usage.capture(item.sessionFile); await unlink(item.sessionFile).catch(() => undefined); } if (item.worktree) await this.#removeWorktree(item.worktree.path); const managed = this.#sessions.get(item.id); if (managed) { managed.unsubscribe(); await managed.session.dispose(); this.#sessions.delete(item.id); } this.#clearBusy(item.id); })); return { ...this.#catalog.snapshot(), nextId: wasActive ? (this.#catalog.activeId ?? null) : null }; }
   async loadMessages(): Promise<ChatMessage[]> { const session = await this.#active(); return this.#messages(session, this.#activeId ?? undefined); }
   /**
-   * An unconfigured engine legitimately has zero models, so report that rather than
-   * throwing "engine not ready" at the composer's model menu.
+   * The models this install can chat with. An unconfigured engine has none, which is an
+   * answer rather than an error — the composer's model menu is how the user connects one.
    */
   async getAvailableModels(): Promise<FastVibeModel[]> {
     if (this.#modelsCache) return this.#modelsCache;
-    if (this.#status.state === "needsAuth") return [];
     await this.#ensureReady();
     return this.#modelsCache ?? [];
   }
   async setModel(provider: string, modelId: string): Promise<EngineSessionState> {
     await this.#ensureReady();
     const model = this.#models?.find(provider, modelId);
-    if (!model) throw new Error("模型不存在");
+    if (!model) throw new Error(uiText("模型不存在", "Model not found"));
     const session = await this.#activeSession();
     if (!session) {
       this.#pendingModel = { provider, id: modelId };
@@ -1055,15 +1061,37 @@ export class PiProcessManager {
       // `refresh()` is async in pi 0.85; the rebind below reads the registry
       // synchronously, so it must finish before we swap the model objects in.
       await registry.refresh({ allowNetwork: false });
-      if (providers.length === 0) {
-        if (this.#status.state !== "needsAuth") this.#setStatus({ state: "needsAuth", cwd: this.#cwd });
-        return this.#status;
-      }
+      // Removing the last provider lands here too: the registry is now empty, every
+      // session's model is gone, and `#rebindModel` leaves the ones it cannot replace
+      // alone. Nothing can be sent until a model exists again, which the composer says.
       await this.#rebindModels();
       if (this.#status.state !== "ready") this.#setStatus({ state: "ready", cwd: this.#cwd });
       return this.#status;
     });
   }
+
+  /**
+   * The models.dev snapshot changed on disk (Settings → 关于). Re-derive `models.json`
+   * from the refreshed catalog and let the shared registry re-read it, exactly as a
+   * provider edit does — the new limits and prices reach every session, including the
+   * ones already open, without a restart.
+   *
+   * Unlike `reloadProviders` there is nothing to start: a cold engine has no registry
+   * to refresh and its next `start()` reads the new snapshot anyway, so booting the
+   * engine here would make a button in 关于 a surprising side effect.
+   */
+  async reloadModelMetadata(): Promise<void> {
+    if (!this.#models) return;
+    await this.#queue(async () => {
+      const registry = this.#models;
+      if (!registry) return;
+      this.#modelsCache = applyProviders(this.#paths);
+      this.#prices = modelPriceIndex(this.#paths);
+      await registry.refresh({ allowNetwork: false });
+      await this.#rebindModels();
+    });
+  }
+
   async handleExtensionUi(_event: Record<string, unknown>): Promise<void> { return; }
   listExtensionPackages(): ExtensionPackage[] { return this.#extensions.list(); }
   async installExtensionPackage(source: string): Promise<ExtensionPackage[]> { await this.#extensions.install(source); await this.#reloadSkills(); return this.#extensions.list(); }
@@ -1132,7 +1160,7 @@ export class PiProcessManager {
    */
   async #createWorktree(project: string, id: string, label: string): Promise<{ path: string; branch: string }> {
     const root = (await execFileAsync("git", ["-C", project, "rev-parse", "--show-toplevel"], { timeout: 5000 })).stdout.trim();
-    if (!root) throw new Error("无法识别 Git 项目");
+    if (!root) throw new Error(uiText("无法识别 Git 项目", "Not a Git project"));
     const safe = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 32) || "run";
     const branch = `fastvibe/${safe}-${id.slice(0, 8)}`;
     const path = join(this.#paths.worktreesDir, `${safe}-${id.slice(0, 8)}`);
@@ -1151,20 +1179,13 @@ export class PiProcessManager {
       ),
     );
   }
-  async #ensureReady(): Promise<void> { if (this.#status.state !== "ready" || !this.#models) await this.start(this.#cwd); if (this.#status.state === "needsAuth") throw new Error("尚未配置模型供应商，请先在设置中连接模型"); if (this.#status.state !== "ready" || !this.#models) throw new Error("engine not ready"); }
-  /**
-   * A session needs a provider, but `needsAuth` is a normal first-run state, not an
-   * error: an empty conversation is still created and the composer's model menu is
-   * how the user connects one.
-   */
-  async #sessionIfReady(conversation: Conversation): Promise<ManagedSession | null> {
-    if (this.#status.state === "needsAuth") return null;
-    await this.#ensureReady();
-    return this.#ensureSession(conversation);
-  }
+  async #ensureReady(): Promise<void> { if (this.#status.state !== "ready" || !this.#models) await this.start(this.#cwd); if (this.#status.state !== "ready" || !this.#models) throw new Error("engine not ready"); }
   async #openFresh(conversation: Conversation): Promise<ConversationOpenResult> {
-    const managed = await this.#sessionIfReady(conversation);
-    if (!managed) return this.#opened(conversation, [], null);
+    // A session can be created with no model at all (the SDK keeps it model-less and
+    // reports the fallback), which is what lets a conversation exist before the user has
+    // connected a provider. Nothing can be sent on it — the composer refuses to type
+    // without a model — and the pick made meanwhile is applied as soon as one exists.
+    const managed = await this.#ensureSession(conversation);
     this.#activate(managed);
     const state = this.#state(managed.session, conversation.id);
     const updated = this.#catalog.update(conversation.id, { sessionFile: state.sessionFile, sessionId: state.sessionId }) ?? conversation;
@@ -1175,8 +1196,9 @@ export class PiProcessManager {
    *
    * Everything that acts *on a conversation* needs a session and may keep failing
    * loudly through `#active()`; the composer's model and thinking chips are not among
-   * them — the empty hero offers both before anything exists to bind them to. Callers
-   * of this method decide what a missing conversation means for them.
+   * them: an unconfigured engine boots with a model-less registry rather than refusing to
+   * start, so a pick made before anything exists to bind it to is held as pending and
+   * answers with a draft state. Callers decide what a missing conversation means for them.
    */
   async #activeSession(): Promise<AgentSession | null> {
     await this.#ensureReady();
@@ -1395,7 +1417,7 @@ export class PiProcessManager {
       // 「任务已完成」 rides the same verdict as the sidebar mark: an `agent_end` that
       // is about to retry, compact or continue is not a finished run.
       if (event.type === "agent_settled") {
-        this.#emit({ type: "conversation_activity", conversationId: conversation.id, title: this.#catalog.get(conversation.id)?.title ?? "会话", status: "completed" });
+        this.#emit({ type: "conversation_activity", conversationId: conversation.id, title: this.#catalog.get(conversation.id)?.title ?? uiText("会话", "Chat"), status: "completed" });
       }
     });
     this.#sessions.set(conversation.id, managed);
@@ -1444,7 +1466,7 @@ export class PiProcessManager {
       const toolName = String(event.toolName ?? event.name ?? "").toLowerCase();
       if (toolName === "subagent") {
         const callId = String(event.toolCallId ?? event.tool_call_id ?? event.id ?? "");
-        for (const [id, item] of this.#subagents) if (id.startsWith(`${callId}:`)) this.#subagents.set(id, { ...item, status: event.isError ? "error" : "completed", endedAt: Date.now(), error: event.isError ? String(event.error ?? "执行失败") : item.error });
+        for (const [id, item] of this.#subagents) if (id.startsWith(`${callId}:`)) this.#subagents.set(id, { ...item, status: event.isError ? "error" : "completed", endedAt: Date.now(), error: event.isError ? String(event.error ?? uiText("执行失败", "Failed")) : item.error });
       }
       return;
     }
@@ -1622,7 +1644,7 @@ export class PiProcessManager {
     const reported = usage ? num(usage.totalTokens) : 0;
     const cost = usage && isRecord(usage.cost) ? num(usage.cost.total) : 0;
     const at = num(message.timestamp) || now;
-    const provider = typeof message.provider === "string" ? message.provider : "未知";
+    const provider = typeof message.provider === "string" ? message.provider : "unknown";
     const model = typeof message.model === "string" ? message.model : "未知";
     let toolCalls = 0;
     if (Array.isArray(message.content)) {
@@ -1710,6 +1732,12 @@ export class PiProcessManager {
     const cwd = request.cwd || this.#cwd;
     const settingsManager = SettingsManager.create(cwd, this.#paths.agentDir);
     const sandbox = builtinExtensionFile("permission-sandbox.ts");
+    // A delegated run never loads the `output-language` extension (`noExtensions`), so
+    // its system prompt carries the same AI 偏好语言 requirement directly — a subagent
+    // report the user cannot read is a bug, not a preference.
+    const appendSystemPrompt = [request.systemPrompt.trim(), currentAiLanguageDirective()].filter(
+      (value): value is string => Boolean(value),
+    );
     const loader = new DefaultResourceLoader({
       cwd,
       agentDir: this.#paths.agentDir,
@@ -1719,7 +1747,7 @@ export class PiProcessManager {
       noPromptTemplates: true,
       noSkills: true,
       ...(sandbox ? { additionalExtensionPaths: [sandbox] } : {}),
-      ...(request.systemPrompt.trim() ? { appendSystemPrompt: [request.systemPrompt] } : {}),
+      ...(appendSystemPrompt.length > 0 ? { appendSystemPrompt } : {}),
     });
     await loader.reload();
 
@@ -2098,7 +2126,16 @@ export class PiProcessManager {
    * because the composer stops a run and a compaction the same way but the
    * sidebar's 运行中 covers both — the renderer unions them (`working`).
    */
-  #state(session: AgentSession, conversationId: string | undefined): EngineSessionState { const model = session.model; const usage = session.getContextUsage(); return { conversationId, running: conversationId ? this.#running.get(conversationId) === true : false, model: model ? { provider: model.provider, id: model.id } : undefined, thinkingLevel: session.thinkingLevel, isStreaming: session.isStreaming, isCompacting: session.isCompacting, interruptMode: this.#interruptMode, sessionFile: session.sessionFile, sessionId: session.sessionId, sessionName: session.sessionName, messageCount: session.messages.length, queuedMessageCount: session.pendingMessageCount, autoCompactionEnabled: session.autoCompactionEnabled, steeringMode: session.steeringMode, followUpMode: session.followUpMode, contextUsage: usage ? { tokens: usage.tokens, contextWindow: usage.contextWindow, percent: usage.percent } : undefined }; }
+  #state(session: AgentSession, conversationId: string | undefined): EngineSessionState {
+    const model = session.model;
+    // A model-less session is not on a model: pi-agent-core substitutes a placeholder
+    // (`provider: "unknown"`) when a session has none, which is exactly the state a
+    // fresh install boots into. Reporting it as a model would put 「unknown」 on the
+    // composer's chip; reporting nothing makes the chip ask for one instead.
+    const picked = model && model.provider !== "unknown" ? { provider: model.provider, id: model.id } : undefined;
+    const usage = session.getContextUsage();
+    return { conversationId, running: conversationId ? this.#running.get(conversationId) === true : false, model: picked, thinkingLevel: session.thinkingLevel, isStreaming: session.isStreaming, isCompacting: session.isCompacting, interruptMode: this.#interruptMode, sessionFile: session.sessionFile, sessionId: session.sessionId, sessionName: session.sessionName, messageCount: session.messages.length, queuedMessageCount: session.pendingMessageCount, autoCompactionEnabled: session.autoCompactionEnabled, steeringMode: session.steeringMode, followUpMode: session.followUpMode, contextUsage: usage ? { tokens: usage.tokens, contextWindow: usage.contextWindow, percent: usage.percent } : undefined };
+  }
   /** State for the empty hero: no session exists, so only the composer's own picks are known. */
   #draftState(): EngineSessionState { return { model: this.#pendingModel, thinkingLevel: this.#pendingThinking, isStreaming: false, running: false, interruptMode: this.#interruptMode }; }
   #opened(conversation: Conversation, messages: ChatMessage[], state: EngineSessionState | null): ConversationOpenResult { return { ...this.#catalog.snapshot(), conversation, messages, state, status: this.#status }; }
@@ -2135,6 +2172,10 @@ export class PiProcessManager {
     const registry = this.#models;
     const current = session.model;
     if (!registry || !current) return;
+    // A session that never had a model carries pi-agent-core's placeholder
+    // (`provider: "unknown"`, i.e. a conversation created before anything was
+    // connected). It finds nothing here and falls through to the fallback search below,
+    // which is how it adopts the provider the user connects afterwards.
     const refreshed = registry.find(current.provider, current.id);
     // Same model, refreshed definition: swap it quietly. A settings edit is not a
     // user model switch, and `setModel()` would append a model_change entry per

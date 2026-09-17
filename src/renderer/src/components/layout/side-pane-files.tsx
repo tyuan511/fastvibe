@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type JSX } from "react";
+import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { ArrowLeft01Icon, Folder01Icon, RefreshIcon } from "@hugeicons/core-free-icons";
 import { IconButton } from "@/components/icon-button";
@@ -45,6 +46,7 @@ export function SidePaneFiles({
   cwd?: string;
   onError: (message: string) => void;
 }): JSX.Element {
+  const { t } = useTranslation("sidepane");
   const patchTab = useSidePaneStore((state) => state.patchTab);
   const [children, setChildren] = useState<DirMap>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -105,7 +107,7 @@ export function SidePaneFiles({
       const preview = await window.fastvibe.workspace.preview(path);
       patchTab(tab.id, { path, preview });
     } catch (error) {
-      onError(error instanceof Error ? error.message : "无法预览该文件");
+      onError(error instanceof Error ? error.message : t("files.previewFailed"));
     }
   }
 
@@ -119,7 +121,7 @@ export function SidePaneFiles({
     }
     return (
       <div className="flex min-h-0 flex-1 items-center justify-center px-8 text-center text-xs leading-5 text-muted-foreground">
-        当前对话未绑定项目，绑定项目后即可浏览文件。
+        {t("files.unbound")}
       </div>
     );
   }
@@ -133,7 +135,7 @@ export function SidePaneFiles({
           <FilePreviewPane preview={preview} onBack={clearPreview} backClassName="@min-[32rem]/files:hidden" />
         ) : (
           <div className="hidden min-h-0 min-w-0 flex-1 items-center justify-center px-8 text-center text-xs leading-5 text-muted-foreground @min-[32rem]/files:flex">
-            选择文件以预览
+            {t("files.pick")}
           </div>
         )}
         <div
@@ -150,12 +152,12 @@ export function SidePaneFiles({
             <IconButton
               size="icon-xs"
               variant="ghost"
-              label="在访达中显示"
+              label={t("files.reveal")}
               onClick={() => void window.fastvibe.workspace.reveal(cwd)}
             >
               <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} />
             </IconButton>
-            <IconButton size="icon-xs" variant="ghost" label="刷新" onClick={() => reset(cwd)}>
+            <IconButton size="icon-xs" variant="ghost" label={t("files.refresh")} onClick={() => reset(cwd)}>
               <HugeiconsIcon strokeWidth={2} icon={RefreshIcon} />
             </IconButton>
           </div>
@@ -187,13 +189,14 @@ function FilePreviewPane({
   onBack: () => void;
   backClassName?: string;
 }): JSX.Element {
+  const { t } = useTranslation("sidepane");
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="flex h-10 shrink-0 items-center gap-1.5 border-b border-border px-2">
         <IconButton
           size="icon-xs"
           variant="ghost"
-          label="返回目录树"
+          label={t("files.back")}
           className={backClassName}
           onClick={onBack}
         >
@@ -207,7 +210,7 @@ function FilePreviewPane({
           <IconButton
             size="icon-xs"
             variant="ghost"
-            label="在访达中显示"
+            label={t("files.reveal")}
             onClick={() => void window.fastvibe.workspace.reveal(preview.path)}
           >
             <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} />

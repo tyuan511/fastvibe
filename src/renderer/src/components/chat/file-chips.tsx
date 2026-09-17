@@ -1,4 +1,5 @@
 import { useState, type JSX } from "react";
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { FileIcon } from "@/components/file-icon";
 import type { ToolCallBlock } from "@shared/types";
@@ -74,6 +75,7 @@ function FileChip({ file }: { file: ChangedFile }): JSX.Element {
 
 /** The turn's changed files as chips, collapsed to one row past six files. */
 export function TurnFileChips({ files, className }: { files: ChangedFile[]; className?: string }): JSX.Element | null {
+  const { t } = useTranslation("chat");
   const [open, setOpen] = useState(false);
   if (files.length === 0) return null;
   const collapsible = files.length > 6;
@@ -90,7 +92,7 @@ export function TurnFileChips({ files, className }: { files: ChangedFile[]; clas
           className="inline-flex h-7 shrink-0 items-center rounded-full px-2 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           onClick={() => setOpen((value) => !value)}
         >
-          {open ? "收起" : `展开 ${files.length}`}
+          {open ? t("files.collapse") : t("files.expand", { count: files.length })}
         </button>
       ) : null}
     </div>

@@ -5,6 +5,7 @@ import { basename, dirname, join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { BrowserImportResult, BrowserProfileInfo } from "@shared/types";
+import { uiText } from "./ui-text";
 
 const execFileAsync = promisify(execFile);
 
@@ -161,7 +162,7 @@ export async function importBrowserProfile(profile: BrowserProfileInfo, setCooki
     }
     db.close();
     const skipped = rows.length - imported;
-    return { browser: profile.browser, profile: profile.name, cookies: imported, encryptedCookiesSkipped: skipped, message: imported ? `已导入 ${imported} 个 Cookie${skipped ? `，另有 ${skipped} 个无法解密或已失效` : ""}` : "没有可导入的 Cookie（可能需要先关闭源浏览器或系统密钥未授权）" };
+    return { browser: profile.browser, profile: profile.name, cookies: imported, encryptedCookiesSkipped: skipped, message: imported ? uiText(`已导入 ${imported} 个 Cookie${skipped ? `，另有 ${skipped} 个无法解密或已失效` : ""}`, `Imported ${imported} cookies${skipped ? `; ${skipped} could not be decrypted or had expired` : ""}`) : uiText("没有可导入的 Cookie（可能需要先关闭源浏览器或系统密钥未授权）", "No cookies to import (close the source browser, or grant keychain access)") };
   } finally {
     await rm(temp, { recursive: true, force: true }).catch(() => undefined);
   }

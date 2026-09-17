@@ -1,4 +1,5 @@
 import { useEffect, useState, type JSX } from "react";
+import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Add01Icon,
@@ -43,6 +44,7 @@ const EMPTY_DRAFT: ServerDraft = {
 };
 
 export function McpSettings(): JSX.Element {
+  const { t } = useTranslation("settings");
   const [servers, setServers] = useState<McpServerStatus[]>([]);
   const [draft, setDraft] = useState<ServerDraft | null>(null);
   const [saving, setSaving] = useState(false);
@@ -69,7 +71,7 @@ export function McpSettings(): JSX.Element {
       setError(null);
       return true;
     } catch (err) {
-      setError(err instanceof Error ? err.message : "保存失败，请重试");
+      setError(err instanceof Error ? err.message : t("mcp.saveFailed"));
       return false;
     } finally {
       setSaving(false);
@@ -105,10 +107,10 @@ export function McpSettings(): JSX.Element {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <span className="text-xs font-medium text-muted-foreground">已配置</span>
+        <span className="text-xs font-medium text-muted-foreground">{t("mcp.configured")}</span>
         <Button size="xs" variant="outline" onClick={() => { setError(null); setDraft({ ...EMPTY_DRAFT }); }}>
           <HugeiconsIcon strokeWidth={2} icon={Add01Icon} />
-          添加服务器
+          {t("mcp.add")}
         </Button>
       </div>
 
@@ -125,7 +127,7 @@ export function McpSettings(): JSX.Element {
             />
           ))
         ) : (
-          <p className="py-3 text-center text-xs text-muted-foreground">尚未配置 MCP 服务器</p>
+          <p className="py-3 text-center text-xs text-muted-foreground">{t("mcp.empty")}</p>
         )}
         {/* Row-level failures have nowhere else to show; the dialog renders its own copy. */}
         {error && draft === null ? <p className="text-xs text-destructive">{error}</p> : null}
@@ -153,6 +155,7 @@ function ServerRow({
   onToggle: (enabled: boolean) => void;
   onRemove: () => void;
 }): JSX.Element {
+  const { t } = useTranslation("settings");
   return (
     <div className="flex items-center gap-3 rounded-lg border border-border/70 px-3 py-2.5">
       <HugeiconsIcon strokeWidth={2} icon={Plug01Icon} className="size-4 text-muted-foreground" />
@@ -168,16 +171,16 @@ function ServerRow({
       {server.connected ? (
         <Badge variant="secondary">
           <HugeiconsIcon strokeWidth={2} icon={CheckmarkCircle02Icon} className="size-3" />
-          {server.tools.length} 个工具
+          {t("mcp.tools", { count: server.tools.length })}
         </Badge>
       ) : (
         <Badge variant={server.error ? "destructive" : "outline"}>
           <HugeiconsIcon strokeWidth={2} icon={AlertCircleIcon} className="size-3" />
-          {server.error ? "连接失败" : "未连接"}
+          {server.error ? t("mcp.connectFailed") : t("mcp.disconnected")}
         </Badge>
       )}
       <Switch checked={server.enabled} onCheckedChange={onToggle} />
-      <Button size="icon-xs" variant="ghost" onClick={onRemove} aria-label="删除服务器">
+      <Button size="icon-xs" variant="ghost" onClick={onRemove} aria-label={t("mcp.delete")}>
         <HugeiconsIcon strokeWidth={2} icon={Delete02Icon} />
       </Button>
     </div>
@@ -202,34 +205,35 @@ function AddServerDialog({
   onClose: () => void;
   onSubmit: () => void;
 }): JSX.Element {
+  const { t } = useTranslation("settings");
   return (
     <Dialog open={draft !== null} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>添加 MCP 服务器</DialogTitle>
-          <DialogDescription>支持本地进程（stdio）与 HTTP 两种传输。</DialogDescription>
+          <DialogTitle>{t("mcp.dialogTitle")}</DialogTitle>
+          <DialogDescription>{t("mcp.dialogDesc")}</DialogDescription>
         </DialogHeader>
 
         {draft ? (
           <div className="space-y-3">
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1.5">
-                <Label>名称</Label>
+                <Label>{t("mcp.name")}</Label>
                 <Input
                   autoFocus
                   value={draft.name}
-                  placeholder="例如 filesystem"
+                  placeholder={t("mcp.namePlaceholder")}
                   onChange={(event) => onPatch({ name: event.target.value })}
                 />
               </div>
               <div className="space-y-1.5">
-                <Label>传输</Label>
+                <Label>{t("mcp.transport")}</Label>
                 <select
                   value={draft.transport}
                   onChange={(event) => onPatch({ transport: event.target.value as McpServerConfig["transport"] })}
                   className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
                 >
-                  <option value="stdio">本地进程（stdio）</option>
+                  <option value="stdio">{t("mcp.stdio")}</option>
                   <option value="http">HTTP（Streamable HTTP）</option>
                 </select>
               </div>
@@ -238,7 +242,7 @@ function AddServerDialog({
             {draft.transport === "stdio" ? (
               <>
                 <div className="space-y-1.5">
-                  <Label>命令</Label>
+                  <Label>{t("mcp.command")}</Label>
                   <Input
                     value={draft.command}
                     placeholder="npx"
@@ -246,7 +250,7 @@ function AddServerDialog({
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label>参数（空格分隔）</Label>
+                  <Label>{t("mcp.args")}</Label>
                   <Input
                     value={draft.args}
                     placeholder="-y @modelcontextprotocol/server-filesystem /Users/me/project"
@@ -267,7 +271,7 @@ function AddServerDialog({
 
             <div className="flex items-center gap-2 text-xs">
               <Switch checked={draft.enabled} onCheckedChange={(checked) => onPatch({ enabled: checked })} />
-              添加后启用
+              {t("mcp.enableAfter")}
             </div>
           </div>
         ) : null}
@@ -276,11 +280,11 @@ function AddServerDialog({
 
         <DialogFooter className="gap-2">
           <Button variant="outline" onClick={onClose}>
-            取消
+            {t("mcp.cancel")}
           </Button>
           <Button disabled={!valid || saving} onClick={onSubmit}>
             {saving ? <HugeiconsIcon strokeWidth={2} icon={Loading03Icon} className="size-3.5 animate-spin" /> : null}
-            添加并连接
+            {t("mcp.addConnect")}
           </Button>
         </DialogFooter>
       </DialogContent>

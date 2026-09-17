@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   ArrowLeft01Icon,
@@ -24,11 +25,13 @@ export type PermissionResponse = {
 
 type Respond = (payload: PermissionResponse) => void;
 
-const CONFIRM_OPTIONS: Array<{ label: string; description: string; response: Pick<PermissionResponse, "confirmed" | "always"> }> = [
-  { label: "允许一次", description: "只执行这一次", response: { confirmed: true } },
-  { label: "始终允许", description: "记住该操作，之后不再询问", response: { confirmed: true, always: true } },
-  { label: "拒绝", description: "不执行该操作", response: { confirmed: false } },
-];
+function confirmOptions(t: (key: string) => string): Array<{ label: string; description: string; response: Pick<PermissionResponse, "confirmed" | "always"> }> {
+  return [
+    { label: t("permission.approveOnce"), description: t("permission.approveOnceDesc"), response: { confirmed: true } },
+    { label: t("permission.alwaysAllow"), description: t("permission.alwaysDesc"), response: { confirmed: true, always: true } },
+    { label: t("permission.deny"), description: t("permission.denyDesc"), response: { confirmed: false } },
+  ];
+}
 
 /** Borderless inline input used for free-form answers, mirroring zcode's custom-answer row. */
 const INLINE_INPUT =
@@ -211,32 +214,34 @@ function CustomInputRow({
 }
 
 function ConfirmPanel({ request, onRespond }: { request: PermissionRequest; onRespond: Respond }): JSX.Element {
+  const { t } = useTranslation("chat");
+  const options = confirmOptions(t);
   const [active, setActive] = useState(0);
-  const respond = useCallback((option: (typeof CONFIRM_OPTIONS)[number]) => onRespond({ id: request.id, ...option.response }), [onRespond, request.id]);
+  const respond = useCallback((option: (typeof options)[number]) => onRespond({ id: request.id, ...option.response }), [onRespond, request.id]);
 
   usePanelKeys({
-    count: CONFIRM_OPTIONS.length,
+    count: options.length,
     active,
     setActive,
-    onConfirm: () => respond(CONFIRM_OPTIONS[active]),
-    onCancel: () => respond(CONFIRM_OPTIONS[CONFIRM_OPTIONS.length - 1]),
-    onIndex: (index) => respond(CONFIRM_OPTIONS[index]),
+    onConfirm: () => respond(options[active]),
+    onCancel: () => respond(options[options.length - 1]),
+    onIndex: (index) => respond(options[index]),
   });
 
   return (
     <PanelShell
       tone="warning"
-      title={request.title || "需要你的批准"}
+      title={request.title || t("permission.needApproval")}
       message={request.message}
-      hint="↑↓ 选择 · 1–3 快捷 · Enter 确认 · Esc 拒绝"
+      hint={t("permission.hintConfirm")}
       actions={
-        <Button size="sm" onClick={() => respond(CONFIRM_OPTIONS[active])}>
-          确认
+        <Button size="sm" onClick={() => respond(options[active])}>
+          {t("permission.confirm")}
         </Button>
       }
     >
-      <div role="listbox" aria-label={request.title || "需要你的批准"} className="flex flex-col gap-0.5">
-        {CONFIRM_OPTIONS.map((option, index) => (
+      <div role="listbox" aria-label={request.title || t("permission.needApproval")} className="flex flex-col gap-0.5">
+        {options.map((option, index) => (
           <OptionRow
             key={option.label}
             index={index}
@@ -253,6 +258,7 @@ function ConfirmPanel({ request, onRespond }: { request: PermissionRequest; onRe
 }
 
 function SelectPanel({ request, onRespond }: { request: PermissionRequest; onRespond: Respond }): JSX.Element {
+  const { t } = useTranslation("chat");
   const options = request.options ?? [];
   const details = request.optionDetails ?? [];
   const [active, setActive] = useState(0);
@@ -273,19 +279,19 @@ function SelectPanel({ request, onRespond }: { request: PermissionRequest; onRes
   return (
     <PanelShell
       tone="primary"
-      title={request.title || "需要你的选择"}
+      title={request.title || t("permission.needChoice")}
       message={request.message}
-      hint="↑↓ 选择 · 1–9 快捷 · Enter 确定 · Esc 取消"
+      hint={t("permission.hintSelect")}
       actions={
         <Button size="sm" variant="outline" onClick={() => onRespond({ id: request.id, cancelled: true })}>
-          取消
+          {t("permission.cancel")}
         </Button>
       }
     >
       {options.length === 0 ? (
-        <p className="px-1 text-sm text-muted-foreground">没有可选项。</p>
+        <p className="px-1 text-sm text-muted-foreground">{t("permission.noOptions")}</p>
       ) : (
-        <div role="listbox" aria-label={request.title || "需要你的选择"} className="flex max-h-72 flex-col gap-0.5 overflow-y-auto">
+        <div role="listbox" aria-label={request.title || t("permission.needChoice")} className="flex max-h-72 flex-col gap-0.5 overflow-y-auto">
           {options.map((option, index) => (
             <OptionRow
               key={`${option}-${index}`}
@@ -304,6 +310,7 @@ function SelectPanel({ request, onRespond }: { request: PermissionRequest; onRes
 }
 
 function InputPanel({ request, onRespond }: { request: PermissionRequest; onRespond: Respond }): JSX.Element {
+  const { t } = useTranslation("chat");
   const [value, setValue] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -333,16 +340,16 @@ function InputPanel({ request, onRespond }: { request: PermissionRequest; onResp
   return (
     <PanelShell
       tone="primary"
-      title={request.title || "需要你的输入"}
+      title={request.title || t("permission.needInput")}
       message={request.message}
-      hint="Enter 提交 · Esc 取消"
+      hint={t("permission.hintInput")}
       actions={
         <>
           <Button size="sm" variant="outline" onClick={cancel}>
-            取消
+            {t("permission.cancel")}
           </Button>
           <Button size="sm" disabled={!value.trim()} onClick={submit}>
-            提交
+            {t("permission.submit")}
           </Button>
         </>
       }
@@ -350,7 +357,7 @@ function InputPanel({ request, onRespond }: { request: PermissionRequest; onResp
       <CustomInputRow
         inputRef={inputRef}
         value={value}
-        placeholder={request.placeholder ?? "输入内容"}
+        placeholder={request.placeholder ?? t("permission.placeholder")}
         onChange={setValue}
       />
     </PanelShell>
@@ -414,6 +421,7 @@ function usePanelKeys({
  * a time; paging arrows sit top-right and answers return positionally as `{ answers }`.
  */
 function QuestionsPanel({ request, onRespond }: { request: PermissionRequest; onRespond: Respond }): JSX.Element | null {
+  const { t } = useTranslation("chat");
   const questions = useMemo(() => request.questions ?? [], [request.questions]);
   const count = questions.length;
   const [index, setIndex] = useState(0);
@@ -559,8 +567,8 @@ function QuestionsPanel({ request, onRespond }: { request: PermissionRequest; on
               variant="ghost"
               size="icon-xs"
               disabled={index === 0}
-              title="上一题"
-              aria-label="上一题"
+              title={t("permission.prev")}
+              aria-label={t("permission.prev")}
               onClick={() => goTo(index - 1)}
             >
               <HugeiconsIcon strokeWidth={2} icon={ArrowLeft01Icon} />
@@ -573,8 +581,8 @@ function QuestionsPanel({ request, onRespond }: { request: PermissionRequest; on
               variant="ghost"
               size="icon-xs"
               disabled={isLast}
-              title="下一题"
-              aria-label="下一题"
+              title={t("permission.next")}
+              aria-label={t("permission.next")}
               onClick={() => goTo(index + 1)}
             >
               <HugeiconsIcon strokeWidth={2} icon={ArrowRight01Icon} />
@@ -582,14 +590,14 @@ function QuestionsPanel({ request, onRespond }: { request: PermissionRequest; on
           </>
         ) : null
       }
-      hint={typing ? "Enter 提交 · Esc 取消" : count > 1 ? "←→ 切换问题 · ↑↓ 选项 · 1–9 选择 · Enter 确认 · Esc 取消" : "↑↓ 选项 · 1–9 选择 · Enter 确认 · Esc 取消"}
+      hint={typing ? t("permission.hintTyping") : count > 1 ? t("permission.hintMulti") : t("permission.hintSingle")}
       actions={
         <>
           <Button size="sm" variant="outline" onClick={cancel}>
-            取消
+            {t("permission.cancel")}
           </Button>
           <Button size="sm" disabled={typing && customValue.trim().length === 0} onClick={primary}>
-            {isLast ? "提交" : "继续"}
+            {isLast ? t("permission.submit") : t("permission.continue")}
           </Button>
         </>
       }
@@ -598,7 +606,7 @@ function QuestionsPanel({ request, onRespond }: { request: PermissionRequest; on
         <CustomInputRow
           inputRef={inputRef}
           value={customValue}
-          placeholder="输入你的回答"
+          placeholder={t("permission.answerPlaceholder")}
           onChange={setCustomValue}
         />
       ) : (
@@ -620,13 +628,13 @@ function QuestionsPanel({ request, onRespond }: { request: PermissionRequest; on
                 inputRef={inputRef}
                 index={options.length + 1}
                 value={customValue}
-                placeholder="自行输入"
+                placeholder={t("permission.otherPlaceholder")}
                 onChange={setCustomValue}
               />
             ) : (
               <OptionRow
                 index={options.length}
-                label="其他（自行输入）"
+                label={t("permission.other")}
                 selected={cursor === options.length}
                 onHover={() => setCursor(options.length)}
                 onSelect={() => setCustomOpen(true)}

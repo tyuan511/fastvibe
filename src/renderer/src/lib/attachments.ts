@@ -42,10 +42,41 @@ export function attachmentsToImages(items: ChatAttachment[]): PromptImage[] {
   });
 }
 
+/**
+ * The file paths a model needs in order to read an attached file, appended to the
+ * prompt.
+ *
+ * A path list is model-facing metadata, not something the user typed, so the
+ * transcript strips it again on the way to the screen (`stripAttachmentBlock`) — the
+ * chips above the bubble are how the reader sees the attachment. The block is tagged
+ * rather than labelled so it reads identically in every UI language; only what the
+ * model *answers* follows 界面语言.
+ */
 export function attachmentPromptSuffix(items: ChatAttachment[]): string {
   const files = items.filter((item) => item.kind === "file" && item.path);
   if (files.length === 0) return "";
-  return `\n\n附件：\n${files.map((item) => `- ${item.path}`).join("\n")}`;
+  return `\n\n<${ATTACHMENT_TAG}>\n${files.map((item) => `- ${item.path}`).join("\n")}\n</${ATTACHMENT_TAG}>`;
+}
+
+const ATTACHMENT_TAG = "fastvibe-attachments";
+/**
+ * The appended block, anchored to the end of the message so a prompt that merely
+ * quotes the tag mid-text is left alone.
+ */
+const ATTACHMENT_BLOCK = new RegExp(`\\n{2,}<${ATTACHMENT_TAG}>\\n[\\s\\S]*?</${ATTACHMENT_TAG}>\\s*$`);
+
+/**
+ * Strip the model-facing attachment block for display.
+ *
+ * The engine's own copy of a user message keeps the block (a retry replays it, and a
+ * file attachment cannot be recovered from the transcript any other way), so every
+ * reader that shows a prompt has to go through here — otherwise the bubble grows the
+ * path list the moment the transcript is re-read.
+ */
+export function stripAttachmentBlock(text: string): string {
+  if (!text.includes(`<${ATTACHMENT_TAG}>`)) return text;
+  const stripped = text.replace(ATTACHMENT_BLOCK, "");
+  return stripped === text ? text : stripped.trimEnd();
 }
 
 function guessMime(name: string): string {

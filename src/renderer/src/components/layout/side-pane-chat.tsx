@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type JSX } from "react";
+import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { MessageSquareIcon } from "@hugeicons/core-free-icons";
 import { useNavigate } from "react-router";
@@ -8,18 +9,21 @@ import { usagePercent } from "@/components/chat/session-controls";
 import { useSessionStore } from "@/stores/session";
 import { useSettingsStore } from "@/stores/settings";
 import { useSidePaneStore, type SidePaneTab } from "@/stores/side-pane";
-import type { ChatAttachment } from "@shared/types";
+import { attachmentPromptSuffix, attachmentsToImages } from "@/lib/attachments";
+import { translate } from "@/lib/i18n";
+import type { ChatAttachment, ChatMessage } from "@shared/types";
 import { parseCompactCommand } from "@shared/slash";
 
 function SideChatEmpty(): JSX.Element {
+  const { t } = useTranslation("sidepane");
   return (
     <div className="flex h-full flex-col items-center justify-center px-6 text-center">
       <div className="flex size-10 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
         <HugeiconsIcon strokeWidth={2} icon={MessageSquareIcon} className="size-5" />
       </div>
-      <h2 className="mt-3 text-base font-semibold tracking-tight">辅助对话</h2>
+      <h2 className="mt-3 text-base font-semibold tracking-tight">{t("chat.title")}</h2>
       <p className="mt-1 max-w-[16rem] text-sm leading-5 text-muted-foreground">
-        针对当前任务单独提问，回复只留在这里，不会写入主对话。
+        {t("chat.desc")}
       </p>
     </div>
   );
@@ -34,6 +38,7 @@ export function SidePaneChat({
   project?: string;
   parentId?: string;
 }): JSX.Element {
+  const { t } = useTranslation("sidepane");
   const patchTab = useSidePaneStore((state) => state.patchTab);
   const navigate = useNavigate();
   const models = useSessionStore((state) => state.models);
@@ -75,9 +80,10 @@ export function SidePaneChat({
   }, [parentId, patchTab, tab.conversationId, tab.id, tab.title]);
 
   async function send(): Promise<void> {
-    const text = tab.draft?.trim();
+    const text = tab.draft?.trim() ?? "";
     const id = tab.conversationId;
-    if (!text || !id || tab.streaming) return;
+    const items = attachments;
+    if ((!text && items.length === 0) || !id || tab.streaming) return;
     if (parseCompactCommand(text)) {
       patchTab(tab.id, { draft: "" });
       try {
@@ -87,24 +93,38 @@ export function SidePaneChat({
       }
       return;
     }
-    const user = {
-      id: crypto.randomUUID(),
-      role: "user" as const,
-      text,
+    const promptText = text || translate("chat:composer.seeAttachments");
+    const payload = `${promptText}${attachmentPromptSuffix(items)}`;
+    // The row is optimistic and minted with a `local:` id, exactly like the main
+    // thread's: the engine echoes this prompt back as a `message_start`, and without
+    // the id the pane appended that echo as a second copy of the same message.
+    const user: ChatMessage = {
+      id: `local:${crypto.randomUUID()}`,
+      role: "user",
+      text: promptText,
       tools: [],
+      parts: [{ kind: "text", text: promptText }],
       createdAt: Date.now(),
-      attachments: attachments.length ? attachments : undefined,
+      attachments: items.length ? items : undefined,
     };
-    patchTab(tab.id, { draft: "", messages: [...messages, user], streaming: true });
+    // Read the transcript at send time, not from this render: an engine event may
+    // have landed in between, and patching with the render's copy would drop it.
+    const current = useSidePaneStore.getState().tabs.find((entry) => entry.id === tab.id)?.messages ?? messages;
+    // Consume the composer before the await, so a second Enter cannot resend it.
+    patchTab(tab.id, { draft: "", messages: [...current, user], streaming: true });
     setAttachments([]);
     try {
-      await window.fastvibe.engine.promptConversation(id, text);
+      // The attachments go with it: this call used to drop them, so a picture sent
+      // here reached the transcript but never the model.
+      await window.fastvibe.engine.promptConversation(id, payload, attachmentsToImages(items));
     } catch {
-      patchTab(tab.id, { draft: text, streaming: false });
+      // Nothing reached the engine: drop the phantom row and hand the composer back.
+      patchTab(tab.id, { draft: text, messages: current, streaming: false });
+      setAttachments(items);
     }
   }
 
-  const projectName = projects.find((item) => item.cwd === project)?.name ?? "无项目";
+  const projectName = projects.find((item) => item.cwd === project)?.name ?? t("chat.noProject");
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -126,7 +146,7 @@ export function SidePaneChat({
           disabled={!tab.conversationId}
           streaming={streaming}
           working={conversationWorking}
-          placeholder="随心输入"
+          placeholder={t("chat.placeholder")}
           models={models}
           model={session?.model}
           thinkingLevel={session?.thinkingLevel}

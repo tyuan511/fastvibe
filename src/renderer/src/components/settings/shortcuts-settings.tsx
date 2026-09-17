@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type JSX } from "react";
+import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { RotateCcwIcon, Search01Icon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
@@ -23,12 +24,16 @@ import {
   formatChord,
   resolveBinding,
   serializeChord,
+  shortcutDescription,
+  shortcutGroupLabel,
+  shortcutLabel,
   type ShortcutId,
   type ShortcutOverrides,
 } from "@/lib/shortcuts";
 import { useSettingsStore } from "@/stores/settings";
 
 export function ShortcutsSettings(): JSX.Element {
+  const { t, i18n } = useTranslation("settings");
   const settings = useSettingsStore((state) => state.settings);
   const update = useSettingsStore((state) => state.update);
   const [query, setQuery] = useState("");
@@ -41,14 +46,16 @@ export function ShortcutsSettings(): JSX.Element {
 
   const grouped = useMemo(() => {
     return SHORTCUT_GROUPS.map((group) => ({
-      ...group,
+      id: group,
+      label: shortcutGroupLabel(group),
       items: SHORTCUT_CATALOG.filter((item) => {
-        if (item.group !== group.id) return false;
+        if (item.group !== group) return false;
         if (!needle) return true;
-        return `${item.label} ${item.description ?? ""} ${item.id}`.toLowerCase().includes(needle);
+        const haystack = `${shortcutLabel(item.id)} ${shortcutDescription(item.id) ?? ""} ${item.id}`;
+        return haystack.toLowerCase().includes(needle);
       }),
     })).filter((group) => group.items.length > 0);
-  }, [needle]);
+  }, [needle, i18n.language]);
 
   function write(next: ShortcutOverrides | undefined): void {
     update({ shortcuts: next && Object.keys(next).length > 0 ? next : undefined });
@@ -83,17 +90,17 @@ export function ShortcutsSettings(): JSX.Element {
         <InputGroupInput
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="搜索快捷键"
+          placeholder={t("shortcuts.search")}
         />
       </InputGroup>
 
       <section className="space-y-2">
-        <h3 className="px-1 text-sm font-medium">发送</h3>
+        <h3 className="px-1 text-sm font-medium">{t("shortcuts.send")}</h3>
         <div className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">
           <div className="flex items-center justify-between gap-6 px-4 py-3">
             <div className="min-w-0">
-              <Label className="text-sm font-medium">回车发送</Label>
-              <p className="mt-0.5 text-xs leading-4 text-muted-foreground">关闭后用发送快捷键发送，Enter 换行</p>
+              <Label className="text-sm font-medium">{t("shortcuts.sendOnEnter")}</Label>
+              <p className="mt-0.5 text-xs leading-4 text-muted-foreground">{t("shortcuts.sendOnEnterDesc")}</p>
             </div>
             <Switch
               checked={settings.sendOnEnter}
@@ -104,7 +111,7 @@ export function ShortcutsSettings(): JSX.Element {
       </section>
 
       {grouped.length === 0 ? (
-        <p className="px-1 text-sm text-muted-foreground">没有匹配的快捷键</p>
+        <p className="px-1 text-sm text-muted-foreground">{t("shortcuts.none")}</p>
       ) : (
         grouped.map((group) => (
           <section key={group.id} className="space-y-2">
@@ -113,16 +120,17 @@ export function ShortcutsSettings(): JSX.Element {
               {group.items.map((item) => {
                 const binding = resolveBinding(item.id, overrides);
                 const isCustom = resolveBinding(item.id, overrides) !== item.default;
+                const description = shortcutDescription(item.id);
                 return (
                   <div key={item.id} className="flex items-center justify-between gap-6 px-4 py-3">
                     <div className="min-w-0">
-                      <Label className="text-sm font-medium">{item.label}</Label>
+                      <Label className="text-sm font-medium">{shortcutLabel(item.id)}</Label>
                       {recording === item.id ? (
                         <p className={cn("mt-0.5 text-xs leading-4", error ? "text-destructive" : "text-muted-foreground")}>
-                          {error ?? "Backspace 清除 · Esc 取消"}
+                          {error ?? t("shortcuts.recordingHint")}
                         </p>
-                      ) : item.description ? (
-                        <p className="mt-0.5 text-xs leading-4 text-muted-foreground">{item.description}</p>
+                      ) : description ? (
+                        <p className="mt-0.5 text-xs leading-4 text-muted-foreground">{description}</p>
                       ) : null}
                     </div>
                     <div className="flex shrink-0 items-center gap-1">
@@ -130,7 +138,7 @@ export function ShortcutsSettings(): JSX.Element {
                         <IconButton
                           size="icon-xs"
                           variant="ghost"
-                          label="恢复默认"
+                          label={t("shortcuts.restoreDefault")}
                           className="text-muted-foreground"
                           onClick={() => {
                             if (recording === item.id) setRecording(null);
@@ -174,7 +182,7 @@ export function ShortcutsSettings(): JSX.Element {
 
       <Button variant="outline" size="sm" disabled={!customized} onClick={resetAll}>
         <HugeiconsIcon strokeWidth={2} icon={RotateCcwIcon} />
-        恢复默认快捷键
+        {t("shortcuts.restoreAll")}
       </Button>
     </div>
   );
@@ -197,6 +205,7 @@ function ShortcutButton({
   onBind: (chord: string) => void;
   onReject: (message: string) => void;
 }): JSX.Element {
+  const { t } = useTranslation("settings");
   const onCancelRef = useRef(onCancel);
   const onClearRef = useRef(onClear);
   const onBindRef = useRef(onBind);
@@ -244,15 +253,15 @@ function ShortcutButton({
       variant={recording ? "secondary" : "outline"}
       data-shortcut-recording={recording ? "" : undefined}
       className={cn("min-w-24 justify-center px-2 font-normal", recording && "ring-3 ring-ring/50")}
-      aria-label={recording ? "正在录制快捷键" : binding ? `快捷键 ${formatChord(binding)}` : "未设置快捷键"}
+      aria-label={recording ? t("shortcuts.recording") : binding ? t("shortcuts.chord", { chord: formatChord(binding) }) : t("shortcuts.unset")}
       onClick={() => (recording ? onCancel() : onStart())}
     >
       {recording ? (
-        <span className="text-xs text-muted-foreground">按下快捷键</span>
+        <span className="text-xs text-muted-foreground">{t("shortcuts.press")}</span>
       ) : binding ? (
         <Kbd>{formatChord(binding)}</Kbd>
       ) : (
-        <span className="text-xs text-muted-foreground">未设置</span>
+        <span className="text-xs text-muted-foreground">{t("shortcuts.notSet")}</span>
       )}
     </Button>
   );

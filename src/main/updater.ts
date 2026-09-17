@@ -9,6 +9,8 @@ const { autoUpdater } = electronUpdater;
 import { Ipc, type AppUpdateState } from "@shared/ipc";
 
 const CHECK_DELAY_MS = 8_000;
+/** Background re-checks after the launch one, for as long as the app runs. */
+const CHECK_INTERVAL_MS = 10 * 60 * 1_000;
 
 /**
  * Squirrel.Mac (electron-updater's native installer) only accepts a Developer ID
@@ -50,7 +52,9 @@ let state: AppUpdateState = {
   currentVersion: "0.0.0",
 };
 let pendingInstall = false;
-let scheduled = false;
+let firstCheckTimer: NodeJS.Timeout | undefined;
+let repeatCheckTimer: NodeJS.Timeout | undefined;
+let scheduleEnabled: boolean | null = null;
 let manualCheck = false;
 let downloadedFile: string | undefined;
 
@@ -188,7 +192,9 @@ export function registerUpdater(getWindows: () => Iterable<BrowserWindow>): void
 
   if (!app.isPackaged) return;
 
-  autoUpdater.autoDownload = true;
+  // Downloads are user-initiated: a background auto-check only announces a version,
+  // and the settings update control (or the manual-check dialog) is what downloads it.
+  autoUpdater.autoDownload = false;
   // Squirrel.Mac would try to apply the zip and fail without a Developer ID.
   autoUpdater.autoInstallOnAppQuit = process.platform !== "darwin";
   autoUpdater.allowPrerelease = false;
@@ -252,11 +258,39 @@ export function registerUpdater(getWindows: () => Iterable<BrowserWindow>): void
   });
 }
 
-/** One delayed check after launch (or when the user turns auto-check back on). */
+/**
+ * A background check, skipped while one is already running or a version is already
+ * known — re-asking would only throw away a pending download.
+ */
+function backgroundCheck(): void {
+  if (
+    state.status === "checking" ||
+    state.status === "available" ||
+    state.status === "downloading" ||
+    state.status === "downloaded"
+  ) {
+    return;
+  }
+  void checkForUpdates(false);
+}
+
+/**
+ * Background checks: once shortly after launch, then every 10 minutes for as long as
+ * the app runs. Called on every settings write, so the current preference wins when it
+ * changes but an unchanged value leaves the running schedule (and its clock) alone.
+ */
 export function scheduleUpdateCheck(enabled: boolean): void {
-  if (!app.isPackaged || !enabled || scheduled) return;
-  scheduled = true;
-  setTimeout(() => {
-    void checkForUpdates(false);
+  if (!app.isPackaged) return;
+  if (scheduleEnabled === enabled) return;
+  scheduleEnabled = enabled;
+  if (firstCheckTimer) clearTimeout(firstCheckTimer);
+  if (repeatCheckTimer) clearInterval(repeatCheckTimer);
+  firstCheckTimer = undefined;
+  repeatCheckTimer = undefined;
+  if (!enabled) return;
+  firstCheckTimer = setTimeout(() => {
+    firstCheckTimer = undefined;
+    backgroundCheck();
   }, CHECK_DELAY_MS);
+  repeatCheckTimer = setInterval(backgroundCheck, CHECK_INTERVAL_MS);
 }

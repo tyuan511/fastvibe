@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { uiText } from "./ui-text";
 import { readFileSync, statSync } from "node:fs";
 import { basename, extname } from "node:path";
 import type { FilePreview } from "@shared/types";
@@ -51,7 +52,7 @@ export function readFilePreview(filePath: string): FilePreview {
   try {
     const stat = statSync(filePath);
     if (!stat.isFile()) {
-      return { kind: "error", path: filePath, name, message: "不是文件" };
+      return { kind: "error", path: filePath, name, message: uiText("不是文件", "Not a file") };
     }
     const ext = extname(filePath).toLowerCase();
     if (ext === ".pdf") {
@@ -119,7 +120,7 @@ export function readFilePreview(filePath: string): FilePreview {
       kind: "error",
       path: filePath,
       name,
-      message: error instanceof Error ? error.message : "无法预览",
+      message: error instanceof Error ? error.message : uiText("无法预览", "Could not preview"),
     };
   }
 }
@@ -160,7 +161,7 @@ function extractPptx(filePath: string): string | null {
     const xml = unzipEntry(filePath, `ppt/slides/slide${i}.xml`);
     if (!xml) break;
     const text = stripXml(xml);
-    if (text) slides.push(`## 幻灯片 ${i}\n\n${text}`);
+    if (text) slides.push(`## ${uiText("幻灯片", "Slide")} ${i}\n\n${text}`);
   }
   return slides.length > 0 ? slides.join("\n\n") : null;
 }

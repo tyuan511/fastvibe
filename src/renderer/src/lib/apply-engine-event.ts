@@ -8,6 +8,7 @@ import type {
   MessagePart,
   ToolCallBlock,
 } from "@shared/types";
+import { i18n } from "@/lib/i18n";
 
 export type ApplyResult = {
   messages: ChatMessage[];
@@ -132,7 +133,7 @@ const MESSAGE_BOUNDARY_EVENTS = new Set([
 function errorFromAssistant(value: unknown): string | undefined {
   if (!isRecord(value) || value.stopReason !== "error") return undefined;
   const text = typeof value.errorMessage === "string" ? value.errorMessage.trim() : "";
-  return text || "请求失败";
+  return text || (i18n.t("common:errors.requestFailed") as string);
 }
 
 function toolText(value: unknown): string | undefined {
@@ -560,7 +561,9 @@ function applyEvent(
     const text =
       asString(event.message) ??
       asString(event.reminder) ??
-      (type === "todo_auto_clear" ? "待办已清空" : "待办提醒");
+      (type === "todo_auto_clear"
+        ? (i18n.t("common:notice.todoCleared") as string)
+        : (i18n.t("common:notice.todoReminder") as string));
     return {
       messages: appendMessage(next, {
         id: crypto.randomUUID(),
@@ -660,7 +663,7 @@ function applyEvent(
           errorFromAssistant(inner.error) ??
           errorFromAssistant(inner.message) ??
           asString(inner.errorMessage) ??
-          "请求失败";
+          (i18n.t("common:errors.requestFailed") as string);
         ensureAssistant().error = error;
       }
     }
@@ -679,8 +682,11 @@ function applyEvent(
       const delayMs = typeof event.delayMs === "number" ? event.delayMs : undefined;
       const retry =
         maxAttempts != null
-          ? `请求失败，正在重试（${attempt}/${maxAttempts}）${delayMs ? `，${Math.round(delayMs / 1000)} 秒后重试` : ""}${error ? `：${error}` : ""}`
-          : `请求失败，正在重试${error ? `：${error}` : ""}`;
+          ? (i18n.t("common:errors.retryingWithBudget", { attempt, maxAttempts }) as string) +
+            (delayMs ? (i18n.t("common:errors.retryAfter", { seconds: Math.round(delayMs / 1000) }) as string) : "") +
+            (error ? (i18n.t("common:errors.retryDetail", { error }) as string) : "")
+          : (i18n.t("common:errors.retrying") as string) +
+            (error ? (i18n.t("common:errors.retryDetail", { error }) as string) : "");
       const list = next.slice();
       list[list.length - 1] = { ...last, error: retry };
       return { messages: list, streaming: true };
@@ -696,7 +702,7 @@ function applyEvent(
       return { messages: list, streaming: nextStreaming };
     }
     if (last?.role === "assistant" && event.success === false) {
-      const error = asString(event.finalError) ?? last.error ?? "请求失败";
+      const error = asString(event.finalError) ?? last.error ?? (i18n.t("common:errors.requestFailed") as string);
       const list = next.slice();
       list[list.length - 1] = { ...last, error };
       return { messages: list, streaming: false };

@@ -24,18 +24,19 @@ import type { PermissionMode } from "@shared/types";
  * happen to match a known risk pattern.
  */
 const MODE_ENV = "FASTVIBE_PERMISSION_MODE";
+const T = (zh: string, en: string): string => (process.env.FASTVIBE_UI_LANGUAGE === "en" ? en : zh);
 
-const MODE_LABELS: Record<PermissionMode, string> = {
-  ask: "请求批准",
-  smart: "帮我批准",
-  full: "完全访问",
-};
+function modeLabel(mode: PermissionMode): string {
+  if (mode === "ask") return T("请求批准", "Ask first");
+  if (mode === "smart") return T("帮我批准", "Smart");
+  return T("完全访问", "Full access");
+}
 
-const MODE_DESCRIPTIONS: Record<PermissionMode, string> = {
-  ask: "编辑外部文件和使用互联网时始终询问",
-  smart: "仅对检测到的风险操作请求批准",
-  full: "可不受限制地访问互联网和你电脑上的任何文件",
-};
+function modeDescription(mode: PermissionMode): string {
+  if (mode === "ask") return T("编辑外部文件和使用互联网时始终询问", "Always ask before editing outside files or using the network");
+  if (mode === "smart") return T("仅对检测到的风险操作请求批准", "Ask only for detected risky operations");
+  return T("可不受限制地访问互联网和你电脑上的任何文件", "Unrestricted access to the internet and any file on your computer");
+}
 
 /** Tools with no side effects; they are never worth a confirmation. */
 const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls", "todo"]);
@@ -135,8 +136,31 @@ function isInside(root: string, target: string): boolean {
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
+const LABEL_EN: Record<string, string> = {
+  递归删除文件: "Recursive delete",
+  强制删除文件: "Force delete",
+  提权执行: "Privilege escalation",
+  开放全部权限: "chmod 777",
+  递归修改所有者: "Recursive chown",
+  磁盘级操作: "Disk-level operation",
+  关机或重启: "Shutdown or reboot",
+  批量结束进程: "Kill processes",
+  管道执行脚本: "Pipe into a shell",
+  强制推送: "Force push",
+  丢弃本地改动: "Discard local changes",
+  发布软件包: "Publish a package",
+  写入磁盘设备: "Write to a disk device",
+  修改系统账号文件: "Modify system account files",
+  环境变量文件: "Environment file",
+  "Git 内部目录": "Git internals",
+  "SSH 密钥": "SSH key",
+  云凭证: "Cloud credentials",
+  私钥或证书: "Private key or certificate",
+  包管理器凭证: "Package-manager credentials",
+};
+
 function matchedLabels(rules: Array<{ label: string; pattern: RegExp }>, text: string): string[] {
-  return rules.filter((rule) => rule.pattern.test(text)).map((rule) => rule.label);
+  return rules.filter((rule) => rule.pattern.test(text)).map((rule) => T(rule.label, LABEL_EN[rule.label] ?? rule.label));
 }
 
 /** Classify a tool call, or `null` when it can never need a confirmation. */
@@ -145,7 +169,7 @@ function assess(toolName: string, input: unknown, cwd: string): Assessment | nul
 
   if (NETWORK_TOOLS.has(toolName)) {
     return {
-      action: "搜索网络",
+      action: T("搜索网络", "Search the web"),
       detail: firstLine(inputString(input, "query") || toolName),
       network: true,
       external: false,
@@ -158,7 +182,7 @@ function assess(toolName: string, input: unknown, cwd: string): Assessment | nul
     const command = inputString(input, "command");
     if (!command) return null;
     return {
-      action: "运行命令",
+      action: T("运行命令", "Run command"),
       detail: firstLine(command),
       network: NETWORK_RULES.some((rule) => rule.test(command)),
       external: false,
@@ -172,7 +196,7 @@ function assess(toolName: string, input: unknown, cwd: string): Assessment | nul
     if (!raw) return null;
     const absolute = resolveToolPath(cwd, raw);
     return {
-      action: "写入文件",
+      action: T("写入文件", "Write file"),
       detail: raw,
       network: false,
       external: !isInside(cwd, absolute),
@@ -187,7 +211,7 @@ function assess(toolName: string, input: unknown, cwd: string): Assessment | nul
   // call is still caught even though the tool itself is unknown.
   const serialized = JSON.stringify(input ?? {}).slice(0, 4000);
   return {
-    action: "调用工具",
+    action: T("调用工具", "Call tool"),
     detail: toolName,
     network: NETWORK_RULES.some((rule) => rule.test(serialized)),
     external: false,
@@ -205,23 +229,23 @@ function shouldConfirm(mode: PermissionMode, assessment: Assessment): boolean {
 
 function reasonsFor(assessment: Assessment): string[] {
   const reasons: string[] = [];
-  if (assessment.network) reasons.push("访问网络");
-  if (assessment.external) reasons.push("修改工作区外的文件");
+  if (assessment.network) reasons.push(T("访问网络", "Network access"));
+  if (assessment.external) reasons.push(T("修改工作区外的文件", "Modify files outside the workspace"));
   reasons.push(...assessment.risks);
-  if (assessment.opaque && reasons.length === 0) reasons.push("外部工具，无法预判其行为");
-  return reasons.length > 0 ? reasons : ["当前权限模式要求确认"];
+  if (assessment.opaque && reasons.length === 0) reasons.push(T("外部工具，无法预判其行为", "External tool; behaviour cannot be predicted"));
+  return reasons.length > 0 ? reasons : [T("当前权限模式要求确认", "The current permission mode requires confirmation")];
 }
 
 function describeCommand(mode: PermissionMode): string {
   return [
-    `当前权限模式：${MODE_LABELS[mode]}（${MODE_DESCRIPTIONS[mode]}）`,
+    T(`当前权限模式：${modeLabel(mode)}（${modeDescription(mode)}）`, `Permission mode: ${modeLabel(mode)} (${modeDescription(mode)})`),
     "",
-    "沙箱规则：",
-    "· 请求批准：外部文件写入、联网、风险操作、外部工具都询问。",
-    "· 帮我批准：仅在检测到风险操作时询问（含外部文件写入）。",
-    "· 完全访问：不询问。",
+    T("沙箱规则：", "Sandbox rules:"),
+    T("· 请求批准：外部文件写入、联网、风险操作、外部工具都询问。", "· Ask first: confirm outside writes, network, risky operations and unknown tools."),
+    T("· 帮我批准：仅在检测到风险操作时询问（含外部文件写入）。", "· Smart: confirm only detected risky operations (including outside writes)."),
+    T("· 完全访问：不询问。", "· Full access: never ask."),
     "",
-    "在输入框的权限菜单中切换模式。",
+    T("在输入框的权限菜单中切换模式。", "Switch modes from the permission menu above the composer."),
   ].join("\n");
 }
 
@@ -237,21 +261,21 @@ export default function permissionSandbox(pi: ExtensionAPI): void {
     if (!ctx.hasUI) {
       return {
         block: true,
-        reason: `权限模式「${MODE_LABELS[mode]}」需要确认（${reasons.join("、")}），但当前会话没有确认界面。`,
+        reason: T(`权限模式「${modeLabel(mode)}」需要确认（${reasons.join("、")}），但当前会话没有确认界面。`, `Permission mode "${modeLabel(mode)}" needs confirmation (${reasons.join(", ")}), but this session has no confirm UI.`),
       };
     }
 
     const message = `${assessment.action}：${assessment.detail}`;
 
-    const approved = await ctx.ui.confirm("FastVibe 操作确认", message);
+    const approved = await ctx.ui.confirm(T("FastVibe 操作确认", "FastVibe wants to run an action"), message);
     if (!approved) {
-      return { block: true, reason: `用户未批准该操作（${reasons.join("、")}）` };
+      return { block: true, reason: T(`用户未批准该操作（${reasons.join("、")}）`, `The user denied this action (${reasons.join(", ")})`) };
     }
     return undefined;
   });
 
   pi.registerCommand("permissions", {
-    description: "查看当前权限模式（请求批准 / 帮我批准 / 完全访问）",
+    description: "Show the current permission mode",
     handler: async (_args, ctx) => {
       ctx.ui.notify(describeCommand(currentMode()), "info");
     },

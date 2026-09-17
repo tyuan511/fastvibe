@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type JSX } from "react";
+import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Alert01Icon,
@@ -54,6 +55,7 @@ export function ImportSettings({
   /** Hands the refreshed catalog to the shell so new chats appear in the sidebar. */
   onImported?: (snapshot: WorkspaceSnapshot, result: ImportRunResult) => void;
 }): JSX.Element {
+  const { t } = useTranslation("settings");
   const [sources, setSources] = useState<ImportSourceStatus[] | null>(null);
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -65,7 +67,7 @@ export function ImportSettings({
       setSources(await window.fastvibe.engine.importSources());
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "无法读取其他 agent 的数据目录");
+      setError(err instanceof Error ? err.message : t("import.scanFailed"));
       setSources([]);
     } finally {
       setScanning(false);
@@ -84,20 +86,19 @@ export function ImportSettings({
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-sm">
             <HugeiconsIcon strokeWidth={2} icon={ImportIcon} className="size-4" />
-            从其他 Agent 导入
+            {t("import.title")}
           </CardTitle>
           <CardDescription>
-            读取本机其他编程 agent 的会话记录，转换后复制到 FastVibe。
-            原始数据只读，不会被修改或删除。
+            {t("import.desc")}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="flex items-center justify-between gap-3">
             <span className="text-xs text-muted-foreground">
-              {sources === null ? "正在扫描…" : `共发现 ${total} 个会话`}
+              {sources === null ? t("import.scanning") : t("import.found", { count: total })}
             </span>
             <IconButton
-              label="重新扫描"
+              label={t("import.rescan")}
               size="icon-sm"
               variant="outline"
               disabled={scanning}
@@ -138,9 +139,9 @@ export function ImportSettings({
 
           {sources !== null && sources.length === 0 ? (
             <div className="rounded-lg border border-dashed border-border px-3 py-8 text-center">
-              <p className="text-sm">未检测到可导入的会话</p>
+              <p className="text-sm">{t("import.emptyTitle")}</p>
               <p className="mt-1 text-xs text-muted-foreground">
-                本机未找到 pi、Claude Code、Codex、opencode 或 zcode 的数据目录
+                {t("import.emptyDesc")}
               </p>
             </div>
           ) : null}
@@ -148,7 +149,7 @@ export function ImportSettings({
           {sources === null ? (
             <p className="flex items-center gap-2 text-xs text-muted-foreground">
               <Spinner className="size-3.5" />
-              正在读取 ~/.pi、~/.claude、~/.codex、opencode 与 zcode 的数据…
+              {t("import.reading")}
             </p>
           ) : null}
         </CardContent>
@@ -177,6 +178,7 @@ function SourceRow({
   source: ImportSourceStatus;
   onOpen: () => void;
 }): JSX.Element {
+  const { t } = useTranslation("settings");
   const unavailable = Boolean(source.reason) || source.sessionCount === 0;
   return (
     <div className="flex items-center gap-3 px-3 py-2.5">
@@ -188,13 +190,13 @@ function SourceRow({
         <div className="truncate text-xs text-muted-foreground">
           {source.reason
             ? source.reason
-            : `${source.sessionCount} 个会话${source.latestAt ? ` · 最近 ${formatDay(source.latestAt)}` : ""}${
-                source.archivedCount ? ` · 含 ${source.archivedCount} 个已归档` : ""
+            : `${t("import.sessions", { count: source.sessionCount })}${source.latestAt ? ` · ${t("import.latest", { date: formatDay(source.latestAt) })}` : ""}${
+                source.archivedCount ? ` · ${t("import.archived", { count: source.archivedCount })}` : ""
               }`}
         </div>
       </div>
       <Button size="sm" variant="outline" disabled={unavailable} onClick={onOpen}>
-        导入
+        {t("import.import")}
       </Button>
     </div>
   );
@@ -209,6 +211,7 @@ function ImportPickerDialog({
   onClose: () => void;
   onImported: (snapshot: WorkspaceSnapshot, result: ImportRunResult) => void;
 }): JSX.Element {
+  const { t } = useTranslation("settings");
   const [candidates, setCandidates] = useState<ImportCandidate[] | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [query, setQuery] = useState("");
@@ -227,7 +230,7 @@ function ImportPickerDialog({
       .catch((err: unknown) => {
         if (cancelled) return;
         setCandidates([]);
-        setError(err instanceof Error ? err.message : "无法读取会话列表");
+        setError(err instanceof Error ? err.message : t("import.listFailed"));
       });
     return () => {
       cancelled = true;
@@ -303,7 +306,7 @@ function ImportPickerDialog({
       );
       onImported(result.snapshot, result);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "导入失败，请重试");
+      setError(err instanceof Error ? err.message : t("import.runFailed"));
     } finally {
       setRunning(false);
     }
@@ -318,12 +321,12 @@ function ImportPickerDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <AgentBrandIcon agent={source.id} className="size-4" />
-            导入 {source.name} 会话
+            {t("import.dialogTitle", { name: source.name })}
           </DialogTitle>
           <DialogDescription>
             {outcomes
-              ? `本次导入完成：成功 ${succeeded.length} 个${failed.length > 0 ? `，失败 ${failed.length} 个` : ""}。`
-              : "选择要导入的会话。导入后会在左侧对话列表中出现，原会话不受影响。"}
+              ? `${t("import.doneSummary", { ok: succeeded.length })}${failed.length > 0 ? t("import.doneFailed", { failed: failed.length }) : ""}。`
+              : t("import.pickHint")}
           </DialogDescription>
         </DialogHeader>
 
@@ -346,7 +349,7 @@ function ImportPickerDialog({
                   disabled={visible.length === 0}
                   onCheckedChange={(checked) => selectAllVisible(checked === true)}
                 />
-                全选（{selectedCount}/{visible.length}）
+                {t("import.selectAll", { selected: selectedCount, total: visible.length })}
               </Label>
               <div className="relative w-56 max-w-full min-w-0 shrink">
                 <HugeiconsIcon
@@ -356,7 +359,7 @@ function ImportPickerDialog({
                 />
                 <Input
                   value={query}
-                  placeholder="搜索标题或目录"
+                  placeholder={t("import.search")}
                   className="h-8 pl-8 text-xs"
                   onChange={(event) => setQuery(event.target.value)}
                 />
@@ -367,15 +370,15 @@ function ImportPickerDialog({
               {candidates === null ? (
                 <div className="flex h-full items-center justify-center gap-2 text-xs text-muted-foreground">
                   <Spinner className="size-3.5" />
-                  正在读取会话列表…
+                  {t("import.loadingList")}
                 </div>
               ) : visible.length === 0 ? (
                 <p className="py-10 text-center text-xs text-muted-foreground">
                   {needle
-                    ? "没有匹配的会话"
+                    ? t("import.noMatch")
                     : archivedCount > 0
-                      ? "只剩已归档会话，打开「显示已归档」查看"
-                      : "没有可导入的会话"}
+                      ? t("import.onlyArchived")
+                      : t("import.none")}
                 </p>
               ) : (
                 <div className="divide-y divide-border">
@@ -398,7 +401,7 @@ function ImportPickerDialog({
                 in a `<label>` — Base UI renders it as a `button`, which a label may not
                 contain. */}
             <span className="flex shrink-0 items-center justify-end gap-2 text-xs text-muted-foreground">
-              显示已归档{archivedCount > 0 ? `（${archivedCount}）` : ""}
+              {archivedCount > 0 ? t("import.showArchivedCount", { count: archivedCount }) : t("import.showArchived")}
               <Switch
                 checked={showArchived}
                 disabled={archivedCount === 0}
@@ -430,12 +433,12 @@ function ImportPickerDialog({
         <DialogFooter>
           {outcomes ? (
             <Button size="sm" onClick={onClose}>
-              完成
+              {t("import.done")}
             </Button>
           ) : (
             <>
               <Button size="sm" variant="ghost" className="sm:flex-1" disabled={running} onClick={onClose}>
-                取消
+                {t("import.cancel")}
               </Button>
               <Button
                 size="sm"
@@ -444,7 +447,7 @@ function ImportPickerDialog({
                 onClick={() => void run()}
               >
                 {running ? <Spinner className="size-3.5" /> : null}
-                {running ? "正在导入…" : `导入 ${selected.size} 个会话`}
+                {running ? t("import.importing") : t("import.importCount", { count: selected.size })}
               </Button>
             </>
           )}
@@ -463,6 +466,7 @@ function CandidateRow({
   checked: boolean;
   onToggle: () => void;
 }): JSX.Element {
+  const { t } = useTranslation("settings");
   return (
     <button
       type="button"
@@ -482,14 +486,14 @@ function CandidateRow({
           <span className="truncate text-xs font-medium">{candidate.title}</span>
           {candidate.imported ? (
             <Badge variant="secondary" className="shrink-0">
-              已导入
+              {t("import.alreadyImported")}
             </Badge>
           ) : null}
         </span>
         <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
           <span>{formatDay(candidate.updatedAt)}</span>
-          {candidate.archived ? <Badge variant="outline">已归档</Badge> : null}
-          {candidate.messageCount !== undefined ? <span>· {candidate.messageCount} 条消息</span> : null}
+          {candidate.archived ? <Badge variant="outline">{t("import.archivedBadge")}</Badge> : null}
+          {candidate.messageCount !== undefined ? <span>· {t("import.messages", { count: candidate.messageCount })}</span> : null}
           {candidate.bytes !== undefined ? <span>· {formatBytes(candidate.bytes)}</span> : null}
           {candidate.cwd ? <span className="truncate">· {shortenPath(candidate.cwd)}</span> : null}
         </span>
@@ -509,6 +513,7 @@ function ImportReport({
   outcomes: ImportOutcome[];
   candidates: ImportCandidate[] | null;
 }): JSX.Element {
+  const { t } = useTranslation("settings");
   const succeeded = outcomes.filter((outcome) => outcome.ok);
   const failed = outcomes.filter((outcome) => !outcome.ok);
   const originalCwd = new Map((candidates ?? []).map((candidate) => [candidate.id, candidate.cwd]));
@@ -525,12 +530,12 @@ function ImportReport({
           <div className="space-y-1.5">
             <div className="flex items-center gap-2 text-xs font-medium text-success">
               <HugeiconsIcon strokeWidth={2} icon={CheckmarkCircle02Icon} className="size-4" />
-              已导入 {succeeded.length} 个会话
+              {t("import.importedCount", { count: succeeded.length })}
             </div>
             <ul className="space-y-1">
               {succeeded.map((outcome) => (
                 <li key={outcome.id} className="truncate text-xs text-muted-foreground">
-                  {outcome.title} · {outcome.messages} 条消息
+                  {outcome.title} · {t("import.messages", { count: outcome.messages })}
                 </li>
               ))}
             </ul>
@@ -539,7 +544,7 @@ function ImportReport({
 
         {notes.length > 0 ? (
           <div className="space-y-1">
-            <div className="text-xs font-medium">转换说明</div>
+            <div className="text-xs font-medium">{t("import.notes")}</div>
             <ul className="space-y-0.5">
               {notes.map((note) => (
                 <li key={note} className="text-xs text-muted-foreground">
@@ -552,11 +557,11 @@ function ImportReport({
 
         {relocated.length > 0 ? (
           <div className="space-y-1">
-            <div className="text-xs font-medium">原目录不存在</div>
+            <div className="text-xs font-medium">{t("import.missingDir")}</div>
             <ul className="space-y-0.5">
               {relocated.map((outcome) => (
                 <li key={outcome.id} className="truncate text-xs text-muted-foreground">
-                  {outcome.title} · 已放入工作区
+                  {outcome.title} · {t("import.movedToWorkspace")}
                 </li>
               ))}
             </ul>
@@ -565,11 +570,11 @@ function ImportReport({
 
         {failed.length > 0 ? (
           <div className="space-y-1">
-            <div className="text-xs font-medium text-destructive">失败 {failed.length} 个</div>
+            <div className="text-xs font-medium text-destructive">{t("import.failedCount", { count: failed.length })}</div>
             <ul className="space-y-0.5">
               {failed.map((outcome) => (
                 <li key={outcome.id} className="text-xs text-muted-foreground">
-                  {outcome.title} · {outcome.error ?? "未知错误"}
+                  {outcome.title} · {outcome.error ?? t("import.unknownError")}
                 </li>
               ))}
             </ul>
@@ -577,7 +582,7 @@ function ImportReport({
         ) : null}
 
         {succeeded.length === 0 && failed.length === 0 ? (
-          <p className="py-10 text-center text-xs text-muted-foreground">没有会话被导入</p>
+          <p className="py-10 text-center text-xs text-muted-foreground">{t("import.noneImported")}</p>
         ) : null}
       </div>
     </ScrollArea>

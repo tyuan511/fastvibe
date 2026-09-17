@@ -11,6 +11,7 @@ import {
   type ThemeMode,
 } from "@/lib/themes";
 import { isPermissionMode } from "@/lib/permission-modes";
+import { detectSystemLanguage, isUiLanguage, type UiLanguage } from "@/lib/language";
 import { sanitizeShortcutOverrides, type ShortcutOverrides } from "@/lib/shortcuts";
 
 const KEY = "fastvibe.settings";
@@ -52,6 +53,18 @@ export type AppSettings = {
    * rewrites them to the last used model on every switch.
    */
   defaultModel?: EngineModel;
+  /**
+   * 界面语言: the language every string in the app is rendered in. Applied through
+   * react-i18next (`lib/i18n.ts`); changing it re-renders the tree and writes
+   * `FASTVIBE_UI_LANGUAGE` so Main and the built-in extensions follow along.
+   */
+  uiLanguage: UiLanguage;
+  /**
+   * AI 偏好语言: appended to the system prompt on every turn by the built-in
+   * `output-language` extension, so the model answers in this language no matter
+   * which one the user typed in. Independent of `uiLanguage` on purpose.
+   */
+  aiLanguage: UiLanguage;
   /** Whether the active theme follows the OS or is pinned light/dark. */
   themeMode: ThemeMode;
   /** Theme used while in light mode. */
@@ -111,6 +124,8 @@ const DEFAULTS: AppSettings = {
   keepAwake: true,
   compactCode: false,
   sendOnEnter: true,
+  uiLanguage: "zh",
+  aiLanguage: "zh",
   themeMode: DEFAULT_THEME_MODE,
   lightTheme: DEFAULT_LIGHT_THEME,
   darkTheme: DEFAULT_DARK_THEME,
@@ -123,6 +138,8 @@ function sanitize(parsed: Partial<AppSettings>): Partial<AppSettings> {
   const next = { ...parsed };
   if (!isPermissionMode(next.permissionMode)) delete next.permissionMode;
   if (!isPermissionMode(next.defaultPermissionMode)) delete next.defaultPermissionMode;
+  if (!isUiLanguage(next.uiLanguage)) delete next.uiLanguage;
+  if (!isUiLanguage(next.aiLanguage)) delete next.aiLanguage;
   if (!isThemeMode(next.themeMode)) delete next.themeMode;
   if (!isThemeId(next.lightTheme)) delete next.lightTheme;
   if (!isThemeId(next.darkTheme)) delete next.darkTheme;
@@ -219,9 +236,22 @@ function writeDisk(settings: AppSettings): void {
  * Disk (`userData/settings.json`) is the source of truth so preferences survive
  * Electron origin changes (dev `localhost` vs packaged `file://`). localStorage
  * is a first-paint cache and a migration source for older installs.
+ *
+ * An install that already has settings predates 语言 and keeps 中文 — flipping an
+ * existing user's interface language on upgrade would be a surprise. Only a
+ * brand-new install follows the OS locale.
  */
 function read(): AppSettings {
-  return { ...DEFAULTS, ...peekLocal(), ...peekDisk() };
+  const local = peekLocal();
+  const disk = peekDisk();
+  const existing = Object.keys(local).length > 0 || Object.keys(disk).length > 0;
+  const defaults = existing ? DEFAULTS : { ...DEFAULTS, ...firstRunLanguages() };
+  return { ...defaults, ...local, ...disk };
+}
+
+function firstRunLanguages(): Pick<AppSettings, "uiLanguage" | "aiLanguage"> {
+  const system = detectSystemLanguage();
+  return { uiLanguage: system, aiLanguage: system };
 }
 
 type SettingsStore = {

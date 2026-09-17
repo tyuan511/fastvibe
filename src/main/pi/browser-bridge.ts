@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { uiText } from "../engine/ui-text";
 import type { WebContents } from "electron";
 import { Ipc } from "@shared/ipc";
 import type { BrowserRequest } from "@shared/types";
@@ -18,7 +19,7 @@ export function attachBrowserRenderer(contents: WebContents): void {
     if (target === contents) target = null;
     for (const [id, request] of pending) {
       clearTimeout(request.timer);
-      request.reject(new Error("浏览器窗口已关闭"));
+      request.reject(new Error(uiText("浏览器窗口已关闭", "Browser window closed")));
       pending.delete(id);
     }
   });
@@ -30,18 +31,18 @@ export function respondBrowserRequest(response: BrowserResponse): void {
   pending.delete(response.id);
   clearTimeout(request.timer);
   if (response.ok) request.resolve(response.result);
-  else request.reject(new Error(response.error || "浏览器操作失败"));
+  else request.reject(new Error(response.error || uiText("浏览器操作失败", "Browser action failed")));
 }
 
 /** Called by the browser-use extension running in the main process. */
 export function requestBrowser(request: BrowserRequest): Promise<unknown> {
-  if (!target || target.isDestroyed()) return Promise.reject(new Error("内置浏览器尚未打开"));
+  if (!target || target.isDestroyed()) return Promise.reject(new Error(uiText("内置浏览器尚未打开", "Built-in browser is not open")));
   const id = randomUUID();
   const timeout = Math.max(1_000, Math.min(request.timeoutMs ?? 30_000, 120_000));
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       pending.delete(id);
-      reject(new Error(`浏览器操作超时（${timeout}ms）`));
+      reject(new Error(uiText(`浏览器操作超时（${timeout}ms）`, `Browser action timed out (${timeout}ms)`)));
     }, timeout);
     pending.set(id, { resolve, reject, timer });
     target?.send(Ipc.browserRequest, { id, request });

@@ -1,16 +1,14 @@
 import { useState, type JSX } from "react";
+import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { ArrowRight01Icon, ScissorIcon } from "@hugeicons/core-free-icons";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
-import type { ChatMessage, CompactReason } from "@shared/types";
+import type { ChatMessage } from "@shared/types";
 import { MarkdownView } from "./markdown-view";
 
-const REASON_LABEL: Partial<Record<CompactReason, string>> = {
-  threshold: "接近上限",
-  overflow: "超出窗口",
-};
+
 
 /** Compact `45.5K` / `1.2M` counts, matching the composer's context ring. */
 function formatCount(value: number): string {
@@ -31,25 +29,26 @@ function tokenHint(before?: number, after?: number): string | null {
  * running compact is visible, and the summary is one click away once it lands.
  */
 export function CompactNotice({ message }: { message: ChatMessage }): JSX.Element {
+  const { t } = useTranslation("chat");
   const [open, setOpen] = useState(false);
   const info = message.compact;
   const status = info?.status ?? (message.text ? "done" : "running");
   const running = status === "running";
   const summary = status === "done" ? message.text.trim() : "";
-  const reason = info?.reason ? REASON_LABEL[info.reason] : undefined;
+  const reason = info?.reason === "threshold" || info?.reason === "overflow" ? t(`compact.${info.reason}`) : undefined;
   const tokens = tokenHint(info?.tokensBefore, info?.tokensAfter);
-  const error = status === "error" ? (info?.error || message.text || "压缩失败") : null;
+  const error = status === "error" ? (info?.error || message.text || t("compact.failed")) : null;
   const expandable = Boolean(summary);
 
   const label =
     running ? (
-      <span className="animated-gradient-text font-medium">正在压缩上下文</span>
+      <span className="animated-gradient-text font-medium">{t("compact.running")}</span>
     ) : status === "aborted" ? (
-      <span className="font-medium text-muted-foreground">上下文压缩已取消</span>
+      <span className="font-medium text-muted-foreground">{t("compact.cancelled")}</span>
     ) : status === "error" ? (
-      <span className="font-medium text-destructive">压缩失败</span>
+      <span className="font-medium text-destructive">{t("compact.failed")}</span>
     ) : (
-      <span className="font-medium text-muted-foreground">上下文已压缩</span>
+      <span className="font-medium text-muted-foreground">{t("compact.done")}</span>
     );
 
   const header = (
