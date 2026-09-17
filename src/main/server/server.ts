@@ -36,6 +36,14 @@ export type RemoteServerDeps = {
   dispatch: (method: string, payload: unknown, clientId: string) => Promise<unknown>;
   /** Attach a push receiver; the returned function detaches it. */
   subscribe: (client: { id: string; send: (channel: string, payload: unknown) => void }) => () => void;
+  /**
+   * Told about a change the caller could not otherwise learn of: a device logging in
+   * over plain HTTP, or a WebSocket attaching or dropping. None of those go through a
+   * `remote:*` method, so without this the settings pane's device list and client count
+   * only refresh the next time its own effect happens to run — a login while the pane is
+   * already open would otherwise sit invisible until it is closed and reopened.
+   */
+  onStatusChange?: () => void;
   /** Directory holding the web client, when one has been built. */
   webRoot?: string;
   log: RemoteLogger;
@@ -201,6 +209,7 @@ export class RemoteServer {
     }
     this.#throttle.recordSuccess();
     this.#deps.log.info(`remote login ok device=${issued.device.id}`);
+    this.#deps.onStatusChange?.();
     this.#json(response, 200, {
       token: issued.token,
       device: { id: issued.device.id, label: issued.device.label, createdAt: issued.device.createdAt },
@@ -372,6 +381,7 @@ export class RemoteServer {
     });
     this.#send(client, { type: "auth", ok: true, device: { id: device.id, label: device.label } });
     this.#deps.log.info(`remote client attached device=${device.id}`);
+    this.#deps.onStatusChange?.();
   }
 
   #send(client: Client, message: unknown): void {
@@ -385,6 +395,9 @@ export class RemoteServer {
 
   #dropClient(client: Client): void {
     if (!this.#clients.has(client.id)) return;
+    // Only an attached client changes anything the pane shows (the `clients` count);
+    // one that was still in its auth grace period leaving is not news.
+    const wasAttached = client.deviceId !== null;
     this.#clients.delete(client.id);
     if (client.timer) clearTimeout(client.timer);
     client.detach?.();
@@ -394,6 +407,7 @@ export class RemoteServer {
     } catch {
       // already gone
     }
+    if (wasAttached) this.#deps.onStatusChange?.();
   }
 }
 

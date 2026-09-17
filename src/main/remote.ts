@@ -36,6 +36,7 @@ function instance(): RemoteServer {
       // policy before they get here, and the rest read `ctx.window` as null.
       dispatch(method, payload, { kind: "remote", window: null, origin: clientId }),
     subscribe: (client) => subscribe(client),
+    onStatusChange: announceFromServer,
     webRoot: app.isPackaged
       ? join(process.resourcesPath, "app.asar", "out", "renderer")
       : join(__dirname, "../renderer"),
@@ -60,6 +61,21 @@ function announce(status: RemoteServerStatus): RemoteServerStatus {
   return status;
 }
 
+/**
+ * `RemoteServer`'s own `onStatusChange` callback.
+ *
+ * A plain function, not `() => announce(instance().status)` inlined at the construction
+ * site: that expression calls `instance()` while `instance()` is still in the middle of
+ * building the very object it would return, before `server` has been assigned — the
+ * memoized `server ??= new RemoteServer(...)` never completes, and each nested call
+ * builds another one. Reading the module-level `server` variable here instead is safe
+ * because this only ever runs later, from inside the server's own event handlers, by
+ * which point construction has long finished.
+ */
+function announceFromServer(): void {
+  if (server) announce(server.status);
+}
+
 export function registerRemoteIpc(): void {
   handle(Ipc.remoteGetState, () => instance().status);
 
@@ -75,7 +91,13 @@ export function registerRemoteIpc(): void {
 
   handle(Ipc.remoteClearPassword, async () => {
     await instance().stop();
-    clearRemoteAccess(getFastVibePaths().remoteAccessFile);
+    const paths = getFastVibePaths();
+    clearRemoteAccess(paths.remoteAccessFile);
+    // Matches what `remote:stop` does: without this, turning access off from the danger
+    // zone left `remoteEnabled: true` on disk — harmless at the next launch, since
+    // `restoreRemoteServer` refuses to start with no password, but it logged a warning
+    // about it every time for a setting the user had already turned off on purpose.
+    writeAppSettings(paths, { ...readAppSettings(paths), remoteEnabled: false });
     return announce(instance().status);
   });
 

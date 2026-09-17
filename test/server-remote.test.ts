@@ -28,6 +28,8 @@ type Harness = {
   dispatched: Array<{ method: string; payload: unknown }>;
   push: (channel: string, payload: unknown) => void;
   subscribers: number;
+  /** Times `onStatusChange` fired — what the settings pane's live refresh rides on. */
+  statusChanges: number;
 };
 
 async function withServer(fn: (h: Harness) => Promise<void>): Promise<void> {
@@ -43,6 +45,7 @@ async function withServer(fn: (h: Harness) => Promise<void>): Promise<void> {
   setPassword(accessFile, PASSWORD);
   const dispatched: Array<{ method: string; payload: unknown }> = [];
   const receivers = new Map<string, (channel: string, payload: unknown) => void>();
+  let statusChanges = 0;
   const server = new RemoteServer({
     accessFile,
     channels: () => registeredChannels(),
@@ -54,6 +57,9 @@ async function withServer(fn: (h: Harness) => Promise<void>): Promise<void> {
     subscribe: (client) => {
       receivers.set(client.id, client.send);
       return () => receivers.delete(client.id);
+    },
+    onStatusChange: () => {
+      statusChanges += 1;
     },
     webRoot,
     log: silent,
@@ -67,6 +73,9 @@ async function withServer(fn: (h: Harness) => Promise<void>): Promise<void> {
       push: (channel, payload) => receivers.forEach((send) => send(channel, payload)),
       get subscribers() {
         return receivers.size;
+      },
+      get statusChanges() {
+        return statusChanges;
       },
     } as Harness);
   } finally {
@@ -250,6 +259,43 @@ test("pushes start at authentication, not at connection", async () => {
     assert.equal(message.push, Ipc.event);
     assert.deepEqual(message.payload, { type: "hello" });
     socket.close();
+  });
+});
+
+test("logging in, authenticating, and dropping an attached client each notify the caller", async () => {
+  // This is what the settings pane's device list and client count live-update on. A
+  // device logging in over plain HTTP, or a socket attaching or dropping, happens
+  // nowhere near a `remote:*` method — without this the pane only learns of any of it
+  // the next time its own effect happens to run.
+  await withServer(async (h) => {
+    assert.equal(h.statusChanges, 0);
+
+    const token = await loginToken(h.port);
+    assert.equal(h.statusChanges, 1, "a login should notify");
+
+    const socket = await connect(h.port);
+    assert.equal(h.statusChanges, 1, "connecting alone (before auth) should not notify");
+    socket.send(JSON.stringify({ type: "auth", token }));
+    await nextMessage(socket);
+    assert.equal(h.statusChanges, 2, "authenticating should notify");
+
+    socket.close();
+    await closed(socket);
+    for (let i = 0; i < 20 && h.statusChanges < 3; i += 1) await new Promise((r) => setTimeout(r, 50));
+    assert.equal(h.statusChanges, 3, "an attached client dropping should notify");
+  });
+});
+
+test("a socket that never authenticates does not notify when it drops", async () => {
+  // The count this drives (`clients`) is meant to answer "who is actually connected",
+  // not "how many sockets happened to open and time out" — a scanner probing the port
+  // must not look like device activity in the settings pane.
+  await withServer(async (h) => {
+    const socket = await connect(h.port);
+    socket.close();
+    await closed(socket);
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal(h.statusChanges, 0);
   });
 });
 
