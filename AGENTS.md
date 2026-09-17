@@ -580,6 +580,16 @@ pnpm check:scripts  # only the browser page scripts (a compile error there is a
 pnpm shadcn add <component> -y
 ```
 
+### 主进程文案里不要出现独立的 `import`
+
+`package.json` 是 `"type": "module"`，主进程产物是 ESM，于是 electron-vite 的
+`vite:esm-shim` 会往 bundle 里补一段 `createRequire` 垫片 —— 插入位置由
+**正则**（不是 AST）找出的「最后一条静态 import」决定。正则会把任意字符串字面量里
+的独立单词 `import` 当成一条 import：一句 `"…compact after import"` 就让它把垫片
+插进了 `parts.join("；")` 的引号中间，构建以毫无线索的
+`[vite:esbuild-transpile] Unterminated string literal`（指向一个 `join("`）失败。
+写主进程英文文案时避开这个词（用 `loading` / `found` 之类替代）。
+
 ## Model metadata (models.dev)
 
 - `scripts/sync-models-dev.mjs` downloads `https://models.dev/api.json` and emits a

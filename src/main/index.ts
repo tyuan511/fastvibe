@@ -149,7 +149,7 @@ function registerIpc(): void {
   ipcMain.handle(Ipc.browserImportProfile, async (_event, payload: { profile: import("@shared/types").BrowserProfileInfo }) => {
     if (!payload?.profile?.cookiePath) throw new Error(uiText("浏览器配置文件无效", "Invalid browser profile"));
     const allowed = (await listBrowserProfiles()).find((profile) => profile.id === payload.profile.id && profile.cookiePath === payload.profile.cookiePath);
-    if (!allowed) throw new Error(uiText("浏览器配置文件未通过校验，请重新打开导入列表", "Browser profile failed validation. Open the import list again."));
+    if (!allowed) throw new Error(uiText("浏览器配置文件未通过校验，请重新打开导入列表", "Browser profile failed validation. Open the list again."));
     return importBrowserProfile(allowed, (cookie) => session.fromPartition("persist:fastvibe-browser").cookies.set(cookie));
   });
   ipcMain.handle(Ipc.engineGetStatus, () => engine.status);

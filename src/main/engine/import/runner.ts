@@ -99,7 +99,7 @@ export async function scanImportCandidates(
 function noteFor(note: string | undefined, messageCount: number | undefined, bytes: number | undefined): string | undefined {
   const parts = note ? [note] : [];
   if ((messageCount !== undefined && messageCount > LARGE_MESSAGES) || (bytes !== undefined && bytes > LARGE_BYTES)) {
-    parts.push(uiText("会话较长，导入后建议先压缩上下文", "This session is long; compact after import"));
+    parts.push(uiText("会话较长，导入后建议先压缩上下文", "This session is long; compact the context after loading"));
   }
   return parts.length ? parts.join("；") : undefined;
 }
