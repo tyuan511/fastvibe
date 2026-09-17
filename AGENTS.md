@@ -923,6 +923,22 @@ awake while an agent run is in flight.
   still counts. `before-quit` clears the set. A compaction counts too: it is minutes of
   model work on the user's own machine, and it is the last thing to finish.
 
+## 自动更新（updater）
+
+`src/main/updater.ts` owns electron-updater. Background checks run once shortly after
+launch and then every 10 minutes, and they only ever *announce* a version: downloads are
+user-initiated (`autoDownload` is off), from the manual-check dialog or the small button
+to the right of the sidebar's 设置 row. The sidebar button and the dialog both read the
+same `update:state` stream (`AppUpdateState`), so 「download → progress → restart」 cannot
+disagree between them.
+
+**`releaseNotes` is HTML, not markdown.** electron-updater's GitHub provider builds it
+from the releases **Atom feed** (`<content type="html">`), i.e. GitHub's already-rendered
+HTML — so rendering it with `react-markdown` showed the raw tags. `release-notes.tsx`
+parses it and rebuilds a whitelist subset as React elements (never `dangerouslySetInnerHTML`;
+unknown tags unwrap, `javascript:` hrefs and `<script>` are dropped), and falls back to the
+markdown renderer when a feed does hand us markdown.
+
 ## Product constraints
 
 - Code / Office / Cowork are first-class; pi-coding-agent is the default backend.

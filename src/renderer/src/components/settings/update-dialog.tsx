@@ -13,8 +13,8 @@ import {
 } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
 import { Spinner } from "@/components/ui/spinner";
-import { MarkdownView } from "@/components/chat/markdown-view";
 import { useAppUpdate } from "@/lib/use-app-update";
+import { ReleaseNotes } from "./release-notes";
 
 function formatBytes(bytes: number): string {
   if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
@@ -100,7 +100,7 @@ export function UpdateDialog({
             <p className="mb-1.5 text-xs font-medium text-muted-foreground">{t("update.dialogNotes")}</p>
             <div className="max-h-64 overflow-y-auto rounded-lg border border-border bg-muted/30 p-3 text-sm">
               {update?.releaseNotes ? (
-                <MarkdownView text={update.releaseNotes} />
+                <ReleaseNotes notes={update.releaseNotes} />
               ) : (
                 <p className="text-muted-foreground">{t("update.dialogNoNotes")}</p>
               )}
