@@ -114,6 +114,12 @@ export const Ipc = {
   providersTest: "providers:test",
   providersCcSwitchScan: "providers:cc-switch-scan",
   providersCcSwitchImport: "providers:cc-switch-import",
+  /** Subscription (OAuth) login: start, answer a prompt, cancel, log out. */
+  providersOAuthLogin: "providers:oauth-login",
+  providersOAuthAnswer: "providers:oauth-answer",
+  providersOAuthCancel: "providers:oauth-cancel",
+  providersLogout: "providers:logout",
+  providersOAuthEvent: "providers:oauth-event",
 } as const;
 
 export type AppModelsDevInfo = {

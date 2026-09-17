@@ -15,6 +15,8 @@ export type FastVibePaths = {
   /** pi-coding-agent SDK model registry configuration. */
   modelsJson: string;
   agentEnv: string;
+  /** Subscription (OAuth) tokens; the one credential that must outlive a restart. */
+  oauthFile: string;
   conversationsFile: string;
   providersFile: string;
   mcpFile: string;
@@ -51,6 +53,7 @@ export function getFastVibePaths(): FastVibePaths {
     scratchDir,
     modelsJson: join(agentDir, "models.json"),
     agentEnv: join(agentDir, ".env"),
+    oauthFile: join(agentDir, "oauth.json"),
     conversationsFile: join(userData, "conversations.json"),
     providersFile: join(userData, "providers.json"),
     mcpFile: join(userData, "mcp.json"),

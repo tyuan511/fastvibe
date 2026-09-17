@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import { unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { InMemoryCredentialStore, InMemoryModelsStore } from "@earendil-works/pi-ai";
+import { InMemoryModelsStore, type AuthPrompt } from "@earendil-works/pi-ai";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
   createAgentSession,
@@ -45,6 +45,10 @@ import type {
   WorkspaceSnapshot,
   ModelPrice,
   NativeProviderConfig,
+  OAuthEvent,
+  OAuthEventPayload,
+  OAuthLoginResult,
+  OAuthPrompt,
   PermissionQuestion,
   ImportCandidate,
   ImportRunResult,
@@ -85,6 +89,8 @@ import {
 } from "../engine/providers";
 import { importCcSwitch, scanCcSwitch } from "../engine/cc-switch";
 import { catalogPrice } from "../engine/models-dev";
+import { findNativeProvider } from "../engine/native-providers";
+import { hasOAuthCredential, OAuthCredentialStore } from "../engine/oauth-store";
 import { priceUsage } from "../engine/pricing";
 import { getFastVibePaths, type FastVibePaths } from "../engine/paths";
 import { McpManager, type McpServerConfig, type McpServerStatus } from "./mcp-manager";
@@ -151,6 +157,19 @@ type RunTiming = {
   toolStartedAt?: number;
   /** In-flight tool call count; tools may overlap. */
   openTools: number;
+};
+/**
+ * An in-flight subscription login.
+ *
+ * A flow can ask the user several questions (which login method, then a pasted
+ * authorisation code), and each of those questions may be dropped while it is still on
+ * screen — the browser callback winning the race is the normal case, not a failure. So
+ * every prompt is parked here under its own id and can be resolved, superseded or
+ * rejected independently of the login as a whole.
+ */
+type OAuthLogin = {
+  abort: AbortController;
+  prompts: Map<string, { resolve: (value: string) => void; reject: (error: Error) => void }>;
 };
 /** Thinking blocks of the message currently streaming, per conversation. */
 type ReasoningRun = { blocks: ThinkingTiming[] };
@@ -374,6 +393,9 @@ export class PiProcessManager {
   /** Live subagent registry and bounded transcript cache. */
   #subagents = new Map<string, SubagentInfo>();
   #subagentMessages = new Map<string, ChatMessage[]>();
+  /** Live subscription logins, keyed by provider id. */
+  #oauthLogins = new Map<string, OAuthLogin>();
+  #oauthListeners = new Set<(payload: OAuthEventPayload) => void>();
   /** In-flight subagent sessions, keyed by subagent id, so `stop()` can dispose them. */
   #subagentSessions = new Map<string, AgentSession>();
 
@@ -399,6 +421,7 @@ export class PiProcessManager {
   onStatus(listener: (status: EngineStatus) => void): () => void { this.#statusListeners.add(listener); return () => this.#statusListeners.delete(listener); }
   onEvent(listener: (event: Record<string, unknown>) => void): () => void { this.#eventListeners.add(listener); return () => this.#eventListeners.delete(listener); }
   onConversationReady(listener: (payload: ConversationReadyEvent) => void): () => void { this.#readyListeners.add(listener); return () => this.#readyListeners.delete(listener); }
+  onOAuthEvent(listener: (payload: OAuthEventPayload) => void): () => void { this.#oauthListeners.add(listener); return () => this.#oauthListeners.delete(listener); }
 
   start(cwd = this.#cwd): Promise<EngineStatus> {
     return this.#queue(async () => {
@@ -423,11 +446,13 @@ export class PiProcessManager {
       const applied = applyProviders(this.#paths);
       this.#modelsCache = applied;
       this.#prices = modelPriceIndex(this.#paths);
-      // Credentials live in an in-memory overlay so keys are never written to the
-      // SDK's own auth file; `models.json` (which FastVibe owns) is the only file
-      // the runtime reads, and dynamic catalogs stay in memory too.
+      // Credentials are split by kind. API keys live in an in-memory overlay so keys
+      // are never written to the SDK's own auth file; `models.json` (which FastVibe
+      // owns) is the only file the runtime reads, and dynamic catalogs stay in memory
+      // too. A subscription (OAuth) token is the exception: its refresh token has to
+      // survive a restart, so it is persisted under the isolated agentDir instead.
       this.#runtime = await ModelRuntime.create({
-        credentials: new InMemoryCredentialStore(),
+        credentials: new OAuthCredentialStore(this.#paths.oauthFile),
         modelsStore: new InMemoryModelsStore(),
         modelsPath: join(this.#paths.agentDir, "models.json"),
         allowModelNetwork: false,
@@ -454,6 +479,9 @@ export class PiProcessManager {
       this.#sessions.clear();
       this.#sessionPromises.clear();
       this.#resolvePendingUi();
+      // A login in flight owns a loopback callback server and waits on a human who is
+      // now looking at a stopped engine. Its own `finally` closes the server.
+      for (const login of this.#oauthLogins.values()) login.abort.abort();
       for (const key of [...this.#widgetTimers.keys()]) this.#clearWidget(key);
       this.#activeId = null;
       // Tell the UI every tracked conversation stopped, so no stale spinner
@@ -1023,6 +1051,88 @@ export class PiProcessManager {
   async importCcSwitch(ids: string[]): Promise<ProviderConfig[]> { await importCcSwitch(this.#paths, ids); await this.reloadProviders(); return this.listProviders(); }
   async updateProvider(id: string, patch: { name?: string; baseUrl?: string; api?: string; enabled?: boolean; models?: ProviderModel[]; apiKey?: string }): Promise<ProviderConfig[]> { updateProviderConfig(this.#paths, id, { name: patch.name, baseUrl: patch.baseUrl?.trim().replace(/\/+$/, ""), api: patch.api, enabled: patch.enabled, models: patch.models }); if (patch.apiKey !== undefined) { const env = providerKeyEnv(this.#paths, id); if (env) await setProviderKey(this.#paths, env, patch.apiKey); } await this.reloadProviders(); return this.listProviders(); }
   async removeProvider(id: string): Promise<ProviderConfig[]> { await removeProviderConfig(this.#paths, id); await this.reloadProviders(); return this.listProviders(); }
+
+  /**
+   * Run a provider's subscription (OAuth) login to completion.
+   *
+   * The flow belongs to pi-ai — it owns the PKCE pair, the loopback callback server and
+   * the device-code polling — but it needs a human, and its two human-facing shapes
+   * (`auth_url` / `device_code`) and its questions all have to cross into the GUI.
+   * `notify` is a one-way readout and `prompt` a round trip; both ride the
+   * `providers:oauth-event` stream, with the answers coming back through
+   * `answerOAuthPrompt`.
+   *
+   * A successful login is followed by dropping the provider's API key: an overlay key is
+   * resolved *before* the stored credential, so leaving one behind would silently keep
+   * billing the key and make the subscription the user just authorised do nothing.
+   */
+  async loginProvider(id: string): Promise<OAuthLoginResult> {
+    const native = findNativeProvider(id);
+    if (!native?.oauth) throw new Error("该供应商不支持订阅登录");
+    if (this.#oauthLogins.has(id)) throw new Error("该供应商正在登录中");
+    await this.#ensureReady();
+    const runtime = this.#runtime;
+    if (!runtime) throw new Error(uiText("引擎未就绪", "Engine not ready"));
+
+    const login: OAuthLogin = { abort: new AbortController(), prompts: new Map() };
+    this.#oauthLogins.set(id, login);
+    const notify = (event: OAuthEvent): void => this.#emitOAuth({ id, event });
+    try {
+      await runtime.login(id, "oauth", {
+        signal: login.abort.signal,
+        notify,
+        prompt: (prompt) => this.#askOAuth(id, prompt, login),
+      });
+      const env = providerKeyEnv(this.#paths, id);
+      if (env) await setProviderKey(this.#paths, env, "");
+      await this.reloadProviders();
+      return { ok: true };
+    } catch (error) {
+      if (login.abort.signal.aborted) return { ok: false };
+      // The flow can fail *after* its credential was stored — the runtime's own
+      // synchronisation pass (recompose, model refresh, availability) runs behind the
+      // login and can throw on its own. A token on disk is a successful login; only a
+      // real failure may say otherwise, or the user would re-authorise for nothing.
+      if (hasOAuthCredential(this.#paths.oauthFile, id)) await this.reloadProviders();
+      else return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      return { ok: true };
+    } finally {
+      this.#oauthLogins.delete(id);
+      // Whatever is still on screen is over: an abandoned loopback race leaves a
+      // pending prompt behind, and its answer would go nowhere.
+      for (const [promptId, pending] of login.prompts) {
+        notify({ type: "prompt_cancelled", promptId });
+        pending.reject(new Error("登录已结束"));
+      }
+      login.prompts.clear();
+    }
+  }
+
+  /** Deliver an answer to a pending login prompt. Unknown ids are ignored. */
+  answerOAuthPrompt(id: string, promptId: string, value: string): void {
+    const pending = this.#oauthLogins.get(id)?.prompts.get(promptId);
+    if (!pending) return;
+    this.#oauthLogins.get(id)?.prompts.delete(promptId);
+    pending.resolve(value);
+  }
+
+  /** Abandon an in-flight login. The flow's own cleanup closes its callback server. */
+  cancelOAuthLogin(id: string): void {
+    this.#oauthLogins.get(id)?.abort.abort();
+  }
+
+  /**
+   * Drop a provider's subscription credential. The provider entry survives, so it stays
+   * visible (and re-loginable) in Settings — it simply has no models until it is
+   * authorised again, which is the same shape as a provider whose key was cleared.
+   */
+  async logoutProvider(id: string): Promise<ProviderConfig[]> {
+    await this.#ensureReady();
+    await this.#runtime?.logout(id);
+    await this.reloadProviders();
+    return this.listProviders();
+  }
+
   /**
    * Provider config changed on disk. Apply it to the running engine — no teardown.
    *
@@ -1442,6 +1552,56 @@ export class PiProcessManager {
   #emit(event: Record<string, unknown>): void {
     this.#trackSubagentEvent(event);
     for (const listener of this.#eventListeners) listener(event);
+  }
+
+  #emitOAuth(payload: OAuthEventPayload): void {
+    for (const listener of this.#oauthListeners) listener(payload);
+  }
+
+  /**
+   * Carry one of the flow's questions into the GUI and wait for the answer.
+   *
+   * `prompt.signal` is how a flow withdraws a question it no longer needs — an
+   * Anthropic login opens the browser *and* offers a paste box, then aborts the box the
+   * instant the loopback callback arrives. Both that and a user-initiated cancel have
+   * to reject, or the login would sit waiting on an answer nobody is going to give.
+   */
+  #askOAuth(id: string, prompt: AuthPrompt, login: OAuthLogin): Promise<string> {
+    const promptId = `${id}:${randomUUID().slice(0, 8)}`;
+    return new Promise<string>((resolve, reject) => {
+      const pending = {
+        resolve: (value: string) => {
+          prompt.signal?.removeEventListener("abort", onAbort);
+          resolve(value);
+        },
+        reject: (error: Error) => {
+          prompt.signal?.removeEventListener("abort", onAbort);
+          reject(error);
+        },
+      };
+      const onAbort = (): void => {
+        if (!login.prompts.delete(promptId)) return;
+        this.#emitOAuth({ id, event: { type: "prompt_cancelled", promptId } });
+        pending.reject(new Error("提示已取消"));
+      };
+      login.prompts.set(promptId, pending);
+      prompt.signal?.addEventListener("abort", onAbort, { once: true });
+      if (login.abort.signal.aborted) {
+        onAbort();
+        return;
+      }
+      const question: OAuthPrompt = { id: promptId, kind: prompt.type, message: prompt.message };
+      if (prompt.type === "select") {
+        question.options = prompt.options.map((option) => ({
+          id: option.id,
+          label: option.label,
+          ...(option.description ? { description: option.description } : {}),
+        }));
+      } else if (prompt.placeholder) {
+        question.placeholder = prompt.placeholder;
+      }
+      this.#emitOAuth({ id, event: { type: "prompt", prompt: question } });
+    });
   }
   #trackSubagentEvent(event: Record<string, unknown>): void {
     const type = typeof event.type === "string" ? event.type : "";

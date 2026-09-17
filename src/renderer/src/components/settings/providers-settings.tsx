@@ -7,7 +7,6 @@ import {
   ArrowDown01Icon,
   ArrowLeft01Icon,
   BoxesIcon,
-  CpuIcon,
   Delete02Icon,
   Download01Icon,
   Loading03Icon,
@@ -42,9 +41,12 @@ import {
 import { cleanError } from "@/lib/ipc-error";
 import { providerLabel } from "@/lib/provider-label";
 import { cn } from "@/lib/utils";
+import { ProviderIcon } from "@/components/provider-icon";
 import { PROVIDER_APIS, type CcSwitchCandidate, type CcSwitchScan, type NativeProviderConfig, type ProviderApi, type ProviderConfig, type ProviderModel } from "@shared/types";
 import { ModelDetailDialog, type ModelDetailTarget } from "./model-detail-dialog";
 import { ModelPicker } from "./model-picker";
+import { OAuthExtraUsageNote } from "./oauth-extra-usage-note";
+import { OAuthLoginDialog, type OAuthTarget } from "./oauth-login-dialog";
 
 const PROVIDER_API_ITEMS: Record<ProviderApi, string> = {
   "openai-completions": "OpenAI Chat Completions (/chat/completions)",
@@ -61,7 +63,7 @@ const PROVIDER_API_SHORT: Record<ProviderApi, string> = {
   "google-generative-ai": "Gemini",
 };
 
-/** `native` = a pi-coding-agent built-in provider configured with an API key. */
+/** `native` = a pi-coding-agent built-in provider configured with an API key or a login. */
 type AddMode = "native" | "custom";
 
 type AddState = {
@@ -72,6 +74,11 @@ type AddState = {
   baseUrl: string;
   api: ProviderApi;
   apiKey: string;
+  /**
+   * Set once a subscription login for the chosen built-in succeeded. The entry can then
+   * be created with no key at all, which is the only way to add a login-only built-in.
+   */
+  oauthDone: boolean;
   candidates: ProviderModel[] | null;
   selected: Set<string>;
   busy: boolean;
@@ -95,6 +102,7 @@ const EMPTY_ADD: AddState = {
   baseUrl: "",
   api: "openai-completions",
   apiKey: "",
+  oauthDone: false,
   candidates: null,
   selected: new Set(),
   busy: false,
@@ -112,6 +120,13 @@ export function ProvidersSettings({ onChanged }: { onChanged: () => void }): JSX
   const [ccSwitchOpen, setCcSwitchOpen] = useState(false);
   const [picker, setPicker] = useState<PickerState | null>(null);
   const [detail, setDetail] = useState<ModelDetailTarget | null>(null);
+  /**
+   * The subscription login on screen. `next` is what to do once it succeeds: continue
+   * the 添加供应商 flow with the model picker, or just refresh a provider's row. It is
+   * carried here rather than inside the dialog because only the caller knows which
+   * flow it is.
+   */
+  const [oauth, setOauth] = useState<{ target: OAuthTarget; next: () => void } | null>(null);
 
   async function refresh(): Promise<ProviderConfig[]> {
     const next = await window.fastvibe.providers.list();
@@ -243,6 +258,19 @@ export function ProvidersSettings({ onChanged }: { onChanged: () => void }): JSX
             onConnectFastVibe={(apiKey) => void startConnect(selected, apiKey, setPicker, setError)}
             onAddModels={() => void startAddModels(selected, setPicker, setError)}
             onEditModel={(model) => setDetail({ providerId: selected.id, model })}
+            onOAuth={() => {
+              if (!selected.oauth) return;
+              setOauth({
+                target: { id: selected.id, name: selected.name, oauth: selected.oauth },
+                next: () => {
+                  // Both views have to move: this pane's rows, and the composer's model
+                  // menu — the login is what made this provider's models exist.
+                  void refresh().catch(() => undefined);
+                  onChanged();
+                },
+              });
+            }}
+            onLogout={() => void logout(selected, setProviders, setError, onChanged)}
             onChanged={async (next) => {
               setProviders(next);
               onChanged();
@@ -277,6 +305,27 @@ export function ProvidersSettings({ onChanged }: { onChanged: () => void }): JSX
         onPatch={(next) => setAdd((current) => (current ? { ...current, ...next } : current))}
         onClose={() => setAdd(null)}
         onFetch={() => void fetchAddCandidates(add, natives, setAdd)}
+        onOAuth={() => {
+          const provider = natives.find((item) => item.id === add?.nativeId);
+          if (!provider?.oauth || !provider.id) return;
+          setOauth({
+            target: { id: provider.id, name: provider.name, oauth: provider.oauth },
+            next: () =>
+              // Authorised, so the model list is available and no key is needed.
+              setAdd((current) =>
+                current?.nativeId === provider.id
+                  ? {
+                      ...current,
+                      oauthDone: true,
+                      apiKey: "",
+                      candidates: provider.models,
+                      selected: new Set(provider.models.map((model) => model.id)),
+                      error: null,
+                    }
+                  : current,
+              ),
+          });
+        }}
         onSave={() =>
           void saveAdd(add, setAdd, async (next) => {
             const saved = await mutate(async () => next);
@@ -299,6 +348,16 @@ export function ProvidersSettings({ onChanged }: { onChanged: () => void }): JSX
         provider={providers.find((item) => item.id === detail?.providerId)}
         onClose={() => setDetail(null)}
         onSave={saveDetail}
+      />
+
+      <OAuthLoginDialog
+        target={oauth?.target ?? null}
+        onClose={() => setOauth(null)}
+        onDone={() => {
+          const next = oauth?.next;
+          setOauth(null);
+          next?.();
+        }}
       />
     </div>
   );
@@ -326,12 +385,19 @@ function ProviderNavItem({
       {provider.kind === "builtin" ? (
         <AppLogo className="size-4 shrink-0 rounded-[4px]" />
       ) : provider.kind === "native" ? (
-        <HugeiconsIcon strokeWidth={2} icon={CpuIcon} className="size-3.5 text-muted-foreground" />
+        // The built-in's own brand mark, else a neutral glyph — the SDK catalog is what
+        // decides which, see `provider-icon.tsx`.
+        <ProviderIcon provider={provider.id} />
       ) : (
-        <HugeiconsIcon strokeWidth={2} icon={BoxesIcon} className="size-3.5 text-muted-foreground" />
+        <HugeiconsIcon strokeWidth={2} icon={BoxesIcon} className="size-4 shrink-0 text-muted-foreground" />
       )}
       <span className="min-w-0 flex-1 truncate text-left">{providerLabel(provider.name || provider.id)}</span>
-      <span className={cn("size-1.5 shrink-0 rounded-full", provider.hasKey ? "bg-success" : "bg-muted-foreground/35")} />
+      <span
+        className={cn(
+          "size-1.5 shrink-0 rounded-full",
+          provider.hasKey || provider.hasOAuth ? "bg-success" : "bg-muted-foreground/35",
+        )}
+      />
     </button>
   );
 }
@@ -342,6 +408,8 @@ function ProviderDetail({
   onConnectFastVibe,
   onAddModels,
   onEditModel,
+  onOAuth,
+  onLogout,
   onChanged,
   onRemoved,
 }: {
@@ -351,6 +419,9 @@ function ProviderDetail({
   onAddModels: () => void;
   /** Opens 模型详情 for one entry of the model list. */
   onEditModel: (model: ProviderModel) => void;
+  /** Starts (or restarts) the subscription login this provider advertises. */
+  onOAuth: () => void;
+  onLogout: () => void;
   onChanged: (next: ProviderConfig[]) => Promise<void>;
   onRemoved: (next: ProviderConfig[]) => Promise<void>;
 }): JSX.Element {
@@ -360,7 +431,8 @@ function ProviderDetail({
   /** Only custom providers own their identity and endpoint; the SDK owns native ones. */
   const editable = provider.kind === "custom";
   /** A native provider's model list is offline, so it needs no key to manage. */
-  const canManageModels = native || provider.hasKey;
+  const connected = provider.hasKey || provider.hasOAuth;
+  const canManageModels = native || connected;
   const [name, setName] = useState(provider.name);
   const [editingName, setEditingName] = useState(false);
   const [baseUrl, setBaseUrl] = useState(provider.baseUrl);
@@ -412,6 +484,7 @@ function ProviderDetail({
     <div className="space-y-5">
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
+          {provider.kind === "native" ? <ProviderIcon provider={provider.id} /> : null}
           {editingName && editable ? (
             <Input
               autoFocus
@@ -517,42 +590,73 @@ function ProviderDetail({
         </Field>
       )}
 
-      <Field label={t("providers.apiKey")}>
-        <div className="flex gap-2">
-          <div className="relative min-w-0 flex-1">
-            <Input
-              type={showKey ? "text" : "password"}
-              autoComplete="off"
-              value={apiKey}
-              placeholder={provider.hasKey ? t("providers.keySaved") : t("providers.pasteKey")}
-              className="pr-8"
-              onChange={(event) => setApiKey(event.target.value)}
-            />
-            <Button
-              size="icon-xs"
-              variant="ghost"
-              className="absolute top-1/2 right-1 -translate-y-1/2 text-muted-foreground"
-              onClick={() => setShowKey((value) => !value)}
-              aria-label={showKey ? t("providers.hideKey") : t("providers.showKey")}
-            >
-              <HugeiconsIcon strokeWidth={2} icon={showKey ? ViewOffSlashIcon : ViewIcon} />
-            </Button>
+      {provider.oauth ? (
+        <Field label={t("providers.oauthField")}>
+          <div className="space-y-1.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={cn("min-w-0 flex-1 truncate text-sm", !provider.hasOAuth && "text-muted-foreground")}>
+                {provider.hasOAuth
+                  ? t("providers.oauthLoggedIn", { name: provider.oauth.name })
+                  : provider.oauth.name}
+              </span>
+              <Button size="xs" variant="outline" disabled={saving} onClick={onOAuth}>
+                {provider.hasOAuth ? t("providers.oauthRelogin") : t("providers.oauthLogin")}
+              </Button>
+              {provider.hasOAuth ? (
+                <Button size="xs" variant="ghost" disabled={saving} onClick={onLogout}>
+                  {t("providers.oauthLogout")}
+                </Button>
+              ) : null}
+            </div>
+            <OAuthExtraUsageNote oauth={provider.oauth} />
           </div>
-          {builtin && !provider.hasKey ? (
-            <Button disabled={!apiKey.trim() || saving} onClick={() => onConnectFastVibe(apiKey.trim())}>
-              {t("providers.connect")}
-            </Button>
-          ) : (
-            <Button
-              variant="outline"
-              disabled={!apiKey.trim() || saving}
-              onClick={() => void save({ apiKey: apiKey.trim() })}
-            >
-              {t("providers.save")}
-            </Button>
-          )}
-        </div>
-      </Field>
+        </Field>
+      ) : null}
+
+      {provider.supportsKey ? (
+        <Field label={t("providers.apiKey")}>
+          <div className="space-y-1.5">
+            <div className="flex gap-2">
+              <div className="relative min-w-0 flex-1">
+                <Input
+                  type={showKey ? "text" : "password"}
+                  autoComplete="off"
+                  value={apiKey}
+                  placeholder={provider.hasKey ? t("providers.keySaved") : t("providers.pasteKey")}
+                  className="pr-8"
+                  onChange={(event) => setApiKey(event.target.value)}
+                />
+                <Button
+                  size="icon-xs"
+                  variant="ghost"
+                  className="absolute top-1/2 right-1 -translate-y-1/2 text-muted-foreground"
+                  onClick={() => setShowKey((value) => !value)}
+                  aria-label={showKey ? t("providers.hideKey") : t("providers.showKey")}
+                >
+                  <HugeiconsIcon strokeWidth={2} icon={showKey ? ViewOffSlashIcon : ViewIcon} />
+                </Button>
+              </div>
+              {builtin && !provider.hasKey ? (
+                <Button disabled={!apiKey.trim() || saving} onClick={() => onConnectFastVibe(apiKey.trim())}>
+                  {t("providers.connect")}
+                </Button>
+              ) : (
+                <Button
+                  variant="outline"
+                  disabled={!apiKey.trim() || saving}
+                  onClick={() => void save({ apiKey: apiKey.trim() })}
+                >
+                  {t("providers.save")}
+                </Button>
+              )}
+            </div>
+            {/* A key is resolved before a stored token, so it quietly takes over. */}
+            {provider.hasOAuth && provider.hasKey ? (
+              <p className="text-xs text-muted-foreground">{t("providers.keyOverridesOauth")}</p>
+            ) : null}
+          </div>
+        </Field>
+      ) : null}
 
       <div className="space-y-2">
         <div className="flex items-center justify-between">
@@ -769,6 +873,7 @@ function AddProviderDialog({
   onPatch,
   onClose,
   onFetch,
+  onOAuth,
   onSave,
 }: {
   state: AddState | null;
@@ -777,14 +882,21 @@ function AddProviderDialog({
   onPatch: (next: Partial<AddState>) => void;
   onClose: () => void;
   onFetch: () => void;
+  /** Starts the subscription login for the picked built-in provider. */
+  onOAuth: () => void;
   onSave: () => void;
 }): JSX.Element {
   const { t } = useTranslation("settings");
   const native = state?.mode === "native";
+  const picked = native ? natives.find((item) => item.id === state?.nativeId) : undefined;
+  /** A login-only built-in (`openai-codex`) has no key field at all. */
+  const showKey = !native || (picked?.supportsKey ?? true);
 
   function setMode(mode: AddMode): void {
-    // Switching source resets the picked provider and any fetched candidates.
-    onPatch({ mode, nativeId: null, candidates: null, selected: new Set(), error: null });
+    // Switching source resets the picked provider, any fetched candidates and the
+    // login it may have completed — a token for one provider is not a credential for
+    // the next one.
+    onPatch({ mode, nativeId: null, oauthDone: false, candidates: null, selected: new Set(), error: null });
   }
 
   return (
@@ -832,7 +944,7 @@ function AddProviderDialog({
                 providers={natives}
                 addedIds={addedIds}
                 value={state.nativeId}
-                onSelect={(nativeId) => onPatch({ nativeId, error: null })}
+                onSelect={(nativeId) => onPatch({ nativeId, oauthDone: false, error: null })}
               />
             ) : (
               <>
@@ -862,15 +974,31 @@ function AddProviderDialog({
                 </Field>
               </>
             )}
-            <Field label={t("providers.apiKey")}>
-              <Input
-                type="password"
-                autoComplete="off"
-                value={state.apiKey}
-                placeholder={native ? t("providers.pasteNativeKey") : "sk-......"}
-                onChange={(event) => onPatch({ apiKey: event.target.value })}
-              />
-            </Field>
+            {picked?.oauth ? (
+              <Field label={t("providers.oauthField")}>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={cn("min-w-0 flex-1 truncate text-sm", !state?.oauthDone && "text-muted-foreground")}>
+                    {state?.oauthDone
+                      ? t("providers.oauthLoggedIn", { name: picked.oauth.name })
+                      : picked.oauth.loginLabel ?? picked.oauth.name}
+                  </span>
+                  <Button size="xs" variant="outline" onClick={onOAuth}>
+                    {state?.oauthDone ? t("providers.oauthRelogin") : t("providers.oauthLogin")}
+                  </Button>
+                </div>
+              </Field>
+            ) : null}
+            {showKey ? (
+              <Field label={t("providers.apiKey")}>
+                <Input
+                  type="password"
+                  autoComplete="off"
+                  value={state.apiKey}
+                  placeholder={native ? t("providers.pasteNativeKey") : "sk-......"}
+                  onChange={(event) => onPatch({ apiKey: event.target.value })}
+                />
+              </Field>
+            ) : null}
           </div>
         ) : null}
         {state?.error ? <p className="text-xs text-destructive">{state.error}</p> : null}
@@ -1011,7 +1139,7 @@ function NativeProviderPicker({
                         close();
                       }}
                     >
-                      <HugeiconsIcon strokeWidth={2} icon={CpuIcon} className="size-3.5 shrink-0 text-muted-foreground" />
+                      <ProviderIcon provider={provider.id} />
                       <span className="min-w-0 flex-1 overflow-hidden">
                         <span className="block truncate text-sm">{provider.name}</span>
                         <span className="block truncate text-xs text-muted-foreground">
@@ -1019,7 +1147,11 @@ function NativeProviderPicker({
                             ? provider.unsupportedReason
                             : added
                               ? t("providers.alreadyAdded")
-                              : t("providers.modelCount", { count: provider.models.length })}
+                              : // A login-only built-in has no key to paste, so say what it
+                                // needs instead of quoting a model count.
+                                provider.oauth && !provider.supportsKey
+                                ? t("providers.loginOnly", { name: provider.oauth.name })
+                                : t("providers.modelCount", { count: provider.models.length })}
                         </span>
                       </span>
                       {value === provider.id ? (
@@ -1184,8 +1316,12 @@ async function fetchAddCandidates(
       setAdd({ ...add, error: provider.unsupportedReason ?? (i18n.t("settings:providers.unsupportedKey") as string) });
       return;
     }
-    if (!add.apiKey.trim()) {
-      setAdd({ ...add, error: i18n.t("settings:providers.needKey") as string });
+    // Either credential is enough: a pasted key, or a login that just completed.
+    if (!add.apiKey.trim() && !add.oauthDone) {
+      setAdd({
+        ...add,
+        error: i18n.t(provider.oauth ? "settings:providers.needKeyOrLogin" : "settings:providers.needKey") as string,
+      });
       return;
     }
     setAdd({
@@ -1248,6 +1384,22 @@ async function saveAdd(
     await onSaved(next);
   } catch (err) {
     setAdd({ ...add, busy: false, error: cleanError(err) });
+  }
+}
+
+/** Drop a subscription credential, leaving the provider entry in place (and re-loginable). */
+async function logout(
+  provider: ProviderConfig,
+  setProviders: (next: ProviderConfig[]) => void,
+  setError: (message: string | null) => void,
+  onChanged: () => void,
+): Promise<void> {
+  try {
+    setProviders(await window.fastvibe.providers.logout(provider.id));
+    setError(null);
+    onChanged();
+  } catch (err) {
+    setError(cleanError(err));
   }
 }
 

@@ -17,6 +17,8 @@ import type {
   ProviderConfig,
   ProviderModel,
   NativeProviderConfig,
+  OAuthEventPayload,
+  OAuthLoginResult,
   CcSwitchScan,
   SlashCommand,
   FilePreview,
@@ -179,6 +181,21 @@ const api = {
       ipcRenderer.invoke(Ipc.providersCcSwitchScan),
     importCcSwitch: (ids: string[]): Promise<ProviderConfig[]> =>
       ipcRenderer.invoke(Ipc.providersCcSwitchImport, { ids }),
+    /**
+     * Subscription (OAuth) login. Resolves only once the whole flow is over, so the
+     * caller can await it and still receive `onOAuthEvent` updates meanwhile.
+     */
+    oauthLogin: (id: string): Promise<OAuthLoginResult> =>
+      ipcRenderer.invoke(Ipc.providersOAuthLogin, { id }),
+    oauthAnswer: (payload: { id: string; promptId: string; value: string }): Promise<void> =>
+      ipcRenderer.invoke(Ipc.providersOAuthAnswer, payload),
+    oauthCancel: (id: string): Promise<void> => ipcRenderer.invoke(Ipc.providersOAuthCancel, { id }),
+    logout: (id: string): Promise<ProviderConfig[]> => ipcRenderer.invoke(Ipc.providersLogout, { id }),
+    onOAuthEvent: (listener: (payload: OAuthEventPayload) => void): (() => void) => {
+      const handler = (_event: unknown, payload: OAuthEventPayload): void => listener(payload);
+      ipcRenderer.on(Ipc.providersOAuthEvent, handler);
+      return () => ipcRenderer.removeListener(Ipc.providersOAuthEvent, handler);
+    },
   },
   conversations: {
     list: (): Promise<WorkspaceSnapshot> => ipcRenderer.invoke(Ipc.conversationsList),

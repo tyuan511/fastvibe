@@ -452,6 +452,8 @@ export const PROVIDERS: ProviderConfig[] = [
     api: "openai-responses",
     apiKeyEnv: "FASTVIBE_API_KEY",
     hasKey: true,
+    hasOAuth: false,
+    supportsKey: true,
     enabled: true,
     models: MODELS.filter((model) => model.provider === "fastvibe").map((model) => ({
       id: model.id,
@@ -472,6 +474,8 @@ export const PROVIDERS: ProviderConfig[] = [
     api: "openai-completions",
     apiKeyEnv: "DEEPSEEK_API_KEY",
     hasKey: true,
+    hasOAuth: false,
+    supportsKey: true,
     enabled: true,
     models: [
       { id: "deepseek-chat", name: "DeepSeek V3.2", contextWindow: 128_000, maxTokens: 8_192, reasoning: false, input: ["text"], source: "models.dev" },

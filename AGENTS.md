@@ -26,6 +26,9 @@ Runtime data lives under the app userData directory:
   models-dev.json        models.dev snapshot refreshed from 设置 → 关于, which wins over the bundled one
   runtime/engine/
     agent/sessions       session transcripts, passed to the SDK's SessionManager
+    agent/.env           provider API keys, injected into the SDK's in-memory auth storage
+    agent/oauth.json     subscription (OAuth) tokens — the one credential written to disk
+    agent/models.json    the only provider config the SDK reads (custom + builtin providers)
     reasoning.json       thinking-block start/end times Main timed from the live stream
     usage-ledger.jsonl   append-only record of finalized turns, so 使用统计 survives deletion
     wt                   git worktrees for isolated conversations
@@ -74,6 +77,35 @@ and the future project file tree.
   and the tree stays on the right. Clicking a file anywhere in a conversation
   routes through `openPreview` → `openFilePreview`, so it opens in this same
   view rather than a separate tab.
+
+### Provider icons
+
+A built-in provider (内置供应商) is drawn with its own brand mark, and with a
+neutral glyph when there is no brand to draw — never with nothing, so a provider
+list keeps one visual rhythm. `components/provider-icon.tsx` is the only place
+that decides; it is keyed by the **SDK's** provider id, so a built-in FastVibe
+starts offering is already covered the day it appears.
+
+- The marks are **vendored from LobeHub's icon set** (https://lobehub.com/icons,
+  MIT), each icon's `Mono` variant only — the one drawn to work on any background.
+  They are inlined `currentColor` paths rather than `<img src>`, exactly like
+  `agent-brand-icon.tsx` and for the same reason: a monochrome mark that follows the
+  theme beats a raster asset that pins a palette colour (see the theming rules).
+- Two providers match nothing on purpose: `radius` (a pi-only gateway) and any
+  `custom-…` provider, which has no brand at all. Both get the fallback glyph,
+  muted so it does not read as a logo.
+- It appears wherever a provider is *presented*: 设置 → 供应商's list and detail
+  header, 添加供应商's 内置供应商 picker, the composer's model submenus, and
+  设置 → 供应商 → 默认模型. Not in the model picker, where every row is one
+  provider by definition, nor in 使用统计, which is a model breakdown.
+- The mark is drawn at **14px** (`size-3.5`) *with its artwork inset* — the `viewBox`
+  is grown to `-2 -2 28 28`, so a mark drawn to LobeHub's full 24-unit grid occupies
+  24/28 of the box. The box matches the fallback glyph and the neighbouring rows
+  (so labels do not shift), while the inset is what makes a logo and the outline
+  glyph look the **same size**. Both numbers are load-bearing: a filled mark filling
+  100% of a box that a Hugeicons stroke icon only fills ~92% of reads distinctly
+  larger than the icon beside it, and that is what made the first pass look oversized.
+  Do not "fix" either one on its own.
 
 ### Code highlighting
 
@@ -212,6 +244,59 @@ model will actually stream with.
 v1 the code pinned it, so a v1 entry's `api` is the old default rather than a choice
 and `normalizeFastVibe` migrates it (`PROVIDERS_VERSION`). The builtin's name and
 baseUrl stay code-owned either way.
+
+**A built-in can also be configured by a subscription login (OAuth).** Claude
+Pro/Max and ChatGPT Plus/Pro are the two people actually want, but nothing names
+them: a provider's capability is read off the SDK, where `auth.apiKey.login` says a
+pasted key is a real path and `auth.oauth` says a login ships with it
+(`native-providers.ts`). Only `amazon-bedrock` / `google-vertex` stay hardcoded as
+unsupported — their credentials are ambient cloud ones. That is why `openai-codex`
+(login only, `supportsKey: false`) is offered at all, and why an SDK release that adds
+a login reaches the UI with no change here.
+
+- **Two credentials, two homes.** An API key is a secret the user pasted and goes to
+the engine's in-memory overlay, never to disk. A subscription token is the opposite:
+its refresh token has to survive a restart or the user re-authorises in a browser
+every launch, so `oauth-store.ts` persists it to `runtime/engine/agent/oauth.json`
+(0600, written through a temp file and renamed). `ModelRuntime.create` wraps whichever
+store it is given, so a key still outranks a token for the same provider —
+`RuntimeCredentials.read` checks the overlay first.
+- **That is why a successful login drops the provider's API key.** Leaving one behind
+would silently keep billing the key and make the subscription the user just
+authorised do nothing. The provider detail says the same thing in words when both
+credentials exist.
+- **Connected means either credential.** `connectedProviderIds` is what
+`applyProviders` (which models the composer sees) and `usableProviders` (which
+providers `reloadProviders` keeps in the overlay) both filter on; a provider with
+neither contributes no models anywhere, which is the whole «not connected» signal.
+Signing out therefore removes the models without removing the entry, exactly like
+clearing a key.
+- **The flow is pi-ai's; the GUI only carries it.** It owns the PKCE pair, the loopback
+callback server and the device-code polling, and asks for a human through `notify`
+(one-way: `auth_url` / `device_code` / `info` / `progress`) and `prompt` (a round trip).
+Both ride `providers:oauth-event`, with the answer coming back through
+`providers:oauth-answer`; `Main` opens the `auth_url` / verification URI with
+`shell.openExternal` and the dialog shows it too, because a browser that will not come
+up has to stay recoverable by hand. **A prompt can be withdrawn while it is on
+screen** — an Anthropic login opens the browser *and* offers a paste box, and aborts
+the box the moment the callback arrives — so the flow's own `prompt.signal` and a
+user cancel both emit `prompt_cancelled` and the dialog takes the question back down
+(`oauth-login-dialog.tsx`). A login that fails *after* its credential landed (the
+runtime's own synchronisation pass can throw) still counts as signed in: re-authorising
+for nothing is worse than a missing confirmation.
+- **`supportsKey: false` hides the key field**, in both 添加供应商 and the provider
+detail; the login is the only way in. A built-in added this way is created with an
+empty key, which `addNativeProvider` accepts only while a token is actually stored.
+- **A subscription login is not always the plan's included usage, and the GUI says
+so.** A Claude Pro/Max login used by a third-party harness is charged per token
+against the account's «extra usage» balance, and refused outright — `third-party apps
+not draw from your extra usage` — while that balance is not enabled. pi's own CLI
+warns about this; the GUI did not, so the refusal was the first the user heard of it,
+after the provider was connected and a prompt already sent. `NativeProviderOAuth`
+carries an optional `extraUsage.url` for such a login, set from `EXTRA_USAGE_LOGINS`
+in `native-providers.ts` (Anthropic is the one that works this way — it is a billing
+fact, not an SDK capability) and drawn by `oauth-extra-usage-note.tsx` under the
+订阅登录 row in the provider detail and in the login dialog's success state.
 
 **Editing a provider never restarts the engine.** `PiProcessManager.reloadProviders()`
 mutates the live `AuthStorage` (set/remove keys), rewrites `models.json`, then calls

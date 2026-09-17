@@ -4,6 +4,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { INPUT_MODALITIES, PROVIDER_APIS, THINKING_EFFORT_LEVELS, type CostTier, type FastVibeModel, type ModelCost, type ModelPrice, type NativeProviderConfig, type ProviderApi, type ProviderConfig, type ProviderModel, type ThinkingLevel } from "@shared/types";
 import { catalogPrice, enrichModel, loadModelsDev, type ModelsDevIndex } from "./models-dev";
 import { findNativeProvider, listNativeProviders, selectedNativeModels } from "./native-providers";
+import { deleteOAuthCredential, readOAuthProviderIds } from "./oauth-store";
 import type { FastVibePaths } from "./paths";
 
 export const FASTVIBE_PROVIDER_ID = "fastvibe";
@@ -154,17 +155,25 @@ export function listProviderConfigs(
   paths: FastVibePaths,
   keys: Record<string, string>,
 ): ProviderConfig[] {
-  return readProviders(paths).map((provider) => ({
-    id: provider.id,
-    kind: provider.kind,
-    name: provider.name,
-    baseUrl: provider.baseUrl,
-    api: provider.api,
-    apiKeyEnv: provider.apiKeyEnv,
-    hasKey: Boolean(keys[provider.apiKeyEnv]),
-    enabled: provider.enabled,
-    models: provider.models,
-  }));
+  const oauth = readOAuthProviderIds(paths.oauthFile);
+  return readProviders(paths).map((provider) => {
+    const native = provider.kind === "native" ? findNativeProvider(provider.id) : undefined;
+    return {
+      id: provider.id,
+      kind: provider.kind,
+      name: provider.name,
+      baseUrl: provider.baseUrl,
+      api: provider.api,
+      apiKeyEnv: provider.apiKeyEnv,
+      hasKey: Boolean(keys[provider.apiKeyEnv]),
+      hasOAuth: oauth.has(provider.id),
+      // Only the SDK can say a built-in has no key login; a user-typed endpoint always does.
+      supportsKey: native ? native.supportsKey : true,
+      ...(native?.oauth ? { oauth: native.oauth } : {}),
+      enabled: provider.enabled,
+      models: provider.models,
+    };
+  });
 }
 
 /** The pi-coding-agent built-ins offered by 添加供应商, with live metadata. */
@@ -175,6 +184,8 @@ export function nativeProviderCatalog(): NativeProviderConfig[] {
     api: provider.api,
     baseUrl: provider.baseUrl,
     models: provider.models,
+    supportsKey: provider.supportsKey,
+    ...(provider.oauth ? { oauth: provider.oauth } : {}),
     supported: provider.supported,
     unsupportedReason: provider.unsupportedReason,
   }));
@@ -317,36 +328,38 @@ function extractModelList(payload: unknown): unknown[] {
  * Materialise the engine's model registry. `models.json` is the only config the
  * pi-coding-agent SDK reads; the YAML/`config.yml` pair the RPC engine used is gone.
  *
- * Providers without a stored key are omitted entirely, so an unconfigured provider
- * contributes no models — which is why a fresh install shows an empty model menu
- * instead of a preloaded catalog.
+ * Providers without a stored credential are omitted entirely, so an unconfigured
+ * provider contributes no models — which is why a fresh install shows an empty model
+ * menu instead of a preloaded catalog. An API key and a subscription (OAuth) token
+ * count equally here (`connectedProviderIds`).
  *
  * Native providers are excluded from the file on purpose: the SDK already knows
  * their endpoint, api and models, and a `models.json` entry would make it resolve
  * `apiKey` as an env-var name — sending the literal name as the bearer token when
- * that name is not exported. Their credentials go to the engine credential overlay instead.
+ * that name is not exported. Their credentials stay outside `models.json` too: a key in
+ * the engine's in-memory overlay, a token in `agent/oauth.json`.
  */
 export function applyProviders(paths: FastVibePaths): FastVibeModel[] {
-  const usable = readProviders(paths).filter(
-    (provider) => provider.enabled && (provider.kind === "native" || provider.models.length > 0),
-  );
+  const providers = readProviders(paths);
   const keys = readProviderKeysSync(paths);
-  const connected = usable.filter((provider) => Boolean(keys[provider.apiKeyEnv]));
-  const writable = connected.filter((provider) => provider.kind !== "native");
+  const connected = connectedProviderIds(paths, keys);
+  const writable = providers.filter((provider) => connected.has(provider.id) && provider.kind !== "native");
   writeFileSync(paths.modelsJson, renderModelsJson(writable), "utf8");
 
   // Only connected providers: returning a keyless provider's models here would put
   // them in the composer's menu even though models.json omits them, and selecting
   // one would then fail with "模型不存在".
-  return connected.flatMap((provider) =>
-    provider.models.map((model) => ({
-      provider: provider.id,
-      providerName: provider.name,
-      id: model.id,
-      name: model.name,
-      thinkingLevels: model.thinkingLevels,
-    })),
-  );
+  return providers
+    .filter((provider) => connected.has(provider.id))
+    .flatMap((provider) =>
+      provider.models.map((model) => ({
+        provider: provider.id,
+        providerName: provider.name,
+        id: model.id,
+        name: model.name,
+        thinkingLevels: model.thinkingLevels,
+      })),
+    );
 }
 
 /**
@@ -434,19 +447,36 @@ function thinkingLevelMap(model: ProviderModel): Record<string, string | null> |
 }
 
 /**
- * Providers that have a stored key and so should reach the engine credential overlay.
+ * Providers that are configured, and so should reach the engine's registry.
+ *
+ * Two credentials count, because they are alternatives rather than a pair: an API key
+ * in the overlay, or a stored subscription (OAuth) token. A provider with neither
+ * contributes no models anywhere — which is the whole signal for «not connected».
+ */
+export function connectedProviderIds(paths: FastVibePaths, keys: Record<string, string>): Set<string> {
+  const oauth = readOAuthProviderIds(paths.oauthFile);
+  const ids = new Set<string>();
+  for (const provider of readProviders(paths)) {
+    if (!provider.enabled) continue;
+    if (provider.kind !== "native" && provider.models.length === 0) continue;
+    if (keys[provider.apiKeyEnv] || oauth.has(provider.id)) ids.add(provider.id);
+  }
+  return ids;
+}
+
+/**
+ * Providers that have a stored key and so should reach the engine's credential overlay.
  *
  * Native providers are included even though they hold no `models.json` models —
  * their models come from the SDK registry, and requiring a non-empty `models` here
  * would keep them out of the credential overlay no matter what key the user pasted.
+ * A subscription login is included for the same reason: this list is what
+ * `reloadProviders` prunes the overlay against, and a logged-in provider missing from
+ * it would have its (unused) overlay entry dropped on every settings write.
  */
 export function usableProviders(paths: FastVibePaths, keys: Record<string, string>): StoredProvider[] {
-  return readProviders(paths).filter(
-    (provider) =>
-      provider.enabled &&
-      (provider.kind === "native" || provider.models.length > 0) &&
-      Boolean(keys[provider.apiKeyEnv]),
-  );
+  const connected = connectedProviderIds(paths, keys);
+  return readProviders(paths).filter((provider) => connected.has(provider.id));
 }
 
 function readProviderKeysSync(paths: FastVibePaths): Record<string, string> {
@@ -509,11 +539,13 @@ export async function addProvider(
 }
 
 /**
- * Enable a pi-coding-agent built-in provider with a pasted key.
+ * Enable a pi-coding-agent built-in provider with a pasted key or a subscription login.
  *
- * Only the key and the chosen models are persisted — name, api and baseUrl are
+ * Only the credential and the chosen models are persisted — name, api and baseUrl are
  * re-read from the SDK on every `readProviders`, and nothing is written to
- * `models.json` (see `applyProviders`).
+ * `models.json` (see `applyProviders`). `apiKey` may be empty when the provider was
+ * already authorised through `loginProvider`, which is the only way to add a
+ * login-only built-in such as `openai-codex`.
  */
 export async function addNativeProvider(
   paths: FastVibePaths,
@@ -523,10 +555,18 @@ export async function addNativeProvider(
 ): Promise<string> {
   const native = findNativeProvider(id);
   if (!native) throw new Error("该内置供应商不存在");
-  if (!native.supported) throw new Error(native.unsupportedReason ?? "该内置供应商暂不支持 API 密钥");
+  if (!native.supported) throw new Error(native.unsupportedReason ?? "该内置供应商暂不支持");
 
   const providers = readProviders(paths);
   if (providers.some((provider) => provider.id === id)) throw new Error("该内置供应商已添加");
+
+  const key = apiKey.trim();
+  // A stored token is a credential like any other, so the entry may be created with
+  // no key — but only when one of the two actually exists. Letting an empty entry
+  // through would leave a provider in the list that can never resolve auth.
+  if (!key && !readOAuthProviderIds(paths.oauthFile).has(id)) {
+    throw new Error(native.supportsKey ? "请填写 API 密钥或完成订阅登录" : "请先完成订阅登录");
+  }
 
   const apiKeyEnv = nativeKeyEnv(id);
   providers.push({
@@ -545,7 +585,7 @@ export async function addNativeProvider(
     ),
   });
   writeProviders(paths, providers);
-  await setProviderKey(paths, apiKeyEnv, apiKey);
+  if (key) await setProviderKey(paths, apiKeyEnv, key);
   return id;
 }
 
@@ -594,9 +634,10 @@ export async function removeProvider(paths: FastVibePaths, id: string): Promise<
   const removed = providers.find((provider) => provider.id === id);
   if (!removed) return;
   writeProviders(paths, providers.filter((provider) => provider.id !== id));
-  // The credential lives in its own env file, so dropping the entry would otherwise
-  // strand `FASTVIBE_KEY_…` there forever.
+  // Both credentials live outside `providers.json`, so dropping the entry would
+  // otherwise strand a `FASTVIBE_KEY_…` line and a live refresh token behind it.
   await setProviderKey(paths, removed.apiKeyEnv, "");
+  deleteOAuthCredential(paths.oauthFile, id);
 }
 
 function uniqueProviderId(providers: StoredProvider[], name: string, baseUrl: string): string {

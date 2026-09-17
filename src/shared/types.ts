@@ -529,6 +529,17 @@ export type ProviderConfig = {
   api: string;
   apiKeyEnv: string;
   hasKey: boolean;
+  /**
+   * A stored OAuth credential, i.e. a subscription login (`/login`'s equivalent).
+   * Kept apart from `hasKey` because the two are different credentials: an API key
+   * sits in the engine's in-memory overlay and is read *before* the stored token, so
+   * a provider holding both is billing the key, not the subscription.
+   */
+  hasOAuth: boolean;
+  /** False for a built-in the SDK only exposes behind a subscription login. */
+  supportsKey: boolean;
+  /** The subscription login this provider offers, when the SDK ships one. */
+  oauth?: NativeProviderOAuth;
   enabled: boolean;
   models: ProviderModel[];
 };
@@ -551,6 +562,32 @@ export type CcSwitchScan = {
   candidates: CcSwitchCandidate[];
 };
 
+/**
+ * The subscription (OAuth) login a pi-coding-agent built-in provider advertises.
+ * Everything here comes from the SDK's own provider definition, so an SDK upgrade
+ * that adds or renames a login reaches the UI without a change in FastVibe.
+ */
+export type NativeProviderOAuth = {
+  /** e.g. `Anthropic (Claude Pro/Max)`. */
+  name: string;
+  /** True when the login is backed by a provider subscription rather than a key mint. */
+  isSubscription: boolean;
+  /** Button copy the SDK suggests, e.g. `Sign in with Kimi Code`. */
+  loginLabel?: string;
+  /**
+   * Set when the login's usage does **not** draw on the subscription's included
+   * limits but is billed per token elsewhere — `url` is where the account enables
+   * and checks that balance.
+   *
+   * A Claude Pro/Max login is the one that works this way: a third-party harness's
+   * request is charged against the account's «extra usage» balance, and refused
+   * outright while that balance is not enabled (`third-party apps not draw from your
+   * extra usage`). Absent for a login that simply bills through its own subscription
+   * (Copilot, ChatGPT, Kimi, Grok).
+   */
+  extraUsage?: { url: string };
+};
+
 /** A pi-coding-agent built-in provider offered in 添加供应商. */
 export type NativeProviderConfig = {
   id: string;
@@ -558,10 +595,51 @@ export type NativeProviderConfig = {
   api: string;
   baseUrl: string;
   models: ProviderModel[];
-  /** False when it needs OAuth or cloud credentials rather than a pasted key. */
+  /** Configurable by pasting an API key. */
+  supportsKey: boolean;
+  /** A subscription login, when the SDK provider declares one. */
+  oauth?: NativeProviderOAuth;
+  /** False when neither a key nor a login can configure it (cloud credentials only). */
   supported: boolean;
   unsupportedReason?: string;
 };
+
+/**
+ * One line of an in-flight OAuth login, mirroring pi-ai's `AuthEvent` plus the
+ * prompt round-trip FastVibe has to carry across IPC.
+ *
+ * `auth_url` / `device_code` are the two «send the user to the provider» shapes;
+ * a flow can use either, and the host opens the URL in the system browser as well
+ * as showing it, so a headless/misconfigured browser is still recoverable by hand.
+ */
+export type OAuthEvent =
+  | { type: "auth_url"; url: string; instructions?: string }
+  | {
+      type: "device_code";
+      userCode: string;
+      verificationUri: string;
+      intervalSeconds?: number;
+      expiresInSeconds?: number;
+    }
+  | { type: "info"; message: string; links?: readonly { url: string; label?: string }[] }
+  | { type: "progress"; message: string }
+  /** The flow is waiting for an answer; `prompt.id` addresses the reply. */
+  | { type: "prompt"; prompt: OAuthPrompt }
+  /** A prompt the flow no longer needs — the loopback callback won the race. */
+  | { type: "prompt_cancelled"; promptId: string };
+
+export type OAuthPrompt = {
+  id: string;
+  kind: "text" | "secret" | "manual_code" | "select";
+  message: string;
+  placeholder?: string;
+  /** Present for `select`, whose answer is the chosen option's `id`. */
+  options?: readonly { id: string; label: string; description?: string }[];
+};
+
+export type OAuthEventPayload = { id: string; event: OAuthEvent };
+
+export type OAuthLoginResult = { ok: boolean; error?: string };
 
 export type ProviderDraft = {
   name: string;

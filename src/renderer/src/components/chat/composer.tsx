@@ -4,6 +4,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { Add01Icon, ArrowDown01Icon, ArrowUp02Icon, AttachmentIcon, Cancel01Icon, ChartHistogramIcon, Folder01Icon, HandIcon, MagicWand02Icon, PlayIcon, ScissorIcon, Search01Icon, ShieldAlertIcon, ShieldCheckIcon, SparklesIcon, SquareIcon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/icon-button";
+import { ProviderIcon } from "@/components/provider-icon";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -885,7 +886,8 @@ export function Composer({
                     return (
                       <DropdownMenuSub key={group.id}>
                         <DropdownMenuSubTrigger>
-                          <span className="flex min-w-0 flex-1 items-center">
+                          <span className="flex min-w-0 flex-1 items-center gap-2">
+                            <ProviderIcon provider={group.id} />
                             <span className="min-w-0 truncate">{group.name}</span>
                             <span className="ml-auto flex size-4 shrink-0 items-center justify-center">
                               {selectedInGroup ? (

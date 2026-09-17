@@ -15,6 +15,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
+import { ProviderIcon } from "@/components/provider-icon";
 import { providerLabel } from "@/lib/provider-label";
 import type { EngineModel, FastVibeModel } from "@shared/types";
 
@@ -96,7 +97,8 @@ export function DefaultModelSelect({
           groups.map((group) => (
             <DropdownMenuSub key={group.id}>
               <DropdownMenuSubTrigger>
-                <span className="flex min-w-0 flex-1 items-center">
+                <span className="flex min-w-0 flex-1 items-center gap-2">
+                  <ProviderIcon provider={group.id} />
                   <span className="min-w-0 truncate">{group.name}</span>
                   <span className="ml-auto flex size-4 shrink-0 items-center justify-center">
                     {group.models.some((item) => modelKey(item) === selected) ? (

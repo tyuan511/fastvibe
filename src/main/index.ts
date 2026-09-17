@@ -392,6 +392,24 @@ function registerIpc(): void {
   ipcMain.handle(Ipc.providersCcSwitchImport, async (_event, payload: { ids: string[] }) => {
     return engine.importCcSwitch(payload.ids);
   });
+  // Subscription (OAuth) logins. `login` resolves when the flow ends, so the renderer
+  // holds one open dialog per provider while its events stream in on
+  // `providers:oauth-event` — the prompts it has to answer among them.
+  ipcMain.handle(Ipc.providersOAuthLogin, async (_event, payload: { id: string }) => {
+    return engine.loginProvider(payload.id);
+  });
+  ipcMain.handle(
+    Ipc.providersOAuthAnswer,
+    (_event, payload: { id: string; promptId: string; value: string }) => {
+      engine.answerOAuthPrompt(payload.id, payload.promptId, payload.value ?? "");
+    },
+  );
+  ipcMain.handle(Ipc.providersOAuthCancel, (_event, payload: { id: string }) => {
+    engine.cancelOAuthLogin(payload.id);
+  });
+  ipcMain.handle(Ipc.providersLogout, async (_event, payload: { id: string }) => {
+    return engine.logoutProvider(payload.id);
+  });
 
   ipcMain.handle(Ipc.conversationsList, () => engine.listWorkspace());
   ipcMain.handle(Ipc.conversationsCreate, async (_event, payload?: { project?: string }) => {
@@ -676,6 +694,19 @@ app.whenReady().then(async () => {
   engine.onStatus(() => broadcastStatus());
   engine.onConversationReady((payload) => {
     for (const window of windows) window.webContents.send(Ipc.conversationReady, payload);
+  });
+  engine.onOAuthEvent((payload) => {
+    // The flow hands us a URL to visit; opening it here is what the CLI does with a
+    // browser open, and the renderer shows the same URL so a machine where that fails
+    // (or the browser is elsewhere) is still recoverable by hand.
+    if (payload.event.type === "auth_url") {
+      void shell.openExternal(payload.event.url).catch((error: unknown) => log.warn(`oauth openExternal failed: ${String(error)}`));
+    } else if (payload.event.type === "device_code") {
+      void shell
+        .openExternal(payload.event.verificationUri)
+        .catch((error: unknown) => log.warn(`oauth openExternal failed: ${String(error)}`));
+    }
+    for (const window of windows) window.webContents.send(Ipc.providersOAuthEvent, payload);
   });
   terminals.onData((event) => {
     for (const window of windows) window.webContents.send(Ipc.workspaceTerminalData, event);
