@@ -110,7 +110,8 @@ starts offering is already covered the day it appears.
 ### Code highlighting
 
 Syntax highlighting is **shikiji** (`src/renderer/src/lib/highlight.ts`), used by
-both the markdown code fences and the file preview.
+both the markdown code fences and the file preview — except for a diff, which is
+rendered rather than highlighted (below).
 
 - The highlighter is created lazily (`getHighlighterCore`, wasm engine); grammars
   are code-split and loaded on demand, so only languages actually shown are fetched.
@@ -118,6 +119,16 @@ both the markdown code fences and the file preview.
   `--code-*` tokens — every theme highlights correctly with no per-theme setup.
 - `useHighlightedCode(code, language)` is the React entry point: it debounces (so a
   streaming fence is not re-tokenized per token) and caches by `(language, code)`.
+- **A diff is not highlighted, it is rendered.** `components/chat/diff-view.tsx` is the
+  one renderer for every diff the app shows — a tool call's file change, a ```diff
+  fence in a reply, a `.patch` preview, the right pane's git diff — and `lib/diff.ts`
+  reads the line numbers out of the diff itself: `@@` hunk headers where a real
+  unified diff has them, pi's baked-in `- 12   label` column where it does not (that
+  format carries no headers at all). The gutter never counts rows — it used to show an
+  invented index beside pi's real number — and a fragment with neither (what a model
+  usually writes by hand) renders unnumbered rather than misnumbered. shikiji is out of
+  the loop for these: its CSS-variables theme maps nothing for `markup.inserted` /
+  `markup.deleted`, so a `diff` fence came out flat and monochrome.
 - The wasm engine needs `'wasm-unsafe-eval'` in the CSP `script-src` (`index.html`).
 
 ## Theming

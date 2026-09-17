@@ -1,31 +1,48 @@
 import { memo, type JSX } from "react";
 import { cn } from "@/lib/utils";
+import { parseDiff, type DiffRow, type DiffRowKind } from "@/lib/diff";
 
-type DiffLine = {
-  kind: "added" | "removed" | "hunk" | "meta" | "context";
-  marker: string;
-  text: string;
-};
-
-/** Classify a unified-diff line the way zcode's lightweight preview does. */
-function classify(line: string): DiffLine {
-  if (line.startsWith("@@")) return { kind: "hunk", marker: "", text: line };
-  if (line.startsWith("+++") || line.startsWith("---")) return { kind: "meta", marker: "", text: line };
-  if (line.startsWith("+")) return { kind: "added", marker: "+", text: line.slice(1) };
-  if (line.startsWith("-")) return { kind: "removed", marker: "-", text: line.slice(1) };
-  if (line.startsWith(" ")) return { kind: "context", marker: " ", text: line.slice(1) };
-  return { kind: "context", marker: "", text: line };
-}
-
-const ROW_STYLE: Record<DiffLine["kind"], string> = {
+const ROW_STYLE: Record<DiffRowKind, string> = {
   added: "border-l-success bg-success/10",
   removed: "border-l-destructive bg-destructive/10",
-  hunk: "border-l-transparent text-info",
-  meta: "border-l-transparent text-muted-foreground/70",
-  context: "border-l-transparent",
+  hunk: "bg-muted/60 text-muted-foreground",
+  meta: "text-muted-foreground/70",
+  context: "",
+  skip: "text-muted-foreground/50",
 };
 
-/** Line-numbered diff with a left colour bar, standing in for a full editor view. */
+const MARKER_STYLE: Record<DiffRowKind, string> = {
+  added: "text-success",
+  removed: "text-destructive",
+  hunk: "",
+  meta: "",
+  context: "text-muted-foreground/60",
+  skip: "",
+};
+
+/** The two number columns: `old` is blank on an added line and `new` on a removed
+ *  one, exactly as a unified diff reads. Header rows carry neither. */
+function Gutter({ row, width }: { row: DiffRow; width: number }): JSX.Element {
+  const cell = "shrink-0 select-none px-1.5 text-right tabular-nums";
+  const size = { minWidth: `calc(${width}ch + 0.75rem)` };
+  return (
+    <>
+      <span aria-hidden style={size} className={cn(cell, "text-muted-foreground/40")}>
+        {row.oldNumber ?? ""}
+      </span>
+      <span aria-hidden style={size} className={cn(cell, "border-r border-border text-muted-foreground/60")}>
+        {row.newNumber ?? ""}
+      </span>
+    </>
+  );
+}
+
+/**
+ * The one renderer for every diff in the app: a tool call's file change, a ```diff
+ * fence in a reply, a `.patch` preview and the right pane's git diff. Numbers come
+ * from the diff itself (`lib/diff.ts`), so a fragment that carries none is drawn
+ * without a gutter rather than with an invented one.
+ */
 export const DiffView = memo(function DiffView({
   text,
   className,
@@ -33,7 +50,7 @@ export const DiffView = memo(function DiffView({
   text: string;
   className?: string;
 }): JSX.Element {
-  const lines = text.replace(/\n$/, "").split("\n");
+  const { rows, numberWidth } = parseDiff(text);
   return (
     <div
       className={cn(
@@ -41,21 +58,15 @@ export const DiffView = memo(function DiffView({
         className,
       )}
     >
-      {lines.map((line, index) => {
-        const { kind, marker, text: body } = classify(line);
-        return (
-          <div key={`${index}-${kind}`} className={cn("flex min-w-full border-l-2", ROW_STYLE[kind])}>
-            <span
-              aria-hidden
-              className="w-10 shrink-0 border-r border-border px-1.5 text-right tabular-nums text-muted-foreground/50 select-none"
-            >
-              {kind === "hunk" || kind === "meta" ? "" : index + 1}
-            </span>
-            <span className="w-4 shrink-0 text-center text-muted-foreground/60 select-none">{marker}</span>
-            <code className="block flex-1 whitespace-pre px-2">{body || " "}</code>
-          </div>
-        );
-      })}
+      {rows.map((row, index) => (
+        <div key={index} className={cn("flex min-w-full border-l-2 border-l-transparent", ROW_STYLE[row.kind])}>
+          {numberWidth > 0 ? <Gutter row={row} width={numberWidth} /> : null}
+          <span aria-hidden className={cn("w-4 shrink-0 text-center select-none", MARKER_STYLE[row.kind])}>
+            {row.marker}
+          </span>
+          <code className="block flex-1 whitespace-pre px-2">{row.text || " "}</code>
+        </div>
+      ))}
     </div>
   );
 });

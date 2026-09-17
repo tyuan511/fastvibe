@@ -7,11 +7,16 @@ import { Copy01Icon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { useHighlightedCode } from "@/lib/highlight";
 import { useSessionStore } from "@/stores/session";
+import { DiffView } from "./diff-view";
+
+/** Fence languages whose body is a diff, drawn by `DiffView` rather than shikiji. */
+const DIFF_LANGUAGES = new Set(["diff", "patch"]);
 
 const CodeBlock = memo(function CodeBlock({ language, code }: { language?: string; code: string }): JSX.Element {
   const { t } = useTranslation("chat");
   const [copied, setCopied] = useState(false);
-  const html = useHighlightedCode(code, language);
+  const diff = language !== undefined && DIFF_LANGUAGES.has(language.toLowerCase());
+  const html = useHighlightedCode(diff ? "" : code, diff ? undefined : language);
 
   async function copy(): Promise<void> {
     try {
@@ -32,13 +37,17 @@ const CodeBlock = memo(function CodeBlock({ language, code }: { language?: strin
           {copied ? t("message.copied") : t("message.copy")}
         </Button>
       </div>
-      <div className="code-shiki overflow-x-auto p-3 text-sm leading-5">
-        {html ? (
-          <div dangerouslySetInnerHTML={{ __html: html }} />
-        ) : (
-          <pre className="font-mono">{code}</pre>
-        )}
-      </div>
+      {diff ? (
+        <DiffView text={code} className="mt-0 rounded-none border-0 bg-transparent" />
+      ) : (
+        <div className="code-shiki overflow-x-auto p-3 text-sm leading-5">
+          {html ? (
+            <div dangerouslySetInnerHTML={{ __html: html }} />
+          ) : (
+            <pre className="font-mono">{code}</pre>
+          )}
+        </div>
+      )}
     </div>
   );
 });

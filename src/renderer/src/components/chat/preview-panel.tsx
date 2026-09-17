@@ -7,6 +7,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import type { FilePreview } from "@shared/types";
 import { useHighlightedCode } from "@/lib/highlight";
 import { MarkdownView } from "./markdown-view";
+import { DiffView } from "./diff-view";
 
 export function PreviewPanel({
   preview,
@@ -98,7 +99,7 @@ export function PreviewBody({ preview }: { preview: FilePreview }): JSX.Element 
     );
   }
   if (preview.kind === "diff") {
-    return <CodePreview text={preview.text} language="diff" showLineNumbers={false} />;
+    return <DiffView text={preview.text} className="mt-0 max-h-none rounded-none border-0 bg-transparent text-xs" />;
   }
   return <CodePreview text={preview.text} language={preview.language} />;
 }
@@ -108,30 +109,20 @@ export function PreviewBody({ preview }: { preview: FilePreview }): JSX.Element 
  * A non-selectable gutter of line numbers is sticky at the left edge, so the
  * numbers stay put while wide lines scroll under them.
  */
-function CodePreview({
-  text,
-  language,
-  showLineNumbers = true,
-}: {
-  text: string;
-  language?: string;
-  showLineNumbers?: boolean;
-}): JSX.Element {
+function CodePreview({ text, language }: { text: string; language?: string }): JSX.Element {
   const html = useHighlightedCode(text, language);
   const lineCount = text.split("\n").length;
   return (
     <div className="code-shiki overflow-x-auto bg-muted/50 text-xs leading-5">
       <div className="flex min-w-full">
-        {showLineNumbers ? (
-          <div
-            aria-hidden
-            className="sticky left-0 z-10 shrink-0 select-none border-r border-border bg-[color-mix(in_oklab,var(--muted)_50%,var(--background))] py-3 pl-3 pr-2 text-right font-mono tabular-nums text-muted-foreground"
-          >
-            {Array.from({ length: lineCount }, (_, index) => (
-              <div key={index}>{index + 1}</div>
-            ))}
-          </div>
-        ) : null}
+        <div
+          aria-hidden
+          className="sticky left-0 z-10 shrink-0 select-none border-r border-border bg-[color-mix(in_oklab,var(--muted)_50%,var(--background))] py-3 pl-3 pr-2 text-right font-mono tabular-nums text-muted-foreground"
+        >
+          {Array.from({ length: lineCount }, (_, index) => (
+            <div key={index}>{index + 1}</div>
+          ))}
+        </div>
         <div className="min-w-0 flex-1 px-3 py-3">
           {html ? (
             <div dangerouslySetInnerHTML={{ __html: html }} />
