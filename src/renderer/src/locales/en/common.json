@@ -29,6 +29,12 @@
     "minutes": "{{n}}m",
     "seconds": "{{n}}s"
   },
+  "crash": {
+    "title": "The interface hit an error",
+    "description": "Conversations and runs live in the main process, so reloading the interface loses nothing.",
+    "reload": "Reload interface",
+    "exportLogs": "Export logs"
+  },
   "errors": {
     "generic": "Something went wrong. Please try again.",
     "previewFailed": "Preview failed",
@@ -40,7 +46,8 @@
   },
   "notice": {
     "todoCleared": "Tasks cleared",
-    "todoReminder": "Task reminder"
+    "todoReminder": "Task reminder",
+    "resultTruncated": "… truncated {{count}} characters"
   },
   "tool": {
     "read": {
@@ -151,6 +158,8 @@
     "nextChat": "Next chat",
     "toggleSidebar": "Toggle sidebar",
     "toggleSidePane": "Toggle side pane",
+    "findInConversation": "Find in conversation",
+    "findInConversationDesc": "Search this conversation's message text",
     "needModifier": "Shortcuts need a modifier key",
     "reserved": "Reserved by the system"
   },

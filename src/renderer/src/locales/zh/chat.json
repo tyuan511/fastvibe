@@ -3,6 +3,8 @@
     "contextWindow": "上下文窗口",
     "used": "已用 {{count}}",
     "remaining": "剩余 {{remaining}} / {{window}}",
+    "contextClose": "上下文接近上限，引擎将在下一轮自动压缩。",
+    "contextImminent": "上下文即将超出窗口，引擎会立即压缩，较早的内容会被摘要替代。",
     "turnStats": "轮次统计",
     "speed": "回答速度",
     "modelTime": "模型耗时",
@@ -101,7 +103,8 @@
     "preview": "预览",
     "running": "运行中",
     "completed": "已完成",
-    "error": "失败"
+    "error": "失败",
+    "aborted": "已终止"
   },
   "run": {
     "duration": "用时 {{duration}}"
@@ -136,9 +139,6 @@
     "complete": "已完成",
     "title": "目标",
     "round": "第 {{round}} 轮",
-    "roundMax": "第 {{round}} 轮 / {{max}}",
-    "collapse": "收起",
-    "expand": "查看",
     "resume": "继续",
     "pause": "暂停",
     "clear": "清除"
@@ -152,6 +152,13 @@
   "turns": {
     "nav": "轮次导航",
     "turn": "第 {{n}} 轮 · {{prompt}}"
+  },
+  "find": {
+    "placeholder": "在会话中查找",
+    "position": "{{index}}/{{total}}",
+    "previous": "上一个结果",
+    "next": "下一个结果",
+    "close": "关闭查找"
   },
   "message": {
     "elapsed": "用时 {{duration}}",

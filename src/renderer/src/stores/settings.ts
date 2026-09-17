@@ -11,6 +11,7 @@ import {
   type ThemeMode,
 } from "@/lib/themes";
 import { isPermissionMode } from "@/lib/permission-modes";
+import { isNotificationPreference, type NotificationPreference } from "@shared/types";
 import { detectSystemLanguage, isUiLanguage, type UiLanguage } from "@/lib/language";
 import { sanitizeShortcutOverrides, type ShortcutOverrides } from "@/lib/shortcuts";
 
@@ -46,6 +47,15 @@ export type AppSettings = {
   sendOnEnter: boolean;
   /** When true, the packaged app checks for updates after launch. */
   autoCheckUpdates: boolean;
+  /**
+   * 系统通知: which desktop notifications FastVibe may raise.
+   *
+   * `done` is the run-finished notice (any conversation), `approval` the one for a
+   * chat that parked on a tool approval while the window was unfocused, `off`
+   * nothing. A single switch could not express the difference: someone who works in
+   * a terminal all day wants to know a chat needs them but not that a run finished.
+   */
+  notifications: NotificationPreference;
   /**
    * Provider/model a brand-new conversation starts on. Persisted like every other
    * preference and read by the engine when it creates a session — the SDK's own
@@ -103,6 +113,12 @@ export type AppSettings = {
    * from its section's list keeps the section's default position (creation order,
    * or pin time for 置顶).
    */
+  /**
+   * 始终允许 rules: prompts the user has said yes to for good, as `method:title:message`
+   * keys. Shared by every conversation and persisted, so an approval made in one chat
+   * is not asked for again in the next (see `lib/permission-rules.ts`).
+   */
+  permissionAlways?: string[];
   sidebarOrder?: Record<string, string[]>;
   /**
    * Shortcut overrides keyed by command id. Absent keys keep the catalog default;
@@ -131,6 +147,7 @@ const DEFAULTS: AppSettings = {
   darkTheme: DEFAULT_DARK_THEME,
   uiFontSize: DEFAULT_UI_FONT_SIZE,
   autoCheckUpdates: true,
+  notifications: "done",
 };
 
 /** Drop malformed persisted theme values so a stale id can never crash the app. */
@@ -150,8 +167,10 @@ function sanitize(parsed: Partial<AppSettings>): Partial<AppSettings> {
   if (typeof next.sidebarCollapsed !== "boolean") delete next.sidebarCollapsed;
   if (!isFiniteNumber(next.sidePaneWidth)) delete next.sidePaneWidth;
   if (!isIdList(next.archivedConversations)) delete next.archivedConversations;
+  if (!isIdList(next.permissionAlways)) delete next.permissionAlways;
   if (!isIdListMap(next.sidebarOrder)) delete next.sidebarOrder;
   if (typeof next.autoCheckUpdates !== "boolean") delete next.autoCheckUpdates;
+  if (!isNotificationPreference(next.notifications)) delete next.notifications;
   if (typeof next.keepAwake !== "boolean") delete next.keepAwake;
   if (typeof next.collapseRuns !== "boolean") delete next.collapseRuns;
   const shortcuts = sanitizeShortcutOverrides(next.shortcuts);
@@ -257,6 +276,11 @@ function firstRunLanguages(): Pick<AppSettings, "uiLanguage" | "aiLanguage"> {
 type SettingsStore = {
   settings: AppSettings;
   update: (patch: Partial<AppSettings>) => void;
+  /**
+   * Adopt preferences another window wrote. Deliberately does **not** write back:
+   * the file already holds them, and echoing would make two windows sync forever.
+   */
+  applyRemote: (settings: Record<string, unknown>) => void;
   reset: () => void;
 };
 
@@ -267,6 +291,12 @@ export const useSettingsStore = create<SettingsStore>((set) => ({
       const next = { ...state.settings, ...patch };
       writeLocal(next);
       writeDisk(next);
+      return { settings: next };
+    }),
+  applyRemote: (remote) =>
+    set(() => {
+      const next = { ...DEFAULTS, ...sanitize(remote as Partial<AppSettings>) } as AppSettings;
+      writeLocal(next);
       return { settings: next };
     }),
   reset: () => {

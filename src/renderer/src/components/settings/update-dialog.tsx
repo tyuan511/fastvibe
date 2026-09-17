@@ -61,25 +61,30 @@ export function UpdateDialog({
   }, [open, runCheck]);
 
   const status = update?.status;
-  const inFlight = checking || status === "checking";
+  // Main reports `downloading` with no progress the moment the click lands, before the
+  // provider has moved any bytes — that gap is a spinner, not a 0% bar.
+  const downloadingStarted = status === "downloading" && !update?.progress;
+  const inFlight = checking || status === "checking" || downloadingStarted;
   const percent = Math.round(update?.progress?.percent ?? 0);
   const bytes = update?.progress
     ? `${formatBytes(update.progress.transferred)} / ${formatBytes(update.progress.total)}`
     : "";
 
-  const description = inFlight
+  const description = checking || status === "checking"
     ? t("update.checking")
-    : status === "available"
-      ? t("update.dialogAvailableTitle", { version: update?.availableVersion })
-      : status === "downloading"
-        ? t("update.dialogDownloadingTitle", { version: update?.availableVersion ?? t("update.newVersion") })
-        : status === "downloaded"
-          ? t("update.ready", { version: update?.availableVersion })
-          : status === "disabled"
-            ? t("update.disabled")
-            : status === "error"
-              ? update?.error || t("update.failed")
-              : t("update.latest");
+    : downloadingStarted
+      ? t("update.downloadingStart", { version: update?.availableVersion ?? t("update.newVersion") })
+      : status === "available"
+        ? t("update.dialogAvailableTitle", { version: update?.availableVersion })
+        : status === "downloading"
+          ? t("update.dialogDownloadingTitle", { version: update?.availableVersion ?? t("update.newVersion") })
+          : status === "downloaded"
+            ? t("update.ready", { version: update?.availableVersion })
+            : status === "disabled"
+              ? t("update.disabled")
+              : status === "error"
+                ? update?.error || t("update.failed")
+                : t("update.latest");
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -108,7 +113,7 @@ export function UpdateDialog({
           </div>
         ) : null}
 
-        {status === "downloading" ? (
+        {status === "downloading" && update?.progress ? (
           <div className="space-y-1.5">
             <Progress value={percent} />
             <div className="flex items-center justify-between text-xs text-muted-foreground tabular-nums">

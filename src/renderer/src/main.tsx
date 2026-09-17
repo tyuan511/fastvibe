@@ -8,6 +8,7 @@ import { dismissBootLoader } from "@/lib/boot-loader";
 import { installRendererLogger } from "@/lib/logger";
 import { useSettingsStore } from "@/stores/settings";
 import { App } from "./App";
+import { ErrorBoundary } from "./components/error-boundary";
 import "./index.css";
 
 installRendererLogger();
@@ -34,10 +35,12 @@ window.setTimeout(dismissBootLoader, 8000);
 // a reload on /settings/providers would 404.
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <TooltipProvider>
-      <HashRouter>
-        <App />
-      </HashRouter>
-    </TooltipProvider>
+    <ErrorBoundary>
+      <TooltipProvider>
+        <HashRouter>
+          <App />
+        </HashRouter>
+      </TooltipProvider>
+    </ErrorBoundary>
   </StrictMode>,
 );

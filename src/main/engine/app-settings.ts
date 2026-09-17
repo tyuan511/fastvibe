@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { nativeTheme, type BrowserWindow } from "electron";
 import type { EngineModel, PermissionMode } from "@shared/types";
 import type { FastVibePaths } from "./paths";
@@ -14,12 +14,27 @@ type SettingsFile = {
  * permission-mode keys and `keepAwake`; everything else is the renderer's. */
 export type PersistedSettings = Record<string, unknown>;
 
+/**
+ * Last parse of `settings.json`, validated against the file's own mtime/size.
+ *
+ * Read-heavy: several main-process paths ask for one preference at a time, and the
+ * engine's event fan-out used to re-read (and re-parse) the whole file per streamed
+ * event. A `statSync` is roughly two orders of magnitude cheaper than the read plus
+ * `JSON.parse`, and keying on the stat keeps the previous semantics — a file edited
+ * behind the app's back is still picked up, which an invalidate-on-write cache alone
+ * would have lost.
+ */
+let cache: { mtimeMs: number; size: number; settings: PersistedSettings } | null = null;
+
 export function readAppSettings(paths: FastVibePaths): PersistedSettings {
   try {
+    const stat = statSync(paths.settingsFile);
+    if (cache && cache.mtimeMs === stat.mtimeMs && cache.size === stat.size) return cache.settings;
     const parsed = JSON.parse(readFileSync(paths.settingsFile, "utf8")) as SettingsFile;
     if (!parsed || parsed.version !== VERSION || !parsed.settings || typeof parsed.settings !== "object") {
       return {};
     }
+    cache = { mtimeMs: stat.mtimeMs, size: stat.size, settings: parsed.settings };
     return parsed.settings;
   } catch {
     return {};
@@ -55,9 +70,13 @@ export function readAutoCompact(paths: FastVibePaths): boolean {
 export function writeAppSettings(paths: FastVibePaths, settings: PersistedSettings): void {
   const payload: SettingsFile = { version: VERSION, settings };
   writeFileSync(paths.settingsFile, `${JSON.stringify(payload, null, 2)}\n`);
+  // A write within the same millisecond as the cached stat would otherwise be
+  // invisible to the mtime check; drop the entry rather than trusting the clock.
+  cache = null;
 }
 
 export function clearAppSettings(paths: FastVibePaths): void {
+  cache = null;
   try {
     if (existsSync(paths.settingsFile)) unlinkSync(paths.settingsFile);
   } catch {

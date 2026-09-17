@@ -14,6 +14,7 @@ import {
   useMessageScroller,
 } from "@/components/ui/message-scroller";
 import { Spinner } from "@/components/ui/spinner";
+import { FindBar } from "@/components/chat/find-bar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatDuration } from "@/lib/time";
 import { stripAttachmentBlock } from "@/lib/attachments";
@@ -675,6 +676,79 @@ function scrollParent(node: HTMLElement): HTMLElement | null {
   return null;
 }
 
+type PinWatcher = { turn: HTMLElement; notify: (pinned: boolean) => void };
+
+type PinRegistry = { add: (node: HTMLElement, watcher: PinWatcher) => () => void };
+
+/** One registry per thread viewport, dropped once its last prompt unmounts. */
+const pinRegistries = new WeakMap<HTMLElement, PinRegistry>();
+
+/**
+ * One scroll listener, one `ResizeObserver` and one animation frame per *thread*,
+ * shared by every prompt in it.
+ *
+ * Each prompt used to wire its own: a long conversation therefore held one scroll
+ * listener and two observed nodes per turn, and since one of those nodes is the
+ * scroller's shared content — which grows with every streamed token — all of them
+ * re-measured on every flush whether the reader was scrolling or not. At a hundred
+ * turns that was hundreds of forced layouts per frame to decide a 24px scrim.
+ *
+ * The batched pass reads the scrollport's edge once and then one rect per prompt,
+ * with no writes in between, so the whole thread costs a single layout flush. The
+ * `turn` rect stays behind the `&&` — only a row already sitting on the edge, of
+ * which there is at most one, pays for it.
+ */
+function pinRegistryFor(scroller: HTMLElement): PinRegistry {
+  const existing = pinRegistries.get(scroller);
+  if (existing) return existing;
+
+  const watchers = new Map<HTMLElement, PinWatcher>();
+  let frame = 0;
+
+  const measure = (): void => {
+    frame = 0;
+    const edge = scroller.getBoundingClientRect().top;
+    for (const [node, watcher] of watchers) {
+      const top = node.getBoundingClientRect().top;
+      const pinned =
+        Math.abs(top - edge) <= PIN_SLACK &&
+        top > watcher.turn.getBoundingClientRect().top + PIN_SLACK;
+      watcher.notify(pinned);
+    }
+  };
+  const schedule = (): void => {
+    if (!frame) frame = requestAnimationFrame(measure);
+  };
+
+  scroller.addEventListener("scroll", schedule, { passive: true });
+  // The turns also move with no scroll event of their own: content streaming into an
+  // earlier turn grows the scroller's content, and a resize moves the top edge.
+  const observer = new ResizeObserver(schedule);
+  observer.observe(scroller);
+  const content = scroller.firstElementChild;
+  if (content) observer.observe(content);
+
+  const registry: PinRegistry = {
+    add(node: HTMLElement, watcher: PinWatcher): () => void {
+      watchers.set(node, watcher);
+      schedule();
+      return () => {
+        watchers.delete(node);
+        if (watchers.size > 0) return;
+        // The last prompt in this thread unmounted; take the shared wiring down
+        // with it rather than leaving it observing a detached scroller.
+        scroller.removeEventListener("scroll", schedule);
+        observer.disconnect();
+        if (frame) cancelAnimationFrame(frame);
+        pinRegistries.delete(scroller);
+      };
+    },
+  };
+  pinRegistries.set(scroller, registry);
+  return registry;
+}
+
+
 /**
  * Whether a sticky prompt is currently covering the thread.
  *
@@ -698,35 +772,10 @@ function usePinnedPrompt(): { ref: (node: HTMLDivElement | null) => void; pinned
     const turn = node.parentElement;
     const scroller = scrollParent(node);
     if (!turn || !scroller) return;
-
-    let frame = 0;
-    const measure = (): void => {
-      frame = 0;
-      const top = node.getBoundingClientRect().top;
-      const edge = scroller.getBoundingClientRect().top;
-      const next =
-        Math.abs(top - edge) <= PIN_SLACK && top > turn.getBoundingClientRect().top + PIN_SLACK;
-      setPinned((current) => (current === next ? current : next));
-    };
-    // One read per frame: every row hears the scroll, measure once.
-    const schedule = (): void => {
-      if (!frame) frame = requestAnimationFrame(measure);
-    };
-
-    scroller.addEventListener("scroll", schedule, { passive: true });
-    // The turn also moves with no scroll event of its own: content streaming into an
-    // earlier turn grows the scroller's content, and a resize moves the top edge.
-    const observer = new ResizeObserver(schedule);
-    observer.observe(scroller);
-    const content = scroller.firstElementChild;
-    if (content) observer.observe(content);
-    schedule();
-
-    detach.current = () => {
-      scroller.removeEventListener("scroll", schedule);
-      observer.disconnect();
-      if (frame) cancelAnimationFrame(frame);
-    };
+    detach.current = pinRegistryFor(scroller).add(node, {
+      turn,
+      notify: (next) => setPinned((current) => (current === next ? current : next)),
+    });
   }, []);
 
   return { ref, pinned };
@@ -799,6 +848,10 @@ export function MessageList({
   showTimestamp = true,
   collapseRuns = false,
   emptyState,
+  findOpen = false,
+  onCloseFind,
+  findQuery,
+  onFindQueryConsumed,
 }: {
   messages: ChatMessage[];
   streaming: boolean;
@@ -810,6 +863,12 @@ export function MessageList({
   /** Fold each reply's process into one 「用时 …」 block (设置 → 对话). */
   collapseRuns?: boolean;
   emptyState?: JSX.Element | null;
+  /** 在会话中查找 is open (the thread's own find bar). */
+  findOpen?: boolean;
+  onCloseFind?: () => void;
+  /** Query the find bar opens with, from a palette body-search hit. */
+  findQuery?: string | null;
+  onFindQueryConsumed?: () => void;
 }): JSX.Element {
   const { t } = useTranslation("chat");
   // One row per user prompt and per assistant reply, not per engine message.
@@ -850,6 +909,14 @@ export function MessageList({
 
   return (
     <MessageScrollerProvider autoScroll>
+      <div className="flex h-full min-h-0 flex-col">
+        <FindBar
+          messages={messages}
+          open={findOpen}
+          onClose={() => onCloseFind?.()}
+          initialQuery={findQuery ?? undefined}
+          onInitialQueryConsumed={onFindQueryConsumed}
+        />
       {/* Named container: the rail is only worth showing when the gutter beside the
           message column can hold it. */}
       <MessageScroller className="@container/thread">
@@ -880,6 +947,7 @@ export function MessageList({
         <MessageScrollerButton />
       </MessageScroller>
       <FollowLatest messages={messages} />
+      </div>
     </MessageScrollerProvider>
   );
 }

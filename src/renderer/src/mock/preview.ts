@@ -9,6 +9,7 @@ import {
   MARKET_PACKAGES,
   MCP_SERVERS,
   MESSAGES,
+  MATH_MESSAGES,
   MODELS,
   PREVIEW_CWD,
   PROJECTS,
@@ -89,17 +90,59 @@ const snapshot = (): WorkspaceSnapshot => ({
   activeId: "conv-theme",
 });
 
+/**
+ * Which conversations the sidebar draws as 运行中. Every fixture transcript is settled,
+ * and the live mark comes from the engine's `conversation_running` push, so `?running=1`
+ * is the only way to look at a spinning sidebar row in the harness. It is answered from
+ * here — module scope — because the app asks `engine:getRunning` *before* it opens the
+ * conversation, so a set filled in during `open` would arrive one step too late.
+ */
+const runningIds = new Set<string>(params.get("running") === "1" ? ["conv-theme"] : []);
+
+/**
+ * `?running=1` keeps the sidebar's 运行中 mark spinning. Every fixture run has settled,
+ * and the real mark only ever comes from the engine's `conversation_running` push, so
+ * the harness replays one — late, once the app has subscribed *and* finished opening the
+ * conversation, because opening it is what sets the mark from the state reply.
+ */
+const runOnStart = params.get("running") === "1";
+
+/** The store's engine-event subscribers, so the replay above has somewhere to land. */
+const eventListeners = new Set<(event: unknown) => void>();
+
 const openResult = (id: string): ConversationOpenResult => {
   const conversation = CONVERSATIONS.find((item) => item.id === id) ?? CONVERSATIONS[0];
   const isActive = conversation.id === "conv-theme";
+  // `?math=1` swaps the thread for the LaTeX fixture, so the math pipeline can be
+  // looked at without adding a conversation to the sidebar. `?running=1` puts
+  // conv-theme in `engine:getRunning` (see `runningIds`), which the app asks for once
+  // at mount — a state reply is not the mark's source, because `setSession` refuses to
+  // speak for a conversation that is not on screen when it lands.
+  let messages = isActive ? MESSAGES : [];
+  if (isActive && params.get("math") === "1") messages = [...MESSAGES.slice(0, 2), ...MATH_MESSAGES];
   return {
     ...snapshot(),
     conversation,
-    messages: isActive ? MESSAGES : [],
-    state: isActive ? SESSION : { ...SESSION, messageCount: 0 },
+    messages,
+    // `running` rides the state because that is what the store unions into the
+    // sidebar mark (`working`); `engine:getRunning` only seeds the map before the
+    // conversation is opened, and a settled-looking state reply would clear it again.
+    state: isActive
+      ? { ...SESSION, messageCount: messages.length, running: params.get("running") === "1" }
+      : { ...SESSION, messageCount: 0 },
     status: { state: "ready", cwd: PREVIEW_CWD },
+    // Only the chat that owns a goal carries one: the panel is conversation-bound, and
+    // the preview is where that is checked (`?goal=1`).
+    extensionStatus:
+      isActive && params.get("goal") === "1"
+        ? { goal: JSON.stringify({ objective: GOAL_OBJECTIVE, status: params.get("goalState") ?? "running", round: 3 }) }
+        : {},
   };
 };
+
+/** Long enough that the one-line row has to ellipsise it. */
+const GOAL_OBJECTIVE =
+  "分析下作为一个智能体客户端还有哪些比较重要的需求没做的，并把它们拆成本轮可执行的任务";
 
 const status: EngineStatus = { state: "ready", cwd: PREVIEW_CWD };
 
@@ -182,6 +225,7 @@ const api = {
     replaceSteering: async () => undefined,
     followUp: async () => undefined,
     abort: async () => undefined,
+    abortSubagent: async () => undefined,
     continue: async () => undefined,
     clearQueue: async () => ({ steering: [], followUp: [] }),
     compact: async () => SESSION,
@@ -238,25 +282,36 @@ const api = {
     respondPermission: async () => undefined,
     newSession: async () => undefined,
     getState: async () => SESSION,
-    getRunning: async (): Promise<string[]> => [],
+    getRunning: async (): Promise<string[]> => [...runningIds],
     getModels: async () => MODELS,
     setModel: async () => SESSION,
     setThinking: async () => SESSION,
     setInterruptMode: async () => SESSION,
     setAutoCompaction: async () => SESSION,
-    branch: async () => MESSAGES,
-    getMessages: async () => MESSAGES,
+    branch: async () => (params.get("math") === "1" ? [...MESSAGES.slice(0, 2), ...MATH_MESSAGES] : MESSAGES),
+    getMessages: async () => (params.get("math") === "1" ? [...MESSAGES.slice(0, 2), ...MATH_MESSAGES] : MESSAGES),
     getStats: async () => STATS,
     setSteeringMode: async () => SESSION,
     setFollowUpMode: async () => SESSION,
     exportHtml: async () => undefined,
     promptConversation: async () => undefined,
     getConversationMessages: async (): Promise<ChatMessage[]> => [],
+    // The retry flow asks before offering a file rewind; the fixture has no checkpoint.
+    getCheckpoint: async () => null,
+    restoreCheckpoint: async () => ({ restored: 0, removed: 0, skipped: 0 }),
     onEvent: (listener: (event: unknown) => void) => {
       // Exposed so the harness can replay engine events from the page console (a
       // model switch, a streamed token) instead of only rendering a fixture thread.
       (window as unknown as { __engineEvent?: (event: unknown) => void }).__engineEvent = listener;
-      return () => undefined;
+      eventListeners.add(listener);
+      if (runOnStart) {
+        window.setTimeout(() => {
+          if (eventListeners.has(listener)) {
+            listener({ type: "conversation_running", conversationId: "conv-theme", running: true });
+          }
+        }, 0);
+      }
+      return () => eventListeners.delete(listener);
     },
     onStatus: () => () => undefined,
     onConversationReady: () => () => undefined,
@@ -367,6 +422,8 @@ const api = {
     load: async () => initialSettings,
     save: async () => undefined,
     clear: async () => undefined,
+    // The real bridge pushes cross-window settings writes; the preview has one window.
+    onChanged: () => () => undefined,
   },
   // The window controls of a hand-drawn title bar (`?platform=win32`): there is no
   // window in the browser, so they only have to be present and inert. State starts
@@ -380,6 +437,18 @@ const api = {
   },
   stats: {
     usage: async () => USAGE,
+  },
+  // Remote access is a real server in the main process; the preview has none to show,
+  // so it renders as never configured and every action is a no-op.
+  remote: {
+    getState: async () => ({ running: false, host: "127.0.0.1", port: null, configured: false, clients: 0, failedLogins: 0 }),
+    setPassword: async () => ({ running: false, host: "127.0.0.1", port: null, configured: true, clients: 0, failedLogins: 0 }),
+    clearPassword: async () => ({ running: false, host: "127.0.0.1", port: null, configured: false, clients: 0, failedLogins: 0 }),
+    start: async () => ({ running: false, host: "127.0.0.1", port: null, configured: false, clients: 0, failedLogins: 0 }),
+    stop: async () => ({ running: false, host: "127.0.0.1", port: null, configured: false, clients: 0, failedLogins: 0 }),
+    listDevices: async () => [],
+    revokeDevice: async () => [],
+    onState: () => () => undefined,
   },
   // The browser-use bridge is main-process driven: in the preview nothing ever
   // requests a browser action, so `onRequest` just returns its unsubscribe.

@@ -11,7 +11,8 @@ import getWasm from "shikiji/wasm";
  */
 const THEME = "fastvibe";
 const MAX_CHARS = 120_000;
-const CACHE_LIMIT = 120;
+/** Roughly 8 MB of highlighted HTML, which is a few hundred ordinary snippets. */
+const CACHE_BYTES = 8_000_000;
 const DEBOUNCE_MS = 60;
 
 type LanguageLoader = () => Promise<{ default: LanguageRegistration[] }>;
@@ -99,7 +100,44 @@ const ALIASES: Record<string, string> = {
   nginx: "nginx",
 };
 
-const cache = new Map<string, string>();
+/**
+ * Highlighted HTML, keyed by `(language, code)` and bounded by *bytes* rather than
+ * entries.
+ *
+ * A plain entry count let the cache hold whatever it was given: the key repeats the
+ * whole snippet and shiki's output is several times the size of its input, so a
+ * hundred long blocks could sit on tens of megabytes. Keys are hashed for the same
+ * reason — a transcript full of long snippets should not keep a second copy of each
+ * one just to find it again.
+ */
+const cache = new Map<string, { html: string; bytes: number }>();
+let cacheBytes = 0;
+
+function cacheKey(code: string, language?: string): string {
+  // FNV-1a over the snippet: collisions only ever mean a wrong *highlight*, and the
+  // length is folded in, so two snippets would have to match in both to be confused.
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < code.length; index += 1) {
+    hash ^= code.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `${language ?? ""}\u0000${code.length}\u0000${(hash >>> 0).toString(36)}`;
+}
+
+function remember(key: string, html: string): void {
+  const existing = cache.get(key);
+  if (existing) cacheBytes -= existing.bytes;
+  const bytes = html.length;
+  cache.set(key, { html, bytes });
+  cacheBytes += bytes;
+  while (cacheBytes > CACHE_BYTES && cache.size > 1) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) break;
+    cacheBytes -= cache.get(oldest)?.bytes ?? 0;
+    cache.delete(oldest);
+  }
+}
+
 const loaded = new Set<string>();
 let corePromise: Promise<HighlighterCore> | null = null;
 
@@ -139,27 +177,27 @@ export async function highlightCode(code: string, language?: string): Promise<st
 /**
  * React binding for `highlightCode`. Debounced so a streaming code block is not
  * re-tokenized on every token, and cached by `(language, code)`.
+ *
+ * The previous highlight is held while the next one is computed. Clearing it on
+ * every change dropped a growing code block back to unstyled `<pre>` between each
+ * debounce window — a block that is streaming flickered between the two the whole
+ * way down, and each swap reflowed the thread underneath it.
  */
 export function useHighlightedCode(code: string, language?: string): string | null {
-  const key = `${language ?? ""}\u0000${code}`;
-  const [html, setHtml] = useState<string | null>(() => cache.get(key) ?? null);
+  const key = cacheKey(code, language);
+  const [html, setHtml] = useState<string | null>(() => cache.get(key)?.html ?? null);
   useEffect(() => {
     const cached = cache.get(key);
     if (cached !== undefined) {
-      setHtml(cached);
+      setHtml(cached.html);
       return;
     }
-    setHtml(null);
     let active = true;
     const timer = window.setTimeout(() => {
       highlightCode(code, language)
         .then((result) => {
           if (!active) return;
-          cache.set(key, result);
-          if (cache.size > CACHE_LIMIT) {
-            const oldest = cache.keys().next().value;
-            if (oldest !== undefined) cache.delete(oldest);
-          }
+          remember(key, result);
           setHtml(result);
         })
         .catch(() => undefined);
@@ -169,5 +207,6 @@ export function useHighlightedCode(code: string, language?: string): string | nu
       window.clearTimeout(timer);
     };
   }, [key, code, language]);
+
   return html;
 }

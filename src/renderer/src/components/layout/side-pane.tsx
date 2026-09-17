@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type JSX } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
@@ -42,7 +42,16 @@ import { SidePaneChat } from "./side-pane-chat";
 import { SidePaneFiles } from "./side-pane-files";
 import { SidePaneGit } from "./side-pane-git";
 import { SidePaneSubagent } from "./side-pane-subagent";
-import { releaseTerminal, SidePaneTerminal } from "./side-pane-terminal";
+import { releaseTerminal } from "./side-pane-terminal-registry";
+
+/**
+ * `@xterm/xterm` is the single largest dependency in the renderer and nothing needs
+ * it until a 终端 tab exists. Disposal stays eager (see the registry module); only
+ * the view is deferred, and it loads while the tab is being created.
+ */
+const SidePaneTerminal = lazy(async () => ({
+  default: (await import("./side-pane-terminal")).SidePaneTerminal,
+}));
 import { HAS_CUSTOM_TITLE_BAR, IS_MAC } from "@/lib/platform";
 
 /**
@@ -187,6 +196,7 @@ export function SidePane({
   const setCollapsed = useSidePaneStore((state) => state.setCollapsed);
   const persistWidth = useSidePaneStore((state) => state.persistWidth);
   const activate = useSidePaneStore((state) => state.activate);
+  const patchTab = useSidePaneStore((state) => state.patchTab);
   const closeTab = useSidePaneStore((state) => state.close);
   const openGit = useSidePaneStore((state) => state.openGit);
   const openTerminal = useSidePaneStore((state) => state.openTerminal);
@@ -456,7 +466,15 @@ export function SidePane({
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col">
-          {active?.type === "git" ? <SidePaneGit cwd={cwd} onError={onError} /> : null}
+          {active?.type === "git" ? (
+            <SidePaneGit
+              cwd={cwd}
+              onError={onError}
+              focusPath={active.gitFocusPath}
+              focusSource={active.gitFocusSource}
+              onFocusHandled={() => patchTab(active.id, { gitFocusPath: undefined, gitFocusSource: undefined })}
+            />
+          ) : null}
           {active?.type === "selection-side-chat" && parentId ? (
             <SidePaneChat tab={active} project={project} parentId={parentId} />
           ) : null}
@@ -464,7 +482,9 @@ export function SidePane({
             tab.type === "terminal" || tab.type === "browser" || tab.type === "files" || tab.type === "subagent" ? (
               <div key={tab.id} hidden={tab.id !== activeTabId} className="flex min-h-0 flex-1 flex-col">
                 {tab.type === "terminal" ? (
-                  <SidePaneTerminal tabId={tab.id} cwd={tab.cwd ?? cwd} sessionId={tab.sessionId} visible={tab.id === activeTabId} />
+                  <Suspense fallback={<div className="min-h-0 flex-1" />}>
+                    <SidePaneTerminal tabId={tab.id} cwd={tab.cwd ?? cwd} sessionId={tab.sessionId} visible={tab.id === activeTabId} />
+                  </Suspense>
                 ) : tab.type === "browser" ? (
                   <SidePaneBrowser tabId={tab.id} url={tab.url ?? ""} visible={tab.id === activeTabId} />
                 ) : (

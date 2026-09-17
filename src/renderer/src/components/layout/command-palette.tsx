@@ -14,7 +14,7 @@ import {
 import { Kbd } from "@/components/ui/kbd";
 import { useTranslation } from "react-i18next";
 import { i18n } from "@/lib/i18n";
-import { SETTINGS_SECTIONS, settingsSectionLabel, type SectionId } from "@/components/settings/settings-dialog";
+import { SETTINGS_SECTIONS, settingsSectionLabel, type SectionId } from "@/components/settings/settings-sections";
 import { useArchivedIds } from "@/stores/archive";
 import { useShortcutLabel } from "@/lib/use-shortcuts";
 import { IS_MAC } from "@/lib/platform";
@@ -62,7 +62,7 @@ export function CommandPalette({
   projects: Project[];
   activeId: string | null;
   onOpenChange: (open: boolean) => void;
-  onSelectChat: (id: string) => void;
+  onSelectChat: (id: string, findQuery?: string) => void;
   onNewChat: () => void;
   onAddProject: () => void;
   onOpenSettings: (section: SectionId) => void;
@@ -154,9 +154,9 @@ export function CommandPalette({
     onOpenChange(false);
   }
 
-  function selectChat(id: string): void {
+  function selectChat(id: string, findQuery?: string): void {
     close();
-    onSelectChat(id);
+    onSelectChat(id, findQuery);
   }
 
   function runAction(id: ActionId): void {
@@ -203,7 +203,7 @@ export function CommandPalette({
                   <CommandItem
                     key={item.id}
                     value={`chat:${item.id}`}
-                    onSelect={() => selectChat(item.id)}
+                    onSelect={() => selectChat(item.id, snippet && needle && !titleHit ? needle : undefined)}
                     aria-current={item.id === activeId ? "true" : undefined}
                   >
                     <span className="min-w-0 flex-1 truncate">{item.title || t("palette.newSession")}</span>

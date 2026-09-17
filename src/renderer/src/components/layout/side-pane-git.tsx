@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type JSX } from "react";
+import { useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { i18n } from "@/lib/i18n";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -295,14 +295,22 @@ function DiffPane({
 export function SidePaneGit({
   cwd,
   onError,
+  focusPath,
+  focusSource,
+  onFocusHandled,
 }: {
   cwd?: string;
   onError: (message: string) => void;
+  /** A chip click's target: select this file in this source when the pane opens. */
+  focusPath?: string;
+  focusSource?: GitDiffSource;
+  /** Told once the focus has been applied, so it is not honoured again on every render. */
+  onFocusHandled?: () => void;
 }): JSX.Element {
   const { t } = useTranslation("sidepane");
   const messages = useSessionStore((state) => state.messages);
   const [status, setStatus] = useState<GitStatus | null>(null);
-  const [source, setSource] = useState<GitDiffSource>("unstaged");
+  const [source, setSource] = useState<GitDiffSource>(focusSource ?? "unstaged");
   const [selected, setSelected] = useState<string>();
   const [diff, setDiff] = useState("");
   const [diffError, setDiffError] = useState<string | null>(null);
@@ -313,6 +321,19 @@ export function SidePaneGit({
   const [reloading, setReloading] = useState(false);
   const lastTurn = useMemo(() => lastTurnPaths(messages), [messages]);
   const counts = useMemo(() => sourceCounts(status, lastTurn), [status, lastTurn]);
+
+  // A changed-file chip said which file and which source; adopt both once, then clear
+  // the request so a later visit to 审查 keeps whatever the reader selects there.
+  const appliedFocus = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!focusPath) return;
+    const tag = `${focusSource ?? ""}:${focusPath}`;
+    if (appliedFocus.current === tag) return;
+    appliedFocus.current = tag;
+    if (focusSource) setSource(focusSource);
+    setSelected(focusPath);
+    onFocusHandled?.();
+  }, [focusPath, focusSource, onFocusHandled]);
 
   async function reload(): Promise<void> {
     if (!cwd) {

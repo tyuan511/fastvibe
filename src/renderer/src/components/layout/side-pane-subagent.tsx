@@ -2,9 +2,12 @@ import { memo, useEffect, useMemo, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { BotIcon } from "@hugeicons/core-free-icons";
+import { Composer } from "@/components/chat/composer";
 import { MessageList } from "@/components/chat/message-list";
+import { usagePercent } from "@/components/chat/session-controls";
 import { useSessionStore } from "@/stores/session";
 import { useSettingsStore } from "@/stores/settings";
+import { abortSubagent } from "@/lib/engine-client";
 import type { ChatMessage } from "@shared/types";
 import type { SidePaneTab } from "@/stores/side-pane";
 
@@ -28,10 +31,16 @@ function SubagentEmpty(): JSX.Element {
  * (`subagent:<toolCallId>:<index>`), so parallel/chain runs — and runs from
  * different conversations — never share a view.
  *
- * Read-only: no composer, no abort. The transcript matches the main thread —
- * same `MessageList`, same follow-the-bottom scroller — with the delegated brief
- * as the opening user message (the sub-session's live stream never includes that
- * user turn) followed by the role's own assistant turns.
+ * The transcript matches the main thread — same `MessageList`, same follow-the-bottom
+ * scroller — with the delegated brief as the opening user message (the sub-session's
+ * live stream never includes that user turn) followed by the role's own assistant turns.
+ *
+ * Below it sits the main thread's composer in its read-only mode: a delegated run is
+ * not a conversation the user can steer, but its *state* is worth reading — which model
+ * it is on, how full its context window is — and a run that has gone wrong (or is simply
+ * too slow) must be stoppable without discarding the parent's answer too. The stop
+ * button aborts this run's own session, which settles the parent's tool call; it is
+ * that failed tool result the main agent reads as 「已被用户终止」.
  *
  * Everything the pane draws is derived from two stable sources: the run's tab
  * (which pins the brief) and the store's per-run stream. Nothing here reads
@@ -39,14 +48,17 @@ function SubagentEmpty(): JSX.Element {
  * snapshot, and deriving the brief from it blanked the transcript mid-flight.
  */
 export const SidePaneSubagent = memo(function SidePaneSubagent({ tab }: { tab: SidePaneTab }): JSX.Element {
+  const { t } = useTranslation("sidepane");
   const subagentId = tab.subagentId ?? null;
   const active = useSessionStore((state) =>
     subagentId ? state.subagents.find((item) => item.id === subagentId) : undefined,
   );
   const streamed = useSessionStore((state) => (subagentId ? state.subagentStreams[subagentId] : undefined));
+  const models = useSessionStore((state) => state.models);
   const showThinking = useSettingsStore((state) => state.settings.showThinking);
   const showTimestamp = useSettingsStore((state) => state.settings.showTimestamps);
   const collapseRuns = useSettingsStore((state) => state.settings.collapseRuns);
+  const permissionMode = useSettingsStore((state) => state.settings.permissionMode);
   const [loaded, setLoaded] = useState<ChatMessage[] | null>(null);
 
   const task = (tab.subagentBrief ?? active?.detail ?? "").trim();
@@ -98,22 +110,65 @@ export const SidePaneSubagent = memo(function SidePaneSubagent({ tab }: { tab: S
     return brief ? [brief, ...body] : body;
   }, [body, brief]);
 
-  // Decided here rather than left to `MessageList`: the empty state and the scroller
-  // are different trees, and flipping between them on every transient change is what
-  // reads as flicker.
-  if (messages.length === 0) return <SubagentEmpty />;
+  const noop = (): void => undefined;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="min-h-0 flex-1">
-        <MessageList
-          messages={messages}
+        {messages.length === 0 ? (
+          <SubagentEmpty />
+        ) : (
+          <MessageList
+            messages={messages}
+            streaming={running}
+            showThinking={showThinking}
+            showTimestamp={showTimestamp}
+            // A delegated run is an agent run too, and its transcript is read the same
+            // way — a dozen tool rows around one answer — so 折叠运行过程 applies here.
+            collapseRuns={collapseRuns}
+          />
+        )}
+      </div>
+      <div className="px-3 pb-3">
+        <Composer
+          readOnly
+          className="px-0 pb-0"
+          value=""
+          disabled
           streaming={running}
-          showThinking={showThinking}
-          showTimestamp={showTimestamp}
-          // A delegated run is an agent run too, and its transcript is read the same
-          // way — a dozen tool rows around one answer — so 折叠运行过程 applies here.
-          collapseRuns={collapseRuns}
+          working={running}
+          placeholder={running ? t("subagent.readOnlyRunning") : t("subagent.readOnlyDone")}
+          models={models}
+          model={active?.model}
+          thinkingLevel={active?.thinkingLevel}
+          workspaceLabel=""
+          projects={[]}
+          commands={[]}
+          permissionMode={permissionMode}
+          onPermissionModeChange={noop}
+          queued={[]}
+          queuePause={null}
+          attachments={[]}
+          history={() => []}
+          contextPercent={usagePercent(active ?? null)}
+          contextUsage={active?.contextUsage}
+          onChange={noop}
+          onSubmit={noop}
+          onAbort={() => {
+            if (subagentId) void abortSubagent(subagentId).catch(() => undefined);
+          }}
+          onPickWorkspace={noop}
+          onSelectProject={noop}
+          onModelChange={noop}
+          onManageModels={noop}
+          onThinkingChange={noop}
+          onAttachmentsChange={noop}
+          onRemoveQueued={noop}
+          onEditQueued={noop}
+          onSendQueuedNow={noop}
+          onRecallQueued={noop}
+          onReorderQueued={noop}
+          onResumeQueue={noop}
         />
       </div>
     </div>

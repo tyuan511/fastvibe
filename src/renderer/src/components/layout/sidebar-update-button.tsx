@@ -17,10 +17,13 @@ export function SidebarUpdateButton(): JSX.Element | null {
   const status = update?.status;
 
   if (status === "downloading") {
+    // Before the first progress tick there is no percentage to show, but the click still
+    // has to register — a spinner and 「下载中」 are what say the download started.
+    const percent = update?.progress?.percent;
     return (
       <Button size="xs" className="shrink-0" disabled>
         <Spinner className="size-3" />
-        {Math.round(update?.progress?.percent ?? 0)}%
+        {percent === undefined ? t("update.sidebarDownloading") : `${Math.round(percent)}%`}
       </Button>
     );
   }

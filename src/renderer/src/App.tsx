@@ -1,9 +1,8 @@
-import { memo, useCallback, useEffect, useRef, useState, type JSX } from "react";
+import { lazy, memo, Suspense, useCallback, useEffect, useRef, useState, type JSX } from "react";
 import { motion } from "motion/react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { AlertCircleIcon, MessageSquarePlusIcon, PanelLeftOpenIcon, PanelRightOpenIcon, Settings01Icon } from "@hugeicons/core-free-icons";
 import { useLocation, useMatch, useNavigate, useNavigationType } from "react-router";
-import { useShallow } from "zustand/react/shallow";
 import { Composer } from "@/components/chat/composer";
 import { ExtensionNotices, ExtensionWidgets, GoalPanel } from "@/components/chat/extension-surface";
 import { TodoPanel } from "@/components/chat/todo-list";
@@ -20,16 +19,40 @@ import { CommandPalette } from "@/components/layout/command-palette";
 import { TitleBar } from "@/components/layout/title-bar";
 import { HAS_CUSTOM_TITLE_BAR, IS_MAC } from "@/lib/platform";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/icon-button";
 import { attachmentPromptSuffix, attachmentsToImages } from "@/lib/attachments";
+import {
+  engine,
+  getModels,
+  getStatus,
+  getSubagents,
+  newSession,
+  onConversationReady,
+  onEvent,
+  onStatus,
+  respondPermission,
+  setAutoCompaction,
+  setInterruptMode,
+  start,
+} from "@/lib/engine-client";
 import { dismissBootLoader } from "@/lib/boot-loader";
 import { cn } from "@/lib/utils";
 
-import { SettingsDialog, SETTINGS_SECTIONS, type SectionId } from "@/components/settings/settings-dialog";
+import { SETTINGS_SECTIONS, type SectionId } from "@/components/settings/settings-sections";
 import type { DeleteConversationsResult } from "@/components/settings/archived-settings";
 import { useConversationWorking, useSessionStore, working } from "@/stores/session";
-import { useSettingsStore } from "@/stores/settings";
+import { permissionKey, rememberPermission, usePermissionAlways } from "@/lib/permission-rules";import { useSettingsStore } from "@/stores/settings";
 import { useThemeSync } from "@/lib/use-theme";
 import { useLanguageSync } from "@/lib/use-language";
 import { useTranslation } from "react-i18next";
@@ -51,9 +74,19 @@ import { useSidePaneStore } from "@/stores/side-pane";
 import { useAppShortcuts, useShortcutLabel } from "@/lib/use-shortcuts";
 import { archiveConversations, archivedIdList, useArchivedIds } from "@/stores/archive";
 
-function permissionKey(request: PermissionRequest): string {
-  return `${request.method}:${request.title ?? ""}:${request.message ?? ""}`;
-}
+
+
+/**
+ * 设置 is ten panes deep — the provider editor, the import sources, the usage charts,
+ * the skill and extension managers — and none of it is reachable until the reader
+ * opens the route. Eagerly imported it was a large share of the single renderer
+ * chunk the app parses before it can paint. `SETTINGS_SECTIONS` stays eager (the
+ * router validates `#/settings/:section` on every navigation); only the panes are
+ * deferred, and they load while the route's own transition runs.
+ */
+const SettingsDialog = lazy(async () => ({
+  default: (await import("@/components/settings/settings-dialog")).SettingsDialog,
+}));
 
 const DRAFT_KEY = "fastvibe.session-drafts";
 
@@ -76,6 +109,57 @@ function writeDraft(id: string | null, text: string): void {
   } catch {
     // Ignore storage quota and private-mode errors.
   }
+}
+
+/**
+ * Persist the composer's draft, off the keystroke.
+ *
+ * `writeDraft` reads *every* saved draft back, re-serialises the lot and writes it —
+ * and `localStorage` is synchronous, so doing that per keystroke put a blocking disk
+ * write in the middle of typing, growing with the number of conversations that have
+ * a draft. A draft is a convenience, not a transaction: a short debounce is
+ * invisible to the reader, and the pending write is flushed on the two events that
+ * can lose it (leaving the conversation, closing the window).
+ */
+const DRAFT_DEBOUNCE_MS = 400;
+
+function useDraftPersistence(activeId: string | null, draft: string): void {
+  const pending = useRef<{ id: string | null; text: string } | null>(null);
+  const timer = useRef<number | null>(null);
+
+  const flush = useCallback(() => {
+    if (timer.current !== null) {
+      window.clearTimeout(timer.current);
+      timer.current = null;
+    }
+    const entry = pending.current;
+    pending.current = null;
+    if (entry) writeDraft(entry.id, entry.text);
+  }, []);
+
+  const lastId = useRef(activeId);
+
+  useEffect(() => {
+    // A conversation switch must not lose the draft being typed into the chat being
+    // left, so the pending write for the *previous* id goes out now. A keystroke
+    // within the same chat just re-arms the timer — flushing here as well would make
+    // the debounce a no-op and put the synchronous write back on every key.
+    if (lastId.current !== activeId) {
+      flush();
+      lastId.current = activeId;
+    }
+    pending.current = { id: activeId, text: draft };
+    if (timer.current === null) timer.current = window.setTimeout(flush, DRAFT_DEBOUNCE_MS);
+  }, [activeId, draft, flush]);
+
+  // `beforeunload`, not the effect cleanup: a window closing never unmounts.
+  useEffect(() => {
+    window.addEventListener("beforeunload", flush);
+    return () => {
+      window.removeEventListener("beforeunload", flush);
+      flush();
+    };
+  }, [flush]);
 }
 
 /** Pull the active conversation's turn statistics into the store. */
@@ -139,7 +223,7 @@ function reloadActiveMessages(): void {
 async function availableModels(): Promise<FastVibeModel[]> {
   const cached = useSessionStore.getState().models;
   if (cached.length > 0) return cached;
-  const next = await window.fastvibe.engine.getModels().catch((): FastVibeModel[] => []);
+  const next = await getModels().catch((): FastVibeModel[] => []);
   useSessionStore.getState().setModels(next);
   return next;
 }
@@ -156,6 +240,10 @@ const MessageThread = memo(function MessageThread({
   showThinking,
   showTimestamp,
   collapseRuns,
+  findOpen,
+  onCloseFind,
+  findQuery,
+  onFindQueryConsumed,
 }: {
   loading: boolean;
   onRetry: (message: ChatMessage) => void;
@@ -163,6 +251,10 @@ const MessageThread = memo(function MessageThread({
   showThinking: boolean;
   showTimestamp: boolean;
   collapseRuns: boolean;
+  findOpen: boolean;
+  onCloseFind: () => void;
+  findQuery: string | null;
+  onFindQueryConsumed: () => void;
 }): JSX.Element {
   const messages = useSessionStore((state) => state.messages);
   const streaming = useSessionStore((state) => state.streaming);
@@ -176,6 +268,10 @@ const MessageThread = memo(function MessageThread({
       showThinking={showThinking}
       showTimestamp={showTimestamp}
       collapseRuns={collapseRuns}
+      findOpen={findOpen}
+      onCloseFind={onCloseFind}
+      findQuery={findQuery}
+      onFindQueryConsumed={onFindQueryConsumed}
     />
   );
 });
@@ -184,6 +280,10 @@ export function App(): JSX.Element {
   // Applies light/dark theme selection (and reacts to OS changes in system mode).
   useThemeSync();
   useLanguageSync();
+  // Another window's preference write. Every window keeps its own copy of
+  // `settings.json`, so without this they drifted (two themes, two font sizes) and
+  // the next save from either one silently reverted the other's change.
+  useEffect(() => window.fastvibe.settings.onChanged((next) => useSettingsStore.getState().applyRemote(next)), []);
   const { t } = useTranslation("app");
   useEffect(() => {
     return window.fastvibe.browser.onRequest(({ id, request }) => {
@@ -202,13 +302,16 @@ export function App(): JSX.Element {
   // streamed token. Derive only the stable facts the shell needs, and let
   // `MessageThread` read the transcript itself.
   const empty = useSessionStore((state) => state.messages.length === 0);
-  const inputHistory = useSessionStore(
-    useShallow((state) =>
-      state.messages
-        .filter((item) => item.role === "user")
+  // Read on demand from the composer's ↑/↓ handler rather than subscribed: see the
+  // `history` prop on `Composer`.
+  const inputHistory = useCallback(
+    () =>
+      useSessionStore
+        .getState()
+        .messages.filter((item) => item.role === "user")
         .map((item) => item.text)
         .filter(Boolean),
-    ),
+    [],
   );
   const hasTranscript = useSessionStore((state) =>
     state.messages.some((item) => item.role === "user" || item.role === "assistant"),
@@ -220,6 +323,7 @@ export function App(): JSX.Element {
   // send is queued or starts a turn.
   const conversationWorking = useConversationWorking();
   const running = useSessionStore((state) => state.running);
+  const waitingForUser = useSessionStore((state) => state.waitingForUser);
   const stats = useSessionStore((state) => state.stats);
   const draft = useSessionStore((state) => state.draft);
   const error = useSessionStore((state) => state.error);
@@ -241,10 +345,10 @@ export function App(): JSX.Element {
   const permission = useSessionStore((state) => state.permission);
   const setCommands = useSessionStore((state) => state.setCommands);
   const setSubagents = useSessionStore((state) => state.setSubagents);
-  const setPermission = useSessionStore((state) => state.setPermission);
+  const resolvePermission = useSessionStore((state) => state.resolvePermission);
   const attachments = useSessionStore((state) => state.attachments);
   const queued = useSessionStore((state) => state.queued);
-  const permissionAlways = useSessionStore((state) => state.permissionAlways);
+  const permissionAlways = usePermissionAlways();
   const setAttachments = useSessionStore((state) => state.setAttachments);
   const queuePause = useSessionStore((state) => state.queuePause);
   const enqueue = useSessionStore((state) => state.enqueue);
@@ -258,7 +362,6 @@ export function App(): JSX.Element {
   const setQueuePause = useSessionStore((state) => state.setQueuePause);
   const runInterrupted = useSessionStore((state) => state.runInterrupted);
   const setRunInterrupted = useSessionStore((state) => state.setRunInterrupted);
-  const rememberPermission = useSessionStore((state) => state.rememberPermission);
   const restoreId = useRef<string | null>(null);
   const draining = useRef(false);
   // One send at a time. A second click / Enter while this send is still being handed
@@ -271,6 +374,12 @@ export function App(): JSX.Element {
   const navigate = useNavigate();
   const initialLocationKey = useRef(location.key);
   const settingsOpen = Boolean(settingsMatch);
+  // Latches on: the lazy chunk is fetched the first time 设置 is opened, and the
+  // dialog stays mounted after so closing it still animates.
+  const [settingsMounted, setSettingsMounted] = useState(false);
+  useEffect(() => {
+    if (settingsOpen) setSettingsMounted(true);
+  }, [settingsOpen]);
   // The wildcard is "" for a bare /settings and the section name otherwise.
   const routeSection = settingsMatch?.params["*"] || undefined;
   const settingsSection = SETTINGS_SECTIONS.flatMap((group) => group.items).some((item) => item.id === routeSection)
@@ -282,6 +391,13 @@ export function App(): JSX.Element {
     if (settingsOpen && !settingsSection) navigate("/settings/general", { replace: true });
   }, [settingsOpen, settingsSection, navigate]);
   const [commandOpen, setCommandOpen] = useState(false);
+  /** 在会话中查找 (Cmd+F) over the open transcript. */
+  const [findOpen, setFindOpen] = useState(false);
+  /**
+   * A query the find bar should open with — set when the palette opens a chat from a
+   * body search hit, so the match is on screen rather than just «this chat contains it».
+   */
+  const [pendingFind, setPendingFind] = useState<string | null>(null);
   // `getStatus()` is async, so until it resolves the store still holds the "idle"
   // placeholder. Track whether the real status has landed: the shell shows the F
   // loader (and keeps the boot splash up) until it has.
@@ -313,11 +429,10 @@ export function App(): JSX.Element {
   const sidebarCollapsed = settings.sidebarCollapsed ?? false;
   const archivedIds = useArchivedIds();
   const toggleSidebarShortcut = useShortcutLabel("toggleSidebar");
-  const toggleSidePaneShortcut = useShortcutLabel("toggleSidePane");
-  const newChatShortcut = useShortcutLabel("newChat");
+  const toggleSidePaneShortcut = useShortcutLabel("toggleSidePane");  const newChatShortcut = useShortcutLabel("newChat");
 
   useEffect(() => {
-    void window.fastvibe.engine.getStatus().then((next) => {
+    void getStatus().then((next) => {
       setStatus(next);
       setEngineKnown(true);
     });
@@ -349,11 +464,11 @@ export function App(): JSX.Element {
         restoreId.current = pending ?? null;
       }
     });
-    const offStatus = window.fastvibe.engine.onStatus(setStatus);
+    const offStatus = onStatus(setStatus);
     // Background conversation init finished: fill in the transcript, unless the
     // user already sent a message (then their optimistic thread wins and engine
     // events will replace it).
-    const offReady = window.fastvibe.engine.onConversationReady((payload) => {
+    const offReady = onConversationReady((payload) => {
       const store = useSessionStore.getState();
       // Seed the sidebar's run indicator even for conversations that are not on screen.
       // `working` unions the two things the mark covers — a run (`running`, which now
@@ -364,8 +479,9 @@ export function App(): JSX.Element {
       store.setMessages(payload.messages, payload.id);
       store.setSession(payload.state);
       store.setStatus(payload.status);
+      store.setExtensionStatus(payload.id, payload.extensionStatus ?? {});
     });
-    const offEvent = window.fastvibe.engine.onEvent((event) => {
+    const offEvent = onEvent((event) => {
       // An extension command replaced the session (plan-mode's fresh handoff):
       // follow the conversation the engine created and seeded.
       if (event.type === "conversation_opened" && event.result && typeof event.result === "object") {
@@ -382,6 +498,18 @@ export function App(): JSX.Element {
       if (event.type === "conversation_running" && conversationId) {
         useSessionStore.getState().setConversationRunning(conversationId, event.running === true);
       }
+      // Blocking prompts and their withdrawal are handled for *every* conversation
+      // before the focus routing below, which sends a background chat's events to the
+      // side-pane store. A tool approval is not transcript content: it is the signal
+      // that this chat needs the user, and the sidebar mark and the notification both
+      // have to see it even though its panel is only drawn for the chat on screen.
+      if (event.type === "extension_ui_request" || event.type === "extension_ui_dismiss") {
+        useSessionStore.getState().applyEvent(event);
+        if (conversationId && conversationId !== useSessionStore.getState().activeId) {
+          useSidePaneStore.getState().applyConversationEvent(conversationId, event);
+        }
+        return;
+      }
       if (event.type === "conversation_renamed" && event.snapshot && typeof event.snapshot === "object") {
         useSessionStore.getState().applySnapshot(event.snapshot as WorkspaceSnapshot);
       }
@@ -391,12 +519,13 @@ export function App(): JSX.Element {
       // the focus routing so every run's tab stays live either way. Each run owns a
       // tab (`subagent:<toolCallId>:<index>`), keyed to the conversation that
       // spawned it, so two chats delegating at once never share a view.
-      if (event.type === "subagent_event" || event.type === "subagent_lifecycle" || event.type === "subagent_progress") {
+      if (event.type === "subagent_event" || event.type === "subagent_state" || event.type === "subagent_lifecycle" || event.type === "subagent_progress") {
         applyEvent(event);
         // A lifecycle event is where a run gets its tab (created, not focused).
-        // Per-token `subagent_event`s only feed the transcript, which the session
-        // store already keys by run id — no side-pane write per token.
-        if (event.type !== "subagent_event") {
+        // Per-token `subagent_event`s and state pushes only feed the transcript / the
+        // pane's read-only composer, which the session store already keys by run id —
+        // no side-pane write per token.
+        if (event.type !== "subagent_event" && event.type !== "subagent_state") {
           const subagentId = typeof event.subagentId === "string" ? event.subagentId : "";
           if (subagentId) {
             const info = useSessionStore.getState().subagents.find((item) => item.id === subagentId);
@@ -407,7 +536,7 @@ export function App(): JSX.Element {
               brief: info?.detail,
             });
           }
-          void window.fastvibe.engine.getSubagents().then(setSubagents).catch(() => undefined);
+          void getSubagents().then(setSubagents).catch(() => undefined);
         }
         return;
       }
@@ -570,12 +699,13 @@ export function App(): JSX.Element {
     },
     toggleSidebar: () => updateSettings({ sidebarCollapsed: !sidebarCollapsed }),
     toggleSidePane: () => togglePane(),
+    findInConversation: () => setFindOpen((open) => !open),
   });
 
   useEffect(() => {
     if (status.state !== "ready") return;
-    void window.fastvibe.engine.setAutoCompaction(settings.autoCompact).catch(() => undefined);
-    void window.fastvibe.engine.setInterruptMode(settings.interruptMode).catch(() => undefined);
+    void setAutoCompaction(settings.autoCompact).catch(() => undefined);
+    void setInterruptMode(settings.interruptMode).catch(() => undefined);
     if (settings.thinkingLevel !== "auto") {
       void window.fastvibe.engine
         .setThinking(settings.thinkingLevel)
@@ -587,12 +717,12 @@ export function App(): JSX.Element {
 
   useEffect(() => {
     if (status.state !== "ready") return;
-    void window.fastvibe.engine.setAutoCompaction(settings.autoCompact).catch(() => undefined);
+    void setAutoCompaction(settings.autoCompact).catch(() => undefined);
   }, [settings.autoCompact, status.state]);
 
   useEffect(() => {
     if (status.state !== "ready") return;
-    void window.fastvibe.engine.setInterruptMode(settings.interruptMode).catch(() => undefined);
+    void setInterruptMode(settings.interruptMode).catch(() => undefined);
   }, [settings.interruptMode, status.state]);
 
   useEffect(() => {
@@ -649,18 +779,19 @@ export function App(): JSX.Element {
     if (!permission || permission.method !== "confirm") return;
     const key = permissionKey(permission);
     if (settings.permissionMode !== "full" && !permissionAlways.includes(key)) return;
-    void window.fastvibe.engine.respondPermission({ id: permission.id, confirmed: true });
-    setPermission(null);
-  }, [permission, permissionAlways, setPermission, settings.permissionMode]);
+    void respondPermission({ id: permission.id, confirmed: true });
+    resolvePermission(permission.id);
+  }, [permission, permissionAlways, resolvePermission, settings.permissionMode]);
 
   // Shared by the inline panel (confirm/select/input/questions) and the modal (editor).
   const handlePermissionRespond = useCallback(
     (payload: PermissionResponse) => {
       if (payload.always && permission) rememberPermission(permissionKey(permission));
-      void window.fastvibe.engine.respondPermission(payload);
-      setPermission(null);
+      void respondPermission(payload);
+      // The panel is gone the moment it is answered; the queue decides what is next.
+      resolvePermission(payload.id);
     },
-    [permission, rememberPermission, setPermission],
+    [permission, resolvePermission],
   );
 
   // Sending is allowed while the engine is still coming up: the prompt waits
@@ -683,9 +814,7 @@ export function App(): JSX.Element {
   // Unbound conversations run in a hidden scratch dir, so never surface that path.
   const workspaceLabel = activeProject?.name ?? t("workspace.noProject");
 
-  useEffect(() => {
-    writeDraft(activeId, draft);
-  }, [activeId, draft]);
+  useDraftPersistence(activeId, draft);
 
   // The composer's `/` palette lists skills: re-list when 设置 → 技能 is left (the
   // shell stays mounted behind that route) and when the conversation switches,
@@ -710,6 +839,10 @@ export function App(): JSX.Element {
     setMessages(result.messages, result.conversation.id);
     setSession(result.state);
     setStatus(result.status);
+    // The goal (or plan mode) this conversation already had, replayed by the engine:
+    // its own `setStatus` fired during session creation, which on a cold start is
+    // before this window was listening.
+    useSessionStore.getState().setExtensionStatus(result.conversation.id, result.extensionStatus ?? {});
     setDraft(readDrafts()[result.conversation.id] ?? "");
     setError(null);
     clearQueued();
@@ -745,8 +878,8 @@ export function App(): JSX.Element {
       if (!activeId) return;
       setDraft("");
       try {
-        await window.fastvibe.engine.compact(compact.instructions);
-        void window.fastvibe.engine.getState().then(setSession).catch(() => undefined);
+        await engine.compact(compact.instructions);
+        void engine.getState().then(setSession).catch(() => undefined);
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       }
@@ -796,7 +929,7 @@ export function App(): JSX.Element {
           // settled, and the guard must not stay held for the length of a run.
           void window.fastvibe.engine
             .steer(payload, attachmentsToImages(currentAttachments))
-            .then(() => window.fastvibe.engine.getState().then(setSession).catch(() => undefined))
+            .then(() => engine.getState().then(setSession).catch(() => undefined))
             .catch((err: unknown) => {
               unmarkQueuedSending(id);
               setError(err instanceof Error ? err.message : String(err));
@@ -838,9 +971,9 @@ export function App(): JSX.Element {
   ): Promise<void> {
     const payload = `${text || t("composer.seeAttachments")}${attachmentPromptSuffix(files)}`;
     const images = attachmentsToImages(files);
-    if (mode === "steer") await window.fastvibe.engine.steer(payload, images);
-    else await window.fastvibe.engine.prompt(payload, { images });
-    void window.fastvibe.engine.getState().then(setSession).catch(() => undefined);
+    if (mode === "steer") await engine.steer(payload, images);
+    else await engine.prompt(payload, { images });
+    void engine.getState().then(setSession).catch(() => undefined);
   }
 
   async function drainQueued(item: QueuedPrompt): Promise<void> {
@@ -861,7 +994,7 @@ export function App(): JSX.Element {
       .getState()
       .queued.filter((item) => item.sending && item.id !== exceptId);
     try {
-      await window.fastvibe.engine.replaceSteering(
+      await engine.replaceSteering(
         remaining.map((item) => ({
           text: item.sentText ?? item.text,
           images: attachmentsToImages(item.attachments ?? []),
@@ -900,8 +1033,8 @@ export function App(): JSX.Element {
       const payload = `${item.text || t("composer.seeAttachments")}${attachmentPromptSuffix(item.attachments ?? [])}`;
       markQueuedSending(id, payload);
       try {
-        await window.fastvibe.engine.steer(payload, attachmentsToImages(item.attachments ?? []));
-        void window.fastvibe.engine.getState().then(setSession).catch(() => undefined);
+        await engine.steer(payload, attachmentsToImages(item.attachments ?? []));
+        void engine.getState().then(setSession).catch(() => undefined);
       } catch (err) {
         unmarkQueuedSending(id);
         setError(err instanceof Error ? err.message : String(err));
@@ -924,17 +1057,17 @@ export function App(): JSX.Element {
     if (pending.length > 0) setQueuePause("stopped");
     try {
       try {
-        await window.fastvibe.engine.clearQueue();
+        await engine.clearQueue();
       } catch {
         // older engines may not support clear_queue
       }
       unmarkAllQueuedSending();
-      await window.fastvibe.engine.abort();
+      await engine.abort();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setStreaming(false);
-      void window.fastvibe.engine.getState().then(setSession).catch(() => undefined);
+      void engine.getState().then(setSession).catch(() => undefined);
     }
   }
 
@@ -949,12 +1082,12 @@ export function App(): JSX.Element {
     if (!canChat) return;
     setRunInterrupted(null);
     try {
-      await window.fastvibe.engine.continue();
+      await engine.continue();
     } catch (err) {
       setRunInterrupted("error");
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      void window.fastvibe.engine.getState().then(setSession).catch(() => undefined);
+      void engine.getState().then(setSession).catch(() => undefined);
     }
   }
 
@@ -979,63 +1112,112 @@ export function App(): JSX.Element {
     })();
   }, [streaming, queuePause, queued]);
 
-  // Stable identities so the memoised transcript rows do not re-render (or hold a
-  // stale closure) when unrelated shell state changes.
-  const handleRetry = useCallback(async (message: ChatMessage): Promise<void> => {
-    const current = useSessionStore.getState();
-    const owner = current.activeId;
-    const source =
-      message.role === "user"
-        ? message
-        : [...current.messages].reverse().find((item) => item.role === "user" && item.createdAt <= message.createdAt);
-    const text = source?.text?.trim();
-    if (!text || !canChat) return;
-    if (current.streaming) {
-      try {
-        await window.fastvibe.engine.abort();
-      } catch {
-        // ignore
-      }
-    }
-    // Every step below acts on whatever conversation the engine has active, and a
-    // branch/send is a round trip the user can switch chats in the middle of. Bail
-    // out rather than rewind (and re-send into) a chat they moved to.
-    if (useSessionStore.getState().activeId !== owner) return;
-    // Retry replaces its turn rather than appending a second copy: drop the source
-    // user message and everything after it, then send it again. Branching rewinds
-    // the engine to the same point; if the id cannot be resolved locally the trim
-    // still keeps the transcript from stacking a duplicate.
-    const sourceIndex = source ? current.messages.findIndex((item) => item.id === source.id) : -1;
-    const trimmed = sourceIndex >= 0 ? current.messages.slice(0, sourceIndex) : current.messages;
-    if (source?.id) {
-      try {
-        const branch = await window.fastvibe.engine.branch(source.id);
-        if (useSessionStore.getState().activeId !== owner) return;
-        setMessages(branch, owner ?? undefined);
-      } catch {
-        setMessages(trimmed, owner ?? undefined);
-      }
-    } else {
-      setMessages(trimmed, owner ?? undefined);
-    }
-    setDraft("");
-    addUserMessage(text, source?.attachments);
+  /**
+   * Stop a chat from the sidebar without opening it.
+   *
+   * The stop button only ever addressed the active conversation, so a `/goal` run
+   * left spinning in the background had to be opened before it could be stopped.
+   * The id is passed explicitly for the same reason as everywhere else: the chat
+   * being stopped is not necessarily the one on screen.
+   */
+  const handleStopConversation = useCallback(async (id: string): Promise<void> => {
     try {
-      await window.fastvibe.engine.prompt(text, {
-        images: source?.attachments ? attachmentsToImages(source.attachments) : undefined,
-      });
-      void window.fastvibe.engine.getState().then(setSession).catch(() => undefined);
+      await engine.abort(id);
     } catch (err) {
-      dropEmptyAssistant();
       setError(err instanceof Error ? err.message : String(err));
     }
+  }, []);
+
+  // Stable identities so the memoised transcript rows do not re-render (or hold a
+  // stale closure) when unrelated shell state changes.
+  /**
+   * A retry whose turn also changed files, held until the user decides about them.
+   *
+   * Only the *decision* is deferred: the checkpoint is read first, and when the turn
+   * wrote nothing (`null`) the retry runs immediately with no extra step. Winding the
+   * working tree back is not something to do silently — the user may have edited those
+   * same files by hand since — but not offering it at all was worse: 「重试这一轮」
+   * re-ran the prompt against code the failed attempt had already changed.
+   */
+  const [retryRewind, setRetryRewind] = useState<{ message: ChatMessage; paths: string[] } | null>(null);
+  /** One retry at a time: the transcript's 重试 button stays mounted while it works. */
+  const retrying = useRef(false);
+
+  const runRetry = useCallback(async (message: ChatMessage): Promise<void> => {
+    if (retrying.current) return;
+    retrying.current = true;
+    try {
+      const current = useSessionStore.getState();
+      const owner = current.activeId;
+      const source =
+        message.role === "user"
+          ? message
+          : [...current.messages].reverse().find((item) => item.role === "user" && item.createdAt <= message.createdAt);
+      const text = source?.text?.trim();
+      if (!text || !canChat) return;
+      if (current.streaming) {
+        try {
+          await engine.abort();
+        } catch {
+          // ignore
+        }
+      }
+      // Every step below acts on whatever conversation the engine has active, and a
+      // branch/send is a round trip the user can switch chats in the middle of. Bail
+      // out rather than rewind (and re-send into) a chat they moved to.
+      if (useSessionStore.getState().activeId !== owner) return;
+      // Retry replaces its turn rather than appending a second copy: drop the source
+      // user message and everything after it, then send it again. Branching rewinds
+      // the engine to the same point; if the id cannot be resolved locally the trim
+      // still keeps the transcript from stacking a duplicate.
+      const sourceIndex = source ? current.messages.findIndex((item) => item.id === source.id) : -1;
+      const trimmed = sourceIndex >= 0 ? current.messages.slice(0, sourceIndex) : current.messages;
+      if (source?.id) {
+        try {
+          const branch = await engine.branch(source.id);
+          if (useSessionStore.getState().activeId !== owner) return;
+          setMessages(branch, owner ?? undefined);
+        } catch {
+          setMessages(trimmed, owner ?? undefined);
+        }
+      } else {
+        setMessages(trimmed, owner ?? undefined);
+      }
+      setDraft("");
+      addUserMessage(text, source?.attachments);
+      try {
+        await engine.prompt(text, {
+          images: source?.attachments ? attachmentsToImages(source.attachments) : undefined,
+        });
+        void engine.getState().then(setSession).catch(() => undefined);
+      } catch (err) {
+        dropEmptyAssistant();
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    } finally {
+      retrying.current = false;
+    }
   }, [canChat, setMessages, setDraft, addUserMessage, dropEmptyAssistant, setError, setSession]);
+
+  const handleRetry = useCallback(async (message: ChatMessage): Promise<void> => {
+    // Ask about the workspace before touching the transcript, so a cancelled retry
+    // leaves everything exactly as it was.
+    const owner = useSessionStore.getState().activeId;
+    if (owner) {
+      const checkpoint = await window.fastvibe.engine.getCheckpoint(owner).catch(() => null);
+      if (checkpoint && checkpoint.paths.length > 0) {
+        setRetryRewind({ message, paths: checkpoint.paths });
+        return;
+      }
+    }
+    await runRetry(message);
+  }, [runRetry]);
 
   const handleEdit = useCallback(async (message: ChatMessage): Promise<void> => {
     const owner = useSessionStore.getState().activeId;
     if (message.id) {
       try {
-        const branch = await window.fastvibe.engine.branch(message.id);
+        const branch = await engine.branch(message.id);
         // Branching rewrites the engine's active session; if the user switched
         // chats while it ran, the result no longer describes the chat on screen.
         if (useSessionStore.getState().activeId !== owner) return;
@@ -1059,6 +1241,7 @@ export function App(): JSX.Element {
     try {
       applyList(await window.fastvibe.conversations.delete(id));
       disposeSidePaneTabs(useSidePaneStore.getState().forgetScope(id));
+      useSessionStore.getState().forgetConversationExtensionState(id);
     } catch {
       // Draft cleanup is best-effort.
     }
@@ -1072,8 +1255,8 @@ export function App(): JSX.Element {
       if (current && !current.preview) {
         if ((current.project ?? undefined) !== (project || undefined)) {
           applyList(await window.fastvibe.conversations.setProject(current.id, project ?? null));
-          void window.fastvibe.engine.getStatus().then(setStatus).catch(() => undefined);
-          void window.fastvibe.engine.getState().then(setSession).catch(() => undefined);
+          void getStatus().then(setStatus).catch(() => undefined);
+          void engine.getState().then(setSession).catch(() => undefined);
         }
         setMessages([], current.id);
         setDraft(readDrafts()[current.id] ?? "");
@@ -1091,8 +1274,15 @@ export function App(): JSX.Element {
     }
   }
 
-  async function handleOpen(id: string, source: "user" | "history" = "user"): Promise<void> {
+  async function handleOpen(id: string, source: "user" | "history" = "user", findQuery?: string): Promise<void> {
     const store = useSessionStore.getState();
+    // A search hit opens the chat *and* the find bar on the query that found it: the
+    // palette can say which conversation matched, but only the transcript can show
+    // where, and scrolling there by hand is the work the search was meant to save.
+    if (findQuery) {
+      setPendingFind(findQuery);
+      setFindOpen(true);
+    }
     // Re-opening the active chat is pointless once it has content or a reply is
     // streaming, but it is how an empty/failed conversation gets retried.
     if (id === store.activeId && (store.messages.length > 0 || store.streaming)) {
@@ -1125,7 +1315,7 @@ export function App(): JSX.Element {
       const added = await window.fastvibe.projects.add();
       if (!added) return;
       applyList(added);
-      setStatus(await window.fastvibe.engine.getStatus());
+      setStatus(await getStatus());
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -1211,7 +1401,10 @@ export function App(): JSX.Element {
       const doomed = useSessionStore.getState().conversations.filter((item) => item.project === cwd).map((item) => item.id);
       const result = await window.fastvibe.projects.remove(cwd);
       applyList(result);
-      for (const id of doomed) disposeSidePaneTabs(useSidePaneStore.getState().forgetScope(id));
+      for (const id of doomed) {
+        disposeSidePaneTabs(useSidePaneStore.getState().forgetScope(id));
+        useSessionStore.getState().forgetConversationExtensionState(id);
+      }
       if (result.nextId) {
         applyOpen(await window.fastvibe.conversations.open(result.nextId));
         revealConversation(result.nextId, true);
@@ -1238,6 +1431,7 @@ export function App(): JSX.Element {
         result = await window.fastvibe.conversations.delete(id);
         deleted.push(id);
         disposeSidePaneTabs(useSidePaneStore.getState().forgetScope(id));
+        useSessionStore.getState().forgetConversationExtensionState(id);
       } catch (err) {
         error = err instanceof Error ? err.message : String(err);
       }
@@ -1273,7 +1467,7 @@ export function App(): JSX.Element {
       }
       const snapshot = await window.fastvibe.conversations.setProject(activeId, project);
       applyList(snapshot);
-      void window.fastvibe.engine.getStatus().then(setStatus).catch(() => undefined);
+      void getStatus().then(setStatus).catch(() => undefined);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -1289,11 +1483,11 @@ export function App(): JSX.Element {
 
   async function handleModelChange(provider: string, modelId: string): Promise<void> {
     try {
-      let next = await window.fastvibe.engine.setModel(provider, modelId);
+      let next = await engine.setModel(provider, modelId);
       const catalog = models.find((item) => item.provider === provider && item.id === modelId);
       const levels = catalog?.thinkingLevels;
       if (levels?.length && (!next.thinkingLevel || !levels.includes(next.thinkingLevel as never))) {
-        next = await window.fastvibe.engine.setThinking(levels.includes("high") ? "high" : levels[0]);
+        next = await engine.setThinking(levels.includes("high") ? "high" : levels[0]);
       }
       setSession(next);
       // Deliberately no transcript re-read here. Nothing about the chat changed yet —
@@ -1307,7 +1501,7 @@ export function App(): JSX.Element {
 
   async function handleThinkingChange(level: string): Promise<void> {
     try {
-      const next = await window.fastvibe.engine.setThinking(level);
+      const next = await engine.setThinking(level);
       setSession(next);
     } catch {
       setError(t("errors.thinking"));
@@ -1352,7 +1546,7 @@ export function App(): JSX.Element {
                 <Button
                   size="xs"
                   variant="outline"
-                  onClick={() => void window.fastvibe.engine.start(status.cwd)}
+                  onClick={() => void start(status.cwd)}
                 >
                   {t("alert.retry")}
                 </Button>
@@ -1453,9 +1647,11 @@ export function App(): JSX.Element {
           conversations={conversations}
           activeId={activeId}
           running={running}
+          waitingForUser={waitingForUser}
           onNewChat={(cwd) => void handleNewChat(cwd)}
           onOpen={(id) => void handleOpen(id)}
           onArchive={(id) => void handleArchiveSession(id)}
+          onStop={(id) => void handleStopConversation(id)}
           onAddProject={() => void handleAddProject()}
           onRenameSession={(id, title) => void handleRenameSession(id, title)}
           onRenameProject={(cwd, name) => void handleRenameProject(cwd, name)}
@@ -1551,6 +1747,10 @@ export function App(): JSX.Element {
                   showThinking={settings.showThinking}
                   showTimestamp={settings.showTimestamps}
                   collapseRuns={settings.collapseRuns}
+                  findOpen={findOpen}
+                  onCloseFind={() => setFindOpen(false)}
+                  findQuery={pendingFind}
+                  onFindQueryConsumed={() => setPendingFind(null)}
                 />
               </div>
               {/* Everything under the transcript shares its column: the transcript's
@@ -1575,32 +1775,38 @@ export function App(): JSX.Element {
           onError={setError}
         />
       </div>
-      <SettingsDialog
-        open={settingsOpen}
-        onOpenChange={(open) => {
-          if (open) {
-            navigate("/settings/general");
-            return;
-          }
-          if ((window.history.state?.idx ?? 0) > 0) navigate(-1);
-          else navigate(workspacePath(activeId), { replace: true });
-        }}
-        section={settingsSection}
-        models={models}
-        onDeleteConversations={handleDeleteConversations}
-        onImported={(snapshot) => applySnapshot(snapshot)}
-        onProvidersChanged={() => {
-          void window.fastvibe.engine.getModels().then(setModels).catch(() => undefined);
-          void window.fastvibe.engine.getState().then(setSession).catch(() => undefined);
-        }}
-      />
+      {/* Mounted from the first time 设置 is opened and left mounted after, so the
+          dialog keeps its own close animation and a section switch costs nothing. */}
+      {settingsMounted ? (
+        <Suspense fallback={null}>
+          <SettingsDialog
+            open={settingsOpen}
+            onOpenChange={(open) => {
+              if (open) {
+                navigate("/settings/general");
+                return;
+              }
+              if ((window.history.state?.idx ?? 0) > 0) navigate(-1);
+              else navigate(workspacePath(activeId), { replace: true });
+            }}
+            section={settingsSection}
+            models={models}
+            onDeleteConversations={handleDeleteConversations}
+            onImported={(snapshot) => applySnapshot(snapshot)}
+            onProvidersChanged={() => {
+              void getModels().then(setModels).catch(() => undefined);
+              void engine.getState().then(setSession).catch(() => undefined);
+            }}
+          />
+        </Suspense>
+      ) : null}
       <CommandPalette
         open={commandOpen}
         conversations={conversations}
         projects={projects}
         activeId={activeId}
         onOpenChange={setCommandOpen}
-        onSelectChat={(id) => void handleOpen(id)}
+        onSelectChat={(id, findQuery) => void handleOpen(id, "user", findQuery)}
         onNewChat={() => void handleNewChat()}
         onAddProject={() => void handleAddProject()}
         onOpenSettings={(section) => navigate(`/settings/${section}`)}
@@ -1610,6 +1816,71 @@ export function App(): JSX.Element {
         request={pendingDialog}
         onRespond={handlePermissionRespond}
       />
+      {/* 重试时询问文件回退. A retry rewinds the conversation, and this is the same
+          question for the working tree the turn wrote — asked, not assumed, because
+          the user may have touched those files by hand since. */}
+      <AlertDialog open={retryRewind !== null} onOpenChange={(open) => { if (!open) setRetryRewind(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("rewind.title")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("rewind.description", { count: retryRewind?.paths.length ?? 0 })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {retryRewind ? (
+            <ul className="max-h-40 space-y-0.5 overflow-y-auto text-xs text-muted-foreground">
+              {retryRewind.paths.map((path) => (
+                <li key={path} className="truncate font-mono" title={path}>
+                  {path}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          <AlertDialogFooter>
+            {/* "Keep the file changes" still retries — it answers the *file* question,
+                not whether to retry at all. A Cancel that only closed the dialog made
+                the whole 重试 click a no-op the moment a turn had written a file. */}
+            <AlertDialogCancel
+              onClick={() => {
+                const pending = retryRewind;
+                setRetryRewind(null);
+                if (pending) void runRetry(pending.message);
+              }}
+            >
+              {t("rewind.keep")}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                const pending = retryRewind;
+                setRetryRewind(null);
+                if (!pending) return;
+                // The chat this retry belongs to, captured now: the restore is a round
+                // trip and the user can switch chats while it runs.
+                const owner = useSessionStore.getState().activeId;
+                void (async () => {
+                  if (owner) {
+                    try {
+                      const result = await window.fastvibe.engine.restoreCheckpoint(owner);
+                      // A file the turn created but could not be put back (binary, too
+                      // large, or a path git will not hand over) must be said out loud —
+                      // silently "reverting" and then retrying on a half-restored tree is
+                      // the failure this whole feature exists to prevent.
+                      if (result.skipped > 0) {
+                        setError(t("rewind.partial", { count: result.skipped }));
+                      }
+                    } catch (err) {
+                      setError(err instanceof Error ? err.message : String(err));
+                    }
+                  }
+                  await runRetry(pending.message);
+                })();
+              }}
+            >
+              {t("rewind.revert")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <ExtensionNotices />
     </div>
   );

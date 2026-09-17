@@ -1,12 +1,14 @@
 import { spawn } from "node:child_process";
 import { accessSync, constants, existsSync } from "node:fs";
 import { join } from "node:path";
-import { app, ipcMain, Notification, type BrowserWindow } from "electron";
+import { app, Notification, type BrowserWindow } from "electron";
 import electronUpdater from "electron-updater";
 import type { ProgressInfo, UpdateDownloadedEvent, UpdateInfo } from "electron-updater";
 
 const { autoUpdater } = electronUpdater;
 import { Ipc, type AppUpdateState } from "@shared/ipc";
+import { broadcast } from "./ipc/broadcast";
+import { handle } from "./ipc/registry";
 
 const CHECK_DELAY_MS = 8_000;
 /** Background re-checks after the launch one, for as long as the app runs. */
@@ -60,9 +62,7 @@ let downloadedFile: string | undefined;
 
 function setState(patch: Partial<AppUpdateState>): void {
   state = { ...state, ...patch };
-  for (const window of windows()) {
-    if (!window.isDestroyed()) window.webContents.send(Ipc.updateState, state);
-  }
+  broadcast(Ipc.updateState, state);
 }
 
 function notesOf(info: UpdateInfo): string | undefined {
@@ -137,6 +137,11 @@ async function checkForUpdates(manual: boolean): Promise<AppUpdateState> {
 
 async function downloadUpdate(): Promise<AppUpdateState> {
   if (!app.isPackaged) return state;
+  // The provider resolves the blockmap and may diff against a cached archive before
+  // a single byte moves, so the first `download-progress` can be seconds away. Without
+  // this the click has no visible effect at all until then; `progress: undefined` is how
+  // the renderer tells 「已开始但还没有进度」 from a real percentage.
+  setState({ status: "downloading", progress: undefined, error: undefined });
   try {
     await autoUpdater.downloadUpdate();
   } catch (error) {
@@ -173,10 +178,10 @@ export function registerUpdater(getWindows: () => Iterable<BrowserWindow>): void
     currentVersion: app.getVersion(),
   };
 
-  ipcMain.handle(Ipc.updateGetState, () => state);
-  ipcMain.handle(Ipc.updateCheck, () => checkForUpdates(true));
-  ipcMain.handle(Ipc.updateDownload, () => downloadUpdate());
-  ipcMain.handle(Ipc.updateInstall, () => {
+  handle(Ipc.updateGetState, () => state);
+  handle(Ipc.updateCheck, () => checkForUpdates(true));
+  handle(Ipc.updateDownload, () => downloadUpdate());
+  handle(Ipc.updateInstall, () => {
     if (state.status !== "downloaded") return state;
     if (process.platform === "darwin") {
       const check = canReplaceMacApp();

@@ -136,7 +136,27 @@ function errorFromAssistant(value: unknown): string | undefined {
   return text || (i18n.t("common:errors.requestFailed") as string);
 }
 
+/**
+ * Same ceiling Main applies to a transcript read (`capToolResult`), enforced again
+ * here because a live result reaches the store through the event stream rather than
+ * through that path. Without it a single `read` of a large file sat in the
+ * transcript for the life of the conversation to fill a card that clips at 4000
+ * characters.
+ */
+const MAX_TOOL_RESULT_CHARS = 256_000;
+
+function capToolResult(text: string): string {
+  if (text.length <= MAX_TOOL_RESULT_CHARS) return text;
+  const dropped = text.length - MAX_TOOL_RESULT_CHARS;
+  return `${text.slice(0, MAX_TOOL_RESULT_CHARS)}\n${i18n.t("common:notice.resultTruncated", { count: dropped })}`;
+}
+
 function toolText(value: unknown): string | undefined {
+  const text = rawToolText(value);
+  return text === undefined ? undefined : capToolResult(text);
+}
+
+function rawToolText(value: unknown): string | undefined {
   if (typeof value === "string") return value;
   if (!isRecord(value)) {
     try {
@@ -181,14 +201,21 @@ function trailingAssistant(messages: ChatMessage[]): ChatMessage | undefined {
  * identity so React can skip re-rendering them; only the assistant (and its
  * tools) that is actually being streamed into gets cloned. Cloning every message
  * on every token made long sessions progressively slower.
+ *
+ * The two arrays are copied, but their *elements* are not: `upsertTool` and
+ * `appendDelta` already replace the single entry they touch with a fresh object,
+ * so cloning every entry here only destroyed the identity `ToolCard` /
+ * `ToolGroupRow` / `ThinkingBlock` are memoised on — a reply with twenty tool
+ * calls re-rendered all twenty cards on every flush, each one re-scanning its
+ * whole result for a diff, to show one new token of text.
  */
 function withAssistant(messages: ChatMessage[]): { list: ChatMessage[]; assistant: ChatMessage } {
   const last = messages.at(-1);
   if (last?.role === "assistant") {
     const assistant: ChatMessage = {
       ...last,
-      tools: last.tools.map((tool) => ({ ...tool })),
-      parts: last.parts ? last.parts.map((part) => ({ ...part })) : [],
+      tools: last.tools.slice(),
+      parts: last.parts ? last.parts.slice() : [],
     };
     const list = messages.slice();
     list[list.length - 1] = assistant;
@@ -282,10 +309,22 @@ function stampThinkingTiming(message: ChatMessage, event: Record<string, unknown
   const startedAt = typeof event.thinkingStartedAt === "number" ? event.thinkingStartedAt : undefined;
   const endedAt = typeof event.thinkingEndedAt === "number" ? event.thinkingEndedAt : undefined;
   if (startedAt === undefined && endedAt === undefined) return;
-  const part = message.parts?.at(-1);
-  if (!part || part.kind !== "thinking") return;
-  if (startedAt !== undefined) part.startedAt = startedAt;
-  if (endedAt !== undefined) part.endedAt = endedAt;
+  const parts = message.parts;
+  const part = parts?.at(-1);
+  if (!parts || !part || part.kind !== "thinking") return;
+  // Main re-sends the bounds on every delta, so most calls have nothing to say.
+  // Bail before writing: the part is shared with the previous snapshot (see
+  // `withAssistant`), and replacing it unconditionally would both mutate history
+  // and hand `ThinkingBlock` a new identity on every flush.
+  const changed =
+    (startedAt !== undefined && part.startedAt !== startedAt) ||
+    (endedAt !== undefined && part.endedAt !== endedAt);
+  if (!changed) return;
+  parts[parts.length - 1] = {
+    ...part,
+    startedAt: startedAt ?? part.startedAt,
+    endedAt: endedAt ?? part.endedAt,
+  };
 }
 
 function upsertTool(message: ChatMessage, patch: Partial<ToolCallBlock> & { id: string }): void {

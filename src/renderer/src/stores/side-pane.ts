@@ -3,6 +3,7 @@ import { applyEngineEvent } from "@/lib/apply-engine-event";
 import { i18n } from "@/lib/i18n";
 import { useSettingsStore } from "@/stores/settings";
 import type { ChatMessage, EngineEvent, FilePreview } from "@shared/types";
+import type { GitDiffSource } from "@shared/ipc";
 
 export type SidePaneTabType = "git" | "terminal" | "browser" | "selection-side-chat" | "files" | "subagent";
 
@@ -51,6 +52,16 @@ export type SidePaneTab = {
   subagentStatus?: string;
   /** The delegated brief; the pane renders it as the run's opening user message. */
   subagentBrief?: string;
+  /**
+   * A file the 审查 tab should select on open, and which diff source to select it in.
+   *
+   * Set when a turn's changed-file chip is clicked: the pane knows the file list already,
+   * but without this it opened on whatever it last showed, leaving the reader to find the
+   * file they just clicked on. Cleared by the pane once honoured, so re-opening the tab
+   * later is not yanked back to an old selection.
+   */
+  gitFocusPath?: string;
+  gitFocusSource?: GitDiffSource;
 };
 
 /**
@@ -177,6 +188,11 @@ type SidePaneStore = {
   closeOthers: (id: string) => void;
   closeAll: () => void;
   openGit: () => void;
+  /**
+   * Open 审查 focused on one file's diff — the turn's changed-file chips route here, so
+   * clicking `+12 -3 auth.ts` lands on that file's diff instead of the pane's last state.
+   */
+  openGitDiff: (path: string, source: GitDiffSource, cwd?: string) => void;
   openTerminal: (cwd?: string) => void;
   openBrowser: (url?: string, conversationId?: string) => string;
   /** Browser tab ids in one conversation's pane (the active chat when omitted). */
@@ -235,6 +251,8 @@ const SUBAGENT_TAB_STATUS: Record<string, string> = {
   running: "tabs.status.running",
   completed: "tabs.status.completed",
   error: "tabs.status.error",
+  // A run the user stopped by hand is neither a success nor a failure of the run.
+  aborted: "tabs.status.aborted",
 };
 
 /** `子 Agent` tab label: role plus live status, e.g. `scout · 运行中`. */
@@ -531,6 +549,23 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
       const scope = scopeOf(state);
       const existing = scope.tabs.find((item) => item.type === "git");
       const tab = existing ?? { id: "git", type: "git" as const, openedAt: Date.now(), title: i18n.t("sidepane:tabs.git") as string };
+      return writeScope(
+        state,
+        scopeKeyOf(state),
+        { ...scope, tabs: upsert(scope.tabs, tab), activeTabId: tab.id },
+        { collapsed: false },
+      );
+    }),
+  openGitDiff: (path, source, cwd) =>
+    set((state) => {
+      const scope = scopeOf(state);
+      const existing = scope.tabs.find((item) => item.type === "git");
+      const tab: SidePaneTab = {
+        ...(existing ?? { id: "git", type: "git" as const, openedAt: Date.now(), title: i18n.t("sidepane:tabs.git") as string }),
+        gitFocusPath: path,
+        gitFocusSource: source,
+        ...(cwd ? { cwd } : {}),
+      };
       return writeScope(
         state,
         scopeKeyOf(state),

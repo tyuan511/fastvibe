@@ -26,9 +26,33 @@ export type FastVibePaths = {
   reasoningFile: string;
   /** Append-only record of finalized turns, so 使用统计 survives session deletion. */
   usageLedgerFile: string;
+  /**
+   * Remote-access password hash and device tokens.
+   *
+   * Deliberately *not* in `settings.json`: that file is handed whole to every renderer
+   * (`settings:get`) and broadcast again on every write, so a credential placed there
+   * would be shipped to every window — and, once the remote server exists, to every
+   * client that connects. Kept apart, and never served by any method.
+   */
+  remoteAccessFile: string;
 };
 
+/**
+ * Resolved once per process.
+ *
+ * The paths are derived from `userData`, which never changes for the life of the
+ * app, and the `mkdirSync` sweep below only has to happen once — but this is called
+ * from hot paths (the engine event fan-out asks for `settingsFile` on every
+ * streamed event), where re-running six `mkdirSync` syscalls per token blocked the
+ * main process's event loop for the whole of a fast reply.
+ */
+let cached: FastVibePaths | null = null;
+
 export function getFastVibePaths(): FastVibePaths {
+  return (cached ??= buildFastVibePaths());
+}
+
+function buildFastVibePaths(): FastVibePaths {
   const userData = app.getPath("userData");
   const logs = join(userData, "logs");
   const runtimeRoot = join(userData, "runtime", "engine");
@@ -60,5 +84,6 @@ export function getFastVibePaths(): FastVibePaths {
     settingsFile: join(userData, "settings.json"),
     reasoningFile: join(runtimeRoot, "reasoning.json"),
     usageLedgerFile: join(runtimeRoot, "usage-ledger.jsonl"),
+    remoteAccessFile: join(userData, "remote-access.json"),
   };
 }

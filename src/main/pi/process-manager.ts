@@ -26,6 +26,7 @@ import type {
   ConversationOpenResult,
   ConversationReadyEvent,
   ConversationSearchHit,
+  ConversationSnapshot,
   ExtensionInfo,
   ExtensionPackage,
   FastVibeModel,
@@ -69,6 +70,7 @@ import { currentAiLanguageDirective } from "../engine/ai-language";
 import { uiText } from "../engine/ui-text";
 import { mapEngineMessages } from "../engine/map-messages";
 import { ReasoningStore } from "../engine/reasoning-store";
+import { captureCheckpoint, clearCheckpoint, readBefore, readCheckpoint, restoreCheckpoint, saveCheckpoints, loadCheckpoints, checkpointFile, type CheckpointFile } from "../engine/checkpoint";
 import { usageLedgerFor, type UsageLedger } from "../engine/usage-ledger";
 import {
   addNativeProvider as addNativeProviderConfig,
@@ -189,6 +191,16 @@ function errorSummary(message: unknown): Record<string, unknown> | undefined {
   return { role: "assistant", stopReason: "error", errorMessage: record.errorMessage };
 }
 
+/** The one block of a partial assistant message a tool-call event actually describes. */
+function toolCallBlock(inner: Record<string, unknown>): unknown {
+  const partial = inner.partial;
+  if (typeof partial !== "object" || partial === null) return undefined;
+  const content = (partial as Record<string, unknown>).content;
+  if (!Array.isArray(content)) return undefined;
+  const index = typeof inner.contentIndex === "number" ? inner.contentIndex : undefined;
+  return index === undefined ? content.at(-1) : content[index];
+}
+
 function slimStreamEvent(event: Record<string, unknown>): Record<string, unknown> {
   if (event.type === "message_update") {
     const inner = event.assistantMessageEvent;
@@ -202,6 +214,25 @@ function slimStreamEvent(event: Record<string, unknown>): Record<string, unknown
     if (innerRecord.type === "error") {
       const { partial: _partial, error, ...deltaOnly } = innerRecord;
       return { ...rest, assistantMessageEvent: { ...deltaOnly, error: errorSummary(error) } };
+    }
+    // A tool-call event needs its `partial` — the call's name and arguments live on
+    // one block of it — but only that block. The whole partial assistant message
+    // carries every word written so far plus every earlier tool call, so a reply
+    // that calls tools as it goes shipped its entire accumulated text across the IPC
+    // boundary again for each argument fragment.
+    if (
+      innerRecord.type === "toolcall_start" ||
+      innerRecord.type === "tool_call_start" ||
+      innerRecord.type === "toolcall_delta" ||
+      innerRecord.type === "tool_call_delta" ||
+      innerRecord.type === "toolcall_end" ||
+      innerRecord.type === "tool_call_end"
+    ) {
+      const block = toolCallBlock(innerRecord);
+      if (block === undefined) return rest;
+      // Rebased onto a one-block `partial`: the reader resolves the call by
+      // `contentIndex`, so the index has to name the block's new position.
+      return { ...rest, assistantMessageEvent: { ...innerRecord, partial: { content: [block] }, contentIndex: 0 } };
     }
     return rest;
   }
@@ -313,6 +344,42 @@ function num(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
+/** How long a permission confirmation waits before Main answers it 未批准. */
+const CONFIRM_TIMEOUT_MS = 5 * 60_000;
+
+/**
+ * Events of an in-flight turn that the transcript cannot express, kept so a client
+ * arriving mid-run can draw them (`#retain`).
+ *
+ * The transcript reader already carries the turn's *content*: `#messages` appends the
+ * streaming assistant message as a `running:` row, tools and all. So the stream events
+ * must NOT be kept — `slimStreamEvent` reduces `message_update` to a bare delta, and
+ * replaying deltas onto a snapshot that has already accumulated them would render the
+ * reply twice over.
+ *
+ * What is left is the panel state the reducer folds and the transcript has no place
+ * for: a notice, a todo list, a retry banner, a model divider. Split by where each is
+ * emitted — the stream ones pass through the session subscription (and are dropped
+ * there for a background conversation), the rest are emitted directly — so that an
+ * event is never retained twice.
+ */
+const RETAIN_FROM_STREAM = new Set([
+  "notice",
+  "command_output",
+  "todo_reminder",
+  "todo_auto_clear",
+  "auto_retry_start",
+  "auto_retry_end",
+]);
+const RETAIN_FROM_EMIT = new Set(["extension_error", "model_changed"]);
+
+/**
+ * Ceiling on those events for one turn. They are a handful per turn in practice; the
+ * cap only bounds a pathological run. Past it the turn is marked `overflowed` and the
+ * client re-reads once it settles, rather than being handed a replay with a hole in it.
+ */
+const TURN_EVENT_LIMIT = 2_000;
+
 /** Host adapter backed by pi-coding-agent. It keeps one AgentSession per conversation in one Node process. */
 export class PiProcessManager {
   #paths: FastVibePaths;
@@ -330,7 +397,26 @@ export class PiProcessManager {
   /** Every configured model's price ladder, refreshed whenever the registry is. */
   #prices: Map<string, ModelPrice> = new Map();
   #operation: Promise<unknown> = Promise.resolve();
-  #pendingUi = new Map<string, { resolve: (value: unknown) => void; fallback: unknown; conversationId: string }>();
+  /**
+   * Extension prompts parked waiting for a human, by prompt id.
+   *
+   * `request` is the very event that announced each one. It is kept because the prompt
+   * is delivered *only* as an event: a client that was not connected when it fired had
+   * no way to learn of it and simply saw a chat that had stopped, with the tool parked
+   * behind a question nobody was being shown. Serving it from this map rather than from
+   * a retained copy means what is offered and what can still be answered are the same
+   * entry, and cannot drift.
+   */
+  #pendingUi = new Map<string, { resolve: (value: unknown) => void; fallback: unknown; conversationId: string; owner: string; request: Record<string, unknown> }>();
+  /**
+   * The last `setStatus` each conversation's extensions published.
+   *
+   * A status is a live event, and the one an extension publishes from `session_start`
+   * — the goal extension restoring an objective as *paused* — fires while the session
+   * is being created, which at boot is before any renderer is listening. Kept so an
+   * open can replay it, exactly as `#messages` re-serves a running compaction card.
+   */
+  #extensionStatuses = new Map<string, Map<string, string>>();
   /** Live component-factory widgets: re-rendered on a timer so a dashboard stays current. */
   #widgetTimers = new Map<string, NodeJS.Timeout>();
   /** Created component instances, kept so a dashboard's internal state survives a redraw. */
@@ -362,6 +448,29 @@ export class PiProcessManager {
    * half of it.
    */
   #busyBroadcast = new Map<string, boolean>();
+  /**
+   * Ordering stamp put on every event as it leaves (`#stamp`).
+   *
+   * A client that was disconnected cannot tell "nothing happened" from "I missed it"
+   * without one. It is process-wide rather than per-conversation so the order of two
+   * events is answerable even across chats; per-conversation contiguity is what
+   * `#turnEvents` provides, and that is what reconstruction actually reads.
+   */
+  #eventSeq = 0;
+  /**
+   * Panel state of each conversation's *current* turn, kept until the turn settles.
+   *
+   * Only the events the transcript has no place for (`RETAIN_FROM_STREAM` /
+   * `RETAIN_FROM_EMIT`) — a notice, a todo list, a retry banner, a model divider. The
+   * reply in flight is not among them: `#messages` already appends it as a `running:`
+   * row, so keeping the stream deltas as well would replay content the snapshot has
+   * already accumulated.
+   *
+   * Filled for *every* conversation, including background ones whose live payloads are
+   * dropped downstream, because "which chat is on screen" is one window's idea and a
+   * second client may be looking at another one.
+   */
+  #turnEvents = new Map<string, { events: Record<string, unknown>[]; overflowed: boolean }>();
   /** Conversations whose session must be re-pointed at the reloaded model registry once its run lands. */
   #modelDirty = new Set<string>();
   /**
@@ -392,12 +501,35 @@ export class PiProcessManager {
   #extensions: ExtensionManager;
   /** Live subagent registry and bounded transcript cache. */
   #subagents = new Map<string, SubagentInfo>();
+  /**
+   * Thinking-block bounds for delegated runs, keyed by subagent id then entry id.
+   *
+   * A subagent transcript has no measured bounds of its own, so the pane could only
+   * fall back to the span of the whole round-trip — and had nothing at all while that
+   * round-trip was still streaming. Its sessions are in-memory, so these cannot share
+   * `ReasoningStore`: that store is keyed by entry id and persisted to disk, and a
+   * delegation's throwaway entry ids are not a durable name for anything.
+   */
+  #subagentReasoning = new Map<string, Map<string, ThinkingTiming[]>>();
+  /** Files this turn has written, so the checkpoint covers exactly them. */
+  #runTouchedFiles = new Map<
+    string,
+    { cwd: string; files: Map<string, CheckpointFile>; pending: Promise<unknown> }
+  >();
   #subagentMessages = new Map<string, ChatMessage[]>();
   /** Live subscription logins, keyed by provider id. */
   #oauthLogins = new Map<string, OAuthLogin>();
   #oauthListeners = new Set<(payload: OAuthEventPayload) => void>();
   /** In-flight subagent sessions, keyed by subagent id, so `stop()` can dispose them. */
   #subagentSessions = new Map<string, AgentSession>();
+  /**
+   * Runs the user stopped by hand.
+   *
+   * A user stop and a parent abort both end with `stopReason: "aborted"`, but only the
+   * first has a live parent waiting to be told *why* its delegation ended — the message
+   * becomes the tool result the main agent reads.
+   */
+  #stoppedSubagents = new Set<string>();
 
   constructor() {
     this.#paths = getFastVibePaths();
@@ -407,6 +539,9 @@ export class PiProcessManager {
     this.#mcp = new McpManager(this.#paths.mcpFile);
     this.#skills = new SkillManager(this.#paths.agentDir, this.#paths.skillsDir);
     this.#extensions = new ExtensionManager(this.#paths.agentDir, this.#paths.scratchDir);
+    // A retry prompt should survive a window reload, which is common in dev and possible
+    // after a crash. Best-effort: a missing file just means no checkpoint is offered.
+    void loadCheckpoints(checkpointFile(this.#paths.runtimeRoot)).catch(() => undefined);
     const active = this.#catalog.activeId ? this.#catalog.get(this.#catalog.activeId) : undefined;
     this.#cwd = active?.project ?? this.#paths.scratchDir;
   }
@@ -415,7 +550,12 @@ export class PiProcessManager {
   searchConversations(query: string): Promise<ConversationSearchHit[]> {
     return searchConversationContent(query, this.#catalog.list());
   }
-  flush(): void { this.#catalog.flush(); this.#reasoning.flush(); this.#usage.flush(); }
+  flush(): void {
+    this.#catalog.flush();
+    this.#reasoning.flush();
+    this.#usage.flush();
+    void saveCheckpoints(checkpointFile(this.#paths.runtimeRoot)).catch(() => undefined);
+  }
   get status(): EngineStatus { return this.#status; }
   get cwd(): string { return this.#cwd; }
   onStatus(listener: (status: EngineStatus) => void): () => void { this.#statusListeners.add(listener); return () => this.#statusListeners.delete(listener); }
@@ -493,6 +633,10 @@ export class PiProcessManager {
       this.#compacting.clear();
       this.#busyBroadcast.clear();
       this.#timing.clear();
+      this.#runTouchedFiles.clear();
+      // A stopped engine is a fresh start: nothing a session published before it is
+      // still true, and the sessions that republish on `session_start` will.
+      this.#extensionStatuses.clear();
       await Promise.all(
         [...this.#subagentSessions.values()].map(async (session) => {
           try {
@@ -503,6 +647,11 @@ export class PiProcessManager {
         }),
       );
       this.#subagentSessions.clear();
+      this.#stoppedSubagents.clear();
+      // A delegated run's timing lives only in memory; a disposed run leaves nothing
+      // behind to read it, so both halves go with the sessions they describe.
+      this.#subagentReasoning.clear();
+      this.#reasoningRun.clear();
       await Promise.all(sessions.map(async (item) => { item.unsubscribe(); this.#persist(item.session); await item.session.dispose(); }));
       this.#models = null;
       this.#runtime = null;
@@ -511,17 +660,28 @@ export class PiProcessManager {
     });
   }
 
-  async prompt(message: string, options?: { streamingBehavior?: "steer" | "followUp"; images?: Array<{ type: "image"; data: string; mimeType: string }> }): Promise<void> {
-    const session = await this.#active();
+  async prompt(
+    message: string,
+    options?: {
+      streamingBehavior?: "steer" | "followUp";
+      images?: Array<{ type: "image"; data: string; mimeType: string }>;
+      conversationId?: string;
+    },
+  ): Promise<void> {
+    const { id, session } = await this.#sessionFor(options?.conversationId);
     if (await this.#compactIfCommand(session, message)) return;
-    if (this.#activeId) await this.#flushModelRebind(this.#activeId);
+    // A user turn begins: this turn's file checkpoint starts empty (see `#beginTurn`).
+    this.#beginTurn(id);
+    if (id) await this.#flushModelRebind(id);
     // A caller may consider the run over and still land inside the settle window —
     // an `agent_end` the SDK is about to retry, compact, or continue. The session is
     // not idle across any of it, and a plain prompt there throws ("Agent is already
     // processing"; "Cannot submit a prompt while compaction is in progress" for a
     // standalone `/compact`, which has no run at all), so wait it out.
     if (!session.isIdle && !options?.streamingBehavior) await session.waitForIdle();
-    await session.prompt(message, options);
+    // Pass only what the SDK understands: `conversationId` is ours, and the SDK's own
+    // options object must not receive a key it never declared.
+    await session.prompt(message, { streamingBehavior: options?.streamingBehavior, images: options?.images });
   }
 
   async promptConversation(id: string, message: string, images?: Array<{ type: "image"; data: string; mimeType: string }>): Promise<void> {
@@ -530,6 +690,7 @@ export class PiProcessManager {
     await this.#ensureReady();
     const managed = await this.#ensureSession(conversation);
     if (await this.#compactIfCommand(managed.session, message)) return;
+    this.#beginTurn(id);
     await this.#flushModelRebind(id);
     await this.#promptWhenIdle(managed.session, message, images);
   }
@@ -568,14 +729,18 @@ export class PiProcessManager {
       this.#catalog.update(conversation.id, { sessionFile: state.sessionFile, sessionId: state.sessionId }) ?? conversation;
     return this.#opened(updated, [], state);
   }
-  async steer(message: string, images?: Array<{ type: "image"; data: string; mimeType: string }>): Promise<void> {
-    const session = await this.#active();
+  async steer(
+    message: string,
+    images?: Array<{ type: "image"; data: string; mimeType: string }>,
+    conversationId?: string,
+  ): Promise<void> {
+    const { id, session } = await this.#sessionFor(conversationId);
     // Steering is only drained between turns of a live run. `#isLive()` spans the
     // whole run — including the window between an `agent_end` and the `agent_start`
     // the SDK still owes it (a retry, a compaction, a queued continuation) — so a
     // steer parked in that window is picked up by that continuation rather than
     // being sent to a runtime that has already stopped.
-    if (!this.#isLive()) {
+    if (!this.#isLive(id)) {
       await this.#promptWhenIdle(session, message, images);
       return;
     }
@@ -592,27 +757,47 @@ export class PiProcessManager {
    */
   async replaceSteering(
     items: Array<{ text: string; images?: Array<{ type: "image"; data: string; mimeType: string }> }>,
+    conversationId?: string,
   ): Promise<void> {
-    const session = await this.#active();
+    const { session } = await this.#sessionFor(conversationId);
     session.clearQueue();
     for (const item of items) await session.steer(item.text, item.images);
   }
-  async followUp(message: string, images?: Array<{ type: "image"; data: string; mimeType: string }>): Promise<void> {
-    const session = await this.#active();
-    if (!this.#isLive()) {
+  async followUp(
+    message: string,
+    images?: Array<{ type: "image"; data: string; mimeType: string }>,
+    conversationId?: string,
+  ): Promise<void> {
+    const { id, session } = await this.#sessionFor(conversationId);
+    if (!this.#isLive(id)) {
       await this.#promptWhenIdle(session, message, images);
       return;
     }
     await session.followUp(message, images);
   }
-  async abort(): Promise<void> {
+  /**
+   * Stop one conversation's run.
+   *
+   * `conversationId` scopes both halves of this: which session is aborted, and whose
+   * parked extension prompts are answered with their fallback. Addressing it matters
+   * because a background conversation can be sitting on a permission prompt while the
+   * user stops a different chat — resolving every pending prompt unconditionally meant
+   * that stop answered the *other* chat's question with 「未批准」, so a tool the user
+   * never saw a prompt for was blocked. Omitting the id keeps the old behaviour for
+   * callers that mean "the active chat" (the composer's stop button, Escape).
+   */
+  async abort(conversationId?: string): Promise<void> {
     // A `tool_call` hook may be parked on an extension UI prompt (permission
     // sandbox / question tool). Resolve those before aborting: the hook cannot
     // observe the abort signal while it awaits `ctx.ui.confirm`, so leaving the
     // promise pending would hang the tool, keep the run from ever settling and pin
     // the conversation as "running" forever.
-    this.#resolvePendingUi();
-    const session = await this.#active();
+    //
+    // Scoped to the chat being stopped, falling back to the active one — *not* to
+    // every chat. Stopping A used to answer B's parked approval with its `false`
+    // fallback, so a tool in a background chat was denied a prompt the user never saw.
+    this.#resolvePendingUi(conversationId ?? this.#activeId ?? undefined);
+    const { session } = await this.#sessionFor(conversationId);
     const timeout = new Promise<never>((_, reject) => {
       const timer = setTimeout(() => reject(new Error(uiText("停止运行超时；会话仍可能在后台运行", "Stop timed out; the session may still be running in the background"))), 15_000);
       timer.unref?.();
@@ -626,6 +811,23 @@ export class PiProcessManager {
       this.#setStatus({ state: "error", cwd: this.#cwd, message: error instanceof Error ? error.message : uiText("停止运行失败", "Failed to stop") });
       throw error;
     }
+  }
+  /**
+   * Stop one delegated run, leaving its parent and its siblings alone.
+   *
+   * The run is a tool call inside the parent's turn, so aborting its own session makes
+   * the parent's tool call return — with a failed result the main agent reads, which is
+   * how the delegation is "told" it was stopped. A parked prompt belongs to the *run*
+   * (its UI context is the parent conversation's, so the two would be indistinguishable
+   * by chat id), and the `tool_call` hook cannot observe the abort while it awaits one,
+   * so those are answered first — scoped to this owner, not the parent's prompts.
+   */
+  async abortSubagent(subagentId: string): Promise<void> {
+    const session = this.#subagentSessions.get(subagentId);
+    if (!session) return;
+    this.#stoppedSubagents.add(subagentId);
+    this.#resolvePendingUi(undefined, subagentId);
+    await session.abort();
   }
   /**
    * Resume the interrupted turn without a new user message. The loop re-enters from
@@ -644,9 +846,10 @@ export class PiProcessManager {
    * Engine-side queued messages are cleared first — the renderer owns the follow-up
    * queue and drains it itself, so a resume must not silently flush it.
    */
-  async continueTurn(): Promise<void> {
-    this.#resolvePendingUi();
-    const session = await this.#active();
+  async continueTurn(conversationId?: string): Promise<void> {
+    // Only this conversation's parked prompt is answered: continue is a per-chat action.
+    this.#resolvePendingUi(conversationId ?? this.#activeId ?? undefined);
+    const { session } = await this.#sessionFor(conversationId);
     const messages = session.agent.state.messages;
     const last = messages[messages.length - 1];
     if (last?.role === "assistant") {
@@ -683,13 +886,19 @@ export class PiProcessManager {
     await run.call(session, []);
   }
 
-  async clearQueue(): Promise<{ steering: string[]; followUp: string[] }> { return (await this.#active()).clearQueue(); }
-  async branch(entryId: string): Promise<ChatMessage[]> { await (await this.#active()).navigateTree(entryId); return this.loadMessages(); }
+  async clearQueue(conversationId?: string): Promise<{ steering: string[]; followUp: string[] }> {
+    return (await this.#sessionFor(conversationId)).session.clearQueue();
+  }
+  async branch(entryId: string, conversationId?: string): Promise<ChatMessage[]> {
+    const session = (await this.#sessionFor(conversationId)).session;
+    await session.navigateTree(entryId);
+    return this.#messages(session, conversationId ?? this.#activeId ?? undefined);
+  }
 
-  async getSessionStats(): Promise<SessionStats> {
-    const session = await this.#active();
+  async getSessionStats(conversationId?: string): Promise<SessionStats> {
+    const { id, session } = await this.#sessionFor(conversationId);
     const stats = session.getSessionStats();
-    const timing = this.#timing.get(this.#activeId ?? "");
+    const timing = this.#timing.get(id ?? "");
     const now = Date.now();
     const totalMs = (timing?.totalMs ?? 0) + (timing?.runStartedAt !== undefined ? now - timing.runStartedAt : 0);
     const toolMs = (timing?.toolMs ?? 0) + (timing?.toolStartedAt !== undefined ? now - timing.toolStartedAt : 0);
@@ -727,7 +936,11 @@ export class PiProcessManager {
     }
     return total;
   }
-  async compact(customInstructions?: string): Promise<EngineSessionState> { await (await this.#active()).compact(customInstructions); return this.getState(); }  async getCommands(): Promise<SlashCommand[]> {
+  async compact(customInstructions?: string, conversationId?: string): Promise<EngineSessionState> {
+    await (await this.#sessionFor(conversationId)).session.compact(customInstructions);
+    return this.getState(conversationId);
+  }
+  async getCommands(): Promise<SlashCommand[]> {
     // Commands come from the session's prompt templates and extensions, so an empty
     // hero has none to list rather than an error to report.
     const session = await this.#activeSession();
@@ -786,6 +999,32 @@ export class PiProcessManager {
     }
     return keys;
   }
+  /**
+   * Whether a retry of this conversation has file changes it could also unwind.
+   *
+   * The renderer asks before offering the rewind, so the prompt only appears when
+   * there is something to put back — a turn that only read files has no checkpoint and
+   * must not grow an empty confirmation step.
+   */
+  getCheckpoint(conversationId: string): { paths: string[]; createdAt: number } | null {
+    const checkpoint = readCheckpoint(conversationId);
+    if (!checkpoint || checkpoint.files.length === 0) return null;
+    return { paths: checkpoint.files.map((file) => file.path), createdAt: checkpoint.createdAt };
+  }
+
+  /** Put the workspace back to a conversation's checkpoint. */
+  async restoreCheckpoint(conversationId: string): Promise<{ restored: number; removed: number; skipped: number }> {
+    const checkpoint = readCheckpoint(conversationId);
+    if (!checkpoint) return { restored: 0, removed: 0, skipped: 0 };
+    const result = await restoreCheckpoint(checkpoint);
+    clearCheckpoint(conversationId);
+    // Drop the accumulator too: the retry that follows is a new attempt at the same
+    // turn and must capture the (now restored) originals again, not skip every path as
+    // "already seen" and leave the checkpoint empty.
+    this.#runTouchedFiles.delete(conversationId);
+    return { restored: result.restored.length, removed: result.removed.length, skipped: result.skipped.length };
+  }
+
   async getSubagentMessages(subagentId: string): Promise<ChatMessage[]> {
     const live = this.#subagentSessions.get(subagentId);
     if (live) {
@@ -796,7 +1035,7 @@ export class PiProcessManager {
       return mapEngineMessages(
         live.messages,
         (message) => entryIds.get(message),
-        undefined,
+        this.#subagentReasoning.get(subagentId),
         undefined,
         sessionCompletionTimes(live),
       );
@@ -871,6 +1110,14 @@ export class PiProcessManager {
     }
     this.#clearBusy(id);
     this.#timing.delete(id);
+    this.#extensionStatuses.delete(id);
+    // A deleted chat's parked prompts must be settled: nothing will ever answer them,
+    // and their promises would keep a tool (and the run flag) pending for the life of
+    // the process. The checkpoint goes with it, too — 32MB of content for a chat that
+    // no longer exists.
+    this.#resolvePendingUi(id);
+    this.#runTouchedFiles.delete(id);
+    clearCheckpoint(id);
     return { ...this.#catalog.snapshot(), nextId: wasActive ? (this.#catalog.activeId ?? null) : null };
   }
   async setConversationProject(id: string, project: string | null): Promise<WorkspaceSnapshot> {
@@ -886,6 +1133,8 @@ export class PiProcessManager {
     }
     // The session is gone, so no `agent_settled` will ever arrive for it.
     this.#clearBusy(id);
+    // The replacement session republishes whatever it holds on `session_start`.
+    this.#extensionStatuses.delete(id);
     if (this.#activeId === id) {
       await this.#ensureReady();
       const reopened = await this.#ensureSession(updated);
@@ -907,8 +1156,47 @@ export class PiProcessManager {
   addProject(cwd: string): ProjectAddResult { const project = this.#catalog.ensureProject(cwd); if (!project) throw new Error("invalid project"); return { ...this.#catalog.snapshot(), project }; }
   renameProject(cwd: string, name: string): WorkspaceSnapshot { this.#catalog.renameProject(cwd, name); return this.#catalog.snapshot(); }
   reorderProjects(cwds: string[]): WorkspaceSnapshot { this.#catalog.reorderProjects(cwds); return this.#catalog.snapshot(); }
-  async removeProject(cwd: string): Promise<ConversationDeleteResult> { const wasActive = this.#catalog.get(this.#catalog.activeId ?? "")?.project === cwd; const removed = this.#catalog.removeProject(cwd); await Promise.all(removed.map(async (item) => { if (item.sessionFile) { await this.#usage.capture(item.sessionFile); await unlink(item.sessionFile).catch(() => undefined); } if (item.worktree) await this.#removeWorktree(item.worktree.path); const managed = this.#sessions.get(item.id); if (managed) { managed.unsubscribe(); await managed.session.dispose(); this.#sessions.delete(item.id); } this.#clearBusy(item.id); })); return { ...this.#catalog.snapshot(), nextId: wasActive ? (this.#catalog.activeId ?? null) : null }; }
-  async loadMessages(): Promise<ChatMessage[]> { const session = await this.#active(); return this.#messages(session, this.#activeId ?? undefined); }
+  async removeProject(cwd: string): Promise<ConversationDeleteResult> { const wasActive = this.#catalog.get(this.#catalog.activeId ?? "")?.project === cwd; const removed = this.#catalog.removeProject(cwd); await Promise.all(removed.map(async (item) => { if (item.sessionFile) { await this.#usage.capture(item.sessionFile); await unlink(item.sessionFile).catch(() => undefined); } if (item.worktree) await this.#removeWorktree(item.worktree.path); const managed = this.#sessions.get(item.id); if (managed) { managed.unsubscribe(); await managed.session.dispose(); this.#sessions.delete(item.id); } this.#clearBusy(item.id); this.#extensionStatuses.delete(item.id); })); return { ...this.#catalog.snapshot(), nextId: wasActive ? (this.#catalog.activeId ?? null) : null }; }
+  async loadMessages(conversationId?: string): Promise<ChatMessage[]> {
+    const { id, session } = await this.#sessionFor(conversationId);
+    return this.#messages(session, id);
+  }
+
+  /**
+   * Everything a client needs to draw one conversation exactly as it stands — including
+   * a turn that is still running.
+   *
+   * The transcript and the retained turn are read with **no `await` between them**, so
+   * the event loop cannot deliver an engine event in the middle and the two halves are
+   * guaranteed to describe the same instant. That is what removes the splice: a client
+   * does not have to reconcile "messages as of some time" against "events since some
+   * other time", which is the race the desktop never hit only because its listener was
+   * installed at boot and never went away.
+   *
+   * `seq` is the last event number in existence at that instant. A caller that
+   * subscribes afterwards discards anything at or below it and applies the rest.
+   */
+  async getSnapshot(conversationId?: string): Promise<ConversationSnapshot> {
+    const { id, session } = await this.#sessionFor(conversationId);
+    const messages = this.#messages(session, id);
+    const running = id ? this.#busy(id) : false;
+    const turn = running && id ? this.#turnEvents.get(id) : undefined;
+    const pendingUi: Array<Record<string, unknown>> = [];
+    if (id) {
+      for (const pending of this.#pendingUi.values()) {
+        if (pending.conversationId === id) pendingUi.push(pending.request);
+      }
+    }
+    return {
+      conversationId: id ?? null,
+      messages,
+      running,
+      pendingUi,
+      turnEvents: turn ? [...turn.events] : [],
+      overflowed: turn?.overflowed ?? false,
+      seq: this.#eventSeq,
+    };
+  }
   /**
    * The models this install can chat with. An unconfigured engine has none, which is an
    * answer rather than an error — the composer's model menu is how the user connects one.
@@ -918,11 +1206,11 @@ export class PiProcessManager {
     await this.#ensureReady();
     return this.#modelsCache ?? [];
   }
-  async setModel(provider: string, modelId: string): Promise<EngineSessionState> {
+  async setModel(provider: string, modelId: string, conversationId?: string): Promise<EngineSessionState> {
     await this.#ensureReady();
     const model = this.#models?.find(provider, modelId);
     if (!model) throw new Error(uiText("模型不存在", "Model not found"));
-    const session = await this.#activeSession();
+    const session = conversationId ? (await this.#sessionFor(conversationId)).session : await this.#activeSession();
     if (!session) {
       this.#pendingModel = { provider, id: modelId };
       return this.#draftState();
@@ -932,10 +1220,10 @@ export class PiProcessManager {
     // one of them — 「A/x → A/x」 for a choice the user never changed.
     const current = session.model;
     if (current && current.provider === model.provider && current.id === model.id) {
-      return this.#state(session, this.#activeId ?? undefined);
+      return this.#state(session, conversationId ?? this.#activeId ?? undefined);
     }
     await this.#useModel(session, model);
-    return this.#state(session, this.#activeId ?? undefined);
+    return this.#state(session, conversationId ?? this.#activeId ?? undefined);
   }
   /**
    * Switch one session's model.
@@ -1000,16 +1288,30 @@ export class PiProcessManager {
     session.setAutoCompactionEnabled(enabled);
     return this.#state(session, this.#activeId ?? undefined);
   }
-  async setThinkingLevel(level: string): Promise<EngineSessionState> {
-    const session = await this.#activeSession();
+  async setThinkingLevel(level: string, conversationId?: string): Promise<EngineSessionState> {
+    const session = conversationId ? (await this.#sessionFor(conversationId)).session : await this.#activeSession();
     if (!session) {
       this.#pendingThinking = level;
       return this.#draftState();
     }
     session.setThinkingLevel(level as ThinkingLevel);
-    return this.#state(session, this.#activeId ?? undefined);
+    return this.#state(session, conversationId ?? this.#activeId ?? undefined);
   }
-  async getState(): Promise<EngineSessionState> {
+  async getState(conversationId?: string): Promise<EngineSessionState> {
+    // An addressed chat is answered from its own session, so a second window asking
+    // about the chat it has open cannot be handed the other window's state. Falling
+    // back to the active session here would be worse than not answering: the reply
+    // would carry *another* chat's state under the requested id, and the renderer files
+    // it by that id.
+    if (conversationId) {
+      const known = this.#sessions.get(conversationId);
+      if (known) return this.#state(known.session, conversationId);
+      const conversation = this.#catalog.get(conversationId);
+      if (!conversation) return this.#draftState();
+      await this.#ensureReady();
+      const managed = await this.#ensureSession(conversation);
+      return this.#state(managed.session, conversationId);
+    }
     const session = await this.#activeSession();
     return session ? this.#state(session, this.#activeId ?? undefined) : this.#draftState();
   }
@@ -1037,6 +1339,7 @@ export class PiProcessManager {
     this.#running.delete(id);
     this.#compacting.delete(id);
     this.#busyBroadcast.delete(id);
+    this.#turnEvents.delete(id);
     if (wasBusy) this.#emit({ type: "conversation_running", conversationId: id, running: false });
   }
 
@@ -1325,6 +1628,27 @@ export class PiProcessManager {
     if (!session) throw new Error("no active conversation");
     return session;
   }
+  /**
+   * Resolve the session an engine call is about, and the id it is addressed to.
+   *
+   * `conversationId` is optional so the many callers that mean "the chat the user is
+   * looking at" (the composer, Escape, the palette) stay unchanged, and the engine
+   * falls back to its active id for them. Everything that can be triggered *from* a
+   * conversation while a different one is active — the sidebar, subagent panes, a
+   * second window — must pass the id, because the engine's active id is one value
+   * shared by every window: two windows on two chats used to send each other's
+   * prompts into whichever chat had been opened last.
+   */
+  async #sessionFor(conversationId?: string): Promise<{ id: string | undefined; session: AgentSession }> {
+    if (!conversationId) return { id: this.#activeId ?? undefined, session: await this.#active() };
+    const known = this.#sessions.get(conversationId);
+    if (known) return { id: conversationId, session: known.session };
+    const conversation = this.#catalog.get(conversationId);
+    if (!conversation) throw new Error("conversation not found");
+    await this.#ensureReady();
+    const managed = await this.#ensureSession(conversation);
+    return { id: conversationId, session: managed.session };
+  }
   async #ensureSession(conversation: Conversation): Promise<ManagedSession> {
     const existing = this.#sessions.get(conversation.id);
     if (existing) return existing;
@@ -1419,6 +1743,10 @@ export class PiProcessManager {
         const timing = this.#timingFor(conversation.id);
         if (timing.toolStartedAt === undefined) timing.toolStartedAt = now;
         timing.openTools += 1;
+        // Before the turn's *first* write, snapshot that file. The captured copy has to
+        // be the pre-turn content, and by the time the tool reports back it is already
+        // overwritten — so this is the only moment it can be read.
+        this.#captureTurnFile(conversation.id, conversation.cwd, event);
       } else if (event.type === "tool_execution_end") {
         const timing = this.#timingFor(conversation.id);
         timing.openTools = Math.max(0, timing.openTools - 1);
@@ -1430,7 +1758,7 @@ export class PiProcessManager {
       // Time each thinking block as it streams. The transcript stores one timestamp
       // per assistant message (its request start), so this is the only chance to
       // record how long a block thought before the block is folded into the entry.
-      this.#timeReasoning(conversation.id, event, result.session, now);
+      this.#timeReasoning(conversation.id, event, result.session, now, (entryId, blocks) => this.#reasoning.set(entryId, blocks));
       // File the finished turn in the usage ledger, so 使用统计 outlives the transcript
       // if this conversation is later deleted.
       if (event.type === "message_end" && isAssistantEngineMessage(event.message)) {
@@ -1485,6 +1813,13 @@ export class PiProcessManager {
         const busy = this.#busy(conversation.id);
         if (this.#busyBroadcast.get(conversation.id) !== busy) {
           this.#busyBroadcast.set(conversation.id, busy);
+          // A turn's retained events start empty and are dropped once it settles — at
+          // which point the transcript holds the whole thing and a replay would only
+          // duplicate it. The events that arrive after this point in the same tick (the
+          // `agent_settled` payload itself) are retained but never served: a snapshot
+          // taken while idle reports no turn at all.
+          if (busy) this.#turnEvents.set(conversation.id, { events: [], overflowed: false });
+          else this.#turnEvents.delete(conversation.id);
           this.#emit({ type: "conversation_running", conversationId: conversation.id, running: busy });
         }
       }
@@ -1513,13 +1848,13 @@ export class PiProcessManager {
       // Bounds of the block being streamed, so the renderer derives its elapsed time
       // from the same clock that will be filed against the entry later — including
       // when the user switches back into a block that is still open.
-      if (event.type === "message_update") {
-        const block = this.#liveThinkingBlock(conversation.id);
-        if (block) {
-          payload.thinkingStartedAt = block.startedAt;
-          if (block.endedAt !== undefined) payload.thinkingEndedAt = block.endedAt;
-        }
-      }
+      this.#withThinkingTiming(conversation.id, event, payload);
+      // Retained *before* the live filter below, which forwards only the conversation on
+      // screen. Which chat that is belongs to one window, so a background conversation
+      // whose payloads are dropped here would otherwise lose this panel state entirely
+      // — and a second client opening it mid-run would never learn of it.
+      this.#stamp(payload);
+      this.#retain(conversation.id, payload, RETAIN_FROM_STREAM);
       if (this.#activeId === conversation.id || conversation.kind === "side-chat") {
         this.#emit(payload);
         return;
@@ -1545,13 +1880,54 @@ export class PiProcessManager {
       messages: this.#messages(result.session, conversation.id),
       state: this.#state(result.session, conversation.id),
       status: this.#status,
+      // The restored goal (or any other session_start status) has already fired by
+      // here; a background session initialising before the renderer could listen
+      // still has it on the reply this way, not only on the event.
+      extensionStatus: this.#extensionStatusSnapshot(conversation.id),
     };
     for (const listener of this.#readyListeners) listener(payload);
     return managed;
   }
   #emit(event: Record<string, unknown>): void {
+    this.#stamp(event);
+    const conversationId = event.conversationId;
+    if (typeof conversationId === "string") this.#retain(conversationId, event, RETAIN_FROM_EMIT);
     this.#trackSubagentEvent(event);
     for (const listener of this.#eventListeners) listener(event);
+  }
+
+  /**
+   * Number one event, once.
+   *
+   * Assigned in place rather than by building `{ ...event, seq }`: this runs for every
+   * streamed token, and an extra object per delta is exactly the kind of per-token cost
+   * the fan-out downstream is careful to avoid. Already-stamped events keep their
+   * number, so an event retained before it is emitted is not renumbered on the way out.
+   */
+  #stamp(event: Record<string, unknown>): void {
+    if (typeof event.seq !== "number") event.seq = ++this.#eventSeq;
+  }
+
+  /**
+   * Keep one event as part of its conversation's current turn.
+   *
+   * Capped so a runaway turn cannot grow without bound. Going over sets `overflowed`
+   * instead of quietly dropping the oldest: a partial replay would render a transcript
+   * that is wrong while looking right, which is worse than telling the client to read
+   * the whole thing again once the turn is done.
+   */
+  #retain(conversationId: string, payload: Record<string, unknown>, allowed: ReadonlySet<string>): void {
+    if (typeof payload.type !== "string" || !allowed.has(payload.type)) return;
+    let turn = this.#turnEvents.get(conversationId);
+    if (!turn) {
+      turn = { events: [], overflowed: false };
+      this.#turnEvents.set(conversationId, turn);
+    }
+    if (turn.events.length >= TURN_EVENT_LIMIT) {
+      turn.overflowed = true;
+      return;
+    }
+    turn.events.push(payload);
   }
 
   #emitOAuth(payload: OAuthEventPayload): void {
@@ -1671,7 +2047,10 @@ export class PiProcessManager {
     this.#emit({ type: "conversation_renamed", conversationId: id, title, snapshot: this.#catalog.snapshot() });
   }
   /** True when the active conversation has a run in flight (`agent_settled` clears it). */
-  #isLive(): boolean { return this.#activeId !== null && this.#running.get(this.#activeId) === true; }
+  #isLive(conversationId?: string): boolean {
+    const id = conversationId ?? this.#activeId;
+    return id !== null && id !== undefined && this.#running.get(id) === true;
+  }
   /**
    * Send a plain turn, first waiting out anything the session still has in flight.
    *
@@ -1706,6 +2085,66 @@ export class PiProcessManager {
   }
 
   /**
+   * Record the pre-turn content of a file a run is about to write.
+   *
+   * Called from `tool_execution_start`, i.e. *before* the tool touches anything — the
+   * last moment the original content exists. The turn's checkpoint accumulates across
+   * its calls, so the second edit of the same file must not re-capture it (that would
+   * store the first edit's output as the "before" state).
+   *
+   * A run's writes are the only thing that changes the workspace, so this is also the
+   * signal that a turn has file work worth offering to unwind. Accumulating resumes
+   * naturally at each `agent_start` (`#runTouchedFiles` is cleared there).
+   */
+  #captureTurnFile(conversationId: string, cwd: string | undefined, event: Record<string, unknown>): void {
+    const toolName = String(event.toolName ?? "").toLowerCase();
+    if (toolName !== "write" && toolName !== "edit") return;
+    const args = event.args as Record<string, unknown> | undefined;
+    const raw = typeof args?.path === "string" ? args.path : typeof args?.file_path === "string" ? args.file_path : "";
+    if (!raw) return;
+    const absolute = raw.startsWith("/") ? raw : join(cwd ?? this.#paths.scratchDir, raw);
+    let touched = this.#runTouchedFiles.get(conversationId);
+    if (!touched) {
+      touched = { cwd: cwd ?? this.#paths.scratchDir, files: new Map<string, CheckpointFile>(), pending: Promise.resolve() };
+      this.#runTouchedFiles.set(conversationId, touched);
+    }
+    // Read once, on first sight. A second `edit` of the same file must not re-read it:
+    // by then the first edit has already been written, so the "before" state would be
+    // the *first* edit's output and a rewind would restore a half-applied change.
+    // Read synchronously, too — the tool executes as soon as this handler returns, so an
+    // async read races the very write it is trying to capture.
+    if (touched.files.has(absolute)) return;
+    touched.files.set(absolute, readBefore(absolute));
+    // Serialized per conversation: `captureCheckpoint` awaits `git rev-parse` before it
+    // stores, so two overlapping calls could land out of order and leave the checkpoint
+    // missing the file captured by the earlier one.
+    const previous = touched.pending;
+    const next = previous
+      .then(() => captureCheckpoint(conversationId, touched.cwd, [...touched.files.values()]))
+      .catch(() => undefined);
+    touched.pending = next;
+  }
+
+  /**
+   * Begin a user turn: the file checkpoint is rebuilt from whatever *this* turn writes.
+   *
+   * Called from the user-facing prompt entry points — not from `agent_start`. One user
+   * turn emits several of those: the SDK's run wrapper loops `agent.continue()` for a
+   * retry, for the continuation a compaction or an `agent_end` handler queued, and for
+   * goal mode's next round. Clearing the accumulator there re-read a file as "before"
+   * after this same turn had already written it — the exact half-applied state the
+   * checkpoint exists to prevent — and a turn that wrote nothing inherited the previous
+   * turn's file list, so a retry would offer to rewind files it never touched.
+   *
+   * `continueTurn` is deliberately not one of these: a resume continues the same turn.
+   */
+  #beginTurn(conversationId: string | undefined): void {
+    if (!conversationId) return;
+    this.#runTouchedFiles.delete(conversationId);
+    clearCheckpoint(conversationId);
+  }
+
+  /**
    * Close the open thinking block, if any. Bounds are only ever written once, so a
    * provider that emits `thinking_end` and then another content event cannot extend
    * the block it already closed.
@@ -1716,24 +2155,37 @@ export class PiProcessManager {
   }
 
   /**
-   * Track where this conversation's thinking blocks start and end.
+   * Track where a stream's thinking blocks start and end.
+   *
+   * `key` scopes one live run: a conversation id for the chat on screen, a subagent id
+   * for a delegated run. The two share the map because they never collide (a
+   * conversation id is a uuid, a run id is `<toolCallId>:<index>`) and the tracking
+   * is identical.
    *
    * The bounds are filed against the session entry the assistant message becomes,
-   * because that entry id is what `#messages` hands the renderer as the message id —
-   * so the timing follows the message through every reload. Until then they ride
-   * along on the streamed events, which is what lets the renderer resume a block the
-   * user switched away from in the middle of.
+   * because that entry id is what `#messages` / `getSubagentMessages` hand the renderer
+   * as the message id — so the timing follows the message through every reload. Until
+   * then they ride along on the streamed events, which is what lets the renderer resume
+   * a block the user switched away from in the middle of. `file` decides where they
+   * land: the persistent `ReasoningStore` for a conversation, an in-memory map for a
+   * delegated run.
    */
-  #timeReasoning(conversationId: string, event: AgentSessionEvent, session: AgentSession, now: number): void {
+  #timeReasoning(
+    key: string,
+    event: AgentSessionEvent,
+    session: AgentSession,
+    now: number,
+    file: (entryId: string, blocks: ThinkingTiming[]) => void,
+  ): void {
     if (event.type === "message_start") {
-      this.#reasoningRun.set(conversationId, { blocks: [] });
+      this.#reasoningRun.set(key, { blocks: [] });
       return;
     }
     if (event.type === "message_update") {
-      let run = this.#reasoningRun.get(conversationId);
+      let run = this.#reasoningRun.get(key);
       if (!run) {
         run = { blocks: [] };
-        this.#reasoningRun.set(conversationId, run);
+        this.#reasoningRun.set(key, run);
       }
       const inner = event.assistantMessageEvent.type;
       if (inner === "thinking_start") {
@@ -1753,8 +2205,8 @@ export class PiProcessManager {
       return;
     }
     if (event.type !== "message_end") return;
-    const run = this.#reasoningRun.get(conversationId);
-    this.#reasoningRun.delete(conversationId);
+    const run = this.#reasoningRun.get(key);
+    this.#reasoningRun.delete(key);
     if (!run) return;
     this.#closeThinkingBlock(run, now);
     const blocks = run.blocks;
@@ -1767,13 +2219,68 @@ export class PiProcessManager {
       const entry = [...session.sessionManager.getEntries()]
         .reverse()
         .find((item) => item.type === "message" && item.message === message);
-      if (entry) this.#reasoning.set(entry.id, blocks);
+      if (entry) file(entry.id, blocks);
     });
   }
 
   /** The block currently being streamed, if any — the renderer derives its elapsed time from it. */
-  #liveThinkingBlock(conversationId: string): ThinkingTiming | undefined {
-    return this.#reasoningRun.get(conversationId)?.blocks.at(-1);
+  #liveThinkingBlock(key: string): ThinkingTiming | undefined {
+    return this.#reasoningRun.get(key)?.blocks.at(-1);
+  }
+
+  /**
+   * File a delegated run's thinking bounds against the entry its message becomes.
+   *
+   * Kept in memory only: a sub-session is a throwaway in-memory session, so its entry
+   * ids name nothing after the run and must not be written to `reasoning.json`, whose
+   * keys are durable conversation entry ids.
+   */
+  #fileSubagentReasoning(subagentId: string, entryId: string, blocks: ThinkingTiming[]): void {
+    // The entry id is only resolved a microtask after `message_end`. That microtask is
+    // queued before the run's own promise continuations, so it always lands while the
+    // session is still registered — but a `stop()` can tear the run down in between,
+    // and bounds for a run nobody can read are not worth keeping.
+    if (!this.#subagentSessions.has(subagentId)) return;
+    let byEntry = this.#subagentReasoning.get(subagentId);
+    if (!byEntry) {
+      byEntry = new Map();
+      this.#subagentReasoning.set(subagentId, byEntry);
+    }
+    byEntry.set(entryId, blocks);
+  }
+
+  /**
+   * Attach the live block's bounds to a payload the renderer will see.
+   *
+   * Both a conversation's events and a delegated run's ride this: the renderer stamps
+   * them onto the thinking part being written, which is what lets an open block keep
+   * counting from its real start instead of waiting for the message to end.
+   */
+  #withThinkingTiming(key: string, event: AgentSessionEvent, payload: Record<string, unknown>): void {
+    if (event.type !== "message_update") return;
+    const block = this.#liveThinkingBlock(key);
+    if (!block) return;
+    payload.thinkingStartedAt = block.startedAt;
+    if (block.endedAt !== undefined) payload.thinkingEndedAt = block.endedAt;
+  }
+
+  /**
+   * Publish a delegated run's own session state (model, thinking level, context usage).
+   *
+   * The subagent pane draws the main thread's composer, read-only; those three values
+   * are the only ones it needs and none of them is in the transcript — the engine holds
+   * them, so they have to be pushed. Recorded on the registry entry as well, so a pane
+   * opened later gets them from the `getSubagents` snapshot instead of waiting for the
+   * next event.
+   */
+  #publishSubagentState(subagentId: string, conversationId: string, session: AgentSession): void {
+    const model = session.model;
+    const picked = model && model.provider !== "unknown" ? { provider: model.provider, id: model.id } : undefined;
+    const usage = session.getContextUsage();
+    const contextUsage = usage ? { tokens: usage.tokens, contextWindow: usage.contextWindow, percent: usage.percent } : undefined;
+    const previous = this.#subagents.get(subagentId);
+    if (previous) this.#subagents.set(subagentId, { ...previous, model: picked, thinkingLevel: session.thinkingLevel, contextUsage });
+    this.#emit({ type: "subagent_state", subagentId, conversationId, model: picked, thinkingLevel: session.thinkingLevel, contextUsage });
   }
 
   /**
@@ -1834,6 +2341,21 @@ export class PiProcessManager {
         },
       ]);
     });
+  }
+
+  /**
+   * Replay the extension statuses a conversation already holds.
+   *
+   * Returned rather than emitted: a status published from `session_start` (the goal
+   * extension restoring an objective) fires while the session is being created, and on
+   * a cold start that is before any renderer is listening — *and* an event sent during
+   * the open round trip would land before the renderer has adopted the chat it names
+   * and be routed to a pane it does not belong to. Riding the reply lands it on the
+   * store together with the transcript.
+   */
+  #extensionStatusSnapshot(conversationId: string): Record<string, string> {
+    const bucket = this.#extensionStatuses.get(conversationId);
+    return bucket ? Object.fromEntries(bucket) : {};
   }
 
   #clearWidget(key: string): void {
@@ -1956,17 +2478,33 @@ export class PiProcessManager {
         ...(request.thinkingLevel ? { thinkingLevel: request.thinkingLevel } : {}),
       });
       session = created.session;
+      const activeSession = session;
       // Bind the parent's UI so the sandbox's `confirm` renders in the same
       // composer panel as a main-tool approval, and `hasUI` is true for the hook.
-      await session.bindExtensions({ mode: "rpc", uiContext: this.#extensionUi(conversationId) });
+      await session.bindExtensions({ mode: "rpc", uiContext: this.#extensionUi(conversationId, subagentId) });
       this.#subagentSessions.set(subagentId, session);
-      unsubscribe = session.subscribe((event) => {
-        this.#emit({
-          type: "subagent_event",
-          subagentId,
-          conversationId,
-          event: slimStreamEvent(event as unknown as Record<string, unknown>),
-        });
+      this.#publishSubagentState(subagentId, conversationId, activeSession);
+      unsubscribe = activeSession.subscribe((event) => {
+        // Time each thinking block as it streams. A delegated run's transcript has no
+        // measured bounds of its own, so without this its thinking row could only ever
+        // fall back to the span of the whole round-trip — and while that round-trip was
+        // still running there was nothing to fall back to at all.
+        const now = Date.now();
+        this.#timeReasoning(subagentId, event, activeSession, now, (entryId, blocks) =>
+          this.#fileSubagentReasoning(subagentId, entryId, blocks),
+        );
+        // The bounds belong on the *inner* event: the renderer re-applies that object
+        // (`applySubagentStream` unwraps `event.event`), and `stampThinkingTiming`
+        // reads them off whatever it was handed.
+        const nested = slimStreamEvent(event as unknown as Record<string, unknown>);
+        this.#withThinkingTiming(subagentId, event, nested);
+        this.#emit({ type: "subagent_event", subagentId, conversationId, event: nested });
+        // The context window moves at every turn boundary, exactly as it does on the
+        // main thread, so the read-only composer's ring is refreshed from the same
+        // point rather than only when the run ends.
+        if (event.type === "turn_end" || event.type === "agent_start" || event.type === "agent_settled") {
+          this.#publishSubagentState(subagentId, conversationId, activeSession);
+        }
       });
       if (request.signal) {
         if (request.signal.aborted) onAbort();
@@ -1990,14 +2528,34 @@ export class PiProcessManager {
       const subEntryIds = sessionEntryIds(session);
       this.#subagentMessages.set(
         subagentId,
-        mapEngineMessages(messages, (message) => subEntryIds.get(message), undefined, undefined, sessionCompletionTimes(session)),
+        mapEngineMessages(
+          messages,
+          (message) => subEntryIds.get(message),
+          this.#subagentReasoning.get(subagentId),
+          undefined,
+          sessionCompletionTimes(session),
+        ),
       );
+      this.#subagentReasoning.delete(subagentId);
     }
+    // A run cut off mid-thought (aborted, torn down) never emits the `message_end` that
+    // would have dropped this, and the key is the run id — nothing else will reuse it.
+    this.#reasoningRun.delete(subagentId);
     stopReason = thrown ? "error" : summary.stopReason;
     errorMessage = thrown ?? summary.errorMessage;
+    // A user stop and a parent abort both arrive as `aborted`, but only the first has a
+    // waiting parent to tell, and it is the message the main agent reads back as the
+    // tool result. Forced, not merely relabelled: the abort can surface here as a
+    // thrown error (`thrown` above), and the tool result must still say the user
+    // stopped it rather than name an engine failure.
+    if (this.#stoppedSubagents.delete(subagentId)) {
+      stopReason = "aborted";
+      errorMessage = uiText("已被用户终止", "Stopped by the user");
+    }
     const failed = stopReason === "error" || stopReason === "aborted";
-    lifecycle(failed ? "error" : "completed", errorMessage);
+    lifecycle(stopReason === "aborted" ? "aborted" : failed ? "error" : "completed", errorMessage);
     this.#subagentSessions.delete(subagentId);
+    if (session) this.#publishSubagentState(subagentId, conversationId, session);
     session?.dispose();
 
     return {
@@ -2040,7 +2598,7 @@ export class PiProcessManager {
     return bySpec(spec) ?? bySpec(fallback);
   }
 
-  #extensionUi(conversationId: string): FastVibeExtensionUIContext {
+  #extensionUi(conversationId: string, owner: string = conversationId): FastVibeExtensionUIContext {
     // Keep the editor mirror per extension session. This is useful to plugins that
     // compose a prompt in several calls, while the renderer remains the source of
     // truth for normal composer typing.
@@ -2050,10 +2608,15 @@ export class PiProcessManager {
       return new Promise<T>((resolve) => {
         const timer = timeout && timeout > 0 ? setTimeout(() => {
           this.#pendingUi.delete(id);
+          // Main answered for the user, so the panel has to come down: without this a
+          // timed-out prompt left an unanswerable question on screen, and clicking it
+          // did nothing (the entry it addressed was already gone).
+          this.#emit({ type: "extension_ui_dismiss", id, conversationId });
           resolve(fallback);
         }, timeout) : undefined;
-        this.#pendingUi.set(id, { fallback, conversationId, resolve: (value) => { if (timer) clearTimeout(timer); resolve(value as T); } });
-        this.#emit({ type: "extension_ui_request", id, conversationId, method, ...request });
+        const announcement: Record<string, unknown> = { type: "extension_ui_request", id, conversationId, method, ...request };
+        this.#pendingUi.set(id, { fallback, conversationId, owner, request: announcement, resolve: (value) => { if (timer) clearTimeout(timer); resolve(value as T); } });
+        this.#emit(announcement);
       });
     };
     return {
@@ -2061,12 +2624,22 @@ export class PiProcessManager {
       questions: (title, questions, opts) =>
         dialog<Array<string | null> | undefined>("questions", { title, questions, timeout: opts?.timeout }, undefined, opts?.timeout),
       runSubagent: (request) => this.#runSubagent(conversationId, request),
-      confirm: (title, message, opts) => dialog("confirm", { title, message, timeout: opts?.timeout }, false, opts?.timeout),
+      // 需求批准 has no timeout of its own, and an unanswered prompt parks the tool (and
+      // the run's settle) forever. A generous default keeps a background chat from
+      // hanging for the rest of the session while still leaving the user time to answer
+      // after switching back — the renderer meanwhile shows how long it has waited.
+      confirm: (title, message, opts) => dialog("confirm", { title, message, timeout: opts?.timeout }, false, opts?.timeout ?? CONFIRM_TIMEOUT_MS),
       input: (title, placeholder, opts) => dialog("input", { title, placeholder, timeout: opts?.timeout }, undefined, opts?.timeout),
       editor: (title, prefill) => dialog("editor", { title, prefill }, undefined),
       notify: (message, type) => { this.#emit({ type: "extension_ui_request", id: randomUUID(), conversationId, method: "notify", message, notifyType: type }); },
       onTerminalInput: () => () => undefined,
-      setStatus: (key, text) => { this.#emit({ type: "extension_ui_request", id: randomUUID(), conversationId, method: "setStatus", statusKey: key, statusText: text }); },
+      setStatus: (key, text) => {
+        const bucket = this.#extensionStatuses.get(conversationId) ?? new Map<string, string>();
+        if (typeof text === "string" && text) bucket.set(key, text);
+        else bucket.delete(key);
+        this.#extensionStatuses.set(conversationId, bucket);
+        this.#emit({ type: "extension_ui_request", id: randomUUID(), conversationId, method: "setStatus", statusKey: key, statusText: text });
+      },
       setWorkingMessage: () => undefined,
       setWorkingVisible: () => undefined,
       setWorkingIndicator: () => undefined,
@@ -2110,10 +2683,23 @@ export class PiProcessManager {
    * Answer every in-flight extension prompt with its fallback. Called when the
    * run is aborted or the engine stops — a hook awaiting a dialog that will
    * never be answered otherwise deadlocks the tool and the whole run.
+   *
+   * `conversationId` narrows it to one chat. `owner` narrows it further to one
+   * session within a chat — a delegated run parks its own prompts under the parent's
+   * conversation id (its UI context is bound to that chat), so stopping the run must
+   * not answer the parent's question, and stopping the chat must answer the
+   * delegation's. The prompts are stored with their owner but the first version never
+   * read it, so stopping *any* chat resolved *every* parked prompt: a background
+   * conversation sitting on a permission question had it answered 「未批准」 by an
+   * unrelated stop, blocking a tool the user never saw a prompt for.
    */
-  #resolvePendingUi(): void {
+  #resolvePendingUi(conversationId?: string, owner?: string): void {
     for (const [id, pending] of this.#pendingUi) {
+      if (conversationId && pending.conversationId !== conversationId) continue;
+      if (owner && pending.owner !== owner) continue;
       this.#pendingUi.delete(id);
+      // The renderer may still be showing this panel; tell it to take the question down.
+      this.#emit({ type: "extension_ui_dismiss", id, conversationId: pending.conversationId });
       pending.resolve(pending.fallback);
     }
   }
@@ -2298,7 +2884,19 @@ export class PiProcessManager {
   }
   /** State for the empty hero: no session exists, so only the composer's own picks are known. */
   #draftState(): EngineSessionState { return { model: this.#pendingModel, thinkingLevel: this.#pendingThinking, isStreaming: false, running: false, interruptMode: this.#interruptMode }; }
-  #opened(conversation: Conversation, messages: ChatMessage[], state: EngineSessionState | null): ConversationOpenResult { return { ...this.#catalog.snapshot(), conversation, messages, state, status: this.#status }; }
+  #opened(conversation: Conversation, messages: ChatMessage[], state: EngineSessionState | null): ConversationOpenResult {
+    return {
+      ...this.#catalog.snapshot(),
+      conversation,
+      messages,
+      state,
+      status: this.#status,
+      // The statuses this conversation's extensions already published (a goal restored
+      // from its transcript, most of all) ride the open: their own event fired while the
+      // session was being created, which on a cold start is before any renderer listened.
+      extensionStatus: this.#extensionStatusSnapshot(conversation.id),
+    };
+  }
 
   /**
    * Re-point live sessions at the model objects the reloaded registry hands out.

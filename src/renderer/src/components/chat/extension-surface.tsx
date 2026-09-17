@@ -1,19 +1,23 @@
-import { useEffect, useState, type JSX } from "react";
+import { useEffect, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { i18n } from "@/lib/i18n";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Alert02Icon,
   Cancel01Icon,
+  Delete02Icon,
   InformationCircleIcon,
   InformationSquareIcon,
+  PauseIcon,
+  PlayIcon,
   Target01Icon,
   TaskDaily01Icon,
 } from "@hugeicons/core-free-icons";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { engine } from "@/lib/engine-client";
+import { IconButton } from "@/components/icon-button";
 import { cn } from "@/lib/utils";
-import { useSessionStore } from "@/stores/session";
+import { useSessionStore, useExtensionStatus, useExtensionWidgets } from "@/stores/session";
 import { TuiLines } from "./tui-lines";
 
 /**
@@ -25,7 +29,7 @@ const BADGE_STATUS_KEYS = new Set(["plan-mode", "goal", "goal-armed"]);
 
 async function runExtensionCommand(command: string): Promise<void> {
   try {
-    await window.fastvibe.engine.prompt(command);
+    await engine.prompt(command);
   } catch {
     // The engine may be busy; the UI updates once the command runs.
   }
@@ -79,8 +83,9 @@ function StatusBadge({
  */
 export function ExtensionStatusBadges({ disabled }: { disabled?: boolean }): JSX.Element | null {
   const { t } = useTranslation("chat");
-  const planActive = useSessionStore((state) => Boolean(state.extensionStatus["plan-mode"]));
-  const goalArmed = useSessionStore((state) => Boolean(state.extensionStatus["goal-armed"]));
+  const status = useExtensionStatus();
+  const planActive = Boolean(status["plan-mode"]);
+  const goalArmed = Boolean(status["goal-armed"]);
   if (!planActive && !goalArmed) return null;
   return (
     <>
@@ -113,8 +118,8 @@ type GoalState = "running" | "paused" | "complete";
 type GoalPayload = {
   objective: string;
   status: GoalState;
+  /** 1-based number of the round the agent is on. */
   round: number;
-  max?: number;
 };
 
 function goalStatusMeta(status: GoalState): { label: string; className: string } {
@@ -130,84 +135,86 @@ function parseGoal(raw?: string): GoalPayload | null {
     if (typeof value.objective !== "string" || !value.objective) return null;
     const status: GoalState =
       value.status === "paused" || value.status === "complete" ? value.status : "running";
-    return {
-      objective: value.objective,
-      status,
-      round: typeof value.round === "number" ? value.round : 0,
-      max: typeof value.max === "number" ? value.max : undefined,
-    };
+    // The extension counts rounds from 1 and never reports the cap; an older build
+    // wrote a 0-based count, which is the same round under this label.
+    const round = typeof value.round === "number" && value.round > 1 ? value.round : 1;
+    return { objective: value.objective, status, round };
   } catch {
     return null;
   }
 }
 
 /**
- * Long-term goal control panel, shown above the composer: the objective, its
- * progress, and view / pause / clear actions that dispatch the goal command.
+ * Long-term goal control, shown above the composer as a single row: the target
+ * glyph, the status, the round, then the objective — which keeps whatever width is
+ * left and ellipsises — and the pause/resume + clear actions as icon buttons.
+ *
+ * One line, not a card: it sits in the composer slot next to the todo panel, and the
+ * objective is usually a sentence rather than a paragraph. The full text is the
+ * title attribute, so the truncated middle of a long objective is still reachable.
  */
 export function GoalPanel({ className, disabled }: { className?: string; disabled?: boolean }): JSX.Element | null {
   const { t } = useTranslation("chat");
-  const raw = useSessionStore((state) => state.extensionStatus["goal"]);
-  const [expanded, setExpanded] = useState(false);
+  const raw = useExtensionStatus()["goal"];
   const goal = parseGoal(raw);
   if (!goal) return null;
   const meta = goalStatusMeta(goal.status);
   return (
     <div className={cn("mx-auto w-full max-w-3xl px-6", className)}>
-      <div className="rounded-xl border border-border bg-card px-3 py-2.5">
-        <div className="flex items-center gap-2">
-          {/* The target glyph names the panel — 「目标」 only restated the icon that
-              already leads the row (and read larger than the chrome beside it). */}
-          <span
-            role="img"
-            aria-label={t("goal.title")}
-            title={t("goal.title")}
-            className="flex size-4 shrink-0 items-center justify-center text-primary"
-          >
-            <HugeiconsIcon strokeWidth={2} icon={Target01Icon} className="size-4" />
-          </span>
-          <Badge variant="secondary" className={meta.className}>
-            {meta.label}
-          </Badge>
-          <span className="text-xs text-muted-foreground">
-            {goal.max ? t("goal.roundMax", { round: goal.round, max: goal.max }) : t("goal.round", { round: goal.round })}
-          </span>
-          <div className="flex-1" />
-          <Button size="xs" variant="ghost" onClick={() => setExpanded((value) => !value)}>
-            {expanded ? t("goal.collapse") : t("goal.expand")}
-          </Button>
-          {goal.status === "paused" ? (
-            <Button
-              size="xs"
-              variant="ghost"
-              disabled={disabled}
-              onClick={() => void runExtensionCommand("/goal resume")}
-            >
-              {t("goal.resume")}
-            </Button>
-          ) : goal.status === "running" ? (
-            <Button
-              size="xs"
-              variant="ghost"
-              disabled={disabled}
-              onClick={() => void runExtensionCommand("/goal pause")}
-            >
-              {t("goal.pause")}
-            </Button>
-          ) : null}
-          <Button
-            size="xs"
-            variant="ghost"
-            className="text-destructive hover:text-destructive"
-            disabled={disabled}
-            onClick={() => void runExtensionCommand("/goal clear")}
-          >
-            {t("goal.clear")}
-          </Button>
-        </div>
-        <p className={cn("mt-1.5 text-xs leading-5 text-muted-foreground", !expanded && "line-clamp-2")}>
+      <div className="flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-1.5">
+        {/* The target glyph names the panel — 「目标」 only restated the icon that
+            already leads the row (and read larger than the chrome beside it). */}
+        <span
+          role="img"
+          aria-label={t("goal.title")}
+          title={t("goal.title")}
+          className="flex size-4 shrink-0 items-center justify-center text-primary"
+        >
+          <HugeiconsIcon strokeWidth={2} icon={Target01Icon} className="size-4" />
+        </span>
+        <Badge variant="secondary" className={cn("shrink-0", meta.className)}>
+          {meta.label}
+        </Badge>
+        <span className="shrink-0 text-xs text-muted-foreground">
+          {t("goal.round", { round: goal.round })}
+        </span>
+        <span title={goal.objective} className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
           {goal.objective}
-        </p>
+        </span>
+        {goal.status === "paused" ? (
+          <IconButton
+            size="icon-xs"
+            variant="ghost"
+            label={t("goal.resume")}
+            title={t("goal.resume")}
+            disabled={disabled}
+            onClick={() => void runExtensionCommand("/goal resume")}
+          >
+            <HugeiconsIcon strokeWidth={2} icon={PlayIcon} className="size-3.5" />
+          </IconButton>
+        ) : goal.status === "running" ? (
+          <IconButton
+            size="icon-xs"
+            variant="ghost"
+            label={t("goal.pause")}
+            title={t("goal.pause")}
+            disabled={disabled}
+            onClick={() => void runExtensionCommand("/goal pause")}
+          >
+            <HugeiconsIcon strokeWidth={2} icon={PauseIcon} className="size-3.5" />
+          </IconButton>
+        ) : null}
+        <IconButton
+          size="icon-xs"
+          variant="ghost"
+          label={t("goal.clear")}
+          title={t("goal.clear")}
+          className="text-destructive hover:text-destructive"
+          disabled={disabled}
+          onClick={() => void runExtensionCommand("/goal clear")}
+        >
+          <HugeiconsIcon strokeWidth={2} icon={Delete02Icon} className="size-3.5" />
+        </IconButton>
       </div>
     </div>
   );
@@ -221,8 +228,8 @@ export function GoalPanel({ className, disabled }: { className?: string; disable
  * badge / control panel.
  */
 export function ExtensionWidgets({ className }: { className?: string }): JSX.Element | null {
-  const status = useSessionStore((state) => state.extensionStatus);
-  const widgets = useSessionStore((state) => state.extensionWidgets);
+  const status = useExtensionStatus();
+  const widgets = useExtensionWidgets();
   const statusEntries = Object.entries(status).filter(([key, text]) => text && !BADGE_STATUS_KEYS.has(key));
   const widgetEntries = Object.values(widgets);
   if (statusEntries.length === 0 && widgetEntries.length === 0) return null;

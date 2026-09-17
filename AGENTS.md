@@ -7,6 +7,7 @@ Electron desktop client for agent work, code, office, and multi-agent cowork. Th
 ```
 src/main/          Electron main: window, IPC, and embedded agent lifecycle
   engine/          Isolated runtime paths, provider configuration, and shared model/file helpers
+  ipc/             Transport-neutral call table and broadcast hub
   pi/              Embedded pi-coding-agent host, MCP bridge, and multi-session lifecycle
 src/preload/       contextBridge API (`window.fastvibe`)
 src/renderer/      React UI (Vite renderer)
@@ -38,6 +39,128 @@ Runtime data lives under the app userData directory:
 Paths are handed to `createAgentSession` programmatically (`agentDir`, `sessionManager`,
 `settingsManager`) rather than through environment variables. Agent IPC channels use the
 `engine:` prefix (`src/shared/ipc.ts`), exposed to the renderer as `window.fastvibe.engine`.
+
+### Calls and pushes
+
+Main's methods are registered on a transport-neutral table (`src/main/ipc/registry.ts`)
+and its pushed messages leave through one hub (`src/main/ipc/broadcast.ts`). Neither
+knows what is on the other end: Electron IPC is attached in `wireElectronTransport()`,
+and a remote client is meant to be a second consumer of the very same table, so a method
+cannot exist on the desktop and be silently missing elsewhere.
+
+Two rules keep that true:
+
+- **Register with `handle()`, never `ipcMain.handle`.** Handlers take `(payload, ctx)`;
+  `ctx` carries the asking window, because `event.sender` is an Electron concept a
+  non-IPC caller cannot produce. `settings:get-sync` is the one exception — `sendSync`
+  has no counterpart on another transport, and the preload reads it before first paint.
+- **Push with `broadcast()`, never a loop over windows.** A receiver is whatever
+  registered a `send`; `{ except }` skips the caller that caused the write.
+
+Registration must finish before `wireElectronTransport()` runs — anything registered
+
+after the wiring loop is in the table and reachable by nothing.
+
+### Reconstructing a conversation
+
+`engine:get-snapshot` (`ConversationSnapshot`) is what a client reads to draw one
+conversation exactly as it stands, a turn in flight included. Every field is read in one
+synchronous stretch, so they cannot describe different instants — there is no snapshot
+to splice against a stream.
+
+What goes where is not obvious, and getting it wrong renders a plausible-looking but
+wrong transcript:
+
+- **`messages` already carries the turn's content.** `#messages` appends the reply being
+  streamed as a trailing `running:<id>` row, with its unfinished tool calls marked
+  running, and a running compaction as its own card. This is what lets a chat switch or
+  a window reload show a reply in progress.
+- **`turnEvents` therefore holds no stream events.** `slimStreamEvent` reduces
+  `message_update` to a bare delta; replaying deltas onto a transcript that has already
+  accumulated them draws the reply twice. Only the panel state the transcript has no
+  place for is kept (`RETAIN_FROM_STREAM` / `RETAIN_FROM_EMIT`): a notice, a todo list,
+  a retry banner, a model divider.
+- **`pendingUi` carries parked prompts**, served from `#pendingUi` itself so what is
+  offered and what can still be answered cannot drift. A prompt is delivered only as an
+  event, so a client that connected afterwards would otherwise see a chat that had
+  silently stopped, with a tool parked behind a question shown to nobody.
+
+Every event carries a monotonic `seq` (`#stamp`). A caller that takes a snapshot and then
+subscribes drops events at or below the snapshot's `seq` and applies the rest.
+
+Retention is filled for **every** conversation, including background ones whose live
+payloads are dropped by the `#activeId` filter in the session subscription — that filter
+encodes one window's idea of "the chat on screen", and a second client may be looking at
+another conversation.
+
+### 远程访问（`src/main/server/`）
+
+A second way into the same call table, for a browser on another device. `src/main/remote.ts`
+holds everything Electron-shaped — settings, paths, the methods the settings pane calls —
+so `server/` itself imports no Electron and could run without a GUI. It is handed the very
+same `dispatch` and `subscribe` the windows use; that is what keeps a method from existing
+on the desktop and being missing on the phone.
+
+Four rules, each of which fails silently if broken:
+
+- **Credentials never touch `settings.json`.** That file is handed whole to every renderer
+  and re-broadcast on every write. The password hash and device tokens live in
+  `remote-access.json` (0600), and no method serves it.
+- **`policy.ts` classifies every method, exhaustively.** `assertPolicyCoverage` refuses to
+  start the server when the table holds one that is in neither set, so adding a method
+  breaks the server until somebody decides — a denylist alone would expose it by default.
+  The bar for denying is narrow: whoever has the password can already ask the agent to run
+  commands, so only calls that *hang* (native dialogs), act on the wrong machine's desktop,
+  or hand over a lever they would not otherwise have (`providers:fetch`) are refused —
+  plus `remote:*` itself, so a stolen token cannot lock the owner out.
+- **No password, no server.** `start()` throws rather than listening, and the default bind
+  is `127.0.0.1`: a tunnel is what publishes it, and a slip in the settings pane cannot put
+  a shell onto the local network.
+- **Pushes begin at authentication, not at connection.** A socket that has not proved who
+  it is is subscribed to nothing and closed after ten seconds.
+
+The password is exchanged once for a device token (`POST /api/login`); tokens travel on
+every later connection, are stored only as hashes, and are revoked one device at a time.
+Guessing is slowed by a global exponential backoff — global rather than per address
+because behind a tunnel every request arrives from the same one.
+
+### 会话作用域（每一条引擎调用都要带 `conversationId`）
+
+Main 每个会话一个 `AgentSession`，但引擎自己只有一个「当前会话」（`PiProcessManager.#activeId`）。
+所有跟会话有关的调用都接受一个可选的 `conversationId`，`#sessionFor(id)` 据此取 session，
+不传时才回退到 `#activeId`。**渲染层调用一律走 `src/renderer/src/lib/engine-client.ts`**，
+它把 id 默认成 store 的 `activeId`；直接 `window.fastvibe.engine.*` 只应出现在这个门面里，
+以及那些本来就不属于任何会话的调用（供应商、技能、MCP、导入…）。
+
+这条不是洁癖：`#activeId` 是**每个窗口共享**的一个值。两个窗口各看一个会话时，谁最后
+`conversations.open` 谁就拥有它，于是 A 窗口发出的提示会落到 B 窗口的会话里。
+新增一个会话级 IPC 时，把 `conversationId` 一路带到引擎，并让门面带默认值。
+
+同理，`getState(id)` 在会话未加载时**不能**退回活动会话——那会把另一个会话的状态
+贴上被请求的 id 返回给渲染层。它走 `#ensureSession` 把那个会话取出来再答。
+
+### 阻塞式插件请求：按会话排队 + 「等你」标记
+
+`ctx.ui.confirm` / `select` / `input` / `editor` / `questions` 会**把工具停住**直到有人回答。
+三点约定：
+
+- **按会话存，不覆盖。** 渲染层的 `pendingPermissions` 是 `Record<conversationId, PermissionRequest[]>`。
+  单槽版本会丢掉同一会话的第二个请求——而并行子 agent 共用父会话的 UI 上下文，八路
+  同时要审批时只有最后一个能显示，其余七个的 promise 永远悬着。面板画队列头（`activePermission`）。
+- **应答按 id 移除，不砍队首。** 引擎自己也会撤回请求（`confirm` 有 `CONFIRM_TIMEOUT_MS`，
+  `abort` 会结算），撤回发 `extension_ui_dismiss`。若用「砍队首」，那条 dismiss 之后再应答
+  就会误删**下一条**刚排队的请求。
+- **取消只看得到当前会话。** `abort(conversationId)` / `#resolvePendingUi(conversationId)` 只结算
+  那个会话的请求；`stop()`（退出应用）才是全部。曾经无条件清空全部，于是停 A 会用
+  `confirm` 的 `false` 回退把 B 后台挂着的审批驳回——用户从没见过那条提问。
+
+`extension_ui_request` / `extension_ui_dismiss` 在 `App.tsx` 的 `onEvent` 里**先于焦点路由**处理：
+阻塞请求不是转录内容，后台会话卡在审批上时必须能点亮侧栏的「等你」和系统通知。
+只有 `set_editor_text` 是例外——它写的是当前输入框，必须按会话过滤，否则后台会话会覆盖
+用户正在打的草稿。
+
+会话在等用户时：侧栏行显示 `Alert02Icon`（悬停换成停止按钮），窗口未聚焦时按
+`settings.notifications === "approval"` 发系统通知。
 
 Provider credentials are kept in FastVibe's isolated runtime and injected into the SDK's in-memory auth storage. Do not export these variables into the user's login shell or the in-app terminal.
 
@@ -130,6 +253,41 @@ rendered rather than highlighted (below).
   the loop for these: its CSS-variables theme maps nothing for `markup.inserted` /
   `markup.deleted`, so a `diff` fence came out flat and monochrome.
 - The wasm engine needs `'wasm-unsafe-eval'` in the CSP `script-src` (`index.html`).
+
+### Math (LaTeX)
+
+A reply's `$…$` and `$$…$$` render as typeset math. `markdown-view.tsx` mounts
+**`remark-math` + `rehype-katex`** (both module-level `PluggableList` constants — an
+inline array would be a new identity on every streamed token and defeat the `memo`
+that exists for exactly that), and `index.css` imports **`katex/dist/katex.min.css`**.
+Importing from CSS rather than JS is what keeps the fonts with it: KaTeX's
+`url(fonts/…)` resolves against the package, so Vite emits the twenty `.woff2` files
+into the renderer bundle and the app stays offline-clean under `default-src 'self'`.
+No CSP change is needed.
+
+- **Colour is inherited, so there is nothing per-theme to do** — and nothing that
+  *could* be done: KaTeX reads no custom properties of its own. It inherits `color`
+  and the font stack, so all twenty themes work untouched. The one exception is the
+  error fragment, which gets `errorColor: "var(--destructive)"` from the plugin
+  options. `index.css` only adds layout (a display block scrolls instead of
+  stretching the bubble).
+- **`throwOnError: false`, always.** A half-streamed formula is the normal case here,
+  not an error: `$$\frac{1}{` must draw itself in the error colour, never throw into
+  React and never log. `strict: false` for the same reason — KaTeX's warnings about
+  constructs it merely tolerates are noise in a chat log.
+- **`$` is not a reliable math delimiter in this app, so `lib/remark-strict-inline-math.ts`
+  judges it.** `remark-math`'s default pairs any two `$` on a line, and a reply about
+  shell, config or money is full of them — `$HOME/.config`, `$PATH`, `$5 到 $10` — each
+  of which rendered as a garbled equation. Disabling single-dollar math is not the
+  answer either (`$O(n\log n)$` is exactly what people type). The plugin keeps
+  `remark-math`'s tokenizer and re-reads each node against **Pandoc's `tex_math_dollars`
+  rules** — no space inside either fence, no digit right after the closing one —
+  putting a rejected run back as the literal text the reader wrote. Display math
+  (`$$…$$`) and fenced ` ```math ` are never touched: their fences are unambiguous.
+  The rules are unit-tested in `test/markdown-math.test.ts`; a change here is a
+  change to what every reply looks like, so run them.
+- Code is out of scope by construction — a `$HOME` inside a fence or a code span is
+  never a math node, so no shell snippet in a tool card can be eaten by this.
 
 ## Theming
 
@@ -582,7 +740,7 @@ the user installs at runtime via 设置 → 插件, which writes to the isolated
     Anthropic key would otherwise win and fail with “No API key found”. Bare ids
     resolve against `getAvailable()` **and** are re-checked for auth.
   - **Renderer.** The sub-session's engine events are re-emitted as
-    `subagent_event` / `subagent_lifecycle` (see `#trackSubagentEvent`), which the
+    `subagent_event` / `subagent_state` / `subagent_lifecycle` (see `#trackSubagentEvent`), which the
     renderer folds into `session.subagents` + `subagentStreams`; `App.tsx` applies
     them regardless of which conversation is focused, so a backgrounded run keeps
     updating. **One run, one right-pane tab**: `registerSubagent` mints
@@ -595,14 +753,40 @@ the user installs at runtime via 设置 → 插件, which writes to the isolated
     listing every run — at most two distinct roles plus a count (`scout ×5`,
     `scout, planner 等 4 个`) — and expanding it reveals each run. A run's tab is
     `SidePaneSubagent`: the same `MessageList` as the main thread (follow-the-bottom
-    included), no composer and no abort — a delegated run is not a conversation the
-    user can steer. The delegated brief is the opening user message, pinned on the
+    included), plus the main composer in its read-only mode (below) — a delegated run
+    is not a conversation the user can steer, but it is one they can read and stop. The
+    delegated brief is the opening user message, pinned on the
     tab as `subagentBrief`: the pane reads it from there, not from `subagents`,
     because that list is replaced by every `getSubagents` snapshot and a brief
     derived from it blanked the transcript mid-run. The cached transcript is read
     only once the run is over, and the empty state is chosen by the pane rather than
     by `MessageList`, so the scroller is never swapped for it mid-flight. The tab is
-    titled `role · 运行中/已完成/失败`.
+    titled `role · 运行中/已完成/已终止/失败`.
+  - **The run's own composer, read-only.** `SidePaneSubagent` draws the main
+    thread's `Composer` with `readOnly`, and the stop button it keeps is what
+    terminates the run. A delegated run cannot be steered, but its state is worth
+    reading — which model it is on, how full its context window is — so the pane
+    keeps the context ring and its popover, the model and thinking chips (as plain
+    `StaticChip` labels, since `Chip` is a button with nothing behind it here), and
+    drops everything that would change the run (attach, the permission menu, the
+    model / thinking menus, send). `model` / `thinkingLevel` / `contextUsage` are
+    pushed as `subagent_state`: the engine holds them, the transcript does not, so
+    Main publishes them on `agent_start` / `turn_end` / `agent_settled` (the same
+    boundaries the main thread refreshes its ring on) and records them on the
+    `SubagentInfo` so a pane opened later gets them from the `getSubagents`
+    snapshot. `usagePercent` accepts just `{ contextUsage }` for this, since a
+    delegated run has no `EngineSessionState`.
+  - **Stopping one run notifies the main agent.** `abortSubagent` aborts the run's
+    own session, which settles the parent's `subagent` tool call: the tool returns
+    `isError` with `已被用户终止`, and that tool result is what the main agent reads as
+    the reason its delegation ended. The run's own lifecycle status is `aborted`
+    (已终止), distinct from `error` so a deliberate stop is not drawn as a failure.
+    A parked permission prompt is answered first *and scoped to this run* — the run
+    shares the parent conversation's UI context, so `#pendingUi` entries carry an
+    `owner` and `#resolvePendingUi(conversationId?, owner?)` filters on it; the
+    `tool_call` hook cannot observe the abort while it awaits a prompt, so leaving
+    it parked would hang the tool. Stop-a-chat still answers every prompt of that
+    conversation (its own and its runs').
 - **Browser use** — `browser-use.ts` is the tool surface for FastVibe's own side-pane
   `<webview>`; it holds no browser code. Every call crosses `browser:request` /`browser:response`
   (`src/main/pi/browser-bridge.ts`, one pending map keyed by request id, 30s default budget) into
@@ -709,6 +893,7 @@ Deliberately deferred. Plugin authors are expected to degrade via `ctx.mode` /
 pnpm sync:models    # rebuild the bundled models.dev index from upstream
 pnpm dev            # sync models.dev if needed, then electron-vite
 pnpm typecheck      # injected browser scripts, then both tsconfigs
+pnpm test           # node's own runner over test/*.test.ts — pure modules only, no DOM
 pnpm check:scripts  # only the browser page scripts (a compile error there is a
                     # `Script failed to execute` at tool-call time, not a build error)
 pnpm shadcn add <component> -y
@@ -1012,9 +1197,16 @@ The bounds can be missing, and the transcript must still say something:
   no duration, in every reload, forever. Blocks are now opened lazily on the first delta (and for
   a second segment that arrives with no start event), so this cannot happen again. Real sessions
   in the wild have this shape: one had 229 thinking messages with no bounds at all.
-- **Transcripts written before, or by a path that does not time them.** A delegated run's
-  transcript (`getSubagentMessages`, the live `subagent_event` stream) and an imported chat carry
-  no bounds at all.
+- **Transcripts written before, or by a path that did not time them.** An imported chat, and
+  any transcript from a build that predates the timing pass, carries no bounds.
+- **A delegated run is timed too.** `#timeReasoning` is keyed rather than conversation-bound and
+  is driven for a sub-session as well, filing into `#subagentReasoning`
+  (`Map<subagentId, Map<entryId, bounds>>`) instead of the persisted `ReasoningStore` — a
+  sub-session is `SessionManager.inMemory`, so its entry ids name nothing once the run ends and
+  must not be written to `reasoning.json`. The bounds ride the *inner* event of `subagent_event`,
+  because the renderer re-applies that object (`applySubagentStream` unwraps `event.event`).
+  Without this a subagent's thinking row fell back to the whole round-trip while it streamed and
+  had no timing at all until that round-trip ended.
 
 So `ChatMessageRow` falls back to the span of the **round-trip the block came from**
 (`messages[].createdAt` → `completedAt`) whenever a thinking part has no bounds of its own: the
@@ -1040,6 +1232,83 @@ from an event payload. So it is as fresh as the last `reloadActiveState()`.
   yet, and the tool result that follows does not move the window on its own; refreshing per
   message would re-read the whole transcript several times a turn for a value that cannot
   change. `turn_end` is the first point where the turn's usage (and its tool results) are in.
+
+## 在会话中查找
+
+`Cmd/Ctrl+F`（`findInConversation`）在转录上方打开一条查找栏（`components/chat/find-bar.tsx`）。
+
+- **在渲染层匹配，不问引擎。** 转录已经在内存里（`findMatches` 只扫 `message.text`），
+  敲一个字就重读一次磁盘会把「在屏幕上找东西」变成一次 IPC 往返。只搜正文：
+  思考与工具输出卡片另有入口，纳入命中列表只会让 `n/N` 数出看不见的位置。
+- **滚动用 scroller 自己的 `scrollToMessage`。** 行 id 是引擎的 entry id，不是位置，
+  所以重试/编辑分支过的会话仍然落得准。`FindBar` 因此必须渲染在
+  `MessageScrollerProvider` **内部**（它用 `useMessageScroller`）。
+- **不在打开状态时什么都不做。** 那条滚动 effect 的依赖里有 `matches`，而它在每个
+  流式 token 上都是新数组——曾经关掉查找栏后转录仍被每个 token 拽回旧命中、不再
+  跟随底部。
+- **从命令面板的正文命中进来时**（`onSelectChat(id, needle)`），会话打开的同时把查找栏
+  预填成那个关键词：它只能告诉你「这个会话里有」，只有转录能告诉你「在哪里」。
+
+## 顶层错误边界
+
+`components/error-boundary.tsx` 包在 `main.tsx` 的最外层。渲染期抛错会卸载 React 拥有的
+整棵树，而这个项目真的发生过：空模型列表下把 group label 画在 group 之外，Base UI 抛
+`MenuGroupContext is missing`，整个窗口变白；typecheck 看不见（它是运行时不变式，不是类型错），
+子树也拦不住。边界只做两件有用的事：说清楚出了什么错（含报错文本），以及给一条出路
+（重新加载界面；会话与运行都在 Main，重载不丢东西）。错误也写进 `logs/renderer.log`
+（`logError`）——React 接管的抛出不会到 `window.onerror`，否则最重要的那次崩溃反而查不到。
+
+## 重试与文件回退（checkpoint）
+
+「重试这一轮」回退的是**对话**（`navigateTree`），工作区文件原本留在原地，于是重试是在
+上一轮已经改过的代码上重跑——第二次看到一个半应用的编辑，或者一个因为文件已有新内容
+而变成空操作的 `write`。两者都是静默的。
+
+- **捕获发生在写入之前。** 引擎在 `tool_execution_start`（工具真正执行**之前**）用
+  `readBefore` **同步**读一遍原文，每个文件每回合只读一次（第二次再读就是第一次编辑的
+  产物了），然后串行落盘（`captureCheckpoint` 里有 `git rev-parse`，并发会乱序覆盖）。
+- **回合边界由 `#beginTurn` 划，不由 `agent_start` 划。** 一个用户回合会发多次 `agent_start`：
+  重试、压缩后继续、`agent_end` 排队的继续、goal 模式的下一轮。在那里清空累加器会把
+  本回合写过的文件重新读成「原文」，并在一个只读回合后把上一回合的文件表当成本回合的。
+  `continueTurn` 不划界（它是同一个回合的续跑）。
+- **回退是问出来、不是自动的。** `retryRewind` 弹窗列出文件；「保留文件改动」**也照常重试**
+  （它回答的是文件那个问题，不是要不要重试）。用户可能在提示词与重试之间自己动过这些文件，
+  所以不能静默还原。
+- **回退不全时必须说出来。** 二进制/过大/未被 git 跟踪的文件没有可回退的内容
+  （`restoreCheckpoint` 记进 `skipped`），于是拼一个半还原的工作区再重试——正是这个功能
+  要防的事。
+
+## 始终允许（permission rules）
+
+`lib/permission-rules.ts`，存在 `settings.permissionAlways`（`method:title:message` 键）。
+它曾经是 session store 上的一个字段：不跨会话、重启即失。而「始终允许」一旦会忘，
+就比不提供更糟——用户已经不再期待被问了。同一个 bash 模式从每个会话都会到达沙箱，
+所以这是一条关于**这台机器**的偏好，不是关于某个会话。键刻意不含会话与请求 id（那正是
+要忽略的东西），也不只看方法（`运行命令：npm test` 与 `运行命令：rm -rf …` 的 message 不同）。
+设置 → 通用 里有条数与清除。
+
+## 设置跨窗口同步
+
+偏好写在一份 `settings.json`，但每个窗口各持一份启动时读的内存副本。一处写入后 Main 发
+`settings:changed`（`broadcast(..., { except: origin })`，不回传给发起者），接收方的
+`applyRemote` 只写 localStorage、**不回写磁盘**——回写会让两个窗口永远互相同步。
+「恢复默认」（`settings:clear`）也算一次写入，同样要广播，否则另一个窗口会继续用旧副本
+并在下次保存时把刚清掉的值写回去。
+
+## 系统通知（设置 → 通用）
+
+`settings.notifications`：`done`（任务完成）/ `approval`（后台会话停在审批上）/ `off`。
+Main 在每个事件上读一次文件，所以改完立即生效。两个通知回答的是不同的问题：跑完是
+「可以回来看结果」，停在审批上是「你不回答它就永远走不下去」——后者才是真正需要打扰用户的。
+只有会阻塞的 dialog 方法算数（`isBlockingPrompt`）；`notify` / `setStatus` / `setWidget`
+是单向的，不能触发通知。
+
+## 测试
+
+`pnpm test` —— Node 自带 runner 跑 `test/**/*.test.ts`，只测**纯模块**（无 DOM、不引 zustand/React）：
+`lib/diff.ts` 的行号读取、`engine/pricing.ts` 的价格阶梯、`lib/todos.ts` 的 `n/N` 语义、
+`engine/checkpoint.ts` 的捕获与还原。这一层抓的是运行时不变式——比如「一个未跟踪路径不能让
+整批 `git checkout` 失败」——typecheck 看不见它们。
 
 ## 运行时保持唤醒
 

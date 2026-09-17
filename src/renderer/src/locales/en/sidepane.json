@@ -9,7 +9,8 @@
     "status": {
       "running": "Running",
       "completed": "Done",
-      "error": "Failed"
+      "error": "Failed",
+      "aborted": "Stopped"
     }
   },
   "pane": {
@@ -46,7 +47,9 @@
   },
   "subagent": {
     "title": "Subagent",
-    "desc": "When the main agent delegates a task, its isolated conversation streams here."
+    "desc": "When the main agent delegates a task, its isolated conversation streams here.",
+    "readOnlyRunning": "This delegated run is read-only",
+    "readOnlyDone": "This delegated run has ended"
   },
   "terminal": {
     "ended": "Session ended"

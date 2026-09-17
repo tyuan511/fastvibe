@@ -21,6 +21,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Textarea } from "@/components/ui/textarea";
+import { engine } from "@/lib/engine-client";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
@@ -99,6 +100,24 @@ const CONTEXT_RING_SIZE = 14;
 const CONTEXT_RING_STROKE = 2;
 const CONTEXT_RING_RADIUS = (CONTEXT_RING_SIZE - CONTEXT_RING_STROKE) / 2;
 const CONTEXT_RING_CIRCUMFERENCE = 2 * Math.PI * CONTEXT_RING_RADIUS;
+
+/**
+ * A chip that only ever reads: a delegated run's pane draws the composer without its
+ * menus, so the model / thinking labels are shown as plain text there. A `Chip` is a
+ * button and would stay in the tab order with nothing behind it.
+ */
+function StaticChip({ children, className }: { children: ReactNode; className?: string }): JSX.Element {
+  return (
+    <span
+      className={cn(
+        "inline-flex h-7 items-center gap-1 rounded-full px-2 text-sm font-normal text-muted-foreground",
+        className,
+      )}
+    >
+      {children}
+    </span>
+  );
+}
 
 function ContextUsageRing({ percent }: { percent: number }): JSX.Element {
   const clamped = Math.min(100, Math.max(0, percent));
@@ -181,6 +200,10 @@ function ContextUsagePanel({
   const clamped = Math.min(100, Math.max(0, percent));
   const barColor = clamped >= 90 ? "bg-destructive" : clamped >= 70 ? "bg-warning" : "bg-primary";
   const remaining = Math.max(0, windowTokens - (used ?? 0));
+  // A number nobody acts on is just decoration: past 70% the popover says *what*
+  // happens next (the engine compacts on its own), and past 90% that it is about to.
+  // The ring alone only ever said how full the window was.
+  const proximity = clamped >= 90 ? "imminent" : clamped >= 70 ? "close" : null;
 
   const tokens = stats?.tokens;
   const input = tokens?.input ?? 0;
@@ -213,6 +236,16 @@ function ContextUsagePanel({
             {t("composer.remaining", { remaining: formatCount(remaining), window: formatCount(windowTokens) })}
           </span>
         </div>
+        {proximity ? (
+          <p
+            className={cn(
+              "rounded-md px-2 py-1.5 text-xs",
+              proximity === "imminent" ? "bg-destructive/10 text-destructive" : "bg-warning/10 text-warning",
+            )}
+          >
+            {t(proximity === "imminent" ? "composer.contextImminent" : "composer.contextClose")}
+          </p>
+        ) : null}
       </div>
 
       {stats ? (
@@ -285,6 +318,7 @@ export function Composer({
   sendOnEnter = true,
   focusSignal,
   className,
+  readOnly = false,
 }: {
   value: string;
   disabled: boolean;
@@ -319,7 +353,15 @@ export function Composer({
   queued: QueuedPrompt[];
   queuePause: QueuePauseReason | null;
   attachments: ChatAttachment[];
-  history: string[];
+  /**
+   * Past prompts for ↑/↓ recall, read on demand.
+   *
+   * A getter rather than an array: deriving it means walking the whole transcript,
+   * and as a subscribed value that ran on every store update — so every keystroke
+   * (the draft lives in the same store) and every streamed batch allocated a fresh
+   * array of every prompt in the conversation for a list only these two keys read.
+   */
+  history: () => string[];
   contextPercent?: number | null;
   contextUsage?: ContextUsage | null;
   /** Turn statistics for the active conversation; shown under the context ring. */
@@ -348,6 +390,14 @@ export function Composer({
   /** Increment to move the caret into the textarea (new sessions focus the composer). */
   focusSignal?: number;
   className?: string;
+  /**
+   * The composer is being shown for a run the user cannot steer — a delegated run's
+   * pane. The input is locked and every control that would change the run (attach,
+   * permission, the model / thinking menus) is dropped; what stays is what is
+   * *readable*: the context ring with its popover, the model and thinking chips as
+   * plain labels, and the stop button while the run is in flight.
+   */
+  readOnly?: boolean;
 }): JSX.Element {
   const { t } = useTranslation("chat");
   const fileRef = useRef<HTMLInputElement>(null);
@@ -393,7 +443,7 @@ export function Composer({
     if (command.source === "extension" && INSTANT_COMMANDS.has(command.name)) {
       onChange("");
       setSlashDismissed(true);
-      void window.fastvibe.engine.prompt(`/${command.name}`).catch(() => undefined);
+      void engine.prompt(`/${command.name}`).catch(() => undefined);
       requestAnimationFrame(() => textareaRef.current?.focus());
       return;
     }
@@ -435,26 +485,27 @@ export function Composer({
       const el = event.currentTarget;
       const atFirstLine = !value.slice(0, el.selectionStart).includes("\n");
       const atLastLine = !value.slice(el.selectionEnd).includes("\n");
-      if (event.key === "ArrowUp" && atFirstLine && history.length > 0) {
+      const past = history();
+      if (event.key === "ArrowUp" && atFirstLine && past.length > 0) {
         event.preventDefault();
         if (histIndex === null) {
           histDraft.current = value;
-          const next = history.length - 1;
+          const next = past.length - 1;
           setHistIndex(next);
-          onChange(history[next] ?? "");
+          onChange(past[next] ?? "");
         } else if (histIndex > 0) {
           const next = histIndex - 1;
           setHistIndex(next);
-          onChange(history[next] ?? "");
+          onChange(past[next] ?? "");
         }
         return;
       }
       if (event.key === "ArrowDown" && atLastLine && histIndex !== null) {
         event.preventDefault();
-        if (histIndex < history.length - 1) {
+        if (histIndex < past.length - 1) {
           const next = histIndex + 1;
           setHistIndex(next);
-          onChange(history[next] ?? "");
+          onChange(past[next] ?? "");
         } else {
           setHistIndex(null);
           onChange(histDraft.current);
@@ -738,7 +789,7 @@ export function Composer({
           ref={textareaRef}
           rows={1}
           value={value}
-          disabled={disabled}
+          disabled={disabled || readOnly}
           placeholder={streaming ? t("composer.placeholderQueued") : placeholder ?? t("composer.placeholder")}
           className={cn(
             "field-sizing-content max-h-56 min-h-13 resize-none border-0 bg-transparent px-4 text-sm leading-6 shadow-none focus-visible:ring-0 disabled:bg-transparent disabled:opacity-100 dark:bg-transparent",
@@ -750,19 +801,22 @@ export function Composer({
         />
 
         <div className="flex items-center gap-1 px-2.5 pb-2.5">
-          <IconButton
-            size="icon-sm"
-            variant="ghost"
-            className="rounded-full text-muted-foreground"
-            label={t("composer.attach")}
-            disabled={disabled}
-            onClick={() => fileRef.current?.click()}
-          >
-            <HugeiconsIcon strokeWidth={2} icon={AttachmentIcon} />
-          </IconButton>
+          {readOnly ? null : (
+            <IconButton
+              size="icon-sm"
+              variant="ghost"
+              className="rounded-full text-muted-foreground"
+              label={t("composer.attach")}
+              disabled={disabled}
+              onClick={() => fileRef.current?.click()}
+            >
+              <HugeiconsIcon strokeWidth={2} icon={AttachmentIcon} />
+            </IconButton>
+          )}
 
-          <DropdownMenu>
-            <DropdownMenuTrigger
+          {readOnly ? null : (
+            <DropdownMenu>
+              <DropdownMenuTrigger
               render={
                 <Chip
                   className={
@@ -812,9 +866,10 @@ export function Composer({
                 })}
               </DropdownMenuRadioGroup>
             </DropdownMenuContent>
-          </DropdownMenu>
+            </DropdownMenu>
+          )}
 
-          <ExtensionStatusBadges disabled={working} />
+          {readOnly ? null : <ExtensionStatusBadges disabled={working} />}
 
           <div className="flex-1" />
 
@@ -844,6 +899,30 @@ export function Composer({
             </span>
           ) : null}
 
+          {readOnly ? (
+            <StaticChip className="max-w-40 @min-[22rem]/composer:max-w-72">
+              <span className="truncate">
+                {selectedModel ? (
+                  <>
+                    <span className="hidden @min-[40rem]/composer:inline">
+                      {providerLabel(selectedModel)}/{selectedModel.id}
+                    </span>
+                    <span className="@min-[40rem]/composer:hidden">
+                      {selectedModel.name || selectedModel.id}
+                    </span>
+                  </>
+                ) : model ? (
+                  // A role may pin a model this install has no catalog entry for; the
+                  // pane still says which one the run is on rather than claiming none.
+                  <span className="truncate">
+                    {model.provider}/{model.id}
+                  </span>
+                ) : (
+                  <span>{t("composer.noModels")}</span>
+                )}
+              </span>
+            </StaticChip>
+          ) : (
           <div className="relative">
             <DropdownMenu>
               <DropdownMenuTrigger
@@ -916,7 +995,11 @@ export function Composer({
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
+          )}
 
+          {readOnly ? (
+            <StaticChip>{thinkingLabel(thinkingValue)}</StaticChip>
+          ) : (
           <span className="hidden @min-[27.5rem]/composer:contents">
             <DropdownMenu>
               <DropdownMenuTrigger
@@ -943,11 +1026,26 @@ export function Composer({
               </DropdownMenuContent>
             </DropdownMenu>
           </span>
+          )}
 
           {/* A run and a compaction are stopped the same way, so the mark that decides
               whether there is something to stop is `working`, not `streaming`: a manual
               `/compact` has no run behind it and used to leave nothing to click. */}
-          {(working && !hasContent) ? (
+          {readOnly ? (
+            working && !hasContent ? (
+              <IconButton
+                size="icon-sm"
+                variant="destructive"
+                className="rounded-full"
+                label={t("composer.stop")}
+                data-fv-action="stop"
+                shortcut={stopShortcut}
+                onClick={onAbort}
+              >
+                <HugeiconsIcon strokeWidth={2} icon={SquareIcon} className="size-3.5 fill-current" />
+              </IconButton>
+            ) : null
+          ) : (working && !hasContent) ? (
             <IconButton
               size="icon-sm"
               variant="destructive"
@@ -985,8 +1083,7 @@ export function Composer({
               <HugeiconsIcon strokeWidth={2} icon={ArrowUp02Icon} />
             </IconButton>
           )}
-        </div>
-      </div>
+        </div>      </div>
     </div>
   );
 }

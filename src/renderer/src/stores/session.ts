@@ -2,7 +2,9 @@ import { create } from "zustand";
 import type {
   ChatAttachment,
   ChatMessage,
+  ContextUsage,
   Conversation,
+  EngineModel,
   FastVibeModel,
   EngineSessionState,
   EngineStatus,
@@ -57,14 +59,39 @@ type SessionStore = {
   commands: SlashCommand[];
   subagents: SubagentInfo[];
   permission: PermissionRequest | null;
-  /** Blocking extension prompts retained while another conversation is active. */
-  pendingPermissions: Record<string, PermissionRequest>;
+  /**
+   * Blocking extension prompts per conversation, in arrival order.
+   *
+   * A list, not one slot: a conversation can have several parked at once. Parallel
+   * subagents share their parent conversation's UI context, so a fan-out of eight
+   * runs each asking for approval arrives here with the same `conversationId`, and
+   * the single-slot version silently kept only the last one — the other seven stayed
+   * parked on the engine side with nothing on screen to answer them.
+   */
+  pendingPermissions: Record<string, PermissionRequest[]>;
+  /**
+   * Conversations parked on a blocking prompt, whether or not they are on screen.
+   *
+   * Drives the sidebar's 「等你」 mark and the approval notification: a prompt is only
+   * drawn for the active conversation, so without this a background chat waiting on a
+   * tool approval looked exactly like an idle one.
+   */
+  waitingForUser: Record<string, boolean>;
   /** Transient notices from extension `ctx.ui.notify()`. */
   notices: ExtensionNotice[];
-  /** Extension status entries (`ctx.ui.setStatus`), keyed by the extension's key. */
-  extensionStatus: Record<string, string>;
-  /** String-line widgets (`ctx.ui.setWidget`), keyed by the extension's key. */
-  extensionWidgets: Record<string, ExtensionWidget>;
+  /**
+   * Extension status entries (`ctx.ui.setStatus`), bucketed by conversation.
+   *
+   * Status belongs to the session that published it: the goal extension's objective
+   * panel, plan mode's badge and any plugin widget are all per-conversation state,
+   * and a single shared map put one chat's panel on another chat's screen — a chat
+   * with no goal at all showed the running one's objective, and its 暂停 button
+   * dispatched `/goal pause` into the conversation that had nothing to pause. Keyed
+   * by owner id, and read through `useExtensionStatus` for the chat on screen.
+   */
+  extensionStatus: Record<string, Record<string, string>>;
+  /** String-line widgets (`ctx.ui.setWidget`), bucketed by conversation. */
+  extensionWidgets: Record<string, Record<string, ExtensionWidget>>;
   attachments: ChatAttachment[];
   queued: QueuedPrompt[];
   queuePause: QueuePauseReason | null;
@@ -74,9 +101,15 @@ type SessionStore = {
    * control — a half-finished reply can be continued without retyping anything.
    */
   runInterrupted: "aborted" | "error" | null;
-  permissionAlways: string[];
   preview: FilePreview | null;
   subagentStreams: Record<string, ChatMessage[]>;
+  /**
+   * Forget one conversation's extension status / widgets.
+   *
+   * Called when a conversation is deleted: the buckets are keyed by id, and a
+   * deleted chat's goal panel must not be reachable afterwards.
+   */
+  forgetConversationExtensionState: (conversationId: string) => void;
   setStatus: (status: EngineStatus) => void;
   setSession: (session: EngineSessionState | null) => void;
   setModels: (models: FastVibeModel[]) => void;
@@ -91,11 +124,31 @@ type SessionStore = {
    * everything here travels one IPC hop, so a slow reply can land after the switch.
    */
   setMessages: (messages: ChatMessage[], conversationId?: string) => void;
+  /**
+   * Seed a conversation's extension statuses from a fresh engine read.
+   *
+   * The engine replays what `session_start` published (a goal restored from its
+   * transcript, brought back paused). It *replaces* that conversation's bucket rather
+   * than merging: the reply is the whole state, so a key it no longer names — a goal
+   * that was cleared, a plan mode that exited while the chat was closed — has to go.
+   * An empty map therefore clears the bucket.
+   */
+  setExtensionStatus: (conversationId: string, status: Record<string, string>) => void;
   setDraft: (draft: string) => void;
   setError: (error: string | null) => void;
   setCommands: (commands: SlashCommand[]) => void;
   setSubagents: (subagents: SubagentInfo[]) => void;
-  setPermission: (permission: PermissionRequest | null) => void;
+  /**
+   * Take one prompt off the queue, by id.
+   *
+   * By id, not "the head": the engine can withdraw a prompt itself (the confirm
+   * timeout, an abort) and the dismiss event may already have removed it, in which
+   * case a head-drop would silently discard the *next* queued prompt — one the engine
+   * is still parked on and will never re-announce, so the run hangs until its own
+   * timeout. Parallel subagents share one `conversationId`, so several prompts really
+   * do queue up here.
+   */
+  resolvePermission: (id: string) => void;
   dismissNotice: (id: string) => void;
   addUserMessage: (text: string, attachments?: ChatAttachment[]) => void;
   dropEmptyAssistant: () => void;
@@ -115,7 +168,6 @@ type SessionStore = {
   setQueuePause: (reason: QueuePauseReason | null) => void;
   /** Clear the interrupted-run marker once a resume (or fresh prompt) takes over. */
   setRunInterrupted: (reason: "aborted" | "error" | null) => void;
-  rememberPermission: (key: string) => void;
   setPreview: (preview: FilePreview | null) => void;
   openPreview: (path: string) => Promise<void>;
   applyEvent: (event: EngineEvent) => void;
@@ -181,6 +233,29 @@ export function useConversationWorking(): boolean {
   return useSessionStore((state) => (state.activeId ? state.running[state.activeId] === true : false));
 }
 
+/**
+ * The extension statuses the conversation on screen owns.
+ *
+ * Status is per-conversation (see `SessionStore.extensionStatus`), so every reader
+ * goes through the active id rather than reaching for the whole map — a chat with
+ * no goal must not draw the one a different chat is running. The empty object is a
+ * module constant so the selector does not allocate a new snapshot per render.
+ */
+const NO_EXTENSION_STATUS: Record<string, string> = {};
+export function useExtensionStatus(): Record<string, string> {
+  return useSessionStore((state) =>
+    state.activeId ? state.extensionStatus[state.activeId] ?? NO_EXTENSION_STATUS : NO_EXTENSION_STATUS,
+  );
+}
+
+/** The string-line widgets the conversation on screen owns. Same rule as status. */
+const NO_EXTENSION_WIDGETS: Record<string, ExtensionWidget> = {};
+export function useExtensionWidgets(): Record<string, ExtensionWidget> {
+  return useSessionStore((state) =>
+    state.activeId ? state.extensionWidgets[state.activeId] ?? NO_EXTENSION_WIDGETS : NO_EXTENSION_WIDGETS,
+  );
+}
+
 function parseOptionDetails(value: unknown): Array<{ description?: string }> | undefined {
   return Array.isArray(value)
     ? value.map((item) =>
@@ -231,6 +306,134 @@ function parsePermission(event: EngineEvent): PermissionRequest | null {
   };
 }
 
+/** Remove one prompt by id, optionally restricted to its owner conversation. */
+function dropPending(
+  pending: Record<string, PermissionRequest[]>,
+  id: string,
+  conversationId?: string,
+): Record<string, PermissionRequest[]> {
+  const next: Record<string, PermissionRequest[]> = {};
+  for (const [key, list] of Object.entries(pending)) {
+    if (conversationId && key !== conversationId) {
+      next[key] = list;
+      continue;
+    }
+    const remaining = list.filter((item) => item.id !== id);
+    if (remaining.length > 0) next[key] = remaining;
+  }
+  return next;
+}
+
+/** The prompt the composer should draw: the head of the active conversation's queue. */
+export function activePermission(
+  pending: Record<string, PermissionRequest[]>,
+  activeId: string | null,
+): PermissionRequest | null {
+  if (!activeId) return null;
+  return pending[activeId]?.[0] ?? null;
+}
+
+/**
+ * Waiting-for-user mark, recomputed from the conversation that just reported state.
+ *
+ * A state reply only says what the engine's own bookkeeping knows; it cannot say
+ * whether a prompt is on screen. The pending queue can, so a chat that comes back
+ * with a prompt parked on it is marked as waiting even though the `extension_ui_request`
+ * itself may have arrived while a different chat was being viewed.
+ */
+function waitingForUserAfter(
+  state: { waitingForUser: Record<string, boolean>; pendingPermissions: Record<string, PermissionRequest[]> },
+  session: EngineSessionState | null,
+): Record<string, boolean> {
+  const id = session?.conversationId;
+  if (!id) return state.waitingForUser;
+  const waiting = (state.pendingPermissions[id]?.length ?? 0) > 0;
+  if (state.waitingForUser[id] === waiting) return state.waitingForUser;
+  return { ...state.waitingForUser, [id]: waiting };
+}
+
+/**
+ * Structural equality with a node budget, for transcript reconciliation.
+ *
+ * Bounded because a tool call's `args`/`details` are arbitrary engine payloads: a
+ * pathological one must cost a fixed amount rather than walking an unbounded
+ * graph. Running out of budget answers "not equal", which is the conservative
+ * direction — the caller then takes the fresh object, exactly as it did before any
+ * reconciliation existed. Strings are compared with `===`, which the engine does
+ * as a length check plus a memcmp; that is far cheaper than re-parsing the
+ * markdown the comparison saves.
+ */
+function equalValue(a: unknown, b: unknown, budget: { left: number }): boolean {
+  if (a === b) return true;
+  if (budget.left-- <= 0) return false;
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((item, index) => equalValue(item, b[index], budget));
+  }
+  const left = a as Record<string, unknown>;
+  const right = b as Record<string, unknown>;
+  const keys = Object.keys(left);
+  if (keys.length !== Object.keys(right).length) return false;
+  return keys.every((key) => key in right && equalValue(left[key], right[key], budget));
+}
+
+/** Budget per message. Generous enough for a real tool payload, finite for a hostile one. */
+const EQUAL_BUDGET = 20_000;
+
+/**
+ * Reconcile an authoritative transcript read against the one already on screen.
+ *
+ * `reloadActiveMessages()` fires at the end of every turn and its reply is a fresh
+ * object graph off the IPC boundary, so every row lost its identity — which made
+ * `ChatMessageRow`'s memo miss for the entire thread and re-ran `mergeAssistantRun`,
+ * `groupParts` (diff stats included) and a full `react-markdown` parse for every
+ * message in the conversation. A hundred-turn chat hitched visibly at each turn's
+ * end for a transcript that had changed in one place.
+ *
+ * Matching is by id rather than position, so an inserted row (a model-change divider,
+ * a compaction notice) only costs the rows that actually differ. The array itself
+ * keeps its identity when nothing moved at all.
+ */
+function reconcileMessages(previous: ChatMessage[], next: ChatMessage[]): ChatMessage[] {
+  if (previous === next) return previous;
+  const byId = new Map<string, ChatMessage>();
+  for (const message of previous) byId.set(message.id, message);
+  let reused = 0;
+  const merged = next.map((message) => {
+    const old = byId.get(message.id);
+    if (old && equalValue(old, message, { left: EQUAL_BUDGET })) {
+      reused += 1;
+      return old;
+    }
+    return message;
+  });
+  return reused === next.length && next.length === previous.length ? previous : merged;
+}
+
+/**
+ * Recompute the sidebar's 等你 set from the prompt queue.
+ *
+ * Returns `previous` unchanged when the set is the same. This runs on every store
+ * update, coalesced token batches included, and `App` subscribes to the map by
+ * identity — handing back a fresh object each time re-rendered the whole shell
+ * (sidebar, composer, side pane) at the stream's flush cadence for a value that
+ * only changes when a tool approval appears or is answered.
+ */
+function waitingFrom(
+  pending: Record<string, PermissionRequest[]>,
+  previous: Record<string, boolean>,
+): Record<string, boolean> {
+  const next: Record<string, boolean> = {};
+  for (const key of Object.keys(pending)) {
+    if ((pending[key]?.length ?? 0) > 0) next[key] = true;
+  }
+  const keys = Object.keys(next);
+  const same =
+    keys.length === Object.keys(previous).length && keys.every((key) => previous[key] === true);
+  return same ? previous : next;
+}
+
 /**
  * High-frequency events that only grow the trailing assistant. Applying each one in
  * its own `set` re-rendered the whole transcript on every token; under a fast model
@@ -248,11 +451,33 @@ const COALESCED_EVENTS = new Set([
   "subagent_event",
 ]);
 
+/**
+ * The bucket an extension UI event belongs to.
+ *
+ * Main stamps `conversationId` on everything a session's extension publishes; an
+ * event without one (a plugin that loaded globally) falls back to the chat on
+ * screen, which is where such a status has always been drawn.
+ */
+function extensionScope(ownerId: string | null | undefined, activeId: string | null): string {
+  return ownerId ?? activeId ?? "__active__";
+}
+
 /** Fire-and-forget extension UI (`notify` / `setStatus` / `setWidget` / `set_editor_text`). */
 function applyExtensionUi(
   event: EngineEvent,
-  state: { notices: ExtensionNotice[]; extensionStatus: Record<string, string>; extensionWidgets: Record<string, ExtensionWidget>; draft: string },
-): Partial<{ notices: ExtensionNotice[]; extensionStatus: Record<string, string>; extensionWidgets: Record<string, ExtensionWidget>; draft: string }> {
+  ownerId: string,
+  state: {
+    notices: ExtensionNotice[];
+    extensionStatus: Record<string, Record<string, string>>;
+    extensionWidgets: Record<string, Record<string, ExtensionWidget>>;
+    draft: string;
+  },
+): Partial<{
+  notices: ExtensionNotice[];
+  extensionStatus: Record<string, Record<string, string>>;
+  extensionWidgets: Record<string, Record<string, ExtensionWidget>>;
+  draft: string;
+}> {
   if (event.type !== "extension_ui_request") return {};
   const method = event.method;
   if (method === "notify" && typeof event.message === "string") {
@@ -263,27 +488,33 @@ function applyExtensionUi(
     return { notices: next.slice(-4) };
   }
   if (method === "setStatus" && typeof event.statusKey === "string") {
+    const bucket = { ...(state.extensionStatus[ownerId] ?? {}) };
+    if (typeof event.statusText === "string" && event.statusText) bucket[event.statusKey] = event.statusText;
+    else delete bucket[event.statusKey];
     const extensionStatus = { ...state.extensionStatus };
-    if (typeof event.statusText === "string" && event.statusText) extensionStatus[event.statusKey] = event.statusText;
-    else delete extensionStatus[event.statusKey];
+    if (Object.keys(bucket).length > 0) extensionStatus[ownerId] = bucket;
+    else delete extensionStatus[ownerId];
     return { extensionStatus };
   }
   if (method === "setWidget" && typeof event.widgetKey === "string") {
-    const extensionWidgets = { ...state.extensionWidgets };
+    const bucket = { ...(state.extensionWidgets[ownerId] ?? {}) };
     const lines = Array.isArray(event.widgetLines)
       ? event.widgetLines.filter((line): line is string => typeof line === "string")
       : [];
     const runs = Array.isArray(event.widgetRuns) ? (event.widgetRuns as TuiRun[][]) : undefined;
     if (lines.length > 0 || (runs?.length ?? 0) > 0) {
-      extensionWidgets[event.widgetKey] = {
+      bucket[event.widgetKey] = {
         key: event.widgetKey,
         lines,
         runs,
         placement: typeof event.widgetPlacement === "string" ? event.widgetPlacement : undefined,
       };
     } else {
-      delete extensionWidgets[event.widgetKey];
+      delete bucket[event.widgetKey];
     }
+    const extensionWidgets = { ...state.extensionWidgets };
+    if (Object.keys(bucket).length > 0) extensionWidgets[ownerId] = bucket;
+    else delete extensionWidgets[ownerId];
     return { extensionWidgets };
   }
   if (method === "set_editor_text" && typeof event.text === "string") {
@@ -296,7 +527,6 @@ function reduceEvents(state: SessionStore, events: EngineEvent[]): Partial<Sessi
   let messages = state.messages;
   let streaming = state.streaming;
   let partBoundary = state.partBoundary;
-  let permission = state.permission;
   let subagents = state.subagents;
   let subagentStreams = state.subagentStreams;
   let notices = state.notices;
@@ -367,17 +597,47 @@ function reduceEvents(state: SessionStore, events: EngineEvent[]): Partial<Sessi
     const parsed = parsePermission(event);
     if (parsed) {
       const conversationId = parsed.conversationId ?? state.activeId ?? "__active__";
-      // Keep one request per conversation. A later request from the same session
-      // supersedes a stale one, while requests from background sessions remain
-      // available when the user switches back to them.
-      pendingPermissions = { ...pendingPermissions, [conversationId]: parsed };
-      if (!parsed.conversationId || parsed.conversationId === state.activeId) permission = parsed;
+      // Append rather than replace: one conversation can have several prompts parked
+      // at once (a parallel subagent fan-out shares the parent's UI context). A prompt
+      // whose id is already in the list is the same question redrawn, not a new one.
+      const existing = pendingPermissions[conversationId] ?? [];
+      pendingPermissions = {
+        ...pendingPermissions,
+        [conversationId]: existing.some((item) => item.id === parsed.id)
+          ? existing.map((item) => (item.id === parsed.id ? parsed : item))
+          : [...existing, parsed],
+      };
     }
-    const ui = applyExtensionUi(event, { notices, extensionStatus, extensionWidgets, draft });
+    // The engine answered for the user (timeout) or withdrew the question (abort,
+    // session teardown). Either way the panel must come down: the entry it addresses
+    // is gone on the engine side, so a click on it would do nothing.
+    if (event.type === "extension_ui_dismiss") {
+      const dismissId = typeof event.id === "string" ? event.id : "";
+      const owner = typeof event.conversationId === "string" ? event.conversationId : undefined;
+      if (dismissId) pendingPermissions = dropPending(pendingPermissions, dismissId, owner);
+    }
+    const ui = applyExtensionUi(
+      event,
+      extensionScope(
+        typeof event.conversationId === "string" ? event.conversationId : undefined,
+        state.activeId,
+      ),
+      { notices, extensionStatus, extensionWidgets, draft },
+    );
     if (ui.notices) notices = ui.notices;
     if (ui.extensionStatus) extensionStatus = ui.extensionStatus;
     if (ui.extensionWidgets) extensionWidgets = ui.extensionWidgets;
-    if (ui.draft !== undefined) draft = ui.draft;
+    if (ui.draft !== undefined) {
+      // Only the chat on screen owns the composer. Status and widgets are bucketed by
+      // conversation (so switching to a background chat shows what it set), but the draft
+      // is one value for the open composer — and a blocking-prompt event is no longer
+      // filtered to the active conversation up front (it has to be seen for *every* chat,
+      // so a parked approval can raise the sidebar's 等你 mark). Without this check a
+      // background chat, or a subagent sharing its parent's UI context, would overwrite
+      // what the user is typing.
+      const owner = typeof event.conversationId === "string" ? event.conversationId : null;
+      if (!owner || owner === state.activeId) draft = ui.draft;
+    }
     if (event.type === "conversation_running" && typeof event.conversationId === "string") {
       broadcast = { id: event.conversationId, running: event.running === true };
       // Main is the authority on 「is this chat working」, so its verdict also ends the
@@ -408,7 +668,7 @@ function reduceEvents(state: SessionStore, events: EngineEvent[]): Partial<Sessi
     running: broadcast
       ? { ...state.running, [broadcast.id]: broadcast.running }
       : activeRunning(state, workingOverride ?? streaming),
-    permission,
+    permission: activePermission(pendingPermissions, state.activeId),
     pendingPermissions,
     notices,
     extensionStatus,
@@ -419,6 +679,7 @@ function reduceEvents(state: SessionStore, events: EngineEvent[]): Partial<Sessi
     queued,
     queuePause,
     runInterrupted,
+    waitingForUser: waitingFrom(pendingPermissions, state.waitingForUser),
   };
 }
 
@@ -437,9 +698,15 @@ function reduceEvents(state: SessionStore, events: EngineEvent[]): Partial<Sessi
  * Subagent traffic is exempt: it is keyed by run id, feeds `subagentStreams`, and is
  * deliberately applied whichever chat is on screen so a backgrounded run stays live.
  * An event with no conversation of its own (an extension load failure) is global.
+ *
+ * A blocking prompt is exempt for the same reason as subagent traffic: it has nothing
+ * to do with the transcript, and a chat parked on one must be able to raise the
+ * sidebar's 等你 mark and the approval notification while a different chat is on
+ * screen. Only the *panel* is scoped to the active conversation, by `activePermission`.
  */
 function belongsToTranscript(event: EngineEvent, ownerId: string | null): boolean {
   if (event.type.startsWith("subagent_")) return true;
+  if (event.type === "extension_ui_request" || event.type === "extension_ui_dismiss") return true;
   const conversationId = typeof event.conversationId === "string" ? event.conversationId : null;
   if (!conversationId) return true;
   return conversationId === ownerId;
@@ -514,6 +781,7 @@ export const useSessionStore = create<SessionStore>((set, get) => {
   subagents: [],
   permission: null,
   pendingPermissions: {},
+  waitingForUser: {},
   notices: [],
   extensionStatus: {},
   extensionWidgets: {},
@@ -521,7 +789,6 @@ export const useSessionStore = create<SessionStore>((set, get) => {
   queued: [],
   queuePause: null,
   runInterrupted: null,
-  permissionAlways: [],
   preview: null,
   subagentStreams: {},
   setStatus: (status) => set({ status, error: status.state === "error" ? status.message ?? null : null }),
@@ -544,14 +811,35 @@ export const useSessionStore = create<SessionStore>((set, get) => {
         // panel): a third copy of it could disagree with these by an IPC hop.
         running:
           mine && state.activeId ? { ...state.running, [state.activeId]: working(session) } : state.running,
+        // The chat just came back from the engine: if it is parked on a prompt, that
+        // is news the event stream may have delivered while another chat was on screen.
+        waitingForUser: waitingForUserAfter(state, session),
       };
     }),
   setModels: (models) => set({ models }),
   setStats: (stats) => set({ stats }),
   applySnapshot: (snapshot) =>
-    set({
-      projects: snapshot.projects,
-      conversations: snapshot.conversations,
+    set((state) => {
+      // Drop per-conversation state for chats the catalog no longer lists. A deleted
+      // chat's parked prompt would otherwise be kept forever (the sidebar cannot even
+      // draw it, because the conversation is gone), and its 等你 mark with it. Only ids
+      // that are definitively absent are pruned, so a snapshot cannot resurrect a run
+      // mark the engine has since corrected.
+      const live = new Set(snapshot.conversations.map((item) => item.id));
+      const prune = <T,>(map: Record<string, T>): Record<string, T> => {
+        const keys = Object.keys(map).filter((key) => !live.has(key));
+        if (keys.length === 0) return map;
+        const next = { ...map };
+        for (const key of keys) delete next[key];
+        return next;
+      };
+      return {
+        projects: snapshot.projects,
+        conversations: snapshot.conversations,
+        pendingPermissions: prune(state.pendingPermissions),
+        waitingForUser: prune(state.waitingForUser),
+        running: prune(state.running),
+      };
     }),
   setActiveId: (activeId) => {
     // The right pane is conversation-bound: switching chats swaps its tabs, its
@@ -559,15 +847,19 @@ export const useSessionStore = create<SessionStore>((set, get) => {
     useSidePaneStore.getState().setScope(activeId);
     set((state) => ({
       activeId,
-      permission: activeId ? state.pendingPermissions[activeId] ?? null : null,
+      permission: activePermission(state.pendingPermissions, activeId),
     }));
   },
   setMessages: (messages, conversationId) => {
     dropQueued();
     set((state) => {
       if (conversationId && state.activeId && conversationId !== state.activeId) return state;
+      // Keep the object identity of every row the read did not actually change, so
+      // the thread re-renders only where it differs.
+      const reconciled = reconcileMessages(state.messages, messages);
+      if (reconciled === state.messages) return state;
       return {
-        messages,
+        messages: reconciled,
         // The run flags are deliberately left alone: a transcript read says nothing
         // about whether a run is in flight. `reloadActiveMessages()` fires at every
         // `agent_end` and `compaction_end`, and its reply is an expensive full
@@ -578,11 +870,18 @@ export const useSessionStore = create<SessionStore>((set, get) => {
         // flags — it broadcasts every change — and `setSession` seeds them from the
         // engine's own state when a conversation is opened or re-read.
         streaming: state.streaming,
-        partBoundary: settledBoundary(messages),
+        partBoundary: settledBoundary(reconciled),
         running: state.running,
       };
     });
   },
+  setExtensionStatus: (conversationId, status) =>
+    set((state) => {
+      const extensionStatus = { ...state.extensionStatus };
+      if (Object.keys(status).length > 0) extensionStatus[conversationId] = { ...status };
+      else delete extensionStatus[conversationId];
+      return { extensionStatus };
+    }),
   setDraft: (draft) => set({ draft }),
   setError: (error) => set({ error }),
   setCommands: (commands) => set({ commands }),
@@ -619,15 +918,21 @@ export const useSessionStore = create<SessionStore>((set, get) => {
       const reordered = next.some((item, index) => item !== state.subagents[index]);
       return changed || reordered ? { subagents: next } : state;
     }),
-  setPermission: (permission) => set((state) => {
-    const pendingPermissions = { ...state.pendingPermissions };
-    const conversationId = permission?.conversationId ?? state.activeId;
-    if (conversationId) {
-      if (permission) pendingPermissions[conversationId] = permission;
+  resolvePermission: (id) =>
+    set((state) => {
+      const conversationId = state.activeId;
+      if (!conversationId) return {};
+      const list = state.pendingPermissions[conversationId] ?? [];
+      const remaining = list.filter((item) => item.id !== id);
+      const pendingPermissions = { ...state.pendingPermissions };
+      if (remaining.length > 0) pendingPermissions[conversationId] = remaining;
       else delete pendingPermissions[conversationId];
-    }
-    return { permission, pendingPermissions };
-  }),
+      return {
+        pendingPermissions,
+        permission: activePermission(pendingPermissions, state.activeId),
+        waitingForUser: waitingFrom(pendingPermissions, state.waitingForUser),
+      };
+    }),
   dismissNotice: (id) => set((state) => ({ notices: state.notices.filter((item) => item.id !== id) })),
   addUserMessage: (text, attachments) =>
     set((state) => {
@@ -717,10 +1022,6 @@ export const useSessionStore = create<SessionStore>((set, get) => {
   clearQueued: () => set({ queued: [], queuePause: null }),
   setQueuePause: (queuePause) => set({ queuePause }),
   setRunInterrupted: (runInterrupted) => set({ runInterrupted }),
-  rememberPermission: (key) =>
-    set((state) =>
-      state.permissionAlways.includes(key) ? state : { permissionAlways: [...state.permissionAlways, key] },
-    ),
   setPreview: (preview) => set({ preview }),
   openPreview: async (path) => {
     // The open file lives on the *conversation's* files tab, so the same file can be
@@ -754,7 +1055,7 @@ export const useSessionStore = create<SessionStore>((set, get) => {
   resetConversation: () => {
     useSidePaneStore.getState().setScope(null);
     dropQueued();
-    set({
+    set((state) => ({
       messages: [],
       streaming: false,
       partBoundary: 0,
@@ -766,10 +1067,20 @@ export const useSessionStore = create<SessionStore>((set, get) => {
       error: null,
       activeId: null,
       permission: null,
-      pendingPermissions: {},
+      // Prompts of *other* conversations are deliberately kept, like `running`: a
+      // background chat parked on an approval must not lose its question because the
+      // user started a new chat. Only the id-scoped marks are rebuilt accordingly.
+      waitingForUser: waitingFrom(state.pendingPermissions, state.waitingForUser),
       notices: [],
-      extensionStatus: {},
-      extensionWidgets: {},
+      // Only the chat on screen is being cleared: status and widgets are bucketed by
+      // conversation, so a background chat's goal panel survives a new session. This
+      // bucket goes because the hero has no conversation to own it.
+      extensionStatus: state.activeId
+        ? Object.fromEntries(Object.entries(state.extensionStatus).filter(([key]) => key !== state.activeId))
+        : state.extensionStatus,
+      extensionWidgets: state.activeId
+        ? Object.fromEntries(Object.entries(state.extensionWidgets).filter(([key]) => key !== state.activeId))
+        : state.extensionWidgets,
       // Delegated runs outlive the chat on screen: wiping these made a background
       // subagent's pane empty after a new-session / archive, and nothing would have
       // rebuilt the stream until the next token.
@@ -777,7 +1088,7 @@ export const useSessionStore = create<SessionStore>((set, get) => {
       queued: [],
       queuePause: null,
       runInterrupted: null,
-    });
+    }));
   },
   setStreaming: (streaming) =>
     set((state) => ({ streaming, running: activeRunning(state, streaming) })),
@@ -800,15 +1111,33 @@ export const useSessionStore = create<SessionStore>((set, get) => {
       for (const id of ids) if (running[id] === undefined) running[id] = true;
       return { running };
     }),
+  forgetConversationExtensionState: (conversationId) =>
+    set((state) => {
+      if (!(conversationId in state.extensionStatus) && !(conversationId in state.extensionWidgets)) {
+        return state;
+      }
+      const extensionStatus = { ...state.extensionStatus };
+      const extensionWidgets = { ...state.extensionWidgets };
+      delete extensionStatus[conversationId];
+      delete extensionWidgets[conversationId];
+      return { extensionStatus, extensionWidgets };
+    }),
   };
 });
 
 function upsertSubagent(list: SubagentInfo[], event: EngineEvent): SubagentInfo[] {
-  if (event.type !== "subagent_lifecycle" && event.type !== "subagent_progress") return list;
+  if (
+    event.type !== "subagent_lifecycle" &&
+    event.type !== "subagent_progress" &&
+    event.type !== "subagent_state"
+  ) {
+    return list;
+  }
   const id = typeof event.subagentId === "string" ? event.subagentId : typeof event.id === "string" ? event.id : "";
   if (!id) return list;
   const previous = list.find((item) => item.id === id);
   const now = Date.now();
+  const state = event.type === "subagent_state";
   const next: SubagentInfo = {
     id,
     conversationId:
@@ -827,13 +1156,29 @@ function upsertSubagent(list: SubagentInfo[], event: EngineEvent): SubagentInfo[
     // stable object identity in the pane) across every later lifecycle event.
     startedAt: previous?.startedAt ?? now,
     endedAt:
-      typeof event.status === "string" && event.status !== "running" ? now : previous?.endedAt,
+      !state && typeof event.status === "string" && event.status !== "running" ? now : previous?.endedAt,
     error: typeof event.error === "string" ? event.error : previous?.error,
+    // A state push only ever carries these; every other event leaves them alone.
+    model: isEngineModel(event.model) ? event.model : previous?.model,
+    thinkingLevel: typeof event.thinkingLevel === "string" ? event.thinkingLevel : previous?.thinkingLevel,
+    contextUsage: isContextUsage(event.contextUsage) ? event.contextUsage : previous?.contextUsage,
   };
   if (previous) {
     return list.map((item) => (item.id === id ? { ...item, ...next } : item));
   }
   return [next, ...list];
+}
+
+function isEngineModel(value: unknown): value is EngineModel {
+  return isRecord(value) && typeof value.provider === "string" && typeof value.id === "string";
+}
+
+function isContextUsage(value: unknown): value is ContextUsage {
+  return isRecord(value) && typeof value.contextWindow === "number";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 function applySubagentStream(

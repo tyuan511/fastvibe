@@ -2,6 +2,15 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
+/*
+ * KaTeX's stylesheet, for the LaTeX in replies and file previews
+ * (`components/chat/markdown-view.tsx` → `rehype-katex`). Importing it here rather
+ * than from JS keeps the fonts with it: its `url(fonts/…)` references resolve
+ * against the package, so Vite emits the twenty `.woff2` files into the renderer
+ * bundle and the app stays offline-clean under a `default-src 'self'` CSP. KaTeX colour
+ * needs no per-theme wiring and gets none (see the Math block further down).
+ */
+@import "katex/dist/katex.min.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -401,6 +410,30 @@ body {
 .chat-markdown hr {
   margin: 0.8em 0;
   border-color: var(--border);
+}
+
+/*
+ * Math ---------------------------------------------------------------------------
+ * KaTeX inherits `color` and the font stack from its surroundings, so a formula
+ * already follows the active theme with no per-theme set-up — no token overrides are
+ * needed here, and none are possible: KaTeX reads no custom properties of its own.
+ * `rehype-katex` gets `errorColor: "var(--destructive)"` (see markdown-view.tsx) so
+ * the one fragment it cannot parse follows the theme too.
+ *
+ * What is left is layout: a display block is its own row, and a wide one scrolls
+ * inside the bubble rather than stretching the transcript.
+ */
+.katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.25em 0;
+}
+
+/* A display block carries KaTeX's own vertical padding; the paragraph spacing around
+ * it is the markdown renderer's, so trim the doubled gap it would otherwise get. */
+.chat-markdown > .katex-display:first-child,
+.chat-markdown > p:first-child > .katex-display {
+  margin-top: 0;
 }
 
 .side-pane-open-tab-shell {

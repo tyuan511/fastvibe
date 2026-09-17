@@ -67,13 +67,24 @@ export function useGitStatus(cwd?: string, refreshKey?: unknown): GitStatus | nu
     cwdRef.current = cwd;
     keyRef.current = refreshKey;
     load(force || !cache.has(cwd));
-    const timer = window.setInterval(() => load(true), POLL_MS);
+    // Every tick spawns a `git` process in Main. A hidden window has nobody to show
+    // the result to, so it polls for as long as the app is left open in the
+    // background — skip those ticks, and take one read on the way back so the chip
+    // is never stale by a whole interval.
+    const timer = window.setInterval(() => {
+      if (!document.hidden) load(true);
+    }, POLL_MS);
     const onFocus = (): void => load(true);
+    const onVisible = (): void => {
+      if (!document.hidden) load(true);
+    };
     window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
       window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [cwd, refreshKey]);
 

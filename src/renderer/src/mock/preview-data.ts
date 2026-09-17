@@ -361,6 +361,42 @@ export const MESSAGES: ChatMessage[] = [
   },
 ];
 
+/**
+ * A LaTeX answer, so the preview harness renders the math pipeline end to end: the
+ * display block, the inline `$…$`, and — the case worth looking at — shell text that
+ * uses `$` for variables, which must stay plain instead of being eaten by math.
+ */
+export const MATH_MESSAGES: ChatMessage[] = [
+  {
+    id: "msg-math-u",
+    role: "user",
+    text: "把注意力公式用 LaTeX 写一遍，顺便导出一份到 $HOME。",
+    tools: [],
+    parts: [{ kind: "text", text: "把注意力公式用 LaTeX 写一遍，顺便导出一份到 $HOME。" }],
+    createdAt: NOW - 40_000,
+  },
+  {
+    id: "msg-math-a",
+    role: "assistant",
+    text:
+      "缩放点积注意力，softmax 作用在缩放后的点积上：\n\n" +
+      "$$\n\\operatorname{Attention}(Q,K,V) = \\operatorname{softmax}\\!\\left(\\frac{QK^\\top}{\\sqrt{d_k}}\\right)V\n$$\n\n" +
+      "其中 $d_k$ 是键的维度；导出脚本里 `$HOME` 与 `$PATH` 是 shell 变量，不会被当成公式。",
+    tools: [],
+    parts: [
+      {
+        kind: "text",
+        text:
+          "缩放点积注意力，softmax 作用在缩放后的点积上：\n\n" +
+          "$$\n\\operatorname{Attention}(Q,K,V) = \\operatorname{softmax}\\!\\left(\\frac{QK^\\top}{\\sqrt{d_k}}\\right)V\n$$\n\n" +
+          "其中 $d_k$ 是键的维度；导出脚本里 `$HOME` 与 `$PATH` 是 shell 变量，不会被当成公式。",
+      },
+    ],
+    createdAt: NOW - 39_000,
+    completedAt: NOW - 38_000,
+  },
+];
+
 export const SESSION: EngineSessionState = {
   // The model the divider's last switch landed on, so the chip and the transcript agree.
   model: { provider: "deepseek", id: "deepseek-chat" },

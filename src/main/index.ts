@@ -6,6 +6,9 @@ import { promisify } from "node:util";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { Ipc, type AppModelsDevInfo } from "@shared/ipc";
+import { broadcast, subscribe } from "./ipc/broadcast";
+import { dispatch, handle, handlerChannels, type CallerContext } from "./ipc/registry";
+import { registerRemoteIpc, restoreRemoteServer, stopRemoteServer } from "./remote";
 import { readFilePreview } from "./engine/file-preview";
 import { readWorkspaceDir } from "./engine/workspace-fs";
 import { loadModelsDev, type ModelsDevStats } from "./engine/models-dev";
@@ -20,7 +23,8 @@ import {
   windowBackgroundColor,
   writeAppSettings,
 } from "./engine/app-settings";
-import { getFastVibePaths } from "./engine/paths";
+import { getFastVibePaths, type FastVibePaths } from "./engine/paths";
+import { isNotificationPreference, type NotificationPreference } from "@shared/types";
 import { applyLanguages } from "./engine/ai-language";
 import { uiText } from "./engine/ui-text";
 import { applyShellPath } from "./engine/shell-path";
@@ -122,7 +126,17 @@ function createWindow(): void {
   };
   window.on("maximize", sendWindowState);
   window.on("unmaximize", sendWindowState);
+  // A window is just one receiver among others now (`ipc/broadcast.ts`); pushes reach
+  // it through the hub rather than through a loop that knows what a window is.
+  const unsubscribe = subscribe({
+    id: windowOrigin(window.webContents.id),
+    send: (channel, payload) => {
+      if (window.isDestroyed()) return;
+      window.webContents.send(channel, payload);
+    },
+  });
   window.on("closed", () => {
+    unsubscribe();
     windows.delete(window);
     if (mainWindow === window) mainWindow = windows.values().next().value ?? null;
   });
@@ -130,7 +144,7 @@ function createWindow(): void {
     shell.openExternal(details.url);
     return { action: "deny" };
   });
-  window.webContents.on("preload-error", (_event, path, error) => {
+  window.webContents.on("preload-error", (path, error) => {
     log.error(`preload-error path=${path}`, error);
   });
   window.webContents.on("unresponsive", () => log.warn("window unresponsive"));
@@ -148,8 +162,16 @@ function createWindow(): void {
   log.info("window opened");
 }
 
+/**
+ * Broadcast identity of one window, derived from its WebContents id. It is what
+ * `settings:set` skips so a window is not told to re-read what it just wrote.
+ */
+function windowOrigin(webContentsId: number): string {
+  return `window:${webContentsId}`;
+}
+
 function broadcastStatus(): void {
-  for (const window of windows) window.webContents.send(Ipc.status, engine.status);
+  broadcast(Ipc.status, engine.status);
 }
 
 /** The models.dev metadata shape the renderer's 关于 pane reads. */
@@ -163,108 +185,118 @@ function modelsDevInfo(stats: ModelsDevStats): AppModelsDevInfo {
 }
 
 function registerIpc(): void {
-  ipcMain.on(Ipc.browserResponse, (_event, payload: { id: string; ok: boolean; result?: unknown; error?: string }) => {
+  handle(Ipc.browserResponse, (payload: { id: string; ok: boolean; result?: unknown; error?: string }) => {
     respondBrowserRequest(payload);
   });
-  ipcMain.handle(Ipc.browserListProfiles, () => listBrowserProfiles());
-  ipcMain.handle(Ipc.browserImportProfile, async (_event, payload: { profile: import("@shared/types").BrowserProfileInfo }) => {
+  handle(Ipc.browserListProfiles, () => listBrowserProfiles());
+  handle(Ipc.browserImportProfile, async (payload: { profile: import("@shared/types").BrowserProfileInfo }) => {
     if (!payload?.profile?.cookiePath) throw new Error(uiText("浏览器配置文件无效", "Invalid browser profile"));
     const allowed = (await listBrowserProfiles()).find((profile) => profile.id === payload.profile.id && profile.cookiePath === payload.profile.cookiePath);
     if (!allowed) throw new Error(uiText("浏览器配置文件未通过校验，请重新打开导入列表", "Browser profile failed validation. Open the list again."));
     return importBrowserProfile(allowed, (cookie) => session.fromPartition("persist:fastvibe-browser").cookies.set(cookie));
   });
-  ipcMain.handle(Ipc.engineGetStatus, () => engine.status);
+  handle(Ipc.engineGetStatus, () => engine.status);
 
-  ipcMain.handle(Ipc.engineStart, async (_event, payload?: { cwd?: string }) => {
+  handle(Ipc.engineStart, async (payload?: { cwd?: string }) => {
     return engine.start(payload?.cwd ?? engine.cwd);
   });
 
-  ipcMain.handle(Ipc.engineStop, async () => {
+  handle(Ipc.engineStop, async () => {
     await engine.stop();
     return engine.status;
   });
 
-  ipcMain.handle(
+  handle(
     Ipc.enginePrompt,
     async (
-      _event,
       payload: {
         message: string;
         streamingBehavior?: "steer" | "followUp";
         images?: Array<{ type: "image"; data: string; mimeType: string }>;
+        /** Omitted by single-window callers, which mean "the chat on screen". */
+        conversationId?: string;
       },
     ) => {
       await engine.prompt(payload.message, {
         streamingBehavior: payload.streamingBehavior,
         images: payload.images,
+        conversationId: payload.conversationId,
       });
     },
   );
 
-  ipcMain.handle(
+  handle(
     Ipc.engineSteer,
-    async (_event, payload: { message: string; images?: Array<{ type: "image"; data: string; mimeType: string }> }) => {
-      await engine.steer(payload.message, payload.images);
+    async (
+      payload: { message: string; images?: Array<{ type: "image"; data: string; mimeType: string }>; conversationId?: string },
+    ) => {
+      await engine.steer(payload.message, payload.images, payload.conversationId);
     },
   );
 
-  ipcMain.handle(
+  handle(
     Ipc.engineFollowUp,
-    async (_event, payload: { message: string; images?: Array<{ type: "image"; data: string; mimeType: string }> }) => {
-      await engine.followUp(payload.message, payload.images);
+    async (
+      payload: { message: string; images?: Array<{ type: "image"; data: string; mimeType: string }>; conversationId?: string },
+    ) => {
+      await engine.followUp(payload.message, payload.images, payload.conversationId);
     },
   );
 
-  ipcMain.handle(Ipc.engineAbort, async () => {
-    await engine.abort();
+  handle(Ipc.engineAbort, async (payload?: { conversationId?: string }) => {
+    await engine.abort(payload?.conversationId);
   });
 
-  ipcMain.handle(Ipc.engineContinue, async () => {
-    await engine.continueTurn();
+  handle(Ipc.engineAbortSubagent, async (payload: { subagentId: string }) => {
+    await engine.abortSubagent(payload.subagentId);
   });
 
-  ipcMain.handle(Ipc.engineClearQueue, async () => {
-    return engine.clearQueue();
+  handle(Ipc.engineContinue, async (payload?: { conversationId?: string }) => {
+    await engine.continueTurn(payload?.conversationId);
   });
 
-  ipcMain.handle(
+  handle(Ipc.engineClearQueue, async (payload?: { conversationId?: string }) => {
+    return engine.clearQueue(payload?.conversationId);
+  });
+
+  handle(
     Ipc.engineReplaceSteering,
     async (
-      _event,
       payload: {
         items: Array<{ text: string; images?: Array<{ type: "image"; data: string; mimeType: string }> }>;
+        conversationId?: string;
       },
     ) => {
-      await engine.replaceSteering(payload.items);
+      await engine.replaceSteering(payload.items, payload.conversationId);
     },
   );
 
-  ipcMain.handle(Ipc.engineCompact, async (_event, payload?: { customInstructions?: string }) => {
-    return engine.compact(payload?.customInstructions);
+  handle(Ipc.engineCompact, async (payload?: { customInstructions?: string; conversationId?: string }) => {
+    return engine.compact(payload?.customInstructions, payload?.conversationId);
   });
 
-  ipcMain.handle(Ipc.engineGetCommands, async () => {
+  handle(Ipc.engineGetCommands, async () => {
     return engine.getCommands();
   });
-  ipcMain.handle(Ipc.engineGetExtensions, async () => engine.getExtensions());
-  ipcMain.handle(Ipc.engineListExtensionPackages, async () => engine.listExtensionPackages());
-  ipcMain.handle(
+  handle(Ipc.engineGetExtensions, async () => engine.getExtensions());
+  handle(Ipc.engineListExtensionPackages, async () => engine.listExtensionPackages());
+  handle(
     Ipc.engineInstallExtensionPackage,
-    async (_event, payload: { source: string }) => engine.installExtensionPackage(payload.source),
+    async (payload: { source: string }) => engine.installExtensionPackage(payload.source),
   );
-  ipcMain.handle(
+  handle(
     Ipc.engineRemoveExtensionPackage,
-    async (_event, payload: { source: string }) => engine.removeExtensionPackage(payload.source),
+    async (payload: { source: string }) => engine.removeExtensionPackage(payload.source),
   );
-  ipcMain.handle(
+  handle(
     Ipc.engineListMarketPackages,
-    async (_event, payload: import("@shared/types").MarketPackageQuery) => fetchPackageCatalog(payload),
+    async (payload: import("@shared/types").MarketPackageQuery) => fetchPackageCatalog(payload),
   );
-  ipcMain.handle(Ipc.engineListMcpServers, async () => engine.listMcpServers());
-  ipcMain.handle(Ipc.engineSaveMcpServers, async (_event, payload: { configs: import("@shared/types").McpServerConfig[] }) => engine.saveMcpServers(payload.configs));
-  ipcMain.handle(Ipc.engineListSkills, async () => engine.listSkills());
-  ipcMain.handle(Ipc.engineCreateSkill, async (_event, payload: import("@shared/types").SkillDraft) => engine.createSkill(payload));
-  ipcMain.handle(Ipc.engineImportSkill, async () => {
+  handle(Ipc.engineListMcpServers, async () => engine.listMcpServers());
+  handle(Ipc.engineSaveMcpServers, async (payload: { configs: import("@shared/types").McpServerConfig[] }) => engine.saveMcpServers(payload.configs));
+  handle(Ipc.engineListSkills, async () => engine.listSkills());
+  handle(Ipc.engineCreateSkill, async (payload: import("@shared/types").SkillDraft) => engine.createSkill(payload));
+  handle(Ipc.engineImportSkill, async () => {
     const result = await dialog.showOpenDialog({
       title: uiText("导入技能", "Import skill"),
       properties: ["openDirectory"],
@@ -272,123 +304,139 @@ function registerIpc(): void {
     if (result.canceled || !result.filePaths[0]) return null;
     return engine.importSkill(result.filePaths[0]);
   });
-  ipcMain.handle(Ipc.engineRemoveSkill, async (_event, payload: { name: string }) => engine.removeSkill(payload.name));
+  handle(Ipc.engineRemoveSkill, async (payload: { name: string }) => engine.removeSkill(payload.name));
 
-  ipcMain.handle(Ipc.engineGetSubagents, async () => {
+  handle(Ipc.engineGetSubagents, async () => {
     return engine.getSubagents();
   });
 
-  ipcMain.handle(Ipc.engineGetSubagentMessages, async (_event, payload: { subagentId: string }) => {
+  handle(Ipc.engineGetSubagentMessages, async (payload: { subagentId: string }) => {
     return engine.getSubagentMessages(payload.subagentId);
   });
 
-  ipcMain.handle(Ipc.conversationsSearch, (_event, payload: { query?: string }) => {
+  handle(Ipc.engineGetCheckpoint, (payload: { conversationId: string }) => {
+    return engine.getCheckpoint(payload.conversationId);
+  });
+
+  handle(Ipc.engineRestoreCheckpoint, async (payload: { conversationId: string }) => {
+    return engine.restoreCheckpoint(payload.conversationId);
+  });
+
+  handle(Ipc.conversationsSearch, (payload: { query?: string }) => {
     return engine.searchConversations(payload?.query ?? "");
   });
 
-  ipcMain.handle(
+  handle(
     Ipc.enginePermissionRespond,
-    (_event, payload: { id: string; confirmed?: boolean; value?: string; cancelled?: boolean; answers?: Array<string | null> }) => {
+    (payload: { id: string; confirmed?: boolean; value?: string; cancelled?: boolean; answers?: Array<string | null> }) => {
       engine.respondPermission(payload);
     },
   );
 
-  ipcMain.handle(Ipc.engineNewSession, async () => {
+  handle(Ipc.engineNewSession, async () => {
     await engine.newSession();
   });
 
-  ipcMain.handle(Ipc.engineGetState, async () => {
-    return engine.getState();
+  handle(Ipc.engineGetState, async (payload?: { conversationId?: string }) => {
+    return engine.getState(payload?.conversationId);
   });
 
-  ipcMain.handle(Ipc.engineGetRunning, async () => {
+  handle(Ipc.engineGetRunning, async () => {
     return engine.getRunningConversations();
   });
 
-  ipcMain.handle(Ipc.engineGetModels, async () => {
+  handle(Ipc.engineGetModels, async () => {
     return engine.getAvailableModels();
   });
 
-  ipcMain.handle(Ipc.engineSetModel, async (_event, payload: { provider: string; modelId: string }) => {
-    return engine.setModel(payload.provider, payload.modelId);
-  });
+  handle(
+    Ipc.engineSetModel,
+    async (payload: { provider: string; modelId: string; conversationId?: string }) => {
+      return engine.setModel(payload.provider, payload.modelId, payload.conversationId);
+    },
+  );
 
-  ipcMain.handle(Ipc.engineSetThinking, async (_event, payload: { level: string }) => {
-    return engine.setThinkingLevel(payload.level);
-  });
-  ipcMain.handle(Ipc.engineSetInterrupt, async (_event, payload: { mode: "immediate" | "wait" }) => {
+  handle(
+    Ipc.engineSetThinking,
+    async (payload: { level: string; conversationId?: string }) => {
+      return engine.setThinkingLevel(payload.level, payload.conversationId);
+    },
+  );
+  handle(Ipc.engineSetInterrupt, async (payload: { mode: "immediate" | "wait" }) => {
     return engine.setInterruptMode(payload.mode);
   });
-  ipcMain.handle(Ipc.engineSetAutoCompact, async (_event, payload: { enabled: boolean }) => {
+  handle(Ipc.engineSetAutoCompact, async (payload: { enabled: boolean }) => {
     return engine.setAutoCompaction(payload.enabled);
   });
-  ipcMain.handle(Ipc.engineBranch, async (_event, payload: { entryId: string }) => {
-    return engine.branch(payload.entryId);
+  handle(Ipc.engineBranch, async (payload: { entryId: string; conversationId?: string }) => {
+    return engine.branch(payload.entryId, payload.conversationId);
   });
-  ipcMain.handle(Ipc.engineGetMessages, async () => {
-    return engine.loadMessages();
+  handle(Ipc.engineGetMessages, async (payload?: { conversationId?: string }) => {
+    return engine.loadMessages(payload?.conversationId);
   });
-  ipcMain.handle(Ipc.engineGetStats, async () => {
-    return engine.getSessionStats();
+  handle(Ipc.engineGetSnapshot, async (payload?: { conversationId?: string }) => {
+    return engine.getSnapshot(payload?.conversationId);
   });
-  ipcMain.handle(Ipc.engineSetSteering, async (_event, payload: { mode: "all" | "one-at-a-time" }) => {
+  handle(Ipc.engineGetStats, async (payload?: { conversationId?: string }) => {
+    return engine.getSessionStats(payload?.conversationId);
+  });
+  handle(Ipc.engineSetSteering, async (payload: { mode: "all" | "one-at-a-time" }) => {
     return engine.setSteeringMode(payload.mode);
   });
-  ipcMain.handle(Ipc.engineSetFollowUp, async (_event, payload: { mode: "all" | "one-at-a-time" }) => {
+  handle(Ipc.engineSetFollowUp, async (payload: { mode: "all" | "one-at-a-time" }) => {
     return engine.setFollowUpMode(payload.mode);
   });
-  ipcMain.handle(Ipc.engineExportHtml, async () => {
+  handle(Ipc.engineExportHtml, async () => {
     const path = await engine.exportHtml();
     if (path) await shell.openPath(path);
     return path;
   });
   // 设置 → 导入. Read-only scans of the other agents' data plus an explicit import;
   // nothing here runs on the live engine, so a scan cannot disturb the chat in flight.
-  ipcMain.handle(Ipc.engineImportSources, async () => engine.importSources());
-  ipcMain.handle(Ipc.engineImportCandidates, async (_event, payload: { source: ImportSourceId }) =>
+  handle(Ipc.engineImportSources, async () => engine.importSources());
+  handle(Ipc.engineImportCandidates, async (payload: { source: ImportSourceId }) =>
     engine.importCandidates(payload.source),
   );
-  ipcMain.handle(Ipc.engineImportSessions, async (_event, payload: { source: ImportSourceId; ids: string[] }) =>
+  handle(Ipc.engineImportSessions, async (payload: { source: ImportSourceId; ids: string[] }) =>
     engine.importSessions(payload.source, payload.ids),
   );
 
-  ipcMain.handle(Ipc.providersList, async () => {
+  handle(Ipc.providersList, async () => {
     return engine.listProviders();
   });
-  ipcMain.handle(Ipc.providersNative, async () => {
+  handle(Ipc.providersNative, async () => {
     return engine.listNativeProviders();
   });
-  ipcMain.handle(
+  handle(
     Ipc.providersAddNative,
-    async (_event, payload: { id: string; apiKey: string; models: ProviderModel[] }) => {
+    async (payload: { id: string; apiKey: string; models: ProviderModel[] }) => {
       return engine.addNativeProvider(payload.id, payload.apiKey, payload.models);
     },
   );
-  ipcMain.handle(
+  handle(
     Ipc.providersFetch,
-    async (_event, payload: { baseUrl: string; apiKey: string; api?: import("@shared/types").ProviderApi }) => {
+    async (payload: { baseUrl: string; apiKey: string; api?: import("@shared/types").ProviderApi }) => {
       return engine.fetchModels(payload.baseUrl, payload.apiKey, payload.api);
     },
   );
-  ipcMain.handle(
+  handle(
     Ipc.providersSaveFastVibe,
-    async (_event, payload: { apiKey: string; models: ProviderModel[] }) => {
+    async (payload: { apiKey: string; models: ProviderModel[] }) => {
       return engine.saveFastVibe(payload.apiKey, payload.models);
     },
   );
-  ipcMain.handle(
+  handle(
     Ipc.providersAdd,
-    async (_event, payload: { name: string; baseUrl: string; apiKey: string; api?: import("@shared/types").ProviderApi; models: ProviderModel[] }) => {
+    async (payload: { name: string; baseUrl: string; apiKey: string; api?: import("@shared/types").ProviderApi; models: ProviderModel[] }) => {
       return engine.addProvider(
         { name: payload.name, baseUrl: payload.baseUrl, apiKey: payload.apiKey, api: payload.api },
         payload.models,
       );
     },
   );
-  ipcMain.handle(
+  handle(
     Ipc.providersUpdate,
     async (
-      _event,
       payload: { id: string; name?: string; baseUrl?: string; api?: import("@shared/types").ProviderApi; enabled?: boolean; apiKey?: string; models?: ProviderModel[] },
     ) => {
       return engine.updateProvider(payload.id, {
@@ -401,57 +449,57 @@ function registerIpc(): void {
       });
     },
   );
-  ipcMain.handle(Ipc.providersRemove, async (_event, payload: { id: string }) => {
+  handle(Ipc.providersRemove, async (payload: { id: string }) => {
     return engine.removeProvider(payload.id);
   });
-  ipcMain.handle(Ipc.providersRefresh, async (_event, payload: { id: string }) => {
+  handle(Ipc.providersRefresh, async (payload: { id: string }) => {
     return engine.refreshProviderModels(payload.id);
   });
-  ipcMain.handle(Ipc.providersCcSwitchScan, async () => {
+  handle(Ipc.providersCcSwitchScan, async () => {
     return engine.scanCcSwitch();
   });
-  ipcMain.handle(Ipc.providersCcSwitchImport, async (_event, payload: { ids: string[] }) => {
+  handle(Ipc.providersCcSwitchImport, async (payload: { ids: string[] }) => {
     return engine.importCcSwitch(payload.ids);
   });
   // Subscription (OAuth) logins. `login` resolves when the flow ends, so the renderer
   // holds one open dialog per provider while its events stream in on
   // `providers:oauth-event` — the prompts it has to answer among them.
-  ipcMain.handle(Ipc.providersOAuthLogin, async (_event, payload: { id: string }) => {
+  handle(Ipc.providersOAuthLogin, async (payload: { id: string }) => {
     return engine.loginProvider(payload.id);
   });
-  ipcMain.handle(
+  handle(
     Ipc.providersOAuthAnswer,
-    (_event, payload: { id: string; promptId: string; value: string }) => {
+    (payload: { id: string; promptId: string; value: string }) => {
       engine.answerOAuthPrompt(payload.id, payload.promptId, payload.value ?? "");
     },
   );
-  ipcMain.handle(Ipc.providersOAuthCancel, (_event, payload: { id: string }) => {
+  handle(Ipc.providersOAuthCancel, (payload: { id: string }) => {
     engine.cancelOAuthLogin(payload.id);
   });
-  ipcMain.handle(Ipc.providersLogout, async (_event, payload: { id: string }) => {
+  handle(Ipc.providersLogout, async (payload: { id: string }) => {
     return engine.logoutProvider(payload.id);
   });
 
-  ipcMain.handle(Ipc.conversationsList, () => engine.listWorkspace());
-  ipcMain.handle(Ipc.conversationsCreate, async (_event, payload?: { project?: string }) => {
+  handle(Ipc.conversationsList, () => engine.listWorkspace());
+  handle(Ipc.conversationsCreate, async (payload?: { project?: string }) => {
     return engine.createConversation(payload?.project);
   });
-  ipcMain.handle(Ipc.conversationsOpen, async (_event, payload: { id: string }) => {
+  handle(Ipc.conversationsOpen, async (payload: { id: string }) => {
     return engine.openConversation(payload.id);
   });
-  ipcMain.handle(Ipc.conversationsRename, (_event, payload: { id: string; title: string }) => {
+  handle(Ipc.conversationsRename, (payload: { id: string; title: string }) => {
     return engine.renameConversation(payload.id, payload.title);
   });
-  ipcMain.handle(Ipc.conversationsDelete, async (_event, payload: { id: string }) => {
+  handle(Ipc.conversationsDelete, async (payload: { id: string }) => {
     return engine.deleteConversation(payload.id);
   });
-  ipcMain.handle(Ipc.conversationsRecordPrompt, (_event, payload: { id: string; text: string }) => {
+  handle(Ipc.conversationsRecordPrompt, (payload: { id: string; text: string }) => {
     return engine.recordPrompt(payload.id, payload.text);
   });
-  ipcMain.handle(Ipc.conversationsSetProject, async (_event, payload: { id: string; project: string | null }) => {
+  handle(Ipc.conversationsSetProject, async (payload: { id: string; project: string | null }) => {
     return engine.setConversationProject(payload.id, payload.project);
   });
-  ipcMain.handle(Ipc.projectsAdd, async () => {
+  handle(Ipc.projectsAdd, async () => {
     const result = await dialog.showOpenDialog({
       title: uiText("打开项目", "Open project"),
       properties: ["openDirectory", "createDirectory"],
@@ -459,16 +507,16 @@ function registerIpc(): void {
     if (result.canceled || !result.filePaths[0]) return null;
     return engine.addProject(result.filePaths[0]);
   });
-  ipcMain.handle(Ipc.projectsRename, (_event, payload: { cwd: string; name: string }) => {
+  handle(Ipc.projectsRename, (payload: { cwd: string; name: string }) => {
     return engine.renameProject(payload.cwd, payload.name);
   });
-  ipcMain.handle(Ipc.projectsRemove, async (_event, payload: { cwd: string }) => {
+  handle(Ipc.projectsRemove, async (payload: { cwd: string }) => {
     return engine.removeProject(payload.cwd);
   });
-  ipcMain.handle(Ipc.projectsReorder, (_event, payload: { cwds: string[] }) => {
+  handle(Ipc.projectsReorder, (payload: { cwds: string[] }) => {
     return engine.reorderProjects(Array.isArray(payload?.cwds) ? payload.cwds : []);
   });
-  ipcMain.handle(Ipc.workspaceReveal, async (_event, payload: { cwd: string }) => {
+  handle(Ipc.workspaceReveal, async (payload: { cwd: string }) => {
     if (!payload.cwd) return;
     try {
       if (statSync(payload.cwd).isFile()) {
@@ -480,24 +528,24 @@ function registerIpc(): void {
     }
     await shell.openPath(payload.cwd);
   });
-  ipcMain.handle(Ipc.workspacePreview, (_event, payload: { path: string }) => {
+  handle(Ipc.workspacePreview, (payload: { path: string }) => {
     if (!payload.path) return { kind: "error", path: "", name: "", message: uiText("路径无效", "Invalid path") };
     return readFilePreview(payload.path);
   });
-  ipcMain.handle(Ipc.workspaceFileIcons, () => getFileIconMapping());
-  ipcMain.handle(Ipc.workspaceReadDir, (_event, payload: { path: string }) => {
+  handle(Ipc.workspaceFileIcons, () => getFileIconMapping());
+  handle(Ipc.workspaceReadDir, (payload: { path: string }) => {
     try {
       return readWorkspaceDir(payload.path);
     } catch {
       return [];
     }
   });
-  ipcMain.handle(Ipc.workspaceGitStatus, async (_event, payload: { cwd: string }): Promise<GitStatus> => {
+  handle(Ipc.workspaceGitStatus, async (payload: { cwd: string }): Promise<GitStatus> => {
     const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
     if (!cwd) return { cwd, isRepository: false, changed: 0, staged: 0, files: [] };
     return readGitStatus(cwd);
   });
-  ipcMain.handle(Ipc.workspaceOpenTerminal, async (_event, payload: { cwd: string }): Promise<void> => {
+  handle(Ipc.workspaceOpenTerminal, async (payload: { cwd: string }): Promise<void> => {
     const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
     if (!cwd) return;
     if (process.platform === "darwin") {
@@ -508,7 +556,7 @@ function registerIpc(): void {
       await execFileAsync("x-terminal-emulator", ["--working-directory", cwd]);
     }
   });
-  ipcMain.handle(Ipc.workspaceGitBranches, async (_event, payload: { cwd: string }): Promise<GitBranch[]> => {
+  handle(Ipc.workspaceGitBranches, async (payload: { cwd: string }): Promise<GitBranch[]> => {
     const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
     if (!cwd) return [];
     try {
@@ -521,21 +569,21 @@ function registerIpc(): void {
       return [];
     }
   });
-  ipcMain.handle(Ipc.workspaceGitCheckout, async (_event, payload: { cwd: string; branch: string }): Promise<GitStatus> => {
+  handle(Ipc.workspaceGitCheckout, async (payload: { cwd: string; branch: string }): Promise<GitStatus> => {
     const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
     const branch = typeof payload.branch === "string" ? payload.branch.trim() : "";
     if (!cwd || !branch || branch.startsWith("-") || branch.includes("\0")) throw new Error(uiText("分支名称无效", "Invalid branch name"));
     await execFileAsync("git", ["-C", cwd, "switch", branch], { timeout: 10000, maxBuffer: 128 * 1024 });
     return readGitStatus(cwd);
   });
-  ipcMain.handle(Ipc.workspaceGitCreateBranch, async (_event, payload: { cwd: string; branch: string }): Promise<GitStatus> => {
+  handle(Ipc.workspaceGitCreateBranch, async (payload: { cwd: string; branch: string }): Promise<GitStatus> => {
     const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
     const branch = typeof payload.branch === "string" ? payload.branch.trim() : "";
     if (!cwd || !branch || branch.startsWith("-") || branch.includes("\0") || /\s/.test(branch)) throw new Error(uiText("分支名称无效", "Invalid branch name"));
     await execFileAsync("git", ["-C", cwd, "switch", "-c", branch], { timeout: 10000, maxBuffer: 128 * 1024 });
     return readGitStatus(cwd);
   });
-  ipcMain.handle(Ipc.workspaceGitStage, async (_event, payload: { cwd: string; paths?: string[]; all?: boolean }): Promise<GitStatus> => {
+  handle(Ipc.workspaceGitStage, async (payload: { cwd: string; paths?: string[]; all?: boolean }): Promise<GitStatus> => {
     const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
     if (!cwd) throw new Error(uiText("项目路径无效", "Invalid project path"));
     const paths = Array.isArray(payload.paths) ? payload.paths.filter((item): item is string => typeof item === "string" && item.length > 0 && !item.includes("\0")) : [];
@@ -543,7 +591,7 @@ function registerIpc(): void {
     await execFileAsync("git", args, { timeout: 10000, maxBuffer: 128 * 1024 });
     return readGitStatus(cwd);
   });
-  ipcMain.handle(Ipc.workspaceGitCommit, async (_event, payload: { cwd: string; message: string }): Promise<GitStatus> => {
+  handle(Ipc.workspaceGitCommit, async (payload: { cwd: string; message: string }): Promise<GitStatus> => {
     const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
     const message = typeof payload.message === "string" ? payload.message.trim() : "";
     if (!cwd || !message) throw new Error(uiText("提交信息不能为空", "Commit message cannot be empty"));
@@ -551,7 +599,7 @@ function registerIpc(): void {
     await execFileAsync("git", ["-C", cwd, "commit", "-m", message], { timeout: 30000, maxBuffer: 256 * 1024 });
     return readGitStatus(cwd);
   });
-  ipcMain.handle(Ipc.workspaceGitDiff, async (_event, payload: { cwd: string; path?: string; source?: GitDiffSource }): Promise<string> => {
+  handle(Ipc.workspaceGitDiff, async (payload: { cwd: string; path?: string; source?: GitDiffSource }): Promise<string> => {
     const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
     if (!cwd) return "";
     const path = typeof payload.path === "string" ? payload.path.trim() : "";
@@ -569,7 +617,7 @@ function registerIpc(): void {
       return detail;
     }
   });
-  ipcMain.handle(Ipc.workspaceGitUnstage, async (_event, payload: { cwd: string; paths: string[] }): Promise<GitStatus> => {
+  handle(Ipc.workspaceGitUnstage, async (payload: { cwd: string; paths: string[] }): Promise<GitStatus> => {
     const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
     if (!cwd) throw new Error(uiText("项目路径无效", "Invalid project path"));
     const paths = Array.isArray(payload.paths) ? payload.paths.filter((item): item is string => typeof item === "string" && item.length > 0 && !item.includes("\0")) : [];
@@ -577,7 +625,7 @@ function registerIpc(): void {
     await execFileAsync("git", ["-C", cwd, "restore", "--staged", "--", ...paths], { timeout: 10000, maxBuffer: 128 * 1024 });
     return readGitStatus(cwd);
   });
-  ipcMain.handle(Ipc.workspaceGitDiscard, async (_event, payload: { cwd: string; paths: string[] }): Promise<GitStatus> => {
+  handle(Ipc.workspaceGitDiscard, async (payload: { cwd: string; paths: string[] }): Promise<GitStatus> => {
     const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
     if (!cwd) throw new Error(uiText("项目路径无效", "Invalid project path"));
     const paths = Array.isArray(payload.paths) ? payload.paths.filter((item): item is string => typeof item === "string" && item.length > 0 && !item.includes("\0")) : [];
@@ -587,43 +635,43 @@ function registerIpc(): void {
     });
     return readGitStatus(cwd);
   });
-  ipcMain.handle(Ipc.workspaceTerminalStart, (_event, payload: { cwd?: string; cols?: number; rows?: number }) => {
+  handle(Ipc.workspaceTerminalStart, (payload: { cwd?: string; cols?: number; rows?: number }) => {
     const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
     // A terminal is not tied to a project: with no workspace bound it opens in home.
     return terminals.start(cwd || homedir(), { cols: payload.cols, rows: payload.rows });
   });
-  ipcMain.handle(Ipc.workspaceTerminalWrite, (_event, payload: { id: string; data: string }) => {
+  handle(Ipc.workspaceTerminalWrite, (payload: { id: string; data: string }) => {
     if (!payload.id || typeof payload.data !== "string") return;
     terminals.write(payload.id, payload.data);
   });
-  ipcMain.handle(Ipc.workspaceTerminalResize, (_event, payload: { id: string; cols: number; rows: number }) => {
+  handle(Ipc.workspaceTerminalResize, (payload: { id: string; cols: number; rows: number }) => {
     if (!payload.id) return;
     terminals.resize(payload.id, payload.cols, payload.rows);
   });
-  ipcMain.handle(Ipc.workspaceTerminalKill, (_event, payload: { id: string }) => {
+  handle(Ipc.workspaceTerminalKill, (payload: { id: string }) => {
     if (payload.id) terminals.kill(payload.id);
   });
-  ipcMain.handle(
+  handle(
     Ipc.enginePromptConversation,
-    async (_event, payload: { id: string; message: string; images?: Array<{ type: "image"; data: string; mimeType: string }> }) => {
+    async (payload: { id: string; message: string; images?: Array<{ type: "image"; data: string; mimeType: string }> }) => {
       await engine.promptConversation(payload.id, payload.message, payload.images);
     },
   );
-  ipcMain.handle(Ipc.engineGetConversationMessages, async (_event, payload: { id: string }) => {
+  handle(Ipc.engineGetConversationMessages, async (payload: { id: string }) => {
     return engine.getConversationMessages(payload.id);
   });
-  ipcMain.handle(Ipc.conversationsCreateSide, async (_event, payload: { project?: string; parentId?: string; title?: string }) => {
+  handle(Ipc.conversationsCreateSide, async (payload: { project?: string; parentId?: string; title?: string }) => {
     return engine.createSideConversation(payload?.project, payload?.parentId, payload?.title);
   });
   for (const [channel, command] of [[Ipc.workspaceGitPull, "pull"], [Ipc.workspaceGitPush, "push"]] as const) {
-    ipcMain.handle(channel, async (_event, payload: { cwd: string }): Promise<GitStatus> => {
+    handle(channel, async (payload: { cwd: string }): Promise<GitStatus> => {
       const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
       if (!cwd) throw new Error(uiText("项目路径无效", "Invalid project path"));
       await execFileAsync("git", ["-C", cwd, command, ...(command === "pull" ? ["--ff-only"] : [])], { timeout: 60000, maxBuffer: 512 * 1024 });
       return readGitStatus(cwd);
     });
   }
-  ipcMain.handle(Ipc.appGetInfo, () => {
+  handle(Ipc.appGetInfo, () => {
     const paths = getFastVibePaths();
     return {
       version: app.getVersion(),
@@ -633,11 +681,11 @@ function registerIpc(): void {
       modelsDev: modelsDevInfo(loadModelsDev().stats),
     };
   });
-  ipcMain.on(Ipc.appLog, (_event, payload: unknown) => {
+  handle(Ipc.appLog, (payload: unknown) => {
     writeRendererLog(payload);
   });
-  ipcMain.handle(Ipc.appExportLogs, async (event) => {
-    return exportLogs(BrowserWindow.fromWebContents(event.sender));
+  handle(Ipc.appExportLogs, async (_payload: void, ctx) => {
+    return exportLogs(ctx.window);
   });
   /**
    * Pull the current models.dev catalog (Settings → 关于) and apply it to the running
@@ -645,41 +693,38 @@ function registerIpc(): void {
    * which is durable and read on the next start, so it is reported as a success rather
    * than as a failure the user would have to undo.
    */
-  ipcMain.handle(Ipc.modelsDevUpdate, async () => {
+  handle(Ipc.modelsDevUpdate, async () => {
     const stats = await updateModelsDevSnapshot();
     await engine.reloadModelMetadata().catch(() => undefined);
     return modelsDevInfo(stats);
   });
-  ipcMain.handle(Ipc.statsUsage, (_event, payload?: { range?: UsageRange }) => {
+  handle(Ipc.statsUsage, (payload?: { range?: UsageRange }) => {
     return collectUsageStats(getFastVibePaths(), payload?.range ?? "30d");
   });
-  ipcMain.handle(Ipc.windowNew, () => {
+  handle(Ipc.windowNew, () => {
     createWindow();
   });
 
   // Window controls for the hand-drawn title bar (Windows / Linux only). They act
   // on the window that asked, so a second window is not steered from the first.
-  const senderWindow = (event: { sender: WebContents }): BrowserWindow | null =>
-    BrowserWindow.fromWebContents(event.sender);
-  ipcMain.handle(Ipc.windowMinimize, (event) => {
-    senderWindow(event)?.minimize();
+  // A remote caller has no window to act on, so these are no-ops there rather than
+  // reaching for "the first window" and moving a window nobody asked about.
+  handle(Ipc.windowMinimize, (_payload: void, ctx) => {
+    ctx.window?.minimize();
   });
-  ipcMain.handle(Ipc.windowToggleMaximize, (event) => {
-    const window = senderWindow(event);
+  handle(Ipc.windowToggleMaximize, (_payload: void, ctx) => {
+    const window = ctx.window;
     if (!window) return;
     if (window.isMaximized()) window.unmaximize();
     else window.maximize();
   });
-  ipcMain.handle(Ipc.windowClose, (event) => {
-    senderWindow(event)?.close();
+  handle(Ipc.windowClose, (_payload: void, ctx) => {
+    ctx.window?.close();
   });
-  ipcMain.handle(Ipc.windowIsMaximized, (event) => senderWindow(event)?.isMaximized() ?? false);
+  handle(Ipc.windowIsMaximized, (_payload: void, ctx) => ctx.window?.isMaximized() ?? false);
 
-  ipcMain.on(Ipc.settingsGetSync, (event) => {
-    event.returnValue = readAppSettings(getFastVibePaths());
-  });
-  ipcMain.handle(Ipc.settingsGet, () => readAppSettings(getFastVibePaths()));
-  ipcMain.handle(Ipc.settingsSet, (_event, settings: Record<string, unknown>) => {
+  handle(Ipc.settingsGet, () => readAppSettings(getFastVibePaths()));
+  handle(Ipc.settingsSet, (settings: Record<string, unknown>, ctx) => {
     const payload = settings && typeof settings === "object" ? settings : {};
     const paths = getFastVibePaths();
     writeAppSettings(paths, payload);
@@ -689,8 +734,10 @@ function registerIpc(): void {
     applyKeepAwake(payload);
     paintWindows(windows);
     scheduleUpdateCheck(payload.autoCheckUpdates !== false);
+    // The other windows hold their own copy, loaded once at startup.
+    broadcastSettings(ctx.origin, payload);
   });
-  ipcMain.handle(Ipc.settingsClear, () => {
+  handle(Ipc.settingsClear, (_payload: void, ctx) => {
     const paths = getFastVibePaths();
     clearAppSettings(paths);
     applyNativeTheme({});
@@ -698,9 +745,12 @@ function registerIpc(): void {
     applyLanguages({});
     applyKeepAwake({});
     paintWindows(windows);
+    // 恢复默认 is a write like any other: the other windows hold their own copy and
+    // would otherwise keep — and later re-save — the settings that were just reset.
+    broadcastSettings(ctx.origin, {});
   });
 
-  ipcMain.handle(Ipc.workspacePick, async () => {
+  handle(Ipc.workspacePick, async () => {
     const result = await dialog.showOpenDialog({
       title: uiText("选择项目", "Choose a project"),
       properties: ["openDirectory", "createDirectory"],
@@ -710,6 +760,53 @@ function registerIpc(): void {
     engine.addProject(cwd);
     await engine.start(cwd);
     return { cwd, status: engine.status };
+  });
+}
+
+/**
+ * Channels the renderer *sends* rather than *invokes*: no reply, so they are wired
+ * with `ipcMain.on`. They are in the same table as everything else because the remote
+ * transport has no such distinction — it is an Electron detail, not a method's nature.
+ */
+const SEND_ONLY = new Set<string>([Ipc.browserResponse, Ipc.appLog]);
+
+/** The window that asked, in the shape a handler reads (`ipc/registry.ts`). */
+function contextFor(event: { sender: WebContents }): CallerContext {
+  return {
+    kind: "window",
+    window: BrowserWindow.fromWebContents(event.sender),
+    origin: windowOrigin(event.sender.id),
+  };
+}
+
+/**
+ * Attach every registered method to Electron IPC.
+ *
+ * This is one half of the wiring: the table above was built without knowing how it
+ * would be reached, and the remote server's WebSocket becomes the other half,
+ * dispatching the same functions with a `kind: "remote"` context. Anything registered
+ * once is therefore reachable both ways by construction — a method cannot exist on the
+ * desktop and be missing on the phone.
+ */
+function wireElectronTransport(): void {
+  for (const channel of handlerChannels()) {
+    if (SEND_ONLY.has(channel)) {
+      ipcMain.on(channel, (event, payload: unknown) => {
+        void dispatch(channel, payload, contextFor(event)).catch((error: unknown) => {
+          log.warn(`ipc send failed channel=${channel}: ${String(error)}`);
+        });
+      });
+      continue;
+    }
+    ipcMain.handle(channel, (event, payload: unknown) => dispatch(channel, payload, contextFor(event)));
+  }
+
+  // `settings:get-sync` is the one call that cannot go through the table: it is read in
+  // the preload world before the page runs so the first paint already has the theme,
+  // and `sendSync` has no counterpart on any other transport. A remote client answers
+  // the same need from its connection handshake instead.
+  ipcMain.on(Ipc.settingsGetSync, (event) => {
+    event.returnValue = readAppSettings(getFastVibePaths());
   });
 }
 
@@ -726,13 +823,19 @@ app.whenReady().then(async () => {
   applyLanguages(startupSettings);
   applyKeepAwake(startupSettings);
   registerFileIconProtocol();
+  // Every module that owns methods registers them first; the transport is attached
+  // once, afterwards. Wiring inside `registerIpc` meant the updater's four methods —
+  // registered on the next line — landed in the table after the loop had already run,
+  // so they were reachable by nothing.
   registerIpc();
   registerUpdater(() => windows);
+  registerRemoteIpc();
+  wireElectronTransport();
   scheduleUpdateCheck(startupSettings.autoCheckUpdates !== false);
 
   engine.onStatus(() => broadcastStatus());
   engine.onConversationReady((payload) => {
-    for (const window of windows) window.webContents.send(Ipc.conversationReady, payload);
+    broadcast(Ipc.conversationReady, payload);
   });
   engine.onOAuthEvent((payload) => {
     // The flow hands us a URL to visit; opening it here is what the CLI does with a
@@ -745,15 +848,43 @@ app.whenReady().then(async () => {
         .openExternal(payload.event.verificationUri)
         .catch((error: unknown) => log.warn(`oauth openExternal failed: ${String(error)}`));
     }
-    for (const window of windows) window.webContents.send(Ipc.providersOAuthEvent, payload);
+    broadcast(Ipc.providersOAuthEvent, payload);
   });
   terminals.onData((event) => {
-    for (const window of windows) window.webContents.send(Ipc.workspaceTerminalData, event);
+    broadcast(Ipc.workspaceTerminalData, event);
   });
 
   engine.onEvent((event) => {
-    if (event.type === "conversation_activity" && !mainWindow?.isFocused() && Notification.isSupported()) {
-      new Notification({ title: String(event.title ?? uiText("会话", "Chat")), body: uiText("任务已完成，可以回来查看结果。", "The task is done. Come back to see the result.") }).show();
+    // Only two event types can raise a 系统通知. Everything else — every streamed
+    // token among them — must fall straight through to the fan-out below: reading
+    // the preference (and resolving the paths) ahead of this gate put a settings
+    // parse and six `mkdirSync` calls on the main process's event loop for every
+    // delta of every reply.
+    const notifiable =
+      (event.type === "conversation_activity" && event.status === "completed") ||
+      (event.type === "extension_ui_request" && isBlockingPrompt(event));
+    if (notifiable && Notification.isSupported()) {
+      const unfocused = ![...windows].some((window) => !window.isDestroyed() && window.isFocused());
+      // 系统通知 is a preference with three values (设置 → 通用), read per event so a
+      // change lands without a restart. `done` and `approval` are separate choices
+      // because the two notifications answer different questions: a finished run is
+      // something to come back to, a parked approval is something that *cannot* proceed
+      // without the user.
+      const notifications = unfocused ? readNotificationPreference(getFastVibePaths()) : undefined;
+      if (event.type === "conversation_activity" && notifications === "done") {
+        new Notification({
+          title: String(event.title ?? uiText("会话", "Chat")),
+          body: uiText("任务已完成，可以回来查看结果。", "The task is done. Come back to see the result."),
+        }).show();
+      } else if (event.type === "extension_ui_request" && notifications === "approval") {
+        // A blocking prompt parks the tool until it is answered, and its panel is only
+        // drawn for the conversation on screen — so without this notice a background
+        // chat could sit waiting with nothing anywhere to say so.
+        new Notification({
+          title: uiText("有一个会话在等你", "A chat is waiting for you"),
+          body: uiText("切换到这个会话继续处理。", "Switch to that conversation to continue."),
+        }).show();
+      }
     }
     if (event.type === "extension_ui_request") {
       void engine.handleExtensionUi(event);
@@ -763,11 +894,13 @@ app.whenReady().then(async () => {
     if (event.type === "conversation_running") {
       setConversationRunning(String(event.conversationId ?? ""), event.running === true);
     }
-    for (const window of windows) window.webContents.send(Ipc.event, event);
+    broadcast(Ipc.event, event);
   });
 
   createWindow();
   void engine.start();
+  // Brought back only if it was running before, and never without a password.
+  void restoreRemoteServer();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -785,6 +918,7 @@ app.on("before-quit", (event) => {
   event.preventDefault();
   stopping = true;
   log.info("app quitting");
+  void stopRemoteServer().catch(() => undefined);
   void engine.stop().finally(() => {
     terminals.dispose();
     clearRunningConversations();
@@ -802,6 +936,49 @@ function parseBranchHeader(header: string): string | undefined {
   const text = header.split("...")[0].trim();
   const name = (text.match(/^No commits yet on (.+)$/)?.[1] ?? text).replace(/ \(no branch\)$/, "").trim();
   return name || undefined;
+}
+
+/**
+ * Which desktop notifications the user asked for, from `settings.json`.
+ *
+ * Read per event rather than cached: the switch in 设置 → 通用 writes the file, and a
+ * notification is rare enough that one small read costs nothing. An absent or
+ * malformed value is `done`, which is what every install had before the preference
+ * existed.
+ */
+function readNotificationPreference(paths: FastVibePaths): NotificationPreference {
+  const value = readAppSettings(paths).notifications;
+  return isNotificationPreference(value) ? value : "done";
+}
+
+/**
+ * Whether an extension UI request is one that parks the run until a human answers.
+ *
+ * `notify` / `setStatus` / `setWidget` are one-way and must not raise a notification;
+ * only the dialog methods block. `editor` is a dialog too, and it is answered through
+ * the modal — the user still has to act, so it counts.
+ */
+function isBlockingPrompt(event: Record<string, unknown>): boolean {
+  const method = event.method;
+  return (
+    method === "confirm" ||
+    method === "select" ||
+    method === "input" ||
+    method === "editor" ||
+    method === "questions"
+  );
+}
+
+/**
+ * Tell every other window what one window just wrote.
+ *
+ * Preferences live in one `settings.json`, but each window keeps its own in-memory
+ * copy loaded at startup — so two open windows silently overwrote each other and
+ * showed different themes/font sizes until a reload. The write already happened;
+ * this only makes the other windows read it back.
+ */
+function broadcastSettings(origin: string | undefined, settings: Record<string, unknown>): void {
+  broadcast(Ipc.settingsChanged, settings, { except: origin });
 }
 
 async function readGitStatus(cwd: string): Promise<GitStatus> {

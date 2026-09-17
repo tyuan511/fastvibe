@@ -3,6 +3,8 @@
     "contextWindow": "Context window",
     "used": "Used {{count}}",
     "remaining": "{{remaining}} / {{window}} left",
+    "contextClose": "The context is close to full; the engine compacts on the next turn.",
+    "contextImminent": "The context is about to overflow. The engine compacts now and replaces earlier content with a summary.",
     "turnStats": "Turn stats",
     "speed": "Reply speed",
     "modelTime": "Model time",
@@ -101,7 +103,8 @@
     "preview": "Preview",
     "running": "Running",
     "completed": "Done",
-    "error": "Failed"
+    "error": "Failed",
+    "aborted": "Stopped"
   },
   "run": {
     "duration": "{{duration}}"
@@ -136,9 +139,6 @@
     "complete": "Done",
     "title": "Goal",
     "round": "Round {{round}}",
-    "roundMax": "Round {{round}} / {{max}}",
-    "collapse": "Collapse",
-    "expand": "View",
     "resume": "Resume",
     "pause": "Pause",
     "clear": "Clear"
@@ -152,6 +152,13 @@
   "turns": {
     "nav": "Turn navigation",
     "turn": "Turn {{n}} · {{prompt}}"
+  },
+  "find": {
+    "placeholder": "Find in conversation",
+    "position": "{{index}}/{{total}}",
+    "previous": "Previous match",
+    "next": "Next match",
+    "close": "Close find"
   },
   "message": {
     "elapsed": "{{duration}}",

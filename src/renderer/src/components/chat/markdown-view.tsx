@@ -1,13 +1,44 @@
 import { memo, useDeferredValue, useState, type JSX, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import Markdown from "react-markdown";
+import type { PluggableList } from "unified";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+import { remarkStrictInlineMath } from "@/lib/remark-strict-inline-math";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Copy01Icon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { useHighlightedCode } from "@/lib/highlight";
 import { useSessionStore } from "@/stores/session";
 import { DiffView } from "./diff-view";
+
+/**
+ * Markdown, with math.
+ *
+ * `remark-math` + `rehype-katex` are wired in with the options the app needs, and
+ * both are **module-level constants**: `react-markdown` builds its processor from
+ * these props, and inline arrays would be a new identity on every render of every
+ * streamed token — the one thing `memo` on this component exists to prevent.
+ *
+ * `remarkStrictInlineMath` follows `remark-math` because it inspects what that
+ * plugin tokenized: `$HOME`, `$PATH` and `$5 到 $10` are prose here, not formulas.
+ */
+const REMARK_PLUGINS: PluggableList = [remarkGfm, remarkMath, remarkStrictInlineMath];
+const REHYPE_PLUGINS: PluggableList = [
+  [
+    rehypeKatex,
+    {
+      // A half-streamed formula is the normal case, not an error: KaTeX must never
+      // throw into React, just draw the offending fragment in the error colour.
+      throwOnError: false,
+      // …and it must not warn about the constructs it merely tolerates (\tag,
+      // unicode text). A broken formula is shown, not logged.
+      strict: false,
+      errorColor: "var(--destructive)",
+    },
+  ],
+];
 
 /** Fence languages whose body is a diff, drawn by `DiffView` rather than shikiji. */
 const DIFF_LANGUAGES = new Set(["diff", "patch"]);
@@ -62,7 +93,8 @@ export const MarkdownView = memo(function MarkdownView({ text }: { text: string 
   const deferred = useDeferredValue(text);
   return (
     <Markdown
-      remarkPlugins={[remarkGfm]}
+      remarkPlugins={REMARK_PLUGINS}
+      rehypePlugins={REHYPE_PLUGINS}
       components={{
         a: ({ href, children }) => (
           <a

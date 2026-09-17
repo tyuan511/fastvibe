@@ -29,6 +29,12 @@
     "minutes": "{{n}}分钟",
     "seconds": "{{n}}秒"
   },
+  "crash": {
+    "title": "界面遇到了一个错误",
+    "description": "对话和运行状态都保存在主进程里，重新加载界面不会丢失任何内容。",
+    "reload": "重新加载界面",
+    "exportLogs": "导出日志"
+  },
   "errors": {
     "generic": "操作失败，请重试",
     "previewFailed": "无法预览",
@@ -40,7 +46,8 @@
   },
   "notice": {
     "todoCleared": "待办已清空",
-    "todoReminder": "待办提醒"
+    "todoReminder": "待办提醒",
+    "resultTruncated": "… 已截断 {{count}} 个字符"
   },
   "tool": {
     "read": {
@@ -151,6 +158,8 @@
     "nextChat": "下一个对话",
     "toggleSidebar": "切换侧边栏",
     "toggleSidePane": "切换侧边面板",
+    "findInConversation": "在会话中查找",
+    "findInConversationDesc": "在当前对话的消息文本中查找",
     "needModifier": "快捷键需要包含修饰键",
     "reserved": "系统保留快捷键"
   },

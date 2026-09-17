@@ -2,6 +2,7 @@ import { useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { FileIcon } from "@/components/file-icon";
+import { useSidePaneStore } from "@/stores/side-pane";
 import type { ToolCallBlock } from "@shared/types";
 
 /** A file touched by one agent turn, with the lines it added and removed. */
@@ -59,17 +60,23 @@ export function collectChangedFiles(tools: ToolCallBlock[]): ChangedFile[] {
   return [...files.values()];
 }
 
-function FileChip({ file }: { file: ChangedFile }): JSX.Element {
+function FileChip({ file, onOpen }: { file: ChangedFile; onOpen: (file: ChangedFile) => void }): JSX.Element {
   const name = fileName(file.path);
   return (
-    <span className="inline-flex h-7 max-w-56 items-center gap-1.5 rounded-full border border-border bg-muted/40 pr-2 pl-1.5 text-xs">
+    <button
+      type="button"
+      // Purely an affordance for the *first* click: the chip adds nothing the tool card
+      // does not already show, but 「which of these 12 files was it」 is the question the
+      // chip exists to answer, and opening its diff is the answer.
+      title={file.path}
+      onClick={() => onOpen(file)}
+      className="inline-flex h-7 max-w-56 items-center gap-1.5 rounded-full border border-border bg-muted/40 pr-2 pl-1.5 text-xs transition-colors hover:border-ring hover:bg-muted"
+    >
       <FileIcon name={name} />
-      <span title={file.path} className="min-w-0 truncate text-foreground">
-        {name}
-      </span>
+      <span className="min-w-0 truncate text-foreground">{name}</span>
       {file.added > 0 ? <span className="shrink-0 tabular-nums text-success">+{file.added}</span> : null}
       {file.removed > 0 ? <span className="shrink-0 tabular-nums text-destructive">-{file.removed}</span> : null}
-    </span>
+    </button>
   );
 }
 
@@ -77,13 +84,20 @@ function FileChip({ file }: { file: ChangedFile }): JSX.Element {
 export function TurnFileChips({ files, className }: { files: ChangedFile[]; className?: string }): JSX.Element | null {
   const { t } = useTranslation("chat");
   const [open, setOpen] = useState(false);
+  const openGitDiff = useSidePaneStore((state) => state.openGitDiff);
   if (files.length === 0) return null;
   const collapsible = files.length > 6;
   return (
     <div className={cn("flex items-center gap-1.5", className)}>
       <div className={cn("flex min-w-0 flex-wrap items-center gap-1.5", collapsible && !open && "max-h-7 overflow-hidden")}>
         {files.map((file) => (
-          <FileChip key={file.path} file={file} />
+          <FileChip
+            key={file.path}
+            file={file}
+            // 本轮改动 lives in the working tree, which is exactly what 审查's 本轮 source
+            // shows: land on that file in that source rather than the pane's last view.
+            onOpen={(changed) => openGitDiff(changed.path, "last-turn")}
+          />
         ))}
       </div>
       {collapsible ? (

@@ -2,7 +2,7 @@ import { useEffect, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Analytics01Icon, Archive04Icon, ArrowLeft01Icon, BoxesIcon, ImportIcon, InformationCircleIcon, KeyboardIcon, Plug01Icon, PuzzleIcon, Settings02Icon, SparklesIcon } from "@hugeicons/core-free-icons";
+import { ArrowLeft01Icon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -19,6 +19,7 @@ import { useSettingsStore } from "@/stores/settings";
 import { i18n } from "@/lib/i18n";
 import { UI_LANGUAGES, UI_LANGUAGE_LABELS, type UiLanguage } from "@/lib/language";
 import { PERMISSION_MODES, permissionDescription, permissionLabel, permissionModeItems } from "@/lib/permission-modes";
+import { clearRememberedPermissions } from "@/lib/permission-rules";
 import type { ThemeMode } from "@/lib/themes";
 import { UI_FONT_SIZE_MAX, UI_FONT_SIZE_MIN, UI_FONT_SIZE_STEP } from "@/lib/themes";
 import { readSidebarWidth } from "@/lib/sidebar-width";
@@ -30,6 +31,7 @@ import { ImportSettings } from "./import-settings";
 import { DefaultModelSelect } from "./default-model-select";
 import { ExtensionsSettings } from "./extensions-settings";
 import { McpSettings } from "./mcp-settings";
+import { RemoteSettings } from "./remote-settings";
 import { SkillsSettings } from "./skills-settings";
 import { THINKING_MENU_ORDER, thinkingMenuItems, thinkingMenuLabel } from "@/lib/thinking-levels";
 import { ThemeSelect } from "./theme-select";
@@ -37,6 +39,13 @@ import { UsageSettings } from "./usage-settings";
 import { ShortcutsSettings } from "./shortcuts-settings";
 import { AboutSettings } from "./about-settings";
 import { SettingsGroup as Group, SettingsRow as Row } from "./settings-group";
+import {
+  SETTINGS_SECTIONS,
+  settingsGroupLabel,
+  settingsSectionLabel,
+  type SectionId,
+} from "./settings-sections";
+
 
 const UI_FONT_SIZE_ITEMS: Record<string, string> = {};
 function uiFontSizeValues(): number[] {
@@ -45,59 +54,6 @@ function uiFontSizeValues(): number[] {
   return values;
 }
 for (const size of uiFontSizeValues()) UI_FONT_SIZE_ITEMS[String(size)] = `${size}px`;
-
-export type SectionId = "general" | "shortcuts" | "archived" | "usage" | "providers" | "mcp" | "skills" | "extensions" | "import" | "about";
-
-export type SettingsGroupId = "personal" | "integrations" | "about";
-
-/**
- * Also drives the router's /settings/:section validation.
- *
- * Only ids live here: names are looked up per render (`settingsSectionLabel`), so the
- * pane's nav, its header and the command palette cannot freeze the language the app
- * happened to start in.
- */
-export const SETTINGS_SECTIONS: Array<{
-  group: SettingsGroupId;
-  items: Array<{ id: SectionId; icon: JSX.Element }>;
-}> = [
-  {
-    group: "personal",
-    items: [
-      { id: "general", icon: <HugeiconsIcon strokeWidth={2} icon={Settings02Icon} /> },
-      { id: "shortcuts", icon: <HugeiconsIcon strokeWidth={2} icon={KeyboardIcon} /> },
-      { id: "archived", icon: <HugeiconsIcon strokeWidth={2} icon={Archive04Icon} /> },
-      { id: "usage", icon: <HugeiconsIcon strokeWidth={2} icon={Analytics01Icon} /> },
-    ],
-  },
-  {
-    group: "integrations",
-    items: [
-      { id: "providers", icon: <HugeiconsIcon strokeWidth={2} icon={BoxesIcon} /> },
-      { id: "mcp", icon: <HugeiconsIcon strokeWidth={2} icon={Plug01Icon} /> },
-      { id: "skills", icon: <HugeiconsIcon strokeWidth={2} icon={SparklesIcon} /> },
-      { id: "extensions", icon: <HugeiconsIcon strokeWidth={2} icon={PuzzleIcon} /> },
-      { id: "import", icon: <HugeiconsIcon strokeWidth={2} icon={ImportIcon} /> },
-    ],
-  },
-  {
-    group: "about",
-    items: [
-      { id: "about", icon: <HugeiconsIcon strokeWidth={2} icon={InformationCircleIcon} /> },
-    ],
-  },
-];
-
-/** Nav/header name of one settings pane. */
-export function settingsSectionLabel(section: SectionId): string {
-  return i18n.t(`settings:sections.${section}`) as string;
-}
-
-/** Nav heading above a group of panes. */
-export function settingsGroupLabel(group: SettingsGroupId): string {
-  return i18n.t(`settings:groups.${group}`) as string;
-}
-
 
 /**
  * Settings is a route (`#/settings/<section>`), not a modal: the shell stays
@@ -127,6 +83,8 @@ export function SettingsDialog({
 }): JSX.Element | null {
   const settings = useSettingsStore((state) => state.settings);
   const update = useSettingsStore((state) => state.update);
+  // 始终允许 rules, so the revoke button can say how many there are and disable itself.
+  const remembered = settings.permissionAlways ?? [];
   const { t } = useTranslation("settings");
   const navigate = useNavigate();
   const [section, setSection] = useState<SectionId>(controlledSection ?? "general");
@@ -400,6 +358,44 @@ export function SettingsDialog({
                     />
                   }
                 />
+                <Row
+                  title={t("common.notifications")}
+                  description={t("common.notificationsDesc")}
+                  control={
+                    <Select
+                      items={{
+                        done: t("common.notifyDone"),
+                        approval: t("common.notifyApproval"),
+                        off: t("common.notifyOff"),
+                      }}
+                      value={settings.notifications}
+                      onValueChange={(value) => update({ notifications: value as typeof settings.notifications })}
+                    >
+                      <SelectTrigger size="sm" className="w-44">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="done">{t("common.notifyDone")}</SelectItem>
+                        <SelectItem value="approval">{t("common.notifyApproval")}</SelectItem>
+                        <SelectItem value="off">{t("common.notifyOff")}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  }
+                />
+                <Row
+                  title={t("common.permissionRules")}
+                  description={t("common.permissionRulesDesc", { count: remembered.length })}
+                  control={
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      disabled={remembered.length === 0}
+                      onClick={() => clearRememberedPermissions()}
+                    >
+                      {t("common.permissionRulesClear")}
+                    </Button>
+                  }
+                />
               </Group>
               <Group title={t("chat.title")}>
                 <Row
@@ -486,6 +482,7 @@ export function SettingsDialog({
           {section === "providers" ? <ProvidersSettings onChanged={() => onProvidersChanged?.()} /> : null}
           {section === "archived" ? <ArchivedSettings onDeleteConversations={onDeleteConversations} /> : null}
           {section === "usage" ? <UsageSettings /> : null}
+          {section === "remote" ? <RemoteSettings /> : null}
 
           {section === "mcp" ? <McpSettings /> : null}
           {section === "skills" ? <SkillsSettings /> : null}

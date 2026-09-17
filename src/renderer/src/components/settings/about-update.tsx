@@ -17,7 +17,11 @@ function statusDescription(state: AppUpdateState | null, t: (key: string, option
   if (state.status === "not-available") return t("update.latest");
   if (state.status === "available") return t("update.available", { version: state.availableVersion });
   if (state.status === "downloading") {
-    const percent = Math.round(state.progress?.percent ?? 0);
+    // Main flips to `downloading` the instant the click lands, before the provider has
+    // reported a single byte — so a missing progress is the ordinary start of a download,
+    // not a zero-percent one, and must not read as `0%`.
+    if (!state.progress) return t("update.downloadingStart", { version: state.availableVersion ?? t("update.newVersion") });
+    const percent = Math.round(state.progress.percent);
     return t("update.downloading", { version: state.availableVersion ?? t("update.newVersion"), percent });
   }
   if (state.status === "downloaded") return t("update.ready", { version: state.availableVersion });

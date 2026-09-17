@@ -6,6 +6,7 @@ export const Ipc = {
   engineSteer: "engine:steer",
   engineFollowUp: "engine:follow-up",
   engineAbort: "engine:abort",
+  engineAbortSubagent: "engine:abort-subagent",
   engineContinue: "engine:continue",
   engineClearQueue: "engine:clear-queue",
   engineReplaceSteering: "engine:replace-steering",
@@ -24,6 +25,9 @@ export const Ipc = {
   engineRemoveSkill: "engine:remove-skill",
   engineGetSubagents: "engine:get-subagents",
   engineGetSubagentMessages: "engine:get-subagent-messages",
+  /** A retry's file checkpoint: what the last turn wrote, and undoing it. */
+  engineGetCheckpoint: "engine:get-checkpoint",
+  engineRestoreCheckpoint: "engine:restore-checkpoint",
   enginePermissionRespond: "engine:permission-respond",
   engineNewSession: "engine:new-session",
   engineGetState: "engine:get-state",
@@ -35,6 +39,8 @@ export const Ipc = {
   engineSetAutoCompact: "engine:set-auto-compact",
   engineBranch: "engine:branch",
   engineGetMessages: "engine:get-messages",
+  /** Transcript + the turn in flight, read at one instant (`ConversationSnapshot`). */
+  engineGetSnapshot: "engine:get-snapshot",
   engineGetStats: "engine:get-stats",
   engineSetSteering: "engine:set-steering",
   engineSetFollowUp: "engine:set-follow-up",
@@ -102,6 +108,8 @@ export const Ipc = {
   settingsGet: "settings:get",
   settingsGetSync: "settings:get-sync",
   settingsSet: "settings:set",
+  /** Pushed to the *other* windows after one writes, so their copy cannot go stale. */
+  settingsChanged: "settings:changed",
   settingsClear: "settings:clear",
   updateGetState: "update:get-state",
   updateCheck: "update:check",
@@ -126,6 +134,16 @@ export const Ipc = {
   providersOAuthCancel: "providers:oauth-cancel",
   providersLogout: "providers:logout",
   providersOAuthEvent: "providers:oauth-event",
+  /** 远程访问（网页/手机）: server lifecycle, credentials and devices. */
+  remoteGetState: "remote:get-state",
+  remoteSetPassword: "remote:set-password",
+  remoteClearPassword: "remote:clear-password",
+  remoteStart: "remote:start",
+  remoteStop: "remote:stop",
+  remoteListDevices: "remote:list-devices",
+  remoteRevokeDevice: "remote:revoke-device",
+  /** Pushed when the server starts, stops or gains a client. */
+  remoteState: "remote:state",
 } as const;
 
 export type AppModelsDevInfo = {
@@ -211,4 +229,25 @@ export type PromptRequest = {
 
 export type StartRequest = {
   cwd?: string;
+};
+
+/** The remote server's state, as the settings pane and the sidebar show it. */
+export type RemoteServerState = {
+  running: boolean;
+  host: string;
+  port: number | null;
+  /** A password has been set. Without one the server refuses to start at all. */
+  configured: boolean;
+  /** Clients connected right now. */
+  clients: number;
+  /** Failed logins since the last success; the throttle grows with this. */
+  failedLogins: number;
+};
+
+/** One client that has logged in, without anything secret. */
+export type RemoteDeviceInfo = {
+  id: string;
+  label: string;
+  createdAt: number;
+  lastSeenAt: number | null;
 };

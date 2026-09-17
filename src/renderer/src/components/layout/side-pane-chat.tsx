@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type JSX } from "react";
+import { useCallback, useEffect, useRef, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { MessageSquareIcon } from "@hugeicons/core-free-icons";
@@ -10,6 +10,7 @@ import { useSessionStore } from "@/stores/session";
 import { useSettingsStore } from "@/stores/settings";
 import { useSidePaneStore, type SidePaneTab } from "@/stores/side-pane";
 import { attachmentPromptSuffix, attachmentsToImages } from "@/lib/attachments";
+import { engine } from "@/lib/engine-client";
 import { translate } from "@/lib/i18n";
 import type { ChatAttachment, ChatMessage } from "@shared/types";
 import { parseCompactCommand } from "@shared/slash";
@@ -56,9 +57,13 @@ export function SidePaneChat({
   const conversationWorking = useSessionStore((state) =>
     tab.conversationId ? state.running[tab.conversationId] === true : streaming,
   );
-  const history = useMemo(
-    () => messages.filter((item) => item.role === "user").map((item) => item.text).filter(Boolean),
-    [messages],
+  // Derived on demand, not per render: a side chat streams into `tab.messages` at the
+  // same cadence as the main thread, and ↑/↓ recall is the only reader.
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+  const history = useCallback(
+    () => messagesRef.current.filter((item) => item.role === "user").map((item) => item.text).filter(Boolean),
+    [],
   );
 
   useEffect(() => {
@@ -173,13 +178,20 @@ export function SidePaneChat({
           onPickWorkspace={() => undefined}
           onSelectProject={() => undefined}
           onModelChange={(provider, modelId) => {
-            void window.fastvibe.engine.setModel(provider, modelId).then((next) => {
+            // Addressed to the side chat's own conversation: this pane shows a chat that
+            // is not the one on screen, so defaulting to the active id would switch the
+            // model of whichever chat the user is looking at instead of this one.
+            const id = tab.conversationId;
+            if (!id) return;
+            void engine.setModel(provider, modelId, id).then((next) => {
               useSessionStore.getState().setSession(next);
             });
           }}
           onManageModels={() => navigate("/settings/providers")}
           onThinkingChange={(level) => {
-            void window.fastvibe.engine.setThinking(level).then((next) => {
+            const id = tab.conversationId;
+            if (!id) return;
+            void engine.setThinking(level, id).then((next) => {
               useSessionStore.getState().setSession(next);
             });
           }}

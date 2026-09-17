@@ -1,4 +1,26 @@
 import type { ChatAttachment, ChatMessage, MessagePart, ThinkingTiming, ToolCallBlock, TuiRun } from "@shared/types";
+import { uiText } from "./ui-text";
+
+/**
+ * Ceiling on the tool output that crosses into the renderer.
+ *
+ * Nothing capped it before: a `read` of a large file, or a command that printed a
+ * build log, was structured-cloned over IPC in full and then held in the transcript
+ * store for the life of the conversation — while the card that shows it clips at
+ * 4000 characters. The headroom here is deliberate and generous, so a real diff or a
+ * long test run still arrives whole; it is only the pathological case that is cut.
+ * The engine's own copy is untouched: the model still sees the full result.
+ */
+const MAX_TOOL_RESULT_CHARS = 256_000;
+
+export function capToolResult(text: string): string {
+  if (text.length <= MAX_TOOL_RESULT_CHARS) return text;
+  const dropped = text.length - MAX_TOOL_RESULT_CHARS;
+  return `${text.slice(0, MAX_TOOL_RESULT_CHARS)}\n${uiText(
+    `… 已截断 ${dropped} 个字符`,
+    `… truncated ${dropped} characters`,
+  )}`;
+}
 
 /**
  * `idOf` resolves the stable session-tree entry id for a raw engine message. The
@@ -209,6 +231,11 @@ function extractContent(content: unknown): {
 }
 
 function toolText(value: unknown): string | undefined {
+  const text = rawToolText(value);
+  return text === undefined ? undefined : capToolResult(text);
+}
+
+function rawToolText(value: unknown): string | undefined {
   if (typeof value === "string") return value;
   if (Array.isArray(value)) {
     return value

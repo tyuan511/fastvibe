@@ -18,7 +18,8 @@ export type ShortcutId =
   | "prevChat"
   | "nextChat"
   | "toggleSidebar"
-  | "toggleSidePane";
+  | "toggleSidePane"
+  | "findInConversation";
 
 export type ShortcutDef = {
   id: ShortcutId;
@@ -42,6 +43,7 @@ export const SHORTCUT_CATALOG: ShortcutDef[] = [
   { id: "nextChat", group: "chat", default: "mod+]" },
   { id: "toggleSidebar", group: "view", default: "mod+b" },
   { id: "toggleSidePane", group: "view", default: "mod+j" },
+  { id: "findInConversation", group: "chat", default: "mod+f" },
 ];
 
 export function shortcutGroupLabel(group: ShortcutGroupId): string {

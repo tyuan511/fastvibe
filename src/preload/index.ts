@@ -5,6 +5,7 @@ import type {
   ConversationDeleteResult,
   ConversationOpenResult,
   ConversationSearchHit,
+  ConversationSnapshot,
   ConversationReadyEvent,
   DirEntry,
   FastVibeModel,
@@ -58,22 +59,33 @@ const api = {
     stop: (): Promise<EngineStatus> => ipcRenderer.invoke(Ipc.engineStop),
     prompt: (
       message: string,
-      options?: { streamingBehavior?: "steer" | "followUp"; images?: PromptImage[] },
+      options?: {
+        streamingBehavior?: "steer" | "followUp";
+        images?: PromptImage[];
+        /** Omitted by single-window callers, which mean "the chat on screen". */
+        conversationId?: string;
+      },
     ): Promise<void> => ipcRenderer.invoke(Ipc.enginePrompt, { message, ...options }),
-    steer: (message: string, images?: PromptImage[]): Promise<void> =>
-      ipcRenderer.invoke(Ipc.engineSteer, { message, images }),
-    followUp: (message: string, images?: PromptImage[]): Promise<void> =>
-      ipcRenderer.invoke(Ipc.engineFollowUp, { message, images }),
-    abort: (): Promise<void> => ipcRenderer.invoke(Ipc.engineAbort),
+    steer: (message: string, images?: PromptImage[], conversationId?: string): Promise<void> =>
+      ipcRenderer.invoke(Ipc.engineSteer, { message, images, conversationId }),
+    followUp: (message: string, images?: PromptImage[], conversationId?: string): Promise<void> =>
+      ipcRenderer.invoke(Ipc.engineFollowUp, { message, images, conversationId }),
+    /** Stop one chat's run. Called with no id, the engine falls back to its active chat. */
+    abort: (conversationId?: string): Promise<void> => ipcRenderer.invoke(Ipc.engineAbort, { conversationId }),
+    /** Stop one delegated run, leaving its parent chat's own run alone. */
+    abortSubagent: (subagentId: string): Promise<void> =>
+      ipcRenderer.invoke(Ipc.engineAbortSubagent, { subagentId }),
     /** Resume the interrupted turn from the transcript, with no new user message. */
-    continue: (): Promise<void> => ipcRenderer.invoke(Ipc.engineContinue),
-    clearQueue: (): Promise<{ steering: string[]; followUp: string[] }> =>
-      ipcRenderer.invoke(Ipc.engineClearQueue),
+    continue: (conversationId?: string): Promise<void> =>
+      ipcRenderer.invoke(Ipc.engineContinue, { conversationId }),
+    clearQueue: (conversationId?: string): Promise<{ steering: string[]; followUp: string[] }> =>
+      ipcRenderer.invoke(Ipc.engineClearQueue, { conversationId }),
     replaceSteering: (
       items: Array<{ text: string; images?: PromptImage[] }>,
-    ): Promise<void> => ipcRenderer.invoke(Ipc.engineReplaceSteering, { items }),
-    compact: (customInstructions?: string): Promise<EngineSessionState> =>
-      ipcRenderer.invoke(Ipc.engineCompact, { customInstructions }),
+      conversationId?: string,
+    ): Promise<void> => ipcRenderer.invoke(Ipc.engineReplaceSteering, { items, conversationId }),
+    compact: (customInstructions?: string, conversationId?: string): Promise<EngineSessionState> =>
+      ipcRenderer.invoke(Ipc.engineCompact, { customInstructions, conversationId }),
     getCommands: (): Promise<SlashCommand[]> => ipcRenderer.invoke(Ipc.engineGetCommands),
     getExtensions: (): Promise<ExtensionInfo[]> => ipcRenderer.invoke(Ipc.engineGetExtensions),
     listExtensionPackages: (): Promise<ExtensionPackage[]> =>
@@ -93,6 +105,13 @@ const api = {
     getSubagents: (): Promise<SubagentInfo[]> => ipcRenderer.invoke(Ipc.engineGetSubagents),
     getSubagentMessages: (subagentId: string): Promise<ChatMessage[]> =>
       ipcRenderer.invoke(Ipc.engineGetSubagentMessages, { subagentId }),
+    /** A retry's file checkpoint, so the dialog can offer to unwind the workspace too. */
+    getCheckpoint: (conversationId: string): Promise<{ paths: string[]; createdAt: number } | null> =>
+      ipcRenderer.invoke(Ipc.engineGetCheckpoint, { conversationId }),
+    restoreCheckpoint: (
+      conversationId: string,
+    ): Promise<{ restored: number; removed: number; skipped: number }> =>
+      ipcRenderer.invoke(Ipc.engineRestoreCheckpoint, { conversationId }),
     respondPermission: (payload: {
       id: string;
       confirmed?: boolean;
@@ -102,20 +121,30 @@ const api = {
       answers?: Array<string | null>;
     }): Promise<void> => ipcRenderer.invoke(Ipc.enginePermissionRespond, payload),
     newSession: (): Promise<void> => ipcRenderer.invoke(Ipc.engineNewSession),
-    getState: (): Promise<EngineSessionState> => ipcRenderer.invoke(Ipc.engineGetState),
+    getState: (conversationId?: string): Promise<EngineSessionState> =>
+      ipcRenderer.invoke(Ipc.engineGetState, { conversationId }),
     getRunning: (): Promise<string[]> => ipcRenderer.invoke(Ipc.engineGetRunning),
     getModels: (): Promise<FastVibeModel[]> => ipcRenderer.invoke(Ipc.engineGetModels),
-    setModel: (provider: string, modelId: string): Promise<EngineSessionState> =>
-      ipcRenderer.invoke(Ipc.engineSetModel, { provider, modelId }),
-    setThinking: (level: string): Promise<EngineSessionState> =>
-      ipcRenderer.invoke(Ipc.engineSetThinking, { level }),
+    setModel: (provider: string, modelId: string, conversationId?: string): Promise<EngineSessionState> =>
+      ipcRenderer.invoke(Ipc.engineSetModel, { provider, modelId, conversationId }),
+    setThinking: (level: string, conversationId?: string): Promise<EngineSessionState> =>
+      ipcRenderer.invoke(Ipc.engineSetThinking, { level, conversationId }),
     setInterruptMode: (mode: "immediate" | "wait"): Promise<EngineSessionState> =>
       ipcRenderer.invoke(Ipc.engineSetInterrupt, { mode }),
     setAutoCompaction: (enabled: boolean): Promise<EngineSessionState> =>
       ipcRenderer.invoke(Ipc.engineSetAutoCompact, { enabled }),
-    branch: (entryId: string): Promise<ChatMessage[]> => ipcRenderer.invoke(Ipc.engineBranch, { entryId }),
-    getMessages: (): Promise<ChatMessage[]> => ipcRenderer.invoke(Ipc.engineGetMessages),
-    getStats: (): Promise<SessionStats> => ipcRenderer.invoke(Ipc.engineGetStats),
+    branch: (entryId: string, conversationId?: string): Promise<ChatMessage[]> =>
+      ipcRenderer.invoke(Ipc.engineBranch, { entryId, conversationId }),
+    getMessages: (conversationId?: string): Promise<ChatMessage[]> =>
+      ipcRenderer.invoke(Ipc.engineGetMessages, { conversationId }),
+    /**
+     * Transcript plus the turn in flight, taken at one instant. What a client reads to
+     * rebuild a conversation exactly — including one whose run is still going.
+     */
+    getSnapshot: (conversationId?: string): Promise<ConversationSnapshot> =>
+      ipcRenderer.invoke(Ipc.engineGetSnapshot, { conversationId }),
+    getStats: (conversationId?: string): Promise<SessionStats> =>
+      ipcRenderer.invoke(Ipc.engineGetStats, { conversationId }),
     setSteeringMode: (mode: "all" | "one-at-a-time"): Promise<EngineSessionState> =>
       ipcRenderer.invoke(Ipc.engineSetSteering, { mode }),
     setFollowUpMode: (mode: "all" | "one-at-a-time"): Promise<EngineSessionState> =>
@@ -308,6 +337,34 @@ const api = {
     load: (): Promise<Record<string, unknown>> => ipcRenderer.invoke(Ipc.settingsGet),
     save: (settings: Record<string, unknown>): Promise<void> => ipcRenderer.invoke(Ipc.settingsSet, settings),
     clear: (): Promise<void> => ipcRenderer.invoke(Ipc.settingsClear),
+    /**
+     * A write made by *another* window. Each window holds its own copy of the
+     * preferences, so without this two open windows drifted apart and overwrote each
+     * other's changes with their stale copy on the next save.
+     */
+    onChanged: (listener: (settings: Record<string, unknown>) => void): (() => void) => {
+      const handler = (_event: unknown, settings: Record<string, unknown>): void => listener(settings);
+      ipcRenderer.on(Ipc.settingsChanged, handler);
+      return () => ipcRenderer.removeListener(Ipc.settingsChanged, handler);
+    },
+  },
+  /** 远程访问：把这台机器上的 agent 通过网页开放给其他设备。 */
+  remote: {
+    getState: (): Promise<import("@shared/ipc").RemoteServerState> => ipcRenderer.invoke(Ipc.remoteGetState),
+    setPassword: (password: string): Promise<import("@shared/ipc").RemoteServerState> =>
+      ipcRenderer.invoke(Ipc.remoteSetPassword, { password }),
+    clearPassword: (): Promise<import("@shared/ipc").RemoteServerState> => ipcRenderer.invoke(Ipc.remoteClearPassword),
+    start: (port?: number): Promise<import("@shared/ipc").RemoteServerState> =>
+      ipcRenderer.invoke(Ipc.remoteStart, { port }),
+    stop: (): Promise<import("@shared/ipc").RemoteServerState> => ipcRenderer.invoke(Ipc.remoteStop),
+    listDevices: (): Promise<import("@shared/ipc").RemoteDeviceInfo[]> => ipcRenderer.invoke(Ipc.remoteListDevices),
+    revokeDevice: (id: string): Promise<import("@shared/ipc").RemoteDeviceInfo[]> =>
+      ipcRenderer.invoke(Ipc.remoteRevokeDevice, { id }),
+    onState: (listener: (state: import("@shared/ipc").RemoteServerState) => void): (() => void) => {
+      const handler = (_event: unknown, payload: import("@shared/ipc").RemoteServerState): void => listener(payload);
+      ipcRenderer.on(Ipc.remoteState, handler);
+      return () => ipcRenderer.removeListener(Ipc.remoteState, handler);
+    },
   },
   stats: {
     usage: (range: UsageRange): Promise<UsageStats> => ipcRenderer.invoke(Ipc.statsUsage, { range }),

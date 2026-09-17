@@ -59,6 +59,17 @@ export function installRendererLogger(): void {
   forward("info", ["renderer ready"]);
 }
 
+/**
+ * Report a renderer error React caught in an error boundary.
+ *
+ * A throw handled by a boundary never reaches `window.onerror`, so without this the
+ * crash that matters most — the one that unmounted the tree — would be the only one
+ * missing from `logs/renderer.log`.
+ */
+export function logError(message: string): void {
+  console.error(message);
+}
+
 function forward(level: LogLevel, args: unknown[]): void {
   const message = args.map(formatArg).join(" ").trim().slice(0, MAX_MESSAGE_CHARS);
   if (!message) return;

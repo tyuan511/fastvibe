@@ -10,6 +10,11 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
+    // Lets a main-process module be imported by `node --test` with an explicit `.ts`
+    // extension, which is the only way those tests resolve it — Node reads no tsconfig
+    // and so knows nothing of the `@shared/*` alias. Safe with `noEmit`: nothing is
+    // written, and Vite resolves the extension for the real build.
+    "allowImportingTsExtensions": true,
     "types": ["node"],
     "baseUrl": ".",
     "paths": {

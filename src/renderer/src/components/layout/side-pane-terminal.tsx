@@ -4,7 +4,14 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { useSidePaneStore } from "@/stores/side-pane";
 import { useSettingsStore } from "@/stores/settings";
+import {
+  getTerminalStash,
+  terminalRegistry as registry,
+  type TerminalEntry as Entry,
+} from "./side-pane-terminal-registry";
 import "@xterm/xterm/css/xterm.css";
+
+export { releaseTerminal } from "./side-pane-terminal-registry";
 
 /**
  * Terminal font follows the 界面字号 preference. xterm's canvas needs a plain px
@@ -15,40 +22,11 @@ function rootFontSize(): number {
   return Number.isFinite(size) && size > 0 ? size : 16;
 }
 
-type Entry = {
-  term: Terminal;
-  fit: FitAddon;
-  host: HTMLDivElement;
-  sessionId?: string;
-  dispose: () => void;
-};
-
-const registry = new Map<string, Entry>();
-let stash: HTMLDivElement | null = null;
-
-function getStash(): HTMLDivElement {
-  if (!stash) {
-    stash = document.createElement("div");
-    stash.setAttribute("data-side-pane-terminal-stash", "");
-    stash.style.display = "none";
-    document.body.appendChild(stash);
-  }
-  return stash;
-}
-
 function readTheme(): Terminal["options"]["theme"] {
   const style = getComputedStyle(document.documentElement);
   const background = style.getPropertyValue("--code-bg").trim() || style.getPropertyValue("--background").trim();
   const foreground = style.getPropertyValue("--foreground").trim();
   return { background, foreground, cursor: foreground };
-}
-
-export function releaseTerminal(tabId: string): void {
-  const entry = registry.get(tabId);
-  if (!entry) return;
-  registry.delete(tabId);
-  entry.dispose();
-  entry.host.remove();
 }
 
 export function SidePaneTerminal({
@@ -88,7 +66,7 @@ export function SidePaneTerminal({
     if (entry) {
       if (entry.host.parentElement !== mount) mount.appendChild(entry.host);
       return () => {
-        if (entry && entry.host.parentElement === mount) getStash().appendChild(entry.host);
+        if (entry && entry.host.parentElement === mount) getTerminalStash().appendChild(entry.host);
       };
     }
 
@@ -198,7 +176,7 @@ export function SidePaneTerminal({
     };
 
     return () => {
-      if (created.host.parentElement === mount) getStash().appendChild(created.host);
+      if (created.host.parentElement === mount) getTerminalStash().appendChild(created.host);
     };
   }, [cwd, patchTab, tabId]);
 

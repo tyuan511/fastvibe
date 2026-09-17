@@ -214,6 +214,15 @@ export type SubagentInfo = {
   startedAt?: number;
   endedAt?: number;
   error?: string;
+  /**
+   * The run's own session, so its pane can draw the read-only composer the main
+   * thread has: which model it is on, its thinking level, and how full its context
+   * window is. Pushed as `subagent_state` (the window moves every turn), never
+   * derived from the transcript — the engine holds these, not the messages.
+   */
+  model?: EngineModel;
+  thinkingLevel?: string;
+  contextUsage?: ContextUsage;
 };
 
 export type ExtensionInfo = {
@@ -713,6 +722,21 @@ export type InputModality = (typeof INPUT_MODALITIES)[number];
 
 export type PermissionMode = "ask" | "smart" | "full";
 
+/**
+ * 系统通知: which desktop notifications the app may raise.
+ *
+ * `done` = a run finished, `approval` = a chat is parked on a tool approval while the
+ * window is unfocused, `off` = none. Main reads the value from `settings.json` on every
+ * event so a change lands immediately; an absent or malformed value means `done`.
+ */
+export const NOTIFICATION_PREFERENCES = ["done", "approval", "off"] as const;
+
+export type NotificationPreference = (typeof NOTIFICATION_PREFERENCES)[number];
+
+export function isNotificationPreference(value: unknown): value is NotificationPreference {
+  return typeof value === "string" && (NOTIFICATION_PREFERENCES as readonly string[]).includes(value);
+}
+
 export type Project = {
   cwd: string;
   name: string;
@@ -765,11 +789,63 @@ export type WorkspaceSnapshot = {
   activeId?: string;
 };
 
+/**
+ * One conversation as it stands right now — everything needed to draw it, including a
+ * turn still in flight.
+ *
+ * `messages` already carries the turn's content: the engine appends the reply being
+ * streamed as a trailing `running:` row, with its unfinished tool calls marked running.
+ * What it cannot carry is state that never becomes a message — a prompt parked waiting
+ * for an answer, a notice, a todo list, a retry banner — and that is what the other two
+ * fields are for. **`turnEvents` therefore holds no stream deltas**: replaying those
+ * onto a transcript that has already accumulated them would draw the reply twice.
+ *
+ * Every field is read at one instant, so they cannot disagree with each other.
+ */
+export type ConversationSnapshot = {
+  conversationId: string | null;
+  /** The transcript, including the reply in flight while `running`. */
+  messages: ChatMessage[];
+  /** Whether a run or a compaction is in flight for this conversation. */
+  running: boolean;
+  /**
+   * Extension prompts parked waiting for a human, as the `extension_ui_request` events
+   * that announced them. A prompt is delivered only as an event, so without these a
+   * client that connected afterwards would show a chat that had silently stopped.
+   */
+  pendingUi: Array<Record<string, unknown>>;
+  /**
+   * The current turn's non-transcript events, oldest first, for the client to fold with
+   * the same reducer it uses for live ones. Empty when nothing is running.
+   */
+  turnEvents: Array<Record<string, unknown>>;
+  /**
+   * The turn produced more of those than are kept. `turnEvents` is then incomplete and
+   * must not be replayed — re-read the snapshot once `running` goes false.
+   */
+  overflowed: boolean;
+  /**
+   * Highest event number in existence when this was taken. A caller that subscribes
+   * afterwards drops events at or below it and applies the rest.
+   */
+  seq: number;
+};
+
 export type ConversationOpenResult = WorkspaceSnapshot & {
   conversation: Conversation;
   messages: ChatMessage[];
   state: EngineSessionState | null;
   status: EngineStatus;
+  /**
+   * The extension statuses this conversation's session already holds.
+   *
+   * An extension publishes `setStatus` from `session_start` (the goal extension
+   * restoring an objective), which fires while the session is being created — on a
+   * cold start that is before any window is listening. Riding the open/ready reply
+   * delivers it with the transcript instead, and only to the conversation it belongs
+   * to. Absent/empty means nothing was published.
+   */
+  extensionStatus?: Record<string, string>;
 };
 
 /** Pushed when a conversation finishes initialising in the background. */
@@ -778,6 +854,8 @@ export type ConversationReadyEvent = {
   messages: ChatMessage[];
   state: EngineSessionState | null;
   status: EngineStatus;
+  /** Same replay as `ConversationOpenResult.extensionStatus`. */
+  extensionStatus?: Record<string, string>;
 };
 
 export type ConversationDeleteResult = WorkspaceSnapshot & {

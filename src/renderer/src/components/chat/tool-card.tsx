@@ -208,7 +208,7 @@ function subagentEntries(args: unknown): SubagentEntry[] {
 }
 
 function subagentStatusLabel(status: string): string {
-  if (status === "running" || status === "completed" || status === "error") {
+  if (status === "running" || status === "completed" || status === "error" || status === "aborted") {
     return i18n.t(`chat:tools.${status}`) as string;
   }
   return status;
