@@ -35,6 +35,8 @@ import { ModelChangeNotice } from "./model-change-notice";
 import { RunCollapse } from "./run-collapse";
 import { TuiLines } from "./tui-lines";
 import { TurnRail, type TurnMarker } from "./turn-rail";
+import { blockedRemotely } from "@/lib/remote-unavailable";
+import { Ipc } from "@shared/ipc";
 
 function formatTime(timestamp: number): string {
   // 24-hour clock in the reader's own time zone; `h23` avoids locales that render
@@ -64,7 +66,10 @@ function AttachmentStrip({ items }: { items: ChatAttachment[] }): JSX.Element {
                 previewable
                   ? () => setPreview(item)
                   : item.path
-                    ? () => void window.fastvibe.workspace.reveal(item.path!)
+                    ? () => {
+                        if (blockedRemotely(Ipc.workspaceReveal)) return;
+                        void window.fastvibe.workspace.reveal(item.path!);
+                      }
                     : undefined
               }
             />

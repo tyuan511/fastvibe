@@ -59,7 +59,7 @@ import { SidebarUpdateButton } from "@/components/layout/sidebar-update-button";
 import { AppLogo } from "@/components/app-logo";
 import { cn } from "@/lib/utils";
 import { clampSidebarWidth, readSidebarWidth, writeSidebarWidth, SIDEBAR_MIN_WIDTH } from "@/lib/sidebar-width";
-import { HAS_CUSTOM_TITLE_BAR, IS_MAC } from "@/lib/platform";
+import { HAS_CUSTOM_TITLE_BAR, HAS_TRAFFIC_LIGHTS } from "@/lib/platform";
 import { useArchivedIds } from "@/stores/archive";
 import { useSettingsStore } from "@/stores/settings";
 import { useShortcutLabel } from "@/lib/use-shortcuts";
@@ -984,7 +984,7 @@ export function Sidebar({
           has a title bar of its own, those controls (and the brand under them) are
           up there instead and the sidebar simply starts. */}
       {HAS_CUSTOM_TITLE_BAR ? null : (
-        <div className={cn("drag-region flex h-11 shrink-0 items-center gap-0.5", IS_MAC ? "pl-22" : "pl-2")}>
+        <div className={cn("drag-region flex h-11 shrink-0 items-center gap-0.5", HAS_TRAFFIC_LIGHTS ? "pl-22" : "pl-2")}>
           <IconButton
             size="icon-sm"
             variant="ghost"

@@ -313,7 +313,7 @@ export function Composer({
   onRecallQueued,
   onReorderQueued,
   onResumeQueue,
-  runInterrupted = false,
+  canResume = false,
   onResumeRun,
   sendOnEnter = true,
   focusSignal,
@@ -382,8 +382,15 @@ export function Composer({
   onRecallQueued: (id: string) => void;
   onReorderQueued: (ids: string[]) => void;
   onResumeQueue: () => void;
-  /** The last run stopped early (user abort or failure): offer a resume control. */
-  runInterrupted?: boolean;
+  /**
+   * The primary action is 继续, not 发送: the transcript is parked on a message the
+   * engine can continue from (an abnormal stop — a failure, a user abort, an
+   * output-limit truncation — or a turn cut off before its reply), and Main says so
+   * from the transcript itself (`EngineSessionState.canResume`). It is drawn only while
+   * the caret is empty, so a follow-up is never sent in place of the resume, and only
+   * while the chat is idle — the caller pairs it with `working`.
+   */
+  canResume?: boolean;
   /** Continue the interrupted turn from the transcript, with no new user message. */
   onResumeRun?: () => void;
   sendOnEnter?: boolean;
@@ -1057,7 +1064,7 @@ export function Composer({
             >
               <HugeiconsIcon strokeWidth={2} icon={SquareIcon} className="size-3.5 fill-current" />
             </IconButton>
-          ) : runInterrupted && !hasContent ? (
+          ) : canResume && !hasContent ? (
             // An interrupted run leaves the caret empty; the primary action resumes
             // the turn instead of sending, so a follow-up is never sent in its place.
             <IconButton

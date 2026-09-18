@@ -52,7 +52,9 @@ import { releaseTerminal } from "./side-pane-terminal-registry";
 const SidePaneTerminal = lazy(async () => ({
   default: (await import("./side-pane-terminal")).SidePaneTerminal,
 }));
-import { HAS_CUSTOM_TITLE_BAR, IS_MAC } from "@/lib/platform";
+import { HAS_CUSTOM_TITLE_BAR, HAS_TRAFFIC_LIGHTS } from "@/lib/platform";
+import { blockedRemotely } from "@/lib/remote-unavailable";
+import { Ipc } from "@shared/ipc";
 
 /**
  * Release everything a set of pane tabs owns. Called when tabs are closed and when
@@ -280,7 +282,18 @@ export function SidePane({
     { id: "files", label: t("pane.files"), icon: Folder01Icon, onOpen: openFiles },
     hasReviewTab ? null : { id: "review", label: t("pane.review"), icon: GitCompareIcon, onOpen: openGit },
     { id: "terminal", label: t("pane.terminal"), icon: TerminalIcon, onOpen: () => openTerminal(cwd) },
-    { id: "browser", label: t("pane.browser"), icon: ChromeIcon, onOpen: () => openBrowser() },
+    {
+      id: "browser",
+      label: t("pane.browser"),
+      icon: ChromeIcon,
+      // The pane is a renderer `<webview>`, which a browser tab has no equivalent of.
+      // The terminal beside it survives because its process runs on the host and only
+      // its output travels; there is no such split for a webview.
+      onOpen: () => {
+        if (blockedRemotely(Ipc.browserListProfiles)) return;
+        openBrowser();
+      },
+    },
   ].filter((item): item is NonNullable<typeof item> => item !== null);
 
   return (
@@ -325,7 +338,7 @@ export function SidePane({
         <div
           className={cn(
             "flex h-11 shrink-0 items-center gap-1 overflow-hidden border-b border-border px-2",
-            leadWithSidebarChrome && IS_MAC && "pl-22",
+            leadWithSidebarChrome && HAS_TRAFFIC_LIGHTS && "pl-22",
           )}
         >
           {leadWithSidebarChrome ? <SidebarCollapsedChrome onNewChat={onNewChat} /> : null}
@@ -414,7 +427,12 @@ export function SidePane({
                 <HugeiconsIcon strokeWidth={2} icon={TerminalIcon} />
                 {t("pane.terminal")}
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => openBrowser()}>
+              <DropdownMenuItem
+                onClick={() => {
+                  if (blockedRemotely(Ipc.browserListProfiles)) return;
+                  openBrowser();
+                }}
+              >
                 <HugeiconsIcon strokeWidth={2} icon={ChromeIcon} />
                 {t("pane.browser")}
               </DropdownMenuItem>
@@ -429,7 +447,7 @@ export function SidePane({
           className={cn(
             "drag-region flex h-11 shrink-0 items-center gap-0.5 px-2",
             leadWithSidebarChrome ? "justify-between" : "justify-end",
-            leadWithSidebarChrome && IS_MAC && "pl-22",
+            leadWithSidebarChrome && HAS_TRAFFIC_LIGHTS && "pl-22",
           )}
         >
           {leadWithSidebarChrome ? <SidebarCollapsedChrome onNewChat={onNewChat} /> : null}

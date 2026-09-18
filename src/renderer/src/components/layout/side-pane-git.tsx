@@ -30,6 +30,8 @@ import { displayPath } from "@/lib/workspace-path";
 import { useSessionStore } from "@/stores/session";
 import type { ChatMessage } from "@shared/types";
 import type { GitDiffSource, GitStatus } from "@shared/ipc";
+import { blockedRemotely } from "@/lib/remote-unavailable";
+import { Ipc } from "@shared/ipc";
 
 const SOURCE_IDS: GitDiffSource[] = ["unstaged", "staged", "branch", "last-turn"];
 const SOURCE_LABEL_KEYS: Record<GitDiffSource, string> = {
@@ -270,7 +272,10 @@ function DiffPane({
           size="icon-xs"
           variant="ghost"
           label={t("git.reveal")}
-          onClick={() => void window.fastvibe.workspace.reveal(resolvePath(cwd, file.path))}
+          onClick={() => {
+            if (blockedRemotely(Ipc.workspaceReveal)) return;
+            void window.fastvibe.workspace.reveal(resolvePath(cwd, file.path));
+          }}
         >
           <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} />
         </IconButton>

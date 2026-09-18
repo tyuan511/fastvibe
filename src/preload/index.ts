@@ -33,6 +33,7 @@ const api = createFastVibeApi({
    * bar (`lib/platform.ts`) instead of guessing from the user agent.
    */
   platform: process.platform,
+  remote: false,
 });
 
 export type { FastVibeApi };

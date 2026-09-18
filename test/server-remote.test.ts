@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { connect as netConnect } from "node:net";
 import WebSocket from "ws";
 import { RemoteServer } from "../src/main/server/server.ts";
 import { setPassword } from "../src/main/server/store.ts";
@@ -32,7 +33,10 @@ type Harness = {
   statusChanges: number;
 };
 
-async function withServer(fn: (h: Harness) => Promise<void>): Promise<void> {
+async function withServer(
+  fn: (h: Harness) => Promise<void>,
+  options: { heartbeatMs?: number } = {},
+): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), "fastvibe-remote-"));
   // The real layout: the web root holds the built client and nothing else, and the
   // credential file is a sibling of it rather than something inside what is served.
@@ -46,6 +50,12 @@ async function withServer(fn: (h: Harness) => Promise<void>): Promise<void> {
   // what it must never be handed.
   await writeFile(join(webRoot, "remote.html"), "<!doctype html><title>client</title>", "utf8");
   await writeFile(join(webRoot, "index.html"), "<!doctype html><title>desktop</title>", "utf8");
+  // The icons are a directory of the icon-theme package, outside the web root: the
+  // desktop reads them through an Electron scheme, and the browser client over HTTP.
+  const iconRoot = join(dir, "icons");
+  await mkdir(iconRoot, { recursive: true });
+  await writeFile(join(iconRoot, "typescript.svg"), "<svg id='ts'/>", "utf8");
+  await writeFile(join(iconRoot, "file.svg"), "<svg id='generic'/>", "utf8");
   setPassword(accessFile, PASSWORD);
   const dispatched: Array<{ method: string; payload: unknown }> = [];
   const receivers = new Map<string, (channel: string, payload: unknown) => void>();
@@ -66,6 +76,8 @@ async function withServer(fn: (h: Harness) => Promise<void>): Promise<void> {
       statusChanges += 1;
     },
     webRoot,
+    iconRoot,
+    heartbeatMs: options.heartbeatMs,
     log: silent,
   });
   const { port } = await server.start({ port: 0, host: "127.0.0.1" });
@@ -113,6 +125,47 @@ function closed(socket: WebSocket): Promise<number> {
       clearTimeout(timer);
       settle(code);
     });
+  });
+}
+
+/**
+ * A handshake written by hand, so a test can choose the headers a tunnel would add.
+ *
+ * The `ws` client will not let a caller set `Host` or `Origin` freely, and those two are
+ * the whole question here — so this speaks the upgrade itself and reports whatever came
+ * back. No answer at all (the socket destroyed) is the refusal; `101` is the socket.
+ */
+async function upgrade(port: number, headers: Record<string, string>): Promise<string> {
+  return new Promise((settle, fail) => {
+    const socket = netConnect(port, "127.0.0.1", () => {
+      const head = Object.entries(headers)
+        .map(([name, value]) => `${name}: ${value}\r\n`)
+        .join("");
+      socket.write(
+        `GET /ws HTTP/1.1\r\n${head}Upgrade: websocket\r\nConnection: Upgrade\r\n` +
+          "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n",
+      );
+    });
+    let received = "";
+    let settled = false;
+    let timer: NodeJS.Timeout;
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.destroy();
+      settle(received);
+    };
+    timer = setTimeout(() => {
+      socket.destroy();
+      fail(new Error("no answer to the upgrade"));
+    }, 4000);
+    socket.on("data", (chunk) => {
+      received += chunk.toString();
+      if (received.includes("\r\n\r\n")) finish();
+    });
+    socket.on("close", finish);
+    socket.on("error", finish);
   });
 }
 
@@ -382,4 +435,193 @@ test("the credential file is not world readable", async () => {
   const mode = statSync(file).mode & 0o777;
   assert.equal(mode, 0o600, `expected 0600, found ${mode.toString(8)}`);
   await rm(dir, { recursive: true, force: true });
+});
+
+test("file icons are served over HTTP, because a browser has no private scheme", async () => {
+  // `fastvibe-icon://` is a `protocol.handle` in Main, so it resolves in a window and
+  // nowhere else; without this route every file chip in the web client is a broken
+  // image. Unauthenticated on purpose — the page needs them before it has a socket.
+  await withServer(async ({ port }) => {
+    const hit = await fetch(`http://127.0.0.1:${port}/file-icon/typescript.svg`);
+    assert.equal(hit.status, 200);
+    assert.equal(hit.headers.get("content-type"), "image/svg+xml");
+    assert.match(await hit.text(), /id='ts'/);
+
+    // The theme's manifest names generated clones that never shipped as files, so an
+    // unknown name is the generic glyph rather than a broken image.
+    const missing = await fetch(`http://127.0.0.1:${port}/file-icon/not-an-icon.svg`);
+    assert.equal(missing.status, 200);
+    assert.match(await missing.text(), /id='generic'/);
+  });
+});
+
+test("the icon route serves only icon names, and nothing through them", async () => {
+  // This directory is addressed by name, not resolved from a path, so the guard is the
+  // character class. A name that could name anything else is refused outright.
+  await withServer(async ({ port }) => {
+    const attempts = [
+      "/file-icon/%2e%2e%2fremote-access.json",
+      "/file-icon/..%2f..%2fremote-access.json",
+      "/file-icon/%2fetc%2fpasswd",
+      "/file-icon/sub%2fdir.svg",
+    ];
+    for (const path of attempts) {
+      const response = await fetch(`http://127.0.0.1:${port}${path}`);
+      const text = await response.text();
+      assert.doesNotMatch(text, /scrypt\$/, `leaked credentials via ${path}`);
+      assert.doesNotMatch(text, /"password"/, `leaked credentials via ${path}`);
+      assert.doesNotMatch(text, /root:/, `served a system file via ${path}`);
+    }
+  });
+});
+
+test("a request that will not parse is answered, not left hanging", async () => {
+  // Both halves of a request line come off the wire: `GET /%` is not decodable, and a
+  // `Host` of `bad host` makes the base URL invalid. Either one thrown out of the
+  // request handler reaches no catch but the process-wide logger's, which records it
+  // and leaves the socket open — a client that waits forever, and one error line per
+  // scan of a public tunnel.
+  await withServer(async ({ port }) => {
+    const malformed = await fetch(`http://127.0.0.1:${port}/%`);
+    assert.equal(malformed.status, 200);
+    assert.match(await malformed.text(), /<title>client<\/title>/);
+
+    const badHost = await new Promise<string>((settle, fail) => {
+      const socket = netConnect(port, "127.0.0.1", () => {
+        socket.write("GET / HTTP/1.1\r\nHost: bad host\r\nConnection: close\r\n\r\n");
+      });
+      let received = "";
+      const timer = setTimeout(() => {
+        socket.destroy();
+        fail(new Error("no response: the request hung"));
+      }, 4000);
+      socket.on("data", (chunk) => {
+        received += chunk.toString();
+      });
+      socket.on("end", () => {
+        clearTimeout(timer);
+        settle(received);
+      });
+      socket.on("error", (error) => {
+        clearTimeout(timer);
+        fail(error);
+      });
+    });
+    assert.match(badHost, /^HTTP\/1\.1 400 /);
+  });
+});
+
+test("a websocket upgrade with an unparseable host is refused, not thrown on", async () => {
+  await withServer(async ({ port }) => {
+    const closed = await new Promise<boolean>((settle) => {
+      const socket = netConnect(port, "127.0.0.1", () => {
+        socket.write(
+          "GET /ws HTTP/1.1\r\nHost: bad host\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
+            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n",
+        );
+      });
+      const timer = setTimeout(() => {
+        socket.destroy();
+        settle(false);
+      }, 4000);
+      const finish = (): void => {
+        clearTimeout(timer);
+        settle(true);
+      };
+      socket.on("close", finish);
+      socket.on("end", finish);
+      socket.on("error", finish);
+    });
+    assert.equal(closed, true, "the upgrade should be closed rather than left open");
+
+    // And the server is still answering afterwards, which is what says the throw did
+    // not take the listener with it.
+    const after = await fetch(`http://127.0.0.1:${port}/`);
+    assert.equal(after.status, 200);
+  });
+});
+
+test("an upgrade through a tunnel that rewrites Host is allowed", async () => {
+  // Every tunnel rewrites `Host` to the address it forwards to, by default, while the
+  // page sits on the public hostname — so judging on `Host` alone refused everyone who
+  // brought their own tunnel, with 「连接被断开」 on screen and one warn line in the log.
+  await withServer(async ({ port }) => {
+    // ngrok's default shape: `Host` rewritten, the public name in `X-Forwarded-Host`.
+    const ngrok = await upgrade(port, {
+      Host: "127.0.0.1:7777",
+      Origin: "https://calm-otter-42.ngrok-free.app",
+      "X-Forwarded-Host": "calm-otter-42.ngrok-free.app",
+      "X-Forwarded-Proto": "https",
+    });
+    assert.match(ngrok, /^HTTP\/1\.1 101 /, "ngrok's default shape should reach the socket");
+
+    // cloudflared's shape: `Host` rewritten to the origin service and no
+    // `X-Forwarded-Host` at all, only the proto/for pair.
+    const cloudflared = await upgrade(port, {
+      Host: "127.0.0.1:7777",
+      Origin: "https://random-words.trycloudflare.com",
+      "X-Forwarded-Proto": "https",
+      "X-Forwarded-For": "203.0.113.7",
+    });
+    assert.match(cloudflared, /^HTTP\/1\.1 101 /, "cloudflared's default shape should reach the socket");
+
+    // A chain of proxies sends a list, and the first entry is the host asked for.
+    const chained = await upgrade(port, {
+      Host: "127.0.0.1:7777",
+      Origin: "https://fv.example.com",
+      "X-Forwarded-Host": "fv.example.com, inner.example.com",
+    });
+    assert.match(chained, /^HTTP\/1\.1 101 /, "a forwarded host list should compare by its first entry");
+  });
+});
+
+test("the origin check still refuses a page that dials this server itself", async () => {
+  await withServer(async ({ port }) => {
+    // A page at evil.example.com opening a socket here directly: no proxy, so none of
+    // the headers rules 2 and 3 read, and the page is not where the socket points.
+    const crossOrigin = await upgrade(port, {
+      Host: `127.0.0.1:${port}`,
+      Origin: "https://evil.example.com",
+    });
+    assert.doesNotMatch(crossOrigin, /101/, "a cross-origin page must not get a socket");
+
+    // When `X-Forwarded-Host` is there it is the authoritative answer, so a value that
+    // disagrees with the origin refuses rather than falling through to the looser rule.
+    const mismatched = await upgrade(port, {
+      Host: "127.0.0.1:7777",
+      Origin: "https://evil.example.com",
+      "X-Forwarded-Host": "calm-otter-42.ngrok-free.app",
+      "X-Forwarded-Proto": "https",
+    });
+    assert.doesNotMatch(mismatched, /101/, "a forwarded host that disagrees must refuse");
+
+    // The same-origin case still works, which is what makes the two refusals mean
+    // something rather than the socket being closed for an unrelated reason.
+    const sameOrigin = await upgrade(port, {
+      Host: `127.0.0.1:${port}`,
+      Origin: `http://127.0.0.1:${port}`,
+    });
+    assert.match(sameOrigin, /^HTTP\/1\.1 101 /, "a same-origin page must still connect");
+  });
+});
+
+test("a socket that stops answering is dropped, and one that answers is kept", async () => {
+  // A tunnel cuts a WebSocket that goes quiet (Cloudflare's edge at 100s, nginx's
+  // `proxy_read_timeout` at 60), and quiet is the normal case: reading a transcript is a
+  // socket with nothing to say. The heartbeat is also the only thing that notices a
+  // half-open connection through a tunnel, which otherwise looks attached forever.
+  await withServer(async ({ port }) => {
+    const silent = new WebSocket(`ws://127.0.0.1:${port}/ws`, { autoPong: false });
+    await new Promise((settle) => silent.once("open", settle));
+    // No close code asserted: a terminated socket is an abnormal closure (1006) rather
+    // than a frame, and "it went away" is the whole claim.
+    await closed(silent);
+
+    const live = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+    await new Promise((settle) => live.once("open", settle));
+    // Several rounds of pings, each answered — a client that pongs must not be dropped.
+    await new Promise((settle) => setTimeout(settle, 400));
+    assert.equal(live.readyState, WebSocket.OPEN, "a client that answers must survive");
+    live.close();
+  }, { heartbeatMs: 50 });
 });

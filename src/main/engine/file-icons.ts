@@ -37,6 +37,17 @@ function iconsDir(): string {
   return join(iconsRoot(), "icons");
 }
 
+/**
+ * Where the SVGs are, for a transport that cannot use the private scheme.
+ *
+ * The browser client has no `protocol.handle`, so the remote server serves the same
+ * directory over HTTP (`server/server.ts`). One directory, two transports — the same
+ * reason the call table itself is shared.
+ */
+export function fileIconsDirectory(): string {
+  return iconsDir();
+}
+
 /** Icon names that actually ship as files (the manifest also names generated clones). */
 function available(): Set<string> {
   if (!availableIcons) {

@@ -9,6 +9,8 @@ import { PreviewBody } from "@/components/chat/preview-panel";
 import { cn } from "@/lib/utils";
 import { useSidePaneStore, type SidePaneTab } from "@/stores/side-pane";
 import type { DirEntry, FilePreview } from "@shared/types";
+import { blockedRemotely } from "@/lib/remote-unavailable";
+import { Ipc } from "@shared/ipc";
 
 type DirMap = Record<string, DirEntry[]>;
 
@@ -153,7 +155,10 @@ export function SidePaneFiles({
               size="icon-xs"
               variant="ghost"
               label={t("files.reveal")}
-              onClick={() => void window.fastvibe.workspace.reveal(cwd)}
+              onClick={() => {
+                if (blockedRemotely(Ipc.workspaceReveal)) return;
+                void window.fastvibe.workspace.reveal(cwd);
+              }}
             >
               <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} />
             </IconButton>
@@ -211,7 +216,10 @@ function FilePreviewPane({
             size="icon-xs"
             variant="ghost"
             label={t("files.reveal")}
-            onClick={() => void window.fastvibe.workspace.reveal(preview.path)}
+            onClick={() => {
+              if (blockedRemotely(Ipc.workspaceReveal)) return;
+              void window.fastvibe.workspace.reveal(preview.path);
+            }}
           >
             <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} />
           </IconButton>

@@ -6,7 +6,7 @@ import type { Duplex } from "node:stream";
 import { WebSocketServer, type WebSocket } from "ws";
 import { LoginThrottle, passwordProblem } from "./auth.ts";
 import { authenticate, isConfigured, listDevices, login, touchDevice } from "./store.ts";
-import { assertPolicyCoverage, remotePolicy } from "./policy.ts";
+import { assertPolicyCoverage, remotePolicy } from "../../shared/remote-policy.ts";
 
 /**
  * The remote server: a second way into the same call table the desktop windows use.
@@ -46,6 +46,23 @@ export type RemoteServerDeps = {
   onStatusChange?: () => void;
   /** Directory holding the web client, when one has been built. */
   webRoot?: string;
+  /**
+   * Directory holding the file-icon SVGs.
+   *
+   * The desktop renderer reads these through a private Electron scheme
+   * (`fastvibe-icon://`), which is a `protocol.handle` in Main and therefore does not
+   * exist in a browser — every file chip and file-tree row came out as a broken image.
+   * Served here under `/file-icon/` instead, so the web client has the same icons over
+   * the transport it does have.
+   */
+  iconRoot?: string;
+  /**
+   * How often to talk to each socket, so nothing in front of us times it out.
+   *
+   * Only tests pass this: a check that a silent socket is dropped cannot afford to wait
+   * out the real interval, and a shorter one proves the same thing.
+   */
+  heartbeatMs?: number;
   log: RemoteLogger;
 };
 
@@ -70,8 +87,28 @@ export type RemoteServerStatus = {
  */
 const CLIENT_ENTRY = "remote.html";
 
+/**
+ * Where file icons are served.
+ *
+ * Unauthenticated, like the client bundle itself: these are ~1250 SVGs from a public
+ * npm package, identical on every install, and the page needs them before there is a
+ * socket to ask over. Nothing about which icons a client fetches says anything about
+ * the machine — the names come from the manifest, not from the workspace.
+ */
+const ICON_PREFIX = "/file-icon";
+
 /** A socket that has not authenticated within this long is closed. */
 const AUTH_GRACE_MS = 10_000;
+
+/**
+ * How often each socket is pinged.
+ *
+ * Comfortably under every idle timeout this server meets in practice — Cloudflare's edge
+ * drops a quiet WebSocket after 100 seconds, nginx's `proxy_read_timeout` defaults to 60
+ * — because what it is protecting is the normal case: a transcript being read, or a run
+ * being watched, is exactly a socket with nothing to say.
+ */
+const HEARTBEAT_MS = 30_000;
 
 /** Largest frame accepted from a client. A prompt with images is the big one. */
 const MAX_FRAME_BYTES = 24 * 1024 * 1024;
@@ -87,6 +124,8 @@ type Client = {
   deviceId: string | null;
   detach: (() => void) | null;
   timer: NodeJS.Timeout | null;
+  /** Answered the last ping. Cleared when one is sent, set again when the pong lands. */
+  alive: boolean;
 };
 
 export class RemoteServer {
@@ -95,6 +134,7 @@ export class RemoteServer {
   #wss: WebSocketServer | null = null;
   #clients = new Map<string, Client>();
   #throttle = new LoginThrottle();
+  #heartbeat: NodeJS.Timeout | null = null;
   #host = "127.0.0.1";
   #port: number | null = null;
 
@@ -129,9 +169,28 @@ export class RemoteServer {
     assertPolicyCoverage(this.#deps.channels());
 
     const host = options.host?.trim() || "127.0.0.1";
-    const server = createServer((request, response) => this.#handleHttp(request, response));
+    // Both handlers are the outermost frame of their own call: anything thrown here
+    // reaches no `catch` but the logger's global one, which records it and leaves the
+    // socket open forever. A client that gets no answer and no close is worse than an
+    // error, so every request ends in a response and every bad upgrade in a destroyed
+    // socket.
+    const server = createServer((request, response) => {
+      try {
+        this.#handleHttp(request, response);
+      } catch (error) {
+        this.#deps.log.error("remote request failed", error);
+        this.#fail(response);
+      }
+    });
     const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });
-    server.on("upgrade", (request, socket, head) => this.#handleUpgrade(wss, request, socket, head));
+    server.on("upgrade", (request, socket, head) => {
+      try {
+        this.#handleUpgrade(wss, request, socket, head);
+      } catch (error) {
+        this.#deps.log.error("remote upgrade failed", error);
+        socket.destroy();
+      }
+    });
     wss.on("connection", (socket) => this.#handleConnection(socket));
 
     await new Promise<void>((settle, fail) => {
@@ -148,6 +207,10 @@ export class RemoteServer {
     this.#wss = wss;
     this.#host = host;
     this.#port = typeof address === "object" && address ? address.port : options.port;
+    this.#heartbeat = this.#beat(this.#deps.heartbeatMs ?? HEARTBEAT_MS);
+    // Never the reason the process stays up: the app owns its own lifetime, and a
+    // timer nobody can see would keep a test run from exiting.
+    this.#heartbeat.unref();
     if (host !== "127.0.0.1" && host !== "localhost" && host !== "::1") {
       this.#deps.log.warn(`remote server bound to ${host} — reachable beyond this machine`);
     }
@@ -156,6 +219,8 @@ export class RemoteServer {
   }
 
   async stop(): Promise<RemoteServerStatus> {
+    if (this.#heartbeat) clearInterval(this.#heartbeat);
+    this.#heartbeat = null;
     for (const client of [...this.#clients.values()]) this.#dropClient(client);
     this.#wss?.close();
     const server = this.#http;
@@ -179,13 +244,26 @@ export class RemoteServer {
   // ---------------------------------------------------------------- HTTP
 
   #handleHttp(request: IncomingMessage, response: ServerResponse): void {
-    const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
+    const url = requestUrl(request);
+    if (!url) {
+      this.#json(response, 400, { error: "请求格式无效" });
+      return;
+    }
     if (url.pathname === "/api/hello") {
       this.#json(response, 200, { configured: isConfigured(this.#deps.accessFile) });
       return;
     }
+    if (url.pathname.startsWith(`${ICON_PREFIX}/`)) {
+      this.#serveIcon(url.pathname.slice(ICON_PREFIX.length + 1), response);
+      return;
+    }
     if (url.pathname === "/api/login" && request.method === "POST") {
-      void this.#handleLogin(request, response);
+      void this.#handleLogin(request, response).catch((error: unknown) => {
+        // Not the request being malformed — that is answered inside. This is the write
+        // of the issued token failing, and it must still end the request.
+        this.#deps.log.error("remote login failed", error);
+        this.#fail(response);
+      });
       return;
     }
     this.#serveStatic(url.pathname, response);
@@ -240,6 +318,47 @@ export class RemoteServer {
   }
 
   /**
+   * Serve one file icon.
+   *
+   * The same rules as the desktop scheme's handler: the name is checked against a
+   * narrow character class rather than resolved and compared, because unlike the web
+   * root this directory is addressed by name and a name is all a client may give — and
+   * an unknown one falls back to the generic glyph, since the icon theme's manifest
+   * names generated clones that never shipped as files.
+   */
+  #serveIcon(name: string, response: ServerResponse): void {
+    const root = this.#deps.iconRoot;
+    const icon = name.replace(/\.svg$/, "");
+    if (!root || !/^[a-z0-9._-]+$/i.test(icon)) {
+      this.#json(response, 404, { error: "not found" });
+      return;
+    }
+    const file = join(root, `${icon}.svg`);
+    const target = existsSync(file) ? file : join(root, "file.svg");
+    if (!existsSync(target)) {
+      this.#json(response, 404, { error: "not found" });
+      return;
+    }
+    response.writeHead(200, {
+      "content-type": "image/svg+xml",
+      // Immutable for the life of a build: the name is the icon.
+      "cache-control": "public, max-age=86400",
+      "x-content-type-options": "nosniff",
+    });
+    createReadStream(target).pipe(response);
+  }
+
+  /** End a request that threw, without assuming nothing was written yet. */
+  #fail(response: ServerResponse): void {
+    try {
+      if (response.headersSent) response.end();
+      else this.#json(response, 500, { error: "\u670d\u52a1\u5668\u5185\u90e8\u9519\u8bef" });
+    } catch {
+      response.destroy();
+    }
+  }
+
+  /**
    * Serve the web client.
    *
    * The path is resolved and then checked to be inside the root, rather than filtered
@@ -266,7 +385,7 @@ export class RemoteServer {
     // only white-screen.
     const desktopEntry = normalizePath(pathname) === "/index.html";
     const requested = pathname === "/" || desktopEntry ? `/${CLIENT_ENTRY}` : pathname;
-    const candidate = resolve(join(rootPath, normalize(decodeURIComponent(requested))));
+    const candidate = resolve(join(rootPath, normalizePath(requested)));
     const inside = candidate === rootPath || candidate.startsWith(rootPath + sep);
     const file = inside && existsSync(candidate) && statSync(candidate).isFile() ? candidate : entry;
     if (!existsSync(file)) {
@@ -285,8 +404,8 @@ export class RemoteServer {
   // ---------------------------------------------------------------- WebSocket
 
   #handleUpgrade(wss: WebSocketServer, request: IncomingMessage, socket: Duplex, head: Buffer): void {
-    const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
-    if (url.pathname !== "/ws") {
+    const url = requestUrl(request);
+    if (!url || url.pathname !== "/ws") {
       socket.destroy();
       return;
     }
@@ -303,14 +422,84 @@ export class RemoteServer {
     wss.handleUpgrade(request, socket, head, (ws) => wss.emit("connection", ws, request));
   }
 
+  /**
+   * Whether the page that opened this socket is served from the host it dialled.
+   *
+   * A browser attaches `Origin` itself and cannot forge it, so this is what stops a page
+   * the user happens to be visiting from opening a socket to a server it guessed — the
+   * case where the page is one thing and the socket's target another.
+   *
+   * But a tunnel is the honest version of exactly that shape. Every one of them rewrites
+   * `Host` to the address it forwards to by default — ngrok's default is literally
+   * `--host-header=rewrite`, and cloudflared sends the origin service's host — while the
+   * page, correctly, is served from the public hostname. Judging on `Host` alone refused
+   * every user who brought their own tunnel, and the only trace was one warn line here;
+   * on screen it was 「连接被断开」 next to a login form that had just succeeded. That is
+   * what the three rules below fix:
+   *
+   *   1. `Host` is the origin's host: a direct connection, or a proxy told to preserve it.
+   *   2. `X-Forwarded-Host` is present (ngrok sets it) — it is then the authoritative
+   *      answer to the question being asked, so it has to match rather than merely exist.
+   *   3. Otherwise any `X-Forwarded-*` at all says something in front of us rewrote the
+   *      request (cloudflared sets `X-Forwarded-Proto` and `-For`, but no `-Host`).
+   *
+   * A page cannot produce any of those headers — the WebSocket API gives it no way to set
+   * one — so rule 3 is out of reach for the page this check exists to refuse. What it does
+   * give up is a page going *through the user's own tunnel*, which is still not a way in:
+   * the first frame has to carry a device token, and the only place to get one is
+   * `POST /api/login`, which a cross-origin page cannot complete (no CORS headers are
+   * sent, so its preflight fails). The token, not this check, is what keeps a stranger
+   * out; this keeps the browser from being used as the transport.
+   */
   #originAllowed(origin: string, request: IncomingMessage): boolean {
-    const host = request.headers.host;
-    if (!host) return false;
+    let originHost: string;
     try {
-      return new URL(origin).host === host;
+      originHost = new URL(origin).host;
     } catch {
       return false;
     }
+    if (request.headers.host === originHost) return true;
+    // A chain of proxies sends a list; the first entry is the hostname the client asked
+    // for, which is the one that compares to the origin.
+    const forwardedHost = firstHeader(request.headers["x-forwarded-host"]);
+    if (forwardedHost) return forwardedHost === originHost;
+    return Boolean(
+      firstHeader(request.headers["x-forwarded-proto"]) ?? firstHeader(request.headers["x-forwarded-for"]),
+    );
+  }
+
+  /**
+   * Ping every socket, and drop the ones that stopped answering.
+   *
+   * A tunnel or reverse proxy in front of this server will cut a WebSocket that goes
+   * quiet — Cloudflare's edge after 100 seconds, nginx's `proxy_read_timeout` after 60 —
+   * and quiet is the normal case here: reading a transcript, or watching a run, is a
+   * socket with nothing to say. Pinging keeps traffic in *both* directions, because the
+   * browser's pong is what resets the timer on the other side of the tunnel.
+   *
+   * It doubles as liveness, which matters more through a tunnel than on a wire: a
+   * half-open connection there looks attached forever and never receives anything again.
+   * A socket that missed a whole round is gone, so it is terminated — which becomes the
+   * `close` the client reconnects from, instead of a client that believes it is
+   * connected to a chat it will never hear from again.
+   */
+  #beat(milliseconds: number): NodeJS.Timeout {
+    return setInterval(() => {
+      for (const client of [...this.#clients.values()]) {
+        if (!client.alive) {
+          // `terminate`, not `close`: the point is that this socket is not answering, so
+          // waiting for a close handshake it will never send is waiting forever.
+          client.socket.terminate();
+          continue;
+        }
+        client.alive = false;
+        try {
+          client.socket.ping();
+        } catch {
+          // Already closing; its close handler settles the rest.
+        }
+      }
+    }, milliseconds);
   }
 
   #handleConnection(socket: WebSocket): void {
@@ -322,11 +511,15 @@ export class RemoteServer {
       // Nothing is served before the first frame authenticates, and a socket that never
       // sends one would otherwise sit open indefinitely.
       timer: setTimeout(() => socket.close(CLOSE_TIMEOUT, "auth timeout"), AUTH_GRACE_MS),
+      alive: true,
     };
     this.#clients.set(client.id, client);
 
     socket.on("message", (raw) => {
       void this.#handleFrame(client, raw as Buffer);
+    });
+    socket.on("pong", () => {
+      client.alive = true;
     });
     socket.on("close", () => this.#dropClient(client));
     socket.on("error", (error) => {
@@ -427,7 +620,29 @@ export class RemoteServer {
   }
 }
 
-/** Decoded and collapsed, so `/index.html` is recognised however it was spelled. */
+/**
+ * The request's URL, or null when it does not have one that parses.
+ *
+ * Both halves can be junk from the wire. A `Host` of `bad host` makes the base URL
+ * invalid, and Node hands the header through without judging it; the target can be any
+ * bytes a client cares to send. Neither is worth an exception — this server's only
+ * answer to an unparseable request is 400.
+ */
+function requestUrl(request: IncomingMessage): URL | null {
+  try {
+    return new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Decoded and collapsed, so `/index.html` is recognised however it was spelled.
+ *
+ * A malformed escape (`/%`) returns the raw path rather than throwing: it then names no
+ * file and falls through to the client entry, which is what every other unknown path
+ * does.
+ */
 function normalizePath(pathname: string): string {
   try {
     return normalize(decodeURIComponent(pathname));
@@ -447,6 +662,18 @@ async function readBody(request: IncomingMessage, limit: number): Promise<string
     chunks.push(buffer);
   }
   return Buffer.concat(chunks).toString("utf8");
+}
+
+/**
+ * The first entry of a comma-separated header, trimmed — or undefined when there is none.
+ *
+ * A proxy list (`X-Forwarded-For: client, edge, lb`) is read by its first entry, which is
+ * the closest thing to the client; `X-Forwarded-Host` is read the same way for the same
+ * reason, the first hop being the one that knows what the client asked for.
+ */
+function firstHeader(value: string | string[] | undefined): string | undefined {
+  const raw = Array.isArray(value) ? value[0] : value;
+  return raw?.split(",")[0]?.trim() || undefined;
 }
 
 const TYPES: Record<string, string> = {

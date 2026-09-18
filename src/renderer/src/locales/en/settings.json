@@ -480,6 +480,7 @@
   "cancel": "Cancel",
   "enable": "Allow remote connections",
   "enableDesc": "When on, other devices can log in with the password and connect to the agent on this computer.",
+  "tunnelHint": "{{address}} is only this computer's listening address, and no other device can reach it until you publish it yourself — any tunnel tool will do. The free one that needs no signup is Cloudflare Tunnel: run cloudflared tunnel --url http://{{address}}, then open the https address it prints. With ngrok, add --host-header=preserve, or the web client will keep failing to connect after login.",
   "copyAddress": "Copy address",
   "clients": "Connected now",
   "clientsDesc": "Devices currently logged in and connected.",

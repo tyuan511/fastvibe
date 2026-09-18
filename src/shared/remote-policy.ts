@@ -1,7 +1,13 @@
-import { Ipc } from "../../shared/ipc.ts";
+import { Ipc } from "./ipc.ts";
 
 /**
  * Which methods a remote client may call.
+ *
+ * Shared rather than main-only, and imported by a relative path so `node --test` can
+ * resolve it: the server reads this to *refuse* a call, and the renderer reads the same
+ * table to *hide* the control that would make it. Two lists would drift the moment one
+ * is edited, and the drift is silent in the direction that matters — a button that is
+ * still there, does nothing, and says nothing about why.
  *
  * Stated as an exhaustive classification — every registered method is named in exactly
  * one of the two sets below, and `assertPolicyCoverage` refuses to start the server if
@@ -206,6 +212,18 @@ export function assertPolicyCoverage(channels: readonly string[]): void {
     problems.push(`策略中的方法已不存在: ${stale.join(", ")}`);
   }
   if (problems.length > 0) throw new Error(`remote policy coverage: ${problems.join(" / ")}`);
+}
+
+/**
+ * Why a remote client cannot call this, or null when it can.
+ *
+ * What the renderer uses to decide whether a control belongs on screen at all
+ * (`lib/remote-unavailable.ts`). The reason is the same sentence the server would have
+ * answered with, so a tooltip and a refusal never disagree.
+ */
+export function remoteDenialReason(method: string): string | null {
+  const verdict = remotePolicy(method);
+  return verdict.allowed ? null : verdict.reason;
 }
 
 /** The methods a remote client may call, for the settings pane and for tests. */

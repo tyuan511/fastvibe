@@ -86,6 +86,16 @@ export type ApiTransport = {
   settingsInitial: Record<string, unknown>;
   /** The host's `process.platform`, which decides whether the shell draws its own title bar. */
   platform: string;
+  /**
+   * Whether this bridge is a browser talking to a remote host, rather than the host's
+   * own window.
+   *
+   * `platform` alone cannot answer that: it reports the machine Main runs on, so a
+   * client connected to a Mac reads `darwin` and lays itself out for traffic lights
+   * that exist in a window 300 miles away. What the layout actually needs to know is
+   * whether there is any window chrome here at all, and only the transport knows.
+   */
+  remote: boolean;
 };
 
 /** Build the bridge object for one transport. */
@@ -315,6 +325,8 @@ export function createFastVibeApi(t: ApiTransport) {
        * (`lib/platform.ts`) instead of guessing from the user agent.
        */
       platform: t.platform,
+      /** True in the browser client. Window chrome and OS keys hang off this. */
+      remote: t.remote,
       log: (payload: import("@shared/ipc").AppLogPayload): void => {
         t.send(Ipc.appLog, payload);
       },

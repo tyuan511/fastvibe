@@ -7,8 +7,8 @@
       `font-src` admits the `data:` faces the CSS pipeline inlines (KaTeX's smallest
       cuts land under Vite's inline limit), and `connect-src` admits the WebSocket this
       client talks to Main over. `fastvibe-icon:` is left out because that scheme is an
-      Electron protocol handler that does not exist here — those images simply do not
-      resolve, which is a missing file icon rather than a broken page.
+      Electron protocol handler that does not exist here; the file icons come from
+      `/file-icon/` on this origin instead, which `img-src 'self'` already covers.
     -->
     <meta
       http-equiv="Content-Security-Policy"

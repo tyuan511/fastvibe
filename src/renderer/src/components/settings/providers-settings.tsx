@@ -47,6 +47,8 @@ import { ModelDetailDialog, type ModelDetailTarget } from "./model-detail-dialog
 import { ModelPicker } from "./model-picker";
 import { OAuthExtraUsageNote } from "./oauth-extra-usage-note";
 import { OAuthLoginDialog, type OAuthTarget } from "./oauth-login-dialog";
+import { blockedRemotely } from "@/lib/remote-unavailable";
+import { Ipc } from "@shared/ipc";
 
 const PROVIDER_API_ITEMS: Record<ProviderApi, string> = {
   "openai-completions": "OpenAI Chat Completions (/chat/completions)",
@@ -255,10 +257,21 @@ export function ProvidersSettings({ onChanged }: { onChanged: () => void }): JSX
           <ProviderDetail
             provider={selected}
             onError={setError}
-            onConnectFastVibe={(apiKey) => void startConnect(selected, apiKey, setPicker, setError)}
-            onAddModels={() => void startAddModels(selected, setPicker, setError)}
+            onConnectFastVibe={(apiKey) => {
+              // Discovering a model list is a request to the provider's URL issued from
+              // the host's network, which the policy refuses.
+              if (blockedRemotely(Ipc.providersFetch)) return;
+              void startConnect(selected, apiKey, setPicker, setError);
+            }}
+            onAddModels={() => {
+              if (blockedRemotely(Ipc.providersFetch)) return;
+              void startAddModels(selected, setPicker, setError);
+            }}
             onEditModel={(model) => setDetail({ providerId: selected.id, model })}
             onOAuth={() => {
+              // The flow opens the host's system browser and waits on a loopback
+              // callback there; nothing about it can complete from a tab.
+              if (blockedRemotely(Ipc.providersOAuthLogin)) return;
               if (!selected.oauth) return;
               setOauth({
                 target: { id: selected.id, name: selected.name, oauth: selected.oauth },
@@ -304,8 +317,14 @@ export function ProvidersSettings({ onChanged }: { onChanged: () => void }): JSX
         addedIds={providers.map((item) => item.id)}
         onPatch={(next) => setAdd((current) => (current ? { ...current, ...next } : current))}
         onClose={() => setAdd(null)}
-        onFetch={() => void fetchAddCandidates(add, natives, setAdd)}
+        onFetch={() => {
+          // 内置 needs no fetch — those model lists ship with the SDK — so the guard is
+          // asked only on the path that would actually issue the request.
+          if (add?.mode !== "native" && blockedRemotely(Ipc.providersFetch)) return;
+          void fetchAddCandidates(add, natives, setAdd);
+        }}
         onOAuth={() => {
+          if (blockedRemotely(Ipc.providersOAuthLogin)) return;
           const provider = natives.find((item) => item.id === add?.nativeId);
           if (!provider?.oauth || !provider.id) return;
           setOauth({

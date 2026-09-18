@@ -6,8 +6,9 @@ import {
   allowedMethods,
   assertPolicyCoverage,
   deniedMethods,
+  remoteDenialReason,
   remotePolicy,
-} from "../src/main/server/policy.ts";
+} from "../src/shared/remote-policy.ts";
 
 /**
  * The policy decides what the internet can reach. Its failure mode is silence: a method
@@ -88,4 +89,55 @@ test("allowed and denied do not overlap", () => {
   const denied = new Set(deniedMethods());
   const overlap = allowedMethods().filter((method) => denied.has(method));
   assert.deepEqual(overlap, []);
+});
+
+test("the denied set is exactly what the UI explains, so a new denial cannot go silent", () => {
+  // A denied method needs a second thing to exist: the control that offers it has to say
+  // why, at the click, instead of doing nothing. That is `blockedRemotely`
+  // (`renderer/src/lib/remote-unavailable.ts`), asked at each trigger and answered from
+  // this same table — but a *new* denial nobody wired up is exactly the failure the
+  // arrangement exists to prevent: a button that is there, does nothing, and explains
+  // nothing.
+  //
+  // So the set is pinned. Denying one more method fails here, and the fix is two lines:
+  // add it below, and guard whatever offers it.
+  assert.deepEqual([...deniedMethods()].sort(), [
+    "app:export-logs",
+    "browser:import-profile",
+    "browser:list-profiles",
+    "browser:response",
+    "engine:export-html",
+    "engine:import-skill",
+    "projects:add",
+    "providers:fetch",
+    "providers:oauth-answer",
+    "providers:oauth-cancel",
+    "providers:oauth-login",
+    "remote:clear-password",
+    "remote:get-state",
+    "remote:list-devices",
+    "remote:revoke-device",
+    "remote:set-password",
+    "remote:start",
+    "remote:stop",
+    "update:check",
+    "update:download",
+    "update:install",
+    "window:close",
+    "window:is-maximized",
+    "window:minimize",
+    "window:new",
+    "window:toggle-maximize",
+    "workspace:open-terminal",
+    "workspace:pick",
+    "workspace:reveal",
+  ]);
+});
+
+test("a denial reason is available to the renderer under its own name", () => {
+  // `remoteDenialReason` is what the UI calls; it must answer for a denied method and
+  // stay null for an allowed one, or every control would hide itself.
+  assert.ok(remoteDenialReason(Ipc.workspacePick));
+  assert.equal(remoteDenialReason(Ipc.enginePrompt), null);
+  assert.equal(remoteDenialReason("engine:never-registered"), "该方法未开放给远程客户端");
 });

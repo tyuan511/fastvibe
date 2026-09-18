@@ -4,6 +4,7 @@ import { Ipc } from "@shared/ipc";
 import { broadcast, subscribe } from "./ipc/broadcast";
 import { dispatch, handle, handlerChannels } from "./ipc/registry";
 import { getFastVibePaths } from "./engine/paths";
+import { fileIconsDirectory } from "./engine/file-icons";
 import { log } from "./engine/logger";
 import { readAppSettings, writeAppSettings } from "./engine/app-settings";
 import { passwordProblem } from "./server/auth";
@@ -40,6 +41,7 @@ function instance(): RemoteServer {
     webRoot: app.isPackaged
       ? join(process.resourcesPath, "app.asar", "out", "renderer")
       : join(__dirname, "../renderer"),
+    iconRoot: fileIconsDirectory(),
     log: {
       info: (message) => log.info(message),
       warn: (message) => log.warn(message),

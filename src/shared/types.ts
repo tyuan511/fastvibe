@@ -81,6 +81,25 @@ export type EngineSessionState = {
    * does not cover is still busy.
    */
   isCompacting?: boolean;
+  /**
+   * The transcript is parked on a message the engine can continue from.
+   *
+   * This is the composer's 继续 control: an abnormal stop (a failure, a user abort, an
+   * output-limit truncation, or a turn cut off before its first token) leaves the
+   * transcript on a message `continueTurn` can re-enter from — see `canResumeRun`.
+   *
+   * It is derived from the transcript rather than from a live event on purpose. The
+   * event that reports an abort is a transient stream payload a client can miss
+   * entirely (a background chat, a window reload, a socket that was gone), and the
+   * affordance then depended on having watched it happen. The transcript survives all
+   * three, so the button reappears however this client got here.
+   *
+   * A run *in flight* is resumable by this rule too — `session.messages` only grows on
+   * `message_end`, so mid-run it ends on a `toolResult` awaiting the next round trip —
+   * so the reader must pair it with 「this chat is idle」 (`running` / `isCompacting`),
+   * which is what the composer does.
+   */
+  canResume?: boolean;
   sessionFile?: string;
   sessionId?: string;
   sessionName?: string;

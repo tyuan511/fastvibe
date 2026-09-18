@@ -5,6 +5,8 @@ import { Download01Icon, RefreshIcon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { useAppUpdate } from "@/lib/use-app-update";
+import { blockedRemotely } from "@/lib/remote-unavailable";
+import { Ipc } from "@shared/ipc";
 
 /**
  * Sits at the right of the sidebar's 设置 row. A version the background check found
@@ -34,7 +36,10 @@ export function SidebarUpdateButton(): JSX.Element | null {
         size="xs"
         className="shrink-0"
         title={t("update.sidebarRestartTitle", { version: update?.availableVersion })}
-        onClick={() => void window.fastvibe.updater.install()}
+        onClick={() => {
+          if (blockedRemotely(Ipc.updateInstall)) return;
+          void window.fastvibe.updater.install();
+        }}
       >
         <HugeiconsIcon strokeWidth={2} icon={RefreshIcon} className="size-3" />
         {t("update.sidebarRestart")}
@@ -48,7 +53,10 @@ export function SidebarUpdateButton(): JSX.Element | null {
         size="xs"
         className="shrink-0"
         title={t("update.sidebarUpdateTitle", { version: update?.availableVersion })}
-        onClick={() => void window.fastvibe.updater.download()}
+        onClick={() => {
+          if (blockedRemotely(Ipc.updateDownload)) return;
+          void window.fastvibe.updater.download();
+        }}
       >
         <HugeiconsIcon strokeWidth={2} icon={Download01Icon} className="size-3" />
         {t("update.sidebarUpdate")}

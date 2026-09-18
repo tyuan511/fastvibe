@@ -11,6 +11,13 @@
     "noEmit": true,
     "isolatedModules": true,
     "resolveJsonModule": true,
+    // `shared/remote-policy.ts` is read by three consumers: the renderer (to hide a
+    // control), the main-process server (to refuse a call), and `node --test`, which
+    // reads no tsconfig and so resolves neither the `@shared/*` alias nor a bare
+    // extensionless path. An explicit `.ts` is the one spelling all three accept, the
+    // same reason tsconfig.node.json sets this. Safe with `noEmit`: Vite resolves the
+    // extension for the real build and nothing here is written.
+    "allowImportingTsExtensions": true,
     "types": ["vite/client"],
     "baseUrl": ".",
     "paths": {

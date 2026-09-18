@@ -243,6 +243,9 @@ const transport: ApiTransport = {
   // Both filled from the handshake below, before the app is imported.
   settingsInitial: {},
   platform: "darwin",
+  // Fixed, and the reason it exists: `platform` describes the machine at the other end
+  // of the socket, which is exactly the wrong thing to lay a browser out for.
+  remote: true,
 };
 
 /* ------------------------------------------------------------------ boot */

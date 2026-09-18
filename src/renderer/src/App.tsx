@@ -17,7 +17,8 @@ import { handleBrowserRequest } from "@/components/layout/side-pane-browser";
 import { PANEL_COLLAPSE_TRANSITION } from "@/components/layout/collapsible-panel";
 import { CommandPalette } from "@/components/layout/command-palette";
 import { TitleBar } from "@/components/layout/title-bar";
-import { HAS_CUSTOM_TITLE_BAR, IS_MAC } from "@/lib/platform";
+import { HAS_CUSTOM_TITLE_BAR, HAS_TRAFFIC_LIGHTS } from "@/lib/platform";
+import { Toaster } from "@/components/ui/sonner";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   AlertDialog,
@@ -74,6 +75,8 @@ import { conversationIdFromHash, conversationIdFromPath, conversationPath, works
 import { useSidePaneStore } from "@/stores/side-pane";
 import { useAppShortcuts, useShortcutLabel } from "@/lib/use-shortcuts";
 import { archiveConversations, archivedIdList, useArchivedIds } from "@/stores/archive";
+import { Ipc } from "@shared/ipc";
+import { blockedRemotely } from "@/lib/remote-unavailable";
 
 
 
@@ -323,6 +326,16 @@ export function App(): JSX.Element {
   // where the subject is a *run*: the transcript's caret/working row, and whether a
   // send is queued or starts a turn.
   const conversationWorking = useConversationWorking();
+  /**
+   * Whether the composer's primary action is 继续 rather than 发送: Main says the
+   * transcript is parked on a message the engine can re-enter from, this chat is idle,
+   * and there is a chat on screen to continue — a run in flight is resumable by that
+   * same rule, so the two must be read together or a working chat would offer 继续
+   * instead of 停止; and the empty hero has no conversation, so 继续 there would reach
+   * for whatever session the engine last held.
+   */
+  const resumable = useSessionStore((state) => state.canResume);
+  const canResume = Boolean(activeId) && resumable && !conversationWorking;
   const running = useSessionStore((state) => state.running);
   const waitingForUser = useSessionStore((state) => state.waitingForUser);
   const stats = useSessionStore((state) => state.stats);
@@ -361,8 +374,8 @@ export function App(): JSX.Element {
   const unmarkAllQueuedSending = useSessionStore((state) => state.unmarkAllQueuedSending);
   const clearQueued = useSessionStore((state) => state.clearQueued);
   const setQueuePause = useSessionStore((state) => state.setQueuePause);
-  const runInterrupted = useSessionStore((state) => state.runInterrupted);
   const setRunInterrupted = useSessionStore((state) => state.setRunInterrupted);
+  const setCanResume = useSessionStore((state) => state.setCanResume);
   const restoreId = useRef<string | null>(null);
   const draining = useRef(false);
   // One send at a time. A second click / Enter while this send is still being handed
@@ -653,6 +666,7 @@ export function App(): JSX.Element {
       if (!settingsOpen) navigate("/settings/general");
     },
     newWindow: () => {
+      if (blockedRemotely(Ipc.windowNew)) return;
       void window.fastvibe.app.newWindow();
     },
     newChat: () => {
@@ -851,6 +865,10 @@ export function App(): JSX.Element {
     setError(null);
     clearQueued();
     setRunInterrupted(null);
+    // `canResume` is deliberately not touched here: it is not a leftover of the chat
+    // being left, it is part of the state reply `setSession` just adopted — and
+    // clearing it would hide the 继续 button on exactly the chat that came back from
+    // an abort.
     // Drop the previous chat's numbers before the new ones arrive.
     useSessionStore.getState().setStats(null);
     refreshStats();
@@ -952,6 +970,7 @@ export function App(): JSX.Element {
       // A fresh prompt supersedes an interrupted turn: drop the resume affordance now
       // so the button does not linger until the engine's `agent_start` lands.
       setRunInterrupted(null);
+      setCanResume(false);
       // Not awaited either: `prompt()` resolves only when the whole run is over, and
       // holding the guard until then would refuse every follow-up sent mid-run.
       void dispatchPrompt(text, currentAttachments, "prompt").catch((err: unknown) => {
@@ -1081,10 +1100,15 @@ export function App(): JSX.Element {
    * follow-ups onto a half-finished reply. Once the resumed run starts, `agent_start`
    * clears `runInterrupted` and unpauses nothing — the queue only resumes when the
    * user explicitly continues it (or a later clean turn ends).
+   *
+   * `canResume` is dropped here rather than left to the engine's reply: the flag is
+   * derived state, and clicking 继续 twice inside one IPC round trip would otherwise
+   * call `continueTurn` on a session the SDK already considers busy.
    */
   async function handleResumeRun(): Promise<void> {
     if (!canChat) return;
     setRunInterrupted(null);
+    setCanResume(false);
     try {
       await engine.continue();
     } catch (err) {
@@ -1315,6 +1339,10 @@ export function App(): JSX.Element {
   }, [location.key, location.pathname, navigationType]);
 
   async function handleAddProject(): Promise<void> {
+    // The picker would open on the machine running the server, where nobody is looking,
+    // and the promise would never settle. Guarded here because three different controls
+    // reach this one function.
+    if (blockedRemotely(Ipc.projectsAdd)) return;
     try {
       const added = await window.fastvibe.projects.add();
       if (!added) return;
@@ -1478,6 +1506,7 @@ export function App(): JSX.Element {
   }
 
   async function handlePickWorkspace(): Promise<void> {
+    if (blockedRemotely(Ipc.workspacePick)) return;
     const picked = await window.fastvibe.workspace.pick();
     if (!picked) return;
     setStatus(picked.status);
@@ -1615,7 +1644,7 @@ export function App(): JSX.Element {
       onRecallQueued={(id) => void handleRecallQueued(id)}
       onReorderQueued={setQueuedOrder}
       onResumeQueue={() => setQueuePause(null)}
-      runInterrupted={runInterrupted !== null}
+      canResume={canResume}
       onResumeRun={() => void handleResumeRun()}
       sendOnEnter={settings.sendOnEnter}
       focusSignal={composerFocus}
@@ -1641,6 +1670,9 @@ export function App(): JSX.Element {
 
   return (
     <div className="flex h-full flex-col bg-background">
+      {/* Above everything, including the settings overlay: a refused click is most
+          likely to happen in there, and the notice has to be where the click was. */}
+      <Toaster />
       {/* Windows and Linux draw the window's own bar here, above the split, so the
           controls the OS used to provide are never missing and never fight the
           sidebar or the right pane for the window's top-right corner. */}
@@ -1670,7 +1702,10 @@ export function App(): JSX.Element {
           onRenameSession={(id, title) => void handleRenameSession(id, title)}
           onRenameProject={(cwd, name) => void handleRenameProject(cwd, name)}
           onRemoveProject={(cwd) => void handleRemoveProject(cwd)}
-          onRevealProject={(cwd) => void window.fastvibe.workspace.reveal(cwd)}
+          onRevealProject={(cwd) => {
+            if (blockedRemotely(Ipc.workspaceReveal)) return;
+            void window.fastvibe.workspace.reveal(cwd);
+          }}
           onReorderProjects={(cwds) => void handleReorderProjects(cwds)}
           onOpenSettings={() => navigate("/settings/general")}
           onOpenMarket={() => navigate("/settings/extensions")}
@@ -1683,7 +1718,7 @@ export function App(): JSX.Element {
             // traffic lights — or in the window's title bar, where there is one.
             // Collapsed: inset this bar on macOS so the expand control, title and
             // lights share one vertically centred row.
-            animate={{ paddingLeft: sidebarCollapsed && IS_MAC ? "5.5rem" : "1rem" }}
+            animate={{ paddingLeft: sidebarCollapsed && HAS_TRAFFIC_LIGHTS ? "5.5rem" : "1rem" }}
             transition={PANEL_COLLAPSE_TRANSITION}
             className="drag-region flex h-11 items-center justify-between pr-4"
           >

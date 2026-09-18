@@ -48,6 +48,13 @@ const maximize = params.get("maximize") === "1";
  * (`lib/platform.ts`). Defaults to macOS, the layout the app is developed on.
  */
 const platform = params.get("platform") ?? "darwin";
+/**
+ * `?remote=1` renders the shell as the browser client sees it: no traffic lights to
+ * inset and no hand-drawn title bar either, whatever `?platform=` says the host is.
+ * This is the layout that had 88px of empty space where a Mac's traffic lights would
+ * be, on a page that has none.
+ */
+const remote = params.get("remote") === "1";
 
 // Reset persisted UI state so the harness always starts from the same layout.
 try {
@@ -187,13 +194,19 @@ async function loadIconMapping() {
 }
 
 /**
- * The real app serves icons over a private `fastvibe-icon://` scheme registered by
- * Electron. In a plain browser that scheme is unknown, so rewrite the images to the
- * package's SVG files that the Vite dev server exposes.
+ * The real app serves icons two ways — a private `fastvibe-icon://` scheme in the
+ * desktop window, `/file-icon/` over HTTP for the browser client — and this harness is
+ * neither, so both are rewritten to the package's SVGs that the Vite dev server
+ * exposes. Matching both is what keeps `?remote=1` previewable.
  */
 function rewriteIcons(scope: ParentNode): void {
-  scope.querySelectorAll<HTMLImageElement>('img[src^="fastvibe-icon://"]').forEach((image) => {
-    const name = (image.getAttribute("src") ?? "").replace("fastvibe-icon://icons/", "").replace(/\.svg$/, "");
+  scope
+    .querySelectorAll<HTMLImageElement>('img[src^="fastvibe-icon://"], img[src^="/file-icon/"]')
+    .forEach((image) => {
+    const name = (image.getAttribute("src") ?? "")
+      .replace("fastvibe-icon://icons/", "")
+      .replace("/file-icon/", "")
+      .replace(/\.svg$/, "");
     image.onerror = () => {
       image.onerror = null;
       image.src = `${ICONS_BASE}file.svg`;
@@ -409,6 +422,8 @@ const api = {
   app: {
     /** Read by `lib/platform.ts` before the first paint; `?platform=` overrides it. */
     platform,
+    /** `?remote=1`: the window chrome the browser client has, which is none. */
+    remote,
     getInfo: async () => APP_INFO,
     log: () => undefined,
     exportLogs: async () => "/Users/dev/Downloads/fastvibe-logs-preview.zip",

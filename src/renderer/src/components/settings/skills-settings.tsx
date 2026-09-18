@@ -51,6 +51,8 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { IconButton } from "@/components/icon-button";
 import type { SkillDraft, SkillInfo } from "@shared/types";
+import { blockedRemotely } from "@/lib/remote-unavailable";
+import { Ipc } from "@shared/ipc";
 
 const EMPTY_DRAFT: SkillDraft = { name: "", description: "", body: "" };
 
@@ -102,6 +104,9 @@ export function SkillsSettings(): JSX.Element {
   }
 
   async function importSkill(): Promise<void> {
+    // A folder dialog, on the host's screen. 新建 beside it writes through a call and
+    // works from anywhere.
+    if (blockedRemotely(Ipc.engineImportSkill)) return;
     setSaving(true);
     try {
       const next = await window.fastvibe.engine.importSkill();

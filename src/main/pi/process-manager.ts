@@ -11,6 +11,7 @@ import {
   ModelRegistry,
   ModelRuntime,
   SessionManager,
+  sessionEntryToContextMessages,
   SettingsManager,
   type AgentSession,
   type AgentSessionEvent,
@@ -69,6 +70,7 @@ import { readAutoCompact, readDefaultModel } from "../engine/app-settings";
 import { currentAiLanguageDirective } from "../engine/ai-language";
 import { uiText } from "../engine/ui-text";
 import { mapEngineMessages } from "../engine/map-messages";
+import { canResumeRun } from "../engine/resume";
 import { ReasoningStore } from "../engine/reasoning-store";
 import { captureCheckpoint, clearCheckpoint, readBefore, readCheckpoint, restoreCheckpoint, saveCheckpoints, loadCheckpoints, checkpointFile, type CheckpointFile } from "../engine/checkpoint";
 import { usageLedgerFor, type UsageLedger } from "../engine/usage-ledger";
@@ -183,12 +185,20 @@ const execFileAsync = promisify(execFile);
  * `assistantMessageEvent`, so forwarding those fields made long replies O(n²) over
  * IPC (each token re-serialised the entire answer) and was a main cause of the UI
  * freezing mid-run. Strip the unused weight; keep the ordered deltas.
+ *
+ * `error` and `aborted` are both kept. Only `error` used to be: an aborted assistant
+ * message was stripped down to nothing, so `agent_end`'s `stopReason === "aborted"`
+ * branch in the renderer was dead code and a user's own 停止 never marked the turn
+ * interrupted — the 继续 control only ever appeared for a failure. The composer's
+ * 继续 now reads the transcript instead (`canResume`), but the live verdict is still
+ * worth carrying: it is what pauses a follow-up queue the moment the user stops a run.
  */
 function errorSummary(message: unknown): Record<string, unknown> | undefined {
   if (typeof message !== "object" || message === null) return undefined;
   const record = message as Record<string, unknown>;
-  if (record.role !== "assistant" || record.stopReason !== "error") return undefined;
-  return { role: "assistant", stopReason: "error", errorMessage: record.errorMessage };
+  if (record.role !== "assistant") return undefined;
+  if (record.stopReason !== "error" && record.stopReason !== "aborted") return undefined;
+  return { role: "assistant", stopReason: record.stopReason, errorMessage: record.errorMessage };
 }
 
 /** The one block of a partial assistant message a tool-call event actually describes. */
@@ -2714,17 +2724,26 @@ export class PiProcessManager {
     this.#setStatus({ state: "ready", cwd: managed.cwd });
   }
   /**
-   * The engine's message list carries no ids of its own; the session entry that
-   * owns each message does. Reuse those entry ids so the renderer can branch
-   * (edit / retry) at the exact point in the session tree, which is also what
-   * makes a retry replace its original turn instead of stacking a second copy.
+   * The user-visible transcript is the full current branch, not `session.messages`.
+   * The latter is the SDK's compaction-aware LLM context: once a summary lands, it
+   * replaces the entries before `firstKeptEntryId`. Reading it here made a compaction
+   * erase the user's history from the thread even though the session file still held
+   * every message. Projecting each branch entry keeps that context projection in the
+   * engine while leaving the reader's transcript intact.
    */
   #messages(session: AgentSession, conversationId: string | undefined): ChatMessage[] {
     const entryIds = new Map<unknown, string>();
     const timings = new Map<string, ThinkingTiming[]>();
-    for (const entry of session.sessionManager.getEntries()) {
+    const transcript: unknown[] = [];
+    for (const entry of session.sessionManager.getBranch()) {
+      for (const message of sessionEntryToContextMessages(entry)) {
+        // The mapper accepts plain engine messages. Keep the owning entry id beside
+        // every projection, including synthetic compaction/custom messages, so rows
+        // remain stable across reads and model dividers can find their reply.
+        entryIds.set(message, entry.id);
+        transcript.push(message);
+      }
       if (entry.type !== "message") continue;
-      entryIds.set(entry.message, entry.id);
       const blocks = this.#reasoning.get(entry.id);
       if (blocks) timings.set(entry.id, blocks);
     }
@@ -2739,7 +2758,7 @@ export class PiProcessManager {
       return renderExtensionMessage(renderer, message, this.#widgetWidth);
     };
     const messages = mapEngineMessages(
-      session.messages,
+      transcript,
       (message) => entryIds.get(message),
       timings,
       renderCustom,
@@ -2824,13 +2843,13 @@ export class PiProcessManager {
       if (typeof raw.provider !== "string" || typeof raw.model !== "string") continue;
       const model: EngineModel = { provider: raw.provider, id: raw.model };
       const from = previous;
-      // Recorded before the on-screen check below: a reply summarised away by a
-      // compaction still moves the sequence on, so the divider that finally shows
-      // names the model it really followed.
+      // Record before the on-screen check below so the divider names the model that
+      // actually answered, including replies before a compaction card.
       previous = model;
       if (!from || (from.provider === model.provider && from.id === model.id)) continue;
       const index = indexById.get(entry.id);
-      // Not on screen: summarised away by a compaction, or on another branch.
+      // A current-branch reply should be on screen; missing ids are malformed or
+      // filtered messages, not a compaction hiding the conversation's history.
       if (index === undefined) continue;
       if (messages[index].role !== "assistant") continue;
       (messages[index].parts ??= []).unshift({ kind: "model", from, to: model });
@@ -2871,6 +2890,13 @@ export class PiProcessManager {
    * `running` is the run alone. A compaction is its own flag (`isCompacting`),
    * because the composer stops a run and a compaction the same way but the
    * sidebar's 运行中 covers both — the renderer unions them (`working`).
+   *
+   * `canResume` is the composer's 继续 control, derived from the transcript here rather
+   * than from a live event: a user abort is reported only by a transient stream payload
+   * a client can miss (a background chat, a reload, a socket that was away), and the
+   * affordance must not depend on having watched it happen. `canResumeRun` holds the
+   * rule; it is the mirror of what `continueTurn` does to re-enter the loop, so the two
+   * cannot disagree about whether the button works.
    */
   #state(session: AgentSession, conversationId: string | undefined): EngineSessionState {
     const model = session.model;
@@ -2880,7 +2906,7 @@ export class PiProcessManager {
     // composer's chip; reporting nothing makes the chip ask for one instead.
     const picked = model && model.provider !== "unknown" ? { provider: model.provider, id: model.id } : undefined;
     const usage = session.getContextUsage();
-    return { conversationId, running: conversationId ? this.#running.get(conversationId) === true : false, model: picked, thinkingLevel: session.thinkingLevel, isStreaming: session.isStreaming, isCompacting: session.isCompacting, interruptMode: this.#interruptMode, sessionFile: session.sessionFile, sessionId: session.sessionId, sessionName: session.sessionName, messageCount: session.messages.length, queuedMessageCount: session.pendingMessageCount, autoCompactionEnabled: session.autoCompactionEnabled, steeringMode: session.steeringMode, followUpMode: session.followUpMode, contextUsage: usage ? { tokens: usage.tokens, contextWindow: usage.contextWindow, percent: usage.percent } : undefined };
+    return { conversationId, running: conversationId ? this.#running.get(conversationId) === true : false, model: picked, thinkingLevel: session.thinkingLevel, isStreaming: session.isStreaming, isCompacting: session.isCompacting, canResume: canResumeRun(session.messages), interruptMode: this.#interruptMode, sessionFile: session.sessionFile, sessionId: session.sessionId, sessionName: session.sessionName, messageCount: session.messages.length, queuedMessageCount: session.pendingMessageCount, autoCompactionEnabled: session.autoCompactionEnabled, steeringMode: session.steeringMode, followUpMode: session.followUpMode, contextUsage: usage ? { tokens: usage.tokens, contextWindow: usage.contextWindow, percent: usage.percent } : undefined };
   }
   /** State for the empty hero: no session exists, so only the composer's own picks are known. */
   #draftState(): EngineSessionState { return { model: this.#pendingModel, thinkingLevel: this.#pendingThinking, isStreaming: false, running: false, interruptMode: this.#interruptMode }; }

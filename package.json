@@ -44,6 +44,7 @@
     "electron-updater": "^6.8.9",
     "material-icon-theme": "^5.38.1",
     "node-pty": "^1.1.0",
+    "sonner": "^2.0.8",
     "typebox": "1.3.7",
     "ws": "^8.21.3"
   },

@@ -232,6 +232,19 @@ export function RemoteSettings(): JSX.Element {
             ) : null}
           </SettingsGroup>
 
+          {/*
+           * What the address above actually is.
+           *
+           * Loopback is where this server listens, not where a client goes — so the row
+           * could only ever show a string no phone can open, next to a switch that says
+           * remote access is on. The pairing people need is the tunnel: bring one, point
+           * it here. The two named services are the two whose Host handling this server
+           * accepts, and only ngrok needs a flag to get there.
+           */}
+          {state.running && address ? (
+            <p className="px-1 text-xs leading-5 text-muted-foreground">{t("remote.tunnelHint", { address })}</p>
+          ) : null}
+
           <SettingsGroup title={t("remote.devices")}>
             {devices.length ? (
               devices.map((device) => (

@@ -13,6 +13,8 @@ import { MarkdownView } from "./markdown-view";
 import { QuestionAnswers } from "./question-answers";
 import { TodoChecklist } from "./todo-list";
 import { ToolRow } from "./tool-row";
+import { blockedRemotely } from "@/lib/remote-unavailable";
+import { Ipc } from "@shared/ipc";
 
 const RESULT_LIMIT = 4000;
 
@@ -172,7 +174,10 @@ function FileActions({ path }: { path: string }): JSX.Element {
       <button
         type="button"
         className="font-mono text-sm text-muted-foreground underline-offset-2 hover:underline"
-        onClick={() => void window.fastvibe.workspace.reveal(path)}
+        onClick={() => {
+          if (blockedRemotely(Ipc.workspaceReveal)) return;
+          void window.fastvibe.workspace.reveal(path);
+        }}
       >
         {displayPath(path, cwd)}
       </button>

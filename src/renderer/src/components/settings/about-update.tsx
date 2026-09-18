@@ -9,6 +9,8 @@ import { SettingsGroup, SettingsRow } from "./settings-group";
 import { UpdateDialog } from "./update-dialog";
 import { useSettingsStore } from "@/stores/settings";
 import type { AppUpdateState } from "@shared/ipc";
+import { blockedRemotely } from "@/lib/remote-unavailable";
+import { Ipc } from "@shared/ipc";
 
 function statusDescription(state: AppUpdateState | null, t: (key: string, options?: Record<string, unknown>) => string): string {
   if (!state || state.status === "idle") return t("update.idle");
@@ -55,7 +57,18 @@ export function AboutUpdate(): JSX.Element {
           title={t("update.check")}
           description={statusDescription(update, t)}
           control={
-            <Button size="xs" variant="outline" disabled={disabled} onClick={() => setDialogOpen(true)}>
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={disabled}
+              // An update installs on the host and restarts it, taking this connection
+              // down with it. The switch above stays live: it is a stored preference,
+              // and the check it governs runs on the host either way.
+              onClick={() => {
+                if (blockedRemotely(Ipc.updateCheck)) return;
+                setDialogOpen(true);
+              }}
+            >
               <HugeiconsIcon strokeWidth={2} icon={RefreshIcon} />
               {t("update.check")}
             </Button>

@@ -8,6 +8,8 @@ import type { FilePreview } from "@shared/types";
 import { useHighlightedCode } from "@/lib/highlight";
 import { MarkdownView } from "./markdown-view";
 import { DiffView } from "./diff-view";
+import { blockedRemotely } from "@/lib/remote-unavailable";
+import { Ipc } from "@shared/ipc";
 
 export function PreviewPanel({
   preview,
@@ -26,7 +28,10 @@ export function PreviewPanel({
             size="icon-xs"
             variant="ghost"
             label={t("preview.reveal")}
-            onClick={() => void window.fastvibe.workspace.reveal(preview.path)}
+            onClick={() => {
+              if (blockedRemotely(Ipc.workspaceReveal)) return;
+              void window.fastvibe.workspace.reveal(preview.path);
+            }}
           >
             <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} />
           </IconButton>

@@ -123,6 +123,37 @@ Four rules, each of which fails silently if broken:
 - **Pushes begin at authentication, not at connection.** A socket that has not proved who
   it is is subscribed to nothing and closed after ten seconds.
 
+**The tunnel is the user's, so the server has to accept the `Host` it rewrites.** Every
+tunnel does that by default — ngrok's default *is* `--host-header=rewrite`, and cloudflared
+sends the origin service's host — while the page, correctly, stays on the public hostname.
+`#originAllowed` used to compare `Host` alone, which refused every user who brought their
+own tunnel: 「连接被断开」 on screen next to a login that had just succeeded, and one warn
+line in the log. The rules now run in this order: `Host` is the origin's host (a direct
+connection, or a proxy told to preserve it); `X-Forwarded-Host` is present, which ngrok
+sets, and then it is the authoritative answer to the question being asked, so it must
+*match* rather than merely exist; otherwise any `X-Forwarded-*` at all (cloudflared sets
+`-Proto` and `-For`, but no `-Host`). A page cannot add any of those — the WebSocket API
+gives it no way to set a header — so the loosest rule is out of reach for the page the check
+exists to refuse. What it gives up is a page going *through the user's own tunnel*, which is
+still not a way in: the first frame must carry a device token, and the only place to get one
+is `POST /api/login`, which a cross-origin page cannot complete (no CORS headers, so the
+preflight fails). The token is what keeps a stranger out; this check keeps the browser from
+being used as the transport. The settings pane says as much out loud, since the row can only
+show `127.0.0.1:7777` — an address no phone can open: while the server is running it prints
+`remote.tunnelHint` under it, naming Cloudflare Tunnel (free, no signup) and the
+`--host-header=preserve` ngrok needs.
+
+**The heartbeat is for the tunnel, not for this machine.** A tunnel or reverse proxy cuts a
+quiet WebSocket — Cloudflare's edge after 100 seconds, nginx's `proxy_read_timeout` after 60
+— and quiet is the normal case here: reading a transcript, or watching a run, is a socket
+with nothing to say. So `#beat` pings each one every 30 seconds, and the browser's pong is
+half the point: traffic has to be seen in *both* directions for the timers on either side to
+reset. It doubles as liveness, which matters more through a tunnel than on a wire — a
+half-open connection there looks attached forever and never receives anything again — so a
+socket that missed a whole round is `terminate()`d, which becomes the `close` the client
+reconnects from. `heartbeatMs` exists only so a test can watch that happen without waiting
+out the real interval.
+
 The password is exchanged once for a device token (`POST /api/login`); tokens travel on
 every later connection, are stored only as hashes, and are revoked one device at a time.
 Guessing is slowed by a global exponential backoff — global rather than per address
@@ -148,6 +179,31 @@ Three things that are easy to get wrong here:
   every event); wiring the renderer to re-snapshot is the better answer once it reads them.
 - **`remote:*` is denied to remote callers**, so 设置 → 远程访问 renders "只能在本机管理"
   out here rather than a setup form it could not submit.
+- **A browser has no window chrome, whatever the host is.** `app.platform` describes the
+  machine Main runs on, so a client connected to a Mac read `darwin` and inset its first
+  row for traffic lights 300 miles away — 88px of blank space before the sidebar's own
+  buttons. `lib/platform.ts` splits the question: `HAS_TRAFFIC_LIGHTS` /
+  `HAS_CUSTOM_TITLE_BAR` are about the window and are both false out here, while `IS_MAC`
+  is about the *keyboard* and follows this device's own user agent — an iPad on a Linux
+  box still sends ⌘. `IS_REMOTE` comes off the bridge (`ApiTransport.remote`), not a
+  guess.
+- **A denied method needs a control that says so.** Refusing the call is half of it; the
+  other half is that pressing 新建项目 or 浏览器 out here has to *tell you why* rather
+  than do nothing. `blockedRemotely(Ipc.x)` (`lib/remote-unavailable.ts`) is asked at
+  each trigger, before the work, and toasts the policy's own sentence — one table, so the
+  notice and a refusal cannot disagree. The controls stay put rather than disappearing: a
+  feature that vanishes on one client and not another is its own confusion, and a
+  disabled control cannot explain itself. `deniedMethods()` is pinned by a test, so
+  denying one more method fails until something guards it.
+- **Anything the desktop reaches through an Electron `protocol.handle` has to be served
+  here too.** File icons were the first: `fastvibe-icon://` does not exist in a browser,
+  so every file chip was a broken image. The server serves the same directory under
+  `/file-icon/<name>.svg` and `fileIconUrl` picks by transport. Unauthenticated on
+  purpose — a public npm package's SVGs, needed before there is a socket to ask over.
+- **In dev the server serves `out/renderer`, which `pnpm dev` does not write.** `webRoot`
+  is the *build* output, so a client checked under `pnpm dev` is whatever `pnpm build`
+  last produced — run it before testing the web client, or you are debugging an old
+  bundle.
 
 ### 窄视口（手机）
 
@@ -230,10 +286,16 @@ and the future project file tree.
   serves the SVGs under the private `fastvibe-icon://icons/<name>.svg` scheme
   (registered privileged before app ready, `protocol.handle` after). Names the
   manifest references but that don't ship as files fall back to `file.svg`.
+- The browser client cannot use that scheme — `protocol.handle` is Main's, and a tab has
+  no Electron — so the remote server serves the same directory over HTTP under
+  `/file-icon/<name>.svg` (`fileIconsDirectory()` → `RemoteServerDeps.iconRoot`). The
+  name is guarded by a character class rather than a resolved-path check, because here a
+  name is all a client may give.
 - `workspace:file-icons` hands the renderer the lookup tables once
   (`src/renderer/src/lib/file-icons.ts`, cached module-wide); `components/file-icon.tsx`
-  resolves a name to an icon. Add `fastvibe-icon:` to the CSP `img-src` when a new
-  surface loads these icons.
+  resolves a name to an icon. `fileIconUrl` picks the scheme or the HTTP path by
+  transport (`IS_REMOTE`). Add `fastvibe-icon:` to the desktop CSP `img-src` when a new
+  surface loads these icons; the remote page needs nothing, `img-src 'self'` covers it.
 - The right pane's **文件** tab (`components/layout/side-pane-files.tsx`) is the
   consumer: a lazily-loaded project tree (`workspace:read-dir`, hiding `.git` and
   `node_modules`). Narrow panes swap between the tree and a file preview; when
@@ -453,8 +515,13 @@ controls out of the side pane's tab strip: the split layout below simply starts 
   window that asked — plus a `window:state` push, because the OS can maximise too (snap,
   double-click, a window-manager key), so the glyph is not derivable from our own clicks.
 - **The platform comes from the preload, not the user agent.** `app.platform` is a plain string on
-  the bridge, read before the first paint, and every `IS_MAC` in the renderer — keybinding labels
-  included — now reads it through `lib/platform.ts`.
+  the bridge, read before the first paint, and the renderer reads it through
+  `lib/platform.ts`.
+- **Two questions, not one.** `HAS_TRAFFIC_LIGHTS` and `HAS_CUSTOM_TITLE_BAR` describe the
+  window around the page; `IS_MAC` describes the keyboard in front of it. They agree in a
+  desktop window and part company in the browser client, which has neither bar nor traffic
+  lights and whose ⌘ key belongs to whatever device is holding it. A layout inset (`pl-22`,
+  the collapsed header's `5.5rem`) reads the chrome flags; a modifier label reads `IS_MAC`.
 - **Nothing the macOS layout keeps in the sidebar is drawn twice.** Where the bar exists, the
   sidebar's title row and its logo row are gone and the logo/搜索 live in the bar instead;
   `SidebarCollapsedChrome` drops its toggle and the main header its 展开侧边栏 button, because the
@@ -1137,12 +1204,26 @@ means either: an agent **run** and a **compaction**.
   flag *and* with an `agent_end` claiming `willRetry` for a retry nothing would perform, so a
   502 mid-resume stuck the chat on 停止 (sidebar 运行中, keep-awake held, sends queued instead
   of sent) with no 继续 control, until some unrelated run settled it.
-- The composer's resume control reads `runInterrupted` (`stores/session.ts`): a terminal
-  `agent_end` (`error` / `aborted`), or an `auto_retry_end` reporting failure with no such
-  verdict on record — a retry chain the user stopped while it waited out the backoff, which
-  the SDK ends after already dropping the failed attempt from agent state, so no errored
-  message and no `agent_end` ever describe it. Both pause the follow-up queue; `agent_start`,
-  `turn_start` and a fresh prompt clear the marker again.
+- The composer's 继续 control reads **`EngineSessionState.canResume`**, which Main derives
+  from the transcript (`canResumeRun`, `src/main/engine/resume.ts`) — the last message is an
+  assistant that did not finish (`error` / `aborted` / `length`), or a user / tool result no
+  reply ever followed. Deriving it is the point: the only event that reports an abort is a
+  *transient* stream payload, so a chat the user was not looking at, a reloaded window, or a
+  socket that was away had no 继续 at all — and the dead-code half of this, an `agent_end`
+  whose `stopReason: "aborted"` never survived `slimStreamEvent` because `errorSummary`
+  kept only `error`, meant a user's own 停止 *never* offered one. `resume.ts` mirrors what
+  `continueTurn` does to re-enter the loop, so the button and the call cannot disagree; the
+  renderer pairs it with `working` because a run in flight is resumable by that same rule.
+  The store copies it under the same ownership rule as the run flags (`canResume`), so a
+  side chat's state reply cannot put 继续 on the main composer's send button.
+- `runInterrupted` (`stores/session.ts`) is now only the *live event*'s verdict that a run
+  stopped early — a terminal `agent_end` (`error` / `aborted`), or an `auto_retry_end`
+  reporting failure with no such verdict on record (a retry chain the user stopped while it
+  waited out the backoff, which the SDK ends after already dropping the failed attempt from
+  agent state, so no errored message and no `agent_end` ever describe it). It pauses the
+  follow-up queue when a run stops early, and its nullness is what tells that cancelled
+  retry chain from one whose failure `agent_end` already reported; `agent_start`,
+  `turn_start` and a fresh prompt clear it again.
 - A compaction keeps its own flag `#compacting`, for when it is not part of a run at all:
   `/compact`, and the threshold check a fresh prompt runs before it is sent. It is the only
   thing that can say such a chat is busy, and it is used to re-serve the 正在压缩上下文 card.
@@ -1368,8 +1449,9 @@ Main 在每个事件上读一次文件，所以改完立即生效。两个通知
 
 `pnpm test` —— Node 自带 runner 跑 `test/**/*.test.ts`，只测**纯模块**（无 DOM、不引 zustand/React）：
 `lib/diff.ts` 的行号读取、`engine/pricing.ts` 的价格阶梯、`lib/todos.ts` 的 `n/N` 语义、
-`engine/checkpoint.ts` 的捕获与还原。这一层抓的是运行时不变式——比如「一个未跟踪路径不能让
-整批 `git checkout` 失败」——typecheck 看不见它们。
+`engine/checkpoint.ts` 的捕获与还原、`engine/resume.ts` 的「能不能原地继续」。这一层抓的是运行时不变式——比如「一个未跟踪路径不能让
+整批 `git checkout` 失败」、「`canResumeRun` 不能对 `continueTurn` 会拒绝的 transcript 说 true」
+——typecheck 看不见它们。
 
 ## 运行时保持唤醒
 

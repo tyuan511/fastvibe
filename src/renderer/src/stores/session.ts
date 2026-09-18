@@ -96,11 +96,27 @@ type SessionStore = {
   queued: QueuedPrompt[];
   queuePause: QueuePauseReason | null;
   /**
-   * How the last run ended early, if it did: `error` (failure) or `aborted` (the
-   * user stopped it). Cleared when a new run starts. Drives the composer's resume
-   * control — a half-finished reply can be continued without retyping anything.
+   * How the *live event stream* said the last run ended early: `error` (failure) or
+   * `aborted` (the user stopped it). Cleared when a new run starts.
+   *
+   * This is no longer what draws the composer's 继续 control — that reads `canResume`,
+   * derived by Main from the transcript, so the affordance survives a reload or a chat
+   * the user was not watching. What it is still for is the arrival: it pauses a
+   * follow-up queue the moment a run stops early instead of leaving it to drain into a
+   * half-finished reply, and `auto_retry_end` uses its nullness to tell a cancelled
+   * retry chain from one whose failure `agent_end` already reported.
    */
   runInterrupted: "aborted" | "error" | null;
+  /**
+   * Main's verdict that the chat on screen is parked on a resumable message.
+   *
+   * Copied out of `session` under the same ownership rule as the run flags, rather
+   * than read off `session` directly: a side chat's own state reply (a model change in
+   * its pane) replaces `session` with a state that describes a *different* chat, and a
+   * `canResume` read from there would put 继续 on the main composer's send button. It is
+   * what `EngineSessionState.canResume` is, held per the conversation it belongs to.
+   */
+  canResume: boolean;
   preview: FilePreview | null;
   subagentStreams: Record<string, ChatMessage[]>;
   /**
@@ -168,6 +184,15 @@ type SessionStore = {
   setQueuePause: (reason: QueuePauseReason | null) => void;
   /** Clear the interrupted-run marker once a resume (or fresh prompt) takes over. */
   setRunInterrupted: (reason: "aborted" | "error" | null) => void;
+  /**
+   * Drop the 继续 affordance optimistically, before the engine's own state says so.
+   *
+   * The click and the `agent_start` that confirms it are an IPC hop apart, and a
+   * second click in that window would call `continueTurn` on a session that is already
+   * running (the SDK refuses it). The flag is derived from Main's state, so the next
+   * reply — or the `conversation_running` broadcast — restores the truth either way.
+   */
+  setCanResume: (canResume: boolean) => void;
   setPreview: (preview: FilePreview | null) => void;
   openPreview: (path: string) => Promise<void>;
   applyEvent: (event: EngineEvent) => void;
@@ -789,6 +814,7 @@ export const useSessionStore = create<SessionStore>((set, get) => {
   queued: [],
   queuePause: null,
   runInterrupted: null,
+  canResume: false,
   preview: null,
   subagentStreams: {},
   setStatus: (status) => set({ status, error: status.state === "error" ? status.message ?? null : null }),
@@ -804,6 +830,7 @@ export const useSessionStore = create<SessionStore>((set, get) => {
       return {
         session,
         streaming: mine ? (session?.running ?? false) : state.streaming,
+        canResume: mine ? session?.canResume === true : state.canResume,
         // `working`, not just `running`: the sidebar's mark means 「still busy」, which
         // a compaction also is — and a chat that compacts in the background keeps it
         // lit, so switching to it and back no longer loses the state. This map is the
@@ -1022,6 +1049,7 @@ export const useSessionStore = create<SessionStore>((set, get) => {
   clearQueued: () => set({ queued: [], queuePause: null }),
   setQueuePause: (queuePause) => set({ queuePause }),
   setRunInterrupted: (runInterrupted) => set({ runInterrupted }),
+  setCanResume: (canResume) => set({ canResume }),
   setPreview: (preview) => set({ preview }),
   openPreview: async (path) => {
     // The open file lives on the *conversation's* files tab, so the same file can be
@@ -1088,6 +1116,7 @@ export const useSessionStore = create<SessionStore>((set, get) => {
       queued: [],
       queuePause: null,
       runInterrupted: null,
+      canResume: false,
     }));
   },
   setStreaming: (streaming) =>

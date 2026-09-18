@@ -480,6 +480,7 @@
   "cancel": "取消",
   "enable": "允许远程连接",
   "enableDesc": "开启后，其他设备可以通过密码登录并连接这台电脑上的 agent。",
+  "tunnelHint": "{{address}} 只是这台电脑的监听地址，别的设备直接连不上——需要你自己把它发布到公网，任何隧道工具都行。免费且不用注册的是 Cloudflare Tunnel：运行 cloudflared tunnel --url http://{{address}}，再用它给出的 https 地址访问。用 ngrok 的话必须加 --host-header=preserve，否则网页登录后会一直连不上。",
   "copyAddress": "复制地址",
   "clients": "当前连接",
   "clientsDesc": "已登录并保持连接的设备数量。",
