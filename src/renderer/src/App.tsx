@@ -50,6 +50,7 @@ import { dismissBootLoader } from "@/lib/boot-loader";
 import { cn } from "@/lib/utils";
 
 import { SETTINGS_SECTIONS, type SectionId } from "@/components/settings/settings-sections";
+import { setSidebarCollapsed, useIsNarrowViewport, useSidebarCollapsed } from "@/lib/sidebar-visibility";
 import type { DeleteConversationsResult } from "@/components/settings/archived-settings";
 import { useConversationWorking, useSessionStore, working } from "@/stores/session";
 import { permissionKey, rememberPermission, usePermissionAlways } from "@/lib/permission-rules";import { useSettingsStore } from "@/stores/settings";
@@ -426,7 +427,10 @@ export function App(): JSX.Element {
   const togglePane = useSidePaneStore((state) => state.toggle);
   const settings = useSettingsStore((state) => state.settings);
   const updateSettings = useSettingsStore((state) => state.update);
-  const sidebarCollapsed = settings.sidebarCollapsed ?? false;
+  const sidebarCollapsed = useSidebarCollapsed();
+  // A phone has no width to give the sidebar or the right pane; the first overlays
+  // (`CollapsiblePanel overlay`) and the second is simply not there.
+  const narrow = useIsNarrowViewport();
   const archivedIds = useArchivedIds();
   const toggleSidebarShortcut = useShortcutLabel("toggleSidebar");
   const toggleSidePaneShortcut = useShortcutLabel("toggleSidePane");  const newChatShortcut = useShortcutLabel("newChat");
@@ -697,7 +701,7 @@ export function App(): JSX.Element {
       setCommandOpen(false);
       return cycleChat(1);
     },
-    toggleSidebar: () => updateSettings({ sidebarCollapsed: !sidebarCollapsed }),
+    toggleSidebar: () => setSidebarCollapsed(!sidebarCollapsed),
     toggleSidePane: () => togglePane(),
     findInConversation: () => setFindOpen((open) => !open),
   });
@@ -1641,7 +1645,17 @@ export function App(): JSX.Element {
           controls the OS used to provide are never missing and never fight the
           sidebar or the right pane for the window's top-right corner. */}
       {HAS_CUSTOM_TITLE_BAR ? <TitleBar onSearch={() => setCommandOpen(true)} /> : null}
-      <div className="flex min-h-0 flex-1">
+      <div className="relative flex min-h-0 flex-1">
+        {/* The drawer's backdrop. Only on a narrow layout, and only while it is open:
+            tapping the conversation behind it is how a phone expects to dismiss it. */}
+        {narrow && !sidebarCollapsed ? (
+          <button
+            type="button"
+            aria-label={t("sidebar.collapseSidebar")}
+            className="absolute inset-0 z-40 bg-black/40"
+            onClick={() => setSidebarCollapsed(true)}
+          />
+        ) : null}
         <Sidebar
           projects={projects}
           conversations={conversations}
@@ -1684,7 +1698,7 @@ export function App(): JSX.Element {
                       variant="ghost"
                       label={t("workspace.expandSidebar")}
                       shortcut={toggleSidebarShortcut}
-                      onClick={() => updateSettings({ sidebarCollapsed: false })}
+                      onClick={() => setSidebarCollapsed(false)}
                     >
                       <HugeiconsIcon strokeWidth={2} icon={PanelLeftOpenIcon} />
                     </IconButton>
@@ -1756,7 +1770,7 @@ export function App(): JSX.Element {
               {/* Everything under the transcript shares its column: the transcript's
                   scroller reserves a scrollbar gutter, so this box reserves the same one
                   (`transcript-gutter`) and both columns land on the same edges. */}
-              <div className="transcript-gutter overflow-hidden">
+              <div className="safe-bottom transcript-gutter overflow-hidden">
                 {bannerNode}
                 <ExtensionWidgets className="pb-2" />
                 <GoalPanel className="pb-2" disabled={conversationWorking} />
@@ -1766,14 +1780,19 @@ export function App(): JSX.Element {
             </>
           )}
         </main>
-        <SidePane
-          cwd={activeProject?.cwd}
-          project={active?.project}
-          parentId={activeId ?? undefined}
-          canSideChat={Boolean(activeId && hasTranscript)}
-          onNewChat={() => void handleNewChat()}
-          onError={setError}
-        />
+        {/* Terminal, git diffs, the file tree and the embedded browser all want room a
+            phone does not have — and the browser pane has no webview to drive out here
+            at all. The conversation is what a narrow screen is for. */}
+        {narrow ? null : (
+          <SidePane
+            cwd={activeProject?.cwd}
+            project={active?.project}
+            parentId={activeId ?? undefined}
+            canSideChat={Boolean(activeId && hasTranscript)}
+            onNewChat={() => void handleNewChat()}
+            onError={setError}
+          />
+        )}
       </div>
       {/* Mounted from the first time 设置 is opened and left mounted after, so the
           dialog keeps its own close animation and a section switch costs nothing. */}

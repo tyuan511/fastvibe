@@ -1,4 +1,4 @@
-import type { FastVibeApi } from "./index";
+import type { FastVibeApi } from "@shared/api";
 
 declare global {
   interface Window {

@@ -493,6 +493,7 @@
   "changePasswordDesc": "修改密码会让所有已登录设备重新登录。",
   "changePasswordWarning": "设置新密码后，所有已登录设备都需要重新输入密码登录。",
   "turnOff": "关闭远程访问",
-  "turnOffDesc": "停止服务并清除密码，所有已登录设备都会被登出。"
+  "turnOffDesc": "停止服务并清除密码，所有已登录设备都会被登出。",
+  "localOnly": "远程访问只能在本机管理"
  }
 }

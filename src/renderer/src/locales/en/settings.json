@@ -493,6 +493,7 @@
   "changePasswordDesc": "Changing the password signs every device out.",
   "changePasswordWarning": "Setting a new password signs every logged-in device out; they will need it to log back in.",
   "turnOff": "Turn off remote access",
-  "turnOffDesc": "Stops the server and clears the password. Every logged-in device is signed out."
+  "turnOffDesc": "Stops the server and clears the password. Every logged-in device is signed out.",
+  "localOnly": "Remote access is managed on the computer itself"
  }
 }

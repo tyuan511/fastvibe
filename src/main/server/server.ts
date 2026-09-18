@@ -59,6 +59,17 @@ export type RemoteServerStatus = {
   failedLogins: number;
 };
 
+/**
+ * The one document this server hands a browser.
+ *
+ * Emphatically *not* `index.html`: that is the Electron window's page, and it reaches
+ * Main through a preload that does not exist in a browser — it reads `window.fastvibe`
+ * as it loads and dies on the first line. Serving it was the difference between "the
+ * remote server has no client yet" and "the remote server appears to have a client that
+ * white-screens", so the desktop page is never served here at all, by any spelling.
+ */
+const CLIENT_ENTRY = "remote.html";
+
 /** A socket that has not authenticated within this long is closed. */
 const AUTH_GRACE_MS = 10_000;
 
@@ -239,8 +250,8 @@ export class RemoteServer {
    * everything inside it is served, by design. So the root must hold the built client
    * and nothing else; it is not a place to keep anything that should not be downloaded.
    *
-   * A path that resolves inside the root but names no file falls through to
-   * `index.html`, which is what lets the client own its own routes.
+   * A path that resolves inside the root but names no file falls through to the client
+   * entry, which is what lets the client own its own routes.
    */
   #serveStatic(pathname: string, response: ServerResponse): void {
     const root = this.#deps.webRoot;
@@ -249,10 +260,15 @@ export class RemoteServer {
       return;
     }
     const rootPath = resolve(root);
-    const requested = pathname === "/" ? "/index.html" : pathname;
+    const entry = join(rootPath, CLIENT_ENTRY);
+    // The built pages share a directory, so the desktop one is sitting right there next
+    // to the client. Asking for it by name gets the client instead of a page that would
+    // only white-screen.
+    const desktopEntry = normalizePath(pathname) === "/index.html";
+    const requested = pathname === "/" || desktopEntry ? `/${CLIENT_ENTRY}` : pathname;
     const candidate = resolve(join(rootPath, normalize(decodeURIComponent(requested))));
     const inside = candidate === rootPath || candidate.startsWith(rootPath + sep);
-    const file = inside && existsSync(candidate) && statSync(candidate).isFile() ? candidate : join(rootPath, "index.html");
+    const file = inside && existsSync(candidate) && statSync(candidate).isFile() ? candidate : entry;
     if (!existsSync(file)) {
       this.#json(response, 404, { error: "not found" });
       return;
@@ -408,6 +424,15 @@ export class RemoteServer {
       // already gone
     }
     if (wasAttached) this.#deps.onStatusChange?.();
+  }
+}
+
+/** Decoded and collapsed, so `/index.html` is recognised however it was spelled. */
+function normalizePath(pathname: string): string {
+  try {
+    return normalize(decodeURIComponent(pathname));
+  } catch {
+    return pathname;
   }
 }
 

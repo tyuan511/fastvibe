@@ -41,7 +41,11 @@ async function withServer(fn: (h: Harness) => Promise<void>): Promise<void> {
   const accessFile = join(dir, "remote-access.json");
   const webRoot = join(dir, "web");
   await mkdir(webRoot, { recursive: true });
-  await writeFile(join(webRoot, "index.html"), "<!doctype html><title>client</title>", "utf8");
+  // Both built pages land in the same directory, which is the situation the routing
+  // below has to get right: the client is what a browser may have, the desktop page is
+  // what it must never be handed.
+  await writeFile(join(webRoot, "remote.html"), "<!doctype html><title>client</title>", "utf8");
+  await writeFile(join(webRoot, "index.html"), "<!doctype html><title>desktop</title>", "utf8");
   setPassword(accessFile, PASSWORD);
   const dispatched: Array<{ method: string; payload: unknown }> = [];
   const receivers = new Map<string, (channel: string, payload: unknown) => void>();
@@ -344,6 +348,28 @@ test("a file inside the web root is served, so the check is not simply refusing 
   // serves nothing at all.
   await withServer(async ({ port }) => {
     const response = await fetch(`http://127.0.0.1:${port}/`);
+    assert.equal(response.status, 200);
+    assert.match(await response.text(), /<title>client<\/title>/);
+  });
+});
+
+test("the desktop page is never served, by any spelling", async () => {
+  // It is the Electron window's document: it reads `window.fastvibe` as it loads, which
+  // a browser has no preload to provide, so serving it looks exactly like a client that
+  // white-screens. Asking for it by name gets the real client instead.
+  await withServer(async ({ port }) => {
+    for (const path of ["/index.html", "/./index.html", "/%69ndex.html", "/a/../index.html"]) {
+      const response = await fetch(`http://127.0.0.1:${port}${path}`);
+      const text = await response.text();
+      assert.doesNotMatch(text, /<title>desktop<\/title>/, `served the desktop page via ${path}`);
+      assert.match(text, /<title>client<\/title>/, `should fall back to the client for ${path}`);
+    }
+  });
+});
+
+test("an unknown route falls through to the client, so it can own its own paths", async () => {
+  await withServer(async ({ port }) => {
+    const response = await fetch(`http://127.0.0.1:${port}/settings/remote`);
     assert.equal(response.status, 200);
     assert.match(await response.text(), /<title>client<\/title>/);
   });

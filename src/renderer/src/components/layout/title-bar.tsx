@@ -13,7 +13,7 @@ import { IconButton } from "@/components/icon-button";
 import { useHistoryNav } from "@/lib/use-history-nav";
 import { useShortcutLabel } from "@/lib/use-shortcuts";
 import { cn } from "@/lib/utils";
-import { useSettingsStore } from "@/stores/settings";
+import { setSidebarCollapsed, useSidebarCollapsed } from "@/lib/sidebar-visibility";
 
 /**
  * The window's title bar on Windows and Linux.
@@ -30,8 +30,7 @@ import { useSettingsStore } from "@/stores/settings";
  */
 export function TitleBar({ onSearch }: { onSearch: () => void }): JSX.Element {
   const { t } = useTranslation("app");
-  const sidebarCollapsed = useSettingsStore((state) => state.settings.sidebarCollapsed ?? false);
-  const updateSettings = useSettingsStore((state) => state.update);
+  const sidebarCollapsed = useSidebarCollapsed();
   const toggleSidebarShortcut = useShortcutLabel("toggleSidebar");
   const searchShortcut = useShortcutLabel("commandPalette");
   const { canBack, canForward, back, forward } = useHistoryNav();
@@ -51,7 +50,7 @@ export function TitleBar({ onSearch }: { onSearch: () => void }): JSX.Element {
             className="text-muted-foreground"
             label={sidebarCollapsed ? t("workspace.expandSidebar") : t("sidebar.collapseSidebar")}
             shortcut={toggleSidebarShortcut}
-            onClick={() => updateSettings({ sidebarCollapsed: !sidebarCollapsed })}
+            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
           >
             <HugeiconsIcon strokeWidth={2} icon={sidebarCollapsed ? PanelLeftOpenIcon : PanelLeftCloseIcon} />
           </IconButton>

@@ -28,6 +28,16 @@ export function RemoteSettings(): JSX.Element {
   const [copied, setCopied] = useState(false);
   /** Shows the password form again over an already-configured server, to replace it. */
   const [changingPassword, setChangingPassword] = useState(false);
+  /**
+   * Why this pane cannot be used from here, when it cannot.
+   *
+   * Every `remote:*` method is refused for a remote caller on purpose — a stolen token
+   * must not be able to change the password or revoke the owner's other devices. The
+   * pane has to say so: without this it read the failed `getState` as "no password set"
+   * and offered a setup form, telling someone who is *looking at it over remote access*
+   * that remote access is not set up, then failing when they filled the form in.
+   */
+  const [unavailable, setUnavailable] = useState<string | null>(null);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   async function refreshDevices(): Promise<void> {
@@ -40,9 +50,14 @@ export function RemoteSettings(): JSX.Element {
 
   useEffect(() => {
     let cancelled = false;
-    void window.fastvibe.remote.getState().then((current) => {
-      if (!cancelled) setState(current);
-    });
+    void window.fastvibe.remote
+      .getState()
+      .then((current) => {
+        if (!cancelled) setState(current);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setUnavailable(cleanError(err));
+      });
     void refreshDevices();
     // Pushed by every write this pane (or a second window) makes, so the two cannot
     // drift — including a `clients` count that a login from elsewhere changes without
@@ -132,7 +147,14 @@ export function RemoteSettings(): JSX.Element {
         </p>
       ) : null}
 
-      {!state?.configured || changingPassword ? (
+      {unavailable ? (
+        <SettingsGroup>
+          <div className="px-4 py-3">
+            <p className="text-sm font-medium">{t("remote.localOnly")}</p>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">{unavailable}</p>
+          </div>
+        </SettingsGroup>
+      ) : !state?.configured || changingPassword ? (
         <SettingsGroup title={changingPassword ? t("remote.changePassword") : t("remote.setup")}>
           <div className="space-y-3 px-4 py-3">
             <p className="text-xs text-muted-foreground">

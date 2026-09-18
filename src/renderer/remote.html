@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <!--
+      Same policy as the desktop page, with the two differences a browser needs:
+      `font-src` admits the `data:` faces the CSS pipeline inlines (KaTeX's smallest
+      cuts land under Vite's inline limit), and `connect-src` admits the WebSocket this
+      client talks to Main over. `fastvibe-icon:` is left out because that scheme is an
+      Electron protocol handler that does not exist here — those images simply do not
+      resolve, which is a missing file icon rather than a broken page.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: http:; font-src 'self' data:; connect-src 'self' ws: wss:"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <link rel="icon" type="image/png" href="/icon-light.png" media="(prefers-color-scheme: light)" />
+    <link rel="icon" type="image/png" href="/icon-dark.png" media="(prefers-color-scheme: dark)" />
+    <link rel="icon" type="image/png" href="/icon.png" />
+    <title>FastVibe</title>
+    <style>
+      /*
+       * The gate, painted from the raw document.
+       *
+       * Unlike the desktop splash this is not only a loading state: nothing of the app
+       * is even imported until a password has been accepted, so these rules have to
+       * stand on their own without the app stylesheet, which arrives with the bundle
+       * that the gate is what decides to load.
+       */
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+          "PingFang SC", "Microsoft YaHei", sans-serif;
+      }
+      :root {
+        color-scheme: light;
+        --bg: #ffffff;
+        --fg: #1f2328;
+        --muted: #59636e;
+        --border: #d1d9e0;
+        --field: #ffffff;
+        --accent: #6d7cff;
+        --danger: #d1242f;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          color-scheme: dark;
+          --bg: #0d1117;
+          --fg: #e6edf3;
+          --muted: #9198a1;
+          --border: #3d444d;
+          --field: #151b23;
+          --accent: #8b95ff;
+          --danger: #ff7b72;
+        }
+      }
+
+      #fastvibe-gate {
+        position: fixed;
+        inset: 0;
+        z-index: 100;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        background: var(--bg);
+        color: var(--fg);
+        transition: opacity 220ms ease;
+      }
+      #fastvibe-gate[hidden] {
+        display: none;
+      }
+      #fastvibe-gate[data-dismissed] {
+        opacity: 0;
+        pointer-events: none;
+      }
+      .gate-card {
+        width: 100%;
+        max-width: 320px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 14px;
+        text-align: center;
+      }
+      .gate-mark {
+        width: 64px;
+        height: 64px;
+      }
+      .gate-title {
+        font-size: 15px;
+        font-weight: 600;
+        margin: 0;
+      }
+      .gate-hint {
+        font-size: 12px;
+        line-height: 1.6;
+        color: var(--muted);
+        margin: 0;
+      }
+      .gate-form {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        width: 100%;
+      }
+      .gate-form[hidden] {
+        display: none;
+      }
+      .gate-input {
+        width: 100%;
+        box-sizing: border-box;
+        height: 38px;
+        padding: 0 12px;
+        font-size: 16px; /* 16px keeps iOS Safari from zooming the page on focus. */
+        color: var(--fg);
+        background: var(--field);
+        border: 1px solid var(--border);
+        border-radius: 9px;
+        outline: none;
+      }
+      .gate-input:focus {
+        border-color: var(--accent);
+      }
+      .gate-button {
+        height: 38px;
+        font-size: 14px;
+        font-weight: 500;
+        color: #ffffff;
+        background: var(--accent);
+        border: 0;
+        border-radius: 9px;
+        cursor: pointer;
+      }
+      .gate-button:disabled {
+        opacity: 0.6;
+        cursor: default;
+      }
+      .gate-error {
+        font-size: 12px;
+        line-height: 1.5;
+        color: var(--danger);
+        margin: 0;
+        min-height: 1em;
+      }
+      .gate-error[hidden] {
+        display: none;
+      }
+
+      /* Reused after mount, when the socket drops and the page is waiting to come back. */
+      .gate-spinner {
+        width: 22px;
+        height: 22px;
+        border: 2px solid var(--border);
+        border-top-color: var(--accent);
+        border-radius: 9999px;
+        animation: gate-spin 700ms linear infinite;
+      }
+      .gate-spinner[hidden] {
+        display: none;
+      }
+      @keyframes gate-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .gate-spinner {
+          animation: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <div id="fastvibe-gate" role="status">
+      <div class="gate-card">
+        <img class="gate-mark" src="./src/assets/f-mark.png" alt="" aria-hidden="true" />
+        <p class="gate-title" id="gate-title">正在连接…</p>
+        <p class="gate-hint" id="gate-hint">FastVibe 远程访问</p>
+        <div class="gate-spinner" id="gate-spinner"></div>
+        <form class="gate-form" id="gate-form" hidden>
+          <input
+            class="gate-input"
+            id="gate-password"
+            type="password"
+            autocomplete="current-password"
+            placeholder="访问密码"
+            aria-label="访问密码"
+          />
+          <button class="gate-button" id="gate-submit" type="submit">连接</button>
+        </form>
+        <p class="gate-error" id="gate-error" hidden></p>
+      </div>
+    </div>
+    <!-- The gate owns the boot: it authenticates, installs `window.fastvibe`, and only
+         then imports the app, which reads that bridge synchronously as it loads. -->
+    <script type="module" src="/src/remote/bridge.ts"></script>
+  </body>
+</html>

@@ -81,6 +81,7 @@ export default defineConfig({
        */
       entries: [
         "index.html",
+        "remote.html",
         "src/components/settings/settings-dialog.tsx",
         "src/components/layout/side-pane-terminal.tsx",
       ],
@@ -95,6 +96,20 @@ export default defineConfig({
        * the traces that actually get exported stay readable.
        */
       minify: "esbuild",
+      rollupOptions: {
+        /**
+         * Two pages out of one app.
+         *
+         * `index.html` is what the Electron window loads, reaching Main through the
+         * preload. `remote.html` is what the remote server serves to a browser, reaching
+         * the same Main over a WebSocket. They share every chunk below the entry — it is
+         * the same React tree — and differ only in how `window.fastvibe` is installed.
+         */
+        input: {
+          index: resolve("src/renderer/index.html"),
+          remote: resolve("src/renderer/remote.html"),
+        },
+      },
     },
   },
 });

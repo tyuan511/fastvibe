@@ -54,6 +54,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ResizeHandle } from "@/components/resize-handle";
 import { CollapsiblePanel } from "@/components/layout/collapsible-panel";
+import { setSidebarCollapsed, useIsNarrowViewport, useSidebarCollapsed } from "@/lib/sidebar-visibility";
 import { SidebarUpdateButton } from "@/components/layout/sidebar-update-button";
 import { AppLogo } from "@/components/app-logo";
 import { cn } from "@/lib/utils";
@@ -685,7 +686,8 @@ export function Sidebar({
 }): JSX.Element {
   const { t } = useTranslation("app");
   const [width, setWidth] = useState(readSidebarWidth);
-  const sidebarCollapsed = useSettingsStore((state) => state.settings.sidebarCollapsed ?? false);
+  const sidebarCollapsed = useSidebarCollapsed();
+  const narrow = useIsNarrowViewport();
   const sidebarOrder = useSettingsStore((state) => state.settings.sidebarOrder);
   const updateSettings = useSettingsStore((state) => state.update);
   const toggleSidebarShortcut = useShortcutLabel("toggleSidebar");
@@ -950,7 +952,7 @@ export function Sidebar({
   // sidebar clips to width 0 rather than shrinking to a sliver. The inner
   // aside keeps its expanded width so the spring is a clip, not a reflow.
   return (
-    <CollapsiblePanel collapsed={sidebarCollapsed} width={width} side="left" instant={resizing}>
+    <CollapsiblePanel collapsed={sidebarCollapsed} width={width} side="left" instant={resizing} overlay={narrow}>
     <aside className="relative flex h-full min-h-0 w-full flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
       <ResizeHandle
         side="right"
@@ -966,7 +968,7 @@ export function Sidebar({
           if (next < SIDEBAR_MIN_WIDTH) {
             if (!collapsing.current) {
               collapsing.current = true;
-              updateSettings({ sidebarCollapsed: true });
+              setSidebarCollapsed(true);
             }
             return;
           }

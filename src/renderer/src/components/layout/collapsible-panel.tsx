@@ -23,6 +23,11 @@ export const PANEL_COLLAPSE_TRANSITION = {
  *
  * Live resize passes `instant` so the splitter follows the pointer. Collapse
  * and expand always spring, even if a drag just crossed the minimum.
+ *
+ * `overlay` switches it from pushing to covering. A phone has no width to give: the
+ * sidebar's minimum alone is most of a 375pt screen, so there it slides over the
+ * conversation as a drawer instead of squeezing it into a strip. Same component, because
+ * the panel is the same panel — only what it does to its neighbour changes.
  */
 export function CollapsiblePanel({
   collapsed,
@@ -30,6 +35,7 @@ export function CollapsiblePanel({
   side,
   instant,
   maximized,
+  overlay,
   children,
   className,
 }: {
@@ -38,6 +44,8 @@ export function CollapsiblePanel({
   side: "left" | "right";
   instant?: boolean;
   maximized?: boolean;
+  /** Cover the layout instead of taking room from it. Used on narrow viewports. */
+  overlay?: boolean;
   children: ReactNode;
   className?: string;
 }): JSX.Element {
@@ -52,24 +60,45 @@ export function CollapsiblePanel({
 
   const innerWidth = fill ? "100%" : collapsed ? clipWidthRef.current : width;
 
+  /**
+   * Both modes drive both properties, always.
+   *
+   * Motion only writes the keys an `animate` object names, and leaves every other inline
+   * value it wrote earlier exactly where it was. So a branch that animated `x` and a
+   * branch that animated `width` left each other's last frame behind on the way past:
+   * switching from drawer to column kept `translateX(-100%)` and parked the sidebar
+   * off-screen on a desktop-width window, which is a stuck layout rather than a
+   * mis-timed one, and it only appears when the viewport crosses the breakpoint.
+   */
+  const animate = overlay
+    ? { x: collapsed ? (side === "right" ? "100%" : "-100%") : 0, width: "86vw" }
+    : { x: 0, width: collapsed ? 0 : fill ? "auto" : width };
+
   return (
     <motion.div
       initial={false}
-      animate={collapsed ? { width: 0 } : fill ? { width: "auto" } : { width }}
-      transition={instant && !collapsed || fill ? { duration: 0 } : PANEL_COLLAPSE_TRANSITION}
+      animate={animate}
+      transition={(instant && !collapsed) || fill ? { duration: 0 } : PANEL_COLLAPSE_TRANSITION}
       className={cn(
         "flex h-full min-h-0 min-w-0 overflow-hidden",
-        fill ? "flex-1" : "shrink-0",
-        side === "right" ? "justify-end" : "justify-start",
+        overlay
+          ? cn(
+              "absolute inset-y-0 z-50 border-border bg-background shadow-xl",
+              side === "right" ? "right-0 border-l" : "left-0 border-r",
+            )
+          : cn(fill ? "flex-1" : "shrink-0", side === "right" ? "justify-end" : "justify-start"),
         className,
       )}
+      // The remembered column width is routinely wider than the phone now covered by it,
+      // so the drawer takes 86vw and this is only a ceiling.
+      style={overlay ? { maxWidth: width } : undefined}
       aria-hidden={collapsed}
       inert={collapsed || undefined}
     >
       <div
         ref={frameRef}
-        className="flex h-full min-h-0 shrink-0 flex-col"
-        style={{ width: innerWidth }}
+        className={cn("flex h-full min-h-0 flex-col", overlay ? "w-full" : "shrink-0")}
+        style={overlay ? undefined : { width: innerWidth }}
       >
         {children}
       </div>

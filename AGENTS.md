@@ -9,7 +9,7 @@ src/main/          Electron main: window, IPC, and embedded agent lifecycle
   engine/          Isolated runtime paths, provider configuration, and shared model/file helpers
   ipc/             Transport-neutral call table and broadcast hub
   pi/              Embedded pi-coding-agent host, MCP bridge, and multi-session lifecycle
-src/preload/       contextBridge API (`window.fastvibe`)
+src/preload/       Electron half of `window.fastvibe` (the shape is `src/shared/api.ts`)
 src/renderer/      React UI (Vite renderer)
   src/components/ui/   shadcn-generated primitives only
   src/components/      product composition (chat, layout)
@@ -50,6 +50,10 @@ cannot exist on the desktop and be silently missing elsewhere.
 
 Two rules keep that true:
 
+- **One bridge, two transports.** `window.fastvibe` is built by
+  `createFastVibeApi` (`src/shared/api.ts`) and handed a transport: Electron IPC in the
+  preload, a WebSocket in `renderer/src/remote/bridge.ts`. Add a method there, not in
+  either caller, or the web client silently lacks what the desktop has.
 - **Register with `handle()`, never `ipcMain.handle`.** Handlers take `(payload, ctx)`;
   `ctx` carries the asking window, because `event.sender` is an Electron concept a
   non-IPC caller cannot produce. `settings:get-sync` is the one exception — `sendSync`
@@ -123,6 +127,43 @@ The password is exchanged once for a device token (`POST /api/login`); tokens tr
 every later connection, are stored only as hashes, and are revoked one device at a time.
 Guessing is slowed by a global exponential backoff — global rather than per address
 because behind a tunnel every request arrives from the same one.
+
+### 网页客户端（`remote.html`）
+
+The same React tree the Electron window runs, served by the remote server and reaching
+Main over a WebSocket instead of a preload. `src/renderer/src/remote/bridge.ts` owns the
+boot — password gate, device token, reconnect — because the renderer reads the bridge as
+it *loads* (`stores/settings` takes the settings snapshot at module scope), so the app
+cannot be imported until a connection exists and that snapshot is in hand. That is why
+`remote.html` loads only the bridge, which imports the app at the end.
+
+Three things that are easy to get wrong here:
+
+- **The server never serves `index.html`.** That is the Electron page; in a browser it
+  reads `window.fastvibe` as it loads and white-screens. `CLIENT_ENTRY` is `remote.html`,
+  and asking for the desktop page by name gets the client instead.
+- **A dropped socket reloads the page.** Events that arrived while it was gone are not
+  replayed, so resuming in place would leave a transcript that looks complete and is not.
+  Main already serves what a precise resume needs (`engine:get-snapshot`, and a `seq` on
+  every event); wiring the renderer to re-snapshot is the better answer once it reads them.
+- **`remote:*` is denied to remote callers**, so 设置 → 远程访问 renders "只能在本机管理"
+  out here rather than a setup form it could not submit.
+
+### 窄视口（手机）
+
+Below `md` the sidebar overlays as a drawer instead of pushing (`CollapsiblePanel
+overlay`), and the right pane is not rendered at all — a 375pt screen has no room for the
+terminal, a diff or the file tree, and the browser pane has no webview to drive anyway.
+
+The drawer's open/closed state is **local to the device** (`lib/sidebar-visibility.ts`),
+not the persisted `sidebarCollapsed`: that preference lives in one `settings.json` shared
+by every client of this machine, so swiping the drawer open on a phone would otherwise
+collapse the sidebar on the desktop it is connected to.
+
+`CollapsiblePanel` drives **both** `x` and `width` in either mode. Motion only writes the
+keys an `animate` object names and leaves the rest of what it last wrote in place, so a
+branch animating only `width` inherited the drawer's `translateX(-100%)` and parked the
+sidebar off-screen the moment a window crossed the breakpoint.
 
 ### 会话作用域（每一条引擎调用都要带 `conversationId`）
 

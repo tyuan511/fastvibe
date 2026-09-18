@@ -528,3 +528,15 @@ body {
     @apply font-sans;
   }
 }
+
+/*
+ * The home indicator's strip, on a phone.
+ *
+ * `viewport-fit=cover` (remote.html) lets the page paint under it, which is what keeps
+ * the background continuous to the bottom edge — so the last row of interactive chrome
+ * has to reserve that strip itself or the composer's controls sit under the bar. Zero on
+ * every desktop, where the inset does not exist.
+ */
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
