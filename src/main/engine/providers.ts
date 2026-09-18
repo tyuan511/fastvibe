@@ -4,6 +4,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { INPUT_MODALITIES, PROVIDER_APIS, THINKING_EFFORT_LEVELS, type CostTier, type FastVibeModel, type ModelCost, type ModelPrice, type NativeProviderConfig, type ProviderApi, type ProviderConfig, type ProviderModel, type ThinkingLevel } from "@shared/types";
 import { catalogPrice, enrichModel, loadModelsDev, type ModelsDevIndex } from "./models-dev";
 import { findNativeProvider, listNativeProviders, selectedNativeModels } from "./native-providers";
+import { engineModelBaseUrl, trimBaseUrl } from "./provider-url";
 import { deleteOAuthCredential, readOAuthProviderIds } from "./oauth-store";
 import type { FastVibePaths } from "./paths";
 
@@ -197,7 +198,7 @@ export async function fetchProviderModels(
   apiKey: string,
   api?: string,
 ): Promise<ProviderModel[]> {
-  const base = baseUrl.trim().replace(/\/+$/, "");
+  const base = engineModelBaseUrl(baseUrl, api ?? "");
   if (!/^https?:\/\//.test(base)) throw new Error("Base URL 需以 http(s):// 开头");
 
   const listed = api === "google-generative-ai"
@@ -392,14 +393,19 @@ function renderModelsJson(providers: StoredProvider[]): string {
   for (const provider of providers) {
     output[provider.id] = {
       name: provider.name,
-      baseUrl: provider.baseUrl,
+      baseUrl: trimBaseUrl(provider.baseUrl),
       api: provider.api,
       apiKey: provider.apiKeyEnv,
       // Gemini authenticates with `x-goog-api-key` via the SDK client, not Bearer.
       authHeader: provider.api !== "google-generative-ai",
       models: provider.models.map((model) => {
-        const compat = modelCompat(model.api ?? provider.api, model);
+        const api = model.api ?? provider.api;
+        const compat = modelCompat(api, model);
         const thinking = thinkingLevelMap(model);
+        // Each protocol's client wants a different version segment, so a model streaming
+        // one other than the provider's gets its own `baseUrl`; pi reads a model-level
+        // `baseUrl` over the provider's. See `engineModelBaseUrl`.
+        const baseUrl = engineModelBaseUrl(provider.baseUrl, api);
         return {
           id: model.id,
           name: model.name,
@@ -410,6 +416,7 @@ function renderModelsJson(providers: StoredProvider[]): string {
           // Omitted when the model inherits the provider's api, which keeps
           // `models.json` a faithful mirror of what the user configured.
           ...(model.api ? { api: model.api } : {}),
+          ...(baseUrl !== trimBaseUrl(provider.baseUrl) ? { baseUrl } : {}),
           ...(compat ? { compat } : {}),
           ...(thinking ? { thinkingLevelMap: thinking } : {}),
           // Only real prices: the engine's own default is all zeros, so writing the

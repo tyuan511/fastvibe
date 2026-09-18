@@ -488,6 +488,26 @@ serve a `/responses` model next to a `/chat/completions` one without being split
 two providers. `compat` is therefore emitted per model, derived from the api that
 model will actually stream with.
 
+**A model's base URL is translated for the protocol it streams with** (`engineModelBaseUrl`,
+`provider-url.ts`), because the four clients address their endpoint from one stored base very
+differently. pi's OpenAI clients append `/chat/completions` / `/responses` *below* the
+version prefix, so `https://host/v1` is what they want and the base is taken as typed. The
+Anthropic Messages client appends `/v1/messages` **itself**, so the same base reaches
+`/v1/v1/messages` and 404s. pi's Google client goes the other way — `apiVersion: ""`, so the
+base must carry the version, and Google's is `v1beta`, not `v1`.
+
+That is invisible while a provider serves one protocol (the user types whichever base its
+protocol wants) and breaks the moment one relay carries several, which is the case the
+per-model `api` exists for. So a model streaming `anthropic-messages` is written its own
+`baseUrl` with the version segment removed, and one streaming `google-generative-ai` with
+`v1` → `v1beta`; the provider keeps the base the user typed for every other model, and pi
+reads a model-level `baseUrl` over the provider's. `fetchProviderModels` derives the same
+way, so listing a Gemini provider's models does not 404 either. **The base is not a
+protocol-neutral root with the version derived**: `/v1` and `/v1beta` are the only segments
+our own UI ever hands a user, and a relay may mount a protocol under a path of its own —
+z.ai's `.../coding/paas/v4` is the endpoint path, so it is never rewritten, and an OpenAI
+api's base is never rewritten either way.
+
 `providers.json` carries a `version`. **v2 made the builtin protocol selectable**; in
 v1 the code pinned it, so a v1 entry's `api` is the old default rather than a choice
 and `normalizeFastVibe` migrates it (`PROVIDERS_VERSION`). The builtin's name and
