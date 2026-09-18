@@ -14,6 +14,8 @@ import {
   useMessageScroller,
 } from "@/components/ui/message-scroller";
 import { Spinner } from "@/components/ui/spinner";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import { FindBar } from "@/components/chat/find-bar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatDuration } from "@/lib/time";
@@ -257,6 +259,56 @@ function UserPromptBubble({ text: raw }: { text: string }): JSX.Element {
   );
 }
 
+/** Edit a prompt in its turn. The transcript is left untouched until Send is pressed. */
+function InlinePromptEditor({
+  value,
+  onCancel,
+  onSubmit,
+}: {
+  value: string;
+  onCancel: () => void;
+  onSubmit: (value: string) => void;
+}): JSX.Element {
+  const { t } = useTranslation("chat");
+  const [text, setText] = useState(value);
+
+  function submit(): void {
+    const next = text.trim();
+    if (next) onSubmit(next);
+  }
+
+  return (
+    <div className="w-full max-w-2xl rounded-xl border border-border bg-secondary/50 p-2">
+      <Textarea
+        autoFocus
+        rows={2}
+        value={text}
+        aria-label={t("message.editPlaceholder")}
+        placeholder={t("message.editPlaceholder")}
+        className="h-16 min-h-16 resize-none [field-sizing:fixed] border-0 bg-transparent shadow-none focus-visible:ring-0"
+        onChange={(event) => setText(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.preventDefault();
+            onCancel();
+          } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+            event.preventDefault();
+            submit();
+          }
+        }}
+      />
+      <div className="flex justify-end gap-2 pt-2">
+        <Button size="sm" variant="ghost" onClick={onCancel}>
+          {t("message.editCancel")}
+        </Button>
+        <Button size="sm" disabled={!text.trim()} onClick={submit}>
+          {t("message.editSend")}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function ChatMessageRowImpl({
   messages,
   streaming,
@@ -269,13 +321,24 @@ function ChatMessageRowImpl({
   messages: ChatMessage[];
   streaming: boolean;
   onRetry?: (message: ChatMessage) => void;
-  onEdit?: (message: ChatMessage) => void;
+  onEdit?: (message: ChatMessage, text: string) => void;
   showThinking: boolean;
   showTimestamp: boolean;
   collapseRuns: boolean;
 }): JSX.Element {
   // A reply spans several engine messages; render it as one block with one footer.
   const message = useMemo(() => mergeAssistantRun(messages), [messages]);
+  const [editing, setEditing] = useState(false);
+  useEffect(() => setEditing(false), [message.id]);
+  const isUser = message.role === "user";
+  const beginEdit = useCallback(() => setEditing(true), []);
+  const submitEdit = useCallback(
+    (text: string) => {
+      setEditing(false);
+      onEdit?.(message, text);
+    },
+    [message, onEdit],
+  );
   // `i18n.language` is part of the dependency list because the folded group summaries
   // are translated and cached per language: without it a language switch would keep
   // serving the previous language's summaries.
@@ -360,6 +423,12 @@ function ChatMessageRowImpl({
     return index;
   }, [fold, parts]);
 
+  // Files this agent run wrote, surfaced as a chip row under the reply.
+  const changedFiles = useMemo(
+    () => (isUser ? [] : collectChangedFiles(message.tools)),
+    [isUser, message.tools],
+  );
+
   if (message.role === "system") {
     if (message.kind === "compact") {
       return (
@@ -387,7 +456,6 @@ function ChatMessageRowImpl({
     );
   }
 
-  const isUser = message.role === "user";
   // Outside the `renderPart` closure: it is a fact about the reply, not about one
   // part, and the row's working marker below is the only consumer.
   //
@@ -408,11 +476,20 @@ function ChatMessageRowImpl({
     lastPart?.kind === "text" ||
     (showThinking && lastPart?.kind === "thinking") ||
     message.tools.some((tool) => tool.status === "running");
-  // Files this agent run wrote, surfaced as a chip row under the reply.
-  const changedFiles = useMemo(
-    () => (isUser ? [] : collectChangedFiles(message.tools)),
-    [isUser, message.tools],
-  );
+  if (isUser && editing) {
+    return (
+      <Message align="end" className="group/row">
+        <MessageContent className="items-end">
+          {message.attachments?.length ? <AttachmentStrip items={message.attachments} /> : null}
+          <InlinePromptEditor
+            value={stripAttachmentBlock(message.text)}
+            onCancel={() => setEditing(false)}
+            onSubmit={submitEdit}
+          />
+        </MessageContent>
+      </Message>
+    );
+  }
 
   const renderPart = (part: RenderPart, index: number): JSX.Element | null => {
     const isTail = index === parts.length - 1;
@@ -516,7 +593,7 @@ function ChatMessageRowImpl({
           <MessageActions
             message={message}
             onRetry={onRetry}
-            onEdit={onEdit}
+            onEdit={onEdit ? beginEdit : undefined}
             showTimestamp={showTimestamp}
             elapsed={runMs}
           />
@@ -809,7 +886,7 @@ function ThreadRow({
   streaming: boolean;
   amendable: boolean;
   onRetry?: (message: ChatMessage) => void;
-  onEdit?: (message: ChatMessage) => void;
+  onEdit?: (message: ChatMessage, text: string) => void;
   showThinking: boolean;
   showTimestamp: boolean;
   collapseRuns: boolean;
@@ -862,7 +939,7 @@ export function MessageList({
   streaming: boolean;
   loading?: boolean;
   onRetry?: (message: ChatMessage) => void;
-  onEdit?: (message: ChatMessage) => void;
+  onEdit?: (message: ChatMessage, text: string) => void;
   showThinking?: boolean;
   showTimestamp?: boolean;
   /** Fold each reply's process into one 「用时 …」 block (设置 → 对话). */

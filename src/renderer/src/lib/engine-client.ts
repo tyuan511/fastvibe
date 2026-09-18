@@ -16,7 +16,7 @@ type FastVibeEngine = typeof window.fastvibe.engine;
  * So every call that acts on a conversation now carries its id. The store's `activeId`
  * is the one this window means, read at call time rather than captured, so a switch
  * mid-flight routes the next call to the new chat. Callers that mean a *different*
- * chat (the sidebar stopping a background run) pass the id explicitly.
+ * chat (archiving a background run) pass the id explicitly.
  *
  * The engine still accepts an omitted id and falls back to its own active
  * conversation, which keeps the no-conversation case — the empty hero, settings, the

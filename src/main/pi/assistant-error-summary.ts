@@ -1,0 +1,33 @@
+export type AssistantErrorSummary = {
+  role: "assistant";
+  stopReason: "error" | "aborted";
+  errorMessage: unknown;
+};
+
+/** Keep only the terminal fields the renderer needs from a failed assistant message. */
+export function assistantErrorSummary(message: unknown): AssistantErrorSummary | undefined {
+  if (typeof message !== "object" || message === null) return undefined;
+  const record = message as Record<string, unknown>;
+  if (record.role !== "assistant") return undefined;
+  if (record.stopReason !== "error" && record.stopReason !== "aborted") return undefined;
+  return {
+    role: "assistant",
+    stopReason: record.stopReason,
+    errorMessage: record.errorMessage,
+  };
+}
+
+/**
+ * Summarise the current final assistant message, not the newest historical failure.
+ * A successful retry leaves failed attempts earlier in the transcript; those must not
+ * be reported again when the completed run emits its final `agent_end`.
+ */
+export function finalAssistantErrorSummary(messages: unknown[]): AssistantErrorSummary | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (typeof message !== "object" || message === null) continue;
+    if ((message as Record<string, unknown>).role !== "assistant") continue;
+    return assistantErrorSummary(message);
+  }
+  return undefined;
+}

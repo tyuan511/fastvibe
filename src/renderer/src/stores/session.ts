@@ -26,6 +26,7 @@ import type {
 } from "@shared/types";
 import { applyEngineEvent, lastUserIsLocal, userMessageText } from "@/lib/apply-engine-event";
 import { i18n } from "@/lib/i18n";
+import { resolvePath } from "@/lib/workspace-path";
 import { useSidePaneStore } from "@/stores/side-pane";
 
 type SessionStore = {
@@ -93,7 +94,10 @@ type SessionStore = {
   /** String-line widgets (`ctx.ui.setWidget`), bucketed by conversation. */
   extensionWidgets: Record<string, Record<string, ExtensionWidget>>;
   attachments: ChatAttachment[];
+  /** Renderer-side follow-ups for every conversation, retained across chat switches. */
   queued: QueuedPrompt[];
+  /** Pause reasons retained per conversation; `queuePause` mirrors the active chat. */
+  queuePauseByConversation: Record<string, QueuePauseReason | null>;
   queuePause: QueuePauseReason | null;
   /**
    * How the *live event stream* said the last run ended early: `error` (failure) or
@@ -182,6 +186,7 @@ type SessionStore = {
   unmarkAllQueuedSending: () => void;
   clearQueued: () => void;
   setQueuePause: (reason: QueuePauseReason | null) => void;
+  setQueuePauseFor: (conversationId: string, reason: QueuePauseReason | null) => void;
   /** Clear the interrupted-run marker once a resume (or fresh prompt) takes over. */
   setRunInterrupted: (reason: "aborted" | "error" | null) => void;
   /**
@@ -256,6 +261,16 @@ export function working(session: EngineSessionState | null | undefined): boolean
  */
 export function useConversationWorking(): boolean {
   return useSessionStore((state) => (state.activeId ? state.running[state.activeId] === true : false));
+}
+
+/**
+ * Working directory of the conversation on screen, or `undefined` when nothing is
+ * bound yet. Tool cards only ever render inside a conversation's transcript — the
+ * main thread, the side pane's chats and the subagent viewer all belong to the
+ * active one — so that conversation is the right frame for every path they show.
+ */
+export function useWorkspacePath(): string | undefined {
+  return useSessionStore((state) => state.conversations.find((item) => item.id === state.activeId)?.cwd);
 }
 
 /**
@@ -560,6 +575,7 @@ function reduceEvents(state: SessionStore, events: EngineEvent[]): Partial<Sessi
   let draft = state.draft;
   let pendingPermissions = state.pendingPermissions;
   let queued = state.queued;
+  let queuePauseByConversation = state.queuePauseByConversation;
   let queuePause = state.queuePause;
   let runInterrupted = state.runInterrupted;
   /** Sidebar mark for this batch when it is not simply `streaming` (a compaction). */
@@ -581,7 +597,8 @@ function reduceEvents(state: SessionStore, events: EngineEvent[]): Partial<Sessi
     // drop the matching 发送中 row so the tray no longer shows it.
     const delivered = userMessageText(event);
     if (delivered !== undefined && !lastUserIsLocal(messages)) {
-      const sending = queued.filter((item) => item.sending);
+      const owner = typeof event.conversationId === "string" ? event.conversationId : state.activeId;
+      const sending = queued.filter((item) => item.sending && item.conversationId === owner);
       if (sending.length > 0) {
         const match = sending.find((item) => item.sentText === delivered) ?? sending[0];
         queued = queued.filter((item) => item.id !== match.id);
@@ -612,8 +629,10 @@ function reduceEvents(state: SessionStore, events: EngineEvent[]): Partial<Sessi
       // half-written, so silently sending the rest of the queue would continue from a
       // broken turn. The composer shows a resume control instead.
       runInterrupted = stoppedEarly;
-      if (state.queued.length > 0) {
+      const owner = typeof event.conversationId === "string" ? event.conversationId : state.activeId;
+      if (owner && state.queued.some((item) => item.conversationId === owner)) {
         queuePause = stoppedEarly === "error" ? "error" : "stopped";
+        queuePauseByConversation = { ...queuePauseByConversation, [owner]: queuePause };
       }
     } else if (event.type === "agent_start" || event.type === "turn_start") {
       // A new run (resume, retry, or fresh prompt) clears the interrupted state.
@@ -702,6 +721,7 @@ function reduceEvents(state: SessionStore, events: EngineEvent[]): Partial<Sessi
     subagents,
     subagentStreams,
     queued,
+    queuePauseByConversation,
     queuePause,
     runInterrupted,
     waitingForUser: waitingFrom(pendingPermissions, state.waitingForUser),
@@ -812,6 +832,7 @@ export const useSessionStore = create<SessionStore>((set, get) => {
   extensionWidgets: {},
   attachments: [],
   queued: [],
+  queuePauseByConversation: {},
   queuePause: null,
   runInterrupted: null,
   canResume: false,
@@ -827,10 +848,23 @@ export const useSessionStore = create<SessionStore>((set, get) => {
       // the chat on screen lit a finished conversation as 运行中 with no event
       // left to clear it.
       const mine = !session?.conversationId || !state.activeId || session.conversationId === state.activeId;
+      const conversationId = mine ? state.activeId : null;
+      const hasQueued = conversationId
+        ? state.queued.some((item) => item.conversationId === conversationId)
+        : false;
+      const resumedQueuePause =
+        mine && conversationId && session?.canResume && hasQueued
+          ? { ...state.queuePauseByConversation, [conversationId]: "stopped" as const }
+          : state.queuePauseByConversation;
       return {
         session,
         streaming: mine ? (session?.running ?? false) : state.streaming,
         canResume: mine ? session?.canResume === true : state.canResume,
+        queuePauseByConversation: resumedQueuePause,
+        queuePause:
+          mine && conversationId
+            ? resumedQueuePause[conversationId] ?? null
+            : state.queuePause,
         // `working`, not just `running`: the sidebar's mark means 「still busy」, which
         // a compaction also is — and a chat that compacts in the background keeps it
         // lit, so switching to it and back no longer loses the state. This map is the
@@ -866,6 +900,8 @@ export const useSessionStore = create<SessionStore>((set, get) => {
         pendingPermissions: prune(state.pendingPermissions),
         waitingForUser: prune(state.waitingForUser),
         running: prune(state.running),
+        queued: state.queued.filter((item) => live.has(item.conversationId)),
+        queuePauseByConversation: prune(state.queuePauseByConversation),
       };
     }),
   setActiveId: (activeId) => {
@@ -875,6 +911,7 @@ export const useSessionStore = create<SessionStore>((set, get) => {
     set((state) => ({
       activeId,
       permission: activePermission(state.pendingPermissions, activeId),
+      queuePause: activeId ? state.queuePauseByConversation[activeId] ?? null : null,
     }));
   },
   setMessages: (messages, conversationId) => {
@@ -1043,11 +1080,41 @@ export const useSessionStore = create<SessionStore>((set, get) => {
   unmarkAllQueuedSending: () =>
     set((state) => ({
       queued: state.queued.map((item) =>
-        item.sending ? { ...item, sending: false, sentText: undefined } : item,
+        item.conversationId === state.activeId && item.sending
+          ? { ...item, sending: false, sentText: undefined }
+          : item,
       ),
     })),
-  clearQueued: () => set({ queued: [], queuePause: null }),
-  setQueuePause: (queuePause) => set({ queuePause }),
+  clearQueued: () =>
+    set((state) => {
+      const conversationId = state.activeId;
+      if (!conversationId) return { queuePause: null };
+      const queuePauseByConversation = { ...state.queuePauseByConversation };
+      delete queuePauseByConversation[conversationId];
+      return {
+        queued: state.queued.filter((item) => item.conversationId !== conversationId),
+        queuePauseByConversation,
+        queuePause: null,
+      };
+    }),
+  setQueuePause: (queuePause) => {
+    const conversationId = get().activeId;
+    if (!conversationId) {
+      set({ queuePause });
+      return;
+    }
+    get().setQueuePauseFor(conversationId, queuePause);
+  },
+  setQueuePauseFor: (conversationId, reason) =>
+    set((state) => {
+      const queuePauseByConversation = { ...state.queuePauseByConversation };
+      if (reason) queuePauseByConversation[conversationId] = reason;
+      else delete queuePauseByConversation[conversationId];
+      return {
+        queuePauseByConversation,
+        queuePause: state.activeId === conversationId ? reason : state.queuePause,
+      };
+    }),
   setRunInterrupted: (runInterrupted) => set({ runInterrupted }),
   setCanResume: (canResume) => set({ canResume }),
   setPreview: (preview) => set({ preview }),
@@ -1055,15 +1122,23 @@ export const useSessionStore = create<SessionStore>((set, get) => {
     // The open file lives on the *conversation's* files tab, so the same file can be
     // previewed in two chats without one suppressing the other. The session-level
     // `preview` field is kept for callers that only want the last preview read.
+    //
+    // Tool args are often project-relative. Main's preview `stat`s the string as
+    // given, so a relative path would miss the file that the tree (which joins
+    // onto an absolute cwd) can still open. Resolve against this conversation's
+    // cwd — the worktree when there is one, otherwise the project / scratch dir.
+    const { conversations, activeId } = get();
+    const cwd = conversations.find((item) => item.id === activeId)?.cwd;
+    const resolved = resolvePath(path, cwd);
     try {
-      const preview = await window.fastvibe.workspace.preview(path);
+      const preview = await window.fastvibe.workspace.preview(resolved);
       set({ preview });
       useSidePaneStore.getState().openFilePreview(preview);
     } catch (error) {
       const preview: FilePreview = {
         kind: "error",
-        path,
-        name: path.split("/").at(-1) ?? path,
+        path: resolved,
+        name: resolved.split("/").at(-1) ?? resolved,
         message: error instanceof Error ? error.message : (i18n.t("common:errors.previewFailed") as string),
       };
       set({ preview });
@@ -1071,7 +1146,24 @@ export const useSessionStore = create<SessionStore>((set, get) => {
     }
   },
   applyEvent: (event) => {
-    if (!belongsToTranscript(event, get().activeId)) return;
+    const owner = typeof event.conversationId === "string" ? event.conversationId : null;
+    // A steer can be delivered while its conversation is in the background. The
+    // transcript event is intentionally filtered below, but the renderer-side row
+    // still has to disappear or it would come back forever when the chat is reopened.
+    if (owner && !belongsToTranscript(event, get().activeId)) {
+      const delivered = userMessageText(event);
+      if (delivered !== undefined) {
+        set((state) => {
+          const sending = state.queued.filter(
+            (item) => item.conversationId === owner && item.sending,
+          );
+          if (sending.length === 0) return state;
+          const match = sending.find((item) => item.sentText === delivered) ?? sending[0];
+          return { queued: state.queued.filter((item) => item.id !== match.id) };
+        });
+      }
+      return;
+    }
     if (COALESCED_EVENTS.has(event.type)) {
       queued.push(event);
       scheduleFlush();
@@ -1113,7 +1205,14 @@ export const useSessionStore = create<SessionStore>((set, get) => {
       // subagent's pane empty after a new-session / archive, and nothing would have
       // rebuilt the stream until the next token.
       preview: null,
-      queued: [],
+      queued: state.activeId
+        ? state.queued.filter((item) => item.conversationId !== state.activeId)
+        : state.queued,
+      queuePauseByConversation: state.activeId
+        ? Object.fromEntries(
+            Object.entries(state.queuePauseByConversation).filter(([key]) => key !== state.activeId),
+          )
+        : state.queuePauseByConversation,
       queuePause: null,
       runInterrupted: null,
       canResume: false,

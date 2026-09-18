@@ -19,9 +19,12 @@ import type {
   NativeProviderConfig,
   OAuthEventPayload,
   OAuthLoginResult,
+  OpenAIAccountQuota,
   CcSwitchScan,
   SlashCommand,
   FilePreview,
+  SubagentConfig,
+  SubagentDraft,
   SubagentInfo,
   UsageRange,
   UsageStats,
@@ -151,6 +154,11 @@ export function createFastVibeApi(t: ApiTransport) {
       importSkill: (): Promise<SkillInfo[] | null> => t.invoke(Ipc.engineImportSkill),
       removeSkill: (name: string): Promise<SkillInfo[]> => t.invoke(Ipc.engineRemoveSkill, { name }),
       getSubagents: (): Promise<SubagentInfo[]> => t.invoke(Ipc.engineGetSubagents),
+      listAgentConfigs: (): Promise<SubagentConfig[]> => t.invoke(Ipc.engineListAgentConfigs),
+      saveAgentConfig: (draft: SubagentDraft): Promise<SubagentConfig[]> =>
+        t.invoke(Ipc.engineSaveAgentConfig, draft),
+      removeAgentConfig: (id: string): Promise<SubagentConfig[]> =>
+        t.invoke(Ipc.engineRemoveAgentConfig, { id }),
       getSubagentMessages: (subagentId: string): Promise<ChatMessage[]> =>
         t.invoke(Ipc.engineGetSubagentMessages, { subagentId }),
       /** A retry's file checkpoint, so the dialog can offer to unwind the workspace too. */
@@ -243,6 +251,8 @@ export function createFastVibeApi(t: ApiTransport) {
       remove: (id: string): Promise<ProviderConfig[]> => t.invoke(Ipc.providersRemove, { id }),
       refresh: (id: string): Promise<ProviderModel[]> =>
         t.invoke(Ipc.providersRefresh, { id }),
+      quota: (id: "openai" | "openai-codex", force = false): Promise<OpenAIAccountQuota> =>
+        t.invoke(Ipc.providersQuota, { id, force }),
       scanCcSwitch: (): Promise<CcSwitchScan> =>
         t.invoke(Ipc.providersCcSwitchScan),
       importCcSwitch: (ids: string[]): Promise<ProviderConfig[]> =>

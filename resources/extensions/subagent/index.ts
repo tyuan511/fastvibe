@@ -421,6 +421,22 @@ export default function (pi: ExtensionAPI) {
 	const roster =
 		registry.map((a) => `${a.name} (${a.source}) — ${a.description}`).join("; ") ||
 		"none installed";
+	// The tool description is created once when the extension loads. Add the current
+	// roster to each turn as well, so a role created in Settings becomes visible to an
+	// already-running conversation without restarting the engine.
+	pi.on("before_agent_start", (event) => {
+		let current: AgentConfig[] = [];
+		try {
+			current = discoverAgents(process.cwd(), "user").agents;
+		} catch {
+			// A broken role file should not prevent the main agent from answering.
+		}
+		const currentRoster = current.map((agent) => `${agent.name} (${agent.source}) — ${agent.description}`).join("; ") || "none installed";
+		return {
+			systemPrompt: `${event.systemPrompt}\n\nCurrent subagent roles (use these exact names): ${currentRoster}`,
+		};
+	});
+
 	pi.registerTool({
 		name: "subagent",
 		label: "Subagent",

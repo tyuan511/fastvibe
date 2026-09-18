@@ -111,13 +111,21 @@ export function todoIndexOf(items: TodoItem[], item: TodoItem | undefined): numb
 
 const EMPTY_TODOS: TodoItem[] = [];
 
-/** Latest todo list in the transcript — the agent's current plan. */
+/**
+ * Latest completed todo list in the transcript — the agent's current plan.
+ *
+ * Do not read a running call here. Tool arguments arrive incrementally while the
+ * model is streaming, so using them would make the panel above the composer
+ * repaint for every partial JSON update. The tool card may still show that live
+ * call, but the persistent panel only advances after execution has produced its
+ * final result (or an error).
+ */
 export function latestTodos(messages: ChatMessage[]): TodoItem[] {
   for (let i = messages.length - 1; i >= 0; i--) {
     const tools = messages[i]?.tools ?? [];
     for (let j = tools.length - 1; j >= 0; j--) {
       const tool = tools[j];
-      if (!isTodoTool(tool.name)) continue;
+      if (!isTodoTool(tool.name) || tool.status === "running") continue;
       const todos = parseToolTodos(tool);
       if (todos.length > 0) return todos;
     }

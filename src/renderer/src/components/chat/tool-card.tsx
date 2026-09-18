@@ -3,10 +3,10 @@ import { useTranslation } from "react-i18next";
 import { i18n } from "@/lib/i18n";
 import { Spinner } from "@/components/ui/spinner";
 import type { ToolCallBlock } from "@shared/types";
-import { useSessionStore } from "@/stores/session";
+import { useSessionStore, useWorkspacePath } from "@/stores/session";
 import { useSidePaneStore } from "@/stores/side-pane";
 import { asRecord, argString, describeTool, familyOf, unwrapShellCommand } from "@/lib/tool-presentation";
-import { displayPath, useWorkspacePath } from "@/lib/workspace-path";
+import { displayPath, resolvePath } from "@/lib/workspace-path";
 import { parseToolTodos } from "@/lib/todos";
 import { DiffView } from "./diff-view";
 import { MarkdownView } from "./markdown-view";
@@ -176,7 +176,7 @@ function FileActions({ path }: { path: string }): JSX.Element {
         className="font-mono text-sm text-muted-foreground underline-offset-2 hover:underline"
         onClick={() => {
           if (blockedRemotely(Ipc.workspaceReveal)) return;
-          void window.fastvibe.workspace.reveal(path);
+          void window.fastvibe.workspace.reveal(resolvePath(path, cwd));
         }}
       >
         {displayPath(path, cwd)}

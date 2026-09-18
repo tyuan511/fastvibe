@@ -2,10 +2,18 @@ import { create } from "zustand";
 import { applyEngineEvent } from "@/lib/apply-engine-event";
 import { i18n } from "@/lib/i18n";
 import { useSettingsStore } from "@/stores/settings";
+import type { ChangedFile } from "@/lib/changed-files";
 import type { ChatMessage, EngineEvent, FilePreview } from "@shared/types";
 import type { GitDiffSource } from "@shared/ipc";
 
-export type SidePaneTabType = "git" | "terminal" | "browser" | "selection-side-chat" | "files" | "subagent";
+export type SidePaneTabType =
+  | "git"
+  | "terminal"
+  | "browser"
+  | "selection-side-chat"
+  | "files"
+  | "subagent"
+  | "changes";
 
 /** Everything needed to mint/re-title a subagent run's tab. */
 export type SubagentTabInit = {
@@ -55,13 +63,19 @@ export type SidePaneTab = {
   /**
    * A file the 审查 tab should select on open, and which diff source to select it in.
    *
-   * Set when a turn's changed-file chip is clicked: the pane knows the file list already,
-   * but without this it opened on whatever it last showed, leaving the reader to find the
-   * file they just clicked on. Cleared by the pane once honoured, so re-opening the tab
-   * later is not yanked back to an old selection.
+   * Set by `openGitDiff` so the pane lands on that file instead of whatever it last
+   * showed. Cleared by the pane once honoured, so re-opening the tab later is not
+   * yanked back to an old selection.
    */
   gitFocusPath?: string;
   gitFocusSource?: GitDiffSource;
+  /**
+   * One turn's writes, shown by the 本轮修改 tab. The tab is opened only from the
+   * transcript's file chips — never from the pane's own menus — and the diffs are
+   * the tools' own patches, not the working tree.
+   */
+  changeFiles?: ChangedFile[];
+  changePath?: string;
 };
 
 /**
@@ -189,10 +203,15 @@ type SidePaneStore = {
   closeAll: () => void;
   openGit: () => void;
   /**
-   * Open 审查 focused on one file's diff — the turn's changed-file chips route here, so
-   * clicking `+12 -3 auth.ts` lands on that file's diff instead of the pane's last state.
+   * Open 审查 focused on one file's diff, so a caller that already knows the file
+   * lands on it instead of the pane's last state.
    */
   openGitDiff: (path: string, source: GitDiffSource, cwd?: string) => void;
+  /**
+   * Open 本轮修改 on one turn's files, focused on `path`. The transcript chips are
+   * the only caller: the pane itself has no entry that would mint this tab.
+   */
+  openTurnChanges: (files: ChangedFile[], path: string) => void;
   openTerminal: (cwd?: string) => void;
   openBrowser: (url?: string, conversationId?: string) => string;
   /** Browser tab ids in one conversation's pane (the active chat when omitted). */
@@ -265,7 +284,7 @@ export function subagentTabLabel(tab: SidePaneTab): string {
 /**
  * The label the tab bar draws for a tab.
  *
- * The four singleton tabs (`git` / `terminal` / `browser` / `files`) are named by
+ * Singleton tabs (`git` / `terminal` / `browser` / `files` / `changes`) are named by
  * their *type* at render time, so switching 界面语言 renames them without closing
  * anything. A subagent tab keeps the stored role name and appends its live status;
  * a 辅助对话 tab keeps the conversation's own title, which is real data the engine
@@ -312,14 +331,28 @@ function writeScope(
   scope: SidePaneScopeState,
   root?: Partial<SidePaneStore>,
 ): Partial<SidePaneStore> {
-  const scopes = { ...state.scopes, [key]: scope };
+  // The root `collapsed` / `maximized` fields *are* the active scope's. A caller
+  // that uncollapses via `{ collapsed: false }` (chip → 本轮修改, a new tab, …)
+  // must persist that on the scope too: otherwise the next `patchTab` / `close`
+  // re-reads the stale `scope.collapsed: true` (left behind when the last tab
+  // closed, or when the user collapsed then reopened) and snaps the pane shut
+  // while the tab is still there.
+  const nextScope =
+    root && (root.collapsed !== undefined || root.maximized !== undefined)
+      ? {
+          ...scope,
+          ...(root.collapsed !== undefined ? { collapsed: root.collapsed } : {}),
+          ...(root.maximized !== undefined ? { maximized: root.maximized } : {}),
+        }
+      : scope;
+  const scopes = { ...state.scopes, [key]: nextScope };
   if (key !== scopeKeyOf(state)) return { scopes };
   return {
     scopes,
-    tabs: scope.tabs,
-    activeTabId: scope.activeTabId,
-    maximized: scope.maximized,
-    collapsed: scope.collapsed ?? state.collapsed,
+    tabs: nextScope.tabs,
+    activeTabId: nextScope.activeTabId,
+    maximized: nextScope.maximized,
+    collapsed: nextScope.collapsed ?? state.collapsed,
     ...root,
   };
 }
@@ -565,6 +598,27 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
         gitFocusPath: path,
         gitFocusSource: source,
         ...(cwd ? { cwd } : {}),
+      };
+      return writeScope(
+        state,
+        scopeKeyOf(state),
+        { ...scope, tabs: upsert(scope.tabs, tab), activeTabId: tab.id },
+        { collapsed: false },
+      );
+    }),
+  openTurnChanges: (files, path) =>
+    set((state) => {
+      const scope = scopeOf(state);
+      const existing = scope.tabs.find((item) => item.type === "changes");
+      const tab: SidePaneTab = {
+        ...(existing ?? {
+          id: "changes",
+          type: "changes" as const,
+          openedAt: Date.now(),
+          title: i18n.t("sidepane:tabs.changes") as string,
+        }),
+        changeFiles: files,
+        changePath: path,
       };
       return writeScope(
         state,

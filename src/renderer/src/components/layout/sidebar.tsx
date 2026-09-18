@@ -2,7 +2,7 @@ import { useCallback, useMemo, useRef, useState, type JSX, type KeyboardEvent } 
 import { useTranslation } from "react-i18next";
 import { createPortal } from "react-dom";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Add01Icon, Alert02Icon, Archive04Icon, ArrowLeft01Icon, ArrowRight01Icon, Delete02Icon, Folder01Icon, Folder02Icon, FolderRootIcon, MessageSquarePlusIcon, MoreHorizontalIcon, PanelLeftCloseIcon, PencilEdit02Icon, PinIcon, PuzzleIcon, Search01Icon, Settings01Icon, StopIcon } from "@hugeicons/core-free-icons";
+import { Add01Icon, Alert02Icon, Archive04Icon, ArrowLeft01Icon, ArrowRight01Icon, Delete02Icon, Folder01Icon, Folder02Icon, FolderRootIcon, MessageSquarePlusIcon, MoreHorizontalIcon, PanelLeftCloseIcon, PencilEdit02Icon, PinIcon, PuzzleIcon, Search01Icon, Settings01Icon } from "@hugeicons/core-free-icons";
 import {
   DndContext,
   DragOverlay,
@@ -423,7 +423,6 @@ function SessionRowContent({
   onOpen,
   onTogglePin,
   onArchive,
-  onStop,
   onRename,
   onCancelRename,
 }: {
@@ -439,7 +438,6 @@ function SessionRowContent({
   onOpen: () => void;
   onTogglePin: () => void;
   onArchive: () => void;
-  onStop: () => void;
   onRename: (title: string) => void;
   onCancelRename: () => void;
 }): JSX.Element {
@@ -469,7 +467,8 @@ function SessionRowContent({
           <div className="flex shrink-0 items-center gap-0.5">
             {/* 等你 outranks 运行中: a chat parked on a prompt is technically still
                 running, but the reason it is running is the user, and that is the one
-                thing the row has to say. Hovering still swaps in the stop button. */}
+                thing the row has to say. Stop lives on the composer; archiving a busy
+                chat aborts it. */}
             {waiting ? (
               <span
                 className="flex size-6 items-center justify-center text-warning group-hover/session:hidden group-focus-within/session:hidden"
@@ -483,21 +482,6 @@ function SessionRowContent({
               </span>
             ) : null}
             <div className="hidden items-center gap-0.5 group-hover/session:flex group-focus-within/session:flex">
-              {showSpinner ? (
-                <IconButton
-                  size="icon-xs"
-                  variant="ghost"
-                  className="text-muted-foreground"
-                  label={t("sidebar.stop")}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onStop();
-                  }}
-                  onPointerDown={(event) => event.stopPropagation()}
-                >
-                  <HugeiconsIcon strokeWidth={2} icon={StopIcon} className="size-3.5" />
-                </IconButton>
-              ) : null}
               <IconButton
                 size="icon-xs"
                 variant="ghost"
@@ -574,7 +558,6 @@ function DraggableSession({
   onOpen,
   onTogglePin,
   onArchive,
-  onStop,
   onStartRename,
   onRename,
   onCancelRename,
@@ -590,8 +573,6 @@ function DraggableSession({
   onOpen: () => void;
   onTogglePin: () => void;
   onArchive: () => void;
-  /** Stop a run without opening the chat. Only offered while it is running. */
-  onStop: () => void;
   onStartRename: () => void;
   onRename: (title: string) => void;
   onCancelRename: () => void;
@@ -624,14 +605,12 @@ function DraggableSession({
             onOpen={onOpen}
             onTogglePin={onTogglePin}
             onArchive={onArchive}
-            onStop={onStop}
             onRename={onRename}
             onCancelRename={onCancelRename}
           />
         </ContextMenuTrigger>
         <ContextMenuContent className="w-32">
           <ContextMenuItem onClick={onTogglePin}>{isPinned ? t("sidebar.unpin") : t("sidebar.pin")}</ContextMenuItem>
-          {showSpinner ? <ContextMenuItem onClick={onStop}>{t("sidebar.stop")}</ContextMenuItem> : null}
           <ContextMenuItem onClick={onStartRename}>{t("sidebar.rename")}</ContextMenuItem>
           <ContextMenuItem onClick={onArchive}>{t("sidebar.archive")}</ContextMenuItem>
         </ContextMenuContent>
@@ -650,7 +629,6 @@ export function Sidebar({
   onNewChat,
   onOpen,
   onArchive,
-  onStop,
   onAddProject,
   onRenameSession,
   onRenameProject,
@@ -671,8 +649,6 @@ export function Sidebar({
   onOpen: (id: string) => void;
   /** Hides the chat from every list; the shell also closes it when it is on screen. */
   onArchive: (id: string) => void;
-  /** Stop one chat's run without opening it. */
-  onStop: (id: string) => void;
   onAddProject: () => void;
   onRenameSession: (id: string, title: string) => void;
   onRenameProject: (cwd: string, name: string) => void;
@@ -889,7 +865,6 @@ export function Sidebar({
         onOpen={() => onOpen(item.id)}
         onTogglePin={() => togglePinned(item.id)}
         onArchive={() => onArchive(item.id)}
-        onStop={() => onStop(item.id)}
         onStartRename={() => setRenaming({ type: "session", id: item.id })}
         onRename={(title) => {
           onRenameSession(item.id, title);

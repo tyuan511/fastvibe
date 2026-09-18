@@ -309,6 +309,9 @@ function registerIpc(): void {
   handle(Ipc.engineGetSubagents, async () => {
     return engine.getSubagents();
   });
+  handle(Ipc.engineListAgentConfigs, () => engine.getAgentConfigs());
+  handle(Ipc.engineSaveAgentConfig, (payload: import("@shared/types").SubagentDraft) => engine.saveAgentConfig(payload));
+  handle(Ipc.engineRemoveAgentConfig, (payload: { id: string }) => engine.removeAgentConfig(payload.id));
 
   handle(Ipc.engineGetSubagentMessages, async (payload: { subagentId: string }) => {
     return engine.getSubagentMessages(payload.subagentId);
@@ -454,6 +457,9 @@ function registerIpc(): void {
   });
   handle(Ipc.providersRefresh, async (payload: { id: string }) => {
     return engine.refreshProviderModels(payload.id);
+  });
+  handle(Ipc.providersQuota, async (payload: { id: string; force?: boolean }) => {
+    return engine.getOpenAIAccountQuota(payload.id, payload.force === true);
   });
   handle(Ipc.providersCcSwitchScan, async () => {
     return engine.scanCcSwitch();

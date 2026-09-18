@@ -1,17 +1,35 @@
 import type { JSX } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { CpuIcon } from "@hugeicons/core-free-icons";
+import { AppLogo } from "@/components/app-logo";
+import antGroupColorIcon from "@/assets/provider-icons/antgroup-color.svg?url&no-inline";
+import azureColorIcon from "@/assets/provider-icons/azure-color.svg?url&no-inline";
+import bedrockColorIcon from "@/assets/provider-icons/bedrock-color.svg?url&no-inline";
+import cerebrasColorIcon from "@/assets/provider-icons/cerebras-color.svg?url&no-inline";
+import cloudflareColorIcon from "@/assets/provider-icons/cloudflare-color.svg?url&no-inline";
+import codexColorIcon from "@/assets/provider-icons/codex-color.svg?url&no-inline";
+import deepseekColorIcon from "@/assets/provider-icons/deepseek-color.svg?url&no-inline";
+import fireworksColorIcon from "@/assets/provider-icons/fireworks-color.svg?url&no-inline";
+import googleColorIcon from "@/assets/provider-icons/google-color.svg?url&no-inline";
+import huggingfaceColorIcon from "@/assets/provider-icons/huggingface-color.svg?url&no-inline";
+import kimiColorIcon from "@/assets/provider-icons/kimi-color.svg?url&no-inline";
+import minimaxColorIcon from "@/assets/provider-icons/minimax-color.svg?url&no-inline";
+import mistralColorIcon from "@/assets/provider-icons/mistral-color.svg?url&no-inline";
+import nvidiaColorIcon from "@/assets/provider-icons/nvidia-color.svg?url&no-inline";
+import openrouterColorIcon from "@/assets/provider-icons/openrouter-color.svg?url&no-inline";
+import qwenColorIcon from "@/assets/provider-icons/qwen-color.svg?url&no-inline";
+import togetherColorIcon from "@/assets/provider-icons/together-color.svg?url&no-inline";
+import vertexAiColorIcon from "@/assets/provider-icons/vertexai-color.svg?url&no-inline";
+import workersAiColorIcon from "@/assets/provider-icons/workersai-color.svg?url&no-inline";
 import { cn } from "@/lib/utils";
 
 /**
  * Brand marks for the pi-coding-agent built-in providers (内置供应商).
  *
- * Vendored from LobeHub's icon set (https://lobehub.com/icons, MIT) as `currentColor`
- * paths rather than `<img src>`, the same way `agent-brand-icon.tsx` handles the
- * import sources: the marks are monochrome, so inlining them lets each one follow the
- * active theme's foreground instead of pinning a palette colour the way a raster asset
- * would (see the theming rules in AGENTS.md). Only each icon's `Mono` variant is taken,
- * which is the one drawn to work on any background.
+ * The colour variants are vendored from LobeHub's icon set
+ * (https://lobehub.com/icons, MIT) as local SVG assets, so the app stays offline-safe.
+ * Providers without a colour variant in the upstream set keep the same LobeHub Mono
+ * path with the provider's brand colour applied as a fallback.
  *
  * A mark is keyed by the SDK's own provider id, so what FastVibe offers is what the
  * SDK says it offers. A provider LobeHub has no icon for — `radius`, a pi-only gateway
@@ -261,6 +279,78 @@ const PROVIDER_MARKS: Record<string, keyof typeof MARKS> = {
 };
 
 /**
+ * Direct colour assets from LobeHub. The upstream collection does not publish a
+ * `-color` file for every provider, so the remaining ids use the Mono path fallback
+ * below with the same provider colour metadata.
+ */
+const PROVIDER_COLOR_ASSETS: Record<string, string> = {
+  "ant-ling": antGroupColorIcon,
+  "azure-openai-responses": azureColorIcon,
+  "amazon-bedrock": bedrockColorIcon,
+  "cerebras": cerebrasColorIcon,
+  "cloudflare-ai-gateway": cloudflareColorIcon,
+  "cloudflare-workers-ai": workersAiColorIcon,
+  "openai-codex": codexColorIcon,
+  "deepseek": deepseekColorIcon,
+  "fireworks": fireworksColorIcon,
+  "google": googleColorIcon,
+  "huggingface": huggingfaceColorIcon,
+  "kimi-coding": kimiColorIcon,
+  "minimax": minimaxColorIcon,
+  "minimax-cn": minimaxColorIcon,
+  "mistral": mistralColorIcon,
+  "nvidia": nvidiaColorIcon,
+  "openrouter": openrouterColorIcon,
+  "qwen-token-plan": qwenColorIcon,
+  "qwen-token-plan-cn": qwenColorIcon,
+  "qwen-token-plan-individual": qwenColorIcon,
+  "together": togetherColorIcon,
+  "google-vertex": vertexAiColorIcon,
+};
+
+const PROVIDER_COLORS: Record<string, string> = {
+  "amazon-bedrock": "#FF9900",
+  "ant-ling": "#1677FF",
+  "anthropic": "#D97757",
+  "azure-openai-responses": "#0078D4",
+  "baseten": "#5B5BD6",
+  "cerebras": "#4C6FFF",
+  "cloudflare-ai-gateway": "#F38020",
+  "cloudflare-workers-ai": "#F38020",
+  "deepseek": "#4D6BFE",
+  "fireworks": "#FF6B35",
+  "github-copilot": "#57606A",
+  "google": "#4285F4",
+  "google-vertex": "#4285F4",
+  "groq": "#F55036",
+  "huggingface": "#D9A400",
+  "kimi-coding": "#6B5CFF",
+  "minimax": "#5B65F5",
+  "minimax-cn": "#5B65F5",
+  "mistral": "#F54E42",
+  "moonshotai": "#4B83F5",
+  "moonshotai-cn": "#4B83F5",
+  "nvidia": "#76B900",
+  "openai": "#10A37F",
+  "openai-codex": "#10A37F",
+  "opencode": "#64748B",
+  "opencode-go": "#64748B",
+  "openrouter": "#6366F1",
+  "qwen-token-plan": "#615CED",
+  "qwen-token-plan-cn": "#615CED",
+  "qwen-token-plan-individual": "#615CED",
+  "together": "#0E9F9A",
+  "vercel-ai-gateway": "#64748B",
+  "xai": "#7C3AED",
+  "xiaomi": "#FF6900",
+  "xiaomi-token-plan-ams": "#FF6900",
+  "xiaomi-token-plan-cn": "#FF6900",
+  "xiaomi-token-plan-sgp": "#FF6900",
+  "zai": "#5A46F2",
+  "zai-coding-cn": "#5A46F2",
+};
+
+/**
  * A provider's brand mark, else a neutral glyph — never nothing, so a list of providers
  * keeps one visual rhythm whether or not each one has a logo.
  *
@@ -277,6 +367,17 @@ const PROVIDER_MARKS: Record<string, keyof typeof MARKS> = {
  * Do not "fix" either number on its own: the pair is what makes them match.
  */
 export function ProviderIcon({ provider, className }: { provider: string; className?: string }): JSX.Element {
+  // FastVibe has a real gradient app mark, so keep it in model menus too instead of
+  // falling back to a CPU glyph when its models are grouped by provider id.
+  if (provider === "fastvibe") {
+    return <AppLogo className={cn("size-3.5 shrink-0 rounded-[3px]", className)} />;
+  }
+
+  const colorAsset = PROVIDER_COLOR_ASSETS[provider];
+  if (colorAsset) {
+    return <img src={colorAsset} alt="" aria-hidden="true" className={cn("size-3.5 shrink-0", className)} />;
+  }
+
   const key = PROVIDER_MARKS[provider] as keyof typeof MARKS | undefined;
   const mark = key ? MARKS[key] : undefined;
   if (!mark) {
@@ -289,6 +390,7 @@ export function ProviderIcon({ provider, className }: { provider: string; classN
       fillRule="evenodd"
       aria-hidden="true"
       className={cn("size-3.5 shrink-0", className)}
+      style={{ color: PROVIDER_COLORS[provider] }}
     >
       {mark}
     </svg>

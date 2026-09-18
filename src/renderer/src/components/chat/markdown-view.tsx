@@ -1,6 +1,6 @@
 import { memo, useDeferredValue, useState, type JSX, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import Markdown from "react-markdown";
+import Markdown, { type Components } from "react-markdown";
 import type { PluggableList } from "unified";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -40,7 +40,7 @@ const REHYPE_PLUGINS: PluggableList = [
   ],
 ];
 
-/** Fence languages whose body is a diff, drawn by `DiffView` rather than shikiji. */
+/** Fence languages whose body is a diff, drawn by `DiffView` rather than Shiki. */
 const DIFF_LANGUAGES = new Set(["diff", "patch"]);
 
 const CodeBlock = memo(function CodeBlock({ language, code }: { language?: string; code: string }): JSX.Element {
@@ -83,6 +83,52 @@ const CodeBlock = memo(function CodeBlock({ language, code }: { language?: strin
   );
 });
 
+// Stable component identities keep streamed updates from remounting CodeBlock.
+const MARKDOWN_COMPONENTS: Components = {
+  a: ({ href, children }) => (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      onClick={(event) => {
+        if (!href) return;
+        if (href.startsWith("file:") || href.startsWith("/")) {
+          event.preventDefault();
+          const path = href.startsWith("file:") ? decodeURI(href.replace("file://", "")) : href;
+          void useSessionStore.getState().openPreview(path);
+        }
+      }}
+    >
+      {children}
+    </a>
+  ),
+  img: ({ src, alt }) => (
+    <img src={src} alt={alt ?? ""} className="my-2 max-h-80 max-w-full rounded-lg border border-border" />
+  ),
+  table: ({ children }) => (
+    <div className="my-2 overflow-x-auto rounded-lg border border-border">
+      <table className="w-full min-w-96 border-collapse text-left">{children}</table>
+    </div>
+  ),
+  th: ({ children }) => (
+    <th className="border-b border-border bg-muted/60 px-2 py-1.5 font-medium">{children}</th>
+  ),
+  td: ({ children }) => <td className="border-b border-border px-2 py-1.5 align-top">{children}</td>,
+  pre: ({ node, children }) => {
+    // Block code always has a pre parent, even for empty or unlabelled single-line fences.
+    const codeNode = node?.children.find((child) => child.type === "element" && child.tagName === "code");
+    if (!codeNode || codeNode.type !== "element") return <pre>{children}</pre>;
+    const classes = codeNode.properties.className;
+    const className = Array.isArray(classes) ? classes.join(" ") : String(classes ?? "");
+    const language = /language-([^\s]+)/.exec(className)?.[1];
+    return <CodeBlock language={language} code={nodeText(children).replace(/\n$/, "")} />;
+  },
+  code: ({ children }) => <code>{children}</code>,
+  blockquote: ({ children }) => (
+    <blockquote className="my-2 border-l-2 border-border pl-3 text-muted-foreground">{children}</blockquote>
+  ),
+};
+
 /**
  * Memoised on `text`: without this, every streamed token re-parsed the markdown
  * of every message already on screen.
@@ -95,49 +141,7 @@ export const MarkdownView = memo(function MarkdownView({ text }: { text: string 
     <Markdown
       remarkPlugins={REMARK_PLUGINS}
       rehypePlugins={REHYPE_PLUGINS}
-      components={{
-        a: ({ href, children }) => (
-          <a
-            href={href}
-            target="_blank"
-            rel="noreferrer"
-            onClick={(event) => {
-              if (!href) return;
-              if (href.startsWith("file:") || href.startsWith("/")) {
-                event.preventDefault();
-                const path = href.startsWith("file:") ? decodeURI(href.replace("file://", "")) : href;
-                void useSessionStore.getState().openPreview(path);
-              }
-            }}
-          >
-            {children}
-          </a>
-        ),
-        img: ({ src, alt }) => (
-          <img src={src} alt={alt ?? ""} className="my-2 max-h-80 max-w-full rounded-lg border border-border" />
-        ),
-        table: ({ children }) => (
-          <div className="my-2 overflow-x-auto rounded-lg border border-border">
-            <table className="w-full min-w-96 border-collapse text-left">{children}</table>
-          </div>
-        ),
-        th: ({ children }) => (
-          <th className="border-b border-border bg-muted/60 px-2 py-1.5 font-medium">{children}</th>
-        ),
-        td: ({ children }) => <td className="border-b border-border px-2 py-1.5 align-top">{children}</td>,
-        pre: ({ children }) => <>{children}</>,
-        code: ({ className, children }) => {
-          const language = /language-([^\s]+)/.exec(className ?? "")?.[1];
-          const code = nodeText(children).replace(/\n$/, "");
-          if (language || code.includes("\n")) {
-            return <CodeBlock language={language} code={code} />;
-          }
-          return <code>{code}</code>;
-        },
-        blockquote: ({ children }) => (
-          <blockquote className="my-2 border-l-2 border-border pl-3 text-muted-foreground">{children}</blockquote>
-        ),
-      }}
+      components={MARKDOWN_COMPONENTS}
     >
       {deferred}
     </Markdown>

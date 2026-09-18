@@ -236,6 +236,22 @@ function appendMessage(messages: ChatMessage[], message: ChatMessage): ChatMessa
   return [...messages, message];
 }
 
+/** Drop a superseded failure off every consecutive trailing assistant.
+ *  `ensureAssistant` only clones `at(-1)`, so a transcript that still holds the
+ *  429 attempt behind the retry (or a model switch) would otherwise keep the
+ *  stale error on an earlier row. */
+function clearTrailingAssistantErrors(messages: ChatMessage[]): ChatMessage[] {
+  let next = messages;
+  for (let index = next.length - 1; index >= 0; index -= 1) {
+    const item = next[index];
+    if (item.role !== "assistant") break;
+    if (!item.error) continue;
+    if (next === messages) next = next.slice();
+    next[index] = { ...item, error: undefined };
+  }
+  return next;
+}
+
 const COMPACT_REASONS = new Set<CompactReason>(["manual", "threshold", "overflow"]);
 
 function compactReason(event: EngineEvent): CompactReason | undefined {
@@ -434,9 +450,8 @@ function applyEvent(
   if (type === "agent_start" || type === "turn_start") {
     // A new turn replaces a previous failure (including auto-retry). Keep the
     // bubble, but drop the stale error so the working state can take over.
-    const target = ensureAssistant();
-    if (target.error) target.error = undefined;
-    return { messages: next, streaming: true };
+    ensureAssistant();
+    return { messages: clearTrailingAssistantErrors(next), streaming: true };
   }
 
   if (type === "message_end") {
@@ -665,12 +680,17 @@ function applyEvent(
       const target = ensureAssistant();
       const call = isRecord(inner.toolCall) ? inner.toolCall : toolCallFromPartial(inner);
       const id = resolveToolId(target, asString(call?.id) ?? asString(inner.id));
+      // This closes the model's streamed tool-call message, not the tool's actual
+      // execution. The SDK emits `tool_execution_start` immediately afterwards and
+      // `tool_execution_end` only after the extension has returned. Keep the call
+      // running here so consumers such as the live todo panel cannot publish a
+      // partial list before the tool has really finished.
       upsertTool(target, {
         id,
         name: asString(call?.name),
         args: call?.arguments,
         result: toolText(inner.result) ?? toolText(inner.output),
-        status: inner.isError === true ? "error" : "done",
+        status: "running",
       });
     }
     if (innerType === "done") {
@@ -736,9 +756,7 @@ function applyEvent(
   if (type === "auto_retry_end") {
     const last = next.at(-1);
     if (last?.role === "assistant" && event.success === true) {
-      const list = next.slice();
-      list[list.length - 1] = { ...last, error: undefined };
-      return { messages: list, streaming: nextStreaming };
+      return { messages: clearTrailingAssistantErrors(next), streaming: nextStreaming };
     }
     if (last?.role === "assistant" && event.success === false) {
       const error = asString(event.finalError) ?? last.error ?? (i18n.t("common:errors.requestFailed") as string);

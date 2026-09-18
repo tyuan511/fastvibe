@@ -22,6 +22,8 @@ export type FastVibePaths = {
   mcpFile: string;
   /** Renderer UI preferences (theme, chat behaviour, …). */
   settingsFile: string;
+  /** User overrides for built-in subagent models. */
+  subagentsFile: string;
   /** Per-thinking-block durations, which the engine's transcripts do not record. */
   reasoningFile: string;
   /** Append-only record of finalized turns, so 使用统计 survives session deletion. */
@@ -82,6 +84,7 @@ function buildFastVibePaths(): FastVibePaths {
     providersFile: join(userData, "providers.json"),
     mcpFile: join(userData, "mcp.json"),
     settingsFile: join(userData, "settings.json"),
+    subagentsFile: join(agentDir, "subagents.json"),
     reasoningFile: join(runtimeRoot, "reasoning.json"),
     usageLedgerFile: join(runtimeRoot, "usage-ledger.jsonl"),
     remoteAccessFile: join(userData, "remote-access.json"),

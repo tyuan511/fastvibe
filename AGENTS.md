@@ -406,8 +406,9 @@ Main 每个会话一个 `AgentSession`，但引擎自己只有一个「当前会
 只有 `set_editor_text` 是例外——它写的是当前输入框，必须按会话过滤，否则后台会话会覆盖
 用户正在打的草稿。
 
-会话在等用户时：侧栏行显示 `Alert02Icon`（悬停换成停止按钮），窗口未聚焦时按
-`settings.notifications === "approval"` 发系统通知。
+会话在等用户时：侧栏行显示 `Alert02Icon`，窗口未聚焦时按
+`settings.notifications === "approval"` 发系统通知。停止只在 composer；归档一个正在
+运行的会话会 `abort` 它，侧栏行不再提供停止按钮。
 
 Provider credentials are kept in FastVibe's isolated runtime and injected into the SDK's in-memory auth storage. Do not export these variables into the user's login shell or the in-app terminal.
 
@@ -485,16 +486,24 @@ starts offering is already covered the day it appears.
 
 ### Code highlighting
 
-Syntax highlighting is **shikiji** (`src/renderer/src/lib/highlight.ts`), used by
-both the markdown code fences and the file preview — except for a diff, which is
-rendered rather than highlighted (below).
+Syntax highlighting is **Shiki + `@shikijs/stream`** (`lib/syntax-highlighter.ts`,
+with the React binding in `src/renderer/src/lib/highlight.ts`), used by both the
+markdown code fences and the file preview — except for a diff, which is rendered
+rather than highlighted (below).
 
-- The highlighter is created lazily (`getHighlighterCore`, wasm engine); grammars
-  are code-split and loaded on demand, so only languages actually shown are fetched.
+- The highlighter is created lazily (`createHighlighterCore`, Oniguruma wasm engine);
+  grammars are code-split and loaded on demand, so only languages actually shown are fetched.
 - Colors come from `createCssVariablesTheme`, mapped in `index.css` onto the app's
   `--code-*` tokens — every theme highlights correctly with no per-theme setup.
-- `useHighlightedCode(code, language)` is the React entry point: it debounces (so a
-  streaming fence is not re-tokenized per token) and caches by `(language, code)`.
+- `useHighlightedCode(code, language)` is the React entry point. Each block keeps a
+  `ShikiStreamTokenizer`: completed lines retain their HTML and grammar state, and
+  only the unfinished line plus appended text is tokenized. There is no trailing
+  debounce to starve a continuous stream; the HTML cache is byte-bounded and keyed
+  by the exact `(language, code)`. Replacing/truncating code resets the tokenizer.
+- Markdown's `components` map must stay at module scope. Inline component functions
+  remount the code block on every token, discarding the retained highlight and
+  flashing plain text between highlighted frames. `pre` identifies block code,
+  including empty/unlabelled single-line fences; `code` alone cannot distinguish them.
 - **A diff is not highlighted, it is rendered.** `components/chat/diff-view.tsx` is the
   one renderer for every diff the app shows — a tool call's file change, a ```diff
   fence in a reply, a `.patch` preview, the right pane's git diff — and `lib/diff.ts`
@@ -502,7 +511,7 @@ rendered rather than highlighted (below).
   unified diff has them, pi's baked-in `- 12   label` column where it does not (that
   format carries no headers at all). The gutter never counts rows — it used to show an
   invented index beside pi's real number — and a fragment with neither (what a model
-  usually writes by hand) renders unnumbered rather than misnumbered. shikiji is out of
+  usually writes by hand) renders unnumbered rather than misnumbered. Shiki is out of
   the loop for these: its CSS-variables theme maps nothing for `markup.inserted` /
   `markup.deleted`, so a `diff` fence came out flat and monochrome.
 - The wasm engine needs `'wasm-unsafe-eval'` in the CSP `script-src` (`index.html`).

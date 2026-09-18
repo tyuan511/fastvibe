@@ -38,6 +38,7 @@ import { ThemeSelect } from "./theme-select";
 import { UsageSettings } from "./usage-settings";
 import { ShortcutsSettings } from "./shortcuts-settings";
 import { AboutSettings } from "./about-settings";
+import { SubagentsSettings } from "./subagents-settings";
 import { SettingsGroup as Group, SettingsRow as Row } from "./settings-group";
 import {
   SETTINGS_SECTIONS,
@@ -484,6 +485,7 @@ export function SettingsDialog({
           {section === "usage" ? <UsageSettings /> : null}
           {section === "remote" ? <RemoteSettings /> : null}
 
+          {section === "subagents" ? <SubagentsSettings models={models} /> : null}
           {section === "mcp" ? <McpSettings /> : null}
           {section === "skills" ? <SkillsSettings /> : null}
           {section === "extensions" ? <ExtensionsSettings /> : null}

@@ -8,6 +8,7 @@ import {
   Cancel01Icon,
   ChromeIcon,
   File01Icon,
+  FileEditIcon,
   Folder01Icon,
   GitCompareIcon,
   MessageSquareIcon,
@@ -40,6 +41,7 @@ import { useSettingsStore } from "@/stores/settings";
 import { MIN_WIDTH, useSidePaneStore, type SidePaneTab, sidePaneTabTitle } from "@/stores/side-pane";
 import { releaseBrowser, SidePaneBrowser } from "./side-pane-browser";
 import { SidePaneChat } from "./side-pane-chat";
+import { SidePaneChanges } from "./side-pane-changes";
 import { SidePaneFiles } from "./side-pane-files";
 import { SidePaneGit } from "./side-pane-git";
 import { SidePaneSubagent } from "./side-pane-subagent";
@@ -148,6 +150,7 @@ function MaximizeButton(): JSX.Element {
 function tabIcon(type: SidePaneTab["type"]) {
   if (type === "subagent") return BotIcon;
   if (type === "git") return GitCompareIcon;
+  if (type === "changes") return FileEditIcon;
   if (type === "terminal") return TerminalIcon;
   if (type === "browser") return ChromeIcon;
   if (type === "selection-side-chat") return MessageSquareIcon;
@@ -284,6 +287,8 @@ export function SidePane({
       : null,
     { id: "files", label: t("pane.files"), icon: Folder01Icon, onOpen: openFiles },
     hasReviewTab ? null : { id: "review", label: t("pane.review"), icon: GitCompareIcon, onOpen: openGit },
+    // 本轮修改 is chip-only: the transcript's file chips mint that tab. A card
+    // here would let the pane open an empty turn-changes view on its own.
     { id: "terminal", label: t("pane.terminal"), icon: TerminalIcon, onOpen: () => openTerminal(cwd) },
     {
       id: "browser",
@@ -494,6 +499,14 @@ export function SidePane({
               focusPath={active.gitFocusPath}
               focusSource={active.gitFocusSource}
               onFocusHandled={() => patchTab(active.id, { gitFocusPath: undefined, gitFocusSource: undefined })}
+            />
+          ) : null}
+          {active?.type === "changes" ? (
+            <SidePaneChanges
+              cwd={cwd}
+              files={active.changeFiles ?? []}
+              path={active.changePath}
+              onSelect={(path) => patchTab(active.id, { changePath: path })}
             />
           ) : null}
           {active?.type === "selection-side-chat" && parentId ? (

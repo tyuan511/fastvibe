@@ -4,6 +4,7 @@
     "terminal": "终端",
     "browser": "浏览器",
     "files": "文件",
+    "changes": "本轮修改",
     "subagent": "子 Agent",
     "sideChat": "辅助对话 {{n}}",
     "status": {
@@ -38,6 +39,14 @@
     "refresh": "刷新",
     "back": "返回目录树",
     "previewFailed": "无法预览该文件"
+  },
+  "changes": {
+    "count": "{{count}} 个文件",
+    "pick": "选择文件以查看 Diff",
+    "noDiff": "没有可显示的 diff",
+    "empty": "这一轮没有改动文件",
+    "back": "返回文件列表",
+    "reveal": "在访达中显示"
   },
   "chat": {
     "title": "辅助对话",

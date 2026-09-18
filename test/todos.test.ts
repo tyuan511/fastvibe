@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   activeTodo,
+  latestTodos,
   parseTodoList,
   todoPosition,
 } from "../src/renderer/src/lib/todos.ts";
@@ -33,6 +34,35 @@ test("the list is found under the wrapper keys the tool uses", () => {
   assert.equal(parseTodoList({ todos: [{ content: "a", status: "pending" }] }).length, 1);
   assert.equal(parseTodoList({ tasks: [{ content: "a", status: "pending" }] }).length, 1);
   assert.deepEqual(parseTodoList({ nope: [] }), []);
+});
+
+test("the live todo call does not replace the panel until execution finishes", () => {
+  const messages = [
+    {
+      id: "assistant",
+      role: "assistant" as const,
+      text: "",
+      tools: [
+        {
+          id: "old",
+          name: "todo",
+          status: "done" as const,
+          args: { todos: [{ content: "old task", status: "in_progress" }] },
+        },
+        {
+          id: "live",
+          name: "todo",
+          status: "running" as const,
+          args: { todos: [{ content: "new task", status: "in_progress" }] },
+        },
+      ],
+      createdAt: 0,
+    },
+  ];
+  assert.deepEqual(latestTodos(messages).map((item) => item.content), ["old task"]);
+
+  messages[0].tools[1].status = "done";
+  assert.deepEqual(latestTodos(messages).map((item) => item.content), ["new task"]);
 });
 
 test("in_progress wins over pending, whichever comes first", () => {

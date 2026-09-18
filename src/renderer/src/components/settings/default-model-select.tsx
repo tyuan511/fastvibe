@@ -17,6 +17,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { ProviderIcon } from "@/components/provider-icon";
 import { providerLabel } from "@/lib/provider-label";
+import { cn } from "@/lib/utils";
 import type { EngineModel, FastVibeModel } from "@shared/types";
 
 function modelKey(model: EngineModel): string {
@@ -34,10 +35,19 @@ export function DefaultModelSelect({
   models,
   value,
   onChange,
+  emptyLabel,
+  className,
+  wrapLabel,
 }: {
   models: FastVibeModel[];
   value?: EngineModel;
   onChange: (model: EngineModel | undefined) => void;
+  /** Label for an unpinned value when the caller has a different fallback semantic. */
+  emptyLabel?: string;
+  /** Optional trigger width/layout for dense settings surfaces. */
+  className?: string;
+  /** Keep a long provider/model label readable instead of truncating it. */
+  wrapLabel?: boolean;
 }): JSX.Element {
   const { t } = useTranslation("settings");
   const groups = useMemo(() => {
@@ -65,21 +75,25 @@ export function DefaultModelSelect({
     ? `${providerLabel(current.providerName || current.provider)}/${current.id}`
     : value
       ? t("defaultModel.unavailable", { label: `${providerLabel(value.provider)}/${value.id}` })
-      : t("defaultModel.followLast");
+      : emptyLabel ?? t("defaultModel.followLast");
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
         render={
-          <Button variant="outline" size="sm" className="w-44 justify-between gap-1.5 font-normal">
-            <span className="truncate">{label}</span>
+          <Button
+            variant="outline"
+            size="sm"
+            className={cn("w-44 justify-between gap-1.5 font-normal", className, wrapLabel && "h-auto min-h-9 py-2")}
+          >
+            <span className={cn(wrapLabel ? "break-all text-left leading-5" : "truncate")}>{label}</span>
             <HugeiconsIcon strokeWidth={2} icon={ArrowDown01Icon} className="size-3.5 shrink-0" />
           </Button>
         }
       />
       <DropdownMenuContent align="end" className="min-w-52">
         <DropdownMenuItem onClick={() => onChange(undefined)}>
-          <span className="min-w-0 flex-1 truncate">{t("defaultModel.followLast")}</span>
+          <span className="min-w-0 flex-1 truncate">{emptyLabel ?? t("defaultModel.followLast")}</span>
           <span className="ml-auto flex size-4 shrink-0 items-center justify-center">
             {value ? null : <HugeiconsIcon strokeWidth={2} icon={Tick02Icon} className="size-4" />}
           </span>

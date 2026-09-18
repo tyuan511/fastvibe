@@ -5,6 +5,7 @@ import { INPUT_MODALITIES, PROVIDER_APIS, THINKING_EFFORT_LEVELS, type CostTier,
 import { catalogPrice, enrichModel, loadModelsDev, type ModelsDevIndex } from "./models-dev";
 import { findNativeProvider, listNativeProviders, selectedNativeModels } from "./native-providers";
 import { engineModelBaseUrl, trimBaseUrl } from "./provider-url";
+import { automaticModelApi } from "./model-api";
 import { deleteOAuthCredential, readOAuthProviderIds } from "./oauth-store";
 import type { FastVibePaths } from "./paths";
 
@@ -212,7 +213,7 @@ export async function fetchProviderModels(
   for (const entry of listed) {
     if (!entry.id || seen.has(entry.id)) continue;
     seen.add(entry.id);
-    models.push(enrichOne(index, entry.id, entry.name));
+    models.push(enrichOne(index, entry.id, entry.name, api));
   }
   return models;
 }
@@ -279,8 +280,13 @@ async function getJson(url: string, headers: Record<string, string>): Promise<un
  * Unknown ids keep models.dev's conservative defaults (128K context / 8K output /
  * text-only) rather than blocking the model.
  */
-function enrichOne(index: ModelsDevIndex, id: string, apiName: string): ProviderModel {
-  return { ...enrichModel(index, id, apiName || id), thinkingFormat: inferThinkingFormat(id) };
+function enrichOne(index: ModelsDevIndex, id: string, apiName: string, providerApi?: string): ProviderModel {
+  const api = automaticModelApi(id, providerApi);
+  return {
+    ...enrichModel(index, id, apiName || id),
+    thinkingFormat: inferThinkingFormat(id),
+    ...(api ? { api } : {}),
+  };
 }
 
 function inferThinkingFormat(id: string): ProviderModel["thinkingFormat"] {

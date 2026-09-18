@@ -1,25 +1,24 @@
-import { useSessionStore } from "@/stores/session";
-
 /**
  * Tool paths arrive from the engine absolute — the engine's working directory *is*
  * the project — but a transcript reads better in project terms: what matters is
  * that the file is `src/main/engine/pricing.ts`, not that the repo happens to live
  * under `/Users/someone/code`. Every path a tool surface prints goes through
  * `displayPath`.
+ *
+ * The inverse is `resolvePath`. The engine also reports project-relative paths
+ * (`src/renderer/src/mock/preview-data.ts`), and Main's `stat` is not run inside
+ * the conversation cwd — a relative string is looked up from `process.cwd()` and
+ * comes back ENOENT even though the file is sitting in the project. Conversation
+ * previews, Finder reveals and anything else that must open the file go through
+ * `resolvePath` first.
  */
-
-/**
- * Working directory of the conversation on screen, or `undefined` when nothing is
- * bound yet. Tool cards only ever render inside a conversation's transcript — the
- * main thread, the side pane's chats and the subagent viewer all belong to the
- * active one — so that conversation is the right frame for every path they show.
- */
-export function useWorkspacePath(): string | undefined {
-  return useSessionStore((state) => state.conversations.find((item) => item.id === state.activeId)?.cwd);
-}
 
 function normalize(path: string): string {
   return path.replace(/\\/g, "/").replace(/\/+$/, "");
+}
+
+function isAbsolute(path: string): boolean {
+  return /^([a-zA-Z]:)?\//.test(path);
 }
 
 /**
@@ -35,7 +34,7 @@ export function displayPath(path: string, cwd?: string): string {
   if (!target || !cwd) return target;
   const value = normalize(target);
   // POSIX and Windows absolutes only; anything else is already project-relative.
-  if (!/^([a-zA-Z]:)?\//.test(value)) return target;
+  if (!isAbsolute(value)) return target;
   const root = normalize(cwd);
   if (!root) return target;
   // macOS volume names keep their own case, so the tests are case-insensitive while
@@ -45,4 +44,24 @@ export function displayPath(path: string, cwd?: string): string {
   if (lower === rootLower) return ".";
   if (!lower.startsWith(`${rootLower}/`)) return target;
   return value.slice(root.length + 1);
+}
+
+/**
+ * `resolvePath("src/a.ts", "/repo")` → `/repo/src/a.ts`.
+ *
+ * Inverse of `displayPath`. An already-absolute path is returned as a normalised
+ * POSIX-style string so later comparisons (`filesPreviewPath`, the file tree's
+ * `selected`) match what `readDir` joins together. A relative path is joined onto
+ * `cwd`. Without a cwd the relative string is returned untouched — Main cannot
+ * guess the workspace.
+ */
+export function resolvePath(path: string, cwd?: string): string {
+  const target = path.trim();
+  if (!target) return target;
+  const value = normalize(target);
+  if (isAbsolute(value)) return value;
+  if (!cwd) return target;
+  const root = normalize(cwd);
+  if (!root) return target;
+  return `${root}/${value.replace(/^\.\//, "")}`;
 }

@@ -3,6 +3,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Analytics01Icon,
   Archive04Icon,
+  BotIcon,
   BoxesIcon,
   ImportIcon,
   InformationCircleIcon,
@@ -30,6 +31,7 @@ export type SectionId =
   | "archived"
   | "usage"
   | "providers"
+  | "subagents"
   | "mcp"
   | "skills"
   | "extensions"
@@ -64,6 +66,7 @@ export const SETTINGS_SECTIONS: Array<{
     group: "integrations",
     items: [
       { id: "providers", icon: <HugeiconsIcon strokeWidth={2} icon={BoxesIcon} /> },
+      { id: "subagents", icon: <HugeiconsIcon strokeWidth={2} icon={BotIcon} /> },
       { id: "mcp", icon: <HugeiconsIcon strokeWidth={2} icon={Plug01Icon} /> },
       { id: "skills", icon: <HugeiconsIcon strokeWidth={2} icon={SparklesIcon} /> },
       { id: "extensions", icon: <HugeiconsIcon strokeWidth={2} icon={PuzzleIcon} /> },

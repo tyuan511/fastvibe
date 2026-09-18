@@ -24,6 +24,9 @@ export const Ipc = {
   engineImportSkill: "engine:import-skill",
   engineRemoveSkill: "engine:remove-skill",
   engineGetSubagents: "engine:get-subagents",
+  engineListAgentConfigs: "engine:list-agent-configs",
+  engineSaveAgentConfig: "engine:save-agent-config",
+  engineRemoveAgentConfig: "engine:remove-agent-config",
   engineGetSubagentMessages: "engine:get-subagent-messages",
   /** A retry's file checkpoint: what the last turn wrote, and undoing it. */
   engineGetCheckpoint: "engine:get-checkpoint",
@@ -134,6 +137,7 @@ export const Ipc = {
   providersUpdate: "providers:update",
   providersRemove: "providers:remove",
   providersRefresh: "providers:refresh",
+  providersQuota: "providers:quota",
   providersTest: "providers:test",
   providersCcSwitchScan: "providers:cc-switch-scan",
   providersCcSwitchImport: "providers:cc-switch-import",

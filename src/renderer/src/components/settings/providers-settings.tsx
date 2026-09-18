@@ -47,6 +47,7 @@ import { ModelDetailDialog, type ModelDetailTarget } from "./model-detail-dialog
 import { ModelPicker } from "./model-picker";
 import { OAuthExtraUsageNote } from "./oauth-extra-usage-note";
 import { OAuthLoginDialog, type OAuthTarget } from "./oauth-login-dialog";
+import { OpenAIQuota } from "./openai-quota";
 import { blockedRemotely } from "@/lib/remote-unavailable";
 import { Ipc } from "@shared/ipc";
 
@@ -676,6 +677,8 @@ function ProviderDetail({
           </div>
         </Field>
       ) : null}
+
+      <OpenAIQuota provider={provider} />
 
       <div className="space-y-2">
         <div className="flex items-center justify-between">
@@ -1448,12 +1451,14 @@ async function savePicker(
       reasoning: stored.reasoning,
       input: stored.input,
       thinkingLevels: stored.thinkingLevels,
+      // The stored value is authoritative even when it is absent: absence means the
+      // user chose to inherit, so a newly inferred protocol must not overwrite it.
+      api: stored.api,
       // Prices are not editable but they are metadata: a model id the catalog does not
       // know keeps the price it was stored with instead of losing it on the next sync.
       cost: stored.cost ?? model.cost,
       costTiers: stored.costTiers ?? model.costTiers,
       edited: true,
-      ...(stored.api ? { api: stored.api } : {}),
     };
   });
   setPicker((current) => (current ? { ...current, busy: true, error: null } : current));

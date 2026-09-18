@@ -110,7 +110,7 @@ export function PreviewBody({ preview }: { preview: FilePreview }): JSX.Element 
 }
 
 /**
- * One code block, highlighted with shikiji once it resolves (plain until then).
+ * One code block, highlighted with Shiki once it resolves (plain until then).
  * A non-selectable gutter of line numbers is sticky at the left edge, so the
  * numbers stay put while wide lines scroll under them.
  */

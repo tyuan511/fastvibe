@@ -4,6 +4,7 @@
     "terminal": "Terminal",
     "browser": "Browser",
     "files": "Files",
+    "changes": "Turn changes",
     "subagent": "Subagent",
     "sideChat": "Side chat {{n}}",
     "status": {
@@ -38,6 +39,14 @@
     "refresh": "Refresh",
     "back": "Back to tree",
     "previewFailed": "Could not preview this file"
+  },
+  "changes": {
+    "count": "{{count}} files",
+    "pick": "Select a file to view the diff",
+    "noDiff": "No diff to show",
+    "empty": "This turn did not change any files",
+    "back": "Back to file list",
+    "reveal": "Show in Finder"
   },
   "chat": {
     "title": "Side chat",

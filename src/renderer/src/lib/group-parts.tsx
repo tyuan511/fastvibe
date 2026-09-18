@@ -101,11 +101,17 @@ export function mergeAssistantRun(messages: ChatMessage[]): ChatMessage {
     if (message.thinking) thoughts.push(message.thinking);
   }
 
-  const error = [...messages].reverse().find((item) => item.error)?.error;
+  // Same rule as `completedAt`: the row's status is its last round-trip, never a
+  // search back. Auto-retry (and a model switch that continues the same visual
+  // turn) leaves the failed attempt in the transcript, then appends the reply
+  // that actually ran. Walking back for `error` pasted that 429 under thinking /
+  // todos that were already writing.
+  const last = messages[messages.length - 1];
+  const error = last?.error;
   // The row ends when its final round-trip does. Deliberately not a search back
   // through the run: an open round-trip has no end yet, and borrowing the previous
   // one's would report a stale finish time the moment it is read mid-stream.
-  const completedAt = messages[messages.length - 1]?.completedAt;
+  const completedAt = last?.completedAt;
   const merged: ChatMessage = {
     ...first,
     text: texts.join("\n\n"),

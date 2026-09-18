@@ -218,6 +218,28 @@ export type SlashCommand = {
   aliases?: string[];
 };
 
+export type SubagentConfig = {
+  /** Stable role id used in the subagent tool and custom agent filename. */
+  id: string;
+  name: string;
+  description: string;
+  tools: string[];
+  /** provider/model, or undefined to inherit the parent agent's model. */
+  model?: string;
+  systemPrompt: string;
+  source: "builtin" | "custom";
+};
+
+export type SubagentDraft = {
+  /** Omit for a new custom agent. Builtins may only update their model. */
+  id?: string;
+  name: string;
+  description: string;
+  tools: string[];
+  model?: string;
+  systemPrompt: string;
+};
+
 export type SubagentInfo = {
   id: string;
   /** The conversation whose tool call spawned this run; scopes it to its own pane. */
@@ -478,6 +500,8 @@ export type QueuePauseReason = "stopped" | "error";
 
 export type QueuedPrompt = {
   id: string;
+  /** Conversation that owns this renderer-side follow-up. */
+  conversationId: string;
   text: string;
   behavior: QueueBehavior;
   attachments?: ChatAttachment[];
@@ -571,6 +595,40 @@ export type ProviderConfig = {
   enabled: boolean;
   models: ProviderModel[];
 };
+
+/** One rolling allowance returned for a ChatGPT-backed OpenAI Codex account. */
+export type OpenAIQuotaWindow = {
+  id: string;
+  /** Primary/secondary identify the account-wide windows; additional is model-specific. */
+  kind: "primary" | "secondary" | "additional";
+  /** Provider-supplied name for an additional model-specific allowance. */
+  name?: string;
+  usedPercent: number;
+  /** Epoch milliseconds. */
+  resetAt?: number;
+  windowSeconds?: number;
+};
+
+/** Account allowance shown only on the two first-party OpenAI provider pages. */
+export type OpenAIAccountQuota =
+  | {
+      providerId: "openai-codex";
+      kind: "codex";
+      fetchedAt: number;
+      plan?: string;
+      windows: OpenAIQuotaWindow[];
+      credits?: { balance?: number; hasCredits?: boolean; unlimited?: boolean };
+    }
+  | {
+      providerId: "openai";
+      kind: "api-credits";
+      fetchedAt: number;
+      totalGranted: number;
+      totalUsed: number;
+      totalAvailable: number;
+      /** Epoch milliseconds for the next expiring credit grant. */
+      nextExpiry?: number;
+    };
 
 /** A provider CC Switch can hand FastVibe. Keys stay in Main. */
 export type CcSwitchCandidate = {

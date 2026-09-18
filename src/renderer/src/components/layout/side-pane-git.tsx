@@ -26,7 +26,7 @@ import { FileIcon } from "@/components/file-icon";
 import { IconButton } from "@/components/icon-button";
 import { readGitStatus } from "@/lib/use-git-status";
 import { cn } from "@/lib/utils";
-import { displayPath } from "@/lib/workspace-path";
+import { displayPath, resolvePath } from "@/lib/workspace-path";
 import { useSessionStore } from "@/stores/session";
 import type { ChatMessage } from "@shared/types";
 import type { GitDiffSource, GitStatus } from "@shared/ipc";
@@ -110,11 +110,6 @@ function splitRelPath(path: string, cwd?: string): { name: string; dir: string }
   const slash = rel.lastIndexOf("/");
   if (slash < 0) return { name: rel, dir: "" };
   return { name: rel.slice(slash + 1), dir: rel.slice(0, slash) };
-}
-
-function resolvePath(cwd: string, path: string): string {
-  if (/^([a-zA-Z]:)?\//.test(path)) return path;
-  return `${cwd.replace(/\/+$/, "")}/${path}`;
 }
 
 function countPatch(text: string): { added: number; removed: number } {
@@ -274,7 +269,7 @@ function DiffPane({
           label={t("git.reveal")}
           onClick={() => {
             if (blockedRemotely(Ipc.workspaceReveal)) return;
-            void window.fastvibe.workspace.reveal(resolvePath(cwd, file.path));
+            void window.fastvibe.workspace.reveal(resolvePath(file.path, cwd));
           }}
         >
           <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} />

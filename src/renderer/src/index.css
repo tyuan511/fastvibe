@@ -72,7 +72,7 @@ html {
   --code-string: oklch(0.48 0.12 145);
   --code-comment: oklch(0.55 0 0);
   --code-number: oklch(0.5 0.12 40);
-  /* Map shikiji's CSS-variables theme onto the code tokens above. */
+  /* Map Shiki's CSS-variables theme onto the code tokens above. */
   --shiki-foreground: var(--foreground);
   --shiki-background: transparent;
   --shiki-token-comment: var(--code-comment);
@@ -386,7 +386,39 @@ body {
 .chat-markdown ul,
 .chat-markdown ol {
   margin: 0.4em 0;
-  padding-left: 1.2em;
+  padding-left: 1.5em;
+  list-style-position: outside;
+}
+
+/* Tailwind's preflight removes browser list markers globally. Restore them in
+ * rendered chat markdown so unordered and ordered lists remain distinguishable,
+ * including when a reply contains nested lists. */
+.chat-markdown ul {
+  list-style-type: disc;
+}
+
+.chat-markdown ol {
+  list-style-type: decimal;
+}
+
+.chat-markdown ul ul {
+  list-style-type: circle;
+}
+
+.chat-markdown ul ul ul {
+  list-style-type: square;
+}
+
+.chat-markdown ol ol {
+  list-style-type: lower-alpha;
+}
+
+.chat-markdown ol ol ol {
+  list-style-type: lower-roman;
+}
+
+.chat-markdown li::marker {
+  color: var(--muted-foreground);
 }
 
 .chat-markdown a {
@@ -460,7 +492,7 @@ body {
   }
 }
 
-/* shikiji renders a whole <pre class="shiki">; strip its chrome so the
+/* Shiki renders a whole <pre class="shiki">; strip its chrome so the
    surrounding card or preview panel keeps its own background and padding. */
 .code-shiki pre {
   margin: 0;

@@ -1,7 +1,7 @@
 import { memo, type JSX } from "react";
 import type { ToolGroup } from "@/lib/group-parts";
 import { describeTool } from "@/lib/tool-presentation";
-import { useWorkspacePath } from "@/lib/workspace-path";
+import { useWorkspacePath } from "@/stores/session";
 import { ToolCard } from "./tool-card";
 import { ToolRow } from "./tool-row";
 

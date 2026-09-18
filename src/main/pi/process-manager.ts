@@ -51,6 +51,7 @@ import type {
   OAuthEventPayload,
   OAuthLoginResult,
   OAuthPrompt,
+  OpenAIAccountQuota,
   PermissionQuestion,
   ImportCandidate,
   ImportRunResult,
@@ -96,8 +97,12 @@ import { catalogPrice } from "../engine/models-dev";
 import { findNativeProvider } from "../engine/native-providers";
 import { hasOAuthCredential, OAuthCredentialStore } from "../engine/oauth-store";
 import { priceUsage } from "../engine/pricing";
+import { fetchOpenAIAccountQuota, openAICodexAccountId } from "../engine/openai-quota";
 import { getFastVibePaths, type FastVibePaths } from "../engine/paths";
+import { SubagentManager } from "../engine/subagents";
+import type { SubagentConfig, SubagentDraft } from "@shared/types";
 import { McpManager, type McpServerConfig, type McpServerStatus } from "./mcp-manager";
+import { assistantErrorSummary, finalAssistantErrorSummary } from "./assistant-error-summary";
 import { SkillManager } from "./skill-manager";
 import { builtinExtensionFile, builtinExtensionPaths, builtinSkillPaths, ExtensionManager } from "./extension-manager";
 import { bindBrowserConversation } from "./browser-bridge";
@@ -193,13 +198,6 @@ const execFileAsync = promisify(execFile);
  * 继续 now reads the transcript instead (`canResume`), but the live verdict is still
  * worth carrying: it is what pauses a follow-up queue the moment the user stops a run.
  */
-function errorSummary(message: unknown): Record<string, unknown> | undefined {
-  if (typeof message !== "object" || message === null) return undefined;
-  const record = message as Record<string, unknown>;
-  if (record.role !== "assistant") return undefined;
-  if (record.stopReason !== "error" && record.stopReason !== "aborted") return undefined;
-  return { role: "assistant", stopReason: record.stopReason, errorMessage: record.errorMessage };
-}
 
 /** The one block of a partial assistant message a tool-call event actually describes. */
 function toolCallBlock(inner: Record<string, unknown>): unknown {
@@ -223,7 +221,7 @@ function slimStreamEvent(event: Record<string, unknown>): Record<string, unknown
     }
     if (innerRecord.type === "error") {
       const { partial: _partial, error, ...deltaOnly } = innerRecord;
-      return { ...rest, assistantMessageEvent: { ...deltaOnly, error: errorSummary(error) } };
+      return { ...rest, assistantMessageEvent: { ...deltaOnly, error: assistantErrorSummary(error) } };
     }
     // A tool-call event needs its `partial` — the call's name and arguments live on
     // one block of it — but only that block. The whole partial assistant message
@@ -247,16 +245,18 @@ function slimStreamEvent(event: Record<string, unknown>): Record<string, unknown
     return rest;
   }
   // `agent_end` / `turn_end` / `message_end` carry the whole transcript. The UI
-  // only needs the last assistant's stopReason/errorMessage to show a failure.
+  // only needs the current final assistant's stopReason/errorMessage to show a failure.
+  // Do not search for the newest historical error: a failed attempt can be followed
+  // by a successful retry in the same visible run.
   if (event.type === "agent_end") {
     const messages = Array.isArray(event.messages) ? event.messages : [];
-    const last = [...messages].reverse().find((item) => errorSummary(item));
+    const summary = finalAssistantErrorSummary(messages);
     const { messages: _messages, ...rest } = event;
-    return last ? { ...rest, messages: [errorSummary(last)] } : rest;
+    return summary ? { ...rest, messages: [summary] } : rest;
   }
   if (event.type === "turn_end" || event.type === "message_end") {
     const { message, toolResults: _toolResults, ...rest } = event;
-    const summary = errorSummary(message);
+    const summary = assistantErrorSummary(message);
     return summary ? { ...rest, message: summary } : rest;
   }
   return event;
@@ -405,6 +405,8 @@ export class PiProcessManager {
   #runtime: ModelRuntime | null = null;
   #models: ModelRegistry | null = null;
   #modelsCache: FastVibeModel[] | null = null;
+  /** Account quota is remote data; keep it warm for five minutes per provider. */
+  #openAIQuotaCache = new Map<string, { quota: OpenAIAccountQuota; expiresAt: number }>();
   /** Every configured model's price ladder, refreshed whenever the registry is. */
   #prices: Map<string, ModelPrice> = new Map();
   #operation: Promise<unknown> = Promise.resolve();
@@ -510,6 +512,7 @@ export class PiProcessManager {
   #skills: SkillManager;
   /** pi package installs (extensions), kept in the isolated agentDir. */
   #extensions: ExtensionManager;
+  #subagentManager: SubagentManager;
   /** Live subagent registry and bounded transcript cache. */
   #subagents = new Map<string, SubagentInfo>();
   /**
@@ -556,6 +559,11 @@ export class PiProcessManager {
     this.#mcp = new McpManager(this.#paths.mcpFile);
     this.#skills = new SkillManager(this.#paths.agentDir, this.#paths.skillsDir);
     this.#extensions = new ExtensionManager(this.#paths.agentDir, this.#paths.scratchDir);
+    this.#subagentManager = new SubagentManager(this.#paths);
+    // The extension API's getAgentDir() is environment-based, while FastVibe passes
+    // the isolated directory programmatically to createAgentSession. Keep the role
+    // discovery path on that same private root as well.
+    process.env.PI_CODING_AGENT_DIR = this.#paths.agentDir;
     // A retry prompt should survive a window reload, which is common in dev and possible
     // after a crash. Best-effort: a missing file just means no checkpoint is offered.
     void loadCheckpoints(checkpointFile(this.#paths.runtimeRoot)).catch(() => undefined);
@@ -1064,6 +1072,18 @@ export class PiProcessManager {
   async getSubagents(): Promise<SubagentInfo[]> {
     return [...this.#subagents.values()].sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
   }
+
+  getAgentConfigs(): SubagentConfig[] {
+    return this.#subagentManager.list();
+  }
+
+  saveAgentConfig(draft: SubagentDraft): SubagentConfig[] {
+    return this.#subagentManager.save(draft);
+  }
+
+  removeAgentConfig(id: string): SubagentConfig[] {
+    return this.#subagentManager.remove(id);
+  }
   respondPermission(payload: { id: string; confirmed?: boolean; value?: string; cancelled?: boolean; answers?: Array<string | null> }): void {
     const pending = this.#pendingUi.get(payload.id);
     if (!pending) return;
@@ -1367,6 +1387,26 @@ export class PiProcessManager {
   async addNativeProvider(id: string, apiKey: string, models: ProviderModel[]): Promise<ProviderConfig[]> { await addNativeProviderConfig(this.#paths, id, apiKey, models); await this.reloadProviders(); return this.listProviders(); }
   async fetchModels(baseUrl: string, apiKey: string, api?: string): Promise<ProviderModel[]> { return fetchProviderModels(baseUrl, apiKey, api); }
   async refreshProviderModels(id: string): Promise<ProviderModel[]> { return refreshProviderModels(this.#paths, id); }
+  async getOpenAIAccountQuota(id: string, force = false): Promise<OpenAIAccountQuota> {
+    if (id !== "openai" && id !== "openai-codex") throw new Error(uiText("该供应商不支持账号额度查询", "This provider does not support account limit queries."));
+    const cached = this.#openAIQuotaCache.get(id);
+    if (!force && cached && cached.expiresAt > Date.now()) return cached.quota;
+    await this.#ensureReady();
+    const auth = await this.#runtime?.getAuth(id, { signal: AbortSignal.timeout(20_000) });
+    const apiKey = auth?.auth.apiKey;
+    if (!apiKey) throw new Error(uiText("请先连接 OpenAI", "Connect OpenAI first."));
+    let accountId: string | undefined;
+    if (id === "openai-codex") {
+      // Prefer the SDK's persisted, refreshed account id; the JWT fallback keeps older
+      // credential files working and never sends the token itself to the renderer.
+      const stored = await new OAuthCredentialStore(this.#paths.oauthFile).read(id);
+      const storedId = stored && "accountId" in stored && typeof stored.accountId === "string" ? stored.accountId : undefined;
+      accountId = storedId ?? openAICodexAccountId(apiKey);
+    }
+    const quota = await fetchOpenAIAccountQuota(id, { apiKey, ...(accountId ? { accountId } : {}) });
+    this.#openAIQuotaCache.set(id, { quota, expiresAt: Date.now() + 5 * 60_000 });
+    return quota;
+  }
   async saveFastVibe(apiKey: string, models: ProviderModel[]): Promise<ProviderConfig[]> { await saveFastVibeConfig(this.#paths, apiKey, models); await this.reloadProviders(); return this.listProviders(); }
   async addProvider(draft: { name: string; baseUrl: string; apiKey: string; api?: import("@shared/types").ProviderApi }, models: ProviderModel[]): Promise<ProviderConfig[]> { await addProviderConfig(this.#paths, draft, models); await this.reloadProviders(); return this.listProviders(); }
   async scanCcSwitch() { return scanCcSwitch(this.#paths); }
@@ -1466,6 +1506,9 @@ export class PiProcessManager {
    * place, so keys, endpoints and model lists can be swapped underneath a live session.
    */
   async reloadProviders(): Promise<EngineStatus> {
+    // Credentials can change during any provider mutation, so never reuse a quota
+    // fetched before this reload.
+    this.#openAIQuotaCache.clear();
     // A cold engine has no conversation to break, and the first provider the user
     // connects is exactly when a full start (registry, MCP, session) is required.
     if (this.#status.state !== "ready" || !this.#runtime || !this.#models) return this.start(this.#cwd);
@@ -2452,16 +2495,15 @@ export class PiProcessManager {
     });
     await loader.reload();
 
-    // A delegated run uses the model its parent chat is on. Delegation is a tool
-    // call inside that conversation, and a run on a *different* gateway than the one
-    // the user just proved works fails on its own — the user's 「默认模型」
-    // (设置 → 供应商) is a preference for a fresh chat's model chip, not a second
-    // opinion about which vendor the current conversation should talk to. It is kept
-    // as the fallback for a parent that has no usable model of its own.
+    // A role's configured model wins when it is available and authenticated. An empty
+    // role setting inherits the parent conversation's model, keeping delegation on the
+    // gateway the user just proved works; the user's default model is the last resort
+    // for a parent session that has no usable model of its own.
     const preferred = readDefaultModel(this.#paths);
+    const configuredModel = this.#subagentManager.modelFor(request.agent, request.model);
     const model = this.#resolveSubagentModel(
-      request.fallbackModel ?? request.model,
-      preferred ? `${preferred.provider}/${preferred.id}` : undefined,
+      configuredModel,
+      request.fallbackModel ?? (preferred ? `${preferred.provider}/${preferred.id}` : undefined),
     );
     const tools =
       request.tools && request.tools.length > 0

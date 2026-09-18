@@ -49,6 +49,7 @@ import {
 } from "@/lib/engine-client";
 import { dismissBootLoader } from "@/lib/boot-loader";
 import { cn } from "@/lib/utils";
+import { resolvePath } from "@/lib/workspace-path";
 
 import { SETTINGS_SECTIONS, type SectionId } from "@/components/settings/settings-sections";
 import { setSidebarCollapsed, useIsNarrowViewport, useSidebarCollapsed } from "@/lib/sidebar-visibility";
@@ -251,7 +252,7 @@ const MessageThread = memo(function MessageThread({
 }: {
   loading: boolean;
   onRetry: (message: ChatMessage) => void;
-  onEdit: (message: ChatMessage) => void;
+  onEdit: (message: ChatMessage, text: string) => void;
   showThinking: boolean;
   showTimestamp: boolean;
   collapseRuns: boolean;
@@ -361,7 +362,10 @@ export function App(): JSX.Element {
   const setSubagents = useSessionStore((state) => state.setSubagents);
   const resolvePermission = useSessionStore((state) => state.resolvePermission);
   const attachments = useSessionStore((state) => state.attachments);
-  const queued = useSessionStore((state) => state.queued);
+  const allQueued = useSessionStore((state) => state.queued);
+  const queued = activeId
+    ? allQueued.filter((item) => item.conversationId === activeId)
+    : [];
   const permissionAlways = usePermissionAlways();
   const setAttachments = useSessionStore((state) => state.setAttachments);
   const queuePause = useSessionStore((state) => state.queuePause);
@@ -372,8 +376,8 @@ export function App(): JSX.Element {
   const markQueuedSending = useSessionStore((state) => state.markQueuedSending);
   const unmarkQueuedSending = useSessionStore((state) => state.unmarkQueuedSending);
   const unmarkAllQueuedSending = useSessionStore((state) => state.unmarkAllQueuedSending);
-  const clearQueued = useSessionStore((state) => state.clearQueued);
   const setQueuePause = useSessionStore((state) => state.setQueuePause);
+  const setQueuePauseFor = useSessionStore((state) => state.setQueuePauseFor);
   const setRunInterrupted = useSessionStore((state) => state.setRunInterrupted);
   const setCanResume = useSessionStore((state) => state.setCanResume);
   const restoreId = useRef<string | null>(null);
@@ -400,7 +404,7 @@ export function App(): JSX.Element {
    * quick succession (the open, then the abandoned-draft cleanup) from doing it either.
    */
   const intendedActiveId = useRef<string | null>(null);
-  const draining = useRef(false);
+  const draining = useRef(new Set<string>());
   // One send at a time. A second click / Enter while this send is still being handed
   // over is not a second message — see `handleSubmit`.
   const submitting = useRef(false);
@@ -671,8 +675,12 @@ export function App(): JSX.Element {
         if (path && /write|edit|apply|create/i.test(name)) {
           // De-dupe against the *active chat's* file view, so a write in one
           // conversation still reveals the file when another one previews it too.
+          // Compare the resolved path: after the first preview the tab stores the
+          // absolute file, while tool args stay relative.
           const store = useSessionStore.getState();
-          if (useSidePaneStore.getState().filesPreviewPath() !== path) void store.openPreview(path);
+          const cwd = store.conversations.find((item) => item.id === store.activeId)?.cwd;
+          const resolved = resolvePath(path, cwd);
+          if (useSidePaneStore.getState().filesPreviewPath() !== resolved) void store.openPreview(path);
         }
       }
     });
@@ -909,7 +917,6 @@ export function App(): JSX.Element {
     useSessionStore.getState().setExtensionStatus(result.conversation.id, result.extensionStatus ?? {});
     setDraft(readDrafts()[result.conversation.id] ?? "");
     setError(null);
-    clearQueued();
     setRunInterrupted(null);
     // `canResume` is deliberately not touched here: it is not a leftover of the chat
     // being left, it is part of the state reply `setSession` just adopted — and
@@ -987,6 +994,7 @@ export function App(): JSX.Element {
           const payload = `${promptText}${attachmentPromptSuffix(currentAttachments)}`;
           enqueue({
             id,
+            conversationId,
             text: promptText,
             behavior: "steer",
             attachments: currentAttachments,
@@ -995,16 +1003,22 @@ export function App(): JSX.Element {
           });
           // Not awaited: `steer()` waits for the run when the engine has already
           // settled, and the guard must not stay held for the length of a run.
-          void window.fastvibe.engine
-            .steer(payload, attachmentsToImages(currentAttachments))
-            .then(() => engine.getState().then(setSession).catch(() => undefined))
+          void engine
+            .steer(payload, attachmentsToImages(currentAttachments), conversationId)
+            .then(() => engine.getState(conversationId))
+            .then((next) => {
+              if (useSessionStore.getState().activeId === conversationId) setSession(next);
+            })
             .catch((err: unknown) => {
               unmarkQueuedSending(id);
-              setError(err instanceof Error ? err.message : String(err));
+              if (useSessionStore.getState().activeId === conversationId) {
+                setError(err instanceof Error ? err.message : String(err));
+              }
             });
         } else {
           enqueue({
             id: crypto.randomUUID(),
+            conversationId,
             text: promptText,
             behavior: "followUp",
             attachments: currentAttachments,
@@ -1019,7 +1033,8 @@ export function App(): JSX.Element {
       setCanResume(false);
       // Not awaited either: `prompt()` resolves only when the whole run is over, and
       // holding the guard until then would refuse every follow-up sent mid-run.
-      void dispatchPrompt(text, currentAttachments, "prompt").catch((err: unknown) => {
+      void dispatchPrompt(text, currentAttachments, "prompt", conversationId).catch((err: unknown) => {
+        if (useSessionStore.getState().activeId !== conversationId) return;
         dropEmptyAssistant();
         setError(err instanceof Error ? err.message : String(err));
       });
@@ -1037,37 +1052,51 @@ export function App(): JSX.Element {
     text: string,
     files: ChatAttachment[],
     mode: "prompt" | "steer",
+    conversationId: string,
   ): Promise<void> {
     const payload = `${text || t("composer.seeAttachments")}${attachmentPromptSuffix(files)}`;
     const images = attachmentsToImages(files);
-    if (mode === "steer") await engine.steer(payload, images);
-    else await engine.prompt(payload, { images });
-    void engine.getState().then(setSession).catch(() => undefined);
+    if (mode === "steer") await engine.steer(payload, images, conversationId);
+    else await engine.prompt(payload, { images, conversationId });
+    void engine
+      .getState(conversationId)
+      .then((next) => {
+        if (useSessionStore.getState().activeId === conversationId) setSession(next);
+      })
+      .catch(() => undefined);
   }
 
   async function drainQueued(item: QueuedPrompt): Promise<void> {
+    const conversationId = item.conversationId;
     removeQueued(item.id);
-    addUserMessage(item.text, item.attachments);
+    if (useSessionStore.getState().activeId === conversationId) {
+      addUserMessage(item.text, item.attachments);
+    }
     try {
-      await dispatchPrompt(item.text, item.attachments ?? [], "prompt");
+      await dispatchPrompt(item.text, item.attachments ?? [], "prompt", conversationId);
     } catch (err) {
-      dropEmptyAssistant();
+      if (useSessionStore.getState().activeId === conversationId) dropEmptyAssistant();
       prependQueued(item);
-      setQueuePause("error");
-      setError(err instanceof Error ? err.message : String(err));
+      setQueuePauseFor(conversationId, "error");
+      if (useSessionStore.getState().activeId === conversationId) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
     }
   }
 
-  async function replaceEngineSteering(exceptId?: string): Promise<void> {
+  async function replaceEngineSteering(conversationId: string, exceptId?: string): Promise<void> {
     const remaining = useSessionStore
       .getState()
-      .queued.filter((item) => item.sending && item.id !== exceptId);
+      .queued.filter(
+        (item) => item.conversationId === conversationId && item.sending && item.id !== exceptId,
+      );
     try {
       await engine.replaceSteering(
         remaining.map((item) => ({
           text: item.sentText ?? item.text,
           images: attachmentsToImages(item.attachments ?? []),
         })),
+        conversationId,
       );
     } catch {
       // The engine may already have drained the item; the tray still updates.
@@ -1076,7 +1105,7 @@ export function App(): JSX.Element {
 
   async function handleRemoveQueued(id: string): Promise<void> {
     const item = useSessionStore.getState().queued.find((entry) => entry.id === id);
-    if (item?.sending) await replaceEngineSteering(id);
+    if (item?.sending) await replaceEngineSteering(item.conversationId, id);
     removeQueued(id);
   }
 
@@ -1091,7 +1120,7 @@ export function App(): JSX.Element {
   async function handleRecallQueued(id: string): Promise<void> {
     const item = useSessionStore.getState().queued.find((entry) => entry.id === id);
     if (!item?.sending) return;
-    await replaceEngineSteering(id);
+    await replaceEngineSteering(item.conversationId, id);
     unmarkQueuedSending(id);
   }
 
@@ -1102,41 +1131,62 @@ export function App(): JSX.Element {
       const payload = `${item.text || t("composer.seeAttachments")}${attachmentPromptSuffix(item.attachments ?? [])}`;
       markQueuedSending(id, payload);
       try {
-        await engine.steer(payload, attachmentsToImages(item.attachments ?? []));
-        void engine.getState().then(setSession).catch(() => undefined);
+        await engine.steer(payload, attachmentsToImages(item.attachments ?? []), item.conversationId);
+        void engine
+          .getState(item.conversationId)
+          .then((next) => {
+            if (useSessionStore.getState().activeId === item.conversationId) setSession(next);
+          })
+          .catch(() => undefined);
       } catch (err) {
         unmarkQueuedSending(id);
-        setError(err instanceof Error ? err.message : String(err));
+        if (useSessionStore.getState().activeId === item.conversationId) {
+          setError(err instanceof Error ? err.message : String(err));
+        }
       }
       return;
     }
     removeQueued(id);
     addUserMessage(item.text, item.attachments);
     try {
-      await dispatchPrompt(item.text, item.attachments ?? [], "prompt");
+      await dispatchPrompt(item.text, item.attachments ?? [], "prompt", item.conversationId);
     } catch (err) {
-      dropEmptyAssistant();
+      if (useSessionStore.getState().activeId === item.conversationId) dropEmptyAssistant();
       prependQueued(item);
-      setError(err instanceof Error ? err.message : String(err));
+      setQueuePauseFor(item.conversationId, "error");
+      if (useSessionStore.getState().activeId === item.conversationId) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
     }
   }
 
   async function handleAbort(): Promise<void> {
-    const pending = useSessionStore.getState().queued;
-    if (pending.length > 0) setQueuePause("stopped");
+    const conversationId = useSessionStore.getState().activeId;
+    if (!conversationId) return;
+    const pending = useSessionStore
+      .getState()
+      .queued.filter((item) => item.conversationId === conversationId);
+    if (pending.length > 0) setQueuePauseFor(conversationId, "stopped");
     try {
       try {
-        await engine.clearQueue();
+        await engine.clearQueue(conversationId);
       } catch {
         // older engines may not support clear_queue
       }
       unmarkAllQueuedSending();
-      await engine.abort();
+      await engine.abort(conversationId);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (useSessionStore.getState().activeId === conversationId) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
     } finally {
-      setStreaming(false);
-      void engine.getState().then(setSession).catch(() => undefined);
+      if (useSessionStore.getState().activeId === conversationId) setStreaming(false);
+      void engine
+        .getState(conversationId)
+        .then((next) => {
+          if (useSessionStore.getState().activeId === conversationId) setSession(next);
+        })
+        .catch(() => undefined);
     }
   }
 
@@ -1169,38 +1219,35 @@ export function App(): JSX.Element {
   // a loop. A one-shot effect would stop after the first item: resetting `draining`
   // in `.finally` does not re-render, so the next queued message would never fire.
   useEffect(() => {
-    if (streaming || queuePause || !queued.some((item) => !item.sending) || draining.current) return;
-    draining.current = true;
+    if (
+      !activeId ||
+      streaming ||
+      queuePause ||
+      !queued.some((item) => !item.sending) ||
+      draining.current.has(activeId)
+    ) return;
+    const conversationId = activeId;
+    draining.current.add(conversationId);
     void (async () => {
       try {
         for (;;) {
           const state = useSessionStore.getState();
-          if (state.queuePause || state.streaming) break;
-          const next = state.queued.find((item) => !item.sending);
+          if (
+            state.activeId !== conversationId ||
+            state.queuePauseByConversation[conversationId] ||
+            state.streaming
+          ) break;
+          const next = state.queued.find(
+            (item) => item.conversationId === conversationId && !item.sending,
+          );
           if (!next) break;
           await drainQueued(next);
         }
       } finally {
-        draining.current = false;
+        draining.current.delete(conversationId);
       }
     })();
-  }, [streaming, queuePause, queued]);
-
-  /**
-   * Stop a chat from the sidebar without opening it.
-   *
-   * The stop button only ever addressed the active conversation, so a `/goal` run
-   * left spinning in the background had to be opened before it could be stopped.
-   * The id is passed explicitly for the same reason as everywhere else: the chat
-   * being stopped is not necessarily the one on screen.
-   */
-  const handleStopConversation = useCallback(async (id: string): Promise<void> => {
-    try {
-      await engine.abort(id);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  }, []);
+  }, [activeId, streaming, queuePause, queued]);
 
   // Stable identities so the memoised transcript rows do not re-render (or hold a
   // stale closure) when unrelated shell state changes.
@@ -1287,26 +1334,46 @@ export function App(): JSX.Element {
     await runRetry(message);
   }, [runRetry]);
 
-  const handleEdit = useCallback(async (message: ChatMessage): Promise<void> => {
+  const handleEdit = useCallback(async (message: ChatMessage, editedText: string): Promise<void> => {
     const owner = useSessionStore.getState().activeId;
+    const text = editedText.trim();
+    if (!owner || !text || !canChat) return;
+
+    // Entering edit mode is purely local: the original turn remains visible while the
+    // user changes the prompt. Only this submit path branches the transcript and starts
+    // the replacement turn, so cancelling an inline edit cannot lose the last round.
+    const attachments = message.attachments ?? [];
+    const promptText = `${text}${attachmentPromptSuffix(attachments)}`;
+    const current = useSessionStore.getState();
+    if (current.activeId !== owner) return;
+    const sourceIndex = current.messages.findIndex((item) => item.id === message.id);
+    const trimmed = sourceIndex >= 0 ? current.messages.slice(0, sourceIndex) : current.messages;
+
+    let branched = trimmed;
     if (message.id) {
       try {
-        const branch = await engine.branch(message.id);
-        // Branching rewrites the engine's active session; if the user switched
-        // chats while it ran, the result no longer describes the chat on screen.
-        if (useSessionStore.getState().activeId !== owner) return;
-        setMessages(branch, owner ?? undefined);
+        branched = await engine.branch(message.id, owner);
       } catch {
-        // A turn sent in this window has no session entry yet: rewrite it by
-        // dropping it (and its reply) locally, matching what branching would do.
-        const current = useSessionStore.getState();
-        if (current.activeId !== owner) return;
-        const index = current.messages.findIndex((item) => item.id === message.id);
-        if (index >= 0) setMessages(current.messages.slice(0, index), owner ?? undefined);
+        // A prompt that was just sent may not have been persisted as an entry yet.
+        // The local trim still gives the replacement turn the same visible shape.
       }
     }
-    setDraft(message.text);
-  }, [setMessages, setDraft]);
+    if (useSessionStore.getState().activeId !== owner) return;
+    setMessages(branched, owner);
+    setRunInterrupted(null);
+    setCanResume(false);
+    addUserMessage(promptText, attachments);
+    try {
+      await engine.prompt(promptText, {
+        images: attachmentsToImages(attachments),
+        conversationId: owner,
+      });
+      void engine.getState(owner).then(setSession).catch(() => undefined);
+    } catch (err) {
+      dropEmptyAssistant();
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, [addUserMessage, canChat, dropEmptyAssistant, setError, setMessages, setRunInterrupted, setCanResume, setSession]);
 
   async function discardDraft(id: string | null | undefined): Promise<void> {
     if (!id) return;
@@ -1438,9 +1505,29 @@ export function App(): JSX.Element {
    * chat being archived is the one on screen it has to leave the screen too —
    * otherwise the sidebar loses a row while the thread it points at stays open.
    * Follow the newest chat still listed, or fall back to a fresh session.
+   *
+   * A run in flight is stopped here: the sidebar has no stop control, so hiding a
+   * busy chat without aborting would leave it consuming tokens behind a row the user
+   * can no longer reach. The composer's stop is the only explicit one; archive is
+   * the implicit one.
    */
   async function handleArchiveSession(id: string): Promise<void> {
+    const busy = useSessionStore.getState().running[id] === true;
     archiveConversations(id);
+    if (busy) {
+      void (async () => {
+        try {
+          try {
+            await engine.clearQueue(id);
+          } catch {
+            // older engines may not support clear_queue
+          }
+          await engine.abort(id);
+        } catch (err) {
+          setError(err instanceof Error ? err.message : String(err));
+        }
+      })();
+    }
     // An archived chat is hidden from every list, so its pane state goes with it:
     // the tabs' shells and browser views must not outlive the chat they served.
     disposeSidePaneTabs(useSidePaneStore.getState().forgetScope(id));
@@ -1763,7 +1850,6 @@ export function App(): JSX.Element {
           onNewChat={(cwd) => void handleNewChat(cwd)}
           onOpen={(id) => void handleOpen(id)}
           onArchive={(id) => void handleArchiveSession(id)}
-          onStop={(id) => void handleStopConversation(id)}
           onAddProject={() => void handleAddProject()}
           onRenameSession={(id, title) => void handleRenameSession(id, title)}
           onRenameProject={(cwd, name) => void handleRenameProject(cwd, name)}
