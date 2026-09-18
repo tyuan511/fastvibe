@@ -630,6 +630,7 @@ export function Sidebar({
   onOpen,
   onArchive,
   onAddProject,
+  onAddRemoteProject,
   onRenameSession,
   onRenameProject,
   onRemoveProject,
@@ -650,6 +651,7 @@ export function Sidebar({
   /** Hides the chat from every list; the shell also closes it when it is on screen. */
   onArchive: (id: string) => void;
   onAddProject: () => void;
+  onAddRemoteProject: () => void;
   onRenameSession: (id: string, title: string) => void;
   onRenameProject: (cwd: string, name: string) => void;
   onRemoveProject: (cwd: string) => void;
@@ -1077,15 +1079,22 @@ export function Sidebar({
 
             <SectionLabel
               action={
-                <IconButton
-                  size="icon-xs"
-                  variant="ghost"
-                  label={t("sidebar.newProject")}
-                  className="text-muted-foreground opacity-0 transition-opacity focus-visible:opacity-100 group-hover/section:opacity-100"
-                  onClick={onAddProject}
-                >
-                  <HugeiconsIcon strokeWidth={2} icon={Add01Icon} className="size-3.5" />
-                </IconButton>
+                <DropdownMenu>
+                  <DropdownMenuTrigger
+                    render={<IconButton
+                      size="icon-xs"
+                      variant="ghost"
+                      label={t("sidebar.newProject")}
+                      className="text-muted-foreground opacity-0 transition-opacity focus-visible:opacity-100 group-hover/section:opacity-100"
+                    >
+                      <HugeiconsIcon strokeWidth={2} icon={Add01Icon} className="size-3.5" />
+                    </IconButton>}
+                  />
+                  <DropdownMenuContent align="end" className="w-36 min-w-36">
+                    <DropdownMenuItem onClick={onAddProject}>{t("projectDialog.local")}</DropdownMenuItem>
+                    <DropdownMenuItem onClick={onAddRemoteProject}>{t("projectDialog.remote")}</DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               }
             >
               {t("sidebar.projects")}

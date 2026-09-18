@@ -24,6 +24,7 @@
   "include": [
     "electron.vite.config.ts",
     "src/main/**/*.ts",
+    "src/agent/**/*.ts",
     "src/preload/**/*.ts",
     "src/shared/**/*.ts",
     "resources/extensions/**/*.ts"

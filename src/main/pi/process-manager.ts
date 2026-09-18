@@ -67,7 +67,7 @@ import {
   scanImportCandidates,
   scanImportSources,
 } from "../engine/import/runner";
-import { readAutoCompact, readDefaultModel } from "../engine/app-settings";
+import { readAutoCompact, readDefaultModel } from "../engine/runtime-settings";
 import { currentAiLanguageDirective } from "../engine/ai-language";
 import { uiText } from "../engine/ui-text";
 import { mapEngineMessages } from "../engine/map-messages";
@@ -112,6 +112,9 @@ type ManagedSession = { conversationId: string; cwd: string; session: AgentSessi
 /** SDK UI context plus FastVibe's single-panel multi-question prompt. */
 type FastVibeExtensionUIContext = ExtensionUIContext & {
   questions(title: string, questions: PermissionQuestion[], opts?: { timeout?: number }): Promise<Array<string | null> | undefined>;
+  planReview(
+    plan: { path: string; title: string; summary: string },
+  ): Promise<{ action: "approve" | "revise" | "ignore"; value?: string }>;
   /**
    * Run one subagent role on a throwaway in-process session. Injected here so the
    * built-in subagent extension has a runner on the embedded engine, which ships
@@ -545,8 +548,8 @@ export class PiProcessManager {
    */
   #stoppedSubagents = new Set<string>();
 
-  constructor() {
-    this.#paths = getFastVibePaths();
+  constructor(paths: FastVibePaths = getFastVibePaths()) {
+    this.#paths = paths;
     this.#catalog = new ConversationCatalog(this.#paths.conversationsFile, this.#paths.scratchDir);
     // Every catalog change, from one place. The alternative was announcing at each of
     // the dozen methods below that mutate it, which is how a new one silently stops
@@ -1084,13 +1087,15 @@ export class PiProcessManager {
   removeAgentConfig(id: string): SubagentConfig[] {
     return this.#subagentManager.remove(id);
   }
-  respondPermission(payload: { id: string; confirmed?: boolean; value?: string; cancelled?: boolean; answers?: Array<string | null> }): void {
+  respondPermission(payload: { id: string; confirmed?: boolean; value?: string; cancelled?: boolean; answers?: Array<string | null>; planAction?: "approve" | "revise" | "ignore" }): void {
     const pending = this.#pendingUi.get(payload.id);
     if (!pending) return;
     this.#pendingUi.delete(payload.id);
     const resolved = payload.cancelled
       ? pending.fallback
-      : Array.isArray(payload.answers)
+      : payload.planAction
+        ? { action: payload.planAction, ...(payload.value ? { value: payload.value } : {}) }
+        : Array.isArray(payload.answers)
         ? payload.answers
         : typeof payload.value === "string"
           ? payload.value
@@ -2684,6 +2689,8 @@ export class PiProcessManager {
       select: (title, options, opts) => dialog<string | undefined>("select", { title, options, timeout: opts?.timeout }, undefined, opts?.timeout),
       questions: (title, questions, opts) =>
         dialog<Array<string | null> | undefined>("questions", { title, questions, timeout: opts?.timeout }, undefined, opts?.timeout),
+      planReview: (plan) =>
+        dialog<{ action: "approve" | "revise" | "ignore"; value?: string }>("plan_review", { plan }, { action: "ignore" }, 30 * 60_000),
       runSubagent: (request) => this.#runSubagent(conversationId, request),
       // 需求批准 has no timeout of its own, and an unanswered prompt parks the tool (and
       // the run's settle) forever. A generous default keeps a background chat from

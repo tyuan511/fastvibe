@@ -1,5 +1,8 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { AgentEndEvent, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 /**
  * FastVibe's built-in plan mode — a deliberately small replacement for the
@@ -14,6 +17,7 @@ import { Type } from "typebox";
  * badge clears the mode by dispatching `/plan` again.
  */
 const STATUS_KEY = "plan-mode";
+const REVIEW_STATUS_KEY = "plan-review";
 const QUESTION_TOOL = "question";
 const T = (zh: string, en: string): string => (process.env.FASTVIBE_UI_LANGUAGE === "en" ? en : zh);
 const otherAnswer = (): string => T("其他（自行输入）", "Other (type your own)");
@@ -38,6 +42,48 @@ type QuestionAnswer = {
   source: "option" | "custom" | "cancelled";
 };
 type QuestionDetails = { questions: QuestionAnswer[] };
+
+type PlanReviewBridge = {
+  planReview?: (plan: { path: string; title: string; summary: string }) => Promise<{ action: "approve" | "revise" | "ignore"; value?: string }>;
+};
+
+function assistantText(event: AgentEndEvent): string {
+  const messages = Array.isArray(event.messages) ? event.messages : [];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index] as { role?: string; content?: unknown; text?: unknown };
+    if (message.role !== "assistant") continue;
+    if (typeof message.text === "string" && message.text.trim()) return message.text.trim();
+    if (!Array.isArray(message.content)) continue;
+    return message.content
+      .map((block) => {
+        const item = block as { type?: string; text?: unknown };
+        return item.type === "text" && typeof item.text === "string" ? item.text : "";
+      })
+      .filter(Boolean)
+      .join("\n\n")
+      .trim();
+  }
+  return "";
+}
+
+function planTitle(markdown: string): string {
+  return markdown.match(/^\s*#\s+(.+)$/m)?.[1]?.trim().slice(0, 120) || T("实施计划", "Implementation plan");
+}
+
+function planSummary(markdown: string): string {
+  const withoutTitle = markdown.replace(/^#\s+.+$/m, "").trim();
+  return withoutTitle.length > 900 ? `${withoutTitle.slice(0, 900).trimEnd()}…` : withoutTitle;
+}
+
+function writePlan(markdown: string): { path: string; title: string; summary: string } {
+  const title = planTitle(markdown);
+  const document = /^#\s+.+$/m.test(markdown) ? markdown : `# ${title}\n\n${markdown}`;
+  const root = join(tmpdir(), "fastvibe-plans");
+  const path = join(root, `plan-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.md`);
+  mkdirSync(root, { recursive: true });
+  writeFileSync(path, document.endsWith("\n") ? document : `${document}\n`, { encoding: "utf8", mode: 0o600 });
+  return { path, title, summary: planSummary(document) };
+}
 
 /**
  * FastVibe-specific single-panel multi-question UI, feature-detected on `ctx.ui`.
@@ -221,6 +267,7 @@ export default function planMode(pi: ExtensionAPI): void {
         setQuestionActive(pi, false);
       }
       ctx.ui.setStatus(STATUS_KEY, active ? "active" : undefined);
+      if (!active) ctx.ui.setStatus(REVIEW_STATUS_KEY, undefined);
     },
   });
 
@@ -231,8 +278,38 @@ export default function planMode(pi: ExtensionAPI): void {
 
   pi.on("tool_call", (event) => {
     if (!active) return;
-    if (event.toolName === "edit" || event.toolName === "write") {
-      return { block: true, reason: T("计划模式已开启：不会修改文件，请先给出计划。", "Plan mode is on: files will not be modified. Produce a plan first.") };
+    if (event.toolName === "edit" || event.toolName === "write" || event.toolName === "bash") {
+      return { block: true, reason: T("计划模式已开启：不会修改文件或运行命令，请先给出计划。", "Plan mode is on: files and commands are blocked. Produce a plan first.") };
+    }
+  });
+
+  pi.on("agent_end", async (event: AgentEndEvent, ctx: ExtensionContext) => {
+    if (!active) return;
+    const markdown = assistantText(event);
+    if (!markdown) return;
+    const plan = writePlan(markdown);
+    ctx.ui.setStatus(REVIEW_STATUS_KEY, JSON.stringify(plan));
+    const bridge = ctx.ui as unknown as PlanReviewBridge;
+    if (typeof bridge.planReview !== "function") return;
+    const review = await bridge.planReview(plan);
+    ctx.ui.setStatus(REVIEW_STATUS_KEY, undefined);
+    if (review.action === "approve") {
+      active = false;
+      setQuestionActive(pi, false);
+      ctx.ui.setStatus(STATUS_KEY, undefined);
+      pi.sendUserMessage(
+        T(`计划已批准。请按照计划执行：\\n\\n${markdown}`, `Plan approved. Execute it:\\n\\n${markdown}`),
+        { deliverAs: "followUp" },
+      );
+    } else if (review.action === "ignore") {
+      active = false;
+      setQuestionActive(pi, false);
+      ctx.ui.setStatus(STATUS_KEY, undefined);
+    } else if (review.action === "revise" && review.value?.trim()) {
+      pi.sendUserMessage(
+        T(`请根据用户的修改意见重新生成计划：\\n${review.value.trim()}`, `Revise the plan using the user's feedback:\\n${review.value.trim()}`),
+        { deliverAs: "followUp" },
+      );
     }
   });
 }

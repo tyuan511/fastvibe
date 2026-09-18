@@ -59,6 +59,16 @@ const DENIED = new Map<string, string>([
   [Ipc.providersOAuthAnswer, "\u8ba2\u9605\u767b\u5f55\u9700\u8981\u5728\u672c\u673a\u6d4f\u89c8\u5668\u4e2d\u5b8c\u6210"],
   [Ipc.providersOAuthCancel, "\u8ba2\u9605\u767b\u5f55\u9700\u8981\u5728\u672c\u673a\u6d4f\u89c8\u5668\u4e2d\u5b8c\u6210"],
 
+  // SSH host profiles and tunnels are local desktop controls. A browser already
+  // connected to this machine must not be able to rewrite its SSH destinations.
+  [Ipc.sshHosts, "SSH 主机只能在本机管理"],
+  [Ipc.sshHostSave, "SSH 主机只能在本机管理"],
+  [Ipc.sshHostRemove, "SSH 主机只能在本机管理"],
+  [Ipc.sshPickIdentityFile, "SSH 主机只能在本机管理"],
+  [Ipc.sshConnect, "SSH 主机只能在本机管理"],
+  [Ipc.sshDisconnect, "SSH 主机只能在本机管理"],
+  [Ipc.sshState, "SSH 主机只能在本机管理"],
+
   // Remote access administers itself only from the desktop. A stolen token must not be
   // able to change the password, revoke the owner's other devices, or switch the server
   // off — that turns one compromised client into a locked-out owner.
@@ -147,6 +157,7 @@ const ALLOWED = new Set<string>([
   Ipc.engineSteer,
   Ipc.engineStop,
   Ipc.modelsDevUpdate,
+  Ipc.projectsAddRemote,
   Ipc.projectsRemove,
   Ipc.projectsRename,
   Ipc.projectsReorder,
@@ -206,10 +217,10 @@ export function remotePolicy(method: string): PolicyVerdict {
  * because nobody classified it; a classified method that no longer exists is a rename
  * that left a rule guarding nothing, which reads as protection and is not.
  */
-export function assertPolicyCoverage(channels: readonly string[]): void {
+export function assertPolicyCoverage(channels: readonly string[], options?: { requireAll?: boolean }): void {
   const known = new Set(channels);
   const unclassified = channels.filter((channel) => !ALLOWED.has(channel) && !DENIED.has(channel));
-  const stale = [...ALLOWED, ...DENIED.keys()].filter((method) => !known.has(method));
+  const stale = options?.requireAll === false ? [] : [...ALLOWED, ...DENIED.keys()].filter((method) => !known.has(method));
   const problems: string[] = [];
   if (unclassified.length > 0) {
     problems.push(`未分类的方法（请在 policy.ts 中归入 ALLOWED 或 DENIED）: ${unclassified.join(", ")}`);

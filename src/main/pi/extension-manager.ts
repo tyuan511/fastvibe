@@ -1,6 +1,5 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { app } from "electron";
 import { DefaultPackageManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { ExtensionPackage } from "@shared/types";
 import { uiText } from "../engine/ui-text";
@@ -33,19 +32,19 @@ export const BUILTIN_AGENTS = [
   { id: "reviewer", name: "Reviewer", description: "Check the implementation, regression risk and test coverage; give actionable feedback.", tools: ["read", "grep", "find", "ls", "bash"] },
 ] as const;
 
+function resourcesRoot(): string {
+  return process.env.FASTVIBE_RESOURCES_PATH?.trim() || join(__dirname, "../../resources");
+}
+
 export function builtinSkillPaths(): string[] {
-  const dir = app.isPackaged
-    ? join(process.resourcesPath, "skills")
-    : join(__dirname, "../../resources/skills");
+  const dir = join(resourcesRoot(), "skills");
   const path = join(dir, "browser-use", "SKILL.md");
   return existsSync(path) ? [path] : [];
 }
 
 /** Directory holding FastVibe's built-in extension entry points (outside the asar). */
 function extensionsDir(): string {
-  return app.isPackaged
-    ? join(process.resourcesPath, "extensions")
-    : join(__dirname, "../../resources/extensions");
+  return join(resourcesRoot(), "extensions");
 }
 
 /** Absolute path to one built-in extension entry point, or null when absent. */

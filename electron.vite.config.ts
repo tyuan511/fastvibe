@@ -47,6 +47,14 @@ export default defineConfig({
         "@shared": shared,
       },
     },
+    build: {
+      rollupOptions: {
+        input: {
+          index: resolve("src/main/index.ts"),
+          agent: resolve("src/agent/main.ts"),
+        },
+      },
+    },
   },
   preload: {
     plugins: [externalizeDepsPlugin()],

@@ -80,6 +80,7 @@ export async function collectUsageStats(
   const days = new Map<string, Metrics>();
   const models = new Map<string, ModelBucket>();
   const contributing = new Set<string>();
+  const sessionTimes = new Map<string, number[]>();
 
   for (const turn of turns.values()) {
     const date = localDateKey(turn.at);
@@ -94,6 +95,9 @@ export async function collectUsageStats(
     addTurn(ensure(bucket.days, date), turn, cost);
 
     contributing.add(turn.sessionId);
+    const times = sessionTimes.get(turn.sessionId) ?? [];
+    times.push(turn.at);
+    sessionTimes.set(turn.sessionId, times);
   }
 
   const dayList: UsageDay[] = [...days.entries()]
@@ -121,6 +125,9 @@ export async function collectUsageStats(
         providerName: providerNames.get(bucket.provider),
         model: bucket.model,
         ...metrics,
+        days: [...bucket.days.entries()]
+          .sort(([a], [b]) => (a < b ? -1 : 1))
+          .map(([date, dayMetrics]) => ({ date, ...dayMetrics })),
       };
     })
     .sort((a, b) => b.tokens - a.tokens || b.requests - a.requests)
@@ -129,8 +136,27 @@ export async function collectUsageStats(
   // Sessions with at least one turn inside the window; the ledger keeps a deleted
   // session's id alive even though its transcript is gone.
   const sessions = contributing.size;
+  const longestSessionMinutes = Math.max(
+    0,
+    ...[...sessionTimes.values()].map((times) => {
+      const sorted = times.filter((time) => time > 0).sort((a, b) => a - b);
+      return sorted.length > 1 ? (sorted[sorted.length - 1] - sorted[0]) / 60_000 : 0;
+    }),
+  );
+  const streaks = calculateStreaks(days, today);
 
-  return { range, from, to: today, totals, days: dayList, models: modelList, sessions };
+  return {
+    range,
+    from,
+    to: today,
+    totals,
+    days: dayList,
+    models: modelList,
+    sessions,
+    longestSessionMinutes,
+    currentStreak: streaks.current,
+    longestStreak: streaks.longest,
+  };
 }
 
 /**
@@ -200,6 +226,24 @@ function localDateKey(ms: number): string {
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${date.getFullYear()}-${month}-${day}`;
+}
+
+function calculateStreaks(days: Map<string, Metrics>, today: string): { current: number; longest: number } {
+  const active = new Set(days.keys());
+  let current = 0;
+  for (let cursor = today; active.has(cursor); cursor = shiftDate(cursor, -1)) current += 1;
+
+  let longest = 0;
+  let run = 0;
+  const sorted = [...active].sort();
+  let previous = "";
+  for (const date of sorted) {
+    if (previous && shiftDate(previous, 1) === date) run += 1;
+    else run = 1;
+    longest = Math.max(longest, run);
+    previous = date;
+  }
+  return { current, longest };
 }
 
 function emptyMetrics(): Metrics {

@@ -1,0 +1,14 @@
+[Unit]
+Description=FastVibe headless Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=@NODE@ @AGENT@
+Environment=FASTVIBE_AGENT_PORT=7777
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

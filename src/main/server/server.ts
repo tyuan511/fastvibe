@@ -32,6 +32,10 @@ export type RemoteServerDeps = {
   accessFile: string;
   /** Every method registered on the neutral table, for the policy coverage check. */
   channels: () => readonly string[];
+  /** Headless Agent registers a supported subset; desktop server keeps the full table. */
+  policyScope?: "full" | "subset";
+  /** SSH port forwards are authenticated by SSH itself and arrive from loopback. */
+  allowLoopbackAuth?: boolean;
   /** Run one method. The same function the Electron transport calls. */
   dispatch: (method: string, payload: unknown, clientId: string) => Promise<unknown>;
   /** Attach a push receiver; the returned function detaches it. */
@@ -163,12 +167,15 @@ export class RemoteServer {
    */
   async start(options: { port: number; host?: string }): Promise<RemoteServerStatus> {
     if (this.#http) return this.status;
-    if (!isConfigured(this.#deps.accessFile)) {
+    if (!isConfigured(this.#deps.accessFile) && !this.#deps.allowLoopbackAuth) {
       throw new Error("请先设置远程访问密码");
     }
-    assertPolicyCoverage(this.#deps.channels());
+    assertPolicyCoverage(this.#deps.channels(), { requireAll: this.#deps.policyScope !== "subset" });
 
     const host = options.host?.trim() || "127.0.0.1";
+    if (this.#deps.allowLoopbackAuth && host !== "127.0.0.1" && host !== "localhost" && host !== "::1") {
+      throw new Error("SSH loopback鉴权服务只能监听本机");
+    }
     // Both handlers are the outermost frame of their own call: anything thrown here
     // reaches no `catch` but the logger's global one, which records it and leaves the
     // socket open forever. A client that gets no answer and no close is worse than an
@@ -191,7 +198,7 @@ export class RemoteServer {
         socket.destroy();
       }
     });
-    wss.on("connection", (socket) => this.#handleConnection(socket));
+    wss.on("connection", (socket, request) => this.#handleConnection(socket, request));
 
     await new Promise<void>((settle, fail) => {
       const onError = (error: unknown): void => fail(error instanceof Error ? error : new Error(String(error)));
@@ -502,7 +509,8 @@ export class RemoteServer {
     }, milliseconds);
   }
 
-  #handleConnection(socket: WebSocket): void {
+  #handleConnection(socket: WebSocket, request: IncomingMessage): void {
+    const loopback = isLoopbackAddress(request.socket.remoteAddress);
     const client: Client = {
       id: `remote:${randomUUID()}`,
       socket,
@@ -514,6 +522,7 @@ export class RemoteServer {
       alive: true,
     };
     this.#clients.set(client.id, client);
+    if (this.#deps.allowLoopbackAuth && loopback) this.#authenticateLoopback(client);
 
     socket.on("message", (raw) => {
       void this.#handleFrame(client, raw as Buffer);
@@ -542,7 +551,7 @@ export class RemoteServer {
     }
 
     if (message.type === "auth") {
-      this.#authenticate(client, typeof message.token === "string" ? message.token : "");
+      if (!client.deviceId) this.#authenticate(client, typeof message.token === "string" ? message.token : "");
       return;
     }
     if (!client.deviceId) {
@@ -569,6 +578,18 @@ export class RemoteServer {
       // the client can do nothing with it.
       this.#send(client, { id, ok: false, error: error instanceof Error ? error.message : String(error) });
     }
+  }
+
+  #authenticateLoopback(client: Client): void {
+    if (client.timer) clearTimeout(client.timer);
+    client.timer = null;
+    client.deviceId = "ssh-loopback";
+    client.detach = this.#deps.subscribe({
+      id: client.id,
+      send: (channel, payload) => this.#send(client, { push: channel, payload }),
+    });
+    this.#send(client, { type: "auth", ok: true, device: { id: client.deviceId, label: "SSH" } });
+    this.#deps.log.info("SSH loopback client attached");
   }
 
   #authenticate(client: Client, token: string): void {
@@ -674,6 +695,10 @@ async function readBody(request: IncomingMessage, limit: number): Promise<string
 function firstHeader(value: string | string[] | undefined): string | undefined {
   const raw = Array.isArray(value) ? value[0] : value;
   return raw?.split(",")[0]?.trim() || undefined;
+}
+
+function isLoopbackAddress(value: string | undefined): boolean {
+  return value === "127.0.0.1" || value === "::1" || value === "::ffff:127.0.0.1";
 }
 
 const TYPES: Record<string, string> = {

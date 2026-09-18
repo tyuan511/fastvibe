@@ -127,6 +127,12 @@ const openResult = (id: string): ConversationOpenResult => {
   // speak for a conversation that is not on screen when it lands.
   let messages = isActive ? MESSAGES : [];
   if (isActive && params.get("math") === "1") messages = [...MESSAGES.slice(0, 2), ...MATH_MESSAGES];
+  const planFixture = isActive && params.get("plan") === "1";
+  const plan = {
+    path: `${PREVIEW_CWD}/.tmp/fastvibe-plan.md`,
+    title: "主题模式改造计划",
+    summary: "目标：为设置页补充跟随系统主题，并确保主题切换在多个窗口间保持一致。\n\n## 实施步骤\n\n1. 梳理现有主题状态与持久化路径。\n2. 增加跟随系统的实时监听。\n3. 补充设置页交互与回归测试。",
+  };
   return {
     ...snapshot(),
     conversation,
@@ -141,9 +147,11 @@ const openResult = (id: string): ConversationOpenResult => {
     // Only the chat that owns a goal carries one: the panel is conversation-bound, and
     // the preview is where that is checked (`?goal=1`).
     extensionStatus:
-      isActive && params.get("goal") === "1"
-        ? { goal: JSON.stringify({ objective: GOAL_OBJECTIVE, status: params.get("goalState") ?? "running", round: 3 }) }
-        : {},
+      planFixture
+        ? { "plan-mode": "active", "plan-review": JSON.stringify(plan) }
+        : isActive && params.get("goal") === "1"
+          ? { goal: JSON.stringify({ objective: GOAL_OBJECTIVE, status: params.get("goalState") ?? "running", round: 3 }) }
+          : {},
   };
 };
 
@@ -327,6 +335,17 @@ const api = {
           }
         }, 0);
       }
+      if (params.get("plan") === "1") {
+        window.setTimeout(() => {
+          if (eventListeners.has(listener)) {
+            listener({ type: "extension_ui_request", id: "plan-review-preview", conversationId: "conv-theme", method: "plan_review", plan: {
+              path: `${PREVIEW_CWD}/.tmp/fastvibe-plan.md`,
+              title: "主题模式改造计划",
+              summary: "目标：为设置页补充跟随系统主题，并确保主题切换在多个窗口间保持一致。\\n\\n## 实施步骤\\n\\n1. 梳理现有主题状态与持久化路径。\\n2. 增加跟随系统的实时监听。\\n3. 补充设置页交互与回归测试。",
+            } });
+          }
+        }, 50);
+      }
       return () => eventListeners.delete(listener);
     },
     onStatus: () => () => undefined,
@@ -366,6 +385,7 @@ const api = {
   },
   projects: {
     add: async () => null,
+    addRemote: async () => ({ ...snapshot(), project: PROJECTS[0] }),
     rename: async () => snapshot(),
     remove: async () => ({ ...snapshot(), nextId: null }),
     reorder: async (cwds: string[]) => {
@@ -457,6 +477,15 @@ const api = {
   },
   stats: {
     usage: async () => USAGE,
+  },
+  ssh: {
+    hosts: async () => ({ saved: [], discovered: [{ id: "ssh:preview", label: "preview", host: "preview", hostName: "192.0.2.10", source: "config" as const, user: "dev" }] }),
+    saveHost: async () => ({ saved: [], discovered: [] }),
+    removeHost: async () => ({ saved: [], discovered: [] }),
+    connect: async (hostId: string) => ({ hostId, status: "connected" as const, localPort: 17777 }),
+    disconnect: async () => ({ hostId: null, status: "disconnected" as const }),
+    state: async () => ({ hostId: null, status: "disconnected" as const }),
+    onState: () => () => undefined,
   },
   // Remote access is a real server in the main process; the preview has none to show,
   // so every action is a no-op over one of the two fixtures `?tunnel=` picks.

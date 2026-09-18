@@ -105,10 +105,11 @@ type SessionStore = {
    *
    * This is no longer what draws the composer's 继续 control — that reads `canResume`,
    * derived by Main from the transcript, so the affordance survives a reload or a chat
-   * the user was not watching. What it is still for is the arrival: it pauses a
-   * follow-up queue the moment a run stops early instead of leaving it to drain into a
-   * half-finished reply, and `auto_retry_end` uses its nullness to tell a cancelled
-   * retry chain from one whose failure `agent_end` already reported.
+   * the user was not watching. What it is still for is the arrival: after
+   * `agent_settled` confirms a run really stopped early, it pauses a follow-up queue
+   * instead of leaving it to drain into a half-finished reply. `auto_retry_end` uses
+   * its nullness to tell a cancelled retry chain from one whose failure `agent_end`
+   * already reported.
    */
   runInterrupted: "aborted" | "error" | null;
   /**
@@ -327,7 +328,7 @@ function parseQuestions(value: unknown): PermissionQuestion[] | undefined {
 function parsePermission(event: EngineEvent): PermissionRequest | null {
   if (event.type !== "extension_ui_request") return null;
   const method = event.method;
-  if (method !== "confirm" && method !== "select" && method !== "input" && method !== "editor" && method !== "questions") {
+  if (method !== "confirm" && method !== "select" && method !== "input" && method !== "editor" && method !== "questions" && method !== "plan_review") {
     return null;
   }
   const id = typeof event.id === "string" ? event.id : "";
@@ -343,6 +344,15 @@ function parsePermission(event: EngineEvent): PermissionRequest | null {
     optionDetails: parseOptionDetails(event.optionDetails),
     questions: parseQuestions(event.questions),
     timeout: typeof event.timeout === "number" ? event.timeout : undefined,
+    plan:
+      event.plan && typeof event.plan === "object"
+        ? (() => {
+            const plan = event.plan as Record<string, unknown>;
+            return typeof plan.path === "string" && typeof plan.title === "string" && typeof plan.summary === "string"
+              ? { path: plan.path, title: plan.title, summary: plan.summary }
+              : undefined;
+          })()
+        : undefined,
   };
 }
 
@@ -625,18 +635,25 @@ function reduceEvents(state: SessionStore, events: EngineEvent[]): Partial<Sessi
         ? "aborted"
         : undefined;
     if (stoppedEarly) {
-      // A run that stopped early may have queued follow-ups. Hold them: the reply is
-      // half-written, so silently sending the rest of the queue would continue from a
-      // broken turn. The composer shows a resume control instead.
+      // Remember the early verdict, but do not pause the queue yet. `agent_end` can
+      // describe an attempt that the SDK is about to retry; older SDK event payloads
+      // do not always include `willRetry: true`. Pausing here made a retry that was
+      // still visibly running show 「队列已暂停」. The queue is paused only below, when
+      // the enclosing run reaches `agent_settled` without starting another attempt.
       runInterrupted = stoppedEarly;
-      const owner = typeof event.conversationId === "string" ? event.conversationId : state.activeId;
-      if (owner && state.queued.some((item) => item.conversationId === owner)) {
-        queuePause = stoppedEarly === "error" ? "error" : "stopped";
-        queuePauseByConversation = { ...queuePauseByConversation, [owner]: queuePause };
-      }
     } else if (event.type === "agent_start" || event.type === "turn_start") {
       // A new run (resume, retry, or fresh prompt) clears the interrupted state.
       runInterrupted = null;
+    }
+    if (event.type === "agent_settled" && runInterrupted) {
+      // `agent_settled` is the first reliable terminal boundary: retries,
+      // auto-compaction and extension continuations have all had their chance to
+      // start another attempt. Only now can a queued follow-up safely be held.
+      const owner = typeof event.conversationId === "string" ? event.conversationId : state.activeId;
+      if (owner && queued.some((item) => item.conversationId === owner && !item.sending)) {
+        queuePause = runInterrupted === "error" ? "error" : "stopped";
+        queuePauseByConversation = { ...queuePauseByConversation, [owner]: queuePause };
+      }
     }
     const parsed = parsePermission(event);
     if (parsed) {

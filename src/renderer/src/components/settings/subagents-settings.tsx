@@ -11,7 +11,7 @@ import {
 } from "@hugeicons/core-free-icons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Item, ItemActions, ItemContent, ItemDescription, ItemMedia, ItemTitle } from "@/components/ui/item";
 import {
   Dialog,
   DialogContent,
@@ -160,7 +160,7 @@ export function SubagentsSettings({ models }: { models: FastVibeModel[] }): JSX.
         models={models}
         value={modelValue(agent.model)}
         emptyLabel={t("subagents.inherit")}
-        className="w-full"
+        className="max-h-12 w-full overflow-hidden"
         wrapLabel
         onChange={(model) => void saveBuiltin(agent, model)}
       />
@@ -170,64 +170,47 @@ export function SubagentsSettings({ models }: { models: FastVibeModel[] }): JSX.
   function renderCard(agent: SubagentConfig): JSX.Element {
     const isBuiltin = agent.source === "builtin";
     return (
-      <Card
-        key={agent.id}
-        className="group relative overflow-hidden border-border/70 bg-card/80 shadow-sm transition-[border-color,box-shadow,transform] hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-md"
-      >
-        <div className="absolute inset-x-0 top-0 h-0.5 bg-primary/60 opacity-0 transition-opacity group-hover:opacity-100" />
-        <CardHeader className="gap-4 pb-3">
-          <div className="flex items-start gap-3">
-            <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary ring-1 ring-primary/15">
-              <HugeiconsIcon icon={BotIcon} strokeWidth={1.8} className="size-5" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2">
-                <CardTitle className="truncate text-base">{agent.name}</CardTitle>
-                <Badge variant={isBuiltin ? "secondary" : "outline"} className="shrink-0 rounded-full px-2 py-0.5 text-xs">
-                  {isBuiltin ? t("subagents.builtin") : t("subagents.custom")}
-                </Badge>
-              </div>
-              <p className="mt-1.5 line-clamp-2 min-h-10 text-sm leading-5 text-muted-foreground">{agent.description}</p>
-            </div>
-            {!isBuiltin ? (
-              <div className="flex shrink-0 -mr-2 -mt-2 gap-0.5 opacity-70 transition-opacity group-hover:opacity-100">
-                <Button size="icon-sm" variant="ghost" aria-label={t("subagents.edit")} onClick={() => setEditor(formFrom(agent))}>
-                  <HugeiconsIcon icon={Edit02Icon} strokeWidth={2} />
-                </Button>
-                <Button size="icon-sm" variant="ghost" className="text-muted-foreground hover:text-destructive" aria-label={t("subagents.remove")} onClick={() => setRemoveId(agent.id)}>
-                  <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
-                </Button>
-              </div>
-            ) : null}
+      <Item key={agent.id} variant="outline" size="sm" className="items-start gap-3 bg-card/80 p-3 transition-colors hover:border-primary/30 hover:bg-muted/20">
+        <ItemMedia variant="icon" className="mt-0.5 size-9 rounded-xl bg-primary/10 text-primary ring-1 ring-primary/15">
+          <HugeiconsIcon icon={BotIcon} strokeWidth={1.8} className="size-5" />
+        </ItemMedia>
+        <ItemContent className="min-w-0 gap-1.5">
+          <div className="flex min-w-0 items-center gap-2">
+            <ItemTitle className="min-w-0 truncate text-base">{agent.name}</ItemTitle>
+            <Badge variant={isBuiltin ? "secondary" : "outline"} className="shrink-0 rounded-full px-2 py-0.5 text-xs">
+              {isBuiltin ? t("subagents.builtin") : t("subagents.custom")}
+            </Badge>
           </div>
-        </CardHeader>
-        <CardContent className="space-y-4 pt-0">
-          <div className="flex min-h-7 flex-wrap items-center gap-1.5">
+          <ItemDescription className="line-clamp-1">{agent.description}</ItemDescription>
+          <div className="flex flex-wrap items-center gap-1.5 pt-1">
             {agent.tools.map((tool) => (
-              <span key={tool} className="rounded-md bg-muted/70 px-2 py-1 text-xs text-muted-foreground">
+              <span key={tool} className="rounded-md bg-muted/70 px-1.5 py-0.5 text-xs text-muted-foreground">
                 {AGENT_TOOLS.includes(tool as AgentTool) ? t(`subagents.toolOptions.${tool}.label`) : t("subagents.toolOptions.other")}
               </span>
             ))}
           </div>
-          <div className="rounded-xl border border-border/60 bg-muted/30 p-3">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="text-sm font-medium">{t("subagents.model")}</p>
-                <p className="mt-0.5 text-xs leading-4 text-muted-foreground">{t("subagents.modelDesc")}</p>
-              </div>
-              {agent.model ? <Badge variant="outline" className="shrink-0 rounded-full text-xs">{t("subagents.configured")}</Badge> : null}
-            </div>
-            <div className="mt-3">
-              {isBuiltin ? renderModel(agent) : (
-                <button type="button" className="flex w-full items-center justify-between gap-2 rounded-lg border border-border bg-background px-3 py-2 text-left text-sm hover:border-primary/40" onClick={() => setEditor(formFrom(agent))}>
-                  <span className="min-w-0 break-all leading-5 text-muted-foreground">{agent.model ?? t("subagents.inherit")}</span>
-                  <HugeiconsIcon icon={ArrowRight01Icon} strokeWidth={2} className="size-4 shrink-0 text-primary" />
-                </button>
-              )}
-            </div>
+        </ItemContent>
+        <ItemActions className="ml-auto shrink-0 self-center">
+          <div className="hidden min-w-44 sm:block">
+            {isBuiltin ? renderModel(agent) : (
+              <button type="button" className="flex w-full items-center justify-between gap-2 rounded-lg border border-border bg-background px-3 py-1.5 text-left text-sm hover:border-primary/40" onClick={() => setEditor(formFrom(agent))}>
+                <span className="min-w-0 truncate text-muted-foreground">{agent.model ?? t("subagents.inherit")}</span>
+                <HugeiconsIcon icon={ArrowRight01Icon} strokeWidth={2} className="size-4 shrink-0 text-primary" />
+              </button>
+            )}
           </div>
-        </CardContent>
-      </Card>
+          {!isBuiltin ? (
+            <>
+              <Button size="icon-sm" variant="ghost" aria-label={t("subagents.edit")} onClick={() => setEditor(formFrom(agent))}>
+                <HugeiconsIcon icon={Edit02Icon} strokeWidth={2} />
+              </Button>
+              <Button size="icon-sm" variant="ghost" className="text-muted-foreground hover:text-destructive" aria-label={t("subagents.remove")} onClick={() => setRemoveId(agent.id)}>
+                <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
+              </Button>
+            </>
+          ) : null}
+        </ItemActions>
+      </Item>
     );
   }
 
@@ -263,7 +246,7 @@ export function SubagentsSettings({ models }: { models: FastVibeModel[] }): JSX.
             <h3 className="text-sm font-semibold">{t("subagents.builtins")}</h3>
             <span className="text-xs text-muted-foreground">{builtins.length}</span>
           </div>
-          <div className="grid items-start gap-3 md:grid-cols-2">{builtins.map(renderCard)}</div>
+          <div className="grid gap-2.5">{builtins.map(renderCard)}</div>
         </section>
       ) : null}
       {!loading && custom.length > 0 ? (
@@ -272,40 +255,40 @@ export function SubagentsSettings({ models }: { models: FastVibeModel[] }): JSX.
             <h3 className="text-sm font-semibold">{t("subagents.customs")}</h3>
             <span className="text-xs text-muted-foreground">{custom.length}</span>
           </div>
-          <div className="grid items-start gap-3 md:grid-cols-2">{custom.map(renderCard)}</div>
+          <div className="grid gap-2.5">{custom.map(renderCard)}</div>
         </section>
       ) : null}
       {!loading && custom.length === 0 ? <p className="rounded-xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground">{t("subagents.empty")}</p> : null}
 
       <Dialog open={editor !== null} onOpenChange={(open) => { if (!open && !saving) setEditor(null); }}>
-        <DialogContent className="sm:max-w-3xl gap-0 overflow-hidden p-0">
-          <DialogHeader className="border-b border-border/70 bg-gradient-to-br from-primary/10 via-background to-background px-6 py-5 pr-12">
-            <div className="mb-3 flex size-10 items-center justify-center rounded-xl bg-primary/10 text-primary ring-1 ring-primary/15">
-              <HugeiconsIcon icon={BotIcon} strokeWidth={1.8} className="size-5" />
+        <DialogContent className="flex max-h-[min(84vh,48rem)] min-h-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl">
+          <DialogHeader className="shrink-0 border-b border-border/70 bg-gradient-to-br from-primary/10 via-background to-background px-5 py-4 pr-12">
+            <div className="mb-2.5 flex size-9 items-center justify-center rounded-xl bg-primary/10 text-primary ring-1 ring-primary/15">
+              <HugeiconsIcon icon={BotIcon} strokeWidth={1.8} className="size-4.5" />
             </div>
             <DialogTitle className="text-lg">{editor?.id ? t("subagents.editTitle") : t("subagents.addTitle")}</DialogTitle>
-            <DialogDescription className="mt-1.5 max-w-lg leading-5">{t("subagents.formDesc")}</DialogDescription>
+            <DialogDescription className="mt-1 max-w-lg text-sm leading-5">{t("subagents.formDesc")}</DialogDescription>
           </DialogHeader>
           {editor ? (
-            <div className="max-h-[68vh] overflow-y-auto px-6 py-5">
-              <div className="grid gap-5">
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="grid gap-2">
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+              <div className="grid gap-3.5">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="grid content-start gap-2">
                     <Label htmlFor="subagent-name">{t("subagents.name")}</Label>
                     <Input id="subagent-name" value={editor.name} onChange={(event) => setEditor({ ...editor, name: event.target.value })} />
                     <p className="text-xs leading-4 text-muted-foreground">{t("subagents.nameHint")}</p>
                   </div>
-                  <div className="grid gap-2">
-                    <Label>{t("subagents.tools")}</Label>
-                    <p className="text-xs leading-4 text-muted-foreground">{t("subagents.toolsHint")}</p>
+                  <div className="grid content-start gap-2">
+                    <Label htmlFor="subagent-description">{t("subagents.description")}</Label>
+                    <Input id="subagent-description" value={editor.description} onChange={(event) => setEditor({ ...editor, description: event.target.value })} />
                   </div>
                 </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="subagent-description">{t("subagents.description")}</Label>
-                  <Input id="subagent-description" value={editor.description} onChange={(event) => setEditor({ ...editor, description: event.target.value })} />
-                </div>
-                <div className="grid gap-3 rounded-xl border border-border/70 bg-muted/25 p-4">
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                <section className="grid gap-2.5 rounded-xl border border-border/70 bg-muted/25 p-3.5">
+                  <div>
+                    <Label>{t("subagents.tools")}</Label>
+                    <p className="mt-1 text-xs leading-4 text-muted-foreground">{t("subagents.toolsHint")}</p>
+                  </div>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
                     {AGENT_TOOLS.map((tool) => {
                       const checked = editor.tools.includes(tool);
                       return (
@@ -327,8 +310,8 @@ export function SubagentsSettings({ models }: { models: FastVibeModel[] }): JSX.
                       );
                     })}
                   </div>
-                </div>
-                <div className="grid gap-2 rounded-xl border border-border/70 bg-muted/25 p-4">
+                </section>
+                <section className="grid gap-2 rounded-xl border border-border/70 bg-muted/25 p-3.5">
                   <Label>{t("subagents.model")}</Label>
                   <p className="text-xs text-muted-foreground">{t("subagents.modelDesc")}</p>
                   <DefaultModelSelect
@@ -339,15 +322,15 @@ export function SubagentsSettings({ models }: { models: FastVibeModel[] }): JSX.
                     wrapLabel
                     onChange={(model) => setEditor({ ...editor, model })}
                   />
-                </div>
-                <div className="grid gap-2">
+                </section>
+                <section className="grid gap-2">
                   <Label htmlFor="subagent-prompt">{t("subagents.prompt")}</Label>
-                  <Textarea id="subagent-prompt" className="min-h-52 resize-y leading-6" value={editor.systemPrompt} onChange={(event) => setEditor({ ...editor, systemPrompt: event.target.value })} />
-                </div>
+                  <Textarea id="subagent-prompt" className="min-h-28 resize-y leading-6" value={editor.systemPrompt} onChange={(event) => setEditor({ ...editor, systemPrompt: event.target.value })} />
+                </section>
               </div>
             </div>
           ) : null}
-          <DialogFooter className="border-t border-border/70 px-6 py-4">
+          <DialogFooter className="m-0 shrink-0 gap-2 rounded-b-xl border-t border-border/70 bg-muted/20 px-5 py-3.5 sm:gap-2">
             <Button variant="outline" onClick={() => setEditor(null)} disabled={saving}>{t("subagents.cancel")}</Button>
             <Button onClick={() => void saveCustom()} disabled={saving}>{t("subagents.save")}</Button>
           </DialogFooter>

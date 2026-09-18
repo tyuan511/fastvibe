@@ -32,6 +32,7 @@ import { DefaultModelSelect } from "./default-model-select";
 import { ExtensionsSettings } from "./extensions-settings";
 import { McpSettings } from "./mcp-settings";
 import { RemoteSettings } from "./remote-settings";
+import { RemoteHostsSettings } from "./remote-hosts-settings";
 import { SkillsSettings } from "./skills-settings";
 import { THINKING_MENU_ORDER, thinkingMenuItems, thinkingMenuLabel } from "@/lib/thinking-levels";
 import { ThemeSelect } from "./theme-select";
@@ -168,7 +169,7 @@ export function SettingsDialog({
 
       <ScrollArea className="min-h-0 flex-1">
         <div className="mx-auto w-full max-w-200 px-8 py-8">
-          <h2 className="mb-5 text-xl font-medium tracking-tight">
+          <h2 className={cn("mb-5 text-xl font-medium tracking-tight", section === "usage" && "hidden")}>
             {settingsSectionLabel(section)}
           </h2>
 
@@ -484,6 +485,7 @@ export function SettingsDialog({
           {section === "archived" ? <ArchivedSettings onDeleteConversations={onDeleteConversations} /> : null}
           {section === "usage" ? <UsageSettings /> : null}
           {section === "remote" ? <RemoteSettings /> : null}
+          {section === "ssh" ? <RemoteHostsSettings /> : null}
 
           {section === "subagents" ? <SubagentsSettings models={models} /> : null}
           {section === "mcp" ? <McpSettings /> : null}

@@ -13,6 +13,47 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  agent-runtime:
+    name: Agent runtime (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch: x64
+          - os: ubuntu-24.04-arm
+            arch: arm64
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Verify tag version
+        run: test "${GITHUB_REF_NAME}" = "v$(node -p \"require('./package.json').version\")"
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build desktop and Agent runtime
+        run: |
+          pnpm build
+          pnpm build:agent-runtime -- --platform=linux --arch=${{ matrix.arch }}
+
+      - name: Publish Agent runtime
+        uses: softprops/action-gh-release@v3
+        with:
+          draft: false
+          fail_on_unmatched_files: true
+          files: release/agent-runtime/fastvibe-agent-linux-${{ matrix.arch }}.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   build:
     name: Package (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
@@ -28,6 +69,9 @@ jobs:
             platform: win
     steps:
       - uses: actions/checkout@v7
+
+      - name: Verify tag version
+        run: test "${GITHUB_REF_NAME}" = "v$(node -p \"require('./package.json').version\")"
 
       - uses: pnpm/action-setup@v6
 

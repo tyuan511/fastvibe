@@ -39,6 +39,18 @@ function ancestorDirs(cwd: string, filePath: string): string[] {
  * on the right. The preview is stored on the tab, so a chat click focuses the
  * same view.
  */
+export function SidePanePlan({ tab }: { tab: SidePaneTab }): JSX.Element {
+  const preview = tab.preview;
+  if (!preview) return <div className="flex min-h-0 flex-1 items-center justify-center text-sm text-muted-foreground">暂无计划内容</div>;
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <ScrollArea className="min-h-0 flex-1">
+        <div className="px-5 py-5"><PreviewBody preview={preview} /></div>
+      </ScrollArea>
+    </div>
+  );
+}
+
 export function SidePaneFiles({
   tab,
   cwd,

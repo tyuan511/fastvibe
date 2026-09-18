@@ -1,0 +1,68 @@
+import { existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import type { EngineModel } from "@shared/types";
+import type { FastVibePaths } from "./paths";
+
+/** Settings that are safe to read from both Electron Main and a headless Agent. */
+export type PersistedSettings = Record<string, unknown>;
+
+type SettingsFile = {
+  version: number;
+  settings: PersistedSettings;
+};
+
+const VERSION = 1;
+let cache: { file: string; mtimeMs: number; size: number; settings: PersistedSettings } | null = null;
+
+export function readAppSettings(paths: FastVibePaths): PersistedSettings {
+  try {
+    const stat = statSync(paths.settingsFile);
+    if (cache && cache.file === paths.settingsFile && cache.mtimeMs === stat.mtimeMs && cache.size === stat.size) {
+      return cache.settings;
+    }
+    const parsed = JSON.parse(readFileSync(paths.settingsFile, "utf8")) as SettingsFile;
+    if (!parsed || parsed.version !== VERSION || !parsed.settings || typeof parsed.settings !== "object") return {};
+    cache = { file: paths.settingsFile, mtimeMs: stat.mtimeMs, size: stat.size, settings: parsed.settings };
+    return parsed.settings;
+  } catch {
+    return {};
+  }
+}
+
+export function readDefaultModel(paths: FastVibePaths): EngineModel | undefined {
+  const value = readAppSettings(paths).defaultModel;
+  if (typeof value !== "object" || value === null) return undefined;
+  const { provider, id } = value as Partial<EngineModel>;
+  if (typeof provider !== "string" || typeof id !== "string" || !provider || !id) return undefined;
+  return { provider, id };
+}
+
+export function readAutoCompact(paths: FastVibePaths): boolean {
+  const value = readAppSettings(paths).autoCompact;
+  return typeof value === "boolean" ? value : true;
+}
+
+export function writeAppSettings(paths: FastVibePaths, settings: PersistedSettings): void {
+  writeFileSync(paths.settingsFile, `${JSON.stringify({ version: VERSION, settings }, null, 2)}\n`);
+  cache = null;
+}
+
+export function clearAppSettings(paths: FastVibePaths): void {
+  cache = null;
+  try {
+    if (existsSync(paths.settingsFile)) unlinkSync(paths.settingsFile);
+  } catch {
+    // The next read will fall back to defaults.
+  }
+}
+
+export function applyPermissionMode(settings: PersistedSettings): void {
+  const mode = settings.permissionMode === "ask" || settings.permissionMode === "full" || settings.permissionMode === "smart"
+    ? settings.permissionMode
+    : "smart";
+  process.env.FASTVIBE_PERMISSION_MODE = mode;
+}
+
+/** Keep this module's import graph free of Electron for the headless runtime. */
+export function settingsFileExists(paths: FastVibePaths): boolean {
+  return existsSync(paths.settingsFile);
+}

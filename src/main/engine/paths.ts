@@ -1,4 +1,3 @@
-import { app } from "electron";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
@@ -37,6 +36,8 @@ export type FastVibePaths = {
    * client that connects. Kept apart, and never served by any method.
    */
   remoteAccessFile: string;
+  /** Saved SSH host profiles; the file is private because it may contain an SSH password. */
+  sshHostsFile: string;
 };
 
 /**
@@ -49,13 +50,29 @@ export type FastVibePaths = {
  * main process's event loop for the whole of a fast reply.
  */
 let cached: FastVibePaths | null = null;
+let configuredUserData: string | undefined;
+
+/**
+ * Set the data root before the first engine is created.
+ *
+ * Electron Main calls this with app.getPath("userData"); a headless Agent calls it
+ * from its own service configuration. Keeping the path provider free of Electron is
+ * what lets the same engine runtime load in a plain Linux Node process.
+ */
+export function configureFastVibeUserData(userData: string): void {
+  const root = userData.trim();
+  if (!root) throw new Error("FastVibe 数据目录不能为空");
+  configuredUserData = root;
+  cached = null;
+}
 
 export function getFastVibePaths(): FastVibePaths {
   return (cached ??= buildFastVibePaths());
 }
 
 function buildFastVibePaths(): FastVibePaths {
-  const userData = app.getPath("userData");
+  const userData = configuredUserData ?? process.env.FASTVIBE_USER_DATA;
+  if (!userData) throw new Error("FastVibe 数据目录尚未配置");
   const logs = join(userData, "logs");
   const runtimeRoot = join(userData, "runtime", "engine");
   const agentDir = join(runtimeRoot, "agent");
@@ -88,5 +105,6 @@ function buildFastVibePaths(): FastVibePaths {
     reasoningFile: join(runtimeRoot, "reasoning.json"),
     usageLedgerFile: join(runtimeRoot, "usage-ledger.jsonl"),
     remoteAccessFile: join(userData, "remote-access.json"),
+    sshHostsFile: join(userData, "ssh-hosts.json"),
   };
 }

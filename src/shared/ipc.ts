@@ -73,6 +73,7 @@ export const Ipc = {
    */
   workspaceChanged: "workspace:changed",
   projectsAdd: "projects:add",
+  projectsAddRemote: "projects:add-remote",
   projectsRename: "projects:rename",
   projectsRemove: "projects:remove",
   projectsReorder: "projects:reorder",
@@ -147,6 +148,15 @@ export const Ipc = {
   providersOAuthCancel: "providers:oauth-cancel",
   providersLogout: "providers:logout",
   providersOAuthEvent: "providers:oauth-event",
+  /** 本地桌面管理 SSH 远程主机；远程客户端不得调用。 */
+  sshHosts: "ssh:hosts",
+  sshHostSave: "ssh:host-save",
+  sshHostRemove: "ssh:host-remove",
+  sshPickIdentityFile: "ssh:pick-identity-file",
+  /** SSH tunnel lifecycle for a selected remote FastVibe service. */
+  sshConnect: "ssh:connect",
+  sshDisconnect: "ssh:disconnect",
+  sshState: "ssh:state",
   /** 远程访问（网页/手机）: server lifecycle, credentials and devices. */
   remoteGetState: "remote:get-state",
   remoteSetPassword: "remote:set-password",

@@ -23,7 +23,7 @@ import {
   windowBackgroundColor,
   writeAppSettings,
 } from "./engine/app-settings";
-import { getFastVibePaths, type FastVibePaths } from "./engine/paths";
+import { configureFastVibeUserData, getFastVibePaths, type FastVibePaths } from "./engine/paths";
 import { isNotificationPreference, type NotificationPreference } from "@shared/types";
 import { applyLanguages } from "./engine/ai-language";
 import { uiText } from "./engine/ui-text";
@@ -40,6 +40,8 @@ import { applyPendingInstall, registerUpdater, scheduleUpdateCheck } from "./upd
 import { PiProcessManager } from "./pi/process-manager";
 import { fetchPackageCatalog } from "./pi/package-catalog";
 import { TerminalSessions } from "./engine/terminal-sessions";
+import { SshManager } from "./ssh/ssh-manager";
+import type { RemoteHostProfile } from "@shared/remote-host";
 import { attachBrowserRenderer, installBrowserGlobal, respondBrowserRequest } from "./pi/browser-bridge";
 import { importBrowserProfile, listBrowserProfiles } from "./engine/browser-profiles";
 import type { ImportSourceId, ProviderModel, UsageRange } from "@shared/types";
@@ -48,6 +50,8 @@ import type { GitBranch, GitDiffSource, GitStatus } from "@shared/ipc";
 const execFileAsync = promisify(execFile);
 
 app.setName("FastVibe");
+configureFastVibeUserData(app.getPath("userData"));
+if (app.isPackaged) process.env.FASTVIBE_RESOURCES_PATH = process.resourcesPath;
 
 // GUI-launched Electron inherits a stub PATH. Fill in Homebrew / user bins
 // before any agent session, MCP stdio server or in-app terminal is spawned.
@@ -66,6 +70,23 @@ if (app.isPackaged) process.env.JITI_FS_CACHE = "false";
 
 const engine = new PiProcessManager();
 const terminals = new TerminalSessions();
+const sshManager = new SshManager({
+  paths: getFastVibePaths(),
+  onState: (state) => broadcast(Ipc.sshState, state),
+  onPush: (channel, payload) => broadcast(channel, payload),
+  log: {
+    info: (message) => log.info(message),
+    warn: (message) => log.warn(message),
+  },
+  agentRuntime: {
+    version: app.getVersion(),
+    artifactDirectory: app.isPackaged
+      ? join(process.resourcesPath, "agent-runtimes")
+      : join(__dirname, "../../release/agent-runtime"),
+    cacheDirectory: join(getFastVibePaths().runtimeRoot, "ssh-agent-runtimes"),
+    releaseBaseUrl: process.env.FASTVIBE_AGENT_RELEASE_BASE_URL,
+  },
+});
 let mainWindow: BrowserWindow | null = null;
 const windows = new Set<BrowserWindow>();
 
@@ -182,6 +203,33 @@ function modelsDevInfo(stats: ModelsDevStats): AppModelsDevInfo {
     generatedAt: stats.generatedAt,
     path: stats.path,
   };
+}
+
+function registerSshIpc(): void {
+  handle(Ipc.sshState, () => sshManager.state);
+  handle(Ipc.sshHosts, () => sshManager.hosts());
+  handle(Ipc.sshHostSave, (payload: { host?: RemoteHostProfile }) => {
+    if (!payload?.host) throw new Error("SSH 主机配置无效");
+    return sshManager.saveHost(payload.host);
+  });
+  handle(Ipc.sshHostRemove, (payload: { id?: string }) => {
+    const id = typeof payload?.id === "string" ? payload.id.trim() : "";
+    if (!id) throw new Error("SSH 主机无效");
+    return sshManager.removeHost(id);
+  });
+  handle(Ipc.sshPickIdentityFile, async () => {
+    const result = await dialog.showOpenDialog({
+      title: uiText("选择 SSH 私钥", "Choose SSH private key"),
+      properties: ["openFile"],
+    });
+    return result.canceled || !result.filePaths[0] ? null : result.filePaths[0];
+  });
+  handle(Ipc.sshConnect, async (payload: { hostId?: string }) => {
+    const hostId = typeof payload?.hostId === "string" ? payload.hostId.trim() : "";
+    if (!hostId) throw new Error("SSH 主机无效");
+    return sshManager.connect(hostId);
+  });
+  handle(Ipc.sshDisconnect, () => sshManager.disconnect());
 }
 
 function registerIpc(): void {
@@ -331,7 +379,7 @@ function registerIpc(): void {
 
   handle(
     Ipc.enginePermissionRespond,
-    (payload: { id: string; confirmed?: boolean; value?: string; cancelled?: boolean; answers?: Array<string | null> }) => {
+    (payload: { id: string; confirmed?: boolean; value?: string; cancelled?: boolean; answers?: Array<string | null>; planAction?: "approve" | "revise" | "ignore" }) => {
       engine.respondPermission(payload);
     },
   );
@@ -512,6 +560,11 @@ function registerIpc(): void {
     });
     if (result.canceled || !result.filePaths[0]) return null;
     return engine.addProject(result.filePaths[0]);
+  });
+  handle(Ipc.projectsAddRemote, (payload: { cwd?: string }) => {
+    const cwd = typeof payload?.cwd === "string" ? payload.cwd.trim() : "";
+    if (!cwd) throw new Error("远程项目目录不能为空");
+    return engine.addProject(cwd);
   });
   handle(Ipc.projectsRename, (payload: { cwd: string; name: string }) => {
     return engine.renameProject(payload.cwd, payload.name);
@@ -798,13 +851,13 @@ function wireElectronTransport(): void {
   for (const channel of handlerChannels()) {
     if (SEND_ONLY.has(channel)) {
       ipcMain.on(channel, (event, payload: unknown) => {
-        void dispatch(channel, payload, contextFor(event)).catch((error: unknown) => {
+        void sshManager.invoke(channel, payload, () => dispatch(channel, payload, contextFor(event))).catch((error: unknown) => {
           log.warn(`ipc send failed channel=${channel}: ${String(error)}`);
         });
       });
       continue;
     }
-    ipcMain.handle(channel, (event, payload: unknown) => dispatch(channel, payload, contextFor(event)));
+    ipcMain.handle(channel, (event, payload: unknown) => sshManager.invoke(channel, payload, () => dispatch(channel, payload, contextFor(event))));
   }
 
   // `settings:get-sync` is the one call that cannot go through the table: it is read in
@@ -836,6 +889,7 @@ app.whenReady().then(async () => {
   registerIpc();
   registerUpdater(() => windows);
   registerRemoteIpc();
+  registerSshIpc();
   wireElectronTransport();
   scheduleUpdateCheck(startupSettings.autoCheckUpdates !== false);
 
@@ -931,6 +985,7 @@ app.on("before-quit", (event) => {
   stopping = true;
   log.info("app quitting");
   void stopRemoteServer().catch(() => undefined);
+  void sshManager.disconnect().catch(() => undefined);
   void engine.stop().finally(() => {
     terminals.dispose();
     clearRunningConversations();

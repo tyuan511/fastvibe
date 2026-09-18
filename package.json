@@ -15,6 +15,9 @@
   },
   "type": "module",
   "main": "./out/main/index.js",
+  "bin": {
+    "fastvibe-agent": "./out/main/agent.js"
+  },
   "scripts": {
     "sync:models": "node scripts/sync-models-dev.mjs",
     "sync": "node scripts/sync-models-dev.mjs",
@@ -22,6 +25,9 @@
     "dev": "electron-vite dev",
     "prebuild": "node scripts/sync-models-dev.mjs && node scripts/check-injected-scripts.mjs",
     "build": "electron-vite build",
+    "agent": "node out/main/agent.js --headless",
+    "build:agent-runtime": "node scripts/build-agent-runtime.mjs",
+    "install:agent-service": "node scripts/install-agent-service.mjs",
     "preview": "electron-vite preview",
     "stage:app": "node scripts/stage-app.mjs",
     "check:scripts": "node scripts/check-injected-scripts.mjs",
@@ -84,6 +90,7 @@
     "react-i18next": "^17.0.14",
     "react-markdown": "^10.1.0",
     "react-router": "^8.3.1",
+    "recharts": "^3.8.0",
     "rehype-katex": "^7.0.1",
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",

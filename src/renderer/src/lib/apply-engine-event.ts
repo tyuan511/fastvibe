@@ -14,10 +14,9 @@ export type ApplyResult = {
   messages: ChatMessage[];
   streaming: boolean;
   /**
-   * Set on `agent_end` when the run stopped early: a failure (`error`) or a user
-   * abort (`aborted`). The caller keeps the follow-up queue paused and offers to
-   * resume the turn instead of draining the queue onto a half-finished
-   * conversation.
+   * Set on `agent_end` when an attempt stopped early: a failure (`error`) or a user
+   * abort (`aborted`). The caller retains this verdict until `agent_settled` confirms
+   * that no retry or continuation followed; only then is the follow-up queue paused.
    */
   interrupted?: "aborted" | "error";
   /**

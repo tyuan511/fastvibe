@@ -12,6 +12,7 @@ export type SidePaneTabType =
   | "browser"
   | "selection-side-chat"
   | "files"
+  | "plan"
   | "subagent"
   | "changes";
 
@@ -70,7 +71,7 @@ export type SidePaneTab = {
   gitFocusPath?: string;
   gitFocusSource?: GitDiffSource;
   /**
-   * One turn's writes, shown by the 本轮修改 tab. The tab is opened only from the
+   * One turn's writes, shown by the 修改记录 tab. The tab is opened only from the
    * transcript's file chips — never from the pane's own menus — and the diffs are
    * the tools' own patches, not the working tree.
    */
@@ -208,7 +209,7 @@ type SidePaneStore = {
    */
   openGitDiff: (path: string, source: GitDiffSource, cwd?: string) => void;
   /**
-   * Open 本轮修改 on one turn's files, focused on `path`. The transcript chips are
+   * Open 修改记录 on one turn's files, focused on `path`. The transcript chips are
    * the only caller: the pane itself has no entry that would mint this tab.
    */
   openTurnChanges: (files: ChangedFile[], path: string) => void;
@@ -231,7 +232,9 @@ type SidePaneStore = {
    */
   registerSubagent: (subagentId: string, init?: SubagentTabInit) => void;
   /** Open the file view focused on one file's preview. */
-  openFilePreview: (preview: FilePreview) => void;
+  openFilePreview: (preview: FilePreview, title?: string) => void;
+  /** Open a standalone plan document without the project file tree. */
+  openPlanPreview: (preview: FilePreview, title: string) => void;
   patchTab: (id: string, patch: Partial<SidePaneTab>) => void;
   applyConversationEvent: (conversationId: string, event: EngineEvent) => void;
   /** Path the active chat's file view is previewing, if any. */
@@ -293,6 +296,8 @@ export function subagentTabLabel(tab: SidePaneTab): string {
 export function sidePaneTabTitle(tab: SidePaneTab): string {
   if (tab.type === "subagent") return subagentTabLabel(tab);
   if (tab.type === "selection-side-chat") return tab.title;
+  if (tab.type === "files" && tab.title !== i18n.t("sidepane:tabs.files")) return tab.title;
+  if (tab.type === "plan") return tab.title;
   return i18n.t(`sidepane:tabs.${tab.type}`) as string;
 }
 
@@ -332,7 +337,7 @@ function writeScope(
   root?: Partial<SidePaneStore>,
 ): Partial<SidePaneStore> {
   // The root `collapsed` / `maximized` fields *are* the active scope's. A caller
-  // that uncollapses via `{ collapsed: false }` (chip → 本轮修改, a new tab, …)
+  // that uncollapses via `{ collapsed: false }` (chip → 修改记录, a new tab, …)
   // must persist that on the scope too: otherwise the next `patchTab` / `close`
   // re-reads the stale `scope.collapsed: true` (left behind when the last tab
   // closed, or when the user collapsed then reopened) and snaps the pane shut
@@ -703,8 +708,10 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
     set((state) => {
       const scope = scopeOf(state);
       const existing = scope.tabs.find((item) => item.type === "files");
-      const tab: SidePaneTab =
-        existing ?? { id: "files", type: "files", openedAt: Date.now(), title: i18n.t("sidepane:tabs.files") as string };
+      const tab: SidePaneTab = {
+        ...(existing ?? { id: "files", type: "files" as const, openedAt: Date.now() }),
+        title: i18n.t("sidepane:tabs.files") as string,
+      };
       return writeScope(
         state,
         scopeKeyOf(state),
@@ -746,17 +753,30 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
       }
       return writeScope(state, key, { ...scope, tabs: upsert(scope.tabs, tab) });
     }),
-  openFilePreview: (preview) =>
+  openPlanPreview: (preview, title) =>
+    set((state) => {
+      const scope = scopeOf(state);
+      const tab: SidePaneTab = {
+        id: `plan:${preview.path}`,
+        type: "plan",
+        openedAt: Date.now(),
+        title,
+        path: preview.path,
+        preview,
+      };
+      return writeScope(state, scopeKeyOf(state), { ...scope, tabs: upsert(scope.tabs, tab), activeTabId: tab.id }, { collapsed: false });
+    }),
+  openFilePreview: (preview, title) =>
     set((state) => {
       const scope = scopeOf(state);
       const existing = scope.tabs.find((item) => item.type === "files");
       const tab: SidePaneTab = existing
-        ? { ...existing, path: preview.path, preview }
+        ? { ...existing, path: preview.path, preview, ...(title ? { title } : {}) }
         : {
             id: "files",
             type: "files",
             openedAt: Date.now(),
-            title: i18n.t("sidepane:tabs.files") as string,
+            title: title || i18n.t("sidepane:tabs.files") as string,
             path: preview.path,
             preview,
           };

@@ -11,6 +11,7 @@ import {
   Plug01Icon,
   PuzzleIcon,
   Settings02Icon,
+  ServerStack01Icon,
   SparklesIcon,
   Wifi01Icon,
 } from "@hugeicons/core-free-icons";
@@ -37,6 +38,7 @@ export type SectionId =
   | "extensions"
   | "import"
   | "remote"
+  | "ssh"
   | "about";
 
 export type SettingsGroupId = "personal" | "integrations" | "about";
@@ -60,6 +62,7 @@ export const SETTINGS_SECTIONS: Array<{
       { id: "archived", icon: <HugeiconsIcon strokeWidth={2} icon={Archive04Icon} /> },
       { id: "usage", icon: <HugeiconsIcon strokeWidth={2} icon={Analytics01Icon} /> },
       { id: "remote", icon: <HugeiconsIcon strokeWidth={2} icon={Wifi01Icon} /> },
+      { id: "ssh", icon: <HugeiconsIcon strokeWidth={2} icon={ServerStack01Icon} /> },
     ],
   },
   {

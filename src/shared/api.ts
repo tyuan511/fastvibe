@@ -44,6 +44,7 @@ import type {
   BrowserProfileInfo,
   BrowserRequest,
 } from "@shared/types";
+import type { RemoteHostProfile, RemoteHostConnectionState } from "@shared/remote-host";
 import type {
   AppUpdateState,
   GitBranch,
@@ -175,6 +176,8 @@ export function createFastVibeApi(t: ApiTransport) {
         cancelled?: boolean;
         /** Answers for a `questions` prompt, positionally matching its question list. */
         answers?: Array<string | null>;
+        /** Plan review action and optional revision feedback. */
+        planAction?: "approve" | "revise" | "ignore";
       }): Promise<void> => t.invoke(Ipc.enginePermissionRespond, payload),
       newSession: (): Promise<void> => t.invoke(Ipc.engineNewSession),
       getState: (conversationId?: string): Promise<EngineSessionState> =>
@@ -299,6 +302,7 @@ export function createFastVibeApi(t: ApiTransport) {
     },
     projects: {
       add: (): Promise<ProjectAddResult | null> => t.invoke(Ipc.projectsAdd),
+      addRemote: (cwd: string): Promise<ProjectAddResult> => t.invoke(Ipc.projectsAddRemote, { cwd }),
       rename: (cwd: string, name: string): Promise<WorkspaceSnapshot> =>
         t.invoke(Ipc.projectsRename, { cwd, name }),
       remove: (cwd: string): Promise<ConversationDeleteResult> =>
@@ -384,6 +388,18 @@ export function createFastVibeApi(t: ApiTransport) {
        * other's changes with their stale copy on the next save.
        */
       onChanged: (listener: (settings: Record<string, unknown>) => void): (() => void) => t.subscribe(Ipc.settingsChanged, listener),
+    },
+    ssh: {
+      hosts: (): Promise<{ saved: RemoteHostProfile[]; discovered: RemoteHostProfile[] }> => t.invoke(Ipc.sshHosts),
+      saveHost: (host: RemoteHostProfile): Promise<{ saved: RemoteHostProfile[]; discovered: RemoteHostProfile[] }> =>
+        t.invoke(Ipc.sshHostSave, { host }),
+      removeHost: (id: string): Promise<{ saved: RemoteHostProfile[]; discovered: RemoteHostProfile[] }> =>
+        t.invoke(Ipc.sshHostRemove, { id }),
+      pickIdentityFile: (): Promise<string | null> => t.invoke(Ipc.sshPickIdentityFile),
+      connect: (hostId: string): Promise<RemoteHostConnectionState> => t.invoke(Ipc.sshConnect, { hostId }),
+      disconnect: (): Promise<RemoteHostConnectionState> => t.invoke(Ipc.sshDisconnect),
+      state: (): Promise<RemoteHostConnectionState> => t.invoke(Ipc.sshState),
+      onState: (listener: (state: RemoteHostConnectionState) => void): (() => void) => t.subscribe(Ipc.sshState, listener),
     },
     /** 远程访问：把这台机器上的 agent 通过网页开放给其他设备。 */
     remote: {

@@ -23,6 +23,8 @@ import { stripAttachmentBlock } from "@/lib/attachments";
 import { i18n } from "@/lib/i18n";
 import { FLoader } from "@/components/f-loader";
 import { groupMessageRows, groupParts, mergeAssistantRun, resolveParts, type MessageRow, type RenderPart } from "@/lib/group-parts";
+import { cn } from "@/lib/utils";
+import { CHAT_COLUMN_CLASS } from "@/lib/chat-layout";
 import type { ChatAttachment, ChatMessage, MessagePart } from "@shared/types";
 import { ImagePreview } from "@/components/image-preview";
 import { AttachmentChip } from "./attachment-chip";
@@ -1003,7 +1005,7 @@ export function MessageList({
           message column can hold it. */}
       <MessageScroller className="@container/thread">
         <MessageScrollerViewport ref={guardViewport} className="scrollbar-thumb-scrollbar">
-          <MessageScrollerContent className="mx-auto w-full max-w-3xl px-6 py-6">
+          <MessageScrollerContent className={cn(CHAT_COLUMN_CLASS, "py-6")}>
             {turns.map((turn) => (
               <MessageGroup key={turn.id} className="gap-5">
                 {turn.rows.map((row) => (

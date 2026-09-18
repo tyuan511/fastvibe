@@ -129,7 +129,14 @@
   },
   "plan": {
     "label": "Plan mode",
-    "exit": "Exit plan mode"
+    "exit": "Exit plan mode",
+    "preview": "Plan",
+    "viewFull": "View full plan",
+    "approve": "Approve and execute",
+    "revise": "Enter feedback",
+    "ignore": "Ignore and stop",
+    "revisionPlaceholder": "Tell the model how to revise the plan…",
+    "hint": "Approval exits plan mode and starts execution"
   },
   "goal": {
     "label": "Goal mode",

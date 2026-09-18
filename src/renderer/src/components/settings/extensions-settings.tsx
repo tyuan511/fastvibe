@@ -8,9 +8,7 @@ import {
   Delete02Icon,
   Download01Icon,
   File01Icon,
-  GithubIcon,
   Loading03Icon,
-  NpmIcon,
   PackageIcon,
   PaintBrushIcon,
   PuzzleIcon,
@@ -22,14 +20,7 @@ import {
 } from "@hugeicons/core-free-icons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Item, ItemActions, ItemContent, ItemDescription, ItemMedia, ItemTitle } from "@/components/ui/item";
 import {
   Empty,
   EmptyDescription,
@@ -386,30 +377,6 @@ function TypeBadge({ type }: { type: string }): JSX.Element {
   );
 }
 
-function MetaLink({
-  label,
-  href,
-  icon,
-}: {
-  label: string;
-  href: string;
-  icon: typeof NpmIcon;
-}): JSX.Element {
-  return (
-    <button
-      type="button"
-      className="inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-xs text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
-      onClick={(event) => {
-        event.stopPropagation();
-        window.open(href, "_blank");
-      }}
-    >
-      <HugeiconsIcon strokeWidth={2} icon={icon} className="size-3.5" />
-      {label}
-    </button>
-  );
-}
-
 function InstalledList({
   packages,
   loaded,
@@ -438,73 +405,33 @@ function InstalledList({
     );
   }
   return (
-    <div className="grid gap-2.5 sm:grid-cols-2">
+    <div className="grid gap-2.5">
       {packages.map((item) => {
         // The loader reports the extension file path, which lives under the
         // package's own node_modules directory, so match on the path not name.
         const state = loaded.find((entry) => entry.path.includes(packageName(item.source)));
         return (
-          <Card key={item.source} size="sm">
-            <CardHeader>
-              <div className="flex min-w-0 items-center gap-2.5">
-                <span
-                  className={cn(
-                    "flex size-9 shrink-0 items-center justify-center rounded-lg",
-                    item.builtin ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground",
-                  )}
-                >
-                  <HugeiconsIcon strokeWidth={1.8} icon={PackageIcon} className="size-4.5" />
-                </span>
-                <div className="min-w-0">
-                  <CardTitle
-                    title={packageName(item.source)}
-                    className="line-clamp-2 break-words text-base leading-5"
-                  >
-                    {packageName(item.source)}
-                  </CardTitle>
-                  <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                    {item.builtin ? t("extensions.builtinWithApp") : item.source}
-                  </p>
-                </div>
+          <Item key={item.source} variant="outline" size="sm" className="items-start gap-3 bg-card/80 p-3 transition-colors hover:border-primary/30 hover:bg-muted/20">
+            <ItemMedia variant="icon" className={cn("mt-0.5 size-9 rounded-xl", item.builtin ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground")}>
+              <HugeiconsIcon strokeWidth={1.8} icon={PackageIcon} className="size-4.5" />
+            </ItemMedia>
+            <ItemContent className="min-w-0 gap-1">
+              <div className="flex min-w-0 items-center gap-2">
+                <ItemTitle title={packageName(item.source)} className="min-w-0 truncate text-base">{packageName(item.source)}</ItemTitle>
+                {item.builtin ? <Badge variant="secondary" className="shrink-0 text-xs font-normal">{t("extensions.builtin")}</Badge> : null}
+                {state?.error ? <Badge variant="destructive" className="shrink-0 text-xs font-normal">{t("extensions.loadFailed")}</Badge> : state ? <Badge variant="secondary" className="shrink-0 text-xs font-normal">{t("extensions.loaded")}</Badge> : null}
               </div>
-              <CardAction className="flex items-center gap-1.5">
-                {item.builtin ? (
-                  <Badge variant="secondary" className="h-4.5 rounded-md px-1.5 text-xs font-normal">
-                    {t("extensions.builtin")}
-                  </Badge>
-                ) : null}
-                {state?.error ? (
-                  <Badge variant="destructive" className="h-4.5 rounded-md px-1.5 text-xs font-normal">
-                    {t("extensions.loadFailed")}
-                  </Badge>
-                ) : state ? (
-                  <Badge variant="secondary" className="h-4.5 rounded-md px-1.5 text-xs font-normal">
-                    {t("extensions.loaded")}
-                  </Badge>
-                ) : null}
-                {item.builtin ? null : (
-                  <Button
-                    size="xs"
-                    variant="outline"
-                    disabled={busy || pending === item.source}
-                    onClick={() => onRemove(item)}
-                  >
-                    {pending === item.source ? (
-                      <HugeiconsIcon strokeWidth={2} icon={Loading03Icon} className="size-3.5 animate-spin" />
-                    ) : (
-                      <HugeiconsIcon strokeWidth={2} icon={Delete02Icon} />
-                    )}
-                    {t("extensions.uninstall")}
-                  </Button>
-                )}
-              </CardAction>
-            </CardHeader>
-            {state?.error ? (
-              <CardContent>
-                <p className="line-clamp-2 text-xs text-destructive">{state.error}</p>
-              </CardContent>
-            ) : null}
-          </Card>
+              <ItemDescription className={cn("line-clamp-1 text-xs", state?.error && "text-destructive")}>{state?.error ?? (item.builtin ? t("extensions.builtinWithApp") : item.source)}</ItemDescription>
+            </ItemContent>
+            {item.builtin ? null : (
+              <ItemActions className="ml-auto shrink-0 self-center">
+                <Button size="xs" variant="outline" disabled={busy || pending === item.source} onClick={() => onRemove(item)}>
+                  {pending === item.source ? <HugeiconsIcon strokeWidth={2} icon={Loading03Icon} className="size-3.5 animate-spin" /> : <HugeiconsIcon strokeWidth={2} icon={Delete02Icon} />}
+                  {t("extensions.uninstall")}
+                </Button>
+              </ItemActions>
+            )}
+          </Item>
         );
       })}
     </div>
@@ -546,91 +473,38 @@ function MarketList({
     );
   }
   return (
-    <div className={cn("grid gap-2.5 sm:grid-cols-2", loading && "opacity-60")}>
+    <div className={cn("grid gap-2.5", loading && "opacity-60")}>
       {page?.packages.map((item) => {
         const isInstalled = installed.has(item.name);
         const isPending = pending === item.name;
         const downloads = formatDownloads(item.downloads);
         return (
-          <Card key={item.name} size="sm">
-            <CardHeader>
-              <div className="flex min-w-0 items-start gap-2.5">
-                <PackageAvatar types={item.types} />
-                <div className="min-w-0 flex-1">
-                  <CardTitle
-                    title={item.name}
-                    className="line-clamp-2 break-words text-base leading-5"
-                  >
-                    {item.name}
-                  </CardTitle>
-                  <div className="mt-1 flex flex-wrap items-center gap-1">
-                    {item.types.slice(0, 2).map((entry) => (
-                      <TypeBadge key={entry} type={entry} />
-                    ))}
-                    {item.version ? (
-                      <span className="text-xs text-muted-foreground">v{item.version}</span>
-                    ) : null}
-                  </div>
-                </div>
+          <Item key={item.name} variant="outline" size="sm" className="items-start gap-3 bg-card/80 p-3 transition-colors hover:border-primary/30 hover:bg-muted/20">
+            <ItemMedia variant="icon" className="mt-0.5 size-9">
+              <PackageAvatar types={item.types} />
+            </ItemMedia>
+            <ItemContent className="min-w-0 gap-1.5">
+              <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                <ItemTitle title={item.name} className="min-w-0 truncate text-base">{item.name}</ItemTitle>
+                {item.types.slice(0, 2).map((entry) => <TypeBadge key={entry} type={entry} />)}
+                {item.version ? <span className="text-xs text-muted-foreground">v{item.version}</span> : null}
               </div>
-              <CardAction>
-                {isInstalled ? (
-                  <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-                    <HugeiconsIcon strokeWidth={2} icon={CheckmarkCircle02Icon} className="size-3.5 text-success" />
-                    {t("extensions.alreadyInstalled")}
-                  </span>
-                ) : (
-                  <Button
-                    size="xs"
-                    variant="secondary"
-                    disabled={pending !== null}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onInstall(item);
-                    }}
-                  >
-                    {isPending ? (
-                      <HugeiconsIcon strokeWidth={2} icon={Loading03Icon} className="size-3.5 animate-spin" />
-                    ) : (
-                      <HugeiconsIcon strokeWidth={2} icon={Download01Icon} />
-                    )}
-                    {t("extensions.install")}
-                  </Button>
-                )}
-              </CardAction>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-2">
-              <p className="line-clamp-2 min-h-10 text-sm leading-5 text-muted-foreground">
-                {item.description}
-              </p>
-              <div className="flex min-w-0 items-center gap-2.5 text-xs text-muted-foreground">
-                {item.author ? (
-                  <span className="inline-flex min-w-0 items-center gap-1">
-                    <HugeiconsIcon strokeWidth={2} icon={UserIcon} className="size-3 shrink-0" />
-                    <span className="truncate">{item.author}</span>
-                  </span>
-                ) : null}
-                {downloads ? (
-                  <span className="inline-flex shrink-0 items-center gap-1">
-                    <HugeiconsIcon strokeWidth={2} icon={Download01Icon} className="size-3" />
-                    {downloads}
-                  </span>
-                ) : null}
-                {item.updatedAt ? (
-                  <span className="inline-flex shrink-0 items-center gap-1">
-                    <HugeiconsIcon strokeWidth={2} icon={Clock01Icon} className="size-3" />
-                    {formatRelativeTime(item.updatedAt)}
-                  </span>
-                ) : null}
+              <ItemDescription className="line-clamp-1">{item.description}</ItemDescription>
+              <div className="flex min-w-0 flex-wrap items-center gap-2.5 pt-0.5 text-xs text-muted-foreground">
+                {item.author ? <span className="inline-flex min-w-0 items-center gap-1"><HugeiconsIcon strokeWidth={2} icon={UserIcon} className="size-3 shrink-0" /><span className="truncate">{item.author}</span></span> : null}
+                {downloads ? <span className="inline-flex shrink-0 items-center gap-1"><HugeiconsIcon strokeWidth={2} icon={Download01Icon} className="size-3" />{downloads}</span> : null}
+                {item.updatedAt ? <span className="inline-flex shrink-0 items-center gap-1"><HugeiconsIcon strokeWidth={2} icon={Clock01Icon} className="size-3" />{formatRelativeTime(item.updatedAt)}</span> : null}
               </div>
-            </CardContent>
-            {item.npmUrl || item.repoUrl ? (
-              <CardFooter className="gap-0.5 py-2">
-                {item.npmUrl ? <MetaLink label="npm" href={item.npmUrl} icon={NpmIcon} /> : null}
-                {item.repoUrl ? <MetaLink label={t("extensions.repo")} href={item.repoUrl} icon={GithubIcon} /> : null}
-              </CardFooter>
-            ) : null}
-          </Card>
+            </ItemContent>
+            <ItemActions className="ml-auto shrink-0 self-center">
+              {isInstalled ? <span className="inline-flex items-center gap-1 text-xs text-muted-foreground"><HugeiconsIcon strokeWidth={2} icon={CheckmarkCircle02Icon} className="size-3.5 text-success" />{t("extensions.alreadyInstalled")}</span> : (
+                <Button size="xs" variant="secondary" disabled={pending !== null} onClick={(event) => { event.stopPropagation(); onInstall(item); }}>
+                  {isPending ? <HugeiconsIcon strokeWidth={2} icon={Loading03Icon} className="size-3.5 animate-spin" /> : <HugeiconsIcon strokeWidth={2} icon={Download01Icon} />}
+                  {t("extensions.install")}
+                </Button>
+              )}
+            </ItemActions>
+          </Item>
         );
       })}
     </div>
