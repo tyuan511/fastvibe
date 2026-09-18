@@ -1,4 +1,4 @@
-import { UI_LANGUAGE_ENV } from "./ai-language";
+import { UI_LANGUAGE_ENV } from "./ai-language.ts";
 
 /**
  * Picks the wording for a user-facing string produced in Main.

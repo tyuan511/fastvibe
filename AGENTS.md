@@ -301,6 +301,27 @@ Below `md` the sidebar overlays as a drawer instead of pushing (`CollapsiblePane
 overlay`), and the right pane is not rendered at all — a 375pt screen has no room for the
 terminal, a diff or the file tree, and the browser pane has no webview to drive anyway.
 
+**The drawer is the whole viewport** (`100vw`), and nothing caps it. It used to take
+`86vw` under a `maxWidth` of the remembered column width, which read as a defensive
+ceiling and was in fact the bug: `clampSidebarWidth` scales its maximum to 40% of the
+viewport, so on a 375pt screen the remembered width came back as **150** and the drawer
+opened as a sliver. The ceiling is gone and the clamp now skips the viewport share on a
+narrow layout entirely — the stored number is a memory of the *desktop's* column, and a
+phone has no business shrinking it, least of all in a `settings.json` the desktop reads.
+
+Three things follow from the drawer covering everything:
+
+- **No backdrop.** There is no dimmed conversation behind it to tap. The button that used
+  to be there sat under a full-screen panel and could never be reached.
+- **No splitter.** `ResizeHandle` is not rendered when narrow: there is no edge to drag,
+  it sat where a thumb scrolls the list, and its drag ended in `writeSidebarWidth` — one
+  stray swipe on a phone rewrote the column width of the desktop it was connected to.
+- **The sidebar's own 收起 is the only way out**, so it has to work. Every control that
+  shows or hides the sidebar goes through `setSidebarCollapsed`
+  (`lib/sidebar-visibility.ts`) and never writes `sidebarCollapsed` directly. Two of them
+  did, and on a phone both did the wrong thing twice at once: the drawer stayed open,
+  because it does not read that key, and the desktop collapsed its sidebar.
+
 The drawer's open/closed state is **local to the device** (`lib/sidebar-visibility.ts`),
 not the persisted `sidebarCollapsed`: that preference lives in one `settings.json` shared
 by every client of this machine, so swiping the drawer open on a phone would otherwise
@@ -310,6 +331,45 @@ collapse the sidebar on the desktop it is connected to.
 keys an `animate` object names and leaves the rest of what it last wrote in place, so a
 branch animating only `width` inherited the drawer's `translateX(-100%)` and parked the
 sidebar off-screen the moment a window crossed the breakpoint.
+
+### 目录变更要广播（`workspace:changed`）
+
+The conversation/project catalog is **pushed**, not polled. Every client used to read it
+once — `conversations.list()` at mount — and never again, so a chat created in one window
+never appeared in another, a delete left a row that opened nothing, and over remote access
+that was the entirety of what a phone ever saw: the sidebar it connected with, frozen.
+
+The notice hangs off `ConversationCatalog.#flush()`, which is the single funnel every
+mutation already reaches through `#write()`. Announcing at the dozen methods that mutate
+the catalog is how the next one added silently stops reaching the other clients — the same
+failure `ipc/broadcast.ts` exists to end — and the 40ms debounce that coalesces the
+`writeFileSync` coalesces the push for free, so one user action is one notice rather than
+one per mutation (「switch this chat to a project」 is four). It fires **after** the write,
+so a client that re-reads anything from disk in response cannot be handed the older state.
+
+`applySnapshot` takes the projects and the conversations. **The active conversation is
+followed separately**, because adopting it is a navigation and has to go down the same
+path a click does — `handleOpen(id, "remote")`, which reloads the transcript and collects
+the abandoned empty draft exactly as a local switch would. It replaces the route rather
+than pushing: the jump was not this person's navigation and does not belong in their back
+stack.
+
+Two things keep that follow from echoing:
+
+- **`setActive` is a no-op for an unchanged id**, so the `conversations.open` a client
+  makes in order to follow announces nothing, and the exchange stops after one hop.
+- **`intendedActiveId`** (`App.tsx`) is the conversation a client believes it *should* be
+  showing, which is not `activeId` — where it has arrived. `openConversation` marks the
+  catalog active before it loads the transcript, so the push overtakes the reply to the
+  very call that caused it; a client comparing against `activeId` alone sees an id it has
+  not reached, concludes somebody else switched, and fires a second identical open. That
+  is a duplicate transcript fetch on every switch, which over a tunnel is the expensive
+  kind. The id is therefore claimed *before* the hop in `handleOpen`, and kept current in
+  `applyOpen` for the paths that cannot know it until their call returns.
+
+A client's own snapshot is not skipped (no `except: origin`): the originator already holds
+the same state as its call's result, so applying it again changes nothing, and threading an
+origin down through the engine to the catalog would buy only that.
 
 ### 会话作用域（每一条引擎调用都要带 `conversationId`）
 

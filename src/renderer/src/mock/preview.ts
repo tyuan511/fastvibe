@@ -358,6 +358,8 @@ const api = {
         (item) => ({ id: item.id, snippet: item.preview }),
       );
     },
+    // Nothing else is writing the catalog in the preview, so this push never fires.
+    onChanged: () => () => undefined,
   },
   projects: {
     add: async () => null,

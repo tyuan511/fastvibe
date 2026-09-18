@@ -9,6 +9,7 @@
  * (`file://`), so it cannot be the source of truth.
  */
 
+import { isNarrowViewport } from "@/lib/sidebar-visibility";
 import { useSettingsStore } from "@/stores/settings";
 
 const WIDTH_KEY = "fastvibe.sidebar.width";
@@ -16,11 +17,22 @@ const MIN_WIDTH = 200;
 const DEFAULT_WIDTH = 288;
 const MAX_WIDTH = 480;
 
-/** Never let the sidebar eat more than this share of the window. */
+/**
+ * Never let the sidebar eat more than this share of the window.
+ *
+ * The share is about the sidebar being a *column* next to a conversation. On a narrow
+ * viewport it is not one — it is a full-screen drawer — and applying the ceiling there
+ * did real damage in both directions: 40% of a 375pt screen is 150, so the remembered
+ * width read back as 150 (a sliver of a drawer, and 134px-wide rows in the drag
+ * overlay), and any write from the phone would have stored that 150 in the preference
+ * the desktop reads for its column. The stored number is a memory of the desktop's
+ * layout; a phone has no business shrinking it.
+ */
 export function clampSidebarWidth(next: number): number {
-  const viewport = typeof window === "undefined" ? MAX_WIDTH : Math.round(window.innerWidth * 0.4);
-  const max = Math.min(MAX_WIDTH, viewport);
-  return Math.round(Math.min(max, Math.max(MIN_WIDTH, next)));
+  const bounded = Math.max(MIN_WIDTH, next);
+  if (typeof window === "undefined" || isNarrowViewport()) return Math.round(Math.min(MAX_WIDTH, bounded));
+  const max = Math.min(MAX_WIDTH, Math.round(window.innerWidth * 0.4));
+  return Math.round(Math.min(max, bounded));
 }
 
 /** Current sidebar width in px, clamped to the usable range. */

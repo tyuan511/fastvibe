@@ -399,6 +399,7 @@ export class PiProcessManager {
   #status: EngineStatus = { state: "idle" };
   #cwd: string;
   #statusListeners = new Set<(status: EngineStatus) => void>();
+  #workspaceListeners = new Set<(snapshot: WorkspaceSnapshot) => void>();
   #eventListeners = new Set<(event: Record<string, unknown>) => void>();
   #readyListeners = new Set<(payload: ConversationReadyEvent) => void>();
   #runtime: ModelRuntime | null = null;
@@ -544,6 +545,12 @@ export class PiProcessManager {
   constructor() {
     this.#paths = getFastVibePaths();
     this.#catalog = new ConversationCatalog(this.#paths.conversationsFile, this.#paths.scratchDir);
+    // Every catalog change, from one place. The alternative was announcing at each of
+    // the dozen methods below that mutate it, which is how a new one silently stops
+    // reaching the other clients — the same failure `ipc/broadcast.ts` exists to end.
+    this.#catalog.onChange = (snapshot) => {
+      for (const listener of this.#workspaceListeners) listener(snapshot);
+    };
     this.#reasoning = new ReasoningStore(this.#paths.reasoningFile);
     this.#usage = usageLedgerFor(this.#paths.usageLedgerFile);
     this.#mcp = new McpManager(this.#paths.mcpFile);
@@ -569,6 +576,8 @@ export class PiProcessManager {
   get status(): EngineStatus { return this.#status; }
   get cwd(): string { return this.#cwd; }
   onStatus(listener: (status: EngineStatus) => void): () => void { this.#statusListeners.add(listener); return () => this.#statusListeners.delete(listener); }
+  /** The conversation/project catalog moved: a chat created, renamed, deleted, opened. */
+  onWorkspaceChange(listener: (snapshot: WorkspaceSnapshot) => void): () => void { this.#workspaceListeners.add(listener); return () => this.#workspaceListeners.delete(listener); }
   onEvent(listener: (event: Record<string, unknown>) => void): () => void { this.#eventListeners.add(listener); return () => this.#eventListeners.delete(listener); }
   onConversationReady(listener: (payload: ConversationReadyEvent) => void): () => void { this.#readyListeners.add(listener); return () => this.#readyListeners.delete(listener); }
   onOAuthEvent(listener: (payload: OAuthEventPayload) => void): () => void { this.#oauthListeners.add(listener); return () => this.#oauthListeners.delete(listener); }

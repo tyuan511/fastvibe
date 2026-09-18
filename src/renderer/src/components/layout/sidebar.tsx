@@ -954,32 +954,43 @@ export function Sidebar({
   return (
     <CollapsiblePanel collapsed={sidebarCollapsed} width={width} side="left" instant={resizing} overlay={narrow}>
     <aside className="relative flex h-full min-h-0 w-full flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
-      <ResizeHandle
-        side="right"
-        onDragStart={() => {
-          startWidth.current = width;
-          collapsing.current = false;
-          setResizing(true);
-        }}
-        onDrag={(delta) => {
-          const next = startWidth.current + delta;
-          // Dragging past the minimum collapses the sidebar instead of clamping
-          // to it; the header toggle (or dragging back out) restores the width.
-          if (next < SIDEBAR_MIN_WIDTH) {
-            if (!collapsing.current) {
-              collapsing.current = true;
-              setSidebarCollapsed(true);
+      {/*
+       * The splitter belongs to the column, not to the drawer.
+       *
+       * A full-screen drawer has no edge to drag and nothing to give width back to, and
+       * the handle sat on top of the conversation list where a thumb scrolls. Worse, its
+       * drag ended in `writeSidebarWidth`, which is the *shared* preference: one stray
+       * swipe on a phone rewrote the width of the column on the desktop it was connected
+       * to.
+       */}
+      {narrow ? null : (
+        <ResizeHandle
+          side="right"
+          onDragStart={() => {
+            startWidth.current = width;
+            collapsing.current = false;
+            setResizing(true);
+          }}
+          onDrag={(delta) => {
+            const next = startWidth.current + delta;
+            // Dragging past the minimum collapses the sidebar instead of clamping
+            // to it; the header toggle (or dragging back out) restores the width.
+            if (next < SIDEBAR_MIN_WIDTH) {
+              if (!collapsing.current) {
+                collapsing.current = true;
+                setSidebarCollapsed(true);
+              }
+              return;
             }
-            return;
-          }
-          applyWidth(next);
-        }}
-        onDragEnd={(delta) => {
-          setResizing(false);
-          const next = startWidth.current + delta;
-          if (next >= SIDEBAR_MIN_WIDTH) writeSidebarWidth(next);
-        }}
-      />
+            applyWidth(next);
+          }}
+          onDragEnd={(delta) => {
+            setResizing(false);
+            const next = startWidth.current + delta;
+            if (next >= SIDEBAR_MIN_WIDTH) writeSidebarWidth(next);
+          }}
+        />
+      )}
       {/* The title row exists to sit around macOS' traffic lights; where the window
           has a title bar of its own, those controls (and the brand under them) are
           up there instead and the sidebar simply starts. */}
@@ -991,7 +1002,15 @@ export function Sidebar({
             className="no-drag text-muted-foreground"
             label={t("sidebar.collapseSidebar")}
             shortcut={toggleSidebarShortcut}
-            onClick={() => updateSettings({ sidebarCollapsed: true })}
+            /*
+             * `setSidebarCollapsed`, not `updateSettings`: on a narrow layout the
+             * sidebar's visibility is the drawer's own state, and writing the preference
+             * directly did the wrong thing twice at once — the drawer stayed open, since
+             * it does not read that key, and the *desktop* this phone was connected to
+             * collapsed its sidebar. This is the only control that closes the drawer now
+             * that it covers the whole screen, so it has to be the one that works.
+             */
+            onClick={() => setSidebarCollapsed(true)}
           >
             <HugeiconsIcon strokeWidth={2} icon={PanelLeftCloseIcon} />
           </IconButton>

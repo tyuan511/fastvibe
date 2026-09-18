@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { uiText } from "./ui-text";
+// Extension spelled out, like `src/main/server/*`, so `node --test` can resolve the
+// chain without the Vite aliases: the catalog's change notice is what every client's
+// conversation list rides on, and that deserves a test that loads the real module.
+import { uiText } from "./ui-text.ts";
 import { readFileSync, writeFileSync } from "node:fs";
 import { basename } from "node:path";
 import type { Conversation, Project, WorkspaceSnapshot } from "@shared/types";
@@ -19,6 +22,14 @@ export class ConversationCatalog {
   #items: Conversation[] = [];
   #activeId: string | undefined;
   #writeTimer: NodeJS.Timeout | null = null;
+  /**
+   * Told after every change, with the snapshot as it now stands.
+   *
+   * Set after construction rather than taken as a constructor argument, because
+   * `#read()` migrates older files and writes during construction — announcing a
+   * snapshot before the object exists is a push nothing could have subscribed to.
+   */
+  onChange: ((snapshot: WorkspaceSnapshot) => void) | null = null;
 
   constructor(file: string, scratchRoot: string) {
     this.#file = file;
@@ -301,6 +312,18 @@ export class ConversationCatalog {
     this.#flush();
   }
 
+  /**
+   * Write, and say what changed.
+   *
+   * The announcement rides the same funnel as the disk write, which is the point. Every
+   * mutation above calls `#write()`, so this is the one place that knows the catalog
+   * moved — and the 40ms debounce that exists to coalesce the `writeFileSync` coalesces
+   * the push for free: one notice per user action rather than one per mutation, of which
+   * a single "switch project" makes several.
+   *
+   * Announcing *after* the write means a client that re-reads in response cannot see a
+   * state older than the one on disk.
+   */
   #flush(): void {
     const payload: CatalogFile = {
       version: 2,
@@ -309,6 +332,7 @@ export class ConversationCatalog {
       conversations: this.#items,
     };
     writeFileSync(this.#file, `${JSON.stringify(payload, null, 2)}\n`);
+    this.onChange?.(this.snapshot());
   }
 }
 

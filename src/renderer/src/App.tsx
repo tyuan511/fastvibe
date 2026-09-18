@@ -377,6 +377,29 @@ export function App(): JSX.Element {
   const setRunInterrupted = useSessionStore((state) => state.setRunInterrupted);
   const setCanResume = useSessionStore((state) => state.setCanResume);
   const restoreId = useRef<string | null>(null);
+  /**
+   * The latest `handleOpen`, so the `workspace:changed` subscription below can mount
+   * once and still call the current one.
+   *
+   * Calling the mount-time closure instead would reach a `revealConversation` holding
+   * the pathname as it was at mount, which compares wrong forever and pushes a history
+   * entry for a route the app is already on.
+   */
+  const openLatest = useRef<((id: string, source?: "user" | "history" | "remote") => Promise<void>) | null>(null);
+  /**
+   * The conversation this client believes it should be showing.
+   *
+   * Not the same as `activeId`, which is where it *has arrived*. The gap between the
+   * two is the whole reason this exists: `openConversation` in Main marks the catalog
+   * active before it loads the transcript, so the `workspace:changed` push (debounced
+   * 40ms) routinely overtakes the reply to the very call that caused it. A client
+   * comparing the push against `activeId` alone sees an id it has not reached yet,
+   * decides someone else must have switched, and fires a second identical open — a
+   * duplicate transcript fetch on every switch, which over a tunnel is the expensive
+   * kind. Claiming the id before the call closes that window, and keeps two pushes in
+   * quick succession (the open, then the abandoned-draft cleanup) from doing it either.
+   */
+  const intendedActiveId = useRef<string | null>(null);
   const draining = useRef(false);
   // One send at a time. A second click / Enter while this send is still being handed
   // over is not a second message — see `handleSubmit`.
@@ -497,6 +520,24 @@ export function App(): JSX.Element {
       store.setSession(payload.state);
       store.setStatus(payload.status);
       store.setExtensionStatus(payload.id, payload.extensionStatus ?? {});
+    });
+    /**
+     * The catalog, whenever anything changes it — this window, a second window, or a
+     * phone over remote access.
+     *
+     * `applySnapshot` takes the projects and the conversations only; the active
+     * conversation is followed separately below, because adopting it is a *navigation*
+     * and has to go through the same path a click does.
+     */
+    const offWorkspace = window.fastvibe.conversations.onChanged((snapshot) => {
+      applySnapshot(snapshot);
+      const next = snapshot.activeId ?? null;
+      const current = useSessionStore.getState().activeId;
+      // Equality is what stops this from echoing: the client that made the change is
+      // already there, and Main's `setActive` is a no-op for an unchanged id, so no
+      // push follows the open this one is about to do.
+      if (!next || next === current || next === intendedActiveId.current) return;
+      void openLatest.current?.(next, "remote");
     });
     const offEvent = onEvent((event) => {
       // An extension command replaced the session (plan-mode's fresh handoff):
@@ -639,6 +680,7 @@ export function App(): JSX.Element {
       offStatus();
       offReady();
       offEvent();
+      offWorkspace();
     };
   }, [applyEvent, applySnapshot, setSession, setStatus]);
 
@@ -853,6 +895,10 @@ export function App(): JSX.Element {
 
   function applyOpen(result: ConversationOpenResult): void {
     applySnapshot(result);
+    // Every path that makes a conversation active locally ends here — a click, a new
+    // chat, a side chat, plan mode's handoff — so this is where the claim is kept
+    // honest for the ones that could not know the id before they called.
+    intendedActiveId.current = result.conversation.id;
     setActiveId(result.conversation.id);
     setMessages(result.messages, result.conversation.id);
     setSession(result.state);
@@ -1302,7 +1348,23 @@ export function App(): JSX.Element {
     }
   }
 
-  async function handleOpen(id: string, source: "user" | "history" = "user", findQuery?: string): Promise<void> {
+  /**
+   * Open a conversation.
+   *
+   * `source` only decides what happens to the URL. A click pushes a history entry; a
+   * back/forward POP has already changed the route and must not push another; a
+   * `"remote"` follow — another window or a phone opened this chat — replaces, because
+   * the jump was not this person's navigation and should not sit in their back stack.
+   * Everything else is the same path on purpose: a followed switch reloads the
+   * transcript and collects the abandoned empty draft exactly as a local one does,
+   * which is what keeps the two clients from ending up in states that differ in ways
+   * nobody chose.
+   */
+  async function handleOpen(
+    id: string,
+    source: "user" | "history" | "remote" = "user",
+    findQuery?: string,
+  ): Promise<void> {
     const store = useSessionStore.getState();
     // A search hit opens the chat *and* the find bar on the query that found it: the
     // palette can say which conversation matched, but only the transcript can show
@@ -1318,15 +1380,25 @@ export function App(): JSX.Element {
       return;
     }
     const previousId = store.activeId;
+    // Claimed before the hop, not after: the push this call is about to cause can beat
+    // its own reply back here (see `intendedActiveId`).
+    intendedActiveId.current = id;
     try {
       const opened = await window.fastvibe.conversations.open(id);
       applyOpen(opened);
       if (source === "user") revealConversation(id);
+      else if (source === "remote") revealConversation(id, true);
       if (previousId && previousId !== id) await discardDraft(previousId);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
   }
+
+  // Handed to the `workspace:changed` subscription, which mounts once and would
+  // otherwise be holding the first render's closure.
+  useEffect(() => {
+    openLatest.current = handleOpen;
+  });
 
   // Back/forward (and the mouse side buttons) POP the hash history. Open the
   // conversation the URL now names, without pushing another entry.
@@ -1678,16 +1750,10 @@ export function App(): JSX.Element {
           sidebar or the right pane for the window's top-right corner. */}
       {HAS_CUSTOM_TITLE_BAR ? <TitleBar onSearch={() => setCommandOpen(true)} /> : null}
       <div className="relative flex min-h-0 flex-1">
-        {/* The drawer's backdrop. Only on a narrow layout, and only while it is open:
-            tapping the conversation behind it is how a phone expects to dismiss it. */}
-        {narrow && !sidebarCollapsed ? (
-          <button
-            type="button"
-            aria-label={t("sidebar.collapseSidebar")}
-            className="absolute inset-0 z-40 bg-black/40"
-            onClick={() => setSidebarCollapsed(true)}
-          />
-        ) : null}
+        {/* No backdrop: the drawer covers the whole viewport, so there is no dimmed
+            conversation behind it to tap. The button that was here sat under a
+            full-screen panel and could never be reached — the sidebar's own
+            「收起」 is what closes it. */}
         <Sidebar
           projects={projects}
           conversations={conversations}

@@ -60,6 +60,15 @@ export const Ipc = {
   conversationsSetProject: "conversations:set-project",
   conversationsSearch: "conversations:search",
   conversationReady: "conversations:ready",
+  /**
+   * Pushed whenever the conversation/project catalog changes, to *every* client.
+   *
+   * The list used to be read once per client, at connect, and never again — so a chat
+   * created on the desktop never appeared on the phone, a delete left a row that opened
+   * nothing, and two desktop windows drifted apart the same way. A push, not a method,
+   * because the client has nothing to ask about: it cannot know that something changed.
+   */
+  workspaceChanged: "workspace:changed",
   projectsAdd: "projects:add",
   projectsRename: "projects:rename",
   projectsRemove: "projects:remove",

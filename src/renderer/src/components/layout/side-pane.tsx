@@ -34,6 +34,7 @@ import {
 import { cn } from "@/lib/utils";
 import { ResizeHandle } from "@/components/resize-handle";
 import { CollapsiblePanel } from "@/components/layout/collapsible-panel";
+import { setSidebarCollapsed } from "@/lib/sidebar-visibility";
 import { useShortcutLabel } from "@/lib/use-shortcuts";
 import { useSettingsStore } from "@/stores/settings";
 import { MIN_WIDTH, useSidePaneStore, type SidePaneTab, sidePaneTabTitle } from "@/stores/side-pane";
@@ -91,7 +92,6 @@ function CollapseButton(): JSX.Element {
 
 function SidebarCollapsedChrome({ onNewChat }: { onNewChat: () => void }): JSX.Element {
   const { t } = useTranslation("sidepane");
-  const updateSettings = useSettingsStore((state) => state.update);
   const toggleSidebarShortcut = useShortcutLabel("toggleSidebar");
   const newChatShortcut = useShortcutLabel("newChat");
   return (
@@ -105,7 +105,10 @@ function SidebarCollapsedChrome({ onNewChat }: { onNewChat: () => void }): JSX.E
           className="text-muted-foreground"
           label={t("pane.expandSidebar")}
           shortcut={toggleSidebarShortcut}
-          onClick={() => updateSettings({ sidebarCollapsed: false })}
+          // Through the layout-aware helper, so a narrow layout opens its drawer
+          // instead of writing the column preference every client of this machine
+          // shares. See `lib/sidebar-visibility.ts`.
+          onClick={() => setSidebarCollapsed(false)}
         >
           <HugeiconsIcon strokeWidth={2} icon={PanelLeftOpenIcon} />
         </IconButton>

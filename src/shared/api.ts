@@ -277,6 +277,15 @@ export function createFastVibeApi(t: ApiTransport) {
         t.invoke(Ipc.conversationsCreateSide, payload),
       search: (query: string): Promise<ConversationSearchHit[]> =>
         t.invoke(Ipc.conversationsSearch, { query }),
+      /**
+       * The catalog changed somewhere — another window, or a phone over remote access.
+       *
+       * Sent to every client including the one whose call caused it, which is the
+       * simpler contract and costs nothing: the originator already holds the same
+       * snapshot as the call's own result, so applying it again changes nothing.
+       */
+      onChanged: (listener: (snapshot: WorkspaceSnapshot) => void): (() => void) =>
+        t.subscribe(Ipc.workspaceChanged, listener),
     },
     projects: {
       add: (): Promise<ProjectAddResult | null> => t.invoke(Ipc.projectsAdd),

@@ -24,10 +24,11 @@ export const PANEL_COLLAPSE_TRANSITION = {
  * Live resize passes `instant` so the splitter follows the pointer. Collapse
  * and expand always spring, even if a drag just crossed the minimum.
  *
- * `overlay` switches it from pushing to covering. A phone has no width to give: the
- * sidebar's minimum alone is most of a 375pt screen, so there it slides over the
- * conversation as a drawer instead of squeezing it into a strip. Same component, because
- * the panel is the same panel — only what it does to its neighbour changes.
+ * `overlay` switches it from pushing to covering, and covers the whole viewport. A phone
+ * has no width to give: the sidebar's minimum alone is most of a 375pt screen, so there
+ * it slides over the conversation as a full-screen drawer instead of squeezing it into a
+ * strip. Same component, because the panel is the same panel — only what it does to its
+ * neighbour changes.
  */
 export function CollapsiblePanel({
   collapsed,
@@ -71,7 +72,7 @@ export function CollapsiblePanel({
    * mis-timed one, and it only appears when the viewport crosses the breakpoint.
    */
   const animate = overlay
-    ? { x: collapsed ? (side === "right" ? "100%" : "-100%") : 0, width: "86vw" }
+    ? { x: collapsed ? (side === "right" ? "100%" : "-100%") : 0, width: "100vw" }
     : { x: 0, width: collapsed ? 0 : fill ? "auto" : width };
 
   return (
@@ -89,9 +90,16 @@ export function CollapsiblePanel({
           : cn(fill ? "flex-1" : "shrink-0", side === "right" ? "justify-end" : "justify-start"),
         className,
       )}
-      // The remembered column width is routinely wider than the phone now covered by it,
-      // so the drawer takes 86vw and this is only a ceiling.
-      style={overlay ? { maxWidth: width } : undefined}
+      /*
+       * Nothing caps the drawer's width.
+       *
+       * It used to be capped at the remembered column width, on the theory that a
+       * desktop's 288px was wider than the phone covering it. On a phone that number is
+       * not a ceiling, it is *the* width — and `clampSidebarWidth` scaled its maximum to
+       * 40% of the viewport, so a 375pt screen read the remembered width back as 150 and
+       * the drawer opened as a sliver with the conversation showing beside it. A phone
+       * has nothing to show beside it: the drawer is the screen.
+       */
       aria-hidden={collapsed}
       inert={collapsed || undefined}
     >

@@ -837,6 +837,12 @@ app.whenReady().then(async () => {
   engine.onConversationReady((payload) => {
     broadcast(Ipc.conversationReady, payload);
   });
+  // The conversation list, to everyone. Without this a client read the catalog once at
+  // connect and never learned of another one's chats — invisible between two desktop
+  // windows, and the whole of what a phone saw over remote access.
+  engine.onWorkspaceChange((snapshot) => {
+    broadcast(Ipc.workspaceChanged, snapshot);
+  });
   engine.onOAuthEvent((payload) => {
     // The flow hands us a URL to visit; opening it here is what the CLI does with a
     // browser open, and the renderer shows the same URL so a machine where that fails
