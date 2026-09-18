@@ -69,6 +69,8 @@ const DENIED = new Map<string, string>([
   [Ipc.remoteStop, "远程访问的设置只能在本机更改"],
   [Ipc.remoteListDevices, "远程访问的设置只能在本机更改"],
   [Ipc.remoteRevokeDevice, "远程访问的设置只能在本机更改"],
+  [Ipc.remoteTunnelTools, "远程访问的设置只能在本机更改"],
+  [Ipc.remoteTunnelSet, "远程访问的设置只能在本机更改"],
 
   // (c) A request to any URL the caller names, carrying any credential the caller
   // names, issued from this machine and from this network. That is a probe into

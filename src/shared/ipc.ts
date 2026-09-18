@@ -142,7 +142,10 @@ export const Ipc = {
   remoteStop: "remote:stop",
   remoteListDevices: "remote:list-devices",
   remoteRevokeDevice: "remote:revoke-device",
-  /** Pushed when the server starts, stops or gains a client. */
+  /** 内网穿透: which tunnel binaries this machine has, and which one to run. */
+  remoteTunnelTools: "remote:tunnel-tools",
+  remoteTunnelSet: "remote:tunnel-set",
+  /** Pushed when the server starts, stops, gains a client, or the tunnel changes phase. */
   remoteState: "remote:state",
 } as const;
 
@@ -231,6 +234,47 @@ export type StartRequest = {
   cwd?: string;
 };
 
+/**
+ * Which tunnel is running in front of the server.
+ *
+ * `off` → none. `starting` → the tool is up and has not printed a URL yet. `online` →
+ * `url` is the address to hand a phone. `error` → `error` says why, and `output` holds
+ * the tail of what the tool itself said about it.
+ */
+export type RemoteTunnelProvider = "cloudflared" | "ngrok";
+export type RemoteTunnelPhase = "off" | "starting" | "online" | "error";
+
+export type RemoteTunnelState = {
+  provider: RemoteTunnelProvider | null;
+  phase: RemoteTunnelPhase;
+  url: string | null;
+  error: string | null;
+  output: string[];
+  /**
+   * The failure was a missing or rejected credential (ngrok's authtoken).
+   *
+   * A flag rather than a sentence for the pane to match on, because it selects a
+   * different *control*: exactly one command fixes it, and the pane puts that command on
+   * screen with a copy button instead of an error the user has to interpret.
+   */
+  needsAuth: boolean;
+};
+
+/** One tunnel binary, as found on this machine. */
+export type RemoteToolInfo = {
+  installed: boolean;
+  path: string | null;
+  version: string | null;
+  /**
+   * Whether the credential this tool needs is on this machine: `true` yes, `false`
+   * positively not, `null` not applicable (Cloudflare needs no account) or unknowable.
+   * Only `false` is acted on, so a check that cannot tell never blocks anybody.
+   */
+  authenticated: boolean | null;
+};
+
+export type RemoteTunnelTools = Record<RemoteTunnelProvider, RemoteToolInfo>;
+
 /** The remote server's state, as the settings pane and the sidebar show it. */
 export type RemoteServerState = {
   running: boolean;
@@ -242,6 +286,22 @@ export type RemoteServerState = {
   clients: number;
   /** Failed logins since the last success; the throttle grows with this. */
   failedLogins: number;
+  /**
+   * The tunnel, which is what makes the loopback address above reachable at all.
+   *
+   * Part of this state rather than its own channel: the pane draws one card out of the
+   * two, and two broadcasts would let it render a public URL over a stopped server for
+   * as long as the second push took to arrive.
+   */
+  tunnel: RemoteTunnelState;
+  /**
+   * The provider the user chose, which outlives the process it names.
+   *
+   * `tunnel.provider` is null while nothing runs, so the pane's select needs somewhere
+   * else to read the choice back from — otherwise a failed start resets the control to
+   * 关闭 and hides the retry.
+   */
+  tunnelChoice: RemoteTunnelProvider | null;
 };
 
 /** One client that has logged in, without anything secret. */

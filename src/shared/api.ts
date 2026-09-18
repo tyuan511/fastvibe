@@ -378,6 +378,11 @@ export function createFastVibeApi(t: ApiTransport) {
       listDevices: (): Promise<import("@shared/ipc").RemoteDeviceInfo[]> => t.invoke(Ipc.remoteListDevices),
       revokeDevice: (id: string): Promise<import("@shared/ipc").RemoteDeviceInfo[]> =>
         t.invoke(Ipc.remoteRevokeDevice, { id }),
+      tunnelTools: (): Promise<import("@shared/ipc").RemoteTunnelTools> => t.invoke(Ipc.remoteTunnelTools),
+      /** Pick a tunnel, or `null` for none. Re-picking the current one restarts it. */
+      setTunnel: (
+        provider: import("@shared/ipc").RemoteTunnelProvider | null,
+      ): Promise<import("@shared/ipc").RemoteServerState> => t.invoke(Ipc.remoteTunnelSet, { provider }),
       onState: (listener: (state: import("@shared/ipc").RemoteServerState) => void): (() => void) => t.subscribe(Ipc.remoteState, listener),
     },
     stats: {

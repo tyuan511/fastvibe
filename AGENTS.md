@@ -138,10 +138,8 @@ exists to refuse. What it gives up is a page going *through the user's own tunne
 still not a way in: the first frame must carry a device token, and the only place to get one
 is `POST /api/login`, which a cross-origin page cannot complete (no CORS headers, so the
 preflight fails). The token is what keeps a stranger out; this check keeps the browser from
-being used as the transport. The settings pane says as much out loud, since the row can only
-show `127.0.0.1:7777` — an address no phone can open: while the server is running it prints
-`remote.tunnelHint` under it, naming Cloudflare Tunnel (free, no signup) and the
-`--host-header=preserve` ngrok needs.
+being used as the transport. Accepting all three shapes is also why the app needs no
+`--host-header` flag when it runs a tunnel itself — see 内网穿透 below.
 
 **The heartbeat is for the tunnel, not for this machine.** A tunnel or reverse proxy cuts a
 quiet WebSocket — Cloudflare's edge after 100 seconds, nginx's `proxy_read_timeout` after 60
@@ -158,6 +156,98 @@ The password is exchanged once for a device token (`POST /api/login`); tokens tr
 every later connection, are stored only as hashes, and are revoked one device at a time.
 Guessing is slowed by a global exponential backoff — global rather than per address
 because behind a tunnel every request arrives from the same one.
+
+### 内网穿透（`src/main/server/tunnel.ts`）
+
+The server listens on loopback, so on its own the settings pane could only ever show
+`127.0.0.1:7777` — an address no phone can open. That used to be answered with a
+paragraph of instructions, and a paragraph of instructions is a feature nobody finishes.
+`TunnelRunner` runs the tunnel instead: `cloudflared tunnel --url http://127.0.0.1:<port>`
+or `ngrok http <port>`, with the public URL read out of the tool's own output and shown
+in the pane as a link and a QR code (`components/ui/qr-code.tsx`).
+
+- **Neither binary ships.** Both are ~30 MB third-party downloads with their own update
+  channels, and one of them needs an account; bundling either would mean shipping a
+  stale copy of somebody else's client. So "not installed" is a first-class state:
+  `probeTunnelTools()` answers `remote:tunnel-tools` by finding each command on PATH
+  *and* running `--version` — a shim pointing at a deleted binary is on PATH and cannot
+  execute — and the pane renders the install command for this platform with the ngrok
+  authtoken step next to it. `findExecutable` searches PATH itself rather than trusting
+  `spawn`, because the pane has to answer "is it installed" before anything is run;
+  `applyShellPath()` has already put Homebrew on `process.env.PATH` by then, which is
+  what makes a GUI-launched Electron see a `brew install cloudflared` at all.
+- **A binary is not the same as a working setup, and ngrok proves it.** With no authtoken
+  it does not fail and it does not exit: it logs the refusal and drops into a reconnect
+  loop. So picking it used to buy a minute of 启动中…, a timeout that blamed the clock,
+  and the real reason twelve lines up in the output. Three things answer that:
+  - **`spec.credential.present()` runs before anything is spawned**, so choosing ngrok
+    with no token says so at the moment of the choice. It reads the two places ngrok
+    itself reads — `NGROK_AUTHTOKEN` and the config file (platform path plus the v2
+    `~/.ngrok2/ngrok.yml`) — because `ngrok config check` only validates the file's
+    *syntax* and answers "valid" for a config with no token in it. It is three-valued:
+    only a definite `false` stops a run, so an unreadable file (`null`) never locks
+    anybody out of a tunnel that works.
+  - **`spec.fatal(line)` ends a run from the output stream.** Separate from `problem`,
+    which only picks a sentence to quote once something has ended; this one *ends* it,
+    then kills the child so it stops reconnecting behind a pane that has already given
+    the answer. Matched on ngrok's own codes (`ERR_NGROK_4018`, `105`/`107`/`108`) first
+    — those are the part of the message ngrok keeps stable — and kept narrow, because
+    anything matched here turns a tunnel that might have come up into a failure telling
+    the user to go fix their account.
+  - **`needsAuth` on the status is a flag, not a sentence to match on.** It selects a
+    different *control*: this is the one failure with exactly one command that fixes it,
+    so the pane shows `ngrok config add-authtoken <token>` with a copy button and the
+    token page, and suppresses the generic failure block so there is one 重试, not two.
+    The pane reaches that block from either direction — the probe (before any run) or
+    `needsAuth` (after one was refused) — and only the second can catch a token that is
+    present and *wrong*, which no file check can see.
+
+  Both halves of "can this run here" are behind the test seam (`launch` and
+  `credential` deps). Whether the dep or the real check answers is decided by whether
+  the dep **exists**, never by what it returned: `??` read a deliberate `null` as no
+  answer and fell through to the machine's real config, which is the one outcome that
+  must not stop a run.
+- **No `--host-header` is passed to ngrok.** `#originAllowed` accepts all three shapes a
+  tunnel produces, so every version works untouched — while a flag value one of them
+  spells differently would be a failure to start rather than a fallback.
+- **`--no-autoupdate` for cloudflared.** Its default is to replace its own binary and
+  restart, which on a Homebrew install is a write it cannot make and on any install is a
+  restart that silently changes the URL the user is looking at.
+- **A run is identified by a number, and a retired run cannot write status.** A tunnel is
+  stopped four ways — the switch, the server stopping, the URL never arriving, the app
+  quitting — and each races the child's own `exit`, which lands after the decision. Every
+  listener checks the `#run` it captured; without that, turning the tunnel off and
+  straight back on reported 「隧道已断开」 over a tunnel that was at that moment coming up.
+  For the same reason the start timeout records its reason *before* killing the child, so
+  the exit it provokes cannot bury it under a sentence about a signal.
+- **`start()` never rejects, and never restarts by itself.** Its callers are a settings
+  pane with a place to show `status.error` and the launch-time restore path, where a
+  tunnel that cannot start must not stop the window opening — so the failure belongs in
+  the pushed status, not in a promise only one of them can catch. Nothing retries on its
+  own either: a quick tunnel that reconnects gets a *new* hostname, and silently swapping
+  it would invalidate the QR code on screen without saying so.
+- **The URL comes from a named field where there is one.** ngrok's `--log-format=json`
+  has `url`, and only that is read: its own failures quote URLs — the authtoken page is
+  one — so a pattern loose enough to accept a reserved domain reads the link out of the
+  error and reports it as the tunnel. cloudflared has no such field, so its quick-tunnel
+  hostname is matched (`*.trycloudflare.com`) out of the ASCII banner it prints.
+- **The tool's last lines are part of the state** (`tunnel.output`). The useful sentence
+  is almost always the tool's, not ours — ngrok names the command that fixes a missing
+  authtoken — and sending the user to the app log for it is sending them somewhere they
+  will not go. Output alone is not broadcast, though: both tools narrate startup over a
+  dozen lines, and each would otherwise be a push to every window for a string nothing
+  renders until `#fail` sends the whole tail with the reason.
+- **The choice outlives the process.** `remoteTunnel` in `settings.json` is a preference,
+  which is why `RemoteServerState` carries both `tunnel.provider` (null while nothing
+  runs) and `tunnelChoice`: without the second, a failed start would reset the pane's
+  select to 关闭 and hide the retry. `remote:stop` leaves the choice alone and
+  `remote:clear-password` clears it, matching what each of those switches means.
+- **The tunnel goes down before the server and up after it.** Stopped the other way round
+  it spends a moment publishing a port with nothing behind it, which a phone reads as a
+  dead site rather than as remote access having been switched off.
+
+`?tunnel=online`, `?tunnel=missing` and `?tunnel=noauth` on `mock.html` render the three
+states in a browser — the real thing needs a password, a port and somebody else's binary.
 
 ### 网页客户端（`remote.html`）
 

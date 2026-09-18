@@ -120,6 +120,8 @@ test("the denied set is exactly what the UI explains, so a new denial cannot go 
     "remote:set-password",
     "remote:start",
     "remote:stop",
+    "remote:tunnel-set",
+    "remote:tunnel-tools",
     "update:check",
     "update:download",
     "update:install",

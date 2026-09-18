@@ -7,8 +7,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { cleanError } from "@/lib/ipc-error";
-import type { RemoteDeviceInfo, RemoteServerState } from "@shared/ipc";
+import type { RemoteDeviceInfo, RemoteServerState, RemoteTunnelProvider } from "@shared/ipc";
 import { SettingsGroup, SettingsRow } from "./settings-group";
+import { RemoteTunnel } from "./remote-tunnel";
 
 /**
  * 远程访问: turn this machine's agent into a server another device can reach.
@@ -108,6 +109,11 @@ export function RemoteSettings(): JSX.Element {
     const next = enabled
       ? await run(() => window.fastvibe.remote.start())
       : await run(() => window.fastvibe.remote.stop());
+    if (next) setState(next);
+  }
+
+  async function setTunnel(provider: RemoteTunnelProvider | null): Promise<void> {
+    const next = await run(() => window.fastvibe.remote.setTunnel(provider));
     if (next) setState(next);
   }
 
@@ -235,15 +241,17 @@ export function RemoteSettings(): JSX.Element {
           {/*
            * What the address above actually is.
            *
-           * Loopback is where this server listens, not where a client goes — so the row
-           * could only ever show a string no phone can open, next to a switch that says
-           * remote access is on. The pairing people need is the tunnel: bring one, point
-           * it here. The two named services are the two whose Host handling this server
-           * accepts, and only ngrok needs a flag to get there.
+           * Loopback is where this server listens, not where a client goes, so the row
+           * can only ever show a string no phone can open. The tunnel below is what turns
+           * it into one — the app runs it now rather than printing instructions — and
+           * this line stays only to say why the address above is not the answer, for
+           * anyone who decides to bring their own.
            */}
           {state.running && address ? (
             <p className="px-1 text-xs leading-5 text-muted-foreground">{t("remote.tunnelHint", { address })}</p>
           ) : null}
+
+          <RemoteTunnel state={state} busy={busy} onSet={(provider) => void setTunnel(provider)} />
 
           <SettingsGroup title={t("remote.devices")}>
             {devices.length ? (

@@ -454,15 +454,17 @@ const api = {
     usage: async () => USAGE,
   },
   // Remote access is a real server in the main process; the preview has none to show,
-  // so it renders as never configured and every action is a no-op.
+  // so every action is a no-op over one of the two fixtures `?tunnel=` picks.
   remote: {
-    getState: async () => ({ running: false, host: "127.0.0.1", port: null, configured: false, clients: 0, failedLogins: 0 }),
-    setPassword: async () => ({ running: false, host: "127.0.0.1", port: null, configured: true, clients: 0, failedLogins: 0 }),
-    clearPassword: async () => ({ running: false, host: "127.0.0.1", port: null, configured: false, clients: 0, failedLogins: 0 }),
-    start: async () => ({ running: false, host: "127.0.0.1", port: null, configured: false, clients: 0, failedLogins: 0 }),
-    stop: async () => ({ running: false, host: "127.0.0.1", port: null, configured: false, clients: 0, failedLogins: 0 }),
-    listDevices: async () => [],
+    getState: async () => REMOTE_STATE,
+    setPassword: async () => ({ ...REMOTE_STATE, configured: true }),
+    clearPassword: async () => REMOTE_OFF,
+    start: async () => REMOTE_STATE,
+    stop: async () => REMOTE_OFF,
+    listDevices: async () => REMOTE_DEVICES,
     revokeDevice: async () => [],
+    tunnelTools: async () => REMOTE_TOOLS,
+    setTunnel: async () => REMOTE_STATE,
     onState: () => () => undefined,
   },
   // The browser-use bridge is main-process driven: in the preview nothing ever
@@ -472,6 +474,115 @@ const api = {
     respond: () => undefined,
   },
 };
+
+/* ------------------------------------------------------------------ 远程访问 fixtures */
+
+/**
+ * 远程访问 in the preview, in one of three shapes.
+ *
+ * The default is a machine nobody has set up, which is the pane's first screen and the
+ * one that has to read as an invitation rather than as a failure. The other two are the
+ * ends of the tunnel story, and neither can be reached in a browser otherwise — the real
+ * thing needs a password, a port and somebody else's binary:
+ *
+ * - `?tunnel=online`: a running server with a Cloudflare quick tunnel in front of it,
+ *   which is the only way to see the public address and its QR code here.
+ * - `?tunnel=missing`: a server running with ngrok chosen and nothing installed, which
+ *   is the state most machines are actually in the first time the pane is opened.
+ */
+const TUNNEL_IDLE = {
+  provider: null,
+  phase: "off" as const,
+  url: null,
+  error: null,
+  output: [],
+  needsAuth: false,
+};
+
+const REMOTE_OFF = {
+  running: false,
+  host: "127.0.0.1",
+  port: null,
+  configured: false,
+  clients: 0,
+  failedLogins: 0,
+  tunnel: TUNNEL_IDLE,
+  tunnelChoice: null,
+};
+
+const REMOTE_ONLINE = {
+  running: true,
+  host: "127.0.0.1",
+  port: 7777,
+  configured: true,
+  clients: 1,
+  failedLogins: 0,
+  tunnel: {
+    ...TUNNEL_IDLE,
+    provider: "cloudflared" as const,
+    phase: "online" as const,
+    url: "https://fluffy-panda-rides-again.trycloudflare.com",
+  },
+  tunnelChoice: "cloudflared" as const,
+};
+
+const REMOTE_MISSING = {
+  ...REMOTE_ONLINE,
+  clients: 0,
+  tunnel: TUNNEL_IDLE,
+  tunnelChoice: "ngrok" as const,
+};
+
+/** ngrok installed, chosen, and refused for want of an authtoken. */
+const REMOTE_NOAUTH = {
+  ...REMOTE_ONLINE,
+  clients: 0,
+  tunnel: {
+    ...TUNNEL_IDLE,
+    provider: "ngrok" as const,
+    phase: "error" as const,
+    error: "ngrok 认证失败：还没有配置可用的 authtoken",
+    output: [
+      '{"lvl":"eror","msg":"authentication failed","err":"Usage of ngrok requires a verified account and authtoken. ERR_NGROK_4018"}',
+    ],
+    needsAuth: true,
+  },
+  tunnelChoice: "ngrok" as const,
+};
+
+const tunnelFixture = params.get("tunnel");
+
+const REMOTE_STATE =
+  tunnelFixture === "online"
+    ? REMOTE_ONLINE
+    : tunnelFixture === "missing"
+      ? REMOTE_MISSING
+      : tunnelFixture === "noauth"
+        ? REMOTE_NOAUTH
+        : REMOTE_OFF;
+
+const REMOTE_DEVICES =
+  tunnelFixture === "online"
+    ? [{ id: "device-1", label: "iPhone", createdAt: Date.now() - 86_400_000, lastSeenAt: Date.now() - 120_000 }]
+    : [];
+
+/**
+ * What each fixture needs of the probe.
+ *
+ * `?tunnel=noauth` is the one that needs ngrok *installed*: the whole point of that
+ * state is a binary that is present and cannot authenticate, which is a different block
+ * in the pane from a binary that is not there at all.
+ */
+const REMOTE_TOOLS =
+  tunnelFixture === "noauth"
+    ? {
+        cloudflared: { installed: true, path: "/opt/homebrew/bin/cloudflared", version: "cloudflared version 2026.9.0", authenticated: null },
+        ngrok: { installed: true, path: "/opt/homebrew/bin/ngrok", version: "ngrok version 3.30.0", authenticated: false },
+      }
+    : {
+        cloudflared: { installed: true, path: "/opt/homebrew/bin/cloudflared", version: "cloudflared version 2026.9.0", authenticated: null },
+        ngrok: { installed: false, path: null, version: null, authenticated: false },
+      };
 
 window.fastvibe = api as unknown as typeof window.fastvibe;
 
