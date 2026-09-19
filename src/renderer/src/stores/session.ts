@@ -651,7 +651,12 @@ function reduceEvents(state: SessionStore, events: EngineEvent[]): Partial<Sessi
       // start another attempt. Only now can a queued follow-up safely be held.
       const owner = typeof event.conversationId === "string" ? event.conversationId : state.activeId;
       if (owner && queued.some((item) => item.conversationId === owner && !item.sending)) {
-        queuePause = runInterrupted === "error" ? "error" : "stopped";
+        // `stopReason: "aborted"` is an engine outcome, not proof that the user
+        // clicked Stop: teardown, a provider abort, and retry cancellation can all
+        // produce it. The only authoritative user-stop marker is the explicit
+        // pause set by `handleAbort`; preserve it, and classify every other
+        // interrupted run as an error so this copy can never lie.
+        queuePause = queuePauseByConversation[owner] === "stopped" ? "stopped" : "error";
         queuePauseByConversation = { ...queuePauseByConversation, [owner]: queuePause };
       }
     }
@@ -866,13 +871,13 @@ export const useSessionStore = create<SessionStore>((set, get) => {
       // left to clear it.
       const mine = !session?.conversationId || !state.activeId || session.conversationId === state.activeId;
       const conversationId = mine ? state.activeId : null;
-      const hasQueued = conversationId
-        ? state.queued.some((item) => item.conversationId === conversationId)
-        : false;
-      const resumedQueuePause =
-        mine && conversationId && session?.canResume && hasQueued
-          ? { ...state.queuePauseByConversation, [conversationId]: "stopped" as const }
-          : state.queuePauseByConversation;
+      // `canResume` only says that the transcript can be continued. It does not say
+      // why the run stopped: a state refresh can observe a resumable transcript after
+      // an error, a reload, or a retry failure as well. Inferring `stopped` here made
+      // any queued follow-up show “由于你中断了当前响应” even when no abort happened.
+      // Queue pauses are owned by the live event verdict (or handleAbort), both of
+      // which have an actual stop reason; a state snapshot must not invent one.
+      const resumedQueuePause = state.queuePauseByConversation;
       return {
         session,
         streaming: mine ? (session?.running ?? false) : state.streaming,
