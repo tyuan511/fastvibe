@@ -8,6 +8,8 @@ import type {
   MessagePart,
   ToolCallBlock,
 } from "@shared/types";
+import { extractPromptAttachments } from "@shared/attachment-metadata";
+import { isAbortOutcome } from "@shared/abort";
 import { i18n } from "@/lib/i18n";
 
 export type ApplyResult = {
@@ -71,7 +73,7 @@ function contentText(content: unknown): string {
 
 function userRowFromEngine(message: Record<string, unknown>): ChatMessage {
   const text = contentText(message.content);
-  const attachments: ChatAttachment[] = [];
+  const attachments: ChatAttachment[] = extractPromptAttachments(text);
   if (Array.isArray(message.content)) {
     for (const part of message.content) {
       if (!isRecord(part) || part.type !== "image" || typeof part.data !== "string") continue;
@@ -708,10 +710,7 @@ function applyEvent(
     }
     if (innerType === "error") {
       nextStreaming = false;
-      const aborted =
-        asString(inner.reason) === "aborted" ||
-        (isRecord(inner.error) && inner.error.stopReason === "aborted") ||
-        (isRecord(inner.message) && inner.message.stopReason === "aborted");
+      const aborted = isAbortOutcome(inner);
       // The round-trip stopped here — a failure or a user abort is still an end, and
       // a failed turn never gets the authoritative transcript re-stamp (the reload is
       // skipped so the error bubble survives), so this is the only reading it gets.

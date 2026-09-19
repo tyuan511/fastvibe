@@ -1,3 +1,6 @@
+packages:
+  - "apps/*"
+
 # Keep the default virtual store: electron-builder's pnpm collector resolves each
 # dependency from the path `pnpm list` reports, and under `nodeLinker: hoisted`
 # pnpm still reports `.pnpm/...` paths that no longer exist, so every dependency
@@ -8,12 +11,15 @@
 # build script must be listed or strictDepBuilds aborts the install.
 allowBuilds:
   '@google/genai': false
+  '@parcel/watcher': false
+  '@swc/core': false
   electron: true
   electron-winstaller: false
   esbuild: true
   koffi: false
   node-pty: true
   protobufjs: false
+  unrs-resolver: false
 
 minimumReleaseAgeExclude:
   - electron@44.4.0

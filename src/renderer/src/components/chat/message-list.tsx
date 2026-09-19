@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { AlertCircleIcon, Copy01Icon, PencilEdit02Icon, RotateCcwIcon, Tick02Icon } from "@hugeicons/core-free-icons";
+import { AlertCircleIcon, Copy01Icon, GitForkIcon, PencilEdit02Icon, RotateCcwIcon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Message, MessageContent, MessageFooter, MessageGroup } from "@/components/ui/message";
 import {
@@ -122,12 +122,17 @@ function ActionButton({
 
 function MessageActions({
   message,
+  forkEntryId,
+  onFork,
   onRetry,
   onEdit,
   showTimestamp,
   elapsed,
 }: {
   message: ChatMessage;
+  /** Last persisted assistant entry in a visually merged run; never its `running:` row. */
+  forkEntryId?: string;
+  onFork?: (entryId: string) => void;
   onRetry?: (message: ChatMessage) => void;
   onEdit?: (message: ChatMessage) => void;
   showTimestamp: boolean;
@@ -168,6 +173,11 @@ function MessageActions({
       {message.role === "user" && onEdit ? (
         <ActionButton label={t("message.edit")} onClick={() => onEdit(message)}>
           <HugeiconsIcon strokeWidth={2} icon={PencilEdit02Icon} className="size-3.5" />
+        </ActionButton>
+      ) : null}
+      {message.role === "assistant" && forkEntryId && onFork ? (
+        <ActionButton label={t("message.fork")} onClick={() => onFork(forkEntryId)}>
+          <HugeiconsIcon strokeWidth={2} icon={GitForkIcon} className="size-3.5" />
         </ActionButton>
       ) : null}
       {onRetry ? (
@@ -316,6 +326,7 @@ function ChatMessageRowImpl({
   streaming,
   onRetry,
   onEdit,
+  onFork,
   showThinking,
   showTimestamp,
   collapseRuns,
@@ -324,6 +335,7 @@ function ChatMessageRowImpl({
   streaming: boolean;
   onRetry?: (message: ChatMessage) => void;
   onEdit?: (message: ChatMessage, text: string) => void;
+  onFork?: (entryId: string) => void;
   showThinking: boolean;
   showTimestamp: boolean;
   collapseRuns: boolean;
@@ -333,6 +345,16 @@ function ChatMessageRowImpl({
   const [editing, setEditing] = useState(false);
   useEffect(() => setEditing(false), [message.id]);
   const isUser = message.role === "user";
+  // A live snapshot appends `running:<id>` to the persisted round-trips in this
+  // visual run. Fork only from the last real SDK entry, never that display row.
+  const forkEntryId = useMemo(() => {
+    if (message.role !== "assistant") return undefined;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const candidate = messages[index];
+      if (candidate.role === "assistant" && !candidate.id.startsWith("running:")) return candidate.id;
+    }
+    return undefined;
+  }, [message.role, messages]);
   const beginEdit = useCallback(() => setEditing(true), []);
   const submitEdit = useCallback(
     (text: string) => {
@@ -594,6 +616,8 @@ function ChatMessageRowImpl({
         {streaming ? null : (
           <MessageActions
             message={message}
+            forkEntryId={forkEntryId}
+            onFork={onFork}
             onRetry={onRetry}
             onEdit={onEdit ? beginEdit : undefined}
             showTimestamp={showTimestamp}
@@ -628,6 +652,7 @@ const ChatMessageRow = memo(ChatMessageRowImpl, (prev, next) => {
     prev.collapseRuns === next.collapseRuns &&
     prev.onRetry === next.onRetry &&
     prev.onEdit === next.onEdit &&
+    prev.onFork === next.onFork &&
     sameMessages(prev.messages, next.messages)
   );
 });
@@ -879,6 +904,7 @@ function ThreadRow({
   amendable,
   onRetry,
   onEdit,
+  onFork,
   showThinking,
   showTimestamp,
   collapseRuns,
@@ -889,6 +915,7 @@ function ThreadRow({
   amendable: boolean;
   onRetry?: (message: ChatMessage) => void;
   onEdit?: (message: ChatMessage, text: string) => void;
+  onFork?: (entryId: string) => void;
   showThinking: boolean;
   showTimestamp: boolean;
   collapseRuns: boolean;
@@ -908,6 +935,7 @@ function ThreadRow({
         streaming={streaming && last && !isUser}
         onRetry={amendable ? onRetry : undefined}
         onEdit={amendable ? onEdit : undefined}
+        onFork={onFork}
         showThinking={showThinking}
         showTimestamp={showTimestamp}
         collapseRuns={collapseRuns}
@@ -928,6 +956,7 @@ export function MessageList({
   loading = false,
   onRetry,
   onEdit,
+  onFork,
   showThinking = true,
   showTimestamp = true,
   collapseRuns = false,
@@ -942,6 +971,8 @@ export function MessageList({
   loading?: boolean;
   onRetry?: (message: ChatMessage) => void;
   onEdit?: (message: ChatMessage, text: string) => void;
+  /** Omit in read-only/secondary panes so their transcripts cannot fork the main catalog. */
+  onFork?: (entryId: string) => void;
   showThinking?: boolean;
   showTimestamp?: boolean;
   /** Fold each reply's process into one 「用时 …」 block (设置 → 对话). */
@@ -1017,6 +1048,7 @@ export function MessageList({
                     amendable={row.id === lastUserRowId}
                     onRetry={onRetry}
                     onEdit={onEdit}
+                    onFork={onFork}
                     showThinking={showThinking}
                     showTimestamp={showTimestamp}
                     collapseRuns={collapseRuns}

@@ -10,6 +10,12 @@ export const Ipc = {
   engineContinue: "engine:continue",
   engineClearQueue: "engine:clear-queue",
   engineReplaceSteering: "engine:replace-steering",
+  engineQueueAdd: "engine:queue-add",
+  engineQueueCancel: "engine:queue-cancel",
+  engineQueueRecall: "engine:queue-recall",
+  engineQueueSendNow: "engine:queue-send-now",
+  engineQueueReorder: "engine:queue-reorder",
+  engineQueueResume: "engine:queue-resume",
   engineCompact: "engine:compact",
   engineGetCommands: "engine:get-commands",
   engineGetExtensions: "engine:get-extensions",
@@ -41,6 +47,7 @@ export const Ipc = {
   engineSetInterrupt: "engine:set-interrupt",
   engineSetAutoCompact: "engine:set-auto-compact",
   engineBranch: "engine:branch",
+  engineFork: "engine:fork",
   engineGetMessages: "engine:get-messages",
   /** Transcript + the turn in flight, read at one instant (`ConversationSnapshot`). */
   engineGetSnapshot: "engine:get-snapshot",
@@ -87,6 +94,7 @@ export const Ipc = {
   workspaceGitCreateBranch: "workspace:git-create-branch",
   workspaceGitStage: "workspace:git-stage",
   workspaceGitCommit: "workspace:git-commit",
+  workspaceGitGenerateCommitMessage: "workspace:git-generate-commit-message",
   workspaceGitDiff: "workspace:git-diff",
   workspaceGitUnstage: "workspace:git-unstage",
   workspaceGitDiscard: "workspace:git-discard",
@@ -217,6 +225,9 @@ export type GitStatus = {
   branch?: string;
   changed: number;
   staged: number;
+  /** Text-line totals across the tracked working tree relative to HEAD. */
+  additions: number;
+  deletions: number;
   ahead?: number;
   behind?: number;
   files: Array<{ path: string; index: string; worktree: string }>;

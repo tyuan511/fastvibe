@@ -1,5 +1,6 @@
 import { appendFileSync, readFileSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
+import { FORK_USAGE_SESSION_FIELD } from "./session-fork.ts";
 
 /**
  * One finalized assistant turn, in the raw terms the engine reported it.
@@ -113,8 +114,15 @@ export async function parseSessionTurns(file: string): Promise<ParsedSession> {
       }
     }
 
+    // Forked transcripts retain the copied entry id but have a new session header.
+    // The per-entry origin keeps inherited usage on its original identity, so the
+    // transcript/ledger union counts it once even after either conversation is deleted.
+    const usageSessionId =
+      typeof entry[FORK_USAGE_SESSION_FIELD] === "string" && entry[FORK_USAGE_SESSION_FIELD]
+        ? String(entry[FORK_USAGE_SESSION_FIELD])
+        : sessionId;
     turns.push({
-      sessionId,
+      sessionId: usageSessionId,
       entryId,
       provider: typeof message.provider === "string" ? message.provider : current?.provider ?? "unknown",
       model: typeof message.model === "string" ? message.model : current?.model ?? "unknown",
@@ -136,7 +144,10 @@ export async function parseSessionTurns(file: string): Promise<ParsedSession> {
   // collide with a real session id, accepting that such a file will not dedup. Stamp the
   // fallback onto every turn too, so `capture()` can still record a damaged transcript.
   const resolvedId = sessionId || `file:${file}`;
-  for (const turn of turns) turn.sessionId = resolvedId;
+  for (const turn of turns) {
+    // Only turns without an explicit fork origin still carry the empty header id.
+    if (!turn.sessionId) turn.sessionId = resolvedId;
+  }
   const result = { sessionId: resolvedId, turns };
   sessionCache.set(file, { ...result, mtimeMs: info.mtimeMs, size: info.size });
   return result;

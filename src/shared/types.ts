@@ -169,6 +169,8 @@ export type ChatAttachment = {
   mimeType?: string;
   dataUrl?: string;
   path?: string;
+  /** In-memory text for a long paste represented as a file-style chip. */
+  text?: string;
 };
 
 export type ChatMessage = {
@@ -226,17 +228,20 @@ export type SubagentConfig = {
   tools: string[];
   /** provider/model, or undefined to inherit the parent agent's model. */
   model?: string;
+  /** Reasoning effort. Legacy templates without one migrate to `medium`. */
+  thinkingLevel: ThinkingLevel;
   systemPrompt: string;
   source: "builtin" | "custom";
 };
 
 export type SubagentDraft = {
-  /** Omit for a new custom agent. Builtins may only update their model. */
+  /** Omit for a new custom agent. Builtins may only update model/reasoning overrides. */
   id?: string;
   name: string;
   description: string;
   tools: string[];
   model?: string;
+  thinkingLevel?: ThinkingLevel;
   systemPrompt: string;
 };
 
@@ -501,16 +506,27 @@ export type QueueBehavior = "steer" | "followUp";
 export type QueuePauseReason = "stopped" | "error";
 
 export type QueuedPrompt = {
+  /** Stable Main-issued identity; queue operations always address this id. */
   id: string;
-  /** Conversation that owns this renderer-side follow-up. */
   conversationId: string;
+  /** Text shown in the queue tray. */
   text: string;
   behavior: QueueBehavior;
   attachments?: ChatAttachment[];
-  /** Handed to the engine as a steer; waiting to be injected into the live run. */
+  /** True while the exact message object is still waiting in the SDK queue. */
   sending?: boolean;
-  /** Exact payload passed to `engine.steer`, used to match delivery. */
+  /** True only after the SDK agent loop has dequeued the object for injection. */
+  claimed?: boolean;
+  /** Exact engine payload, retained so a pending item survives a process restart. */
   sentText?: string;
+};
+
+export type ConversationQueueState = {
+  conversationId: string;
+  /** Monotonic Main revision; clients ignore an older RPC reply after a newer push. */
+  revision: number;
+  items: QueuedPrompt[];
+  pause: QueuePauseReason | null;
 };
 
 export type EngineEvent = {
@@ -887,6 +903,8 @@ export type ConversationSnapshot = {
   messages: ChatMessage[];
   /** Whether a run or a compaction is in flight for this conversation. */
   running: boolean;
+  /** Main-owned durable message queue at the same instant as the transcript. */
+  queue: ConversationQueueState;
   /**
    * Extension prompts parked waiting for a human, as the `extension_ui_request` events
    * that announced them. A prompt is delivered only as an event, so without these a
@@ -925,6 +943,8 @@ export type ConversationOpenResult = WorkspaceSnapshot & {
    * to. Absent/empty means nothing was published.
    */
   extensionStatus?: Record<string, string>;
+  /** Main-owned durable queue, included so reload/open never starts from an empty tray. */
+  queue: ConversationQueueState;
 };
 
 /** Pushed when a conversation finishes initialising in the background. */

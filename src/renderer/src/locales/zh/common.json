@@ -15,7 +15,11 @@
     "full": "完全访问",
     "askDesc": "编辑外部文件和使用互联网时始终询问",
     "smartDesc": "仅对检测到的风险操作请求批准",
-    "fullDesc": "可不受限制地访问互联网和你电脑上的任何文件"
+    "fullDesc": "可不受限制地访问互联网和你电脑上的任何文件",
+    "fullConfirmTitle": "开启完全访问？",
+    "fullConfirmDescription": "开启后，智能体可以不经询问访问互联网，并读取、修改或删除你电脑上的任何文件。此确认只会显示一次，之后会记住你的选择。",
+    "fullConfirmCancel": "取消",
+    "fullConfirmAction": "确认开启"
   },
   "time": {
     "justNow": "刚刚",

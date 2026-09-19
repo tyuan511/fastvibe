@@ -19,7 +19,8 @@
  "errors": {
   "cannotStart": "Could not start a chat. Please try again shortly.",
   "switchModel": "Could not switch model. Please try again shortly.",
-  "thinking": "Could not set the reasoning level."
+  "thinking": "Could not set the reasoning level.",
+  "fork": "Could not fork the chat. Please try again shortly."
  },
  "workspace": {
   "noProject": "No project",
@@ -88,6 +89,7 @@
   "archive": "Archive",
   "waitingForYou": "Waiting for your approval",
   "rename": "Rename",
+  "fork": "Fork chat",
   "delete": "Delete",
   "pin": "Pin",
   "unpin": "Unpin",

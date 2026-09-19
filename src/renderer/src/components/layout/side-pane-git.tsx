@@ -275,7 +275,8 @@ function DiffPane({
           <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} />
         </IconButton>
       </div>
-      <ScrollArea className="min-h-0 flex-1">
+      {/* Unlike the file list, a diff needs visible scrollbars on both axes. */}
+      <div className="min-h-0 flex-1 overflow-auto">
         {diffLoading ? (
           <div className="flex items-center justify-center py-10">
             <Spinner className="size-4 text-muted-foreground" />
@@ -287,7 +288,7 @@ function DiffPane({
         ) : (
           <p className="px-4 py-10 text-center text-xs leading-5 text-muted-foreground">{t("git.noDiff")}</p>
         )}
-      </ScrollArea>
+      </div>
     </div>
   );
 }

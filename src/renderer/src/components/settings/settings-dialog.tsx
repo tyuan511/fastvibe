@@ -14,7 +14,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import type { EngineModel, FastVibeModel, ImportRunResult, PermissionMode, WorkspaceSnapshot } from "@shared/types";
+import type { EngineModel, FastVibeModel, ImportRunResult, WorkspaceSnapshot } from "@shared/types";
 import { useSettingsStore } from "@/stores/settings";
 import { i18n } from "@/lib/i18n";
 import { UI_LANGUAGES, UI_LANGUAGE_LABELS, type UiLanguage } from "@/lib/language";
@@ -40,6 +40,7 @@ import { ShortcutsSettings } from "./shortcuts-settings";
 import { AboutSettings } from "./about-settings";
 import { SubagentsSettings } from "./subagents-settings";
 import { SettingsGroup as Group, SettingsRow as Row } from "./settings-group";
+import { usePermissionModeSelection } from "@/components/permission-mode-provider";
 import {
   SETTINGS_SECTIONS,
   settingsGroupLabel,
@@ -84,6 +85,7 @@ export function SettingsDialog({
 }): JSX.Element | null {
   const settings = useSettingsStore((state) => state.settings);
   const update = useSettingsStore((state) => state.update);
+  const { setPermissionMode } = usePermissionModeSelection();
   // 始终允许 rules, so the revoke button can say how many there are and disable itself.
   const remembered = settings.permissionAlways ?? [];
   const { t } = useTranslation("settings");
@@ -330,11 +332,7 @@ export function SettingsDialog({
                     <Select
                       items={permissionModeItems()}
                       value={settings.defaultPermissionMode}
-                      onValueChange={(value) =>
-                        // Also retarget the live mode, so changing the default from here
-                        // does not leave the running session on the old mode.
-                        update({ defaultPermissionMode: value as PermissionMode, permissionMode: value as PermissionMode })
-                      }
+                      onValueChange={(value) => setPermissionMode(value as typeof settings.defaultPermissionMode)}
                     >
                       <SelectTrigger size="sm" className="w-44">
                         <SelectValue />

@@ -1,5 +1,5 @@
 import { useSessionStore } from "@/stores/session";
-import type { ChatMessage, EngineSessionState, PromptImage, SessionStats } from "@shared/types";
+import type { ChatMessage, ConversationOpenResult, EngineSessionState, PromptImage, SessionStats } from "@shared/types";
 
 type FastVibeEngine = typeof window.fastvibe.engine;
 
@@ -63,6 +63,10 @@ export const engine = {
 
   branch: (entryId: string, conversationId?: string): Promise<ChatMessage[]> =>
     window.fastvibe.engine.branch(entryId, conversationId ?? activeId()),
+
+  /** Copy a chat at an entry (or its current tip) without rewinding the source chat. */
+  fork: (entryId?: string, conversationId?: string): Promise<ConversationOpenResult> =>
+    window.fastvibe.engine.fork(entryId, conversationId ?? activeId()),
 
   getMessages: (conversationId?: string): Promise<ChatMessage[]> =>
     window.fastvibe.engine.getMessages(conversationId ?? activeId()),

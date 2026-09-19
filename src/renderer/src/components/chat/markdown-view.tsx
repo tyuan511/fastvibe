@@ -71,7 +71,7 @@ const CodeBlock = memo(function CodeBlock({ language, code }: { language?: strin
       {diff ? (
         <DiffView text={code} className="mt-0 rounded-none border-0 bg-transparent" />
       ) : (
-        <div className="code-shiki overflow-x-auto p-3 text-sm leading-5">
+        <div className="code-shiki overflow-x-auto text-sm leading-5">
           {html ? (
             <div dangerouslySetInnerHTML={{ __html: html }} />
           ) : (

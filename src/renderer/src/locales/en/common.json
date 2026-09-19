@@ -15,7 +15,11 @@
     "full": "Full access",
     "askDesc": "Always ask before editing outside files or using the network",
     "smartDesc": "Ask only for detected risky operations",
-    "fullDesc": "Unrestricted access to the internet and any file on your computer"
+    "fullDesc": "Unrestricted access to the internet and any file on your computer",
+    "fullConfirmTitle": "Enable full access?",
+    "fullConfirmDescription": "The agent will be able to access the internet and read, modify, or delete any file on your computer without asking. This warning appears only once, and your choice will be remembered.",
+    "fullConfirmCancel": "Cancel",
+    "fullConfirmAction": "Enable full access"
   },
   "time": {
     "justNow": "Just now",

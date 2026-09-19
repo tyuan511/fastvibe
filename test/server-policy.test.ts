@@ -77,7 +77,7 @@ test("a denial explains itself", () => {
 
 test("the calls a remote client actually needs are allowed", () => {
   for (const method of [
-    Ipc.enginePrompt, Ipc.engineAbort, Ipc.engineGetSnapshot, Ipc.engineGetMessages,
+    Ipc.enginePrompt, Ipc.engineAbort, Ipc.engineFork, Ipc.engineGetSnapshot, Ipc.engineGetMessages,
     Ipc.enginePermissionRespond, Ipc.conversationsList, Ipc.conversationsOpen,
     Ipc.engineGetModels, Ipc.engineSetModel, Ipc.settingsGet,
   ]) {

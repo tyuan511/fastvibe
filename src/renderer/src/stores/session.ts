@@ -4,6 +4,7 @@ import type {
   ChatMessage,
   ContextUsage,
   Conversation,
+  ConversationQueueState,
   EngineModel,
   FastVibeModel,
   EngineSessionState,
@@ -24,9 +25,10 @@ import type {
   SubagentInfo,
   WorkspaceSnapshot,
 } from "@shared/types";
-import { applyEngineEvent, lastUserIsLocal, userMessageText } from "@/lib/apply-engine-event";
+import { applyEngineEvent } from "@/lib/apply-engine-event";
 import { i18n } from "@/lib/i18n";
 import { resolvePath } from "@/lib/workspace-path";
+import { canRestoreComposer } from "@/lib/composer-race";
 import { useSidePaneStore } from "@/stores/side-pane";
 
 type SessionStore = {
@@ -94,8 +96,17 @@ type SessionStore = {
   /** String-line widgets (`ctx.ui.setWidget`), bucketed by conversation. */
   extensionWidgets: Record<string, Record<string, ExtensionWidget>>;
   attachments: ChatAttachment[];
+  /**
+   * Composer payloads are conversation-owned. Attachments used to be one global slot,
+   * so opening another chat either leaked the previous files into it or cleared them
+   * before returning. The version lets async queue edits restore only the reservation
+   * they made, never text the user typed while an IPC call was in flight.
+   */
+  composerDrafts: Record<string, { draft: string; attachments: ChatAttachment[]; version: number }>;
   /** Renderer-side follow-ups for every conversation, retained across chat switches. */
   queued: QueuedPrompt[];
+  /** Last Main revision applied per conversation; rejects stale multi-window replies. */
+  queueRevisionByConversation: Record<string, number>;
   /** Pause reasons retained per conversation; `queuePause` mirrors the active chat. */
   queuePauseByConversation: Record<string, QueuePauseReason | null>;
   queuePause: QueuePauseReason | null;
@@ -172,22 +183,21 @@ type SessionStore = {
   resolvePermission: (id: string) => void;
   dismissNotice: (id: string) => void;
   addUserMessage: (text: string, attachments?: ChatAttachment[]) => void;
+  /** Remove a fresh prompt that Main rejected before it entered the transcript. */
+  rollbackOptimisticPrompt: () => void;
   dropEmptyAssistant: () => void;
   setAttachments: (attachments: ChatAttachment[]) => void;
-  enqueue: (item: QueuedPrompt) => void;
-  removeQueued: (id: string) => void;
-  /** Drag-to-reorder: persist the full id order the sortable list produced. */
-  setQueuedOrder: (ids: string[]) => void;
-  prependQueued: (item: QueuedPrompt) => void;
-  /** Mark a queued row as 发送中 and record the payload the engine was given. */
-  markQueuedSending: (id: string, sentText: string) => void;
-  /** 撤回: put a 发送中 row back to pending. */
-  unmarkQueuedSending: (id: string) => void;
-  /** Abort dropped the engine's steering queue; those rows are pending again. */
-  unmarkAllQueuedSending: () => void;
-  clearQueued: () => void;
-  setQueuePause: (reason: QueuePauseReason | null) => void;
-  setQueuePauseFor: (conversationId: string, reason: QueuePauseReason | null) => void;
+  /** Atomically replace the active conversation's complete composer payload. */
+  setComposer: (draft: string, attachments: ChatAttachment[]) => void;
+  /** Restore an async operation's payload iff that conversation has not changed since. */
+  restoreComposer: (
+    conversationId: string,
+    draft: string,
+    attachments: ChatAttachment[],
+    expectedVersion: number,
+  ) => boolean;
+  /** Replace one conversation's queue from Main's authoritative snapshot. */
+  setQueueState: (queue: ConversationQueueState) => void;
   /** Clear the interrupted-run marker once a resume (or fresh prompt) takes over. */
   setRunInterrupted: (reason: "aborted" | "error" | null) => void;
   /**
@@ -603,17 +613,6 @@ function reduceEvents(state: SessionStore, events: EngineEvent[]): Partial<Sessi
    */
   let broadcast: { id: string; running: boolean } | undefined;
   for (const event of events) {
-    // A steered user turn has no optimistic copy. Once the engine injects it,
-    // drop the matching 发送中 row so the tray no longer shows it.
-    const delivered = userMessageText(event);
-    if (delivered !== undefined && !lastUserIsLocal(messages)) {
-      const owner = typeof event.conversationId === "string" ? event.conversationId : state.activeId;
-      const sending = queued.filter((item) => item.sending && item.conversationId === owner);
-      if (sending.length > 0) {
-        const match = sending.find((item) => item.sentText === delivered) ?? sending[0];
-        queued = queued.filter((item) => item.id !== match.id);
-      }
-    }
     const applied = applyEngineEvent(messages, event, streaming, partBoundary);
     messages = applied.messages;
     streaming = applied.streaming;
@@ -644,21 +643,6 @@ function reduceEvents(state: SessionStore, events: EngineEvent[]): Partial<Sessi
     } else if (event.type === "agent_start" || event.type === "turn_start") {
       // A new run (resume, retry, or fresh prompt) clears the interrupted state.
       runInterrupted = null;
-    }
-    if (event.type === "agent_settled" && runInterrupted) {
-      // `agent_settled` is the first reliable terminal boundary: retries,
-      // auto-compaction and extension continuations have all had their chance to
-      // start another attempt. Only now can a queued follow-up safely be held.
-      const owner = typeof event.conversationId === "string" ? event.conversationId : state.activeId;
-      if (owner && queued.some((item) => item.conversationId === owner && !item.sending)) {
-        // `stopReason: "aborted"` is an engine outcome, not proof that the user
-        // clicked Stop: teardown, a provider abort, and retry cancellation can all
-        // produce it. The only authoritative user-stop marker is the explicit
-        // pause set by `handleAbort`; preserve it, and classify every other
-        // interrupted run as an error so this copy can never lie.
-        queuePause = queuePauseByConversation[owner] === "stopped" ? "stopped" : "error";
-        queuePauseByConversation = { ...queuePauseByConversation, [owner]: queuePause };
-      }
     }
     const parsed = parsePermission(event);
     if (parsed) {
@@ -853,7 +837,9 @@ export const useSessionStore = create<SessionStore>((set, get) => {
   extensionStatus: {},
   extensionWidgets: {},
   attachments: [],
+  composerDrafts: {},
   queued: [],
+  queueRevisionByConversation: {},
   queuePauseByConversation: {},
   queuePause: null,
   runInterrupted: null,
@@ -922,7 +908,9 @@ export const useSessionStore = create<SessionStore>((set, get) => {
         pendingPermissions: prune(state.pendingPermissions),
         waitingForUser: prune(state.waitingForUser),
         running: prune(state.running),
+        composerDrafts: prune(state.composerDrafts),
         queued: state.queued.filter((item) => live.has(item.conversationId)),
+        queueRevisionByConversation: prune(state.queueRevisionByConversation),
         queuePauseByConversation: prune(state.queuePauseByConversation),
       };
     }),
@@ -930,11 +918,22 @@ export const useSessionStore = create<SessionStore>((set, get) => {
     // The right pane is conversation-bound: switching chats swaps its tabs, its
     // active tab and its collapsed/maximized state onto the incoming chat.
     useSidePaneStore.getState().setScope(activeId);
-    set((state) => ({
-      activeId,
-      permission: activePermission(state.pendingPermissions, activeId),
-      queuePause: activeId ? state.queuePauseByConversation[activeId] ?? null : null,
-    }));
+    set((state) => {
+      if (state.activeId === activeId) {
+        return {
+          permission: activePermission(state.pendingPermissions, activeId),
+          queuePause: activeId ? state.queuePauseByConversation[activeId] ?? null : null,
+        };
+      }
+      const composer = activeId ? state.composerDrafts[activeId] : undefined;
+      return {
+        activeId,
+        draft: composer?.draft ?? "",
+        attachments: composer?.attachments ?? [],
+        permission: activePermission(state.pendingPermissions, activeId),
+        queuePause: activeId ? state.queuePauseByConversation[activeId] ?? null : null,
+      };
+    });
   },
   setMessages: (messages, conversationId) => {
     dropQueued();
@@ -968,7 +967,22 @@ export const useSessionStore = create<SessionStore>((set, get) => {
       else delete extensionStatus[conversationId];
       return { extensionStatus };
     }),
-  setDraft: (draft) => set({ draft }),
+  setDraft: (draft) =>
+    set((state) => {
+      if (!state.activeId) return { draft };
+      const previous = state.composerDrafts[state.activeId];
+      return {
+        draft,
+        composerDrafts: {
+          ...state.composerDrafts,
+          [state.activeId]: {
+            draft,
+            attachments: state.attachments,
+            version: (previous?.version ?? 0) + 1,
+          },
+        },
+      };
+    }),
   setError: (error) => set({ error }),
   setCommands: (commands) => set({ commands }),
   setSubagents: (subagents) =>
@@ -1057,6 +1071,16 @@ export const useSessionStore = create<SessionStore>((set, get) => {
         running: activeRunning(state, startsTurn),
       };
     }),
+  rollbackOptimisticPrompt: () =>
+    set((state) => {
+      const messages = [...state.messages];
+      const assistant = messages.at(-1);
+      if (assistant?.role === "assistant" && !assistant.text && !assistant.thinking && assistant.tools.length === 0) {
+        messages.pop();
+      }
+      if (messages.at(-1)?.role === "user" && messages.at(-1)?.id.startsWith("local:")) messages.pop();
+      return { messages, streaming: false, running: activeRunning(state, false) };
+    }),
   dropEmptyAssistant: () =>
     set((state) => {
       const last = state.messages.at(-1);
@@ -1071,70 +1095,74 @@ export const useSessionStore = create<SessionStore>((set, get) => {
       }
       return { streaming: false, running: activeRunning(state, false) };
     }),
-  setAttachments: (attachments) => set({ attachments }),
-  enqueue: (item) => set((state) => ({ queued: [...state.queued, item] })),
-  removeQueued: (id) => set((state) => ({ queued: state.queued.filter((item) => item.id !== id) })),
-  setQueuedOrder: (ids) =>
+  setAttachments: (attachments) =>
     set((state) => {
-      const rank = new Map(ids.map((id, index) => [id, index]));
-      // Unknown ids keep their relative order at the end, so a stale drop can't drop items.
-      const queued = [...state.queued].sort((a, b) => {
-        const left = rank.get(a.id);
-        const right = rank.get(b.id);
-        if (left === undefined && right === undefined) return 0;
-        if (left === undefined) return 1;
-        if (right === undefined) return -1;
-        return left - right;
-      });
-      return { queued };
-    }),
-  prependQueued: (item) => set((state) => ({ queued: [item, ...state.queued] })),
-  markQueuedSending: (id, sentText) =>
-    set((state) => ({
-      queued: state.queued.map((item) => (item.id === id ? { ...item, sending: true, sentText } : item)),
-    })),
-  unmarkQueuedSending: (id) =>
-    set((state) => ({
-      queued: state.queued.map((item) =>
-        item.id === id ? { ...item, sending: false, sentText: undefined } : item,
-      ),
-    })),
-  unmarkAllQueuedSending: () =>
-    set((state) => ({
-      queued: state.queued.map((item) =>
-        item.conversationId === state.activeId && item.sending
-          ? { ...item, sending: false, sentText: undefined }
-          : item,
-      ),
-    })),
-  clearQueued: () =>
-    set((state) => {
-      const conversationId = state.activeId;
-      if (!conversationId) return { queuePause: null };
-      const queuePauseByConversation = { ...state.queuePauseByConversation };
-      delete queuePauseByConversation[conversationId];
+      if (!state.activeId) return { attachments };
+      const previous = state.composerDrafts[state.activeId];
       return {
-        queued: state.queued.filter((item) => item.conversationId !== conversationId),
-        queuePauseByConversation,
-        queuePause: null,
+        attachments,
+        composerDrafts: {
+          ...state.composerDrafts,
+          [state.activeId]: {
+            draft: state.draft,
+            attachments,
+            version: (previous?.version ?? 0) + 1,
+          },
+        },
       };
     }),
-  setQueuePause: (queuePause) => {
-    const conversationId = get().activeId;
-    if (!conversationId) {
-      set({ queuePause });
-      return;
-    }
-    get().setQueuePauseFor(conversationId, queuePause);
-  },
-  setQueuePauseFor: (conversationId, reason) =>
+  setComposer: (draft, attachments) =>
     set((state) => {
-      const queuePauseByConversation = { ...state.queuePauseByConversation };
-      if (reason) queuePauseByConversation[conversationId] = reason;
-      else delete queuePauseByConversation[conversationId];
+      if (!state.activeId) return { draft, attachments };
+      const previous = state.composerDrafts[state.activeId];
       return {
+        draft,
+        attachments,
+        composerDrafts: {
+          ...state.composerDrafts,
+          [state.activeId]: {
+            draft,
+            attachments,
+            version: (previous?.version ?? 0) + 1,
+          },
+        },
+      };
+    }),
+  restoreComposer: (conversationId, draft, attachments, expectedVersion) => {
+    let restored = false;
+    set((state) => {
+      const previous = state.composerDrafts[conversationId];
+      if (!previous || !canRestoreComposer(previous.version, expectedVersion)) return state;
+      restored = true;
+      const next = {
+        draft,
+        attachments,
+        version: previous.version + 1,
+      };
+      return {
+        composerDrafts: { ...state.composerDrafts, [conversationId]: next },
+        ...(state.activeId === conversationId ? { draft, attachments } : {}),
+      };
+    });
+    return restored;
+  },
+  setQueueState: (queue) =>
+    set((state) => {
+      if ((state.queueRevisionByConversation[queue.conversationId] ?? -1) > queue.revision) return state;
+      const queuePauseByConversation = { ...state.queuePauseByConversation };
+      if (queue.pause) queuePauseByConversation[queue.conversationId] = queue.pause;
+      else delete queuePauseByConversation[queue.conversationId];
+      return {
+        queued: [
+          ...state.queued.filter((item) => item.conversationId !== queue.conversationId),
+          ...queue.items,
+        ],
+        queueRevisionByConversation: {
+          ...state.queueRevisionByConversation,
+          [queue.conversationId]: queue.revision,
+        },
         queuePauseByConversation,
-        queuePause: state.activeId === conversationId ? reason : state.queuePause,
+        queuePause: state.activeId === queue.conversationId ? queue.pause : state.queuePause,
       };
     }),
   setRunInterrupted: (runInterrupted) => set({ runInterrupted }),
@@ -1169,23 +1197,7 @@ export const useSessionStore = create<SessionStore>((set, get) => {
   },
   applyEvent: (event) => {
     const owner = typeof event.conversationId === "string" ? event.conversationId : null;
-    // A steer can be delivered while its conversation is in the background. The
-    // transcript event is intentionally filtered below, but the renderer-side row
-    // still has to disappear or it would come back forever when the chat is reopened.
-    if (owner && !belongsToTranscript(event, get().activeId)) {
-      const delivered = userMessageText(event);
-      if (delivered !== undefined) {
-        set((state) => {
-          const sending = state.queued.filter(
-            (item) => item.conversationId === owner && item.sending,
-          );
-          if (sending.length === 0) return state;
-          const match = sending.find((item) => item.sentText === delivered) ?? sending[0];
-          return { queued: state.queued.filter((item) => item.id !== match.id) };
-        });
-      }
-      return;
-    }
+    if (owner && !belongsToTranscript(event, get().activeId)) return;
     if (COALESCED_EVENTS.has(event.type)) {
       queued.push(event);
       scheduleFlush();
@@ -1208,6 +1220,8 @@ export const useSessionStore = create<SessionStore>((set, get) => {
       stats: null,
       error: null,
       activeId: null,
+      draft: "",
+      attachments: [],
       permission: null,
       // Prompts of *other* conversations are deliberately kept, like `running`: a
       // background chat parked on an approval must not lose its question because the
@@ -1230,6 +1244,11 @@ export const useSessionStore = create<SessionStore>((set, get) => {
       queued: state.activeId
         ? state.queued.filter((item) => item.conversationId !== state.activeId)
         : state.queued,
+      queueRevisionByConversation: state.activeId
+        ? Object.fromEntries(
+            Object.entries(state.queueRevisionByConversation).filter(([key]) => key !== state.activeId),
+          )
+        : state.queueRevisionByConversation,
       queuePauseByConversation: state.activeId
         ? Object.fromEntries(
             Object.entries(state.queuePauseByConversation).filter(([key]) => key !== state.activeId),

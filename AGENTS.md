@@ -986,11 +986,12 @@ the user installs at runtime via 设置 → 插件, which writes to the isolated
   reads no FastVibe internals — keep new rules in the file itself.
   Two settings keys feed it: `defaultPermissionMode` (设置 → 通用 → 默认权限模式, default
   `smart` 帮我批准) is what a launch starts on, while `permissionMode` is the live mode the
-  composer's chip switches. Main resolves the two at startup —
-  `applyStartupPermissionMode` (`engine/app-settings.ts`) re-seeds the live value from the
-  default, writes it back to `settings.json` and exports it — so one session escalated to
-  `full` cannot outlive the app, and the sandbox env cannot disagree with the chip. An
-  absent or malformed value anywhere means `smart`, never `full`.
+  sandbox reads. Every permission picker updates both keys, so a choice made in the composer
+  survives restarts and upgrades; Main's `applyStartupPermissionMode` still re-seeds the live
+  key from the persisted default so the sandbox env and chip agree from the first frame.
+  Entering `full` is guarded by one machine-wide warning. Accepting it stores
+  `fullAccessConfirmed`, so changing away and back never asks again; 恢复默认 is the explicit
+  way to forget that acknowledgement. An absent or malformed mode means `smart`, never `full`.
 - **Subagent** — `subagent/index.ts` registers a `subagent` tool that delegates a
   self-contained task to a role defined by a markdown file under
   `resources/extensions/subagent/agents/*.md`: `scout`, `planner`, `worker`,
@@ -1025,7 +1026,11 @@ the user installs at runtime via 设置 → 插件, which writes to the isolated
     says this install can authenticate it — the catalog (`getAll()`) holds every
     reseller's models, so a pinned `claude-sonnet-4-5` on a gateway with no
     Anthropic key would otherwise win and fail with “No API key found”. Bare ids
-    resolve against `getAvailable()` **and** are re-checked for auth.
+    resolve against `getAvailable()` **and** are re-checked for auth. A role may also
+    set `thinkingLevel:` (`minimal | low | medium | high | xhigh | max`) in its
+    frontmatter; absent or invalid values migrate to `medium` rather than inheriting
+    the parent run. Built-in role overrides live beside model overrides in
+    `subagents.json`, while custom roles persist the field in their Markdown template.
   - **Renderer.** The sub-session's engine events are re-emitted as
     `subagent_event` / `subagent_state` / `subagent_lifecycle` (see `#trackSubagentEvent`), which the
     renderer folds into `session.subagents` + `subagentStreams`; `App.tsx` applies
@@ -1103,6 +1108,20 @@ the user installs at runtime via 设置 → 插件, which writes to the isolated
     all) is reported as an error. `tabId` is optional everywhere: an
     omitted id means the current tab, and a stale id with exactly one tab open is adopted with a
     `note`.
+  - **A guest's popup never becomes a second window.** A `window.open` — or a `target="_blank"`
+    link, which the injected click runs like any other click — was answered by Electron's
+    default window-open handling, which *creates a `BrowserWindow`*: a chrome-less guest no pane
+    owns, shown in front of whatever the user was doing, with nothing on screen to explain it.
+    `guardGuestPopups()` (main, registered before any window exists) denies every one of them
+    and loads the address in the tab that was already being driven instead — which is what the
+    model meant by clicking the link, keeps the tab id it holds valid, and leaves the pane's
+    `did-navigate` listener to keep the title and `Entry.url` in step, so a recovery resumes the
+    popup page rather than the page it opened from. Only `http(s)` is followed: every other
+    scheme carries no address of its own or is a hand-off to another program — the same
+    interruption through a different door. The pane's webview carries `disableDialogs` for the
+    same reason one door over: a page's `alert` / `confirm` / `prompt` is a native modal by
+    default, which lands in front of the user *and* parks the guest, so the tool call waits on a
+    button nobody is there to press.
   - **A guest is never re-parented.** Chromium tears the guest down when its `<webview>`
     element is moved in the DOM — every call after that fails with `Invalid guestInstanceId`,
     and re-assigning `src` does not bring it back. So every guest's host lives in one layer
@@ -1324,9 +1343,22 @@ Settings → 使用统计 (`components/settings/usage-settings.tsx`) is fed by
   transcript (`PiProcessManager.deleteConversation`), which used to silently rewrite
   history; the ledger is what keeps it. A live transcript is the primary source and the
   ledger only adds turns whose file is gone; the two are deduplicated by
-  `sessionId` + entry id (`turnKey`). Branching is safe because FastVibe branches in
-  place (`navigateTree`) and never calls the SDK's `createBranchedSession`, so a session
-  id — and therefore the key — is stable.
+  `sessionId` + entry id (`turnKey`). Retry/edit branches in place (`navigateTree`),
+  keeping that key stable. Independent conversation forks (`engine:fork`,
+  `engine/session-fork.ts`) instead create a new v3 transcript and session id, copying
+  only the selected branch. Inherited assistant entries carry `fastvibeUsageSessionId`
+  (preserved through repeated forks), so `parseSessionTurns` uses the original usage
+  identity and never bills copied history twice. New turns use the new session id.
+  Forks preserve entry ids for reasoning timing, include pending tool results at the
+  chosen reply boundary, and never rewind workspace files. An unfinished tool exchange
+  does not block a fork: the copy pairs each call with its existing result and supplies
+  an explicit error result only where none exists, without executing any tools. Results
+  are placed after their owning assistant before the next assistant, as required by
+  pi-ai's `transformMessages`; roundtrip tests cover both SDK loading and that conversion.
+  They are ordinary catalog
+  conversations with a nonempty preview, not side chats or disposable empty drafts;
+  creation stays inactive until `#ensureSession` finishes. Isolated worktree forks are
+  refused because deleting the source would otherwise destroy the fork's shared cwd.
 - **The ledger stores raw usage, never a price.** `UsageLedger` (`usage-ledger.ts`)
   appends one line per finalized assistant turn (tokens, model, engine-reported cost,
   timestamp, tool-call count) as the turn lands, and `capture()` folds a whole

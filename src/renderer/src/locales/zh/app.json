@@ -19,7 +19,8 @@
  "errors": {
   "cannotStart": "暂时无法开始对话，请稍后重试。",
   "switchModel": "切换模型失败，请稍后重试。",
-  "thinking": "无法设置推理强度。"
+  "thinking": "无法设置推理强度。",
+  "fork": "无法分叉会话，请稍后重试。"
  },
  "workspace": {
   "noProject": "无项目",
@@ -88,6 +89,7 @@
   "archive": "归档",
   "waitingForYou": "正在等你确认",
   "rename": "重命名",
+  "fork": "分叉会话",
   "delete": "删除",
   "pin": "置顶",
   "unpin": "取消置顶",

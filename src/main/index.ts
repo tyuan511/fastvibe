@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, Notification, protocol, session, shell } from "electron";
 import type { WebContents } from "electron";
 import { statSync } from "node:fs";
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -11,6 +11,13 @@ import { dispatch, handle, handlerChannels, type CallerContext } from "./ipc/reg
 import { registerRemoteIpc, restoreRemoteServer, stopRemoteServer } from "./remote";
 import { readFilePreview } from "./engine/file-preview";
 import { readWorkspaceDir } from "./engine/workspace-fs";
+import {
+  classifyCommitFile,
+  countPatchLines,
+  parseCommitPorcelain,
+  type CommitFileMaterial,
+  type CommitStatusPath,
+} from "./engine/commit-message";
 import { loadModelsDev, type ModelsDevStats } from "./engine/models-dev";
 import { updateModelsDevSnapshot } from "./engine/models-dev-update";
 import {
@@ -40,7 +47,7 @@ import { applyPendingInstall, registerUpdater, scheduleUpdateCheck } from "./upd
 import { PiProcessManager } from "./pi/process-manager";
 import { fetchPackageCatalog } from "./pi/package-catalog";
 import { TerminalSessions } from "./engine/terminal-sessions";
-import { attachBrowserRenderer, installBrowserGlobal, respondBrowserRequest } from "./pi/browser-bridge";
+import { attachBrowserRenderer, guardGuestPopups, installBrowserGlobal, respondBrowserRequest } from "./pi/browser-bridge";
 import { importBrowserProfile, listBrowserProfiles } from "./engine/browser-profiles";
 import type { ImportSourceId, ProviderModel, UsageRange } from "@shared/types";
 import type { GitBranch, GitDiffSource, GitStatus } from "@shared/ipc";
@@ -55,6 +62,10 @@ applyShellPath();
 
 // Privileged schemes must be declared before the app is ready.
 registerFileIconScheme();
+
+// A guest's popup must never become a second window — see `guardGuestPopups`. Registered
+// here, before any window exists, so no guest can be created ahead of it.
+guardGuestPopups();
 
 // File logger before anything that can throw: engine construction, IPC, windows.
 initLogger();
@@ -271,6 +282,17 @@ function registerIpc(): void {
     },
   );
 
+  handle(Ipc.engineQueueAdd, async (payload: Parameters<typeof engine.enqueueMessage>[0]) => {
+    return engine.enqueueMessage(payload);
+  });
+  handle(Ipc.engineQueueCancel, async (payload: { id: string }) => engine.cancelQueued(payload.id));
+  handle(Ipc.engineQueueRecall, async (payload: { id: string }) => engine.recallQueued(payload.id));
+  handle(Ipc.engineQueueSendNow, async (payload: { id: string }) => engine.sendQueuedNow(payload.id));
+  handle(Ipc.engineQueueReorder, async (payload: { conversationId: string; ids: string[] }) =>
+    engine.reorderQueued(payload.conversationId, payload.ids));
+  handle(Ipc.engineQueueResume, async (payload: { conversationId: string }) =>
+    engine.resumeQueue(payload.conversationId));
+
   handle(Ipc.engineCompact, async (payload?: { customInstructions?: string; conversationId?: string }) => {
     return engine.compact(payload?.customInstructions, payload?.conversationId);
   });
@@ -373,6 +395,9 @@ function registerIpc(): void {
   });
   handle(Ipc.engineBranch, async (payload: { entryId: string; conversationId?: string }) => {
     return engine.branch(payload.entryId, payload.conversationId);
+  });
+  handle(Ipc.engineFork, async (payload?: { entryId?: string; conversationId?: string }) => {
+    return engine.fork(payload?.entryId, payload?.conversationId);
   });
   handle(Ipc.engineGetMessages, async (payload?: { conversationId?: string }) => {
     return engine.loadMessages(payload?.conversationId);
@@ -548,7 +573,7 @@ function registerIpc(): void {
   });
   handle(Ipc.workspaceGitStatus, async (payload: { cwd: string }): Promise<GitStatus> => {
     const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
-    if (!cwd) return { cwd, isRepository: false, changed: 0, staged: 0, files: [] };
+    if (!cwd) return { cwd, isRepository: false, changed: 0, staged: 0, additions: 0, deletions: 0, files: [] };
     return readGitStatus(cwd);
   });
   handle(Ipc.workspaceOpenTerminal, async (payload: { cwd: string }): Promise<void> => {
@@ -604,6 +629,15 @@ function registerIpc(): void {
     if (message.length > 5000) throw new Error(uiText("提交信息过长", "Commit message is too long"));
     await execFileAsync("git", ["-C", cwd, "commit", "-m", message], { timeout: 30000, maxBuffer: 256 * 1024 });
     return readGitStatus(cwd);
+  });
+  handle(Ipc.workspaceGitGenerateCommitMessage, async (payload: { cwd: string; conversationId?: string }): Promise<string> => {
+    const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
+    const conversationId = typeof payload.conversationId === "string" ? payload.conversationId : undefined;
+    if (!cwd) throw new Error(uiText("项目路径无效", "Invalid project path"));
+    const statusFiles = await readCommitStatusFiles(cwd);
+    if (statusFiles.length === 0) throw new Error(uiText("没有要提交的改动", "No changes to commit"));
+    const files = await collectCommitMessageMaterial(cwd, statusFiles);
+    return engine.generateCommitMessage(files, conversationId);
   });
   handle(Ipc.workspaceGitDiff, async (payload: { cwd: string; path?: string; source?: GitDiffSource }): Promise<string> => {
     const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
@@ -816,7 +850,16 @@ function wireElectronTransport(): void {
   });
 }
 
+type ShutdownPhase = "running" | "cleaning" | "exiting";
+
+const SHUTDOWN_TIMEOUT_MS = 5_000;
+const EXIT_FALLBACK_MS = 1_000;
+let shutdownPhase: ShutdownPhase = "running";
+let shutdownDeadline: NodeJS.Timeout | undefined;
+let devParentWatch: NodeJS.Timeout | undefined;
+
 app.whenReady().then(async () => {
+  if (shutdownPhase !== "running") return;
   log.info("app ready");
   installBrowserGlobal();
   applyAppIcon();
@@ -915,7 +958,7 @@ app.whenReady().then(async () => {
   void restoreRemoteServer();
 
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (shutdownPhase === "running" && BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
 
@@ -923,21 +966,125 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-let stopping = false;
+/**
+ * End the process after one quit request, but give sessions and child processes a
+ * short bounded window to shut down first. A second Cmd+Q must not be the mechanism
+ * that escapes a cleanup promise which never settles.
+ */
+function requestShutdown(reason: string): void {
+  if (shutdownPhase !== "running") return;
+  shutdownPhase = "cleaning";
+  log.info(`app quitting reason=${reason}`);
+
+  if (devParentWatch) clearInterval(devParentWatch);
+  devParentWatch = undefined;
+  // Establish the deadline before calling any cleanup owner. A synchronous failure
+  // must not strand the process in the cleaning phase either.
+  shutdownDeadline = setTimeout(() => finishShutdown(true), SHUTDOWN_TIMEOUT_MS);
+
+  // These are synchronous and should happen even if one of the asynchronous owners
+  // below never settles.
+  try {
+    terminals.dispose();
+  } catch (error) {
+    log.warn(`terminal cleanup failed: ${String(error)}`);
+  }
+  try {
+    clearRunningConversations();
+  } catch (error) {
+    log.warn(`keep-awake cleanup failed: ${String(error)}`);
+  }
+  try {
+    engine.flush();
+  } catch (error) {
+    log.warn(`engine flush failed: ${String(error)}`);
+  }
+
+  void Promise.allSettled([engine.stop(), stopRemoteServer()]).then((results) => {
+    for (const result of results) {
+      if (result.status === "rejected") log.warn(`shutdown cleanup failed: ${String(result.reason)}`);
+    }
+    try {
+      engine.flush();
+    } catch (error) {
+      log.warn(`final engine flush failed: ${String(error)}`);
+    }
+    finishShutdown(false);
+  });
+}
+
+function finishShutdown(timedOut: boolean): void {
+  if (shutdownPhase !== "cleaning") return;
+  shutdownPhase = "exiting";
+  if (shutdownDeadline) clearTimeout(shutdownDeadline);
+  shutdownDeadline = undefined;
+  if (timedOut) log.warn(`shutdown cleanup timed out after ${SHUTDOWN_TIMEOUT_MS}ms`);
+
+  // Keep this timer referenced: it is the guarantee that one quit request ends the
+  // process even when Electron or the updater does not complete its own exit path.
+  const fallback = setTimeout(() => app.exit(0), EXIT_FALLBACK_MS);
+
+  // On Windows/Linux quitAndInstall owns the normal exit. Keep a longer bound there,
+  // since an updater handoff must not leave a Dock/taskbar process forever.
+  let installing = false;
+  try {
+    installing = applyPendingInstall();
+  } catch (error) {
+    log.warn(`update handoff failed: ${String(error)}`);
+  }
+  if (installing) {
+    clearTimeout(fallback);
+    setTimeout(() => app.exit(0), 10_000);
+  } else {
+    app.quit();
+  }
+}
 
 app.on("before-quit", (event) => {
-  if (stopping) return;
+  if (shutdownPhase === "exiting") return;
   event.preventDefault();
-  stopping = true;
-  log.info("app quitting");
-  void stopRemoteServer().catch(() => undefined);
-  void engine.stop().finally(() => {
-    terminals.dispose();
-    clearRunningConversations();
-    engine.flush();
-    if (!applyPendingInstall()) app.quit();
-  });
+  requestShutdown("app request");
 });
+
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+  process.on(signal, () => requestShutdown(signal));
+}
+
+// electron-vite launches Electron as a child. Some IDE stop buttons terminate only
+// that development host, leaving its child alive and visible in the Dock. A packaged
+// app must not care who launched it, so this parent-liveness rule is development-only.
+if (!app.isPackaged && process.env.ELECTRON_RENDERER_URL) {
+  const parentPid = process.ppid;
+  let launcherPid: number | undefined;
+  if (process.platform !== "win32" && parentPid > 1) {
+    try {
+      const value = execFileSync("ps", ["-o", "ppid=", "-p", String(parentPid)], { encoding: "utf8" }).trim();
+      const parsed = Number(value);
+      if (Number.isSafeInteger(parsed) && parsed > 1) launcherPid = parsed;
+    } catch {
+      // Direct-parent tracking still covers electron-vite itself.
+    }
+  }
+  const alive = (pid: number): boolean => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      return error instanceof Error && "code" in error && error.code === "EPERM";
+    }
+  };
+  devParentWatch = setInterval(() => {
+    if (
+      parentPid <= 1 ||
+      process.ppid !== parentPid ||
+      !alive(parentPid) ||
+      (launcherPid !== undefined && !alive(launcherPid))
+    ) {
+      requestShutdown("development host ended");
+    }
+  }, 500);
+  devParentWatch.unref();
+}
 
 /**
  * `git status --short --branch` heads with `## main...origin/main [ahead 1]`,
@@ -993,8 +1140,122 @@ function broadcastSettings(origin: string | undefined, settings: Record<string, 
   broadcast(Ipc.settingsChanged, settings, { except: origin });
 }
 
+async function readCommitStatusFiles(cwd: string): Promise<CommitStatusPath[]> {
+  const { stdout } = await execFileAsync(
+    "git",
+    ["--no-optional-locks", "-C", cwd, "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+    { timeout: 10_000, maxBuffer: 4 * 1024 * 1024 },
+  );
+  return parseCommitPorcelain(stdout);
+}
+
+async function collectCommitMessageMaterial(
+  cwd: string,
+  files: CommitStatusPath[],
+): Promise<CommitFileMaterial[]> {
+  const results: CommitFileMaterial[] = new Array(files.length);
+  // Read bodies from at most 128 files, rotating across top-level directories so one
+  // generated subtree cannot consume the whole collection budget. Every other path
+  // still reaches the planner as metadata.
+  const queues = new Map<string, number[]>();
+  files.forEach((file, index) => {
+    const kind = classifyCommitFile(file.path);
+    if (file.index === "?" || file.worktree === "?" || kind === "lock" || kind === "generated") return;
+    const slash = file.path.indexOf("/");
+    const area = slash > 0 ? file.path.slice(0, slash) : "root";
+    const queue = queues.get(area) ?? [];
+    queue.push(index);
+    queues.set(area, queue);
+  });
+  const bodyIndexes = new Set<number>();
+  while (bodyIndexes.size < 128) {
+    let added = false;
+    for (const queue of queues.values()) {
+      const index = queue.shift();
+      if (index === undefined) continue;
+      bodyIndexes.add(index);
+      added = true;
+      if (bodyIndexes.size >= 128) break;
+    }
+    if (!added) break;
+  }
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(4, files.length) }, async () => {
+    for (;;) {
+      const index = cursor;
+      cursor += 1;
+      const file = files[index];
+      if (!file) return;
+      const status = `${file.index}${file.worktree}`;
+      const initialKind = classifyCommitFile(file.path);
+      if (!bodyIndexes.has(index)) {
+        results[index] = {
+          path: file.displayPath,
+          status,
+          kind: initialKind,
+          omitted: file.index === "?" || file.worktree === "?"
+            ? "untracked: metadata only"
+            : initialKind === "lock" || initialKind === "generated"
+              ? undefined
+              : "content collection limit",
+        };
+        continue;
+      }
+      // Porcelain paths are repository-root relative even when the bound workspace is
+      // a subdirectory. `top` keeps the literal path anchored to that same root.
+      const pathspec = `:(top,literal)${file.path}`;
+      let patch = "";
+      let omitted: string | undefined;
+      try {
+        patch = (await execFileAsync(
+          "git",
+          ["-C", cwd, "diff", "HEAD", "--no-ext-diff", "--no-textconv", "--unified=3", "--", pathspec],
+          { timeout: 5000, maxBuffer: 128 * 1024 },
+        )).stdout;
+      } catch (error) {
+        const partial = error && typeof error === "object" && "stdout" in error && typeof error.stdout === "string"
+          ? error.stdout
+          : "";
+        if (partial) {
+          patch = partial;
+          omitted = "diff truncated";
+        } else {
+          const [staged, working] = await Promise.all([
+            execFileAsync("git", ["-C", cwd, "diff", "--cached", "--no-ext-diff", "--no-textconv", "--unified=3", "--", pathspec], { timeout: 5000, maxBuffer: 64 * 1024 }).catch(() => ({ stdout: "" })),
+            execFileAsync("git", ["-C", cwd, "diff", "--no-ext-diff", "--no-textconv", "--unified=3", "--", pathspec], { timeout: 5000, maxBuffer: 64 * 1024 }).catch(() => ({ stdout: "" })),
+          ]);
+          patch = `${staged.stdout}\n${working.stdout}`.trim();
+          if (!patch) omitted = "diff unavailable";
+        }
+      }
+      const stats = countPatchLines(patch);
+      results[index] = {
+        path: file.displayPath,
+        status,
+        patch,
+        ...stats,
+        kind: classifyCommitFile(file.path, patch),
+        omitted,
+      };
+    }
+  });
+  await Promise.all(workers);
+  return results.filter(Boolean);
+}
+
+function parseGitNumstat(output: string): { additions: number; deletions: number } {
+  let additions = 0;
+  let deletions = 0;
+  for (const line of output.split(/\r?\n/)) {
+    const [added, removed] = line.split("\t", 3);
+    if (/^\d+$/.test(added ?? "")) additions += Number(added);
+    if (/^\d+$/.test(removed ?? "")) deletions += Number(removed);
+  }
+  return { additions, deletions };
+}
+
 async function readGitStatus(cwd: string): Promise<GitStatus> {
-  const empty: GitStatus = { cwd, isRepository: false, changed: 0, staged: 0, files: [] };
+  const empty: GitStatus = { cwd, isRepository: false, changed: 0, staged: 0, additions: 0, deletions: 0, files: [] };
   try {
     const { stdout } = await execFileAsync("git", ["-C", cwd, "status", "--short", "--branch"], { timeout: 5000, maxBuffer: 256 * 1024 });
     const lines = stdout.split(/\r?\n/).filter(Boolean);
@@ -1012,7 +1273,24 @@ async function readGitStatus(cwd: string): Promise<GitStatus> {
       if (line[0] !== " " && line[0] !== "?") staged += 1;
       files.push({ index: line[0] === "?" ? "?" : line[0], worktree: line[1] ?? " ", path: line.slice(3).trim() });
     }
-    return { cwd, isRepository: true, branch, changed, staged, ahead, behind, files };
+    let additions = 0;
+    let deletions = 0;
+    try {
+      const diff = await execFileAsync("git", ["-C", cwd, "diff", "--numstat", "HEAD", "--"], { timeout: 5000, maxBuffer: 256 * 1024 });
+      ({ additions, deletions } = parseGitNumstat(diff.stdout));
+    } catch {
+      // An unborn branch has no HEAD. Its staged and unstaged layers are still useful,
+      // and summing them is the closest line-level status available before first commit.
+      const [stagedDiff, workingDiff] = await Promise.all([
+        execFileAsync("git", ["-C", cwd, "diff", "--numstat", "--cached", "--"], { timeout: 5000, maxBuffer: 256 * 1024 }).catch(() => ({ stdout: "" })),
+        execFileAsync("git", ["-C", cwd, "diff", "--numstat", "--"], { timeout: 5000, maxBuffer: 256 * 1024 }).catch(() => ({ stdout: "" })),
+      ]);
+      const stagedStats = parseGitNumstat(stagedDiff.stdout);
+      const workingStats = parseGitNumstat(workingDiff.stdout);
+      additions = stagedStats.additions + workingStats.additions;
+      deletions = stagedStats.deletions + workingStats.deletions;
+    }
+    return { cwd, isRepository: true, branch, changed, staged, additions, deletions, ahead, behind, files };
   } catch {
     return empty;
   }

@@ -4,6 +4,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { MessageSquarePlusIcon, PanelLeftOpenIcon, PanelRightOpenIcon } from "@hugeicons/core-free-icons";
 import { useLocation, useMatch, useNavigate, useNavigationType } from "react-router";
 import { Composer } from "@/components/chat/composer";
+import { GitStatusPopover } from "@/components/chat/git-status-popover";
 import { ExtensionNotices, ExtensionWidgets, GoalPanel } from "@/components/chat/extension-surface";
 import { TodoPanel } from "@/components/chat/todo-list";
 import { MessageList } from "@/components/chat/message-list";
@@ -50,6 +51,7 @@ import {
 import { dismissBootLoader } from "@/lib/boot-loader";
 import { cn } from "@/lib/utils";
 import { resolvePath } from "@/lib/workspace-path";
+import { shouldQueueSubmission } from "@/lib/composer-race";
 
 import { SETTINGS_SECTIONS, type SectionId } from "@/components/settings/settings-sections";
 import { setSidebarCollapsed, useIsNarrowViewport, useSidebarCollapsed } from "@/lib/sidebar-visibility";
@@ -78,6 +80,8 @@ import { useAppShortcuts, useShortcutLabel } from "@/lib/use-shortcuts";
 import { archiveConversations, archivedIdList, useArchivedIds } from "@/stores/archive";
 import { Ipc } from "@shared/ipc";
 import { blockedRemotely } from "@/lib/remote-unavailable";
+import { isAbortOutcome } from "@shared/abort";
+import { usePermissionModeSelection } from "@/components/permission-mode-provider";
 
 
 
@@ -242,6 +246,7 @@ const MessageThread = memo(function MessageThread({
   loading,
   onRetry,
   onEdit,
+  onFork,
   showThinking,
   showTimestamp,
   collapseRuns,
@@ -253,6 +258,7 @@ const MessageThread = memo(function MessageThread({
   loading: boolean;
   onRetry: (message: ChatMessage) => void;
   onEdit: (message: ChatMessage, text: string) => void;
+  onFork: (entryId: string) => void;
   showThinking: boolean;
   showTimestamp: boolean;
   collapseRuns: boolean;
@@ -270,6 +276,7 @@ const MessageThread = memo(function MessageThread({
       loading={loading}
       onRetry={onRetry}
       onEdit={onEdit}
+      onFork={onFork}
       showThinking={showThinking}
       showTimestamp={showTimestamp}
       collapseRuns={collapseRuns}
@@ -361,6 +368,7 @@ export function App(): JSX.Element {
   const applyEvent = useSessionStore((state) => state.applyEvent);
   const setStreaming = useSessionStore((state) => state.setStreaming);
   const dropEmptyAssistant = useSessionStore((state) => state.dropEmptyAssistant);
+  const rollbackOptimisticPrompt = useSessionStore((state) => state.rollbackOptimisticPrompt);
   const resetConversation = useSessionStore((state) => state.resetConversation);
   const commands = useSessionStore((state) => state.commands);
   const permission = useSessionStore((state) => state.permission);
@@ -374,16 +382,10 @@ export function App(): JSX.Element {
     : [];
   const permissionAlways = usePermissionAlways();
   const setAttachments = useSessionStore((state) => state.setAttachments);
+  const setComposer = useSessionStore((state) => state.setComposer);
+  const restoreComposer = useSessionStore((state) => state.restoreComposer);
   const queuePause = useSessionStore((state) => state.queuePause);
-  const enqueue = useSessionStore((state) => state.enqueue);
-  const removeQueued = useSessionStore((state) => state.removeQueued);
-  const setQueuedOrder = useSessionStore((state) => state.setQueuedOrder);
-  const prependQueued = useSessionStore((state) => state.prependQueued);
-  const markQueuedSending = useSessionStore((state) => state.markQueuedSending);
-  const unmarkQueuedSending = useSessionStore((state) => state.unmarkQueuedSending);
-  const unmarkAllQueuedSending = useSessionStore((state) => state.unmarkAllQueuedSending);
-  const setQueuePause = useSessionStore((state) => state.setQueuePause);
-  const setQueuePauseFor = useSessionStore((state) => state.setQueuePauseFor);
+  const setQueueState = useSessionStore((state) => state.setQueueState);
   const setRunInterrupted = useSessionStore((state) => state.setRunInterrupted);
   const setCanResume = useSessionStore((state) => state.setCanResume);
   const restoreId = useRef<string | null>(null);
@@ -410,7 +412,6 @@ export function App(): JSX.Element {
    * quick succession (the open, then the abandoned-draft cleanup) from doing it either.
    */
   const intendedActiveId = useRef<string | null>(null);
-  const draining = useRef(new Set<string>());
   // One send at a time. A second click / Enter while this send is still being handed
   // over is not a second message — see `handleSubmit`.
   const submitting = useRef(false);
@@ -472,6 +473,7 @@ export function App(): JSX.Element {
   const paneMaximized = useSidePaneStore((state) => state.maximized);
   const togglePane = useSidePaneStore((state) => state.toggle);
   const settings = useSettingsStore((state) => state.settings);
+  const { setPermissionMode } = usePermissionModeSelection();
   const updateSettings = useSettingsStore((state) => state.update);
   const sidebarCollapsed = useSidebarCollapsed();
   // A phone has no width to give the sidebar or the right pane; the first overlays
@@ -565,6 +567,12 @@ export function App(): JSX.Element {
       // which chats are working, even while the user is looking at another one.
       if (event.type === "conversation_running" && conversationId) {
         useSessionStore.getState().setConversationRunning(conversationId, event.running === true);
+      }
+      // Queue state is Main-owned and applies for every conversation. It must cross
+      // the focus filter so a background drain, failure or second window stays visible.
+      if (event.type === "queue_changed" && event.queue && typeof event.queue === "object") {
+        useSessionStore.getState().setQueueState(event.queue as import("@shared/types").ConversationQueueState);
+        return;
       }
       // Blocking prompts and their withdrawal are handled for *every* conversation
       // before the focus routing below, which sends a background chat's events to the
@@ -932,15 +940,19 @@ export function App(): JSX.Element {
     // chat, a side chat, plan mode's handoff — so this is where the claim is kept
     // honest for the ones that could not know the id before they called.
     intendedActiveId.current = result.conversation.id;
+    const savedComposer = useSessionStore.getState().composerDrafts[result.conversation.id];
     setActiveId(result.conversation.id);
     setMessages(result.messages, result.conversation.id);
     setSession(result.state);
     setStatus(result.status);
+    setQueueState(result.queue);
     // The goal (or plan mode) this conversation already had, replayed by the engine:
     // its own `setStatus` fired during session creation, which on a cold start is
     // before this window was listening.
     useSessionStore.getState().setExtensionStatus(result.conversation.id, result.extensionStatus ?? {});
-    setDraft(readDrafts()[result.conversation.id] ?? "");
+    // In-memory composer state is newer than the debounced localStorage write and
+    // includes attachments. Only hydrate from disk the first time this window opens it.
+    if (!savedComposer) setDraft(readDrafts()[result.conversation.id] ?? "");
     setError(null);
     setRunInterrupted(null);
     // `canResume` is deliberately not touched here: it is not a leftover of the chat
@@ -971,7 +983,18 @@ export function App(): JSX.Element {
     // same prompt again, without its text (`请查看附件` + the same attachments).
     if (submitting.current) return;
     const text = draft.trim();
-    const currentAttachments = useSessionStore.getState().attachments;
+    const submitState = useSessionStore.getState();
+    const submitOwner = submitState.activeId;
+    const queueAtSubmit = shouldQueueSubmission({
+      hasConversation: submitOwner !== null,
+      running: Boolean(submitOwner && submitState.running[submitOwner]),
+      paused: Boolean(submitOwner && submitState.queuePauseByConversation[submitOwner]),
+      hasQueuedItems: Boolean(
+        submitOwner && submitState.queued.some((item) => item.conversationId === submitOwner),
+      ),
+    });
+    const queueBehavior = settings.queueBehavior;
+    const currentAttachments = submitState.attachments;
     if ((!text && currentAttachments.length === 0) || !canChat) return;
     const compact = parseCompactCommand(text);
     if (compact) {
@@ -986,13 +1009,18 @@ export function App(): JSX.Element {
       return;
     }
     submitting.current = true;
+    let consumedOwner: string | null = null;
+    let consumedVersion: number | undefined;
     try {
       // Nothing to run a turn on: keep the draft and ask for a model. Creating the
       // conversation first would leave a chat whose prompt the engine then refuses.
       if ((await availableModels()).length === 0) {
-        setNeedsModel(true);
+        if (useSessionStore.getState().activeId === submitOwner) setNeedsModel(true);
         return;
       }
+      // An await above may have crossed a chat switch. This submission still belongs
+      // to the composer it captured; it must not clear or send the incoming chat's draft.
+      if (useSessionStore.getState().activeId !== submitOwner) return;
       // The text the engine will actually receive, and therefore also the text the
       // row shows: they used to differ (file names in the bubble, `请查看附件` in the
       // engine), so re-reading the transcript silently rewrote the message.
@@ -1001,73 +1029,81 @@ export function App(): JSX.Element {
       // attachments belong to this call, so a second click finds an empty composer
       // (and a disabled send button) instead of re-sending the same prompt without
       // its text.
-      setDraft("");
-      setAttachments([]);
-      let conversationId = activeId;
+      setComposer("", []);
+      let conversationId = submitOwner;
       if (!conversationId) {
         const created = await window.fastvibe.conversations.create(active?.project);
         applyOpen(created);
         conversationId = created.conversation.id;
         revealConversation(conversationId);
       }
+      consumedOwner = conversationId;
+      consumedVersion = useSessionStore.getState().composerDrafts[conversationId]?.version;
       const nextList = await window.fastvibe.conversations.recordPrompt(conversationId, promptText);
       applyList(nextList);
-      if (streaming) {
-        setQueuePause(null);
-        if (settings.queueBehavior === "steer") {
-          const id = crypto.randomUUID();
-          const payload = `${promptText}${attachmentPromptSuffix(currentAttachments)}`;
-          enqueue({
-            id,
+      // Queue semantics belong to the instant Send was pressed. A stop can settle the
+      // run during recordPrompt; routing that item through prompt() would restart it
+      // and a late renderer reply could also erase Main's stopped pause.
+      if (queueAtSubmit) {
+        const payload = `${promptText}${attachmentPromptSuffix(currentAttachments)}`;
+        try {
+          const queue = await window.fastvibe.engine.queueAdd({
             conversationId,
             text: promptText,
-            behavior: "steer",
+            message: payload,
+            behavior: queueBehavior,
             attachments: currentAttachments,
-            sending: true,
-            sentText: payload,
+            images: attachmentsToImages(currentAttachments),
           });
-          // Not awaited: `steer()` waits for the run when the engine has already
-          // settled, and the guard must not stay held for the length of a run.
-          void engine
-            .steer(payload, attachmentsToImages(currentAttachments), conversationId)
-            .then(() => engine.getState(conversationId))
-            .then((next) => {
-              if (useSessionStore.getState().activeId === conversationId) setSession(next);
-            })
-            .catch((err: unknown) => {
-              unmarkQueuedSending(id);
-              if (useSessionStore.getState().activeId === conversationId) {
-                setError(err instanceof Error ? err.message : String(err));
-              }
-            });
-        } else {
-          enqueue({
-            id: crypto.randomUUID(),
-            conversationId,
-            text: promptText,
-            behavior: "followUp",
-            attachments: currentAttachments,
-          });
+          setQueueState(queue);
+        } catch (err) {
+          // Main never accepted the item. Restore only the composer this submission
+          // consumed; a chat switch gives ownership to a different draft.
+          if (consumedVersion !== undefined) {
+            restoreComposer(conversationId, text, currentAttachments, consumedVersion);
+          }
+          if (useSessionStore.getState().activeId === conversationId) {
+            setError(err instanceof Error ? err.message : String(err));
+          }
         }
         return;
       }
-      addUserMessage(promptText, currentAttachments);
+      // recordPrompt is another switch-sized IPC hop. Sending still belongs to the
+      // captured conversation, but its optimistic row must never land in the chat
+      // that is on screen now (nor clear that chat's attachments).
+      const stillActive = useSessionStore.getState().activeId === conversationId;
+      if (stillActive) addUserMessage(promptText, currentAttachments);
       // A fresh prompt supersedes an interrupted turn: drop the resume affordance now
       // so the button does not linger until the engine's `agent_start` lands.
-      setRunInterrupted(null);
-      setCanResume(false);
+      if (stillActive) {
+        setRunInterrupted(null);
+        setCanResume(false);
+      }
       // Not awaited either: `prompt()` resolves only when the whole run is over, and
       // holding the guard until then would refuse every follow-up sent mid-run.
-      void dispatchPrompt(text, currentAttachments, "prompt", conversationId).catch((err: unknown) => {
-        if (useSessionStore.getState().activeId !== conversationId) return;
-        dropEmptyAssistant();
-        setError(err instanceof Error ? err.message : String(err));
+      void dispatchPrompt(text, currentAttachments, conversationId).catch((err: unknown) => {
+        // Stop rejects some transports with the original AbortError. The engine has
+        // already retained the interrupted turn, so rolling it back or showing a red
+        // toast would misreport an intentional cancellation as a failed send.
+        if (isAbortOutcome(err)) return;
+        if (stillActive && useSessionStore.getState().activeId === conversationId) {
+          rollbackOptimisticPrompt();
+          setError(err instanceof Error ? err.message : String(err));
+        }
+        if (consumedVersion !== undefined) {
+          restoreComposer(conversationId, text, currentAttachments, consumedVersion);
+        }
       });
     } catch (err) {
-      // Nothing reached the engine: hand the composer back what this call consumed.
-      setDraft(text);
-      setAttachments(currentAttachments);
-      setError(err instanceof Error ? err.message : String(err));
+      // Nothing reached the engine: hand back only the composer this call consumed.
+      if (consumedOwner && consumedVersion !== undefined) {
+        restoreComposer(consumedOwner, text, currentAttachments, consumedVersion);
+      } else if (useSessionStore.getState().activeId === submitOwner) {
+        setComposer(text, currentAttachments);
+      }
+      if (useSessionStore.getState().activeId === (consumedOwner ?? submitOwner)) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
     } finally {
       submitting.current = false;
     }
@@ -1076,13 +1112,11 @@ export function App(): JSX.Element {
   async function dispatchPrompt(
     text: string,
     files: ChatAttachment[],
-    mode: "prompt" | "steer",
     conversationId: string,
   ): Promise<void> {
     const payload = `${text || t("composer.seeAttachments")}${attachmentPromptSuffix(files)}`;
     const images = attachmentsToImages(files);
-    if (mode === "steer") await engine.steer(payload, images, conversationId);
-    else await engine.prompt(payload, { images, conversationId });
+    await engine.prompt(payload, { images, conversationId });
     void engine
       .getState(conversationId)
       .then((next) => {
@@ -1091,114 +1125,87 @@ export function App(): JSX.Element {
       .catch(() => undefined);
   }
 
-  async function drainQueued(item: QueuedPrompt): Promise<void> {
-    const conversationId = item.conversationId;
-    removeQueued(item.id);
-    if (useSessionStore.getState().activeId === conversationId) {
-      addUserMessage(item.text, item.attachments);
-    }
-    try {
-      await dispatchPrompt(item.text, item.attachments ?? [], "prompt", conversationId);
-    } catch (err) {
-      if (useSessionStore.getState().activeId === conversationId) dropEmptyAssistant();
-      prependQueued(item);
-      setQueuePauseFor(conversationId, "error");
-      if (useSessionStore.getState().activeId === conversationId) {
-        setError(err instanceof Error ? err.message : String(err));
-      }
-    }
-  }
-
-  async function replaceEngineSteering(conversationId: string, exceptId?: string): Promise<void> {
-    const remaining = useSessionStore
-      .getState()
-      .queued.filter(
-        (item) => item.conversationId === conversationId && item.sending && item.id !== exceptId,
-      );
-    try {
-      await engine.replaceSteering(
-        remaining.map((item) => ({
-          text: item.sentText ?? item.text,
-          images: attachmentsToImages(item.attachments ?? []),
-        })),
-        conversationId,
-      );
-    } catch {
-      // The engine may already have drained the item; the tray still updates.
+  function queueActionError(err: unknown, conversationId?: string): void {
+    if (!conversationId || useSessionStore.getState().activeId === conversationId) {
+      setError(err instanceof Error ? err.message : String(err));
     }
   }
 
   async function handleRemoveQueued(id: string): Promise<void> {
-    const item = useSessionStore.getState().queued.find((entry) => entry.id === id);
-    if (item?.sending) await replaceEngineSteering(item.conversationId, id);
-    removeQueued(id);
+    const owner = useSessionStore.getState().queued.find((entry) => entry.id === id)?.conversationId;
+    try {
+      const queue = await window.fastvibe.engine.queueCancel(id);
+      if (queue) setQueueState(queue);
+    } catch (err) {
+      queueActionError(err, owner);
+    }
   }
 
   function handleEditQueued(id: string): void {
-    const item = useSessionStore.getState().queued.find((entry) => entry.id === id);
-    if (!item || item.sending || draft.trim()) return;
-    removeQueued(id);
-    setDraft(item.text);
-    if (item.attachments?.length) setAttachments(item.attachments);
+    const state = useSessionStore.getState();
+    const item = state.queued.find((entry) => entry.id === id);
+    // A queued item replaces the whole composer payload. Existing files count as a
+    // draft just as much as text does; silently overwriting them loses user input.
+    if (!item || item.sending || state.draft.trim() || state.attachments.length > 0) return;
+    const previous = { draft: state.draft, attachments: state.attachments };
+    // Reserve the payload before asking Main to delete the queue row. If the user
+    // switches chats, this reservation follows its owner and is waiting on return.
+    setComposer(item.text, item.attachments ?? []);
+    const reservedVersion = useSessionStore.getState().composerDrafts[item.conversationId]?.version;
+    void window.fastvibe.engine.queueCancel(id).then((queue) => {
+      if (!queue) {
+        if (reservedVersion !== undefined) {
+          restoreComposer(item.conversationId, previous.draft, previous.attachments, reservedVersion);
+        }
+        return;
+      }
+      setQueueState(queue);
+    }).catch((err: unknown) => {
+      if (reservedVersion !== undefined) {
+        restoreComposer(item.conversationId, previous.draft, previous.attachments, reservedVersion);
+      }
+      queueActionError(err, item.conversationId);
+    });
   }
 
   async function handleRecallQueued(id: string): Promise<void> {
-    const item = useSessionStore.getState().queued.find((entry) => entry.id === id);
-    if (!item?.sending) return;
-    await replaceEngineSteering(item.conversationId, id);
-    unmarkQueuedSending(id);
+    const owner = useSessionStore.getState().queued.find((entry) => entry.id === id)?.conversationId;
+    try {
+      const queue = await window.fastvibe.engine.queueRecall(id);
+      if (queue) setQueueState(queue);
+    } catch (err) {
+      queueActionError(err, owner);
+    }
   }
 
   async function handleSendQueuedNow(id: string): Promise<void> {
-    const item = useSessionStore.getState().queued.find((entry) => entry.id === id);
-    if (!item || item.sending) return;
-    if (useSessionStore.getState().streaming) {
-      const payload = `${item.text || t("composer.seeAttachments")}${attachmentPromptSuffix(item.attachments ?? [])}`;
-      markQueuedSending(id, payload);
-      try {
-        await engine.steer(payload, attachmentsToImages(item.attachments ?? []), item.conversationId);
-        void engine
-          .getState(item.conversationId)
-          .then((next) => {
-            if (useSessionStore.getState().activeId === item.conversationId) setSession(next);
-          })
-          .catch(() => undefined);
-      } catch (err) {
-        unmarkQueuedSending(id);
-        if (useSessionStore.getState().activeId === item.conversationId) {
-          setError(err instanceof Error ? err.message : String(err));
-        }
-      }
-      return;
-    }
-    removeQueued(id);
-    addUserMessage(item.text, item.attachments);
+    const owner = useSessionStore.getState().queued.find((entry) => entry.id === id)?.conversationId;
     try {
-      await dispatchPrompt(item.text, item.attachments ?? [], "prompt", item.conversationId);
+      const queue = await window.fastvibe.engine.queueSendNow(id);
+      if (queue) setQueueState(queue);
     } catch (err) {
-      if (useSessionStore.getState().activeId === item.conversationId) dropEmptyAssistant();
-      prependQueued(item);
-      setQueuePauseFor(item.conversationId, "error");
-      if (useSessionStore.getState().activeId === item.conversationId) {
-        setError(err instanceof Error ? err.message : String(err));
-      }
+      queueActionError(err, owner);
     }
+  }
+
+  function handleReorderQueued(ids: string[]): void {
+    const conversationId = useSessionStore.getState().activeId;
+    if (!conversationId) return;
+    void window.fastvibe.engine.queueReorder(conversationId, ids).then(setQueueState)
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+  }
+
+  function handleResumeQueue(): void {
+    const conversationId = useSessionStore.getState().activeId;
+    if (!conversationId) return;
+    void window.fastvibe.engine.queueResume(conversationId).then(setQueueState)
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
   }
 
   async function handleAbort(): Promise<void> {
     const conversationId = useSessionStore.getState().activeId;
     if (!conversationId) return;
-    const pending = useSessionStore
-      .getState()
-      .queued.filter((item) => item.conversationId === conversationId);
-    if (pending.length > 0) setQueuePauseFor(conversationId, "stopped");
     try {
-      try {
-        await engine.clearQueue(conversationId);
-      } catch {
-        // older engines may not support clear_queue
-      }
-      unmarkAllQueuedSending();
       await engine.abort(conversationId);
     } catch (err) {
       if (useSessionStore.getState().activeId === conversationId) {
@@ -1233,46 +1240,14 @@ export function App(): JSX.Element {
     try {
       await engine.continue();
     } catch (err) {
-      setRunInterrupted("error");
-      setError(err instanceof Error ? err.message : String(err));
+      if (!isAbortOutcome(err)) {
+        setRunInterrupted("error");
+        setError(err instanceof Error ? err.message : String(err));
+      }
     } finally {
       void engine.getState().then(setSession).catch(() => undefined);
     }
   }
-
-  // Each dispatch resolves only once its whole run finishes, so drain the queue in
-  // a loop. A one-shot effect would stop after the first item: resetting `draining`
-  // in `.finally` does not re-render, so the next queued message would never fire.
-  useEffect(() => {
-    if (
-      !activeId ||
-      streaming ||
-      queuePause ||
-      !queued.some((item) => !item.sending) ||
-      draining.current.has(activeId)
-    ) return;
-    const conversationId = activeId;
-    draining.current.add(conversationId);
-    void (async () => {
-      try {
-        for (;;) {
-          const state = useSessionStore.getState();
-          if (
-            state.activeId !== conversationId ||
-            state.queuePauseByConversation[conversationId] ||
-            state.streaming
-          ) break;
-          const next = state.queued.find(
-            (item) => item.conversationId === conversationId && !item.sending,
-          );
-          if (!next) break;
-          await drainQueued(next);
-        }
-      } finally {
-        draining.current.delete(conversationId);
-      }
-    })();
-  }, [activeId, streaming, queuePause, queued]);
 
   // Stable identities so the memoised transcript rows do not re-render (or hold a
   // stale closure) when unrelated shell state changes.
@@ -1331,14 +1306,18 @@ export function App(): JSX.Element {
       }
       setDraft("");
       addUserMessage(text, source?.attachments);
+      const hasAttachmentMetadata = text.includes("<fastvibe-attachments>") || text.includes("<fastvibe-pasted-text>");
+      const payload = hasAttachmentMetadata ? text : `${text}${attachmentPromptSuffix(source?.attachments ?? [])}`;
       try {
-        await engine.prompt(text, {
+        await engine.prompt(payload, {
           images: source?.attachments ? attachmentsToImages(source.attachments) : undefined,
         });
         void engine.getState().then(setSession).catch(() => undefined);
       } catch (err) {
-        dropEmptyAssistant();
-        setError(err instanceof Error ? err.message : String(err));
+        if (!isAbortOutcome(err)) {
+          dropEmptyAssistant();
+          setError(err instanceof Error ? err.message : String(err));
+        }
       }
     } finally {
       retrying.current = false;
@@ -1358,6 +1337,25 @@ export function App(): JSX.Element {
     }
     await runRetry(message);
   }, [runRetry]);
+
+  const handleFork = useCallback(async (conversationId: string, entryId?: string): Promise<void> => {
+    try {
+      const forked = await engine.fork(entryId, conversationId);
+      applyOpen(forked);
+      revealConversation(forked.conversation.id);
+    } catch (err) {
+      toast.error(t("errors.fork"), {
+        description: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }, [t]);
+
+  // Stable for MessageThread/ChatMessageRow memoisation; resolve the owner at click
+  // time so a stale toolbar can never fork the conversation now on screen by mistake.
+  const handleForkFromEntry = useCallback((entryId: string): void => {
+    const owner = useSessionStore.getState().activeId;
+    if (owner) void handleFork(owner, entryId);
+  }, [handleFork]);
 
   const handleEdit = useCallback(async (message: ChatMessage, editedText: string): Promise<void> => {
     const owner = useSessionStore.getState().activeId;
@@ -1395,8 +1393,10 @@ export function App(): JSX.Element {
       });
       void engine.getState(owner).then(setSession).catch(() => undefined);
     } catch (err) {
-      dropEmptyAssistant();
-      setError(err instanceof Error ? err.message : String(err));
+      if (!isAbortOutcome(err)) {
+        dropEmptyAssistant();
+        setError(err instanceof Error ? err.message : String(err));
+      }
     }
   }, [addUserMessage, canChat, dropEmptyAssistant, setError, setMessages, setRunInterrupted, setCanResume, setSession]);
 
@@ -1425,7 +1425,8 @@ export function App(): JSX.Element {
           void engine.getState().then(setSession).catch(() => undefined);
         }
         setMessages([], current.id);
-        setDraft(readDrafts()[current.id] ?? "");
+        const savedComposer = useSessionStore.getState().composerDrafts[current.id];
+        if (!savedComposer) setDraft(readDrafts()[current.id] ?? "");
         setError(null);
         revealConversation(current.id);
         return;
@@ -1542,11 +1543,6 @@ export function App(): JSX.Element {
     if (busy) {
       void (async () => {
         try {
-          try {
-            await engine.clearQueue(id);
-          } catch {
-            // older engines may not support clear_queue
-          }
           await engine.abort(id);
         } catch (err) {
           setError(err instanceof Error ? err.message : String(err));
@@ -1767,7 +1763,7 @@ export function App(): JSX.Element {
       newSession={isNewSession}
       commands={paletteCommands}
       permissionMode={settings.permissionMode}
-      onPermissionModeChange={(mode) => updateSettings({ permissionMode: mode })}
+      onPermissionModeChange={setPermissionMode}
       queued={queued}
       queuePause={queuePause}
       attachments={attachments}
@@ -1787,8 +1783,8 @@ export function App(): JSX.Element {
       onEditQueued={handleEditQueued}
       onSendQueuedNow={(id) => void handleSendQueuedNow(id)}
       onRecallQueued={(id) => void handleRecallQueued(id)}
-      onReorderQueued={setQueuedOrder}
-      onResumeQueue={() => setQueuePause(null)}
+      onReorderQueued={handleReorderQueued}
+      onResumeQueue={handleResumeQueue}
       canResume={canResume}
       onResumeRun={() => void handleResumeRun()}
       sendOnEnter={settings.sendOnEnter}
@@ -1835,6 +1831,7 @@ export function App(): JSX.Element {
           waitingForUser={waitingForUser}
           onNewChat={(cwd) => void handleNewChat(cwd)}
           onOpen={(id) => void handleOpen(id)}
+          onFork={(id) => void handleFork(id)}
           onArchive={(id) => void handleArchiveSession(id)}
           onAddProject={() => void handleAddProject()}
           onRenameSession={(id, title) => void handleRenameSession(id, title)}
@@ -1891,9 +1888,26 @@ export function App(): JSX.Element {
                 <span className="mx-1.5 h-4 w-px shrink-0 bg-border" aria-hidden />
               ) : null}
               {isNewSession ? null : (
-                <h1 className="min-w-0 truncate text-sm font-semibold text-foreground" title={headerTitle}>
-                  {headerTitle}
-                </h1>
+                <>
+                  {activeProject ? (
+                    <>
+                      <span className="max-w-32 shrink-0 truncate text-sm text-muted-foreground" title={activeProject.name}>
+                        {activeProject.name}
+                      </span>
+                      <span className="shrink-0 text-sm text-muted-foreground" aria-hidden>/</span>
+                    </>
+                  ) : null}
+                  <h1 className="min-w-0 truncate text-sm font-semibold text-foreground" title={headerTitle}>
+                    {headerTitle}
+                  </h1>
+                  <GitStatusPopover
+                    key={`${activeId ?? ""}:${active?.cwd ?? ""}`}
+                    cwd={active?.project ? active.cwd : undefined}
+                    conversationId={activeId ?? undefined}
+                    refreshKey={conversationWorking}
+                    canReview={!narrow}
+                  />
+                </>
               )}
             </div>
             {paneCollapsed ? (
@@ -1930,6 +1944,7 @@ export function App(): JSX.Element {
                   loading={loading}
                   onRetry={handleRetry}
                   onEdit={handleEdit}
+                  onFork={handleForkFromEntry}
                   showThinking={settings.showThinking}
                   showTimestamp={settings.showTimestamps}
                   collapseRuns={settings.collapseRuns}
@@ -1956,7 +1971,7 @@ export function App(): JSX.Element {
             at all. The conversation is what a narrow screen is for. */}
         {narrow ? null : (
           <SidePane
-            cwd={activeProject?.cwd}
+            cwd={active?.project ? active.cwd : activeProject?.cwd}
             project={active?.project}
             parentId={activeId ?? undefined}
             canSideChat={Boolean(activeId && hasTranscript)}

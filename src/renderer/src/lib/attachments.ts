@@ -4,6 +4,12 @@ type NativeFile = File & { path?: string };
 
 const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp", "image/svg+xml"]);
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+/** Long clipboard text becomes a file chip instead of overwhelming the composer. */
+export const PASTED_TEXT_ATTACHMENT_THRESHOLD = 500;
+
+export function shouldAttachPastedText(text: string): boolean {
+  return text.length > PASTED_TEXT_ATTACHMENT_THRESHOLD;
+}
 
 export async function filesToAttachments(files: File[]): Promise<ChatAttachment[]> {
   const result: ChatAttachment[] = [];
@@ -54,16 +60,31 @@ export function attachmentsToImages(items: ChatAttachment[]): PromptImage[] {
  */
 export function attachmentPromptSuffix(items: ChatAttachment[]): string {
   const files = items.filter((item) => item.kind === "file" && item.path);
-  if (files.length === 0) return "";
-  return `\n\n<${ATTACHMENT_TAG}>\n${files.map((item) => `- ${item.path}`).join("\n")}\n</${ATTACHMENT_TAG}>`;
+  const pasted = items.flatMap((item) =>
+    item.kind === "file" && typeof item.text === "string"
+      ? [{ name: item.name, content: item.text }]
+      : [],
+  );
+  const blocks: string[] = [];
+  if (files.length > 0) {
+    blocks.push(`<${ATTACHMENT_TAG}>\n${files.map((item) => `- ${item.path}`).join("\n")}\n</${ATTACHMENT_TAG}>`);
+  }
+  if (pasted.length > 0) {
+    blocks.push(`<${PASTED_TEXT_TAG}>\n${JSON.stringify(pasted)}\n</${PASTED_TEXT_TAG}>`);
+  }
+  return blocks.length > 0 ? `\n\n${blocks.join("\n\n")}` : "";
 }
 
 const ATTACHMENT_TAG = "fastvibe-attachments";
+const PASTED_TEXT_TAG = "fastvibe-pasted-text";
 /**
- * The appended block, anchored to the end of the message so a prompt that merely
- * quotes the tag mid-text is left alone.
+ * Generated attachment blocks, anchored to the end so a prompt that merely quotes
+ * either tag mid-text is left alone.
  */
-const ATTACHMENT_BLOCK = new RegExp(`\\n{2,}<${ATTACHMENT_TAG}>\\n[\\s\\S]*?</${ATTACHMENT_TAG}>\\s*$`);
+const ATTACHMENT_BLOCK = new RegExp(
+  `(?:\\n{2,}<${ATTACHMENT_TAG}>\\n[\\s\\S]*?</${ATTACHMENT_TAG}>|` +
+  `\\n{2,}<${PASTED_TEXT_TAG}>\\n[\\s\\S]*?</${PASTED_TEXT_TAG}>)+\\s*$`,
+);
 
 /**
  * Strip the model-facing attachment block for display.
@@ -74,7 +95,7 @@ const ATTACHMENT_BLOCK = new RegExp(`\\n{2,}<${ATTACHMENT_TAG}>\\n[\\s\\S]*?</${
  * path list the moment the transcript is re-read.
  */
 export function stripAttachmentBlock(text: string): string {
-  if (!text.includes(`<${ATTACHMENT_TAG}>`)) return text;
+  if (!text.includes(`<${ATTACHMENT_TAG}>`) && !text.includes(`<${PASTED_TEXT_TAG}>`)) return text;
   const stripped = text.replace(ATTACHMENT_BLOCK, "");
   return stripped === text ? text : stripped.trimEnd();
 }

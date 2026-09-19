@@ -145,13 +145,16 @@ function ChangeDiffPane({
           <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} />
         </IconButton>
       </div>
-      <ScrollArea className="min-h-0 flex-1">
+      {/* Base UI's ScrollArea only mounts a vertical bar. The viewport can still
+          move sideways, but gives no visible horizontal thumb, so diffs use the
+          app's styled native two-axis scroller instead. */}
+      <div className="min-h-0 flex-1 overflow-auto">
         {file.diff ? (
           <DiffView text={file.diff} className="mt-0 max-h-none overflow-visible rounded-none border-0" />
         ) : (
           <p className="px-4 py-10 text-center text-xs leading-5 text-muted-foreground">{t("changes.noDiff")}</p>
         )}
-      </ScrollArea>
+      </div>
     </div>
   );
 }

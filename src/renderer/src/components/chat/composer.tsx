@@ -1,23 +1,17 @@
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type JSX, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Add01Icon, ArrowDown01Icon, ArrowUp02Icon, AttachmentIcon, Cancel01Icon, ChartHistogramIcon, Folder01Icon, HandIcon, MagicWand02Icon, PlayIcon, ScissorIcon, Search01Icon, ShieldAlertIcon, ShieldCheckIcon, SparklesIcon, SquareIcon, Tick02Icon } from "@hugeicons/core-free-icons";
+import { Add01Icon, ArrowDown01Icon, ArrowUp02Icon, AttachmentIcon, Cancel01Icon, ChartHistogramIcon, Folder01Icon, HandIcon, MagicWand02Icon, PlayIcon, ScissorIcon, Search01Icon, ShieldAlertIcon, ShieldCheckIcon, SparklesIcon, SquareIcon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/icon-button";
-import { ProviderIcon } from "@/components/provider-icon";
+import { ModelThinkingSelect } from "@/components/model-thinking-select";
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuGroup,
-  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
-  DropdownMenuSeparator,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Textarea } from "@/components/ui/textarea";
@@ -35,11 +29,8 @@ import type {
   QueuedPrompt,
   SessionStats,
   SlashCommand,
-  ThinkingLevel,
 } from "@shared/types";
-import { DEFAULT_THINKING_LEVELS, THINKING_LEVELS } from "@shared/types";
-import { filesToAttachments } from "@/lib/attachments";
-import { thinkingLabel } from "@/lib/thinking-levels";
+import { filesToAttachments, shouldAttachPastedText } from "@/lib/attachments";
 import { useGitStatus } from "@/lib/use-git-status";
 import { cn } from "@/lib/utils";
 import { formatDuration } from "@/lib/time";
@@ -70,15 +61,6 @@ const COMMAND_ICONS: Record<string, typeof SparklesIcon> = {
  */
 const INSTANT_COMMANDS = new Set(["plan", "goal"]);
 
-function modelKey(model: { provider: string; id: string }): string {
-  return `${model.provider}/${model.id}`;
-}
-
-function providerLabel(model: FastVibeModel): string {
-  // `custom-<slug>` is the internal id namespace, never a display name.
-  return model.providerName || model.provider.replace(/^custom-/, "");
-}
-
 function Chip({
   children,
   className,
@@ -100,24 +82,6 @@ const CONTEXT_RING_SIZE = 14;
 const CONTEXT_RING_STROKE = 2;
 const CONTEXT_RING_RADIUS = (CONTEXT_RING_SIZE - CONTEXT_RING_STROKE) / 2;
 const CONTEXT_RING_CIRCUMFERENCE = 2 * Math.PI * CONTEXT_RING_RADIUS;
-
-/**
- * A chip that only ever reads: a delegated run's pane draws the composer without its
- * menus, so the model / thinking labels are shown as plain text there. A `Chip` is a
- * button and would stay in the tab order with nothing behind it.
- */
-function StaticChip({ children, className }: { children: ReactNode; className?: string }): JSX.Element {
-  return (
-    <span
-      className={cn(
-        "inline-flex h-7 items-center gap-1 rounded-full px-2 text-sm font-normal text-muted-foreground",
-        className,
-      )}
-    >
-      {children}
-    </span>
-  );
-}
 
 function ContextUsageRing({ percent }: { percent: number }): JSX.Element {
   const clamped = Math.min(100, Math.max(0, percent));
@@ -548,31 +512,6 @@ export function Composer({
     requestAnimationFrame(() => textareaRef.current?.focus());
   }
 
-  const selected = model ? modelKey(model) : undefined;
-  const selectedModel = models.find((item) => model && modelKey(item) === selected);
-  // The menu only ever offers levels FastVibe is willing to request, i.e. never `off`.
-  // The chip still names whatever the session is actually on — a restored conversation
-  // or a model that does not think at all reports `off`, and saying 低 there would lie.
-  const thinkingOptions = selectedModel?.thinkingLevels?.length
-    ? selectedModel.thinkingLevels
-    : DEFAULT_THINKING_LEVELS;
-  const thinkingValue = (THINKING_LEVELS as readonly string[]).includes(thinkingLevel ?? "")
-    ? (thinkingLevel as ThinkingLevel)
-    : thinkingOptions[0];
-  const modelsByProvider = useMemo(() => {
-    const groups: { id: string; name: string; models: FastVibeModel[] }[] = [];
-    const index = new Map<string, number>();
-    for (const item of models) {
-      const existing = index.get(item.provider);
-      if (existing === undefined) {
-        index.set(item.provider, groups.length);
-        groups.push({ id: item.provider, name: providerLabel(item), models: [item] });
-      } else {
-        groups[existing].models.push(item);
-      }
-    }
-    return groups;
-  }, [models]);
   const hasContent = Boolean(value.trim() || attachments.length > 0);
   const filteredProjects = useMemo(() => {
     const query = projectQuery.trim().toLowerCase();
@@ -583,7 +522,9 @@ export function Composer({
   // refresh key covers both a finished turn (the agent may have committed or
   // created a branch) and an explicit switch from the branch picker.
   const [gitEpoch, setGitEpoch] = useState(0);
-  const gitStatus = useGitStatus(project, `${streaming ? "streaming" : "idle"}:${gitEpoch}`);
+  // The persistent header owns status after the first message. Stop polling here
+  // at that point so one visible repository never starts two git processes.
+  const gitStatus = useGitStatus(newSession ? project : undefined, `${streaming ? "streaming" : "idle"}:${gitEpoch}`);
   const git = gitStatus?.isRepository && gitStatus.branch ? gitStatus : null;
   // Project/branch chips only belong to an empty conversation. Once a message
   // has been sent the top bar carries the title, so the chips are dropped.
@@ -612,9 +553,26 @@ export function Composer({
 
   function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>): void {
     const files = [...event.clipboardData.files];
-    if (files.length === 0) return;
+    if (files.length > 0) {
+      event.preventDefault();
+      void addFiles(files);
+      return;
+    }
+
+    const text = event.clipboardData.getData("text/plain");
+    if (!shouldAttachPastedText(text)) return;
+
     event.preventDefault();
-    void addFiles(files);
+    onAttachmentsChange([
+      ...attachments,
+      {
+        id: crypto.randomUUID(),
+        kind: "file",
+        name: t("composer.pastedTextFile"),
+        mimeType: "text/plain",
+        text,
+      },
+    ]);
   }
 
   function handleChange(next: string): void {
@@ -855,15 +813,20 @@ export function Composer({
                       key={mode}
                       value={mode}
                       closeOnClick
-                      className={cn(
-                        "items-start gap-1.5 rounded-lg px-1.5 py-1.5 pr-7",
-                        mode === permissionMode &&
-                        mode === "full" && "text-destructive focus:text-destructive",
-                      )}
+                      className="items-start gap-1.5 rounded-lg px-1.5 py-1.5 pr-7"
                     >
-                      <HugeiconsIcon strokeWidth={2} icon={modeIcon} className="mt-0.5 size-3.5 shrink-0" />
+                      <HugeiconsIcon
+                        strokeWidth={2}
+                        icon={modeIcon}
+                        className={cn(
+                          "mt-0.5 size-3.5 shrink-0",
+                          mode === "full" && "text-destructive! **:text-destructive!",
+                        )}
+                      />
                       <span className="min-w-0">
-                        <span className="block text-sm font-medium leading-4">{permissionLabel(mode)}</span>
+                        <span className={cn("block text-sm font-medium leading-4", mode === "full" && "text-destructive!")}>
+                          {permissionLabel(mode)}
+                        </span>
                         <span className="mt-0.5 block text-xs font-normal leading-3.5 text-muted-foreground">
                           {permissionDescription(mode)}
                         </span>
@@ -906,134 +869,20 @@ export function Composer({
             </span>
           ) : null}
 
-          {readOnly ? (
-            <StaticChip className="max-w-40 @min-[22rem]/composer:max-w-72">
-              <span className="truncate">
-                {selectedModel ? (
-                  <>
-                    <span className="hidden @min-[40rem]/composer:inline">
-                      {providerLabel(selectedModel)}/{selectedModel.id}
-                    </span>
-                    <span className="@min-[40rem]/composer:hidden">
-                      {selectedModel.name || selectedModel.id}
-                    </span>
-                  </>
-                ) : model ? (
-                  // A role may pin a model this install has no catalog entry for; the
-                  // pane still says which one the run is on rather than claiming none.
-                  <span className="truncate">
-                    {model.provider}/{model.id}
-                  </span>
-                ) : (
-                  <span>{t("composer.noModels")}</span>
-                )}
-              </span>
-            </StaticChip>
-          ) : (
-          <div className="relative">
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                render={
-                  <Chip className="max-w-40 @min-[22rem]/composer:max-w-72">
-                    <span className="truncate">
-                      {selectedModel ? (
-                        <>
-                          <span className="hidden @min-[40rem]/composer:inline">
-                            {providerLabel(selectedModel)}/{selectedModel.id}
-                          </span>
-                          <span className="@min-[40rem]/composer:hidden">
-                            {selectedModel.name || selectedModel.id}
-                          </span>
-                        </>
-                      ) : (
-                        // With nothing configured there is nothing to choose, so the chip
-                        // names what it is for instead — its popover says 暂无模型 and
-                        // hands the user to 供应商.
-                        <span className={models.length === 0 ? "text-muted-foreground" : undefined}>
-                          {models.length === 0 ? t("composer.addModel") : t("composer.pickModel")}
-                        </span>
-                      )}
-                    </span>
-                    <HugeiconsIcon strokeWidth={2} icon={ArrowDown01Icon} className="size-3" />
-                  </Chip>
-                }
-              />
-              <DropdownMenuContent align="end" className="min-w-44">
-                {models.length === 0 ? (
-                  // `DropdownMenuLabel` is Base UI's `Menu.GroupLabel` and throws out of a
-                  // group — which it did here, unmounting the whole app the moment this
-                  // menu was opened on an install with no models.
-                  <DropdownMenuGroup>
-                    <DropdownMenuLabel className="font-normal text-muted-foreground">{t("composer.noModels")}</DropdownMenuLabel>
-                  </DropdownMenuGroup>
-                ) : (
-                  modelsByProvider.map((group) => {
-                    const selectedInGroup = group.models.some((item) => modelKey(item) === selected);
-                    return (
-                      <DropdownMenuSub key={group.id}>
-                        <DropdownMenuSubTrigger>
-                          <span className="flex min-w-0 flex-1 items-center gap-2">
-                            <ProviderIcon provider={group.id} />
-                            <span className="min-w-0 truncate">{group.name}</span>
-                            <span className="ml-auto flex size-4 shrink-0 items-center justify-center">
-                              {selectedInGroup ? (
-                                <HugeiconsIcon icon={Tick02Icon} strokeWidth={2} className="size-4" />
-                              ) : null}
-                            </span>
-                          </span>
-                        </DropdownMenuSubTrigger>
-                        <DropdownMenuSubContent align="start" side="right" className="min-w-52">
-                          {group.models.map((item) => (
-                            <DropdownMenuCheckboxItem
-                              key={modelKey(item)}
-                              checked={modelKey(item) === selected}
-                              onCheckedChange={() => onModelChange(item.provider, item.id)}
-                            >
-                              <span className="truncate">{item.name || item.id}</span>
-                            </DropdownMenuCheckboxItem>
-                          ))}
-                        </DropdownMenuSubContent>
-                      </DropdownMenuSub>
-                    );
-                  })
-                )}
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={onManageModels}>{t("composer.manageModels")}</DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-          )}
-
-          {readOnly ? (
-            <StaticChip>{thinkingLabel(thinkingValue)}</StaticChip>
-          ) : (
-          <span className="hidden @min-[27.5rem]/composer:contents">
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                render={
-                  <Chip>
-                    {thinkingLabel(thinkingValue)}
-                    <HugeiconsIcon strokeWidth={2} icon={ArrowDown01Icon} className="size-3" />
-                  </Chip>
-                }
-              />
-              <DropdownMenuContent align="end" className="w-36 min-w-36">
-                <DropdownMenuGroup>
-                  <DropdownMenuLabel>{t("composer.thinking")}</DropdownMenuLabel>
-                  {thinkingOptions.map((level) => (
-                    <DropdownMenuCheckboxItem
-                      key={level}
-                      checked={level === thinkingValue}
-                      onCheckedChange={() => onThinkingChange(level)}
-                    >
-                      {thinkingLabel(level)}
-                    </DropdownMenuCheckboxItem>
-                  ))}
-                </DropdownMenuGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </span>
-          )}
+          <ModelThinkingSelect
+            models={models}
+            model={model}
+            thinkingLevel={thinkingLevel}
+            readOnly={readOnly}
+            emptyModelLabel={models.length === 0 ? t("composer.addModel") : t("composer.pickModel")}
+            onManageModels={onManageModels}
+            onModelChange={(next) => {
+              if (next) onModelChange(next.provider, next.id);
+            }}
+            onThinkingChange={(level) => {
+              if (level) onThinkingChange(level);
+            }}
+          />
 
           {/* A run and a compaction are stopped the same way, so the mark that decides
               whether there is something to stop is `working`, not `streaming`: a manual

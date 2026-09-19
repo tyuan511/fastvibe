@@ -12,8 +12,10 @@ import { useSidePaneStore, type SidePaneTab } from "@/stores/side-pane";
 import { attachmentPromptSuffix, attachmentsToImages } from "@/lib/attachments";
 import { engine } from "@/lib/engine-client";
 import { translate } from "@/lib/i18n";
+import { usePermissionModeSelection } from "@/components/permission-mode-provider";
 import type { ChatAttachment, ChatMessage } from "@shared/types";
 import { parseCompactCommand } from "@shared/slash";
+import { isAbortOutcome } from "@shared/abort";
 
 function SideChatEmpty(): JSX.Element {
   const { t } = useTranslation("sidepane");
@@ -47,7 +49,7 @@ export function SidePaneChat({
   const projects = useSessionStore((state) => state.projects);
   const commands = useSessionStore((state) => state.commands);
   const settings = useSettingsStore((state) => state.settings);
-  const updateSettings = useSettingsStore((state) => state.update);
+  const { setPermissionMode } = usePermissionModeSelection();
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const messages = tab.messages ?? [];
   const streaming = Boolean(tab.streaming);
@@ -122,8 +124,10 @@ export function SidePaneChat({
       // The attachments go with it: this call used to drop them, so a picture sent
       // here reached the transcript but never the model.
       await window.fastvibe.engine.promptConversation(id, payload, attachmentsToImages(items));
-    } catch {
-      // Nothing reached the engine: drop the phantom row and hand the composer back.
+    } catch (error) {
+      // Stop means the optimistic turn did reach the engine. Its stream owns the
+      // interrupted transcript; only a real send failure should restore the draft.
+      if (isAbortOutcome(error)) return;
       patchTab(tab.id, { draft: text, messages: current, streaming: false });
       setAttachments(items);
     }
@@ -161,7 +165,7 @@ export function SidePaneChat({
           hideProjectPicker
           commands={commands}
           permissionMode={settings.permissionMode}
-          onPermissionModeChange={(next) => updateSettings({ permissionMode: next })}
+          onPermissionModeChange={setPermissionMode}
           queued={[]}
           queuePause={null}
           attachments={attachments}

@@ -18,18 +18,12 @@ import { sanitizeShortcutOverrides, type ShortcutOverrides } from "@/lib/shortcu
 const KEY = "fastvibe.settings";
 
 export type AppSettings = {
-  /**
-   * The mode the sandbox enforces right now; the composer's chip is its view. Written
-   * by the composer, and re-seeded from `defaultPermissionMode` by Main on every launch
-   * (`applyStartupPermissionMode`) so an escalated session does not outlive the app.
-   */
+  /** The mode the sandbox enforces now. Every picker persists it as the startup mode too. */
   permissionMode: PermissionMode;
-  /**
-   * 默认权限模式: what a launch starts on (设置 → 通用 → 默认权限模式). Separate from the
-   * live mode so escalating one run to 完全访问 in the composer cannot silently carry
-   * over to the next launch.
-   */
+  /** 默认权限模式: kept in sync with `permissionMode` by every permission picker. */
   defaultPermissionMode: PermissionMode;
+  /** Whether the machine-wide risk warning for 完全访问 has already been accepted. */
+  fullAccessConfirmed: boolean;
   thinkingLevel: ThinkingLevel | "auto";
   queueBehavior: QueueBehavior;
   autoCompact: boolean;
@@ -130,6 +124,7 @@ export type AppSettings = {
 const DEFAULTS: AppSettings = {
   permissionMode: "smart",
   defaultPermissionMode: "smart",
+  fullAccessConfirmed: false,
   thinkingLevel: "auto",
   queueBehavior: "followUp",
   autoCompact: true,
@@ -155,6 +150,7 @@ function sanitize(parsed: Partial<AppSettings>): Partial<AppSettings> {
   const next = { ...parsed };
   if (!isPermissionMode(next.permissionMode)) delete next.permissionMode;
   if (!isPermissionMode(next.defaultPermissionMode)) delete next.defaultPermissionMode;
+  if (typeof next.fullAccessConfirmed !== "boolean") delete next.fullAccessConfirmed;
   if (!isUiLanguage(next.uiLanguage)) delete next.uiLanguage;
   if (!isUiLanguage(next.aiLanguage)) delete next.aiLanguage;
   if (!isThemeMode(next.themeMode)) delete next.themeMode;
@@ -265,7 +261,17 @@ function read(): AppSettings {
   const disk = peekDisk();
   const existing = Object.keys(local).length > 0 || Object.keys(disk).length > 0;
   const defaults = existing ? DEFAULTS : { ...DEFAULTS, ...firstRunLanguages() };
-  return { ...defaults, ...local, ...disk };
+  const merged = { ...defaults, ...local, ...disk };
+  // Before the one-time warning existed, selecting full access was already an explicit
+  // grant. Preserve that grant across the migration rather than asking an existing user.
+  if (
+    local.fullAccessConfirmed === undefined &&
+    disk.fullAccessConfirmed === undefined &&
+    (merged.permissionMode === "full" || merged.defaultPermissionMode === "full")
+  ) {
+    merged.fullAccessConfirmed = true;
+  }
+  return merged;
 }
 
 function firstRunLanguages(): Pick<AppSettings, "uiLanguage" | "aiLanguage"> {

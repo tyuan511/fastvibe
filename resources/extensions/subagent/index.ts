@@ -41,6 +41,7 @@ const PER_TASK_OUTPUT_CAP = 50 * 1024;
 type HostSubagentRequest = {
 	subagentId: string;
 	agent: string;
+	agentSource?: "user" | "project";
 	task: string;
 	systemPrompt: string;
 	tools?: string[];
@@ -281,7 +282,6 @@ type OnUpdateCallback = (partial: AgentToolResult<SubagentDetails>) => void;
 
 interface DispatchDefaults {
 	model?: string;
-	thinkingLevel?: ThinkingLevel;
 }
 
 async function runSingleAgent(
@@ -350,12 +350,13 @@ async function runSingleAgent(
 		const response = await host.runSubagent({
 			subagentId,
 			agent: agentName,
+			agentSource: agent.source,
 			task,
 			systemPrompt: agent.systemPrompt,
 			tools: agent.tools,
 			model: agent.model,
 			fallbackModel: dispatchDefaults.model,
-			thinkingLevel: dispatchDefaults.thinkingLevel,
+			thinkingLevel: agent.thinkingLevel,
 			cwd: cwd ?? defaultCwd,
 			signal,
 		});
@@ -471,7 +472,6 @@ export default function (pi: ExtensionAPI) {
 			}
 			const dispatchDefaults: DispatchDefaults = {
 				model: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
-				thinkingLevel: ctx.thinkingLevel,
 			};
 			const discovery = discoverAgents(ctx.cwd, agentScope);
 			const agents = discovery.agents;

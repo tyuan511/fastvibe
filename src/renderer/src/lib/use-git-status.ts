@@ -14,7 +14,7 @@ const cache = new Map<string, { at: number; status: GitStatus }>();
 const inflight = new Map<string, Promise<GitStatus>>();
 
 function emptyStatus(cwd: string): GitStatus {
-  return { cwd, isRepository: false, changed: 0, staged: 0, files: [] };
+  return { cwd, isRepository: false, changed: 0, staged: 0, additions: 0, deletions: 0, files: [] };
 }
 
 export async function readGitStatus(cwd: string, force = false): Promise<GitStatus> {

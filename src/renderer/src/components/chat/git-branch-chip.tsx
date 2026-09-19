@@ -120,6 +120,12 @@ export function GitBranchChip({
       >
         <HugeiconsIcon strokeWidth={1.8} icon={GitBranchIcon} className="size-3.5 shrink-0" />
         <span className="truncate">{status.branch}</span>
+        {status.changed > 0 ? (
+          <span className="flex shrink-0 items-center gap-1.5 text-xs tabular-nums">
+            <span className="text-success">+{status.additions}</span>
+            <span className="text-destructive">-{status.deletions}</span>
+          </span>
+        ) : null}
         <HugeiconsIcon strokeWidth={1.8} icon={ArrowDown01Icon} className="size-3 shrink-0" />
       </PopoverTrigger>
       <PopoverContent

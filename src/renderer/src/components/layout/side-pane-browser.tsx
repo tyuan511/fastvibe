@@ -187,6 +187,12 @@ function createGuest(tabId: string, url: string): Entry {
   host.style.cssText = HIDDEN_HOST;
   const view = document.createElement("webview") as Guest;
   view.setAttribute("allowpopups", "true");
+  // A page's alert/confirm/prompt is a native modal by default: it lands in front of the
+  // user *and* blocks the guest, so a tool call waits on a button nobody is there to
+  // press. Auto-dismissed instead, page JS keeps running — `confirm` answers false, which
+  // is what a browser with dialogs switched off does too. Popups are a different door,
+  // closed in main (`guardGuestPopups`).
+  view.setAttribute("webpreferences", "disableDialogs=true");
   view.setAttribute("partition", "persist:fastvibe-browser");
   view.style.width = "100%";
   view.style.height = "100%";

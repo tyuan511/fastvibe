@@ -32,7 +32,11 @@
     "dist:win": "pnpm build && pnpm stage:app && electron-builder --win --publish never",
     "dist:linux": "pnpm build && pnpm stage:app && electron-builder --linux --publish never",
     "typecheck": "node scripts/check-injected-scripts.mjs && tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
-    "shadcn": "shadcn"
+    "shadcn": "shadcn",
+    "website:dev": "pnpm --filter @fastvibe/website dev",
+    "website:build": "pnpm --filter @fastvibe/website build",
+    "website:lint": "pnpm --filter @fastvibe/website lint",
+    "website:typecheck": "pnpm --filter @fastvibe/website typecheck"
   },
   "packageManager": "pnpm@11.22.0",
   "dependencies": {

@@ -1,4 +1,5 @@
 import type { ChatAttachment, ChatMessage, MessagePart, ThinkingTiming, ToolCallBlock, TuiRun } from "@shared/types";
+import { extractPromptAttachments } from "@shared/attachment-metadata";
 import { uiText } from "./ui-text";
 
 /**
@@ -99,6 +100,7 @@ export function mapEngineMessages(
     }
     const role = message.role === "assistant" || message.role === "system" ? message.role : "user";
     const { text, thinking, tools, attachments, parts } = extractContent(message.content);
+    if (role === "user") attachments.push(...extractPromptAttachments(text));
     const id = idOf?.(entry) ?? String(message.id ?? crypto.randomUUID());
     applyThinkingTimings(parts, id ? timings?.get(id) : undefined);
     const error = assistantError(message);

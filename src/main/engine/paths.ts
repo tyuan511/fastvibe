@@ -28,6 +28,8 @@ export type FastVibePaths = {
   reasoningFile: string;
   /** Append-only record of finalized turns, so 使用统计 survives session deletion. */
   usageLedgerFile: string;
+  /** Durable, Main-owned user message queue. */
+  messageQueueFile: string;
   /**
    * Remote-access password hash and device tokens.
    *
@@ -87,6 +89,7 @@ function buildFastVibePaths(): FastVibePaths {
     subagentsFile: join(agentDir, "subagents.json"),
     reasoningFile: join(runtimeRoot, "reasoning.json"),
     usageLedgerFile: join(runtimeRoot, "usage-ledger.jsonl"),
+    messageQueueFile: join(runtimeRoot, "message-queue.json"),
     remoteAccessFile: join(userData, "remote-access.json"),
   };
 }

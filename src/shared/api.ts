@@ -43,6 +43,9 @@ import type {
   BrowserImportResult,
   BrowserProfileInfo,
   BrowserRequest,
+  ChatAttachment,
+  ConversationQueueState,
+  QueueBehavior,
 } from "@shared/types";
 import type {
   AppUpdateState,
@@ -135,6 +138,24 @@ export function createFastVibeApi(t: ApiTransport) {
         items: Array<{ text: string; images?: PromptImage[] }>,
         conversationId?: string,
       ): Promise<void> => t.invoke(Ipc.engineReplaceSteering, { items, conversationId }),
+      queueAdd: (payload: {
+        conversationId: string;
+        text: string;
+        message: string;
+        behavior: QueueBehavior;
+        attachments?: ChatAttachment[];
+        images?: PromptImage[];
+      }): Promise<ConversationQueueState> => t.invoke(Ipc.engineQueueAdd, payload),
+      queueCancel: (id: string): Promise<ConversationQueueState | null> =>
+        t.invoke(Ipc.engineQueueCancel, { id }),
+      queueRecall: (id: string): Promise<ConversationQueueState | null> =>
+        t.invoke(Ipc.engineQueueRecall, { id }),
+      queueSendNow: (id: string): Promise<ConversationQueueState | null> =>
+        t.invoke(Ipc.engineQueueSendNow, { id }),
+      queueReorder: (conversationId: string, ids: string[]): Promise<ConversationQueueState> =>
+        t.invoke(Ipc.engineQueueReorder, { conversationId, ids }),
+      queueResume: (conversationId: string): Promise<ConversationQueueState> =>
+        t.invoke(Ipc.engineQueueResume, { conversationId }),
       compact: (customInstructions?: string, conversationId?: string): Promise<EngineSessionState> =>
         t.invoke(Ipc.engineCompact, { customInstructions, conversationId }),
       getCommands: (): Promise<SlashCommand[]> => t.invoke(Ipc.engineGetCommands),
@@ -193,6 +214,8 @@ export function createFastVibeApi(t: ApiTransport) {
         t.invoke(Ipc.engineSetAutoCompact, { enabled }),
       branch: (entryId: string, conversationId?: string): Promise<ChatMessage[]> =>
         t.invoke(Ipc.engineBranch, { entryId, conversationId }),
+      fork: (entryId?: string, conversationId?: string): Promise<ConversationOpenResult> =>
+        t.invoke(Ipc.engineFork, { entryId, conversationId }),
       getMessages: (conversationId?: string): Promise<ChatMessage[]> =>
         t.invoke(Ipc.engineGetMessages, { conversationId }),
       /**
@@ -323,6 +346,8 @@ export function createFastVibeApi(t: ApiTransport) {
       gitCreateBranch: (cwd: string, branch: string): Promise<GitStatus> => t.invoke(Ipc.workspaceGitCreateBranch, { cwd, branch }),
       gitStage: (cwd: string, paths?: string[], all?: boolean): Promise<GitStatus> => t.invoke(Ipc.workspaceGitStage, { cwd, paths, all }),
       gitCommit: (cwd: string, message: string): Promise<GitStatus> => t.invoke(Ipc.workspaceGitCommit, { cwd, message }),
+      gitGenerateCommitMessage: (cwd: string, conversationId?: string): Promise<string> =>
+        t.invoke(Ipc.workspaceGitGenerateCommitMessage, { cwd, conversationId }),
       gitDiff: (cwd: string, path?: string, source?: GitDiffSource): Promise<string> =>
         t.invoke(Ipc.workspaceGitDiff, { cwd, path, source }),
       gitUnstage: (cwd: string, paths: string[]): Promise<GitStatus> =>

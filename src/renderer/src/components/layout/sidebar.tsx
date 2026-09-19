@@ -557,6 +557,7 @@ function DraggableSession({
   leadSlot,
   onOpen,
   onTogglePin,
+  onFork,
   onArchive,
   onStartRename,
   onRename,
@@ -572,6 +573,7 @@ function DraggableSession({
   leadSlot?: boolean;
   onOpen: () => void;
   onTogglePin: () => void;
+  onFork: () => void;
   onArchive: () => void;
   onStartRename: () => void;
   onRename: (title: string) => void;
@@ -612,6 +614,8 @@ function DraggableSession({
         <ContextMenuContent className="w-32">
           <ContextMenuItem onClick={onTogglePin}>{isPinned ? t("sidebar.unpin") : t("sidebar.pin")}</ContextMenuItem>
           <ContextMenuItem onClick={onStartRename}>{t("sidebar.rename")}</ContextMenuItem>
+          <ContextMenuItem onClick={onFork}>{t("sidebar.fork")}</ContextMenuItem>
+          <ContextMenuSeparator />
           <ContextMenuItem onClick={onArchive}>{t("sidebar.archive")}</ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
@@ -628,6 +632,7 @@ export function Sidebar({
   waitingForUser,
   onNewChat,
   onOpen,
+  onFork,
   onArchive,
   onAddProject,
   onRenameSession,
@@ -647,6 +652,8 @@ export function Sidebar({
   waitingForUser: Record<string, boolean>;
   onNewChat: (cwd?: string) => void;
   onOpen: (id: string) => void;
+  /** Copies a settled chat at its current tip and opens the new conversation. */
+  onFork: (id: string) => void;
   /** Hides the chat from every list; the shell also closes it when it is on screen. */
   onArchive: (id: string) => void;
   onAddProject: () => void;
@@ -864,6 +871,7 @@ export function Sidebar({
         leadSlot={leadSlot}
         onOpen={() => onOpen(item.id)}
         onTogglePin={() => togglePinned(item.id)}
+        onFork={() => onFork(item.id)}
         onArchive={() => onArchive(item.id)}
         onStartRename={() => setRenaming({ type: "session", id: item.id })}
         onRename={(title) => {
