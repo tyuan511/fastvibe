@@ -11,6 +11,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { CHAT_COLUMN_CLASS } from "@/lib/chat-layout";
 import type { PermissionRequest } from "@shared/types";
 
 export type PermissionResponse = {
@@ -21,6 +22,7 @@ export type PermissionResponse = {
   always?: boolean;
   /** Positional answers for a `questions` prompt; `null` marks a skipped question. */
   answers?: Array<string | null>;
+  planAction?: "approve" | "revise" | "ignore";
 };
 
 type Respond = (payload: PermissionResponse) => void;
@@ -58,6 +60,8 @@ export function PermissionPanel({ request, onRespond }: { request: PermissionReq
       return <InputPanel request={request} onRespond={onRespond} />;
     case "questions":
       return <QuestionsPanel request={request} onRespond={onRespond} />;
+    case "plan_review":
+      return <PlanReviewPanel request={request} onRespond={onRespond} />;
     default:
       return null;
   }
@@ -209,6 +213,49 @@ function CustomInputRow({
         onChange={(event) => onChange(event.target.value)}
         className={INLINE_INPUT}
       />
+    </div>
+  );
+}
+
+function PlanReviewPanel({ request, onRespond }: { request: PermissionRequest; onRespond: Respond }): JSX.Element {
+  const { t } = useTranslation("chat");
+  const [feedback, setFeedback] = useState("");
+  const plan = request.plan;
+  const approve = useCallback(() => onRespond({ id: request.id, planAction: "approve" }), [onRespond, request.id]);
+  const revise = useCallback(() => {
+    if (feedback.trim()) onRespond({ id: request.id, planAction: "revise", value: feedback.trim() });
+  }, [feedback, onRespond, request.id]);
+  return (
+    <div className={cn(CHAT_COLUMN_CLASS, "pb-4")}>
+      <div className="overflow-hidden rounded-xl border border-border bg-card px-3 py-3 shadow-sm">
+        <div className="flex items-center gap-3 pb-2">
+          <span className="rounded-full border border-border px-2.5 py-0.5 text-xs font-semibold text-foreground">需要权限</span>
+          <span className="text-sm font-semibold text-foreground">实施计划</span>
+          <span className="ml-auto text-xs tabular-nums text-muted-foreground">‹　1 / 1　›</span>
+        </div>
+        <button type="button" onClick={approve} className="flex w-full items-center gap-3 rounded-lg bg-muted/70 px-3 py-2 text-left transition-colors hover:bg-muted">
+          <span className="text-sm text-muted-foreground">1.</span>
+          <span className="text-sm font-semibold text-foreground">批准</span>
+          <span className="text-sm text-muted-foreground">退出计划模式并开始实施。</span>
+        </button>
+        <Input
+          value={feedback}
+          onChange={(event) => setFeedback(event.target.value)}
+          placeholder={t("plan.revisionPlaceholder")}
+          className="mt-2 h-9 border-0 bg-transparent px-3 text-sm shadow-none placeholder:text-muted-foreground/60 focus-visible:ring-0"
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              revise();
+            }
+          }}
+        />
+        <div className="mt-4 flex items-center gap-3 text-xs text-muted-foreground">
+          <span className="flex min-w-0 flex-1 items-center gap-1.5"><span>ⓘ</span>使用 Tab / 上下键选择，回车或空格选中</span>
+          <Button size="sm" variant="outline" onClick={() => onRespond({ id: request.id, planAction: "ignore" })}>忽略</Button>
+          <Button size="sm" disabled={!feedback.trim()} onClick={revise}>提交</Button>
+        </div>
+      </div>
     </div>
   );
 }

@@ -29,6 +29,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Verify tag version
+        run: test "${GITHUB_REF_NAME}" = "v$(node -p \"require('./package.json').version\")"
+
       - uses: pnpm/action-setup@v6
 
       - uses: actions/setup-node@v7

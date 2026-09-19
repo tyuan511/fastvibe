@@ -46,7 +46,7 @@ export function TurnFileChips({ files, className }: { files: ChangedFile[]; clas
           <FileChip
             key={file.path}
             file={file}
-            // The chip is the only way into 本轮修改: the pane itself has no 打开
+            // The chip is the only way into 修改记录: the pane itself has no 打开
             // entry, and 审查's git diff is a different question (working tree vs HEAD).
             onOpen={(changed) => openTurnChanges(files, changed.path)}
           />

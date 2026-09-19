@@ -129,7 +129,14 @@
   },
   "plan": {
     "label": "计划模式",
-    "exit": "退出计划模式"
+    "exit": "退出计划模式",
+    "preview": "计划",
+    "viewFull": "查看完整计划",
+    "approve": "批准并执行",
+    "revise": "输入修改意见",
+    "ignore": "忽略并停止",
+    "revisionPlaceholder": "告诉模型需要如何修改计划…",
+    "hint": "批准后退出计划模式并开始执行"
   },
   "goal": {
     "label": "目标模式",

@@ -1,12 +1,11 @@
-import { useEffect, type JSX } from "react";
+import { useEffect, useRef, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { i18n } from "@/lib/i18n";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { toast } from "sonner";
 import {
-  Alert02Icon,
   Cancel01Icon,
   Delete02Icon,
-  InformationCircleIcon,
   InformationSquareIcon,
   PauseIcon,
   PlayIcon,
@@ -14,10 +13,12 @@ import {
   TaskDaily01Icon,
 } from "@hugeicons/core-free-icons";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { engine } from "@/lib/engine-client";
 import { IconButton } from "@/components/icon-button";
 import { cn } from "@/lib/utils";
 import { useSessionStore, useExtensionStatus, useExtensionWidgets } from "@/stores/session";
+import { useSidePaneStore } from "@/stores/side-pane";
 import { TuiLines } from "./tui-lines";
 
 /**
@@ -25,7 +26,56 @@ import { TuiLines } from "./tui-lines";
  * line above the composer: `plan-mode` becomes a badge beside the permission
  * control, `goal` becomes the `GoalPanel`.
  */
-const BADGE_STATUS_KEYS = new Set(["plan-mode", "goal", "goal-armed"]);
+const BADGE_STATUS_KEYS = new Set(["plan-mode", "plan-review", "goal", "goal-armed"]);
+
+type PlanPayload = { path: string; title: string; summary: string };
+
+function parsePlan(raw?: string): PlanPayload | null {
+  if (!raw) return null;
+  try {
+    const value = JSON.parse(raw) as Partial<PlanPayload>;
+    return typeof value.path === "string" && typeof value.title === "string" && typeof value.summary === "string"
+      ? { path: value.path, title: value.title, summary: value.summary }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function PlanPreview(): JSX.Element | null {
+  const { t } = useTranslation("chat");
+  const plan = parsePlan(useExtensionStatus()["plan-review"]);
+  const openPlanPreview = useSidePaneStore((state) => state.openPlanPreview);
+  if (!plan) return null;
+  const open = () => {
+    void window.fastvibe.workspace.preview(plan.path).then((preview) => openPlanPreview(preview, plan.title)).catch(() => undefined);
+  };
+  const [intro, ...rest] = plan.summary.split(/\n\n+/);
+  return (
+    <div className="w-full pb-3">
+      <div className="relative max-h-[24rem] overflow-hidden rounded-xl border border-border bg-card px-5 py-4 shadow-sm">
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <HugeiconsIcon strokeWidth={1.8} icon={TaskDaily01Icon} className="size-4" />
+          <span>计划</span>
+          <button type="button" aria-label="复制计划" className="ml-auto text-foreground/80" onClick={() => void navigator.clipboard?.writeText(plan.summary)}>⧉</button>
+        </div>
+        <h2 className="mt-5 text-xl font-bold text-foreground">{plan.title}</h2>
+        <p className="mt-5 border-l-2 border-muted-foreground/20 pl-3 text-sm leading-6 text-muted-foreground">{intro}</p>
+        {rest.map((section, index) => {
+          const [heading, ...body] = section.split("\n");
+          return (
+            <div key={index} className="mt-5 text-sm leading-6 text-muted-foreground">
+              {heading.startsWith("## ") ? <h3 className="font-semibold text-foreground/80">{heading.slice(3)}</h3> : null}
+              <p className="whitespace-pre-wrap">{(heading.startsWith("## ") ? body : [heading, ...body]).join("\n")}</p>
+            </div>
+          );
+        })}
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-32 bg-gradient-to-t from-card via-card/90 to-transparent" />
+        <Button type="button" size="default" className="absolute bottom-4 left-1/2 z-10 -translate-x-1/2 rounded-full px-5 text-sm" onClick={open}>{t("plan.viewFull")}　→</Button>
+      </div>
+    </div>
+  );
+}
 
 async function runExtensionCommand(command: string): Promise<void> {
   try {
@@ -232,9 +282,10 @@ export function ExtensionWidgets({ className }: { className?: string }): JSX.Ele
   const widgets = useExtensionWidgets();
   const statusEntries = Object.entries(status).filter(([key, text]) => text && !BADGE_STATUS_KEYS.has(key));
   const widgetEntries = Object.values(widgets);
-  if (statusEntries.length === 0 && widgetEntries.length === 0) return null;
+  if (statusEntries.length === 0 && widgetEntries.length === 0 && !status["plan-review"]) return null;
   return (
     <div className={cn("mx-auto w-full max-w-3xl space-y-1.5 px-6", className)}>
+      <PlanPreview />
       {statusEntries.map(([key, text]) => (
         <div key={key} className="flex items-center gap-2 text-xs text-muted-foreground">
           <HugeiconsIcon strokeWidth={2} icon={InformationSquareIcon} className="size-3.5 shrink-0" />
@@ -263,44 +314,24 @@ export function ExtensionWidgets({ className }: { className?: string }): JSX.Ele
 
 /** Transient extension notices (`ctx.ui.notify()`), stacked bottom-right. */
 export function ExtensionNotices(): JSX.Element | null {
-  const { t } = useTranslation("chat");
   const notices = useSessionStore((state) => state.notices);
   const dismissNotice = useSessionStore((state) => state.dismissNotice);
+  const shown = useRef(new Set<string>());
 
   useEffect(() => {
-    if (notices.length === 0) return;
-    const timers = notices.map((notice) => window.setTimeout(() => dismissNotice(notice.id), 6000));
-    return () => timers.forEach((timer) => window.clearTimeout(timer));
+    for (const notice of notices) {
+      if (shown.current.has(notice.id)) continue;
+      shown.current.add(notice.id);
+      const show = notice.level === "error" ? toast.error : notice.level === "warning" ? toast.warning : toast.info;
+      show(notice.message, {
+        id: notice.id,
+        onDismiss: () => {
+          shown.current.delete(notice.id);
+          dismissNotice(notice.id);
+        },
+      });
+    }
   }, [notices, dismissNotice]);
 
-  if (notices.length === 0) return null;
-  return (
-    <div className="pointer-events-none fixed right-4 bottom-4 z-50 flex w-[min(22rem,calc(100vw-2rem))] flex-col gap-1.5">
-      {notices.map((notice) => (
-        <div
-          key={notice.id}
-          className={cn(
-            "pointer-events-auto flex items-start gap-2 rounded-xl border border-border bg-popover px-3 py-2 text-xs shadow-sm",
-            notice.level === "error" && "border-destructive/40 text-destructive",
-            notice.level === "warning" && "text-warning",
-          )}
-        >
-          <HugeiconsIcon
-            strokeWidth={2}
-            icon={notice.level === "info" ? InformationCircleIcon : Alert02Icon}
-            className="mt-0.5 size-3.5 shrink-0"
-          />
-          <span className="min-w-0 flex-1 whitespace-pre-wrap break-words">{notice.message}</span>
-          <button
-            type="button"
-            aria-label={t("notice.close")}
-            className="-mr-1 -mt-0.5 shrink-0 rounded-full p-0.5 text-muted-foreground hover:bg-muted"
-            onClick={() => dismissNotice(notice.id)}
-          >
-            <HugeiconsIcon strokeWidth={2} icon={Cancel01Icon} className="size-3" />
-          </button>
-        </div>
-      ))}
-    </div>
-  );
+  return null;
 }

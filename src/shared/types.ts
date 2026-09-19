@@ -482,7 +482,7 @@ export type PermissionRequest = {
   id: string;
   /** Conversation that owns the blocking extension request. */
   conversationId?: string;
-  method: "confirm" | "select" | "input" | "editor" | "questions" | "custom";
+  method: "confirm" | "select" | "input" | "editor" | "questions" | "plan_review" | "custom";
   title?: string;
   message?: string;
   /** Placeholder for `input` dialogs. */
@@ -492,6 +492,8 @@ export type PermissionRequest = {
   /** Multi-question payload for `method: "questions"`. */
   questions?: PermissionQuestion[];
   timeout?: number;
+  /** Plan document metadata shown by the plan review panel. */
+  plan?: { path: string; title: string; summary: string };
 };
 
 export type QueueBehavior = "steer" | "followUp";
@@ -976,6 +978,8 @@ export type UsageModelBreakdown = UsageMetrics & {
    */
   providerName?: string;
   model: string;
+  /** Per-day model usage for the trend chart; absent only in older responses. */
+  days?: UsageDay[];
 };
 
 export type UsageStats = {
@@ -990,6 +994,11 @@ export type UsageStats = {
   models: UsageModelBreakdown[];
   /** Session transcripts that contributed to the totals. */
   sessions: number;
+  /** Longest span between turns in one session, in minutes. */
+  longestSessionMinutes: number;
+  /** Consecutive active days ending today, and the longest such run. */
+  currentStreak: number;
+  longestStreak: number;
 };
 
 /**

@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 
@@ -9,9 +10,11 @@ import { delimiter, join } from "node:path";
  * installed. We prepend the well-known bins for this OS — only directories that
  * actually exist, and only if they are not already on PATH.
  *
- * A login-shell dump would be more complete, but it is slow, can hang on a
- * heavy `.zshrc`, and is not what we want at every launch. Existing entries are
- * left in place so a terminal-launched `pnpm dev` keeps the user's order.
+ * We also ask the user's login shell for its PATH. This is intentionally
+ * shell-oriented rather than manager-oriented: fnm, nvm, mise, Homebrew and
+ * user-defined tools can all configure themselves from the same shell startup
+ * files. A broken or slow startup file is not allowed to prevent the app from
+ * launching; the fixed directories below remain the fallback.
  */
 export function applyShellPath(
   env: NodeJS.ProcessEnv = process.env,
@@ -20,14 +23,13 @@ export function applyShellPath(
 ): string {
   const key = Object.keys(env).find((name) => name.toLowerCase() === "path") ?? "PATH";
   const current = env[key] ?? "";
-  const existing = current.split(delimiter).filter(Boolean);
+  const shellEntries = shellPathEntries(env, platform);
+  const existing = [...shellEntries, ...current.split(delimiter).filter(Boolean)].filter(
+    (entry, index, entries) => entries.indexOf(entry) === index,
+  );
   const extras = commonPathDirs(platform, home, env).filter(
     (dir) => existsSync(dir) && !hasPathEntry(existing, dir, platform),
   );
-  if (extras.length === 0) {
-    env[key] = current;
-    return current;
-  }
   const next = [...extras, ...existing].join(delimiter);
   env[key] = next;
   return next;
@@ -100,6 +102,39 @@ export function commonPathDirs(
   }
 
   return [local];
+}
+
+const SHELL_PATH_START = "__FASTVIBE_PATH_START__";
+const SHELL_PATH_END = "__FASTVIBE_PATH_END__";
+const SHELL_PATH_TIMEOUT_MS = 1_500;
+
+function shellPathEntries(
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+): string[] {
+  if (platform === "win32") return [];
+  const shell = env.SHELL || (platform === "darwin" ? "/bin/zsh" : "/bin/sh");
+  if (!shell.startsWith("/")) return [];
+
+  try {
+    const output = execFileSync(
+      shell,
+      ["-ilc", `printf '${SHELL_PATH_START}%s${SHELL_PATH_END}' "$PATH"`],
+      {
+        env: { ...env },
+        encoding: "utf8",
+        timeout: SHELL_PATH_TIMEOUT_MS,
+        maxBuffer: 1024 * 1024,
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    );
+    const match = output.match(
+      new RegExp(`${SHELL_PATH_START}([\\s\\S]*?)${SHELL_PATH_END}`),
+    );
+    return match?.[1]?.split(delimiter).filter(Boolean) ?? [];
+  } catch {
+    return [];
+  }
 }
 
 function hasPathEntry(entries: string[], dir: string, platform: NodeJS.Platform): boolean {

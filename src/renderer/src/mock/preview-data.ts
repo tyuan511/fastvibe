@@ -546,6 +546,9 @@ export const USAGE: UsageStats = {
     { provider: "deepseek", model: "deepseek-chat", input: 209_000, output: 20_200, cacheRead: 75_200, cacheWrite: 7_300, tokens: 304_800, cost: 2.0, requests: 52, toolCalls: 124 },
   ],
   sessions: 37,
+  longestSessionMinutes: 19,
+  currentStreak: 1,
+  longestStreak: 3,
 };
 
 /** A small project tree for the right pane's 文件 tab. */

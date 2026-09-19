@@ -168,7 +168,7 @@ export function SettingsDialog({
 
       <ScrollArea className="min-h-0 flex-1">
         <div className="mx-auto w-full max-w-200 px-8 py-8">
-          <h2 className="mb-5 text-xl font-medium tracking-tight">
+          <h2 className={cn("mb-5 text-xl font-medium tracking-tight", section === "usage" && "hidden")}>
             {settingsSectionLabel(section)}
           </h2>
 

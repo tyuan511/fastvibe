@@ -1,7 +1,7 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useRef, useState, type JSX } from "react";
 import { motion } from "motion/react";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { AlertCircleIcon, MessageSquarePlusIcon, PanelLeftOpenIcon, PanelRightOpenIcon, Settings01Icon } from "@hugeicons/core-free-icons";
+import { MessageSquarePlusIcon, PanelLeftOpenIcon, PanelRightOpenIcon } from "@hugeicons/core-free-icons";
 import { useLocation, useMatch, useNavigate, useNavigationType } from "react-router";
 import { Composer } from "@/components/chat/composer";
 import { ExtensionNotices, ExtensionWidgets, GoalPanel } from "@/components/chat/extension-surface";
@@ -19,7 +19,7 @@ import { CommandPalette } from "@/components/layout/command-palette";
 import { TitleBar } from "@/components/layout/title-bar";
 import { HAS_CUSTOM_TITLE_BAR, HAS_TRAFFIC_LIGHTS } from "@/lib/platform";
 import { Toaster } from "@/components/ui/sonner";
-import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { toast } from "sonner";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -341,7 +341,6 @@ export function App(): JSX.Element {
   const waitingForUser = useSessionStore((state) => state.waitingForUser);
   const stats = useSessionStore((state) => state.stats);
   const draft = useSessionStore((state) => state.draft);
-  const error = useSessionStore((state) => state.error);
   const setStatus = useSessionStore((state) => state.setStatus);
   const setSession = useSessionStore((state) => state.setSession);
   const setModels = useSessionStore((state) => state.setModels);
@@ -350,7 +349,14 @@ export function App(): JSX.Element {
   const setActiveId = useSessionStore((state) => state.setActiveId);
   const setMessages = useSessionStore((state) => state.setMessages);
   const setDraft = useSessionStore((state) => state.setDraft);
-  const setError = useSessionStore((state) => state.setError);
+  const setStoreError = useSessionStore((state) => state.setError);
+  const setError = useCallback(
+    (message: string | null) => {
+      if (message) toast.error(message);
+      else setStoreError(null);
+    },
+    [setStoreError],
+  );
   const addUserMessage = useSessionStore((state) => state.addUserMessage);
   const applyEvent = useSessionStore((state) => state.applyEvent);
   const setStreaming = useSessionStore((state) => state.setStreaming);
@@ -873,12 +879,6 @@ export function App(): JSX.Element {
     (status.state === "ready" || status.state === "starting" || status.state === "idle");
   const active = conversations.find((item) => item.id === activeId);
   const activeProject = projects.find((item) => item.cwd === active?.project);
-  const banner =
-    status.state === "missing" || status.state === "error"
-      ? t("errors.cannotStart")
-      : error
-        ? error
-        : null;
   // Unbound conversations run in a hidden scratch dir, so never surface that path.
   const workspaceLabel = activeProject?.name ?? t("workspace.noProject");
 
@@ -895,11 +895,36 @@ export function App(): JSX.Element {
       .catch(() => undefined);
   }, [settingsOpen, active?.project]);
 
-  // The nudge exists to explain a refused send — once a model is configured there is
-  // nothing left to explain, and 供应商 hands the refreshed list over itself.
+  // Global engine failures and the model-less first-run nudge belong in the toast
+  // layer, rather than taking space from the transcript and composer.
+  useEffect(() => {
+    if (!engineKnown || status.state === "starting") return;
+    if (status.state === "missing" || status.state === "error") {
+      toast.error(t("errors.cannotStart"), {
+        id: "engine-start-error",
+        action: {
+          label: t("alert.retry"),
+          onClick: () => void start(status.cwd),
+        },
+      });
+    }
+  }, [engineKnown, status.state, status.cwd, t]);
+
   useEffect(() => {
     if (models.length > 0) setNeedsModel(false);
   }, [models.length]);
+
+  useEffect(() => {
+    if (!needsModel) return;
+    toast.info(t("alert.noModelTitle"), {
+      id: "no-model",
+      description: t("alert.noModelDesc"),
+      action: {
+        label: t("alert.goSettings"),
+        onClick: () => navigate("/settings/providers"),
+      },
+    });
+  }, [needsModel, navigate, t]);
 
   function applyOpen(result: ConversationOpenResult): void {
     applySnapshot(result);
@@ -1711,45 +1736,6 @@ export function App(): JSX.Element {
   // A fresh conversation swaps the transcript for the centred greeting hero.
   const showHero = empty && !loading;
 
-  const bannerNode = (
-    <>
-      {needsModel ? (
-        <div className="mx-auto mb-2 w-full max-w-3xl px-6">
-          <Alert>
-            <HugeiconsIcon strokeWidth={2} icon={Settings01Icon} />
-            <AlertTitle>{t("alert.noModelTitle")}</AlertTitle>
-            <AlertDescription>{t("alert.noModelDesc")}</AlertDescription>
-            <AlertAction>
-              <Button size="xs" variant="outline" onClick={() => navigate("/settings/providers")}>
-                {t("alert.goSettings")}
-              </Button>
-            </AlertAction>
-          </Alert>
-        </div>
-      ) : null}
-      {banner ? (
-        <div className="mx-auto mb-2 w-full max-w-3xl px-6">
-          <Alert variant="destructive">
-            <HugeiconsIcon strokeWidth={2} icon={AlertCircleIcon} />
-            <AlertTitle>{t("alert.problemTitle")}</AlertTitle>
-            <AlertDescription>{banner}</AlertDescription>
-            {status.state === "missing" || status.state === "error" ? (
-              <AlertAction>
-                <Button
-                  size="xs"
-                  variant="outline"
-                  onClick={() => void start(status.cwd)}
-                >
-                  {t("alert.retry")}
-                </Button>
-              </AlertAction>
-            ) : null}
-          </Alert>
-        </div>
-      ) : null}
-    </>
-  );
-
   // The composer's `/` palette: one entry per installed skill, then the engine's
   // own commands (extension commands, prompt templates, …). `getCommands()` does
   // not enumerate skill commands yet, so those are appended here.
@@ -1928,7 +1914,6 @@ export function App(): JSX.Element {
             // New conversation: the greeting hero sits above the composer and the
             // suggestion chips below it, with the group centred like the reference.
             <div className="flex min-h-0 w-full flex-1 flex-col items-center justify-center gap-6">
-              {bannerNode}
               <NewSessionHero />
               <ExtensionWidgets className="pb-2" />
               <GoalPanel className="pb-2" disabled={conversationWorking} />
@@ -1958,7 +1943,6 @@ export function App(): JSX.Element {
                   scroller reserves a scrollbar gutter, so this box reserves the same one
                   (`transcript-gutter`) and both columns land on the same edges. */}
               <div className="safe-bottom transcript-gutter overflow-hidden">
-                {bannerNode}
                 <ExtensionWidgets className="pb-2" />
                 <GoalPanel className="pb-2" disabled={conversationWorking} />
                 <TodoPanel className="pb-2" />

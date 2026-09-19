@@ -13,13 +13,7 @@ import {
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Item, ItemActions, ItemContent, ItemDescription, ItemMedia, ItemTitle } from "@/components/ui/item";
 import {
   Dialog,
   DialogContent,
@@ -182,7 +176,7 @@ export function SkillsSettings(): JSX.Element {
       </div>
 
       {visible.length ? (
-        <div className="grid gap-2.5 sm:grid-cols-2">
+        <div className="grid gap-2.5">
           {visible.map((skill) => (
             <SkillCard
               key={`${skill.scope}:${skill.filePath}`}
@@ -228,35 +222,25 @@ function SkillCard({ skill, onRemove }: { skill: SkillInfo; onRemove: () => void
         ? t("skills.scopeTemporary")
         : t("skills.scopeGlobal");
   return (
-    <Card size="sm" className="gap-3 transition-colors hover:ring-foreground/20">
-      <CardHeader>
-        <div className="flex min-w-0 items-start gap-2.5">
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
-            <HugeiconsIcon strokeWidth={2} icon={MagicWand02Icon} className="size-4" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <CardTitle title={skill.name} className="truncate">
-              {skill.name}
-            </CardTitle>
-            <div className="mt-1">
-              <Badge variant="secondary">{scopeLabel}</Badge>
-            </div>
-          </div>
+    <Item variant="outline" size="sm" className="items-start gap-3 bg-card/80 p-3 transition-colors hover:border-primary/30 hover:bg-muted/20">
+      <ItemMedia variant="icon" className="mt-0.5 size-9 rounded-xl bg-primary/10 text-primary ring-1 ring-primary/15">
+        <HugeiconsIcon strokeWidth={2} icon={MagicWand02Icon} className="size-4" />
+      </ItemMedia>
+      <ItemContent className="min-w-0 gap-1.5">
+        <div className="flex min-w-0 items-center gap-2">
+          <ItemTitle title={skill.name} className="min-w-0 truncate text-base">{skill.name}</ItemTitle>
+          <Badge variant="secondary" className="shrink-0">{scopeLabel}</Badge>
         </div>
-        {skill.removable ? (
-          <CardAction>
-            <IconButton label={t("skills.delete")} size="icon-xs" variant="ghost" onClick={onRemove}>
-              <HugeiconsIcon strokeWidth={2} icon={Delete02Icon} />
-            </IconButton>
-          </CardAction>
-        ) : null}
-      </CardHeader>
-      <CardContent>
-        <p className="line-clamp-2 min-h-10 text-sm leading-5 text-muted-foreground">
-          {skill.description}
-        </p>
-      </CardContent>
-    </Card>
+        <ItemDescription className="line-clamp-1">{skill.description}</ItemDescription>
+      </ItemContent>
+      {skill.removable ? (
+        <ItemActions className="ml-auto shrink-0 self-center">
+          <IconButton label={t("skills.delete")} size="icon-xs" variant="ghost" onClick={onRemove}>
+            <HugeiconsIcon strokeWidth={2} icon={Delete02Icon} />
+          </IconButton>
+        </ItemActions>
+      ) : null}
+    </Item>
   );
 }
 

@@ -117,19 +117,23 @@ export class SubagentManager {
     const description = draft.description.trim();
     const systemPrompt = draft.systemPrompt.trim();
     const tools = [...new Set(draft.tools.map((tool) => tool.trim()).filter(Boolean))];
-    if (!NAME_PATTERN.test(name)) throw new Error(uiText("子 Agent 名称只能包含字母、数字、下划线和连字符", "Subagent names may contain only letters, numbers, underscores and hyphens"));
-    if (!description) throw new Error(uiText("子 Agent 描述不能为空", "Subagent description is required"));
-    if (!systemPrompt) throw new Error(uiText("子 Agent 提示词不能为空", "Subagent system prompt is required"));
-    if (draft.model && !MODEL_PATTERN.test(draft.model.trim())) throw new Error(uiText("模型格式应为 provider/model", "Model must use the provider/model format"));
-
     const current = draft.id ? this.list().find((item) => item.id === draft.id) : undefined;
+
+    // Built-in agents only persist a model override. Their prompt comes from the
+    // bundled role file and is intentionally not sent back by the settings form.
     if (current?.source === "builtin") {
+      if (draft.model && !MODEL_PATTERN.test(draft.model.trim())) throw new Error(uiText("模型格式应为 provider/model", "Model must use the provider/model format"));
       const overrides = this.#readOverrides();
       if (draft.model?.trim()) overrides.models[current.id] = draft.model.trim();
       else delete overrides.models[current.id];
       this.#writeOverrides(overrides);
       return this.list();
     }
+
+    if (!NAME_PATTERN.test(name)) throw new Error(uiText("子 Agent 名称只能包含字母、数字、下划线和连字符", "Subagent names may contain only letters, numbers, underscores and hyphens"));
+    if (!description) throw new Error(uiText("子 Agent 描述不能为空", "Subagent description is required"));
+    if (!systemPrompt) throw new Error(uiText("子 Agent 提示词不能为空", "Subagent system prompt is required"));
+    if (draft.model && !MODEL_PATTERN.test(draft.model.trim())) throw new Error(uiText("模型格式应为 provider/model", "Model must use the provider/model format"));
 
     const id = current?.id ?? this.#newId(name);
     const duplicate = this.list().find((item) => item.id !== id && item.name.toLowerCase() === name.toLowerCase());

@@ -42,7 +42,7 @@ import { MIN_WIDTH, useSidePaneStore, type SidePaneTab, sidePaneTabTitle } from 
 import { releaseBrowser, SidePaneBrowser } from "./side-pane-browser";
 import { SidePaneChat } from "./side-pane-chat";
 import { SidePaneChanges } from "./side-pane-changes";
-import { SidePaneFiles } from "./side-pane-files";
+import { SidePaneFiles, SidePanePlan } from "./side-pane-files";
 import { SidePaneGit } from "./side-pane-git";
 import { SidePaneSubagent } from "./side-pane-subagent";
 import { releaseTerminal } from "./side-pane-terminal-registry";
@@ -154,7 +154,7 @@ function tabIcon(type: SidePaneTab["type"]) {
   if (type === "terminal") return TerminalIcon;
   if (type === "browser") return ChromeIcon;
   if (type === "selection-side-chat") return MessageSquareIcon;
-  if (type === "files") return Folder01Icon;
+  if (type === "files" || type === "plan") return Folder01Icon;
   return File01Icon;
 }
 
@@ -287,7 +287,7 @@ export function SidePane({
       : null,
     { id: "files", label: t("pane.files"), icon: Folder01Icon, onOpen: openFiles },
     hasReviewTab ? null : { id: "review", label: t("pane.review"), icon: GitCompareIcon, onOpen: openGit },
-    // 本轮修改 is chip-only: the transcript's file chips mint that tab. A card
+    // 修改记录 is chip-only: the transcript's file chips mint that tab. A card
     // here would let the pane open an empty turn-changes view on its own.
     { id: "terminal", label: t("pane.terminal"), icon: TerminalIcon, onOpen: () => openTerminal(cwd) },
     {
@@ -513,7 +513,7 @@ export function SidePane({
             <SidePaneChat tab={active} project={project} parentId={parentId} />
           ) : null}
           {visibleTabs.map((tab) =>
-            tab.type === "terminal" || tab.type === "browser" || tab.type === "files" || tab.type === "subagent" ? (
+            tab.type === "terminal" || tab.type === "browser" || tab.type === "files" || tab.type === "plan" || tab.type === "subagent" ? (
               <div key={tab.id} hidden={tab.id !== activeTabId} className="flex min-h-0 flex-1 flex-col">
                 {tab.type === "terminal" ? (
                   <Suspense fallback={<div className="min-h-0 flex-1" />}>
@@ -522,7 +522,7 @@ export function SidePane({
                 ) : tab.type === "browser" ? (
                   <SidePaneBrowser tabId={tab.id} url={tab.url ?? ""} visible={tab.id === activeTabId} />
                 ) : (
-                  tab.type === "files" ? <SidePaneFiles tab={tab} cwd={cwd} onError={onError} /> : <SidePaneSubagent tab={tab} />
+                  tab.type === "files" ? <SidePaneFiles tab={tab} cwd={cwd} onError={onError} /> : tab.type === "plan" ? <SidePanePlan tab={tab} /> : <SidePaneSubagent tab={tab} />
                 )}
               </div>
             ) : null,

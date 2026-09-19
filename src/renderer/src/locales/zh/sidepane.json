@@ -4,7 +4,7 @@
     "terminal": "终端",
     "browser": "浏览器",
     "files": "文件",
-    "changes": "本轮修改",
+    "changes": "修改记录",
     "subagent": "子 Agent",
     "sideChat": "辅助对话 {{n}}",
     "status": {

@@ -54,12 +54,12 @@ export const DiffView = memo(function DiffView({
   return (
     <div
       className={cn(
-        "mt-1.5 max-h-80 overflow-auto rounded-md border border-border bg-background font-mono text-sm leading-5 select-text",
+        "mt-1.5 max-h-80 overflow-auto rounded-md border border-border bg-background font-mono text-xs leading-5 select-text",
         className,
       )}
     >
       {rows.map((row, index) => (
-        <div key={index} className={cn("flex min-w-full border-l-2 border-l-transparent", ROW_STYLE[row.kind])}>
+        <div key={index} className={cn("flex w-max min-w-full border-l-2 border-l-transparent", ROW_STYLE[row.kind])}>
           {numberWidth > 0 ? <Gutter row={row} width={numberWidth} /> : null}
           <span aria-hidden className={cn("w-4 shrink-0 text-center select-none", MARKER_STYLE[row.kind])}>
             {row.marker}
