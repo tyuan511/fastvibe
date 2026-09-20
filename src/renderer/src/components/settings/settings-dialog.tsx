@@ -38,6 +38,7 @@ import { ThemeSelect } from "./theme-select";
 import { UsageSettings } from "./usage-settings";
 import { ShortcutsSettings } from "./shortcuts-settings";
 import { AboutSettings } from "./about-settings";
+import { PersonalizationSettings } from "./personalization-settings";
 import { SubagentsSettings } from "./subagents-settings";
 import { SettingsGroup as Group, SettingsRow as Row } from "./settings-group";
 import { usePermissionModeSelection } from "@/components/permission-mode-provider";
@@ -291,7 +292,7 @@ export function SettingsDialog({
                   }
                 />
               </Group>
-              <Group title={t("common.title")}>
+              <Group title={t("agent.title")}>
                 <Row
                   title={t("common.defaultModel")}
                   description={t("common.defaultModelDesc")}
@@ -325,6 +326,8 @@ export function SettingsDialog({
                     </Select>
                   }
                 />
+              </Group>
+              <Group title={t("security.title")}>
                 <Row
                   title={t("common.permission")}
                   description={t("common.permissionDesc", { mode: permissionDescription(settings.defaultPermissionMode) })}
@@ -347,6 +350,22 @@ export function SettingsDialog({
                     </Select>
                   }
                 />
+                <Row
+                  title={t("common.permissionRules")}
+                  description={t("common.permissionRulesDesc", { count: remembered.length })}
+                  control={
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      disabled={remembered.length === 0}
+                      onClick={() => clearRememberedPermissions()}
+                    >
+                      {t("common.permissionRulesClear")}
+                    </Button>
+                  }
+                />
+              </Group>
+              <Group title={t("runtime.title")}>
                 <Row
                   title={t("common.keepAwake")}
                   description={t("common.keepAwakeDesc")}
@@ -379,20 +398,6 @@ export function SettingsDialog({
                         <SelectItem value="off">{t("common.notifyOff")}</SelectItem>
                       </SelectContent>
                     </Select>
-                  }
-                />
-                <Row
-                  title={t("common.permissionRules")}
-                  description={t("common.permissionRulesDesc", { count: remembered.length })}
-                  control={
-                    <Button
-                      size="xs"
-                      variant="outline"
-                      disabled={remembered.length === 0}
-                      onClick={() => clearRememberedPermissions()}
-                    >
-                      {t("common.permissionRulesClear")}
-                    </Button>
                   }
                 />
               </Group>
@@ -445,6 +450,8 @@ export function SettingsDialog({
                     />
                   }
                 />
+              </Group>
+              <Group title={t("display.title")}>
                 <Row
                   title={t("chat.collapseRuns")}
                   description={t("chat.collapseRunsDesc")}
@@ -477,6 +484,7 @@ export function SettingsDialog({
             </div>
           ) : null}
 
+          {section === "personalization" ? <PersonalizationSettings /> : null}
           {section === "shortcuts" ? <ShortcutsSettings /> : null}
           {section === "providers" ? <ProvidersSettings onChanged={() => onProvidersChanged?.()} /> : null}
           {section === "archived" ? <ArchivedSettings onDeleteConversations={onDeleteConversations} /> : null}

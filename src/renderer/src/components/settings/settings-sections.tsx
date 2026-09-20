@@ -27,6 +27,7 @@ import { i18n } from "@/lib/i18n";
  */
 export type SectionId =
   | "general"
+  | "personalization"
   | "shortcuts"
   | "archived"
   | "usage"
@@ -39,7 +40,7 @@ export type SectionId =
   | "remote"
   | "about";
 
-export type SettingsGroupId = "personal" | "integrations" | "about";
+export type SettingsGroupId = "preferences" | "workspace" | "integrations" | "system" | "about";
 
 /**
  * Also drives the router's /settings/:section validation.
@@ -53,13 +54,19 @@ export const SETTINGS_SECTIONS: Array<{
   items: Array<{ id: SectionId; icon: JSX.Element }>;
 }> = [
   {
-    group: "personal",
+    group: "preferences",
     items: [
       { id: "general", icon: <HugeiconsIcon strokeWidth={2} icon={Settings02Icon} /> },
+      { id: "personalization", icon: <HugeiconsIcon strokeWidth={2} icon={SparklesIcon} /> },
       { id: "shortcuts", icon: <HugeiconsIcon strokeWidth={2} icon={KeyboardIcon} /> },
+    ],
+  },
+  {
+    group: "workspace",
+    items: [
       { id: "archived", icon: <HugeiconsIcon strokeWidth={2} icon={Archive04Icon} /> },
       { id: "usage", icon: <HugeiconsIcon strokeWidth={2} icon={Analytics01Icon} /> },
-      { id: "remote", icon: <HugeiconsIcon strokeWidth={2} icon={Wifi01Icon} /> },
+      { id: "import", icon: <HugeiconsIcon strokeWidth={2} icon={ImportIcon} /> },
     ],
   },
   {
@@ -70,8 +77,11 @@ export const SETTINGS_SECTIONS: Array<{
       { id: "mcp", icon: <HugeiconsIcon strokeWidth={2} icon={Plug01Icon} /> },
       { id: "skills", icon: <HugeiconsIcon strokeWidth={2} icon={SparklesIcon} /> },
       { id: "extensions", icon: <HugeiconsIcon strokeWidth={2} icon={PuzzleIcon} /> },
-      { id: "import", icon: <HugeiconsIcon strokeWidth={2} icon={ImportIcon} /> },
     ],
+  },
+  {
+    group: "system",
+    items: [{ id: "remote", icon: <HugeiconsIcon strokeWidth={2} icon={Wifi01Icon} /> }],
   },
   {
     group: "about",

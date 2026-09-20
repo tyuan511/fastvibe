@@ -206,17 +206,65 @@ function reloadActiveState(): void {
     .catch(() => undefined);
 }
 
+/**
+ * The row an end-of-turn read can start from: the prompt of the turn that just ran.
+ *
+ * A `ChatMessage.id` *is* its session-entry id, so Main can find it on the branch and
+ * map only from there. Everything a finished turn changes — its replies, their tool
+ * results, a compaction summary, the model divider on the first reply — lies at or
+ * after that prompt, and the rows above it are already what the read would say.
+ *
+ * The optimistic row a send puts up (`local:`) has no entry yet, so it is skipped: the
+ * anchor falls back to the previous turn's prompt, which costs one extra turn to map
+ * and stays correct. No prompt at all (an imported or system-only transcript) means a
+ * full read.
+ */
+function reloadAnchor(messages: ChatMessage[]): string | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role !== "user" || message.id.startsWith("local:")) continue;
+    return message.id;
+  }
+  return undefined;
+}
+
 /** Same attribution rule as `reloadActiveState`, for the transcript itself. */
 function reloadActiveMessages(): void {
-  const id = useSessionStore.getState().activeId;
+  const store = useSessionStore.getState();
+  const id = store.activeId;
   // `getMessages` answers for whatever conversation the *engine* has active. With
   // none on screen — the hero after 归档, or a window that never opened a chat —
   // that transcript belongs to someone else and must not be painted here.
   if (!id) return;
+  const anchor = reloadAnchor(store.messages);
+  if (!anchor) {
+    void window.fastvibe.engine
+      .getMessages()
+      .then((messages) => {
+        if (useSessionStore.getState().activeId === id) useSessionStore.getState().setMessages(messages, id);
+      })
+      .catch(() => undefined);
+    return;
+  }
   void window.fastvibe.engine
-    .getMessages()
-    .then((messages) => {
-      if (useSessionStore.getState().activeId === id) useSessionStore.getState().setMessages(messages, id);
+    .getMessagesSince(anchor)
+    .then((reply) => {
+      if (useSessionStore.getState().activeId !== id) return;
+      // `full` is Main saying the anchor is no longer on the branch — an edit, a retry
+      // or a fork rewound past it — and a splice would then graft the new turn onto a
+      // history that no longer exists. A splice the store itself rejects (the rows
+      // moved under the reply) falls back the same way.
+      if (reply.mode === "full") {
+        useSessionStore.getState().setMessages(reply.messages, id);
+        return;
+      }
+      if (useSessionStore.getState().spliceMessages(reply.anchorId, reply.messages, id)) return;
+      void window.fastvibe.engine
+        .getMessages()
+        .then((messages) => {
+          if (useSessionStore.getState().activeId === id) useSessionStore.getState().setMessages(messages, id);
+        })
+        .catch(() => undefined);
     })
     .catch(() => undefined);
 }

@@ -49,6 +49,12 @@ export const Ipc = {
   engineBranch: "engine:branch",
   engineFork: "engine:fork",
   engineGetMessages: "engine:get-messages",
+  /**
+   * The transcript from one entry onward, for a client that already holds the rest
+   * (`TranscriptTail`). What the end-of-turn reload uses, so its cost is the turn
+   * rather than the whole conversation.
+   */
+  engineGetMessagesSince: "engine:get-messages-since",
   /** Transcript + the turn in flight, read at one instant (`ConversationSnapshot`). */
   engineGetSnapshot: "engine:get-snapshot",
   engineGetStats: "engine:get-stats",

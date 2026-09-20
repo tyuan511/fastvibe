@@ -68,6 +68,8 @@
     "forward": "Forward",
     "reload": "Reload",
     "placeholder": "Enter a URL or search and press Return",
+    "emptyTitle": "Start browsing",
+    "emptyDescription": "Enter a URL or search above to get started.",
     "openExternal": "Open in default browser",
     "importTitle": "Import login state from another browser",
     "importHeading": "Import browser login state",

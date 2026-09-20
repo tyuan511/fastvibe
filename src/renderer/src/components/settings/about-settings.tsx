@@ -89,7 +89,7 @@ export function AboutSettings(): JSX.Element {
         </div>
       </header>
 
-      <SettingsGroup>
+      <SettingsGroup title={t("about.appInfo")}>
         <SettingsRow
           title={t("about.modelsDev")}
           description={
@@ -119,6 +119,11 @@ export function AboutSettings(): JSX.Element {
             </div>
           }
         />
+      </SettingsGroup>
+
+      <AboutUpdate />
+
+      <SettingsGroup title={t("about.data")}>
         <SettingsRow
           title={t("about.dataDir")}
           description={<span className="break-all font-mono">{info?.userData ?? "—"}</span>}
@@ -137,11 +142,6 @@ export function AboutSettings(): JSX.Element {
             ) : null
           }
         />
-      </SettingsGroup>
-
-      <AboutUpdate />
-
-      <SettingsGroup>
         <SettingsRow
           title={t("about.exportLogs")}
           description={
@@ -162,7 +162,7 @@ export function AboutSettings(): JSX.Element {
         />
       </SettingsGroup>
 
-      <SettingsGroup>
+      <SettingsGroup title={t("about.advanced")}>
         <SettingsRow
           title={t("about.reset")}
           description={t("about.resetDesc")}

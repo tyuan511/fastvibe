@@ -75,11 +75,15 @@ function userRowFromEngine(message: Record<string, unknown>): ChatMessage {
   const text = contentText(message.content);
   const attachments: ChatAttachment[] = extractPromptAttachments(text);
   if (Array.isArray(message.content)) {
+    let images = 0;
     for (const part of message.content) {
       if (!isRecord(part) || part.type !== "image" || typeof part.data !== "string") continue;
       const mimeType = typeof part.mimeType === "string" ? part.mimeType : "image/png";
       attachments.push({
-        id: crypto.randomUUID(),
+        // Same positional scheme Main's mapping uses (`map-messages.ts`), so the row
+        // this builds optimistically and the row that replaces it after the reload
+        // describe the image identically.
+        id: `image:${images++}`,
         kind: "image",
         name: "image",
         mimeType,
@@ -488,7 +492,10 @@ function applyEvent(
 
   if (type === "agent_end") {
     const lastEngine = Array.isArray(event.messages) ? event.messages.at(-1) : undefined;
-    const error = errorFromAssistant(lastEngine);
+    // `agent_end` is the failed attempt's boundary, not the final outcome, when the
+    // SDK is about to retry. Keep that transient error out of the red terminal bubble;
+    // the following `auto_retry_start` renders it as the expandable retry row.
+    const error = event.willRetry === true ? undefined : errorFromAssistant(lastEngine);
     // A run that failed or was aborted stopped before the model finished; a clean
     // turn ends with `stopReason` `stop`/`toolUse`/`length`. When the engine is about
     // to auto-retry (`willRetry`), this is a transient failure the SDK is already
@@ -737,15 +744,15 @@ function applyEvent(
       const attempt = typeof event.attempt === "number" ? event.attempt : 1;
       const maxAttempts = typeof event.maxAttempts === "number" ? event.maxAttempts : undefined;
       const delayMs = typeof event.delayMs === "number" ? event.delayMs : undefined;
-      const retry =
-        maxAttempts != null
-          ? (i18n.t("common:errors.retryingWithBudget", { attempt, maxAttempts }) as string) +
-            (delayMs ? (i18n.t("common:errors.retryAfter", { seconds: Math.round(delayMs / 1000) }) as string) : "") +
-            (error ? (i18n.t("common:errors.retryDetail", { error }) as string) : "")
-          : (i18n.t("common:errors.retrying") as string) +
-            (error ? (i18n.t("common:errors.retryDetail", { error }) as string) : "");
       const list = next.slice();
-      list[list.length - 1] = { ...last, error: retry };
+      // Keep the provider detail as data, not baked into a red error string. The
+      // renderer presents this transient state like a tool call and reveals the
+      // detail only when the row is expanded.
+      list[list.length - 1] = {
+        ...last,
+        error: undefined,
+        retry: { attempt, maxAttempts, delayMs, error: error || undefined },
+      };
       return { messages: list, streaming: true };
     }
     return { messages: next, streaming: true };
@@ -754,12 +761,16 @@ function applyEvent(
   if (type === "auto_retry_end") {
     const last = next.at(-1);
     if (last?.role === "assistant" && event.success === true) {
-      return { messages: clearTrailingAssistantErrors(next), streaming: nextStreaming };
+      const cleared = clearTrailingAssistantErrors(next);
+      const list = cleared.slice();
+      const tail = list.at(-1);
+      if (tail?.role === "assistant") list[list.length - 1] = { ...tail, retry: undefined };
+      return { messages: list, streaming: nextStreaming };
     }
     if (last?.role === "assistant" && event.success === false) {
-      const error = asString(event.finalError) ?? last.error ?? (i18n.t("common:errors.requestFailed") as string);
+      const error = asString(event.finalError) ?? last.retry?.error ?? last.error ?? (i18n.t("common:errors.requestFailed") as string);
       const list = next.slice();
-      list[list.length - 1] = { ...last, error };
+      list[list.length - 1] = { ...last, retry: undefined, error };
       return { messages: list, streaming: false };
     }
     return { messages: next, streaming: nextStreaming };

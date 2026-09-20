@@ -48,6 +48,7 @@ import type {
   SlashCommand,
   SubagentInfo,
   ThinkingTiming,
+  TranscriptTail,
   TuiRun,
   WorkspaceSnapshot,
   ModelPrice,
@@ -74,7 +75,7 @@ import {
   scanImportSources,
 } from "../engine/import/runner";
 import { readAutoCompact, readDefaultModel } from "../engine/app-settings";
-import { currentAiLanguageDirective } from "../engine/ai-language";
+import { currentAiLanguageDirective, currentCustomSystemPrompt } from "../engine/ai-language";
 import { uiText } from "../engine/ui-text";
 import { mapEngineMessages } from "../engine/map-messages";
 import { canResumeRun } from "../engine/resume";
@@ -409,11 +410,33 @@ const RETAIN_FROM_EMIT = new Set(["extension_error", "model_changed"]);
  */
 const TURN_EVENT_LIMIT = 2_000;
 
+/**
+ * When an idle conversation's session is released, and how many stay resident.
+ *
+ * A session holds its whole transcript in memory (plus its extension hosts), and
+ * nothing used to let one go: they were disposed only when a conversation was
+ * deleted, archived, re-homed, or the engine stopped. So a day of switching between
+ * chats left every chat ever opened resident in Main — a heap that only grew.
+ *
+ * Releasing one costs nothing durable: the transcript is on disk and `#ensureSession`
+ * reopens it on the next touch. It is not free either (reopening re-reads the file and
+ * re-loads extensions), so the window is generous and a conversation with anything in
+ * flight — a run, a compaction, a parked prompt, a queued follow-up — is never a
+ * candidate. The resident cap is what bounds the heap when many chats are used inside
+ * one window; the idle sweep is what releases them when the app is left open.
+ */
+const SESSION_IDLE_MS = 15 * 60_000;
+const SESSION_SWEEP_MS = 60_000;
+const MAX_RESIDENT_SESSIONS = 8;
+
 /** Host adapter backed by pi-coding-agent. It keeps one AgentSession per conversation in one Node process. */
 export class PiProcessManager {
   #paths: FastVibePaths;
   #catalog: ConversationCatalog;
   #sessions = new Map<string, ManagedSession>();
+  /** Last time each resident session was opened or asked for, for the idle sweep. */
+  #sessionTouched = new Map<string, number>();
+  #sessionSweep: NodeJS.Timeout | null = null;
   #activeId: string | null = null;
   #status: EngineStatus = { state: "idle" };
   #cwd: string;
@@ -677,15 +700,18 @@ export class PiProcessManager {
       // Durable work belongs to every conversation, not only whichever chat happened
       // to be active when Main restarted. Drains lazily create background sessions.
       for (const conversationId of this.#messageQueue.conversationIds()) this.#scheduleQueueDrain(conversationId);
+      this.#startSessionSweep();
       return this.#status;
     });
   }
 
   async stop(): Promise<void> {
     this.#queueShutdown = true;
+    this.#stopSessionSweep();
     await this.#queue(async () => {
       const sessions = [...this.#sessions.values()];
       this.#sessions.clear();
+      this.#sessionTouched.clear();
       this.#sessionPromises.clear();
       this.#resolvePendingUi();
       // A login in flight owns a loopback callback server and waits on a human who is
@@ -1511,6 +1537,27 @@ export class PiProcessManager {
   }
 
   /**
+   * The transcript from one entry onward, for a reader that already holds the rest.
+   *
+   * `full` says the anchor is no longer on the branch — an edit, a retry or a fork
+   * rewound past it — and the reply is the whole transcript to be applied as a
+   * replacement. Otherwise the reply starts at the anchor itself, so the caller
+   * splices from that row and everything above it keeps the identity it had.
+   *
+   * The anchor belongs on a turn boundary — a user prompt — because a tool result is
+   * folded into the reply that called it: one whose reply sits above the anchor has
+   * nothing in the tail to attach to and is left out of it.
+   */
+  async loadMessagesSince(
+    anchorEntryId: string,
+    conversationId?: string,
+  ): Promise<TranscriptTail> {
+    const { id, session } = await this.#sessionFor(conversationId);
+    const { messages, anchored } = this.#messagesFrom(session, id, anchorEntryId);
+    return anchored ? { mode: "tail", anchorId: anchorEntryId, messages } : { mode: "full", messages };
+  }
+
+  /**
    * Everything a client needs to draw one conversation exactly as it stands — including
    * a turn that is still running.
    *
@@ -2107,7 +2154,10 @@ export class PiProcessManager {
   async #sessionFor(conversationId?: string): Promise<{ id: string | undefined; session: AgentSession }> {
     if (!conversationId) return { id: this.#activeId ?? undefined, session: await this.#active() };
     const known = this.#sessions.get(conversationId);
-    if (known) return { id: conversationId, session: known.session };
+    if (known) {
+      this.#touchSession(conversationId);
+      return { id: conversationId, session: known.session };
+    }
     const conversation = this.#catalog.get(conversationId);
     if (!conversation) throw new Error("conversation not found");
     await this.#ensureReady();
@@ -2116,7 +2166,10 @@ export class PiProcessManager {
   }
   async #ensureSession(conversation: Conversation): Promise<ManagedSession> {
     const existing = this.#sessions.get(conversation.id);
-    if (existing) return existing;
+    if (existing) {
+      this.#touchSession(conversation.id);
+      return existing;
+    }
     const pending = this.#sessionPromises.get(conversation.id);
     if (pending) return pending;
     if (!this.#runtime || !this.#models) throw new Error("engine not ready");
@@ -2358,6 +2411,7 @@ export class PiProcessManager {
     });
     this.#installQueueBoundary(conversation.id, result.session);
     this.#sessions.set(conversation.id, managed);
+    this.#touchSession(conversation.id);
     // 自动压缩 is FastVibe's setting, but the engine keeps it in its own settings file
     // and the renderer's boot-time call cannot reach a session that does not exist yet
     // (a brand-new install has no conversation at launch) — so the preference is picked
@@ -3063,7 +3117,11 @@ export class PiProcessManager {
     // A delegated run never loads the `output-language` extension (`noExtensions`), so
     // its system prompt carries the same AI 偏好语言 requirement directly — a subagent
     // report the user cannot read is a bug, not a preference.
-    const appendSystemPrompt = [request.systemPrompt.trim(), currentAiLanguageDirective()].filter(
+    const appendSystemPrompt = [
+      request.systemPrompt.trim(),
+      currentAiLanguageDirective(),
+      currentCustomSystemPrompt(),
+    ].filter(
       (value): value is string => Boolean(value),
     );
     const loader = new DefaultResourceLoader({
@@ -3351,8 +3409,104 @@ export class PiProcessManager {
       pending.resolve(pending.fallback);
     }
   }
+  #touchSession(conversationId: string): void {
+    this.#sessionTouched.set(conversationId, Date.now());
+  }
+
+  /**
+   * Is this conversation's session safe to let go of right now?
+   *
+   * Everything in flight disqualifies it: the chat on screen, a run or a compaction,
+   * a session still being built, a queue that is draining or still holds a follow-up,
+   * and a parked extension prompt (whose promise lives in this process and would never
+   * be answered again). Side chats are kept too — a selection pane is a live view of
+   * its own session, and there are never many of them.
+   *
+   * The last guard is the one that matters most: a conversation whose first turn has
+   * not been filed yet has no `sessionFile` in the catalog, so letting go of it would
+   * lose the transcript rather than release it.
+   */
+  #releasableSession(id: string): boolean {
+    if (id === this.#activeId) return false;
+    const managed = this.#sessions.get(id);
+    if (!managed) return false;
+    if (this.#busy(id)) return false;
+    if (this.#sessionPromises.has(id)) return false;
+    if (this.#drainingQueues.has(id)) return false;
+    if (this.#messageQueue.all(id).length > 0) return false;
+    for (const pending of this.#pendingUi.values()) {
+      if (pending.conversationId === id) return false;
+    }
+    const conversation = this.#catalog.get(id);
+    if (!conversation || conversation.kind === "side-chat") return false;
+    if (!conversation.sessionFile && managed.session.messages.length > 0) return false;
+    return true;
+  }
+
+  /** Flush a session to disk and let it go. `#ensureSession` reopens it on demand. */
+  async #releaseSession(id: string): Promise<void> {
+    const managed = this.#sessions.get(id);
+    if (!managed) return;
+    this.#sessions.delete(id);
+    this.#sessionTouched.delete(id);
+    managed.unsubscribe();
+    // Flushed first: the SDK holds writes back until an assistant message exists, and
+    // the file is all the reopened session will have to read.
+    this.#persist(managed.session);
+    try {
+      await managed.session.dispose();
+    } catch {
+      // Already torn down; nothing left to release.
+    }
+  }
+
+  /**
+   * Release what has gone quiet, then trim to the resident cap.
+   *
+   * Runs on the engine's own operation queue, so it can never interleave with a
+   * session being created, activated or torn down.
+   */
+  #sweepSessions(): void {
+    if (this.#sessions.size <= 1) return;
+    void this.#queue(async () => {
+      const now = Date.now();
+      // Timestamps of sessions that went away by some other route (a deleted chat, a
+      // project change) have nothing left to describe.
+      for (const id of [...this.#sessionTouched.keys()]) {
+        if (!this.#sessions.has(id)) this.#sessionTouched.delete(id);
+      }
+      const expired = [...this.#sessions.keys()].filter(
+        (id) =>
+          this.#releasableSession(id) &&
+          now - (this.#sessionTouched.get(id) ?? now) >= SESSION_IDLE_MS,
+      );
+      for (const id of expired) await this.#releaseSession(id);
+      if (this.#sessions.size <= MAX_RESIDENT_SESSIONS) return;
+      const surplus = [...this.#sessions.keys()]
+        .filter((id) => this.#releasableSession(id))
+        .sort((a, b) => (this.#sessionTouched.get(a) ?? 0) - (this.#sessionTouched.get(b) ?? 0))
+        .slice(0, this.#sessions.size - MAX_RESIDENT_SESSIONS);
+      for (const id of surplus) await this.#releaseSession(id);
+    }).catch(() => undefined);
+  }
+
+  #startSessionSweep(): void {
+    if (this.#sessionSweep) return;
+    const timer = setInterval(() => this.#sweepSessions(), SESSION_SWEEP_MS);
+    // Housekeeping must never be the reason the process stays up.
+    timer.unref?.();
+    this.#sessionSweep = timer;
+  }
+
+  #stopSessionSweep(): void {
+    if (!this.#sessionSweep) return;
+    clearInterval(this.#sessionSweep);
+    this.#sessionSweep = null;
+  }
+
   #activate(managed: ManagedSession): void {
     this.#activeId = managed.conversationId;
+    this.#touchSession(managed.conversationId);
     this.#cwd = managed.cwd;
     this.#catalog.setActive(managed.conversationId);
     // The user is looking at a conversation now, so a pick made when none existed has
@@ -3370,10 +3524,35 @@ export class PiProcessManager {
    * engine while leaving the reader's transcript intact.
    */
   #messages(session: AgentSession, conversationId: string | undefined): ChatMessage[] {
+    return this.#messagesFrom(session, conversationId).messages;
+  }
+  /**
+   * The transcript, or only its tail.
+   *
+   * `fromEntryId` names an entry the reader already holds: everything from it onward
+   * is mapped and everything before it is skipped, which is what makes the end-of-turn
+   * reload cost the turn rather than the conversation. A hundred-turn chat was mapping
+   * every entry, re-running the model-switch pass over all of them and structured-cloning
+   * the whole history across the IPC boundary at every `agent_end` — for a transcript
+   * that had changed in its last few rows.
+   *
+   * `anchored: false` means the entry is not on the current branch (an edit or a fork
+   * rewound past it, or it is simply unknown) and the answer is the whole transcript,
+   * which the caller must then apply as a replacement rather than a splice.
+   */
+  #messagesFrom(
+    session: AgentSession,
+    conversationId: string | undefined,
+    fromEntryId?: string,
+  ): { messages: ChatMessage[]; anchored: boolean } {
+    const branch = [...session.sessionManager.getBranch()];
+    const start = fromEntryId ? branch.findIndex((entry) => entry.id === fromEntryId) : 0;
+    const anchored = start >= 0;
+    const entries = anchored ? branch.slice(start) : branch;
     const entryIds = new Map<unknown, string>();
     const timings = new Map<string, ThinkingTiming[]>();
     const transcript: unknown[] = [];
-    for (const entry of session.sessionManager.getBranch()) {
+    for (const entry of entries) {
       for (const message of sessionEntryToContextMessages(entry)) {
         // The mapper accepts plain engine messages. Keep the owning entry id beside
         // every projection, including synthetic compaction/custom messages, so rows
@@ -3402,7 +3581,7 @@ export class PiProcessManager {
       renderCustom,
       sessionCompletionTimes(session),
     );
-    this.#insertModelSwitches(session, messages);
+    this.#insertModelSwitches(messages, branch, anchored ? start : 0);
     // The SDK keeps the reply in flight in `agent.state.streamingMessage` and only
     // pushes it into `agent.state.messages` on `message_end`. A read taken mid-run
     // therefore ends at the user prompt with no trailing assistant row — and the
@@ -3448,7 +3627,7 @@ export class PiProcessManager {
         compact: { status: "running", reason: this.#compacting.get(conversationId) },
       });
     }
-    return messages;
+    return { messages, anchored };
   }
   /**
    * Fold model switches into the transcript as divider parts, where the replies show them.
@@ -3467,11 +3646,27 @@ export class PiProcessManager {
    * renderer, so a switch made mid-run still lands *between that reply's parts* rather than
    * between turns.
    */
-  #insertModelSwitches(session: AgentSession, messages: ChatMessage[]): void {
+  #insertModelSwitches(
+    messages: ChatMessage[],
+    branch: ReturnType<AgentSession["sessionManager"]["getBranch"]>,
+    fromIndex: number,
+  ): void {
     if (messages.length === 0) return;
     const indexById = new Map(messages.map((message, index) => [message.id, index]));
     let previous: EngineModel | undefined;
-    for (const entry of session.sessionManager.getBranch()) {
+    // A tail read still has to know which model answered *before* it, or the first
+    // reply in the tail would compare against nothing and lose its divider. Reading
+    // the model off each entry is a field access, not a projection, so catching up
+    // over the skipped head stays cheap.
+    for (let index = 0; index < fromIndex; index += 1) {
+      const entry = branch[index];
+      if (entry.type !== "message") continue;
+      const raw: unknown = entry.message;
+      if (!isRecord(raw) || raw.role !== "assistant") continue;
+      if (typeof raw.provider !== "string" || typeof raw.model !== "string") continue;
+      previous = { provider: raw.provider, id: raw.model };
+    }
+    for (const entry of branch.slice(fromIndex)) {
       if (entry.type !== "message") continue;
       const raw: unknown = entry.message;
       if (!isRecord(raw) || raw.role !== "assistant") continue;

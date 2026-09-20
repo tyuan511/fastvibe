@@ -68,6 +68,8 @@
     "forward": "前进",
     "reload": "刷新",
     "placeholder": "输入网址或搜索内容后回车",
+    "emptyTitle": "开始浏览",
+    "emptyDescription": "在上方输入网址或搜索内容，开始浏览。",
     "openExternal": "在默认浏览器中打开",
     "importTitle": "导入其他浏览器登录态",
     "importHeading": "导入浏览器登录态",

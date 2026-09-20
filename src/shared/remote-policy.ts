@@ -110,6 +110,7 @@ const ALLOWED = new Set<string>([
   Ipc.engineGetConversationMessages,
   Ipc.engineGetExtensions,
   Ipc.engineGetMessages,
+  Ipc.engineGetMessagesSince,
   Ipc.engineGetModels,
   Ipc.engineGetRunning,
   Ipc.engineGetSnapshot,

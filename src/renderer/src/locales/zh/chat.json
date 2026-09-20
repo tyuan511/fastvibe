@@ -182,7 +182,9 @@
     "expand": "展开",
     "collapse": "收起",
     "preparing": "正在准备工作区…",
-    "copied": "已复制"
+    "copied": "已复制",
+    "earlier_one": "显示更早的 {{count}} 个回合",
+    "earlier_other": "显示更早的 {{count}} 个回合"
   },
   "permission": {
     "needConfirm": "需要确认",

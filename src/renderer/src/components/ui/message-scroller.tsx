@@ -3,7 +3,7 @@
 import * as React from "react"
 import {
   MessageScroller as MessageScrollerPrimitive,
-  useMessageScroller,
+  useMessageScroller as useMessageScrollerPrimitive,
   useMessageScrollerScrollable,
   useMessageScrollerVisibility,
 } from "@shadcn/react/message-scroller"
@@ -118,7 +118,55 @@ function MessageScrollerButton({
   )
 }
 
+/**
+ * Mount a row that is not in the DOM yet, and say whether it had to.
+ *
+ * A long thread keeps only its tail mounted, so a row named from outside the
+ * viewport — a turn-rail mark, a find hit — may have no element to scroll to. The
+ * thread installs this; `scrollToMessage` below consults it before giving up.
+ */
+type RevealMessage = (messageId: string) => boolean
+
+const MessageRevealContext = React.createContext<RevealMessage | null>(null)
+
+function MessageRevealProvider({
+  reveal,
+  children,
+}: {
+  reveal: RevealMessage
+  children: React.ReactNode
+}) {
+  return <MessageRevealContext.Provider value={reveal}>{children}</MessageRevealContext.Provider>
+}
+
+/**
+ * The primitive's scroller, with `scrollToMessage` taught about unmounted rows.
+ *
+ * The identities stay stable across renders — a caller's effect depends on
+ * `scrollToMessage`, and a fresh function each render would re-run it (and re-scroll)
+ * on every streamed flush.
+ */
+function useMessageScroller(): ReturnType<typeof useMessageScrollerPrimitive> {
+  const { scrollToEnd, scrollToMessage: scrollToMounted, scrollToStart } = useMessageScrollerPrimitive()
+  const reveal = React.useContext(MessageRevealContext)
+  const scrollToMessage = React.useCallback<typeof scrollToMounted>(
+    (messageId, options) => {
+      if (scrollToMounted(messageId, options)) return true
+      // Nothing to scroll to yet: mount the row, then scroll once it is in the DOM.
+      if (!reveal?.(messageId)) return false
+      requestAnimationFrame(() => scrollToMounted(messageId, options))
+      return true
+    },
+    [reveal, scrollToMounted],
+  )
+  return React.useMemo(
+    () => ({ scrollToEnd, scrollToMessage, scrollToStart }),
+    [scrollToEnd, scrollToMessage, scrollToStart],
+  )
+}
+
 export {
+  MessageRevealProvider,
   MessageScrollerProvider,
   MessageScroller,
   MessageScrollerViewport,

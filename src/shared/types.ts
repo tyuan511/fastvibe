@@ -197,6 +197,13 @@ export type ChatMessage = {
   attachments?: ChatAttachment[];
   /** Model/request failure for this assistant turn. Absent on success or user abort. */
   error?: string;
+  /** A transient provider failure that the engine is currently retrying. */
+  retry?: {
+    attempt: number;
+    maxAttempts?: number;
+    delayMs?: number;
+    error?: string;
+  };
   /** Present when `kind` is `"compact"`: running / finished / cancelled compaction. */
   compact?: CompactInfo;
 };
@@ -897,6 +904,18 @@ export type WorkspaceSnapshot = {
  *
  * Every field is read at one instant, so they cannot disagree with each other.
  */
+/**
+ * A transcript read that only carries what the reader is missing.
+ *
+ * `tail` starts at `anchorId` — a row the reader already has — so it is spliced in
+ * from that row and everything above keeps the identity (and therefore the rendered
+ * output) it already had. `full` is the whole transcript, for when the anchor is no
+ * longer on the branch at all.
+ */
+export type TranscriptTail =
+  | { mode: "tail"; anchorId: string; messages: ChatMessage[] }
+  | { mode: "full"; messages: ChatMessage[] };
+
 export type ConversationSnapshot = {
   conversationId: string | null;
   /** The transcript, including the reply in flight while `running`. */

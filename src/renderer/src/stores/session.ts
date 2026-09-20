@@ -29,7 +29,7 @@ import { applyEngineEvent } from "@/lib/apply-engine-event";
 import { i18n } from "@/lib/i18n";
 import { resolvePath } from "@/lib/workspace-path";
 import { canRestoreComposer } from "@/lib/composer-race";
-import { useSidePaneStore } from "@/stores/side-pane";
+import { useSidePaneStore, type SidePaneTab } from "@/stores/side-pane";
 
 type SessionStore = {
   status: EngineStatus;
@@ -156,6 +156,17 @@ type SessionStore = {
    * everything here travels one IPC hop, so a slow reply can land after the switch.
    */
   setMessages: (messages: ChatMessage[], conversationId?: string) => void;
+  /**
+   * Replace the transcript from `anchorId` down, keeping every row above it untouched.
+   *
+   * What the end-of-turn reload applies: Main answers with the turn rather than the
+   * whole conversation, so nothing above the anchor is re-read, re-compared or
+   * re-rendered. `false` means the anchor was not in the transcript after all (the
+   * chat moved under the reply), and the caller falls back to a full read; a tail for
+   * a conversation that is no longer on screen is dropped, and reports no failure
+   * because there is nothing left to read for it.
+   */
+  spliceMessages: (anchorId: string, tail: ChatMessage[], conversationId?: string) => boolean;
   /**
    * Seed a conversation's extension statuses from a fresh engine read.
    *
@@ -706,7 +717,7 @@ function reduceEvents(state: SessionStore, events: EngineEvent[]): Partial<Sessi
       workingOverride = streaming;
     }
     subagents = upsertSubagent(subagents, event);
-    subagentStreams = applySubagentStream(subagentStreams, event);
+    subagentStreams = applySubagentStream(subagentStreams, event, subagents);
   }
   return {
     messages,
@@ -959,6 +970,34 @@ export const useSessionStore = create<SessionStore>((set, get) => {
         running: state.running,
       };
     });
+  },
+  spliceMessages: (anchorId, tail, conversationId) => {
+    const state = get();
+    if (conversationId && state.activeId && conversationId !== state.activeId) return true;
+    const index = state.messages.findIndex((message) => message.id === anchorId);
+    if (index < 0) return false;
+    dropQueued();
+    set((current) => {
+      // Re-read inside the update: `dropQueued` can flush pending events between the
+      // lookup above and here, which moves the rows.
+      const at = current.messages.findIndex((message) => message.id === anchorId);
+      if (at < 0) return current;
+      const previousTail = current.messages.slice(at);
+      const reconciled = reconcileMessages(previousTail, tail);
+      // `reconcileMessages` hands back the array it was given when every row was
+      // reused, and `previousTail` is fresh here — so this is "the turn is unchanged".
+      if (reconciled === previousTail) return current;
+      const messages = [...current.messages.slice(0, at), ...reconciled];
+      return {
+        messages,
+        // Same reasoning as `setMessages`: a transcript read says nothing about
+        // whether a run is in flight, and Main owns those flags.
+        streaming: current.streaming,
+        partBoundary: settledBoundary(messages),
+        running: current.running,
+      };
+    });
+    return true;
   },
   setExtensionStatus: (conversationId, status) =>
     set((state) => {
@@ -1350,9 +1389,67 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+/**
+ * How many delegated runs keep their live transcript in the renderer.
+ *
+ * Nothing used to drop these: `subagentStreams` is keyed by run id, subagent traffic
+ * is deliberately exempt from the active-conversation filter (so a background chat's
+ * pane stays live), and a new session does not clear it either — so every run of
+ * every conversation accumulated a full transcript, tool results included, for as
+ * long as the window stayed open. A fan-out-heavy afternoon leaked hundreds of MB.
+ *
+ * The cap is on *finished, unwatched* runs only: a run that is still going, and any
+ * run open in a right-pane tab, is never dropped. A dropped run is not lost either —
+ * the pane reads the authoritative transcript back from Main (`getSubagentMessages`)
+ * once the run is over, and the live stream is only its fallback.
+ */
+const MAX_SUBAGENT_STREAMS = 12;
+
+/** Run ids with a pane open on them, in any conversation's scope. */
+function watchedSubagentIds(): Set<string> {
+  const pane = useSidePaneStore.getState();
+  const watched = new Set<string>();
+  const collect = (tabs: SidePaneTab[]): void => {
+    for (const tab of tabs) if (tab.subagentId) watched.add(tab.subagentId);
+  };
+  collect(pane.tabs);
+  for (const scope of Object.values(pane.scopes)) collect(scope.tabs);
+  return watched;
+}
+
+/**
+ * Drop the least recently active finished runs once the cap is exceeded.
+ *
+ * Key order is recency order — `applySubagentStream` re-inserts the run that just
+ * spoke at the end — so the oldest candidates come first.
+ */
+function pruneSubagentStreams(
+  streams: Record<string, ChatMessage[]>,
+  keep: string,
+  subagents: SubagentInfo[],
+): Record<string, ChatMessage[]> {
+  const keys = Object.keys(streams);
+  if (keys.length <= MAX_SUBAGENT_STREAMS) return streams;
+  const running = new Set(subagents.filter((item) => item.status === "running").map((item) => item.id));
+  const watched = watchedSubagentIds();
+  const dropped = new Set<string>();
+  let over = keys.length - MAX_SUBAGENT_STREAMS;
+  for (const key of keys) {
+    if (over === 0) break;
+    if (key === keep || running.has(key) || watched.has(key)) continue;
+    dropped.add(key);
+    over -= 1;
+  }
+  if (dropped.size === 0) return streams;
+  const next: Record<string, ChatMessage[]> = {};
+  for (const key of keys) if (!dropped.has(key)) next[key] = streams[key];
+  return next;
+}
+
 function applySubagentStream(
   streams: Record<string, ChatMessage[]>,
   event: EngineEvent,
+  subagents: SubagentInfo[],
 ): Record<string, ChatMessage[]> {
   if (event.type !== "subagent_event") return streams;
   const id =
@@ -1377,6 +1474,18 @@ function applySubagentStream(
       return streams;
     }
   }
-  const applied = applyEngineEvent(streams[id] ?? [], nested, true);
-  return { ...streams, [id]: applied.messages };
+  const known = streams[id];
+  const applied = applyEngineEvent(known ?? [], nested, true);
+  // Rebuilt rather than spread over, so the run that just spoke moves to the end:
+  // a plain `{ ...streams, [id]: … }` keeps an existing key in its original slot,
+  // and the cap prunes by exactly this order.
+  const next: Record<string, ChatMessage[]> = {};
+  for (const key of Object.keys(streams)) {
+    if (key !== id) next[key] = streams[key];
+  }
+  next[id] = applied.messages;
+  // Only a run that was not being tracked yet can push the count over the cap, and
+  // this runs for every delta of every delegated run — so the pruning pass (which
+  // reads the pane's tabs) is reached once per run rather than once per token.
+  return known === undefined ? pruneSubagentStreams(next, id, subagents) : next;
 }

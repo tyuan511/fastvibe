@@ -1,6 +1,7 @@
 import { Ipc } from "@shared/ipc";
 import type {
   ChatMessage,
+  TranscriptTail,
   ConversationDeleteResult,
   ConversationOpenResult,
   ConversationSearchHit,
@@ -218,6 +219,13 @@ export function createFastVibeApi(t: ApiTransport) {
         t.invoke(Ipc.engineFork, { entryId, conversationId }),
       getMessages: (conversationId?: string): Promise<ChatMessage[]> =>
         t.invoke(Ipc.engineGetMessages, { conversationId }),
+      /**
+       * The transcript from `anchorEntryId` onward. The reply says whether the anchor
+       * was still on the branch (`tail`) or the whole transcript had to be sent
+       * (`full`, after an edit/retry/fork rewound past it).
+       */
+      getMessagesSince: (anchorEntryId: string, conversationId?: string): Promise<TranscriptTail> =>
+        t.invoke(Ipc.engineGetMessagesSince, { anchorEntryId, conversationId }),
       /**
        * Transcript plus the turn in flight, taken at one instant. What a client reads to
        * rebuild a conversation exactly — including one whose run is still going.

@@ -170,6 +170,8 @@ function extractContent(content: unknown): {
   const attachments: ChatAttachment[] = [];
   const parts: MessagePart[] = [];
   const results = new Map<string, string>();
+  /** Position of the next image in this message, which is what names it. */
+  let images = 0;
 
   for (const part of content) {
     if (typeof part === "string") {
@@ -204,12 +206,19 @@ function extractContent(content: unknown): {
     if (type === "image" && typeof part.data === "string") {
       const mime = typeof part.mimeType === "string" ? part.mimeType : "image/png";
       attachments.push({
-        id: crypto.randomUUID(),
+        // Positional, not random: this mapping runs again at the end of every turn,
+        // and a fresh id made the message structurally different from the one already
+        // on screen — so `reconcileMessages` could never reuse a row that carries an
+        // image, and that row re-rendered (re-decoding its base64) at every turn end.
+        // Ids only have to be unique within their own message; they are React keys
+        // for one attachment strip.
+        id: `image:${images}`,
         kind: "image",
         name: "image",
         mimeType: mime,
         dataUrl: `data:${mime};base64,${part.data}`,
       });
+      images += 1;
     }
     if (type === "tool_result") {
       const id = String(part.tool_use_id ?? part.toolCallId ?? part.id ?? "");

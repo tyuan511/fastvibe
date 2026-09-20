@@ -69,6 +69,8 @@ export type AppSettings = {
    * which one the user typed in. Independent of `uiLanguage` on purpose.
    */
   aiLanguage: UiLanguage;
+  /** Extra instructions appended to the default system prompt on every turn. */
+  customSystemPrompt: string;
   /** Whether the active theme follows the OS or is pinned light/dark. */
   themeMode: ThemeMode;
   /** Theme used while in light mode. */
@@ -137,6 +139,7 @@ const DEFAULTS: AppSettings = {
   sendOnEnter: true,
   uiLanguage: "zh",
   aiLanguage: "zh",
+  customSystemPrompt: "",
   themeMode: DEFAULT_THEME_MODE,
   lightTheme: DEFAULT_LIGHT_THEME,
   darkTheme: DEFAULT_DARK_THEME,
@@ -153,6 +156,7 @@ function sanitize(parsed: Partial<AppSettings>): Partial<AppSettings> {
   if (typeof next.fullAccessConfirmed !== "boolean") delete next.fullAccessConfirmed;
   if (!isUiLanguage(next.uiLanguage)) delete next.uiLanguage;
   if (!isUiLanguage(next.aiLanguage)) delete next.aiLanguage;
+  if (typeof next.customSystemPrompt !== "string") delete next.customSystemPrompt;
   if (!isThemeMode(next.themeMode)) delete next.themeMode;
   if (!isThemeId(next.lightTheme)) delete next.lightTheme;
   if (!isThemeId(next.darkTheme)) delete next.darkTheme;

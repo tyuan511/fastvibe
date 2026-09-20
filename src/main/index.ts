@@ -402,6 +402,11 @@ function registerIpc(): void {
   handle(Ipc.engineGetMessages, async (payload?: { conversationId?: string }) => {
     return engine.loadMessages(payload?.conversationId);
   });
+  handle(Ipc.engineGetMessagesSince, async (payload?: { anchorEntryId?: string; conversationId?: string }) => {
+    const anchor = payload?.anchorEntryId;
+    if (!anchor) return { mode: "full", messages: await engine.loadMessages(payload?.conversationId) };
+    return engine.loadMessagesSince(anchor, payload?.conversationId);
+  });
   handle(Ipc.engineGetSnapshot, async (payload?: { conversationId?: string }) => {
     return engine.getSnapshot(payload?.conversationId);
   });

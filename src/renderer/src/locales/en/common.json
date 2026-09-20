@@ -45,6 +45,8 @@
     "requestFailed": "Request failed",
     "retryingWithBudget": "Request failed; retrying ({{attempt}}/{{maxAttempts}})",
     "retrying": "Request failed; retrying",
+    "retryingLabel": "Retrying",
+    "retryingAttempt": "{{attempt}}/{{maxAttempts}}",
     "retryAfter": ", retrying in {{seconds}}s",
     "retryDetail": ": {{error}}"
   },

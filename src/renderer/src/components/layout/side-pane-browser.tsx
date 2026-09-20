@@ -5,11 +5,13 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import {
   ArrowLeft01Icon,
   ArrowRight01Icon,
+  ChromeIcon,
   LinkSquare02Icon,
   Refresh01Icon,
   Upload01Icon,
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { useSessionStore } from "@/stores/session";
 import { useSidePaneStore } from "@/stores/side-pane";
@@ -1061,7 +1063,21 @@ export function SidePaneBrowser({
         ) : null}
         {importStatus ? <span className="absolute right-3 top-11 z-20 max-w-72 truncate rounded bg-muted px-2 py-1 text-xs text-muted-foreground">{importStatus}</span> : null}
       </form>
-      <div ref={box} className="relative min-h-0 min-w-0 flex-1 overflow-hidden bg-white" />
+      <div ref={box} className="relative min-h-0 min-w-0 flex-1 overflow-hidden bg-white">
+        {!draft.trim() ? (
+          <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-background">
+            <Empty className="flex-none border-0 py-6">
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <HugeiconsIcon strokeWidth={2} icon={ChromeIcon} />
+                </EmptyMedia>
+                <EmptyTitle>{t("browser.emptyTitle")}</EmptyTitle>
+                <EmptyDescription>{t("browser.emptyDescription")}</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }

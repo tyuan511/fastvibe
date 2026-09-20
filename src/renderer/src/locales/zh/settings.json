@@ -7,12 +7,15 @@
   "aiDesc": "每轮对话都会提示 AI 用该语言回复"
  },
  "groups": {
-  "personal": "个人",
-  "integrations": "集成",
+  "preferences": "偏好设置",
+  "workspace": "工作区与数据",
+  "integrations": "模型与扩展",
+  "system": "系统",
   "about": "关于"
  },
  "sections": {
-  "general": "通用",
+  "general": "偏好设置",
+  "personalization": "个性化",
   "shortcuts": "快捷键",
   "archived": "归档对话",
   "usage": "使用统计",
@@ -26,6 +29,13 @@
   "remote": "远程访问"
  },
  "backToApp": "返回应用",
+ "personalization": {
+  "promptTitle": "Agent 说明",
+  "promptDesc": "为所有聊天中的 Agent 提供额外说明和上下文。此内容会追加到默认系统提示词之后。",
+  "placeholder": "例如：始终使用简体中文回答；修改代码前先说明计划。",
+  "promptHint": "每次新的 Agent 回合都会使用这段说明。留空即可停用。",
+  "save": "保存"
+ },
  "appearance": {
   "title": "外观",
   "themeMode": "主题模式",
@@ -38,6 +48,18 @@
   "darkTheme": "暗色主题",
   "darkThemeDesc": "暗色模式下使用的主题",
   "uiFontSize": "界面字号"
+ },
+ "agent": {
+  "title": "Agent 默认行为"
+ },
+ "security": {
+  "title": "安全与权限"
+ },
+ "runtime": {
+  "title": "运行时"
+ },
+ "display": {
+  "title": "显示"
  },
  "common": {
   "title": "通用",
@@ -76,6 +98,9 @@
   "showTimestamps": "显示消息时间"
  },
  "about": {
+  "appInfo": "应用信息",
+  "data": "数据与诊断",
+  "advanced": "高级",
   "tagline": "桌面智能体工作台",
   "modelsDev": "模型元数据",
   "generatedAt": "生成于 {{date}}",

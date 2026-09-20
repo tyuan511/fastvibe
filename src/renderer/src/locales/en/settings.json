@@ -7,12 +7,15 @@
   "aiDesc": "Tell the AI, on every turn, which language to reply in"
  },
  "groups": {
-  "personal": "Personal",
-  "integrations": "Integrations",
+  "preferences": "Preferences",
+  "workspace": "Workspace & data",
+  "integrations": "Models & extensions",
+  "system": "System",
   "about": "About"
  },
  "sections": {
-  "general": "General",
+  "general": "Preferences",
+  "personalization": "Personalization",
   "shortcuts": "Shortcuts",
   "archived": "Archived chats",
   "usage": "Usage",
@@ -26,6 +29,13 @@
   "remote": "Remote access"
  },
  "backToApp": "Back to app",
+ "personalization": {
+  "promptTitle": "Agent instructions",
+  "promptDesc": "Give the Agent extra instructions and context for every chat. This is appended after the default system prompt.",
+  "placeholder": "For example: Always answer in Simplified Chinese; explain your plan before editing code.",
+  "promptHint": "This text is used on every new Agent turn. Leave it empty to disable it.",
+  "save": "Save"
+ },
  "appearance": {
   "title": "Appearance",
   "themeMode": "Theme mode",
@@ -38,6 +48,18 @@
   "darkTheme": "Dark theme",
   "darkThemeDesc": "Theme used in dark mode",
   "uiFontSize": "Interface size"
+ },
+ "agent": {
+  "title": "Agent defaults"
+ },
+ "security": {
+  "title": "Security & permissions"
+ },
+ "runtime": {
+  "title": "Runtime"
+ },
+ "display": {
+  "title": "Display"
  },
  "common": {
   "title": "General",
@@ -76,6 +98,9 @@
   "showTimestamps": "Show timestamps"
  },
  "about": {
+  "appInfo": "App information",
+  "data": "Data & diagnostics",
+  "advanced": "Advanced",
   "tagline": "Desktop client for agent work, code, and cowork",
   "modelsDev": "Model metadata",
   "generatedAt": "Generated {{date}}",

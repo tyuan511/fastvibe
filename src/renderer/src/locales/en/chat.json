@@ -182,7 +182,9 @@
     "expand": "Expand",
     "collapse": "Collapse",
     "preparing": "Preparing workspace…",
-    "copied": "Copied"
+    "copied": "Copied",
+    "earlier_one": "Show {{count}} earlier turn",
+    "earlier_other": "Show {{count}} earlier turns"
   },
   "permission": {
     "needConfirm": "Confirmation needed",
