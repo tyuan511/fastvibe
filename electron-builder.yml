@@ -68,24 +68,12 @@ electronLanguages:
 mac:
   icon: resources/icon.icns
   category: public.app-category.developer-tools
-  # Signed with FastVibe's own Developer ID, and pinned by Team ID rather than
-  # left to auto-discovery: this machine's login keychain also holds an
-  # unrelated company Developer ID, and electron-builder would otherwise sign
-  # whichever it found first — shipping an app attributed to the wrong entity.
-  #
-  # A Team ID is not a secret (it is readable in any signed binary), so it lives
-  # here rather than in CI secrets. Only the certificate and the notarization
-  # credentials are secret.
-  #
-  # Why this matters beyond Gatekeeper: macOS keys TCC grants (Accessibility,
-  # Screen Recording) to the signing identity. A stable Developer ID is what lets
-  # a granted permission survive an app update; the ad-hoc signature this project
-  # shipped before changed on every build, so any such grant would silently die.
-  #
-  # TODO: replace with the personal team's ID once its Developer ID Application
-  # certificate exists. Until then electron-builder finds no matching identity,
-  # warns, and produces an unsigned build — the previous behaviour.
-  identity: REPLACE_WITH_PERSONAL_TEAM_ID
+  # Unsigned until a Developer ID Application certificate exists. A placeholder
+  # identity plus an empty CSC_LINK made electron-builder treat the repo path as
+  # a cert file and fail the mac CI package step. Pin the Team ID here when the
+  # certificate is ready; until then identity stays null and CI sets
+  # CSC_IDENTITY_AUTO_DISCOVERY=false.
+  identity: null
   hardenedRuntime: true
   # Entitlements are deliberately *not* named here. electron-builder picks up
   # `entitlements.mac.plist` and `entitlements.mac.inherit.plist` from
