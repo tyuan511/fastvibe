@@ -682,8 +682,6 @@
     "grant": "Request access",
     "openSystemSettings": "Open System Settings",
     "recheck": "Check again",
-    "dragTitle": "Drag FastVibe into the Privacy & Security list",
-    "dragDesc": "Press Request access first, so FastVibe appears in the list. If it still is not there, drag this into the System Settings list to add it.",
     "unavailable": "No computer-control engine is available for this OS or architecture",
     "windowsNote": "Windows needs no extra permission — computer control can be switched on directly.",
     "linuxNote": "Linux needs no extra permission; support under Wayland depends on the compositor.",
@@ -700,6 +698,8 @@
     "allowedEmpty": "None",
     "allowedPick": "Pick a running app",
     "allowedAdd": "Add",
-    "allowedRemove": "Remove"
+    "allowedRemove": "Remove",
+    "dragButton": "Drag to add",
+    "grantHint": "Request access shows the system prompts, which is what puts FastVibe in the list. If it still is not there, use Drag to add on a row to summon a floating panel and drag that into the System Settings list."
   }
 }

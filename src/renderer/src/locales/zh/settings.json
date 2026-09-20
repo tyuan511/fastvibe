@@ -680,8 +680,6 @@
     "grant": "请求授权",
     "openSystemSettings": "打开系统设置",
     "recheck": "重新检查",
-    "dragTitle": "把 FastVibe 拖到隐私与安全性列表里",
-    "dragDesc": "先点「请求授权」让 FastVibe 出现在列表中；如果列表里仍然没有，把这里拖进系统设置的列表即可添加。",
     "unavailable": "当前系统或架构没有可用的电脑操控组件",
     "windowsNote": "Windows 无需额外授权，可直接开启电脑操控。",
     "linuxNote": "Linux 无需额外授权；Wayland 下的支持取决于桌面合成器。",
@@ -698,6 +696,8 @@
     "allowedEmpty": "暂无",
     "allowedPick": "选择运行中的应用",
     "allowedAdd": "添加",
-    "allowedRemove": "移除"
+    "allowedRemove": "移除",
+    "dragButton": "拖拽添加",
+    "grantHint": "点「请求授权」会弹出系统提示，FastVibe 随即出现在列表中；如果列表里仍然没有，用每一行右侧的「拖拽添加」召出一个浮层，把它拖进系统设置的列表即可。"
   }
 }

@@ -124,6 +124,9 @@ export const Ipc = {
   computerListApps: "computer:list-apps",
   /** Starts the native drag that carries FastVibe.app into the Privacy & Security list. */
   computerStartDrag: "computer:start-drag",
+  /** Shows/hides the floating panel that is the drag source for that list. */
+  computerShowGrantOverlay: "computer:show-grant-overlay",
+  computerCloseGrantOverlay: "computer:close-grant-overlay",
   enginePromptConversation: "engine:prompt-conversation",
   engineGetConversationMessages: "engine:get-conversation-messages",
   conversationsCreateSide: "conversations:create-side",

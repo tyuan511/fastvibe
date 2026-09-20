@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState, type DragEvent, type JSX } from "react";
+import { useCallback, useEffect, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Alert02Icon, CheckmarkCircle02Icon, ComputerIcon, Delete02Icon, RefreshIcon } from "@hugeicons/core-free-icons";
+import { Alert02Icon, CheckmarkCircle02Icon, Delete02Icon, DragDropIcon, RefreshIcon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Spinner } from "@/components/ui/spinner";
@@ -259,10 +259,20 @@ function PermissionCard({
     <SettingsGroup title={t("computer.permissionTitle")}>
       {mac ? (
         <>
-          <PermissionRow label={t("computer.accessibility")} description={t("computer.accessibilityDesc")} granted={status?.accessibility === true} />
-          <PermissionRow label={t("computer.screenRecording")} description={t("computer.screenRecordingDesc")} granted={status?.screenRecording === true} />
+          <PermissionRow
+            label={t("computer.accessibility")}
+            description={t("computer.accessibilityDesc")}
+            granted={status?.accessibility === true}
+            permission="accessibility"
+          />
+          <PermissionRow
+            label={t("computer.screenRecording")}
+            description={t("computer.screenRecordingDesc")}
+            granted={status?.screenRecording === true}
+            permission="screenRecording"
+          />
           {status?.ready ? null : (
-            <div className="space-y-3 px-4 py-4">
+            <div className="space-y-2 px-4 py-4">
               <div className="flex items-center gap-2">
                 <Button size="sm" disabled={requesting} onClick={() => void request()}>
                   {requesting ? <Spinner className="size-3.5" /> : null}
@@ -275,7 +285,7 @@ function PermissionCard({
                   {t("computer.recheck")}
                 </Button>
               </div>
-              <DragToGrant />
+              <p className="text-xs leading-4 text-muted-foreground">{t("computer.grantHint")}</p>
             </div>
           )}
         </>
@@ -288,51 +298,42 @@ function PermissionCard({
   );
 }
 
-function PermissionRow({ label, description, granted }: { label: string; description: string; granted: boolean }): JSX.Element {
+/**
+ * One permission, its state, and — while it is missing — the button that summons the
+ * drag panel for it. Per row rather than once for the card, because the two permissions
+ * live in two different lists in System Settings and the panel has to say which.
+ */
+function PermissionRow({
+  label,
+  description,
+  granted,
+  permission,
+}: {
+  label: string;
+  description: string;
+  granted: boolean;
+  permission: "accessibility" | "screenRecording";
+}): JSX.Element {
   const { t } = useTranslation("settings");
   return (
     <SettingsRow
       title={label}
       description={description}
       control={
-        <Badge variant={granted ? "secondary" : "outline"} className={cn("gap-1", granted ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground")}>
-          <HugeiconsIcon strokeWidth={2} icon={granted ? CheckmarkCircle02Icon : Alert02Icon} className="size-3" />
-          {granted ? t("computer.granted") : t("computer.notGranted")}
-        </Badge>
+        <div className="flex items-center gap-2">
+          {granted ? null : (
+            <Button size="sm" variant="outline" onClick={() => void window.fastvibe.computer.showGrantOverlay(permission)}>
+              <HugeiconsIcon strokeWidth={2} icon={DragDropIcon} className="size-3.5" />
+              {t("computer.dragButton")}
+            </Button>
+          )}
+          <Badge variant={granted ? "secondary" : "outline"} className={cn("gap-1", granted ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground")}>
+            <HugeiconsIcon strokeWidth={2} icon={granted ? CheckmarkCircle02Icon : Alert02Icon} className="size-3" />
+            {granted ? t("computer.granted") : t("computer.notGranted")}
+          </Badge>
+        </div>
       }
     />
   );
 }
 
-/**
- * Drag FastVibe.app into the Privacy & Security list.
- *
- * macOS accepts an application dropped onto that list, and dropping is the only route
- * that does not send the user hunting through a file picker for a bundle they cannot
- * easily name. The drag has to be a *native file* drag, which a web page cannot start on
- * its own — `dragstart` is forwarded to Main, which calls `webContents.startDrag` with
- * the real bundle path. `preventDefault` stops Chromium from also starting its own
- * (text) drag, which would cancel the native one.
- */
-function DragToGrant(): JSX.Element {
-  const { t } = useTranslation("settings");
-  const onDragStart = (event: DragEvent<HTMLDivElement>): void => {
-    event.preventDefault();
-    void window.fastvibe.computer.startDrag();
-  };
-  return (
-    <div
-      draggable
-      onDragStart={onDragStart}
-      className="flex cursor-grab items-center gap-3 rounded-lg border border-dashed border-border bg-muted/40 px-3 py-3 active:cursor-grabbing"
-    >
-      <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-background shadow-sm">
-        <HugeiconsIcon strokeWidth={2} icon={ComputerIcon} className="size-5" />
-      </div>
-      <div className="min-w-0">
-        <p className="text-sm font-medium">{t("computer.dragTitle")}</p>
-        <p className="mt-0.5 text-xs leading-4 text-muted-foreground">{t("computer.dragDesc")}</p>
-      </div>
-    </div>
-  );
-}

@@ -56,6 +56,7 @@ import {
   requestComputerPermissions,
   startComputerDrag,
 } from "./pi/cua-bridge";
+import { closeGrantOverlay, showGrantOverlay, type GrantPermission } from "./pi/computer-grant-overlay";
 import { importBrowserProfile, listBrowserProfiles } from "./engine/browser-profiles";
 import type { ImportSourceId, ProviderModel, UsageRange } from "@shared/types";
 import type { GitBranch, GitDiffSource, GitStatus } from "@shared/ipc";
@@ -219,12 +220,17 @@ function registerIpc(): void {
   handle(Ipc.computerOpenSettings, () => openComputerSettings());
   handle(Ipc.computerListApps, () => listComputerApps());
   handle(Ipc.computerStartDrag, (_payload, ctx) => {
-    // A drag belongs to the window the gesture started in; a remote caller has no
-    // `webContents` to drag from, which is why the policy denies this method outright.
+    // A drag belongs to the window the gesture started in — in practice the floating
+    // grant panel, which is a window of its own. A remote caller has no `webContents`
+    // to drag from, which is why the policy denies this method outright.
     const contents = ctx.window?.webContents;
     if (!contents) throw new Error(uiText("需要在桌面端窗口中拖拽", "Dragging requires a desktop window"));
     startComputerDrag(contents);
   });
+  handle(Ipc.computerShowGrantOverlay, (payload: { permission?: GrantPermission }) => {
+    showGrantOverlay(payload?.permission === "screenRecording" ? "screenRecording" : "accessibility");
+  });
+  handle(Ipc.computerCloseGrantOverlay, () => closeGrantOverlay());
 
   handle(Ipc.engineGetStatus, () => engine.status);
 
@@ -891,6 +897,9 @@ app.whenReady().then(async () => {
   // still not loaded here — `cua-bridge` imports it on the first `computer_*` call, so a
   // user who never touches the feature pays nothing for it.
   installComputerGlobal();
+  // The grant panel is a window, so it is torn down where the other windows are, not
+  // inside the bridge — which would make the bridge and the panel import each other.
+  app.once("will-quit", () => closeGrantOverlay());
   applyAppIcon();
   const startupSettings = readAppSettings(getFastVibePaths());
   applyNativeTheme(startupSettings);

@@ -48,6 +48,11 @@ extraResources:
   # build and the skills silently apply only in development.
   - from: resources/skills
     to: skills
+  # The floating grant panel is a static page loaded by path into its own window, and
+  # it references `../icon.png` — which is why it sits next to the icon out here rather
+  # than becoming a third renderer entry point.
+  - from: resources/grant-overlay
+    to: grant-overlay
   - from: resources/icon.icns
     to: icon.icns
   - from: resources/icon.png

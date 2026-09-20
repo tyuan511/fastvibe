@@ -535,6 +535,9 @@ const api = {
       { pid: 901, name: "访达", bundleId: "com.apple.finder", active: false },
     ],
     startDrag: async () => undefined,
+    // The panel is a real Electron window, so the preview can only stub it away.
+    showGrantOverlay: async () => undefined,
+    closeGrantOverlay: async () => undefined,
   },
 };
 
