@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { priceUsage, selectCost, type TokenUsage } from "../src/main/engine/pricing.ts";
+import { defaultContextWindow } from "../src/main/engine/context-window.ts";
 
 /**
  * The price ladder is the one place FastVibe bills money itself, and it exists because
@@ -48,6 +49,24 @@ test("a model with a price but no usage costs zero", () => {
 test("the arithmetic is per million tokens", () => {
   const cost = priceUsage({ cost: ENTRY }, usage({ input: 1_000_000, output: 1_000_000 }));
   assert.equal(cost, 18);
+});
+
+test("a tiered model defaults to the first context price segment", () => {
+  assert.equal(
+    defaultContextWindow(1_000_000, [
+      { over: 1_000_000, cost: ENTRY },
+      { over: 200_000, cost: TIER },
+    ]),
+    200_000,
+  );
+});
+
+test("the catalog context remains the cap for an impossible price threshold", () => {
+  assert.equal(defaultContextWindow(128_000, [{ over: 200_000, cost: TIER }]), 128_000);
+});
+
+test("a flat-price model keeps its catalog context", () => {
+  assert.equal(defaultContextWindow(1_000_000), 1_000_000);
 });
 
 test("the highest step the prompt clears wins", () => {

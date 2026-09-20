@@ -22,6 +22,8 @@ export type FastVibePaths = {
   mcpFile: string;
   /** Renderer UI preferences (theme, chat behaviour, …). */
   settingsFile: string;
+  /** Main-owned normal window size and maximized state. */
+  windowStateFile: string;
   /** User overrides for built-in subagent models. */
   subagentsFile: string;
   /** Per-thinking-block durations, which the engine's transcripts do not record. */
@@ -86,6 +88,7 @@ function buildFastVibePaths(): FastVibePaths {
     providersFile: join(userData, "providers.json"),
     mcpFile: join(userData, "mcp.json"),
     settingsFile: join(userData, "settings.json"),
+    windowStateFile: join(userData, "window-state.json"),
     subagentsFile: join(agentDir, "subagents.json"),
     reasoningFile: join(runtimeRoot, "reasoning.json"),
     usageLedgerFile: join(runtimeRoot, "usage-ledger.jsonl"),

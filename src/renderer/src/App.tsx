@@ -66,7 +66,9 @@ import type {
   ChatMessage,
   ConversationDeleteResult,
   ConversationOpenResult,
+  EngineModel,
   FastVibeModel,
+  PermissionMode,
   PermissionRequest,
   QueuedPrompt,
   SkillInfo,
@@ -100,20 +102,69 @@ const SettingsDialog = lazy(async () => ({
 
 const DRAFT_KEY = "fastvibe.session-drafts";
 
-function readDrafts(): Record<string, string> {
+type PersistedDraft = {
+  draft: string;
+  attachments: ChatAttachment[];
+  model?: EngineModel;
+  thinkingLevel?: string;
+  permissionMode?: PermissionMode;
+};
+
+function isStoredModel(value: unknown): value is EngineModel {
+  if (!value || typeof value !== "object") return false;
+  const model = value as Partial<EngineModel>;
+  return typeof model.provider === "string" && model.provider.length > 0 && typeof model.id === "string" && model.id.length > 0;
+}
+
+function isStoredAttachment(value: unknown): value is ChatAttachment {
+  if (!value || typeof value !== "object") return false;
+  const attachment = value as Partial<ChatAttachment>;
+  return (
+    typeof attachment.id === "string" &&
+    (attachment.kind === "image" || attachment.kind === "file") &&
+    typeof attachment.name === "string"
+  );
+}
+
+function isStoredPermissionMode(value: unknown): value is PermissionMode {
+  return value === "ask" || value === "smart" || value === "full";
+}
+
+function readDrafts(): Record<string, PersistedDraft> {
   try {
     const parsed = JSON.parse(localStorage.getItem(DRAFT_KEY) ?? "{}");
-    return parsed && typeof parsed === "object" ? parsed as Record<string, string> : {};
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const drafts: Record<string, PersistedDraft> = {};
+    for (const [id, value] of Object.entries(parsed)) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+      const item = value as Partial<PersistedDraft>;
+      if (typeof item.draft !== "string") continue;
+      drafts[id] = {
+        draft: item.draft,
+        attachments: Array.isArray(item.attachments) ? item.attachments.filter(isStoredAttachment) : [],
+        ...(isStoredModel(item.model) ? { model: item.model } : {}),
+        ...(typeof item.thinkingLevel === "string" ? { thinkingLevel: item.thinkingLevel } : {}),
+        ...(isStoredPermissionMode(item.permissionMode) ? { permissionMode: item.permissionMode } : {}),
+      };
+    }
+    return drafts;
   } catch {
     return {};
   }
 }
 
-function writeDraft(id: string | null, text: string): void {
+function writeDraft(id: string | null, state: PersistedDraft): void {
   if (!id) return;
   try {
     const drafts = readDrafts();
-    if (text) drafts[id] = text;
+    const hasPayload = Boolean(
+      state.draft ||
+      state.attachments.length > 0 ||
+      state.model ||
+      state.thinkingLevel ||
+      state.permissionMode,
+    );
+    if (hasPayload) drafts[id] = state;
     else delete drafts[id];
     localStorage.setItem(DRAFT_KEY, JSON.stringify(drafts));
   } catch {
@@ -133,8 +184,16 @@ function writeDraft(id: string | null, text: string): void {
  */
 const DRAFT_DEBOUNCE_MS = 400;
 
-function useDraftPersistence(activeId: string | null, draft: string): void {
-  const pending = useRef<{ id: string | null; text: string } | null>(null);
+function useDraftPersistence(
+  activeId: string | null,
+  draft: string,
+  attachments: ChatAttachment[],
+  model: EngineModel | undefined,
+  thinkingLevel: string | undefined,
+  permissionMode: PermissionMode,
+  emptySession: boolean,
+): void {
+  const pending = useRef<{ id: string | null; state: PersistedDraft } | null>(null);
   const timer = useRef<number | null>(null);
 
   const flush = useCallback(() => {
@@ -144,7 +203,7 @@ function useDraftPersistence(activeId: string | null, draft: string): void {
     }
     const entry = pending.current;
     pending.current = null;
-    if (entry) writeDraft(entry.id, entry.text);
+    if (entry) writeDraft(entry.id, entry.state);
   }, []);
 
   const lastId = useRef(activeId);
@@ -158,9 +217,21 @@ function useDraftPersistence(activeId: string | null, draft: string): void {
       flush();
       lastId.current = activeId;
     }
-    pending.current = { id: activeId, text: draft };
+    pending.current = {
+      id: activeId,
+      state: {
+        draft,
+        attachments,
+        // Model, thinking strength and permission are meaningful as a bundle for an
+        // empty project session. A completed chat keeps only its ordinary composer
+        // draft, so opening history cannot silently change its controls.
+        ...(emptySession && model ? { model } : {}),
+        ...(emptySession && thinkingLevel ? { thinkingLevel } : {}),
+        ...(emptySession ? { permissionMode } : {}),
+      },
+    };
     if (timer.current === null) timer.current = window.setTimeout(flush, DRAFT_DEBOUNCE_MS);
-  }, [activeId, draft, flush]);
+  }, [activeId, attachments, draft, emptySession, flush, model, permissionMode, thinkingLevel]);
 
   // `beforeunload`, not the effect cleanup: a window closing never unmounts.
   useEffect(() => {
@@ -353,7 +424,15 @@ function ComposerSlot({
 function DraftKeeper(): null {
   const activeId = useSessionStore((state) => state.activeId);
   const draft = useSessionStore((state) => state.draft);
-  useDraftPersistence(activeId, draft);
+  const attachments = useSessionStore((state) => state.attachments);
+  const model = useSessionStore((state) => state.session?.model);
+  const thinkingLevel = useSessionStore((state) => state.session?.thinkingLevel);
+  const permissionMode = useSettingsStore((state) => state.settings.permissionMode);
+  const emptySession = useSessionStore((state) => {
+    const conversation = state.conversations.find((item) => item.id === state.activeId);
+    return Boolean(conversation && !conversation.preview);
+  });
+  useDraftPersistence(activeId, draft, attachments, model, thinkingLevel, permissionMode, emptySession);
   return null;
 }
 
@@ -479,6 +558,9 @@ export function App(): JSX.Element {
    * quick succession (the open, then the abandoned-draft cleanup) from doing it either.
    */
   const intendedActiveId = useRef<string | null>(null);
+  // Invalidates model/thinking restoration from an older conversation open. A slow
+  // provider reply must never overwrite a choice made after the user switched again.
+  const openGeneration = useRef(0);
   // One send at a time. A second click / Enter while this send is still being handed
   // over is not a second message — see `handleSubmit`.
   const submitting = useRef(false);
@@ -1004,10 +1086,25 @@ export function App(): JSX.Element {
     // chat, a side chat, plan mode's handoff — so this is where the claim is kept
     // honest for the ones that could not know the id before they called.
     intendedActiveId.current = result.conversation.id;
+    const generation = ++openGeneration.current;
     const savedComposer = useSessionStore.getState().composerDrafts[result.conversation.id];
+    const persisted = readDrafts()[result.conversation.id];
+    const emptySession = !result.conversation.preview;
+    const restorePersistedState = emptySession && !savedComposer;
+    // Hydrate the visible session state synchronously as well as correcting Main below.
+    // Otherwise DraftKeeper could see Main's default model for one render and overwrite
+    // the project's saved choice before the asynchronous setModel call returned. An
+    // in-memory composer is newer than localStorage, so it wins on same-window switches.
+    const restoredState = restorePersistedState && result.state
+      ? {
+          ...result.state,
+          ...(persisted?.model ? { model: persisted.model } : {}),
+          ...(persisted?.thinkingLevel ? { thinkingLevel: persisted.thinkingLevel } : {}),
+        }
+      : result.state;
     setActiveId(result.conversation.id);
     setMessages(result.messages, result.conversation.id);
-    setSession(result.state);
+    setSession(restoredState);
     setStatus(result.status);
     setQueueState(result.queue);
     // The goal (or plan mode) this conversation already had, replayed by the engine:
@@ -1016,7 +1113,43 @@ export function App(): JSX.Element {
     useSessionStore.getState().setExtensionStatus(result.conversation.id, result.extensionStatus ?? {});
     // In-memory composer state is newer than the debounced localStorage write and
     // includes attachments. Only hydrate from disk the first time this window opens it.
-    if (!savedComposer) setDraft(readDrafts()[result.conversation.id] ?? "");
+    if (!savedComposer) {
+      setComposer(persisted?.draft ?? "", persisted?.attachments ?? []);
+    }
+    if (emptySession && persisted?.permissionMode && persisted.permissionMode !== settings.permissionMode) {
+      // The normal permission picker still owns the full-access confirmation. A saved
+      // full choice is therefore restored through the same guarded path, never by
+      // writing the sandbox setting directly.
+      setPermissionMode(persisted.permissionMode);
+    }
+    if (restorePersistedState && (persisted?.model || persisted?.thinkingLevel)) {
+      // Keep the two SDK mutations ordered: changing the model re-clamps thinking,
+      // so a concurrent restore could let the model response overwrite the saved
+      // thinking level again.
+      void (async () => {
+        let next = result.state;
+        const current = (): boolean =>
+          openGeneration.current === generation && useSessionStore.getState().activeId === result.conversation.id;
+        if (!current()) return;
+        if (persisted.model) {
+          try {
+            next = await engine.setModel(persisted.model.provider, persisted.model.id, result.conversation.id);
+          } catch {
+            // The provider may have been removed since this draft was saved; retain
+            // Main's authoritative state rather than the invalid saved model.
+          }
+        }
+        if (!current()) return;
+        if (persisted.thinkingLevel) {
+          try {
+            next = await engine.setThinking(persisted.thinkingLevel, result.conversation.id);
+          } catch {
+            // The model may no longer support the saved thinking level.
+          }
+        }
+        if (next && current()) setSession(next);
+      })();
+    }
     setError(null);
     setRunInterrupted(null);
     // `canResume` is deliberately not touched here: it is not a leftover of the chat
@@ -1503,42 +1636,22 @@ export function App(): JSX.Element {
     }
   }, [addUserMessage, canChat, dropEmptyAssistant, setError, setMessages, setRunInterrupted, setCanResume, setSession]);
 
-  async function discardDraft(id: string | null | undefined): Promise<void> {
-    if (!id) return;
-    const item = useSessionStore.getState().conversations.find((entry) => entry.id === id);
-    if (!item || item.preview) return;
-    try {
-      applyList(await window.fastvibe.conversations.delete(id));
-      disposeSidePaneTabs(useSidePaneStore.getState().forgetScope(id));
-      useSessionStore.getState().forgetConversationExtensionState(id);
-    } catch {
-      // Draft cleanup is best-effort.
-    }
-  }
-
   /** Empty chats stay off the sidebar until the first prompt is sent. */
   async function handleNewChat(project?: string): Promise<void> {
     setComposerFocus((value) => value + 1);
     try {
       const current = conversations.find((item) => item.id === activeId);
-      if (current && !current.preview) {
-        if ((current.project ?? undefined) !== (project || undefined)) {
-          applyList(await window.fastvibe.conversations.setProject(current.id, project ?? null));
-          void getStatus().then(setStatus).catch(() => undefined);
-          void engine.getState().then(setSession).catch(() => undefined);
-        }
+      if (current && !current.preview && (current.project ?? undefined) === (project || undefined)) {
         setMessages([], current.id);
-        const savedComposer = useSessionStore.getState().composerDrafts[current.id];
-        if (!savedComposer) setDraft(readDrafts()[current.id] ?? "");
         setError(null);
         revealConversation(current.id);
         return;
       }
-      const previousId = activeId;
+      // Main reuses the unfinished conversation for this project. Do not retarget the
+      // current empty chat: its draft belongs to its old project and must remain there.
       const created = await window.fastvibe.conversations.create(project);
       applyOpen(created);
       revealConversation(created.conversation.id);
-      await discardDraft(previousId);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -1552,9 +1665,8 @@ export function App(): JSX.Element {
    * `"remote"` follow — another window or a phone opened this chat — replaces, because
    * the jump was not this person's navigation and should not sit in their back stack.
    * Everything else is the same path on purpose: a followed switch reloads the
-   * transcript and collects the abandoned empty draft exactly as a local one does,
-   * which is what keeps the two clients from ending up in states that differ in ways
-   * nobody chose.
+   * transcript while leaving the project's unfinished composer session intact, which
+   * keeps the two clients from ending up in states that differ in ways nobody chose.
    */
   async function handleOpen(
     id: string,
@@ -1567,7 +1679,6 @@ export function App(): JSX.Element {
       if (source === "user") revealConversation(id);
       return;
     }
-    const previousId = store.activeId;
     // Claimed before the hop, not after: the push this call is about to cause can beat
     // its own reply back here (see `intendedActiveId`).
     intendedActiveId.current = id;
@@ -1576,7 +1687,6 @@ export function App(): JSX.Element {
       applyOpen(opened);
       if (source === "user") revealConversation(id);
       else if (source === "remote") revealConversation(id, true);
-      if (previousId && previousId !== id) await discardDraft(previousId);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -1766,13 +1876,17 @@ export function App(): JSX.Element {
    */
   async function handleSetProject(project: string | null): Promise<void> {
     try {
-      if (!activeId) {
+      const current = conversations.find((item) => item.id === activeId);
+      if (!current || !current.preview) {
+        // Project selection on the hero is a switch between project-owned empty
+        // sessions, not a mutation that would strand the current project's draft.
         const created = await window.fastvibe.conversations.create(project ?? undefined);
         applyOpen(created);
         revealConversation(created.conversation.id);
         return;
       }
-      const snapshot = await window.fastvibe.conversations.setProject(activeId, project);
+      if ((current.project ?? null) === project) return;
+      const snapshot = await window.fastvibe.conversations.setProject(activeId!, project);
       applyList(snapshot);
       void getStatus().then(setStatus).catch(() => undefined);
     } catch (err) {
@@ -1790,6 +1904,7 @@ export function App(): JSX.Element {
   }
 
   async function handleModelChange(provider: string, modelId: string): Promise<void> {
+    openGeneration.current += 1;
     try {
       let next = await engine.setModel(provider, modelId);
       const catalog = models.find((item) => item.provider === provider && item.id === modelId);
@@ -1808,6 +1923,7 @@ export function App(): JSX.Element {
   }
 
   async function handleThinkingChange(level: string): Promise<void> {
+    openGeneration.current += 1;
     try {
       const next = await engine.setThinking(level);
       setSession(next);

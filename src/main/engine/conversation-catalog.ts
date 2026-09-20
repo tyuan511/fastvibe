@@ -79,6 +79,12 @@ export class ConversationCatalog {
     return this.#items.find((item) => item.id === id);
   }
 
+  /** The one unfinished conversation reserved for a project, if it exists. */
+  findEmpty(project?: string | null): Conversation | undefined {
+    const bound = normalizeProject(project);
+    return this.#items.find((item) => item.kind !== "side-chat" && !item.preview && item.project === bound);
+  }
+
   get activeId(): string | undefined {
     return this.#activeId;
   }

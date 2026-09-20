@@ -22,6 +22,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { McpServerConfig, McpServerStatus } from "@shared/types";
 
 /** The add-server form's draft; also doubles as the dialog's open state. */
@@ -98,7 +99,7 @@ export function McpSettings(): JSX.Element {
       enabled: draft.enabled,
       transport: draft.transport,
       ...(draft.transport === "stdio"
-        ? { command: draft.command.trim(), args: draft.args.trim() ? draft.args.trim().split(/\s+/) : undefined }
+        ? { command: draft.command.trim(), args: parseArgs(draft.args) }
         : { url: draft.url.trim() }),
     };
     if (await save([...servers, { ...config, connected: false, tools: [] }])) setDraft(null);
@@ -173,10 +174,27 @@ function ServerRow({
           <HugeiconsIcon strokeWidth={2} icon={CheckmarkCircle02Icon} className="size-3" />
           {t("mcp.tools", { count: server.tools.length })}
         </Badge>
+      ) : server.error ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={<span tabIndex={0} aria-label={t("mcp.errorDetails")} className="shrink-0 outline-none" />}
+          >
+            <Badge variant="destructive" className="cursor-help">
+              <HugeiconsIcon strokeWidth={2} icon={AlertCircleIcon} className="size-3" />
+              {t("mcp.connectFailed")}
+            </Badge>
+          </TooltipTrigger>
+          <TooltipContent side="top" align="end" className="max-w-96 whitespace-normal">
+            <div className="space-y-1 text-left">
+              <p className="font-medium">{t("mcp.errorDetails")}</p>
+              <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all font-mono text-xs">{server.error}</pre>
+            </div>
+          </TooltipContent>
+        </Tooltip>
       ) : (
-        <Badge variant={server.error ? "destructive" : "outline"}>
+        <Badge variant="outline">
           <HugeiconsIcon strokeWidth={2} icon={AlertCircleIcon} className="size-3" />
-          {server.error ? t("mcp.connectFailed") : t("mcp.disconnected")}
+          {t("mcp.disconnected")}
         </Badge>
       )}
       <Switch checked={server.enabled} onCheckedChange={onToggle} />
@@ -188,6 +206,38 @@ function ServerRow({
 }
 
 /** The add form lives in a dialog so the list keeps the whole pane. */
+function parseArgs(value: string): string[] | undefined {
+  const args: string[] = [];
+  let current = "";
+  let quote: '"' | "'" | null = null;
+  let escaped = false;
+
+  for (const char of value.trim()) {
+    if (escaped) {
+      current += char;
+      escaped = false;
+    } else if (char === "\\") {
+      escaped = true;
+    } else if (quote) {
+      if (char === quote) quote = null;
+      else current += char;
+    } else if (char === '"' || char === "'") {
+      quote = char;
+    } else if (/\s/.test(char)) {
+      if (current) {
+        args.push(current);
+        current = "";
+      }
+    } else {
+      current += char;
+    }
+  }
+
+  if (escaped) current += "\\";
+  if (current) args.push(current);
+  return args.length ? args : undefined;
+}
+
 function AddServerDialog({
   draft,
   saving,

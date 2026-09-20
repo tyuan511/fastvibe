@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { THINKING_EFFORT_LEVELS, type CostTier, type ModelPrice, type ProviderModel, type ThinkingLevel } from "@shared/types";
 import { getFastVibePaths } from "./paths";
+import { defaultContextWindow } from "./context-window";
 
 /**
  * models.dev metadata, pre-indexed at build time by `scripts/sync-models-dev.mjs` and
@@ -193,7 +194,7 @@ function toMeta(tuple: ModelTuple, version: number): ModelMeta {
   const efforts = decodeEfforts(levels);
   const pricing = decodeCost((tuple as unknown[])[costSlot(version)] as CostTuple | undefined);
   return {
-    contextWindow: contextWindow > 0 ? contextWindow : DEFAULT_CONTEXT,
+    contextWindow: defaultContextWindow(contextWindow, pricing.costTiers),
     maxTokens: maxTokens > 0 ? maxTokens : DEFAULT_MAX_TOKENS,
     reasoning: efforts.thinkingLevels !== undefined,
     input: input.length > 0 ? input : ["text"],

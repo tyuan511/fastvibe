@@ -478,6 +478,7 @@
   "empty": "No MCP servers configured",
   "tools": "{{count}} tools",
   "connectFailed": "Failed",
+  "errorDetails": "Connection error details",
   "disconnected": "Disconnected",
   "delete": "Delete server",
   "dialogTitle": "Add MCP server",

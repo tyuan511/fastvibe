@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, Notification, protocol, session, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, Notification, protocol, screen, session, shell } from "electron";
 import type { WebContents } from "electron";
 import { statSync } from "node:fs";
 import { execFile, execFileSync } from "node:child_process";
@@ -31,6 +31,7 @@ import {
   writeAppSettings,
 } from "./engine/app-settings";
 import { getFastVibePaths, type FastVibePaths } from "./engine/paths";
+import { readWindowState, writeWindowState } from "./engine/window-state";
 import { isNotificationPreference, type NotificationPreference } from "@shared/types";
 import { applyLanguages } from "./engine/ai-language";
 import { uiText } from "./engine/ui-text";
@@ -110,13 +111,21 @@ function applyAppIcon(): void {
  * history and its own minimise/maximise/close (`components/layout/title-bar.tsx`).
  */
 const IS_MAC = process.platform === "darwin";
+const DEFAULT_WINDOW_SIZE = { width: 1280, height: 840 } as const;
+const MIN_WINDOW_SIZE = { width: 920, height: 640 } as const;
+const WINDOW_STATE_SAVE_DELAY_MS = 250;
 
 function createWindow(): void {
+  const paths = getFastVibePaths();
+  const restored = readWindowState(paths.windowStateFile);
+  const workArea = screen.getPrimaryDisplay().workAreaSize;
+  const width = clampWindowDimension(restored?.width ?? DEFAULT_WINDOW_SIZE.width, MIN_WINDOW_SIZE.width, workArea.width);
+  const height = clampWindowDimension(restored?.height ?? DEFAULT_WINDOW_SIZE.height, MIN_WINDOW_SIZE.height, workArea.height);
   const window = new BrowserWindow({
-    width: 1280,
-    height: 840,
-    minWidth: 920,
-    minHeight: 640,
+    width,
+    height,
+    minWidth: MIN_WINDOW_SIZE.width,
+    minHeight: MIN_WINDOW_SIZE.height,
     title: "FastVibe",
     icon: resolveAppIcon(),
     backgroundColor: windowBackgroundColor(),
@@ -136,15 +145,50 @@ function createWindow(): void {
       },
   });
 
-  window.on("ready-to-show", () => window.show());
+  let stateSaveTimer: ReturnType<typeof setTimeout> | undefined;
+  const persistWindowState = (): void => {
+    if (window.isDestroyed()) return;
+    const bounds = window.getNormalBounds();
+    try {
+      writeWindowState(paths.windowStateFile, {
+        width: bounds.width,
+        height: bounds.height,
+        maximized: window.isMaximized(),
+      });
+    } catch (error) {
+      log.warn(`window state save failed: ${String(error)}`);
+    }
+  };
+  const scheduleWindowStateSave = (): void => {
+    if (stateSaveTimer) clearTimeout(stateSaveTimer);
+    stateSaveTimer = setTimeout(() => {
+      stateSaveTimer = undefined;
+      persistWindowState();
+    }, WINDOW_STATE_SAVE_DELAY_MS);
+  };
+
+  window.on("ready-to-show", () => {
+    if (restored?.maximized) window.maximize();
+    window.show();
+  });
+  window.on("resize", scheduleWindowStateSave);
+  window.on("close", () => {
+    if (stateSaveTimer) clearTimeout(stateSaveTimer);
+    stateSaveTimer = undefined;
+    persistWindowState();
+  });
   // The title bar's maximise control swaps its glyph on this; Main owns the truth
   // because the OS can also maximise the window (snap, double-click, a WM key).
   const sendWindowState = (): void => {
     if (window.isDestroyed()) return;
     window.webContents.send(Ipc.windowState, { maximized: window.isMaximized() });
   };
-  window.on("maximize", sendWindowState);
-  window.on("unmaximize", sendWindowState);
+  const handleMaximizedStateChange = (): void => {
+    sendWindowState();
+    scheduleWindowStateSave();
+  };
+  window.on("maximize", handleMaximizedStateChange);
+  window.on("unmaximize", handleMaximizedStateChange);
   // A window is just one receiver among others now (`ipc/broadcast.ts`); pushes reach
   // it through the hub rather than through a loop that knows what a window is.
   const unsubscribe = subscribe({
@@ -155,6 +199,7 @@ function createWindow(): void {
     },
   });
   window.on("closed", () => {
+    if (stateSaveTimer) clearTimeout(stateSaveTimer);
     unsubscribe();
     windows.delete(window);
     if (mainWindow === window) mainWindow = windows.values().next().value ?? null;
@@ -179,6 +224,10 @@ function createWindow(): void {
   mainWindow = window;
   windows.add(window);
   log.info("window opened");
+}
+
+function clampWindowDimension(value: number, minimum: number, available: number): number {
+  return Math.min(Math.max(value, minimum), Math.max(minimum, available));
 }
 
 /**

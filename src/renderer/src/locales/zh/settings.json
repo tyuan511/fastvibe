@@ -476,6 +476,7 @@
   "empty": "尚未配置 MCP 服务器",
   "tools": "{{count}} 个工具",
   "connectFailed": "连接失败",
+  "errorDetails": "连接错误详情",
   "disconnected": "未连接",
   "delete": "删除服务器",
   "dialogTitle": "添加 MCP 服务器",

@@ -148,6 +148,17 @@ body {
   user-select: none;
 }
 
+/* The desktop client does not use browser-style focus chrome. Keep focus itself
+   available for keyboard interaction, but do not paint the web accessibility ring. */
+:focus,
+:focus-visible {
+  outline: none !important;
+}
+
+:focus-visible {
+  box-shadow: none !important;
+}
+
 /*
  * Chat gutter -------------------------------------------------------------------
  * The transcript scrolls inside a `scrollbar-gutter: stable` box, so its content

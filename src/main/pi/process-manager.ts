@@ -1430,8 +1430,12 @@ export class PiProcessManager {
   async newSession(): Promise<void> { await (await this.#active()).abort(); }
 
   async createConversation(project?: string): Promise<ConversationOpenResult> {
-      const stale = this.#catalog.list().filter((item) => !item.preview);
-      for (const item of stale) await this.deleteConversation(item.id);
+      // An unfinished chat is the project's composer workspace. Keep it around when
+      // the user opens another chat, and reuse it instead of creating a second empty
+      // session for the same project. The old global cleanup deleted the only place
+      // where a long prompt (and its model choices) could live before Send.
+      const existing = this.#catalog.findEmpty(project);
+      if (existing) return this.openConversation(existing.id);
       const conversation = this.#catalog.create(project);
       return this.#openFresh(conversation);
   }
