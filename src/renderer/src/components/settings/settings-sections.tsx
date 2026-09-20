@@ -5,6 +5,7 @@ import {
   Archive04Icon,
   BotIcon,
   BoxesIcon,
+  ComputerIcon,
   ImportIcon,
   InformationCircleIcon,
   KeyboardIcon,
@@ -38,6 +39,7 @@ export type SectionId =
   | "extensions"
   | "import"
   | "remote"
+  | "computer"
   | "about";
 
 export type SettingsGroupId = "preferences" | "workspace" | "integrations" | "system" | "about";
@@ -81,7 +83,10 @@ export const SETTINGS_SECTIONS: Array<{
   },
   {
     group: "system",
-    items: [{ id: "remote", icon: <HugeiconsIcon strokeWidth={2} icon={Wifi01Icon} /> }],
+    items: [
+      { id: "computer", icon: <HugeiconsIcon strokeWidth={2} icon={ComputerIcon} /> },
+      { id: "remote", icon: <HugeiconsIcon strokeWidth={2} icon={Wifi01Icon} /> },
+    ],
   },
   {
     group: "about",

@@ -121,6 +121,9 @@ export const Ipc = {
   computerPermissions: "computer:permissions",
   computerRequestPermissions: "computer:request-permissions",
   computerOpenSettings: "computer:open-settings",
+  computerListApps: "computer:list-apps",
+  /** Starts the native drag that carries FastVibe.app into the Privacy & Security list. */
+  computerStartDrag: "computer:start-drag",
   enginePromptConversation: "engine:prompt-conversation",
   engineGetConversationMessages: "engine:get-conversation-messages",
   conversationsCreateSide: "conversations:create-side",

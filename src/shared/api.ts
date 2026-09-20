@@ -447,6 +447,8 @@ export function createFastVibeApi(t: ApiTransport) {
       requestPermissions: (): Promise<import("@shared/types").ComputerPermissionStatus> =>
         t.invoke(Ipc.computerRequestPermissions),
       openSettings: (): Promise<void> => t.invoke(Ipc.computerOpenSettings),
+      listApps: (): Promise<import("@shared/types").ComputerAppInfo[]> => t.invoke(Ipc.computerListApps),
+      startDrag: (): Promise<void> => t.invoke(Ipc.computerStartDrag),
     },
     browser: {
       listProfiles: (): Promise<BrowserProfileInfo[]> => t.invoke(Ipc.browserListProfiles),

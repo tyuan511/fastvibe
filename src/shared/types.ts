@@ -483,12 +483,48 @@ export type ComputerResult = {
  *
  * `ready` is the only field a caller should branch on; the two booleans exist so the UI
  * can name the toggle that is still off rather than saying "permission denied".
+ *
+ * `available` is a different question from `ready`: it is false when the native engine
+ * could not be loaded at all (an architecture with no native package), where no amount
+ * of granting will help and the UI should say so instead of offering a button.
  */
 export type ComputerPermissionStatus = {
   platform: string;
   accessibility: boolean;
   screenRecording: boolean;
   ready: boolean;
+  available: boolean;
+  /** Why the engine is unavailable, when it is. */
+  error?: string;
+};
+
+/** One running application, as the Settings allow-list picker lists them. */
+export type ComputerAppInfo = {
+  pid: number;
+  name: string;
+  bundleId?: string;
+  active: boolean;
+};
+
+/**
+ * 电脑操控 preferences.
+ *
+ * Read by the bridge on every call rather than cached, so flipping a switch applies to
+ * a run that is already going — the same contract the permission modes have.
+ */
+export type ComputerSettings = {
+  /** Master switch. Off means the `computer_*` tools refuse before touching the driver. */
+  enabled: boolean;
+  /** Clipboard is shared by every application, so it gets its own switch. */
+  clipboard: boolean;
+  /** Prefer delivery that does not take focus from whatever the user is doing. */
+  preferBackground: boolean;
+  /**
+   * Applications whose windows never raise a confirmation, by bundle id (macOS) or
+   * executable name. "Always allowed" in the sense of the confirmation dialog only —
+   * it does not widen what the tools can do.
+   */
+  allowedApps: string[];
 };
 
 export type BrowserImportResult = {

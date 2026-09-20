@@ -517,7 +517,43 @@ const api = {
     onRequest: () => () => undefined,
     respond: () => undefined,
   },
+  /**
+   * 电脑操控 in the preview.
+   *
+   * `?computer=granted` renders the pane a user sees once macOS has agreed — the state
+   * the switches are actually usable in. The default is the ungranted one, because that
+   * is the screen this pane has to get right: it is where every user starts, and it is
+   * the only one that has to explain something.
+   */
+  computer: {
+    permissions: async () => computerStatus(),
+    requestPermissions: async () => computerStatus(),
+    openSettings: async () => undefined,
+    listApps: async () => [
+      { pid: 412, name: "Google Chrome", bundleId: "com.google.Chrome", active: true },
+      { pid: 733, name: "Microsoft Excel", bundleId: "com.microsoft.Excel", active: false },
+      { pid: 901, name: "访达", bundleId: "com.apple.finder", active: false },
+    ],
+    startDrag: async () => undefined,
+  },
 };
+
+function computerStatus(): {
+  platform: string;
+  accessibility: boolean;
+  screenRecording: boolean;
+  ready: boolean;
+  available: boolean;
+} {
+  const granted = params.get("computer") === "granted";
+  return {
+    platform: params.get("platform") ?? "darwin",
+    accessibility: granted,
+    screenRecording: granted,
+    ready: granted,
+    available: params.get("computer") !== "unavailable",
+  };
+}
 
 /* ------------------------------------------------------------------ 远程访问 fixtures */
 

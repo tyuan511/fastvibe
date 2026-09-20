@@ -60,6 +60,9 @@ const DENIED = new Map<string, string>([
   [Ipc.computerPermissions, "\u7535\u8111\u64cd\u4f5c\u6743\u9650\u53ea\u80fd\u5728\u672c\u673a\u67e5\u770b\u548c\u6388\u6743"],
   [Ipc.computerRequestPermissions, "\u7535\u8111\u64cd\u4f5c\u6743\u9650\u53ea\u80fd\u5728\u672c\u673a\u67e5\u770b\u548c\u6388\u6743"],
   [Ipc.computerOpenSettings, "\u7535\u8111\u64cd\u4f5c\u6743\u9650\u53ea\u80fd\u5728\u672c\u673a\u67e5\u770b\u548c\u6388\u6743"],
+  [Ipc.computerListApps, "\u7535\u8111\u64cd\u4f5c\u6743\u9650\u53ea\u80fd\u5728\u672c\u673a\u67e5\u770b\u548c\u6388\u6743"],
+  // A drag has to start from a real window's webContents, which a web client has none of.
+  [Ipc.computerStartDrag, "\u62d6\u62fd\u6388\u6743\u53ea\u80fd\u5728\u684c\u9762\u7aef\u5b8c\u6210"],
   // A subscription login opens the system browser on the server's machine and waits on
   // a loopback callback there. Nothing about it can complete from another device.
   [Ipc.providersOAuthLogin, "\u8ba2\u9605\u767b\u5f55\u9700\u8981\u5728\u672c\u673a\u6d4f\u89c8\u5668\u4e2d\u5b8c\u6210"],

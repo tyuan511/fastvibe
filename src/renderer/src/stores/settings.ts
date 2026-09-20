@@ -115,6 +115,22 @@ export type AppSettings = {
    * is not asked for again in the next (see `lib/permission-rules.ts`).
    */
   permissionAlways?: string[];
+  /**
+   * 电脑操控 (设置 → 电脑操控). Mirrors `ComputerSettings`; kept as flat keys because
+   * `settings.json` is a flat bag that Main reads one preference at a time.
+   */
+  computerEnabled: boolean;
+  computerClipboard: boolean;
+  computerPreferBackground: boolean;
+  /**
+   * Apps whose windows skip the tool confirmation.
+   *
+   * `id` is the identity that is matched — a bundle id where the platform has one,
+   * otherwise the executable name. `name` rides along purely so the list can be read by
+   * a human; matching never looks at it, because a display name is not an identity and
+   * two applications can share one.
+   */
+  computerAllowedApps?: Array<{ id: string; name: string }>;
   sidebarOrder?: Record<string, string[]>;
   /**
    * Shortcut overrides keyed by command id. Absent keys keep the catalog default;
@@ -146,6 +162,12 @@ const DEFAULTS: AppSettings = {
   uiFontSize: DEFAULT_UI_FONT_SIZE,
   autoCheckUpdates: true,
   notifications: "done",
+  // Off until the user turns it on. Driving the desktop is not something an app should
+  // start doing because it was installed — unlike every other default here, the cost of
+  // guessing wrong is an action taken in someone else's application.
+  computerEnabled: false,
+  computerClipboard: false,
+  computerPreferBackground: true,
 };
 
 /** Drop malformed persisted theme values so a stale id can never crash the app. */
@@ -168,6 +190,10 @@ function sanitize(parsed: Partial<AppSettings>): Partial<AppSettings> {
   if (!isFiniteNumber(next.sidePaneWidth)) delete next.sidePaneWidth;
   if (!isIdList(next.archivedConversations)) delete next.archivedConversations;
   if (!isIdList(next.permissionAlways)) delete next.permissionAlways;
+  if (typeof next.computerEnabled !== "boolean") delete next.computerEnabled;
+  if (typeof next.computerClipboard !== "boolean") delete next.computerClipboard;
+  if (typeof next.computerPreferBackground !== "boolean") delete next.computerPreferBackground;
+  if (!isAllowedAppList(next.computerAllowedApps)) delete next.computerAllowedApps;
   if (!isIdListMap(next.sidebarOrder)) delete next.sidebarOrder;
   if (typeof next.autoCheckUpdates !== "boolean") delete next.autoCheckUpdates;
   if (!isNotificationPreference(next.notifications)) delete next.notifications;
@@ -196,6 +222,20 @@ function isFontSize(value: unknown): value is number {
  */
 function isThinkingLevel(value: unknown): value is ThinkingLevel | "auto" {
   return value === "auto" || (typeof value === "string" && (THINKING_EFFORT_LEVELS as readonly string[]).includes(value));
+}
+
+/** 始终允许的应用 entries; one malformed pair drops the whole list, as elsewhere here. */
+function isAllowedAppList(value: unknown): value is Array<{ id: string; name: string }> {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (item) =>
+        typeof item === "object" &&
+        item !== null &&
+        typeof (item as { id?: unknown }).id === "string" &&
+        typeof (item as { name?: unknown }).name === "string",
+    )
+  );
 }
 
 function isIdList(value: unknown): value is string[] {

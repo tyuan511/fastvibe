@@ -106,12 +106,14 @@ test("the denied set is exactly what the UI explains, so a new denial cannot go 
     "browser:import-profile",
     "browser:list-profiles",
     "browser:response",
-    // No control offers these yet — `api.computer.*` exists for a Settings row that has
-    // not been built. Whoever builds it guards the button with `blockedRemotely`, the
-    // same as the browser-profile controls in the side pane.
+    // 设置 › 电脑操控 guards every one of these with `blockedRemotely`: the pane renders
+    // read-only from a remote client and says why, rather than offering buttons that
+    // would prompt on a machine nobody is sitting at.
+    "computer:list-apps",
     "computer:open-settings",
     "computer:permissions",
     "computer:request-permissions",
+    "computer:start-drag",
     "engine:export-html",
     "engine:import-skill",
     "projects:add",

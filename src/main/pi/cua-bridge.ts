@@ -1,6 +1,9 @@
-import { app } from "electron";
+import { app, nativeImage, type WebContents } from "electron";
+import { join } from "node:path";
 import { uiText } from "../engine/ui-text";
-import type { ComputerPermissionStatus, ComputerRequest, ComputerResult } from "@shared/types";
+import { readComputerSettings } from "../engine/app-settings";
+import { getFastVibePaths } from "../engine/paths";
+import type { ComputerAppInfo, ComputerPermissionStatus, ComputerRequest, ComputerResult } from "@shared/types";
 
 /**
  * FastVibe's bridge to Cua Driver, the Rust engine behind the `computer_*` tools.
@@ -63,20 +66,45 @@ async function driverModule(): Promise<DriverModule> {
   return modulePromise;
 }
 
-/** Non-prompting permission read, for Settings and for the pre-flight check. */
+/**
+ * Non-prompting permission read, for Settings and for the pre-flight check.
+ *
+ * Never throws: Settings has to render a row for a machine whose native engine will not
+ * load at all, and an exception there would leave the page blank rather than explaining
+ * that this architecture has no build.
+ */
 export async function computerPermissions(): Promise<ComputerPermissionStatus> {
+  let module: DriverModule;
+  try {
+    module = await driverModule();
+  } catch (error) {
+    return {
+      platform: process.platform,
+      accessibility: false,
+      screenRecording: false,
+      ready: false,
+      available: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
   if (process.platform !== "darwin") {
     // Windows and Linux need no TCC-style grant; the driver either works or reports
     // its own platform error on first use.
-    return { platform: process.platform, accessibility: true, screenRecording: true, ready: true };
+    return {
+      platform: process.platform,
+      accessibility: true,
+      screenRecording: true,
+      ready: true,
+      available: true,
+    };
   }
-  const module = await driverModule();
   const status = module.currentMacOsPermissionStatus();
   return {
     platform: "darwin",
     accessibility: status.accessibility,
     screenRecording: status.screenRecording,
     ready: status.accessibility && status.screenRecording,
+    available: true,
   };
 }
 
@@ -106,6 +134,7 @@ export async function requestComputerPermissions(): Promise<ComputerPermissionSt
     accessibility: status.accessibility,
     screenRecording: status.screenRecording,
     ready: status.accessibility && status.screenRecording,
+    available: true,
   };
 }
 
@@ -116,31 +145,16 @@ export async function openComputerSettings(): Promise<void> {
   module.openMacOsScreenRecordingSettings();
 }
 
+/**
+ * The driver object, created once.
+ *
+ * No permission check here on purpose. Enumerating applications needs no TCC grant, and
+ * Settings lists them *before* anything has been granted — choosing what to allow is how
+ * the user decides to grant at all. The grants gate actions, not the object, so that
+ * check lives in `assertDrivable` on the action path.
+ */
 async function ensureDriver(): Promise<Driver> {
   driverPromise ??= (async () => {
-    let permissions = await computerPermissions();
-    if (!permissions.ready) {
-      // Ask before complaining. macOS does not list an application under Privacy &
-      // Security until it has actually requested the permission, so an error telling the
-      // user to go flip a toggle would point them at a pane FastVibe is not in yet.
-      // Requesting registers the app and surfaces the prompts; flipping the toggle stays
-      // the user's decision, which is why this can still fall through to the throw.
-      permissions = await requestComputerPermissions();
-    }
-    if (!permissions.ready) {
-      // Starting the driver without grants gets a stream of opaque per-call failures
-      // instead of one explanation, so refuse here and say which toggle is missing.
-      const missing = [
-        permissions.accessibility ? "" : uiText("辅助功能", "Accessibility"),
-        permissions.screenRecording ? "" : uiText("屏幕录制", "Screen Recording"),
-      ].filter(Boolean).join(uiText("、", ", "));
-      throw new Error(
-        uiText(
-          `FastVibe 还没有获得「${missing}」权限，无法操作电脑。已经打开系统设置 › 隐私与安全性，请在其中把 FastVibe 的开关打开后重试。`,
-          `FastVibe has not been granted ${missing}, so it cannot control the computer. System Settings › Privacy & Security has been opened — switch FastVibe on there and try again.`,
-        ),
-      );
-    }
     const module = await driverModule();
     const created = module.CuaDriver.create(undefined);
     driver = created;
@@ -151,6 +165,33 @@ async function ensureDriver(): Promise<Driver> {
     throw error;
   });
   return driverPromise;
+}
+
+/** Refuse, legibly, unless this machine has actually granted what a desktop action needs. */
+async function assertDrivable(): Promise<void> {
+  let permissions = await computerPermissions();
+  if (!permissions.ready && permissions.available) {
+    // Ask before complaining. macOS does not list an application under Privacy &
+    // Security until it has actually requested the permission, so an error telling the
+    // user to go flip a toggle would point them at a pane FastVibe is not in yet.
+    // Requesting registers the app and surfaces the prompts; flipping the toggle stays
+    // the user's decision, which is why this can still fall through to the throw.
+    permissions = await requestComputerPermissions();
+  }
+  if (permissions.ready) return;
+  if (!permissions.available) throw new Error(permissions.error ?? uiText("电脑操作组件不可用", "The computer-use engine is unavailable"));
+  // Starting to act without grants gets a stream of opaque per-call failures instead of
+  // one explanation, so refuse here and say which toggle is missing.
+  const missing = [
+    permissions.accessibility ? "" : uiText("辅助功能", "Accessibility"),
+    permissions.screenRecording ? "" : uiText("屏幕录制", "Screen Recording"),
+  ].filter(Boolean).join(uiText("、", ", "));
+  throw new Error(
+    uiText(
+      `FastVibe 还没有获得「${missing}」权限，无法操作电脑。已经打开系统设置 › 隐私与安全性，请在其中把 FastVibe 的开关打开后重试。`,
+      `FastVibe has not been granted ${missing}, so it cannot control the computer. System Settings › Privacy & Security has been opened — switch FastVibe on there and try again.`,
+    ),
+  );
 }
 
 /**
@@ -182,8 +223,31 @@ function windowId(value: string | undefined): bigint {
   }
 }
 
+/** Actions that read or replace the clipboard, which 电脑操控 gates separately. */
+const CLIPBOARD_ACTIONS = new Set(["clipboard_read", "clipboard_write"]);
+
 export async function requestComputer(request: ComputerRequest): Promise<ComputerResult> {
   return serialize(async () => {
+    // Read per call, not per session: a user who turns the switch off mid-run means it
+    // to stop now, and a cached value would let the current run finish driving anyway.
+    const settings = readComputerSettings(getFastVibePaths());
+    if (!settings.enabled) {
+      throw new Error(
+        uiText(
+          "电脑操控尚未开启。请在 设置 › 电脑操控 中打开后重试。",
+          "Computer control is switched off. Turn it on in Settings › Computer control and try again.",
+        ),
+      );
+    }
+    if (CLIPBOARD_ACTIONS.has(request.action) && !settings.clipboard) {
+      throw new Error(
+        uiText(
+          "剪贴板访问尚未开启。请在 设置 › 电脑操控 中打开「读写剪贴板」后重试。",
+          "Clipboard access is switched off. Enable it in Settings › Computer control and try again.",
+        ),
+      );
+    }
+    await assertDrivable();
     const module = await driverModule();
     const active = await ensureDriver();
     if (!sessionStarted) {
@@ -198,7 +262,13 @@ export async function requestComputer(request: ComputerRequest): Promise<Compute
         .catch(() => undefined);
     }
     const signal = AbortSignal.timeout(Math.max(1_000, Math.min(request.timeoutMs ?? DEFAULT_TIMEOUT_MS, 120_000)));
-    return dispatch(module, active, request, signal);
+    // The preference is a default, not a ceiling: a call that explicitly asked for the
+    // foreground has already been through the confirmation that explains what that costs.
+    const resolved: ComputerRequest = {
+      ...request,
+      foreground: request.foreground ?? !settings.preferBackground,
+    };
+    return dispatch(module, active, resolved, signal);
   });
 }
 
@@ -478,6 +548,74 @@ export async function shutdownComputer(): Promise<void> {
   if (typeof destroyable.uniffiDestroy === "function") destroyable.uniffiDestroy();
 }
 
+/**
+ * Running applications, for the Settings allow-list picker.
+ *
+ * Deliberately not routed through `requestComputer`: that path enforces the master
+ * switch and the grants, and Settings has to list apps before either is in place —
+ * choosing what to allow is how the user decides to turn it on at all.
+ */
+export async function listComputerApps(): Promise<ComputerAppInfo[]> {
+  const module = await driverModule();
+  const active = await ensureDriver();
+  const output = await active.listApps(module.ListAppsInput.new({}));
+  return output.apps
+    .filter((item) => item.running && item.name)
+    .map((item) => ({ pid: item.pid, name: item.name, bundleId: item.bundleId, active: item.active }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * Which application a pid belongs to, for the confirmation dialog and the allow-list.
+ *
+ * Cached for a few seconds: the permission sandbox asks this on every action, and a
+ * process's identity does not change under a pid within one interaction. A miss simply
+ * re-enumerates.
+ */
+let appCache: { at: number; byPid: Map<number, ComputerAppInfo> } | null = null;
+const APP_CACHE_MS = 5_000;
+
+export async function computerAppForPid(pid: number): Promise<ComputerAppInfo | undefined> {
+  if (!appCache || Date.now() - appCache.at > APP_CACHE_MS) {
+    const apps = await listComputerApps().catch(() => [] as ComputerAppInfo[]);
+    appCache = { at: Date.now(), byPid: new Map(apps.map((item) => [item.pid, item])) };
+  }
+  return appCache.byPid.get(pid);
+}
+
+/**
+ * Start a native drag carrying FastVibe's own application bundle.
+ *
+ * This is the macOS grant flow that actually works. The Privacy & Security list accepts
+ * an application dropped onto it, and dropping is the one gesture that does not require
+ * the user to find this app inside a file picker rooted somewhere else. `startDrag`
+ * must be called on the sender's `webContents`, from Main, in response to a real
+ * dragstart — the renderer cannot produce a file drag on its own.
+ */
+export function startComputerDrag(contents: WebContents): void {
+  if (process.platform !== "darwin") return;
+  const bundle = appBundlePath();
+  if (!bundle) throw new Error(uiText("未能定位 FastVibe 应用包", "Could not locate the FastVibe application bundle"));
+  const iconFile = app.isPackaged
+    ? join(process.resourcesPath, "icon.png")
+    : join(__dirname, "../../resources/icon.png");
+  const icon = nativeImage.createFromPath(iconFile);
+  contents.startDrag({
+    file: bundle,
+    // An empty image makes the drag invisible and the gesture unexplainable, so fall
+    // back to a blank 1×1 only when the icon file is genuinely missing.
+    icon: icon.isEmpty() ? nativeImage.createEmpty() : icon.resize({ width: 64, height: 64 }),
+  });
+}
+
+/** `/Applications/FastVibe.app`, derived from the running executable. */
+function appBundlePath(): string | null {
+  const exe = app.getPath("exe");
+  const marker = exe.indexOf(".app/Contents/MacOS/");
+  if (marker === -1) return null;
+  return exe.slice(0, marker + ".app".length);
+}
+
 const BIND_KEY = "__fastvibeComputerConversationId";
 let bindTail: Promise<unknown> = Promise.resolve();
 
@@ -511,6 +649,9 @@ export function bindComputerConversation<T>(conversationId: string, fn: () => Pr
  */
 export function installComputerGlobal(): void {
   (globalThis as Record<string, unknown>).__fastvibeComputerRequest = requestComputer;
+  // The permission sandbox turns a pid into an application name for its dialog, and
+  // matches 始终允许的应用 against the same identity.
+  (globalThis as Record<string, unknown>).__fastvibeComputerAppForPid = computerAppForPid;
   app.once("will-quit", () => {
     void shutdownComputer();
   });

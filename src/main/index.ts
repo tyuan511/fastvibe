@@ -48,7 +48,14 @@ import { PiProcessManager } from "./pi/process-manager";
 import { fetchPackageCatalog } from "./pi/package-catalog";
 import { TerminalSessions } from "./engine/terminal-sessions";
 import { attachBrowserRenderer, guardGuestPopups, installBrowserGlobal, respondBrowserRequest } from "./pi/browser-bridge";
-import { computerPermissions, installComputerGlobal, openComputerSettings, requestComputerPermissions } from "./pi/cua-bridge";
+import {
+  computerPermissions,
+  installComputerGlobal,
+  listComputerApps,
+  openComputerSettings,
+  requestComputerPermissions,
+  startComputerDrag,
+} from "./pi/cua-bridge";
 import { importBrowserProfile, listBrowserProfiles } from "./engine/browser-profiles";
 import type { ImportSourceId, ProviderModel, UsageRange } from "@shared/types";
 import type { GitBranch, GitDiffSource, GitStatus } from "@shared/ipc";
@@ -210,6 +217,14 @@ function registerIpc(): void {
   handle(Ipc.computerPermissions, () => computerPermissions());
   handle(Ipc.computerRequestPermissions, () => requestComputerPermissions());
   handle(Ipc.computerOpenSettings, () => openComputerSettings());
+  handle(Ipc.computerListApps, () => listComputerApps());
+  handle(Ipc.computerStartDrag, (_payload, ctx) => {
+    // A drag belongs to the window the gesture started in; a remote caller has no
+    // `webContents` to drag from, which is why the policy denies this method outright.
+    const contents = ctx.window?.webContents;
+    if (!contents) throw new Error(uiText("需要在桌面端窗口中拖拽", "Dragging requires a desktop window"));
+    startComputerDrag(contents);
+  });
 
   handle(Ipc.engineGetStatus, () => engine.status);
 

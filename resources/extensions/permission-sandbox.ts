@@ -78,6 +78,46 @@ const COMPUTER_ACTION_TOOLS = new Set([
   "computer_clipboard_write",
 ]);
 
+/**
+ * 始终允许的应用, as 设置 › 电脑操控 wrote them.
+ *
+ * Passed through the environment for the same reason the permission mode is: this file
+ * is loaded from outside the bundle and cannot read FastVibe's settings store. Main
+ * re-exports it whenever the list changes, and it is re-read per call so an app added
+ * mid-run takes effect without restarting the session.
+ */
+const ALLOWED_APPS_ENV = "FASTVIBE_COMPUTER_ALLOWED_APPS";
+
+function allowedApps(): string[] {
+  const raw = process.env[ALLOWED_APPS_ENV];
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Which application a `computer_*` call targets, asked of the bridge in Main.
+ *
+ * The tool arguments carry a pid, and a pid means nothing to a user reading a dialog.
+ * The bridge is in this same process and already caches the mapping, so resolving it
+ * here costs a map lookup and turns 「操作 pid 4711」 into 「操作 Microsoft Excel」.
+ */
+async function computerApp(input: unknown): Promise<{ name: string; bundleId?: string } | undefined> {
+  const pid = input && typeof input === "object" ? (input as Record<string, unknown>).pid : undefined;
+  if (typeof pid !== "number") return undefined;
+  const resolve = (globalThis as Record<string, unknown>).__fastvibeComputerAppForPid;
+  if (typeof resolve !== "function") return undefined;
+  try {
+    return (await (resolve as (pid: number) => Promise<{ name: string; bundleId?: string } | undefined>)(pid)) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** What the confirmation dialog shows: the intended effect, not the tool name. */
 function describeComputer(toolName: string, input: unknown): string {
   const text = inputString(input, "text");
@@ -323,6 +363,22 @@ export default function permissionSandbox(pi: ExtensionAPI): void {
 
     const assessment = assess(event.toolName, event.input, ctx.cwd);
     if (!assessment || !shouldConfirm(mode, assessment)) return undefined;
+
+    if (COMPUTER_ACTION_TOOLS.has(event.toolName)) {
+      const target = await computerApp(event.input);
+      // 始终允许的应用: the user has already said yes to this application, for good.
+      // Matched on bundle id first because a display name is not an identity — two
+      // applications can share one, and a rename must not silently widen the list.
+      const allowed = allowedApps();
+      if (target && (allowed.includes(target.bundleId ?? " ") || allowed.includes(target.name))) {
+        return undefined;
+      }
+      // Name the application in the dialog. 「在 Microsoft Excel 中点击」 is a question
+      // the user can answer; 「computer_click」 is not.
+      if (target) {
+        assessment.detail = T(`在 ${target.name} 中${assessment.detail}`, `${assessment.detail} in ${target.name}`);
+      }
+    }
 
     const reasons = reasonsFor(assessment);
     if (!ctx.hasUI) {
