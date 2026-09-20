@@ -18,7 +18,6 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { FindBar } from "@/components/chat/find-bar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatDuration } from "@/lib/time";
 import { stripAttachmentBlock } from "@/lib/attachments";
@@ -1063,10 +1062,6 @@ export function MessageList({
   showTimestamp = true,
   collapseRuns = false,
   emptyState,
-  findOpen = false,
-  onCloseFind,
-  findQuery,
-  onFindQueryConsumed,
 }: {
   messages: ChatMessage[];
   streaming: boolean;
@@ -1080,12 +1075,6 @@ export function MessageList({
   /** Fold each reply's process into one 「用时 …」 block (设置 → 对话). */
   collapseRuns?: boolean;
   emptyState?: JSX.Element | null;
-  /** 在会话中查找 is open (the thread's own find bar). */
-  findOpen?: boolean;
-  onCloseFind?: () => void;
-  /** Query the find bar opens with, from a palette body-search hit. */
-  findQuery?: string | null;
-  onFindQueryConsumed?: () => void;
 }): JSX.Element {
   const { t } = useTranslation("chat");
   // One row per user prompt and per assistant reply, not per engine message.
@@ -1178,13 +1167,6 @@ export function MessageList({
     <MessageScrollerProvider autoScroll>
       <MessageRevealProvider reveal={reveal}>
       <div className="flex h-full min-h-0 flex-col">
-        <FindBar
-          messages={messages}
-          open={findOpen}
-          onClose={() => onCloseFind?.()}
-          initialQuery={findQuery ?? undefined}
-          onInitialQueryConsumed={onFindQueryConsumed}
-        />
       {/* Named container: the rail is only worth showing when the gutter beside the
           message column can hold it. */}
       <MessageScroller className="@container/thread">

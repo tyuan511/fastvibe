@@ -299,10 +299,6 @@ const MessageThread = memo(function MessageThread({
   showThinking,
   showTimestamp,
   collapseRuns,
-  findOpen,
-  onCloseFind,
-  findQuery,
-  onFindQueryConsumed,
 }: {
   loading: boolean;
   onRetry: (message: ChatMessage) => void;
@@ -311,10 +307,6 @@ const MessageThread = memo(function MessageThread({
   showThinking: boolean;
   showTimestamp: boolean;
   collapseRuns: boolean;
-  findOpen: boolean;
-  onCloseFind: () => void;
-  findQuery: string | null;
-  onFindQueryConsumed: () => void;
 }): JSX.Element {
   const messages = useSessionStore((state) => state.messages);
   const streaming = useSessionStore((state) => state.streaming);
@@ -329,10 +321,6 @@ const MessageThread = memo(function MessageThread({
       showThinking={showThinking}
       showTimestamp={showTimestamp}
       collapseRuns={collapseRuns}
-      findOpen={findOpen}
-      onCloseFind={onCloseFind}
-      findQuery={findQuery}
-      onFindQueryConsumed={onFindQueryConsumed}
     />
   );
 });
@@ -521,13 +509,6 @@ export function App(): JSX.Element {
     if (settingsOpen && !settingsSection) navigate("/settings/general", { replace: true });
   }, [settingsOpen, settingsSection, navigate]);
   const [commandOpen, setCommandOpen] = useState(false);
-  /** 在会话中查找 (Cmd+F) over the open transcript. */
-  const [findOpen, setFindOpen] = useState(false);
-  /**
-   * A query the find bar should open with — set when the palette opens a chat from a
-   * body search hit, so the match is on screen rather than just «this chat contains it».
-   */
-  const [pendingFind, setPendingFind] = useState<string | null>(null);
   // `getStatus()` is async, so until it resolves the store still holds the "idle"
   // placeholder. Track whether the real status has landed: the shell shows the F
   // loader (and keeps the boot splash up) until it has.
@@ -867,7 +848,6 @@ export function App(): JSX.Element {
     },
     toggleSidebar: () => setSidebarCollapsed(!sidebarCollapsed),
     toggleSidePane: () => togglePane(),
-    findInConversation: () => setFindOpen((open) => !open),
   });
 
   useEffect(() => {
@@ -1579,16 +1559,8 @@ export function App(): JSX.Element {
   async function handleOpen(
     id: string,
     source: "user" | "history" | "remote" = "user",
-    findQuery?: string,
   ): Promise<void> {
     const store = useSessionStore.getState();
-    // A search hit opens the chat *and* the find bar on the query that found it: the
-    // palette can say which conversation matched, but only the transcript can show
-    // where, and scrolling there by hand is the work the search was meant to save.
-    if (findQuery) {
-      setPendingFind(findQuery);
-      setFindOpen(true);
-    }
     // Re-opening the active chat is pointless once it has content or a reply is
     // streaming, but it is how an empty/failed conversation gets retried.
     if (id === store.activeId && (store.messages.length > 0 || store.streaming)) {
@@ -1896,8 +1868,6 @@ export function App(): JSX.Element {
   const onSidebarOpenMarket = useStable(() => navigate("/settings/extensions"));
   const onSidebarSearch = useStable(() => setCommandOpen(true));
   const onSidePaneNewChat = useStable(() => void handleNewChat());
-  const onCloseFind = useStable(() => setFindOpen(false));
-  const onFindQueryConsumed = useStable(() => setPendingFind(null));
 
   const composer = (
     <ComposerSlot
@@ -2104,10 +2074,6 @@ export function App(): JSX.Element {
                   showThinking={settings.showThinking}
                   showTimestamp={settings.showTimestamps}
                   collapseRuns={settings.collapseRuns}
-                  findOpen={findOpen}
-                  onCloseFind={onCloseFind}
-                  findQuery={pendingFind}
-                  onFindQueryConsumed={onFindQueryConsumed}
                 />
               </div>
               {/* Everything under the transcript shares its column: the transcript's
@@ -2167,7 +2133,7 @@ export function App(): JSX.Element {
         projects={projects}
         activeId={activeId}
         onOpenChange={setCommandOpen}
-        onSelectChat={(id, findQuery) => void handleOpen(id, "user", findQuery)}
+        onSelectChat={(id) => void handleOpen(id, "user")}
         onNewChat={() => void handleNewChat()}
         onAddProject={() => void handleAddProject()}
         onOpenSettings={(section) => navigate(`/settings/${section}`)}

@@ -164,8 +164,6 @@
     "nextChat": "Next chat",
     "toggleSidebar": "Toggle sidebar",
     "toggleSidePane": "Toggle side pane",
-    "findInConversation": "Find in conversation",
-    "findInConversationDesc": "Search this conversation's message text",
     "needModifier": "Shortcuts need a modifier key",
     "reserved": "Reserved by the system"
   },

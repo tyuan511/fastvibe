@@ -161,13 +161,6 @@
     "nav": "Turn navigation",
     "turn": "Turn {{n}} · {{prompt}}"
   },
-  "find": {
-    "placeholder": "Find in conversation",
-    "position": "{{index}}/{{total}}",
-    "previous": "Previous match",
-    "next": "Next match",
-    "close": "Close find"
-  },
   "message": {
     "elapsed": "{{duration}}",
     "copy": "Copy",

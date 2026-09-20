@@ -62,7 +62,7 @@ export function CommandPalette({
   projects: Project[];
   activeId: string | null;
   onOpenChange: (open: boolean) => void;
-  onSelectChat: (id: string, findQuery?: string) => void;
+  onSelectChat: (id: string) => void;
   onNewChat: () => void;
   onAddProject: () => void;
   onOpenSettings: (section: SectionId) => void;
@@ -154,9 +154,9 @@ export function CommandPalette({
     onOpenChange(false);
   }
 
-  function selectChat(id: string, findQuery?: string): void {
+  function selectChat(id: string): void {
     close();
-    onSelectChat(id, findQuery);
+    onSelectChat(id);
   }
 
   function runAction(id: ActionId): void {
@@ -203,7 +203,7 @@ export function CommandPalette({
                   <CommandItem
                     key={item.id}
                     value={`chat:${item.id}`}
-                    onSelect={() => selectChat(item.id, snippet && needle && !titleHit ? needle : undefined)}
+                    onSelect={() => selectChat(item.id)}
                     aria-current={item.id === activeId ? "true" : undefined}
                   >
                     <span className="min-w-0 flex-1 truncate">{item.title || t("palette.newSession")}</span>

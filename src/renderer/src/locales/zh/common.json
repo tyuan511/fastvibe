@@ -164,8 +164,6 @@
     "nextChat": "下一个对话",
     "toggleSidebar": "切换侧边栏",
     "toggleSidePane": "切换侧边面板",
-    "findInConversation": "在会话中查找",
-    "findInConversationDesc": "在当前对话的消息文本中查找",
     "needModifier": "快捷键需要包含修饰键",
     "reserved": "系统保留快捷键"
   },

@@ -1566,22 +1566,6 @@ from an event payload. So it is as fresh as the last `reloadActiveState()`.
   message would re-read the whole transcript several times a turn for a value that cannot
   change. `turn_end` is the first point where the turn's usage (and its tool results) are in.
 
-## 在会话中查找
-
-`Cmd/Ctrl+F`（`findInConversation`）在转录上方打开一条查找栏（`components/chat/find-bar.tsx`）。
-
-- **在渲染层匹配，不问引擎。** 转录已经在内存里（`findMatches` 只扫 `message.text`），
-  敲一个字就重读一次磁盘会把「在屏幕上找东西」变成一次 IPC 往返。只搜正文：
-  思考与工具输出卡片另有入口，纳入命中列表只会让 `n/N` 数出看不见的位置。
-- **滚动用 scroller 自己的 `scrollToMessage`。** 行 id 是引擎的 entry id，不是位置，
-  所以重试/编辑分支过的会话仍然落得准。`FindBar` 因此必须渲染在
-  `MessageScrollerProvider` **内部**（它用 `useMessageScroller`）。
-- **不在打开状态时什么都不做。** 那条滚动 effect 的依赖里有 `matches`，而它在每个
-  流式 token 上都是新数组——曾经关掉查找栏后转录仍被每个 token 拽回旧命中、不再
-  跟随底部。
-- **从命令面板的正文命中进来时**（`onSelectChat(id, needle)`），会话打开的同时把查找栏
-  预填成那个关键词：它只能告诉你「这个会话里有」，只有转录能告诉你「在哪里」。
-
 ## 顶层错误边界
 
 `components/error-boundary.tsx` 包在 `main.tsx` 的最外层。渲染期抛错会卸载 React 拥有的
