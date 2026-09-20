@@ -118,13 +118,30 @@
     </div>
     <script>
       const params = new URLSearchParams(location.search);
+      const LANG = params.get("lang") === "en" ? "en" : "zh";
       const HINTS = {
         accessibility: { zh: "拖到「辅助功能」列表", en: "Drag into the Accessibility list" },
         screenRecording: { zh: "拖到「屏幕录制」列表", en: "Drag into the Screen Recording list" },
       };
-      const permission = params.get("permission") === "screenRecording" ? "screenRecording" : "accessibility";
-      const lang = params.get("lang") === "en" ? "en" : "zh";
-      document.getElementById("hint").textContent = HINTS[permission][lang];
+
+      /**
+       * Called by Main as the flow advances, rather than the window being reloaded: a
+       * 300×86 panel that blinks between steps reads as a glitch, and the sequence is
+       * meant to feel like one object moving on to the next list.
+       */
+      window.__setStep = ({ permission, step, total }) => {
+        const key = permission === "screenRecording" ? "screenRecording" : "accessibility";
+        const where = HINTS[key][LANG];
+        // The counter is only worth the space when there is more than one step left.
+        const prefix = total > 1 ? (LANG === "en" ? `Step ${step}/${total} · ` : `第 ${step}/${total} 步 · `) : "";
+        document.getElementById("hint").textContent = prefix + where;
+      };
+
+      window.__setStep({
+        permission: params.get("permission"),
+        step: Number(params.get("step") || 1),
+        total: Number(params.get("total") || 1),
+      });
 
       // Chromium would otherwise start its own (text) drag, which cancels the native
       // file drag Main begins — the bundle has to travel as a file for the Privacy
@@ -133,9 +150,11 @@
         event.preventDefault();
         window.fastvibe?.computer?.startDrag();
       });
-      // A chrome-less window has no close button of its own.
+      // A chrome-less window has no close button of its own, and abandoning the panel
+      // has to abandon the whole sequence — otherwise the next pane opens over a user
+      // who has already given up.
       document.addEventListener("keydown", (event) => {
-        if (event.key === "Escape") window.fastvibe?.computer?.closeGrantOverlay();
+        if (event.key === "Escape") window.fastvibe?.computer?.cancelGrantFlow();
       });
       document.body.setAttribute("draggable", "true");
     </script>

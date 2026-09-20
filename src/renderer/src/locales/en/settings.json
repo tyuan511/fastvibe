@@ -679,8 +679,7 @@
     "accessibilityDesc": "Lets FastVibe read window contents and click and type for you",
     "screenRecording": "Screen Recording",
     "screenRecordingDesc": "Lets FastVibe capture the screen, so it can see what is on it",
-    "grant": "Request access",
-    "openSystemSettings": "Open System Settings",
+    "grant": "Start granting",
     "recheck": "Check again",
     "unavailable": "No computer-control engine is available for this OS or architecture",
     "windowsNote": "Windows needs no extra permission — computer control can be switched on directly.",
@@ -699,7 +698,10 @@
     "allowedPick": "Pick a running app",
     "allowedAdd": "Add",
     "allowedRemove": "Remove",
-    "dragButton": "Drag to add",
-    "grantHint": "Request access shows the system prompts, which is what puts FastVibe in the list. If it still is not there, use Drag to add on a row to summon a floating panel and drag that into the System Settings list."
+    "grantHint": "Press Start granting once and FastVibe walks you through it: Screen Recording first — its settings page opens with a floating panel, which you drag into the list — and once the grant is detected, Accessibility opens by itself for the same gesture.",
+    "dragNow": "Drag it in",
+    "flowProgress": "Step {{step}}/{{total}} · waiting for the drop",
+    "flowHint": "The panel is floating above System Settings. Drag it into the list for this step; the next one opens by itself. Esc cancels.",
+    "cancelFlow": "Cancel"
   }
 }

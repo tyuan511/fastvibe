@@ -10,7 +10,7 @@ import { SettingsGroup, SettingsRow } from "./settings-group";
 import { useSettingsStore } from "@/stores/settings";
 import { blockedRemotely } from "@/lib/remote-unavailable";
 import { Ipc } from "@shared/ipc";
-import type { ComputerAppInfo, ComputerPermissionStatus } from "@shared/types";
+import type { ComputerAppInfo, ComputerPermissionStatus, GrantFlowState } from "@shared/types";
 import { cn } from "@/lib/utils";
 
 /**
@@ -214,7 +214,22 @@ function PermissionCard({
   onRefresh: () => Promise<void>;
 }): JSX.Element {
   const { t } = useTranslation("settings");
-  const [requesting, setRequesting] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [flow, setFlow] = useState<GrantFlowState>({ active: false, step: 0, total: 0 });
+
+  // The flow runs in Main and advances on its own as the user works in System Settings,
+  // so the pane follows it rather than driving it. Each step's grant also re-reads the
+  // permissions, which is what moves a row to 已授权 without waiting for window focus.
+  //
+  // Read once as well as subscribed: the broadcast only fires when a step changes, so a
+  // pane opened in the middle of a sequence would otherwise show the idle state.
+  useEffect(() => {
+    void window.fastvibe.computer.getGrantFlow().then(setFlow);
+    return window.fastvibe.computer.onGrantFlowState((next) => {
+      setFlow(next);
+      void onRefresh();
+    });
+  }, [onRefresh]);
 
   if (checking && !status) {
     return (
@@ -245,12 +260,12 @@ function PermissionCard({
 
   const mac = status?.platform === "darwin";
 
-  const request = async (): Promise<void> => {
-    setRequesting(true);
+  const start = async (): Promise<void> => {
+    setStarting(true);
     try {
-      await window.fastvibe.computer.requestPermissions();
+      setFlow(await window.fastvibe.computer.startGrantFlow());
     } finally {
-      setRequesting(false);
+      setStarting(false);
       await onRefresh();
     }
   };
@@ -259,33 +274,47 @@ function PermissionCard({
     <SettingsGroup title={t("computer.permissionTitle")}>
       {mac ? (
         <>
-          <PermissionRow
-            label={t("computer.accessibility")}
-            description={t("computer.accessibilityDesc")}
-            granted={status?.accessibility === true}
-            permission="accessibility"
-          />
+          {/* Screen Recording first, matching the order the flow collects them in. */}
           <PermissionRow
             label={t("computer.screenRecording")}
             description={t("computer.screenRecordingDesc")}
             granted={status?.screenRecording === true}
-            permission="screenRecording"
+            current={flow.active && flow.permission === "screenRecording"}
+          />
+          <PermissionRow
+            label={t("computer.accessibility")}
+            description={t("computer.accessibilityDesc")}
+            granted={status?.accessibility === true}
+            current={flow.active && flow.permission === "accessibility"}
           />
           {status?.ready ? null : (
             <div className="space-y-2 px-4 py-4">
               <div className="flex items-center gap-2">
-                <Button size="sm" disabled={requesting} onClick={() => void request()}>
-                  {requesting ? <Spinner className="size-3.5" /> : null}
-                  {t("computer.grant")}
-                </Button>
-                <Button size="sm" variant="outline" onClick={() => void window.fastvibe.computer.openSettings()}>
-                  {t("computer.openSystemSettings")}
-                </Button>
-                <Button size="sm" variant="ghost" onClick={() => void onRefresh()}>
-                  {t("computer.recheck")}
-                </Button>
+                {flow.active ? (
+                  <>
+                    <Button size="sm" variant="outline" onClick={() => void window.fastvibe.computer.cancelGrantFlow()}>
+                      {t("computer.cancelFlow")}
+                    </Button>
+                    <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <Spinner className="size-3.5" />
+                      {t("computer.flowProgress", { step: flow.step, total: flow.total })}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <Button size="sm" disabled={starting} onClick={() => void start()}>
+                      {starting ? <Spinner className="size-3.5" /> : null}
+                      {t("computer.grant")}
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => void onRefresh()}>
+                      {t("computer.recheck")}
+                    </Button>
+                  </>
+                )}
               </div>
-              <p className="text-xs leading-4 text-muted-foreground">{t("computer.grantHint")}</p>
+              <p className="text-xs leading-4 text-muted-foreground">
+                {flow.active ? t("computer.flowHint") : t("computer.grantHint")}
+              </p>
             </div>
           )}
         </>
@@ -299,20 +328,22 @@ function PermissionCard({
 }
 
 /**
- * One permission, its state, and — while it is missing — the button that summons the
- * drag panel for it. Per row rather than once for the card, because the two permissions
- * live in two different lists in System Settings and the panel has to say which.
+ * One permission and its state.
+ *
+ * `current` marks the step the flow is waiting on, so the row and the floating panel
+ * agree about which list the user is being asked to drag into — the panel is over
+ * System Settings, and this pane is the other half of the same instruction.
  */
 function PermissionRow({
   label,
   description,
   granted,
-  permission,
+  current,
 }: {
   label: string;
   description: string;
   granted: boolean;
-  permission: "accessibility" | "screenRecording";
+  current: boolean;
 }): JSX.Element {
   const { t } = useTranslation("settings");
   return (
@@ -320,18 +351,20 @@ function PermissionRow({
       title={label}
       description={description}
       control={
-        <div className="flex items-center gap-2">
-          {granted ? null : (
-            <Button size="sm" variant="outline" onClick={() => void window.fastvibe.computer.showGrantOverlay(permission)}>
-              <HugeiconsIcon strokeWidth={2} icon={DragDropIcon} className="size-3.5" />
-              {t("computer.dragButton")}
-            </Button>
+        <Badge
+          variant={granted ? "secondary" : "outline"}
+          className={cn(
+            "gap-1",
+            granted ? "text-emerald-600 dark:text-emerald-400" : current ? "text-foreground" : "text-muted-foreground",
           )}
-          <Badge variant={granted ? "secondary" : "outline"} className={cn("gap-1", granted ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground")}>
-            <HugeiconsIcon strokeWidth={2} icon={granted ? CheckmarkCircle02Icon : Alert02Icon} className="size-3" />
-            {granted ? t("computer.granted") : t("computer.notGranted")}
-          </Badge>
-        </div>
+        >
+          <HugeiconsIcon
+            strokeWidth={2}
+            icon={granted ? CheckmarkCircle02Icon : current ? DragDropIcon : Alert02Icon}
+            className="size-3"
+          />
+          {granted ? t("computer.granted") : current ? t("computer.dragNow") : t("computer.notGranted")}
+        </Badge>
       }
     />
   );

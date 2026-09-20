@@ -64,8 +64,9 @@ const DENIED = new Map<string, string>([
   // A drag has to start from a real window's webContents, and the panel it starts from
   // is a window opened on the server's own screen. A web client has neither.
   [Ipc.computerStartDrag, "\u62d6\u62fd\u6388\u6743\u53ea\u80fd\u5728\u684c\u9762\u7aef\u5b8c\u6210"],
-  [Ipc.computerShowGrantOverlay, "\u62d6\u62fd\u6388\u6743\u53ea\u80fd\u5728\u684c\u9762\u7aef\u5b8c\u6210"],
-  [Ipc.computerCloseGrantOverlay, "\u62d6\u62fd\u6388\u6743\u53ea\u80fd\u5728\u684c\u9762\u7aef\u5b8c\u6210"],
+  [Ipc.computerStartGrantFlow, "\u62d6\u62fd\u6388\u6743\u53ea\u80fd\u5728\u684c\u9762\u7aef\u5b8c\u6210"],
+  [Ipc.computerCancelGrantFlow, "\u62d6\u62fd\u6388\u6743\u53ea\u80fd\u5728\u684c\u9762\u7aef\u5b8c\u6210"],
+  [Ipc.computerGetGrantFlow, "\u62d6\u62fd\u6388\u6743\u53ea\u80fd\u5728\u684c\u9762\u7aef\u5b8c\u6210"],
   // A subscription login opens the system browser on the server's machine and waits on
   // a loopback callback there. Nothing about it can complete from another device.
   [Ipc.providersOAuthLogin, "\u8ba2\u9605\u767b\u5f55\u9700\u8981\u5728\u672c\u673a\u6d4f\u89c8\u5668\u4e2d\u5b8c\u6210"],

@@ -677,8 +677,7 @@
     "accessibilityDesc": "允许 FastVibe 读取窗口内容并代你点击、输入",
     "screenRecording": "屏幕录制",
     "screenRecordingDesc": "允许 FastVibe 截取屏幕，从而看到界面现在是什么样",
-    "grant": "请求授权",
-    "openSystemSettings": "打开系统设置",
+    "grant": "开始授权",
     "recheck": "重新检查",
     "unavailable": "当前系统或架构没有可用的电脑操控组件",
     "windowsNote": "Windows 无需额外授权，可直接开启电脑操控。",
@@ -697,7 +696,10 @@
     "allowedPick": "选择运行中的应用",
     "allowedAdd": "添加",
     "allowedRemove": "移除",
-    "dragButton": "拖拽添加",
-    "grantHint": "点「请求授权」会弹出系统提示，FastVibe 随即出现在列表中；如果列表里仍然没有，用每一行右侧的「拖拽添加」召出一个浮层，把它拖进系统设置的列表即可。"
+    "grantHint": "点一次「开始授权」，FastVibe 会依次带你完成：先打开「屏幕录制」的设置页并弹出一个浮层，把浮层拖进列表即可；检测到添加成功后会自动打开下一项「辅助功能」，同样拖进去就完成了。",
+    "dragNow": "拖进列表",
+    "flowProgress": "第 {{step}}/{{total}} 步 · 等待你把浮层拖进列表",
+    "flowHint": "浮层已经浮在系统设置上方。把它拖进当前这一项的列表；完成后会自动进入下一项。按 Esc 可以中止。",
+    "cancelFlow": "中止授权"
   }
 }

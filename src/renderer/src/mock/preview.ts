@@ -535,11 +535,20 @@ const api = {
       { pid: 901, name: "访达", bundleId: "com.apple.finder", active: false },
     ],
     startDrag: async () => undefined,
-    // The panel is a real Electron window, so the preview can only stub it away.
-    showGrantOverlay: async () => undefined,
-    closeGrantOverlay: async () => undefined,
+    // The flow drives a real Electron window and polls the real OS, so the preview can
+    // only report the shape it would be in: `?computer=granting` renders the pane mid
+    // sequence, which is the state the 授权 button is otherwise hard to look at.
+    startGrantFlow: async () => grantFlowState(),
+    cancelGrantFlow: async () => undefined,
+    getGrantFlow: async () => grantFlowState(),
+    onGrantFlowState: () => () => undefined,
   },
 };
+
+function grantFlowState(): { active: boolean; permission?: "accessibility" | "screenRecording"; step: number; total: number } {
+  if (params.get("computer") !== "granting") return { active: false, step: 0, total: 0 };
+  return { active: true, permission: "screenRecording", step: 1, total: 2 };
+}
 
 function computerStatus(): {
   platform: string;

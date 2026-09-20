@@ -56,7 +56,7 @@ import {
   requestComputerPermissions,
   startComputerDrag,
 } from "./pi/cua-bridge";
-import { closeGrantOverlay, showGrantOverlay, type GrantPermission } from "./pi/computer-grant-overlay";
+import { cancelGrantFlow, grantFlowState, startGrantFlow } from "./pi/computer-grant-flow";
 import { importBrowserProfile, listBrowserProfiles } from "./engine/browser-profiles";
 import type { ImportSourceId, ProviderModel, UsageRange } from "@shared/types";
 import type { GitBranch, GitDiffSource, GitStatus } from "@shared/ipc";
@@ -227,10 +227,9 @@ function registerIpc(): void {
     if (!contents) throw new Error(uiText("需要在桌面端窗口中拖拽", "Dragging requires a desktop window"));
     startComputerDrag(contents);
   });
-  handle(Ipc.computerShowGrantOverlay, (payload: { permission?: GrantPermission }) => {
-    showGrantOverlay(payload?.permission === "screenRecording" ? "screenRecording" : "accessibility");
-  });
-  handle(Ipc.computerCloseGrantOverlay, () => closeGrantOverlay());
+  handle(Ipc.computerStartGrantFlow, () => startGrantFlow());
+  handle(Ipc.computerCancelGrantFlow, () => cancelGrantFlow());
+  handle(Ipc.computerGetGrantFlow, () => grantFlowState());
 
   handle(Ipc.engineGetStatus, () => engine.status);
 
@@ -898,8 +897,8 @@ app.whenReady().then(async () => {
   // user who never touches the feature pays nothing for it.
   installComputerGlobal();
   // The grant panel is a window, so it is torn down where the other windows are, not
-  // inside the bridge — which would make the bridge and the panel import each other.
-  app.once("will-quit", () => closeGrantOverlay());
+  // inside the bridge — which would make the bridge and the flow import each other.
+  app.once("will-quit", () => cancelGrantFlow());
   applyAppIcon();
   const startupSettings = readAppSettings(getFastVibePaths());
   applyNativeTheme(startupSettings);

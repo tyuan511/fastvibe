@@ -498,6 +498,22 @@ export type ComputerPermissionStatus = {
   error?: string;
 };
 
+/** The two macOS grants the driver needs, named as `ComputerPermissionStatus` keys. */
+export type GrantPermission = "accessibility" | "screenRecording";
+
+/**
+ * Where the guided grant flow has got to.
+ *
+ * `step`/`total` count the permissions this run still had to collect when it started, so
+ * a machine that already had Screen Recording reports 1/1 rather than a misleading 2/2.
+ */
+export type GrantFlowState = {
+  active: boolean;
+  permission?: GrantPermission;
+  step: number;
+  total: number;
+};
+
 /** One running application, as the Settings allow-list picker lists them. */
 export type ComputerAppInfo = {
   pid: number;

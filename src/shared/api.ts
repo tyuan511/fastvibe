@@ -449,9 +449,11 @@ export function createFastVibeApi(t: ApiTransport) {
       openSettings: (): Promise<void> => t.invoke(Ipc.computerOpenSettings),
       listApps: (): Promise<import("@shared/types").ComputerAppInfo[]> => t.invoke(Ipc.computerListApps),
       startDrag: (): Promise<void> => t.invoke(Ipc.computerStartDrag),
-      showGrantOverlay: (permission: "accessibility" | "screenRecording"): Promise<void> =>
-        t.invoke(Ipc.computerShowGrantOverlay, { permission }),
-      closeGrantOverlay: (): Promise<void> => t.invoke(Ipc.computerCloseGrantOverlay),
+      startGrantFlow: (): Promise<import("@shared/types").GrantFlowState> => t.invoke(Ipc.computerStartGrantFlow),
+      cancelGrantFlow: (): Promise<void> => t.invoke(Ipc.computerCancelGrantFlow),
+      getGrantFlow: (): Promise<import("@shared/types").GrantFlowState> => t.invoke(Ipc.computerGetGrantFlow),
+      onGrantFlowState: (listener: (state: import("@shared/types").GrantFlowState) => void): (() => void) =>
+        t.subscribe(Ipc.computerGrantFlowState, listener),
     },
     browser: {
       listProfiles: (): Promise<BrowserProfileInfo[]> => t.invoke(Ipc.browserListProfiles),
