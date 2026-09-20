@@ -84,7 +84,7 @@ FastVibe 的核心承诺是：**pi 扩展在终端里能做什么，在这里就
 
 ### 内置扩展
 
-随应用内置六个扩展，无需安装：
+随应用内置九个扩展，无需安装：
 
 - **`plan.ts`** —— `/plan` 进入计划模式：工具收窄为只读集合，可通过 `question`
   工具一次性提出多个澄清问题，确认后把方案作为执行提示词发回。
@@ -96,8 +96,15 @@ FastVibe 的核心承诺是：**pi 扩展在终端里能做什么，在这里就
   后不再覆盖。
 - **`browser-use.ts`** —— 内置浏览器的工具集：`browser_open` / `snapshot` / `click` /
   `type` / `press` / `history` 等九个工具，把网页操作桥接到侧栏的浏览器标签。
+  （快照驱动的工作方式见下面「内置浏览器」一节，这套提示词同时作为
+  `resources/skills/browser-use` 内含技能提供。）
 - **`permission-sandbox.ts`** —— 权限沙箱的执行侧：识别网络、工作区外写入、
   敏感路径与破坏性命令，并按模式决定是否请求批准。
+- **`web-search.ts`** —— 会话模型走 OpenAI Responses 协议时注册 `web_search` 工具，
+  以旁路请求完成搜索，不注入主对话。
+- **`output-language.ts`** —— 始终可用：每轮把宿主的 AI 偏好语言要求追加到系统提示词。
+- **`subagent/`** —— 注册 `subagent` 工具，把独立任务委派给角色文件
+  （`scout` / `planner` / `worker` / `reviewer`），支持单路、并行与链式。
 
 ## 功能一览
 
