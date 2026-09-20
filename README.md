@@ -14,7 +14,7 @@ FastVibe is an Electron desktop client for agent work. Instead of reimplementing
 it runs pi directly in the main process and presents terminal interactions—tool calls, reasoning,
 extension dialogs, plan mode, and goal mode—as a native GUI.
 
-![FastVibe](docs/screenshots/chat-light.png)
+![FastVibe](apps/website/public/screenshots/en/workspace.webp)
 
 ## Download
 
@@ -96,7 +96,7 @@ operates the same visible tabs through `browser_open`, `browser_snapshot`, `brow
 `browser_type`, `browser_press`, and related tools. The workflow is snapshot-driven: take a snapshot,
 address an element by its explicit reference or selector, perform an action, and snapshot again.
 
-![Browser use](docs/screenshots/files-light.png)
+![Browser use](apps/website/public/screenshots/en/files.webp)
 
 Browser automation is subject to the permission sandbox. The built-in browser can also import cookies
 from supported Chromium browsers into FastVibe's isolated browser partition; passwords and payment
@@ -109,7 +109,7 @@ list, and select the models to keep. Protocols can be set at provider level or o
 Context windows, output limits, input modalities, reasoning levels, and prices come from the bundled
 models.dev snapshot, which can be refreshed from Settings → About.
 
-![Model management](docs/screenshots/models-light.png)
+![Model management](apps/website/public/screenshots/en/models.webp)
 
 ## Development
 

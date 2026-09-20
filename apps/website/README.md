@@ -8,7 +8,7 @@ FastVibe 产品介绍与下载页，使用 Next.js App Router 和 next-intl。
 
 - `/zh`、`/en`：中文、英文页面，文案位于 `messages/`。
 - `/`：next-intl 根据语言偏好 cookie、浏览器语言选择页面；默认英文。
-- 页面按语言加载 `public/screenshots/{zh,en}/` 的应用截图。
+- 页面按语言加载 `public/screenshots/{zh,en}/` 的应用截图。官网只呈现 `workspace` / `review` / `models` 三张；`files` / `tools` / `market` 供 README 使用，同一套截图脚本一并生成。
 - DM Sans 通过 Fontsource 本地托管，不依赖 Google Fonts 请求。
 - 视觉使用 FastVibe 标志的紫色与青色、桌面式圆角和真实工作区首屏，不使用蓝灰雾面或仿终端下载窗。
 
@@ -48,7 +48,9 @@ WEBSITE_URL=http://localhost:3000 pnpm --filter @fastvibe/website test:browser
 pnpm --filter @fastvibe/website screenshots
 ```
 
-脚本使用真实 renderer 的 `mock.html?website=1&lang=zh|en&scene=workspace|review|models&platform=darwin`，生成六张 2880×1800 WebP。演示数据来自 `src/renderer/src/mock/website-fixtures.ts`。macOS 交通灯只注入此专用 mock，不改变正式应用窗口。
+脚本使用真实 renderer 的 `mock.html?website=1&lang=zh|en&scene=workspace|files|review|tools|models|market&platform=darwin`，生成十二张 2880×1800 WebP（两种语言 × 六个场景），同时供官网与两份 README 使用。演示数据来自 `src/renderer/src/mock/website-fixtures.ts`。macOS 交通灯只注入此专用 mock，不改变正式应用窗口。
+
+每个场景都必须让 mock 设置 `document.body.dataset.websiteSceneReady`（展开某个折叠、切到某个标签页、打开侧栏），脚本等到它才截图，所以场景跑不到那个状态时会超时失败，而不是拿到一张空白图。`apps/website/lib/screenshots.ts` 与 `scripts/capture-website.mjs` 各持一份场景清单，新增场景要同时改两处。
 
 截图脚本复用 `CAPTURE_PORT`（默认 5175）上的 Vite，否则自行启动并在结束后关闭。浏览器脚本在 macOS 默认使用 Google Chrome；其他平台先运行 `pnpm --filter @fastvibe/website exec playwright install chromium`，或通过 `CHROME_PATH` 指定浏览器。
 

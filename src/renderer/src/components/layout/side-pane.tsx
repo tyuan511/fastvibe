@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState, type JSX } from "react";
+import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
@@ -177,7 +177,12 @@ function BrowserTabIcon({ src }: { src?: string | null }): JSX.Element {
   return <HugeiconsIcon strokeWidth={2} icon={ChromeIcon} className="size-3.5 shrink-0" />;
 }
 
-export function SidePane({
+/**
+ * The right pane, held still for the same reason as the sidebar: its tabs own a
+ * terminal, a browser view and a file tree, none of which have anything to say about
+ * a reply arriving. Its callback props are stabilised by the caller (`useStable`).
+ */
+export const SidePane = memo(function SidePane({
   cwd,
   project,
   parentId,
@@ -532,4 +537,4 @@ export function SidePane({
     </aside>
     </CollapsiblePanel>
   );
-}
+});

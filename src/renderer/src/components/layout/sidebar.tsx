@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState, type JSX, type KeyboardEvent } from "react";
+import { memo, useCallback, useMemo, useRef, useState, type JSX, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { createPortal } from "react-dom";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -624,7 +624,17 @@ function DraggableSession({
   );
 }
 
-export function Sidebar({
+/**
+ * The chat list, held still while the shell around it re-renders.
+ *
+ * Memoised because it is the biggest subtree in the window that has nothing to do
+ * with a conversation's progress: every project and every chat is a row, and each one
+ * carries a drag-and-drop hook. It used to be rebuilt for every render of `App` —
+ * which, before the composer's draft moved out of the shell, meant on every keystroke.
+ * Its callback props are stabilised by the caller (`useStable`), so the default
+ * shallow comparison is enough.
+ */
+export const Sidebar = memo(function Sidebar({
   projects,
   conversations,
   activeId,
@@ -1196,4 +1206,4 @@ export function Sidebar({
     </aside>
     </CollapsiblePanel>
   );
-}
+});

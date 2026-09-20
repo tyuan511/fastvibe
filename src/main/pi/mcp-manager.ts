@@ -4,7 +4,28 @@ import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotoc
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { McpServerConfig, McpServerStatus } from "@shared/types";
+import { uiText } from "../engine/ui-text";
 export type { McpServerConfig, McpServerStatus } from "@shared/types";
+
+/**
+ * How long one server gets to answer before it is given up on.
+ *
+ * Both calls below are bounded, because neither the MCP SDK's handshake nor its
+ * `tools/list` has a deadline of its own — an unreachable HTTP endpoint, or a stdio
+ * server that starts but never speaks, simply never settles. The engine awaits
+ * `connectAll()` before it reports itself ready, so without this the whole app sat in
+ * 「正在准备工作区…」 for as long as that server stayed silent, with no way to send a
+ * prompt and nothing on screen to say why.
+ */
+const CONNECT_TIMEOUT_MS = 10_000;
+
+function withTimeout<T>(work: Promise<T>, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(label)), CONNECT_TIMEOUT_MS);
+    timer.unref?.();
+    work.then(resolve, reject).finally(() => clearTimeout(timer));
+  });
+}
 
 type Connection = { config: McpServerConfig; client: Client; transport: StdioClientTransport | StreamableHTTPClientTransport; tools: Array<{ name: string; description?: string; inputSchema?: unknown }> };
 
@@ -66,16 +87,21 @@ export class McpManager {
   }
 
   async #connect(config: McpServerConfig): Promise<void> {
+    let client: Client | undefined;
     try {
-      const client = new Client({ name: "FastVibe", version: "0.1.0" });
+      client = new Client({ name: "FastVibe", version: "0.1.0" });
       const transport = config.transport === "stdio"
         ? new StdioClientTransport({ command: config.command ?? "", args: config.args, env: { ...getDefaultEnvironment(), ...config.env }, cwd: process.cwd(), stderr: "pipe" })
         : new StreamableHTTPClientTransport(new URL(config.url ?? ""));
-      await client.connect(transport);
-      const listed = await client.listTools();
+      await withTimeout(client.connect(transport), uiText("连接超时", "Connection timed out"));
+      const listed = await withTimeout(client.listTools(), uiText("读取工具列表超时", "Listing tools timed out"));
       this.#connections.set(config.id, { config, client, transport, tools: listed.tools ?? [] });
     } catch (error) {
       this.#errors.set(config.id, error instanceof Error ? error.message : String(error));
+      // A timed-out connect can still be in flight, and a stdio server is a child
+      // process this one owns: closing releases it instead of leaving it running for
+      // the life of the app.
+      await client?.close().catch(() => undefined);
     }
   }
 }

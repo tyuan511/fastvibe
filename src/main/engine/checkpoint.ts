@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync, type Stats } from "node:fs";
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
@@ -53,6 +53,14 @@ export type CheckpointFile = {
   created?: boolean;
   /** True when the pre-turn content was too large / not text and could not be kept. */
   opaque?: boolean;
+  /**
+   * Byte length of `content`, measured when it was read.
+   *
+   * Carried rather than re-derived because `captureCheckpoint` runs once per written
+   * file and weighs *every* file it has collected so far: a turn that writes fifty
+   * files re-measured up to 32 MB of text fifty times over, on Main's event loop.
+   */
+  bytes?: number;
 };
 
 export type TurnCheckpoint = {
@@ -79,7 +87,9 @@ export function readCheckpoint(conversationId: string): TurnCheckpoint | undefin
 export async function saveCheckpoints(file: string): Promise<void> {
   try {
     await mkdir(dirname(file), { recursive: true });
-    await writeFile(file, `${JSON.stringify([...checkpoints.values()], null, 2)}\n`, "utf8");
+    // Compact, not pretty: this holds whole file contents (up to 32 MB per
+    // conversation) and is written while the app is quitting. Nothing reads it by eye.
+    await writeFile(file, `${JSON.stringify([...checkpoints.values()])}\n`, "utf8");
   } catch {
     // A checkpoint is best-effort: losing it only means the retry prompt is not offered.
   }
@@ -109,20 +119,32 @@ export async function loadCheckpoints(file: string): Promise<void> {
  * per turn (the caller caches by path).
  */
 export function readBefore(path: string): CheckpointFile {
-  let buffer: Buffer;
+  let info: Stats;
   try {
-    buffer = readFileSync(path);
+    info = statSync(path);
   } catch (error) {
     // Only "no such file" means the turn is about to create it (so reverting means
-    // deleting it). Anything else — a directory, a permission error, a broken symlink —
-    // is a file that already exists and that this cannot snapshot; treating it as
-    // "created" made restore delete something the turn never created.
+    // deleting it). Anything else — a permission error, a broken symlink — is a file
+    // that already exists and that this cannot snapshot; treating it as "created"
+    // made restore delete something the turn never created.
     const code = (error as NodeJS.ErrnoException).code;
     return code === "ENOENT" ? { path, created: true } : { path, opaque: true };
   }
+  // Measured before it is read, because the read is synchronous and on Main's event
+  // loop: `readFileSync` on the 300 MB file an agent just generated would freeze the
+  // whole app (and spike its memory) only to have the size check below discard it.
+  if (!info.isFile() || info.size > MAX_FILE_BYTES) return { path, opaque: true };
+  let buffer: Buffer;
+  try {
+    buffer = readFileSync(path);
+  } catch {
+    // Raced by the very write this is capturing, or unreadable: either way there is
+    // no pre-turn content to keep, and the file demonstrably existed a moment ago.
+    return { path, opaque: true };
+  }
   // A NUL byte is the cheap, reliable "this is binary" signal `git` also uses.
   if (buffer.includes(0) || buffer.byteLength > MAX_FILE_BYTES) return { path, opaque: true };
-  return { path, content: buffer.toString("utf8") };
+  return { path, content: buffer.toString("utf8"), bytes: buffer.byteLength };
 }
 
 /**
@@ -142,7 +164,7 @@ export async function captureCheckpoint(
   let total = 0;
   let copied = 0;
   for (const file of files) {
-    const bytes = file.content === undefined ? 0 : Buffer.byteLength(file.content, "utf8");
+    const bytes = file.content === undefined ? 0 : file.bytes ?? Buffer.byteLength(file.content, "utf8");
     if (file.content !== undefined && (copied >= MAX_COPIED_FILES || total + bytes > MAX_TOTAL_BYTES)) {
       trimmed.push({ path: file.path, opaque: true });
       continue;

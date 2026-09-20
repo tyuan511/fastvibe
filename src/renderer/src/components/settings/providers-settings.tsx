@@ -11,6 +11,7 @@ import {
   Download01Icon,
   Loading03Icon,
   PencilEdit02Icon,
+  CircleQuestionMarkIcon,
   RefreshIcon,
   Search01Icon,
   Tick02Icon,
@@ -31,6 +32,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Select,
   SelectContent,
@@ -383,6 +385,37 @@ export function ProvidersSettings({ onChanged }: { onChanged: () => void }): JSX
   );
 }
 
+function FastVibeInfoTooltip(): JSX.Element {
+  const { t } = useTranslation("settings");
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            tabIndex={0}
+            aria-label={t("providers.fastvibeAbout")}
+            className="inline-flex size-4 shrink-0 items-center justify-center rounded text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+          />
+        }
+      >
+        <HugeiconsIcon strokeWidth={2} icon={CircleQuestionMarkIcon} className="size-3.5" />
+      </TooltipTrigger>
+      <TooltipContent side="bottom">
+        <span>
+          {t("providers.fastvibeDescription")} {" "}<a
+            href="https://fastvibe.dev"
+            target="_blank"
+            rel="noreferrer"
+            className="font-medium text-primary underline underline-offset-3 hover:text-primary/80"
+          >
+            {t("providers.fastvibeVisit")}
+          </a>
+        </span>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 function ProviderNavItem({
   provider,
   selected,
@@ -527,6 +560,7 @@ function ProviderDetail({
           ) : (
             <h3 className="truncate text-base font-medium">{providerLabel(provider.name || provider.id)}</h3>
           )}
+          {builtin ? <FastVibeInfoTooltip /> : null}
           {editable && !editingName ? (
             <Button size="icon-xs" variant="ghost" onClick={() => setEditingName(true)} aria-label={t("providers.rename")}>
               <HugeiconsIcon strokeWidth={2} icon={PencilEdit02Icon} />

@@ -80,6 +80,7 @@ import { useAppShortcuts, useShortcutLabel } from "@/lib/use-shortcuts";
 import { archiveConversations, archivedIdList, useArchivedIds } from "@/stores/archive";
 import { Ipc } from "@shared/ipc";
 import { blockedRemotely } from "@/lib/remote-unavailable";
+import { useStable } from "@/lib/use-stable";
 import { isAbortOutcome } from "@shared/abort";
 import { usePermissionModeSelection } from "@/components/permission-mode-provider";
 
@@ -336,6 +337,38 @@ const MessageThread = memo(function MessageThread({
   );
 });
 
+/**
+ * The composer's own subscription to what is being typed.
+ *
+ * `draft` and `attachments` change on every keystroke, and `App` is the shell: the
+ * sidebar, the transcript, the side pane and every dialog are built in its render, so
+ * reading them there re-rendered all of it per character — a cost that grows with the
+ * number of conversations in the sidebar and the number of rows mounted in the thread.
+ * The composer's element is built by `render` instead, so a keystroke re-renders this
+ * and the composer alone. The same trick `MessageThread` uses for the transcript.
+ */
+function ComposerSlot({
+  render,
+}: {
+  render: (draft: string, attachments: ChatAttachment[]) => JSX.Element;
+}): JSX.Element {
+  const draft = useSessionStore((state) => state.draft);
+  const attachments = useSessionStore((state) => state.attachments);
+  return render(draft, attachments);
+}
+
+/**
+ * Draft persistence, kept out of the shell for the same reason — and out of the
+ * composer's own slot, which an extension prompt takes over while a question is
+ * parked, so the debounce is not torn down and re-armed by an approval.
+ */
+function DraftKeeper(): null {
+  const activeId = useSessionStore((state) => state.activeId);
+  const draft = useSessionStore((state) => state.draft);
+  useDraftPersistence(activeId, draft);
+  return null;
+}
+
 export function App(): JSX.Element {
   // Applies light/dark theme selection (and reacts to OS changes in system mode).
   useThemeSync();
@@ -395,7 +428,6 @@ export function App(): JSX.Element {
   const running = useSessionStore((state) => state.running);
   const waitingForUser = useSessionStore((state) => state.waitingForUser);
   const stats = useSessionStore((state) => state.stats);
-  const draft = useSessionStore((state) => state.draft);
   const setStatus = useSessionStore((state) => state.setStatus);
   const setSession = useSessionStore((state) => state.setSession);
   const setModels = useSessionStore((state) => state.setModels);
@@ -423,7 +455,6 @@ export function App(): JSX.Element {
   const setCommands = useSessionStore((state) => state.setCommands);
   const setSubagents = useSessionStore((state) => state.setSubagents);
   const resolvePermission = useSessionStore((state) => state.resolvePermission);
-  const attachments = useSessionStore((state) => state.attachments);
   const allQueued = useSessionStore((state) => state.queued);
   const queued = activeId
     ? allQueued.filter((item) => item.conversationId === activeId)
@@ -463,6 +494,9 @@ export function App(): JSX.Element {
   // One send at a time. A second click / Enter while this send is still being handed
   // over is not a second message — see `handleSubmit`.
   const submitting = useRef(false);
+  // A send made while Stop is still settling must wait for that stop, then start a
+  // fresh run rather than being mistaken for a follow-up to the run being stopped.
+  const abortInFlight = useRef(new Map<string, Promise<void>>());
   // Settings lives at #/settings/<section>; no match means we are in the app.
   const settingsMatch = useMatch("/settings/*");
   const location = useLocation();
@@ -615,6 +649,10 @@ export function App(): JSX.Element {
       // which chats are working, even while the user is looking at another one.
       if (event.type === "conversation_running" && conversationId) {
         useSessionStore.getState().setConversationRunning(conversationId, event.running === true);
+        // A failed/timeout Stop stays as a barrier until Main explicitly confirms
+        // that the conversation is idle. This also releases a barrier kept after a
+        // timeout when the SDK eventually settles on its own.
+        if (event.running !== true) abortInFlight.current.delete(conversationId);
       }
       // Queue state is Main-owned and applies for every conversation. It must cross
       // the focus filter so a background drain, failure or second window stays visible.
@@ -938,8 +976,6 @@ export function App(): JSX.Element {
   // Unbound conversations run in a hidden scratch dir, so never surface that path.
   const workspaceLabel = activeProject?.name ?? t("workspace.noProject");
 
-  useDraftPersistence(activeId, draft);
-
   // The composer's `/` palette lists skills: re-list when 设置 → 技能 is left (the
   // shell stays mounted behind that route) and when the conversation switches,
   // since project skills are discovered from the active workspace.
@@ -1030,36 +1066,59 @@ export function App(): JSX.Element {
     // or hundreds of ms — a second click or Enter in that window used to send the
     // same prompt again, without its text (`请查看附件` + the same attachments).
     if (submitting.current) return;
-    const text = draft.trim();
-    const submitState = useSessionStore.getState();
-    const submitOwner = submitState.activeId;
-    const queueAtSubmit = shouldQueueSubmission({
-      hasConversation: submitOwner !== null,
-      running: Boolean(submitOwner && submitState.running[submitOwner]),
-      paused: Boolean(submitOwner && submitState.queuePauseByConversation[submitOwner]),
-      hasQueuedItems: Boolean(
-        submitOwner && submitState.queued.some((item) => item.conversationId === submitOwner),
-      ),
-    });
-    const queueBehavior = settings.queueBehavior;
-    const currentAttachments = submitState.attachments;
-    if ((!text && currentAttachments.length === 0) || !canChat) return;
-    const compact = parseCompactCommand(text);
-    if (compact) {
-      if (!activeId) return;
-      setDraft("");
-      try {
-        await engine.compact(compact.instructions);
-        void engine.getState().then(setSession).catch(() => undefined);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
-      }
-      return;
-    }
+    // Reserve the send before any await, including waiting for Stop. Otherwise two
+    // Enter presses can both resume after the same abort and submit twice.
     submitting.current = true;
     let consumedOwner: string | null = null;
     let consumedVersion: number | undefined;
+    let submitOwner: string | null = null;
+    let text = "";
+    let currentAttachments: ChatAttachment[] = [];
     try {
+      // Stop and Send are separate UI events. If Send wins the renderer race, wait for
+      // Main to finish the stop instead of putting this fresh prompt into the queue of
+      // the run the user just stopped. Re-read the composer after the await: the user
+      // may have edited it while the stop was settling.
+      const initialOwner = useSessionStore.getState().activeId;
+      const abortPromise = initialOwner ? abortInFlight.current.get(initialOwner) : undefined;
+      if (abortPromise) {
+        try {
+          await abortPromise;
+        } catch {
+          // handleAbort already reported the failed stop. Do not send into a session
+          // whose termination was not confirmed.
+          return;
+        }
+        if (useSessionStore.getState().activeId !== initialOwner) return;
+      }
+
+      const submitState = useSessionStore.getState();
+      submitOwner = submitState.activeId;
+      text = submitState.draft.trim();
+      const queueAtSubmit = shouldQueueSubmission({
+        hasConversation: submitOwner !== null,
+        running: Boolean(submitOwner && submitState.running[submitOwner]),
+        pauseReason: submitOwner ? submitState.queuePauseByConversation[submitOwner] ?? null : null,
+        hasQueuedItems: Boolean(
+          submitOwner && submitState.queued.some((item) => item.conversationId === submitOwner),
+        ),
+        stopConfirmed: Boolean(abortPromise),
+      });
+      const queueBehavior = settings.queueBehavior;
+      currentAttachments = submitState.attachments;
+      if ((!text && currentAttachments.length === 0) || !canChat) return;
+      const compact = parseCompactCommand(text);
+      if (compact) {
+        if (!activeId) return;
+        setDraft("");
+        try {
+          await engine.compact(compact.instructions);
+          void engine.getState().then(setSession).catch(() => undefined);
+        } catch (err) {
+          setError(err instanceof Error ? err.message : String(err));
+        }
+        return;
+      }
       // Nothing to run a turn on: keep the draft and ask for a model. Creating the
       // conversation first would leave a chat whose prompt the engine then refuses.
       if ((await availableModels()).length === 0) {
@@ -1090,8 +1149,9 @@ export function App(): JSX.Element {
       const nextList = await window.fastvibe.conversations.recordPrompt(conversationId, promptText);
       applyList(nextList);
       // Queue semantics belong to the instant Send was pressed. A stop can settle the
-      // run during recordPrompt; routing that item through prompt() would restart it
-      // and a late renderer reply could also erase Main's stopped pause.
+      // run during recordPrompt; routing an actual follow-up through prompt() would
+      // restart it and a late renderer reply could also erase Main's stopped pause.
+      // A send that raced Stop waited above and is intentionally a fresh prompt.
       if (queueAtSubmit) {
         const payload = `${promptText}${attachmentPromptSuffix(currentAttachments)}`;
         try {
@@ -1253,13 +1313,14 @@ export function App(): JSX.Element {
   async function handleAbort(): Promise<void> {
     const conversationId = useSessionStore.getState().activeId;
     if (!conversationId) return;
-    try {
+
+    // Publish the promise before awaiting it so a concurrent Send can establish an
+    // ordering point. The promise rejects on an unconfirmed stop; Send then leaves
+    // the composer alone instead of racing a still-running SDK session.
+    let abortConfirmed = false;
+    const abortPromise = (async (): Promise<void> => {
       await engine.abort(conversationId);
-    } catch (err) {
-      if (useSessionStore.getState().activeId === conversationId) {
-        setError(err instanceof Error ? err.message : String(err));
-      }
-    } finally {
+      abortConfirmed = true;
       if (useSessionStore.getState().activeId === conversationId) setStreaming(false);
       void engine
         .getState(conversationId)
@@ -1267,6 +1328,20 @@ export function App(): JSX.Element {
           if (useSessionStore.getState().activeId === conversationId) setSession(next);
         })
         .catch(() => undefined);
+    })();
+    abortInFlight.current.set(conversationId, abortPromise);
+    try {
+      await abortPromise;
+    } catch (err) {
+      if (useSessionStore.getState().activeId === conversationId) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    } finally {
+      // Keep a failed stop as a barrier until the running=false event arrives. A
+      // later Send must not infer that the SDK is idle just because a timeout fired.
+      if (abortConfirmed && abortInFlight.current.get(conversationId) === abortPromise) {
+        abortInFlight.current.delete(conversationId);
+      }
     }
   }
 
@@ -1795,49 +1870,82 @@ export function App(): JSX.Element {
     ...commands,
   ];
 
+  /**
+   * Stable identities for the shell's two biggest subtrees.
+   *
+   * `Sidebar` and `SidePane` are memoised, and the handlers below are the only props
+   * they take that would otherwise be new on every render of this component — which
+   * would have made those memos do nothing at all. `useStable` fixes the identity
+   * while still calling the newest closure, so neither subtree is rebuilt for a
+   * transcript reload, a stats refresh or a run flag flipping.
+   */
+  const onSidebarNewChat = useStable((cwd?: string) => void handleNewChat(cwd));
+  const onSidebarOpen = useStable((id: string) => void handleOpen(id));
+  const onSidebarFork = useStable((id: string) => void handleFork(id));
+  const onSidebarArchive = useStable((id: string) => void handleArchiveSession(id));
+  const onSidebarAddProject = useStable(() => void handleAddProject());
+  const onSidebarRenameSession = useStable((id: string, title: string) => void handleRenameSession(id, title));
+  const onSidebarRenameProject = useStable((cwd: string, name: string) => void handleRenameProject(cwd, name));
+  const onSidebarRemoveProject = useStable((cwd: string) => void handleRemoveProject(cwd));
+  const onSidebarRevealProject = useStable((cwd: string) => {
+    if (blockedRemotely(Ipc.workspaceReveal)) return;
+    void window.fastvibe.workspace.reveal(cwd);
+  });
+  const onSidebarReorderProjects = useStable((cwds: string[]) => void handleReorderProjects(cwds));
+  const onSidebarOpenSettings = useStable(() => navigate("/settings/general"));
+  const onSidebarOpenMarket = useStable(() => navigate("/settings/extensions"));
+  const onSidebarSearch = useStable(() => setCommandOpen(true));
+  const onSidePaneNewChat = useStable(() => void handleNewChat());
+  const onCloseFind = useStable(() => setFindOpen(false));
+  const onFindQueryConsumed = useStable(() => setPendingFind(null));
+
   const composer = (
-    <Composer
-      value={draft}
-      disabled={!canChat}
-      streaming={streaming}
-      working={conversationWorking}
-      placeholder={canChat ? t("composer.ready") : modelsLoaded && !hasModel ? t("composer.needModel") : t("composer.preparing")}
-      models={models}
-      model={session?.model}
-      thinkingLevel={session?.thinkingLevel}
-      workspaceLabel={workspaceLabel}
-      projects={projects}
-      project={active?.project}
-      newSession={isNewSession}
-      commands={paletteCommands}
-      permissionMode={settings.permissionMode}
-      onPermissionModeChange={setPermissionMode}
-      queued={queued}
-      queuePause={queuePause}
-      attachments={attachments}
-      history={inputHistory}
-      contextPercent={usagePercent(session)}
-      contextUsage={session?.contextUsage}
-      stats={stats}
-      onChange={setDraft}
-      onSubmit={() => void handleSubmit()}
-      onAbort={() => void handleAbort()}
-      onPickWorkspace={() => void handlePickWorkspace()}
-      onSelectProject={(project) => void handleSetProject(project)}
-      onModelChange={(provider, modelId) => void handleModelChange(provider, modelId)}
-      onThinkingChange={(level) => void handleThinkingChange(level)}
-      onAttachmentsChange={setAttachments}
-      onRemoveQueued={(id) => void handleRemoveQueued(id)}
-      onEditQueued={handleEditQueued}
-      onSendQueuedNow={(id) => void handleSendQueuedNow(id)}
-      onRecallQueued={(id) => void handleRecallQueued(id)}
-      onReorderQueued={handleReorderQueued}
-      onResumeQueue={handleResumeQueue}
-      canResume={canResume}
-      onResumeRun={() => void handleResumeRun()}
-      sendOnEnter={settings.sendOnEnter}
-      focusSignal={composerFocus}
-      onManageModels={() => navigate("/settings/providers")}
+    <ComposerSlot
+      render={(draft, attachments) => (
+        <Composer
+          value={draft}
+          disabled={!canChat}
+          streaming={streaming}
+          working={conversationWorking}
+          placeholder={canChat ? t("composer.ready") : modelsLoaded && !hasModel ? t("composer.needModel") : t("composer.preparing")}
+          models={models}
+          model={session?.model}
+          thinkingLevel={session?.thinkingLevel}
+          workspaceLabel={workspaceLabel}
+          projects={projects}
+          project={active?.project}
+          newSession={isNewSession}
+          commands={paletteCommands}
+          permissionMode={settings.permissionMode}
+          onPermissionModeChange={setPermissionMode}
+          queued={queued}
+          queuePause={queuePause}
+          attachments={attachments}
+          history={inputHistory}
+          contextPercent={usagePercent(session)}
+          contextUsage={session?.contextUsage}
+          stats={stats}
+          onChange={setDraft}
+          onSubmit={() => void handleSubmit()}
+          onAbort={() => void handleAbort()}
+          onPickWorkspace={() => void handlePickWorkspace()}
+          onSelectProject={(project) => void handleSetProject(project)}
+          onModelChange={(provider, modelId) => void handleModelChange(provider, modelId)}
+          onThinkingChange={(level) => void handleThinkingChange(level)}
+          onAttachmentsChange={setAttachments}
+          onRemoveQueued={(id) => void handleRemoveQueued(id)}
+          onEditQueued={handleEditQueued}
+          onSendQueuedNow={(id) => void handleSendQueuedNow(id)}
+          onRecallQueued={(id) => void handleRecallQueued(id)}
+          onReorderQueued={handleReorderQueued}
+          onResumeQueue={handleResumeQueue}
+          canResume={canResume}
+          onResumeRun={() => void handleResumeRun()}
+          sendOnEnter={settings.sendOnEnter}
+          focusSignal={composerFocus}
+          onManageModels={() => navigate("/settings/providers")}
+        />
+      )}
     />
   );
 
@@ -1866,6 +1974,9 @@ export function App(): JSX.Element {
           controls the OS used to provide are never missing and never fight the
           sidebar or the right pane for the window's top-right corner. */}
       {HAS_CUSTOM_TITLE_BAR ? <TitleBar onSearch={() => setCommandOpen(true)} /> : null}
+      {/* Draws nothing; it is where the draft's debounced write lives, outside the
+          composer's slot so a parked approval does not take it down with it. */}
+      <DraftKeeper />
       <div className="relative flex min-h-0 flex-1">
         {/* No backdrop: the drawer covers the whole viewport, so there is no dimmed
             conversation behind it to tap. The button that was here sat under a
@@ -1877,22 +1988,19 @@ export function App(): JSX.Element {
           activeId={activeId}
           running={running}
           waitingForUser={waitingForUser}
-          onNewChat={(cwd) => void handleNewChat(cwd)}
-          onOpen={(id) => void handleOpen(id)}
-          onFork={(id) => void handleFork(id)}
-          onArchive={(id) => void handleArchiveSession(id)}
-          onAddProject={() => void handleAddProject()}
-          onRenameSession={(id, title) => void handleRenameSession(id, title)}
-          onRenameProject={(cwd, name) => void handleRenameProject(cwd, name)}
-          onRemoveProject={(cwd) => void handleRemoveProject(cwd)}
-          onRevealProject={(cwd) => {
-            if (blockedRemotely(Ipc.workspaceReveal)) return;
-            void window.fastvibe.workspace.reveal(cwd);
-          }}
-          onReorderProjects={(cwds) => void handleReorderProjects(cwds)}
-          onOpenSettings={() => navigate("/settings/general")}
-          onOpenMarket={() => navigate("/settings/extensions")}
-          onSearch={() => setCommandOpen(true)}
+          onNewChat={onSidebarNewChat}
+          onOpen={onSidebarOpen}
+          onFork={onSidebarFork}
+          onArchive={onSidebarArchive}
+          onAddProject={onSidebarAddProject}
+          onRenameSession={onSidebarRenameSession}
+          onRenameProject={onSidebarRenameProject}
+          onRemoveProject={onSidebarRemoveProject}
+          onRevealProject={onSidebarRevealProject}
+          onReorderProjects={onSidebarReorderProjects}
+          onOpenSettings={onSidebarOpenSettings}
+          onOpenMarket={onSidebarOpenMarket}
+          onSearch={onSidebarSearch}
         />
         <main className={cn("flex min-w-0 flex-1 flex-col", !paneCollapsed && paneMaximized && "hidden")}>
           <motion.header
@@ -1997,9 +2105,9 @@ export function App(): JSX.Element {
                   showTimestamp={settings.showTimestamps}
                   collapseRuns={settings.collapseRuns}
                   findOpen={findOpen}
-                  onCloseFind={() => setFindOpen(false)}
+                  onCloseFind={onCloseFind}
                   findQuery={pendingFind}
-                  onFindQueryConsumed={() => setPendingFind(null)}
+                  onFindQueryConsumed={onFindQueryConsumed}
                 />
               </div>
               {/* Everything under the transcript shares its column: the transcript's
@@ -2023,7 +2131,7 @@ export function App(): JSX.Element {
             project={active?.project}
             parentId={activeId ?? undefined}
             canSideChat={Boolean(activeId && hasTranscript)}
-            onNewChat={() => void handleNewChat()}
+            onNewChat={onSidePaneNewChat}
             onError={setError}
           />
         )}

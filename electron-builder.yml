@@ -68,12 +68,41 @@ electronLanguages:
 mac:
   icon: resources/icon.icns
   category: public.app-category.developer-tools
-  # Local builds must never sign: without this, electron-builder discovers a
-  # Developer ID in the login keychain and signs/notarizes the dev build.
-  # Packaged Mac updates do not go through Squirrel.Mac (that needs a Developer
-  # ID Apple trusts); the app swaps the .app from the GitHub zip instead.
-  identity: null
-  notarize: false
+  # Signed with FastVibe's own Developer ID, and pinned by Team ID rather than
+  # left to auto-discovery: this machine's login keychain also holds an
+  # unrelated company Developer ID, and electron-builder would otherwise sign
+  # whichever it found first — shipping an app attributed to the wrong entity.
+  #
+  # A Team ID is not a secret (it is readable in any signed binary), so it lives
+  # here rather than in CI secrets. Only the certificate and the notarization
+  # credentials are secret.
+  #
+  # Why this matters beyond Gatekeeper: macOS keys TCC grants (Accessibility,
+  # Screen Recording) to the signing identity. A stable Developer ID is what lets
+  # a granted permission survive an app update; the ad-hoc signature this project
+  # shipped before changed on every build, so any such grant would silently die.
+  #
+  # TODO: replace with the personal team's ID once its Developer ID Application
+  # certificate exists. Until then electron-builder finds no matching identity,
+  # warns, and produces an unsigned build — the previous behaviour.
+  identity: REPLACE_WITH_PERSONAL_TEAM_ID
+  hardenedRuntime: true
+  # Entitlements are deliberately *not* named here. electron-builder picks up
+  # `entitlements.mac.plist` and `entitlements.mac.inherit.plist` from
+  # buildResources (`resources/`) by filename and resolves them to absolute
+  # paths; an explicit value is instead passed to codesign verbatim and resolved
+  # against whatever directory the build was started from.
+  # Notarization is driven entirely by environment variables (APPLE_API_KEY,
+  # APPLE_API_KEY_ID, APPLE_API_ISSUER — see .github/workflows/release.yml).
+  # electron-builder 26 ignores a `teamId` written here. With no credentials in
+  # the environment it logs a warning and skips the upload, so a local
+  # `pnpm dist:mac` signs in seconds and never talks to Apple.
+
+  # Shown in the system dialog when the updater's fallback path sends an Apple
+  # event (`osascript ... with administrator privileges`). A hardened app that
+  # sends one without this string is killed by the OS rather than prompted.
+  extendInfo:
+    NSAppleEventsUsageDescription: FastVibe 需要发送 Apple 事件来完成应用更新。
   files:
     - "!**/node_modules/node-pty/prebuilds/{win32,linux}-*/**"
     - "!**/node_modules/node-pty/prebuilds/darwin-!(${arch}){,/**/*}"

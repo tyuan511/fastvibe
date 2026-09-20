@@ -47,7 +47,10 @@ const sessionCache = new Map<string, ParsedSession & { mtimeMs: number; size: nu
  * ledger with history that predates it. Transcripts only ever grow, so results are
  * memoised on `mtimeMs` + `size`.
  */
-export async function parseSessionTurns(file: string): Promise<ParsedSession> {
+export async function parseSessionTurns(
+  file: string,
+  options?: { since?: number },
+): Promise<ParsedSession> {
   let info;
   try {
     info = await stat(file);
@@ -58,6 +61,12 @@ export async function parseSessionTurns(file: string): Promise<ParsedSession> {
   if (cached && cached.mtimeMs === info.mtimeMs && cached.size === info.size) {
     return { sessionId: cached.sessionId, turns: cached.turns };
   }
+  // A transcript's last write is no earlier than its last turn, so a file untouched
+  // since before the window being asked about holds nothing that window can show —
+  // and reading it would mean loading and JSON-parsing a whole conversation to throw
+  // every line away. The caller's cutoff is already slackened by a day, which covers a
+  // clock that was wrong when a turn was recorded.
+  if (options?.since !== undefined && info.mtimeMs < options.since) return { sessionId: "", turns: [] };
 
   let text: string;
   try {

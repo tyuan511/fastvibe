@@ -14,7 +14,7 @@ FastVibe 是一个 Electron 桌面客户端。它没有另起炉灶重写一套 
 pi（pi coding agent）作为默认引擎直接跑在主进程里，再把原本只存在于终端里的交互
 （工具调用、思考过程、扩展对话框、计划 / 目标模式……）原生地呈现为 GUI。
 
-![FastVibe 界面](docs/screenshots/chat-light.png)
+![FastVibe 界面](apps/website/public/screenshots/zh/workspace.webp)
 
 ## 下载
 
@@ -80,7 +80,7 @@ FastVibe 的核心承诺是：**pi 扩展在终端里能做什么，在这里就
 （扩展 / 技能 / 主题 / 提示词），一键安装 / 卸载；已安装页展示随应用内置的扩展与
 运行时安装的插件。
 
-![插件市场](docs/screenshots/market-light.png)
+![插件市场](apps/website/public/screenshots/zh/market.webp)
 
 ### 内置扩展
 
@@ -106,7 +106,7 @@ FastVibe 的核心承诺是：**pi 扩展在终端里能做什么，在这里就
 读取 / 搜索 / 列目录相邻调用自动折叠成一组，编辑展开为行号 diff，终端保留原始命令与输出。
 每条回复结束时，本轮改动过的文件会以带 `+n / -m` 的标签行汇总。
 
-![工具调用与 diff](docs/screenshots/tools-light.png)
+![工具调用与 diff](apps/website/public/screenshots/zh/tools.webp)
 
 ### 工作区侧栏
 
@@ -114,7 +114,7 @@ FastVibe 的核心承诺是：**pi 扩展在终端里能做什么，在这里就
 同时支持图片、PDF、CSV、HTML 与 diff）。侧栏还包含终端、内置浏览器、Git 审查与辅助对话——
 其中浏览器不只是给人看的，agent 也能通过工具驱动它。
 
-![文件与预览](docs/screenshots/files-light.png)
+![文件与预览](apps/website/public/screenshots/zh/files.webp)
 
 ### 内置浏览器（browser use）
 
@@ -164,7 +164,7 @@ FastVibe 是众多供应商之一，而非强制的入门门槛。配置供应�
 导入其自定义供应商与密钥。上下文窗口、最大输出、输入模态、推理档位与价格来自
 内置的 models.dev 快照，可在 设置 → 关于 从上游更新。
 
-![模型管理](docs/screenshots/models-light.png)
+![模型管理](apps/website/public/screenshots/zh/models.webp)
 
 ### 主题
 

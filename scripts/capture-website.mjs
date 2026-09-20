@@ -19,7 +19,11 @@ const root = path.resolve(import.meta.dirname, "..");
 const port = Number(process.env.CAPTURE_PORT ?? 5175);
 const origin = `http://127.0.0.1:${port}`;
 const chrome = process.env.CHROME_PATH ?? (process.platform === "darwin" ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" : undefined);
-const scenes = ["workspace", "review", "models"];
+// Every scene the mock harness can reach a stable state for. `capture-website` waits on
+// `websiteSceneReady`, which the harness sets once the pane/tab/fold the scene is about
+// has actually rendered — a scene with no way to reach that state would hang here rather
+// than ship a blank frame.
+const scenes = ["workspace", "files", "review", "tools", "models", "market"];
 const languages = ["zh", "en"];
 
 async function loadPlaywright() {
@@ -93,11 +97,7 @@ try {
       await page.goto(url, { waitUntil: "networkidle" });
       await page.evaluate(() => document.fonts.ready);
       await page.waitForFunction((lang) => document.documentElement.lang.startsWith(lang), language);
-      if (scene !== "models") {
-        await page.waitForFunction((expected) => document.body.dataset.websiteSceneReady === expected, scene);
-      } else {
-        await page.getByText(language === "zh" ? "API 密钥" : "API key", { exact: true }).waitFor();
-      }
+      await page.waitForFunction((expected) => document.body.dataset.websiteSceneReady === expected, scene);
       // Let the real pane's spring animation and syntax highlighting finish.
       await page.waitForTimeout(1000);
 

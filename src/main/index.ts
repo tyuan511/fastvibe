@@ -77,6 +77,14 @@ if (app.isPackaged) process.env.JITI_FS_CACHE = "false";
 
 const engine = new PiProcessManager();
 const terminals = new TerminalSessions();
+/**
+ * Which client each shell belongs to, by broadcast identity.
+ *
+ * A terminal pane starts its own shell (`terminalStart` returns a fresh id) and is the
+ * only receiver that can draw it, so its output is delivered to that one client rather
+ * than pushed to every window and every remote session.
+ */
+const terminalOwners = new Map<string, string>();
 let mainWindow: BrowserWindow | null = null;
 const windows = new Set<BrowserWindow>();
 
@@ -680,13 +688,20 @@ function registerIpc(): void {
     });
     return readGitStatus(cwd);
   });
-  handle(Ipc.workspaceTerminalStart, (payload: { cwd?: string; cols?: number; rows?: number }) => {
+  handle(Ipc.workspaceTerminalStart, (payload: { cwd?: string; cols?: number; rows?: number }, ctx) => {
     const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
     // A terminal is not tied to a project: with no workspace bound it opens in home.
-    return terminals.start(cwd || homedir(), { cols: payload.cols, rows: payload.rows });
+    const session = terminals.start(cwd || homedir(), { cols: payload.cols, rows: payload.rows });
+    // Each pane starts its own shell and is the only client that can draw it, so its
+    // output is addressed back to whoever asked for it (see `terminals.onData`).
+    if (ctx.origin) terminalOwners.set(session.id, ctx.origin);
+    return session;
   });
-  handle(Ipc.workspaceTerminalWrite, (payload: { id: string; data: string }) => {
+  handle(Ipc.workspaceTerminalWrite, (payload: { id: string; data: string }, ctx) => {
     if (!payload.id || typeof payload.data !== "string") return;
+    // Typing into a terminal claims it: a client that reattached to a shell it did not
+    // start (a reloaded window) is where its output belongs from now on.
+    if (ctx.origin) terminalOwners.set(payload.id, ctx.origin);
     terminals.write(payload.id, payload.data);
   });
   handle(Ipc.workspaceTerminalResize, (payload: { id: string; cols: number; rows: number }) => {
@@ -694,7 +709,9 @@ function registerIpc(): void {
     terminals.resize(payload.id, payload.cols, payload.rows);
   });
   handle(Ipc.workspaceTerminalKill, (payload: { id: string }) => {
-    if (payload.id) terminals.kill(payload.id);
+    if (!payload.id) return;
+    terminalOwners.delete(payload.id);
+    terminals.kill(payload.id);
   });
   handle(
     Ipc.enginePromptConversation,
@@ -911,7 +928,13 @@ app.whenReady().then(async () => {
     broadcast(Ipc.providersOAuthEvent, payload);
   });
   terminals.onData((event) => {
-    broadcast(Ipc.workspaceTerminalData, event);
+    // Addressed to the pane that opened this shell. A build log used to reach every
+    // window and every remote client, which on a phone over the tunnel meant megabytes
+    // of output for a terminal it had never opened. An unknown owner (a shell started
+    // before this map existed) still goes to everyone, so nothing can go missing.
+    const owner = terminalOwners.get(event.id);
+    broadcast(Ipc.workspaceTerminalData, event, owner ? { only: owner } : undefined);
+    if (event.exited) terminalOwners.delete(event.id);
   });
 
   engine.onEvent((event) => {

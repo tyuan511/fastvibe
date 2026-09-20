@@ -38,7 +38,9 @@ const website = params.get("website") === "1";
 const websiteLanguage: WebsiteLanguage = params.get("lang") === "en" ? "en" : "zh";
 const websiteScene = params.get("scene") ?? "workspace";
 const websiteData = website ? websiteFixture(websiteLanguage) : null;
+// The settings scenes are routes, so they have to be entered before the shell mounts.
 if (website && websiteScene === "models") window.location.hash = "#/settings/providers";
+if (website && websiteScene === "market") window.location.hash = "#/settings/extensions";
 const theme = params.get("theme");
 const pane = params.get("pane");
 const scroll = params.get("scroll");
@@ -95,7 +97,9 @@ const initialSettings: Record<string, unknown> = {
   darkTheme: website ? "github-dark" : "tokyo-night",
   sidebarWidth: website ? 260 : 264,
   sidebarCollapsed: sidebar === "collapsed",
-  sidePaneWidth: website ? 460 : 384,
+  // The files scene has to be wide enough for the pane's `@min-[32rem]/files` container
+  // query, which is what swaps the preview for tree + preview side by side.
+  sidePaneWidth: website ? (websiteScene === "files" ? 760 : 460) : 384,
 };
 
 const fixtureProjects = websiteData?.projects ?? PROJECTS;
@@ -666,36 +670,94 @@ if (website && platform === "darwin" && !remote) {
 
 /* ------------------------------------------------------------------ layout tweaks */
 
-if (websiteData && websiteScene !== "models") {
-  window.setTimeout(() => {
-    void import("@/stores/side-pane").then(({ useSidePaneStore }) => {
-      const store = useSidePaneStore.getState();
-      if (websiteScene === "review") {
-        store.openGitDiff("src/components/CommandMenu.tsx", "unstaged", websiteData.cwd);
-      } else {
+/**
+ * Website scenes each have to reach a state the capture cannot click its way to: a pane
+ * opened, a fold expanded, a settings tab switched.
+ *
+ * Each scene is described as a `setup` — done once React has rendered the node it acts on
+ * — plus a `ready` predicate the capture waits for. They are separate on purpose: the
+ * market's setup is a tab click, but its readiness is the catalog rows that click
+ * fetches, and conflating the two would let the capture snap an empty pane.
+ */
+if (websiteData) {
+  const markReady = (): void => {
+    document.body.dataset.websiteSceneReady = websiteScene;
+  };
+  /** React, not a fixed delay on a cold Vite build, is what the setup waits for. */
+  const whenFound = <T,>(find: () => T | null | undefined, act: (value: T) => void, then?: () => boolean): void => {
+    let settled = false;
+    const attempt = (): boolean => {
+      if (settled) return true;
+      const value = find();
+      if (!value) return false;
+      act(value);
+      if (then && !then()) return false;
+      settled = true;
+      markReady();
+      return true;
+    };
+    if (attempt()) return;
+    const observer = new MutationObserver(() => {
+      if (attempt()) observer.disconnect();
+    });
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+    window.setTimeout(() => observer.disconnect(), 15_000);
+  };
+  const byText = (pattern: RegExp) => (): boolean => pattern.test(document.body.innerText);
+  const tabMatching = (pattern: RegExp) => () =>
+    [...document.querySelectorAll<HTMLElement>('[data-slot="tabs-trigger"]')].find((node) =>
+      pattern.test(node.textContent ?? ""),
+    ) ?? null;
+
+  if (websiteScene === "workspace" || websiteScene === "review" || websiteScene === "files") {
+    window.setTimeout(() => {
+      void import("@/stores/side-pane").then(({ useSidePaneStore }) => {
+        const store = useSidePaneStore.getState();
+        if (websiteScene === "review") {
+          store.openGitDiff("src/components/CommandMenu.tsx", "unstaged", websiteData.cwd);
+          return;
+        }
         store.openFiles();
         store.openFilePreview(websiteData.previewFor(websiteData.previewPath));
-      }
-    });
-  }, 500);
+      });
+    }, 500);
+  }
 
-  // Wait for React rather than racing a fixed delay on a cold Vite build.
-  const selectSceneControl = () => {
-    const button = websiteScene === "workspace"
-      ? document.querySelector<HTMLElement>('[data-tool-id="website-todo"]')?.closest("button")
-      : [...document.querySelectorAll<HTMLButtonElement>("button")]
-        .find((node) => (node.textContent ?? "").startsWith("CommandMenu.tsxsrc/components"));
-    if (!button) return false;
-    button.click();
-    document.body.dataset.websiteSceneReady = websiteScene;
-    return true;
-  };
-  const observer = new MutationObserver(() => {
-    if (selectSceneControl()) observer.disconnect();
-  });
-  if (!selectSceneControl()) {
-    observer.observe(document.body, { childList: true, subtree: true });
-    window.setTimeout(() => observer.disconnect(), 15_000);
+  if (websiteScene === "workspace") {
+    // 待办 opens so the checklist the fixture finished is legible in the frame.
+    whenFound(
+      () => document.querySelector<HTMLElement>('[data-tool-id="website-todo"]')?.closest("button") as HTMLButtonElement | null,
+      (button) => button.click(),
+    );
+  } else if (websiteScene === "review") {
+    whenFound(
+      () =>
+        [...document.querySelectorAll<HTMLButtonElement>("button")].find((node) =>
+          (node.textContent ?? "").startsWith("CommandMenu.tsxsrc/components"),
+        ) ?? null,
+      (button) => button.click(),
+    );
+  } else if (websiteScene === "files") {
+    // The preview's own header is the signal: the pane is open, and at this width the
+    // tree sits beside it rather than behind the back button.
+    whenFound(
+      () => document.querySelector<HTMLElement>(`span[title="${websiteData.previewPath}"]`),
+      () => undefined,
+    );
+  } else if (websiteScene === "tools") {
+    // Every folded tool row opens, the way the feature reads in the README.
+    whenFound(
+      () => {
+        const rows = [...document.querySelectorAll<HTMLElement>('[data-slot="tool-row"]')];
+        return rows.length ? rows : null;
+      },
+      (rows) => rows.forEach((row) => row.closest("button")?.click()),
+    );
+  } else if (websiteScene === "market") {
+    // The catalog is fetched on the tab switch, so the rows — not the click — are ready.
+    whenFound(tabMatching(/官方市场|Marketplace/), (tab) => tab.click(), byText(/pi-mcp-adapter/));
+  } else if (websiteScene === "models") {
+    whenFound(byText(/API 密钥|API key/), () => undefined);
   }
 }
 

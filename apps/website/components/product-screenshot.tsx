@@ -3,10 +3,10 @@
 import Image from "next/image";
 import { useRef } from "react";
 import { useLocale, useTranslations } from "next-intl";
-import { screenshotUrl, type ScreenshotScene } from "@/lib/screenshots";
+import { screenshotUrl, type FeatureScene } from "@/lib/screenshots";
 import { Icon } from "./icons";
 
-export function ProductScreenshot({ scene, large = false, priority = false }: { scene: ScreenshotScene; large?: boolean; priority?: boolean }) {
+export function ProductScreenshot({ scene, large = false, priority = false }: { scene: FeatureScene; large?: boolean; priority?: boolean }) {
   const locale = useLocale();
   const t = useTranslations("features");
   const dialog = useRef<HTMLDialogElement>(null);
