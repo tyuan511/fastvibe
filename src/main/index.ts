@@ -48,6 +48,7 @@ import { PiProcessManager } from "./pi/process-manager";
 import { fetchPackageCatalog } from "./pi/package-catalog";
 import { TerminalSessions } from "./engine/terminal-sessions";
 import { attachBrowserRenderer, guardGuestPopups, installBrowserGlobal, respondBrowserRequest } from "./pi/browser-bridge";
+import { computerPermissions, installComputerGlobal, openComputerSettings, requestComputerPermissions } from "./pi/cua-bridge";
 import { importBrowserProfile, listBrowserProfiles } from "./engine/browser-profiles";
 import type { ImportSourceId, ProviderModel, UsageRange } from "@shared/types";
 import type { GitBranch, GitDiffSource, GitStatus } from "@shared/ipc";
@@ -206,6 +207,10 @@ function registerIpc(): void {
     if (!allowed) throw new Error(uiText("浏览器配置文件未通过校验，请重新打开导入列表", "Browser profile failed validation. Open the list again."));
     return importBrowserProfile(allowed, (cookie) => session.fromPartition("persist:fastvibe-browser").cookies.set(cookie));
   });
+  handle(Ipc.computerPermissions, () => computerPermissions());
+  handle(Ipc.computerRequestPermissions, () => requestComputerPermissions());
+  handle(Ipc.computerOpenSettings, () => openComputerSettings());
+
   handle(Ipc.engineGetStatus, () => engine.status);
 
   handle(Ipc.engineStart, async (payload?: { cwd?: string }) => {
@@ -867,6 +872,10 @@ app.whenReady().then(async () => {
   if (shutdownPhase !== "running") return;
   log.info("app ready");
   installBrowserGlobal();
+  // Registers the bridge global and an at-quit driver shutdown. The native library is
+  // still not loaded here — `cua-bridge` imports it on the first `computer_*` call, so a
+  // user who never touches the feature pays nothing for it.
+  installComputerGlobal();
   applyAppIcon();
   const startupSettings = readAppSettings(getFastVibePaths());
   applyNativeTheme(startupSettings);

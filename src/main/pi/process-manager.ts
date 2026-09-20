@@ -117,6 +117,7 @@ import { assistantErrorSummary, finalAssistantErrorSummary } from "./assistant-e
 import { SkillManager } from "./skill-manager";
 import { builtinExtensionFile, builtinExtensionPaths, builtinSkillPaths, ExtensionManager } from "./extension-manager";
 import { bindBrowserConversation } from "./browser-bridge";
+import { bindComputerConversation } from "./cua-bridge";
 import { createTuiWidget, renderExtensionMessage, renderTuiComponent, type TuiComponent } from "./tui-bridge";
 
 type ManagedSession = { conversationId: string; cwd: string; session: AgentSession; extensions: LoadExtensionsResult; unsubscribe: () => void };
@@ -2204,8 +2205,12 @@ export class PiProcessManager {
       additionalExtensionPaths: builtinExtensionPaths(),
       additionalSkillPaths: builtinSkillPaths(),
     });
-    // browser-use closes over the conversation id at factory time, which is this reload.
-    await bindBrowserConversation(conversation.id, () => resourceLoader.reload());
+    // browser-use and computer-use both close over the conversation id at factory time,
+    // which is this reload. Nested rather than merged: each bridge owns its own global
+    // and its own serialisation, and a reload is the only moment either needs stamping.
+    await bindBrowserConversation(conversation.id, () =>
+      bindComputerConversation(conversation.id, () => resourceLoader.reload()),
+    );
     const result = await createAgentSession({
       cwd,
       agentDir: this.#paths.agentDir,

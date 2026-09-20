@@ -19,6 +19,7 @@ export const BUILTIN_EXTENSIONS: Array<{ source: string; file: string }> = [
   { source: "fastvibe:permission-sandbox", file: "permission-sandbox.ts" },
   { source: "fastvibe:session-title", file: "session-title.ts" },
   { source: "fastvibe:browser-use", file: "browser-use.ts" },
+  { source: "fastvibe:computer-use", file: "computer-use.ts" },
   { source: "fastvibe:web-search", file: "web-search.ts" },
   { source: "fastvibe:subagent-team", file: "subagent/index.ts" },
 ];
@@ -33,12 +34,14 @@ export const BUILTIN_AGENTS = [
   { id: "reviewer", name: "Reviewer", description: "Check the implementation, regression risk and test coverage; give actionable feedback.", tools: ["read", "grep", "find", "ls", "bash"] },
 ] as const;
 
+/** Built-in skills, by directory name under `resources/skills`. */
+const BUILTIN_SKILLS = ["browser-use", "computer-use"];
+
 export function builtinSkillPaths(): string[] {
   const dir = app.isPackaged
     ? join(process.resourcesPath, "skills")
     : join(__dirname, "../../resources/skills");
-  const path = join(dir, "browser-use", "SKILL.md");
-  return existsSync(path) ? [path] : [];
+  return BUILTIN_SKILLS.map((name) => join(dir, name, "SKILL.md")).filter((path) => existsSync(path));
 }
 
 /** Directory holding FastVibe's built-in extension entry points (outside the asar). */

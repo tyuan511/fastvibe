@@ -433,6 +433,64 @@ export type BrowserRequest = {
   conversationId?: string;
 };
 
+/**
+ * One `computer_*` tool call on its way to Cua Driver.
+ *
+ * A flat bag rather than a discriminated union, matching `BrowserRequest`: the extension
+ * that builds these is loaded from outside the bundle and cannot import this file, so the
+ * type documents the contract for the main-process half and nothing enforces it across
+ * the boundary anyway.
+ */
+export type ComputerRequest = {
+  action: string;
+  /** Process id of the target app, from `computer_list_apps`. */
+  pid?: number;
+  /** Window id as a decimal string — the driver's ids are `bigint` and JSON is not. */
+  windowId?: string;
+  x?: number;
+  y?: number;
+  text?: string;
+  key?: string;
+  keys?: string[];
+  modifiers?: string[];
+  /** Opaque handle for an element from `computer_window_state`, preferred over x/y. */
+  elementToken?: string;
+  button?: "left" | "right" | "middle";
+  count?: number;
+  direction?: "up" | "down" | "left" | "right";
+  amount?: number;
+  /** Menu item path, e.g. ["File", "Save"]. */
+  path?: string[];
+  query?: string;
+  /** Opt in to stealing focus. Background delivery is the default. */
+  foreground?: boolean;
+  includeScreenshot?: boolean;
+  maxElements?: number;
+  onScreenOnly?: boolean;
+  timeoutMs?: number;
+  conversationId?: string;
+};
+
+export type ComputerResult = {
+  text: string;
+  /** Base64 payloads, shaped like the SDK's own image content parts. */
+  images: Array<{ mimeType: string; data: string }>;
+  structured?: string;
+};
+
+/**
+ * Whether this machine will let FastVibe drive it.
+ *
+ * `ready` is the only field a caller should branch on; the two booleans exist so the UI
+ * can name the toggle that is still off rather than saying "permission denied".
+ */
+export type ComputerPermissionStatus = {
+  platform: string;
+  accessibility: boolean;
+  screenRecording: boolean;
+  ready: boolean;
+};
+
 export type BrowserImportResult = {
   browser: string;
   profile: string;

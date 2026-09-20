@@ -47,6 +47,51 @@ const NETWORK_TOOLS = new Set(["web_search"]);
 /** Built-in tools this extension knows how to classify. */
 const KNOWN_TOOLS = new Set(["read", "write", "edit", "bash", "powershell", "grep", "find", "ls"]);
 
+/**
+ * Cua-driven desktop control, split by whether the call changes anything.
+ *
+ * Observation is classified as neither network nor external, so it confirms in no mode —
+ * a loop that has to ask before every screenshot is a loop nobody will use. Note that
+ * this does mean a full-desktop capture reaches the model without a prompt.
+ *
+ * The action tools are marked `external`, because "outside the workspace" is exactly
+ * what they are: they reach applications and documents the conversation never named, on
+ * a desktop the user may be using at the same time. That places them under `smart` and
+ * `ask` alongside a write outside the project — and, like every other tool, outside
+ * `full`, which promises no prompts at all.
+ */
+const COMPUTER_OBSERVE_TOOLS = new Set([
+  "computer_screenshot",
+  "computer_list_apps",
+  "computer_list_windows",
+  "computer_window_state",
+  "computer_clipboard_read",
+]);
+
+const COMPUTER_ACTION_TOOLS = new Set([
+  "computer_click",
+  "computer_type",
+  "computer_key",
+  "computer_hotkey",
+  "computer_scroll",
+  "computer_menu",
+  "computer_clipboard_write",
+]);
+
+/** What the confirmation dialog shows: the intended effect, not the tool name. */
+function describeComputer(toolName: string, input: unknown): string {
+  const text = inputString(input, "text");
+  const key = inputString(input, "key");
+  if (toolName === "computer_type" && text) return T(`输入「${firstLine(text, 80)}」`, `Type "${firstLine(text, 80)}"`);
+  if (toolName === "computer_clipboard_write" && text) return T("写入剪贴板", "Write to the clipboard");
+  if (toolName === "computer_key" && key) return T(`按下 ${key}`, `Press ${key}`);
+  if (toolName === "computer_menu") {
+    const path = input && typeof input === "object" ? (input as Record<string, unknown>).path : undefined;
+    if (Array.isArray(path)) return T(`菜单 ${path.join(" › ")}`, `Menu ${path.join(" › ")}`);
+  }
+  return toolName;
+}
+
 /** Shell activity that reaches the network ("使用互联网"). */
 const NETWORK_RULES: RegExp[] = [
   /\b(curl|wget)\b/i,
@@ -201,6 +246,28 @@ function assess(toolName: string, input: unknown, cwd: string): Assessment | nul
       network: false,
       external: !isInside(cwd, absolute),
       risks: matchedLabels(SENSITIVE_PATH_RULES, absolute),
+      opaque: false,
+    };
+  }
+
+  if (COMPUTER_OBSERVE_TOOLS.has(toolName)) {
+    return {
+      action: T("查看电脑屏幕", "Read the screen"),
+      detail: toolName,
+      network: false,
+      external: false,
+      risks: [],
+      opaque: false,
+    };
+  }
+
+  if (COMPUTER_ACTION_TOOLS.has(toolName)) {
+    return {
+      action: T("操作电脑", "Control the computer"),
+      detail: describeComputer(toolName, input),
+      network: false,
+      external: true,
+      risks: [T("操作其他应用", "Control another application")],
       opaque: false,
     };
   }

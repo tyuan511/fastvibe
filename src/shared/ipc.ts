@@ -116,6 +116,11 @@ export const Ipc = {
   browserResponse: "browser:response",
   browserListProfiles: "browser:list-profiles",
   browserImportProfile: "browser:import-profile",
+  /** Cua Driver permission state. The tools themselves need no IPC — the driver is
+   * loaded into Main, so a `computer_*` call never leaves the process. */
+  computerPermissions: "computer:permissions",
+  computerRequestPermissions: "computer:request-permissions",
+  computerOpenSettings: "computer:open-settings",
   enginePromptConversation: "engine:prompt-conversation",
   engineGetConversationMessages: "engine:get-conversation-messages",
   conversationsCreateSide: "conversations:create-side",

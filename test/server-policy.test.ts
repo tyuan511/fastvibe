@@ -106,6 +106,12 @@ test("the denied set is exactly what the UI explains, so a new denial cannot go 
     "browser:import-profile",
     "browser:list-profiles",
     "browser:response",
+    // No control offers these yet — `api.computer.*` exists for a Settings row that has
+    // not been built. Whoever builds it guards the button with `blockedRemotely`, the
+    // same as the browser-profile controls in the side pane.
+    "computer:open-settings",
+    "computer:permissions",
+    "computer:request-permissions",
     "engine:export-html",
     "engine:import-skill",
     "projects:add",
