@@ -1,6 +1,17 @@
-import { memo, type JSX } from "react";
+import { memo, useMemo, useState, type JSX } from "react";
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { parseDiff, type DiffRow, type DiffRowKind } from "@/lib/diff";
+
+/**
+ * Rows drawn before the rest is folded behind a button.
+ *
+ * Every line of a diff is a handful of DOM nodes, and a tool result carries up to
+ * 256 000 characters — a generated file or a wide refactor is thousands of lines built
+ * into a box that shows about twenty at a time. The cap is generous enough that a
+ * normal edit is never folded, and the fold is one click from the whole thing.
+ */
+const ROW_LIMIT = 400;
 
 const ROW_STYLE: Record<DiffRowKind, string> = {
   added: "border-l-success bg-success/10",
@@ -50,7 +61,11 @@ export const DiffView = memo(function DiffView({
   text: string;
   className?: string;
 }): JSX.Element {
-  const { rows, numberWidth } = parseDiff(text);
+  const { t } = useTranslation("common");
+  const [expanded, setExpanded] = useState(false);
+  const { rows, numberWidth } = useMemo(() => parseDiff(text), [text]);
+  const hidden = expanded ? 0 : Math.max(0, rows.length - ROW_LIMIT);
+  const shown = hidden > 0 ? rows.slice(0, ROW_LIMIT) : rows;
   return (
     <div
       className={cn(
@@ -58,7 +73,7 @@ export const DiffView = memo(function DiffView({
         className,
       )}
     >
-      {rows.map((row, index) => (
+      {shown.map((row, index) => (
         <div key={index} className={cn("flex w-max min-w-full border-l-2 border-l-transparent", ROW_STYLE[row.kind])}>
           {numberWidth > 0 ? <Gutter row={row} width={numberWidth} /> : null}
           <span aria-hidden className={cn("w-4 shrink-0 text-center select-none", MARKER_STYLE[row.kind])}>
@@ -67,6 +82,15 @@ export const DiffView = memo(function DiffView({
           <code className="block flex-1 whitespace-pre px-2">{row.text || " "}</code>
         </div>
       ))}
+      {hidden > 0 ? (
+        <button
+          type="button"
+          className="sticky bottom-0 block w-full border-t border-border bg-muted/60 px-2 py-1 text-left text-xs text-muted-foreground hover:text-foreground"
+          onClick={() => setExpanded(true)}
+        >
+          {t("diff.more", { count: hidden })}
+        </button>
+      ) : null}
     </div>
   );
 });

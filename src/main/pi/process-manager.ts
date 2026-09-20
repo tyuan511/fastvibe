@@ -1478,6 +1478,7 @@ export class PiProcessManager {
       this.#sessions.delete(id);
     }
     this.#clearBusy(id);
+    this.#clearConversationWidgets(id);
     this.#messageQueue.clear(id);
     this.#sdkQueueAdapters.delete(id);
     this.#queueDrainFaults.delete(id);
@@ -1507,6 +1508,7 @@ export class PiProcessManager {
     }
     // The session is gone, so no `agent_settled` will ever arrive for it.
     this.#clearBusy(id);
+    this.#clearConversationWidgets(id);
     // The replacement session republishes whatever it holds on `session_start`.
     this.#extensionStatuses.delete(id);
     if (this.#activeId === id) {
@@ -1530,7 +1532,7 @@ export class PiProcessManager {
   addProject(cwd: string): ProjectAddResult { const project = this.#catalog.ensureProject(cwd); if (!project) throw new Error("invalid project"); return { ...this.#catalog.snapshot(), project }; }
   renameProject(cwd: string, name: string): WorkspaceSnapshot { this.#catalog.renameProject(cwd, name); return this.#catalog.snapshot(); }
   reorderProjects(cwds: string[]): WorkspaceSnapshot { this.#catalog.reorderProjects(cwds); return this.#catalog.snapshot(); }
-  async removeProject(cwd: string): Promise<ConversationDeleteResult> { const wasActive = this.#catalog.get(this.#catalog.activeId ?? "")?.project === cwd; const removed = this.#catalog.removeProject(cwd); await Promise.all(removed.map(async (item) => { if (item.sessionFile) { await this.#usage.capture(item.sessionFile); await unlink(item.sessionFile).catch(() => undefined); } if (item.worktree) await this.#removeWorktree(item.worktree.path); const managed = this.#sessions.get(item.id); if (managed) { managed.unsubscribe(); await managed.session.dispose(); this.#sessions.delete(item.id); } this.#clearBusy(item.id); this.#extensionStatuses.delete(item.id); })); return { ...this.#catalog.snapshot(), nextId: wasActive ? (this.#catalog.activeId ?? null) : null }; }
+  async removeProject(cwd: string): Promise<ConversationDeleteResult> { const wasActive = this.#catalog.get(this.#catalog.activeId ?? "")?.project === cwd; const removed = this.#catalog.removeProject(cwd); await Promise.all(removed.map(async (item) => { if (item.sessionFile) { await this.#usage.capture(item.sessionFile); await unlink(item.sessionFile).catch(() => undefined); } if (item.worktree) await this.#removeWorktree(item.worktree.path); const managed = this.#sessions.get(item.id); if (managed) { managed.unsubscribe(); await managed.session.dispose(); this.#sessions.delete(item.id); } this.#clearBusy(item.id); this.#clearConversationWidgets(item.id); this.#extensionStatuses.delete(item.id); })); return { ...this.#catalog.snapshot(), nextId: wasActive ? (this.#catalog.activeId ?? null) : null }; }
   async loadMessages(conversationId?: string): Promise<ChatMessage[]> {
     const { id, session } = await this.#sessionFor(conversationId);
     return this.#messages(session, id);
@@ -3058,6 +3060,23 @@ export class PiProcessManager {
     return bucket ? Object.fromEntries(bucket) : {};
   }
 
+  /**
+   * Stop every widget this conversation was drawing.
+   *
+   * A component widget redraws on a one-second timer of its own, and the timer used
+   * to be cleared only when the extension took the widget down or the engine stopped
+   * — so a conversation that was deleted, re-homed, or (since the idle sweep) simply
+   * released kept a 1 Hz render running against a host that no longer exists. What is
+   * already on screen is deliberately left alone: a released session republishes its
+   * widgets when it comes back, and a deleted one has its bucket dropped by the client.
+   */
+  #clearConversationWidgets(conversationId: string): void {
+    const prefix = `${conversationId}:`;
+    for (const key of [...this.#widgetTimers.keys()]) {
+      if (key.startsWith(prefix)) this.#clearWidget(key);
+    }
+  }
+
   #clearWidget(key: string): void {
     const timer = this.#widgetTimers.get(key);
     if (timer) clearInterval(timer);
@@ -3449,6 +3468,7 @@ export class PiProcessManager {
     if (!managed) return;
     this.#sessions.delete(id);
     this.#sessionTouched.delete(id);
+    this.#clearConversationWidgets(id);
     managed.unsubscribe();
     // Flushed first: the SDK holds writes back until an assistant message exists, and
     // the file is all the reopened session will have to read.

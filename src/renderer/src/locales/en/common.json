@@ -171,5 +171,9 @@
   },
   "attachments": {
     "seeAttachments": "See the attachment"
+  },
+  "diff": {
+    "more_one": "{{count}} more line — show it",
+    "more_other": "{{count}} more lines — show them"
   }
 }

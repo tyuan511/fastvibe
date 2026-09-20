@@ -171,5 +171,9 @@
   },
   "attachments": {
     "seeAttachments": "请查看附件"
+  },
+  "diff": {
+    "more_one": "还有 {{count}} 行，点击展开",
+    "more_other": "还有 {{count}} 行，点击展开"
   }
 }
