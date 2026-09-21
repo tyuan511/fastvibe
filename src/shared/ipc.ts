@@ -74,6 +74,10 @@ export const Ipc = {
   conversationsDelete: "conversations:delete",
   conversationsRecordPrompt: "conversations:record-prompt",
   conversationsSetProject: "conversations:set-project",
+  conversationsCreateWorktree: "conversations:create-worktree",
+  conversationsBindWorktree: "conversations:bind-worktree",
+  conversationsUnbindWorktree: "conversations:unbind-worktree",
+  conversationsListWorktrees: "conversations:list-worktrees",
   conversationsSearch: "conversations:search",
   conversationReady: "conversations:ready",
   /**
@@ -255,6 +259,17 @@ export type GitStatus = {
 };
 
 export type GitBranch = { name: string; current: boolean; upstream?: string };
+
+export type GitWorktree = {
+  path: string;
+  branch?: string;
+  head?: string;
+  bare?: boolean;
+  detached?: boolean;
+  locked?: boolean;
+  /** This conversation's engine cwd. */
+  current?: boolean;
+};
 
 export type GitDiffSource = "unstaged" | "staged" | "branch" | "last-turn";
 

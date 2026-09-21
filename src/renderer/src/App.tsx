@@ -2146,6 +2146,7 @@ export function App(): JSX.Element {
                     key={`${activeId ?? ""}:${active?.cwd ?? ""}`}
                     cwd={active?.project ? active.cwd : undefined}
                     conversationId={activeId ?? undefined}
+                    worktree={active?.worktree}
                     refreshKey={conversationWorking}
                     canReview={!narrow}
                   />

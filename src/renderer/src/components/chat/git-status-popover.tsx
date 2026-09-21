@@ -24,7 +24,7 @@ import { useGitStatus } from "@/lib/use-git-status";
 import { useSidePaneStore } from "@/stores/side-pane";
 import type { GitStatus } from "@shared/ipc";
 
-type BusyAction = "generate" | "commit" | "commit-push" | "pull" | "push";
+type BusyAction = "generate" | "commit" | "commit-push" | "pull" | "push" | "unbind";
 
 /**
  * Persistent, lightweight repository status for the conversation header.
@@ -34,11 +34,13 @@ type BusyAction = "generate" | "commit" | "commit-push" | "pull" | "push";
 export function GitStatusPopover({
   cwd,
   conversationId,
+  worktree,
   refreshKey,
   canReview = true,
 }: {
   cwd?: string;
   conversationId?: string;
+  worktree?: { path: string; branch: string };
   refreshKey?: unknown;
   canReview?: boolean;
 }): JSX.Element | null {
@@ -93,6 +95,20 @@ export function GitStatusPopover({
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : fallback);
       return null;
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function unbindWorktree(): Promise<void> {
+    if (busy || !conversationId) return;
+    setBusy("unbind");
+    setError(null);
+    try {
+      await window.fastvibe.conversations.unbindWorktree(conversationId);
+      setOpen(false);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : t("git.unbindWorktreeFailed"));
     } finally {
       setBusy(null);
     }
@@ -177,7 +193,7 @@ export function GitStatusPopover({
         <div className="px-2 py-2">
           <div className="flex items-center gap-2">
             <HugeiconsIcon strokeWidth={2} icon={GitBranchIcon} className="size-3.5 shrink-0 text-muted-foreground" />
-            <span className="min-w-0 flex-1 truncate text-sm font-semibold" title={status.branch}>{status.branch}</span>
+            <span className="min-w-0 flex-1 truncate text-sm font-semibold" title={worktree ? `${status.branch} · ${worktree.path}` : status.branch}>{status.branch}</span>
             <div className="flex shrink-0 items-center gap-0.5 rounded-lg bg-muted/50 p-0.5">
               <IconButton
                 type="button"
@@ -215,8 +231,25 @@ export function GitStatusPopover({
               {changeSummary}
             </div>
           )}
+          {worktree ? (
+            <div className="mt-1 flex items-center gap-2 pl-5.5">
+              <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground" title={worktree.path}>
+                {t("git.worktree")}: {worktree.path}
+              </span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                className="h-6 shrink-0 px-1.5 text-xs font-normal"
+                disabled={Boolean(busy) || !conversationId}
+                onClick={() => void unbindWorktree()}
+              >
+                {busy === "unbind" ? <Spinner className="size-3" /> : null}
+                {t("git.unbindWorktree")}
+              </Button>
+            </div>
+          ) : null}
         </div>
-
 
         <div className="mt-1 flex items-center gap-2 px-2 pb-2">
           <div className="relative min-w-0 flex-1">

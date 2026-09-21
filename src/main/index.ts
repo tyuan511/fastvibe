@@ -617,6 +617,18 @@ function registerIpc(): void {
   handle(Ipc.conversationsSetProject, async (payload: { id: string; project: string | null }) => {
     return engine.setConversationProject(payload.id, payload.project);
   });
+  handle(Ipc.conversationsCreateWorktree, async (payload: { id: string; path?: string; branch?: string; label?: string }) => {
+    return engine.createConversationWorktree(payload.id, payload);
+  });
+  handle(Ipc.conversationsBindWorktree, async (payload: { id: string; path: string }) => {
+    return engine.bindConversationWorktree(payload.id, payload.path);
+  });
+  handle(Ipc.conversationsUnbindWorktree, async (payload: { id: string; remove?: boolean }) => {
+    return engine.unbindConversationWorktree(payload.id, payload);
+  });
+  handle(Ipc.conversationsListWorktrees, async (payload: { id: string }) => {
+    return engine.listConversationWorktrees(payload.id);
+  });
   handle(Ipc.projectsAdd, async () => {
     const result = await dialog.showOpenDialog({
       title: uiText("打开项目", "Open project"),

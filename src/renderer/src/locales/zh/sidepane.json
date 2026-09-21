@@ -162,7 +162,10 @@
     "stageFailed": "暂存失败",
     "unstageFailed": "取消暂存失败",
     "discardFailed": "丢弃失败",
-    "commitFailed": "提交失败"
+    "commitFailed": "提交失败",
+    "worktree": "隔离工作区",
+    "unbindWorktree": "回到项目",
+    "unbindWorktreeFailed": "解除工作区绑定失败"
   },
   "gitDialog": {
     "title": "工作区变更",

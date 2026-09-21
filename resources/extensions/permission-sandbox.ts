@@ -39,13 +39,25 @@ function modeDescription(mode: PermissionMode): string {
 }
 
 /** Tools with no side effects; they are never worth a confirmation. */
-const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls", "todo"]);
+const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls", "todo", "worktree_list"]);
 
 /** Built-in network lookup; `ask` confirms it, `smart` does not. */
 const NETWORK_TOOLS = new Set(["web_search"]);
 
 /** Built-in tools this extension knows how to classify. */
-const KNOWN_TOOLS = new Set(["read", "write", "edit", "bash", "powershell", "grep", "find", "ls"]);
+const KNOWN_TOOLS = new Set([
+  "read",
+  "write",
+  "edit",
+  "bash",
+  "powershell",
+  "grep",
+  "find",
+  "ls",
+  "worktree_create",
+  "worktree_bind",
+  "worktree_unbind",
+]);
 
 /**
  * Cua-driven desktop control, split by whether the call changes anything.

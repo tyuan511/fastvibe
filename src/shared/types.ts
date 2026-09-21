@@ -1012,6 +1012,7 @@ export type Conversation = {
    * foreign session is recognisable instead of silently duplicating it.
    */
   importedFrom?: { source: ImportSourceId; sourceId: string };
+  /** Isolated git worktree this conversation's engine cwd is bound to. */
   worktree?: { path: string; branch: string };
   /** Hidden from the left sidebar; lives in the right side pane. */
   kind?: "side-chat";

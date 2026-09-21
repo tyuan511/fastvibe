@@ -190,7 +190,19 @@ export class ConversationCatalog {
   setProject(id: string, project: string | undefined): Conversation | undefined {
     const bound = normalizeProject(project);
     if (bound) this.ensureProject(bound);
-    return this.update(id, { project: bound, cwd: bound ?? this.#scratchRoot });
+    return this.update(id, { project: bound, cwd: bound ?? this.#scratchRoot, worktree: undefined });
+  }
+
+  /** Point the engine cwd at a git worktree, or restore it to the bound project. */
+  setWorktree(id: string, worktree: { path: string; branch: string } | undefined, project?: string): Conversation | undefined {
+    const current = this.get(id);
+    if (!current) return undefined;
+    const bound = normalizeProject(project) ?? current.project;
+    if (bound) this.ensureProject(bound);
+    if (worktree) {
+      return this.update(id, { project: bound, cwd: worktree.path, worktree });
+    }
+    return this.update(id, { project: bound, cwd: bound ?? this.#scratchRoot, worktree: undefined });
   }
 
   update(id: string, patch: Partial<Conversation>): Conversation | undefined {
@@ -201,8 +213,11 @@ export class ConversationCatalog {
     const next = { ...current, ...patch, id, createdAt: current.createdAt, updatedAt: Date.now() };
     if ("project" in patch) {
       next.project = normalizeProject(patch.project);
-      next.cwd = next.project ?? this.#scratchRoot;
-    } else if (!next.cwd) {
+      // An explicit cwd wins: binding a worktree sets `project` *and* a checkout that
+      // is not the project path. Only fill cwd from the project when the caller left it alone.
+      if (!("cwd" in patch)) next.cwd = next.project ?? this.#scratchRoot;
+    }
+    if (!next.cwd) {
       next.cwd = next.project ?? this.#scratchRoot;
     }
     this.#items[index] = next;

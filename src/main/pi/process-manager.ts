@@ -1,8 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
-import { unlink } from "node:fs/promises";
-import { join } from "node:path";
+import { existsSync } from "node:fs";
+import { mkdir, unlink } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { InMemoryModelsStore, type AuthPrompt } from "@earendil-works/pi-ai";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
@@ -83,6 +84,14 @@ import { ReasoningStore } from "../engine/reasoning-store";
 import { captureCheckpoint, clearCheckpoint, readBefore, readCheckpoint, restoreCheckpoint, saveCheckpoints, loadCheckpoints, checkpointFile, type CheckpointFile } from "../engine/checkpoint";
 import { usageLedgerFor, type UsageLedger } from "../engine/usage-ledger";
 import { cwdUsesWorktree, forkPreview, selectForkEntries, SessionForkError, writeForkSession } from "../engine/session-fork";
+import {
+  defaultWorktreePath,
+  expandUserPath,
+  isManagedWorktreePath,
+  parseWorktreePorcelain,
+  sanitizeSegment,
+  type GitWorktreeInfo,
+} from "../engine/worktree";
 import { MessageQueueStore, SdkQueueClaims, type StoredQueuedPrompt } from "../engine/message-queue";
 import { installSdkQueueAdapter, type SdkQueueAdapter } from "./sdk-queue-adapter";
 import {
@@ -133,6 +142,17 @@ type FastVibeExtensionUIContext = ExtensionUIContext & {
    * no `pi` CLI to spawn (see `resources/extensions/subagent/index.ts`).
    */
   runSubagent(request: SubagentHostRequest): Promise<SubagentHostResponse>;
+  createWorktree(options?: { path?: string; branch?: string; label?: string }): Promise<WorktreeHostResult>;
+  bindWorktree(path: string): Promise<WorktreeHostResult>;
+  unbindWorktree(options?: { remove?: boolean }): Promise<{ cwd: string }>;
+  listWorktrees(): Promise<GitWorktreeInfo[]>;
+};
+
+type WorktreeHostResult = {
+  path: string;
+  branch: string;
+  cwd: string;
+  rebound: boolean;
 };
 
 type SubagentHostUsage = {
@@ -567,6 +587,8 @@ export class PiProcessManager {
   #queuedSdkMessages = new SdkQueueClaims();
   /** Terminal verdict held until `agent_settled`, when queued work may drain. */
   #interruptedRuns = new Map<string, "stopped" | "error">();
+  /** Sessions whose catalog cwd changed mid-run; rebound once the turn settles. */
+  #pendingCwdRebind = new Set<string>();
   #interruptMode: "immediate" | "wait" = "immediate";
   #mcp: McpManager;
   #skills: SkillManager;
@@ -1475,7 +1497,9 @@ export class PiProcessManager {
       await this.#usage.capture(removed.sessionFile);
       await unlink(removed.sessionFile).catch(() => undefined);
     }
-    if (removed?.worktree) await this.#removeWorktree(removed.worktree.path);
+    if (removed?.worktree && this.#ownsWorktree(removed.worktree.path)) {
+      await this.#removeWorktree(removed.worktree.path, removed.project);
+    }
     const managed = this.#sessions.get(id);
     if (managed) {
       managed.unsubscribe();
@@ -1489,6 +1513,7 @@ export class PiProcessManager {
     this.#queueDrainFaults.delete(id);
     this.#queueOperations.delete(id);
     this.#interruptedRuns.delete(id);
+    this.#pendingCwdRebind.delete(id);
     this.#timing.delete(id);
     this.#extensionStatuses.delete(id);
     // A deleted chat's parked prompts must be settled: nothing will ever answer them,
@@ -1504,7 +1529,9 @@ export class PiProcessManager {
     const before = this.#catalog.get(id);
     const updated = this.#catalog.setProject(id, project ?? undefined);
     if (!updated || before?.cwd === updated.cwd) return this.#catalog.snapshot();
-    if (before?.worktree) await this.#removeWorktree(before.worktree.path);
+    if (before?.worktree && this.#ownsWorktree(before.worktree.path)) {
+      await this.#removeWorktree(before.worktree.path, before.project);
+    }
     const managed = this.#sessions.get(id);
     if (managed) {
       managed.unsubscribe();
@@ -1514,6 +1541,7 @@ export class PiProcessManager {
     // The session is gone, so no `agent_settled` will ever arrive for it.
     this.#clearBusy(id);
     this.#clearConversationWidgets(id);
+    this.#pendingCwdRebind.delete(id);
     // The replacement session republishes whatever it holds on `session_start`.
     this.#extensionStatuses.delete(id);
     if (this.#activeId === id) {
@@ -1522,6 +1550,21 @@ export class PiProcessManager {
       this.#activate(reopened);
     }
     return this.#catalog.snapshot();
+  }
+  async createConversationWorktree(id: string, options?: { path?: string; branch?: string; label?: string }): Promise<WorkspaceSnapshot> {
+    await this.#hostCreateWorktree(id, options);
+    return this.#catalog.snapshot();
+  }
+  async bindConversationWorktree(id: string, path: string): Promise<WorkspaceSnapshot> {
+    await this.#hostBindWorktree(id, path);
+    return this.#catalog.snapshot();
+  }
+  async unbindConversationWorktree(id: string, options?: { remove?: boolean }): Promise<WorkspaceSnapshot> {
+    await this.#hostUnbindWorktree(id, options);
+    return this.#catalog.snapshot();
+  }
+  async listConversationWorktrees(id: string): Promise<GitWorktreeInfo[]> {
+    return this.#listGitWorktrees(id);
   }
   recordPrompt(id: string, text: string): WorkspaceSnapshot {
     const preview = text.trim().slice(0, 80);
@@ -1537,7 +1580,7 @@ export class PiProcessManager {
   addProject(cwd: string): ProjectAddResult { const project = this.#catalog.ensureProject(cwd); if (!project) throw new Error("invalid project"); return { ...this.#catalog.snapshot(), project }; }
   renameProject(cwd: string, name: string): WorkspaceSnapshot { this.#catalog.renameProject(cwd, name); return this.#catalog.snapshot(); }
   reorderProjects(cwds: string[]): WorkspaceSnapshot { this.#catalog.reorderProjects(cwds); return this.#catalog.snapshot(); }
-  async removeProject(cwd: string): Promise<ConversationDeleteResult> { const wasActive = this.#catalog.get(this.#catalog.activeId ?? "")?.project === cwd; const removed = this.#catalog.removeProject(cwd); await Promise.all(removed.map(async (item) => { if (item.sessionFile) { await this.#usage.capture(item.sessionFile); await unlink(item.sessionFile).catch(() => undefined); } if (item.worktree) await this.#removeWorktree(item.worktree.path); const managed = this.#sessions.get(item.id); if (managed) { managed.unsubscribe(); await managed.session.dispose(); this.#sessions.delete(item.id); } this.#clearBusy(item.id); this.#clearConversationWidgets(item.id); this.#extensionStatuses.delete(item.id); })); return { ...this.#catalog.snapshot(), nextId: wasActive ? (this.#catalog.activeId ?? null) : null }; }
+  async removeProject(cwd: string): Promise<ConversationDeleteResult> { const wasActive = this.#catalog.get(this.#catalog.activeId ?? "")?.project === cwd; const removed = this.#catalog.removeProject(cwd); await Promise.all(removed.map(async (item) => { if (item.sessionFile) { await this.#usage.capture(item.sessionFile); await unlink(item.sessionFile).catch(() => undefined); } if (item.worktree && this.#ownsWorktree(item.worktree.path)) await this.#removeWorktree(item.worktree.path, item.project); const managed = this.#sessions.get(item.id); if (managed) { managed.unsubscribe(); await managed.session.dispose(); this.#sessions.delete(item.id); } this.#clearBusy(item.id); this.#clearConversationWidgets(item.id); this.#extensionStatuses.delete(item.id); })); return { ...this.#catalog.snapshot(), nextId: wasActive ? (this.#catalog.activeId ?? null) : null }; }
   async loadMessages(conversationId?: string): Promise<ChatMessage[]> {
     const { id, session } = await this.#sessionFor(conversationId);
     return this.#messages(session, id);
@@ -2085,23 +2128,163 @@ export class PiProcessManager {
     return { cancelled: false };
   }
 
-  /**
-   * Worktree isolation is kept even though its only caller (the parallel-run
-   * dialog) is gone: `Conversation.worktree` and `#removeWorktree` still clean up
-   * conversations an earlier build isolated, so new creation stays next to them.
-   */
-  async #createWorktree(project: string, id: string, label: string): Promise<{ path: string; branch: string }> {
-    const root = (await execFileAsync("git", ["-C", project, "rev-parse", "--show-toplevel"], { timeout: 5000 })).stdout.trim();
+  #ownsWorktree(path: string): boolean {
+    return isManagedWorktreePath(path, [this.#paths.worktreesDir]);
+  }
+
+  async #gitToplevel(cwd: string): Promise<string> {
+    const root = (await execFileAsync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], { timeout: 5000 })).stdout.trim();
     if (!root) throw new Error(uiText("无法识别 Git 项目", "Not a Git project"));
-    const safe = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 32) || "run";
-    const branch = `fastvibe/${safe}-${id.slice(0, 8)}`;
-    const path = join(this.#paths.worktreesDir, `${safe}-${id.slice(0, 8)}`);
-    await execFileAsync("git", ["-C", root, "worktree", "add", "-b", branch, path, "HEAD"], { timeout: 30000, maxBuffer: 128 * 1024 });
+    return root;
+  }
+
+  async #gitCommonRoot(cwd: string): Promise<string> {
+    const raw = (await execFileAsync("git", ["-C", cwd, "rev-parse", "--git-common-dir"], { timeout: 5000 })).stdout.trim();
+    if (!raw) throw new Error(uiText("无法识别 Git 项目", "Not a Git project"));
+    const common = isAbsolute(raw) ? raw : resolve(cwd, raw);
+    return common.endsWith(".git") ? dirname(common) : await this.#gitToplevel(cwd);
+  }
+
+  async #gitBranch(cwd: string): Promise<string> {
+    const branch = (await execFileAsync("git", ["-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"], { timeout: 5000 })).stdout.trim();
+    return branch && branch !== "HEAD" ? branch : "HEAD";
+  }
+
+  async #branchExists(root: string, branch: string): Promise<boolean> {
+    try {
+      await execFileAsync("git", ["-C", root, "show-ref", "--verify", "--quiet", `refs/heads/${branch}`], { timeout: 5000 });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async #createGitWorktree(project: string, id: string, options?: { path?: string; branch?: string; label?: string }): Promise<{ path: string; branch: string }> {
+    const root = await this.#gitToplevel(project);
+    const projectName = basename(root);
+    const safe = sanitizeSegment(options?.label || options?.branch || "run") || "run";
+    const branch = (options?.branch?.trim() || `fastvibe/${safe}-${id.slice(0, 8)}`).replace(/^\/+/, "");
+    if (!branch || branch.startsWith("-") || branch.includes("\0") || /\s/.test(branch)) {
+      throw new Error(uiText("分支名称无效", "Invalid branch name"));
+    }
+    let path = options?.path?.trim()
+      ? expandUserPath(options.path)
+      : defaultWorktreePath(projectName, `${safe}-${id.slice(0, 8)}`);
+    if (existsSync(path)) {
+      if (options?.path?.trim()) throw new Error(uiText("该路径已存在", "That path already exists"));
+      path = `${path}-${id.slice(0, 8)}`;
+    }
+    await mkdir(dirname(path), { recursive: true });
+    const exists = await this.#branchExists(root, branch);
+    if (exists) {
+      await execFileAsync("git", ["-C", root, "worktree", "add", path, branch], { timeout: 30000, maxBuffer: 128 * 1024 });
+    } else {
+      await execFileAsync("git", ["-C", root, "worktree", "add", "-b", branch, path, "HEAD"], { timeout: 30000, maxBuffer: 128 * 1024 });
+    }
     return { path, branch };
   }
 
-  async #removeWorktree(path: string): Promise<void> {
-    await execFileAsync("git", ["-C", path, "worktree", "remove", "--force", path], { timeout: 30000, maxBuffer: 128 * 1024 }).catch(() => undefined);
+  async #removeWorktree(path: string, project?: string): Promise<void> {
+    const root = project && existsSync(project) ? project : path;
+    await execFileAsync("git", ["-C", root, "worktree", "remove", "--force", path], { timeout: 30000, maxBuffer: 128 * 1024 }).catch(() => undefined);
+  }
+
+  async #listGitWorktrees(conversationId: string): Promise<GitWorktreeInfo[]> {
+    const conversation = this.#catalog.get(conversationId);
+    const cwd = conversation?.cwd || conversation?.project;
+    if (!cwd) return [];
+    try {
+      const { stdout } = await execFileAsync("git", ["-C", cwd, "worktree", "list", "--porcelain"], { timeout: 5000, maxBuffer: 256 * 1024 });
+      const cwdResolved = conversation?.cwd ? resolve(conversation.cwd) : "";
+      return parseWorktreePorcelain(stdout).map((item) => ({
+        ...item,
+        current: Boolean(cwdResolved) && resolve(item.path) === cwdResolved,
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  async #applyWorktree(id: string, worktree: { path: string; branch: string } | undefined, project?: string): Promise<WorktreeHostResult> {
+    const updated = this.#catalog.setWorktree(id, worktree, project);
+    if (!updated) throw new Error(uiText("找不到会话", "Conversation not found"));
+    const rebound = await this.#rebindSessionCwd(id);
+    return { path: updated.cwd, branch: updated.worktree?.branch || worktree?.branch || "", cwd: updated.cwd, rebound };
+  }
+
+  async #rebindSessionCwd(id: string): Promise<boolean> {
+    const conversation = this.#catalog.get(id);
+    if (!conversation) return false;
+    const managed = this.#sessions.get(id);
+    if (managed && managed.cwd === conversation.cwd) return true;
+    if (managed?.session.isStreaming || managed?.session.isCompacting) {
+      this.#pendingCwdRebind.add(id);
+      return false;
+    }
+    if (managed) {
+      managed.unsubscribe();
+      await managed.session.dispose();
+      this.#sessions.delete(id);
+    }
+    this.#pendingCwdRebind.delete(id);
+    if (this.#activeId === id) {
+      await this.#ensureReady();
+      const reopened = await this.#ensureSession(conversation);
+      this.#activate(reopened);
+    }
+    return !this.#sessions.has(id) || this.#sessions.get(id)?.cwd === conversation.cwd;
+  }
+
+  async #hostCreateWorktree(id: string, options?: { path?: string; branch?: string; label?: string }): Promise<WorktreeHostResult> {
+    const conversation = this.#catalog.get(id);
+    if (!conversation) throw new Error(uiText("找不到会话", "Conversation not found"));
+    if (conversation.worktree) {
+      throw new Error(uiText("当前会话已绑定隔离工作区，请先解除绑定再创建", "This conversation already has an isolated workspace; unbind it first"));
+    }
+    const project = conversation.project;
+    if (!project) throw new Error(uiText("请先绑定一个 Git 项目", "Bind a Git project first"));
+    const created = await this.#createGitWorktree(project, id, {
+      ...options,
+      label: options?.label || conversation.title,
+    });
+    return this.#applyWorktree(id, created, project);
+  }
+
+  async #hostBindWorktree(id: string, rawPath: string): Promise<WorktreeHostResult> {
+    const conversation = this.#catalog.get(id);
+    if (!conversation) throw new Error(uiText("找不到会话", "Conversation not found"));
+    const path = expandUserPath(rawPath);
+    if (!path || !existsSync(path)) throw new Error(uiText("工作区路径不存在", "Worktree path does not exist"));
+    const toplevel = await this.#gitToplevel(path);
+    const project = await this.#gitCommonRoot(path);
+    if (conversation.project && resolve(conversation.project) !== resolve(project) && resolve(conversation.project) !== resolve(toplevel)) {
+      const sameRepo = await this.#gitCommonRoot(conversation.project).then(
+        (root) => resolve(root) === resolve(project),
+        () => false,
+      );
+      if (!sameRepo) throw new Error(uiText("该工作区不属于当前项目", "That worktree does not belong to this project"));
+    }
+    if (conversation.worktree && resolve(conversation.worktree.path) !== resolve(path)) {
+      this.#catalog.setWorktree(id, undefined, conversation.project);
+    }
+    const branch = await this.#gitBranch(path);
+    return this.#applyWorktree(id, { path: toplevel, branch }, conversation.project || project);
+  }
+
+  async #hostUnbindWorktree(id: string, options?: { remove?: boolean }): Promise<{ cwd: string }> {
+    const conversation = this.#catalog.get(id);
+    if (!conversation) throw new Error(uiText("找不到会话", "Conversation not found"));
+    const previous = conversation.worktree;
+    if (!previous) {
+      const cwd = conversation.project || conversation.cwd;
+      return { cwd };
+    }
+    const updated = this.#catalog.setWorktree(id, undefined, conversation.project);
+    if (options?.remove && this.#ownsWorktree(previous.path)) {
+      await this.#removeWorktree(previous.path, conversation.project);
+    }
+    await this.#rebindSessionCwd(id);
+    return { cwd: updated?.cwd || conversation.project || this.#paths.scratchDir };
   }
 
   async #reloadSkills(): Promise<void> {
@@ -2372,6 +2555,10 @@ export class PiProcessManager {
           this.#emitQueue(conversation.id);
         } else if (!interrupted) {
           this.#scheduleQueueDrain(conversation.id);
+        }
+        if (this.#pendingCwdRebind.has(conversation.id)) {
+          this.#pendingCwdRebind.delete(conversation.id);
+          void this.#rebindSessionCwd(conversation.id).catch(() => undefined);
         }
       }
       // A user turn has no id of its own; the session entry that stores it does.
@@ -3382,6 +3569,10 @@ export class PiProcessManager {
       planReview: (plan) =>
         dialog<{ action: "approve" | "revise" | "ignore"; value?: string }>("plan_review", { plan }, { action: "ignore" }, 30 * 60_000),
       runSubagent: (request) => this.#runSubagent(conversationId, request),
+      createWorktree: (options) => this.#hostCreateWorktree(conversationId, options),
+      bindWorktree: (path) => this.#hostBindWorktree(conversationId, path),
+      unbindWorktree: (options) => this.#hostUnbindWorktree(conversationId, options),
+      listWorktrees: () => this.#listGitWorktrees(conversationId),
       // 需求批准 has no timeout of its own, and an unanswered prompt parks the tool (and
       // the run's settle) forever. A generous default keeps a background chat from
       // hanging for the rest of the session while still leaving the user time to answer

@@ -53,6 +53,7 @@ import type {
   GitBranch,
   GitDiffSource,
   GitStatus,
+  GitWorktree,
   TerminalDataEvent,
   WindowChromeState,
   TerminalSessionInfo,
@@ -316,6 +317,14 @@ export function createFastVibeApi(t: ApiTransport) {
         t.invoke(Ipc.conversationsRecordPrompt, { id, text }),
       setProject: (id: string, project: string | null): Promise<WorkspaceSnapshot> =>
         t.invoke(Ipc.conversationsSetProject, { id, project }),
+      createWorktree: (id: string, options?: { path?: string; branch?: string; label?: string }): Promise<WorkspaceSnapshot> =>
+        t.invoke(Ipc.conversationsCreateWorktree, { id, ...options }),
+      bindWorktree: (id: string, path: string): Promise<WorkspaceSnapshot> =>
+        t.invoke(Ipc.conversationsBindWorktree, { id, path }),
+      unbindWorktree: (id: string, options?: { remove?: boolean }): Promise<WorkspaceSnapshot> =>
+        t.invoke(Ipc.conversationsUnbindWorktree, { id, ...options }),
+      listWorktrees: (id: string): Promise<GitWorktree[]> =>
+        t.invoke(Ipc.conversationsListWorktrees, { id }),
       createSide: (payload: { project?: string; parentId?: string; title?: string }): Promise<ConversationOpenResult> =>
         t.invoke(Ipc.conversationsCreateSide, payload),
       search: (query: string): Promise<ConversationSearchHit[]> =>

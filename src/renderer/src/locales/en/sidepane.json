@@ -162,7 +162,10 @@
     "stageFailed": "Stage failed",
     "unstageFailed": "Unstage failed",
     "discardFailed": "Discard failed",
-    "commitFailed": "Commit failed"
+    "commitFailed": "Commit failed",
+    "worktree": "Worktree",
+    "unbindWorktree": "Back to project",
+    "unbindWorktreeFailed": "Could not unbind the worktree"
   },
   "gitDialog": {
     "title": "Workspace changes",
