@@ -6,6 +6,7 @@ import { uiText } from "../engine/ui-text";
 import { readComputerSettings } from "../engine/app-settings";
 import { unpackedPath } from "../engine/asar-unpacked";
 import { getFastVibePaths } from "../engine/paths";
+import { resolveComputerAvailability } from "@shared/computer-availability";
 import type { ComputerAppInfo, ComputerPermissionStatus, ComputerRequest, ComputerResult } from "@shared/types";
 
 /**
@@ -138,9 +139,29 @@ export async function computerPermissions(): Promise<ComputerPermissionStatus> {
       error: error instanceof Error ? error.message : String(error),
     };
   }
+  const availability = resolveComputerAvailability(process.platform, false);
+  if (!availability.supported) {
+    // Decided up front rather than discovered at the first tool call. `available: false`
+    // is what tells Settings to explain the machine instead of offering a grant button
+    // that cannot lead anywhere.
+    return {
+      platform: process.platform,
+      accessibility: false,
+      screenRecording: false,
+      ready: false,
+      available: false,
+      error:
+        availability.kind === "local-linux"
+          ? uiText(
+              "Linux 下的电脑操控依赖随桌面合成器而异的组件，本应用未附带，因此未开放。",
+              "Computer control on Linux depends on compositor-specific components this app does not ship, so it is not offered.",
+            )
+          : uiText("当前环境不支持电脑操控。", "Computer control is not supported in this environment."),
+    };
+  }
   if (process.platform !== "darwin") {
-    // Windows and Linux need no TCC-style grant; the driver either works or reports
-    // its own platform error on first use.
+    // Windows needs no TCC-style grant; the driver either works or reports its own
+    // platform error on first use.
     return {
       platform: process.platform,
       accessibility: true,

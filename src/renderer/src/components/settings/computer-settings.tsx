@@ -22,13 +22,25 @@ import { cn } from "@/lib/utils";
  * the macOS grant cannot be completed from inside this app at all — the pane's job is to
  * open the right pane of System Settings and hand the user something to drop into it.
  */
+/**
+ * Last known grant state, kept for the life of the renderer.
+ *
+ * Deliberately module-level rather than in the store: it is a fact about the machine
+ * that Main can answer at any time, not a preference worth persisting, and its only job
+ * is to stop a remount from rendering "unknown" before the answer arrives.
+ */
+let lastStatus: ComputerPermissionStatus | null = null;
+
 export function ComputerSettings(): JSX.Element {
   const { t } = useTranslation("settings");
   const settings = useSettingsStore((state) => state.settings);
   const save = useSettingsStore((state) => state.update);
 
-  const [status, setStatus] = useState<ComputerPermissionStatus | null>(null);
-  const [checking, setChecking] = useState(true);
+  // Seeded from the module-level cache: the grant state is a low-frequency fact, and
+  // re-entering this pane should render the last answer rather than flashing "checking"
+  // and settling on the same result a moment later.
+  const [status, setStatus] = useState<ComputerPermissionStatus | null>(lastStatus);
+  const [checking, setChecking] = useState(lastStatus === null);
   const [apps, setApps] = useState<ComputerAppInfo[] | null>(null);
   const [appsLoading, setAppsLoading] = useState(false);
 
@@ -39,11 +51,17 @@ export function ComputerSettings(): JSX.Element {
       setChecking(false);
       return;
     }
-    setChecking(true);
+    // Only the first read shows a spinner. A refresh that already has an answer to
+    // display must not take it away and put it back — that is what made the grant
+    // button flicker between "open System Settings" and "checking…".
+    if (lastStatus === null) setChecking(true);
     try {
-      setStatus(await window.fastvibe.computer.permissions());
+      const next = await window.fastvibe.computer.permissions();
+      lastStatus = next;
+      setStatus(next);
     } catch {
-      setStatus(null);
+      // Keep whatever was on screen. A transient failure is not evidence that the
+      // permissions went away.
     } finally {
       setChecking(false);
     }

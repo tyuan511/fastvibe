@@ -30,6 +30,8 @@ import { computerPermissions, requestComputerPermissions } from "./cua-bridge";
 
 let overlay: BrowserWindow | null = null;
 let timer: NodeJS.Timeout | undefined;
+/** When the current step's polling gives up. See `GIVE_UP_MS`. */
+let deadline = 0;
 /** Steps still to do. The head is the step the panel is currently showing. */
 let queue: GrantPermission[] = [];
 let total = 0;
@@ -40,6 +42,17 @@ const HEIGHT = 86;
 
 /** Screen Recording first; see the restart note above. */
 const ORDER: readonly GrantPermission[] = ["screenRecording", "accessibility"];
+
+/**
+ * How long one step waits before the flow gives up.
+ *
+ * Polling exists to notice a toggle flipped in another application; it is not a thing
+ * to leave running because the user wandered off. Without a deadline a panel and a
+ * 1.5-second timer outlive the intent that started them, for the rest of the session.
+ * Five minutes is far longer than the gesture takes and short enough to be self-
+ * correcting. The user can always press 开始授权 again.
+ */
+const GIVE_UP_MS = 5 * 60 * 1_000;
 
 /** The Privacy & Security anchors each permission's list lives behind. */
 const PANE: Record<GrantPermission, string> = {
@@ -172,6 +185,7 @@ function closeOverlay(): void {
  */
 function startPolling(): void {
   stopPolling();
+  deadline = Date.now() + GIVE_UP_MS;
   timer = setInterval(() => {
     void tick();
   }, 1_500);
@@ -180,6 +194,12 @@ function startPolling(): void {
 async function tick(): Promise<void> {
   const permission = queue[0];
   if (!permission) return;
+  if (Date.now() > deadline) {
+    // Silently: the panel disappearing is the message, and a dialog about a flow the
+    // user already walked away from is an interruption about an interruption.
+    cancelGrantFlow();
+    return;
+  }
   const status = await computerPermissions();
   if (!status[permission]) return;
   queue = queue.slice(1);
@@ -190,6 +210,9 @@ async function tick(): Promise<void> {
     publish();
     return;
   }
+  // A granted step is progress, so the next one starts its own budget rather than
+  // inheriting what is left of the first one's.
+  deadline = Date.now() + GIVE_UP_MS;
   await advance();
   publish();
 }
