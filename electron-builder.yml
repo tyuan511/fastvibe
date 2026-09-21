@@ -116,15 +116,14 @@ mac:
     # runners, which may not have clipboard-darwin-x64 installed). Drop the
     # other arch's package; the loader tries universal first, then ${arch}.
     - "!**/node_modules/@mariozechner/clipboard-darwin-!(${arch}|universal){,/**/*}"
+  # No `arch:` here on purpose. `computeArchToTargetNamesMap` only falls back to the
+  # architectures named on the command line when a target declares none of its own
+  # (`archs == null ? defaultArchs : asArray(archs)`), so listing them here made
+  # `--arm64` and `--x64` silently do nothing and every mac job built both. The
+  # release workflow packages one architecture per job; `pnpm dist:mac` asks for both.
   target:
-    - target: dmg
-      arch:
-        - arm64
-        - x64
-    - target: zip
-      arch:
-        - arm64
-        - x64
+    - dmg
+    - zip
 
 win:
   icon: resources/icon.png

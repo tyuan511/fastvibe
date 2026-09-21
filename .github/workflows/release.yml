@@ -87,6 +87,33 @@ jobs:
           printf '%s' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/private_keys/AuthKey.p8"
           chmod 600 "$RUNNER_TEMP/private_keys/AuthKey.p8"
 
+      # electron-builder imports the certificate into a temporary keychain of its
+      # own and tears that keychain down when it finishes — so by the time the dmg
+      # exists there is no identity left to sign it with, and `notarize-dmg.mjs`
+      # fails with "no identity found". This keychain belongs to the job and
+      # outlives the packaging step.
+      - name: Prepare signing keychain
+        if: matrix.platform == 'mac' && env.APPLE_CERT_P12 != ''
+        env:
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password="$(openssl rand -base64 24)"
+          printf '%s' "$APPLE_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$password" "$keychain"
+          # Without this the keychain re-locks on a timer mid-build and signing fails
+          # with an error that names neither the keychain nor the lock.
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" \
+            -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
+          # Lets codesign use the key without a UI prompt nobody is there to answer.
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security find-identity -v -p codesigning "$keychain"
+
       # Two steps so Windows never sees a bash script (the runner's default
       # shell is pwsh). Empty CSC_LINK is also not "unset": electron-builder
       # treats it as a file path and fails against the repo root.
