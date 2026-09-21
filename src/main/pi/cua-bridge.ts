@@ -574,34 +574,40 @@ function optionalTarget(module: DriverModule, request: ComputerRequest) {
 /**
  * What a screenshot is allowed to cost before it reaches a model.
  *
- * Two ceilings, because they bound different things. The dimension governs what the
- * model actually pays for: vision models resize what they are given to their own working
- * resolution — around 1568px on the long edge for the current generation — so a 3360px
- * Retina capture spends four and a half times the pixels that survive. The byte ceiling
- * governs everything else the image touches on the way: the socket, the transcript it is
- * stored in, and every later turn that carries it.
+ * The dimension governs what the model pays for: vision models resize what they are
+ * given to their own working resolution — around 1568px on the long edge for the current
+ * generation — so a 3360px Retina capture spends four and a half times the pixels that
+ * survive. The byte ceiling governs everything else the image touches: the request body,
+ * the transcript it is stored in, and every later turn that carries it there.
+ *
+ * The byte ceiling is the one that bites. A transcript resends its whole history, so
+ * screenshots accumulate across turns, and a provider answers the sum with a 413 rather
+ * than a message about any single image.
  *
  * ZCode budgets images the same way and adds a token ceiling derived from base64 length.
- * That is deliberately not copied: for an *image* the proxy is wrong by an order of
- * magnitude — vision tokens scale with pixel area, not with encoded size — so it would
- * over-compress screenshots to satisfy a number that never applied to them. The
- * dimension cap is the honest expression of the same intent.
+ * That is deliberately not copied: for an image the proxy is wrong by an order of
+ * magnitude — vision tokens scale with pixel area, not encoded size — so it would
+ * over-compress to satisfy a number that never described screenshots.
  */
 const MAX_IMAGE_EDGE = 1568;
-const MAX_IMAGE_BYTES = 600 * 1024;
+const MAX_IMAGE_BYTES = 200 * 1024;
 /** What Cua's own Claude-Code compatibility mode encodes screenshots at. */
 const JPEG_QUALITY = 85;
+/** Tried in turn when the first encode is still over budget. */
+const FALLBACK_EDGES = [1024, 768];
 
 /**
  * Bring a driver screenshot inside that budget.
  *
- * PNG first, and JPEG only when PNG will not fit. The model is reading UI text, and
- * compression artefacts land hardest on exactly the small glyphs that decide whether it
- * can find a button — but a screenshot too large to send is worth less than a slightly
- * soft one, and Cua reaches for JPEG at the same quality in its own compatibility path.
+ * JPEG first. An earlier version preferred PNG on the reasoning that the model is
+ * reading UI text and compression artefacts land hardest on small glyphs — measured, the
+ * same frame is 604 KB as PNG and 70 KB as JPEG at 85, and the PNG-first version sent
+ * enough bytes to earn a 413. Cua encodes screenshots the same way in its own
+ * compatibility path. A screenshot too large to send is worth nothing at all, which
+ * settles the trade the other way.
  *
  * Failure is never fatal: an image that cannot be decoded or re-encoded passes through
- * untouched, because an expensive screenshot beats a failed action.
+ * untouched, because an expensive screenshot still beats a failed action.
  */
 function budgetImage(image: { mimeType: string; data: string }): { mimeType: string; data: string } {
   try {
@@ -609,32 +615,44 @@ function budgetImage(image: { mimeType: string; data: string }): { mimeType: str
     const { width, height } = decoded.getSize();
     if (width === 0 || height === 0) return image;
 
-    const longest = Math.max(width, height);
-    // `resize` keeps the aspect ratio when only one dimension is given.
-    const scaled =
-      longest <= MAX_IMAGE_EDGE
-        ? decoded
-        : width >= height
-          ? decoded.resize({ width: MAX_IMAGE_EDGE, quality: "good" })
-          : decoded.resize({ height: MAX_IMAGE_EDGE, quality: "good" });
-
-    const png = scaled.toPNG();
-    if (png.length > 0 && png.length <= MAX_IMAGE_BYTES) {
-      return scaled === decoded ? image : { mimeType: "image/png", data: png.toString("base64") };
+    for (const edge of [MAX_IMAGE_EDGE, ...FALLBACK_EDGES]) {
+      const longest = Math.max(width, height);
+      // `resize` keeps the aspect ratio when only one dimension is given.
+      const scaled =
+        longest <= edge
+          ? decoded
+          : width >= height
+            ? decoded.resize({ width: edge, quality: "good" })
+            : decoded.resize({ height: edge, quality: "good" });
+      // Both, and keep whichever is smaller. JPEG wins by a wide margin on a real
+      // desktop — measured, one frame is 604 KB as PNG and 70 KB as JPEG — but an image
+      // that is mostly high-frequency detail inverts that, and sending the larger of two
+      // encodings we already hold would be a straightforward waste.
+      const best = smaller(scaled.toJPEG(JPEG_QUALITY), "image/jpeg", scaled.toPNG(), "image/png");
+      if (!best) break;
+      // The last rung: send it rather than nothing, because a large screenshot is still
+      // a screenshot the caller can act on.
+      if (best.bytes.length <= MAX_IMAGE_BYTES || edge === FALLBACK_EDGES[FALLBACK_EDGES.length - 1]) {
+        return { mimeType: best.mimeType, data: best.bytes.toString("base64") };
+      }
     }
-
-    const jpeg = scaled.toJPEG(JPEG_QUALITY);
-    if (jpeg.length === 0) {
-      return png.length > 0 && scaled !== decoded ? { mimeType: "image/png", data: png.toString("base64") } : image;
-    }
-    // A JPEG that somehow came out larger than the PNG is not an improvement.
-    if (png.length > 0 && png.length <= jpeg.length) {
-      return scaled === decoded ? image : { mimeType: "image/png", data: png.toString("base64") };
-    }
-    return { mimeType: "image/jpeg", data: jpeg.toString("base64") };
+    return image;
   } catch {
     return image;
   }
+}
+
+/** The smaller of two encodings, ignoring any that failed to produce bytes. */
+function smaller(
+  a: Buffer,
+  aType: string,
+  b: Buffer,
+  bType: string,
+): { bytes: Buffer; mimeType: string } | undefined {
+  if (a.length === 0 && b.length === 0) return undefined;
+  if (a.length === 0) return { bytes: b, mimeType: bType };
+  if (b.length === 0) return { bytes: a, mimeType: aType };
+  return a.length <= b.length ? { bytes: a, mimeType: aType } : { bytes: b, mimeType: bType };
 }
 
 function budgetImages(images: Array<{ mimeType: string; data: string }>): Array<{ mimeType: string; data: string }> {
