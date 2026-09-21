@@ -53,6 +53,12 @@ extraResources:
   # than becoming a third renderer entry point.
   - from: resources/grant-overlay
     to: grant-overlay
+  # The `cua-driver` worker (macOS only). It is an executable, so it must live outside
+  # the asar; electron-builder re-signs every Mach-O file it finds in the bundle, which
+  # is what puts this one under our Developer ID rather than Cua's. Fetched by
+  # `scripts/fetch-cua-driver.mjs`, which pins the release and verifies its checksum.
+  - from: resources/cua-driver/cua-driver
+    to: cua-driver
   - from: resources/icon.icns
     to: icon.icns
   - from: resources/icon.png

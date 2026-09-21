@@ -30,3 +30,7 @@ resources/models-dev/**
 *.p12
 *.p8
 *.mobileprovision
+
+# Fetched at build time by scripts/fetch-cua-driver.mjs, pinned and checksummed there.
+# 63 MB of third-party executable belongs in the release artifact, not in history.
+resources/cua-driver/

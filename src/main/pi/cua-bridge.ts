@@ -1,20 +1,32 @@
 import { app, nativeImage, type WebContents } from "electron";
+import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import { join } from "node:path";
 import { uiText } from "../engine/ui-text";
 import { readComputerSettings } from "../engine/app-settings";
+import { unpackedPath } from "../engine/asar-unpacked";
 import { getFastVibePaths } from "../engine/paths";
 import type { ComputerAppInfo, ComputerPermissionStatus, ComputerRequest, ComputerResult } from "@shared/types";
 
 /**
  * FastVibe's bridge to Cua Driver, the Rust engine behind the `computer_*` tools.
  *
- * Unlike `browser-bridge`, nothing here crosses a process boundary: the driver is a
- * native library loaded *into the Electron main process* (`CuaDriver.create(undefined)`,
- * no daemon, no socket). That is not an optimisation — it is the only arrangement macOS
- * accepts. Accessibility and Screen Recording are granted to a *process*, keyed by its
- * code signature, and a child spawned through a gateway, a terminal or `open` starts a
- * new responsibility chain that owns none of this app's grants. Running in-process means
- * the grants the user gave FastVibe are the grants the driver acts under.
+ * The driver runs as a *private worker*: a `cua-driver` process this app spawns and
+ * owns, reached over a unix socket. It began as an in-process library
+ * (`CuaDriver.create`), which is simpler and needs no bundled executable — but that
+ * arrangement cannot show the user anything. Every agent-cursor call is refused with
+ * `facility_unavailable`, because `DriverHostOptions.cursor` is, in cua's words,
+ * "Rust-only host configuration used by the standalone daemon. Language bindings
+ * intentionally receive the smaller DriverOptions record." An agent moving a pointer
+ * around someone's desktop with no on-screen sign of what it is doing is not a
+ * trade worth 63 MB of savings.
+ *
+ * What does *not* change is where the permissions come from. macOS grants Accessibility
+ * and Screen Recording to a process, keyed by its code signature, and a child spawned
+ * through a gateway, a terminal or `open` starts a new responsibility chain owning none
+ * of them. `EmbeddedCuaDriverHost` spawns the worker directly from this process, so it
+ * inherits the grants the user gave FastVibe — which is also why cua requires the spawn
+ * to come from the app that holds them.
  *
  * The corollary is that a build signed with an unstable identity cannot hold those grants
  * across an update, which is why this feature is gated behind the Developer ID work in
@@ -38,10 +50,48 @@ const SESSION = "FastVibe";
 /** Any single desktop action that has not answered by now is not going to. */
 const DEFAULT_TIMEOUT_MS = 30_000;
 
+/** Identity the worker reports in macOS permission diagnostics. Advisory only. */
+const HOST_BUNDLE_ID = "dev.fastvibe.desktop";
+
 let modulePromise: Promise<DriverModule> | null = null;
 let driverPromise: Promise<Driver> | null = null;
 let driver: Driver | null = null;
+/** The embedded host owning the worker process, so shutdown can stop it. */
+let host: ReturnType<DriverModule["EmbeddedCuaDriverHost"]["withOptions"]> | null = null;
 let sessionStarted = false;
+let asarShimInstalled = false;
+
+/**
+ * Point native-library resolution at the unpacked copy, because the Cua SDK opens its
+ * `.dylib`/`.so`/`.dll` with a raw `dlopen` rather than through `process.dlopen`.
+ *
+ * `electron-builder` marks the native packages `asarUnpack`, so the library sits on disk
+ * at `app.asar.unpacked/…` — but `require.resolve` still hands back the `app.asar/…`
+ * path, and Electron's asar-aware `fs` makes that path *look* present. That is enough for
+ * the pure-JS import to proceed and then fail at the first native call: the Rust side
+ * calls `libc`'s `dlopen` directly, and the kernel answers `errno=20` (`ENOTDIR`) for a
+ * path through the archive. Electron patches `process.dlopen` for `.node` addons, but
+ * nothing patches the raw `dlopen` a native dependency performs itself.
+ *
+ * So rewrite a resolved path to its unpacked twin whenever that twin actually exists.
+ * Packed JavaScript has no twin, so its resolution is untouched; the only paths this
+ * moves are the ones the packaging step deliberately placed outside the archive.
+ */
+function installAsarNativeResolution(): void {
+  if (asarShimInstalled) return;
+  asarShimInstalled = true;
+  const require_ = createRequire(import.meta.url);
+  const Module = require_("node:module") as typeof import("node:module") & {
+    _resolveFilename: (request: string, ...rest: unknown[]) => string;
+  };
+  const original = Module._resolveFilename;
+  Module._resolveFilename = function (request: string, ...rest: unknown[]): string {
+    const resolved = original.call(this, request, ...rest);
+    const candidate = typeof resolved === "string" ? unpackedPath(resolved) : resolved;
+    if (candidate !== resolved && existsSync(candidate)) return candidate;
+    return resolved;
+  };
+}
 
 /**
  * Load the native bindings, once.
@@ -53,6 +103,7 @@ let sessionStarted = false;
  * throws before the first window opens.
  */
 async function driverModule(): Promise<DriverModule> {
+  installAsarNativeResolution();
   modulePromise ??= import("@trycua/cua-driver").catch((error: unknown) => {
     modulePromise = null;
     const detail = error instanceof Error ? error.message : String(error);
@@ -153,15 +204,77 @@ export async function openComputerSettings(): Promise<void> {
  * the user decides to grant at all. The grants gate actions, not the object, so that
  * check lives in `assertDrivable` on the action path.
  */
+/**
+ * The bundled `cua-driver` executable, which this app runs as its private worker.
+ *
+ * Fetched at build time by `scripts/fetch-cua-driver.mjs` and shipped outside the asar,
+ * because a private worker is the only arrangement that gives the user a visible agent
+ * cursor. In-process mode (`CuaDriver.create`) refuses every cursor call with
+ * `facility_unavailable`: `DriverHostOptions.cursor` is "Rust-only host configuration
+ * used by the standalone daemon. Language bindings intentionally receive the smaller
+ * DriverOptions record." An agent driving a desktop with no on-screen sign of what it
+ * is doing is the thing worth paying 63 MB to avoid.
+ */
+function driverBinary(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, "cua-driver")
+    : join(__dirname, "../../resources/cua-driver/cua-driver");
+}
+
+/**
+ * Start the private worker and connect to it.
+ *
+ * The worker inherits this process's Accessibility and Screen Recording grants, which
+ * is why cua requires the spawn to come from the app that owns them rather than from a
+ * terminal or a launcher. `EmbeddedCuaDriverHost` holds a parent-liveness pipe, so the
+ * daemon cannot outlive a crash of this process.
+ */
 async function ensureDriver(): Promise<Driver> {
   driverPromise ??= (async () => {
     const module = await driverModule();
-    const created = module.CuaDriver.create(undefined);
+    const binary = driverBinary();
+    if (!existsSync(binary)) {
+      throw new Error(
+        uiText(
+          `未找到电脑操控组件（${binary}）。开发环境请先运行 pnpm fetch:cua-driver。`,
+          `The computer-use engine is missing (${binary}). In development, run pnpm fetch:cua-driver first.`,
+        ),
+      );
+    }
+    const embedded = module.EmbeddedCuaDriverHost.withOptions(
+      module.EmbeddedDriverHostOptions.new({
+        binaryPath: binary,
+        hostBundleId: HOST_BUNDLE_ID,
+        // The agent cursor is the whole reason this runs as a worker instead of
+        // in-process, so the host must not suppress it.
+        noOverlay: false,
+        // Cua Driver reports product telemetry to PostHog unless told otherwise, and
+        // nothing about running it on the user's behalf implies consent to that. The
+        // environment takes precedence over its persisted setting, so this holds even
+        // if something else on the machine enabled it.
+        environment: [module.EmbeddedEnvironmentVariable.new({ name: "CUA_DRIVER_RS_TELEMETRY_ENABLED", value: "0" })],
+        // No manifest or policy file is supplied, so there is nothing to pre-approve;
+        // saying so explicitly keeps a future default from widening what this grants.
+        approveCapabilityManifest: false,
+        approveSessionPolicy: false,
+        // The flag that turns off the driver's own runtime approvals. FastVibe's
+        // permission sandbox is not a substitute for them, and its own default mode
+        // asks nothing at all — together those would be no check anywhere.
+        dangerouslyBypassApprovals: false,
+        // The worker's stderr carries its telemetry notice and its own diagnostics;
+        // routing it into this process's output would interleave it with the agent's.
+        inheritStderr: false,
+      }),
+    );
+    const connection = await embedded.start();
+    host = embedded;
+    const created = module.CuaDriver.connect(connection.socketPath);
     driver = created;
     return created;
   })().catch((error: unknown) => {
     driverPromise = null;
     driver = null;
+    host = null;
     throw error;
   });
   return driverPromise;
@@ -256,8 +369,16 @@ export async function requestComputer(request: ComputerRequest): Promise<Compute
       // driver version that renames the call must not take the whole feature down.
       await active
         .startSession(module.StartSessionInput.new({ session: SESSION }))
-        .then(() => {
+        .then(async () => {
           sessionStarted = true;
+          // Make Cua's click-through Agent Cursor explicit. Relying on the driver's
+          // default is not enough across platforms/embedded hosts, and without this
+          // the agent can act in the background with no visible pointer or badge.
+          await active
+            .setAgentCursorEnabled(
+              module.SetAgentCursorEnabledInput.new({ session: SESSION, enabled: true }),
+            )
+            .catch(() => undefined);
         })
         .catch(() => undefined);
     }
@@ -539,13 +660,24 @@ function replacer(_key: string, value: unknown): unknown {
  */
 export async function shutdownComputer(): Promise<void> {
   const active = driver;
+  const worker = host;
   driverPromise = null;
   driver = null;
+  host = null;
   sessionStarted = false;
-  if (!active) return;
-  await active.shutdown().catch(() => undefined);
-  const destroyable = active as { uniffiDestroy?: () => void };
-  if (typeof destroyable.uniffiDestroy === "function") destroyable.uniffiDestroy();
+  if (active) {
+    await active.shutdown().catch(() => undefined);
+    const destroyable = active as { uniffiDestroy?: () => void };
+    if (typeof destroyable.uniffiDestroy === "function") destroyable.uniffiDestroy();
+  }
+  // After the client, never before: `stop()` cancels an in-progress start and is
+  // idempotent, but tearing the process down under a live client loses whatever it
+  // was in the middle of.
+  if (worker) {
+    await worker.stop().catch(() => undefined);
+    const destroyable = worker as { uniffiDestroy?: () => void };
+    if (typeof destroyable.uniffiDestroy === "function") destroyable.uniffiDestroy();
+  }
 }
 
 /**

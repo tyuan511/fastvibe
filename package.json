@@ -18,9 +18,9 @@
   "scripts": {
     "sync:models": "node scripts/sync-models-dev.mjs",
     "sync": "node scripts/sync-models-dev.mjs",
-    "predev": "node scripts/sync-models-dev.mjs",
+    "predev": "node scripts/sync-models-dev.mjs && node scripts/fetch-cua-driver.mjs",
     "dev": "electron-vite dev",
-    "prebuild": "node scripts/sync-models-dev.mjs && node scripts/check-injected-scripts.mjs",
+    "prebuild": "node scripts/sync-models-dev.mjs && node scripts/check-injected-scripts.mjs && node scripts/fetch-cua-driver.mjs",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "stage:app": "node scripts/stage-app.mjs",
@@ -36,7 +36,8 @@
     "website:dev": "pnpm --filter @fastvibe/website dev",
     "website:build": "pnpm --filter @fastvibe/website build",
     "website:lint": "pnpm --filter @fastvibe/website lint",
-    "website:typecheck": "pnpm --filter @fastvibe/website typecheck"
+    "website:typecheck": "pnpm --filter @fastvibe/website typecheck",
+    "fetch:cua-driver": "node scripts/fetch-cua-driver.mjs"
   },
   "packageManager": "pnpm@11.22.0",
   "dependencies": {
