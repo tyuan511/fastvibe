@@ -56,8 +56,14 @@ extraResources:
   # The `cua-driver` worker (macOS only). It is an executable, so it must live outside
   # the asar; electron-builder re-signs every Mach-O file it finds in the bundle, which
   # is what puts this one under our Developer ID rather than Cua's. Fetched by
-  # `scripts/fetch-cua-driver.mjs`, which pins the release and verifies its checksum.
-  - from: resources/cua-driver/cua-driver
+  # `scripts/fetch-cua-driver.mjs`, which pins the release, verifies its checksum and
+  # splits the universal archive per architecture.
+  #
+  # `${arch}` matters: `pnpm dist:mac` packages arm64 and x64 from one invocation, so a
+  # single path would put the same slice in both. The macro is expanded per build
+  # (`platformPackager` passes the current arch into the file matchers), which is what
+  # keeps each package to the ~30 MB it can actually run.
+  - from: resources/cua-driver/${arch}/cua-driver
     to: cua-driver
   - from: resources/icon.icns
     to: icon.icns

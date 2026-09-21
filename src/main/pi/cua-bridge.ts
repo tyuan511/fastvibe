@@ -19,7 +19,7 @@ import type { ComputerAppInfo, ComputerPermissionStatus, ComputerRequest, Comput
  * "Rust-only host configuration used by the standalone daemon. Language bindings
  * intentionally receive the smaller DriverOptions record." An agent moving a pointer
  * around someone's desktop with no on-screen sign of what it is doing is not a
- * trade worth 63 MB of savings.
+ * trade worth ~30 MB of savings.
  *
  * What does *not* change is where the permissions come from. macOS grants Accessibility
  * and Screen Recording to a process, keyed by its code signature, and a child spawned
@@ -213,12 +213,14 @@ export async function openComputerSettings(): Promise<void> {
  * `facility_unavailable`: `DriverHostOptions.cursor` is "Rust-only host configuration
  * used by the standalone daemon. Language bindings intentionally receive the smaller
  * DriverOptions record." An agent driving a desktop with no on-screen sign of what it
- * is doing is the thing worth paying 63 MB to avoid.
+ * is doing is the thing worth paying ~30 MB to avoid.
  */
 function driverBinary(): string {
+  // Packaged builds carry one slice, already named `cua-driver`; a dev tree holds both,
+  // so pick the one this process can run.
   return app.isPackaged
     ? join(process.resourcesPath, "cua-driver")
-    : join(__dirname, "../../resources/cua-driver/cua-driver");
+    : join(__dirname, "../../resources/cua-driver", process.arch, "cua-driver");
 }
 
 /**

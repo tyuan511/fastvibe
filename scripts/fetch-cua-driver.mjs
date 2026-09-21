@@ -15,10 +15,11 @@
  * "Upgrade the bindings and native library together." Both are 0.28.2 here, and the
  * daemon confirms it at startup (`driverVersion: 0.28.2, contract: 0.8.0`).
  *
- * The universal build is deliberate. A thinned slice is half the size, but a local
- * `pnpm dist:mac` packages both architectures from one invocation and would copy
- * whichever slice happened to be fetched into both. One file that is correct for
- * both is worth the extra megabytes.
+ * One universal archive is downloaded and then split, so each package carries only the
+ * slice it can run: ~30 MB instead of 63. The split is what makes that safe — a local
+ * `pnpm dist:mac` packages both architectures from a single invocation, so a lone file
+ * would be copied into both, and `extraResources` reads
+ * `resources/cua-driver/${arch}/cua-driver` to pick the right one per build.
  *
  *   node scripts/fetch-cua-driver.mjs
  */
@@ -35,8 +36,12 @@ const SHA256 = "386db225a3080714a0f9f935525e61efaf46709587ef8b94dd2df81aeb2f6daa
 const URL = `https://github.com/trycua/cua/releases/download/${TAG}/${ASSET}`;
 
 const OUT_DIR = "resources/cua-driver";
-const OUT = join(OUT_DIR, "cua-driver");
-/** Records which release the binary on disk came from, so a version bump refetches. */
+/** electron-builder's arch names, which are what `${arch}` expands to, and lipo's. */
+const SLICES = [
+  { dir: "arm64", lipo: "arm64" },
+  { dir: "x64", lipo: "x86_64" },
+];
+/** Records which release the binaries on disk came from, so a version bump refetches. */
 const STAMP = join(OUT_DIR, ".version");
 
 function main() {
@@ -44,8 +49,9 @@ function main() {
     console.log(`skipped cua-driver fetch — only macOS ships the private worker (this is ${process.platform})`);
     return;
   }
-  if (existsSync(OUT) && existsSync(STAMP) && readFileSync(STAMP, "utf8").trim() === VERSION) {
-    console.log(`cua-driver ${VERSION} already present (${mb(OUT)} MB)`);
+  const present = SLICES.every(({ dir }) => existsSync(sliceOut(dir)));
+  if (present && existsSync(STAMP) && readFileSync(STAMP, "utf8").trim() === VERSION) {
+    console.log(`cua-driver ${VERSION} already present (${SLICES.map(({ dir }) => `${dir} ${mb(sliceOut(dir))} MB`).join(", ")})`);
     return;
   }
 
@@ -67,10 +73,26 @@ function main() {
   // native library the npm package already provides, and a C header.
   execFileSync("tar", ["xzf", archive, "-C", OUT_DIR, "cua-driver"], { stdio: "inherit" });
   rmSync(archive, { force: true });
-  chmodSync(OUT, 0o755);
+
+  const universal = join(OUT_DIR, "cua-driver");
+  for (const { dir, lipo } of SLICES) {
+    const out = sliceOut(dir);
+    mkdirSync(join(OUT_DIR, dir), { recursive: true });
+    execFileSync("lipo", ["-thin", lipo, universal, "-output", out], { stdio: "inherit" });
+    chmodSync(out, 0o755);
+  }
+  // The universal copy has served its purpose; leaving it would double what a build
+  // has to scan and invite the wrong file being referenced by hand.
+  rmSync(universal, { force: true });
   writeFileSync(STAMP, `${VERSION}\n`);
 
-  console.log(`cua-driver ${VERSION} ready at ${OUT} (${mb(OUT)} MB)`);
+  console.log(
+    `cua-driver ${VERSION} ready (${SLICES.map(({ dir }) => `${dir} ${mb(sliceOut(dir))} MB`).join(", ")})`,
+  );
+}
+
+function sliceOut(dir) {
+  return join(OUT_DIR, dir, "cua-driver");
 }
 
 function mb(path) {
