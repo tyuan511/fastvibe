@@ -24,9 +24,11 @@
  *
  *   node scripts/notarize-dmg.mjs
  */
-import { execFileSync, spawnSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { fileEntry, readManifest, writeManifest } from "./lib/mac-manifest.mjs";
 
 const RELEASE_DIR = "release";
 
@@ -99,7 +101,36 @@ function main() {
     // did, and nothing downstream would notice. `spctl` writes its verdict across both
     // streams, which is why `run` joins them.
     console.log(run("spctl", ["--assess", "--type", "open", "--context", "context:primary-signature", "-vv", path]));
+    refreshManifest(name, path);
   }
+}
+
+/**
+ * Re-record the image's digest in the update manifest.
+ *
+ * electron-builder hashes each artifact as it produces it — before this script signs
+ * and staples the image, which rewrites its bytes. Left alone, `latest-mac.yml` would
+ * carry a digest for a file that no longer matches it. macOS updates download the zip,
+ * so nothing breaks today; it is simply wrong, and wrong in the way that surfaces as an
+ * unexplainable checksum mismatch to whoever verifies a download by hand.
+ *
+ * The matching `.dmg.blockmap` goes stale for the same reason and is *not* regenerated.
+ * macOS updates very much do use differential downloads — but only over the zip:
+ * `MacUpdater.doDownloadUpdate` resolves a `zipFileInfo`, caches the previous one as
+ * `update.zip`, and diffs against that. The dmg is the first-install download and
+ * never enters the update path, so its blockmap has no consumer. The zip and its
+ * blockmap are not touched by this script at all.
+ */
+function refreshManifest(name, path) {
+  const manifestPath = join(RELEASE_DIR, "latest-mac.yml");
+  if (!existsSync(manifestPath)) return;
+  const manifest = readManifest(manifestPath);
+  const entry = fileEntry(manifest, name);
+  if (!entry) return;
+  entry.sha512 = createHash("sha512").update(readFileSync(path)).digest("base64");
+  entry.size = statSync(path).size;
+  writeManifest(manifestPath, manifest);
+  console.log(`latest-mac.yml: refreshed ${name}`);
 }
 
 try {

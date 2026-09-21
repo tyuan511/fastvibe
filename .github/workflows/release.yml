@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   build:
-    name: Package (${{ matrix.platform }})
+    name: Package (${{ matrix.platform }}${{ matrix.arch && format(' {0}', matrix.arch) || '' }})
     runs-on: ${{ matrix.os }}
     # GitHub does not expose the `secrets` context to `if:`, so the "are the
     # macOS signing credentials configured?" gate has to be read through `env`,
@@ -28,8 +28,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # The two macOS architectures are separate legs so they package and
+          # notarize at the same time instead of one after the other — four notary
+          # round trips are most of this workflow's wall clock. They each write a
+          # manifest covering only their own arch; `mac-manifest` merges them.
           - os: macos-latest
             platform: mac
+            arch: arm64
+          - os: macos-latest
+            platform: mac
+            arch: x64
           - os: ubuntu-latest
             platform: linux
           - os: windows-latest
@@ -57,9 +65,9 @@ jobs:
             ~/Library/Caches/electron-builder
             ~/AppData/Local/electron/Cache
             ~/AppData/Local/electron-builder/Cache
-          key: ${{ runner.os }}-electron-${{ hashFiles('pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-${{ matrix.arch || 'default' }}-electron-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: |
-            ${{ runner.os }}-electron-
+            ${{ runner.os }}-${{ matrix.arch || 'default' }}-electron-
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -84,13 +92,13 @@ jobs:
       # treats it as a file path and fails against the repo root.
       - name: Package
         if: matrix.platform != 'mac' || env.APPLE_CERT_P12 == ''
-        run: pnpm exec electron-builder --${{ matrix.platform }} --publish never
+        run: pnpm exec electron-builder --${{ matrix.platform }} ${{ matrix.arch && format('--{0}', matrix.arch) || '' }} --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
       - name: Package signed mac
         if: matrix.platform == 'mac' && env.APPLE_CERT_P12 != ''
-        run: pnpm exec electron-builder --mac --publish never
+        run: pnpm exec electron-builder --mac --${{ matrix.arch }} --publish never
         env:
           CSC_LINK: ${{ secrets.APPLE_CERT_P12 }}
           CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
@@ -134,6 +142,24 @@ jobs:
           done
           [ "$found" = 1 ] || { echo "no .app found under release/"; exit 1; }
 
+      # One manifest covers both architectures and only one file can carry the name
+      # the updater fetches, so neither mac leg may publish its own: the second to
+      # finish would overwrite the first, and the loser's users would be updating from
+      # a manifest that does not list their architecture. `mac-manifest` merges them.
+      - name: Set the mac manifest aside
+        if: matrix.platform == 'mac'
+        run: |
+          mkdir -p manifest
+          mv release/latest-mac.yml "manifest/latest-mac-${{ matrix.arch }}.yml"
+
+      - name: Upload the mac manifest
+        if: matrix.platform == 'mac'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-manifest-${{ matrix.arch }}
+          path: manifest/latest-mac-${{ matrix.arch }}.yml
+          retention-days: 1
+
       - name: Publish release assets
         uses: softprops/action-gh-release@v3
         with:
@@ -142,7 +168,7 @@ jobs:
           # freshly generated notes to an existing release's body, so three legs
           # publishing the same tag stack the changelog three times over. The other
           # legs pass no body and keep whatever is already there.
-          generate_release_notes: ${{ matrix.platform == 'mac' }}
+          generate_release_notes: ${{ matrix.platform == 'mac' && matrix.arch == 'arm64' }}
           fail_on_unmatched_files: false
           files: |
             release/*.dmg
@@ -152,5 +178,45 @@ jobs:
             release/*.AppImage
             release/*.deb
             release/latest*.yml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  mac-manifest:
+    name: Merge mac update manifest
+    # Every leg has to have succeeded. A merged manifest describing a release whose
+    # other half never uploaded would point users at files that are not there, and the
+    # absence of a manifest is the safe failure: the app simply finds no update.
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download the per-architecture manifests
+        uses: actions/download-artifact@v4
+        with:
+          pattern: mac-manifest-*
+          path: manifests
+          merge-multiple: true
+
+      - name: Merge
+        run: |
+          set -euo pipefail
+          # Both must exist. Merging one would publish a manifest that silently moves
+          # every arm64 user onto x64 builds, or breaks x64 updates outright.
+          test -f manifests/latest-mac-arm64.yml
+          test -f manifests/latest-mac-x64.yml
+          mkdir -p release
+          node scripts/merge-mac-manifest.mjs release/latest-mac.yml \
+            manifests/latest-mac-arm64.yml manifests/latest-mac-x64.yml
+          echo "::group::latest-mac.yml"
+          cat release/latest-mac.yml
+          echo "::endgroup::"
+
+      - name: Publish the merged manifest
+        uses: softprops/action-gh-release@v3
+        with:
+          draft: false
+          fail_on_unmatched_files: true
+          files: release/latest-mac.yml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
