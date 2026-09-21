@@ -45,6 +45,7 @@ type ComputerResult = {
   text: string;
   images: Array<{ mimeType: string; data: string }>;
   structured?: string;
+  targetApp?: { name: string; bundleId?: string };
 };
 
 type ComputerBridge = (request: ComputerRequest) => Promise<ComputerResult>;
@@ -68,12 +69,26 @@ export default function computerUse(pi: ExtensionAPI): void {
   const conversationId = boundConversationId();
 
   async function call(action: string, params: Omit<ComputerRequest, "action"> = {}): Promise<any> {
-    const result = await bridge()({ action, ...params, conversationId });
+    let result: ComputerResult;
+    try {
+      result = await bridge()({ action, ...params, conversationId });
+    } catch (error) {
+      // The bridge attaches what would resolve the failure. Handing the model only the
+      // sentence makes it retry the identical call; handing it the remedy lets it either
+      // act or tell the user precisely what to do.
+      const detail = (error as { detail?: { suggestedAction?: string } })?.detail;
+      const message = error instanceof Error ? error.message : String(error);
+      throw detail?.suggestedAction ? new Error(`${message}\n${detail.suggestedAction}`) : error;
+    }
     // Screenshots go back as real image parts rather than a base64 blob inside text: the
     // model has to *see* the screen for any of this to work, and a stringified payload is
     // both invisible to it and large enough to crowd out the rest of the context.
     const content: Array<Record<string, unknown>> = [];
-    if (result.text) content.push({ type: "text", text: result.text });
+    // Naming the app makes an observation self-describing: a screenshot that says which
+    // window it came from is one the model can reason about a turn later.
+    const prefix = result.targetApp ? `[${result.targetApp.name}] ` : "";
+    if (result.text) content.push({ type: "text", text: prefix + result.text });
+    else if (prefix) content.push({ type: "text", text: prefix.trim() });
     for (const image of result.images) content.push({ type: "image", data: image.data, mimeType: image.mimeType });
     if (content.length === 0) content.push({ type: "text", text: "(无输出)" });
     return { content, details: result.structured ? { structured: result.structured } : undefined };

@@ -483,6 +483,32 @@ export type ComputerResult = {
   /** Base64 payloads, shaped like the SDK's own image content parts. */
   images: Array<{ mimeType: string; data: string }>;
   structured?: string;
+  /** The application the action was routed to, when the call named a window. */
+  targetApp?: { name: string; bundleId?: string };
+};
+
+/**
+ * A computer-use failure the caller can act on, rather than a sentence to read.
+ *
+ * A bare message leaves both the model and the UI guessing: the model retries the same
+ * call, and the pane can only print the text. `code` says what class of failure it was
+ * and `suggestedAction` says what would resolve it — which is the difference between
+ * "computer control is switched off" and a result the renderer can put a button on.
+ */
+export type ComputerErrorCode =
+  | "disabled"
+  | "clipboard_disabled"
+  | "unsupported"
+  | "permission_required"
+  | "engine_unavailable"
+  | "batch_step_failed";
+
+export type ComputerError = {
+  code: ComputerErrorCode;
+  message: string;
+  suggestedAction?: string;
+  /** Present when the failure was about macOS grants, so the UI need not re-query. */
+  permissions?: ComputerPermissionStatus;
 };
 
 /**

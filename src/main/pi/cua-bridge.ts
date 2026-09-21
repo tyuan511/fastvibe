@@ -7,7 +7,14 @@ import { readComputerSettings } from "../engine/app-settings";
 import { unpackedPath } from "../engine/asar-unpacked";
 import { getFastVibePaths } from "../engine/paths";
 import { resolveComputerAvailability } from "@shared/computer-availability";
-import type { ComputerAppInfo, ComputerPermissionStatus, ComputerRequest, ComputerResult } from "@shared/types";
+import type {
+  ComputerAppInfo,
+  ComputerError,
+  ComputerErrorCode,
+  ComputerPermissionStatus,
+  ComputerRequest,
+  ComputerResult,
+} from "@shared/types";
 
 /**
  * FastVibe's bridge to Cua Driver, the Rust engine behind the `computer_*` tools.
@@ -50,6 +57,27 @@ const SESSION = "FastVibe";
 
 /** Any single desktop action that has not answered by now is not going to. */
 const DEFAULT_TIMEOUT_MS = 30_000;
+
+/**
+ * A failure that carries its own remedy.
+ *
+ * Thrown rather than returned so every existing call site keeps working unchanged; the
+ * structure rides along on the error object for the ones that know to look. A model that
+ * is told only "it failed" retries the same call, and a pane that is handed only a
+ * sentence can do nothing but print it.
+ */
+export class ComputerFailure extends Error {
+  readonly detail: ComputerError;
+  constructor(detail: ComputerError) {
+    super(detail.message);
+    this.name = "ComputerFailure";
+    this.detail = detail;
+  }
+}
+
+function fail(code: ComputerErrorCode, message: string, suggestedAction?: string, permissions?: ComputerPermissionStatus): never {
+  throw new ComputerFailure({ code, message, suggestedAction, permissions });
+}
 
 /** Identity the worker reports in macOS permission diagnostics. Advisory only. */
 const HOST_BUNDLE_ID = "dev.fastvibe.desktop";
@@ -108,12 +136,17 @@ async function driverModule(): Promise<DriverModule> {
   modulePromise ??= import("@trycua/cua-driver").catch((error: unknown) => {
     modulePromise = null;
     const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(
-      uiText(
-        `电脑操作组件未能加载（当前系统或架构可能没有对应的原生库）：${detail}`,
-        `Could not load the computer-use engine (this OS/architecture may have no native library): ${detail}`,
+    throw new ComputerFailure({
+      code: "engine_unavailable",
+      message: uiText(
+        `电脑操作组件未能加载：${detail}`,
+        `Could not load the computer-use engine: ${detail}`,
       ),
-    );
+      suggestedAction: uiText(
+        "当前系统或架构可能没有对应的原生库。",
+        "This OS or architecture may have no matching native library.",
+      ),
+    });
   });
   return modulePromise;
 }
@@ -315,18 +348,30 @@ async function assertDrivable(): Promise<void> {
     permissions = await requestComputerPermissions();
   }
   if (permissions.ready) return;
-  if (!permissions.available) throw new Error(permissions.error ?? uiText("电脑操作组件不可用", "The computer-use engine is unavailable"));
+  if (!permissions.available) {
+    fail(
+      "unsupported",
+      permissions.error ?? uiText("电脑操作组件不可用。", "The computer-use engine is unavailable."),
+      undefined,
+      permissions,
+    );
+  }
   // Starting to act without grants gets a stream of opaque per-call failures instead of
   // one explanation, so refuse here and say which toggle is missing.
   const missing = [
     permissions.accessibility ? "" : uiText("辅助功能", "Accessibility"),
     permissions.screenRecording ? "" : uiText("屏幕录制", "Screen Recording"),
   ].filter(Boolean).join(uiText("、", ", "));
-  throw new Error(
+  // The live status rides along so the UI need not ask again to know which toggle is
+  // still off — the answer it would get could already differ from the one that failed.
+  fail(
+    "permission_required",
+    uiText(`FastVibe 还没有获得「${missing}」权限。`, `FastVibe has not been granted ${missing}.`),
     uiText(
-      `FastVibe 还没有获得「${missing}」权限，无法操作电脑。已经打开系统设置 › 隐私与安全性，请在其中把 FastVibe 的开关打开后重试。`,
-      `FastVibe has not been granted ${missing}, so it cannot control the computer. System Settings › Privacy & Security has been opened — switch FastVibe on there and try again.`,
+      "在 设置 › 电脑操控 点「开始授权」，按引导把浮层拖进系统设置的列表。",
+      "Press Start granting in Settings › Computer control and drag the panel into the System Settings list.",
     ),
+    permissions,
   );
 }
 
@@ -380,11 +425,10 @@ export async function requestComputer(request: ComputerRequest): Promise<Compute
     // to stop now, and a cached value would let the current run finish driving anyway.
     const settings = readComputerSettings(getFastVibePaths());
     if (!settings.enabled) {
-      throw new Error(
-        uiText(
-          "电脑操控尚未开启。请在 设置 › 电脑操控 中打开后重试。",
-          "Computer control is switched off. Turn it on in Settings › Computer control and try again.",
-        ),
+      fail(
+        "disabled",
+        uiText("电脑操控尚未开启。", "Computer control is switched off."),
+        uiText("在 设置 › 电脑操控 中打开「允许操作电脑」。", "Turn on \"Allow controlling the computer\" in Settings › Computer control."),
       );
     }
     const steps = request.action === "batch" ? (request.steps ?? []) : [request];
@@ -394,11 +438,10 @@ export async function requestComputer(request: ComputerRequest): Promise<Compute
     // Checked across the whole sequence before any of it runs: a batch that would be
     // refused halfway leaves the desktop in a state nobody asked for.
     if (!settings.clipboard && steps.some((step) => CLIPBOARD_ACTIONS.has(step.action))) {
-      throw new Error(
-        uiText(
-          "剪贴板访问尚未开启。请在 设置 › 电脑操控 中打开「读写剪贴板」后重试。",
-          "Clipboard access is switched off. Enable it in Settings › Computer control and try again.",
-        ),
+      fail(
+        "clipboard_disabled",
+        uiText("剪贴板访问尚未开启。", "Clipboard access is switched off."),
+        uiText("在 设置 › 电脑操控 中打开「读写剪贴板」。", "Turn on \"Read and write the clipboard\" in Settings › Computer control."),
       );
     }
     if (steps.some((step) => step.action === "batch")) {
@@ -440,18 +483,31 @@ export async function requestComputer(request: ComputerRequest): Promise<Compute
         foreground: step.foreground ?? !settings.preferBackground,
       };
       try {
-        results.push(await dispatch(module, active, resolved, signal));
+        const result = await dispatch(module, active, resolved, signal);
+        // Named from the pid the driver actually routes to, so the app reported back
+        // cannot drift from the one that was driven.
+        if (resolved.pid !== undefined) {
+          const app = await computerAppForPid(resolved.pid).catch(() => undefined);
+          if (app) result.targetApp = { name: app.name, bundleId: app.bundleId };
+        }
+        results.push(result);
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
         if (steps.length === 1) throw error;
         // Naming the step is the whole value of the report: the model has to know which
         // of the actions it batched left the desktop where it is.
-        throw new Error(
-          uiText(
+        const inner = error instanceof ComputerFailure ? error.detail : undefined;
+        throw new ComputerFailure({
+          code: "batch_step_failed",
+          message: uiText(
             `第 ${index + 1}/${steps.length} 步（${step.action}）失败：${reason}${summarise(results, steps)}`,
             `Step ${index + 1}/${steps.length} (${step.action}) failed: ${reason}${summarise(results, steps)}`,
           ),
-        );
+          // The step's own remedy is what the caller can act on; the batch wrapper only
+          // says where it stopped.
+          suggestedAction: inner?.suggestedAction,
+          permissions: inner?.permissions,
+        });
       }
     }
     return steps.length === 1 ? results[0] : merge(results, steps);
@@ -483,6 +539,7 @@ function merge(results: ComputerResult[], steps: ComputerRequest[]): ComputerRes
     text,
     images: results.flatMap((result) => result.images),
     structured: results.find((result) => result.structured)?.structured,
+    targetApp: results.find((result) => result.targetApp)?.targetApp,
   };
 }
 
@@ -515,40 +572,66 @@ function optionalTarget(module: DriverModule, request: ComputerRequest) {
 }
 
 /**
- * The longest edge a screenshot is allowed to reach before it is sent to a model.
+ * What a screenshot is allowed to cost before it reaches a model.
  *
- * Vision models resize what they are given to their own working resolution — around
- * 1568px on the long edge for the current generation — so everything above this is
- * encoded, transferred, stored in the transcript and billed for, and then thrown away
- * before the model ever looks at it. A Retina desktop capture is routinely 3360px wide,
- * which is more than four times the pixels that survive.
+ * Two ceilings, because they bound different things. The dimension governs what the
+ * model actually pays for: vision models resize what they are given to their own working
+ * resolution — around 1568px on the long edge for the current generation — so a 3360px
+ * Retina capture spends four and a half times the pixels that survive. The byte ceiling
+ * governs everything else the image touches on the way: the socket, the transcript it is
+ * stored in, and every later turn that carries it.
  *
- * Downscaling rather than re-encoding to JPEG on purpose: the model is reading UI text,
- * and compression artefacts land hardest on exactly the small glyphs that decide whether
- * it can find a button.
+ * ZCode budgets images the same way and adds a token ceiling derived from base64 length.
+ * That is deliberately not copied: for an *image* the proxy is wrong by an order of
+ * magnitude — vision tokens scale with pixel area, not with encoded size — so it would
+ * over-compress screenshots to satisfy a number that never applied to them. The
+ * dimension cap is the honest expression of the same intent.
  */
 const MAX_IMAGE_EDGE = 1568;
+const MAX_IMAGE_BYTES = 600 * 1024;
+/** What Cua's own Claude-Code compatibility mode encodes screenshots at. */
+const JPEG_QUALITY = 85;
 
 /**
  * Bring a driver screenshot inside that budget.
  *
- * Failure is not fatal anywhere: an image that cannot be decoded or resized is passed
- * through untouched, because a slightly expensive screenshot is worth more to the caller
- * than a failed action.
+ * PNG first, and JPEG only when PNG will not fit. The model is reading UI text, and
+ * compression artefacts land hardest on exactly the small glyphs that decide whether it
+ * can find a button — but a screenshot too large to send is worth less than a slightly
+ * soft one, and Cua reaches for JPEG at the same quality in its own compatibility path.
+ *
+ * Failure is never fatal: an image that cannot be decoded or re-encoded passes through
+ * untouched, because an expensive screenshot beats a failed action.
  */
 function budgetImage(image: { mimeType: string; data: string }): { mimeType: string; data: string } {
   try {
     const decoded = nativeImage.createFromBuffer(Buffer.from(image.data, "base64"));
     const { width, height } = decoded.getSize();
+    if (width === 0 || height === 0) return image;
+
     const longest = Math.max(width, height);
-    if (longest <= MAX_IMAGE_EDGE || longest === 0) return image;
     // `resize` keeps the aspect ratio when only one dimension is given.
-    const resized = width >= height
-      ? decoded.resize({ width: MAX_IMAGE_EDGE, quality: "good" })
-      : decoded.resize({ height: MAX_IMAGE_EDGE, quality: "good" });
-    const png = resized.toPNG();
-    if (png.length === 0) return image;
-    return { mimeType: "image/png", data: png.toString("base64") };
+    const scaled =
+      longest <= MAX_IMAGE_EDGE
+        ? decoded
+        : width >= height
+          ? decoded.resize({ width: MAX_IMAGE_EDGE, quality: "good" })
+          : decoded.resize({ height: MAX_IMAGE_EDGE, quality: "good" });
+
+    const png = scaled.toPNG();
+    if (png.length > 0 && png.length <= MAX_IMAGE_BYTES) {
+      return scaled === decoded ? image : { mimeType: "image/png", data: png.toString("base64") };
+    }
+
+    const jpeg = scaled.toJPEG(JPEG_QUALITY);
+    if (jpeg.length === 0) {
+      return png.length > 0 && scaled !== decoded ? { mimeType: "image/png", data: png.toString("base64") } : image;
+    }
+    // A JPEG that somehow came out larger than the PNG is not an improvement.
+    if (png.length > 0 && png.length <= jpeg.length) {
+      return scaled === decoded ? image : { mimeType: "image/png", data: png.toString("base64") };
+    }
+    return { mimeType: "image/jpeg", data: jpeg.toString("base64") };
   } catch {
     return image;
   }
