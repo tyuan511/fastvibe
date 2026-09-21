@@ -26,7 +26,8 @@
   "extensions": "Extensions",
   "import": "Import",
   "about": "About",
-  "remote": "Remote access"
+  "remote": "Remote access",
+  "computer": "Computer control"
  },
  "backToApp": "Back to app",
  "personalization": {
@@ -651,5 +652,39 @@
   "turnOff": "Turn off remote access",
   "turnOffDesc": "Stops the server and clears the password. Every logged-in device is signed out.",
   "localOnly": "Remote access is managed on the computer itself"
+ },
+ "computer": {
+  "permissionTitle": "System permissions",
+  "checking": "Checking permissions…",
+  "granted": "Granted",
+  "notGranted": "Not granted",
+  "accessibility": "Accessibility",
+  "accessibilityDesc": "Lets FastVibe read window contents and click and type for you",
+  "screenRecording": "Screen Recording",
+  "screenRecordingDesc": "Lets FastVibe capture the screen, so it can see what is on it",
+  "grant": "Start granting",
+  "recheck": "Check again",
+  "unavailable": "No computer-control engine is available for this OS or architecture",
+  "windowsNote": "Windows needs no extra permission — computer control can be switched on directly.",
+  "linuxNote": "Linux needs no extra permission; support under Wayland depends on the compositor.",
+  "remoteOnly": "Computer-control permissions and switches can only be viewed and changed in FastVibe on that machine.",
+  "controlTitle": "Control",
+  "enable": "Allow controlling the computer",
+  "enableDesc": "Let FastVibe control other applications on your computer",
+  "background": "Prefer background delivery",
+  "backgroundDesc": "Does not take focus, so you can carry on working; a target that cannot accept it reports an error instead of grabbing focus anyway",
+  "clipboard": "Read and write the clipboard",
+  "clipboardDesc": "The clipboard is shared by every application, and writing replaces what you had on it",
+  "allowedTitle": "Always allowed apps",
+  "allowedDesc": "Actions in these applications are not confirmed each time. Everything else still asks, per the current permission mode.",
+  "allowedEmpty": "None",
+  "allowedPick": "Pick a running app",
+  "allowedAdd": "Add",
+  "allowedRemove": "Remove",
+  "grantHint": "Press Start granting once and FastVibe walks you through it: Screen Recording first — its settings page opens with a floating panel, which you drag into the list — and once the grant is detected, Accessibility opens by itself for the same gesture.",
+  "dragNow": "Drag it in",
+  "flowProgress": "Step {{step}}/{{total}} · waiting for the drop",
+  "flowHint": "The panel is floating above System Settings. Drag it into the list for this step; the next one opens by itself. Esc cancels.",
+  "cancelFlow": "Cancel"
  }
 }

@@ -49,6 +49,15 @@ import { PiProcessManager } from "./pi/process-manager";
 import { fetchPackageCatalog } from "./pi/package-catalog";
 import { TerminalSessions } from "./engine/terminal-sessions";
 import { attachBrowserRenderer, guardGuestPopups, installBrowserGlobal, respondBrowserRequest } from "./pi/browser-bridge";
+import {
+  computerPermissions,
+  installComputerGlobal,
+  listComputerApps,
+  openComputerSettings,
+  requestComputerPermissions,
+  startComputerDrag,
+} from "./pi/cua-bridge";
+import { cancelGrantFlow, grantFlowState, startGrantFlow } from "./pi/computer-grant-flow";
 import { importBrowserProfile, listBrowserProfiles } from "./engine/browser-profiles";
 import type { ImportSourceId, ProviderModel, UsageRange } from "@shared/types";
 import type { GitBranch, GitDiffSource, GitStatus } from "@shared/ipc";
@@ -263,6 +272,22 @@ function registerIpc(): void {
     if (!allowed) throw new Error(uiText("浏览器配置文件未通过校验，请重新打开导入列表", "Browser profile failed validation. Open the list again."));
     return importBrowserProfile(allowed, (cookie) => session.fromPartition("persist:fastvibe-browser").cookies.set(cookie));
   });
+  handle(Ipc.computerPermissions, () => computerPermissions());
+  handle(Ipc.computerRequestPermissions, () => requestComputerPermissions());
+  handle(Ipc.computerOpenSettings, () => openComputerSettings());
+  handle(Ipc.computerListApps, () => listComputerApps());
+  handle(Ipc.computerStartDrag, (_payload, ctx) => {
+    // A drag belongs to the window the gesture started in — in practice the floating
+    // grant panel, which is a window of its own. A remote caller has no `webContents`
+    // to drag from, which is why the policy denies this method outright.
+    const contents = ctx.window?.webContents;
+    if (!contents) throw new Error(uiText("需要在桌面端窗口中拖拽", "Dragging requires a desktop window"));
+    startComputerDrag(contents);
+  });
+  handle(Ipc.computerStartGrantFlow, () => startGrantFlow());
+  handle(Ipc.computerCancelGrantFlow, () => cancelGrantFlow());
+  handle(Ipc.computerGetGrantFlow, () => grantFlowState());
+
   handle(Ipc.engineGetStatus, () => engine.status);
 
   handle(Ipc.engineStart, async (payload?: { cwd?: string }) => {
@@ -933,6 +958,13 @@ app.whenReady().then(async () => {
   if (shutdownPhase !== "running") return;
   log.info("app ready");
   installBrowserGlobal();
+  // Registers the bridge global and an at-quit driver shutdown. The native library is
+  // still not loaded here — `cua-bridge` imports it on the first `computer_*` call, so a
+  // user who never touches the feature pays nothing for it.
+  installComputerGlobal();
+  // The grant panel is a window, so it is torn down where the other windows are, not
+  // inside the bridge — which would make the bridge and the flow import each other.
+  app.once("will-quit", () => cancelGrantFlow());
   applyAppIcon();
   const startupSettings = readAppSettings(getFastVibePaths());
   applyNativeTheme(startupSettings);

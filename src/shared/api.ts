@@ -442,6 +442,19 @@ export function createFastVibeApi(t: ApiTransport) {
     stats: {
       usage: (range: UsageRange): Promise<UsageStats> => t.invoke(Ipc.statsUsage, { range }),
     },
+    computer: {
+      permissions: (): Promise<import("@shared/types").ComputerPermissionStatus> => t.invoke(Ipc.computerPermissions),
+      requestPermissions: (): Promise<import("@shared/types").ComputerPermissionStatus> =>
+        t.invoke(Ipc.computerRequestPermissions),
+      openSettings: (): Promise<void> => t.invoke(Ipc.computerOpenSettings),
+      listApps: (): Promise<import("@shared/types").ComputerAppInfo[]> => t.invoke(Ipc.computerListApps),
+      startDrag: (): Promise<void> => t.invoke(Ipc.computerStartDrag),
+      startGrantFlow: (): Promise<import("@shared/types").GrantFlowState> => t.invoke(Ipc.computerStartGrantFlow),
+      cancelGrantFlow: (): Promise<void> => t.invoke(Ipc.computerCancelGrantFlow),
+      getGrantFlow: (): Promise<import("@shared/types").GrantFlowState> => t.invoke(Ipc.computerGetGrantFlow),
+      onGrantFlowState: (listener: (state: import("@shared/types").GrantFlowState) => void): (() => void) =>
+        t.subscribe(Ipc.computerGrantFlowState, listener),
+    },
     browser: {
       listProfiles: (): Promise<BrowserProfileInfo[]> => t.invoke(Ipc.browserListProfiles),
       importProfile: (profile: BrowserProfileInfo): Promise<BrowserImportResult> => t.invoke(Ipc.browserImportProfile, { profile }),

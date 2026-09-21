@@ -43,6 +43,16 @@ extraResources:
   # they must stay outside the asar archive.
   - from: resources/extensions
     to: extensions
+  # Built-in skills are read from `resourcesPath/skills` at runtime
+  # (`builtinSkillPaths`). Without this entry that lookup finds nothing in a packaged
+  # build and the skills silently apply only in development.
+  - from: resources/skills
+    to: skills
+  # The floating grant panel is a static page loaded by path into its own window, and
+  # it references `../icon.png` — which is why it sits next to the icon out here rather
+  # than becoming a third renderer entry point.
+  - from: resources/grant-overlay
+    to: grant-overlay
   - from: resources/icon.icns
     to: icon.icns
   - from: resources/icon.png
@@ -54,6 +64,12 @@ asarUnpack:
   - "**/*.node"
   - "**/*.wasm"
   - "**/node-pty/prebuilds/**"
+  # cua-driver's native packages ship a shared library (.dylib/.so/.dll) *beside* their
+  # .node addon, and the loader resolves it by path from the package directory. Only the
+  # .node is covered by the glob above; the shared library would be left inside the asar
+  # archive, which dlopen cannot open. Unpack the package so both halves land on disk
+  # together — the per-platform `files` filters below keep it to one architecture.
+  - "**/node_modules/@trycua/cua-driver-*/**"
 
 # node-pty / koffi / photon ship N-API prebuilds that already work in Electron.
 # Avoid running node-gyp against a toolchain the CI image may not have.
@@ -116,6 +132,11 @@ mac:
     # runners, which may not have clipboard-darwin-x64 installed). Drop the
     # other arch's package; the loader tries universal first, then ${arch}.
     - "!**/node_modules/@mariozechner/clipboard-darwin-!(${arch}|universal){,/**/*}"
+    # ~50 MB per architecture, so shipping the other one doubles the cost of a feature
+    # it cannot serve. pnpm normally installs only the host's package anyway; these
+    # filters matter when a build host installs several (`supportedArchitectures`).
+    - "!**/node_modules/@trycua/cua-driver-{win32,linux}-*{,/**/*}"
+    - "!**/node_modules/@trycua/cua-driver-darwin-!(${arch}){,/**/*}"
   # No `arch:` here on purpose. `computeArchToTargetNamesMap` only falls back to the
   # architectures named on the command line when a target declares none of its own
   # (`archs == null ? defaultArchs : asArray(archs)`), so listing them here made
@@ -138,6 +159,8 @@ win:
     - "!**/node_modules/@earendil-works/pi-tui/native/win32/prebuilds/win32-!(${arch}){,/**/*}"
     - "!**/node_modules/@mariozechner/clipboard-{darwin,linux}-*/**"
     - "!**/node_modules/@mariozechner/clipboard-win32-!(${arch}*){,/**/*}"
+    - "!**/node_modules/@trycua/cua-driver-{darwin,linux}-*{,/**/*}"
+    - "!**/node_modules/@trycua/cua-driver-win32-!(${arch}*){,/**/*}"
   target:
     - target: nsis
       arch:
@@ -158,6 +181,8 @@ linux:
     - "!**/node_modules/@earendil-works/pi-tui/native/{darwin,win32}{,/**/*}"
     - "!**/node_modules/@mariozechner/clipboard-{darwin,win32}-*/**"
     - "!**/node_modules/@mariozechner/clipboard-linux-!(${arch}*){,/**/*}"
+    - "!**/node_modules/@trycua/cua-driver-{darwin,win32}-*{,/**/*}"
+    - "!**/node_modules/@trycua/cua-driver-linux-!(${arch}*){,/**/*}"
   target:
     - AppImage
     - deb

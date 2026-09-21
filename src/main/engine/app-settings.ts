@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { nativeTheme, type BrowserWindow } from "electron";
-import type { EngineModel, PermissionMode } from "@shared/types";
+import type { ComputerSettings, EngineModel, PermissionMode } from "@shared/types";
 import type { FastVibePaths } from "./paths";
 
 const VERSION = 1;
@@ -67,6 +67,25 @@ export function readAutoCompact(paths: FastVibePaths): boolean {
   return typeof value === "boolean" ? value : true;
 }
 
+/**
+ * 电脑操控 (设置 → 电脑操控).
+ *
+ * Read per call rather than cached in the bridge, so turning the master switch off stops
+ * a run that is already going instead of only the next one. `readAppSettings` is itself
+ * stat-cached, so this stays cheap enough to sit in front of every desktop action.
+ */
+export function readComputerSettings(paths: FastVibePaths): ComputerSettings {
+  const settings = readAppSettings(paths);
+  return {
+    // Defaults match the renderer's: a machine whose settings file has not been written
+    // yet must not be drivable, which is the opposite of how the other preferences fail.
+    enabled: settings.computerEnabled === true,
+    clipboard: settings.computerClipboard === true,
+    preferBackground: settings.computerPreferBackground !== false,
+    allowedApps: allowedAppIds(settings.computerAllowedApps),
+  };
+}
+
 export function writeAppSettings(paths: FastVibePaths, settings: PersistedSettings): void {
   const payload: SettingsFile = { version: VERSION, settings };
   writeFileSync(paths.settingsFile, `${JSON.stringify(payload, null, 2)}\n`);
@@ -103,6 +122,22 @@ export const PERMISSION_MODE_ENV = "FASTVIBE_PERMISSION_MODE";
  */
 export function applyPermissionMode(settings: PersistedSettings): void {
   setPermissionModeEnv(settings.permissionMode);
+  applyComputerAllowedApps(settings);
+}
+
+/** Same channel, same reason: 始终允许的应用 has to reach the sandbox extension. */
+export const COMPUTER_ALLOWED_APPS_ENV = "FASTVIBE_COMPUTER_ALLOWED_APPS";
+
+export function applyComputerAllowedApps(settings: PersistedSettings): void {
+  process.env[COMPUTER_ALLOWED_APPS_ENV] = JSON.stringify(allowedAppIds(settings.computerAllowedApps));
+}
+
+/** The identities out of 始终允许的应用; the display names stored beside them are the UI's. */
+function allowedAppIds(list: unknown): string[] {
+  if (!Array.isArray(list)) return [];
+  return list
+    .map((item) => (item && typeof item === "object" ? (item as { id?: unknown }).id : undefined))
+    .filter((id): id is string => typeof id === "string");
 }
 
 /**
@@ -128,6 +163,7 @@ export function applyStartupPermissionMode(paths: FastVibePaths): void {
     writeAppSettings(paths, { ...settings, permissionMode: mode });
   }
   setPermissionModeEnv(mode);
+  applyComputerAllowedApps(settings);
 }
 
 function permissionModeOf(value: unknown): PermissionMode | undefined {

@@ -32,6 +32,7 @@ import { DefaultModelSelect } from "./default-model-select";
 import { ExtensionsSettings } from "./extensions-settings";
 import { McpSettings } from "./mcp-settings";
 import { RemoteSettings } from "./remote-settings";
+import { ComputerSettings } from "./computer-settings";
 import { SkillsSettings } from "./skills-settings";
 import { THINKING_MENU_ORDER, thinkingMenuItems, thinkingMenuLabel } from "@/lib/thinking-levels";
 import { ThemeSelect } from "./theme-select";
@@ -490,6 +491,7 @@ export function SettingsDialog({
           {section === "archived" ? <ArchivedSettings onDeleteConversations={onDeleteConversations} /> : null}
           {section === "usage" ? <UsageSettings /> : null}
           {section === "remote" ? <RemoteSettings /> : null}
+          {section === "computer" ? <ComputerSettings /> : null}
 
           {section === "subagents" ? <SubagentsSettings models={models} /> : null}
           {section === "mcp" ? <McpSettings /> : null}

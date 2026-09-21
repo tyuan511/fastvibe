@@ -433,6 +433,116 @@ export type BrowserRequest = {
   conversationId?: string;
 };
 
+/**
+ * One `computer_*` tool call on its way to Cua Driver.
+ *
+ * A flat bag rather than a discriminated union, matching `BrowserRequest`: the extension
+ * that builds these is loaded from outside the bundle and cannot import this file, so the
+ * type documents the contract for the main-process half and nothing enforces it across
+ * the boundary anyway.
+ */
+export type ComputerRequest = {
+  action: string;
+  /** Process id of the target app, from `computer_list_apps`. */
+  pid?: number;
+  /** Window id as a decimal string — the driver's ids are `bigint` and JSON is not. */
+  windowId?: string;
+  x?: number;
+  y?: number;
+  text?: string;
+  key?: string;
+  keys?: string[];
+  modifiers?: string[];
+  /** Opaque handle for an element from `computer_window_state`, preferred over x/y. */
+  elementToken?: string;
+  button?: "left" | "right" | "middle";
+  count?: number;
+  direction?: "up" | "down" | "left" | "right";
+  amount?: number;
+  /** Menu item path, e.g. ["File", "Save"]. */
+  path?: string[];
+  query?: string;
+  /** Opt in to stealing focus. Background delivery is the default. */
+  foreground?: boolean;
+  includeScreenshot?: boolean;
+  maxElements?: number;
+  onScreenOnly?: boolean;
+  timeoutMs?: number;
+  conversationId?: string;
+};
+
+export type ComputerResult = {
+  text: string;
+  /** Base64 payloads, shaped like the SDK's own image content parts. */
+  images: Array<{ mimeType: string; data: string }>;
+  structured?: string;
+};
+
+/**
+ * Whether this machine will let FastVibe drive it.
+ *
+ * `ready` is the only field a caller should branch on; the two booleans exist so the UI
+ * can name the toggle that is still off rather than saying "permission denied".
+ *
+ * `available` is a different question from `ready`: it is false when the native engine
+ * could not be loaded at all (an architecture with no native package), where no amount
+ * of granting will help and the UI should say so instead of offering a button.
+ */
+export type ComputerPermissionStatus = {
+  platform: string;
+  accessibility: boolean;
+  screenRecording: boolean;
+  ready: boolean;
+  available: boolean;
+  /** Why the engine is unavailable, when it is. */
+  error?: string;
+};
+
+/** The two macOS grants the driver needs, named as `ComputerPermissionStatus` keys. */
+export type GrantPermission = "accessibility" | "screenRecording";
+
+/**
+ * Where the guided grant flow has got to.
+ *
+ * `step`/`total` count the permissions this run still had to collect when it started, so
+ * a machine that already had Screen Recording reports 1/1 rather than a misleading 2/2.
+ */
+export type GrantFlowState = {
+  active: boolean;
+  permission?: GrantPermission;
+  step: number;
+  total: number;
+};
+
+/** One running application, as the Settings allow-list picker lists them. */
+export type ComputerAppInfo = {
+  pid: number;
+  name: string;
+  bundleId?: string;
+  active: boolean;
+};
+
+/**
+ * 电脑操控 preferences.
+ *
+ * Read by the bridge on every call rather than cached, so flipping a switch applies to
+ * a run that is already going — the same contract the permission modes have.
+ */
+export type ComputerSettings = {
+  /** Master switch. Off means the `computer_*` tools refuse before touching the driver. */
+  enabled: boolean;
+  /** Clipboard is shared by every application, so it gets its own switch. */
+  clipboard: boolean;
+  /** Prefer delivery that does not take focus from whatever the user is doing. */
+  preferBackground: boolean;
+  /**
+   * Applications whose windows never raise a confirmation, by bundle id (macOS) or
+   * executable name. "Always allowed" in the sense of the confirmation dialog only —
+   * it does not widen what the tools can do.
+   */
+  allowedApps: string[];
+};
+
 export type BrowserImportResult = {
   browser: string;
   profile: string;
