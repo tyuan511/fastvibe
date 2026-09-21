@@ -169,6 +169,21 @@ jobs:
           done
           [ "$found" = 1 ] || { echo "no .app found under release/"; exit 1; }
 
+      # The updater follows the installer filename from latest.yml. Fail the release
+      # before publishing if the manifest points at a differently named asset — GitHub
+      # otherwise accepts both files and every Windows download fails with 404.
+      - name: Verify Windows update manifest
+        if: matrix.platform == 'win'
+        shell: pwsh
+        run: |
+          $manifest = Get-Content release/latest.yml -Raw
+          $match = [regex]::Match($manifest, '(?m)^path:\s*(.+)$')
+          if (-not $match.Success) { throw 'release/latest.yml has no installer path' }
+          $installer = Join-Path 'release' $match.Groups[1].Value.Trim().Trim("'").Trim('"')
+          if (-not (Test-Path -LiteralPath $installer)) {
+            throw "latest.yml points to '$installer', but that file was not produced"
+          }
+
       # One manifest covers both architectures and only one file can carry the name
       # the updater fetches, so neither mac leg may publish its own: the second to
       # finish would overwrite the first, and the loser's users would be updating from

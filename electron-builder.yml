@@ -181,6 +181,11 @@ win:
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
+  # Keep the installer name identical to the name written into latest.yml.
+  # Without an explicit pattern electron-builder may sanitize the generated
+  # GitHub asset name differently from the manifest, making Windows updates
+  # request a non-existent installer and return 404.
+  artifactName: FastVibe.Setup.${version}.${ext}
 
 linux:
   icon: resources/icon.png
