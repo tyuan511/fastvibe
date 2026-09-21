@@ -443,6 +443,13 @@ export type BrowserRequest = {
  */
 export type ComputerRequest = {
   action: string;
+  /**
+   * For `action: "batch"`: the sequence to run, in order, stopping at the first failure.
+   *
+   * Driving a GUI one tool call at a time costs a model round trip, a confirmation and a
+   * screenshot per click. A sequence collapses the predictable runs into one call.
+   */
+  steps?: ComputerRequest[];
   /** Process id of the target app, from `computer_list_apps`. */
   pid?: number;
   /** Window id as a decimal string — the driver's ids are `bigint` and JSON is not. */

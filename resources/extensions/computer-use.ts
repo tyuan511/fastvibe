@@ -16,6 +16,8 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 type ComputerRequest = {
   action: string;
+  /** For `action: "batch"`: the sequence to run in order. */
+  steps?: ComputerRequest[];
   pid?: number;
   windowId?: string;
   x?: number;
@@ -277,6 +279,48 @@ export default function computerUse(pi: ExtensionAPI): void {
     }),
     async execute(_id, params) {
       return call("clipboard_write", { text: params.text });
+    },
+  });
+
+  pi.registerTool({
+    name: "computer_batch",
+    label: "连续操作",
+    description:
+      "一次执行一串动作，按顺序跑，任何一步失败就停下并告诉你停在哪。只要下一步不依赖上一步的返回结果，就应该用它，而不是连着发好几个 computer_* 调用——每个单独调用都要多一轮模型往返、一次确认和一张截图。\n" +
+      "典型用法：点击输入框 → 输入文本 → 回车 → 截图。每步的 action 和参数与同名单独工具一致（click、type、key、hotkey、scroll、menu、screenshot、window_state、list_apps、list_windows、clipboard_read、clipboard_write）。\n" +
+      "不要把需要先看结果再决定的步骤放进同一批：元素令牌要先 computer_window_state 拿到，拿令牌和用令牌应该分两次。",
+    promptSnippet: "连续执行几步电脑操作",
+    parameters: Type.Object({
+      steps: Type.Array(
+        Type.Object({
+          action: Type.String({
+            description: "click、type、key、hotkey、scroll、menu、screenshot、window_state、list_apps、list_windows、clipboard_read、clipboard_write",
+          }),
+          elementToken: Type.Optional(Type.String()),
+          pid: Type.Optional(Type.Number()),
+          windowId: Type.Optional(Type.String()),
+          x: Type.Optional(Type.Number()),
+          y: Type.Optional(Type.Number()),
+          text: Type.Optional(Type.String()),
+          key: Type.Optional(Type.String()),
+          keys: Type.Optional(Type.Array(Type.String())),
+          modifiers: Type.Optional(Type.Array(Type.String())),
+          button: Type.Optional(Type.String()),
+          count: Type.Optional(Type.Number()),
+          direction: Type.Optional(Type.String()),
+          amount: Type.Optional(Type.Number()),
+          path: Type.Optional(Type.Array(Type.String())),
+          query: Type.Optional(Type.String()),
+          foreground: Type.Optional(Type.Boolean()),
+          includeScreenshot: Type.Optional(Type.Boolean()),
+          maxElements: Type.Optional(Type.Number()),
+          onScreenOnly: Type.Optional(Type.Boolean()),
+        }),
+        { description: "按顺序执行的动作列表" },
+      ),
+    }),
+    async execute(_id, params) {
+      return call("batch", { steps: params.steps as any });
     },
   });
 }

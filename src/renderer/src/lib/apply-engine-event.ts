@@ -134,6 +134,22 @@ const MESSAGE_BOUNDARY_EVENTS = new Set([
   "tool_execution_end",
 ]);
 
+/**
+ * The inner types of a `message_update` that write the reply itself, as opposed to
+ * closing it (`done`) or reporting why it stopped (`error`). Only these mean the
+ * attempt a retry was waiting for is now streaming.
+ */
+const STREAMED_CONTENT = new Set([
+  "text_delta",
+  "thinking_delta",
+  "toolcall_start",
+  "tool_call_start",
+  "toolcall_delta",
+  "tool_call_delta",
+  "toolcall_end",
+  "tool_call_end",
+]);
+
 /** User aborts stay silent; only `stopReason: "error"` becomes a visible failure. */
 function errorFromAssistant(value: unknown): string | undefined {
   if (!isRecord(value) || value.stopReason !== "error") return undefined;
@@ -253,6 +269,28 @@ function clearTrailingAssistantErrors(messages: ChatMessage[]): ChatMessage[] {
     if (!item.error) continue;
     if (next === messages) next = next.slice();
     next[index] = { ...item, error: undefined };
+  }
+  return next;
+}
+
+/**
+ * Drop a retry banner off every consecutive trailing assistant.
+ *
+ * The banner describes the *wait* for the next attempt — the backoff the SDK is
+ * sitting out, with the provider's error behind it. The moment that attempt
+ * starts writing (a new `message_start`, then its deltas) the wait is over, and
+ * the banner sits on the very row the reply is streaming into: left there it
+ * reads as 正在重试 under live output. `auto_retry_end` only reports the outcome
+ * once the retried message has *finished*, which is far too late to take it down.
+ */
+function clearTrailingAssistantRetry(messages: ChatMessage[]): ChatMessage[] {
+  let next = messages;
+  for (let index = next.length - 1; index >= 0; index -= 1) {
+    const item = next[index];
+    if (item.role !== "assistant") break;
+    if (!item.retry) continue;
+    if (next === messages) next = next.slice();
+    next[index] = { ...item, retry: undefined };
   }
   return next;
 }
@@ -437,7 +475,17 @@ function applyEvent(
   // echo is skipped; `user_message_persisted` adopts its session id.
   if (type === "message_start") {
     const message = isRecord(event.message) ? event.message : undefined;
-    if (message?.role !== "user") return { messages: next, streaming: nextStreaming };
+    if (message?.role !== "user") {
+      // The reply the retry was waiting for has begun streaming, so the banner that
+      // announced the wait for it comes down here, at the very first event of that
+      // stream. It sits on the row the reply is being written into, and
+      // `auto_retry_end` only arrives once the reply has *finished* — by which point
+      // the user has been reading it under a 正在重试.
+      if (message?.role === "assistant") {
+        return { messages: clearTrailingAssistantRetry(next), streaming: nextStreaming };
+      }
+      return { messages: next, streaming: nextStreaming };
+    }
     if (lastUserIsLocal(next)) return { messages: next, streaming: nextStreaming };
     return { messages: appendMessage(next, userRowFromEngine(message)), streaming: nextStreaming };
   }
@@ -644,6 +692,14 @@ function applyEvent(
     const inner = isRecord(event.assistantMessageEvent) ? event.assistantMessageEvent : null;
     const innerType = asString(inner?.type);
     if (!inner) return { messages: next, streaming: nextStreaming };
+
+    // Content, as opposed to the end of the message. The retried attempt is writing,
+    // so the banner that announced the wait for it goes now rather than riding the
+    // streamed reply (see `clearTrailingAssistantRetry`).
+    if (innerType !== undefined && STREAMED_CONTENT.has(innerType)) {
+      const target = ensureAssistant();
+      if (target.retry) target.retry = undefined;
+    }
 
     if (innerType === "text_delta") {
       const delta = asString(inner.delta) ?? asString(inner.text) ?? "";

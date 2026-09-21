@@ -2410,6 +2410,14 @@ export class PiProcessManager {
       // — and a second client opening it mid-run would never learn of it.
       this.#stamp(payload);
       this.#retain(conversation.id, payload, RETAIN_FROM_STREAM);
+      // A retry banner is only true while the retry is still waiting out its backoff.
+      // The attempt it announced starts streaming as soon as the provider answers, and
+      // the banner has to come down then — in the retained copy too: it is what a client
+      // that connects mid-attempt replays onto a transcript already holding the reply
+      // that stream produced. Live clients fold the same event the same way.
+      if (event.type === "message_start" && isAssistantEngineMessage(event.message)) {
+        this.#forgetRetained(conversation.id, "auto_retry_start");
+      }
       if (this.#activeId === conversation.id || conversation.kind === "side-chat") {
         this.#emit(payload);
         return;
@@ -2486,6 +2494,22 @@ export class PiProcessManager {
       return;
     }
     turn.events.push(payload);
+  }
+
+  /**
+   * Take a retained event back, because a later one in the same turn made it untrue.
+   *
+   * The retained list is a *replay* of what the live stream said, so it has to be
+   * revised the moment the live stream says something else. A retry banner is the
+   * case: it is retained while the backoff is the truth, and stops being the truth
+   * the instant the retried attempt starts streaming.
+   */
+  #forgetRetained(conversationId: string, type: string): void {
+    const turn = this.#turnEvents.get(conversationId);
+    if (!turn) return;
+    const kept = turn.events.filter((item) => item.type !== type);
+    if (kept.length === turn.events.length) return;
+    turn.events = kept;
   }
 
   #emitOAuth(payload: OAuthEventPayload): void {

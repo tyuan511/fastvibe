@@ -341,6 +341,18 @@ function windowId(value: string | undefined): bigint {
 /** Actions that read or replace the clipboard, which 电脑操控 gates separately. */
 const CLIPBOARD_ACTIONS = new Set(["clipboard_read", "clipboard_write"]);
 
+/**
+ * Run one action, or a whole sequence, against the desktop.
+ *
+ * A sequence is not a convenience wrapper. Driving a GUI one tool call at a time means
+ * a model round trip, a confirmation and a screenshot between every click — a dozen
+ * steps of ordinary work becomes a dozen of each, and the cost shows up as latency the
+ * user watches and tokens they pay for. `steps` collapses the predictable runs (click,
+ * type, press Return, look) into a single call while keeping every step's result.
+ *
+ * It stops at the first failure and reports how far it got. Continuing past a failed
+ * step would carry on typing into a window that never opened.
+ */
 export async function requestComputer(request: ComputerRequest): Promise<ComputerResult> {
   return serialize(async () => {
     // Read per call, not per session: a user who turns the switch off mid-run means it
@@ -354,13 +366,22 @@ export async function requestComputer(request: ComputerRequest): Promise<Compute
         ),
       );
     }
-    if (CLIPBOARD_ACTIONS.has(request.action) && !settings.clipboard) {
+    const steps = request.action === "batch" ? (request.steps ?? []) : [request];
+    if (steps.length === 0) {
+      throw new Error(uiText("批量操作为空", "The batch contains no steps"));
+    }
+    // Checked across the whole sequence before any of it runs: a batch that would be
+    // refused halfway leaves the desktop in a state nobody asked for.
+    if (!settings.clipboard && steps.some((step) => CLIPBOARD_ACTIONS.has(step.action))) {
       throw new Error(
         uiText(
           "剪贴板访问尚未开启。请在 设置 › 电脑操控 中打开「读写剪贴板」后重试。",
           "Clipboard access is switched off. Enable it in Settings › Computer control and try again.",
         ),
       );
+    }
+    if (steps.some((step) => step.action === "batch")) {
+      throw new Error(uiText("批量操作不能嵌套", "A batch cannot contain another batch"));
     }
     await assertDrivable();
     const module = await driverModule();
@@ -384,15 +405,64 @@ export async function requestComputer(request: ComputerRequest): Promise<Compute
         })
         .catch(() => undefined);
     }
-    const signal = AbortSignal.timeout(Math.max(1_000, Math.min(request.timeoutMs ?? DEFAULT_TIMEOUT_MS, 120_000)));
-    // The preference is a default, not a ceiling: a call that explicitly asked for the
-    // foreground has already been through the confirmation that explains what that costs.
-    const resolved: ComputerRequest = {
-      ...request,
-      foreground: request.foreground ?? !settings.preferBackground,
-    };
-    return dispatch(module, active, resolved, signal);
+    const results: ComputerResult[] = [];
+    for (const [index, step] of steps.entries()) {
+      // Per step rather than per call: a long sequence must not have its last action
+      // cut short by a budget the first one already spent.
+      const signal = AbortSignal.timeout(
+        Math.max(1_000, Math.min(step.timeoutMs ?? request.timeoutMs ?? DEFAULT_TIMEOUT_MS, 120_000)),
+      );
+      // The preference is a default, not a ceiling: a call that explicitly asked for the
+      // foreground has already been through the confirmation that explains what that costs.
+      const resolved: ComputerRequest = {
+        ...step,
+        foreground: step.foreground ?? !settings.preferBackground,
+      };
+      try {
+        results.push(await dispatch(module, active, resolved, signal));
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        if (steps.length === 1) throw error;
+        // Naming the step is the whole value of the report: the model has to know which
+        // of the actions it batched left the desktop where it is.
+        throw new Error(
+          uiText(
+            `第 ${index + 1}/${steps.length} 步（${step.action}）失败：${reason}${summarise(results, steps)}`,
+            `Step ${index + 1}/${steps.length} (${step.action}) failed: ${reason}${summarise(results, steps)}`,
+          ),
+        );
+      }
+    }
+    return steps.length === 1 ? results[0] : merge(results, steps);
   });
+}
+
+/** What a failed batch got through, so the model can reason about where it stopped. */
+function summarise(done: ComputerResult[], steps: ComputerRequest[]): string {
+  if (done.length === 0) return "";
+  const names = steps.slice(0, done.length).map((step) => step.action).join(" → ");
+  return uiText(`（已完成：${names}）`, ` (completed: ${names})`);
+}
+
+/**
+ * One result for a whole sequence.
+ *
+ * Every step's text is kept and labelled, because a batch ending in a screenshot is the
+ * normal shape and the steps before it explain what the screenshot shows. Images are
+ * concatenated in order for the same reason.
+ */
+function merge(results: ComputerResult[], steps: ComputerRequest[]): ComputerResult {
+  const text = results
+    .map((result, index) => {
+      const body = result.text?.trim();
+      return body ? `[${index + 1}/${results.length}] ${steps[index].action}: ${body}` : `[${index + 1}/${results.length}] ${steps[index].action}: ok`;
+    })
+    .join("\n");
+  return {
+    text,
+    images: results.flatMap((result) => result.images),
+    structured: results.find((result) => result.structured)?.structured,
+  };
 }
 
 /**

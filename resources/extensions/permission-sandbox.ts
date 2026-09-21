@@ -76,7 +76,44 @@ const COMPUTER_ACTION_TOOLS = new Set([
   "computer_scroll",
   "computer_menu",
   "computer_clipboard_write",
+  "computer_batch",
 ]);
+
+/** The step actions inside a batch that change something, named as the bridge names them. */
+const BATCH_ACTING_STEPS = new Set(["click", "type", "key", "hotkey", "scroll", "menu", "clipboard_write"]);
+
+/**
+ * A batch is confirmed once, for the sequence as a whole.
+ *
+ * Asking per step would defeat the reason the batch exists — the point is to stop
+ * charging a round trip and a dialog to each click — but a single "run 6 actions?" is
+ * not consent either. So the prompt lists what the sequence will do, in order, and the
+ * user agrees to that list rather than to a count.
+ */
+function describeBatch(input: unknown): string | undefined {
+  const steps = input && typeof input === "object" ? (input as Record<string, unknown>).steps : undefined;
+  if (!Array.isArray(steps) || steps.length === 0) return undefined;
+  const acting = steps.filter(
+    (step) => step && typeof step === "object" && BATCH_ACTING_STEPS.has(String((step as Record<string, unknown>).action)),
+  );
+  // Observation-only sequences change nothing; they are not what the dialog is for.
+  if (acting.length === 0) return undefined;
+  const parts = steps.map((step) => {
+    const record = (step ?? {}) as Record<string, unknown>;
+    const action = String(record.action ?? "?");
+    const text = typeof record.text === "string" ? record.text : "";
+    if (action === "type" && text) return T(`输入「${firstLine(text, 24)}」`, `type "${firstLine(text, 24)}"`);
+    if (action === "key" && typeof record.key === "string") return T(`按 ${record.key}`, `press ${record.key}`);
+    if (action === "menu" && Array.isArray(record.path)) return T(`菜单 ${record.path.join(" › ")}`, `menu ${record.path.join(" › ")}`);
+    return action;
+  });
+  // Long sequences are summarised rather than truncated mid-list: a dialog the user
+  // cannot read in one glance is one they will approve without reading.
+  const shown = parts.slice(0, 6).join(" → ");
+  return parts.length > 6
+    ? T(`${shown} …共 ${parts.length} 步`, `${shown} … ${parts.length} steps in total`)
+    : shown;
+}
 
 /**
  * 始终允许的应用, as 设置 › 电脑操控 wrote them.
@@ -129,6 +166,7 @@ function describeComputer(toolName: string, input: unknown): string {
     const path = input && typeof input === "object" ? (input as Record<string, unknown>).path : undefined;
     if (Array.isArray(path)) return T(`菜单 ${path.join(" › ")}`, `Menu ${path.join(" › ")}`);
   }
+  if (toolName === "computer_batch") return describeBatch(input) ?? toolName;
   return toolName;
 }
 
@@ -291,6 +329,19 @@ function assess(toolName: string, input: unknown, cwd: string): Assessment | nul
   }
 
   if (COMPUTER_OBSERVE_TOOLS.has(toolName)) {
+    return {
+      action: T("查看电脑屏幕", "Read the screen"),
+      detail: toolName,
+      network: false,
+      external: false,
+      risks: [],
+      opaque: false,
+    };
+  }
+
+  // A batch that only looks at things belongs with the observation tools, not with the
+  // ones that change something.
+  if (toolName === "computer_batch" && !describeBatch(input)) {
     return {
       action: T("查看电脑屏幕", "Read the screen"),
       detail: toolName,
