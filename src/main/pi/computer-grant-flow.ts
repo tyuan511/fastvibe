@@ -3,7 +3,7 @@ import { app, BrowserWindow, screen, shell } from "electron";
 import { Ipc } from "@shared/ipc";
 import type { GrantFlowState, GrantPermission } from "@shared/types";
 import { broadcast } from "../ipc/broadcast";
-import { computerPermissions, requestComputerPermissions } from "./cua-bridge";
+import { computerPermissions, requestComputerPermissions, resetComputerWorker } from "./cua-bridge";
 
 /**
  * The guided macOS grant flow: one click, then one permission at a time.
@@ -23,9 +23,14 @@ import { computerPermissions, requestComputerPermissions } from "./cua-bridge";
  * macOS reports the grant, the next step opens itself. The user presses 授权 once and
  * drags twice.
  *
- * Screen Recording goes first deliberately. macOS commonly wants an application
- * restarted before a new Screen Recording grant takes effect, and taking that step first
- * means the restart lands before the rest of the flow rather than in the middle of it.
+ * Screen Recording goes first deliberately. A process is told its TCC answers when it
+ * starts, so whatever was already running keeps being refused until it restarts — and
+ * Screen Recording is the grant that most often exposes this. Taking it first means the
+ * restart that follows lands before the rest of the flow rather than in the middle.
+ *
+ * The process that restarts is the *worker*, not FastVibe: `resetComputerWorker` drops
+ * it when the last grant lands, and the next action spawns one that can see the new
+ * permissions. The user is never asked to relaunch the app.
  */
 
 let overlay: BrowserWindow | null = null;
@@ -207,6 +212,10 @@ async function tick(): Promise<void> {
     stopPolling();
     closeOverlay();
     total = 0;
+    // The worker learned its TCC answers when it started, so one spawned before this
+    // grant is still being refused. Dropping it here is what makes the permission the
+    // user just gave take effect on the very next action instead of after a relaunch.
+    await resetComputerWorker().catch(() => undefined);
     publish();
     return;
   }

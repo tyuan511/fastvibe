@@ -869,6 +869,24 @@ export function bindComputerConversation<T>(conversationId: string, fn: () => Pr
 }
 
 /**
+ * Drop the worker so the next action starts a fresh one.
+ *
+ * macOS hands a process its TCC answers when it starts; a worker spawned before the
+ * user granted Screen Recording keeps being told "no" for as long as it lives, however
+ * many times the tools ask. Cua's own guidance is to call `embedded.restart()` and
+ * reconnect on the new generation — this does the same thing by letting the existing
+ * lazy start do it, which costs one cold start on the next action and avoids a second
+ * reconnection path that would only ever run in this one situation.
+ *
+ * It is why granting no longer asks the user to restart FastVibe: the process that has
+ * to be restarted is the worker, and it is ours.
+ */
+export async function resetComputerWorker(): Promise<void> {
+  if (!driverPromise && !host) return;
+  await shutdownComputer();
+}
+
+/**
  * Exposed for the resource-loaded extension, which cannot import FastVibe internals —
  * it is loaded by path from outside the asar, the same arrangement `browser-bridge` uses.
  */
