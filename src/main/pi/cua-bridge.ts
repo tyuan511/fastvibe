@@ -514,6 +514,50 @@ function optionalTarget(module: DriverModule, request: ComputerRequest) {
   return undefined;
 }
 
+/**
+ * The longest edge a screenshot is allowed to reach before it is sent to a model.
+ *
+ * Vision models resize what they are given to their own working resolution — around
+ * 1568px on the long edge for the current generation — so everything above this is
+ * encoded, transferred, stored in the transcript and billed for, and then thrown away
+ * before the model ever looks at it. A Retina desktop capture is routinely 3360px wide,
+ * which is more than four times the pixels that survive.
+ *
+ * Downscaling rather than re-encoding to JPEG on purpose: the model is reading UI text,
+ * and compression artefacts land hardest on exactly the small glyphs that decide whether
+ * it can find a button.
+ */
+const MAX_IMAGE_EDGE = 1568;
+
+/**
+ * Bring a driver screenshot inside that budget.
+ *
+ * Failure is not fatal anywhere: an image that cannot be decoded or resized is passed
+ * through untouched, because a slightly expensive screenshot is worth more to the caller
+ * than a failed action.
+ */
+function budgetImage(image: { mimeType: string; data: string }): { mimeType: string; data: string } {
+  try {
+    const decoded = nativeImage.createFromBuffer(Buffer.from(image.data, "base64"));
+    const { width, height } = decoded.getSize();
+    const longest = Math.max(width, height);
+    if (longest <= MAX_IMAGE_EDGE || longest === 0) return image;
+    // `resize` keeps the aspect ratio when only one dimension is given.
+    const resized = width >= height
+      ? decoded.resize({ width: MAX_IMAGE_EDGE, quality: "good" })
+      : decoded.resize({ height: MAX_IMAGE_EDGE, quality: "good" });
+    const png = resized.toPNG();
+    if (png.length === 0) return image;
+    return { mimeType: "image/png", data: png.toString("base64") };
+  } catch {
+    return image;
+  }
+}
+
+function budgetImages(images: Array<{ mimeType: string; data: string }>): Array<{ mimeType: string; data: string }> {
+  return images.map(budgetImage);
+}
+
 function toolResult(result: {
   text: string;
   images: Array<{ mimeType: string; dataBase64: string }>;
@@ -526,7 +570,7 @@ function toolResult(result: {
   }
   return {
     text: result.text,
-    images: result.images.map((image) => ({ mimeType: image.mimeType, data: image.dataBase64 })),
+    images: budgetImages(result.images.map((image) => ({ mimeType: image.mimeType, data: image.dataBase64 }))),
     structured: result.structuredJson,
   };
 }
@@ -617,7 +661,7 @@ async function dispatch(
           null,
           2,
         ),
-        images: output.images.map((image) => ({ mimeType: image.mimeType, data: image.dataBase64 })),
+        images: budgetImages(output.images.map((image) => ({ mimeType: image.mimeType, data: image.dataBase64 }))),
       };
     }
 

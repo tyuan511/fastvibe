@@ -25,7 +25,7 @@ import type {
   SubagentInfo,
   WorkspaceSnapshot,
 } from "@shared/types";
-import { applyEngineEvent } from "@/lib/apply-engine-event";
+import { applyEngineEvent, userMessageText } from "@/lib/apply-engine-event";
 import { i18n } from "@/lib/i18n";
 import { resolvePath } from "@/lib/workspace-path";
 import { canRestoreComposer } from "@/lib/composer-race";
@@ -624,6 +624,20 @@ function reduceEvents(state: SessionStore, events: EngineEvent[]): Partial<Sessi
    */
   let broadcast: { id: string; running: boolean } | undefined;
   for (const event of events) {
+    // A queued user turn has no optimistic copy of its own. Once the engine injects
+    // it, remove the matching sending row immediately so the tray cannot outlive
+    // the message that is already in the transcript. This must not depend on whether
+    // the last transcript user row is local: an older optimistic row may still be
+    // present while a queued follow-up is being injected.
+    const delivered = userMessageText(event);
+    if (delivered !== undefined) {
+      const owner = typeof event.conversationId === "string" ? event.conversationId : state.activeId;
+      const sending = queued.filter((item) => item.sending && item.conversationId === owner);
+      if (sending.length > 0) {
+        const match = sending.find((item) => item.sentText === delivered) ?? sending[0];
+        queued = queued.filter((item) => item.id !== match.id);
+      }
+    }
     const applied = applyEngineEvent(messages, event, streaming, partBoundary);
     messages = applied.messages;
     streaming = applied.streaming;
