@@ -98,6 +98,19 @@ jobs:
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
 
+      # electron-builder notarizes the .app and staples the ticket to it — which is
+      # what the zip, and so the updater, carries. The .dmg it then builds around that
+      # app is a new disk image nobody signed, and Gatekeeper assesses a downloaded
+      # image on its own signature: `rejected (source=no usable signature)`. This signs,
+      # notarizes and staples the image too, and asserts the result.
+      - name: Notarize the dmg
+        if: matrix.platform == 'mac' && env.APPLE_CERT_P12 != '' && env.APPLE_API_KEY_P8 != ''
+        run: node scripts/notarize-dmg.mjs
+        env:
+          APPLE_API_KEY: ${{ format('{0}/private_keys/AuthKey.p8', runner.temp) }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+
       # electron-builder only *warns* when it cannot sign or notarize, so a
       # release would otherwise ship unsigned and nobody would notice until a
       # user's Gatekeeper blocked it — or, worse, until their Accessibility grant

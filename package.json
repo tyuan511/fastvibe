@@ -28,7 +28,7 @@
     "test": "node --test 'test/**/*.test.ts'",
     "pack": "pnpm build && pnpm stage:app && electron-builder --dir",
     "dist": "pnpm build && pnpm stage:app && electron-builder --publish never",
-    "dist:mac": "pnpm build && pnpm stage:app && electron-builder --mac --publish never",
+    "dist:mac": "pnpm build && pnpm stage:app && electron-builder --mac --publish never && node scripts/notarize-dmg.mjs",
     "dist:win": "pnpm build && pnpm stage:app && electron-builder --win --publish never",
     "dist:linux": "pnpm build && pnpm stage:app && electron-builder --linux --publish never",
     "typecheck": "node scripts/check-injected-scripts.mjs && tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
