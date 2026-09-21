@@ -169,6 +169,13 @@ jobs:
           # publishing the same tag stack the changelog three times over. The other
           # legs pass no body and keep whatever is already there.
           generate_release_notes: ${{ matrix.platform == 'mac' && matrix.arch == 'arm64' }}
+          # A tag carrying a semver prerelease component (v0.8.3-rc.1) has to be
+          # flagged as one on GitHub, because that flag is the only thing keeping it
+          # away from existing users: electron-updater with allowPrerelease=false
+          # resolves updates through `/releases/latest`, which GitHub answers by
+          # excluding prereleases. It never looks at the version string, so an rc
+          # published as a normal release is offered to everybody within the hour.
+          prerelease: ${{ contains(github.ref_name, '-') }}
           fail_on_unmatched_files: false
           files: |
             release/*.dmg
@@ -216,6 +223,13 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           draft: false
+          # A tag carrying a semver prerelease component (v0.8.3-rc.1) has to be
+          # flagged as one on GitHub, because that flag is the only thing keeping it
+          # away from existing users: electron-updater with allowPrerelease=false
+          # resolves updates through `/releases/latest`, which GitHub answers by
+          # excluding prereleases. It never looks at the version string, so an rc
+          # published as a normal release is offered to everybody within the hour.
+          prerelease: ${{ contains(github.ref_name, '-') }}
           fail_on_unmatched_files: true
           files: release/latest-mac.yml
         env:
