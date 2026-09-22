@@ -24,7 +24,7 @@ Runtime data lives under the app userData directory:
   conversations.json
   providers.json
   mcp.json
-  models-dev.json        models.dev snapshot refreshed from 设置 → 关于, which wins over the bundled one
+  models-dev.json        models.dev snapshot refreshed hourly and from 设置 → 关于; wins over the bundled one
   runtime/engine/
     agent/sessions       session transcripts, passed to the SDK's SessionManager
     agent/.env           provider API keys, injected into the SDK's in-memory auth storage
@@ -297,9 +297,14 @@ Three things that are easy to get wrong here:
 
 ### 窄视口（手机）
 
-Below `md` the sidebar overlays as a drawer instead of pushing (`CollapsiblePanel
-overlay`), and the right pane is not rendered at all — a 375pt screen has no room for the
-terminal, a diff or the file tree, and the browser pane has no webview to drive anyway.
+Below `md` the sidebar overlays as a drawer instead of pushing (`CollapsiblePanel`), and
+the right pane is not rendered at all — a 375pt screen has no room for the terminal, a diff
+or the file tree, and the browser pane has no webview to drive anyway. Above `md` the three
+columns are one `react-resizable-panels` group: `components/ui/resizable.tsx` (added with
+`pnpm shadcn add resizable`) holds the primitives, `lib/use-resizable-panel.ts` binds one
+side panel to the app's own state, and `App.tsx` owns the group. The library owns *who is
+how wide*; the collapsed flags and the resting widths stay in the stores and in
+`settings.json` exactly as before.
 
 **The drawer is the whole viewport** (`100vw`), and nothing caps it. It used to take
 `86vw` under a `maxWidth` of the remembered column width, which read as a defensive
@@ -313,7 +318,7 @@ Three things follow from the drawer covering everything:
 
 - **No backdrop.** There is no dimmed conversation behind it to tap. The button that used
   to be there sat under a full-screen panel and could never be reached.
-- **No splitter.** `ResizeHandle` is not rendered when narrow: there is no edge to drag,
+- **No splitter.** The separator is not rendered when narrow: there is no edge to drag,
   it sat where a thumb scrolls the list, and its drag ended in `writeSidebarWidth` — one
   stray swipe on a phone rewrote the column width of the desktop it was connected to.
 - **The sidebar's own 收起 is the only way out**, so it has to work. Every control that
@@ -327,10 +332,19 @@ not the persisted `sidebarCollapsed`: that preference lives in one `settings.jso
 by every client of this machine, so swiping the drawer open on a phone would otherwise
 collapse the sidebar on the desktop it is connected to.
 
-`CollapsiblePanel` drives **both** `x` and `width` in either mode. Motion only writes the
-keys an `animate` object names and leaves the rest of what it last wrote in place, so a
-branch animating only `width` inherited the drawer's `translateX(-100%)` and parked the
-sidebar off-screen the moment a window crossed the breakpoint.
+`CollapsiblePanel` is the drawer only now, and it still drives **both** `x` and `width`.
+Motion only writes the keys an `animate` object names and leaves the rest of what it last
+wrote in place, so a branch animating only `width` inherited the drawer's
+`translateX(-100%)` and parked the sidebar off-screen the moment a window crossed the
+breakpoint.
+
+The column layout the library replaced had no such trap, but it had a worse one: its
+splitter listened for `mousemove` / `mouseup` on `window`, and the side pane hosts a
+`<webview>`. A pointer that crossed into the guest stopped reaching the parent document,
+so the drag froze mid-way — and a button released over the guest never fired `mouseup`, so
+the splitter stayed welded to the cursor until the next click. The library drives its
+separators with pointer events and `setPointerCapture`, which is the whole point of using
+it.
 
 ### 目录变更要广播（`workspace:changed`）
 
@@ -1131,8 +1145,9 @@ the user installs at runtime via 设置 → 插件, which writes to the isolated
     moved the host out of the park when the pane mounted it, so the guest died on open,
     `usable()` retired the fresh tab, and retiring the last tab collapsed the pane — the
     闪一下 the side pane did when a tool opened the browser. The layer follows the pane's
-    collapse spring through its clipping ancestor's rect and leaves the pane's splitter
-    clickable (`SPLITTER_GUTTER`); a parked or momentarily zero-sized guest stays found
+    width through its clipping ancestor's rect — the panel's own clipping box, which is what
+    shrinks, so the guest is never wider than the pane it sits in; a parked or momentarily
+    zero-sized guest stays found
     (`guestAlive` probes `getURL`), which is what keeps browser-use in a background chat
     working.
 - **Web search** — `web-search.ts` registers a client `web_search` tool only while the
@@ -1250,16 +1265,21 @@ pnpm shadcn add <component> -y
   written before pricing existed leaves `models.json` with no price and every turn is
   billed at $0.
 - `src/main/engine/models-dev.ts` reads the user-updated snapshot first
-  (`models-dev.json` in the app data dir) and the bundled one second, and is otherwise
-  the app's only runtime network call for metadata — always user-initiated, from
-  设置 → 关于 (`models-dev-update.ts`). Deleting the updated file falls back to the copy
-  the app shipped with, and a corrupt one is ignored rather than trusted. Both writers
-  share one encoder (`scripts/models-dev-encode.mjs`, also used by
-  `scripts/sync-models-dev.mjs`), so what 关于 downloads is the format the decoder
-  already reads; a successful update then re-derives `models.json` through
-  `PiProcessManager.reloadModelMetadata()`, which refreshes live sessions like a
-  provider edit but never boots a cold engine. `normalizeModelKey` must stay identical
-  to `normalize` in the sync script.
+  (`models-dev.json` in the app data dir) and the bundled one second. The snapshot is
+  refreshed hourly on the user's machine (`models-dev-refresh.ts`) and on demand from
+  设置 → 关于; both call `models-dev-update.ts`, and a click during the background fetch
+  waits for that same download. A failure is logged and retried an hour later — it is
+  not shown, and it is not polled in a loop. An overdue or missing snapshot is fetched
+  shortly after launch rather than waiting out a full hour; one already inside the hour
+  waits for the rest of it. Deleting the updated file falls back to the copy the app
+  shipped with, and a corrupt one is ignored rather than trusted. Both writers share
+  one encoder (`scripts/models-dev-encode.mjs`, also used by `scripts/sync-models-dev.mjs`),
+  so what is downloaded is the format the decoder already reads. The file is replaced
+  either way (its timestamp is what the schedule waits on), but `models.json` is
+  re-derived through `PiProcessManager.reloadModelMetadata()` only when the catalog
+  content changed — an unchanged hour must not rebind every open session. That reload
+  refreshes live sessions like a provider edit and never boots a cold engine.
+  `normalizeModelKey` must stay identical to `normalize` in the sync script.
 - Resolution order: the updated `models-dev.json`, then
   `process.resourcesPath/models-dev/index.json`, then `resources/models-dev/index.json`.
   Packaging must copy the directory via

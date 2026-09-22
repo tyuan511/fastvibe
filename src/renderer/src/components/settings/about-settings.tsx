@@ -17,9 +17,9 @@ import { Ipc } from "@shared/ipc";
 /**
  * Settings → 关于: who this install is (logo, version) and what it is built from.
  *
- * Two actions live here besides the identity header: refresh the bundled models.dev
- * snapshot (limits and prices move faster than releases), and export the main/renderer
- * logs as a zip for troubleshooting.
+ * Two actions live here besides the identity header: refresh the models.dev snapshot
+ * now (it also refreshes on its own, hourly — limits and prices move faster than
+ * releases), and export the main/renderer logs as a zip for troubleshooting.
  */
 export function AboutSettings(): JSX.Element {
   const { t } = useTranslation("settings");
@@ -33,14 +33,22 @@ export function AboutSettings(): JSX.Element {
 
   useEffect(() => {
     let cancelled = false;
+    // A refresh that lands before getInfo returns would otherwise be overwritten by
+    // the snapshot the page asked for a moment earlier.
+    let live: AppInfo["modelsDev"];
+    const off = window.fastvibe.app.onModelsDev((modelsDev) => {
+      live = modelsDev;
+      if (!cancelled) setInfo((prev) => (prev ? { ...prev, modelsDev } : prev));
+    });
     void window.fastvibe.app
       .getInfo()
       .then((next) => {
-        if (!cancelled) setInfo(next);
+        if (!cancelled) setInfo(live ? { ...next, modelsDev: live } : next);
       })
       .catch(() => undefined);
     return () => {
       cancelled = true;
+      off();
     };
   }, []);
 
@@ -97,6 +105,7 @@ export function AboutSettings(): JSX.Element {
               {modelsDev?.models
                 ? t("about.counts", { models: modelsDev.models, aliases: modelsDev.aliases })
                 : t("about.missing")}
+              <span className="mt-0.5 block">{t("about.autoRefresh")}</span>
               {/* The failure replaces nothing: the counts above are still the ones in use. */}
               {error ? <span className="mt-0.5 block text-destructive">{error}</span> : null}
             </>
@@ -105,7 +114,7 @@ export function AboutSettings(): JSX.Element {
             <div className="flex items-center gap-3">
               {modelsDev?.generatedAt ? (
                 <span className="text-xs text-muted-foreground">
-                  {t("about.generatedAt", { date: new Date(modelsDev.generatedAt).toLocaleDateString() })}
+                  {t("about.generatedAt", { date: new Date(modelsDev.generatedAt).toLocaleString() })}
                 </span>
               ) : null}
               <Button size="xs" variant="outline" disabled={updating} onClick={() => void updateModelsDev()}>

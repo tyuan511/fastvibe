@@ -6,8 +6,9 @@ import { defaultContextWindow } from "./context-window";
 
 /**
  * models.dev metadata, pre-indexed at build time by `scripts/sync-models-dev.mjs` and
- * refreshable at runtime from Settings → 关于 (`models-dev-update.ts` writes the same
- * format into the app data directory, which wins over the bundled copy).
+ * refreshable at runtime (`models-dev-update.ts` writes the same format into the app
+ * data directory, which wins over the bundled copy). The refresh runs hourly
+ * (`models-dev-refresh.ts`) and on demand from Settings → 关于.
  *
  * The artifact is a compact snapshot: `m` holds unique models as tuples and
  * `x` maps every alias to an index in `m`, so lookups are a single Map hit.
@@ -97,12 +98,39 @@ export function bundledIndexPath(): string | null {
 }
 
 /**
- * The snapshot the user pulled from Settings → 关于. It lives in the app's own data
- * directory and wins over the bundled copy, so refreshing metadata does not need a new
- * build of the app; deleting the file falls back to the snapshot the app shipped with.
+ * The snapshot pulled on this machine — hourly, or from Settings → 关于. It lives in the
+ * app's own data directory and wins over the bundled copy, so refreshing metadata does
+ * not need a new build of the app; deleting the file falls back to the snapshot the
+ * app shipped with.
  */
 export function localIndexPath(): string {
   return join(getFastVibePaths().userData, "models-dev.json");
+}
+
+/**
+ * Identity of the catalog currently in use, ignoring when it was written.
+ *
+ * A refresh compares this to the download so an unchanged catalog does not rebind
+ * every open session. `null` means nothing usable is on disk (a missing file, or a
+ * local snapshot the loader would itself reject in favour of the bundled one).
+ */
+export function modelsDevCatalogSignature(): string | null {
+  const local = localIndexPath();
+  const bundled = bundledIndexPath();
+  const path = existsSync(local) ? local : bundled;
+  const signature = path ? catalogSignatureOf(path) : null;
+  if (path === local && signature === null && bundled) return catalogSignatureOf(bundled);
+  return signature;
+}
+
+function catalogSignatureOf(path: string): string | null {
+  try {
+    const snapshot = JSON.parse(readFileSync(path, "utf8")) as BundledIndex;
+    if (!Array.isArray(snapshot.m) || snapshot.m.length === 0) return null;
+    return JSON.stringify([snapshot.v, snapshot.m, snapshot.x]);
+  } catch {
+    return null;
+  }
 }
 
 export class ModelsDevIndex {

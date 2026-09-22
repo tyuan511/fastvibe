@@ -106,6 +106,7 @@
   "modelsDev": "Model metadata",
   "generatedAt": "Generated {{date}}",
   "counts": "models.dev · {{models}} models / {{aliases}} aliases",
+  "autoRefresh": "Refreshes automatically every hour",
   "missing": "No bundled snapshot; defaults will be used",
   "update": "Update",
   "updating": "Updating…",

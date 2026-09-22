@@ -1,7 +1,7 @@
 /**
  * The models.dev snapshot format — written by both `scripts/sync-models-dev.mjs` (at
- * build time, into `resources/models-dev/`) and the app itself (Settings → 关于,
- * into the userData directory), and read by `src/main/engine/models-dev.ts`.
+ * build time, into `resources/models-dev/`) and the app itself (hourly, and from
+ * Settings → 关于, into the userData directory), and read by `src/main/engine/models-dev.ts`.
  *
  * It lives outside `src/main` (plain ESM, no build step) because the sync script is run
  * by bare `node`, while the main bundle imports it as an ordinary module.

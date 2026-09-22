@@ -396,6 +396,8 @@ export function createFastVibeApi(t: ApiTransport) {
       exportLogs: (): Promise<string | undefined> => t.invoke(Ipc.appExportLogs),
       updateModelsDev: (): Promise<import("@shared/ipc").AppModelsDevInfo> =>
         t.invoke(Ipc.modelsDevUpdate),
+      onModelsDev: (listener: (info: import("@shared/ipc").AppModelsDevInfo) => void): (() => void) =>
+        t.subscribe(Ipc.modelsDevChanged, listener),
       newWindow: (): Promise<void> => t.invoke(Ipc.windowNew),
     },
     /** The hand-drawn title bar's window controls (Windows / Linux only). */

@@ -19,6 +19,7 @@ import {
   type CommitStatusPath,
 } from "./engine/commit-message";
 import { loadModelsDev, type ModelsDevStats } from "./engine/models-dev";
+import { startModelsDevRefresh } from "./engine/models-dev-refresh";
 import { updateModelsDevSnapshot } from "./engine/models-dev-update";
 import {
   applyNativeTheme,
@@ -259,6 +260,35 @@ function modelsDevInfo(stats: ModelsDevStats): AppModelsDevInfo {
     generatedAt: stats.generatedAt,
     path: stats.path,
   };
+}
+
+/**
+ * One in-flight refresh, shared by the hourly timer and 设置 → 关于.
+ *
+ * A click during the background fetch waits for that same download rather than
+ * starting a second one. The snapshot is applied to the running engine only when
+ * the catalog itself moved — an unchanged hour must not rebind every open session —
+ * and a cold engine is left alone: its next start reads the file either way.
+ */
+let modelsDevInflight: Promise<AppModelsDevInfo> | null = null;
+
+function refreshModelsDev(): Promise<AppModelsDevInfo> {
+  if (modelsDevInflight) return modelsDevInflight;
+  modelsDevInflight = (async () => {
+    const result = await updateModelsDevSnapshot();
+    if (shutdownPhase === "running" && result.changed) {
+      await engine.reloadModelMetadata().catch((error: unknown) => {
+        log.warn(`models.dev reload failed: ${String(error)}`);
+      });
+    }
+    const info = modelsDevInfo(result);
+    if (shutdownPhase === "running") broadcast(Ipc.modelsDevChanged, info);
+    log.info(`models.dev refreshed models=${info.models} changed=${result.changed}`);
+    return info;
+  })().finally(() => {
+    modelsDevInflight = null;
+  });
+  return modelsDevInflight;
 }
 
 function registerIpc(): void {
@@ -837,15 +867,12 @@ function registerIpc(): void {
   });
   /**
    * Pull the current models.dev catalog (Settings → 关于) and apply it to the running
-   * engine. A refresh that cannot reach the registry has still updated the snapshot,
-   * which is durable and read on the next start, so it is reported as a success rather
-   * than as a failure the user would have to undo.
+   * engine. The hourly refresh calls the same function. A refresh that cannot reach the
+   * registry has still updated the snapshot, which is durable and read on the next
+   * start, so it is reported as a success rather than as a failure the user would have
+   * to undo.
    */
-  handle(Ipc.modelsDevUpdate, async () => {
-    const stats = await updateModelsDevSnapshot();
-    await engine.reloadModelMetadata().catch(() => undefined);
-    return modelsDevInfo(stats);
-  });
+  handle(Ipc.modelsDevUpdate, () => refreshModelsDev());
   handle(Ipc.statsUsage, (payload?: { range?: UsageRange }) => {
     return collectUsageStats(getFastVibePaths(), payload?.range ?? "30d");
   });
@@ -963,6 +990,7 @@ type ShutdownPhase = "running" | "cleaning" | "exiting";
 const SHUTDOWN_TIMEOUT_MS = 5_000;
 const EXIT_FALLBACK_MS = 1_000;
 let shutdownPhase: ShutdownPhase = "running";
+let stopModelsDevRefresh: (() => void) | undefined;
 let shutdownDeadline: NodeJS.Timeout | undefined;
 let devParentWatch: NodeJS.Timeout | undefined;
 
@@ -1075,6 +1103,15 @@ app.whenReady().then(async () => {
 
   createWindow();
   void engine.start();
+  // Limits and prices move faster than releases. Refresh hourly; a snapshot already
+  // within the hour waits out the rest of it instead of fetching at every launch.
+  stopModelsDevRefresh = startModelsDevRefresh({
+    generatedAt: () => loadModelsDev().stats.generatedAt,
+    refresh: () => refreshModelsDev().then(() => undefined),
+    onError: (error) => {
+      log.warn(`models.dev refresh failed: ${error instanceof Error ? error.message : String(error)}`);
+    },
+  });
   // Brought back only if it was running before, and never without a password.
   void restoreRemoteServer();
 
@@ -1099,6 +1136,8 @@ function requestShutdown(reason: string): void {
 
   if (devParentWatch) clearInterval(devParentWatch);
   devParentWatch = undefined;
+  stopModelsDevRefresh?.();
+  stopModelsDevRefresh = undefined;
   // Establish the deadline before calling any cleanup owner. A synchronous failure
   // must not strand the process in the cleaning phase either.
   shutdownDeadline = setTimeout(() => finishShutdown(true), SHUTDOWN_TIMEOUT_MS);

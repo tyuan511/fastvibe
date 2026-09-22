@@ -106,6 +106,7 @@
   "modelsDev": "模型元数据",
   "generatedAt": "生成于 {{date}}",
   "counts": "models.dev · {{models}} 个模型 / {{aliases}} 条索引",
+  "autoRefresh": "每小时自动更新一次",
   "missing": "未内置快照，将使用默认值",
   "update": "更新",
   "updating": "更新中…",

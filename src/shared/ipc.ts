@@ -142,6 +142,8 @@ export const Ipc = {
   appLog: "app:log",
   appExportLogs: "app:export-logs",
   modelsDevUpdate: "models-dev:update",
+  /** Pushed after a models.dev refresh (hourly, or 设置 → 关于) so an open About pane stays current. */
+  modelsDevChanged: "models-dev:changed",
   statsUsage: "stats:usage",
   windowNew: "window:new",
   /** Window controls for the hand-drawn title bar (Windows / Linux). */
