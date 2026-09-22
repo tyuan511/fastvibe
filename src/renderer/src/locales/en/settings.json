@@ -1,4 +1,24 @@
 {
+ "proxy": {
+  "title": "Network proxy",
+  "enabled": "Enable proxy",
+  "scope": "Routes client HTTP(S) / WebSocket traffic: models, login token exchange, updates, downloads and the built-in browser. Direct when off.",
+  "mode": "Proxy mode",
+  "system": "System proxy",
+  "custom": "Custom proxy",
+  "systemHint": "System mode follows system settings and PAC direct-connection rules.",
+  "protocol": "Protocol",
+  "host": "Host",
+  "hostHint": "Hostname or IP only, without a scheme, path or credentials. Enclose IPv6 in brackets.",
+  "port": "Port",
+  "invalidHost": "Enter a valid hostname or IP without a scheme, path, spaces or credentials.",
+  "invalidPort": "Port must be an integer from 1 to 65535.",
+  "applyTitle": "Apply after saving",
+  "limits": "Applying disconnects existing network connections. Local callbacks stay direct. SSH, tunnels, external browsers and external programs are not controlled. Authenticated proxies and system SOCKS4 are not supported.",
+  "apply": "Apply",
+  "saving": "Saving…",
+  "saveFailed": "Could not save proxy settings: {{error}}"
+ },
  "language": {
   "title": "Language",
   "ui": "Interface language",

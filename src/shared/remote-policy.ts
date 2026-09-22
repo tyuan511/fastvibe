@@ -221,6 +221,7 @@ const ALLOWED = new Set<string>([
   Ipc.settingsClear,
   Ipc.settingsGet,
   Ipc.settingsSet,
+  Ipc.settingsProxySet,
   Ipc.statsUsage,
   Ipc.updateGetState,
   Ipc.workspaceFileIcons,

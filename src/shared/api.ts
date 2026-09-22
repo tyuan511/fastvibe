@@ -457,6 +457,7 @@ export function createFastVibeApi(t: ApiTransport) {
       initial: t.settingsInitial,
       load: (): Promise<Record<string, unknown>> => t.invoke(Ipc.settingsGet),
       save: (settings: Record<string, unknown>): Promise<void> => t.invoke(Ipc.settingsSet, settings),
+      saveProxy: (settings: import("./proxy").ProxySettings): Promise<void> => t.invoke(Ipc.settingsProxySet, settings),
       clear: (): Promise<void> => t.invoke(Ipc.settingsClear),
       /**
        * A write made by *another* window. Each window holds its own copy of the
