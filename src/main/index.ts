@@ -77,7 +77,9 @@ const execFileAsync = promisify(execFile);
 
 app.setName("FastVibe");
 configureFastVibeUserData(app.getPath("userData"));
-if (app.isPackaged) process.env.FASTVIBE_RESOURCES_PATH = process.resourcesPath;
+process.env.FASTVIBE_RESOURCES_PATH = app.isPackaged
+  ? process.resourcesPath
+  : join(app.getAppPath(), "resources");
 
 // GUI-launched Electron inherits a stub PATH. Fill in Homebrew / user bins
 // before any agent session, MCP stdio server or in-app terminal is spawned.

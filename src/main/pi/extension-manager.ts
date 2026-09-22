@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { DefaultPackageManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { ExtensionPackage } from "@shared/types";
-import { uiText } from "../engine/ui-text";
+import { uiText } from "../engine/ui-text.ts";
 
 /**
  * FastVibe's own extensions. They are plain files shipped outside the asar
@@ -36,7 +36,11 @@ export const BUILTIN_AGENTS = [
 ] as const;
 
 function resourcesRoot(): string {
-  return process.env.FASTVIBE_RESOURCES_PATH?.trim() || join(__dirname, "../../resources");
+  // Main pins this explicitly. The cwd fallback keeps source-level tests and other
+  // development entry points independent of electron-vite's chunk location: a
+  // bundled module lives under out/main/chunks, where walking up from __dirname
+  // incorrectly points at out/resources and silently drops every built-in extension.
+  return process.env.FASTVIBE_RESOURCES_PATH?.trim() || join(process.cwd(), "resources");
 }
 
 /** Built-in skills, by directory name under `resources/skills`. */
