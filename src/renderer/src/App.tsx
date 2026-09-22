@@ -1,4 +1,5 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useRef, useState, type JSX } from "react";
+import { usePanelRef } from "react-resizable-panels";
 import { motion } from "motion/react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { MessageSquarePlusIcon, PanelLeftOpenIcon, PanelRightOpenIcon } from "@hugeicons/core-free-icons";
@@ -16,6 +17,7 @@ import { Sidebar } from "@/components/layout/sidebar";
 import { SidePane, disposeSidePaneTabs } from "@/components/layout/side-pane";
 import { handleBrowserRequest } from "@/components/layout/side-pane-browser";
 import { PANEL_COLLAPSE_TRANSITION } from "@/components/layout/collapsible-panel";
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { CommandPalette } from "@/components/layout/command-palette";
 import { TitleBar } from "@/components/layout/title-bar";
 import { HAS_CUSTOM_TITLE_BAR, HAS_TRAFFIC_LIGHTS } from "@/lib/platform";
@@ -625,6 +627,34 @@ export function App(): JSX.Element {
   // (`CollapsiblePanel overlay`) and the second is simply not there.
   const narrow = useIsNarrowViewport();
   const archivedIds = useArchivedIds();
+  // Maximised hands the window to the side pane. Emptying the conversation column
+  // rather than unmounting it keeps the shell one three-panel group the library can
+  // undo, and keeps the transcript (and its scroll position) where it was.
+  //
+  // Two details. A frame's delay, because the pane lifts its own size ceiling in
+  // response to this flag and that lands a render later: empty the column first and the
+  // pane is still capped at two thirds, which hands the leftover back to the sidebar.
+  // And `resize` rather than the library's `collapse`, because a collapsible column is
+  // one a stray End or Enter on a splitter can park, and the conversation is the one
+  // panel that must never disappear on a keypress.
+  const conversationPanel = usePanelRef();
+  const conversationWidth = useRef<number | null>(null);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      const panel = conversationPanel.current;
+      if (!panel) return;
+      if (paneMaximized) {
+        // A share, not pixels: the column keeps its proportion if the window is
+        // resized while the pane owns it.
+        conversationWidth.current = panel.getSize().asPercentage;
+        panel.resize(0);
+      } else if (conversationWidth.current !== null) {
+        panel.resize(`${conversationWidth.current}%`);
+        conversationWidth.current = null;
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [paneMaximized]);
   const toggleSidebarShortcut = useShortcutLabel("toggleSidebar");
   const toggleSidePaneShortcut = useShortcutLabel("toggleSidePane");  const newChatShortcut = useShortcutLabel("newChat");
 
@@ -2063,161 +2093,182 @@ export function App(): JSX.Element {
       {/* Draws nothing; it is where the draft's debounced write lives, outside the
           composer's slot so a parked approval does not take it down with it. */}
       <DraftKeeper />
+      {/*
+       * The three columns are one resizable group: the library owns who is how wide,
+       * the stores own who is open. Splitters are only rendered where there is a
+       * column on both sides to trade width with — a collapsed sidebar or side pane
+       * has no edge to drag, and on a narrow layout the sidebar is a full-screen
+       * drawer with nothing to give back.
+       */}
       <div className="relative flex min-h-0 flex-1">
-        {/* No backdrop: the drawer covers the whole viewport, so there is no dimmed
-            conversation behind it to tap. The button that was here sat under a
-            full-screen panel and could never be reached — the sidebar's own
-            「收起」 is what closes it. */}
-        <Sidebar
-          projects={projects}
-          conversations={conversations}
-          activeId={activeId}
-          running={running}
-          waitingForUser={waitingForUser}
-          onNewChat={onSidebarNewChat}
-          onOpen={onSidebarOpen}
-          onFork={onSidebarFork}
-          onArchive={onSidebarArchive}
-          onAddProject={onSidebarAddProject}
-          onRenameSession={onSidebarRenameSession}
-          onRenameProject={onSidebarRenameProject}
-          onRemoveProject={onSidebarRemoveProject}
-          onRevealProject={onSidebarRevealProject}
-          onReorderProjects={onSidebarReorderProjects}
-          onOpenSettings={onSidebarOpenSettings}
-          onOpenMarket={onSidebarOpenMarket}
-          onSearch={onSidebarSearch}
-        />
-        <main className={cn("flex min-w-0 flex-1 flex-col", !paneCollapsed && paneMaximized && "hidden")}>
-          <motion.header
-            initial={false}
-            // Expanded: the collapse control lives on the sidebar, next to the
-            // traffic lights — or in the window's title bar, where there is one.
-            // Collapsed: inset this bar on macOS so the expand control, title and
-            // lights share one vertically centred row.
-            animate={{ paddingLeft: sidebarCollapsed && HAS_TRAFFIC_LIGHTS ? "5.5rem" : "1rem" }}
-            transition={PANEL_COLLAPSE_TRANSITION}
-            className="drag-region flex h-11 items-center justify-between pr-4"
+        <ResizablePanelGroup>
+          {/* No backdrop: the drawer covers the whole viewport, so there is no dimmed
+              conversation behind it to tap. The button that was here sat under a
+              full-screen panel and could never be reached — the sidebar's own
+              「收起」 is what closes it. */}
+          <Sidebar
+            projects={projects}
+            conversations={conversations}
+            activeId={activeId}
+            running={running}
+            waitingForUser={waitingForUser}
+            onNewChat={onSidebarNewChat}
+            onOpen={onSidebarOpen}
+            onFork={onSidebarFork}
+            onArchive={onSidebarArchive}
+            onAddProject={onSidebarAddProject}
+            onRenameSession={onSidebarRenameSession}
+            onRenameProject={onSidebarRenameProject}
+            onRemoveProject={onSidebarRemoveProject}
+            onRevealProject={onSidebarRevealProject}
+            onReorderProjects={onSidebarReorderProjects}
+            onOpenSettings={onSidebarOpenSettings}
+            onOpenMarket={onSidebarOpenMarket}
+            onSearch={onSidebarSearch}
+          />
+          {narrow || sidebarCollapsed ? null : <ResizableHandle />}
+          <ResizablePanel
+            id="conversation"
+            minSize={0}
+            panelRef={conversationPanel}
+            inert={paneMaximized || undefined}
+            aria-hidden={paneMaximized || undefined}
           >
-            <div className="no-drag flex min-w-0 flex-1 items-center gap-1 pr-3">
-              {sidebarCollapsed ? (
-                <div className="flex items-center gap-1">
-                  {/* With a title bar of our own the sidebar's toggle lives up there,
-                      on the same screen as this one; two of them read as a bug. */}
-                  {HAS_CUSTOM_TITLE_BAR ? null : (
+            <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <motion.header
+              initial={false}
+              // Expanded: the collapse control lives on the sidebar, next to the
+              // traffic lights — or in the window's title bar, where there is one.
+              // Collapsed: inset this bar on macOS so the expand control, title and
+              // lights share one vertically centred row.
+              animate={{ paddingLeft: sidebarCollapsed && HAS_TRAFFIC_LIGHTS ? "5.5rem" : "1rem" }}
+              transition={PANEL_COLLAPSE_TRANSITION}
+              className="drag-region flex h-11 items-center justify-between pr-4"
+            >
+              <div className="no-drag flex min-w-0 flex-1 items-center gap-1 pr-3">
+                {sidebarCollapsed ? (
+                  <div className="flex items-center gap-1">
+                    {/* With a title bar of our own the sidebar's toggle lives up there,
+                        on the same screen as this one; two of them read as a bug. */}
+                    {HAS_CUSTOM_TITLE_BAR ? null : (
+                      <IconButton
+                        size="icon-sm"
+                        variant="ghost"
+                        label={t("workspace.expandSidebar")}
+                        shortcut={toggleSidebarShortcut}
+                        onClick={() => setSidebarCollapsed(false)}
+                      >
+                        <HugeiconsIcon strokeWidth={2} icon={PanelLeftOpenIcon} />
+                      </IconButton>
+                    )}
                     <IconButton
                       size="icon-sm"
                       variant="ghost"
-                      label={t("workspace.expandSidebar")}
-                      shortcut={toggleSidebarShortcut}
-                      onClick={() => setSidebarCollapsed(false)}
+                      label={t("workspace.newChat")}
+                      shortcut={newChatShortcut}
+                      onClick={() => void handleNewChat()}
                     >
-                      <HugeiconsIcon strokeWidth={2} icon={PanelLeftOpenIcon} />
+                      <HugeiconsIcon strokeWidth={2} icon={MessageSquarePlusIcon} />
                     </IconButton>
-                  )}
+                  </div>
+                ) : null}
+                {sidebarCollapsed && !isNewSession ? (
+                  <span className="mx-1.5 h-4 w-px shrink-0 bg-border" aria-hidden />
+                ) : null}
+                {isNewSession ? null : (
+                  <>
+                    {activeProject ? (
+                      <>
+                        <span className="max-w-32 shrink-0 truncate text-sm text-muted-foreground" title={activeProject.name}>
+                          {activeProject.name}
+                        </span>
+                        <span className="shrink-0 text-sm text-muted-foreground" aria-hidden>/</span>
+                      </>
+                    ) : null}
+                    <h1 className="min-w-0 truncate text-sm font-semibold text-foreground" title={headerTitle}>
+                      {headerTitle}
+                    </h1>
+                    <GitStatusPopover
+                      key={`${activeId ?? ""}:${active?.cwd ?? ""}`}
+                      cwd={active?.project ? active.cwd : undefined}
+                      conversationId={activeId ?? undefined}
+                      worktree={active?.worktree}
+                      refreshKey={conversationWorking}
+                      canReview={!narrow}
+                    />
+                  </>
+                )}
+              </div>
+              {paneCollapsed ? (
+                <div className="no-drag flex items-center">
                   <IconButton
                     size="icon-sm"
                     variant="ghost"
-                    label={t("workspace.newChat")}
-                    shortcut={newChatShortcut}
-                    onClick={() => void handleNewChat()}
+                    label={t("workspace.expandSidePane")}
+                    shortcut={toggleSidePaneShortcut}
+                    onClick={togglePane}
                   >
-                    <HugeiconsIcon strokeWidth={2} icon={MessageSquarePlusIcon} />
+                    <HugeiconsIcon strokeWidth={2} icon={PanelRightOpenIcon} />
                   </IconButton>
                 </div>
               ) : null}
-              {sidebarCollapsed && !isNewSession ? (
-                <span className="mx-1.5 h-4 w-px shrink-0 bg-border" aria-hidden />
-              ) : null}
-              {isNewSession ? null : (
-                <>
-                  {activeProject ? (
-                    <>
-                      <span className="max-w-32 shrink-0 truncate text-sm text-muted-foreground" title={activeProject.name}>
-                        {activeProject.name}
-                      </span>
-                      <span className="shrink-0 text-sm text-muted-foreground" aria-hidden>/</span>
-                    </>
-                  ) : null}
-                  <h1 className="min-w-0 truncate text-sm font-semibold text-foreground" title={headerTitle}>
-                    {headerTitle}
-                  </h1>
-                  <GitStatusPopover
-                    key={`${activeId ?? ""}:${active?.cwd ?? ""}`}
-                    cwd={active?.project ? active.cwd : undefined}
-                    conversationId={activeId ?? undefined}
-                    worktree={active?.worktree}
-                    refreshKey={conversationWorking}
-                    canReview={!narrow}
-                  />
-                </>
-              )}
-            </div>
-            {paneCollapsed ? (
-              <div className="no-drag flex items-center">
-                <IconButton
-                  size="icon-sm"
-                  variant="ghost"
-                  label={t("workspace.expandSidePane")}
-                  shortcut={toggleSidePaneShortcut}
-                  onClick={togglePane}
-                >
-                  <HugeiconsIcon strokeWidth={2} icon={PanelRightOpenIcon} />
-                </IconButton>
-              </div>
-            ) : null}
-          </motion.header>
-          {showHero ? (
-            // New conversation: the greeting hero sits above the composer and the
-            // suggestion chips below it, with the group centred like the reference.
-            <div className="flex min-h-0 w-full flex-1 flex-col items-center justify-center gap-6">
-              <NewSessionHero />
-              <ExtensionWidgets className="pb-2" />
-              <GoalPanel className="pb-2" disabled={conversationWorking} />
-              <TodoPanel className="pb-2" />
-              {composerSlot}
-              {/* The suggestion chips write the draft, which a model-less composer refuses to
-                  type — offering them there would fill a box the user cannot send from. */}
-              {hasModel ? <SuggestionChips onSelect={setDraft} /> : null}
-            </div>
-          ) : (
-            <>
-              <div className="relative min-h-0 flex-1">
-                <MessageThread
-                  loading={loading}
-                  onRetry={handleRetry}
-                  onEdit={handleEdit}
-                  onFork={handleForkFromEntry}
-                  showThinking={settings.showThinking}
-                  showTimestamp={settings.showTimestamps}
-                  collapseRuns={settings.collapseRuns}
-                />
-              </div>
-              {/* Everything under the transcript shares its column: the transcript's
-                  scroller reserves a scrollbar gutter, so this box reserves the same one
-                  (`transcript-gutter`) and both columns land on the same edges. */}
-              <div className="safe-bottom transcript-gutter overflow-hidden">
+            </motion.header>
+            {showHero ? (
+              // New conversation: the greeting hero sits above the composer and the
+              // suggestion chips below it, with the group centred like the reference.
+              <div className="flex min-h-0 w-full flex-1 flex-col items-center justify-center gap-6">
+                <NewSessionHero />
                 <ExtensionWidgets className="pb-2" />
                 <GoalPanel className="pb-2" disabled={conversationWorking} />
                 <TodoPanel className="pb-2" />
                 {composerSlot}
+                {/* The suggestion chips write the draft, which a model-less composer refuses to
+                    type — offering them there would fill a box the user cannot send from. */}
+                {hasModel ? <SuggestionChips onSelect={setDraft} /> : null}
               </div>
-            </>
+            ) : (
+              <>
+                <div className="relative min-h-0 flex-1">
+                  <MessageThread
+                    loading={loading}
+                    onRetry={handleRetry}
+                    onEdit={handleEdit}
+                    onFork={handleForkFromEntry}
+                    showThinking={settings.showThinking}
+                    showTimestamp={settings.showTimestamps}
+                    collapseRuns={settings.collapseRuns}
+                  />
+                </div>
+                {/* Everything under the transcript shares its column: the transcript's
+                    scroller reserves a scrollbar gutter, so this box reserves the same one
+                    (`transcript-gutter`) and both columns land on the same edges. */}
+                <div className="safe-bottom transcript-gutter overflow-hidden">
+                  <ExtensionWidgets className="pb-2" />
+                  <GoalPanel className="pb-2" disabled={conversationWorking} />
+                  <TodoPanel className="pb-2" />
+                  {composerSlot}
+                </div>
+              </>
+            )}
+            </main>
+          </ResizablePanel>
+          {/* Terminal, git diffs, the file tree and the embedded browser all want room a
+              phone does not have — and the browser pane has no webview to drive out here
+              at all. The conversation is what a narrow screen is for. A maximised pane
+              has swallowed the conversation column, so its splitter has nothing to
+              resize against either. */}
+          {narrow || paneCollapsed || paneMaximized ? null : <ResizableHandle />}
+          {narrow ? null : (
+            <SidePane
+              cwd={active?.project ? active.cwd : activeProject?.cwd}
+              project={active?.project}
+              parentId={activeId ?? undefined}
+              canSideChat={Boolean(activeId && hasTranscript)}
+              onNewChat={onSidePaneNewChat}
+              onError={setError}
+            />
           )}
-        </main>
-        {/* Terminal, git diffs, the file tree and the embedded browser all want room a
-            phone does not have — and the browser pane has no webview to drive out here
-            at all. The conversation is what a narrow screen is for. */}
-        {narrow ? null : (
-          <SidePane
-            cwd={active?.project ? active.cwd : activeProject?.cwd}
-            project={active?.project}
-            parentId={activeId ?? undefined}
-            canSideChat={Boolean(activeId && hasTranscript)}
-            onNewChat={onSidePaneNewChat}
-            onError={setError}
-          />
-        )}
+        </ResizablePanelGroup>
       </div>
       {/* Mounted from the first time 设置 is opened and left mounted after, so the
           dialog keeps its own close animation and a section switch costs nothing. */}

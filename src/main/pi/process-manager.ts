@@ -5,7 +5,7 @@ import { existsSync } from "node:fs";
 import { mkdir, unlink } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
-import { InMemoryModelsStore, type AuthPrompt } from "@earendil-works/pi-ai";
+import { InMemoryModelsStore, type AssistantMessage, type AuthPrompt } from "@earendil-works/pi-ai";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
   createAgentSession,
@@ -1170,7 +1170,7 @@ export class PiProcessManager {
    *
    * An empty message list is the continuation: the loop still starts from the
    * transcript's last user/tool-result message, with everything the SDK wraps around a
-   * run kept intact. The wrapper is private (0.85.1 has no public entry point for
+   * run kept intact. The wrapper is private (0.86.1 has no public entry point for
    * continuing an interrupted turn), hence the cast — so a version that renames it must
    * fail loudly here rather than silently go back to driving runs by hand.
    */
@@ -2033,8 +2033,8 @@ export class PiProcessManager {
       // shared registry re-read it, so every session resolves the new definition.
       this.#modelsCache = applyProviders(this.#paths);
       this.#prices = modelPriceIndex(this.#paths);
-      // `refresh()` is async in pi 0.85; the rebind below reads the registry
-      // synchronously, so it must finish before we swap the model objects in.
+      // `refresh()` is async; the rebind below reads the registry synchronously, so it
+      // must finish before we swap the model objects in.
       await registry.refresh({ allowNetwork: false });
       // Removing the last provider lands here too: the registry is now empty, every
       // session's model is gone, and `#rebindModel` leaves the ones it cannot replace
@@ -2046,7 +2046,7 @@ export class PiProcessManager {
   }
 
   /**
-   * The models.dev snapshot changed on disk (Settings → 关于). Re-derive `models.json`
+   * The models.dev snapshot changed on disk (hourly refresh, or Settings → 关于). Re-derive `models.json`
    * from the refreshed catalog and let the shared registry re-read it, exactly as a
    * provider edit does — the new limits and prices reach every session, including the
    * ones already open, without a restart.
@@ -2504,7 +2504,14 @@ export class PiProcessManager {
         this.#interruptedRuns.delete(conversation.id);
       } else if (event.type === "agent_end") {
         const messages = Array.isArray(event.messages) ? event.messages : [];
-        const last = [...messages].reverse().find((message) => isRecord(message) && message.role === "assistant") as { stopReason?: unknown } | undefined;
+        // The role is read through a cast, not through `isRecord`: narrowing a union by a
+        // type predicate *filters* it, and since pi-ai 0.86 spells `ToolResultMessage` as a
+        // type alias it is the only member with an implicit index signature — so
+        // `isRecord(message)` left just that member, and `role === "assistant"` had nothing
+        // to compare against. Reading `role` off `unknown` keeps the union intact.
+        const last = [...messages]
+          .reverse()
+          .find((message): message is AssistantMessage => (message as { role?: unknown }).role === "assistant");
         if (
           this.#interruptedRuns.get(conversation.id) !== "stopped" &&
           (last?.stopReason === "error" || last?.stopReason === "aborted" || last?.stopReason === "length")

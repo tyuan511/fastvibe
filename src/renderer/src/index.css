@@ -178,6 +178,35 @@ body {
   scrollbar-gutter: stable;
 }
 
+/* Side panel splitters --------------------------------------------------------
+   `react-resizable-panels` sizes the sidebar and the side pane with `flex-grow`,
+   so a collapse or expand has nothing to move unless the panel is told to
+   transition. `use-resizable-panel.ts` writes `data-animate` for the duration of
+   a programmatic collapse/expand only — a live drag must track the pointer
+   exactly, and the library rewrites `flex-grow` on every frame of one.
+
+   The `--panel-width` custom property is the panel's resting width. While the
+   panel is animating, its content holds that width instead of reflowing with the
+   clip, which is the reason the old splitter kept a fixed-width inner frame:
+   a sidebar that squashes its rows on the way out reads as a broken layout. */
+[data-slot="resizable-panel"][data-animate] {
+  transition: flex-grow 280ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+[data-slot="resizable-panel"][data-animate] [data-slot="panel-frame"] {
+  width: var(--panel-width, 100%);
+}
+
+/* The library marks a separator while it is being dragged. Neither the panel it
+   moves nor the one opposite it may transition then. */
+[data-slot="resizable-panel-group"]:has([data-separator="active"]) [data-slot="resizable-panel"] {
+  transition: none;
+}
+
+[data-slot="resizable-panel-group"]:has([data-separator="active"]) [data-slot="panel-frame"] {
+  width: 100%;
+}
+
 /* Scrollbars -----------------------------------------------------------------
    Slim, rounded thumbs with a transparent track, so the scrollbar reads as part
    of the surface instead of a chrome bar. Chromium paints these through the

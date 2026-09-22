@@ -23,16 +23,22 @@ allowBuilds:
 
 minimumReleaseAgeExclude:
   - electron@44.4.0
+  - '@earendil-works/chord@0.86.1'
+  - '@earendil-works/pi-agent-core@0.86.1'
+  - '@earendil-works/pi-ai@0.86.1'
+  - '@earendil-works/pi-coding-agent@0.86.1'
+  - '@earendil-works/pi-telemetry@0.86.1'
+  - '@earendil-works/pi-tui@0.86.1'
 
 # Pin the pi runtime to the exact SDK version FastVibe ships so the host and any
 # extension loaded into it share one pi-tui/pi-ai instance.
 overrides:
-  '@earendil-works/pi-ai': 0.85.1
-  '@earendil-works/pi-coding-agent': 0.85.1
-  '@earendil-works/pi-tui': 0.85.1
+  '@earendil-works/pi-ai': 0.86.1
+  '@earendil-works/pi-coding-agent': 0.86.1
+  '@earendil-works/pi-tui': 0.86.1
 
 peerDependencyRules:
   allowedVersions:
-    '@earendil-works/pi-ai': '0.85.1'
-    '@earendil-works/pi-coding-agent': '0.85.1'
-    '@earendil-works/pi-tui': '0.85.1'
+    '@earendil-works/pi-ai': '0.86.1'
+    '@earendil-works/pi-coding-agent': '0.86.1'
+    '@earendil-works/pi-tui': '0.86.1'

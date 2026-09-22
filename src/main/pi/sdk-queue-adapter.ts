@@ -2,11 +2,11 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { SdkQueueClaims } from "../engine/message-queue";
 
 /**
- * This adapter intentionally targets the private queue shape in pi-agent-core 0.85.1.
+ * This adapter intentionally targets the private queue shape in pi-agent-core 0.86.1.
  * package.json pins that exact version; fail closed if the shape changes instead of
  * silently turning a cancellation into clear-and-replay.
  */
-export const SUPPORTED_PI_AGENT_CORE_VERSION = "0.85.1";
+export const SUPPORTED_PI_AGENT_CORE_VERSION = "0.86.1";
 
 type PendingQueue = {
   messages: AgentMessage[];

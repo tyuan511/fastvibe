@@ -52,17 +52,18 @@ import {
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { ResizeHandle } from "@/components/resize-handle";
+import { ResizablePanel } from "@/components/ui/resizable";
 import { CollapsiblePanel } from "@/components/layout/collapsible-panel";
 import { setSidebarCollapsed, useIsNarrowViewport, useSidebarCollapsed } from "@/lib/sidebar-visibility";
 import { SidebarUpdateButton } from "@/components/layout/sidebar-update-button";
 import { AppLogo } from "@/components/app-logo";
 import { cn } from "@/lib/utils";
-import { clampSidebarWidth, readSidebarWidth, writeSidebarWidth, SIDEBAR_MIN_WIDTH } from "@/lib/sidebar-width";
+import { readSidebarWidth, writeSidebarWidth, SIDEBAR_MIN_WIDTH } from "@/lib/sidebar-width";
 import { HAS_CUSTOM_TITLE_BAR, HAS_TRAFFIC_LIGHTS } from "@/lib/platform";
 import { useArchivedIds } from "@/stores/archive";
 import { useSettingsStore } from "@/stores/settings";
 import { useShortcutLabel } from "@/lib/use-shortcuts";
+import { useSidePanel } from "@/lib/use-resizable-panel";
 import { useHistoryNav } from "@/lib/use-history-nav";
 import type { Conversation, Project } from "@shared/types";
 
@@ -678,7 +679,7 @@ export const Sidebar = memo(function Sidebar({
   onSearch: () => void;
 }): JSX.Element {
   const { t } = useTranslation("app");
-  const [width, setWidth] = useState(readSidebarWidth);
+  const [width] = useState(readSidebarWidth);
   const sidebarCollapsed = useSidebarCollapsed();
   const narrow = useIsNarrowViewport();
   const sidebarOrder = useSettingsStore((state) => state.settings.sidebarOrder);
@@ -695,22 +696,22 @@ export const Sidebar = memo(function Sidebar({
   const [pendingDelete, setPendingDelete] = useState<DeleteTarget | null>(null);
   const [drop, setDrop] = useState<DropIndicator | null>(null);
   const [drag, setDrag] = useState<ActiveDrag | null>(null);
-  const startWidth = useRef(width);
-  // Set once the drag has crossed the minimum, so the collapsing branch fires a
-  // single settings write instead of one per mousemove until the drag ends.
-  const collapsing = useRef(false);
-  // Live splitter drags skip the spring so the edge tracks the pointer.
-  const [resizing, setResizing] = useState(false);
+  const sidebarPanel = useSidePanel({
+    id: "sidebar",
+    width,
+    collapsed: sidebarCollapsed,
+    minSize: SIDEBAR_MIN_WIDTH,
+    // The same ceiling `clampSidebarWidth` applies to the stored value, expressed
+    // as a share of the shell so it keeps its meaning when the window is resized.
+    maxSize: "40%",
+    persist: writeSidebarWidth,
+    reportCollapsed: setSidebarCollapsed,
+  });
   const sensors = useSensors(
     // A small threshold keeps a plain click (open the chat) from starting a drag,
     // and lets the row's nested pin/archive buttons stop propagation untouched.
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
   );
-
-  /** Live width while dragging; only written to disk once the drag ends. */
-  function applyWidth(next: number): void {
-    setWidth(clampSidebarWidth(next));
-  }
 
   function setOpen(cwd: string, open: boolean): void {
     setCollapsed((prev) => {
@@ -942,48 +943,14 @@ export const Sidebar = memo(function Sidebar({
   const draggingProject = dragSection?.key === PROJECTS_SECTION && drag ? groups.find((group) => group.cwd === drag.id) ?? null : null;
 
   // Collapsed (dragged below the minimum width, or via the header toggle): the
-  // sidebar clips to width 0 rather than shrinking to a sliver. The inner
-  // aside keeps its expanded width so the spring is a clip, not a reflow.
-  return (
-    <CollapsiblePanel collapsed={sidebarCollapsed} width={width} side="left" instant={resizing} overlay={narrow}>
-    <aside className="relative flex h-full min-h-0 w-full flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
-      {/*
-       * The splitter belongs to the column, not to the drawer.
-       *
-       * A full-screen drawer has no edge to drag and nothing to give width back to, and
-       * the handle sat on top of the conversation list where a thumb scrolls. Worse, its
-       * drag ended in `writeSidebarWidth`, which is the *shared* preference: one stray
-       * swipe on a phone rewrote the width of the column on the desktop it was connected
-       * to.
-       */}
-      {narrow ? null : (
-        <ResizeHandle
-          side="right"
-          onDragStart={() => {
-            startWidth.current = width;
-            collapsing.current = false;
-            setResizing(true);
-          }}
-          onDrag={(delta) => {
-            const next = startWidth.current + delta;
-            // Dragging past the minimum collapses the sidebar instead of clamping
-            // to it; the header toggle (or dragging back out) restores the width.
-            if (next < SIDEBAR_MIN_WIDTH) {
-              if (!collapsing.current) {
-                collapsing.current = true;
-                setSidebarCollapsed(true);
-              }
-              return;
-            }
-            applyWidth(next);
-          }}
-          onDragEnd={(delta) => {
-            setResizing(false);
-            const next = startWidth.current + delta;
-            if (next >= SIDEBAR_MIN_WIDTH) writeSidebarWidth(next);
-          }}
-        />
-      )}
+  // panel collapses to zero width rather than shrinking to a sliver. The content
+  // holds its resting width while it animates, so the spring clips it instead of
+  // reflowing it (see the "Side panel splitters" block in `index.css`).
+  const content = (
+    <aside
+      data-slot="panel-frame"
+      className="relative flex h-full min-h-0 w-full flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground"
+    >
       {/* The title row exists to sit around macOS' traffic lights; where the window
           has a title bar of its own, those controls (and the brand under them) are
           up there instead and the sidebar simply starts. */}
@@ -1204,6 +1171,21 @@ export const Sidebar = memo(function Sidebar({
         </AlertDialogContent>
       </AlertDialog>
     </aside>
+  );
+
+  /*
+   * A full-screen drawer has no edge to drag and nothing to give width back to, and
+   * a splitter would sit on top of the conversation list where a thumb scrolls. Worse,
+   * its drag ended in `writeSidebarWidth`, which is the *shared* preference: one stray
+   * swipe on a phone would rewrite the width of the column on the desktop it is
+   * connected to. So the drawer only slides, and the desktop column gets the library's
+   * splitter.
+   */
+  return narrow ? (
+    <CollapsiblePanel collapsed={sidebarCollapsed} side="left">
+      {content}
     </CollapsiblePanel>
+  ) : (
+    <ResizablePanel {...sidebarPanel}>{content}</ResizablePanel>
   );
 });

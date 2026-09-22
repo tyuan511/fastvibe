@@ -1,10 +1,11 @@
-import { useLayoutEffect, useRef, type ReactNode, type JSX } from "react";
+import type { ReactNode, JSX } from "react";
 import { motion } from "motion/react";
 import { cn } from "@/lib/utils";
 
 /**
- * Shared by the workspace sidebar, the right side pane, and the header inset
- * so expand/collapse always lands on the same timing.
+ * Expand/collapse timing for the shell's side chrome. The conversation header's
+ * inset animates on this and the narrow-viewport drawer springs on it, so a
+ * sidebar opening and the bar beside it land together.
  *
  * `bounce: 0` keeps the spring snappy without overshoot — a bouncing splitter
  * reads as a toy, not a desktop shell.
@@ -16,100 +17,54 @@ export const PANEL_COLLAPSE_TRANSITION = {
 } as const;
 
 /**
- * Width-clip wrapper for a side panel. The inner frame keeps a fixed pixel
- * width (`shrink-0`) so content does not reflow or squash while the outer
- * overflow clips; a right-hand panel is packed against the trailing edge so
- * it closes toward the window edge.
+ * The narrow-viewport sidebar: a full-screen drawer that slides over the
+ * conversation instead of pushing it aside.
  *
- * Live resize passes `instant` so the splitter follows the pointer. Collapse
- * and expand always spring, even if a drag just crossed the minimum.
+ * A phone has no width to give — the sidebar's minimum alone is most of a 375pt
+ * screen — so there the panel covers the layout rather than taking room from it.
+ * Nothing caps its width: it used to be capped at the remembered column width, and
+ * `clampSidebarWidth` scaled that to 40% of the viewport, so a 375pt screen read the
+ * remembered width back as 150 and opened as a sliver with the conversation showing
+ * beside it. A phone has nothing to show beside it: the drawer is the screen.
  *
- * `overlay` switches it from pushing to covering, and covers the whole viewport. A phone
- * has no width to give: the sidebar's minimum alone is most of a 375pt screen, so there
- * it slides over the conversation as a full-screen drawer instead of squeezing it into a
- * strip. Same component, because the panel is the same panel — only what it does to its
- * neighbour changes.
+ * On a desktop-width layout the sidebar is a column of the resizable group instead
+ * (see `components/layout/sidebar.tsx` and `lib/use-resizable-panel.ts`), which is
+ * where its width and its splitter live.
+ *
+ * Both properties are driven on every render, always. Motion only writes the keys an
+ * `animate` object names and leaves every other inline value it wrote earlier exactly
+ * where it was, so a branch that animated `x` and one that animated `width` left each
+ * other's last frame behind on the way past: switching from drawer to column kept
+ * `translateX(-100%)` and parked the sidebar off-screen on a desktop-width window,
+ * which is a stuck layout rather than a mis-timed one, and it only appears when the
+ * viewport crosses the breakpoint.
  */
 export function CollapsiblePanel({
   collapsed,
-  width,
   side,
-  instant,
-  maximized,
-  overlay,
   children,
   className,
 }: {
   collapsed: boolean;
-  width: number;
+  /** Which edge the drawer is packed against, and so which way it slides in from. */
   side: "left" | "right";
-  instant?: boolean;
-  maximized?: boolean;
-  /** Cover the layout instead of taking room from it. Used on narrow viewports. */
-  overlay?: boolean;
   children: ReactNode;
   className?: string;
 }): JSX.Element {
-  const fill = Boolean(maximized && !collapsed);
-  const frameRef = useRef<HTMLDivElement>(null);
-  const clipWidthRef = useRef(width);
-
-  useLayoutEffect(() => {
-    if (collapsed) return;
-    clipWidthRef.current = fill && frameRef.current ? frameRef.current.offsetWidth : width;
-  }, [collapsed, fill, width]);
-
-  const innerWidth = fill ? "100%" : collapsed ? clipWidthRef.current : width;
-
-  /**
-   * Both modes drive both properties, always.
-   *
-   * Motion only writes the keys an `animate` object names, and leaves every other inline
-   * value it wrote earlier exactly where it was. So a branch that animated `x` and a
-   * branch that animated `width` left each other's last frame behind on the way past:
-   * switching from drawer to column kept `translateX(-100%)` and parked the sidebar
-   * off-screen on a desktop-width window, which is a stuck layout rather than a
-   * mis-timed one, and it only appears when the viewport crosses the breakpoint.
-   */
-  const animate = overlay
-    ? { x: collapsed ? (side === "right" ? "100%" : "-100%") : 0, width: "100vw" }
-    : { x: 0, width: collapsed ? 0 : fill ? "auto" : width };
-
   return (
     <motion.div
       initial={false}
-      animate={animate}
-      transition={(instant && !collapsed) || fill ? { duration: 0 } : PANEL_COLLAPSE_TRANSITION}
+      animate={{ x: collapsed ? (side === "right" ? "100%" : "-100%") : 0, width: "100vw" }}
+      transition={PANEL_COLLAPSE_TRANSITION}
       className={cn(
-        "flex h-full min-h-0 min-w-0 overflow-hidden",
-        overlay
-          ? cn(
-              "absolute inset-y-0 z-50 border-border bg-background shadow-xl",
-              side === "right" ? "right-0 border-l" : "left-0 border-r",
-            )
-          : cn(fill ? "flex-1" : "shrink-0", side === "right" ? "justify-end" : "justify-start"),
+        "absolute inset-y-0 z-50 flex h-full min-h-0 min-w-0 overflow-hidden border-border bg-background shadow-xl",
+        side === "right" ? "right-0 border-l" : "left-0 border-r",
         className,
       )}
-      /*
-       * Nothing caps the drawer's width.
-       *
-       * It used to be capped at the remembered column width, on the theory that a
-       * desktop's 288px was wider than the phone covering it. On a phone that number is
-       * not a ceiling, it is *the* width — and `clampSidebarWidth` scaled its maximum to
-       * 40% of the viewport, so a 375pt screen read the remembered width back as 150 and
-       * the drawer opened as a sliver with the conversation showing beside it. A phone
-       * has nothing to show beside it: the drawer is the screen.
-       */
       aria-hidden={collapsed}
       inert={collapsed || undefined}
     >
-      <div
-        ref={frameRef}
-        className={cn("flex h-full min-h-0 flex-col", overlay ? "w-full" : "shrink-0")}
-        style={overlay ? undefined : { width: innerWidth }}
-      >
-        {children}
-      </div>
+      <div className="flex h-full min-h-0 w-full flex-col">{children}</div>
     </motion.div>
   );
 }

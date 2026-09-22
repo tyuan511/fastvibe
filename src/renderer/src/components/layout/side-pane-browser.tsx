@@ -96,8 +96,6 @@ const PARKED_LAYER =
   "position:fixed;left:-10000px;top:0;width:1024px;height:768px;overflow:hidden;pointer-events:none;z-index:5;";
 const SHOWN_HOST = "position:absolute;left:0;top:0;width:100%;height:100%;";
 const HIDDEN_HOST = "position:absolute;left:-20000px;top:0;width:1024px;height:768px;";
-/** The pane's splitter (`w-1`) hugs its leading edge; leave it clickable. */
-const SPLITTER_GUTTER = 4;
 
 function getLayer(): HTMLDivElement {
   if (!layer) {
@@ -123,13 +121,15 @@ function clipAncestor(node: HTMLElement): HTMLElement | null {
   return null;
 }
 
-/** The part of the browser viewport actually on screen, splitter left alone. */
+/** The part of the browser viewport actually on screen. */
 function visibleRect(
   node: HTMLElement,
   clip: HTMLElement | null,
 ): { left: number; top: number; width: number; height: number } {
   const box = node.getBoundingClientRect();
-  let left = box.left + SPLITTER_GUTTER;
+  // The splitter is a flex item beside the pane, not an overlay inside it, so the
+  // pane's own left edge is already clear of it — nothing to carve out here.
+  let left = box.left;
   let right = box.right;
   let top = box.top;
   let bottom = box.bottom;

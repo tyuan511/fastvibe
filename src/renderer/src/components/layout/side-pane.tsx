@@ -33,11 +33,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
-import { ResizeHandle } from "@/components/resize-handle";
-import { CollapsiblePanel } from "@/components/layout/collapsible-panel";
+import { ResizablePanel } from "@/components/ui/resizable";
 import { setSidebarCollapsed } from "@/lib/sidebar-visibility";
 import { useShortcutLabel } from "@/lib/use-shortcuts";
 import { useSettingsStore } from "@/stores/settings";
+import { useSidePanel } from "@/lib/use-resizable-panel";
 import { MIN_WIDTH, useSidePaneStore, type SidePaneTab, sidePaneTabTitle } from "@/stores/side-pane";
 import { releaseBrowser, SidePaneBrowser } from "./side-pane-browser";
 import { SidePaneChat } from "./side-pane-chat";
@@ -205,7 +205,6 @@ export const SidePane = memo(function SidePane({
   const leadWithSidebarChrome = maximized && sidebarCollapsed;
   const tabs = useSidePaneStore((state) => state.tabs);
   const activeTabId = useSidePaneStore((state) => state.activeTabId);
-  const setWidth = useSidePaneStore((state) => state.setWidth);
   const setCollapsed = useSidePaneStore((state) => state.setCollapsed);
   const persistWidth = useSidePaneStore((state) => state.persistWidth);
   const activate = useSidePaneStore((state) => state.activate);
@@ -218,13 +217,19 @@ export const SidePane = memo(function SidePane({
   const openSideChat = useSidePaneStore((state) => state.openSideChat);
   const nextSideChatOrdinal = useSidePaneStore((state) => state.nextSideChatOrdinal);
   const hasReviewTab = useSidePaneStore((state) => state.tabs.some((item) => item.type === "git"));
-  const startWidth = useRef(width);
-  // Set once the drag has crossed the minimum, so collapsing fires a single
-  // store write instead of one per mousemove until the drag ends.
-  const collapsing = useRef(false);
+  const panePanel = useSidePanel({
+    id: "side-pane",
+    width,
+    collapsed,
+    minSize: MIN_WIDTH,
+    // Two thirds of the window, whatever the sidebar is doing. Maximised, the
+    // conversation column is gone and the pane owns the rest — see `liftCeiling`.
+    maxSize: "65%",
+    persist: persistWidth,
+    reportCollapsed: setCollapsed,
+    liftCeiling: maximized,
+  });
   const tabsViewportRef = useRef<HTMLDivElement>(null);
-  // Live splitter drags skip the spring so the edge tracks the pointer.
-  const [resizing, setResizing] = useState(false);
 
   const visibleTabs = useMemo(
     () =>
@@ -310,8 +315,9 @@ export const SidePane = memo(function SidePane({
   ].filter((item): item is NonNullable<typeof item> => item !== null);
 
   return (
-    <CollapsiblePanel collapsed={collapsed} width={width} side="right" instant={resizing} maximized={maximized}>
+    <ResizablePanel {...panePanel}>
     <aside
+      data-slot="panel-frame"
       className={cn(
         "relative flex h-full min-h-0 w-full flex-col bg-background",
         // Maximized, the conversation column is gone and this pane sits against
@@ -319,34 +325,6 @@ export const SidePane = memo(function SidePane({
         !maximized && "border-l border-border",
       )}
     >
-      {maximized ? null : (
-      <ResizeHandle
-        side="left"
-        onDragStart={() => {
-          startWidth.current = width;
-          collapsing.current = false;
-          setResizing(true);
-        }}
-        onDrag={(delta) => {
-          const next = startWidth.current - delta;
-          // Dragging past the minimum width collapses the pane instead of
-          // clamping to it; the header toggle reopens it at the stored width.
-          if (next < MIN_WIDTH) {
-            if (!collapsing.current) {
-              collapsing.current = true;
-              setCollapsed(true);
-            }
-            return;
-          }
-          const max = Math.round(window.innerWidth * 0.65);
-          setWidth(Math.min(max, next));
-        }}
-        onDragEnd={() => {
-          setResizing(false);
-          persistWidth();
-        }}
-      />
-      )}
       {visibleTabs.length > 0 ? (
         <div
           className={cn(
@@ -535,6 +513,6 @@ export const SidePane = memo(function SidePane({
         </div>
       )}
     </aside>
-    </CollapsiblePanel>
+    </ResizablePanel>
   );
 });
