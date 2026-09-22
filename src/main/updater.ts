@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { accessSync, constants, existsSync } from "node:fs";
 import { join } from "node:path";
-import { app, Notification, type BrowserWindow } from "electron";
+import { app, type BrowserWindow } from "electron";
 import electronUpdater from "electron-updater";
 import type { ProgressInfo, UpdateDownloadedEvent, UpdateInfo } from "electron-updater";
 
@@ -9,6 +9,9 @@ const { autoUpdater } = electronUpdater;
 import { Ipc, type AppUpdateState } from "@shared/ipc";
 import { broadcast } from "./ipc/broadcast";
 import { handle } from "./ipc/registry";
+import { presentNotification, readNotificationSettings } from "./engine/notifications";
+import { notificationEnabled } from "@shared/notifications";
+import { uiText } from "./engine/ui-text";
 
 const CHECK_DELAY_MS = 8_000;
 /** Background re-checks after the launch one, for as long as the app runs. */
@@ -49,6 +52,8 @@ const MAC_INSTALL_SCRIPT = [
 ].join("\n");
 
 let windows: () => Iterable<BrowserWindow> = () => [];
+/** Bringing the window back for an update notice; the same one Main uses. */
+let createWindow: () => void = () => undefined;
 let state: AppUpdateState = {
   status: "idle",
   currentVersion: "0.0.0",
@@ -84,8 +89,18 @@ function notesOf(info: UpdateInfo): string | undefined {
 
 function notifyDownloaded(version: string): void {
   const focused = [...windows()].some((window) => !window.isDestroyed() && window.isFocused());
-  if (focused || !Notification.isSupported()) return;
-  new Notification({ title: "FastVibe", body: `版本 ${version} 已下载，重启即可更新。` }).show();
+  if (focused) return;
+  // 系统通知 → 应用更新 (设置 → 通用), read here rather than cached so turning the
+  // switch off lands at the next check instead of at the next launch.
+  if (!notificationEnabled(readNotificationSettings(), "notifyUpdate")) return;
+  presentNotification(
+    {
+      setting: "notifyUpdate",
+      title: "FastVibe",
+      body: uiText(`版本 ${version} 已下载，重启即可更新。`, `Version ${version} is downloaded. Restart to update.`),
+    },
+    { windows, createWindow },
+  );
 }
 
 function macAppBundle(): string | null {
@@ -171,8 +186,9 @@ export function applyPendingInstall(): boolean {
   return true;
 }
 
-export function registerUpdater(getWindows: () => Iterable<BrowserWindow>): void {
+export function registerUpdater(getWindows: () => Iterable<BrowserWindow>, openWindow: () => void): void {
   windows = getWindows;
+  createWindow = openWindow;
   state = {
     status: app.isPackaged ? "idle" : "disabled",
     currentVersion: app.getVersion(),

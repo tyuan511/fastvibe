@@ -2864,10 +2864,21 @@ export class PiProcessManager {
         this.#emit(payload);
         return;
       }
-      // 「任务已完成」 rides the same verdict as the sidebar mark: an `agent_end` that
-      // is about to retry, compact or continue is not a finished run.
+      // A settled run in a background chat is the one moment the user cannot see for
+      // themselves, so it is reported — as `completed` or `failed`, the same
+      // `#interruptedRuns` verdict that decides whether the queued work may drain. A run
+      // that ended because the user stopped it is neither: they were there for it, and
+      // 「任务已完成」 over a deliberate Stop would be a notification nobody asked for.
       if (event.type === "agent_settled") {
-        this.#emit({ type: "conversation_activity", conversationId: conversation.id, title: this.#catalog.get(conversation.id)?.title ?? uiText("会话", "Chat"), status: "completed" });
+        const interrupted = this.#interruptedRuns.get(conversation.id);
+        if (interrupted !== "stopped") {
+          this.#emit({
+            type: "conversation_activity",
+            conversationId: conversation.id,
+            title: this.#catalog.get(conversation.id)?.title ?? uiText("会话", "Chat"),
+            status: interrupted === "error" ? "failed" : "completed",
+          });
+        }
       }
     });
     this.#installQueueBoundary(conversation.id, result.session);

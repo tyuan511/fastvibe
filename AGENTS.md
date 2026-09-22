@@ -1634,11 +1634,39 @@ from an event payload. So it is as fresh as the last `reloadActiveState()`.
 
 ## 系统通知（设置 → 通用）
 
-`settings.notifications`：`done`（任务完成）/ `approval`（后台会话停在审批上）/ `off`。
-Main 在每个事件上读一次文件，所以改完立即生效。两个通知回答的是不同的问题：跑完是
-「可以回来看结果」，停在审批上是「你不回答它就永远走不下去」——后者才是真正需要打扰用户的。
-只有会阻塞的 dialog 方法算数（`isBlockingPrompt`）；`notify` / `setStatus` / `setWidget`
-是单向的，不能触发通知。
+设置里是一个总开关加四个场景开关，全部**默认打开**。Main 在每个事件上读一次文件，所以改完
+立即生效。四个场景回答的是不同的问题：跑完是「可以回来看结果」，出错是「这次没成功」，停在
+审批上是「你不回答它就永远走不下去」——只有最后一条是真正的阻塞。
+
+- **`settings.notifyDone` / `notifyError` / `notifyApproval` / `notifyUpdate`**，平铺在
+  `settings.json` 里（Main 一次只读一个键）。**缺失即为打开**：开关是用来关的，不是用来开的，
+  否则升级上来的 install 会被静默静音。旧的 `notifications: "done" | "approval" | "off"`
+  被丢掉而不迁移——它的每个取值都是新默认值的子集。
+- **判定与投递分两层。** `src/shared/notifications.ts` 不引 Electron（`node --test` 加载不了），
+  只回答两件事：这个场景开没开、这个事件属于哪个场景。`src/main/engine/notifications.ts`
+  是 Electron 那一半：`new Notification` 和它的 click。这里多出的一个理由是 test 要能跑。
+- **`notifyError` 与 `notifyDone` 分开，`stopped` 两者都不发。** `agent_settled` 上的
+  `#interruptedRuns` 判定既是「队列能不能继续排空」的依据，也是「这次算完成还是失败」的依据；
+  「任务已完成」压在一次用户自己按的停止上，是一条没人要过的通知。
+- **点通知要落到那条会话。** click 里先 `app.focus({ steal: true })`（macOS：只
+  `window.focus()` 拉不回 ⌘H 隐藏或在别的 Space 的窗口）、再 restore/show/focus，然后调
+  `engine.openConversation(id)`。跳转本身不重新实现：把会话设成 active 就是侧栏点一下做的事，
+  每个客户端都已经在跟（`workspace:changed` → `handleOpen`），所以窗口当时**关着**也对——
+  活过来的窗口在启动时 adopt 的正是 catalog 的 activeId。
+- 只有会阻塞的 dialog 方法算数（`isBlockingPrompt`）；`notify` / `setStatus` / `setWidget`
+  是单向的，不能触发通知。
+
+## 单窗口
+
+FastVibe 是一个窗口、一个进程：`app.requestSingleInstanceLock()` 在模块作用域取（输的那个进程
+要在开窗之前就没了），`second-instance` 把已有的窗口恢复并聚焦——再点 Dock 图标不是再开一个
+窗口，而是回到原来那个。`window:new` 同样折进已有窗口而不是 `createWindow()`：每个 push、
+每个不说「谁的」就操作「当前会话」的方法都是按一个客户端设计的。
+
+开发态是例外：`ELECTRON_RENDERER_URL` 有值时跳过锁。`electron-vite dev` 每次改主进程都会异步
+杀掉旧子进程再起新的，新进程可能在旧进程还没释放锁的时候来抢——那会让 `pnpm dev` 变成一个
+没有窗口也没有报错的应用（旧进程以为是自己被替换了，新进程以为旧的那个还在）。在主进程里，
+`false` 恰好是错的那个答案。
 
 ## 测试
 

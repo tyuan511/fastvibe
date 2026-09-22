@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, Notification, protocol, screen, session, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, protocol, screen, session, shell } from "electron";
 import type { WebContents } from "electron";
 import { statSync } from "node:fs";
 import { execFile, execFileSync } from "node:child_process";
@@ -33,7 +33,12 @@ import {
 } from "./engine/app-settings";
 import { getFastVibePaths, type FastVibePaths } from "./engine/paths";
 import { readWindowState, writeWindowState } from "./engine/window-state";
-import { isNotificationPreference, type NotificationPreference } from "@shared/types";
+import { presentNotification, readNotificationSettings } from "./engine/notifications";
+import {
+  notificationEnabled,
+  notificationForEvent,
+  type NotificationRequest,
+} from "@shared/notifications";
 import { applyLanguages } from "./engine/ai-language";
 import { uiText } from "./engine/ui-text";
 import { applyShellPath } from "./engine/shell-path";
@@ -892,6 +897,18 @@ function registerIpc(): void {
     return collectUsageStats(getFastVibePaths(), payload?.range ?? "30d");
   });
   handle(Ipc.windowNew, () => {
+    // FastVibe is a single-window app: every push, and every method that acts on "the
+    // active conversation" without saying whose, is addressed to one client by design.
+    // Rather than answer a second window with a second, subtly different view of the
+    // same state, the request is folded into the window that already exists — which is
+    // what the shortcut is really asking for.
+    for (const window of windows) {
+      if (window.isDestroyed()) continue;
+      if (window.isMinimized()) window.restore();
+      window.show();
+      window.focus();
+      return;
+    }
     createWindow();
   });
 
@@ -1009,7 +1026,22 @@ let stopModelsDevRefresh: (() => void) | undefined;
 let shutdownDeadline: NodeJS.Timeout | undefined;
 let devParentWatch: NodeJS.Timeout | undefined;
 
+// FastVibe is a single-window app, and one *process*: a second launch — the Dock icon, or
+// opening the .app again — must bring the window that already exists forward rather than
+// start a second copy holding its own engine over the same catalog and transcripts. The
+// lock is taken at module scope, before anything is ready, because the process that loses
+// it has to be gone before it opens a window.
+//
+// `electron-vite dev` relaunches the app on every main-process edit, and it terminates
+// the old child asynchronously — so the new one can ask for the lock while the previous
+// is still releasing it, which would leave `pnpm dev` showing an app with no window and
+// no error. `ELECTRON_RENDERER_URL` is set by that dev server and by nothing else, and
+// this is exactly the case where `false` is the *wrong* answer: in development a second
+// window is the point, because it is how the reload is visible.
+const singleInstance = Boolean(process.env.ELECTRON_RENDERER_URL) || app.requestSingleInstanceLock();
+
 app.whenReady().then(async () => {
+  if (!singleInstance) return;
   if (shutdownPhase !== "running") return;
   log.info("app ready");
   installBrowserGlobal();
@@ -1035,7 +1067,10 @@ app.whenReady().then(async () => {
   // registered on the next line — landed in the table after the loop had already run,
   // so they were reachable by nothing.
   registerIpc();
-  registerUpdater(() => windows);
+  registerUpdater(
+    () => windows,
+    () => createWindow(),
+  );
   registerRemoteIpc();
   wireElectronTransport();
   scheduleUpdateCheck(startupSettings.autoCheckUpdates !== false);
@@ -1074,37 +1109,10 @@ app.whenReady().then(async () => {
   });
 
   engine.onEvent((event) => {
-    // Only two event types can raise a 系统通知. Everything else — every streamed
-    // token among them — must fall straight through to the fan-out below: reading
-    // the preference (and resolving the paths) ahead of this gate put a settings
-    // parse and six `mkdirSync` calls on the main process's event loop for every
-    // delta of every reply.
-    const notifiable =
-      (event.type === "conversation_activity" && event.status === "completed") ||
-      (event.type === "extension_ui_request" && isBlockingPrompt(event));
-    if (notifiable && Notification.isSupported()) {
-      const unfocused = ![...windows].some((window) => !window.isDestroyed() && window.isFocused());
-      // 系统通知 is a preference with three values (设置 → 通用), read per event so a
-      // change lands without a restart. `done` and `approval` are separate choices
-      // because the two notifications answer different questions: a finished run is
-      // something to come back to, a parked approval is something that *cannot* proceed
-      // without the user.
-      const notifications = unfocused ? readNotificationPreference(getFastVibePaths()) : undefined;
-      if (event.type === "conversation_activity" && notifications === "done") {
-        new Notification({
-          title: String(event.title ?? uiText("会话", "Chat")),
-          body: uiText("任务已完成，可以回来查看结果。", "The task is done. Come back to see the result."),
-        }).show();
-      } else if (event.type === "extension_ui_request" && notifications === "approval") {
-        // A blocking prompt parks the tool until it is answered, and its panel is only
-        // drawn for the conversation on screen — so without this notice a background
-        // chat could sit waiting with nothing anywhere to say so.
-        new Notification({
-          title: uiText("有一个会话在等你", "A chat is waiting for you"),
-          body: uiText("切换到这个会话继续处理。", "Switch to that conversation to continue."),
-        }).show();
-      }
-    }
+    // Raise a desktop notice when a background chat needs the user, or when an update
+    // lands. Everything else — every streamed token among them — must fall straight
+    // through to the fan-out below.
+    if (NOTIFIABLE_EVENTS.has(String(event.type))) raiseNotification(event);
     if (event.type === "extension_ui_request") {
       void engine.handleExtensionUi(event);
     }
@@ -1137,6 +1145,22 @@ app.whenReady().then(async () => {
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
+});
+
+/**
+ * A second launch is not a second window: the lock is what makes this one process, and
+ * the event is the arriving second process asking to be let in.
+ */
+app.on("second-instance", () => {
+  if (!singleInstance || shutdownPhase !== "running") return;
+  for (const window of windows) {
+    if (window.isDestroyed()) continue;
+    if (window.isMinimized()) window.restore();
+    window.show();
+    window.focus();
+    return;
+  }
+  createWindow();
 });
 
 /**
@@ -1273,34 +1297,54 @@ function parseBranchHeader(header: string): string | undefined {
 }
 
 /**
- * Which desktop notifications the user asked for, from `settings.json`.
+ * The two engine events a desktop notice can come from.
  *
- * Read per event rather than cached: the switch in 设置 → 通用 writes the file, and a
- * notification is rare enough that one small read costs nothing. An absent or
- * malformed value is `done`, which is what every install had before the preference
- * existed.
+ * A set rather than a call to `notificationForEvent`, because this is the hot path — it
+ * runs once per streamed token of every reply.
  */
-function readNotificationPreference(paths: FastVibePaths): NotificationPreference {
-  const value = readAppSettings(paths).notifications;
-  return isNotificationPreference(value) ? value : "done";
-}
+const NOTIFIABLE_EVENTS = new Set(["conversation_activity", "extension_ui_request"]);
 
 /**
- * Whether an extension UI request is one that parks the run until a human answers.
+ * Raise one notice, if the user asked for that scenario and no window is in front.
  *
- * `notify` / `setStatus` / `setWidget` are one-way and must not raise a notification;
- * only the dialog methods block. `editor` is a dialog too, and it is answered through
- * the modal — the user still has to act, so it counts.
+ * The wording lives here rather than in `notificationForEvent`: that function is a pure
+ * scenario decision the tests load without a process environment, while every user-facing
+ * string in Main goes through `uiText` so it follows 界面语言.
+ *
+ * The window check comes first on purpose. It is the cheap part of the gate and it is true
+ * for every streamed token of a reply the user is watching, so nothing expensive —
+ * resolving the paths behind `settings.json`, let alone parsing it — happens until the
+ * app is genuinely in the background and an event worth noticing has actually arrived.
  */
-function isBlockingPrompt(event: Record<string, unknown>): boolean {
-  const method = event.method;
-  return (
-    method === "confirm" ||
-    method === "select" ||
-    method === "input" ||
-    method === "editor" ||
-    method === "questions"
-  );
+function raiseNotification(event: Record<string, unknown>): void {
+  const focused = [...windows].some((window) => !window.isDestroyed() && window.isFocused());
+  if (focused) return;
+  const notice = notificationForEvent(event);
+  if (!notice) return;
+  if (!notificationEnabled(readNotificationSettings(), notice.setting)) return;
+  // A blocking prompt parks the tool until it is answered, and its panel is only drawn for
+  // the conversation on screen — so without this notice a background chat could sit
+  // waiting with nothing anywhere to say so.
+  const request: NotificationRequest =
+    notice.setting === "notifyApproval"
+      ? {
+          ...notice,
+          title: uiText("有一个会话在等你", "A chat is waiting for you"),
+          body: uiText("切换到这个会话继续处理。", "Switch to that conversation to continue."),
+        }
+      : {
+          ...notice,
+          title: notice.title ?? uiText("会话", "Chat"),
+          body:
+            notice.setting === "notifyError"
+              ? uiText("任务出错了，可以回来看看。", "The task failed. Come back to see what happened.")
+              : uiText("任务已完成，可以回来查看结果。", "The task is done. Come back to see the result."),
+        };
+  presentNotification(request, {
+    windows: () => windows,
+    createWindow: () => createWindow(),
+    openConversation: (id) => engine.openConversation(id),
+  });
 }
 
 /**

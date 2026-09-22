@@ -11,7 +11,7 @@ import {
   type ThemeMode,
 } from "@/lib/themes";
 import { isPermissionMode } from "@/lib/permission-modes";
-import { isNotificationPreference, type NotificationPreference } from "@shared/types";
+import { NOTIFICATION_SETTINGS } from "@shared/types";
 import { detectSystemLanguage, isUiLanguage, type UiLanguage } from "@/lib/language";
 import { sanitizeShortcutOverrides, type ShortcutOverrides } from "@/lib/shortcuts";
 
@@ -42,14 +42,21 @@ export type AppSettings = {
   /** When true, the packaged app checks for updates after launch. */
   autoCheckUpdates: boolean;
   /**
-   * 系统通知: which desktop notifications FastVibe may raise.
+   * 系统通知: one switch per scenario (设置 → 通用). Flat keys, because `settings.json`
+   * is a flat bag Main reads one preference at a time, and **on** when absent — the
+   * user has to turn a notice off, never on.
    *
-   * `done` is the run-finished notice (any conversation), `approval` the one for a
-   * chat that parked on a tool approval while the window was unfocused, `off`
-   * nothing. A single switch could not express the difference: someone who works in
-   * a terminal all day wants to know a chat needs them but not that a run finished.
+   * `notifyDone` is an ordinary finish, `notifyError` a run that settled on an error,
+   * `notifyApproval` a background chat parked on a question, `notifyUpdate` a downloaded
+   * update. They are separate because they answer different questions: someone who works
+   * in a terminal all day wants to know a chat *cannot* proceed without them and may not
+   * care that a run finished, and a failed run is worth saying out loud even when an
+   * ordinary one is not.
    */
-  notifications: NotificationPreference;
+  notifyDone: boolean;
+  notifyError: boolean;
+  notifyApproval: boolean;
+  notifyUpdate: boolean;
   /**
    * Provider/model a brand-new conversation starts on. Persisted like every other
    * preference and read by the engine when it creates a session — the SDK's own
@@ -161,7 +168,11 @@ const DEFAULTS: AppSettings = {
   darkTheme: DEFAULT_DARK_THEME,
   uiFontSize: DEFAULT_UI_FONT_SIZE,
   autoCheckUpdates: true,
-  notifications: "done",
+  // 系统通知 (设置 → 通用): every scenario on, so a fresh install is not a silent one.
+  notifyDone: true,
+  notifyError: true,
+  notifyApproval: true,
+  notifyUpdate: true,
   // Off until the user turns it on. Driving the desktop is not something an app should
   // start doing because it was installed — unlike every other default here, the cost of
   // guessing wrong is an action taken in someone else's application.
@@ -196,7 +207,13 @@ function sanitize(parsed: Partial<AppSettings>): Partial<AppSettings> {
   if (!isAllowedAppList(next.computerAllowedApps)) delete next.computerAllowedApps;
   if (!isIdListMap(next.sidebarOrder)) delete next.sidebarOrder;
   if (typeof next.autoCheckUpdates !== "boolean") delete next.autoCheckUpdates;
-  if (!isNotificationPreference(next.notifications)) delete next.notifications;
+  // A malformed switch drops, which reads back as the default — on. `notifications` is
+  // the three-valued key this replaced, and a stale one is dropped rather than migrated:
+  // every one of its values is the new default's superset.
+  for (const key of NOTIFICATION_SETTINGS) {
+    if (typeof next[key] !== "boolean") delete next[key];
+  }
+  delete (next as Record<string, unknown>).notifications;
   if (typeof next.keepAwake !== "boolean") delete next.keepAwake;
   if (typeof next.collapseRuns !== "boolean") delete next.collapseRuns;
   const shortcuts = sanitizeShortcutOverrides(next.shortcuts);

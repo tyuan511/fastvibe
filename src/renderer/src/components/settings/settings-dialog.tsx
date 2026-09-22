@@ -381,24 +381,57 @@ export function SettingsDialog({
                   title={t("common.notifications")}
                   description={t("common.notificationsDesc")}
                   control={
-                    <Select
-                      items={{
-                        done: t("common.notifyDone"),
-                        approval: t("common.notifyApproval"),
-                        off: t("common.notifyOff"),
-                      }}
-                      value={settings.notifications}
-                      onValueChange={(value) => update({ notifications: value as typeof settings.notifications })}
-                    >
-                      <SelectTrigger size="sm" className="w-44">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="done">{t("common.notifyDone")}</SelectItem>
-                        <SelectItem value="approval">{t("common.notifyApproval")}</SelectItem>
-                        <SelectItem value="off">{t("common.notifyOff")}</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <Switch
+                      checked={settings.notifyDone && settings.notifyError && settings.notifyApproval && settings.notifyUpdate}
+                      onCheckedChange={(checked) =>
+                        update({
+                          notifyDone: checked,
+                          notifyError: checked,
+                          notifyApproval: checked,
+                          notifyUpdate: checked,
+                        })
+                      }
+                    />
+                  }
+                />
+                <Row
+                  title={t("common.notifyDone")}
+                  description={t("common.notifyDoneDesc")}
+                  control={
+                    <Switch
+                      checked={settings.notifyDone}
+                      onCheckedChange={(checked) => update({ notifyDone: checked })}
+                    />
+                  }
+                />
+                <Row
+                  title={t("common.notifyError")}
+                  description={t("common.notifyErrorDesc")}
+                  control={
+                    <Switch
+                      checked={settings.notifyError}
+                      onCheckedChange={(checked) => update({ notifyError: checked })}
+                    />
+                  }
+                />
+                <Row
+                  title={t("common.notifyApproval")}
+                  description={t("common.notifyApprovalDesc")}
+                  control={
+                    <Switch
+                      checked={settings.notifyApproval}
+                      onCheckedChange={(checked) => update({ notifyApproval: checked })}
+                    />
+                  }
+                />
+                <Row
+                  title={t("common.notifyUpdate")}
+                  description={t("common.notifyUpdateDesc")}
+                  control={
+                    <Switch
+                      checked={settings.notifyUpdate}
+                      onCheckedChange={(checked) => update({ notifyUpdate: checked })}
+                    />
                   }
                 />
               </Group>

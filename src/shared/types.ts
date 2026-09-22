@@ -1022,18 +1022,23 @@ export type InputModality = (typeof INPUT_MODALITIES)[number];
 export type PermissionMode = "ask" | "smart" | "full";
 
 /**
- * 系统通知: which desktop notifications the app may raise.
+ * 系统通知: the scenarios a desktop notification may be raised for (设置 → 通用).
  *
- * `done` = a run finished, `approval` = a chat is parked on a tool approval while the
- * window is unfocused, `off` = none. Main reads the value from `settings.json` on every
- * event so a change lands immediately; an absent or malformed value means `done`.
+ * One key per scenario rather than one three-valued preference, so someone who wants to
+ * hear about a chat waiting on an approval but not about every finished run can say so.
+ * `done` and `error` are the two verdicts a background run can settle with, `approval`
+ * is a chat parked on a question only the user can answer, `update` is an update that
+ * has finished downloading.
+ *
+ * Main reads each key from `settings.json` on every event, so a change lands immediately.
+ * An absent value means **on**: the switch has to be turned off to stop a notice.
  */
-export const NOTIFICATION_PREFERENCES = ["done", "approval", "off"] as const;
+export const NOTIFICATION_SETTINGS = ["notifyDone", "notifyError", "notifyApproval", "notifyUpdate"] as const;
 
-export type NotificationPreference = (typeof NOTIFICATION_PREFERENCES)[number];
+export type NotificationSetting = (typeof NOTIFICATION_SETTINGS)[number];
 
-export function isNotificationPreference(value: unknown): value is NotificationPreference {
-  return typeof value === "string" && (NOTIFICATION_PREFERENCES as readonly string[]).includes(value);
+export function isNotificationSetting(value: unknown): value is NotificationSetting {
+  return typeof value === "string" && (NOTIFICATION_SETTINGS as readonly string[]).includes(value);
 }
 
 export type Project = {

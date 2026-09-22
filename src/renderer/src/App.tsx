@@ -913,10 +913,6 @@ export function App(): JSX.Element {
     settings: () => {
       if (!settingsOpen) navigate("/settings/general");
     },
-    newWindow: () => {
-      if (blockedRemotely(Ipc.windowNew)) return;
-      void window.fastvibe.app.newWindow();
-    },
     newChat: () => {
       setCommandOpen(false);
       void handleNewChat();
