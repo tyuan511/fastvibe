@@ -20,6 +20,7 @@ export const BUILTIN_EXTENSIONS: Array<{ source: string; file: string }> = [
   { source: "fastvibe:browser-use", file: "browser-use.ts" },
   { source: "fastvibe:computer-use", file: "computer-use.ts" },
   { source: "fastvibe:web-search", file: "web-search.ts" },
+  { source: "fastvibe:conversation-search", file: "conversation-search.ts" },
   { source: "fastvibe:worktree", file: "worktree.ts" },
   { source: "fastvibe:subagent-team", file: "subagent/index.ts" },
 ];

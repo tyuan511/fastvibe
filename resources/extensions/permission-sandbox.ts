@@ -39,7 +39,7 @@ function modeDescription(mode: PermissionMode): string {
 }
 
 /** Tools with no side effects; they are never worth a confirmation. */
-const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls", "todo", "worktree_list"]);
+const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls", "todo", "conversation_search", "worktree_list"]);
 
 /** Built-in network lookup; `ask` confirms it, `smart` does not. */
 const NETWORK_TOOLS = new Set(["web_search"]);

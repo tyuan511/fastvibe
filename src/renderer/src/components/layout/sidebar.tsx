@@ -1,6 +1,7 @@
 import { memo, useCallback, useMemo, useRef, useState, type JSX, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { createPortal } from "react-dom";
+import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Add01Icon, Alert02Icon, Archive04Icon, ArrowLeft01Icon, ArrowRight01Icon, Delete02Icon, Folder01Icon, Folder02Icon, FolderRootIcon, Link01Icon, MessageSquarePlusIcon, MoreHorizontalIcon, PanelLeftCloseIcon, PencilEdit02Icon, PinIcon, PuzzleIcon, Search01Icon, Settings01Icon } from "@hugeicons/core-free-icons";
 import {
@@ -632,6 +633,20 @@ function DraggableSession({
           <ContextMenuItem onClick={onTogglePin}>{isPinned ? t("sidebar.unpin") : t("sidebar.pin")}</ContextMenuItem>
           <ContextMenuItem onClick={onStartRename}>{t("sidebar.rename")}</ContextMenuItem>
           <ContextMenuItem onClick={onFork}>{t("sidebar.fork")}</ContextMenuItem>
+          <ContextMenuItem
+            onClick={() => {
+              if (!navigator.clipboard) {
+                toast.error(t("sidebar.copyIdFailed"));
+                return;
+              }
+              void navigator.clipboard
+                .writeText(item.id)
+                .then(() => toast.success(t("sidebar.copiedId")))
+                .catch(() => toast.error(t("sidebar.copyIdFailed")));
+            }}
+          >
+            {t("sidebar.copyId")}
+          </ContextMenuItem>
           <ContextMenuSeparator />
           <ContextMenuItem onClick={onArchive}>{t("sidebar.archive")}</ContextMenuItem>
         </ContextMenuContent>

@@ -918,9 +918,10 @@ engine is gone because the SDK never read them.
 ## Plugins & extensions
 
 FastVibe hosts pi extensions (the SDK's plugin system) and bridges their
-terminal-only surface onto the GUI. Nine **built-in** extensions ship with the app
+terminal-only surface onto the GUI. Twelve **built-in** extensions ship with the app
 (`resources/extensions/plan.ts`, `goal.ts`, `todo.ts`, `permission-sandbox.ts`, `session-title.ts`,
-`browser-use.ts`, `web-search.ts`, `output-language.ts`, `subagent/index.ts`); anything else
+`browser-use.ts`, `computer-use.ts`, `web-search.ts`, `conversation-search.ts`, `worktree.ts`,
+`output-language.ts`, `subagent/index.ts`); anything else
 the user installs at runtime via 设置 → 插件, which writes to the isolated `agentDir`
 (`ExtensionManager` → SDK `DefaultPackageManager`), never `~/.pi`.
 
@@ -1167,6 +1168,15 @@ the user installs at runtime via 设置 → 插件, which writes to the isolated
   **not** injected into the main conversation, because pi-ai cannot parse `web_search_call`.
   Completions / Messages models drop it from the active set. The sandbox treats it as
   network (`ask` confirms, `smart` does not). Do not vendor `pi-web-search`.
+- **Conversation search** — `conversation-search.ts` registers `conversation_search`, which
+  treats a catalog conversation id like a file path and a focused query like `grep`. Main
+  resolves the id through the catalog, searches the target's current branch without activating
+  it or creating an `AgentSession`, and returns bounded snippets plus a little surrounding
+  transcript. A session already in memory supplies its live branch pointer; an unloaded one is
+  parsed into `SessionManager.inMemory`, never `SessionManager.open`, so a read cannot migrate
+  or rewrite the transcript. System prompts, thinking blocks, images and hidden custom messages
+  are excluded. It is read-only in the permission sandbox and available to main sessions only;
+  throwaway subagents still load just the sandbox.
 - **Loading** — `src/main/pi/extension-manager.ts` resolves the built-in entry
   points (from `resources/extensions` in dev, `resourcesPath/extensions` packaged;
   `electron-builder.yml` copies them via `extraResources`) and `#createSession`

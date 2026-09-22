@@ -71,6 +71,13 @@ import { buildCommitMessagePlan, type CommitFileMaterial } from "../engine/commi
 import { ConversationCatalog } from "../engine/conversation-catalog";
 import { searchConversationContent } from "../engine/conversation-search";
 import {
+  ConversationTranscriptError,
+  loadConversationTranscriptBranch,
+  searchConversationTranscript,
+  type ConversationTranscriptSearchRequest,
+  type ConversationTranscriptSearchResult,
+} from "../engine/conversation-transcript-search";
+import {
   importSessions as runImport,
   keyOf,
   scanImportCandidates,
@@ -146,10 +153,21 @@ type FastVibeExtensionUIContext = ExtensionUIContext & {
    * no `pi` CLI to spawn (see `resources/extensions/subagent/index.ts`).
    */
   runSubagent(request: SubagentHostRequest): Promise<SubagentHostResponse>;
+  searchConversation(request: ConversationSearchHostRequest): Promise<ConversationSearchHostResult>;
   createWorktree(options?: { path?: string; branch?: string; label?: string }): Promise<WorktreeHostResult>;
   bindWorktree(path: string): Promise<WorktreeHostResult>;
   unbindWorktree(options?: { remove?: boolean }): Promise<{ cwd: string }>;
   listWorktrees(): Promise<GitWorktreeInfo[]>;
+};
+
+type ConversationSearchHostRequest = ConversationTranscriptSearchRequest & {
+  conversationId: string;
+};
+
+type ConversationSearchHostResult = ConversationTranscriptSearchResult & {
+  conversationId: string;
+  title: string;
+  cwd: string;
 };
 
 type WorktreeHostResult = {
@@ -668,6 +686,42 @@ export class PiProcessManager {
   listWorkspace(): WorkspaceSnapshot { return this.#catalog.snapshot(); }
   searchConversations(query: string): Promise<ConversationSearchHit[]> {
     return searchConversationContent(query, this.#catalog.list());
+  }
+  async #searchConversationForAgent(request: ConversationSearchHostRequest): Promise<ConversationSearchHostResult> {
+    const conversationId = request.conversationId.trim();
+    if (!conversationId) throw new Error(uiText("会话 ID 不能为空", "Conversation ID is required"));
+    const conversation = this.#catalog.get(conversationId);
+    if (!conversation) throw new Error(uiText("没有找到这个会话", "Conversation not found"));
+
+    try {
+      const managed = this.#sessions.get(conversationId);
+      const branch = managed
+        ? managed.session.sessionManager.getBranch()
+        : conversation.sessionFile
+          ? await loadConversationTranscriptBranch(conversation.sessionFile, conversation.cwd)
+          : [];
+      return {
+        conversationId,
+        title: conversation.title,
+        cwd: conversation.cwd,
+        ...searchConversationTranscript(branch, request),
+      };
+    } catch (error) {
+      if (!(error instanceof ConversationTranscriptError)) throw error;
+      if (error.code === "empty-query") {
+        throw new Error(uiText("搜索词不能为空", "Search query is required"));
+      }
+      if (error.code === "query-too-long") {
+        throw new Error(uiText("搜索词过长，请缩短后重试", "The search query is too long; shorten it and try again"));
+      }
+      if (error.code === "too-large") {
+        throw new Error(uiText("会话转录过大，无法安全搜索", "The conversation transcript is too large to search safely"));
+      }
+      if (error.code === "missing") {
+        throw new Error(uiText("会话转录不存在", "The conversation transcript is missing"));
+      }
+      throw new Error(uiText("会话转录已损坏，无法搜索", "The conversation transcript is invalid"));
+    }
   }
   flush(): void {
     this.#catalog.flush();
@@ -3937,6 +3991,7 @@ export class PiProcessManager {
       planReview: (plan) =>
         dialog<{ action: "approve" | "revise" | "ignore"; value?: string }>("plan_review", { plan }, { action: "ignore" }, 30 * 60_000),
       runSubagent: (request) => this.#runSubagent(conversationId, request),
+      searchConversation: (request) => this.#searchConversationForAgent(request),
       createWorktree: (options) => this.#hostCreateWorktree(conversationId, options),
       bindWorktree: (path) => this.#hostBindWorktree(conversationId, path),
       unbindWorktree: (options) => this.#hostUnbindWorktree(conversationId, options),
