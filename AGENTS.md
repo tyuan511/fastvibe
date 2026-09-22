@@ -421,7 +421,7 @@ Main 每个会话一个 `AgentSession`，但引擎自己只有一个「当前会
 用户正在打的草稿。
 
 会话在等用户时：侧栏行显示 `Alert02Icon`，窗口未聚焦时按
-`settings.notifications === "approval"` 发系统通知。停止只在 composer；归档一个正在
+`settings.notifyApproval` 发系统通知。停止只在 composer；归档一个正在
 运行的会话会 `abort` 它，侧栏行不再提供停止按钮。
 
 Provider credentials are kept in FastVibe's isolated runtime and injected into the SDK's in-memory auth storage. Do not export these variables into the user's login shell or the in-app terminal.
