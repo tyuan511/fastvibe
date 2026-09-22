@@ -20,7 +20,8 @@ type StoredOverrides = {
   thinkingLevels: Record<string, ThinkingLevel>;
 };
 
-const BUILTIN_IDS = ["scout", "planner", "worker", "reviewer"] as const;
+const BUILTIN_IDS = ["explorer", "planner", "worker", "reviewer"] as const;
+const LEGACY_SCOUT_ID = "scout";
 const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const MODEL_PATTERN = /^[^\s/]+\/[^\s]+$/;
 
@@ -200,15 +201,25 @@ export class SubagentManager {
       const value = JSON.parse(readFileSync(this.#paths.subagentsFile, "utf8")) as Partial<StoredOverrides>;
       const models = value.models && typeof value.models === "object" ? value.models : {};
       const thinkingLevels = value.thinkingLevels && typeof value.thinkingLevels === "object" ? value.thinkingLevels : {};
-      return {
-        version: 2,
-        models: Object.fromEntries(
-          Object.entries(models).filter(([key, model]) => Boolean(key) && typeof model === "string" && MODEL_PATTERN.test(model)),
-        ),
-        thinkingLevels: Object.fromEntries(
-          Object.entries(thinkingLevels).filter(([key, level]) => Boolean(key) && Boolean(safeThinkingLevel(level))),
-        ) as Record<string, ThinkingLevel>,
-      };
+      const safeModels = Object.fromEntries(
+        Object.entries(models).filter(([key, model]) => Boolean(key) && typeof model === "string" && MODEL_PATTERN.test(model)),
+      );
+      const safeThinkingLevels = Object.fromEntries(
+        Object.entries(thinkingLevels).filter(([key, level]) => Boolean(key) && Boolean(safeThinkingLevel(level))),
+      ) as Record<string, ThinkingLevel>;
+
+      // `scout` was renamed to `explorer`; preserve an existing built-in override
+      // unless the user has already saved an explicit value under the new id.
+      if (safeModels.explorer === undefined && safeModels[LEGACY_SCOUT_ID] !== undefined) {
+        safeModels.explorer = safeModels[LEGACY_SCOUT_ID];
+      }
+      if (safeThinkingLevels.explorer === undefined && safeThinkingLevels[LEGACY_SCOUT_ID] !== undefined) {
+        safeThinkingLevels.explorer = safeThinkingLevels[LEGACY_SCOUT_ID];
+      }
+      delete safeModels[LEGACY_SCOUT_ID];
+      delete safeThinkingLevels[LEGACY_SCOUT_ID];
+
+      return { version: 2, models: safeModels, thinkingLevels: safeThinkingLevels };
     } catch {
       return { version: 2, models: {}, thinkingLevels: {} };
     }

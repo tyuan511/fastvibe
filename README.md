@@ -113,7 +113,7 @@ Nine extensions ship with the app; none needs a separate install:
 - **`output-language.ts`** — always on: appends the host's AI language preference to the system
   prompt on every turn.
 - **`subagent/`** — registers a `subagent` tool that delegates a self-contained task to a role file
-  (`scout`, `planner`, `worker`, `reviewer`), in single, parallel or chained mode.
+  (`explorer`, `planner`, `worker`, `reviewer`), in single, parallel or chained mode.
 
 ## Feature overview
 

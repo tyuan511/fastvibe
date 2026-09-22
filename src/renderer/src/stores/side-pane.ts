@@ -277,7 +277,7 @@ const SUBAGENT_TAB_STATUS: Record<string, string> = {
   aborted: "tabs.status.aborted",
 };
 
-/** `子 Agent` tab label: role plus live status, e.g. `scout · 运行中`. */
+/** `子 Agent` tab label: role plus live status, e.g. `explorer · 运行中`. */
 export function subagentTabLabel(tab: SidePaneTab): string {
   const key = tab.subagentStatus ? SUBAGENT_TAB_STATUS[tab.subagentStatus] : undefined;
   const status = key ? (i18n.t(`sidepane:${key}`) as string) : tab.subagentStatus;

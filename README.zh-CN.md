@@ -104,7 +104,7 @@ FastVibe 的核心承诺是：**pi 扩展在终端里能做什么，在这里就
   以旁路请求完成搜索，不注入主对话。
 - **`output-language.ts`** —— 始终可用：每轮把宿主的 AI 偏好语言要求追加到系统提示词。
 - **`subagent/`** —— 注册 `subagent` 工具，把独立任务委派给角色文件
-  （`scout` / `planner` / `worker` / `reviewer`），支持单路、并行与链式。
+  （`explorer` / `planner` / `worker` / `reviewer`），支持单路、并行与链式。
 
 ## 功能一览
 

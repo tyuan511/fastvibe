@@ -1019,7 +1019,7 @@ the user installs at runtime via 设置 → 插件, which writes to the isolated
   way to forget that acknowledgement. An absent or malformed mode means `smart`, never `full`.
 - **Subagent** — `subagent/index.ts` registers a `subagent` tool that delegates a
   self-contained task to a role defined by a markdown file under
-  `resources/extensions/subagent/agents/*.md`: `scout`, `planner`, `worker`,
+  `resources/extensions/subagent/agents/*.md`: `explorer`, `planner`, `worker`,
   `reviewer` (user roles under `getAgentDir()/agents` are merged in). Because the
   SDK omits custom tools from the system prompt unless they declare it, the tool sets
   `promptSnippet` + `promptGuidelines` and lists the discovered roles in its
@@ -1067,8 +1067,8 @@ the user installs at runtime via 设置 → 插件, which writes to the isolated
     A `subagent` tool card does not dump its parameters — it lists the spawned
     runs (role · brief · status, the whole row opening that run's tab; no
     「查看对话」 button). The collapsed row summarises the fan-out rather than
-    listing every run — at most two distinct roles plus a count (`scout ×5`,
-    `scout, planner 等 4 个`) — and expanding it reveals each run. A run's tab is
+    listing every run — at most two distinct roles plus a count (`explorer ×5`,
+    `explorer, planner 等 4 个`) — and expanding it reveals each run. A run's tab is
     `SidePaneSubagent`: the same `MessageList` as the main thread (follow-the-bottom
     included), plus the main composer in its read-only mode (below) — a delegated run
     is not a conversation the user can steer, but it is one they can read and stop. The
