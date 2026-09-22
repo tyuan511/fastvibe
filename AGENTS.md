@@ -974,6 +974,17 @@ the user installs at runtime via 设置 → 插件, which writes to the isolated
       not news after the run that was working through it stopped; it would sit above
       the composer with a busy mark, claiming work that is not happening. The plan is
       still in the transcript's todo card, one collapsed row away.
+    - **A newer user prompt closes it.** `todoSnapshot` (`lib/todos.ts`) reports the
+      list together with whether it was written *before* the newest user message, and
+      the panel draws nothing while that is true. A checklist belongs to the request
+      it was written for: asking something else must not resurface the previous
+      task's leftovers the moment the new run starts, which is exactly what the
+      transcript-derived panel did — it only knew the list existed, not which turn it
+      was for. The list is not destroyed (the card keeps it), and it comes back the
+      moment the agent writes one for the work in front of it. The extension's
+      `before_agent_start` reminder is worded the same way — continue the list only
+      if the request does — so the model is not pushed to resume an abandoned plan
+      just because it is unfinished.
     - **Busy marks follow the run.** The header's leading glyph and the leading glyph
       of the item `in_progress` are `RunningMark` (`components/running-mark.tsx`) —
       the same sweeping-arc mark the sidebar puts on a running conversation, shared so

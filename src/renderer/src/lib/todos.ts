@@ -111,24 +111,48 @@ export function todoIndexOf(items: TodoItem[], item: TodoItem | undefined): numb
 
 const EMPTY_TODOS: TodoItem[] = [];
 
-/**
- * Latest completed todo list in the transcript — the agent's current plan.
- *
- * Do not read a running call here. Tool arguments arrive incrementally while the
- * model is streaming, so using them would make the panel above the composer
- * repaint for every partial JSON update. The tool card may still show that live
- * call, but the persistent panel only advances after execution has produced its
- * final result (or an error).
- */
-export function latestTodos(messages: ChatMessage[]): TodoItem[] {
+/** Index of the newest user turn in the transcript, or -1 when there is none. */
+function lastUserIndex(messages: ChatMessage[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?.role === "user") return i;
+  }
+  return -1;
+}
+
+function scanTodos(messages: ChatMessage[]): { items: TodoItem[]; messageIndex: number } {
   for (let i = messages.length - 1; i >= 0; i--) {
     const tools = messages[i]?.tools ?? [];
     for (let j = tools.length - 1; j >= 0; j--) {
       const tool = tools[j];
       if (!isTodoTool(tool.name) || tool.status === "running") continue;
       const todos = parseToolTodos(tool);
-      if (todos.length > 0) return todos;
+      if (todos.length > 0) return { items: todos, messageIndex: i };
     }
   }
-  return EMPTY_TODOS;
+  return { items: EMPTY_TODOS, messageIndex: -1 };
+}
+
+/**
+ * The list the panel would draw, plus whether the newest user prompt arrived after
+ * it was written.
+ *
+ * Do not read a running call here. Tool arguments arrive incrementally while the
+ * model is streaming, so using them would make the panel above the composer
+ * repaint for every partial JSON update. The tool card may still show that live
+ * call, but the persistent panel only advances after execution has produced its
+ * final result (or an error).
+ *
+ * A list is written for the request being worked on, and it stays in the transcript
+ * as history. But the composer slot above the input is the scarcest space in the app,
+ * and a checklist from an earlier turn is not this turn's plan: ask something else and
+ * it would sit there while an unrelated run streams, claiming work that is not
+ * happening. So a newer user prompt closes the panel; it comes back only when the
+ * agent writes the list again (`todo` at the start of the new turn), which is also the
+ * signal that the work is back on a checklist. A list written during the current turn
+ * — including the reply still streaming — is not superseded.
+ */
+export function todoSnapshot(messages: ChatMessage[]): { items: TodoItem[]; superseded: boolean } {
+  const { items, messageIndex } = scanTodos(messages);
+  if (items.length === 0 || messageIndex < 0) return { items, superseded: false };
+  return { items, superseded: lastUserIndex(messages) > messageIndex };
 }

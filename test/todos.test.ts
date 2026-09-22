@@ -2,9 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   activeTodo,
-  latestTodos,
   parseTodoList,
   todoPosition,
+  todoSnapshot,
 } from "../src/renderer/src/lib/todos.ts";
 
 /**
@@ -59,10 +59,74 @@ test("the live todo call does not replace the panel until execution finishes", (
       createdAt: 0,
     },
   ];
-  assert.deepEqual(latestTodos(messages).map((item) => item.content), ["old task"]);
+  assert.deepEqual(todoSnapshot(messages).items.map((item) => item.content), ["old task"]);
 
   messages[0].tools[1].status = "done";
-  assert.deepEqual(latestTodos(messages).map((item) => item.content), ["new task"]);
+  assert.deepEqual(todoSnapshot(messages).items.map((item) => item.content), ["new task"]);
+});
+
+test("a list written during the current turn is the panel's list", () => {
+  const messages = [
+    { id: "u1", role: "user" as const, text: "do the thing", tools: [], createdAt: 0 },
+    {
+      id: "a1",
+      role: "assistant" as const,
+      text: "",
+      tools: [{ id: "t1", name: "todo", status: "done" as const, args: { todos: [{ content: "step", status: "in_progress" }] } }],
+      createdAt: 1,
+    },
+  ];
+  const snapshot = todoSnapshot(messages);
+  assert.deepEqual(snapshot.items.map((item) => item.content), ["step"]);
+  assert.equal(snapshot.superseded, false);
+});
+
+test("a newer user prompt closes a list written for the previous one", () => {
+  // The complaint this rule answers: asking something else must not resurface the
+  // previous task's leftovers above the composer the moment the new run starts.
+  const messages = [
+    { id: "u1", role: "user" as const, text: "do the thing", tools: [], createdAt: 0 },
+    {
+      id: "a1",
+      role: "assistant" as const,
+      text: "",
+      tools: [{ id: "t1", name: "todo", status: "done" as const, args: { todos: [{ content: "step", status: "in_progress" }] } }],
+      createdAt: 1,
+    },
+    { id: "u2", role: "user" as const, text: "unrelated question", tools: [], createdAt: 2 },
+  ];
+  const snapshot = todoSnapshot(messages);
+  assert.deepEqual(snapshot.items.map((item) => item.content), ["step"]);
+  assert.equal(snapshot.superseded, true);
+});
+
+test("the agent rewriting the list in the new turn un-closes the panel", () => {
+  const messages = [
+    { id: "u1", role: "user" as const, text: "do the thing", tools: [], createdAt: 0 },
+    {
+      id: "a1",
+      role: "assistant" as const,
+      text: "",
+      tools: [{ id: "t1", name: "todo", status: "done" as const, args: { todos: [{ content: "old step", status: "pending" }] } }],
+      createdAt: 1,
+    },
+    { id: "u2", role: "user" as const, text: "carry on", tools: [], createdAt: 2 },
+    {
+      id: "a2",
+      role: "assistant" as const,
+      text: "",
+      tools: [{ id: "t2", name: "todo", status: "done" as const, args: { todos: [{ content: "old step", status: "in_progress" }] } }],
+      createdAt: 3,
+    },
+  ];
+  const snapshot = todoSnapshot(messages);
+  assert.deepEqual(snapshot.items.map((item) => item.status), ["in_progress"]);
+  assert.equal(snapshot.superseded, false);
+});
+
+test("a transcript with no todo call has nothing to close", () => {
+  const messages = [{ id: "u1", role: "user" as const, text: "hi", tools: [], createdAt: 0 }];
+  assert.deepEqual(todoSnapshot(messages), { items: [], superseded: false });
 });
 
 test("in_progress wins over pending, whichever comes first", () => {
