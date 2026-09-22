@@ -104,6 +104,7 @@
   "showTimestamps": "Show timestamps"
  },
  "about": {
+  "more": "More",
   "tagline": "Desktop client for agent work, code, and cowork",
   "modelsDev": "Model metadata",
   "generatedAt": "Generated {{date}}",
@@ -498,6 +499,7 @@
   "configured": "Configured",
   "add": "Add server",
   "empty": "No MCP servers configured",
+  "emptyHint": "Add a server to see it here",
   "tools": "{{count}} tools",
   "connectFailed": "Failed",
   "errorDetails": "Connection error details",

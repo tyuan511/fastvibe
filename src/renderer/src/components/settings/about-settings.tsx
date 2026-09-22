@@ -17,9 +17,10 @@ import { Ipc } from "@shared/ipc";
 /**
  * Settings → 关于: who this install is (logo, version) and what it is built from.
  *
- * Two actions live here besides the identity header: refresh the models.dev snapshot
- * now (it also refreshes on its own, hourly — limits and prices move faster than
- * releases), and export the main/renderer logs as a zip for troubleshooting.
+ * Two cards below the identity header. 更新 first — the app's own update check. 更多 holds
+ * everything else about this install: the models.dev snapshot (refreshable now; it also
+ * refreshes on its own hourly — limits and prices move faster than releases), where its data
+ * lives, exporting the main/renderer logs as a zip, and resetting preferences.
  */
 export function AboutSettings(): JSX.Element {
   const { t } = useTranslation("settings");
@@ -97,7 +98,9 @@ export function AboutSettings(): JSX.Element {
         </div>
       </header>
 
-      <SettingsGroup title={t("about.appInfo")}>
+      <AboutUpdate />
+
+      <SettingsGroup title={t("about.more")}>
         <SettingsRow
           title={t("about.modelsDev")}
           description={
@@ -128,11 +131,6 @@ export function AboutSettings(): JSX.Element {
             </div>
           }
         />
-      </SettingsGroup>
-
-      <AboutUpdate />
-
-      <SettingsGroup title={t("about.data")}>
         <SettingsRow
           title={t("about.dataDir")}
           description={<span className="break-all font-mono">{info?.userData ?? "—"}</span>}
@@ -169,9 +167,6 @@ export function AboutSettings(): JSX.Element {
             </Button>
           }
         />
-      </SettingsGroup>
-
-      <SettingsGroup title={t("about.advanced")}>
         <SettingsRow
           title={t("about.reset")}
           description={t("about.resetDesc")}

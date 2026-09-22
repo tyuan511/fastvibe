@@ -104,6 +104,7 @@
   "showTimestamps": "显示消息时间"
  },
  "about": {
+  "more": "更多",
   "tagline": "桌面智能体工作台",
   "modelsDev": "模型元数据",
   "generatedAt": "生成于 {{date}}",
@@ -496,6 +497,7 @@
   "configured": "已配置",
   "add": "添加服务器",
   "empty": "尚未配置 MCP 服务器",
+  "emptyHint": "添加服务器后会出现在这里",
   "tools": "{{count}} 个工具",
   "connectFailed": "连接失败",
   "errorDetails": "连接错误详情",
