@@ -45,6 +45,8 @@ xattr -cr /Applications/FastVibe.app
 - **Usage statistics**: view request and token usage by day, including usage from deleted sessions.
 - **Workspace side panes**: file tree and preview, terminal, browser, Git review, and auxiliary conversations.
 - **Browser use**: the agent can open pages, inspect snapshots, click, type, and submit forms in the built-in browser.
+- **Computer use**: the agent drives native desktop applications through `computer_*` tools — reading window elements, clicking, typing, using menus, batching steps — with background delivery that does not steal your focus.
+- **Remote projects over SSH**: deploy the headless Agent to another Linux machine and bind its workspaces as projects here; several servers can be attached at once.
 - **Git and attachments**: create or switch branches, attach images and files, queue messages, and retry or edit from a conversation branch.
 - **20 themes**: independently select light and dark themes and scale the interface globally.
 - **Automatic updates**: check for updates in the background and download/install them from the app.
@@ -91,7 +93,7 @@ both the extensions bundled with the app and anything installed at runtime.
 
 ### Built-in extensions
 
-Nine extensions ship with the app; none needs a separate install:
+Eleven extensions ship with the app; none needs a separate install:
 
 - **`plan.ts`** — `/plan` enters plan mode: the tool set narrows to read-only, and a `question` tool
   asks every clarifying question in one panel before the plan is confirmed and sent back as the
@@ -105,6 +107,10 @@ Nine extensions ship with the app; none needs a separate install:
 - **`browser-use.ts`** — the built-in browser's tool set: `browser_open` / `snapshot` / `click` /
   `type` / `press` / `history` and related tools, bridging page operations to the browser tab in the
   side pane.
+- **`computer-use.ts`** — the computer-use tool set: `computer_screenshot` / `list_apps` /
+  `list_windows` / `window_state` / `click` / `type` / `key` / `hotkey` / `menu` / `scroll` /
+  `clipboard_*`, plus `computer_batch` for running a chain of steps in one call, bridging desktop
+  operations to Cua Driver (see [Computer use](#computer-use) below).
 - **`permission-sandbox.ts`** — the enforcement half of the permission sandbox: it detects network
   access, writes outside the workspace, sensitive paths and destructive commands, and asks for
   approval according to the active mode.
@@ -114,6 +120,8 @@ Nine extensions ship with the app; none needs a separate install:
   prompt on every turn.
 - **`subagent/`** — registers a `subagent` tool that delegates a self-contained task to a role file
   (`explorer`, `planner`, `worker`, `reviewer`), in single, parallel or chained mode.
+- **`worktree.ts`** — binds a conversation to an isolated git worktree (`worktree_list` / `create` /
+  `bind` / `unbind`), so changes made in isolation never dirty the main checkout.
 
 ## Feature overview
 
@@ -177,6 +185,69 @@ read together with its WAL so cookies written moments ago are not missed.
   limit on every operation, and a closed window or a timeout reports an explicit error rather than
   failing silently.
 
+### Computer use
+
+`browser_*` drives the isolated built-in browser; **computer use drives the machine you are sitting
+at** — Finder, System Settings, Office, design tools, other IDEs. The model reaches them through
+`computer_*` tools:
+
+| Tool | What it does |
+| --- | --- |
+| `computer_screenshot` | Captures the whole desktop, for locating and verifying |
+| `computer_list_apps` / `computer_list_windows` | Finds the target application and window |
+| `computer_window_state` | Reads a window's interactive elements and their `elementToken`s |
+| `computer_click` | Clicks, preferring an `elementToken` over raw coordinates |
+| `computer_type` / `computer_key` / `computer_hotkey` | Types text and presses keys |
+| `computer_menu` | Uses the application menu, which does not depend on a menu being open |
+| `computer_scroll` | Scrolls |
+| `computer_clipboard_read` / `computer_clipboard_write` | Reads and writes the system clipboard |
+| `computer_batch` | Runs a chain of steps that do not depend on each other's results in one call |
+
+**Tokens before coordinates.** A coordinate bets on what is at that spot right now; move the window or
+scroll the content and the same point lands on something else — and a click cannot be undone.
+`computer_window_state` returns an `elementToken` that names the control itself. Re-read it after the
+interface changes; a stale token is refused.
+
+**Background delivery by default.** Actions reach the target window without stealing focus, so you can
+keep working. When a target does not support it the tool reports an explicit error instead of forcing
+focus away from you.
+
+The engine is **Cua Driver** (Rust), run as a private worker process of this app — so the pointer is
+visible on screen while the agent drives it, and macOS grants Accessibility / Screen Recording to
+FastVibe itself.
+
+**System permissions.** macOS needs both Accessibility and Screen Recording; Settings → Computer
+control opens the matching System Settings panes and picks the grant up when you come back. Windows and
+Linux need no extra grant (on Wayland it depends on the compositor). Permissions and switches are
+managed **on this machine only** — a remote client reads “managed locally”.
+
+**Boundaries.** Text on screen is data, not instructions; a screenshot brings unrelated mail, chats and
+password managers into the conversation, so obvious credentials are described rather than repeated; and
+irreversible actions — sending a message, paying, deleting, changing settings — are stated and
+confirmed first.
+
+### Remote projects (SSH hosts)
+
+Connect the FastVibe Agent running on another **Linux** machine and bind its workspaces as projects in
+this workspace.
+
+- Add a host under Settings → SSH hosts (it reads `~/.ssh/config` by default, and supports the default
+  key / ssh-agent, an explicit identity file, or a password). On connect the app deploys the
+  **headless `fastvibe-agent`** to that machine, starts it, and carries the App Protocol over an
+  OpenSSH loopback forward.
+- The Add project dialog lets you pick a host, browse its directories, and add the chosen workspace as
+  a **remote project** in the sidebar.
+- **Several servers at once.** There is no global “connected host”: a remote conversation's id is
+  `remote:<serverInstanceId>:<id>` and every call is routed by that id. A binding is a *reference* —
+  when the server is unreachable the project stays in the list (marked offline / auth required /
+  incompatible / missing) and returns when it is reachable again.
+- Provider, OAuth, model, MCP and subagent configuration is replicated to the remote Agent over the
+  tunnel; credentials travel as 0600 files and are never written into the remote shell environment.
+
+The remote Agent runs the **same embedded engine** (`src/agent/runtime.ts` → `PiProcessManager`) with
+Electron removed. Its capability set is a subset of the desktop's (no `browser`, no `native`), so local
+capabilities — native dialogs, computer use, browser tabs — simply do not exist in a remote session.
+
 ### Model management
 
 FastVibe is one provider among many, not an onboarding gate. Configure a provider, fetch its model
@@ -193,6 +264,75 @@ Settings → About.
 Twenty themes (ten light, ten dark); light and dark remember their own choice, and `themeMode` decides
 which one is active. Every theme is derived from semantic tokens, so code highlighting and component
 appearance follow along automatically.
+
+## Architecture (App Server)
+
+FastVibe keeps the method table and the transports apart: every method is registered once in
+`ipc/registry.ts`, and *who is on the other end* is the transport's business. Desktop windows, the web /
+phone client, and the headless Agent on the far side of an SSH tunnel all speak to the **same
+`AppServer`** (`src/main/app-server/`) — they differ only in transport and in the capability subset they
+are granted.
+
+```mermaid
+flowchart TB
+  subgraph Desktop["Desktop · Electron main process"]
+    UI["Renderer windows · React<br/>window.fastvibe"]
+    IPCT["Electron transport<br/>transport/electron.ts"]
+    APP["AppServer · app-server/<br/>sessions · capabilities · event bus"]
+    TABLE["Method table · ipc/registry.ts"]
+    HUB["Push hub · ipc/broadcast.ts"]
+    GW["RemoteGateway · remote/gateway.ts"]
+    ENGINE["PiProcessManager<br/>embedded pi engine"]
+    CM["RemoteConnectionManager"]
+    SRV["RemoteServer + tunnel · server/"]
+    UI --> IPCT --> APP --> TABLE --> GW
+    TABLE --> HUB
+    HUB -. "observe" .-> APP
+    GW -->|"local ids"| ENGINE
+    GW -->|"namespaced ids"| CM
+    SRV --> APP
+  end
+
+  subgraph Web["Browser · phone"]
+    BROWSER["Web client remote.html"]
+  end
+
+  subgraph Remote["Remote Linux machine"]
+    AGENT["fastvibe-agent · src/agent/"]
+    AAPP["AppServer<br/>HEADLESS_CAPABILITIES"]
+    AENGINE["PiProcessManager"]
+    ASRV["RemoteServer · 127.0.0.1"]
+    AGENT --> AAPP --> AENGINE
+    AGENT --> ASRV --> AAPP
+  end
+
+  BROWSER -. "WebSocket · password to device token" .-> SRV
+  CM -. "SSH local forward · App Protocol" .-> ASRV
+```
+
+Three transports, one method table:
+
+| Transport | Client | Entry point | Authentication |
+| --- | --- | --- | --- |
+| Electron IPC | Desktop windows | `transport/electron.ts` → `AppServer` | In-process; the window *is* the identity |
+| WebSocket | Web / phone | `server/server.ts` | Password exchanged for a device token |
+| App Protocol over SSH | This machine → remote Agent | `remote/connection-manager.ts` + `ssh/` | SSH (key / agent / password) |
+
+Rules that run through all of it:
+
+- **`AppServer` only owns sessions, capabilities and event fan-out.** The handshake negotiates the
+  capability intersection; administrative methods (`remote:*`, `ssh:*`) are refused to every remote
+  caller; events are recorded per scope with a `seq`, so a reconnecting client resumes from a cursor
+  and is told to resync when it fell too far behind.
+- **Routing comes from the identifier, not from a “current connection”.** A `remote:<server>:<id>`
+  argument decides the destination (`server-scope.ts`), and a payload naming two different servers is an
+  error rather than a guess.
+- **Remote pushes are renamed before they are relayed.** The far side broadcasts its own ids, so
+  `remote-events.ts` prefixes conversation and workspace ids with `remote:<server>:` before they reach a
+  local client; a channel this build has not classified is dropped rather than applied.
+- **The headless Agent is the same code.** `src/agent/` builds a `PiProcessManager` without importing
+  Electron, starts an `AppServer` with `HEADLESS_CAPABILITIES`, and listens on `127.0.0.1` for the SSH
+  forward.
 
 ## Development
 
@@ -234,6 +374,12 @@ in-memory authentication storage; they are not exported to the user's login shel
 | Windows | `%APPDATA%\\FastVibe\\` |
 | Linux | `~/.config/FastVibe/` |
 
+Beyond the catalog and preferences, the data directory holds the pieces this architecture adds:
+`remote-access.json` (the remote-access password hash and device tokens), `ssh-hosts.json` (saved SSH
+hosts, possibly with a password), `project-bindings.json` (references to remote workspaces, kept apart
+from `conversations.json` because they outlive a server being unreachable), and `server-identity.json`
+(this installation's stable App Server identity).
+
 Provider credentials stay in FastVibe's isolated runtime and are injected into the SDK's in-memory
 authentication storage at launch; they are never exported to the user's login shell or the in-app
 terminal. The built-in browser uses its own session partition for the same reason, so imported login
@@ -264,11 +410,17 @@ Whether Enter sends directly is controlled by **Settings → Shortcuts → Enter
 
 ```text
 src/main/          Electron main process: window, IPC, and embedded agent lifecycle
+  app-server/      AppServer: sessions, capability negotiation, event bus, resume
+  transport/       Electron IPC / window sessions adapted onto the AppServer
+  server/          The remote-access HTTP + WebSocket server and its tunnels
+  ssh/             SSH hosts, tunnels, remote Agent deployment and config sync
+  remote/          Project bindings, multi-server connections and the routing gateway
   engine/          Isolated runtime paths, provider configuration, models, and file helpers
   pi/              Embedded pi host, MCP bridge, and multi-session lifecycle
+src/agent/         The headless FastVibe Agent (runs on a remote Linux machine)
 src/preload/       contextBridge API (window.fastvibe)
 src/renderer/      React UI (Vite)
-src/shared/        IPC channels and shared types
+src/shared/        IPC channels, the App Protocol, bindings and scope types
 resources/extensions/  Built-in pi extensions
 resources/skills/      Built-in pi skills
 ```
