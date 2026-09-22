@@ -778,7 +778,7 @@ export function Composer({
           rows={1}
           value={value}
           disabled={disabled || readOnly}
-          placeholder={streaming ? t("composer.placeholderQueued") : placeholder ?? t("composer.placeholder")}
+          placeholder={!readOnly && streaming ? t("composer.placeholderQueued") : placeholder ?? t("composer.placeholder")}
           className={cn(
             "field-sizing-content max-h-56 min-h-13 resize-none border-0 bg-transparent px-4 text-sm leading-6 shadow-none focus-visible:ring-0 disabled:bg-transparent disabled:opacity-100 dark:bg-transparent",
             attachments.length > 0 ? "pt-2" : "pt-3.5",

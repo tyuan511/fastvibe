@@ -44,7 +44,6 @@ import {
   engine,
   getModels,
   getStatus,
-  getSubagents,
   newSession,
   onConversationReady,
   onEvent,
@@ -743,7 +742,6 @@ export function App(): JSX.Element {
               brief: info?.detail,
             });
           }
-          void getSubagents().then(setSubagents).catch(() => undefined);
         }
         return;
       }

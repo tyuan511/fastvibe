@@ -1059,7 +1059,17 @@ the user installs at runtime via 设置 → 插件, which writes to the isolated
     `subagents.json`, while custom roles persist the field in their Markdown template.
   - **Renderer.** The sub-session's engine events are re-emitted as
     `subagent_event` / `subagent_state` / `subagent_lifecycle` (see `#trackSubagentEvent`), which the
-    renderer folds into `session.subagents` + `subagentStreams`; `App.tsx` applies
+    renderer folds into `session.subagents` + `subagentStreams`. Main and the renderer share
+    `shared/subagent-state.ts`: snapshots merge by run id and monotonic `revision`, never
+    replace the global registry with one conversation's list or overwrite newer events.
+    The lifecycle itself carries `conversationId` even when no parent tool-start was visible.
+    Tabs, the read-only composer and parent tool cards all read this registry; a missing row
+    is unknown, not completed, and cannot freeze the pane onto a cached mid-run transcript.
+    Retry, compaction and parked approval are explicit phases. Only the runner's final
+    lifecycle ends a run, after caching its transcript and final model/thinking/context state;
+    the parent tool's aggregate `isError` never overwrites individual sibling outcomes.
+    `mock.html?subagent=running|retrying|waiting|aborted|error` previews these states without
+    a provider or a real delegated run. `App.tsx` applies
     them regardless of which conversation is focused, so a backgrounded run keeps
     updating. **One run, one right-pane tab**: `registerSubagent` mints
     `subagent:<toolCallId>:<index>` on lifecycle, tagged with the owning
@@ -1104,7 +1114,11 @@ the user installs at runtime via 设置 → 插件, which writes to the isolated
     `owner` and `#resolvePendingUi(conversationId?, owner?)` filters on it; the
     `tool_call` hook cannot observe the abort while it awaits a prompt, so leaving
     it parked would hang the tool. Stop-a-chat still answers every prompt of that
-    conversation (its own and its runs').
+    conversation (its own and its runs'). `SubagentControl` also covers asynchronous setup:
+    an already-aborted request must never reach `prompt()` (the SDK resets its abort flag
+    there). Parent cancellation releases prompts scoped to the run before awaiting abort,
+    and late prompts after cancellation return their fallback. Setup and transcript-mapping
+    failures still produce a terminal lifecycle and release the session/control in cleanup.
 - **Browser use** — `browser-use.ts` is the tool surface for FastVibe's own side-pane
   `<webview>`; it holds no browser code. Every call crosses `browser:request` /`browser:response`
   (`src/main/pi/browser-bridge.ts`, one pending map keyed by request id, 30s default budget) into
@@ -1473,7 +1487,8 @@ means either: an agent **run** and a **compaction**.
   (`useConversationWorking()`; the side pane reads `running[tab.conversationId]`). Nothing
   keeps a second copy — the store has no `compacting` field any more — and `Escape`-to-stop
   uses the same gate as the button it clicks. A delegated run's tab is the same idea one
-  level down: `Main` marks it 已完成 on the sub-session's `agent_settled`.
+  level down: `Main` finalises it when the sub-session's prompt has settled and its
+  transcript/state have been cached, then publishes the terminal lifecycle.
 - The renderer's `streaming` is deliberately *not* that mark: it means 「a run is in flight
   for the chat on screen」, and is read only where that is the question — the transcript's
   caret / working row / per-message footer, and whether a send is queued (steer or

@@ -7,7 +7,10 @@ import { MessageList } from "@/components/chat/message-list";
 import { usagePercent } from "@/components/chat/session-controls";
 import { useSessionStore } from "@/stores/session";
 import { useSettingsStore } from "@/stores/settings";
-import { abortSubagent, getSubagentMessages } from "@/lib/engine-client";
+import { abortSubagent, getSubagentMessages, getSubagents } from "@/lib/engine-client";
+import { subagentFinished, subagentViewStatus } from "@shared/subagent-state";
+import { subagentStatusText } from "@/lib/subagent-status";
+import { toast } from "sonner";
 import type { ChatMessage } from "@shared/types";
 import type { SidePaneTab } from "@/stores/side-pane";
 
@@ -42,10 +45,9 @@ function SubagentEmpty(): JSX.Element {
  * button aborts this run's own session, which settles the parent's tool call; it is
  * that failed tool result the main agent reads as 「已被用户终止」.
  *
- * Everything the pane draws is derived from two stable sources: the run's tab
- * (which pins the brief) and the store's per-run stream. Nothing here reads
- * `subagents` for its content — that list is replaced on every `getSubagents`
- * snapshot, and deriving the brief from it blanked the transcript mid-flight.
+ * The tab pins the brief, the keyed stream carries the transcript, and the shared
+ * run registry owns status/model/context. An absent registry row is not a terminal
+ * verdict: only an explicit final status may switch from the live stream to cache.
  */
 export const SidePaneSubagent = memo(function SidePaneSubagent({ tab }: { tab: SidePaneTab }): JSX.Element {
   const { t } = useTranslation("sidepane");
@@ -65,19 +67,21 @@ export const SidePaneSubagent = memo(function SidePaneSubagent({ tab }: { tab: S
   // `tab.openedAt` keeps the value defined, so the brief's identity never changes
   // when the engine's snapshot finally carries the run's real `startedAt`.
   const startedAt = active?.startedAt ?? tab.openedAt;
-  const status = active?.status;
+  const status = subagentViewStatus(active, tab.subagentStatus);
   const running = status === "running";
+  const finished = subagentFinished(status);
 
   useEffect(() => {
     setLoaded(null);
-  }, [subagentId]);
+    void getSubagents(tab.conversationId).then(useSessionStore.getState().setSubagents).catch(() => undefined);
+  }, [subagentId, tab.conversationId]);
 
   // Pull the cached transcript exactly once, when the run is over. Reading it while
   // the run was live mixed a mid-flight snapshot into the growing stream and swapped
   // the whole list — the pane flickered, and the authoritative mapping is only
   // written at the end anyway.
   useEffect(() => {
-    if (!subagentId || running) return;
+    if (!subagentId || !finished) return;
     let cancelled = false;
     void getSubagentMessages(subagentId, tab.conversationId)
       .then((result) => {
@@ -87,7 +91,7 @@ export const SidePaneSubagent = memo(function SidePaneSubagent({ tab }: { tab: S
     return () => {
       cancelled = true;
     };
-  }, [subagentId, running, tab.conversationId]);
+  }, [subagentId, finished, tab.conversationId]);
 
   const brief = useMemo<ChatMessage | null>(() => {
     if (!task) return null;
@@ -101,7 +105,7 @@ export const SidePaneSubagent = memo(function SidePaneSubagent({ tab }: { tab: S
     };
   }, [startedAt, subagentId, tab.id, task]);
 
-  const body = (running ? streamed : loaded ?? streamed) ?? [];
+  const body = (finished ? loaded ?? streamed : streamed) ?? [];
   const messages = useMemo(() => {
     // The cached transcript repeats the delegated turn the engine stored; the brief
     // already stands for it.
@@ -129,6 +133,7 @@ export const SidePaneSubagent = memo(function SidePaneSubagent({ tab }: { tab: S
         )}
       </div>
       <div className="px-3 pb-3">
+        {active?.error ? <p role="status" className={`mb-2 whitespace-pre-wrap text-sm ${status === "error" ? "text-destructive" : "text-muted-foreground"}`}>{active.error}</p> : null}
         <Composer
           readOnly
           className="px-0 pb-0"
@@ -136,7 +141,7 @@ export const SidePaneSubagent = memo(function SidePaneSubagent({ tab }: { tab: S
           disabled
           streaming={running}
           working={running}
-          placeholder={running ? t("subagent.readOnlyRunning") : t("subagent.readOnlyDone")}
+          placeholder={t("subagent.readOnlyStatus", { status: subagentStatusText(active, tab.subagentStatus) })}
           models={models}
           model={active?.model}
           thinkingLevel={active?.thinkingLevel}
@@ -154,7 +159,7 @@ export const SidePaneSubagent = memo(function SidePaneSubagent({ tab }: { tab: S
           onChange={noop}
           onSubmit={noop}
           onAbort={() => {
-            if (subagentId) void abortSubagent(subagentId, tab.conversationId).catch(() => undefined);
+            if (subagentId) void abortSubagent(subagentId, tab.conversationId).catch((error: unknown) => toast.error(String(error)));
           }}
           onPickWorkspace={noop}
           onSelectProject={noop}
@@ -178,5 +183,7 @@ export const SidePaneSubagent = memo(function SidePaneSubagent({ tab }: { tab: S
   // The brief arrives with a later `registerSubagent` when the tool card is what
   // opened the tab, and it is what the pane draws as the run's opening message.
   prev.tab.subagentBrief === next.tab.subagentBrief &&
-  prev.tab.openedAt === next.tab.openedAt,
+  prev.tab.openedAt === next.tab.openedAt &&
+  prev.tab.conversationId === next.tab.conversationId &&
+  prev.tab.subagentStatus === next.tab.subagentStatus,
 );

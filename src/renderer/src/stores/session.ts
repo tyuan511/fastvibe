@@ -1,9 +1,9 @@
 import { create } from "zustand";
+import { mergeSubagentSnapshot, reduceSubagent } from "@shared/subagent-state";
 import { belongsToTranscript, sessionBelongsToConversation } from "../lib/conversation-ownership";
 import type {
   ChatAttachment,
   ChatMessage,
-  ContextUsage,
   Conversation,
   ConversationQueueState,
   EngineModel,
@@ -1034,36 +1034,8 @@ export const useSessionStore = create<SessionStore>((set, get) => {
   setCommands: (commands) => set({ commands }),
   setSubagents: (subagents) =>
     set((state) => {
-      // Merge the engine's snapshot by id rather than replacing the list. A snapshot
-      // lands on every lifecycle event, and a wholesale replacement handed every
-      // subagent pane a brand-new entry object each time — re-rendering the pane (and
-      // re-deriving each run's brief) several times per run for identical data.
-      const previous = new Map(state.subagents.map((item) => [item.id, item]));
-      let changed = state.subagents.length !== subagents.length;
-      const next = subagents.map((item) => {
-        const before = previous.get(item.id);
-        if (!before) {
-          changed = true;
-          return item;
-        }
-        const merged: SubagentInfo = { ...before, ...item };
-        const same =
-          before.status === merged.status &&
-          before.detail === merged.detail &&
-          before.progress === merged.progress &&
-          before.error === merged.error &&
-          before.endedAt === merged.endedAt &&
-          before.startedAt === merged.startedAt &&
-          before.name === merged.name &&
-          before.agent === merged.agent;
-        if (same) return before;
-        changed = true;
-        return merged;
-      });
-      // The engine's order is by recency; only adopt it when it really differs, so an
-      // unchanged snapshot leaves the store (and every subscriber) untouched.
-      const reordered = next.some((item, index) => item !== state.subagents[index]);
-      return changed || reordered ? { subagents: next } : state;
+      const next = mergeSubagentSnapshot(state.subagents, subagents);
+      return next === state.subagents ? state : { subagents: next };
     }),
   resolvePermission: (id) =>
     set((state) => {
@@ -1359,59 +1331,10 @@ export const useSessionStore = create<SessionStore>((set, get) => {
 });
 
 function upsertSubagent(list: SubagentInfo[], event: EngineEvent): SubagentInfo[] {
-  if (
-    event.type !== "subagent_lifecycle" &&
-    event.type !== "subagent_progress" &&
-    event.type !== "subagent_state"
-  ) {
-    return list;
-  }
-  const id = typeof event.subagentId === "string" ? event.subagentId : typeof event.id === "string" ? event.id : "";
-  if (!id) return list;
-  const previous = list.find((item) => item.id === id);
-  const now = Date.now();
-  const state = event.type === "subagent_state";
-  const next: SubagentInfo = {
-    id,
-    conversationId:
-      typeof event.conversationId === "string" ? event.conversationId : previous?.conversationId,
-    agent: typeof event.agent === "string" ? event.agent : previous?.agent,
-    name: typeof event.name === "string" ? event.name : previous?.name,
-    status: typeof event.status === "string" ? event.status : previous?.status,
-    detail:
-      typeof event.detail === "string"
-        ? event.detail
-        : typeof event.progress === "string"
-          ? event.progress
-          : previous?.detail,
-    progress: typeof event.progress === "number" ? event.progress : previous?.progress,
-    // Recorded once, so a run's brief keeps a stable `createdAt` (and therefore a
-    // stable object identity in the pane) across every later lifecycle event.
-    startedAt: previous?.startedAt ?? now,
-    endedAt:
-      !state && typeof event.status === "string" && event.status !== "running" ? now : previous?.endedAt,
-    error: typeof event.error === "string" ? event.error : previous?.error,
-    // A state push only ever carries these; every other event leaves them alone.
-    model: isEngineModel(event.model) ? event.model : previous?.model,
-    thinkingLevel: typeof event.thinkingLevel === "string" ? event.thinkingLevel : previous?.thinkingLevel,
-    contextUsage: isContextUsage(event.contextUsage) ? event.contextUsage : previous?.contextUsage,
-  };
-  if (previous) {
-    return list.map((item) => (item.id === id ? { ...item, ...next } : item));
-  }
-  return [next, ...list];
-}
-
-function isEngineModel(value: unknown): value is EngineModel {
-  return isRecord(value) && typeof value.provider === "string" && typeof value.id === "string";
-}
-
-function isContextUsage(value: unknown): value is ContextUsage {
-  return isRecord(value) && typeof value.contextWindow === "number";
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  const previous = list.find((item) => item.id === event.subagentId);
+  const next = reduceSubagent(previous, event);
+  if (!next || next === previous) return list;
+  return previous ? list.map((item) => item === previous ? next : item) : [next, ...list];
 }
 
 /**

@@ -130,6 +130,8 @@ import { fetchOpenAIAccountQuota, openAICodexAccountId } from "../engine/openai-
 import { fetchGatewayBalance, gatewayTargets, probeGateway, readGatewayCredentials, writeGatewayCredentials } from "../engine/gateway-probe";
 import { getFastVibePaths, type FastVibePaths } from "../engine/paths";
 import { SubagentManager } from "../engine/subagents";
+import { reduceSubagent } from "@shared/subagent-state";
+import { SubagentControl } from "./subagent-control";
 import type { SubagentConfig, SubagentDraft, GatewayBalanceResult, GatewayKind } from "@shared/types";
 import { isAbortOutcome } from "@shared/abort";
 import { McpManager, type McpServerConfig, type McpServerStatus } from "./mcp-manager";
@@ -647,6 +649,7 @@ export class PiProcessManager {
   #oauthListeners = new Set<(payload: OAuthEventPayload) => void>();
   /** In-flight subagent sessions, keyed by subagent id, so `stop()` can dispose them. */
   #subagentSessions = new Map<string, AgentSession>();
+  #subagentControls = new Map<string, SubagentControl>();
   /**
    * Runs the user stopped by hand.
    *
@@ -802,6 +805,7 @@ export class PiProcessManager {
       this.#sessionTouched.clear();
       this.#sessionPromises.clear();
       this.#resolvePendingUi();
+      for (const control of this.#subagentControls.values()) void control.abort().catch(() => undefined);
       // A login in flight owns a loopback callback server and waits on a human who is
       // now looking at a stopped engine. Its own `finally` closes the server.
       for (const login of this.#oauthLogins.values()) login.abort.abort();
@@ -1215,11 +1219,21 @@ export class PiProcessManager {
   async abortSubagent(subagentId: string, conversationId?: string): Promise<void> {
     const owner = this.#subagents.get(subagentId)?.conversationId;
     if (conversationId && owner && owner !== conversationId) return;
-    const session = this.#subagentSessions.get(subagentId);
-    if (!session) return;
+    const control = this.#subagentControls.get(subagentId);
+    if (!control) return;
     this.#stoppedSubagents.add(subagentId);
-    this.#resolvePendingUi(undefined, subagentId);
-    await session.abort();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        control.abort(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(uiText("停止子 Agent 超时，仍在等待执行器退出", "Subagent stop timed out; still waiting for the runner to exit"))), 15_000);
+          timer.unref?.();
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
   /**
    * Resume the interrupted turn without a new user message. The loop re-enters from
@@ -3075,59 +3089,13 @@ export class PiProcessManager {
     });
   }
   #trackSubagentEvent(event: Record<string, unknown>): void {
-    const type = typeof event.type === "string" ? event.type : "";
-    if (type === "tool_execution_start" || type === "toolcall_start") {
-      const toolName = String(event.toolName ?? event.name ?? "").toLowerCase();
-      if (toolName === "subagent") {
-        const args = (event.args ?? event.arguments) as Record<string, unknown> | undefined;
-        const callId = String(event.toolCallId ?? event.tool_call_id ?? event.id ?? randomUUID());
-        const conversationId = typeof event.conversationId === "string" ? event.conversationId : undefined;
-        const entries: Array<{ agent: string; task?: string; mode: string }> = [];
-        if (typeof args?.agent === "string") entries.push({ agent: args.agent, task: typeof args.task === "string" ? args.task : undefined, mode: "single" });
-        if (Array.isArray(args?.tasks)) for (const item of args.tasks) if (item && typeof item === "object" && typeof (item as Record<string, unknown>).agent === "string") entries.push({ agent: String((item as Record<string, unknown>).agent), task: typeof (item as Record<string, unknown>).task === "string" ? String((item as Record<string, unknown>).task) : undefined, mode: "parallel" });
-        if (Array.isArray(args?.chain)) for (const item of args.chain) if (item && typeof item === "object" && typeof (item as Record<string, unknown>).agent === "string") entries.push({ agent: String((item as Record<string, unknown>).agent), task: typeof (item as Record<string, unknown>).task === "string" ? String((item as Record<string, unknown>).task) : undefined, mode: "chain" });
-        for (const [index, item] of entries.entries()) {
-          const id = `${callId}:${index}`;
-          this.#subagents.set(id, { id, conversationId, agent: item.agent, name: item.agent, mode: item.mode, status: "running", detail: item.task, startedAt: Date.now() });
-        }
-      }
-      return;
-    }
-    if (type === "tool_execution_end" || type === "toolcall_end") {
-      const toolName = String(event.toolName ?? event.name ?? "").toLowerCase();
-      if (toolName === "subagent") {
-        const callId = String(event.toolCallId ?? event.tool_call_id ?? event.id ?? "");
-        for (const [id, item] of this.#subagents) if (id.startsWith(`${callId}:`)) this.#subagents.set(id, { ...item, status: event.isError ? "error" : "completed", endedAt: Date.now(), error: event.isError ? String(event.error ?? uiText("执行失败", "Failed")) : item.error });
-      }
-      return;
-    }
-    if (type !== "subagent_lifecycle" && type !== "subagent_progress" && type !== "subagent_event") return;
-    const id = typeof event.subagentId === "string" ? event.subagentId : typeof event.id === "string" ? event.id : "";
-    if (!id) return;
-    const previous = this.#subagents.get(id);
-    const status = typeof event.status === "string" ? event.status : previous?.status;
-    const nested = event.event && typeof event.event === "object" ? event.event as Record<string, unknown> : undefined;
-    const nestedType = typeof nested?.type === "string" ? nested.type : "";
-    const now = Date.now();
-    const next: SubagentInfo = {
-      ...previous,
-      id,
-      agent: typeof event.agent === "string" ? event.agent : previous?.agent,
-      name: typeof event.name === "string" ? event.name : previous?.name,
-      description: typeof event.description === "string" ? event.description : previous?.description,
-      mode: typeof event.mode === "string" ? event.mode : previous?.mode,
-      // A delegated run ends the same way the parent one does: `agent_end` only means
-      // the SDK is about to retry / compact / continue it, so the tab reports 已完成
-      // (and stamps `endedAt`) on `agent_settled`. The runner's own lifecycle event
-      // lands after the session settles and stays the final word.
-      status: status ?? (nestedType === "agent_settled" ? "completed" : "running"),
-      detail: typeof event.detail === "string" ? event.detail : typeof event.progress === "string" ? event.progress : previous?.detail,
-      progress: typeof event.progress === "number" ? event.progress : previous?.progress,
-      startedAt: previous?.startedAt ?? now,
-      endedAt: nestedType === "agent_settled" || status === "completed" || status === "error" ? now : previous?.endedAt,
-      error: typeof event.error === "string" ? event.error : previous?.error,
-    };
-    this.#subagents.set(id, next);
+    if (typeof event.subagentId !== "string") return;
+    const previous = this.#subagents.get(event.subagentId);
+    const next = reduceSubagent(previous, event);
+    if (next && next !== previous) this.#subagents.set(next.id, next);
+    // Never infer individual outcomes from the parent tool's aggregate isError.
+    // A parallel batch can contain successful, failed and user-stopped siblings;
+    // a chain can contain steps that were never started at all.
   }
   /**
    * The session-title extension names a chat via `setSessionName`. Apply it to
@@ -3622,8 +3590,6 @@ export class PiProcessManager {
     const picked = model && model.provider !== "unknown" ? { provider: model.provider, id: model.id } : undefined;
     const usage = session.getContextUsage();
     const contextUsage = usage ? { tokens: usage.tokens, contextWindow: usage.contextWindow, percent: usage.percent } : undefined;
-    const previous = this.#subagents.get(subagentId);
-    if (previous) this.#subagents.set(subagentId, { ...previous, model: picked, thinkingLevel: session.thinkingLevel, contextUsage });
     this.#emit({ type: "subagent_state", subagentId, conversationId, model: picked, thinkingLevel: session.thinkingLevel, contextUsage });
   }
 
@@ -3771,66 +3737,67 @@ export class PiProcessManager {
    * still gated by the user's current mode.
    */
   async #runSubagent(conversationId: string, request: SubagentHostRequest): Promise<SubagentHostResponse> {
-    if (!this.#runtime || !this.#models) throw new Error("engine not ready");
-    const cwd = request.cwd || this.#cwd;
-    const settingsManager = SettingsManager.create(cwd, this.#paths.agentDir);
-    const sandbox = builtinExtensionFile("permission-sandbox.ts");
-    // A delegated run never loads the `output-language` extension (`noExtensions`), so
-    // its system prompt carries the same AI 偏好语言 requirement directly — a subagent
-    // report the user cannot read is a bug, not a preference.
-    const appendSystemPrompt = [
-      request.systemPrompt.trim(),
-      currentAiLanguageDirective(),
-      currentCustomSystemPrompt(),
-    ].filter(
-      (value): value is string => Boolean(value),
-    );
-    const loader = new DefaultResourceLoader({
-      cwd,
-      agentDir: this.#paths.agentDir,
-      settingsManager,
-      noExtensions: true,
-      noThemes: true,
-      noPromptTemplates: true,
-      noSkills: true,
-      ...(sandbox ? { additionalExtensionPaths: [sandbox] } : {}),
-      ...(appendSystemPrompt.length > 0 ? { appendSystemPrompt } : {}),
-    });
-    await loader.reload();
-
-    // A role's configured model wins when it is available and authenticated. An empty
-    // role setting inherits the parent conversation's model, keeping delegation on the
-    // gateway the user just proved works; the user's default model is the last resort
-    // for a parent session that has no usable model of its own.
-    const preferred = readDefaultModel(this.#paths);
-    const configuredModel = this.#subagentManager.modelFor(request.agent, request.model, request.agentSource);
-    const thinkingLevel = this.#subagentManager.thinkingLevelFor(request.agent, request.thinkingLevel, request.agentSource);
-    const model = this.#resolveSubagentModel(
-      configuredModel,
-      request.fallbackModel ?? (preferred ? `${preferred.provider}/${preferred.id}` : undefined),
-    );
-    const tools =
-      request.tools && request.tools.length > 0
-        ? request.tools
-        : ["read", "bash", "edit", "write", "grep", "find", "ls"];
     const { subagentId } = request;
     const lifecycle = (status: string, error?: string): void => {
       this.#emit({ type: "subagent_lifecycle", subagentId, conversationId, agent: request.agent, name: request.agent, status, detail: request.task, ...(error ? { error } : {}) });
     };
-    lifecycle("running");
-
+    const control = new SubagentControl(request.signal, () => this.#resolvePendingUi(undefined, subagentId));
+    this.#subagentControls.set(subagentId, control);
     let session: AgentSession | undefined;
     let unsubscribe: (() => void) | undefined;
-    const onAbort = (): void => {
-      void session?.abort().catch(() => undefined);
-    };
     let thrown: unknown;
     let stopReason: string | undefined;
     let errorMessage: string | undefined;
     let messages: unknown[] = [];
     let summary = summarizeSubagentMessages([]);
-    let usedModel = model ? `${model.provider}/${model.id}` : undefined;
+    let usedModel: string | undefined;
     try {
+      lifecycle("running");
+      control.check();
+      if (!this.#runtime || !this.#models) throw new Error("engine not ready");
+      const cwd = request.cwd || this.#cwd;
+      const settingsManager = SettingsManager.create(cwd, this.#paths.agentDir);
+      const sandbox = builtinExtensionFile("permission-sandbox.ts");
+      // A delegated run never loads the `output-language` extension (`noExtensions`), so
+      // its system prompt carries the same AI 偏好语言 requirement directly — a subagent
+      // report the user cannot read is a bug, not a preference.
+      const appendSystemPrompt = [
+        request.systemPrompt.trim(),
+        currentAiLanguageDirective(),
+        currentCustomSystemPrompt(),
+      ].filter(
+        (value): value is string => Boolean(value),
+      );
+      const loader = new DefaultResourceLoader({
+        cwd,
+        agentDir: this.#paths.agentDir,
+        settingsManager,
+        noExtensions: true,
+        noThemes: true,
+        noPromptTemplates: true,
+        noSkills: true,
+        ...(sandbox ? { additionalExtensionPaths: [sandbox] } : {}),
+        ...(appendSystemPrompt.length > 0 ? { appendSystemPrompt } : {}),
+      });
+      await loader.reload();
+      control.check();
+
+      // A role's configured model wins when it is available and authenticated. An empty
+      // role setting inherits the parent conversation's model, keeping delegation on the
+      // gateway the user just proved works; the user's default model is the last resort
+      // for a parent session that has no usable model of its own.
+      const preferred = readDefaultModel(this.#paths);
+      const configuredModel = this.#subagentManager.modelFor(request.agent, request.model, request.agentSource);
+      const thinkingLevel = this.#subagentManager.thinkingLevelFor(request.agent, request.thinkingLevel, request.agentSource);
+      const model = this.#resolveSubagentModel(
+        configuredModel,
+        request.fallbackModel ?? (preferred ? `${preferred.provider}/${preferred.id}` : undefined),
+      );
+      const tools =
+        request.tools && request.tools.length > 0
+          ? request.tools
+          : ["read", "bash", "edit", "write", "grep", "find", "ls"];
+      usedModel = model ? `${model.provider}/${model.id}` : undefined;
       const created = await createAgentSession({
         cwd,
         agentDir: this.#paths.agentDir,
@@ -3843,6 +3810,7 @@ export class PiProcessManager {
         ...(thinkingLevel ? { thinkingLevel } : {}),
       });
       session = created.session;
+      control.bind(session);
       const activeSession = session;
       // Bind the parent's UI so the sandbox's `confirm` renders in the same
       // composer panel as a main-tool approval, and `hasUI` is true for the hook.
@@ -3871,42 +3839,44 @@ export class PiProcessManager {
           this.#publishSubagentState(subagentId, conversationId, activeSession);
         }
       });
-      if (request.signal) {
-        if (request.signal.aborted) onAbort();
-        else request.signal.addEventListener("abort", onAbort, { once: true });
-      }
+      control.check();
       await session.prompt(request.task);
     } catch (error) {
       thrown = error;
     }
-    request.signal?.removeEventListener("abort", onAbort);
     unsubscribe?.();
-    if (session) {
-      messages = session.messages.slice();
-      summary = summarizeSubagentMessages(messages);
-      if (session.model) usedModel = `${session.model.provider}/${session.model.id}`;
-      // `message_end` is slimmed for IPC, so the live stream is the only in-flight
-      // transcript; persist the mapped session here so a tab opened after the run
-      // still has the full reply (tools and parts included). The sub-session is
-      // in-memory, but its entries still carry the persist instant, so a completed
-      // pane's footer reads the same as a persisted transcript's.
-      const subEntryIds = sessionEntryIds(session);
-      this.#subagentMessages.set(
-        subagentId,
-        mapEngineMessages(
-          messages,
-          (message) => subEntryIds.get(message),
-          this.#subagentReasoning.get(subagentId),
-          undefined,
-          sessionCompletionTimes(session),
-        ),
-      );
+    try {
+      if (session) {
+        messages = session.messages.slice();
+        summary = summarizeSubagentMessages(messages);
+        if (session.model) usedModel = `${session.model.provider}/${session.model.id}`;
+        // `message_end` is slimmed for IPC, so the live stream is the only in-flight
+        // transcript; persist the mapped session here so a tab opened after the run
+        // still has the full reply (tools and parts included). The sub-session is
+        // in-memory, but its entries still carry the persist instant, so a completed
+        // pane's footer reads the same as a persisted transcript's.
+        const subEntryIds = sessionEntryIds(session);
+        this.#subagentMessages.set(
+          subagentId,
+          mapEngineMessages(
+            messages,
+            (message) => subEntryIds.get(message),
+            this.#subagentReasoning.get(subagentId),
+            undefined,
+            sessionCompletionTimes(session),
+          ),
+        );
+        this.#publishSubagentState(subagentId, conversationId, session);
+      }
+    } catch (error) {
+      thrown ??= error;
+    } finally {
       this.#subagentReasoning.delete(subagentId);
     }
     // A run cut off mid-thought (aborted, torn down) never emits the `message_end` that
     // would have dropped this, and the key is the run id — nothing else will reuse it.
     this.#reasoningRun.delete(subagentId);
-    stopReason = thrown ? (isAbortOutcome(thrown) ? "aborted" : "error") : summary.stopReason;
+    stopReason = control.aborted ? "aborted" : thrown ? (isAbortOutcome(thrown) ? "aborted" : "error") : summary.stopReason;
     errorMessage = thrown ? (thrown instanceof Error ? thrown.message : String(thrown)) : summary.errorMessage;
     // A user stop and a parent abort both arrive as `aborted`, but only the first has a
     // waiting parent to tell, and it is the message the main agent reads back as the
@@ -3918,10 +3888,17 @@ export class PiProcessManager {
       errorMessage = uiText("已被用户终止", "Stopped by the user");
     }
     const failed = stopReason === "error" || stopReason === "aborted";
-    lifecycle(stopReason === "aborted" ? "aborted" : failed ? "error" : "completed", errorMessage);
-    this.#subagentSessions.delete(subagentId);
-    if (session) this.#publishSubagentState(subagentId, conversationId, session);
-    session?.dispose();
+    try {
+      // Cache and state land before the terminal event: a pane reacting to it can
+      // now read the complete transcript, never a half-finalised live session.
+      lifecycle(stopReason === "aborted" ? "aborted" : failed ? "error" : "completed", errorMessage);
+    } finally {
+      control.dispose();
+      this.#subagentControls.delete(subagentId);
+      this.#subagentSessions.delete(subagentId);
+      this.#resolvePendingUi(undefined, subagentId);
+      session?.dispose();
+    }
 
     return {
       messages,
@@ -3969,18 +3946,30 @@ export class PiProcessManager {
     // truth for normal composer typing.
     let editorText = "";
     const dialog = <T>(method: string, request: Record<string, unknown>, fallback: T, timeout?: number): Promise<T> => {
+      if (this.#subagentControls.get(owner)?.aborted) return Promise.resolve(fallback);
       const id = randomUUID();
       return new Promise<T>((resolve) => {
+        const publishPhase = (): void => {
+          if (!this.#subagentControls.has(owner)) return;
+          const waiting = [...this.#pendingUi.values()].some((item) => item.owner === owner);
+          this.#emit({ type: "subagent_progress", subagentId: owner, conversationId, phase: waiting ? "waiting" : "working" });
+        };
+        const finish = (value: T): void => {
+          if (timer) clearTimeout(timer);
+          publishPhase();
+          resolve(value);
+        };
         const timer = timeout && timeout > 0 ? setTimeout(() => {
           this.#pendingUi.delete(id);
           // Main answered for the user, so the panel has to come down: without this a
           // timed-out prompt left an unanswerable question on screen, and clicking it
           // did nothing (the entry it addressed was already gone).
           this.#emit({ type: "extension_ui_dismiss", id, conversationId });
-          resolve(fallback);
+          finish(fallback);
         }, timeout) : undefined;
         const announcement: Record<string, unknown> = { type: "extension_ui_request", id, conversationId, method, ...request };
-        this.#pendingUi.set(id, { fallback, conversationId, owner, request: announcement, resolve: (value) => { if (timer) clearTimeout(timer); resolve(value as T); } });
+        this.#pendingUi.set(id, { fallback, conversationId, owner, request: announcement, resolve: (value) => finish(value as T) });
+        publishPhase();
         this.#emit(announcement);
       });
     };

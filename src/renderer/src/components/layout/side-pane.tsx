@@ -37,6 +37,8 @@ import { ResizablePanel } from "@/components/ui/resizable";
 import { setSidebarCollapsed } from "@/lib/sidebar-visibility";
 import { useShortcutLabel } from "@/lib/use-shortcuts";
 import { useSettingsStore } from "@/stores/settings";
+import { useSessionStore } from "@/stores/session";
+import { subagentStatusText } from "@/lib/subagent-status";
 import { useSidePanel } from "@/lib/use-resizable-panel";
 import { MIN_WIDTH, useSidePaneStore, type SidePaneTab, sidePaneTabTitle } from "@/stores/side-pane";
 import { releaseBrowser, SidePaneBrowser } from "./side-pane-browser";
@@ -76,6 +78,12 @@ export function disposeSidePaneTabs(tabs: SidePaneTab[]): void {
       void window.fastvibe.conversations.delete(tab.conversationId).catch(() => undefined);
     }
   }
+}
+
+function PaneTabTitle({ tab }: { tab: SidePaneTab }): JSX.Element {
+  const info = useSessionStore((state) => tab.subagentId ? state.subagents.find((item) => item.id === tab.subagentId) : undefined);
+  useTranslation("sidepane");
+  return <>{tab.type === "subagent" ? `${info?.name ?? tab.title} · ${subagentStatusText(info, tab.subagentStatus)}` : sidePaneTabTitle(tab)}</>;
 }
 
 function CollapseButton(): JSX.Element {
@@ -394,7 +402,7 @@ export const SidePane = memo(function SidePane({
                       <HugeiconsIcon strokeWidth={2} icon={tabIcon(tab.type)} className="size-3.5 shrink-0" />
                     )}
                     <span className="min-w-0 flex-1 truncate text-left">
-                      {sidePaneTabTitle(tab)}
+                      <PaneTabTitle tab={tab} />
                     </span>
                     <span
                       role="presentation"

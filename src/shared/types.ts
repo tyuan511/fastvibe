@@ -257,6 +257,9 @@ export type SubagentDraft = {
 
 export type SubagentInfo = {
   id: string;
+  /** Monotonic engine event sequence for stale-snapshot rejection. */
+  revision?: number;
+  phase?: "working" | "retrying" | "compacting" | "waiting";
   /** The conversation whose tool call spawned this run; scopes it to its own pane. */
   conversationId?: string;
   /** Stable role identifier when this run comes from a built-in agent. */

@@ -60,7 +60,20 @@
     "title": "子 Agent",
     "desc": "主 Agent 委派子任务时，这里会实时显示它在隔离上下文里的完整对话。",
     "readOnlyRunning": "子 Agent 运行中，只读",
-    "readOnlyDone": "子 Agent 已结束"
+    "readOnlyDone": "子 Agent 已结束",
+    "readOnlyStatus": "子 Agent · {{status}} · 只读",
+    "status": {
+      "running": "运行中",
+      "completed": "已完成",
+      "error": "失败",
+      "aborted": "已终止",
+      "retrying": "等待重试",
+      "compacting": "压缩上下文中",
+      "waiting": "等待批准",
+      "queued": "等待执行",
+      "skipped": "未执行",
+      "unknown": "状态待同步"
+    }
   },
   "terminal": {
     "ended": "会话已结束"

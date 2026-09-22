@@ -1,6 +1,7 @@
 import { memo, type JSX } from "react";
 import { useTranslation } from "react-i18next";
-import { i18n } from "@/lib/i18n";
+import { subagentStatusText } from "@/lib/subagent-status";
+import { subagentResultStatus } from "@shared/subagent-state";
 import { Spinner } from "@/components/ui/spinner";
 import type { ToolCallBlock } from "@shared/types";
 import { useSessionStore, useWorkspacePath } from "@/stores/session";
@@ -214,11 +215,16 @@ function subagentEntries(args: unknown): SubagentEntry[] {
   return entries;
 }
 
-function subagentStatusLabel(status: string): string {
-  if (status === "running" || status === "completed" || status === "error" || status === "aborted") {
-    return i18n.t(`chat:tools.${status}`) as string;
-  }
-  return status;
+function SubagentSummary({ tool }: { tool: ToolCallBlock }): JSX.Element {
+  useTranslation("sidepane");
+  const subagents = useSessionStore((state) => state.subagents);
+  const counts = new Map<string, number>();
+  subagentEntries(tool.args).forEach((_, index) => {
+    const info = subagents.find((item) => item.id === `${tool.id}:${index}`);
+    const label = subagentStatusText(info, subagentResultStatus(tool, index));
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  });
+  return <span className="text-xs text-muted-foreground">{[...counts].map(([label, count]) => `${label} ${count}`).join(" · ")}</span>;
 }
 
 /**
@@ -228,6 +234,7 @@ function subagentStatusLabel(status: string): string {
  * (no button, no chevron) so the eye lands on the brief.
  */
 function SubagentPanel({ tool }: { tool: ToolCallBlock }): JSX.Element {
+  useTranslation("sidepane");
   const subagents = useSessionStore((state) => state.subagents);
   const openSubagent = useSidePaneStore((state) => state.openSubagent);
   const entries = subagentEntries(tool.args);
@@ -237,7 +244,8 @@ function SubagentPanel({ tool }: { tool: ToolCallBlock }): JSX.Element {
       {entries.map((entry, index) => {
         const id = `${tool.id}:${index}`;
         const state = subagents.find((item) => item.id === id);
-        const status = state?.status ? subagentStatusLabel(state.status) : undefined;
+        const fallback = subagentResultStatus(tool, index);
+        const status = subagentStatusText(state, fallback);
         return (
           <button
             key={id}
@@ -247,7 +255,7 @@ function SubagentPanel({ tool }: { tool: ToolCallBlock }): JSX.Element {
               openSubagent(id, {
                 conversationId: state?.conversationId,
                 title: entry.agent,
-                status: state?.status,
+                status: state?.status ?? fallback,
                 brief: entry.task ?? state?.detail,
               })
             }
@@ -345,6 +353,7 @@ export const ToolCard = memo(function ToolCard({
       canToggle={!inline}
       showIcon={showIcon}
       persistKey={tool.id}
+      trailing={view.family === "agent" ? <SubagentSummary tool={tool} /> : undefined}
       onSubjectClick={
         view.family === "read" && path ? () => void useSessionStore.getState().openPreview(path) : undefined
       }

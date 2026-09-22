@@ -104,8 +104,8 @@ export function ModelThinkingSelect({
   const label = (
     <>
       <span className="min-w-0 truncate">{currentModelLabel}</span>
-      <span className={cn("shrink-0 text-border", surface === "composer" && "hidden @min-[27.5rem]/composer:inline")}>·</span>
-      <span className={cn("shrink-0", surface === "composer" && "hidden @min-[27.5rem]/composer:inline")}>{currentThinkingLabel}</span>
+      <span className={cn("shrink-0 text-border", !readOnly && surface === "composer" && "hidden @min-[27.5rem]/composer:inline")}>·</span>
+      <span className={cn("shrink-0", !readOnly && surface === "composer" && "hidden @min-[27.5rem]/composer:inline")}>{currentThinkingLabel}</span>
     </>
   );
 

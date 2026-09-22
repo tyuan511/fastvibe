@@ -60,7 +60,20 @@
     "title": "Subagent",
     "desc": "When the main agent delegates a task, its isolated conversation streams here.",
     "readOnlyRunning": "This delegated run is read-only",
-    "readOnlyDone": "This delegated run has ended"
+    "readOnlyDone": "This delegated run has ended",
+    "readOnlyStatus": "Subagent · {{status}} · Read-only",
+    "status": {
+      "running": "Running",
+      "completed": "Completed",
+      "error": "Failed",
+      "aborted": "Stopped",
+      "retrying": "Waiting to retry",
+      "compacting": "Compacting context",
+      "waiting": "Waiting for approval",
+      "queued": "Queued",
+      "skipped": "Not run",
+      "unknown": "Awaiting status"
+    }
   },
   "terminal": {
     "ended": "Session ended"

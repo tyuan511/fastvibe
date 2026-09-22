@@ -860,6 +860,12 @@ if (websiteData) {
   }
 }
 
+if (params.has("subagent")) {
+  window.setTimeout(() => {
+    void import("./subagent-preview").then(({ previewSubagent }) => previewSubagent(params.get("subagent") ?? "running"));
+  }, 800);
+}
+
 if (pane === "files" || pane === "preview" || pane === "git") {
   window.setTimeout(() => {
     void import("@/stores/side-pane").then(({ useSidePaneStore }) => {
