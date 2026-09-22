@@ -117,8 +117,15 @@ export class MessageQueueStore {
     this.#writer = writer;
     try {
       this.#state = normalizeQueueFile(JSON.parse(readFileSync(file, "utf8")));
-    } catch {
-      this.#state = cloneState(EMPTY);
+    } catch (error) {
+      // A first run has no queue file; every other failure must remain visible. Treating
+      // a corrupt or temporarily unreadable file as empty would overwrite durable prompts
+      // on the next mutation and silently lose work.
+      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+        this.#state = cloneState(EMPTY);
+      } else {
+        throw new Error(`Unable to read durable message queue: ${file}`, { cause: error });
+      }
     }
   }
 
@@ -159,6 +166,15 @@ export class MessageQueueStore {
       this.#touch(next, removed.conversationId);
     });
     return removed ? { ...removed } : undefined;
+  }
+
+  /** Reinsert an exact id when an SDK-side cancellation loses its race. */
+  restore(item: StoredQueuedPrompt): void {
+    this.#mutate((next) => {
+      if (next.items.some((entry) => entry.id === item.id)) return false;
+      next.items.push({ ...item, images: item.images?.map((image) => ({ ...image })) });
+      this.#touch(next, item.conversationId);
+    });
   }
 
   update(id: string, patch: Partial<StoredQueuedPrompt>): StoredQueuedPrompt | undefined {
@@ -214,6 +230,27 @@ export class MessageQueueStore {
       }
       if (next.pauses[conversationId] !== reason) changed = true;
       next.pauses[conversationId] = reason;
+      if (!changed) return false;
+      this.#touch(next, conversationId);
+    });
+    return changed;
+  }
+
+  /** Reset every unclaimed row when its SDK owner no longer exists. */
+  resetUnclaimed(conversationId: string, reason: QueuePauseReason): boolean {
+    let changed = false;
+    this.#mutate((next) => {
+      for (const item of next.items) {
+        if (item.conversationId !== conversationId || item.claimed) continue;
+        if (item.sending) {
+          item.sending = false;
+          changed = true;
+        }
+      }
+      if (next.pauses[conversationId] !== reason) {
+        next.pauses[conversationId] = reason;
+        changed = true;
+      }
       if (!changed) return false;
       this.#touch(next, conversationId);
     });

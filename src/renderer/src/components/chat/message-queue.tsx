@@ -70,6 +70,7 @@ function QueueRowContent({
 }): JSX.Element {
   const { t } = useTranslation("chat");
   const sending = Boolean(item.sending);
+  const claimed = Boolean(item.claimed);
   return (
     <div
       className={cn(
@@ -102,9 +103,21 @@ function QueueRowContent({
         {item.text}
       </span>
       {sending && !overlay ? (
-        <span className="shrink-0 text-xs text-muted-foreground">{t("queue.sending")}</span>
+        <span className="shrink-0 text-xs text-muted-foreground">
+          {claimed ? t("queue.submitted") : t("queue.sending")}
+        </span>
       ) : null}
-      {overlay ? null : sending ? (
+      {overlay ? null : sending ? claimed ? (
+        <IconButton
+          variant="ghost"
+          size="icon-xs"
+          label={t("queue.discardSubmitted")}
+          className="text-muted-foreground hover:text-foreground"
+          onClick={onRemove}
+        >
+          <HugeiconsIcon strokeWidth={2} icon={Cancel01Icon} className="size-3.5" />
+        </IconButton>
+      ) : (
         <>
           <Button
             type="button"

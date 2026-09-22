@@ -29,6 +29,27 @@ export type SdkQueueAdapter = {
   cancelPending(id: string): boolean;
   /** Ids still physically present in either SDK queue. */
   pendingIds(): string[];
+  /**
+   * Detach one pending object without touching the SDK queue.
+   *
+   * The session drains its own steering queue to build an idle run's opening
+   * prompt, and the object it drained is no longer in the queue the adapter
+   * watches — but the caller still has to claim that exact object, because the
+   * delivery acknowledgement matches on object identity. Returns nothing once the
+   * agent loop has already taken it.
+   */
+  takePending(id: string): AgentMessage | undefined;
+  /**
+   * Make the SDK's next queue read return nothing, once per queue.
+   *
+   * `agent.continue()` starts a fresh run when the transcript ends on an assistant
+   * message, and that run drains both pending queues before it ever looks at the
+   * transcript. Those objects were steered while the interrupted run was live and
+   * are still owned by FastVibe's queue, so a resume must not deliver them. The
+   * suppression is one read only: a steer that arrives after the resumed run has
+   * started is a new decision and has to be delivered normally.
+   */
+  suppressNextDrain(): void;
 };
 
 function supportedQueue(value: unknown): value is PendingQueue {
@@ -90,22 +111,41 @@ export function installSdkQueueAdapter(
     };
   };
 
+  // One suppressed read per queue, held until that read happens. A resume arms both
+  // before it starts. The hold has to span the whole read rather than expire at its
+  // start: steering mode is one-at-a-time, so a steer that arrives while the resumed
+  // run's first poll is in flight would otherwise land behind the stale head and be
+  // the message that poll returns.
+  const skipDrains = new WeakSet<PendingQueue>();
   const wrapDrain = (queue: PendingQueue): void => {
     const original = queue.drain.bind(queue);
     queue.drain = () => {
+      if (skipDrains.has(queue)) {
+        skipDrains.delete(queue);
+        return [];
+      }
       const selected = queue.mode === "all" ? queue.messages.slice() : queue.messages.slice(0, 1);
-      // Commit ownership before the SDK removes the objects. If persistence fails,
-      // throw and leave its queue untouched so the caller can pause without loss.
-      for (const message of selected) {
-        const id = idByMessage.get(message as object);
-        if (id) options.onClaim(id);
+      // The agent loop's own read is the claim boundary, and it always happens
+      // inside a submission. A drain made outside one — the session builds an idle
+      // run's opening prompt by draining this queue itself — leaves the object
+      // unclaimed, because that prompt is a different object and the claim on
+      // `agent.prompt` never sees this one. The caller reclaims it by identity
+      // afterwards (`takePending`). Committing the claim before the SDK removes the
+      // objects means a failed write leaves its queue untouched.
+      if (options.currentId()) {
+        for (const message of selected) {
+          const id = idByMessage.get(message as object);
+          if (id) options.onClaim(id);
+        }
       }
       const drained = original();
-      for (const message of drained) {
-        const id = idByMessage.get(message as object);
-        if (!id) continue;
-        options.claims.claim(message as object, id);
-        forget(message);
+      if (options.currentId()) {
+        for (const message of drained) {
+          const id = idByMessage.get(message as object);
+          if (!id) continue;
+          options.claims.claim(message as object, id);
+          forget(message);
+        }
       }
       return drained;
     };
@@ -158,6 +198,19 @@ export function installSdkQueueAdapter(
         }
       }
       return ids;
+    },
+    suppressNextDrain() {
+      skipDrains.add(agent.steeringQueue!);
+      skipDrains.add(agent.followUpQueue!);
+    },
+    takePending(id) {
+      const message = byId.get(id);
+      if (!message) return undefined;
+      // Still physically queued: the agent loop has not taken it, so claiming it
+      // here would acknowledge a delivery that has not happened.
+      if ([agent.steeringQueue!, agent.followUpQueue!].some((queue) => queue.messages.includes(message))) return undefined;
+      forget(message);
+      return message;
     },
   };
 }

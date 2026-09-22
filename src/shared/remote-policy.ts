@@ -90,6 +90,11 @@ const DENIED = new Map<string, string>([
   // names, issued from this machine and from this network. That is a probe into
   // whatever the machine can reach, and it needs no agent to use.
   [Ipc.providersFetch, "\u8be5\u64cd\u4f5c\u4f1a\u4ece\u670d\u52a1\u7aef\u53d1\u8d77\u4efb\u610f\u5916\u90e8\u8bf7\u6c42\uff0c\u8fdc\u7a0b\u4e0d\u53ef\u7528"],
+  // The same arbitrary-URL request as `providers:fetch`, minus the credential — which
+  // makes it the more useful probe, not the less: no key is needed to map what this
+  // machine can reach.
+  [Ipc.providersProbeGateway, "\u8be5\u64cd\u4f5c\u4f1a\u4ece\u670d\u52a1\u7aef\u53d1\u8d77\u4efb\u610f\u5916\u90e8\u8bf7\u6c42\uff0c\u8fdc\u7a0b\u4e0d\u53ef\u7528"],
+  [Ipc.providersIdentifyGateway, "\u8be5\u64cd\u4f5c\u4f1a\u4ece\u670d\u52a1\u7aef\u53d1\u8d77\u4efb\u610f\u5916\u90e8\u8bf7\u6c42\uff0c\u8fdc\u7a0b\u4e0d\u53ef\u7528"],
 ]);
 
 /**
@@ -107,6 +112,7 @@ const ALLOWED = new Set<string>([
   Ipc.conversationsList,
   Ipc.conversationsOpen,
   Ipc.conversationsRecordPrompt,
+  Ipc.conversationsRestorePrompt,
   Ipc.conversationsRename,
   Ipc.conversationsSearch,
   Ipc.conversationsSetProject,
@@ -183,6 +189,11 @@ const ALLOWED = new Set<string>([
   Ipc.providersList,
   Ipc.providersLogout,
   Ipc.providersNative,
+  // Balance reads are allowed: the URL comes from the stored provider and the key from
+  // the engine's own store, so the call can only read an allowance this install already
+  // holds — the same bargain `providers:quota` makes for the OpenAI providers.
+  Ipc.providersGatewayBalance,
+  Ipc.providersGatewayCredentials,
   Ipc.providersQuota,
   Ipc.providersRefresh,
   Ipc.providersRemove,

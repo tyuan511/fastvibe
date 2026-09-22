@@ -205,6 +205,18 @@ export class ConversationCatalog {
     return this.update(id, { project: bound, cwd: bound ?? this.#scratchRoot, worktree: undefined });
   }
 
+  /** Restore a prompt preview only if no later catalog mutation replaced it. */
+  restorePromptPreview(
+    id: string,
+    expected: { title: string; preview?: string },
+    previous: { title: string; preview?: string },
+  ): boolean {
+    const current = this.get(id);
+    if (!current || current.title !== expected.title || current.preview !== expected.preview) return false;
+    this.update(id, { title: previous.title, preview: previous.preview });
+    return true;
+  }
+
   update(id: string, patch: Partial<Conversation>): Conversation | undefined {
     const index = this.#items.findIndex((item) => item.id === id);
     if (index < 0) return undefined;

@@ -72,6 +72,8 @@
     "error": "The queue is paused because the current reply failed (nothing was lost)",
     "reorder": "Drag to reorder",
     "sending": "Sending",
+    "submitted": "Submitted",
+    "discardSubmitted": "Remove submitted message",
     "recall": "Recall",
     "delete": "Delete",
     "now": "Now",

@@ -30,7 +30,7 @@ import type {
   SessionStats,
   SlashCommand,
 } from "@shared/types";
-import { filesToAttachments, shouldAttachPastedText } from "@/lib/attachments";
+import { filesToAttachments, pastedTextAttachmentName, shouldAttachPastedText } from "@/lib/attachments";
 import { useGitStatus } from "@/lib/use-git-status";
 import { cn } from "@/lib/utils";
 import { formatDuration } from "@/lib/time";
@@ -164,10 +164,6 @@ function ContextUsagePanel({
   const clamped = Math.min(100, Math.max(0, percent));
   const barColor = clamped >= 90 ? "bg-destructive" : clamped >= 70 ? "bg-warning" : "bg-primary";
   const remaining = Math.max(0, windowTokens - (used ?? 0));
-  // A number nobody acts on is just decoration: past 70% the popover says *what*
-  // happens next (the engine compacts on its own), and past 90% that it is about to.
-  // The ring alone only ever said how full the window was.
-  const proximity = clamped >= 90 ? "imminent" : clamped >= 70 ? "close" : null;
 
   const tokens = stats?.tokens;
   const input = tokens?.input ?? 0;
@@ -200,16 +196,6 @@ function ContextUsagePanel({
             {t("composer.remaining", { remaining: formatCount(remaining), window: formatCount(windowTokens) })}
           </span>
         </div>
-        {proximity ? (
-          <p
-            className={cn(
-              "rounded-md px-2 py-1.5 text-xs",
-              proximity === "imminent" ? "bg-destructive/10 text-destructive" : "bg-warning/10 text-warning",
-            )}
-          >
-            {t(proximity === "imminent" ? "composer.contextImminent" : "composer.contextClose")}
-          </p>
-        ) : null}
       </div>
 
       {stats ? (
@@ -386,11 +372,45 @@ export function Composer({
 
   // The composer survives session switches, so a plain autoFocus never re-fires.
   // A changing signal (new chat, app launch) pulls focus back to the input.
+  //
+  // Focusing is also where the caret gets placed. A draft that arrives from outside
+  // the textarea — a suggestion chip, an ↑ history recall, a restored draft on chat
+  // switch, a plugin's `setEditorText` — is assigned as the value, and the browser
+  // parks the caret at offset 0 for that. The one case a value comparison cannot see
+  // is coming *back* to a draft: switching chats renders the empty draft first (the
+  // caret collapses to 0) and the restored text second, and that second value is the
+  // one this composer already holds, so nothing looks like it changed. A programmatic
+  // focus is exactly "the user is being put into this draft", so the caret belongs at
+  // the end of whatever is there — but only when focus actually moves in. A re-render
+  // while the user is typing focuses an element that is already focused, and must not
+  // drag a mid-text caret to the end.
   useEffect(() => {
     if (focusSignal === undefined) return;
-    const frame = requestAnimationFrame(() => textareaRef.current?.focus());
+    const frame = requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      const entering = document.activeElement !== el;
+      el.focus();
+      if (entering) {
+        const end = el.value.length;
+        el.setSelectionRange(end, end);
+      }
+    });
     return () => cancelAnimationFrame(frame);
   }, [focusSignal]);
+
+  // Same caret rule for a draft written in while the textarea is already focused.
+  // Typing never reaches the branch: `handleChange` records the value the keystroke
+  // just produced, so it compares equal and the caret the user placed stays put.
+  const echoedValue = useRef(value);
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el || echoedValue.current === value) return;
+    echoedValue.current = value;
+    if (document.activeElement !== el) return;
+    const end = value.length;
+    el.setSelectionRange(end, end);
+  }, [value]);
 
   const slash = useMemo(() => {
     if (slashDismissed || !/^\/[^\s]*$/.test(value)) return [];
@@ -568,7 +588,7 @@ export function Composer({
       {
         id: crypto.randomUUID(),
         kind: "file",
-        name: t("composer.pastedTextFile"),
+        name: pastedTextAttachmentName(text) || t("composer.pastedTextFile"),
         mimeType: "text/plain",
         text,
       },
@@ -576,6 +596,9 @@ export function Composer({
   }
 
   function handleChange(next: string): void {
+    // Claim the value before it round-trips through state, so the caret effect above
+    // can tell a keystroke apart from a draft written in from outside.
+    echoedValue.current = next;
     setSlashDismissed(false);
     setHistIndex(null);
     onChange(next);

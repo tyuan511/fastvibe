@@ -19,6 +19,7 @@ export type FastVibePaths = {
   oauthFile: string;
   conversationsFile: string;
   providersFile: string;
+  gatewayCredentialsFile: string;
   mcpFile: string;
   /** Renderer UI preferences (theme, chat behaviour, …). */
   settingsFile: string;
@@ -86,6 +87,8 @@ function buildFastVibePaths(): FastVibePaths {
     oauthFile: join(agentDir, "oauth.json"),
     conversationsFile: join(userData, "conversations.json"),
     providersFile: join(userData, "providers.json"),
+    /** Panel credentials for custom relays (new-api); never served, never in providers.json. */
+    gatewayCredentialsFile: join(userData, "gateway-credentials.json"),
     mcpFile: join(userData, "mcp.json"),
     settingsFile: join(userData, "settings.json"),
     windowStateFile: join(userData, "window-state.json"),

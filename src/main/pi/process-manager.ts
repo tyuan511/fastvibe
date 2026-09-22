@@ -34,6 +34,7 @@ import type {
   ChatAttachment,
   PromptImage,
   QueueBehavior,
+  QueuedPromptPreview,
   ExtensionInfo,
   ExtensionPackage,
   FastVibeModel,
@@ -107,6 +108,8 @@ import {
   refreshProviderModels,
   removeProvider as removeProviderConfig,
   saveFastVibe as saveFastVibeConfig,
+  readProviders,
+  setProviderGateway,
   setProviderKey,
   updateProvider as updateProviderConfig,
   usableProviders,
@@ -117,9 +120,10 @@ import { findNativeProvider } from "../engine/native-providers";
 import { hasOAuthCredential, OAuthCredentialStore } from "../engine/oauth-store";
 import { priceUsage } from "../engine/pricing";
 import { fetchOpenAIAccountQuota, openAICodexAccountId } from "../engine/openai-quota";
+import { fetchGatewayBalance, gatewayTargets, probeGateway, readGatewayCredentials, writeGatewayCredentials } from "../engine/gateway-probe";
 import { getFastVibePaths, type FastVibePaths } from "../engine/paths";
 import { SubagentManager } from "../engine/subagents";
-import type { SubagentConfig, SubagentDraft } from "@shared/types";
+import type { SubagentConfig, SubagentDraft, GatewayBalanceResult, GatewayKind } from "@shared/types";
 import { isAbortOutcome } from "@shared/abort";
 import { McpManager, type McpServerConfig, type McpServerStatus } from "./mcp-manager";
 import { assistantErrorSummary, finalAssistantErrorSummary } from "./assistant-error-summary";
@@ -470,6 +474,7 @@ export class PiProcessManager {
   #modelsCache: FastVibeModel[] | null = null;
   /** Account quota is remote data; keep it warm for five minutes per provider. */
   #openAIQuotaCache = new Map<string, { quota: OpenAIAccountQuota; expiresAt: number }>();
+  #gatewayBalanceCache = new Map<string, { result: GatewayBalanceResult; expiresAt: number }>();
   /** Every configured model's price ladder, refreshed whenever the registry is. */
   #prices: Map<string, ModelPrice> = new Map();
   #operation: Promise<unknown> = Promise.resolve();
@@ -574,6 +579,12 @@ export class PiProcessManager {
   #messageQueue: MessageQueueStore;
   #queueOperations = new Map<string, Promise<unknown>>();
   #drainingQueues = new Set<string>();
+  /** The actual drain promise, so session replacement can wait for old SDK work. */
+  #drainPromises = new Map<string, Promise<void>>();
+  /** A drain requested by the user while another drain was running. */
+  #preferredQueueIds = new Map<string, string>();
+  /** Session replacement temporarily blocks scheduled drains from binding to the old agent. */
+  #queueRebuilds = new Set<string>();
   /** A drain whose durable write failed stays stopped until an explicit resume. */
   #queueDrainFaults = new Set<string>();
   #queueShutdown = false;
@@ -763,6 +774,9 @@ export class PiProcessManager {
       }
       this.#sdkQueueAdapters.clear();
       this.#drainingQueues.clear();
+      this.#drainPromises.clear();
+      this.#preferredQueueIds.clear();
+      this.#queueRebuilds.clear();
       this.#queueDrainFaults.clear();
       this.#interruptedRuns.clear();
       this.#timing.clear();
@@ -945,6 +959,7 @@ export class PiProcessManager {
     behavior: QueueBehavior;
     attachments?: ChatAttachment[];
     images?: PromptImage[];
+    preview?: QueuedPromptPreview;
   }): Promise<ConversationQueueState> {
     return this.#withQueue(input.conversationId, async () => {
       const item = this.#messageQueue.add({
@@ -954,6 +969,7 @@ export class PiProcessManager {
         attachments: input.attachments,
         images: input.images,
         sentText: input.message,
+        preview: input.preview,
       });
       // This durable write succeeded, so a prior transient I/O drain fault may be retried.
       this.#queueDrainFaults.delete(input.conversationId);
@@ -974,20 +990,33 @@ export class PiProcessManager {
     return this.#withQueue(item.conversationId, async () => {
       const current = this.#messageQueue.get(id);
       if (!current) return this.#messageQueue.state(item.conversationId);
+      // A claimed row may already be in the transcript, so it must never be replayed.
+      // Removing only the durable tracking row is safe and gives the user a way to
+      // clear an uncertainty left by Stop or a failed persistence acknowledgement.
       if (current.claimed) {
-        throw new Error(uiText("消息已由引擎领取，无法取消", "The engine has already claimed this message"));
+        this.#messageQueue.remove(id);
+        // Claimed means the prompt may already be in the transcript; keep the catalog
+        // preview rather than pretending an uncertain delivery never happened.
+        if (this.#messageQueue.all(item.conversationId).length === 0) this.#messageQueue.pause(item.conversationId, null);
+        this.#emitQueue(item.conversationId);
+        return this.#messageQueue.state(item.conversationId);
       }
       const adapter = this.#sdkQueueAdapters.get(item.conversationId);
       if (current.sending && !adapter?.hasPending(id)) {
         throw new Error(uiText("消息已由引擎领取，无法取消", "The engine has already claimed this message"));
       }
-      // No await separates the durable commit and exact-object filter. A failed write
-      // leaves the SDK object intact; a successful write is followed synchronously by
-      // removing only that object, never clear-and-replay.
+      // No await separates the durable commit and exact-object filter. If the SDK object
+      // disappears between the membership check and removal, restore an explicitly
+      // claimed row rather than leaving an untracked object that could be replayed.
       this.#messageQueue.remove(id);
       if (current.sending && !adapter!.cancelPending(id)) {
+        this.#messageQueue.restore({ ...current, claimed: true, sending: true });
+        this.#messageQueue.pause(item.conversationId, "error");
+        this.#emitQueue(item.conversationId);
         throw new Error(uiText("SDK 队列状态意外变化", "The SDK queue changed unexpectedly"));
       }
+      this.#restoreQueuedPreview(current);
+      if (this.#messageQueue.all(item.conversationId).length === 0) this.#messageQueue.pause(item.conversationId, null);
       this.#emitQueue(item.conversationId);
       return this.#messageQueue.state(item.conversationId);
     });
@@ -1008,6 +1037,9 @@ export class PiProcessManager {
       }
       this.#messageQueue.update(id, { sending: false });
       if (current.sending && !adapter!.cancelPending(id)) {
+        this.#messageQueue.update(id, { claimed: true, sending: true });
+        this.#messageQueue.pause(item.conversationId, "error");
+        this.#emitQueue(item.conversationId);
         throw new Error(uiText("SDK 队列状态意外变化", "The SDK queue changed unexpectedly"));
       }
       this.#emitQueue(item.conversationId);
@@ -1036,6 +1068,9 @@ export class PiProcessManager {
 
   async reorderQueued(conversationId: string, ids: string[]): Promise<ConversationQueueState> {
     return this.#withQueue(conversationId, async () => {
+      // Invalidate a candidate selected before this reorder. The next drain reads the
+      // latest durable order instead of sending a row the user just moved down.
+      this.#bumpQueueEpoch(conversationId);
       this.#messageQueue.reorder(conversationId, ids);
       this.#emitQueue(conversationId);
       return this.#messageQueue.state(conversationId);
@@ -1046,6 +1081,13 @@ export class PiProcessManager {
     return this.#withQueue(conversationId, async () => {
       this.#bumpQueueEpoch(conversationId);
       this.#queueDrainFaults.delete(conversationId);
+      // A claimed row is an unresolved delivery, not a row that can safely replay.
+      // Keep the pause visible until the user removes that tracking row explicitly.
+      if (this.#messageQueue.all(conversationId).some((item) => item.claimed)) {
+        this.#messageQueue.pause(conversationId, "error");
+        this.#emitQueue(conversationId);
+        return this.#messageQueue.state(conversationId);
+      }
       this.#messageQueue.pause(conversationId, null);
       this.#emitQueue(conversationId);
       this.#scheduleQueueDrain(conversationId);
@@ -1137,12 +1179,20 @@ export class PiProcessManager {
    * loop — see `#runContinuation`. A resume is half a turn, but it is still a *run*,
    * and the events only that wrapper emits are what every watcher reads.
    *
-   * Engine-side queued messages are cleared first — the renderer owns the follow-up
-   * queue and drains it itself, so a resume must not silently flush it.
+   * The SDK's own pending queues are left where they are. A steer that landed while
+   * the interrupted run was live is still sitting in `steeringQueue`, and
+   * `agent.continue()` delivers it the moment the transcript ends on an assistant
+   * message — which is exactly the shape an aborted turn has. That delivery is a real
+   * prompt (the row shows up in the transcript) but it never crosses the adapter's
+   * claim boundary, so FastVibe's queue row stays on screen over a message that has
+   * already been sent. The resumed run skips one read of each queue instead; the rows
+   * stay pending and only leave when the user resumes the queue, or when the resumed
+   * run settles cleanly and the ordinary drain sends them.
    */
   async continueTurn(conversationId?: string): Promise<void> {
     // Only this conversation's parked prompt is answered: continue is a per-chat action.
-    this.#resolvePendingUi(conversationId ?? this.#activeId ?? undefined);
+    const owner = conversationId ?? this.#activeId ?? undefined;
+    this.#resolvePendingUi(owner);
     const { session } = await this.#sessionFor(conversationId);
     const messages = session.agent.state.messages;
     const last = messages[messages.length - 1];
@@ -1152,6 +1202,10 @@ export class PiProcessManager {
         session.agent.state.messages = messages.slice(0, -1);
       }
     }
+    // The session is resolved first, so the adapter exists even for a chat whose
+    // session was created by this call. Arming it after the run started would be too
+    // late: the loop drains both queues before its first model request.
+    if (owner) this.#sdkQueueAdapters.get(owner)?.suppressNextDrain();
     await this.#runContinuation(session);
   }
   /**
@@ -1486,6 +1540,11 @@ export class PiProcessManager {
     return this.#catalog.snapshot();
   }
   async deleteConversation(id: string): Promise<ConversationDeleteResult> {
+    this.#queueRebuilds.add(id);
+    this.#bumpQueueEpoch(id);
+    const managedBefore = this.#sessions.get(id);
+    if (managedBefore && !managedBefore.session.isIdle) await managedBefore.session.abort().catch(() => undefined);
+    await this.#drainPromises.get(id)?.catch(() => undefined);
     const children = this.#catalog.listAll().filter((item) => item.parentId === id && item.kind === "side-chat");
     for (const child of children) await this.deleteConversation(child.id);
     const wasActive = this.#catalog.activeId === id;
@@ -1511,6 +1570,8 @@ export class PiProcessManager {
     this.#messageQueue.clear(id);
     this.#sdkQueueAdapters.delete(id);
     this.#queueDrainFaults.delete(id);
+    this.#preferredQueueIds.delete(id);
+    this.#queueRebuilds.delete(id);
     this.#queueOperations.delete(id);
     this.#interruptedRuns.delete(id);
     this.#pendingCwdRebind.delete(id);
@@ -1529,25 +1590,49 @@ export class PiProcessManager {
     const before = this.#catalog.get(id);
     const updated = this.#catalog.setProject(id, project ?? undefined);
     if (!updated || before?.cwd === updated.cwd) return this.#catalog.snapshot();
-    if (before?.worktree && this.#ownsWorktree(before.worktree.path)) {
-      await this.#removeWorktree(before.worktree.path, before.project);
-    }
-    const managed = this.#sessions.get(id);
-    if (managed) {
-      managed.unsubscribe();
-      await managed.session.dispose();
-      this.#sessions.delete(id);
-    }
-    // The session is gone, so no `agent_settled` will ever arrive for it.
-    this.#clearBusy(id);
-    this.#clearConversationWidgets(id);
-    this.#pendingCwdRebind.delete(id);
-    // The replacement session republishes whatever it holds on `session_start`.
-    this.#extensionStatuses.delete(id);
-    if (this.#activeId === id) {
-      await this.#ensureReady();
-      const reopened = await this.#ensureSession(updated);
-      this.#activate(reopened);
+
+    // Re-homing replaces the SDK agent. Do not let an old drain or adapter keep writing
+    // into the disposed agent, and do not replay an object the old agent already claimed.
+    this.#queueRebuilds.add(id);
+    this.#bumpQueueEpoch(id);
+    try {
+      await this.#drainPromises.get(id)?.catch(() => undefined);
+      const oldAdapter = this.#sdkQueueAdapters.get(id);
+      const pending = new Set(oldAdapter?.pendingIds() ?? []);
+      const managed = this.#sessions.get(id);
+      if (managed) managed.session.clearQueue();
+      const restored = oldAdapter
+        ? this.#messageQueue.restorePending(id, pending, "error")
+        : this.#messageQueue.resetUnclaimed(id, "error");
+      if (restored) this.#emitQueue(id);
+      if (managed) {
+        managed.unsubscribe();
+        await managed.session.dispose();
+        this.#sessions.delete(id);
+      }
+      this.#sdkQueueAdapters.delete(id);
+      this.#queueDrainFaults.delete(id);
+      this.#preferredQueueIds.delete(id);
+      this.#interruptedRuns.delete(id);
+      if (before?.worktree && this.#ownsWorktree(before.worktree.path)) {
+        await this.#removeWorktree(before.worktree.path, before.project);
+      }
+      // The session is gone, so no `agent_settled` will ever arrive for it.
+      this.#clearBusy(id);
+      this.#clearConversationWidgets(id);
+      this.#pendingCwdRebind.delete(id);
+      // The replacement session republishes whatever it holds on `session_start`.
+      this.#extensionStatuses.delete(id);
+      if (this.#activeId === id) {
+        await this.#ensureReady();
+        const reopened = await this.#ensureSession(updated);
+        this.#activate(reopened);
+      }
+    } finally {
+      this.#queueRebuilds.delete(id);
+      if (!this.#queueShutdown && !this.#messageQueue.state(id).pause && this.#messageQueue.all(id).some((item) => !item.claimed && !item.sending)) {
+        this.#scheduleQueueDrain(id);
+      }
     }
     return this.#catalog.snapshot();
   }
@@ -1577,10 +1662,51 @@ export class PiProcessManager {
     // Leave `sessionName` empty so the session-title extension can generate one.
     return this.#catalog.snapshot();
   }
+  restorePromptPreview(payload: { id: string; expectedTitle: string; expectedPreview?: string; title: string; preview?: string }): WorkspaceSnapshot {
+    this.#catalog.restorePromptPreview(
+      payload.id,
+      { title: payload.expectedTitle, preview: payload.expectedPreview },
+      { title: payload.title, preview: payload.preview },
+    );
+    return this.#catalog.snapshot();
+  }
   addProject(cwd: string): ProjectAddResult { const project = this.#catalog.ensureProject(cwd); if (!project) throw new Error("invalid project"); return { ...this.#catalog.snapshot(), project }; }
   renameProject(cwd: string, name: string): WorkspaceSnapshot { this.#catalog.renameProject(cwd, name); return this.#catalog.snapshot(); }
   reorderProjects(cwds: string[]): WorkspaceSnapshot { this.#catalog.reorderProjects(cwds); return this.#catalog.snapshot(); }
-  async removeProject(cwd: string): Promise<ConversationDeleteResult> { const wasActive = this.#catalog.get(this.#catalog.activeId ?? "")?.project === cwd; const removed = this.#catalog.removeProject(cwd); await Promise.all(removed.map(async (item) => { if (item.sessionFile) { await this.#usage.capture(item.sessionFile); await unlink(item.sessionFile).catch(() => undefined); } if (item.worktree && this.#ownsWorktree(item.worktree.path)) await this.#removeWorktree(item.worktree.path, item.project); const managed = this.#sessions.get(item.id); if (managed) { managed.unsubscribe(); await managed.session.dispose(); this.#sessions.delete(item.id); } this.#clearBusy(item.id); this.#clearConversationWidgets(item.id); this.#extensionStatuses.delete(item.id); })); return { ...this.#catalog.snapshot(), nextId: wasActive ? (this.#catalog.activeId ?? null) : null }; }
+  async removeProject(cwd: string): Promise<ConversationDeleteResult> {
+    const wasActive = this.#catalog.get(this.#catalog.activeId ?? "")?.project === cwd;
+    const removed = this.#catalog.removeProject(cwd);
+    await Promise.all(removed.map(async (item) => {
+      this.#queueRebuilds.add(item.id);
+      this.#bumpQueueEpoch(item.id);
+      try {
+        const managed = this.#sessions.get(item.id);
+        if (managed && !managed.session.isIdle) await managed.session.abort().catch(() => undefined);
+        await this.#drainPromises.get(item.id)?.catch(() => undefined);
+        if (item.sessionFile) {
+          await this.#usage.capture(item.sessionFile);
+          await unlink(item.sessionFile).catch(() => undefined);
+        }
+        if (item.worktree && this.#ownsWorktree(item.worktree.path)) await this.#removeWorktree(item.worktree.path, item.project);
+        if (managed) {
+          managed.unsubscribe();
+          await managed.session.dispose();
+          this.#sessions.delete(item.id);
+        }
+        this.#clearBusy(item.id);
+        this.#clearConversationWidgets(item.id);
+        this.#extensionStatuses.delete(item.id);
+        this.#messageQueue.clear(item.id);
+        this.#sdkQueueAdapters.delete(item.id);
+        this.#queueDrainFaults.delete(item.id);
+        this.#preferredQueueIds.delete(item.id);
+        this.#interruptedRuns.delete(item.id);
+      } finally {
+        this.#queueRebuilds.delete(item.id);
+      }
+    }));
+    return { ...this.#catalog.snapshot(), nextId: wasActive ? (this.#catalog.activeId ?? null) : null };
+  }
   async loadMessages(conversationId?: string): Promise<ChatMessage[]> {
     const { id, session } = await this.#sessionFor(conversationId);
     return this.#messages(session, id);
@@ -1886,6 +2012,96 @@ export class PiProcessManager {
   async listNativeProviders(): Promise<NativeProviderConfig[]> { return nativeProviderCatalog(); }
   async addNativeProvider(id: string, apiKey: string, models: ProviderModel[]): Promise<ProviderConfig[]> { await addNativeProviderConfig(this.#paths, id, apiKey, models); await this.reloadProviders(); return this.listProviders(); }
   async fetchModels(baseUrl: string, apiKey: string, api?: string): Promise<ProviderModel[]> { return fetchProviderModels(baseUrl, apiKey, api); }
+
+  /**
+   * Identify the relay software behind a Base URL, so 添加供应商 can store it with the
+   * provider it is about to create. Never rejects: an unidentified endpoint is the
+   * normal case for any OpenAI-compatible gateway, and it must not stop the add.
+   */
+  async probeGateway(baseUrl: string): Promise<GatewayKind | undefined> {
+    try {
+      return await probeGateway(baseUrl);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * The 余额 attached to a custom provider's stored key, for the two panels that report
+   * one. Cached briefly like the OpenAI allowance: the caller polls it on pane open and
+   * on an explicit refresh, and a relay's balance does not move between two renders.
+   */
+  async getGatewayBalance(id: string, force = false): Promise<GatewayBalanceResult> {
+    const cached = this.#gatewayBalanceCache.get(id);
+    if (!force && cached && cached.expiresAt > Date.now()) return cached.result;
+    const provider = listProviderConfigs(this.#paths, await loadProviderKeys(this.#paths)).find((item) => item.id === id);
+    if (!provider) throw new Error(uiText("供应商不存在", "This provider does not exist."));
+    // The gateway is what decides this, not the provider's kind: the builtin FastVibe
+    // endpoint is a Sub2API deployment and reads its balance the same way a custom one
+    // does. A provider whose upstream was never identified has no endpoint to call.
+    if (!provider.gateway) throw new Error(uiText("未识别该站点的类型，无法读取余额", "This site was not identified, so its balance cannot be read."));
+    const keys = await loadProviderKeys(this.#paths);
+    return this.#readGatewayBalance(id, provider, keys[provider.apiKeyEnv] ?? "");
+  }
+
+  /** The one place a balance read is assembled, so a credential change and an open pane agree. */
+  async #readGatewayBalance(
+    id: string,
+    provider: ProviderConfig,
+    apiKey: string,
+  ): Promise<GatewayBalanceResult> {
+    const targets = gatewayTargets(provider.baseUrl);
+    const target = targets[targets.length - 1];
+    if (!target) throw new Error(uiText("Base URL 无效", "The base URL is not valid."));
+    const dashboard = readGatewayCredentials(this.#paths.gatewayCredentialsFile)[id];
+    const balance = await fetchGatewayBalance({
+      ...target,
+      apiKey,
+      kind: provider.gateway,
+      ...(dashboard ? { dashboard } : {}),
+    });
+    const result: GatewayBalanceResult = { fetchedAt: Date.now(), balance };
+    this.#gatewayBalanceCache.set(id, { result, expiresAt: Date.now() + 60_000 });
+    return result;
+  }
+
+  /**
+   * Identify the upstream behind an already-stored provider, and remember it.
+   *
+   * `refreshProviderModels` does the same thing as a side effect of 同步模型, which is no
+   * way to discover the feature: a provider added before the probe existed has no gateway,
+   * so the balance row is not drawn at all — and an empty space explains nothing. This is
+   * the explicit entry point that row offers instead. A miss is `undefined`, which is a
+   * legitimate answer (most OpenAI-compatible endpoints have no panel) and not an error.
+   */
+  async identifyGateway(id: string): Promise<GatewayKind | undefined> {
+    const provider = readProviders(this.#paths).find((item) => item.id === id);
+    if (!provider || provider.kind !== "custom") return undefined;
+    const kind = await probeGateway(provider.baseUrl);
+    if (kind) setProviderGateway(this.#paths, id, kind);
+    return kind;
+  }
+
+  /**
+   * Store (or clear) the panel credential a new-api deployment needs for its balance.
+   *
+   * The token is written where no client can read it back — `providers:list` serves
+   * `providers.json`, and this is not that file — so the reply carries no secret, only
+   * the fresh balance the new credential unlocked.
+   */
+  async setGatewayCredentials(id: string, credential: { accessToken: string; userId: string }): Promise<void> {
+    const file = this.#paths.gatewayCredentialsFile;
+    const credentials = readGatewayCredentials(file);
+    const next = { ...credentials };
+    if (credential.accessToken.trim()) {
+      next[id] = { accessToken: credential.accessToken.trim(), userId: credential.userId.trim() };
+    } else {
+      delete next[id];
+    }
+    writeGatewayCredentials(file, next);
+    // The cached answer belongs to the credential that produced it.
+    this.#gatewayBalanceCache.delete(id);
+  }
   async refreshProviderModels(id: string): Promise<ProviderModel[]> { return refreshProviderModels(this.#paths, id); }
   async getOpenAIAccountQuota(id: string, force = false): Promise<OpenAIAccountQuota> {
     if (id !== "openai" && id !== "openai-codex") throw new Error(uiText("该供应商不支持账号额度查询", "This provider does not support account limit queries."));
@@ -1908,7 +2124,10 @@ export class PiProcessManager {
     return quota;
   }
   async saveFastVibe(apiKey: string, models: ProviderModel[]): Promise<ProviderConfig[]> { await saveFastVibeConfig(this.#paths, apiKey, models); await this.reloadProviders(); return this.listProviders(); }
-  async addProvider(draft: { name: string; baseUrl: string; apiKey: string; api?: import("@shared/types").ProviderApi }, models: ProviderModel[]): Promise<ProviderConfig[]> { await addProviderConfig(this.#paths, draft, models); await this.reloadProviders(); return this.listProviders(); }
+  async addProvider(
+    draft: { name: string; baseUrl: string; apiKey: string; api?: import("@shared/types").ProviderApi; gateway?: GatewayKind },
+    models: ProviderModel[],
+  ): Promise<ProviderConfig[]> { await addProviderConfig(this.#paths, draft, models); await this.reloadProviders(); return this.listProviders(); }
   async scanCcSwitch() { return scanCcSwitch(this.#paths); }
   async importCcSwitch(ids: string[]): Promise<ProviderConfig[]> { await importCcSwitch(this.#paths, ids); await this.reloadProviders(); return this.listProviders(); }
   async updateProvider(id: string, patch: { name?: string; baseUrl?: string; api?: string; enabled?: boolean; models?: ProviderModel[]; apiKey?: string }): Promise<ProviderConfig[]> { updateProviderConfig(this.#paths, id, { name: patch.name, baseUrl: patch.baseUrl?.trim().replace(/\/+$/, ""), api: patch.api, enabled: patch.enabled, models: patch.models }); if (patch.apiKey !== undefined) { const env = providerKeyEnv(this.#paths, id); if (env) await setProviderKey(this.#paths, env, patch.apiKey); } await this.reloadProviders(); return this.listProviders(); }
@@ -2009,6 +2228,7 @@ export class PiProcessManager {
     // Credentials can change during any provider mutation, so never reuse a quota
     // fetched before this reload.
     this.#openAIQuotaCache.clear();
+    this.#gatewayBalanceCache.clear();
     // A cold engine has no conversation to break, and the first provider the user
     // connects is exactly when a full start (registry, MCP, session) is required.
     if (this.#status.state !== "ready" || !this.#runtime || !this.#models) return this.start(this.#cwd);
@@ -2221,16 +2441,37 @@ export class PiProcessManager {
       this.#pendingCwdRebind.add(id);
       return false;
     }
-    if (managed) {
-      managed.unsubscribe();
-      await managed.session.dispose();
-      this.#sessions.delete(id);
-    }
-    this.#pendingCwdRebind.delete(id);
-    if (this.#activeId === id) {
-      await this.#ensureReady();
-      const reopened = await this.#ensureSession(conversation);
-      this.#activate(reopened);
+    this.#queueRebuilds.add(id);
+    this.#bumpQueueEpoch(id);
+    try {
+      await this.#drainPromises.get(id)?.catch(() => undefined);
+      const oldAdapter = this.#sdkQueueAdapters.get(id);
+      const pending = new Set(oldAdapter?.pendingIds() ?? []);
+      if (managed) managed.session.clearQueue();
+      const restored = oldAdapter
+        ? this.#messageQueue.restorePending(id, pending, "error")
+        : this.#messageQueue.resetUnclaimed(id, "error");
+      if (restored) this.#emitQueue(id);
+      if (managed) {
+        managed.unsubscribe();
+        await managed.session.dispose();
+        this.#sessions.delete(id);
+      }
+      this.#sdkQueueAdapters.delete(id);
+      this.#queueDrainFaults.delete(id);
+      this.#preferredQueueIds.delete(id);
+      this.#interruptedRuns.delete(id);
+      this.#pendingCwdRebind.delete(id);
+      if (this.#activeId === id) {
+        await this.#ensureReady();
+        const reopened = await this.#ensureSession(conversation);
+        this.#activate(reopened);
+      }
+    } finally {
+      this.#queueRebuilds.delete(id);
+      if (!this.#queueShutdown && !this.#messageQueue.state(id).pause && this.#messageQueue.all(id).some((item) => !item.claimed && !item.sending)) {
+        this.#scheduleQueueDrain(id);
+      }
     }
     return !this.#sessions.has(id) || this.#sessions.get(id)?.cwd === conversation.cwd;
   }
@@ -2532,12 +2773,14 @@ export class PiProcessManager {
       // handles the older `auto_compaction_*`, and both have to be tracked here.
       const eventType: string = event.type;
       let compactionTouched = false;
+      let compactionEnded = false;
       if (eventType === "compaction_start" || eventType === "auto_compaction_start") {
         this.#compacting.set(conversation.id, compactReasonOf(event as { reason?: unknown }));
         compactionTouched = true;
       } else if (eventType === "compaction_end" || eventType === "auto_compaction_end") {
         this.#compacting.delete(conversation.id);
         compactionTouched = true;
+        compactionEnded = true;
       }
       if (running !== undefined) this.#running.set(conversation.id, running);
       if (running !== undefined || compactionTouched) {
@@ -2553,6 +2796,11 @@ export class PiProcessManager {
           else this.#turnEvents.delete(conversation.id);
           this.#emit({ type: "conversation_running", conversationId: conversation.id, running: busy });
         }
+      }
+      if (compactionEnded && !this.#busy(conversation.id)) {
+        // Standalone /compact has no agent_settled event. A prompt queued while the
+        // compaction was running otherwise remains pending until another user action.
+        this.#scheduleQueueDrain(conversation.id);
       }
       if (event.type === "agent_settled") {
         const interrupted = this.#interruptedRuns.get(conversation.id);
@@ -2856,9 +3104,27 @@ export class PiProcessManager {
     this.#emit({ type: "queue_changed", conversationId, queue: this.#messageQueue.state(conversationId) });
   }
 
+  #restoreQueuedPreview(item: StoredQueuedPrompt): void {
+    const preview = item.preview;
+    if (!preview) return;
+    this.#catalog.restorePromptPreview(
+      item.conversationId,
+      { title: preview.nextTitle, preview: preview.nextPreview },
+      { title: preview.previousTitle, preview: preview.previousPreview },
+    );
+  }
+
   async #insertQueuedSteer(item: StoredQueuedPrompt): Promise<void> {
+    const epoch = this.#queueEpochs.get(item.conversationId) ?? 0;
     const managed = await this.#sessionFor(item.conversationId);
-    if (!this.#queueCanSubmit(item.conversationId, item.id)) return;
+    // The run can settle while session/model setup is awaiting. In that case leave the
+    // durable row pending and let the normal idle drain submit it instead of silently
+    // parking a steer in an SDK queue that no longer has a reader.
+    if (!this.#queueCanSubmit(item.conversationId, item.id, epoch) || !this.#isLive(item.conversationId)) {
+      this.#emitQueue(item.conversationId);
+      this.#scheduleQueueDrain(item.conversationId);
+      return;
+    }
     try {
       await this.#queueSubmission.run(
         { conversationId: item.conversationId, id: item.id },
@@ -2868,11 +3134,30 @@ export class PiProcessManager {
       // until its private drain/getSteeringMessages boundary marks it claimed.
       const current = this.#messageQueue.get(item.id);
       if (current && !current.claimed) {
-        this.#messageQueue.update(item.id, { sending: true });
-        this.#emitQueue(item.conversationId);
+        const adapter = this.#sdkQueueAdapters.get(item.conversationId);
+        if (((this.#queueEpochs.get(item.conversationId) ?? 0) !== epoch || !this.#isLive(item.conversationId)) && adapter?.cancelPending(item.id)) {
+          this.#messageQueue.update(item.id, { sending: false });
+          this.#emitQueue(item.conversationId);
+          this.#scheduleQueueDrain(item.conversationId);
+        } else {
+          this.#messageQueue.update(item.id, { sending: true });
+          this.#emitQueue(item.conversationId);
+        }
       }
     } catch (error) {
       const current = this.#messageQueue.get(item.id);
+      const state = this.#messageQueue.state(item.conversationId);
+      // Stop/reorder/session replacement won the race. Preserve its decision and let
+      // the winning operation handle the row; do not rewrite an explicit stopped pause
+      // as a generic send failure.
+      if (state.pause === "stopped" || (this.#queueEpochs.get(item.conversationId) ?? 0) !== epoch) {
+        if (current?.sending && !current.claimed) {
+          this.#sdkQueueAdapters.get(item.conversationId)?.cancelPending(item.id);
+          this.#messageQueue.update(item.id, { sending: false });
+          this.#emitQueue(item.conversationId);
+        }
+        return;
+      }
       if (current?.claimed) this.#messageQueue.pause(item.conversationId, "error");
       else if (current) this.#messageQueue.fail(item.id, "error");
       this.#emitQueue(item.conversationId);
@@ -2915,11 +3200,16 @@ export class PiProcessManager {
   }
 
   #scheduleQueueDrain(conversationId: string, preferredId?: string): void {
-    if (this.#queueShutdown || this.#queueDrainFaults.has(conversationId)) return;
+    if (preferredId) this.#preferredQueueIds.set(conversationId, preferredId);
+    if (this.#queueShutdown || this.#queueDrainFaults.has(conversationId) || this.#queueRebuilds.has(conversationId)) return;
     queueMicrotask(() => {
-      if (this.#queueShutdown || this.#queueDrainFaults.has(conversationId) || this.#drainingQueues.has(conversationId)) return;
+      if (this.#queueShutdown || this.#queueDrainFaults.has(conversationId) || this.#queueRebuilds.has(conversationId) || this.#drainingQueues.has(conversationId)) return;
       this.#drainingQueues.add(conversationId);
-      void this.#drainQueue(conversationId, preferredId)
+      const requested = this.#preferredQueueIds.get(conversationId);
+      this.#preferredQueueIds.delete(conversationId);
+      const run = this.#drainQueue(conversationId, requested);
+      this.#drainPromises.set(conversationId, run);
+      void run
         .catch(() => {
           // Most failures are already converted into a durable pause by #drainQueue.
           // If that write itself failed, do not spin the same item in microtasks.
@@ -2927,9 +3217,12 @@ export class PiProcessManager {
         })
         .finally(() => {
           this.#drainingQueues.delete(conversationId);
+          if (this.#drainPromises.get(conversationId) === run) this.#drainPromises.delete(conversationId);
           const state = this.#messageQueue.state(conversationId);
-          if (!this.#queueShutdown && !this.#queueDrainFaults.has(conversationId) && !state.pause && state.items.some((item) => !item.claimed && !item.sending) && !this.#busy(conversationId)) {
-            this.#scheduleQueueDrain(conversationId);
+          const nextPreferred = this.#preferredQueueIds.get(conversationId);
+          this.#preferredQueueIds.delete(conversationId);
+          if (!this.#queueShutdown && !this.#queueDrainFaults.has(conversationId) && !this.#queueRebuilds.has(conversationId) && !state.pause && state.items.some((item) => !item.claimed && !item.sending) && !this.#busy(conversationId)) {
+            this.#scheduleQueueDrain(conversationId, nextPreferred);
           }
         });
     });
@@ -2958,18 +3251,32 @@ export class PiProcessManager {
         { conversationId, id: candidate.id },
         () => this.#promptWhenIdle(session, candidate!.sentText ?? candidate!.text, candidate!.images),
       );
-      // SDK-handled slash commands do not create a user message and therefore never
-      // reach the exact-object acknowledgement. Successful return is their boundary.
-      const handledWithoutMessage = this.#messageQueue.get(candidate.id);
-      if (handledWithoutMessage && !handledWithoutMessage.claimed) {
-        this.#messageQueue.remove(candidate.id);
-        this.#emitQueue(conversationId);
-      }
+      // A resumed queue prompts while the session is idle, so the message goes out as
+      // the run's opening prompt rather than through a queue the adapter can claim.
+      // The adapter's wrapped `agent.prompt` is the claim boundary for that shape, but
+      // the session drains its own steering queue on the way there and prompts the
+      // agent with what it drained — a different object, which the wrapper never sees.
+      // Without a claim the delivery acknowledgement has nothing to match, so the row
+      // stays on screen over a turn that was already sent. The exact object is still
+      // in the session's steering queue here: claim it, and the acknowledgement
+      // removes the row once the transcript entry lands.
+      const handedToSession = this.#messageQueue.get(candidate.id);
+      if (handedToSession && !handedToSession.claimed) this.#claimSessionQueuedPrompt(conversationId, candidate.id);
       this.#scheduleQueueDrain(conversationId);
     } catch {
       await this.#withQueue(conversationId, async () => {
         const current = candidate ? this.#messageQueue.get(candidate.id) : undefined;
         if (!current) return;
+        const state = this.#messageQueue.state(conversationId);
+        // Stop, reorder, resume, or session replacement superseded this attempt. Keep
+        // the winner's durable state; an AbortError must not turn stopped into error.
+        if (state.pause === "stopped" || (this.#queueEpochs.get(conversationId) ?? 0) !== epoch) {
+          if (state.pause !== "stopped" && !current.claimed && current.sending) {
+            this.#messageQueue.update(current.id, { sending: false });
+            this.#emitQueue(conversationId);
+          }
+          return;
+        }
         // Once claimed, uncertainty must remain claimed: replay could duplicate a
         // submitted turn. Before that boundary the row is safe to keep pending.
         if (current.claimed) this.#messageQueue.pause(conversationId, "error");
@@ -2979,6 +3286,41 @@ export class PiProcessManager {
     }
   }
 
+  /**
+   * Claim a row the session queued and then drained itself.
+   *
+   * `session.prompt` steers into the SDK queue and, while idle, immediately drains
+   * that queue to build the run's opening prompt. The adapter only claims what
+   * `agent.prompt` receives, so the drained object is left unclaimed and the row can
+   * never be acknowledged. The object is still remembered by the adapter at this
+   * point, which is how the exact object is found again and recorded for the
+   * acknowledgement. A slash command the session handled itself never reaches that
+   * queue and never produces a message, so its row is removed on the successful
+   * return instead.
+   */
+  #claimSessionQueuedPrompt(conversationId: string, id: string): void {
+    const item = this.#messageQueue.get(id);
+    if (!item || item.claimed) return;
+    const message = this.#sdkQueueAdapters.get(conversationId)?.takePending(id);
+    if (!message) {
+      // A command is handled before the SDK sees a user message, so it is safe to
+      // remove. For ordinary text, a missing identity means the prompt may already
+      // have reached the agent; retain it as an explicit uncertainty instead of
+      // silently dropping the only durable evidence or replaying it later.
+      if (parseCompactCommand(item.sentText ?? item.text)) {
+        this.#messageQueue.remove(id);
+      } else {
+        this.#messageQueue.update(id, { claimed: true, sending: true });
+        this.#messageQueue.pause(conversationId, "error");
+      }
+      this.#emitQueue(conversationId);
+      return;
+    }
+    this.#messageQueue.update(id, { claimed: true, sending: true });
+    this.#queuedSdkMessages.claim(message, id);
+    this.#emitQueue(conversationId);
+  }
+
   #queuedMessageDelivered(conversationId: string, message: object): void {
     const id = this.#queuedSdkMessages.take(message);
     if (!id) return;
@@ -2986,6 +3328,8 @@ export class PiProcessManager {
       const item = this.#messageQueue.get(id);
       if (!item || item.conversationId !== conversationId || !item.claimed) return;
       this.#messageQueue.remove(id);
+      if (this.#messageQueue.all(conversationId).length === 0) this.#messageQueue.pause(conversationId, null);
+      this.#emit({ type: "queue_delivered", conversationId, queueId: id });
       this.#emitQueue(conversationId);
     }).catch(() => {
       // Event listeners are fire-and-forget; a disk failure must not become an

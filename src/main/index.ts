@@ -564,6 +564,18 @@ function registerIpc(): void {
       return engine.fetchModels(payload.baseUrl, payload.apiKey, payload.api);
     },
   );
+  handle(Ipc.providersProbeGateway, async (payload: { baseUrl: string }) => {
+    return engine.probeGateway(payload.baseUrl);
+  });
+  handle(Ipc.providersGatewayBalance, async (payload: { id: string; force?: boolean }) => {
+    return engine.getGatewayBalance(payload.id, payload.force === true);
+  });
+  handle(Ipc.providersGatewayCredentials, async (payload: { id: string; accessToken: string; userId: string }) => {
+    await engine.setGatewayCredentials(payload.id, { accessToken: payload.accessToken, userId: payload.userId });
+  });
+  handle(Ipc.providersIdentifyGateway, async (payload: { id: string }) => {
+    return engine.identifyGateway(payload.id);
+  });
   handle(
     Ipc.providersSaveFastVibe,
     async (payload: { apiKey: string; models: ProviderModel[] }) => {
@@ -572,9 +584,9 @@ function registerIpc(): void {
   );
   handle(
     Ipc.providersAdd,
-    async (payload: { name: string; baseUrl: string; apiKey: string; api?: import("@shared/types").ProviderApi; models: ProviderModel[] }) => {
+    async (payload: { name: string; baseUrl: string; apiKey: string; api?: import("@shared/types").ProviderApi; gateway?: import("@shared/types").GatewayKind; models: ProviderModel[] }) => {
       return engine.addProvider(
-        { name: payload.name, baseUrl: payload.baseUrl, apiKey: payload.apiKey, api: payload.api },
+        { name: payload.name, baseUrl: payload.baseUrl, apiKey: payload.apiKey, api: payload.api, gateway: payload.gateway },
         payload.models,
       );
     },
@@ -643,6 +655,9 @@ function registerIpc(): void {
   });
   handle(Ipc.conversationsRecordPrompt, (payload: { id: string; text: string }) => {
     return engine.recordPrompt(payload.id, payload.text);
+  });
+  handle(Ipc.conversationsRestorePrompt, (payload: { id: string; expectedTitle: string; expectedPreview?: string; title: string; preview?: string }) => {
+    return engine.restorePromptPreview(payload);
   });
   handle(Ipc.conversationsSetProject, async (payload: { id: string; project: string | null }) => {
     return engine.setConversationProject(payload.id, payload.project);

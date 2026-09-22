@@ -72,6 +72,8 @@
     "error": "由于当前响应出错，队列已暂停（内容未丢失）",
     "reorder": "拖动调整顺序",
     "sending": "发送中",
+    "submitted": "已提交",
+    "discardSubmitted": "移除已提交消息",
     "recall": "撤回",
     "delete": "删除",
     "now": "立即",

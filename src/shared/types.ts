@@ -655,6 +655,15 @@ export type QueueBehavior = "steer" | "followUp";
 
 export type QueuePauseReason = "stopped" | "error";
 
+export type QueuedPromptPreview = {
+  /** Catalog values before this prompt was recorded. */
+  previousTitle: string;
+  previousPreview?: string;
+  /** Catalog values written for this prompt. */
+  nextTitle: string;
+  nextPreview?: string;
+};
+
 export type QueuedPrompt = {
   /** Stable Main-issued identity; queue operations always address this id. */
   id: string;
@@ -669,6 +678,8 @@ export type QueuedPrompt = {
   claimed?: boolean;
   /** Exact engine payload, retained so a pending item survives a process restart. */
   sentText?: string;
+  /** Conditional catalog rollback data for a queued prompt that is discarded. */
+  preview?: QueuedPromptPreview;
 };
 
 export type ConversationQueueState = {
@@ -760,6 +771,18 @@ export type ProviderConfig = {
   supportsKey: boolean;
   /** The subscription login this provider offers, when the SDK ships one. */
   oauth?: NativeProviderOAuth;
+  /**
+   * Set once 添加供应商 identified the relay software behind a custom Base URL.
+   * Absent means "not identified" — either the probe ran and found nothing, or the
+   * provider predates the probe — and leaves every gateway-specific row hidden.
+   */
+  gateway?: GatewayKind;
+  /**
+   * **Whether** a panel credential is stored, never the credential: this object is
+   * served to every window and every remote client as `providers:list`, and a new-api
+   * balance needs a dashboard access token that must not travel that way.
+   */
+  gatewayCredential?: boolean;
   enabled: boolean;
   models: ProviderModel[];
 };
@@ -814,6 +837,37 @@ export type CcSwitchScan = {
   found: boolean;
   path: string;
   candidates: CcSwitchCandidate[];
+};
+
+/**
+ * Which relay software a custom provider's Base URL turned out to be.
+ *
+ * The two families answer the same OpenAI/Anthropic protocols, so the model list
+ * cannot tell them apart — only their management panels can, which is what the probe
+ * reads at 添加供应商. Stored on the provider because it decides which balance endpoint
+ * applies, not re-derived on every render.
+ */
+export const GATEWAY_KINDS = ["sub2api", "new-api"] as const;
+export type GatewayKind = (typeof GATEWAY_KINDS)[number];
+
+/**
+ * What a relay panel says is left on the stored key, in USD.
+ *
+ * Both families report money, by different routes — new-api from the key's own quota,
+ * sub2api from the wallet in `/v1/usage` — so one field covers them and the pane does not
+ * have to know which panel answered. `unlimited` is the distinct state a panel can be in
+ * instead of a number.
+ */
+export type GatewayBalance = {
+  unlimited: boolean;
+  /** USD. Absent when unlimited, or when the panel reported no number. */
+  available?: number;
+};
+
+export type GatewayBalanceResult = {
+  /** Epoch milliseconds of the read, so the pane can show its freshness. */
+  fetchedAt: number;
+  balance: GatewayBalance;
 };
 
 /**

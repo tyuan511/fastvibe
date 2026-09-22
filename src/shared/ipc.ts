@@ -73,6 +73,7 @@ export const Ipc = {
   conversationsRename: "conversations:rename",
   conversationsDelete: "conversations:delete",
   conversationsRecordPrompt: "conversations:record-prompt",
+  conversationsRestorePrompt: "conversations:restore-prompt",
   conversationsSetProject: "conversations:set-project",
   conversationsCreateWorktree: "conversations:create-worktree",
   conversationsBindWorktree: "conversations:bind-worktree",
@@ -173,6 +174,14 @@ export const Ipc = {
   providersRemove: "providers:remove",
   providersRefresh: "providers:refresh",
   providersQuota: "providers:quota",
+  /** Identify the relay software behind a custom Base URL (添加供应商). */
+  providersProbeGateway: "providers:probe-gateway",
+  /** Read a custom provider's panel balance; the kind decides which endpoint. */
+  providersGatewayBalance: "providers:gateway-balance",
+  /** Store the panel credential a new-api deployment needs for its balance. */
+  providersGatewayCredentials: "providers:gateway-credentials",
+  /** Identify (and remember) the upstream behind an already-stored provider. */
+  providersIdentifyGateway: "providers:identify-gateway",
   providersTest: "providers:test",
   providersCcSwitchScan: "providers:cc-switch-scan",
   providersCcSwitchImport: "providers:cc-switch-import",

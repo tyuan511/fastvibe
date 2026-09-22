@@ -21,6 +21,8 @@ import type {
   OAuthEventPayload,
   OAuthLoginResult,
   OpenAIAccountQuota,
+  GatewayBalanceResult,
+  GatewayKind,
   CcSwitchScan,
   SlashCommand,
   FilePreview,
@@ -47,6 +49,7 @@ import type {
   ChatAttachment,
   ConversationQueueState,
   QueueBehavior,
+  QueuedPromptPreview,
 } from "@shared/types";
 import type {
   AppUpdateState,
@@ -147,6 +150,7 @@ export function createFastVibeApi(t: ApiTransport) {
         behavior: QueueBehavior;
         attachments?: ChatAttachment[];
         images?: PromptImage[];
+        preview?: QueuedPromptPreview;
       }): Promise<ConversationQueueState> => t.invoke(Ipc.engineQueueAdd, payload),
       queueCancel: (id: string): Promise<ConversationQueueState | null> =>
         t.invoke(Ipc.engineQueueCancel, { id }),
@@ -271,6 +275,8 @@ export function createFastVibeApi(t: ApiTransport) {
         baseUrl: string;
         apiKey: string;
         api?: import("@shared/types").ProviderApi;
+        /** What `probeGateway` reported, so the new entry starts identified. */
+        gateway?: GatewayKind;
         models: ProviderModel[];
       }): Promise<ProviderConfig[]> => t.invoke(Ipc.providersAdd, payload),
       update: (payload: {
@@ -287,6 +293,24 @@ export function createFastVibeApi(t: ApiTransport) {
         t.invoke(Ipc.providersRefresh, { id }),
       quota: (id: "openai" | "openai-codex", force = false): Promise<OpenAIAccountQuota> =>
         t.invoke(Ipc.providersQuota, { id, force }),
+      /**
+       * Which relay software answers at a Base URL. Undefined means "not identified",
+       * which is the ordinary answer for any OpenAI-compatible gateway.
+       */
+      probeGateway: (baseUrl: string): Promise<GatewayKind | undefined> =>
+        t.invoke(Ipc.providersProbeGateway, { baseUrl }),
+      /** The 余额 a custom provider's own panel reports for the stored key. */
+      gatewayBalance: (id: string, force = false): Promise<GatewayBalanceResult> =>
+        t.invoke(Ipc.providersGatewayBalance, { id, force }),
+      /**
+       * The panel credential a new-api balance needs. Write-only: an empty token clears
+       * it, and nothing ever reads it back across this bridge.
+       */
+      setGatewayCredentials: (payload: { id: string; accessToken: string; userId: string }): Promise<void> =>
+        t.invoke(Ipc.providersGatewayCredentials, payload),
+      /** Probe a stored provider's endpoint, remember what it is, and report the verdict. */
+      identifyGateway: (id: string): Promise<GatewayKind | undefined> =>
+        t.invoke(Ipc.providersIdentifyGateway, { id }),
       scanCcSwitch: (): Promise<CcSwitchScan> =>
         t.invoke(Ipc.providersCcSwitchScan),
       importCcSwitch: (ids: string[]): Promise<ProviderConfig[]> =>
@@ -315,6 +339,8 @@ export function createFastVibeApi(t: ApiTransport) {
         t.invoke(Ipc.conversationsDelete, { id }),
       recordPrompt: (id: string, text: string): Promise<WorkspaceSnapshot> =>
         t.invoke(Ipc.conversationsRecordPrompt, { id, text }),
+      restorePrompt: (payload: { id: string; expectedTitle: string; expectedPreview?: string; title: string; preview?: string }): Promise<WorkspaceSnapshot> =>
+        t.invoke(Ipc.conversationsRestorePrompt, payload),
       setProject: (id: string, project: string | null): Promise<WorkspaceSnapshot> =>
         t.invoke(Ipc.conversationsSetProject, { id, project }),
       createWorktree: (id: string, options?: { path?: string; branch?: string; label?: string }): Promise<WorkspaceSnapshot> =>

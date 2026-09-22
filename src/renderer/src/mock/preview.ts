@@ -376,6 +376,18 @@ const api = {
     native: async () => [],
     addNative: async () => PROVIDERS,
     fetch: async () => PROVIDERS[0].models,
+    probeGateway: async () => "new-api",
+    identifyGateway: async () => "new-api",
+    setGatewayCredentials: async () => undefined,
+    gatewayBalance: async (id: string) => ({
+      fetchedAt: Date.now(),
+      balance:
+        id === "custom-relay"
+          ? { unlimited: false, available: 14.5 }
+          : id === "custom-sub2api"
+            ? { unlimited: true }
+            : { unlimited: false, available: 18155.71 },
+    }),
     saveFastVibe: async () => PROVIDERS,
     add: async () => PROVIDERS,
     update: async () => PROVIDERS,

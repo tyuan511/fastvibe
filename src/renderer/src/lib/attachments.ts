@@ -11,6 +11,30 @@ export function shouldAttachPastedText(text: string): boolean {
   return text.length > PASTED_TEXT_ATTACHMENT_THRESHOLD;
 }
 
+/** How many characters of a long paste become its chip name. */
+const PASTED_TEXT_NAME_LENGTH = 10;
+
+/**
+ * Name a pasted-text chip from the paste itself: the first ten characters, then
+ * an ellipsis. Whitespace collapses to a single line so a leading newline does
+ * not become the name. An empty result (a paste of only whitespace) is `""`,
+ * and the caller falls back to the generic label.
+ */
+export function pastedTextAttachmentName(text: string): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  const chars = graphemes(flat);
+  if (chars.length === 0) return "";
+  const head = chars.slice(0, PASTED_TEXT_NAME_LENGTH).join("");
+  return chars.length > PASTED_TEXT_NAME_LENGTH ? `${head}…` : head;
+}
+
+function graphemes(text: string): string[] {
+  if (typeof Intl !== "undefined" && "Segmenter" in Intl) {
+    return [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text)].map((part) => part.segment);
+  }
+  return [...text];
+}
+
 export async function filesToAttachments(files: File[]): Promise<ChatAttachment[]> {
   const result: ChatAttachment[] = [];
   for (const file of files) {

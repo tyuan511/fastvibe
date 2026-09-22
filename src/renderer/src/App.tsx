@@ -73,6 +73,7 @@ import type {
   PermissionMode,
   PermissionRequest,
   QueuedPrompt,
+  QueuedPromptPreview,
   SkillInfo,
   SlashCommand,
   WorkspaceSnapshot,
@@ -753,6 +754,10 @@ export function App(): JSX.Element {
         useSessionStore.getState().setQueueState(event.queue as import("@shared/types").ConversationQueueState);
         return;
       }
+      if (event.type === "queue_delivered") {
+        useSessionStore.getState().applyEvent(event);
+        return;
+      }
       // Blocking prompts and their withdrawal are handled for *every* conversation
       // before the focus routing below, which sends a background chat's events to the
       // side-pane store. A tool approval is not transcript content: it is the signal
@@ -1217,6 +1222,7 @@ export function App(): JSX.Element {
     let submitOwner: string | null = null;
     let text = "";
     let currentAttachments: ChatAttachment[] = [];
+    let queuePreview: QueuedPromptPreview | undefined;
     try {
       // Stop and Send are separate UI events. If Send wins the renderer race, wait for
       // Main to finish the stop instead of putting this fresh prompt into the queue of
@@ -1289,8 +1295,18 @@ export function App(): JSX.Element {
       }
       consumedOwner = conversationId;
       consumedVersion = useSessionStore.getState().composerDrafts[conversationId]?.version;
+      const beforePrompt = useSessionStore.getState().conversations.find((item) => item.id === conversationId);
       const nextList = await window.fastvibe.conversations.recordPrompt(conversationId, promptText);
       applyList(nextList);
+      const afterPrompt = nextList.conversations.find((item) => item.id === conversationId);
+      if (beforePrompt && afterPrompt) {
+        queuePreview = {
+          previousTitle: beforePrompt.title,
+          previousPreview: beforePrompt.preview,
+          nextTitle: afterPrompt.title,
+          nextPreview: afterPrompt.preview,
+        };
+      }
       // Queue semantics belong to the instant Send was pressed. A stop can settle the
       // run during recordPrompt; routing an actual follow-up through prompt() would
       // restart it and a late renderer reply could also erase Main's stopped pause.
@@ -1305,6 +1321,7 @@ export function App(): JSX.Element {
             behavior: queueBehavior,
             attachments: currentAttachments,
             images: attachmentsToImages(currentAttachments),
+            preview: queuePreview,
           });
           setQueueState(queue);
         } catch (err) {
@@ -1312,6 +1329,18 @@ export function App(): JSX.Element {
           // consumed; a chat switch gives ownership to a different draft.
           if (consumedVersion !== undefined) {
             restoreComposer(conversationId, text, currentAttachments, consumedVersion);
+          }
+          if (queuePreview) {
+            void window.fastvibe.conversations
+              .restorePrompt({
+                id: conversationId,
+                expectedTitle: queuePreview.nextTitle,
+                expectedPreview: queuePreview.nextPreview,
+                title: queuePreview.previousTitle,
+                preview: queuePreview.previousPreview,
+              })
+              .then(applyList)
+              .catch(() => undefined);
           }
           if (useSessionStore.getState().activeId === conversationId) {
             setError(err instanceof Error ? err.message : String(err));

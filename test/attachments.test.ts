@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   attachmentPromptSuffix,
   PASTED_TEXT_ATTACHMENT_THRESHOLD,
+  pastedTextAttachmentName,
   shouldAttachPastedText,
   stripAttachmentBlock,
 } from "../src/renderer/src/lib/attachments.ts";
@@ -12,6 +13,12 @@ test("only clipboard text above the composer threshold becomes an attachment", (
   assert.equal(shouldAttachPastedText("x".repeat(PASTED_TEXT_ATTACHMENT_THRESHOLD)), false);
   assert.equal(shouldAttachPastedText("x".repeat(PASTED_TEXT_ATTACHMENT_THRESHOLD + 1)), true);
   assert.equal(shouldAttachPastedText("短文本"), false);
+});
+
+test("a long paste is named from its first ten characters", () => {
+  assert.equal(pastedTextAttachmentName("你好世界这是一段很长的粘贴内容，后面还有很多字"), "你好世界这是一段很长…");
+  assert.equal(pastedTextAttachmentName("\n\n  Hello world, this is long"), "Hello worl…");
+  assert.equal(pastedTextAttachmentName("   \n\n   "), "");
 });
 
 test("a long paste stays model-visible but is hidden behind a file-style chip", () => {
