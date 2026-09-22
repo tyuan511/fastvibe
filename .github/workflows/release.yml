@@ -27,8 +27,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Deliberately the same form the `build` legs use. The previous spelling here was
+      # `test "${GITHUB_REF_NAME}" = "v$(node -p \"require('./package.json').version\")"`,
+      # which never reaches the build at all: inside `$( )` within a double-quoted string the
+      # `\"` is not an escaped quote, so bash parses `require('./package.json')` unquoted and
+      # dies with `syntax error near unexpected token `(` (exit 2) before anything is compiled.
       - name: Verify tag version
-        run: test "${GITHUB_REF_NAME}" = "v$(node -p \"require('./package.json').version\")"
+        run: node -e "const fs=require('fs');const v=JSON.parse(fs.readFileSync('package.json','utf8')).version;if(process.env.GITHUB_REF_NAME !== 'v'+v) process.exit(1)"
 
       - uses: pnpm/action-setup@v6
 
