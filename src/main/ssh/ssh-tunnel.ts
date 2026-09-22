@@ -37,6 +37,8 @@ export type SshCommandOptions = {
   onOutput?: (text: string) => void;
   /** Bytes sent to the remote command's stdin, used for the Agent runtime archive. */
   input?: Buffer;
+  /** Bytes of `input` handed to ssh so far, for an upload progress bar. */
+  onInputProgress?: (sent: number, total: number) => void;
   signal?: AbortSignal;
   /** Reuse an already authenticated SSH connection instead of handshaking again. */
   controlPath?: string;
@@ -466,7 +468,7 @@ export async function runSshCommand(options: SshCommandOptions): Promise<string>
     output += text;
     options.onOutput?.(text);
   };
-  if (options.input) child.stdin?.end(options.input);
+  if (options.input) writeInput(child.stdin, options.input, options.onInputProgress);
   else child.stdin?.end();
   child.stdout?.setEncoding("utf8");
   child.stderr?.setEncoding("utf8");
@@ -522,6 +524,31 @@ export async function runSshCommand(options: SshCommandOptions): Promise<string>
  */
 function passwordPromptArgs(password: string | undefined): string[] {
   return password ? ["-o", "NumberOfPasswordPrompts=1"] : [];
+}
+
+/**
+ * Stream `input` into ssh in chunks, honouring backpressure, so the bytes that have left
+ * this process can be counted. A single `end(buffer)` would be one opaque write.
+ */
+function writeInput(stdin: NodeJS.WritableStream | null, input: Buffer, onProgress?: (sent: number, total: number) => void): void {
+  if (!stdin) return;
+  const CHUNK = 256 * 1024;
+  let offset = 0;
+  stdin.on("error", () => undefined); // ssh exiting early is reported by its exit code
+  const pump = (): void => {
+    while (offset < input.length) {
+      const next = input.subarray(offset, Math.min(offset + CHUNK, input.length));
+      offset += next.length;
+      const more = stdin.write(next);
+      onProgress?.(offset, input.length);
+      if (!more) {
+        stdin.once("drain", pump);
+        return;
+      }
+    }
+    stdin.end();
+  };
+  pump();
 }
 
 function createAskpass(): string {

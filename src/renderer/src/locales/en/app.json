@@ -150,6 +150,12 @@
   "emptyDirectory": "This directory is empty",
   "addRemote": "Add remote project",
   "cancel": "Cancel",
+  "progress": {
+    "agent-download": "Host downloading the Agent runtime",
+    "node-download": "Host downloading Node.js",
+    "agent-fetch": "Downloading the Agent runtime here",
+    "agent-upload": "Uploading the Agent runtime to the host"
+  },
   "hostKey": {
     "unknownTitle": "First connection to this host",
     "unknownBody": "This computer has no record of the host's key yet. Check that the fingerprint below matches ssh-keygen -lf /etc/ssh/ssh_host_*_key.pub on the server before trusting it.",

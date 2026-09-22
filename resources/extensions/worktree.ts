@@ -80,12 +80,15 @@ export default function worktreeExtension(pi: ExtensionAPI): void {
     label: "创建 Worktree",
     description: [
       "为当前会话创建一个 git worktree，并把整个 agent 工作区绑定到该目录。",
+      "调用前必须先征得用户同意：在回复里说明为什么想开、建在哪个路径，然后停下来等用户确认，同意后再调用。",
       "默认创建在 ~/.fastvibe/worktree/<project-name>/ 下。",
       "可指定 branch（新分支名）或 path（自定义路径）。",
     ].join(""),
     promptSnippet: "Create a git worktree and bind this conversation to it",
     promptGuidelines: [
-      "Create a worktree when the task should not dirty the project's main checkout: parallel work, a risky edit, or an isolated branch.",
+      "Ask first, then stop: explain why a worktree would help and where it would live, end your reply, and wait for the user to agree. Only call this tool after they do.",
+      "Never create a worktree on your own initiative — a new checkout is a change to the user's machine they did not ask for.",
+      "Suggest one (and say why) when the task would dirty the project's main checkout: parallel work, a risky edit, or an isolated branch. Then let the user decide.",
       "Default path is ~/.fastvibe/worktree/<project-name>/<slug>. Pass path only to override.",
       "The session cwd switches to the worktree; subsequent read/edit/bash calls run there.",
     ],
@@ -118,6 +121,7 @@ export default function worktreeExtension(pi: ExtensionAPI): void {
     description: "把当前会话的工作区绑定到一个已有的 git worktree 目录。绑定后 read/edit/bash 与顶部 Git 操作都针对该目录。",
     promptSnippet: "Bind this conversation's workspace to an existing git worktree",
     promptGuidelines: [
+      "Ask the user before binding, the same way worktree_create does — switching the workspace is not something to do unasked.",
       "Bind when a worktree already exists (see worktree_list) and this conversation should work in it.",
       "The path must belong to the same git repository as the bound project.",
     ],

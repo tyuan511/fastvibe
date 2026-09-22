@@ -1,13 +1,14 @@
 ---
 name: release
-description: 发布 FastVibe 新版本：按提交推断并写入 package.json 版本号、生成 release note、打 tag 推送触发远端 CI 打包、再把 release note 覆盖到 GitHub Release。用户说「发版 / 发布新版本 / 出个 release / cut a release」时使用。
+description: 发布 FastVibe 新版本：按提交推断并写入 package.json 版本号、生成 release note 并提交到 docs/release/{version}.md、打 tag 推送触发远端 CI 打包，CI 直接用它当 GitHub Release body。用户说「发版 / 发布新版本 / 出个 release / cut a release」时使用。
 ---
 
 # Release
 
-一次发版 = 版本号 + release note + tag + 远端 CI + GitHub Release body。三步在本机
-完成（版本号、note、tag），打包和创建 Release 都是 `.github/workflows/release.yml`
-的活。
+一次发版 = 版本号 + release note + tag + 远端 CI。前三步都在本机，且都在推 tag **之前**：
+note 写进 `docs/release/vX.Y.Z.md` 并随版本提交一起进仓库，CI 打包时直接把它当作
+GitHub Release 的 body（`release.yml` 的 `body_path`）。所以发布出去的内容在 tag 存在之前
+就已定稿，没有任何「等 CI 跑完再回来改 body」的步骤。
 
 ## 环境
 
@@ -59,10 +60,11 @@ compare 链接。
 
 **草稿不能直接发布。** 它是英文提交标题 + 提交正文原文，按下面改写成人话：
 
-- **一律用英文书写，正文里不留任何中文。** 这是 GitHub Release，面向国际用户，与
-  README 的英文部分一致。分组标题也用英文（`Added` / `Improved` / `Fixed` /
+- **一律用英文书写。** 这是 GitHub Release，面向国际用户，与 README 的英文部分一致，
+  也是 `docs/release/*.md` 的约定。分组标题也用英文（`Added` / `Improved` / `Fixed` /
   `Performance` / `Refactor` / `Docs` / `Import` / `Other` / `Breaking changes`）。
-  提交正文里原文引用的中文句子也要译过来，不能因为「是引用」就留下。
+  提交正文里原文引用的中文句子也要译过来，不能因为「是引用」就留下。**这只是写作约定，不是闸门**：
+  `check-release-note.mjs` 不查语言，不因为一个正则卡住一次发布。
 - 界面文案用当下的英文界面原文，不要写中文标签：`用时` → "took …"、
   `始终允许` → "Always allow"、`设置 → 通用` → "Settings → General"、
   子 Agent → subagent、电脑操控 → computer control。
@@ -82,32 +84,38 @@ compare 链接。
   因为提交粒度较大而把网站改动带进来。若整个区间只有网站或文档改动，正文写明「本版本无桌面端功能变更」。
 - 破坏性变更放最前并写清迁移动作；`Full Changelog` 那行保留不动。
 
-改写结果存到仓库**外**，不要提交进仓库（release/ 是构建产物目录且被 gitignore）：
+改写结果写入 `docs/release/vX.Y.Z.md`——它是仓库的一部分，要随版本提交一起提交：
 
 ```bash
-printf '%s\n' "<改写后的 note>" > "${TMPDIR:-/tmp}/fastvibe-release-vX.Y.Z.md"
+mkdir -p docs/release
+printf '%s\n' "<改写后的 note>" > docs/release/vX.Y.Z.md
+node scripts/check-release-note.mjs --tag vX.Y.Z   # 缺失 / 空白都会在这里拦住
 ```
 
-写完后自查没有中文残留（含引用、标点）：
+`scripts/check-release-note.mjs` 就是 CI 里跑的那一支（只查缺失与空白，**不查语言**：note 是
+给人读的文章，不该被一条正则拦住发布），本地先跑一次，免得推完 tag 才发现文件名写错——那时
+`release.yml` 会在几十秒内失败，但 tag 已经推出去了。
+
+英文约定自己守（含引用、标点），CI 不管这段：
 
 ```bash
-rg -P '[\p{Han}]' "${TMPDIR:-/tmp}/fastvibe-release-vX.Y.Z.md" || echo "all English"
+rg -P '[\p{Han}]' docs/release/vX.Y.Z.md || echo "all English"
 ```
 
 把最终 note 念给用户确认——这一步之后就是不可逆的推送。
 
-**历史 Release 也要是英文的。** 早期版本发的中文 note 用同一条 `gh release edit
+**历史 Release 也要是英文的。** 早期版本发的中文 note 在 GitHub 上，用 `gh release edit
 --notes-file` 覆盖即可，产物不用重打；覆盖前先把原文存到仓库外备份：
 
 ```bash
 gh release view vX.Y.Z --json tagName,body > "${TMPDIR:-/tmp}/fv-notes/vX.Y.Z.json"
 ```
 
-### 3. 写入版本号并提交
+### 3. 写入版本号和 note 并提交
 
 ```bash
 node .agents/skills/release/scripts/bump-version.mjs minor   # 或 patch/major/X.Y.Z
-git add package.json
+git add package.json docs/release/vX.Y.Z.md
 git commit -m "chore: release vX.Y.Z"
 ```
 
@@ -140,6 +148,11 @@ leg 自己的资产一起传进 draft，安全的原因是那时 Release 还没�
 `publish` **needs 全部 leg**（`build` 矩阵 + Agent runtime 矩阵）。任一条腿失败，
 Release 就停在 draft，客户端不会被通知——这是安全的失败方式，修好重跑即可。
 
+**note 不在这里产生。** 每条 leg 都传 `body_path: docs/release/${{ github.ref_name }}.md`，
+GitHub Release 的 body 就是那个 tag 上的文件内容。action-gh-release 是**整体替换** body
+（会做拼接的只有 `generate_release_notes`，而它已经被删掉了），所以四条 leg 反复写的是同一份
+字节，不会再出现「三条腿各生成一次、同一条 Release 堆三份 changelog」那个问题。
+
 ### 5. 等 CI
 
 ```bash
@@ -165,40 +178,53 @@ gh run rerun <run-id> --job <databaseId>   # 注意要 databaseId，不是 URL �
 停在 draft 说明 `publish` 没成功，此时用户**不会**收到任何更新通知（draft 进不了
 Atom feed，也没有 `latest*.yml` 可读）。
 
-### 6. 把 note 覆盖到 GitHub Release
+### 6. 确认 Release 的 body
 
-CI 的 mac leg 用 `generate_release_notes` 把内容写进 draft Release 的 body（所以里面是
-GitHub 自动生成的英文提交列表），`publish` job 在全部资产上传完后把它转正。等整条 run
-结束后用我们的版本**整体覆盖**：
+body 已经由 CI 写好了，这一步只是核对，不是修补：
 
 ```bash
-gh release edit vX.Y.Z \
-  --title "FastVibe vX.Y.Z" \
-  --notes-file "${TMPDIR:-/tmp}/fastvibe-release-vX.Y.Z.md"
-gh release view vX.Y.Z --json tagName,name,isDraft,isPrerelease,url,assets
+gh release view vX.Y.Z --json tagName,name,isDraft,isPrerelease,url,body,assets
 ```
 
-`gh release edit` 是全量替换 body，这正是要的。校验四项：tag 对、不是 draft、
-note 是改写后的英文版（`rg -P '[\p{Han}]'` 无命中）、产物齐全（mac 两条 dmgs/zip +
+```bash
+gh release download vX.Y.Z --pattern 'latest*.yml' 2>/dev/null   # 可选
+diff <(gh release view vX.Y.Z --json body --jq .body) docs/release/vX.Y.Z.md
+```
+
+校验四项：tag 对、不是 draft、上面那条 `diff` 无输出、产物齐全（mac 两条 dmgs/zip +
 blockmap、win exe、linux AppImage/deb、`latest-mac.yml` / `latest.yml` /
-`latest-linux.yml`）。最后把 `url` 给用户。
+`latest-linux.yml`）；title 是 `FastVibe vX.Y.Z`。最后把 `url` 给用户。
+
+若 body 确实错了（写成中文、漏了内容等），改的是**那条 Release**，不是重打产物：
+
+```bash
+gh release edit vX.Y.Z --notes-file docs/release/vX.Y.Z.md   # 先把文件改对再跑
+```
+
+workflow 读的是 **tag 上的**那个文件，所以在 `main` 上补一次提交不会回改已发布的 body；
+下一次重跑同一条 workflow 也不会（它 checkout 的是 tag 对应的提交）。要两者一致，得改文件并
+重打 tag（见回滚）。只想让文件别再落后于现实时，补提交到 `main` 就够了。
 
 ## 为什么这么排
 
 - **note 在 bump 提交之前生成**：版本提交本身不该出现在功能列表里。脚本会过滤
   `chore: release vX.Y.Z`，但先取范围更干净。
-- **不自己 `gh release create`**：CI 的 mac leg 已经在建 draft Release，且带
-  `generate_release_notes: true`。若推 tag 前先建好 Release，GitHub 会把自动生成的
-  notes **追加**在已有 body 后面，一次发布出现两份 changelog；自己建 draft 也一样，
-  action-gh-release 会就地接管它。Release 的创建者是 CI，转正由 `publish` 做，note 用
-  `gh release edit` 事后覆盖。
+- **note 进仓库（`docs/release/vX.Y.Z.md`）而不是留在本机**：CI 读的就是这个文件。
+  它以前放在 `${TMPDIR}` 里、push 后由人 `gh release edit` 补上，那段窗口里 Release 的
+  body 是 GitHub 自动生成的提交列表——用户看到的确实是错的，只是等着人去改。现在是先定稿
+  再发布，没有那个窗口。
+- **不自己 `gh release create`**：CI 的 leg 已经在建 draft Release，自己先建也一样，
+  action-gh-release 会就地接管它。Release 的创建者和转正（`publish`）都是 CI 的事。
 - **不要把某个 leg 改回 `draft: false`**：那正是「通知了更新、安装包还没传完」这个 bug
   本身。要让 Release 提前可见，唯一正确的做法是先传完再公开，而不是让先到的腿把门打开。
-- **不要给 `release.yml` 加第二个 note 来源**（`body_path`、`--notes` 之类）。
-  历史提交 `37ad9b6` / `a30fe01` 修的正是三条腿各生成一次 notes、同一条 Release
-  堆三份 changelog 的问题，`generate_release_notes` 只留给 mac 腿。要换 note 来源就
-  换这里的第 6 步，别动 workflow。
-- **note 不进仓库**：它是对 tag 区间的描述，git 历史已经带着了；提交一份只会过期。
+- **不要再引入 `generate_release_notes`**：它做的是**追加**，历史提交 `37ad9b6` /
+  `a30fe01` 修的正是三条腿各追加一次、同一条 Release 堆三份 changelog 的问题。
+  `body_path` 是整体替换，四条腿写同一份字节，这才是安全的。要改 release note 本身，
+  改 `docs/release/vX.Y.Z.md`。
+- **每条 leg 都跑 `check-release-note.mjs`**：少了这个检查，漏写 note 的 tag 会先花二十
+  分钟打包、再发布一个空 body 的 Release——那是唯一一个重跑也修不好的结果。
+- **不要用 `docs/release/` 以外的位置**：`electron-builder.yml` 的 `app` staging 是白名单
+  （`scripts/stage-app.mjs` 只拷 `package.json` + `out/`），所以这个目录不会进安装包。
 
 ## 边界
 
@@ -217,8 +243,9 @@ blockmap、win exe、linux AppImage/deb、`latest-mac.yml` / `latest.yml` /
 | CI 全挂、Release 都没建出来 | 修好 → `git push origin :refs/tags/vX.Y.Z` 后重新打 tag 推；不要本地 `gh release create` |
 | 某条腿失败，Release **停在 draft** | 客户端根本没被通知，直接 `gh run rerun --failed`（`publish` 被 skip 时用全部重跑，见第 5 步）；不用重新打 tag |
 | draft 里的半个发布不想要了 | `gh release delete vX.Y.Z --cleanup-tag` 删掉 draft；它从未公开，用户侧无感 |
-| 已发布但 note 写错 | 直接 `gh release edit ... --notes-file` 覆盖，产物不用重打 |
-| 已发布的 note 是中文 | 改写成英文后用同一条命令覆盖（备份原文见第 2 步）；只改 body，不重打产物、不动 tag |
+| 已发布但 note 写错 | 直接 `gh release edit ... --notes-file docs/release/vX.Y.Z.md` 覆盖，产物不用重打；再把这个文件改对提交到 `main`，让仓库与 Release 一致 |
+| 已发布的 note 是中文 | 改写成英文后用同一条命令覆盖（备份原文见第 2 步）；只改 body，不重打产物、不动 tag。校验不过不拦发布，只是与你默认的英文约定不符 |
+| tag 上的 note 缺失 / 为空 | `release.yml` 会在开头几秒里失败，Release 没建出来，客户端也就没被通知。补上 note（缺失时这必然是一个新提交）、`git push origin :refs/tags/vX.Y.Z`、重新打 tag 推 |
 | 版本号推低过已发布版本 | 必须往上补一个新版本（自动更新只升不降），旧 tag 按上一条删掉 |
 
 ## 脚本
@@ -228,3 +255,4 @@ blockmap、win exe、linux AppImage/deb、`latest-mac.yml` / `latest.yml` /
 | `scripts/env.sh` | 拼 PATH（node / pnpm / gh），每条命令前 source |
 | `scripts/bump-version.mjs` | 推断并写入 `package.json` 版本，`--dry-run` 只看不写 |
 | `scripts/release-notes.mjs` | 由 `git log` 生成 note 草稿，`--tag` 必填，`--from` 可覆盖范围 |
+| `docs/release/README.md` | note 文件的约定（命名、英文、它是 Release body） |

@@ -92,4 +92,24 @@ export type RemoteHostConnectionState = {
   home?: string;
   /** Recent SSH bootstrap/tunnel output shown while the client prepares the Agent. */
   output?: string[];
+  /** The long transfer running right now, if any; cleared as soon as the next step logs. */
+  progress?: RemoteTransferProgress;
+};
+
+/**
+ * One download or upload of a connect, for a progress bar.
+ *
+ * - `agent-download` / `node-download`: the remote host fetching the Agent runtime or
+ *   Node.js (official source first, mirror on failure).
+ * - `agent-fetch`: this desktop downloading the runtime, when the host could not.
+ * - `agent-upload`: this desktop pushing the runtime to the host over SSH.
+ */
+export type RemoteTransferProgress = {
+  phase: "agent-download" | "node-download" | "agent-fetch" | "agent-upload";
+  /** Bytes so far. */
+  done: number;
+  /** Bytes in all, when the server (or the local archive) said. */
+  total?: number;
+  /** Recent speed in bytes per second. */
+  rate?: number;
 };

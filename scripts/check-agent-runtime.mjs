@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
+import { builtinModules } from "node:module";
 import { resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import ts from "typescript";
@@ -12,7 +13,24 @@ const defaultEntry = fileURLToPath(new URL("../out/main/agent.js", import.meta.u
  * readSource is injectable so the checker can also operate on an in-memory graph.
  */
 export function checkAgentRuntime(entry = defaultEntry, readSource = (file) => readFileSync(file, "utf8")) {
+  return walkAgentRuntime(entry, readSource).files;
+}
+
+/**
+ * The npm packages the Agent actually imports, by name (`@scope/name` or `name`).
+ *
+ * This is what the runtime archive installs. The desktop's `dependencies` also carry
+ * Electron-only packages (the updater, the computer-use driver, icon themes, toasts),
+ * which on the remote host are only download weight. Deriving the list from the built
+ * graph keeps it honest: a new import in the Agent adds its package here by itself.
+ */
+export function agentRuntimePackages(entry = defaultEntry, readSource = (file) => readFileSync(file, "utf8")) {
+  return walkAgentRuntime(entry, readSource).packages;
+}
+
+function walkAgentRuntime(entry, readSource) {
   const visited = new Set();
+  const packages = new Set();
   const pending = [{ file: resolve(entry), chain: [] }];
   while (pending.length) {
     const { file, chain } = pending.pop();
@@ -57,10 +75,23 @@ export function checkAgentRuntime(entry = defaultEntry, readSource = (file) => r
         // URL resolution mirrors ESM, including query/hash removal and escaped paths.
         const url = new URL(specifier, pathToFileURL(file));
         pending.push({ file: fileURLToPath(url), chain: route });
+      } else {
+        const name = packageName(specifier);
+        if (name) packages.add(name);
       }
     }
   }
-  return visited;
+  return { files: visited, packages };
+}
+
+const BUILTINS = new Set(builtinModules);
+
+/** `@scope/name/sub/path` → `@scope/name`, `name/sub` → `name`; builtins → null. */
+function packageName(specifier) {
+  if (specifier.startsWith("node:")) return null;
+  const parts = specifier.split("/");
+  const name = specifier.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0];
+  return BUILTINS.has(name) ? null : name;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

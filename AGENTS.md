@@ -1191,6 +1191,12 @@ the user installs at runtime via 设置 → 插件, which writes to the isolated
   or rewrite the transcript. System prompts, thinking blocks, images and hidden custom messages
   are excluded. It is read-only in the permission sandbox and available to main sessions only;
   throwaway subagents still load just the sandbox.
+- **Worktree** — `worktree.ts` exposes list / create / bind / unbind over the host's
+  worktree methods. Creating or binding **switches the conversation's workspace**, which is
+  a change to the user's machine they never asked for, so the tool's prompt guidelines make
+  the agent state why and stop, then wait for the user to agree — a suggestion, not a
+  decision. `worktree_list` stays read-only in the sandbox; create / bind / unbind are
+  classified by `KNOWN_TOOLS` and get no confirmation of their own.
 - **Loading** — `src/main/pi/extension-manager.ts` resolves the built-in entry
   points (from `resources/extensions` in dev, `resourcesPath/extensions` packaged;
   `electron-builder.yml` copies them via `extraResources`) and `#createSession`
@@ -1254,6 +1260,17 @@ pnpm check:scripts  # only the browser page scripts (a compile error there is a
                     # `Script failed to execute` at tool-call time, not a build error)
 pnpm shadcn add <component> -y
 ```
+
+## 发版与 release note
+
+版本号写 `package.json`，release note 写 `docs/release/<tag>.md`（如
+`docs/release/v0.11.0.md`），两者在同一个 `chore: release vX.Y.Z` 提交里。推 `v*` tag
+触发 `.github/workflows/release.yml`：每个 job 先跑 `scripts/check-release-note.mjs`
+（只查文件是否存在、是否有内容），打包产物上传进 draft Release，最后 `publish` job
+合并 mac 清单并转正。**Release 的 body 就是那个 commit 上的 note 文件**
+（`body_path`），不是 GitHub 自动生成的提交列表，也没有「事后 `gh release edit` 覆盖」
+这个步骤。note 文件本身的约定见 `docs/release/README.md`，完整流程见
+`.agents/skills/release/SKILL.md`。
 
 ### 主进程文案里不要出现独立的 `import`
 

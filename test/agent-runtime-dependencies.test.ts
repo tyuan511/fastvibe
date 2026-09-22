@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { checkAgentRuntime } from "../scripts/check-agent-runtime.mjs";
+import { agentRuntimePackages, checkAgentRuntime } from "../scripts/check-agent-runtime.mjs";
 
 function fixture(files: Record<string, string>, run: (entry: string) => void) {
   const root = mkdtempSync(join(tmpdir(), "agent-dependencies-"));
@@ -79,4 +79,12 @@ test("CLI returns failure for indirect Electron and success for clean graph", ()
       if (electron) assert.match(result.stderr, /chunk\.js -> electron/);
     });
   }
+});
+
+test("lists the packages the Agent imports, by package name, without builtins", () => {
+  fixture({
+    "agent.js": `import './chunks/a.js'; import 'node:fs'; import 'path'; import ws from 'ws'; export { x } from '@scope/pkg/sub/path.js';`,
+    "chunks/a.js": `const m = await import('@scope/other'); require('left-pad/index.js');`,
+    "index.js": `import 'desktop-only-package';`,
+  }, (entry) => assert.deepEqual([...agentRuntimePackages(entry)].sort(), ["@scope/other", "@scope/pkg", "left-pad", "ws"]));
 });

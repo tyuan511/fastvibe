@@ -7,10 +7,12 @@
  *
  * Markdown goes to stdout (nothing else); the range being summarised goes to
  * stderr. The output is a *draft*: every entry is still an English commit
- * subject. Rewrite it into user-facing English prose before publishing — the
- * release note is read on GitHub by an international audience, so it must
- * contain no Chinese; see SKILL.md. Run it BEFORE the version-bump commit so the
- * notes cover only shipped work; `chore: release vX.Y.Z` is skipped either way.
+ * subject. Rewrite it into user-facing English prose and commit it to
+ * `docs/release/<tag>.md` — that file, at the tag, is the GitHub Release body
+ * (`release.yml`'s `body_path`), so it must contain no Chinese; see SKILL.md and
+ * docs/release/README.md. `scripts/check-release-note.mjs` is the same check CI
+ * runs. Generate it BEFORE the version-bump commit so the notes cover only
+ * shipped work; `chore: release vX.Y.Z` is skipped either way.
  */
 import { execFileSync } from "node:child_process";
 import { dirname, resolve } from "node:path";

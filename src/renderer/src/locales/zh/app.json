@@ -150,6 +150,12 @@
   "emptyDirectory": "此目录为空",
   "addRemote": "添加远程项目",
   "cancel": "取消",
+  "progress": {
+    "agent-download": "远程主机下载 Agent 运行包",
+    "node-download": "远程主机下载 Node.js",
+    "agent-fetch": "本机下载 Agent 运行包",
+    "agent-upload": "上传 Agent 运行包到远程主机"
+  },
   "hostKey": {
     "unknownTitle": "首次连接这台主机",
     "unknownBody": "本机还没有记录这台主机的指纹。请确认下面的指纹与服务器上 ssh-keygen -lf /etc/ssh/ssh_host_*_key.pub 的输出一致，再信任。",

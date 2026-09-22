@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { cleanError } from "@/lib/ipc-error";
 import { SshHostKeyNotice } from "@/components/ssh-host-key";
 import { displayRemotePath, encodeRemoteReadPath, parentRemotePath } from "@/lib/remote-project";
-import type { RemoteHostConnectionState, RemoteHostProfile } from "@shared/remote-host";
+import type { RemoteHostConnectionState, RemoteHostProfile, RemoteTransferProgress } from "@shared/remote-host";
 import type { DirEntry, ProjectAddResult, WorkspaceSnapshot } from "@shared/types";
 
 type Props = {
@@ -246,6 +246,7 @@ export function AddProjectDialog({ open, onOpenChange, onAdded }: Props): JSX.El
                 <span className="size-2 shrink-0 animate-pulse rounded-full bg-primary" />
                 <span className="truncate">{currentConnectionStep}</span>
               </div>
+              {connection.progress ? <TransferBar progress={connection.progress} label={t(`projectDialog.progress.${connection.progress.phase}`)} /> : null}
               <pre className="mt-3 max-h-44 min-h-28 w-full min-w-0 overflow-auto whitespace-pre-wrap break-words border-t border-border/70 pt-3 font-mono text-xs leading-5 text-muted-foreground">{connectionOutput}</pre>
             </div>
           </div>
@@ -347,4 +348,34 @@ export function AddProjectDialog({ open, onOpenChange, onAdded }: Props): JSX.El
       </DialogContent>
     </Dialog>
   );
+}
+
+/**
+ * One transfer of a connect: bytes, speed and, when the size is known, a determinate bar.
+ * An unknown size (a server that sent no length) gets a moving bar instead of a guess.
+ */
+function TransferBar({ progress, label }: { progress: RemoteTransferProgress; label: string }): JSX.Element {
+  const percent = progress.total ? Math.min(100, Math.round((progress.done / progress.total) * 100)) : null;
+  const amount = progress.total ? `${formatBytes(progress.done)} / ${formatBytes(progress.total)}` : formatBytes(progress.done);
+  return (
+    <div className="mt-3 min-w-0 space-y-1.5" role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100} {...(percent !== null ? { "aria-valuenow": percent } : {})}>
+      <div className="flex min-w-0 items-center justify-between gap-3 text-xs text-muted-foreground">
+        <span className="truncate">{label}</span>
+        <span className="shrink-0 font-mono tabular-nums">
+          {amount}{progress.rate ? ` · ${formatBytes(progress.rate)}/s` : ""}{percent !== null ? ` · ${percent}%` : ""}
+        </span>
+      </div>
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-border">
+        {percent !== null
+          ? <div className="h-full rounded-full bg-primary transition-[width] duration-300" style={{ width: `${percent}%` }} />
+          : <div className="h-full w-1/3 animate-pulse rounded-full bg-primary" />}
+      </div>
+    </div>
+  );
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }

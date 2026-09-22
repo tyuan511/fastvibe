@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { agentPreflightCommand, agentStopCommand, buildAgentBootstrapCommand, openSshAppTransport, parsePreflight } from "../src/main/ssh/ssh-manager.ts";
+import { agentPreflightCommand, agentStopCommand, buildAgentBootstrapCommand, openSshAppTransport, parsePreflight, transferProgress } from "../src/main/ssh/ssh-manager.ts";
 
 test("bootstrap lets the remote OS pick the port and records it in ~/.fastvibe", () => {
   const command = buildAgentBootstrapCommand(undefined, "0.7.0");
@@ -21,21 +21,24 @@ test("bootstrap lets the remote OS pick the port and records it in ~/.fastvibe",
   assert.doesNotMatch(command, /killall/);
 });
 
-test("bootstrap reads PATH out of the login shell's rc files before looking for Node", () => {
+test("bootstrap loads the login shell's rc environment before looking for Node", () => {
   const command = buildAgentBootstrapCommand(undefined, "0.7.0");
   // A login-but-not-interactive shell misses nvm/fnm/volta twice over: bash skips
   // `~/.bashrc` unless interactive, and the `-l` profile chain only reaches it when
   // `~/.bash_profile` sources it. Without this the host downloads a Node it has.
-  assert.match(command, /"\$SHELL" -ilc/);
+  assert.match(command, /"\$PROBE_SHELL" -ilc/);
   assert.match(command, /\.bashrc/);
-  assert.match(command, /\.zshrc/);
-  assert.match(command, /__FV_PATH__/);
+  // Zsh loads its own rc; never force Bash or sh to parse it.
+  assert.doesNotMatch(command, /\.zshrc/);
+  assert.match(command, /__FV_ENV__/);
   // The probe is bounded, because a startup file that waits for input would otherwise
   // hang the whole connect with no timeout and no output.
   assert.match(command, /-lt 100/);
-  assert.match(command, /kill "\$PID"/);
-  // The rc line runs before the probe, so a manager's shims are on PATH by the time it does.
-  assert.equal(command.indexOf("LOGIN_PATH=$(login_path)") < command.indexOf("SYSTEM_NODE=$(command -v node"), true);
+  assert.match(command, /kill "\$FV_ENV_PID"/);
+  // Loaded in this shell (not a subshell) before Node is looked for, so a manager's shims
+  // are on PATH by then — and the Agent started later inherits the proxy settings too.
+  assert.equal(command.indexOf("\nload_login_env\n") > 0, true);
+  assert.equal(command.indexOf("\nload_login_env\n") < command.indexOf("SYSTEM_NODE=$(command -v node"), true);
   // And the probe keeps up with the managers even when PATH cannot be read: the rc file
   // may be zsh-only, or absent.
   assert.match(command, /\.nvm\/versions\/node\/\*\/bin\/node/);
@@ -119,4 +122,31 @@ test("stopping the Agent only ever kills a FastVibe process", () => {
 test("a pinned servicePort is passed through; anything invalid falls back to a random port", () => {
   assert.match(buildAgentBootstrapCommand(8123, "0.7.0"), /REQUESTED_PORT=8123/);
   assert.match(buildAgentBootstrapCommand(70_000, "0.7.0"), /REQUESTED_PORT=0/);
+});
+
+test("transfer progress reports a speed and at most four events a second", () => {
+  let clock = 0;
+  const events: unknown[] = [];
+  const progress = transferProgress((event) => events.push(event), () => clock);
+  progress.report("agent-upload", 262_144, 4_194_304);
+  for (let step = 1; step <= 8; step += 1) {
+    clock = step * 125;
+    progress.report("agent-upload", 262_144 * (step + 1), 4_194_304);
+  }
+  // Nine reports over one second: throttled to the first and every 250 ms after.
+  assert.equal(events.length, 5);
+  assert.deepEqual(events.at(-1), { phase: "agent-upload", done: 2_359_296, total: 4_194_304, rate: 2_359_296 });
+  // The final chunk always gets through, whatever the throttle says.
+  clock += 10;
+  progress.report("agent-upload", 4_194_304, 4_194_304);
+  assert.equal((events.at(-1) as { done: number }).done, 4_194_304);
+  progress.clear();
+  assert.equal(events.at(-1), null);
+});
+
+test("the bootstrap downloads Node from nodejs.org first and npmmirror only as a fallback", () => {
+  const command = buildAgentBootstrapCommand(undefined, "0.7.0");
+  assert.match(command, /fv_download node-download "\$TMP\/node\.tar\.gz" "\$NODE_OFFICIAL\/\$NODE_FILE" "\$NODE_MIRROR\/\$NODE_FILE"/);
+  assert.match(command, /https:\/\/nodejs\.org\/dist/);
+  assert.match(command, /https:\/\/cdn\.npmmirror\.com\/binaries\/node/);
 });

@@ -58,7 +58,7 @@ import { createAppServer, initAppServer, getAppServer } from "./app-server/runti
 import { loadOrCreateServerIdentity } from "./server/identity";
 import { APP_CAPABILITIES } from "@shared/app-protocol";
 import { wireElectronAppTransport } from "./transport/electron";
-import type { RemoteHostProfile, RemoteHostConnectionState, SshErrorCode } from "@shared/remote-host";
+import type { RemoteHostProfile, RemoteHostConnectionState, RemoteTransferProgress, SshErrorCode } from "@shared/remote-host";
 import { attachBrowserRenderer, guardGuestPopups, installBrowserGlobal, respondBrowserRequest } from "./pi/browser-bridge";
 import {
   computerPermissions,
@@ -140,6 +140,17 @@ const sshManager = new SshManager({
 
 const sshUiStates = new Map<string, RemoteHostConnectionState>();
 
+/** A download/upload bar for a connect in progress; `null` removes it. */
+function publishSshProgress(hostId: string, progress: RemoteTransferProgress | null): void {
+  const current = sshUiStates.get(hostId) ?? { hostId, status: "connecting" as const };
+  if (current.status !== "connecting") return;
+  const { progress: _previous, ...rest } = current;
+  const next: RemoteHostConnectionState = progress ? { ...rest, progress } : rest;
+  sshUiStates.set(hostId, next);
+  broadcast(Ipc.sshState, next);
+  broadcast(Ipc.sshStates, [...sshUiStates.values()]);
+}
+
 function publishSshOutput(hostId: string, message: string): void {
   const current = sshUiStates.get(hostId) ?? { hostId, status: "connecting" as const };
   const output = [...(current.output ?? []), message].slice(-80);
@@ -187,6 +198,7 @@ const remoteConnections = new RemoteConnectionManager({
   openTransport: (profile, signal) => openSshAppTransport({
     profile,
     onOutput: (message) => publishSshOutput(profile.id, message),
+    onProgress: (progress) => publishSshProgress(profile.id, progress),
     signal,
     agentRuntime: {
       version: app.getVersion(),

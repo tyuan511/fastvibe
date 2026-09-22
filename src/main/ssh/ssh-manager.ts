@@ -1,10 +1,11 @@
 import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:net";
 import type { FastVibePaths } from "../engine/paths.ts";
-import type { RemoteHostConnectionState, RemoteHostProfile, RemoteHostTestResult, SshHostKeyScan } from "../../shared/remote-host.ts";
+import type { RemoteHostConnectionState, RemoteHostProfile, RemoteHostTestResult, RemoteTransferProgress, SshHostKeyScan } from "../../shared/remote-host.ts";
 import { readSshHosts, redactSshHosts, removeSshHost, saveSshHost, type SecretBox, type SshHostSnapshot } from "./ssh-hosts.ts";
 import { captureHostKey, writeTrustedHostKey, type CapturedHostKey } from "./ssh-known-hosts.ts";
-import { loadAgentRuntime, agentRuntimeTarget, agentRuntimeRemoteDownloadCommand, agentRuntimeUploadCommand, sha256Helper, shellQuote } from "./agent-runtime.ts";
+import { loadAgentRuntime, agentRuntimeTarget, agentRuntimeRemoteDownloadCommand, agentRuntimeUploadCommand, sha256Helper } from "./agent-runtime.ts";
+import { downloadHelpers, loginEnvironment, NODE_MIRROR, remoteShellCommand, shellQuote } from "./remote-shell.ts";
 import { probeSshHost, runSshCommand, SshError, SshTunnel, startSshMaster, type SshMaster } from "./ssh-tunnel.ts";
 
 export type SshManagerDeps = {
@@ -139,9 +140,11 @@ export async function openSshAppTransport(options: {
   agentRuntime: SshManagerDeps["agentRuntime"];
   log: { info(message: string): void; warn(message: string): void };
   onOutput?: (message: string) => void;
+  /** The transfer in progress, or null once the connect has moved on to its next step. */
+  onProgress?: (progress: RemoteTransferProgress | null) => void;
   signal?: AbortSignal;
 }): Promise<{ port: number; close: () => Promise<void>; configSyncToken: string; home?: string }> {
-  const { profile, agentRuntime, log, onOutput, signal } = options;
+  const { profile, agentRuntime, log, onOutput, onProgress, signal } = options;
   throwIfAborted(signal);
   if (profile.authMethod === "password" && !profile.password) throw new Error("请填写 SSH 密码");
   if (profile.authMethod === "identity-file" && !profile.identityFile) throw new Error("请填写私钥路径");
@@ -150,11 +153,38 @@ export async function openSshAppTransport(options: {
   const localPort = profile.localPort ? await assertPortFree(profile.localPort) : await freePort();
   throwIfAborted(signal);
   const password = profile.authMethod === "password" ? profile.password : undefined;
+  const progress = transferProgress(onProgress);
   const output = (text: string): void => {
     for (const line of text.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)) {
+      progress.clear();
       log.info(`[ssh:${profile.id}] ${line}`);
       onOutput?.(line);
     }
+  };
+  /**
+   * What a remote script prints, line by line: progress lines feed the bar, the sync token
+   * never reaches the log, and everything else is shown. Lines are reassembled first — a
+   * chunk from ssh can end mid-line, and half a progress line would be logged as text.
+   */
+  const remote = (onLine?: (line: string) => void): ((text: string) => void) => {
+    let pending = "";
+    return (text) => {
+      pending += text;
+      const lines = pending.split(/\r?\n/);
+      pending = lines.pop() ?? "";
+      for (const raw of lines) {
+        const line = raw.trim();
+        if (!line) continue;
+        const match = /^FASTVIBE_PROGRESS (\S+) (\d+) ?(\d*)$/.exec(line);
+        if (match) {
+          if (isTransferPhase(match[1])) progress.report(match[1], Number(match[2]), match[3] ? Number(match[3]) : undefined);
+          continue;
+        }
+        if (/^FASTVIBE_AGENT_SYNC_TOKEN=[a-f0-9]{64}$/.test(line)) continue;
+        onLine?.(line);
+        output(line);
+      }
+    };
   };
   output("正在连接 SSH…");
   let master: SshMaster | null = null;
@@ -192,7 +222,7 @@ export async function openSshAppTransport(options: {
       controlPath,
       command: agentPreflightCommand(agentRuntime.version),
       timeoutMs: 20_000,
-      onOutput: (text) => outputWithoutSyncToken(text, output),
+      onOutput: remote(),
       signal,
     }));
     throwIfAborted(signal);
@@ -243,12 +273,7 @@ export async function openSshAppTransport(options: {
           // nothing and the sentence worth showing is the one the host's own shell
           // printed. Keep the tail here rather than making the caller dig through
           // `output` for it.
-          onOutput: (text) => {
-            output(text);
-            for (const line of text.split(/\r?\n/)) {
-              if (line.trim()) remoteFailure = line.trim();
-            }
-          },
+          onOutput: remote((line) => { remoteFailure = line; }),
           signal,
         });
         deployed = true;
@@ -260,7 +285,7 @@ export async function openSshAppTransport(options: {
         output(`远程主机直接下载失败，改为本机下载后上传：${reason}`);
       }
       if (!deployed) {
-        const runtime = await loadAgentRuntime(agentRuntime, target, output);
+        const runtime = await loadAgentRuntime(agentRuntime, target, output, (done, total) => progress.report("agent-fetch", done, total));
         throwIfAborted(signal);
         output(`正在上传并部署 Agent（${formatBytes(runtime.archive.length)}）…`);
         await runSshCommand({
@@ -269,8 +294,9 @@ export async function openSshAppTransport(options: {
           controlPath,
           command: agentRuntimeUploadCommand(agentRuntime, createHash("sha256").update(runtime.archive).digest("hex")),
           input: runtime.archive,
+          onInputProgress: (sent, total) => progress.report("agent-upload", sent, total),
           timeoutMs: 300_000,
-          onOutput: output,
+          onOutput: remote(),
           signal,
         });
       }
@@ -282,8 +308,9 @@ export async function openSshAppTransport(options: {
       password,
       controlPath,
       command: buildAgentBootstrapCommand(profile.servicePort, agentRuntime.version, target, randomBytes(32).toString("hex")),
-      timeoutMs: 180_000,
-      onOutput: (text) => outputWithoutSyncToken(text, output),
+      // Long enough for a first deploy that also has to download Node.js from a mirror.
+      timeoutMs: 900_000,
+      onOutput: remote(),
       signal,
     });
     const configSyncToken = extractSyncToken(bootstrap);
@@ -338,7 +365,7 @@ export function agentPreflightCommand(version: string): string {
     '}',
     'resident',
   ].join("\n");
-  return `sh -lc ${shellQuote(script)}`;
+  return remoteShellCommand(script);
 }
 
 /**
@@ -418,7 +445,7 @@ export function agentStopCommand(): string {
     'rm -f "$STATE"',
     'echo "远程 Agent 已停止"',
   ].join("\n");
-  return `sh -lc ${shellQuote(script)}`;
+  return remoteShellCommand(script);
 }
 
 /**
@@ -480,37 +507,14 @@ export function buildAgentBootstrapCommand(port: number | undefined, version: st
     'if [ -s "$SYNC_TOKEN_FILE" ]; then SYNC_TOKEN=$(cat "$SYNC_TOKEN_FILE"); elif [ -n "$SYNC_TOKEN_INPUT" ]; then printf "%s\\n" "$SYNC_TOKEN_INPUT" > "$SYNC_TOKEN_FILE"; SYNC_TOKEN="$SYNC_TOKEN_INPUT"; TOKEN_CREATED=1; fi',
     'if [ ! -f "$MAIN" ]; then echo "FastVibe Agent runtime upload is incomplete" >&2; exit 127; fi',
     ...sha256Helper(),
+    ...downloadHelpers(),
     "node_version() { awk -F'\"' '/\"node\"/ { print $4; exit }' \"$ROOT/releases/$VERSION/manifest.json\"; }",
     "usable_node() { candidate=\"$1\"; [ -n \"$candidate\" ] && [ -x \"$candidate\" ] || return 1; \"$candidate\" -e \"const [major, minor] = process.versions.node.split('.').map(Number); if (major < 22 || (major === 22 && minor < 5)) process.exit(1); require('node:sqlite')\" >/dev/null 2>&1; }",
-    // `sh -lc` is a login shell but not an interactive one. That misses nvm, fnm and volta
-    // twice over: bash reads `~/.bashrc` only when interactive, and the `-l` profile chain
-    // only reaches them when `~/.bash_profile` happens to source `~/.bashrc`, which Debian's
-    // default does not. So the host downloads a Node it already has, and the probe below is
-    // the only fix. The desktop app asks the user's own shell for its PATH the same way
-    // (`engine/shell-path.ts`). Three details are load-bearing: `-i` is what makes the
-    // interactive guards inside an rc file pass, the files are sourced in the order a login
-    // shell would reach them (the rc last, because that is where the managers prepend), and
-    // the answer is read out between markers from a file, because a startup file is free to
-    // print anything at all to stdout. The probe is backgrounded and killed after ten
-    // seconds so an rc file that waits for input cannot hang a connect, and its stderr is
-    // dropped because a bash-only `.bashrc` sourced by `sh` is expected to complain.
-    'login_path() {',
-    '  [ -n "$SHELL" ] && [ -x "$SHELL" ] || return 0',
-    '  TMP=$(mktemp 2>/dev/null) || return 0',
-    "  \"$SHELL\" -ilc 'for f in \"$HOME/.bash_profile\" \"$HOME/.profile\" \"$HOME/.bashrc\" \"$HOME/.zshrc\"; do [ -r \"$f\" ] && . \"$f\"; done; printf \"__FV_PATH__%s__FV_PATH_END__\" \"$PATH\"' >\"$TMP\" 2>/dev/null &",
-    '  PID=$!',
-    '  N=0',
-    '  while [ "$N" -lt 100 ]; do',
-    '    grep -q "__FV_PATH_END__" "$TMP" 2>/dev/null && break',
-    '    kill -0 "$PID" 2>/dev/null || break',
-    '    N=$((N+1)); sleep 0.1',
-    '  done',
-    '  kill "$PID" 2>/dev/null || true',
-    "  sed -n 's/.*__FV_PATH__\\(.*\\)__FV_PATH_END__.*/\\1/p' \"$TMP\" | tail -n 1",
-    '  rm -f "$TMP"',
-    '}',
-    'LOGIN_PATH=$(login_path)',
-    'if [ -n "$LOGIN_PATH" ]; then PATH="$LOGIN_PATH:$PATH"; export PATH; echo "已应用登录 shell 的 PATH"; fi',
+    // Node managers and proxy settings usually live in .bashrc/.zshrc, which `ssh host cmd`
+    // never reads. Load that environment before looking for Node or downloading it; the
+    // Agent started below inherits it, so its own tools get the same proxy and PATH.
+    ...loginEnvironment(),
+    'load_login_env',
     'NODE=""',
     'SYSTEM_NODE=$(command -v node 2>/dev/null || command -v nodejs 2>/dev/null || true)',
     'if usable_node "$SYSTEM_NODE"; then NODE="$SYSTEM_NODE"; echo "Using system Node.js: $NODE"; fi',
@@ -533,12 +537,18 @@ export function buildAgentBootstrapCommand(port: number | undefined, version: st
     '    echo "未找到兼容的系统 Node.js，正在通过 SSH 安装 Node.js v$NODE_VERSION"',
     '    TMP="$ROOT/.node-${NODE_VERSION}.$$"',
     '    rm -rf "$TMP" && mkdir -p "$TMP"',
-    '    URL="https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-${TARGET}.tar.gz"',
-    '    if command -v curl >/dev/null 2>&1; then curl -fsSL --retry 2 "$URL" -o "$TMP/node.tar.gz" || { echo "Node.js 下载失败" >&2; rm -rf "$TMP"; exit 127; }; elif command -v wget >/dev/null 2>&1; then wget -q --tries=2 "$URL" -O "$TMP/node.tar.gz" || { echo "Node.js 下载失败" >&2; rm -rf "$TMP"; exit 127; }; else echo "远程主机缺少 curl 或 wget，无法安装 Node.js" >&2; rm -rf "$TMP"; exit 127; fi',
-    // Checked against nodejs.org's own SHASUMS256.txt before anything is unpacked, so a
-    // truncated download or a proxy's error page cannot become the Agent's runtime.
-    '    SUMS_URL="https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt"',
-    '    if command -v curl >/dev/null 2>&1; then SUMS=$(curl -fsSL --retry 2 "$SUMS_URL"); else SUMS=$(wget -qO- --tries=2 "$SUMS_URL"); fi || { echo "Node.js 校验和下载失败" >&2; rm -rf "$TMP"; exit 127; }',
+    '    NODE_FILE="node-v${NODE_VERSION}-${TARGET}.tar.gz"',
+    `    NODE_OFFICIAL="https://nodejs.org/dist/v\${NODE_VERSION}"`,
+    `    NODE_MIRROR=${shellQuote(NODE_MIRROR)}"/v\${NODE_VERSION}"`,
+    // nodejs.org first; npmmirror only when that fails or crawls (see `downloadHelpers`).
+    '    fv_download node-download "$TMP/node.tar.gz" "$NODE_OFFICIAL/$NODE_FILE" "$NODE_MIRROR/$NODE_FILE" || { echo "Node.js 下载失败" >&2; rm -rf "$TMP"; exit 127; }',
+    // Checked against SHASUMS256.txt before anything is unpacked, so a truncated download
+    // or a proxy's error page cannot become the Agent's runtime. The sums come from the
+    // source that served the archive, falling back to the other one.
+    '    NODE_USED="${FV_SOURCE%/*}"',
+    '    if [ "$NODE_USED" = "$NODE_OFFICIAL" ]; then NODE_OTHER="$NODE_MIRROR"; else NODE_OTHER="$NODE_OFFICIAL"; fi',
+    '    fv_download node-sums "$TMP/SHASUMS256.txt" "$NODE_USED/SHASUMS256.txt" "$NODE_OTHER/SHASUMS256.txt" >/dev/null || { echo "Node.js 校验和下载失败" >&2; rm -rf "$TMP"; exit 127; }',
+    '    SUMS=$(cat "$TMP/SHASUMS256.txt")',
     '    WANT=$(printf "%s\\n" "$SUMS" | awk -v f="node-v${NODE_VERSION}-${TARGET}.tar.gz" \'$2 == f { print $1; exit }\')',
     '    GOT=$(sha256_of "$TMP/node.tar.gz")',
     '    if [ -z "$WANT" ]; then echo "Node.js 校验和缺失" >&2; rm -rf "$TMP"; exit 127; fi',
@@ -605,15 +615,46 @@ export function buildAgentBootstrapCommand(port: number | undefined, version: st
     'prune',
     'if [ -n "$SYNC_TOKEN" ]; then printf "FASTVIBE_AGENT_SYNC_TOKEN=%s\\n" "$SYNC_TOKEN"; fi',
   ].join("\n");
-  return `sh -lc ${shellQuote(script)}`;
+  return remoteShellCommand(script);
 }
 
-function outputWithoutSyncToken(text: string, output: (message: string) => void): void {
-  const visible = text
-    .split(/\r?\n/)
-    .filter((line) => !/^FASTVIBE_AGENT_SYNC_TOKEN=[a-f0-9]{64}$/.test(line.trim()))
-    .join("\n");
-  if (visible.trim()) output(visible);
+const TRANSFER_PHASES = new Set<RemoteTransferProgress["phase"]>(["agent-download", "node-download", "agent-fetch", "agent-upload"]);
+
+function isTransferPhase(value: string): value is RemoteTransferProgress["phase"] {
+  return TRANSFER_PHASES.has(value as RemoteTransferProgress["phase"]);
+}
+
+/**
+ * Turn byte counts into progress events: a speed over the last second or so, and at most
+ * four events a second — an upload reports every 256 KiB chunk, which is far more often
+ * than a progress bar can use or a broadcast should carry.
+ */
+export function transferProgress(emit: ((progress: RemoteTransferProgress | null) => void) | undefined, now: () => number = Date.now) {
+  let current: RemoteTransferProgress | null = null;
+  let sample = { at: 0, done: 0 };
+  let emittedAt = Number.NEGATIVE_INFINITY;
+  return {
+    report(phase: RemoteTransferProgress["phase"], done: number, total?: number): void {
+      const at = now();
+      if (!current || current.phase !== phase || done < current.done) sample = { at, done: 0 };
+      let rate = current?.phase === phase ? current.rate : undefined;
+      if (at - sample.at >= 1_000) {
+        rate = Math.max(0, Math.round((done - sample.done) / ((at - sample.at) / 1_000)));
+        sample = { at, done };
+      }
+      current = { phase, done, ...(total ? { total } : {}), ...(rate !== undefined ? { rate } : {}) };
+      const finished = total !== undefined && done >= total;
+      if (finished || at - emittedAt >= 250) {
+        emittedAt = at;
+        emit?.(current);
+      }
+    },
+    clear(): void {
+      if (!current) return;
+      current = null;
+      emit?.(null);
+    },
+  };
 }
 
 function extractSyncToken(output: string): string | undefined {

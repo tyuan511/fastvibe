@@ -70,8 +70,6 @@ export const SETTINGS_SECTIONS: Array<{
     items: [
       { id: "archived", icon: <HugeiconsIcon strokeWidth={2} icon={Archive04Icon} /> },
       { id: "usage", icon: <HugeiconsIcon strokeWidth={2} icon={Analytics01Icon} /> },
-      { id: "remote", icon: <HugeiconsIcon strokeWidth={2} icon={Wifi01Icon} /> },
-      { id: "ssh", icon: <HugeiconsIcon strokeWidth={2} icon={ServerStack01Icon} /> },
       { id: "import", icon: <HugeiconsIcon strokeWidth={2} icon={ImportIcon} /> },
     ],
   },
@@ -90,6 +88,7 @@ export const SETTINGS_SECTIONS: Array<{
     items: [
       { id: "computer", icon: <HugeiconsIcon strokeWidth={2} icon={ComputerIcon} /> },
       { id: "remote", icon: <HugeiconsIcon strokeWidth={2} icon={Wifi01Icon} /> },
+      { id: "ssh", icon: <HugeiconsIcon strokeWidth={2} icon={ServerStack01Icon} /> },
     ],
   },
   {

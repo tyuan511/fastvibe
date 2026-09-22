@@ -20,6 +20,19 @@ name: Release
 #
 # Do not "simplify" a leg back to `draft: false`. It looks like one keystroke and returns
 # to announcing an update whose installer 404s.
+#
+# The release note is a file in the repo at `docs/release/<tag>.md`, written and committed
+# with the version bump, and every leg passes it to the release as `body_path`. So what the
+# release says is fixed before the tag exists: nothing has to come back after CI and rewrite
+# it, and a published release cannot be left showing GitHub's raw commit list while somebody
+# gets around to it. The tag is what selects the note, so it has to be named after the tag;
+# `scripts/check-release-note.mjs` asserts in each job, early, that the file is there and has
+# content — without that, a tag whose note was never added still spends twenty minutes
+# packaging and then publishes an empty body, which is the one thing about a release nobody
+# can fix in a rerun. The checker stops there and does not police the note's language (English
+# is the convention, see docs/release/README.md).
+# `generate_release_notes` is deliberately gone: it *appends*, which is how one release once
+# ended up with three stacked changelogs.
 
 on:
   push:
@@ -41,7 +54,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          # Pinned rather than `ubuntu-latest`: that label migrates to Ubuntu 26 in
+          # October 2026 and every run in between warns about it. The arm leg below
+          # is already a pinned image, so both halves stay on the same release.
+          - os: ubuntu-24.04
             arch: x64
           - os: ubuntu-24.04-arm
             arch: arm64
@@ -55,6 +71,12 @@ jobs:
       # dies with `syntax error near unexpected token `(` (exit 2) before anything is compiled.
       - name: Verify tag version
         run: node -e "const fs=require('fs');const v=JSON.parse(fs.readFileSync('package.json','utf8')).version;if(process.env.GITHUB_REF_NAME !== 'v'+v) process.exit(1)"
+
+      # The release body is `docs/release/<tag>.md` — see the header. Asserted here rather than
+      # only in the job that reads it: a tag whose note is missing must fail in the first few
+      # seconds, not after twenty minutes of packaging.
+      - name: Verify release note
+        run: node scripts/check-release-note.mjs
 
       - uses: pnpm/action-setup@v6
 
@@ -111,7 +133,7 @@ jobs:
           - os: macos-latest
             platform: mac
             arch: x64
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             platform: linux
           - os: windows-latest
             platform: win
@@ -120,6 +142,9 @@ jobs:
 
       - name: Verify tag version
         run: node -e "const fs=require('fs');const v=JSON.parse(fs.readFileSync('package.json','utf8')).version;if(process.env.GITHUB_REF_NAME !== 'v'+v) process.exit(1)"
+
+      - name: Verify release note
+        run: node scripts/check-release-note.mjs
 
       - uses: pnpm/action-setup@v6
 
@@ -269,7 +294,7 @@ jobs:
 
       - name: Upload the mac manifest
         if: matrix.platform == 'mac'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mac-manifest-${{ matrix.arch }}
           path: manifest/latest-mac-${{ matrix.arch }}.yml
@@ -284,11 +309,21 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           draft: true
-          # Only one matrix leg may generate the notes. `action-gh-release` appends
-          # freshly generated notes to an existing release's body, so three legs
-          # publishing the same tag stack the changelog three times over. The other
-          # legs pass no body and keep whatever is already there.
-          generate_release_notes: ${{ matrix.platform == 'mac' && matrix.arch == 'arm64' }}
+          # `FastVibe vX.Y.Z` rather than the bare tag, on every leg, so the draft and the
+          # published release carry the same title (the publish job sets it again on the way out).
+          name: FastVibe ${{ github.ref_name }}
+          # The release note is `docs/release/<tag>.md`, committed with the version bump
+          # (see the header block above). It is a file rather than `generate_release_notes`
+          # for two reasons: the note is written and reviewed before the tag exists, and
+          # GitHub's generated body is the raw commit list — a release note that had to be
+          # rewritten afterwards is one that was published wrong first.
+          #
+          # Every leg passes it, which is safe: action-gh-release replaces the body with
+          # the file's contents rather than appending (only `generate_release_notes`,
+          # deliberately absent here, concatenates), so four legs write the same bytes.
+          # A leg that passes nothing would fall back to the existing body, which is why
+          # this is not conditioned on the matrix.
+          body_path: docs/release/${{ github.ref_name }}.md
           # A tag carrying a semver prerelease component (v0.8.3-rc.1) has to be
           # flagged as one on GitHub, because that flag is the only thing keeping it
           # away from existing users: electron-updater with allowPrerelease=false
@@ -322,12 +357,12 @@ jobs:
     # files that are not there, and the absence of a manifest is the safe failure: the
     # app simply finds no update.
     needs: [agent-runtime, build]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 
       - name: Download the per-architecture manifests
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: mac-manifest-*
           path: manifests
@@ -347,6 +382,9 @@ jobs:
           cat release/latest-mac.yml
           echo "::endgroup::"
 
+      - name: Verify release note
+        run: node scripts/check-release-note.mjs
+
       # This is the release's publish step, and `draft: false` is the switch.
       # action-gh-release uploads every listed file and only then unmarks the draft, so
       # the order that matters is inside this call: a client that finds the release at the
@@ -358,6 +396,10 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           draft: false
+          # Re-supplied on the way out so the release GitHub ends up with is the one in the
+          # repo even if a draft was edited by hand while a failed run was being fixed.
+          name: FastVibe ${{ github.ref_name }}
+          body_path: docs/release/${{ github.ref_name }}.md
           # A tag carrying a semver prerelease component (v0.8.3-rc.1) has to be
           # flagged as one on GitHub, because that flag is the only thing keeping it
           # away from existing users: electron-updater with allowPrerelease=false

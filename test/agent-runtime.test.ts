@@ -1,16 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { agentRuntimeRemoteDownloadCommand, agentRuntimeTarget, agentRuntimeUploadCommand, agentRuntimeUrl, shellQuote } from "../src/main/ssh/agent-runtime.ts";
+import { agentRuntimeMirrorUrl, agentRuntimeRemoteDownloadCommand, agentRuntimeTarget, agentRuntimeUploadCommand, agentRuntimeUrl, shellQuote } from "../src/main/ssh/agent-runtime.ts";
 
 /**
- * Undo the `sh -lc '...'` wrapper so a test can read the script the host will run.
+ * Undo the shell selector wrapper so a test can read the script the host will run.
  *
  * Every quote inside the script is escaped a second time by that wrapper, so asserting on
  * the command directly would only prove that the escaping layers are the expected number
  * deep — not that an injected quote ends up as data.
  */
 function remoteScript(command: string): string {
-  const inner = command.slice("sh -lc ".length);
+  const marker = " fastvibe-ssh ";
+  assert.ok(command.includes(marker));
+  const inner = command.slice(command.indexOf(marker) + marker.length);
   return inner.slice(1, -1).replace(/'\\''/g, "'");
 }
 
@@ -79,4 +81,15 @@ test("an uploaded archive passes the same checks as a downloaded one, plus its c
   assert.match(command, /trap cleanup EXIT/);
   // A malformed digest is never interpolated.
   assert.equal(agentRuntimeUploadCommand({ version: "0.7.0" }, "'; rm -rf ~; '").includes("rm -rf ~"), false);
+});
+
+test("GitHub releases fall back to gh-proxy; a custom release server is never rewritten", () => {
+  assert.equal(
+    agentRuntimeMirrorUrl({ version: "0.7.0" }, "linux-x64"),
+    "https://gh-proxy.com/https://github.com/tyuan511/fastvibe/releases/download/v0.7.0/fastvibe-agent-linux-x64.tar.gz",
+  );
+  assert.equal(agentRuntimeMirrorUrl({ version: "0.7.0", releaseBaseUrl: "https://cdn.example.com/releases" }, "linux-x64"), undefined);
+  const command = agentRuntimeRemoteDownloadCommand({ version: "0.7.0" }, "linux-x64");
+  assert.match(command, /fv_download agent-download "\$TMP\/agent\.tar\.gz" "\$URL" "\$MIRROR_URL"/);
+  assert.equal(command.includes("gh-proxy.com"), true);
 });

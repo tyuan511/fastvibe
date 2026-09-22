@@ -1,5 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { downloadHelpers, GITHUB_MIRROR, loginEnvironment, remoteShellCommand, shellQuote } from "./remote-shell.ts";
+export { shellQuote } from "./remote-shell.ts";
 
 export type AgentRuntimeTarget = "linux-x64" | "linux-arm64";
 
@@ -30,6 +32,18 @@ export function agentRuntimeUrl(source: AgentRuntimeSource, target: AgentRuntime
 }
 
 /**
+ * The same archive through the GitHub mirror, for hosts that cannot reach GitHub.
+ *
+ * Only a github.com URL has one: a custom `releaseBaseUrl` is somebody's own server, and
+ * rewriting it through a public proxy would be a surprise rather than a fallback. What
+ * comes back is still only trusted after the manifest names the expected version.
+ */
+export function agentRuntimeMirrorUrl(source: AgentRuntimeSource, target: AgentRuntimeTarget): string | undefined {
+  const url = agentRuntimeUrl(source, target);
+  return url.startsWith("https://github.com/") ? `${GITHUB_MIRROR}${url}` : undefined;
+}
+
+/**
  * Deploy the Agent by having the *remote host* fetch the release archive.
  *
  * The alternative — download here, then push the archive through SSH stdin — makes the
@@ -48,14 +62,19 @@ export function agentRuntimeRemoteDownloadCommand(source: AgentRuntimeSource, ta
   const script = [
     ...stagingPrelude(source),
     `URL=${shellQuote(agentRuntimeUrl(source, target))}`,
-    'if command -v curl >/dev/null 2>&1; then FETCH=curl; elif command -v wget >/dev/null 2>&1; then FETCH=wget; else echo "远程主机缺少 curl 或 wget，无法直接下载 Agent 运行包" >&2; exit 127; fi',
-    `echo "正在由远程主机直接下载 Agent 运行包：fastvibe-agent-${target}.tar.gz"`,
-    // `-s`/`-q` keeps curl's progress meter and wget's dot bar out of the stream, which
-    // reaches the GUI one push per chunk; `-S`/`-f` still print the real error on failure.
-    'if [ "$FETCH" = curl ]; then curl -fsSL --connect-timeout 15 --retry 2 --retry-delay 1 --speed-limit 1024 --speed-time 30 -o "$TMP/agent.tar.gz" "$URL" || { echo "Agent 运行包下载失败" >&2; exit 127; }; else wget -q --timeout=30 --tries=2 -O "$TMP/agent.tar.gz" "$URL" || { echo "Agent 运行包下载失败" >&2; exit 127; }; fi',
+    `MIRROR_URL=${shellQuote(agentRuntimeMirrorUrl(source, target) ?? "")}`,
+    // A host behind a proxy usually configures it in .bashrc, which `ssh host cmd` skips.
+    ...loginEnvironment(),
+    'load_login_env',
+    ...downloadHelpers(),
+    `echo "正在由远程主机直接下载 Agent 运行包：fastvibe-agent-${target}.tar.gz（$(fv_host "$URL")）"`,
+    // `-s`/`-q` keeps curl's progress meter and wget's dot bar out of the stream; progress
+    // reaches the GUI as `FASTVIBE_PROGRESS` lines instead. A failure here is not fatal to
+    // the connect: the desktop falls back to uploading the archive itself.
+    'fv_download agent-download "$TMP/agent.tar.gz" "$URL" "$MIRROR_URL" || { echo "Agent 运行包下载失败" >&2; exit 127; }',
     ...installStagedArchive("远程主机已直接下载并部署 Agent"),
   ].join("\n");
-  return `sh -lc ${shellQuote(script)}`;
+  return remoteShellCommand(script);
 }
 
 /**
@@ -78,7 +97,7 @@ export function agentRuntimeUploadCommand(source: AgentRuntimeSource, sha256: st
     'if [ -z "$ACTUAL_SHA" ]; then echo "远程主机缺少 sha256sum/shasum，跳过校验和检查"; elif [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then echo "Agent 运行包上传不完整（校验和不匹配）" >&2; exit 127; fi',
     ...installStagedArchive("预编译 Agent 已部署"),
   ].join("\n");
-  return `sh -lc ${shellQuote(script)}`;
+  return remoteShellCommand(script);
 }
 
 /**
@@ -130,14 +149,11 @@ export function sha256Helper(): string[] {
   ];
 }
 
-export function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, "'\\''")}'`;
-}
-
 export async function loadAgentRuntime(
   source: AgentRuntimeSource,
   target: AgentRuntimeTarget,
   onOutput: (message: string) => void,
+  onProgress?: (done: number, total: number | undefined) => void,
 ): Promise<{ archive: Buffer; location: string }> {
   const filename = agentRuntimeFilename(target);
   const localPath = source.artifactDirectory ? join(source.artifactDirectory, filename) : "";
@@ -169,6 +185,7 @@ export async function loadAgentRuntime(
       const part = await reader.read();
       if (part.done) break;
       total += part.value.byteLength;
+      onProgress?.(total, declaredLength || undefined);
       if (total > maxBytes) {
         await reader.cancel();
         throw new Error(`远程 Agent 运行包过大：${filename}`);
