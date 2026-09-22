@@ -39,6 +39,7 @@ import { ModelChangeNotice } from "./model-change-notice";
 import { RunCollapse } from "./run-collapse";
 import { TuiLines } from "./tui-lines";
 import { TurnRail, type TurnMarker } from "./turn-rail";
+import { isRemoteRef } from "@/lib/remote-project";
 import { blockedRemotely } from "@/lib/remote-unavailable";
 import { Ipc } from "@shared/ipc";
 
@@ -71,7 +72,7 @@ function AttachmentStrip({ items }: { items: ChatAttachment[] }): JSX.Element {
                   ? () => setPreview(item)
                   : item.path
                     ? () => {
-                        if (blockedRemotely(Ipc.workspaceReveal)) return;
+                        if (isRemoteRef(item.path) || blockedRemotely(Ipc.workspaceReveal)) return;
                         void window.fastvibe.workspace.reveal(item.path!);
                       }
                     : undefined
@@ -926,6 +927,7 @@ export function MessageList({
   messages,
   streaming,
   loading = false,
+  loadingReplaces = false,
   onRetry,
   onEdit,
   showThinking = true,
@@ -940,6 +942,8 @@ export function MessageList({
   messages: ChatMessage[];
   streaming: boolean;
   loading?: boolean;
+  /** Replace the current transcript with the loader, instead of only covering an empty one. */
+  loadingReplaces?: boolean;
   onRetry?: (message: ChatMessage) => void;
   onEdit?: (message: ChatMessage, text: string) => void;
   showThinking?: boolean;
@@ -973,11 +977,13 @@ export function MessageList({
   // rows, which is long after an effect keyed on a ref object would have run.
   const guardViewport = useNoOpWheelGuard();
 
-  if (messages.length === 0 && loading) {
+  if (loading && (messages.length === 0 || loadingReplaces)) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-4">
         <FLoader className="size-12" />
-        <p className="text-sm text-muted-foreground">{t("message.preparing")}</p>
+        <p className="text-sm text-muted-foreground">
+          {loadingReplaces ? t("message.loadingConversation") : t("message.preparing")}
+        </p>
       </div>
     );
   }

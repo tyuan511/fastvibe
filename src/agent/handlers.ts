@@ -1,7 +1,9 @@
 import { execFile } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { promisify } from "node:util";
 import { Ipc } from "@shared/ipc";
+import type { AgentConfigSyncPayload } from "@shared/agent-config";
 import type { CallerContext } from "../main/ipc/registry";
 import { broadcast, subscribe } from "../main/ipc/broadcast";
 import { dispatch, handle, handlerChannels } from "../main/ipc/registry";
@@ -9,7 +11,9 @@ import type { PiProcessManager } from "../main/pi/process-manager";
 import { readFilePreview } from "../main/engine/file-preview";
 import { readWorkspaceDir } from "../main/engine/workspace-fs";
 import { TerminalSessions } from "../main/engine/terminal-sessions";
-import { applyPermissionMode, clearAppSettings, readAppSettings, writeAppSettings } from "../main/engine/runtime-settings";
+import { applyLanguages } from "../main/engine/ai-language";
+import { applyPermissionMode, clearAppSettings, invalidateAppSettingsCache, readAppSettings, writeAppSettings } from "../main/engine/runtime-settings";
+import { writeAgentConfig } from "../main/engine/runtime-config";
 import type { FastVibePaths } from "../main/engine/paths";
 import type { GitBranch, GitDiffSource, GitStatus } from "@shared/ipc";
 import type { ImportSourceId, ProviderModel, UsageRange, McpServerConfig, SkillDraft, SubagentDraft } from "@shared/types";
@@ -38,11 +42,11 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
   handle(Ipc.engineSteer, async (payload: { message: string; images?: Array<{ type: "image"; data: string; mimeType: string }>; conversationId?: string }) => engine.steer(payload.message, payload.images, payload.conversationId));
   handle(Ipc.engineFollowUp, async (payload: { message: string; images?: Array<{ type: "image"; data: string; mimeType: string }>; conversationId?: string }) => engine.followUp(payload.message, payload.images, payload.conversationId));
   handle(Ipc.engineAbort, async (payload?: { conversationId?: string }) => engine.abort(payload?.conversationId));
-  handle(Ipc.engineAbortSubagent, async (payload: { subagentId: string }) => engine.abortSubagent(payload.subagentId));
+  handle(Ipc.engineAbortSubagent, async (payload: { subagentId: string; conversationId?: string }) => engine.abortSubagent(payload.subagentId, payload.conversationId));
   handle(Ipc.engineContinue, async (payload?: { conversationId?: string }) => engine.continueTurn(payload?.conversationId));
   handle(Ipc.engineClearQueue, async (payload?: { conversationId?: string }) => engine.clearQueue(payload?.conversationId));
   handle(Ipc.engineCompact, async (payload?: { customInstructions?: string; conversationId?: string }) => engine.compact(payload?.customInstructions, payload?.conversationId));
-  handle(Ipc.engineGetCommands, () => engine.getCommands());
+  handle(Ipc.engineGetCommands, (payload?: { conversationId?: string }) => engine.getCommands(payload?.conversationId));
   handle(Ipc.engineReplaceSteering, (payload: { items: Array<{ text: string; images?: Array<{ type: "image"; data: string; mimeType: string }> }>; conversationId?: string }) => engine.replaceSteering(payload.items, payload.conversationId));
   handle(Ipc.engineGetExtensions, () => engine.getExtensions());
   handle(Ipc.engineInstallExtensionPackage, (payload: { source: string }) => engine.installExtensionPackage(payload.source));
@@ -53,11 +57,11 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
   handle(Ipc.engineListSkills, () => engine.listSkills());
   handle(Ipc.engineCreateSkill, (payload: SkillDraft) => engine.createSkill(payload));
   handle(Ipc.engineRemoveSkill, (payload: { name: string }) => engine.removeSkill(payload.name));
-  handle(Ipc.engineGetSubagents, () => engine.getSubagents());
+  handle(Ipc.engineGetSubagents, (payload?: { conversationId?: string }) => engine.getSubagents(payload?.conversationId));
   handle(Ipc.engineListAgentConfigs, () => engine.getAgentConfigs());
   handle(Ipc.engineSaveAgentConfig, (payload: SubagentDraft) => engine.saveAgentConfig(payload));
   handle(Ipc.engineRemoveAgentConfig, (payload: { id: string }) => engine.removeAgentConfig(payload.id));
-  handle(Ipc.engineGetSubagentMessages, (payload: { subagentId: string }) => engine.getSubagentMessages(payload.subagentId));
+  handle(Ipc.engineGetSubagentMessages, (payload: { subagentId: string; conversationId?: string }) => engine.getSubagentMessages(payload.subagentId, payload.conversationId));
   handle(Ipc.engineGetCheckpoint, (payload: { conversationId: string }) => engine.getCheckpoint(payload.conversationId));
   handle(Ipc.engineRestoreCheckpoint, (payload: { conversationId: string }) => engine.restoreCheckpoint(payload.conversationId));
   handle(Ipc.enginePermissionRespond, (payload: { id: string; confirmed?: boolean; value?: string; cancelled?: boolean; answers?: Array<string | null>; planAction?: "approve" | "revise" | "ignore" }) => engine.respondPermission(payload));
@@ -65,16 +69,32 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
   handle(Ipc.engineGetState, (payload?: { conversationId?: string }) => engine.getState(payload?.conversationId));
   handle(Ipc.engineGetRunning, () => engine.getRunningConversations());
   handle(Ipc.engineGetModels, () => engine.getAvailableModels());
+  handle(Ipc.engineSyncConfig, async (payload: AgentConfigSyncPayload) => {
+    const expectedToken = process.env.FASTVIBE_AGENT_SYNC_TOKEN;
+    if (!expectedToken || payload?.syncToken !== expectedToken) throw new Error("配置同步凭据无效");
+    const previousMcp = readFileOrEmpty(paths.mcpFile);
+    const { syncToken: _syncToken, ...snapshot } = payload;
+    writeAgentConfig(paths, snapshot);
+    invalidateAppSettingsCache();
+    const settings = readAppSettings(paths);
+    applyPermissionMode(settings);
+    applyLanguages(settings);
+    await engine.reloadProviders();
+    if (payload && "mcp" in payload && payload.mcp !== previousMcp) {
+      const parsed = typeof payload.mcp === "string" ? JSON.parse(payload.mcp) as unknown : [];
+      await engine.saveMcpServers(Array.isArray(parsed) ? parsed : []);
+    }
+  });
   handle(Ipc.engineSetModel, (payload: { provider: string; modelId: string; conversationId?: string }) => engine.setModel(payload.provider, payload.modelId, payload.conversationId));
   handle(Ipc.engineSetThinking, (payload: { level: string; conversationId?: string }) => engine.setThinkingLevel(payload.level, payload.conversationId));
-  handle(Ipc.engineSetInterrupt, (payload: { mode: "immediate" | "wait" }) => engine.setInterruptMode(payload.mode));
-  handle(Ipc.engineSetAutoCompact, (payload: { enabled: boolean }) => engine.setAutoCompaction(payload.enabled));
+  handle(Ipc.engineSetInterrupt, (payload: { mode: "immediate" | "wait"; conversationId?: string }) => engine.setInterruptMode(payload.mode, payload.conversationId));
+  handle(Ipc.engineSetAutoCompact, (payload: { enabled: boolean; conversationId?: string }) => engine.setAutoCompaction(payload.enabled, payload.conversationId));
   handle(Ipc.engineBranch, (payload: { entryId: string; conversationId?: string }) => engine.branch(payload.entryId, payload.conversationId));
   handle(Ipc.engineGetMessages, (payload?: { conversationId?: string }) => engine.loadMessages(payload?.conversationId));
   handle(Ipc.engineGetSnapshot, (payload?: { conversationId?: string }) => engine.getSnapshot(payload?.conversationId));
   handle(Ipc.engineGetStats, (payload?: { conversationId?: string }) => engine.getSessionStats(payload?.conversationId));
-  handle(Ipc.engineSetSteering, (payload: { mode: "all" | "one-at-a-time" }) => engine.setSteeringMode(payload.mode));
-  handle(Ipc.engineSetFollowUp, (payload: { mode: "all" | "one-at-a-time" }) => engine.setFollowUpMode(payload.mode));
+  handle(Ipc.engineSetSteering, (payload: { mode: "all" | "one-at-a-time"; conversationId?: string }) => engine.setSteeringMode(payload.mode, payload.conversationId));
+  handle(Ipc.engineSetFollowUp, (payload: { mode: "all" | "one-at-a-time"; conversationId?: string }) => engine.setFollowUpMode(payload.mode, payload.conversationId));
   handle(Ipc.enginePromptConversation, (payload: { id: string; message: string; images?: Array<{ type: "image"; data: string; mimeType: string }> }) => engine.promptConversation(payload.id, payload.message, payload.images));
   handle(Ipc.engineGetConversationMessages, (payload: { id: string }) => engine.getConversationMessages(payload.id));
 
@@ -157,6 +177,10 @@ export function bindAgentPush(engine: PiProcessManager, terminals: TerminalSessi
     if (event.type === "extension_ui_request") void engine.handleExtensionUi(event);
     broadcast(Ipc.event, event);
   });
+}
+
+function readFileOrEmpty(path: string): string {
+  try { return readFileSync(path, "utf8"); } catch { return ""; }
 }
 
 function cwd(value: string): string {

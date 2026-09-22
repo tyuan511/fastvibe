@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type JSX } from "react";
+import { useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { useNavigate } from "react-router";
 import { useTranslation } from "react-i18next";
 import { ArrowLeft01Icon, CheckmarkCircle02Icon, Folder01Icon, Link01Icon, RefreshIcon } from "@hugeicons/core-free-icons";
@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { cleanError } from "@/lib/ipc-error";
+import { displayRemotePath, encodeRemoteReadPath, parentRemotePath } from "@/lib/remote-project";
 import type { RemoteHostConnectionState, RemoteHostProfile } from "@shared/remote-host";
 import type { DirEntry, ProjectAddResult, WorkspaceSnapshot } from "@shared/types";
 
@@ -21,91 +22,184 @@ export function AddProjectDialog({ open, onOpenChange, onAdded }: Props): JSX.El
   const navigate = useNavigate();
   const [hosts, setHosts] = useState<RemoteHostProfile[]>([]);
   const [hostId, setHostId] = useState("");
-  const [path, setPath] = useState("/");
+  const [rawPath, setRawPath] = useState("/");
+  const [serverInstanceId, setServerInstanceId] = useState<string | null>(null);
   const [entries, setEntries] = useState<DirEntry[]>([]);
   const [connected, setConnected] = useState(false);
   const [connection, setConnection] = useState<RemoteHostConnectionState>({ hostId: null, status: "disconnected" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const requestRef = useRef(0);
+  const openRef = useRef(open);
+  openRef.current = open;
 
   const selectedHost = hosts.find((host) => host.id === hostId);
   const directories = useMemo(() => entries.filter((entry) => entry.kind === "directory"), [entries]);
 
-  useEffect(() => window.fastvibe.ssh.onState(setConnection), []);
+  function nextRequest(): number {
+    requestRef.current += 1;
+    return requestRef.current;
+  }
+
+  function stale(token: number): boolean {
+    return token !== requestRef.current || !openRef.current;
+  }
+
+  useEffect(() => {
+    const apply = (state: RemoteHostConnectionState): void => {
+      if (!state.hostId || state.hostId !== hostId) return;
+      setConnection(state);
+    };
+    const offState = window.fastvibe.ssh.onState(apply);
+    const offStates = window.fastvibe.ssh.onStates((states) => {
+      const match = states.find((state) => state.hostId === hostId);
+      if (match) apply(match);
+    });
+    return () => {
+      offState();
+      offStates();
+    };
+  }, [hostId]);
 
   useEffect(() => {
     if (!open) return;
-    let cancelled = false;
+    nextRequest();
     setHostId("");
-    setPath("/");
+    setRawPath("/");
+    setServerInstanceId(null);
     setEntries([]);
     setConnected(false);
     setConnection({ hostId: null, status: "disconnected" });
     setError(null);
+    setBusy(false);
+    let cancelled = false;
     void window.fastvibe.ssh.hosts().then((snapshot) => {
       if (cancelled) return;
       const map = new Map<string, RemoteHostProfile>();
       for (const host of [...snapshot.discovered, ...snapshot.saved]) map.set(host.id, host);
       setHosts([...map.values()]);
     }).catch((err: unknown) => {
-      if (!cancelled) setError(cleanError(err));
+      if (!cancelled) setError(t("projectDialog.errors.loadHosts", { message: cleanError(err) }));
     });
     return () => { cancelled = true; };
-  }, [open]);
+  }, [open, t]);
 
   function close(): void {
+    nextRequest();
     onOpenChange(false);
     setHosts([]);
     setHostId("");
-    setPath("/");
+    setRawPath("/");
+    setServerInstanceId(null);
     setEntries([]);
     setConnected(false);
     setBusy(false);
     setError(null);
   }
 
+  async function readPath(nextRaw: string, server: string, token: number): Promise<void> {
+    const scoped = encodeRemoteReadPath(server, nextRaw);
+    const listed = await window.fastvibe.workspace.readDir(scoped);
+    if (stale(token)) return;
+    setEntries(listed);
+    setRawPath(nextRaw.trim() || "/");
+  }
+
   async function connect(): Promise<void> {
     if (!hostId) return;
+    const requested = hostId;
+    const token = nextRequest();
     setBusy(true);
     setError(null);
+    setConnected(false);
+    setServerInstanceId(null);
+    setEntries([]);
+    setRawPath("/");
     try {
-      await window.fastvibe.ssh.connect(hostId);
-      setPath("/");
-      setEntries(await window.fastvibe.workspace.readDir("/"));
+      const state = await window.fastvibe.ssh.connect(requested);
+      if (stale(token) || state.hostId !== requested) return;
+      setConnection(state);
+      if (state.status === "error") {
+        setError(state.error || t("projectDialog.errors.connect", { message: "" }).trim());
+        return;
+      }
+      const server = state.serverInstanceId?.trim() ?? "";
+      if (!server) {
+        setError(t("projectDialog.errors.noServer"));
+        return;
+      }
+      setServerInstanceId(server);
+      await readPath("/", server, token);
+      if (stale(token)) return;
       setConnected(true);
     } catch (err) {
-      setError(cleanError(err));
+      if (stale(token)) return;
+      setError(t("projectDialog.errors.connect", { message: cleanError(err) }));
     } finally {
-      setBusy(false);
+      if (!stale(token)) setBusy(false);
     }
   }
 
-  async function readPath(nextPath = path): Promise<void> {
+  async function browse(nextRaw = rawPath): Promise<void> {
+    const server = serverInstanceId;
+    if (!server) return;
+    const token = nextRequest();
     setBusy(true);
     setError(null);
     try {
-      setEntries(await window.fastvibe.workspace.readDir(nextPath));
-      setPath(nextPath);
+      await readPath(nextRaw, server, token);
     } catch (err) {
-      setError(cleanError(err));
+      if (stale(token)) return;
+      setError(t("projectDialog.errors.readDir", { message: cleanError(err) }));
     } finally {
-      setBusy(false);
+      if (!stale(token)) setBusy(false);
     }
   }
 
   async function addRemote(): Promise<void> {
-    if (!selectedHost || !connected || !path.trim()) return;
+    const host = selectedHost;
+    const server = serverInstanceId;
+    const path = rawPath.trim();
+    if (!host || !connected || !server || !path || path === "/") return;
+    const token = nextRequest();
     setBusy(true);
     setError(null);
     try {
-      const added: ProjectAddResult = await window.fastvibe.projects.addRemote(path.trim());
+      const cwd = encodeRemoteReadPath(server, path);
+      const added: ProjectAddResult = await window.fastvibe.projects.addRemote(cwd, {
+        hostId: host.id,
+        serverInstanceId: server,
+        workspaceId: path,
+        name: path.split("/").filter(Boolean).pop() || host.label,
+      });
+      if (stale(token)) return;
       onAdded(added);
       close();
     } catch (err) {
-      setError(cleanError(err));
+      if (stale(token)) return;
+      setError(t("projectDialog.errors.addRemote", { message: cleanError(err) }));
     } finally {
-      setBusy(false);
+      if (!stale(token) && openRef.current) setBusy(false);
     }
+  }
+
+  function selectHost(id: string): void {
+    if (id === hostId) return;
+    nextRequest();
+    setHostId(id);
+    setConnected(false);
+    setServerInstanceId(null);
+    setEntries([]);
+    setRawPath("/");
+    setError(null);
+    setBusy(false);
+    setConnection({ hostId: null, status: "disconnected" });
+  }
+
+  function openFolder(entry: DirEntry): void {
+    const next = displayRemotePath(entry.path);
+    setRawPath(next);
+    void browse(next);
   }
 
   return (
@@ -132,7 +226,7 @@ export function AddProjectDialog({ open, onOpenChange, onAdded }: Props): JSX.El
                       key={host.id}
                       type="button"
                       aria-pressed={selected}
-                      onClick={() => setHostId(host.id)}
+                      onClick={() => selectHost(host.id)}
                       className={`flex w-full items-center gap-3 rounded-md border px-3 py-2.5 text-left transition-colors ${selected ? "border-primary/50 bg-primary/10 text-foreground shadow-sm" : "border-transparent hover:bg-muted"}`}
                     >
                       <HugeiconsIcon icon={Link01Icon} className="size-4 shrink-0 text-muted-foreground" />
@@ -165,21 +259,24 @@ export function AddProjectDialog({ open, onOpenChange, onAdded }: Props): JSX.El
             </div>
             <div className="rounded-lg border border-border">
               <div className="flex items-center gap-2 border-b border-border px-3 py-2">
-                <Button size="icon-xs" variant="ghost" disabled={busy || path === "/"} onClick={() => void readPath(path.replace(/\/[^/]+$/, "") || "/")} aria-label={t("projectDialog.parent")}>
+                <Button size="icon-xs" variant="ghost" disabled={busy || rawPath === "/"} onClick={() => void browse(parentRemotePath(rawPath))} aria-label={t("projectDialog.parent")}>
                   <HugeiconsIcon icon={ArrowLeft01Icon} />
                 </Button>
-                <Input value={path} onChange={(event) => setPath(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void readPath(); }} className="h-8 font-mono text-xs" />
-                <Button size="icon-xs" variant="ghost" disabled={busy} onClick={() => void readPath()} aria-label={t("projectDialog.refresh")}>
+                <Input value={rawPath} onChange={(event) => setRawPath(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !busy) void browse(); }} className="h-8 font-mono text-xs" />
+                <Button size="icon-xs" variant="ghost" disabled={busy} onClick={() => void browse()} aria-label={t("projectDialog.refresh")}>
                   <HugeiconsIcon icon={RefreshIcon} />
                 </Button>
               </div>
               <div className="max-h-64 overflow-y-auto p-1">
-                {directories.length ? directories.map((entry) => (
-                  <button key={entry.path} type="button" className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted ${entry.path === path ? "bg-primary/10" : ""}`} onDoubleClick={() => void readPath(entry.path)} onClick={() => setPath(entry.path)}>
-                    <HugeiconsIcon icon={Folder01Icon} className="size-4 text-muted-foreground" />
-                    <span className="truncate">{entry.name}</span>
-                  </button>
-                )) : <p className="px-2 py-4 text-center text-xs text-muted-foreground">{t("projectDialog.emptyDirectory")}</p>}
+                {directories.length ? directories.map((entry) => {
+                  const shown = displayRemotePath(entry.path);
+                  return (
+                    <button key={entry.path} type="button" disabled={busy} className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted ${shown === rawPath ? "bg-primary/10" : ""}`} onDoubleClick={() => { if (!busy) openFolder(entry); }} onClick={() => setRawPath(shown)}>
+                      <HugeiconsIcon icon={Folder01Icon} className="size-4 text-muted-foreground" />
+                      <span className="truncate">{entry.name}</span>
+                    </button>
+                  );
+                }) : <p className="px-2 py-4 text-center text-xs text-muted-foreground">{t("projectDialog.emptyDirectory")}</p>}
               </div>
             </div>
           </div>
@@ -198,7 +295,7 @@ export function AddProjectDialog({ open, onOpenChange, onAdded }: Props): JSX.El
               <HugeiconsIcon icon={Link01Icon} />{busy ? t("projectDialog.initializing") : t("projectDialog.connect")}
             </Button>
           ) : (
-            <Button disabled={busy || path === "/"} onClick={() => void addRemote()}>{t("projectDialog.addRemote")}</Button>
+            <Button disabled={busy || rawPath === "/"} onClick={() => void addRemote()}>{t("projectDialog.addRemote")}</Button>
           )}
           </div>
         </DialogFooter>

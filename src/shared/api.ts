@@ -125,8 +125,8 @@ export function createFastVibeApi(t: ApiTransport) {
       /** Stop one chat's run. Called with no id, the engine falls back to its active chat. */
       abort: (conversationId?: string): Promise<void> => t.invoke(Ipc.engineAbort, { conversationId }),
       /** Stop one delegated run, leaving its parent chat's own run alone. */
-      abortSubagent: (subagentId: string): Promise<void> =>
-        t.invoke(Ipc.engineAbortSubagent, { subagentId }),
+      abortSubagent: (subagentId: string, conversationId?: string): Promise<void> =>
+        t.invoke(Ipc.engineAbortSubagent, { subagentId, conversationId }),
       /** Resume the interrupted turn from the transcript, with no new user message. */
       continue: (conversationId?: string): Promise<void> =>
         t.invoke(Ipc.engineContinue, { conversationId }),
@@ -138,7 +138,8 @@ export function createFastVibeApi(t: ApiTransport) {
       ): Promise<void> => t.invoke(Ipc.engineReplaceSteering, { items, conversationId }),
       compact: (customInstructions?: string, conversationId?: string): Promise<EngineSessionState> =>
         t.invoke(Ipc.engineCompact, { customInstructions, conversationId }),
-      getCommands: (): Promise<SlashCommand[]> => t.invoke(Ipc.engineGetCommands),
+      getCommands: (conversationId?: string): Promise<SlashCommand[]> =>
+        t.invoke(Ipc.engineGetCommands, { conversationId }),
       getExtensions: (): Promise<ExtensionInfo[]> => t.invoke(Ipc.engineGetExtensions),
       listExtensionPackages: (): Promise<ExtensionPackage[]> =>
         t.invoke(Ipc.engineListExtensionPackages),
@@ -154,14 +155,15 @@ export function createFastVibeApi(t: ApiTransport) {
       createSkill: (draft: SkillDraft): Promise<SkillInfo[]> => t.invoke(Ipc.engineCreateSkill, draft),
       importSkill: (): Promise<SkillInfo[] | null> => t.invoke(Ipc.engineImportSkill),
       removeSkill: (name: string): Promise<SkillInfo[]> => t.invoke(Ipc.engineRemoveSkill, { name }),
-      getSubagents: (): Promise<SubagentInfo[]> => t.invoke(Ipc.engineGetSubagents),
+      getSubagents: (conversationId?: string): Promise<SubagentInfo[]> =>
+        t.invoke(Ipc.engineGetSubagents, { conversationId }),
       listAgentConfigs: (): Promise<SubagentConfig[]> => t.invoke(Ipc.engineListAgentConfigs),
       saveAgentConfig: (draft: SubagentDraft): Promise<SubagentConfig[]> =>
         t.invoke(Ipc.engineSaveAgentConfig, draft),
       removeAgentConfig: (id: string): Promise<SubagentConfig[]> =>
         t.invoke(Ipc.engineRemoveAgentConfig, { id }),
-      getSubagentMessages: (subagentId: string): Promise<ChatMessage[]> =>
-        t.invoke(Ipc.engineGetSubagentMessages, { subagentId }),
+      getSubagentMessages: (subagentId: string, conversationId?: string): Promise<ChatMessage[]> =>
+        t.invoke(Ipc.engineGetSubagentMessages, { subagentId, conversationId }),
       /** A retry's file checkpoint, so the dialog can offer to unwind the workspace too. */
       getCheckpoint: (conversationId: string): Promise<{ paths: string[]; createdAt: number } | null> =>
         t.invoke(Ipc.engineGetCheckpoint, { conversationId }),
@@ -183,15 +185,16 @@ export function createFastVibeApi(t: ApiTransport) {
       getState: (conversationId?: string): Promise<EngineSessionState> =>
         t.invoke(Ipc.engineGetState, { conversationId }),
       getRunning: (): Promise<string[]> => t.invoke(Ipc.engineGetRunning),
-      getModels: (): Promise<FastVibeModel[]> => t.invoke(Ipc.engineGetModels),
+      getModels: (conversationId?: string): Promise<FastVibeModel[]> =>
+        t.invoke(Ipc.engineGetModels, { conversationId }),
       setModel: (provider: string, modelId: string, conversationId?: string): Promise<EngineSessionState> =>
         t.invoke(Ipc.engineSetModel, { provider, modelId, conversationId }),
       setThinking: (level: string, conversationId?: string): Promise<EngineSessionState> =>
         t.invoke(Ipc.engineSetThinking, { level, conversationId }),
-      setInterruptMode: (mode: "immediate" | "wait"): Promise<EngineSessionState> =>
-        t.invoke(Ipc.engineSetInterrupt, { mode }),
-      setAutoCompaction: (enabled: boolean): Promise<EngineSessionState> =>
-        t.invoke(Ipc.engineSetAutoCompact, { enabled }),
+      setInterruptMode: (mode: "immediate" | "wait", conversationId?: string): Promise<EngineSessionState> =>
+        t.invoke(Ipc.engineSetInterrupt, { mode, conversationId }),
+      setAutoCompaction: (enabled: boolean, conversationId?: string): Promise<EngineSessionState> =>
+        t.invoke(Ipc.engineSetAutoCompact, { enabled, conversationId }),
       branch: (entryId: string, conversationId?: string): Promise<ChatMessage[]> =>
         t.invoke(Ipc.engineBranch, { entryId, conversationId }),
       getMessages: (conversationId?: string): Promise<ChatMessage[]> =>
@@ -204,10 +207,10 @@ export function createFastVibeApi(t: ApiTransport) {
         t.invoke(Ipc.engineGetSnapshot, { conversationId }),
       getStats: (conversationId?: string): Promise<SessionStats> =>
         t.invoke(Ipc.engineGetStats, { conversationId }),
-      setSteeringMode: (mode: "all" | "one-at-a-time"): Promise<EngineSessionState> =>
-        t.invoke(Ipc.engineSetSteering, { mode }),
-      setFollowUpMode: (mode: "all" | "one-at-a-time"): Promise<EngineSessionState> =>
-        t.invoke(Ipc.engineSetFollowUp, { mode }),
+      setSteeringMode: (mode: "all" | "one-at-a-time", conversationId?: string): Promise<EngineSessionState> =>
+        t.invoke(Ipc.engineSetSteering, { mode, conversationId }),
+      setFollowUpMode: (mode: "all" | "one-at-a-time", conversationId?: string): Promise<EngineSessionState> =>
+        t.invoke(Ipc.engineSetFollowUp, { mode, conversationId }),
       exportHtml: (): Promise<string | undefined> => t.invoke(Ipc.engineExportHtml),
       /** 设置 → 导入: the other agents on this machine and their sessions. */
       importSources: (): Promise<ImportSourceStatus[]> => t.invoke(Ipc.engineImportSources),
@@ -302,7 +305,10 @@ export function createFastVibeApi(t: ApiTransport) {
     },
     projects: {
       add: (): Promise<ProjectAddResult | null> => t.invoke(Ipc.projectsAdd),
-      addRemote: (cwd: string): Promise<ProjectAddResult> => t.invoke(Ipc.projectsAddRemote, { cwd }),
+      addRemote: (
+        cwd: string,
+        options?: { hostId?: string; serverInstanceId?: string; workspaceId?: string; name?: string },
+      ): Promise<ProjectAddResult> => t.invoke(Ipc.projectsAddRemote, { cwd, ...options }),
       rename: (cwd: string, name: string): Promise<WorkspaceSnapshot> =>
         t.invoke(Ipc.projectsRename, { cwd, name }),
       remove: (cwd: string): Promise<ConversationDeleteResult> =>
@@ -397,9 +403,13 @@ export function createFastVibeApi(t: ApiTransport) {
         t.invoke(Ipc.sshHostRemove, { id }),
       pickIdentityFile: (): Promise<string | null> => t.invoke(Ipc.sshPickIdentityFile),
       connect: (hostId: string): Promise<RemoteHostConnectionState> => t.invoke(Ipc.sshConnect, { hostId }),
-      disconnect: (): Promise<RemoteHostConnectionState> => t.invoke(Ipc.sshDisconnect),
+      disconnect: (hostId?: string): Promise<RemoteHostConnectionState> =>
+        t.invoke(Ipc.sshDisconnect, hostId ? { hostId } : undefined),
       state: (): Promise<RemoteHostConnectionState> => t.invoke(Ipc.sshState),
+      states: (): Promise<RemoteHostConnectionState[]> => t.invoke(Ipc.sshStates),
       onState: (listener: (state: RemoteHostConnectionState) => void): (() => void) => t.subscribe(Ipc.sshState, listener),
+      onStates: (listener: (states: RemoteHostConnectionState[]) => void): (() => void) =>
+        t.subscribe(Ipc.sshStates, listener),
     },
     /** 远程访问：把这台机器上的 agent 通过网页开放给其他设备。 */
     remote: {

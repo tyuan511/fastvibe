@@ -7,6 +7,15 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { LoginThrottle, passwordProblem } from "./auth.ts";
 import { authenticate, isConfigured, listDevices, login, touchDevice } from "./store.ts";
 import { assertPolicyCoverage, remotePolicy } from "../../shared/remote-policy.ts";
+import {
+  APP_CAPABILITIES,
+  newServerInstanceId,
+  readClientMessage,
+  type AppCapability,
+  type AppServerIdentity,
+} from "../../shared/app-protocol.ts";
+import { AppServer } from "../app-server/app-server.ts";
+import type { ClientSession } from "../app-server/client-session.ts";
 
 /**
  * The remote server: a second way into the same call table the desktop windows use.
@@ -36,9 +45,19 @@ export type RemoteServerDeps = {
   policyScope?: "full" | "subset";
   /** SSH port forwards are authenticated by SSH itself and arrive from loopback. */
   allowLoopbackAuth?: boolean;
-  /** Run one method. The same function the Electron transport calls. */
+  /** Run one method. The same function the Electron transport calls. Used for legacy frames. */
   dispatch: (method: string, payload: unknown, clientId: string) => Promise<unknown>;
-  /** Attach a push receiver; the returned function detaches it. */
+  /**
+   * Process-wide AppServer. When omitted, one is constructed for tests / headless with a
+   * stable identity fallback. Production injects the runtime instance so Electron and
+   * WebSocket share a journal, not a second envelope.
+   */
+  appServer?: AppServer;
+  /** Stable identity advertised after outer authentication. Ignored when `appServer` is set. */
+  identity?: AppServerIdentity;
+  /** Capabilities this headless/desktop server exposes. Ignored when `appServer` is set. */
+  capabilities?: readonly AppCapability[];
+  /** Attach a push receiver; the returned function detaches it. Legacy clients only. */
   subscribe: (client: { id: string; send: (channel: string, payload: unknown) => void }) => () => void;
   /**
    * Told about a change the caller could not otherwise learn of: a device logging in
@@ -130,6 +149,9 @@ type Client = {
   timer: NodeJS.Timeout | null;
   /** Answered the last ping. Cleared when one is sent, set again when the pong lands. */
   alive: boolean;
+  /** New App Protocol frames are used after the legacy auth frame. */
+  protocolClient: boolean;
+  appSession: ClientSession | null;
 };
 
 export class RemoteServer {
@@ -141,9 +163,35 @@ export class RemoteServer {
   #heartbeat: NodeJS.Timeout | null = null;
   #host = "127.0.0.1";
   #port: number | null = null;
+  #appServer: AppServer;
+  #ownsAppServer: boolean;
 
   constructor(deps: RemoteServerDeps) {
     this.#deps = deps;
+    if (deps.appServer) {
+      this.#appServer = deps.appServer;
+      this.#ownsAppServer = false;
+      return;
+    }
+    const identity: AppServerIdentity = deps.identity ?? {
+      serverInstanceId: newServerInstanceId(),
+      version: "unknown",
+      platform: process.platform,
+    };
+    this.#ownsAppServer = true;
+    this.#appServer = new AppServer({
+      identity,
+      channels: deps.channels,
+      capabilities: deps.capabilities ?? APP_CAPABILITIES,
+      dispatch: (method, payload, context) =>
+        deps.dispatch(method, payload, context.origin ?? context.subject),
+      log: deps.log,
+    });
+  }
+
+  /** The AppServer this socket adapter talks to. Process-wide when injected. */
+  get appServer(): AppServer {
+    return this.#appServer;
   }
 
   get status(): RemoteServerStatus {
@@ -229,6 +277,9 @@ export class RemoteServer {
     if (this.#heartbeat) clearInterval(this.#heartbeat);
     this.#heartbeat = null;
     for (const client of [...this.#clients.values()]) this.#dropClient(client);
+    // Shared process AppServer (Electron windows, other adapters) stays up. Only a
+    // fallback instance this server constructed for itself is torn down here.
+    if (this.#ownsAppServer) this.#appServer.closeAll();
     this.#wss?.close();
     const server = this.#http;
     this.#http = null;
@@ -520,12 +571,16 @@ export class RemoteServer {
       // sends one would otherwise sit open indefinitely.
       timer: setTimeout(() => socket.close(CLOSE_TIMEOUT, "auth timeout"), AUTH_GRACE_MS),
       alive: true,
+      protocolClient: false,
+      appSession: null,
     };
     this.#clients.set(client.id, client);
     if (this.#deps.allowLoopbackAuth && loopback) this.#authenticateLoopback(client);
 
     socket.on("message", (raw) => {
-      void this.#handleFrame(client, raw as Buffer);
+      void this.#handleFrame(client, raw as Buffer).catch((error: unknown) => {
+        this.#deps.log.error("remote frame failed", error);
+      });
     });
     socket.on("pong", () => {
       client.alive = true;
@@ -542,16 +597,19 @@ export class RemoteServer {
       client.socket.close(CLOSE_TOO_LARGE, "frame too large");
       return;
     }
-    let message: { id?: unknown; type?: unknown; method?: unknown; payload?: unknown; token?: unknown };
+    let rawMessage: unknown;
     try {
-      message = JSON.parse(raw.toString("utf8")) as typeof message;
+      rawMessage = JSON.parse(raw.toString("utf8"));
     } catch {
       this.#send(client, { type: "error", error: "请求格式无效" });
       return;
     }
 
-    if (message.type === "auth") {
-      if (!client.deviceId) this.#authenticate(client, typeof message.token === "string" ? message.token : "");
+    const legacy = typeof rawMessage === "object" && rawMessage !== null
+      ? rawMessage as Record<string, unknown>
+      : null;
+    if (legacy?.type === "auth") {
+      if (!client.deviceId) this.#authenticate(client, typeof legacy.token === "string" ? legacy.token : "");
       return;
     }
     if (!client.deviceId) {
@@ -559,8 +617,46 @@ export class RemoteServer {
       return;
     }
 
-    const id = typeof message.id === "number" ? message.id : null;
-    const method = typeof message.method === "string" ? message.method : "";
+    const appMessage = readClientMessage(rawMessage);
+    if (appMessage) {
+      if (!client.appSession) {
+        client.protocolClient = true;
+        client.detach?.();
+        client.detach = null;
+        client.appSession = this.#appServer.attach({
+          identity: {
+            subject: client.deviceId,
+            kind: "remote",
+            clientKind: appMessage.kind === "hello" ? appMessage.hello.client.kind : "unknown",
+            clientVersion: appMessage.kind === "hello" ? appMessage.hello.client.version : "unknown",
+          },
+          origin: client.id,
+          send: (message) => {
+            this.#send(client, message);
+            return client.socket.readyState === client.socket.OPEN;
+          },
+        });
+      }
+      const keep = await this.#appServer.receive(client.appSession, rawMessage, client.socket);
+      if (!keep) {
+        this.#appServer.detach(client.appSession);
+        client.appSession = null;
+        client.socket.close(CLOSE_UNAUTHORIZED, "protocol rejected");
+      }
+      return;
+    }
+
+    // Legacy transport adapter. It is intentionally below the canonical protocol: old
+    // `{id, method}` clients still work, but a client that already completed hello must
+    // not fall back to this path — that would bypass negotiated capabilities.
+    if (client.protocolClient || client.appSession) {
+      this.#send(client, { type: "error", error: "请使用 App 协议调用" });
+      return;
+    }
+    this.#ensureLegacySubscription(client);
+    const id = typeof legacy?.id === "number" ? legacy.id : null;
+    const method = typeof legacy?.method === "string" ? legacy.method : "";
+    const payload = legacy?.payload;
     if (id === null || !method) {
       this.#send(client, { type: "error", error: "缺少 id 或 method" });
       return;
@@ -571,23 +667,31 @@ export class RemoteServer {
       return;
     }
     try {
-      const result = await this.#deps.dispatch(method, message.payload, client.id);
+      const result = await this.#deps.dispatch(method, payload, client.id);
       this.#send(client, { id, ok: true, result });
     } catch (error) {
-      // The message only — a stack trace names paths and packages on this machine, and
-      // the client can do nothing with it.
-      this.#send(client, { id, ok: false, error: error instanceof Error ? error.message : String(error) });
+      const message = error instanceof Error ? error.message : String(error);
+      this.#send(client, { id, ok: false, error: message });
     }
+  }
+
+  #sendPush(client: Client, channel: string, payload: unknown): void {
+    this.#send(client, { push: channel, payload });
+  }
+
+  #ensureLegacySubscription(client: Client): void {
+    if (client.detach || client.protocolClient) return;
+    client.detach = this.#deps.subscribe({
+      id: client.id,
+      send: (channel, payload) => this.#sendPush(client, channel, payload),
+    });
   }
 
   #authenticateLoopback(client: Client): void {
     if (client.timer) clearTimeout(client.timer);
     client.timer = null;
     client.deviceId = "ssh-loopback";
-    client.detach = this.#deps.subscribe({
-      id: client.id,
-      send: (channel, payload) => this.#send(client, { push: channel, payload }),
-    });
+    this.#ensureLegacySubscription(client);
     this.#send(client, { type: "auth", ok: true, device: { id: client.deviceId, label: "SSH" } });
     this.#deps.log.info("SSH loopback client attached");
   }
@@ -603,12 +707,10 @@ export class RemoteServer {
     client.timer = null;
     client.deviceId = device.id;
     touchDevice(this.#deps.accessFile, device.id);
-    // Pushes start only now: a socket that has not proved who it is must not be sent
-    // conversation events while it waits.
-    client.detach = this.#deps.subscribe({
-      id: client.id,
-      send: (channel, payload) => this.#send(client, { push: channel, payload }),
-    });
+    // Legacy clients expect pushes immediately after auth. The App Protocol transport
+    // filters any such race until its hello has been sent, then switches this client to
+    // the canonical AppServer session.
+    this.#ensureLegacySubscription(client);
     this.#send(client, { type: "auth", ok: true, device: { id: device.id, label: device.label } });
     this.#deps.log.info(`remote client attached device=${device.id}`);
     this.#deps.onStatusChange?.();
@@ -632,6 +734,10 @@ export class RemoteServer {
     if (client.timer) clearTimeout(client.timer);
     client.detach?.();
     client.detach = null;
+    if (client.appSession) {
+      this.#appServer.detach(client.appSession);
+      client.appSession = null;
+    }
     try {
       client.socket.close();
     } catch {

@@ -19,6 +19,9 @@ import { PANEL_COLLAPSE_TRANSITION } from "@/components/layout/collapsible-panel
 import { CommandPalette } from "@/components/layout/command-palette";
 import { TitleBar } from "@/components/layout/title-bar";
 import { HAS_CUSTOM_TITLE_BAR, HAS_TRAFFIC_LIGHTS } from "@/lib/platform";
+import { isRemoteRef, shouldFollowCatalogActive } from "@/lib/remote-project";
+import { createConversationRefresh } from "@/lib/conversation-refresh";
+import { sameServerScope } from "../../shared/server-scope.ts";
 import { Toaster } from "@/components/ui/sonner";
 import { toast } from "sonner";
 import {
@@ -36,6 +39,8 @@ import { IconButton } from "@/components/icon-button";
 import { attachmentPromptSuffix, attachmentsToImages } from "@/lib/attachments";
 import {
   engine,
+  getCheckpoint,
+  getCommands,
   getModels,
   getStatus,
   getSubagents,
@@ -44,6 +49,7 @@ import {
   onEvent,
   onStatus,
   respondPermission,
+  restoreCheckpoint,
   setAutoCompaction,
   setInterruptMode,
   start,
@@ -168,55 +174,11 @@ function useDraftPersistence(activeId: string | null, draft: string): void {
   }, [flush]);
 }
 
-/** Pull the active conversation's turn statistics into the store. */
-function refreshStats(): void {
-  const id = useSessionStore.getState().activeId;
-  // With no conversation on screen the engine's active one is not ours to report:
-  // its statistics would land on the empty hero as if they were this chat's.
-  if (!id) return;
-  void window.fastvibe.engine
-    .getStats()
-    .then((stats) => {
-      // Statistics are conversation-scoped but carry no id of their own, so the
-      // answer is only good for the chat that was on screen when it was asked for.
-      if (useSessionStore.getState().activeId === id) useSessionStore.getState().setStats(stats);
-    })
-    .catch(() => undefined);
-}
-
-/**
- * Re-read the engine's session state for the conversation on screen.
- *
- * The reply is one IPC hop behind the user, who may have opened another chat in
- * the meantime: the state is dropped unless its conversation is still the one on
- * screen. Without the check a finished chat could adopt the answer meant for the
- * one that was just left — and the sidebar would light it up as 运行中.
- */
-function reloadActiveState(): void {
-  const id = useSessionStore.getState().activeId;
-  if (!id) return;
-  void window.fastvibe.engine
-    .getState()
-    .then((next) => {
-      if (useSessionStore.getState().activeId === id) useSessionStore.getState().setSession(next);
-    })
-    .catch(() => undefined);
-}
-
-/** Same attribution rule as `reloadActiveState`, for the transcript itself. */
-function reloadActiveMessages(): void {
-  const id = useSessionStore.getState().activeId;
-  // `getMessages` answers for whatever conversation the *engine* has active. With
-  // none on screen — the hero after 归档, or a window that never opened a chat —
-  // that transcript belongs to someone else and must not be painted here.
-  if (!id) return;
-  void window.fastvibe.engine
-    .getMessages()
-    .then((messages) => {
-      if (useSessionStore.getState().activeId === id) useSessionStore.getState().setMessages(messages, id);
-    })
-    .catch(() => undefined);
-}
+// Capture the displayed conversation for both routing and reply ownership. Calling
+// the raw bridge without an id reads Main's local active chat, even while a remote
+// conversation is on screen — and used to replace that remote transcript every turn.
+const { refreshStats, reloadActiveState, reloadActiveMessages } =
+  createConversationRefresh(engine, useSessionStore.getState);
 
 /**
  * The models this install can actually chat with.
@@ -241,6 +203,7 @@ async function availableModels(): Promise<FastVibeModel[]> {
  */
 const MessageThread = memo(function MessageThread({
   loading,
+  loadingReplaces = false,
   onRetry,
   onEdit,
   showThinking,
@@ -252,6 +215,8 @@ const MessageThread = memo(function MessageThread({
   onFindQueryConsumed,
 }: {
   loading: boolean;
+  /** Show the loader in place of whatever transcript is already on screen. */
+  loadingReplaces?: boolean;
   onRetry: (message: ChatMessage) => void;
   onEdit: (message: ChatMessage, text: string) => void;
   showThinking: boolean;
@@ -269,6 +234,7 @@ const MessageThread = memo(function MessageThread({
       messages={messages}
       streaming={streaming}
       loading={loading}
+      loadingReplaces={loadingReplaces}
       onRetry={onRetry}
       onEdit={onEdit}
       showThinking={showThinking}
@@ -411,6 +377,17 @@ export function App(): JSX.Element {
    * quick succession (the open, then the abandoned-draft cleanup) from doing it either.
    */
   const intendedActiveId = useRef<string | null>(null);
+  // The catalog push always carries this machine's own active conversation, even when
+  // the change came from a remote server. Following it on every push would yank the
+  // view back to that local chat whenever a remote project gained a conversation.
+  // Only a push whose active id actually changed is someone else navigating, and a
+  // local id never pulls the window off a remote conversation.
+  const followedActiveId = useRef<string | null | undefined>(undefined);
+  // Bumped on every open/create so a slow remote transcript cannot land after the
+  // user has already moved on, and so the loader is cleared only by the latest one.
+  const openingTicket = useRef(0);
+  const [opening, setOpening] = useState(false);
+  const [openingId, setOpeningId] = useState<string | null>(null);
   const draining = useRef(new Set<string>());
   // One send at a time. A second click / Enter while this send is still being handed
   // over is not a second message — see `handleSubmit`.
@@ -544,11 +521,17 @@ export function App(): JSX.Element {
     const offWorkspace = window.fastvibe.conversations.onChanged((snapshot) => {
       applySnapshot(snapshot);
       const next = snapshot.activeId ?? null;
+      // A remote catalog change republishes the same local active id. Nothing
+      // navigated; following it would leave the remote conversation just created.
+      if (next === followedActiveId.current) return;
+      followedActiveId.current = next;
       const current = useSessionStore.getState().activeId;
       // Equality is what stops this from echoing: the client that made the change is
       // already there, and Main's `setActive` is a no-op for an unchanged id, so no
-      // push follows the open this one is about to do.
-      if (!next || next === current || next === intendedActiveId.current) return;
+      // push follows the open this one is about to do. A local id is also not a
+      // reason to leave a remote conversation — that push is this machine's catalog,
+      // not the chat on screen.
+      if (!next || !shouldFollowCatalogActive({ next, current, intended: intendedActiveId.current })) return;
       void openLatest.current?.(next, "remote");
     });
     const offEvent = onEvent((event) => {
@@ -556,6 +539,18 @@ export function App(): JSX.Element {
       // follow the conversation the engine created and seeded.
       if (event.type === "conversation_opened" && event.result && typeof event.result === "object") {
         const opened = event.result as ConversationOpenResult;
+        const openedId = opened.conversation?.id;
+        const viewing = useSessionStore.getState().activeId;
+        // A local session replacement must not steal a remote conversation. The
+        // remote server's own `conversation_opened` is not relayed; this is the
+        // local engine, and its active chat is not the one on screen.
+        if (
+          typeof openedId === "string"
+          && !isRemoteRef(openedId)
+          && (isRemoteRef(viewing) || isRemoteRef(intendedActiveId.current))
+        ) {
+          return;
+        }
         applyOpen(opened);
         if (conversationIdFromHash() !== opened.conversation.id) {
           navigate(conversationPath(opened.conversation.id));
@@ -606,7 +601,7 @@ export function App(): JSX.Element {
               brief: info?.detail,
             });
           }
-          void getSubagents().then(setSubagents).catch(() => undefined);
+          void getSubagents(useSessionStore.getState().activeId ?? undefined).then(setSubagents).catch(() => undefined);
         }
         return;
       }
@@ -783,7 +778,7 @@ export function App(): JSX.Element {
     void setAutoCompaction(settings.autoCompact).catch(() => undefined);
     void setInterruptMode(settings.interruptMode).catch(() => undefined);
     if (settings.thinkingLevel !== "auto") {
-      void window.fastvibe.engine
+      void engine
         .setThinking(settings.thinkingLevel)
         .then(setSession)
         .catch(() => undefined);
@@ -803,7 +798,7 @@ export function App(): JSX.Element {
 
   useEffect(() => {
     if (status.state !== "ready" || settings.thinkingLevel === "auto") return;
-    void window.fastvibe.engine
+    void engine
       .setThinking(settings.thinkingLevel)
       .then(setSession)
       .catch(() => undefined);
@@ -811,7 +806,7 @@ export function App(): JSX.Element {
 
   useEffect(() => {
     if (status.state !== "ready") return;
-    void window.fastvibe.engine
+    void engine
       .getState()
       .then(setSession)
       .catch(() => undefined);
@@ -820,20 +815,17 @@ export function App(): JSX.Element {
     // start rather than on every status flip. `modelsLoaded` records that the answer
     // has landed: an empty list then means 没有模型 rather than 还没问到.
     if (useSessionStore.getState().models.length === 0) {
-      void window.fastvibe.engine
-        .getModels()
+      void getModels()
         .then(setModels)
         .catch(() => undefined)
         .finally(() => setModelsLoaded(true));
     } else {
       setModelsLoaded(true);
     }
-    void window.fastvibe.engine
-      .getCommands()
+    void getCommands()
       .then(setCommands)
       .catch(() => undefined);
-    void window.fastvibe.engine
-      .getSubagents()
+    void getSubagents(activeId ?? undefined)
       .then(setSubagents)
       .catch(() => undefined);
     const pending = restoreId.current;
@@ -951,6 +943,16 @@ export function App(): JSX.Element {
     // Drop the previous chat's numbers before the new ones arrive.
     useSessionStore.getState().setStats(null);
     refreshStats();
+    const openedId = result.conversation.id;
+    void getModels(openedId).then((next) => {
+      if (useSessionStore.getState().activeId === openedId) setModels(next);
+    }).catch(() => undefined);
+    void getCommands(openedId).then((next) => {
+      if (useSessionStore.getState().activeId === openedId) setCommands(next);
+    }).catch(() => undefined);
+    void getSubagents(openedId).then((next) => {
+      if (useSessionStore.getState().activeId === openedId) setSubagents(next);
+    }).catch(() => undefined);
   }
 
   /** Push or replace the conversation URL so back/forward walk real history. */
@@ -1351,7 +1353,7 @@ export function App(): JSX.Element {
     // leaves everything exactly as it was.
     const owner = useSessionStore.getState().activeId;
     if (owner) {
-      const checkpoint = await window.fastvibe.engine.getCheckpoint(owner).catch(() => null);
+      const checkpoint = await getCheckpoint(owner).catch(() => null);
       if (checkpoint && checkpoint.paths.length > 0) {
         setRetryRewind({ message, paths: checkpoint.paths });
         return;
@@ -1414,12 +1416,42 @@ export function App(): JSX.Element {
     }
   }
 
+  /**
+   * Mark a transcript fetch in flight.
+   *
+   * Remote opens wait on a tunnel, so the thread shows a loader instead of the chat
+   * being left. Every open bumps the ticket: a reply that belongs to an older one
+   * must not paint over the conversation the user has since asked for.
+   */
+  function beginOpening(id: string | null, showLoader: boolean): number {
+    const ticket = openingTicket.current + 1;
+    openingTicket.current = ticket;
+    setOpening(showLoader);
+    setOpeningId(showLoader ? id : null);
+    return ticket;
+  }
+
+  function openingStillCurrent(ticket: number): boolean {
+    return openingTicket.current === ticket;
+  }
+
+  function endOpening(ticket: number): void {
+    if (!openingStillCurrent(ticket)) return;
+    setOpening(false);
+    setOpeningId(null);
+  }
+
   /** Empty chats stay off the sidebar until the first prompt is sent. */
   async function handleNewChat(project?: string): Promise<void> {
     setComposerFocus((value) => value + 1);
+    let ticket = 0;
     try {
       const current = conversations.find((item) => item.id === activeId);
-      if (current && !current.preview) {
+      // An empty draft can be reused only on the server that already owns it. A remote
+      // project is not a folder this conversation can be moved into — that call is
+      // refused, and it is what made 新建远程会话 fail while a local draft was open.
+      if (current && !current.preview && sameServerScope(current.id, project)) {
+        ticket = beginOpening(current.id, false);
         if ((current.project ?? undefined) !== (project || undefined)) {
           applyList(await window.fastvibe.conversations.setProject(current.id, project ?? null));
           void getStatus().then(setStatus).catch(() => undefined);
@@ -1432,12 +1464,16 @@ export function App(): JSX.Element {
         return;
       }
       const previousId = activeId;
+      ticket = beginOpening(null, isRemoteRef(project));
       const created = await window.fastvibe.conversations.create(project);
+      if (!openingStillCurrent(ticket)) return;
       applyOpen(created);
       revealConversation(created.conversation.id);
       await discardDraft(previousId);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      if (ticket) endOpening(ticket);
     }
   }
 
@@ -1469,6 +1505,8 @@ export function App(): JSX.Element {
     // Re-opening the active chat is pointless once it has content or a reply is
     // streaming, but it is how an empty/failed conversation gets retried.
     if (id === store.activeId && (store.messages.length > 0 || store.streaming)) {
+      beginOpening(id, false);
+      intendedActiveId.current = id;
       if (source === "user") revealConversation(id);
       return;
     }
@@ -1476,14 +1514,18 @@ export function App(): JSX.Element {
     // Claimed before the hop, not after: the push this call is about to cause can beat
     // its own reply back here (see `intendedActiveId`).
     intendedActiveId.current = id;
+    const ticket = beginOpening(id, isRemoteRef(id));
     try {
       const opened = await window.fastvibe.conversations.open(id);
+      if (!openingStillCurrent(ticket)) return;
       applyOpen(opened);
       if (source === "user") revealConversation(id);
       else if (source === "remote") revealConversation(id, true);
       if (previousId && previousId !== id) await discardDraft(previousId);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      endOpening(ticket);
     }
   }
 
@@ -1677,10 +1719,18 @@ export function App(): JSX.Element {
    */
   async function handleSetProject(project: string | null): Promise<void> {
     try {
-      if (!activeId) {
-        const created = await window.fastvibe.conversations.create(project ?? undefined);
-        applyOpen(created);
-        revealConversation(created.conversation.id);
+      if (!activeId || !sameServerScope(activeId, project)) {
+        const previousId = activeId;
+        const ticket = beginOpening(null, isRemoteRef(project));
+        try {
+          const created = await window.fastvibe.conversations.create(project ?? undefined);
+          if (!openingStillCurrent(ticket)) return;
+          applyOpen(created);
+          revealConversation(created.conversation.id);
+          await discardDraft(previousId);
+        } finally {
+          endOpening(ticket);
+        }
         return;
       }
       const snapshot = await window.fastvibe.conversations.setProject(activeId, project);
@@ -1727,16 +1777,22 @@ export function App(): JSX.Element {
     }
   }
 
-  const headerTitle = active ? active.title : t("workspace.newSession");
+  const pendingConversation = openingId
+    ? conversations.find((item) => item.id === openingId) ?? null
+    : null;
+  const headerTitle = opening && !pendingConversation
+    ? t("workspace.loadingConversation")
+    : (pendingConversation ?? active)?.title ?? t("workspace.newSession");
   // A conversation with no preview yet is still a "new session": it has no title
   // or content to put in the top bar, so the bar is dropped and the project
-  // binding is surfaced above the composer instead.
-  const isNewSession = !active?.preview;
+  // binding is surfaced above the composer instead. A remote open in flight is not
+  // that — the transcript is on its way, and the hero would hide the loader.
+  const isNewSession = !opening && !active?.preview;
   // `loading` is the engine coming up, never the model question — plus the window
   // before `getStatus()` lands, which the boot splash is already covering.
   const loading = empty && (!engineKnown || status.state === "starting");
   // A fresh conversation swaps the transcript for the centred greeting hero.
-  const showHero = empty && !loading;
+  const showHero = empty && !loading && !opening;
 
   // The composer's `/` palette: one entry per installed skill, then the engine's
   // own commands (extension commands, prompt templates, …). `getCommands()` does
@@ -1840,7 +1896,7 @@ export function App(): JSX.Element {
         <Sidebar
           projects={projects}
           conversations={conversations}
-          activeId={activeId}
+          activeId={openingId ?? activeId}
           running={running}
           waitingForUser={waitingForUser}
           onNewChat={(cwd) => void handleNewChat(cwd)}
@@ -1938,7 +1994,8 @@ export function App(): JSX.Element {
             <>
               <div className="relative min-h-0 flex-1">
                 <MessageThread
-                  loading={loading}
+                  loading={loading || opening}
+                  loadingReplaces={opening}
                   onRetry={handleRetry}
                   onEdit={handleEdit}
                   showThinking={settings.showThinking}
@@ -1968,6 +2025,7 @@ export function App(): JSX.Element {
         {narrow ? null : (
           <SidePane
             cwd={activeProject?.cwd}
+            workspace={activeProject}
             project={active?.project}
             parentId={activeId ?? undefined}
             canSideChat={Boolean(activeId && hasTranscript)}
@@ -2061,7 +2119,7 @@ export function App(): JSX.Element {
                 void (async () => {
                   if (owner) {
                     try {
-                      const result = await window.fastvibe.engine.restoreCheckpoint(owner);
+                      const result = await restoreCheckpoint(owner);
                       // A file the turn created but could not be put back (binary, too
                       // large, or a path git will not hand over) must be said out loud —
                       // silently "reverting" and then retrying on a half-restored tree is

@@ -36,6 +36,8 @@ export const Ipc = {
   engineGetState: "engine:get-state",
   engineGetRunning: "engine:get-running",
   engineGetModels: "engine:get-models",
+  /** Internal desktop → SSH Agent configuration replication. */
+  engineSyncConfig: "engine:sync-config",
   engineSetModel: "engine:set-model",
   engineSetThinking: "engine:set-thinking",
   engineSetInterrupt: "engine:set-interrupt",
@@ -157,6 +159,8 @@ export const Ipc = {
   sshConnect: "ssh:connect",
   sshDisconnect: "ssh:disconnect",
   sshState: "ssh:state",
+  /** Every live SSH host at once. Parent owns the handler; the pane must not treat `ssh:state` as global. */
+  sshStates: "ssh:states",
   /** 远程访问（网页/手机）: server lifecycle, credentials and devices. */
   remoteGetState: "remote:get-state",
   remoteSetPassword: "remote:set-password",

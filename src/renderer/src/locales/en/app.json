@@ -24,6 +24,7 @@
  "workspace": {
   "noProject": "No project",
   "newSession": "New chat",
+  "loadingConversation": "Loading conversation…",
   "expandSidebar": "Expand sidebar",
   "newChat": "New chat",
   "expandSidePane": "Expand side pane"
@@ -94,6 +95,15 @@
   "newChat": "New chat",
   "newSession": "New chat",
   "reveal": "Show in Finder",
+  "remote": "Remote",
+  "binding": {
+    "available": "Connected",
+    "connecting": "Connecting",
+    "offline": "Offline",
+    "authRequired": "Sign-in required",
+    "incompatible": "Incompatible protocol",
+    "missing": "Remote workspace is gone"
+  },
   "remove": "Remove from list",
   "emptyChats": "No chats yet",
   "collapseMore": "Show less",
@@ -134,7 +144,14 @@
   "refresh": "Refresh directory",
   "emptyDirectory": "This directory is empty",
   "addRemote": "Add remote project",
-  "cancel": "Cancel"
+  "cancel": "Cancel",
+  "errors": {
+    "loadHosts": "Could not load SSH hosts: {{message}}",
+    "connect": "Could not connect to the remote host: {{message}}",
+    "noServer": "Connected, but the server identity was missing, so the remote folder cannot be browsed.",
+    "readDir": "Could not read the remote directory: {{message}}",
+    "addRemote": "Could not add the remote project: {{message}}"
+  }
  },
  "titleBar": {
   "minimize": "Minimize",

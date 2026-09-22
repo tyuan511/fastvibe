@@ -30,7 +30,9 @@
     "closeAll": "关闭所有标签",
     "newTab": "新增标签",
     "openTabs": "打开标签页",
-    "openTabsDesc": "选择要在侧边面板中打开的标签。"
+    "openTabsDesc": "选择要在侧边面板中打开的标签。",
+    "unsupported": "当前远程项目不支持「{{feature}}」",
+    "unavailable": "远程项目当前不可用（{{state}}）"
   },
   "files": {
     "unbound": "当前对话未绑定项目，绑定项目后即可浏览文件。",

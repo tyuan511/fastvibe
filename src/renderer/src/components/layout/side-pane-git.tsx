@@ -30,6 +30,7 @@ import { displayPath, resolvePath } from "@/lib/workspace-path";
 import { useSessionStore } from "@/stores/session";
 import type { ChatMessage } from "@shared/types";
 import type { GitDiffSource, GitStatus } from "@shared/ipc";
+import { isRemoteRef } from "@/lib/remote-project";
 import { blockedRemotely } from "@/lib/remote-unavailable";
 import { Ipc } from "@shared/ipc";
 
@@ -263,6 +264,7 @@ function DiffPane({
             <HugeiconsIcon strokeWidth={2} icon={Delete02Icon} />
           </IconButton>
         ) : null}
+        {isRemoteRef(cwd) ? null : (
         <IconButton
           size="icon-xs"
           variant="ghost"
@@ -274,6 +276,7 @@ function DiffPane({
         >
           <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} />
         </IconButton>
+        )}
       </div>
       <ScrollArea className="min-h-0 flex-1">
         {diffLoading ? (

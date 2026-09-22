@@ -55,6 +55,10 @@ export function clearAppSettings(paths: FastVibePaths): void {
   }
 }
 
+export function invalidateAppSettingsCache(): void {
+  cache = null;
+}
+
 export function applyPermissionMode(settings: PersistedSettings): void {
   const mode = settings.permissionMode === "ask" || settings.permissionMode === "full" || settings.permissionMode === "smart"
     ? settings.permissionMode

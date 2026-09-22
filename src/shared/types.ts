@@ -1,3 +1,6 @@
+import type { AppCapability } from "./app-protocol.ts";
+import type { ProjectBindingState } from "./project-binding.ts";
+
 export type EngineStatusState = "idle" | "starting" | "ready" | "error" | "missing";
 
 export type EngineStatus = {
@@ -824,6 +827,32 @@ export type Project = {
   createdAt: number;
   /** Last mutation time (rename, new conversation, …). Not used for ordering. */
   updatedAt: number;
+  /** A bound workspace on another App Server. Absent on folders this machine owns. */
+  kind?: "remote";
+  bindingId?: string;
+  bindingState?: ProjectBindingState;
+  capabilities?: AppCapability[];
+  connectionId?: string;
+  serverInstanceId?: string;
+  /** Where it lives over there. Display and diagnostics only — never opened locally. */
+  remotePath?: string;
+};
+
+/**
+ * A workspace another App Server offers.
+ *
+ * The remote server's own project list, read over the App Protocol. It is *not* a
+ * `Project`: a `Project` is a folder this machine owns and can open, while this is a
+ * description of something over there — the value a `ProjectBinding` is built from.
+ * Keeping them apart is what makes a binding a reference rather than a copy.
+ */
+export type RemoteWorkspace = {
+  serverInstanceId: string;
+  /** The workspace's identity on its own server. */
+  workspaceId: string;
+  /** Where it lives over there. Display and diagnostics only. */
+  path: string;
+  name: string;
 };
 
 export type Conversation = {

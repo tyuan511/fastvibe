@@ -24,6 +24,7 @@
  "workspace": {
   "noProject": "无项目",
   "newSession": "新会话",
+  "loadingConversation": "正在加载会话…",
   "expandSidebar": "展开侧边栏",
   "newChat": "新对话",
   "expandSidePane": "展开侧边面板"
@@ -94,6 +95,15 @@
   "newChat": "新建对话",
   "newSession": "新建会话",
   "reveal": "在访达中显示",
+  "remote": "远程",
+  "binding": {
+    "available": "已连接",
+    "connecting": "正在连接",
+    "offline": "离线",
+    "authRequired": "需要登录",
+    "incompatible": "协议不兼容",
+    "missing": "远程工作区已不存在"
+  },
   "remove": "从列表移除",
   "emptyChats": "暂无对话",
   "collapseMore": "收起显示",
@@ -134,7 +144,14 @@
   "refresh": "刷新目录",
   "emptyDirectory": "此目录为空",
   "addRemote": "添加远程项目",
-  "cancel": "取消"
+  "cancel": "取消",
+  "errors": {
+    "loadHosts": "无法读取 SSH 主机：{{message}}",
+    "connect": "无法连接远程主机：{{message}}",
+    "noServer": "连接已建立，但没有返回服务器标识，无法浏览远程目录。",
+    "readDir": "无法读取远程目录：{{message}}",
+    "addRemote": "无法添加远程项目：{{message}}"
+  }
  },
  "titleBar": {
   "minimize": "最小化",

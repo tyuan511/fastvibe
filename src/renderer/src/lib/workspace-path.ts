@@ -13,12 +13,24 @@
  * `resolvePath` first.
  */
 
+import { decodeRemoteProjectKey, remoteProjectKey } from "../../../shared/project-binding.ts";
+
 function normalize(path: string): string {
   return path.replace(/\\/g, "/").replace(/\/+$/, "");
 }
 
 function isAbsolute(path: string): boolean {
   return /^([a-zA-Z]:)?\//.test(path);
+}
+
+function unscope(path: string): { serverInstanceId?: string; path: string } {
+  const decoded = decodeRemoteProjectKey(path);
+  if (!decoded) return { path };
+  return { serverInstanceId: decoded.serverInstanceId, path: decoded.remoteWorkspaceId };
+}
+
+function rescope(serverInstanceId: string | undefined, path: string): string {
+  return serverInstanceId ? remoteProjectKey(serverInstanceId, path) : path;
 }
 
 /**
@@ -30,12 +42,13 @@ function isAbsolute(path: string): boolean {
  * is returned untouched.
  */
 export function displayPath(path: string, cwd?: string): string {
-  const target = path.trim();
-  if (!target || !cwd) return target;
+  const target = unscope(path.trim()).path;
+  if (!target) return target;
+  if (!cwd) return target;
   const value = normalize(target);
+  const root = normalize(unscope(cwd).path);
   // POSIX and Windows absolutes only; anything else is already project-relative.
   if (!isAbsolute(value)) return target;
-  const root = normalize(cwd);
   if (!root) return target;
   // macOS volume names keep their own case, so the tests are case-insensitive while
   // the slice preserves the original spelling.
@@ -58,10 +71,13 @@ export function displayPath(path: string, cwd?: string): string {
 export function resolvePath(path: string, cwd?: string): string {
   const target = path.trim();
   if (!target) return target;
-  const value = normalize(target);
-  if (isAbsolute(value)) return value;
+  const scopedTarget = unscope(target);
+  const scopedCwd = cwd ? unscope(cwd) : undefined;
+  const serverInstanceId = scopedTarget.serverInstanceId ?? scopedCwd?.serverInstanceId;
+  const value = normalize(scopedTarget.path);
+  if (isAbsolute(value)) return rescope(serverInstanceId, value);
   if (!cwd) return target;
-  const root = normalize(cwd);
+  const root = normalize(scopedCwd?.path ?? cwd);
   if (!root) return target;
-  return `${root}/${value.replace(/^\.\//, "")}`;
+  return rescope(serverInstanceId, `${root}/${value.replace(/^\.\//, "")}`);
 }

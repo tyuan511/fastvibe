@@ -16,7 +16,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { cleanError } from "@/lib/ipc-error";
-import type { RemoteHostProfile } from "@shared/remote-host";
+import type { RemoteHostConnectionState, RemoteHostProfile } from "@shared/remote-host";
 import { IS_REMOTE } from "@/lib/platform";
 import { SettingsGroup } from "./settings-group";
 
@@ -30,7 +30,9 @@ export function RemoteHostsSettings(): JSX.Element {
   const [form, setForm] = useState<Form>(EMPTY);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [busyHostId, setBusyHostId] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [byHost, setByHost] = useState<Record<string, RemoteHostConnectionState>>({});
 
   async function load(): Promise<void> {
     try {
@@ -44,7 +46,75 @@ export function RemoteHostsSettings(): JSX.Element {
 
   useEffect(() => {
     void load();
+    let cancelled = false;
+    void window.fastvibe.ssh.states().then((states) => {
+      if (cancelled) return;
+      const next: Record<string, RemoteHostConnectionState> = {};
+      for (const state of states) {
+        if (state.hostId) next[state.hostId] = state;
+      }
+      setByHost(next);
+    }).catch(() => {
+      void window.fastvibe.ssh.state().then((state) => {
+        if (cancelled || !state.hostId) return;
+        setByHost({ [state.hostId]: state });
+      }).catch(() => undefined);
+    });
+    const offState = window.fastvibe.ssh.onState((state) => {
+      if (!state.hostId) return;
+      setByHost((prev) => ({ ...prev, [state.hostId!]: state }));
+    });
+    const offStates = window.fastvibe.ssh.onStates((states) => {
+      const next: Record<string, RemoteHostConnectionState> = {};
+      for (const state of states) {
+        if (state.hostId) next[state.hostId] = state;
+      }
+      setByHost(next);
+    });
+    return () => {
+      cancelled = true;
+      offState();
+      offStates();
+    };
   }, []);
+
+  async function connectHost(hostId: string): Promise<void> {
+    setBusyHostId(hostId);
+    setError(null);
+    try {
+      const state = await window.fastvibe.ssh.connect(hostId);
+      setByHost((prev) => ({ ...prev, [hostId]: state }));
+    } catch (err) {
+      setError(cleanError(err));
+    } finally {
+      setBusyHostId(null);
+    }
+  }
+
+  async function disconnectHost(hostId: string): Promise<void> {
+    setBusyHostId(hostId);
+    setError(null);
+    try {
+      const state = await window.fastvibe.ssh.disconnect(hostId);
+      setByHost((prev) => {
+        const next = { ...prev };
+        if (state.hostId === hostId) next[hostId] = state;
+        else delete next[hostId];
+        return next;
+      });
+    } catch (err) {
+      setError(cleanError(err));
+    } finally {
+      setBusyHostId(null);
+    }
+  }
+
+  function statusLabel(state: RemoteHostConnectionState | undefined): string {
+    if (!state || state.status === "disconnected") return t("remoteHosts.disconnected");
+    if (state.status === "connecting") return t("remoteHosts.connecting");
+    if (state.status === "error") return t("remoteHosts.error");
+    return t("remoteHosts.connected");
+  }
 
   const hosts = useMemo(() => {
     const map = new Map<string, RemoteHostProfile>();
@@ -135,15 +205,31 @@ export function RemoteHostsSettings(): JSX.Element {
         </div>
       </div>
       <SettingsGroup>
-        {hosts.length ? hosts.map((host) => (
+        {hosts.length ? hosts.map((host) => {
+          const state = byHost[host.id];
+          const connected = state?.status === "connected" || state?.status === "connecting";
+          return (
           <div key={host.id} className="flex items-center gap-3 px-4 py-2.5">
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm">{host.label}</p>
               <p className="truncate text-xs text-muted-foreground">
                 {host.user ? `${host.user}@` : ""}{host.hostName ?? host.host}:{host.port ?? 22}
               </p>
+              {state?.status === "error" && state.error ? (
+                <p className="mt-1 truncate text-xs text-destructive">{state.error}</p>
+              ) : null}
             </div>
             {host.source === "config" ? <Badge variant="secondary">{t("remoteHosts.fromSshConfig")}</Badge> : null}
+            <Badge variant={state?.status === "connected" ? "secondary" : "outline"}>{statusLabel(state)}</Badge>
+            {connected ? (
+              <Button size="xs" variant="ghost" disabled={busyHostId === host.id} onClick={() => void disconnectHost(host.id)}>
+                {t("remoteHosts.disconnect")}
+              </Button>
+            ) : (
+              <Button size="xs" variant="ghost" disabled={busyHostId === host.id} onClick={() => void connectHost(host.id)}>
+                {t("remoteHosts.connect")}
+              </Button>
+            )}
             <Button size="xs" variant="ghost" disabled={busy} onClick={() => edit(host)} aria-label={t("remoteHosts.edit")}>
               <HugeiconsIcon strokeWidth={2} icon={Edit02Icon} />
             </Button>
@@ -153,7 +239,8 @@ export function RemoteHostsSettings(): JSX.Element {
               </Button>
             ) : null}
           </div>
-        )) : <p className="px-4 py-3 text-xs text-muted-foreground">{t("remoteHosts.empty")}</p>}
+          );
+        }) : <p className="px-4 py-3 text-xs text-muted-foreground">{t("remoteHosts.empty")}</p>}
       </SettingsGroup>
       <Dialog
         open={dialogOpen}

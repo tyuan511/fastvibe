@@ -1,4 +1,4 @@
-import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -42,6 +42,11 @@ try {
     stdio: "inherit",
     env: { ...process.env, CI: "true" },
   });
+  pruneAgentDependencies(staging);
+  pruneDebugFiles(join(staging, "node_modules"));
+  const runtimePackage = JSON.parse(readFileSync(join(staging, "package.json"), "utf8"));
+  delete runtimePackage.dependencies?.["node-pty"];
+  writeFileSync(join(staging, "package.json"), JSON.stringify(runtimePackage, null, 2) + "\n");
   rmSync(join(staging, "pnpm-lock.yaml"), { force: true });
   rmSync(join(staging, "pnpm-workspace.yaml"), { force: true });
 
@@ -51,9 +56,9 @@ try {
     const source = join(root, "resources", name);
     if (existsSync(source)) cpSync(source, join(staging, "resources", name), { recursive: true });
   }
-  mkdirSync(join(staging, "bin"), { recursive: true });
-  cpSync(process.execPath, join(staging, "bin", "node"));
-  chmodSync(join(staging, "bin", "node"), 0o755);
+  // Node is intentionally not copied into the Agent archive. The remote bootstrap
+  // reuses a compatible system Node, or installs the exact build version under the
+  // user's ~/.fastvibe-agent directory when the host has none.
   writeFileSync(join(staging, "manifest.json"), JSON.stringify({
     version: packageJson.version,
     platform,
@@ -64,9 +69,37 @@ try {
   execFileSync("tar", ["-czf", archive, "--format=pax", "."], {
     cwd: staging,
     stdio: "inherit",
-    env: { ...process.env, COPYFILE_DISABLE: "1" },
+    env: { ...process.env, COPYFILE_DISABLE: "1", GZIP: "-9" },
   });
   console.log(`Agent runtime written to ${archive}`);
 } finally {
   rmSync(staging, { recursive: true, force: true });
+}
+
+function pruneAgentDependencies(rootDir) {
+  const pnpmRoot = join(rootDir, "node_modules", ".pnpm");
+  if (!existsSync(pnpmRoot)) return;
+  const nodePtyPackages = readdirSync(pnpmRoot)
+    .filter((name) => name.startsWith("node-pty@"));
+  // The remote Agent uses Linux's `script` PTY fallback. Removing node-pty is
+  // important now that the Agent uses the host's Node: its native ABI would be
+  // tied to the Node version used by the build machine.
+  for (const packageDir of nodePtyPackages) {
+    rmSync(join(pnpmRoot, packageDir), { recursive: true, force: true });
+  }
+  rmSync(join(rootDir, "node_modules", "node-pty"), { force: true });
+}
+
+function pruneDebugFiles(rootDir) {
+  if (!existsSync(rootDir)) return;
+  for (const entry of readdirSync(rootDir, { withFileTypes: true })) {
+    const path = join(rootDir, entry.name);
+    if (entry.isDirectory()) {
+      pruneDebugFiles(path);
+      continue;
+    }
+    // Source maps and TypeScript declarations are not loaded by Node at runtime.
+    // They accounted for about 50 MB in the dependency tree of the Agent.
+    if (entry.name.endsWith(".map") || entry.name.endsWith(".d.ts")) rmSync(path, { force: true });
+  }
 }

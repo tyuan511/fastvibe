@@ -69,6 +69,8 @@ async function withServer(
       return { echoed: method };
     },
     subscribe: (client) => {
+      // Authenticated sockets only. The process AppServer journal observer uses
+      // `observe()`, not `subscribe()`, and must not be counted here.
       receivers.set(client.id, client.send);
       return () => receivers.delete(client.id);
     },

@@ -180,6 +180,7 @@
     "expand": "展开",
     "collapse": "收起",
     "preparing": "正在准备工作区…",
+    "loadingConversation": "正在加载会话…",
     "copied": "已复制"
   },
   "permission": {

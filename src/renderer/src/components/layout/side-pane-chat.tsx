@@ -10,7 +10,7 @@ import { useSessionStore } from "@/stores/session";
 import { useSettingsStore } from "@/stores/settings";
 import { useSidePaneStore, type SidePaneTab } from "@/stores/side-pane";
 import { attachmentPromptSuffix, attachmentsToImages } from "@/lib/attachments";
-import { engine } from "@/lib/engine-client";
+import { engine, promptConversation } from "@/lib/engine-client";
 import { translate } from "@/lib/i18n";
 import type { ChatAttachment, ChatMessage } from "@shared/types";
 import { parseCompactCommand } from "@shared/slash";
@@ -92,7 +92,7 @@ export function SidePaneChat({
     if (parseCompactCommand(text)) {
       patchTab(tab.id, { draft: "" });
       try {
-        await window.fastvibe.engine.promptConversation(id, text);
+        await promptConversation(id, text);
       } catch {
         patchTab(tab.id, { draft: text });
       }
@@ -121,7 +121,7 @@ export function SidePaneChat({
     try {
       // The attachments go with it: this call used to drop them, so a picture sent
       // here reached the transcript but never the model.
-      await window.fastvibe.engine.promptConversation(id, payload, attachmentsToImages(items));
+      await promptConversation(id, payload, attachmentsToImages(items));
     } catch {
       // Nothing reached the engine: drop the phantom row and hand the composer back.
       patchTab(tab.id, { draft: text, messages: current, streaming: false });

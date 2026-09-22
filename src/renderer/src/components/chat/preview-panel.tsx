@@ -8,6 +8,7 @@ import type { FilePreview } from "@shared/types";
 import { useHighlightedCode } from "@/lib/highlight";
 import { MarkdownView } from "./markdown-view";
 import { DiffView } from "./diff-view";
+import { isRemoteRef } from "@/lib/remote-project";
 import { blockedRemotely } from "@/lib/remote-unavailable";
 import { Ipc } from "@shared/ipc";
 
@@ -23,7 +24,7 @@ export function PreviewPanel({
     <aside className="flex w-[min(28rem,42%)] shrink-0 flex-col border-l border-border bg-background">
       <div className="flex h-12 items-center gap-2 border-b border-border px-3">
         <div className="min-w-0 flex-1 truncate text-sm font-medium">{preview.name}</div>
-        {preview.kind !== "error" ? (
+        {preview.kind !== "error" && !isRemoteRef(preview.path) ? (
           <IconButton
             size="icon-xs"
             variant="ghost"

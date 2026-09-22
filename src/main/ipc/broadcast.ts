@@ -23,11 +23,36 @@ export type Subscriber = {
 
 const subscribers = new Map<string, Subscriber>();
 
+export type BroadcastObservation = {
+  channel: string;
+  payload: unknown;
+  except?: string;
+};
+
+type BroadcastObserver = (observation: BroadcastObservation) => void;
+
+const observers = new Set<BroadcastObserver>();
+
 /** Register a receiver. The returned function removes it; call it once, on close. */
 export function subscribe(subscriber: Subscriber): () => void {
   subscribers.set(subscriber.id, subscriber);
   return () => {
     subscribers.delete(subscriber.id);
+  };
+}
+
+/**
+ * Watch every push, including the `except` origin `broadcast` itself applies.
+ *
+ * Distinct from `subscribe`: a subscriber is skipped when its id matches `except`, which
+ * is what stops a window echoing its own write. The process AppServer still has to see
+ * that write so every *other* session can receive it — so the observer is not a
+ * subscriber, is not counted in `subscriberCount`, and is never the origin being skipped.
+ */
+export function observe(observer: BroadcastObserver): () => void {
+  observers.add(observer);
+  return () => {
+    observers.delete(observer);
   };
 }
 
@@ -41,6 +66,13 @@ export function subscribe(subscriber: Subscriber): () => void {
  * thing that never reproduces, so it is handled here once instead of at seven sites.
  */
 export function broadcast(channel: string, payload: unknown, options?: { except?: string }): void {
+  for (const observer of [...observers]) {
+    try {
+      observer({ channel, payload, except: options?.except });
+    } catch {
+      observers.delete(observer);
+    }
+  }
   for (const subscriber of [...subscribers.values()]) {
     if (options?.except && subscriber.id === options.except) continue;
     try {

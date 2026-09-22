@@ -36,6 +36,18 @@ export const SECOND_CWD = "/Users/dev/code/paper-trail";
 export const PROJECTS: Project[] = [
   { cwd: PREVIEW_CWD, name: "fastvibe", createdAt: NOW - 12 * DAY, updatedAt: NOW - 2 * MINUTE },
   { cwd: SECOND_CWD, name: "paper-trail", createdAt: NOW - 30 * DAY, updatedAt: NOW - 3 * DAY },
+  {
+    cwd: "remote:srv_preview:/home/dev/app",
+    name: "app",
+    createdAt: NOW - 8 * DAY,
+    updatedAt: NOW - 1 * HOUR,
+    kind: "remote",
+    bindingState: "available",
+    serverInstanceId: "srv_preview",
+    connectionId: "ssh:preview",
+    remotePath: "/home/dev/app",
+    capabilities: ["conversations", "engine", "workspace"],
+  },
 ];
 
 export const CONVERSATIONS: Conversation[] = [
@@ -553,6 +565,17 @@ export const USAGE: UsageStats = {
 
 /** A small project tree for the right pane's 文件 tab. */
 export const TREE: Record<string, DirEntry[]> = {
+  "/": [
+    { name: "home", path: "/home", kind: "directory" },
+    { name: "tmp", path: "/tmp", kind: "directory" },
+  ],
+  "/home": [
+    { name: "dev", path: "/home/dev", kind: "directory" },
+  ],
+  "/home/dev": [
+    { name: "app", path: "/home/dev/app", kind: "directory" },
+    { name: "code", path: "/home/dev/code", kind: "directory" },
+  ],
   [PREVIEW_CWD]: [
     { name: "resources", path: `${PREVIEW_CWD}/resources`, kind: "directory" },
     { name: "scripts", path: `${PREVIEW_CWD}/scripts`, kind: "directory" },

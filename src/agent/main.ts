@@ -8,8 +8,10 @@ import { TerminalSessions } from "../main/engine/terminal-sessions";
 import { RemoteServer } from "../main/server/server";
 import { broadcast, subscribe } from "../main/ipc/broadcast";
 import { dispatch } from "../main/ipc/registry";
-import { getFastVibePaths } from "../main/engine/paths";
 import { applyShellPath } from "../main/engine/shell-path";
+import { loadOrCreateServerIdentity } from "../main/server/identity";
+import { HEADLESS_CAPABILITIES } from "../main/app-server/capabilities";
+import { createAppServer, initAppServer } from "../main/app-server/runtime";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const defaultDataRoot = join(homedir(), ".fastvibe");
@@ -42,8 +44,26 @@ registerAgentIpc({
   },
 });
 
+const appServer = createAppServer({
+  identity: loadOrCreateServerIdentity(runtime.paths.serverIdentityFile, {
+    version: process.env.FASTVIBE_VERSION || "agent",
+    platform: process.platform,
+  }),
+  capabilities: HEADLESS_CAPABILITIES,
+  channels: agentChannels,
+  log: {
+    info: (message) => console.info(`[fastvibe-agent] ${message}`),
+    warn: (message) => console.warn(`[fastvibe-agent] ${message}`),
+  },
+});
+initAppServer({
+  dispatch: (method, payload, context) =>
+    dispatch(method, payload, { kind: context.kind, window: null, origin: context.origin }),
+});
+
 const server = new RemoteServer({
   accessFile: runtime.paths.remoteAccessFile,
+  appServer,
   channels: agentChannels,
   policyScope: "subset",
   allowLoopbackAuth: true,

@@ -38,3 +38,17 @@ test("displayPath is the inverse for files inside the workspace", () => {
   assert.equal(displayPath(resolvePath("src/a.ts", "/repo"), "/repo"), "src/a.ts");
   assert.equal(resolvePath(displayPath("/repo/src/a.ts", "/repo"), "/repo"), "/repo/src/a.ts");
 });
+
+test("namespaced remote paths display decoded and resolve still namespaced", () => {
+  const cwd = "remote:srv_preview:/home/dev/app";
+  assert.equal(displayPath(`${cwd}/src/a.ts`, cwd), "src/a.ts");
+  assert.equal(displayPath(cwd, cwd), ".");
+  assert.equal(displayPath(cwd), "/home/dev/app");
+  assert.equal(resolvePath("src/a.ts", cwd), "remote:srv_preview:/home/dev/app/src/a.ts");
+  assert.equal(resolvePath("/home/dev/app/src/a.ts", cwd), "remote:srv_preview:/home/dev/app/src/a.ts");
+  assert.equal(resolvePath("/other/a.ts", cwd), "remote:srv_preview:/other/a.ts");
+  assert.equal(
+    displayPath(resolvePath("src/a.ts", cwd), cwd),
+    "src/a.ts",
+  );
+});

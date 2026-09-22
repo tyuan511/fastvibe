@@ -7,7 +7,7 @@ import { MessageList } from "@/components/chat/message-list";
 import { usagePercent } from "@/components/chat/session-controls";
 import { useSessionStore } from "@/stores/session";
 import { useSettingsStore } from "@/stores/settings";
-import { abortSubagent } from "@/lib/engine-client";
+import { abortSubagent, getSubagentMessages } from "@/lib/engine-client";
 import type { ChatMessage } from "@shared/types";
 import type { SidePaneTab } from "@/stores/side-pane";
 
@@ -79,8 +79,7 @@ export const SidePaneSubagent = memo(function SidePaneSubagent({ tab }: { tab: S
   useEffect(() => {
     if (!subagentId || running) return;
     let cancelled = false;
-    void window.fastvibe.engine
-      .getSubagentMessages(subagentId)
+    void getSubagentMessages(subagentId, tab.conversationId)
       .then((result) => {
         if (!cancelled && result.length > 0) setLoaded(result);
       })
@@ -88,7 +87,7 @@ export const SidePaneSubagent = memo(function SidePaneSubagent({ tab }: { tab: S
     return () => {
       cancelled = true;
     };
-  }, [subagentId, running]);
+  }, [subagentId, running, tab.conversationId]);
 
   const brief = useMemo<ChatMessage | null>(() => {
     if (!task) return null;
@@ -155,7 +154,7 @@ export const SidePaneSubagent = memo(function SidePaneSubagent({ tab }: { tab: S
           onChange={noop}
           onSubmit={noop}
           onAbort={() => {
-            if (subagentId) void abortSubagent(subagentId).catch(() => undefined);
+            if (subagentId) void abortSubagent(subagentId, tab.conversationId).catch(() => undefined);
           }}
           onPickWorkspace={noop}
           onSelectProject={noop}

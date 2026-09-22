@@ -2,7 +2,7 @@ import { chmodSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { mkdirSync } from "node:fs";
 import type { RemoteHostProfile } from "@shared/remote-host";
-import { readSshConfig } from "./ssh-config";
+import { readSshConfig } from "./ssh-config.ts";
 
 type StoredHosts = { version: 1; hosts: RemoteHostProfile[] };
 

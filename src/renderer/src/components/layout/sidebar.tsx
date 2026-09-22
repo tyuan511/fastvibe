@@ -2,7 +2,7 @@ import { useCallback, useMemo, useRef, useState, type JSX, type KeyboardEvent } 
 import { useTranslation } from "react-i18next";
 import { createPortal } from "react-dom";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Add01Icon, Alert02Icon, Archive04Icon, ArrowLeft01Icon, ArrowRight01Icon, Delete02Icon, Folder01Icon, Folder02Icon, FolderRootIcon, MessageSquarePlusIcon, MoreHorizontalIcon, PanelLeftCloseIcon, PencilEdit02Icon, PinIcon, PuzzleIcon, Search01Icon, Settings01Icon } from "@hugeicons/core-free-icons";
+import { Add01Icon, Alert02Icon, Archive04Icon, ArrowLeft01Icon, ArrowRight01Icon, Delete02Icon, Folder01Icon, Folder02Icon, FolderRootIcon, Link01Icon, MessageSquarePlusIcon, MoreHorizontalIcon, PanelLeftCloseIcon, PencilEdit02Icon, PinIcon, PuzzleIcon, Search01Icon, Settings01Icon } from "@hugeicons/core-free-icons";
 import {
   DndContext,
   DragOverlay,
@@ -64,6 +64,7 @@ import { useArchivedIds } from "@/stores/archive";
 import { useSettingsStore } from "@/stores/settings";
 import { useShortcutLabel } from "@/lib/use-shortcuts";
 import { useHistoryNav } from "@/lib/use-history-nav";
+import { bindingStateKey, displayRemotePath, isRemoteProject } from "@/lib/remote-project";
 import type { Conversation, Project } from "@shared/types";
 
 const COLLAPSED_KEY = "fastvibe.sidebar.collapsed";
@@ -230,8 +231,7 @@ function DropLine({ rect, edge }: { rect: DropRect; edge: "above" | "below" }): 
  * drop targets another project's header rather than its whole (tall) expanded group.
  */
 function DraggableProject({
-  cwd,
-  name,
+  project,
   open,
   renaming,
   onOpenChange,
@@ -243,8 +243,7 @@ function DraggableProject({
   onRemove,
   children,
 }: {
-  cwd: string;
-  name: string;
+  project: Project;
   open: boolean;
   renaming: boolean;
   onOpenChange: (open: boolean) => void;
@@ -256,6 +255,11 @@ function DraggableProject({
   onRemove: () => void;
   children: React.ReactNode;
 }): JSX.Element {
+  const cwd = project.cwd;
+  const name = project.name;
+  const remote = isRemoteProject(project);
+  const pathHint = project.remotePath || (remote ? displayRemotePath(cwd) : cwd);
+  const bindingKey = bindingStateKey(project.bindingState);
   const { t } = useTranslation("app");
   const { listeners, setNodeRef: setDraggableRef, setActivatorNodeRef, isDragging } = useDraggable({ id: cwd });
   const { setNodeRef: setDroppableRef } = useDroppable({ id: cwd });
@@ -314,7 +318,7 @@ function DraggableProject({
                 >
                   <HugeiconsIcon
                     strokeWidth={2}
-                    icon={open ? Folder02Icon : Folder01Icon}
+                    icon={remote ? Link01Icon : open ? Folder02Icon : Folder01Icon}
                     className="size-3.5 shrink-0 text-muted-foreground"
                   />
                   {renaming ? (
@@ -322,10 +326,20 @@ function DraggableProject({
                   ) : (
                     <span className="truncate">{name}</span>
                   )}
+                  {remote && !renaming ? (
+                    <span className="shrink-0 text-xs text-muted-foreground">
+                      {project.bindingState && project.bindingState !== "available"
+                        ? t(`sidebar.binding.${bindingKey}`)
+                        : t("sidebar.remote")}
+                    </span>
+                  ) : null}
                 </TooltipTrigger>
                 {renaming ? null : (
                   <TooltipContent side="right" align="center" sideOffset={pathOffset} className="max-w-96">
-                    <span className="font-mono break-all">{cwd}</span>
+                    <span className="font-mono break-all">{pathHint}</span>
+                    {remote && project.bindingState && project.bindingState !== "available" ? (
+                      <span className="mt-1 block text-xs text-muted-foreground">{t(`sidebar.binding.${bindingKey}`)}</span>
+                    ) : null}
                   </TooltipContent>
                 )}
               </Tooltip>
@@ -347,10 +361,12 @@ function DraggableProject({
                       <HugeiconsIcon strokeWidth={2} icon={PencilEdit02Icon} />
                       {t("sidebar.rename")}
                     </DropdownMenuItem>
-                    <DropdownMenuItem onClick={onReveal}>
-                      <HugeiconsIcon strokeWidth={2} icon={FolderRootIcon} />
-                      {t("sidebar.reveal")}
-                    </DropdownMenuItem>
+                    {remote ? null : (
+                      <DropdownMenuItem onClick={onReveal}>
+                        <HugeiconsIcon strokeWidth={2} icon={FolderRootIcon} />
+                        {t("sidebar.reveal")}
+                      </DropdownMenuItem>
+                    )}
                     <DropdownMenuSeparator />
                     <DropdownMenuItem variant="destructive" onClick={onRemove}>
                       <HugeiconsIcon strokeWidth={2} icon={Delete02Icon} />
@@ -377,7 +393,7 @@ function DraggableProject({
           <ContextMenuContent className="w-40">
             <ContextMenuItem onClick={onNewChat}>{t("sidebar.newChat")}</ContextMenuItem>
             <ContextMenuItem onClick={onStartRename}>{t("sidebar.rename")}</ContextMenuItem>
-            <ContextMenuItem onClick={onReveal}>{t("sidebar.reveal")}</ContextMenuItem>
+            {remote ? null : <ContextMenuItem onClick={onReveal}>{t("sidebar.reveal")}</ContextMenuItem>}
             <ContextMenuSeparator />
             <ContextMenuItem variant="destructive" onClick={onRemove}>
               {t("sidebar.remove")}
@@ -744,11 +760,12 @@ export function Sidebar({
       byProject.set(item.project, list);
     }
 
-    const result: Array<{ cwd: string; name: string; items: Conversation[]; key: string }> = [];
+    const result: Array<{ project: Project; cwd: string; name: string; items: Conversation[]; key: string }> = [];
     for (const project of projects) {
       const items = byProject.get(project.cwd) ?? [];
       const key = sectionKey("project", project.cwd);
       result.push({
+        project,
         cwd: project.cwd,
         name: project.name,
         key,
@@ -1109,8 +1126,7 @@ export function Sidebar({
                   return (
                     <DraggableProject
                       key={group.cwd}
-                      cwd={group.cwd}
-                      name={group.name}
+                      project={group.project}
                       open={open}
                       renaming={renamingProject}
                       onOpenChange={(next) => setOpen(group.cwd, next)}

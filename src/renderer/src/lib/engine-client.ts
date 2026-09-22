@@ -95,26 +95,37 @@ export const onConversationReady: FastVibeEngine["onConversationReady"] = (...ar
   window.fastvibe.engine.onConversationReady(...args);
 export const respondPermission: FastVibeEngine["respondPermission"] = (...args) =>
   window.fastvibe.engine.respondPermission(...args);
-export const getCommands: FastVibeEngine["getCommands"] = (...args) => window.fastvibe.engine.getCommands(...args);
-export const getModels: FastVibeEngine["getModels"] = (...args) => window.fastvibe.engine.getModels(...args);
+/**
+ * Newly session-scoped (parent must route by `conversationId`, including a namespaced
+ * remote id): `getCommands`, `getModels`, `getSubagents`, `getSubagentMessages`,
+ * `abortSubagent`. Previously they hit whichever engine was active on this machine.
+ */
+export const getCommands: FastVibeEngine["getCommands"] = (conversationId) =>
+  window.fastvibe.engine.getCommands(conversationId ?? activeId());
+export const getModels: FastVibeEngine["getModels"] = (conversationId) =>
+  window.fastvibe.engine.getModels(conversationId ?? activeId());
 export const getStatus: FastVibeEngine["getStatus"] = (...args) => window.fastvibe.engine.getStatus(...args);
 export const start: FastVibeEngine["start"] = (...args) => window.fastvibe.engine.start(...args);
 export const stop: FastVibeEngine["stop"] = (...args) => window.fastvibe.engine.stop(...args);
-export const setInterruptMode: FastVibeEngine["setInterruptMode"] = (...args) =>
-  window.fastvibe.engine.setInterruptMode(...args);
-export const setAutoCompaction: FastVibeEngine["setAutoCompaction"] = (...args) =>
-  window.fastvibe.engine.setAutoCompaction(...args);
-export const setSteeringMode: FastVibeEngine["setSteeringMode"] = (...args) =>
-  window.fastvibe.engine.setSteeringMode(...args);
-export const setFollowUpMode: FastVibeEngine["setFollowUpMode"] = (...args) =>
-  window.fastvibe.engine.setFollowUpMode(...args);
+export const setInterruptMode: FastVibeEngine["setInterruptMode"] = (mode, conversationId) =>
+  window.fastvibe.engine.setInterruptMode(mode, conversationId ?? activeId());
+export const setAutoCompaction: FastVibeEngine["setAutoCompaction"] = (enabled, conversationId) =>
+  window.fastvibe.engine.setAutoCompaction(enabled, conversationId ?? activeId());
+export const setSteeringMode: FastVibeEngine["setSteeringMode"] = (mode, conversationId) =>
+  window.fastvibe.engine.setSteeringMode(mode, conversationId ?? activeId());
+export const setFollowUpMode: FastVibeEngine["setFollowUpMode"] = (mode, conversationId) =>
+  window.fastvibe.engine.setFollowUpMode(mode, conversationId ?? activeId());
 export const exportHtml: FastVibeEngine["exportHtml"] = (...args) => window.fastvibe.engine.exportHtml(...args);
-export const abortSubagent: FastVibeEngine["abortSubagent"] = (...args) =>
-  window.fastvibe.engine.abortSubagent(...args);
-export const getSubagents: FastVibeEngine["getSubagents"] = (...args) =>
-  window.fastvibe.engine.getSubagents(...args);
-export const getSubagentMessages: FastVibeEngine["getSubagentMessages"] = (...args) =>
-  window.fastvibe.engine.getSubagentMessages(...args);
+export const abortSubagent: FastVibeEngine["abortSubagent"] = (subagentId, conversationId) =>
+  window.fastvibe.engine.abortSubagent(subagentId, conversationId ?? activeId());
+export const getSubagents: FastVibeEngine["getSubagents"] = (conversationId) =>
+  window.fastvibe.engine.getSubagents(conversationId ?? activeId());
+export const getSubagentMessages: FastVibeEngine["getSubagentMessages"] = (subagentId, conversationId) =>
+  window.fastvibe.engine.getSubagentMessages(subagentId, conversationId ?? activeId());
+export const getCheckpoint: FastVibeEngine["getCheckpoint"] = (conversationId) =>
+  window.fastvibe.engine.getCheckpoint(conversationId);
+export const restoreCheckpoint: FastVibeEngine["restoreCheckpoint"] = (conversationId) =>
+  window.fastvibe.engine.restoreCheckpoint(conversationId);
 export const newSession: FastVibeEngine["newSession"] = (...args) => window.fastvibe.engine.newSession(...args);
 export const getRunning: FastVibeEngine["getRunning"] = (...args) => window.fastvibe.engine.getRunning(...args);
 export const promptConversation: FastVibeEngine["promptConversation"] = (...args) =>

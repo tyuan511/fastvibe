@@ -68,6 +68,7 @@ const DENIED = new Map<string, string>([
   [Ipc.sshConnect, "SSH 主机只能在本机管理"],
   [Ipc.sshDisconnect, "SSH 主机只能在本机管理"],
   [Ipc.sshState, "SSH 主机只能在本机管理"],
+  [Ipc.sshStates, "SSH 主机只能在本机管理"],
 
   // Remote access administers itself only from the desktop. A stolen token must not be
   // able to change the password, revoke the owner's other devices, or switch the server
@@ -148,6 +149,9 @@ const ALLOWED = new Set<string>([
   Ipc.engineRestoreCheckpoint,
   Ipc.engineSaveMcpServers,
   Ipc.engineSetAutoCompact,
+  // The headless Agent additionally requires the per-SSH token established during
+  // bootstrap; listing this here only lets the App Protocol carry that trusted call.
+  Ipc.engineSyncConfig,
   Ipc.engineSetFollowUp,
   Ipc.engineSetInterrupt,
   Ipc.engineSetModel,

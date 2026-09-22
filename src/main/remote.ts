@@ -11,6 +11,7 @@ import { readAppSettings, writeAppSettings } from "./engine/app-settings";
 import { passwordProblem } from "./server/auth";
 import { clearRemoteAccess, isConfigured, listDevices, revokeDevice, setPassword } from "./server/store";
 import { RemoteServer } from "./server/server";
+import { getAppServer } from "./app-server/runtime";
 import {
   TunnelRunner,
   TUNNEL_OFF,
@@ -40,6 +41,7 @@ const DEFAULT_PORT = 7777;
 function instance(): RemoteServer {
   return (server ??= new RemoteServer({
     accessFile: getFastVibePaths().remoteAccessFile,
+    appServer: getAppServer(),
     channels: () => handlerChannels(),
     dispatch: (method, payload, clientId) =>
       // A remote caller has no window: the handlers that need one are denied by the

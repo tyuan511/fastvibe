@@ -31,6 +31,8 @@ export type RemoteWorkspaceTarget = {
 
 export type RemoteHostConnectionState = {
   hostId: string | null;
+  /** App Server identity; unlike hostId this is stable across transports. */
+  serverInstanceId?: string | null;
   status: "disconnected" | "connecting" | "connected" | "error";
   localPort?: number;
   error?: string;

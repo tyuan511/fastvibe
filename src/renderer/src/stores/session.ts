@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { belongsToTranscript, sessionBelongsToConversation } from "../lib/conversation-ownership";
 import type {
   ChatAttachment,
   ChatMessage,
@@ -759,21 +760,13 @@ function reduceEvents(state: SessionStore, events: EngineEvent[]): Partial<Sessi
  *
  * Subagent traffic is exempt: it is keyed by run id, feeds `subagentStreams`, and is
  * deliberately applied whichever chat is on screen so a backgrounded run stays live.
- * An event with no conversation of its own (an extension load failure) is global.
+ * Transcript events without an owner cannot be applied to an open conversation.
  *
  * A blocking prompt is exempt for the same reason as subagent traffic: it has nothing
  * to do with the transcript, and a chat parked on one must be able to raise the
  * sidebar's 等你 mark and the approval notification while a different chat is on
  * screen. Only the *panel* is scoped to the active conversation, by `activePermission`.
  */
-function belongsToTranscript(event: EngineEvent, ownerId: string | null): boolean {
-  if (event.type.startsWith("subagent_")) return true;
-  if (event.type === "extension_ui_request" || event.type === "extension_ui_dismiss") return true;
-  const conversationId = typeof event.conversationId === "string" ? event.conversationId : null;
-  if (!conversationId) return true;
-  return conversationId === ownerId;
-}
-
 /**
  * Cap transcript updates at ~30fps. One commit per animation frame was still enough
  * to saturate layout: the message scroller re-measures its children on every content
@@ -858,28 +851,24 @@ export const useSessionStore = create<SessionStore>((set, get) => {
   setStatus: (status) => set({ status, error: status.state === "error" ? status.message ?? null : null }),
   setSession: (session) =>
     set((state) => {
-      // A state reply travels one IPC hop, so it can land after the user opened
-      // another chat. It still describes the surface the composer reads
-      // (`session.model` is shared by the side pane's own composer), but its run
-      // flags speak only for the conversation they belong to: adopting them for
-      // the chat on screen lit a finished conversation as 运行中 with no event
-      // left to clear it.
-      const mine = !session?.conversationId || !state.activeId || session.conversationId === state.activeId;
-      const conversationId = mine ? state.activeId : null;
+      // Reject the entire foreign reply, not just its run flags: model, context
+      // usage and thinking level belong to the addressed conversation too.
+      if (!sessionBelongsToConversation(session, state.activeId)) return state;
+      const conversationId = state.activeId;
       const hasQueued = conversationId
         ? state.queued.some((item) => item.conversationId === conversationId)
         : false;
       const resumedQueuePause =
-        mine && conversationId && session?.canResume && hasQueued
+        conversationId && session?.canResume && hasQueued
           ? { ...state.queuePauseByConversation, [conversationId]: "stopped" as const }
           : state.queuePauseByConversation;
       return {
         session,
-        streaming: mine ? (session?.running ?? false) : state.streaming,
-        canResume: mine ? session?.canResume === true : state.canResume,
+        streaming: session?.running ?? false,
+        canResume: session?.canResume === true,
         queuePauseByConversation: resumedQueuePause,
         queuePause:
-          mine && conversationId
+          conversationId
             ? resumedQueuePause[conversationId] ?? null
             : state.queuePause,
         // `working`, not just `running`: the sidebar's mark means 「still busy」, which
@@ -888,7 +877,7 @@ export const useSessionStore = create<SessionStore>((set, get) => {
         // **only** busy state the UI reads (sidebar mark, composer's stop button, todo
         // panel): a third copy of it could disagree with these by an IPC hop.
         running:
-          mine && state.activeId ? { ...state.running, [state.activeId]: working(session) } : state.running,
+          state.activeId ? { ...state.running, [state.activeId]: working(session) } : state.running,
         // The chat just came back from the engine: if it is parked on a prompt, that
         // is news the event stream may have delivered while another chat was on screen.
         waitingForUser: waitingForUserAfter(state, session),
@@ -932,9 +921,11 @@ export const useSessionStore = create<SessionStore>((set, get) => {
     }));
   },
   setMessages: (messages, conversationId) => {
+    // A stale read must not even discard the active chat's queued stream deltas.
+    if (conversationId && conversationId !== get().activeId) return;
     dropQueued();
     set((state) => {
-      if (conversationId && state.activeId && conversationId !== state.activeId) return state;
+      if (conversationId && conversationId !== state.activeId) return state;
       // Keep the object identity of every row the read did not actually change, so
       // the thread re-renders only where it differs.
       const reconciled = reconcileMessages(state.messages, messages);
@@ -1167,9 +1158,9 @@ export const useSessionStore = create<SessionStore>((set, get) => {
     // A steer can be delivered while its conversation is in the background. The
     // transcript event is intentionally filtered below, but the renderer-side row
     // still has to disappear or it would come back forever when the chat is reopened.
-    if (owner && !belongsToTranscript(event, get().activeId)) {
+    if (!belongsToTranscript(event, get().activeId)) {
       const delivered = userMessageText(event);
-      if (delivered !== undefined) {
+      if (owner && delivered !== undefined) {
         set((state) => {
           const sending = state.queued.filter(
             (item) => item.conversationId === owner && item.sending,

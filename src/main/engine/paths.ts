@@ -38,6 +38,22 @@ export type FastVibePaths = {
   remoteAccessFile: string;
   /** Saved SSH host profiles; the file is private because it may contain an SSH password. */
   sshHostsFile: string;
+  /**
+   * Remote projects on other App Servers, as references.
+   *
+   * Separate from `conversationsFile` because the two have different owners: a binding
+   * points at something another server owns and must outlive that server being
+   * unreachable, while the catalog holds chats this machine really has.
+   */
+  projectBindingsFile: string;
+  /**
+   * This installation's stable identity.
+   *
+   * Read by every handshake, and what makes `remote:<server>:<id>` mean something on
+   * both ends. Kept beside the conversations rather than in `settings.json`, which is a
+   * file the user is expected to reset.
+   */
+  serverIdentityFile: string;
 };
 
 /**
@@ -106,5 +122,7 @@ function buildFastVibePaths(): FastVibePaths {
     usageLedgerFile: join(runtimeRoot, "usage-ledger.jsonl"),
     remoteAccessFile: join(userData, "remote-access.json"),
     sshHostsFile: join(userData, "ssh-hosts.json"),
+    projectBindingsFile: join(userData, "project-bindings.json"),
+    serverIdentityFile: join(userData, "server-identity.json"),
   };
 }

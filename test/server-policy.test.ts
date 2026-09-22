@@ -129,6 +129,7 @@ test("the denied set is exactly what the UI explains, so a new denial cannot go 
     "ssh:hosts",
     "ssh:pick-identity-file",
     "ssh:state",
+    "ssh:states",
     "update:check",
     "update:download",
     "update:install",

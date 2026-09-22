@@ -9,6 +9,7 @@ import { IconButton } from "@/components/icon-button";
 import type { ChangedFile } from "@/lib/changed-files";
 import { displayPath, resolvePath } from "@/lib/workspace-path";
 import { cn } from "@/lib/utils";
+import { isRemoteRef } from "@/lib/remote-project";
 import { blockedRemotely } from "@/lib/remote-unavailable";
 import { Ipc } from "@shared/ipc";
 
@@ -133,6 +134,7 @@ function ChangeDiffPane({
         {file.removed > 0 ? (
           <span className="shrink-0 text-xs tabular-nums text-destructive">−{file.removed}</span>
         ) : null}
+        {isRemoteRef(cwd) ? null : (
         <IconButton
           size="icon-xs"
           variant="ghost"
@@ -144,6 +146,7 @@ function ChangeDiffPane({
         >
           <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} />
         </IconButton>
+        )}
       </div>
       <ScrollArea className="min-h-0 flex-1">
         {file.diff ? (

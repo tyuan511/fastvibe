@@ -13,6 +13,7 @@ import { MarkdownView } from "./markdown-view";
 import { QuestionAnswers } from "./question-answers";
 import { TodoChecklist } from "./todo-list";
 import { ToolRow } from "./tool-row";
+import { isRemoteRef } from "@/lib/remote-project";
 import { blockedRemotely } from "@/lib/remote-unavailable";
 import { Ipc } from "@shared/ipc";
 
@@ -175,8 +176,9 @@ function FileActions({ path }: { path: string }): JSX.Element {
         type="button"
         className="font-mono text-sm text-muted-foreground underline-offset-2 hover:underline"
         onClick={() => {
-          if (blockedRemotely(Ipc.workspaceReveal)) return;
-          void window.fastvibe.workspace.reveal(resolvePath(path, cwd));
+          const resolved = resolvePath(path, cwd);
+          if (isRemoteRef(resolved) || isRemoteRef(cwd) || blockedRemotely(Ipc.workspaceReveal)) return;
+          void window.fastvibe.workspace.reveal(resolved);
         }}
       >
         {displayPath(path, cwd)}

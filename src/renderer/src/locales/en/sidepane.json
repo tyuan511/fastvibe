@@ -30,7 +30,9 @@
     "closeAll": "Close all tabs",
     "newTab": "New tab",
     "openTabs": "Open a tab",
-    "openTabsDesc": "Choose a tab to open in the side pane."
+    "openTabsDesc": "Choose a tab to open in the side pane.",
+    "unsupported": "This remote project does not support {{feature}}",
+    "unavailable": "This remote project is unavailable ({{state}})"
   },
   "files": {
     "unbound": "This chat is not bound to a project. Bind one to browse files.",

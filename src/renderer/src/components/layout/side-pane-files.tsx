@@ -9,6 +9,7 @@ import { PreviewBody } from "@/components/chat/preview-panel";
 import { cn } from "@/lib/utils";
 import { useSidePaneStore, type SidePaneTab } from "@/stores/side-pane";
 import type { DirEntry, FilePreview } from "@shared/types";
+import { isRemoteRef } from "@/lib/remote-project";
 import { blockedRemotely } from "@/lib/remote-unavailable";
 import { Ipc } from "@shared/ipc";
 
@@ -54,10 +55,12 @@ export function SidePanePlan({ tab }: { tab: SidePaneTab }): JSX.Element {
 export function SidePaneFiles({
   tab,
   cwd,
+  remote,
   onError,
 }: {
   tab: SidePaneTab;
   cwd?: string;
+  remote?: boolean;
   onError: (message: string) => void;
 }): JSX.Element {
   const { t } = useTranslation("sidepane");
@@ -163,17 +166,19 @@ export function SidePaneFiles({
             <span className="min-w-0 flex-1 truncate text-xs font-medium" title={cwd}>
               {baseName(cwd)}
             </span>
+            {remote ? null : (
             <IconButton
               size="icon-xs"
               variant="ghost"
               label={t("files.reveal")}
               onClick={() => {
                 if (blockedRemotely(Ipc.workspaceReveal)) return;
-                void window.fastvibe.workspace.reveal(cwd);
+                if (cwd) void window.fastvibe.workspace.reveal(cwd);
               }}
             >
               <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} />
             </IconButton>
+            )}
             <IconButton size="icon-xs" variant="ghost" label={t("files.refresh")} onClick={() => reset(cwd)}>
               <HugeiconsIcon strokeWidth={2} icon={RefreshIcon} />
             </IconButton>
@@ -223,7 +228,7 @@ function FilePreviewPane({
         <span className="min-w-0 flex-1 truncate text-xs font-medium" title={preview.path}>
           {preview.name}
         </span>
-        {preview.kind !== "error" ? (
+        {preview.kind !== "error" && !isRemoteRef(preview.path) ? (
           <IconButton
             size="icon-xs"
             variant="ghost"

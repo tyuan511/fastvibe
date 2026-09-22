@@ -56,8 +56,12 @@ const SidePaneTerminal = lazy(async () => ({
   default: (await import("./side-pane-terminal")).SidePaneTerminal,
 }));
 import { HAS_CUSTOM_TITLE_BAR, HAS_TRAFFIC_LIGHTS } from "@/lib/platform";
+import { toast } from "sonner";
 import { blockedRemotely } from "@/lib/remote-unavailable";
+import { bindingStateKey, isRemoteProject, projectHasCapability } from "@/lib/remote-project";
 import { Ipc } from "@shared/ipc";
+import type { AppCapability } from "@shared/app-protocol";
+import type { Project } from "@shared/types";
 
 /**
  * Release everything a set of pane tabs owns. Called when tabs are closed and when
@@ -180,6 +184,7 @@ function BrowserTabIcon({ src }: { src?: string | null }): JSX.Element {
 export function SidePane({
   cwd,
   project,
+  workspace,
   parentId,
   canSideChat,
   onNewChat,
@@ -187,12 +192,14 @@ export function SidePane({
 }: {
   cwd?: string;
   project?: string;
+  workspace?: Project;
   parentId?: string;
   canSideChat: boolean;
   onNewChat: () => void;
   onError: (message: string) => void;
 }): JSX.Element {
   const { t } = useTranslation("sidepane");
+  const { t: tApp } = useTranslation("app");
   const collapsed = useSidePaneStore((state) => state.collapsed);
   const maximized = useSidePaneStore((state) => state.maximized);
   const sidebarCollapsed = useSettingsStore((state) => state.settings.sidebarCollapsed ?? false);
@@ -276,6 +283,24 @@ export function SidePane({
     setCollapsed(true);
   }
 
+  function openCapable(capability: AppCapability, feature: string, run: () => void): void {
+    if (!isRemoteProject(workspace)) {
+      run();
+      return;
+    }
+    if (workspace?.bindingState && workspace.bindingState !== "available") {
+      toast.info(t("pane.unavailable", { state: tApp(`sidebar.binding.${bindingStateKey(workspace.bindingState)}`) }), {
+        id: `remote-project:${capability}`,
+      });
+      return;
+    }
+    if (!projectHasCapability(workspace, capability)) {
+      toast.info(t("pane.unsupported", { feature }), { id: `remote-project:${capability}` });
+      return;
+    }
+    run();
+  }
+
   const cards = [
     canSideChat && parentId
       ? {
@@ -285,11 +310,11 @@ export function SidePane({
           onOpen: () => openSideChat(parentId, nextSideChatOrdinal(parentId)),
         }
       : null,
-    { id: "files", label: t("pane.files"), icon: Folder01Icon, onOpen: openFiles },
-    hasReviewTab ? null : { id: "review", label: t("pane.review"), icon: GitCompareIcon, onOpen: openGit },
+    { id: "files", label: t("pane.files"), icon: Folder01Icon, onOpen: () => openCapable("workspace", t("pane.files"), openFiles) },
+    hasReviewTab ? null : { id: "review", label: t("pane.review"), icon: GitCompareIcon, onOpen: () => openCapable("git", t("pane.review"), openGit) },
     // 修改记录 is chip-only: the transcript's file chips mint that tab. A card
     // here would let the pane open an empty turn-changes view on its own.
-    { id: "terminal", label: t("pane.terminal"), icon: TerminalIcon, onOpen: () => openTerminal(cwd) },
+    { id: "terminal", label: t("pane.terminal"), icon: TerminalIcon, onOpen: () => openCapable("terminal", t("pane.terminal"), () => openTerminal(cwd)) },
     {
       id: "browser",
       label: t("pane.browser"),
@@ -299,7 +324,7 @@ export function SidePane({
       // its output travels; there is no such split for a webview.
       onOpen: () => {
         if (blockedRemotely(Ipc.browserListProfiles)) return;
-        openBrowser();
+        openCapable("browser", t("pane.browser"), openBrowser);
       },
     },
   ].filter((item): item is NonNullable<typeof item> => item !== null);
@@ -421,24 +446,24 @@ export function SidePane({
                   {t("pane.sideChat")}
                 </DropdownMenuItem>
               ) : null}
-              <DropdownMenuItem onClick={openFiles}>
+              <DropdownMenuItem onClick={() => openCapable("workspace", t("pane.files"), openFiles)}>
                 <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} />
                 {t("pane.files")}
               </DropdownMenuItem>
               {hasReviewTab ? null : (
-                <DropdownMenuItem onClick={openGit}>
+                <DropdownMenuItem onClick={() => openCapable("git", t("pane.review"), openGit)}>
                   <HugeiconsIcon strokeWidth={2} icon={GitCompareIcon} />
                   {t("pane.review")}
                 </DropdownMenuItem>
               )}
-              <DropdownMenuItem onClick={() => openTerminal(cwd)}>
+              <DropdownMenuItem onClick={() => openCapable("terminal", t("pane.terminal"), () => openTerminal(cwd))}>
                 <HugeiconsIcon strokeWidth={2} icon={TerminalIcon} />
                 {t("pane.terminal")}
               </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={() => {
                   if (blockedRemotely(Ipc.browserListProfiles)) return;
-                  openBrowser();
+                  openCapable("browser", t("pane.browser"), openBrowser);
                 }}
               >
                 <HugeiconsIcon strokeWidth={2} icon={ChromeIcon} />
@@ -522,7 +547,7 @@ export function SidePane({
                 ) : tab.type === "browser" ? (
                   <SidePaneBrowser tabId={tab.id} url={tab.url ?? ""} visible={tab.id === activeTabId} />
                 ) : (
-                  tab.type === "files" ? <SidePaneFiles tab={tab} cwd={cwd} onError={onError} /> : tab.type === "plan" ? <SidePanePlan tab={tab} /> : <SidePaneSubagent tab={tab} />
+                  tab.type === "files" ? <SidePaneFiles tab={tab} cwd={cwd} remote={isRemoteProject(workspace)} onError={onError} /> : tab.type === "plan" ? <SidePanePlan tab={tab} /> : <SidePaneSubagent tab={tab} />
                 )}
               </div>
             ) : null,

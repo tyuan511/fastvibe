@@ -1,4 +1,5 @@
-import type { ChatMessage, ConversationOpenResult, EngineStatus, ImportSourceId, WorkspaceSnapshot } from "@shared/types";
+import { decodeRemoteProjectKey, remoteProjectKey } from "@shared/project-binding";
+import type { ChatMessage, ConversationOpenResult, DirEntry, EngineStatus, ImportSourceId, WorkspaceSnapshot } from "@shared/types";
 import type { AppInfo, GitStatus } from "@shared/ipc";
 import {
   COMMANDS,
@@ -385,7 +386,18 @@ const api = {
   },
   projects: {
     add: async () => null,
-    addRemote: async () => ({ ...snapshot(), project: PROJECTS[0] }),
+    addRemote: async (cwd: string) => {
+      const project = PROJECTS.find((item) => item.cwd === cwd) ?? {
+        cwd,
+        name: cwd.split("/").filter(Boolean).pop() ?? cwd,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        kind: "remote" as const,
+        bindingState: "available" as const,
+      };
+      if (!PROJECTS.some((item) => item.cwd === project.cwd)) PROJECTS.push(project);
+      return { ...snapshot(), project };
+    },
     rename: async () => snapshot(),
     remove: async () => ({ ...snapshot(), nextId: null }),
     reorder: async (cwds: string[]) => {
@@ -399,7 +411,16 @@ const api = {
     reveal: async () => undefined,
     preview: async (path: string) => previewFor(path),
     fileIcons: loadIconMapping,
-    readDir: async (path: string) => TREE[path] ?? [],
+    readDir: async (path: string) => {
+      const decoded = decodeRemoteProjectKey(path);
+      const raw = decoded?.remoteWorkspaceId ?? path;
+      const entries: DirEntry[] = TREE[raw] ?? [];
+      if (!decoded) return entries;
+      return entries.map((entry) => ({
+        ...entry,
+        path: remoteProjectKey(decoded.serverInstanceId, entry.path),
+      }));
+    },
     gitStatus: async (cwd: string): Promise<GitStatus> => ({
       cwd,
       isRepository: true,
@@ -482,10 +503,13 @@ const api = {
     hosts: async () => ({ saved: [], discovered: [{ id: "ssh:preview", label: "preview", host: "preview", hostName: "192.0.2.10", source: "config" as const, user: "dev" }] }),
     saveHost: async () => ({ saved: [], discovered: [] }),
     removeHost: async () => ({ saved: [], discovered: [] }),
-    connect: async (hostId: string) => ({ hostId, status: "connected" as const, localPort: 17777 }),
-    disconnect: async () => ({ hostId: null, status: "disconnected" as const }),
-    state: async () => ({ hostId: null, status: "disconnected" as const }),
+    pickIdentityFile: async () => null,
+    connect: async (hostId: string) => ({ hostId, serverInstanceId: "srv_preview", status: "connected" as const, localPort: 17777 }),
+    disconnect: async (hostId?: string) => ({ hostId: hostId ?? null, serverInstanceId: null, status: "disconnected" as const }),
+    state: async () => ({ hostId: null, serverInstanceId: null, status: "disconnected" as const }),
+    states: async () => [],
     onState: () => () => undefined,
+    onStates: () => () => undefined,
   },
   // Remote access is a real server in the main process; the preview has none to show,
   // so every action is a no-op over one of the two fixtures `?tunnel=` picks.

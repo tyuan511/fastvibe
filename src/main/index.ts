@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { Ipc, type AppModelsDevInfo } from "@shared/ipc";
-import { broadcast, subscribe } from "./ipc/broadcast";
+import { broadcast } from "./ipc/broadcast";
 import { dispatch, handle, handlerChannels, type CallerContext } from "./ipc/registry";
 import { registerRemoteIpc, restoreRemoteServer, stopRemoteServer } from "./remote";
 import { readFilePreview } from "./engine/file-preview";
@@ -24,6 +24,7 @@ import {
   writeAppSettings,
 } from "./engine/app-settings";
 import { configureFastVibeUserData, getFastVibePaths, type FastVibePaths } from "./engine/paths";
+import { readAgentConfig } from "./engine/runtime-config";
 import { isNotificationPreference, type NotificationPreference } from "@shared/types";
 import { applyLanguages } from "./engine/ai-language";
 import { uiText } from "./engine/ui-text";
@@ -40,8 +41,14 @@ import { applyPendingInstall, registerUpdater, scheduleUpdateCheck } from "./upd
 import { PiProcessManager } from "./pi/process-manager";
 import { fetchPackageCatalog } from "./pi/package-catalog";
 import { TerminalSessions } from "./engine/terminal-sessions";
-import { SshManager } from "./ssh/ssh-manager";
-import type { RemoteHostProfile } from "@shared/remote-host";
+import { SshManager, openSshAppTransport } from "./ssh/ssh-manager";
+import { RemoteConnectionManager } from "./remote/connection-manager";
+import { RemoteGateway, shouldSyncAgentConfig } from "./remote/gateway";
+import { createAppServer, initAppServer, getAppServer } from "./app-server/runtime";
+import { loadOrCreateServerIdentity } from "./server/identity";
+import { APP_CAPABILITIES } from "@shared/app-protocol";
+import { wireElectronAppTransport } from "./transport/electron";
+import type { RemoteHostProfile, RemoteHostConnectionState } from "@shared/remote-host";
 import { attachBrowserRenderer, installBrowserGlobal, respondBrowserRequest } from "./pi/browser-bridge";
 import { importBrowserProfile, listBrowserProfiles } from "./engine/browser-profiles";
 import type { ImportSourceId, ProviderModel, UsageRange } from "@shared/types";
@@ -86,6 +93,72 @@ const sshManager = new SshManager({
     cacheDirectory: join(getFastVibePaths().runtimeRoot, "ssh-agent-runtimes"),
     releaseBaseUrl: process.env.FASTVIBE_AGENT_RELEASE_BASE_URL,
   },
+});
+
+const sshUiStates = new Map<string, RemoteHostConnectionState>();
+
+function publishSshOutput(hostId: string, message: string): void {
+  const current = sshUiStates.get(hostId) ?? { hostId, status: "connecting" as const };
+  const output = [...(current.output ?? []), message].slice(-80);
+  const next: RemoteHostConnectionState = { ...current, hostId, status: "connecting", output };
+  sshUiStates.set(hostId, next);
+  broadcast(Ipc.sshState, next);
+  broadcast(Ipc.sshStates, [...sshUiStates.values()]);
+}
+
+const remoteConnections = new RemoteConnectionManager({
+  log: {
+    info: (message) => log.info(message),
+    warn: (message) => log.warn(message),
+  },
+  onStatus: (status) => {
+    const profile = sshManager.hosts().saved.find((item) => item.id === status.connectionId)
+      ?? sshManager.hosts().discovered.find((item) => item.id === status.connectionId);
+    const localPort = profile?.localPort;
+    const previous = sshUiStates.get(status.connectionId);
+    const output = previous?.output?.length ? { output: previous.output } : {};
+    const next: RemoteHostConnectionState = status.state === "ready"
+      ? { hostId: status.connectionId, serverInstanceId: status.serverInstanceId, status: "connected", ...(localPort ? { localPort } : {}) }
+      : status.state === "connecting"
+        ? { hostId: status.connectionId, serverInstanceId: null, status: "connecting", ...(localPort ? { localPort } : {}) }
+        : status.state === "closed"
+          ? { hostId: status.connectionId, serverInstanceId: status.serverInstanceId, status: "disconnected" }
+          : { hostId: status.connectionId, serverInstanceId: status.serverInstanceId, status: "error", ...(status.error ? { error: status.error } : {}), ...output };
+    sshUiStates.set(status.connectionId, next);
+    broadcast(Ipc.sshState, next);
+    broadcast(Ipc.sshStates, [...sshUiStates.values()]);
+    gateway.publishLocalSnapshot(engine.listWorkspace());
+  },
+  onPush: (channel, payload, serverInstanceId) => gateway.acceptNamespacedRemotePush(channel, payload, serverInstanceId),
+  openTransport: (profile, signal) => openSshAppTransport({
+    profile,
+    onOutput: (message) => publishSshOutput(profile.id, message),
+    signal,
+    agentRuntime: {
+      version: app.getVersion(),
+      artifactDirectory: app.isPackaged
+        ? join(process.resourcesPath, "agent-runtimes")
+        : join(__dirname, "../../release/agent-runtime"),
+      cacheDirectory: join(getFastVibePaths().runtimeRoot, "ssh-agent-runtimes"),
+      releaseBaseUrl: process.env.FASTVIBE_AGENT_RELEASE_BASE_URL,
+    },
+    log: {
+      info: (message) => log.info(message),
+      warn: (message) => log.warn(message),
+    },
+  }),
+});
+const gateway = new RemoteGateway({
+  localDispatch: (method, payload, ctx) => dispatch(method, payload, ctx as CallerContext),
+  localSnapshot: () => engine.listWorkspace(),
+  localAgentConfig: () => readAgentConfig(getFastVibePaths()),
+  connections: remoteConnections,
+  bindingsFile: getFastVibePaths().projectBindingsFile,
+  profiles: () => {
+    const hosts = sshManager.hosts();
+    return [...hosts.saved, ...hosts.discovered];
+  },
+  broadcast,
 });
 let mainWindow: BrowserWindow | null = null;
 const windows = new Set<BrowserWindow>();
@@ -147,17 +220,8 @@ function createWindow(): void {
   };
   window.on("maximize", sendWindowState);
   window.on("unmaximize", sendWindowState);
-  // A window is just one receiver among others now (`ipc/broadcast.ts`); pushes reach
-  // it through the hub rather than through a loop that knows what a window is.
-  const unsubscribe = subscribe({
-    id: windowOrigin(window.webContents.id),
-    send: (channel, payload) => {
-      if (window.isDestroyed()) return;
-      window.webContents.send(channel, payload);
-    },
-  });
+  // Window events are subscribed through its App Protocol session in the transport.
   window.on("closed", () => {
-    unsubscribe();
     windows.delete(window);
     if (mainWindow === window) mainWindow = windows.values().next().value ?? null;
   });
@@ -206,15 +270,17 @@ function modelsDevInfo(stats: ModelsDevStats): AppModelsDevInfo {
 }
 
 function registerSshIpc(): void {
-  handle(Ipc.sshState, () => sshManager.state);
+  handle(Ipc.sshState, () => ({ hostId: null, status: "disconnected" } satisfies RemoteHostConnectionState));
+  handle(Ipc.sshStates, () => [...sshUiStates.values()]);
   handle(Ipc.sshHosts, () => sshManager.hosts());
   handle(Ipc.sshHostSave, (payload: { host?: RemoteHostProfile }) => {
     if (!payload?.host) throw new Error("SSH 主机配置无效");
     return sshManager.saveHost(payload.host);
   });
-  handle(Ipc.sshHostRemove, (payload: { id?: string }) => {
+  handle(Ipc.sshHostRemove, async (payload: { id?: string }) => {
     const id = typeof payload?.id === "string" ? payload.id.trim() : "";
     if (!id) throw new Error("SSH 主机无效");
+    await remoteConnections.disconnect(id);
     return sshManager.removeHost(id);
   });
   handle(Ipc.sshPickIdentityFile, async () => {
@@ -227,9 +293,19 @@ function registerSshIpc(): void {
   handle(Ipc.sshConnect, async (payload: { hostId?: string }) => {
     const hostId = typeof payload?.hostId === "string" ? payload.hostId.trim() : "";
     if (!hostId) throw new Error("SSH 主机无效");
-    return sshManager.connect(hostId);
+    const hosts = sshManager.hosts();
+    const profile = [...hosts.saved, ...hosts.discovered].find((item) => item.id === hostId);
+    if (!profile) throw new Error("SSH 主机不存在");
+    const connected = await remoteConnections.connect(profile);
+    await gateway.refreshServer(connected.serverInstanceId);
+    return sshUiStates.get(hostId);
   });
-  handle(Ipc.sshDisconnect, () => sshManager.disconnect());
+  handle(Ipc.sshDisconnect, async (payload?: { hostId?: string }) => {
+    const hostId = typeof payload?.hostId === "string" ? payload.hostId.trim() : "";
+    if (!hostId) throw new Error("请选择要断开的 SSH 主机");
+    await remoteConnections.disconnect(hostId);
+    return sshUiStates.get(hostId);
+  });
 }
 
 function registerIpc(): void {
@@ -295,8 +371,8 @@ function registerIpc(): void {
     await engine.abort(payload?.conversationId);
   });
 
-  handle(Ipc.engineAbortSubagent, async (payload: { subagentId: string }) => {
-    await engine.abortSubagent(payload.subagentId);
+  handle(Ipc.engineAbortSubagent, async (payload: { subagentId: string; conversationId?: string }) => {
+    await engine.abortSubagent(payload.subagentId, payload.conversationId);
   });
 
   handle(Ipc.engineContinue, async (payload?: { conversationId?: string }) => {
@@ -323,8 +399,8 @@ function registerIpc(): void {
     return engine.compact(payload?.customInstructions, payload?.conversationId);
   });
 
-  handle(Ipc.engineGetCommands, async () => {
-    return engine.getCommands();
+  handle(Ipc.engineGetCommands, async (payload?: { conversationId?: string }) => {
+    return engine.getCommands(payload?.conversationId);
   });
   handle(Ipc.engineGetExtensions, async () => engine.getExtensions());
   handle(Ipc.engineListExtensionPackages, async () => engine.listExtensionPackages());
@@ -354,15 +430,15 @@ function registerIpc(): void {
   });
   handle(Ipc.engineRemoveSkill, async (payload: { name: string }) => engine.removeSkill(payload.name));
 
-  handle(Ipc.engineGetSubagents, async () => {
-    return engine.getSubagents();
+  handle(Ipc.engineGetSubagents, async (payload?: { conversationId?: string }) => {
+    return engine.getSubagents(payload?.conversationId);
   });
   handle(Ipc.engineListAgentConfigs, () => engine.getAgentConfigs());
   handle(Ipc.engineSaveAgentConfig, (payload: import("@shared/types").SubagentDraft) => engine.saveAgentConfig(payload));
   handle(Ipc.engineRemoveAgentConfig, (payload: { id: string }) => engine.removeAgentConfig(payload.id));
 
-  handle(Ipc.engineGetSubagentMessages, async (payload: { subagentId: string }) => {
-    return engine.getSubagentMessages(payload.subagentId);
+  handle(Ipc.engineGetSubagentMessages, async (payload: { subagentId: string; conversationId?: string }) => {
+    return engine.getSubagentMessages(payload.subagentId, payload.conversationId);
   });
 
   handle(Ipc.engineGetCheckpoint, (payload: { conversationId: string }) => {
@@ -400,6 +476,12 @@ function registerIpc(): void {
     return engine.getAvailableModels();
   });
 
+  // The SSH gateway invokes this on the headless Agent. Keep the method in the
+  // desktop table for protocol coverage, but never accept it as a local write.
+  handle(Ipc.engineSyncConfig, async () => {
+    throw new Error("配置同步只能由 SSH Agent 接收");
+  });
+
   handle(
     Ipc.engineSetModel,
     async (payload: { provider: string; modelId: string; conversationId?: string }) => {
@@ -413,11 +495,11 @@ function registerIpc(): void {
       return engine.setThinkingLevel(payload.level, payload.conversationId);
     },
   );
-  handle(Ipc.engineSetInterrupt, async (payload: { mode: "immediate" | "wait" }) => {
-    return engine.setInterruptMode(payload.mode);
+  handle(Ipc.engineSetInterrupt, async (payload: { mode: "immediate" | "wait"; conversationId?: string }) => {
+    return engine.setInterruptMode(payload.mode, payload.conversationId);
   });
-  handle(Ipc.engineSetAutoCompact, async (payload: { enabled: boolean }) => {
-    return engine.setAutoCompaction(payload.enabled);
+  handle(Ipc.engineSetAutoCompact, async (payload: { enabled: boolean; conversationId?: string }) => {
+    return engine.setAutoCompaction(payload.enabled, payload.conversationId);
   });
   handle(Ipc.engineBranch, async (payload: { entryId: string; conversationId?: string }) => {
     return engine.branch(payload.entryId, payload.conversationId);
@@ -431,11 +513,11 @@ function registerIpc(): void {
   handle(Ipc.engineGetStats, async (payload?: { conversationId?: string }) => {
     return engine.getSessionStats(payload?.conversationId);
   });
-  handle(Ipc.engineSetSteering, async (payload: { mode: "all" | "one-at-a-time" }) => {
-    return engine.setSteeringMode(payload.mode);
+  handle(Ipc.engineSetSteering, async (payload: { mode: "all" | "one-at-a-time"; conversationId?: string }) => {
+    return engine.setSteeringMode(payload.mode, payload.conversationId);
   });
-  handle(Ipc.engineSetFollowUp, async (payload: { mode: "all" | "one-at-a-time" }) => {
-    return engine.setFollowUpMode(payload.mode);
+  handle(Ipc.engineSetFollowUp, async (payload: { mode: "all" | "one-at-a-time"; conversationId?: string }) => {
+    return engine.setFollowUpMode(payload.mode, payload.conversationId);
   });
   handle(Ipc.engineExportHtml, async () => {
     const path = await engine.exportHtml();
@@ -839,6 +921,20 @@ function contextFor(event: { sender: WebContents }): CallerContext {
 }
 
 /**
+ * Route a renderer call by the remote ids it already carries. There is intentionally no
+ * "currently connected SSH host": a local payload stays in the local registry, while a
+ * namespaced conversation/project resolves one exact App Server. The response is put
+ * back into the same opaque namespace before it reaches the renderer.
+ */
+async function dispatchForWindow(
+  channel: string,
+  payload: unknown,
+  context: CallerContext,
+): Promise<unknown> {
+  return gateway.dispatch(channel, payload, context);
+}
+
+/**
  * Attach every registered method to Electron IPC.
  *
  * This is one half of the wiring: the table above was built without knowing how it
@@ -848,17 +944,7 @@ function contextFor(event: { sender: WebContents }): CallerContext {
  * desktop and be missing on the phone.
  */
 function wireElectronTransport(): void {
-  for (const channel of handlerChannels()) {
-    if (SEND_ONLY.has(channel)) {
-      ipcMain.on(channel, (event, payload: unknown) => {
-        void sshManager.invoke(channel, payload, () => dispatch(channel, payload, contextFor(event))).catch((error: unknown) => {
-          log.warn(`ipc send failed channel=${channel}: ${String(error)}`);
-        });
-      });
-      continue;
-    }
-    ipcMain.handle(channel, (event, payload: unknown) => sshManager.invoke(channel, payload, () => dispatch(channel, payload, contextFor(event))));
-  }
+  wireElectronAppTransport(getAppServer());
 
   // `settings:get-sync` is the one call that cannot go through the table: it is read in
   // the preload world before the page runs so the first paint already has the theme,
@@ -890,6 +976,33 @@ app.whenReady().then(async () => {
   registerUpdater(() => windows);
   registerRemoteIpc();
   registerSshIpc();
+  createAppServer({
+    identity: loadOrCreateServerIdentity(getFastVibePaths().serverIdentityFile, {
+      version: app.getVersion(),
+      platform: process.platform,
+    }),
+    capabilities: APP_CAPABILITIES,
+    channels: handlerChannels,
+    log,
+  });
+  initAppServer({
+    dispatch: (method, payload, context) => {
+      const caller: CallerContext = {
+        kind: context.kind,
+        window: (context.window as BrowserWindow | null) ?? null,
+        origin: context.origin,
+      };
+      // A remote WebSocket is already at this App Server. It must never be routed back
+      // out through this desktop's gateway merely because its payload contains a local
+      // conversation id. The gateway is only for Electron calls selecting a binding.
+      if (context.kind === "remote") {
+        const result = dispatch(method, payload, caller);
+        if (shouldSyncAgentConfig(method)) return result.finally(() => void gateway.syncConfiguration());
+        return result;
+      }
+      return gateway.dispatch(method, payload, caller);
+    },
+  });
   wireElectronTransport();
   scheduleUpdateCheck(startupSettings.autoCheckUpdates !== false);
 
@@ -901,7 +1014,7 @@ app.whenReady().then(async () => {
   // connect and never learned of another one's chats — invisible between two desktop
   // windows, and the whole of what a phone saw over remote access.
   engine.onWorkspaceChange((snapshot) => {
-    broadcast(Ipc.workspaceChanged, snapshot);
+    gateway.publishLocalSnapshot(snapshot);
   });
   engine.onOAuthEvent((payload) => {
     // The flow hands us a URL to visit; opening it here is what the CLI does with a
@@ -960,11 +1073,16 @@ app.whenReady().then(async () => {
     if (event.type === "conversation_running") {
       setConversationRunning(String(event.conversationId ?? ""), event.running === true);
     }
-    broadcast(Ipc.event, event);
+    gateway.publishLocalEvent(event);
   });
 
   createWindow();
   void engine.start();
+  // Warm every bound remote project in the background. Do not wait for SSH before
+  // showing the window, and do not activate any conversation as catalogs arrive.
+  void gateway.restoreBoundServers().then((failures) => {
+    for (const failure of failures) log.warn(`remote startup connection failed server=${failure.serverInstanceId}: ${failure.error}`);
+  }).catch((error: unknown) => log.warn(`remote startup restore failed: ${String(error)}`));
   // Brought back only if it was running before, and never without a password.
   void restoreRemoteServer();
 
@@ -984,9 +1102,7 @@ app.on("before-quit", (event) => {
   event.preventDefault();
   stopping = true;
   log.info("app quitting");
-  void stopRemoteServer().catch(() => undefined);
-  void sshManager.disconnect().catch(() => undefined);
-  void engine.stop().finally(() => {
+  void Promise.allSettled([stopRemoteServer(), remoteConnections.closeAll(), engine.stop()]).finally(() => {
     terminals.dispose();
     clearRunningConversations();
     engine.flush();

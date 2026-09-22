@@ -852,7 +852,9 @@ export class PiProcessManager {
    * by chat id), and the `tool_call` hook cannot observe the abort while it awaits one,
    * so those are answered first — scoped to this owner, not the parent's prompts.
    */
-  async abortSubagent(subagentId: string): Promise<void> {
+  async abortSubagent(subagentId: string, conversationId?: string): Promise<void> {
+    const owner = this.#subagents.get(subagentId)?.conversationId;
+    if (conversationId && owner && owner !== conversationId) return;
     const session = this.#subagentSessions.get(subagentId);
     if (!session) return;
     this.#stoppedSubagents.add(subagentId);
@@ -970,12 +972,12 @@ export class PiProcessManager {
     await (await this.#sessionFor(conversationId)).session.compact(customInstructions);
     return this.getState(conversationId);
   }
-  async getCommands(): Promise<SlashCommand[]> {
+  async getCommands(conversationId?: string): Promise<SlashCommand[]> {
     // Commands come from the session's prompt templates and extensions, so an empty
     // hero has none to list rather than an error to report.
-    const session = await this.#activeSession();
+    const session = conversationId ? (await this.#sessionFor(conversationId)).session : await this.#activeSession();
     if (!session) return [];
-    const managed = this.#sessions.get(this.#activeId ?? "");
+    const managed = this.#sessions.get(conversationId ?? this.#activeId ?? "");
     const promptCommands = session.promptTemplates.map((item) => ({ name: item.name, description: item.description, source: "prompt" }));
     const extensionCommands = managed?.extensions.extensions.flatMap((extension) => [...extension.commands.values()].map((command) => ({ name: command.name, description: command.description, source: "extension" }))) ?? [];
     const builtins: SlashCommand[] = [{ name: "compact", description: uiText("压缩当前会话的上下文", "Compact this conversation's context"), source: "builtin" }];
@@ -1055,7 +1057,9 @@ export class PiProcessManager {
     return { restored: result.restored.length, removed: result.removed.length, skipped: result.skipped.length };
   }
 
-  async getSubagentMessages(subagentId: string): Promise<ChatMessage[]> {
+  async getSubagentMessages(subagentId: string, conversationId?: string): Promise<ChatMessage[]> {
+    const owner = this.#subagents.get(subagentId)?.conversationId;
+    if (conversationId && owner && owner !== conversationId) return [];
     const live = this.#subagentSessions.get(subagentId);
     if (live) {
       // The live pane draws the store's per-run stream, not this, but the mapping
@@ -1072,8 +1076,10 @@ export class PiProcessManager {
     }
     return this.#subagentMessages.get(subagentId)?.slice() ?? [];
   }
-  async getSubagents(): Promise<SubagentInfo[]> {
-    return [...this.#subagents.values()].sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
+  async getSubagents(conversationId?: string): Promise<SubagentInfo[]> {
+    return [...this.#subagents.values()]
+      .filter((item) => !conversationId || item.conversationId === conversationId)
+      .sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
   }
 
   getAgentConfigs(): SubagentConfig[] {
@@ -1320,17 +1326,17 @@ export class PiProcessManager {
     if (previous.provider === provider && previous.id === id) return;
     this.#emit({ type: "model_changed", conversationId, model: { provider, id }, previous });
   }
-  async setInterruptMode(mode: "immediate" | "wait"): Promise<EngineSessionState> { this.#interruptMode = mode; return this.getState(); }
-  async setSteeringMode(mode: "all" | "one-at-a-time"): Promise<EngineSessionState> { (await this.#active()).setSteeringMode(mode); return this.getState(); }
-  async setFollowUpMode(mode: "all" | "one-at-a-time"): Promise<EngineSessionState> { (await this.#active()).setFollowUpMode(mode); return this.getState(); }
+  async setInterruptMode(mode: "immediate" | "wait", conversationId?: string): Promise<EngineSessionState> { this.#interruptMode = mode; return this.getState(conversationId); }
+  async setSteeringMode(mode: "all" | "one-at-a-time", conversationId?: string): Promise<EngineSessionState> { (await this.#sessionFor(conversationId)).session.setSteeringMode(mode); return this.getState(conversationId); }
+  async setFollowUpMode(mode: "all" | "one-at-a-time", conversationId?: string): Promise<EngineSessionState> { (await this.#sessionFor(conversationId)).session.setFollowUpMode(mode); return this.getState(conversationId); }
   async exportHtml(): Promise<string | undefined> { return (await this.#active()).exportToHtml(); }
-  async setAutoCompaction(enabled: boolean): Promise<EngineSessionState> {
+  async setAutoCompaction(enabled: boolean, conversationId?: string): Promise<EngineSessionState> {
     // The preference is already in FastVibe's settings (`settings.json`), and every new
     // session reads it there, so on the empty hero there is nothing to apply it to yet.
-    const session = await this.#activeSession();
+    const session = conversationId ? (await this.#sessionFor(conversationId)).session : await this.#activeSession();
     if (!session) return this.#draftState();
     session.setAutoCompactionEnabled(enabled);
-    return this.#state(session, this.#activeId ?? undefined);
+    return this.#state(session, conversationId ?? this.#activeId ?? undefined);
   }
   async setThinkingLevel(level: string, conversationId?: string): Promise<EngineSessionState> {
     const session = conversationId ? (await this.#sessionFor(conversationId)).session : await this.#activeSession();
@@ -1787,7 +1793,7 @@ export class PiProcessManager {
         switchSession: (sessionPath, options) => this.#extensionSwitchSession(sessionPath, options),
         reload: () => result.session.reload(),
       },
-      onError: (error) => this.#emit({ type: "extension_error", extensionPath: error.extensionPath, event: error.event, error: error.error }),
+      onError: (error) => this.#emit({ type: "extension_error", conversationId: conversation.id, extensionPath: error.extensionPath, event: error.event, error: error.error }),
     });
     const managed: ManagedSession = { conversationId: conversation.id, cwd, session: result.session, extensions: result.extensionsResult, unsubscribe: () => undefined };
     managed.unsubscribe = result.session.subscribe((event) => {

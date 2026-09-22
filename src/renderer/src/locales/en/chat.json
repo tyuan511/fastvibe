@@ -180,6 +180,7 @@
     "expand": "Expand",
     "collapse": "Collapse",
     "preparing": "Preparing workspace…",
+    "loadingConversation": "Loading conversation…",
     "copied": "Copied"
   },
   "permission": {

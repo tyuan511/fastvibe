@@ -31,6 +31,8 @@ import type {
   SubagentInfo,
 } from "@shared/types";
 import { MessageList } from "./message-list";
+import { getSubagentMessages } from "@/lib/engine-client";
+import { useSessionStore } from "@/stores/session";
 
 /** Header dropdown holding session actions. */
 export function SessionMenu({
@@ -181,12 +183,13 @@ export function SubagentBrowser({
   const { t } = useTranslation("chat");
   const [active, setActive] = useState<string | null>(initialId ?? subagents[0]?.id ?? null);
   const [loaded, setLoaded] = useState<Record<string, ChatMessage[]>>({});
+  const conversationId = useSessionStore((state) => state.activeId);
 
   async function select(id: string): Promise<void> {
     setActive(id);
     if (streams[id]?.length || loaded[id]) return;
     try {
-      const messages = await window.fastvibe.engine.getSubagentMessages(id);
+      const messages = await getSubagentMessages(id, conversationId ?? undefined);
       setLoaded((prev) => ({ ...prev, [id]: messages }));
     } catch {
       setLoaded((prev) => ({ ...prev, [id]: [] }));

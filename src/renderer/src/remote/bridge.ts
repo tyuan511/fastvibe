@@ -1,5 +1,8 @@
 import { Ipc } from "@shared/ipc";
 import { createFastVibeApi, type ApiTransport } from "@shared/api";
+import { ALL_SCOPES } from "@shared/app-protocol";
+import { AppClient, type MessageTransport } from "@shared/app-client";
+import { planResume } from "@shared/app-resume";
 
 /**
  * The web client's half of `window.fastvibe`.
@@ -24,12 +27,20 @@ import { createFastVibeApi, type ApiTransport } from "@shared/api";
  */
 const TOKEN_KEY = "fastvibe.remote.token";
 
-type Pending = { resolve: (value: unknown) => void; reject: (error: Error) => void };
+const AUTH_TIMEOUT_MS = 10_000;
+const HELLO_TIMEOUT_MS = 15_000;
+const MAX_PENDING_PUSHES = 256;
 
-let socket: WebSocket | null = null;
-let nextCallId = 1;
-const pending = new Map<number, Pending>();
+let appClient: AppClient | null = null;
+/** Bumped on every new socket so a retired one cannot restart reconnect or land hello. */
+let connectionGeneration = 0;
+let reconnecting: Promise<void> | null = null;
+let reconnectStopped = false;
+/** After the first successful boot connect; onStatus on that path must not start reconnect. */
+let live = false;
 const listeners = new Map<string, Set<(payload: unknown) => void>>();
+/** Pushes that arrived before any React subscriber. Dropping them was a silent stall. */
+const pendingPushes: Array<{ channel: string; payload: unknown }> = [];
 
 /* ------------------------------------------------------------------ the gate */
 
@@ -69,118 +80,245 @@ function showError(message: string | null): void {
 
 function dispatchPush(channel: string, payload: unknown): void {
   const bucket = listeners.get(channel);
-  if (!bucket) return;
+  if (!bucket || bucket.size === 0) {
+    if (pendingPushes.length >= MAX_PENDING_PUSHES) pendingPushes.shift();
+    pendingPushes.push({ channel, payload });
+    return;
+  }
   // Copied before iterating: a listener that detaches itself while being called would
-  // otherwise mutate the set mid-iteration.
-  for (const listener of [...bucket]) listener(payload);
+  // otherwise mutate the set mid-iteration. One throwing subscriber must not stall the rest.
+  for (const listener of [...bucket]) {
+    try {
+      listener(payload);
+    } catch {
+      // A UI reducer bug is not a protocol gap.
+    }
+  }
 }
 
-function failPending(reason: string): void {
-  for (const [, entry] of pending) entry.reject(new Error(reason));
-  pending.clear();
+function flushPending(channel: string, listener: (payload: unknown) => void): void {
+  if (pendingPushes.length === 0) return;
+  const rest: Array<{ channel: string; payload: unknown }> = [];
+  for (const item of pendingPushes) {
+    if (item.channel === channel) listener(item.payload);
+    else rest.push(item);
+  }
+  pendingPushes.length = 0;
+  pendingPushes.push(...rest);
+}
+
+function isCanonicalFrame(message: unknown): boolean {
+  return typeof message === "object" && message !== null && typeof (message as { kind?: unknown }).kind === "string";
+}
+
+function websocketTransport(ws: WebSocket): MessageTransport {
+  return {
+    send: (message) => {
+      ws.send(JSON.stringify(message));
+    },
+    onMessage: (listener) => {
+      const handler = (event: MessageEvent): void => {
+        let message: unknown;
+        try {
+          message = JSON.parse(String(event.data));
+        } catch {
+          return;
+        }
+        // Outer auth and leftover legacy `{push}` frames are not App Protocol.
+        if (!isCanonicalFrame(message)) return;
+        listener(message);
+      };
+      ws.addEventListener("message", handler);
+      return () => ws.removeEventListener("message", handler);
+    },
+    onClose: (listener) => {
+      const handler = (): void => listener("远程连接已断开");
+      ws.addEventListener("close", handler);
+      return () => ws.removeEventListener("close", handler);
+    },
+    close: () => {
+      ws.close();
+    },
+  };
+}
+
+function bindClient(client: AppClient, generation: number): void {
+  client.onPush((channel, payload) => {
+    if (generation !== connectionGeneration) return;
+    dispatchPush(channel, payload);
+  });
+  client.onResync(() => {
+    if (generation !== connectionGeneration) return;
+    // A gap the journal cannot fill: the transcript on screen would look complete and
+    // would not be. Reload (and the boot snapshot) is the honest resume.
+    window.location.reload();
+  });
+  client.onStatus((status) => {
+    if (generation !== connectionGeneration) return;
+    if (appClient !== client) return;
+    if (!live || reconnectStopped) return;
+    if (status.state !== "error" && status.state !== "closed") return;
+    appClient = null;
+    void scheduleReconnect();
+  });
 }
 
 /**
- * Open a socket and authenticate it.
+ * Open a socket, authenticate it, then handshake the App Protocol.
  *
- * Resolves only once the server has accepted the token, so a caller can treat a
- * resolved promise as "this connection can carry calls". A refused token rejects with
- * `UNAUTHORIZED`, which is the signal to forget it and ask for the password again.
+ * Resolves only once welcome has landed, so a caller can treat a resolved promise as
+ * "this connection can carry calls". A refused token rejects with `UNAUTHORIZED`.
+ * Auth and hello each have a deadline; an obsolete generation is closed, not retried.
  */
-function connect(token: string): Promise<void> {
+function connect(token: string, generation: number, options?: { subscribe?: boolean }): Promise<void> {
   return new Promise((resolve, reject) => {
     const url = new URL("/ws", window.location.href);
     url.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const next = new WebSocket(url.toString());
     let settled = false;
+    let authTimer: number | null = window.setTimeout(() => {
+      fail(new Error("远程连接鉴权超时"));
+    }, AUTH_TIMEOUT_MS);
+
+    const clearAuthTimer = (): void => {
+      if (authTimer === null) return;
+      window.clearTimeout(authTimer);
+      authTimer = null;
+    };
+
+    const fail = (error: Error): void => {
+      if (settled) return;
+      settled = true;
+      clearAuthTimer();
+      try {
+        next.close();
+      } catch {
+        // already gone
+      }
+      reject(error);
+    };
+
+    const obsolete = (): boolean => generation !== connectionGeneration || reconnectStopped;
 
     next.addEventListener("open", () => {
+      if (settled || obsolete()) {
+        fail(new Error("远程连接已过期"));
+        return;
+      }
       next.send(JSON.stringify({ type: "auth", token }));
     });
 
     next.addEventListener("message", (event) => {
+      if (settled) return;
+      if (obsolete()) {
+        fail(new Error("远程连接已过期"));
+        return;
+      }
       let message: Record<string, unknown>;
       try {
         message = JSON.parse(String(event.data)) as Record<string, unknown>;
       } catch {
         return;
       }
-
-      if (message.type === "auth") {
-        if (settled) return;
-        settled = true;
-        if (message.ok === true) {
-          socket = next;
-          resolve();
-        } else {
-          next.close();
-          reject(new Error("UNAUTHORIZED"));
+      if (message.type !== "auth") return;
+      if (message.ok !== true) {
+        fail(new Error("UNAUTHORIZED"));
+        return;
+      }
+      clearAuthTimer();
+      const client = new AppClient(websocketTransport(next), {
+        client: { kind: "browser", version: "web" },
+        handshakeTimeoutMs: HELLO_TIMEOUT_MS,
+      });
+      bindClient(client, generation);
+      void client.connect().then(() => {
+        if (settled || obsolete()) {
+          client.close();
+          fail(new Error("远程连接已过期"));
+          return;
         }
-        return;
-      }
-
-      if (typeof message.push === "string") {
-        dispatchPush(message.push, message.payload);
-        return;
-      }
-
-      if (typeof message.id === "number") {
-        const entry = pending.get(message.id);
-        if (!entry) return;
-        pending.delete(message.id);
-        if (message.ok === true) entry.resolve(message.result);
-        else entry.reject(new Error(typeof message.error === "string" ? message.error : "请求失败"));
-      }
+        settled = true;
+        appClient = client;
+        if (options?.subscribe !== false) {
+          // Live-only. Replay of `*` cannot name scopes that first moved while we
+          // were gone; boot re-reads snapshots instead of a partial journal.
+          client.subscribe([ALL_SCOPES]);
+        }
+        resolve();
+      }).catch((error: unknown) => {
+        fail(error instanceof Error ? error : new Error(String(error)));
+      });
     });
 
     next.addEventListener("close", () => {
-      if (!settled) {
-        settled = true;
-        reject(new Error("连接被关闭"));
-        return;
-      }
-      if (socket === next) {
-        socket = null;
-        failPending("连接已断开");
-        void reconnect();
-      }
+      fail(new Error("连接被关闭"));
     });
 
     next.addEventListener("error", () => {
-      if (settled) return;
-      settled = true;
-      reject(new Error("无法连接到服务器"));
+      fail(new Error("无法连接到服务器"));
     });
   });
 }
 
+function scheduleReconnect(): Promise<void> {
+  if (reconnectStopped) return Promise.resolve();
+  if (reconnecting) return reconnecting;
+  reconnecting = runReconnect().finally(() => {
+    reconnecting = null;
+  });
+  return reconnecting;
+}
+
+function showLoginGate(title: string, hint: string, error?: string): void {
+  reconnectStopped = true;
+  connectionGeneration += 1;
+  showGate(title, hint, { form: true });
+  if (error) showError(error);
+  armPasswordForm(() => {
+    window.location.reload();
+  });
+}
+
 /**
- * Come back after a dropped socket, then reload.
+ * Come back after a dropped socket.
  *
- * Reloading rather than resuming is deliberate for now. Everything the app has on screen
- * was folded from an event stream, and the events that arrived while the socket was gone
- * are not replayed — so keeping the page would leave a transcript that looks complete and
- * is not, which is worse than the cost of starting over. Main already serves what a
- * precise resume needs (`engine:get-snapshot`, and a `seq` on every event); wiring the
- * renderer to re-snapshot in place is the better answer once it reads them.
+ * Wildcard resume cannot guarantee scope coverage, and a numeric seq without its
+ * epoch would be applied to the new welcome epoch. After a successful probe we
+ * always reload and re-read snapshots — never pretend a replay was complete.
+ * Single-flight: a second onStatus cannot start another loop. An obsolete socket
+ * or an intentional logout does not resurrect retries.
  */
-async function reconnect(): Promise<void> {
+async function runReconnect(): Promise<void> {
   const token = localStorage.getItem(TOKEN_KEY);
   if (!token) {
-    showGate("连接已断开", "请重新登录", { form: true });
+    showLoginGate("连接已断开", "请重新登录");
     return;
   }
   showGate("连接已断开", "正在重新连接…", { spinner: true });
   for (let attempt = 0; ; attempt += 1) {
+    if (reconnectStopped) return;
     await new Promise((settle) => window.setTimeout(settle, Math.min(10_000, 500 * 2 ** attempt)));
+    if (reconnectStopped) return;
+    const generation = ++connectionGeneration;
     try {
-      await connect(token);
-      window.location.reload();
+      await connect(token, generation, { subscribe: false });
+      if (generation !== connectionGeneration || reconnectStopped) return;
+      const plan = planResume({
+        welcomeEpoch: appClient?.epoch ?? "",
+        cursors: appClient?.eventCursors() ?? {},
+        wildcard: true,
+      });
+      // `*` → rebootstrap. Reload snapshots rather than apply a partial journal;
+      // never pretend a replay was complete (named-scope replay is not offered here).
+      if (plan.kind === "rebootstrap" || plan.kind === "replay") {
+        window.location.reload();
+      }
       return;
     } catch (error) {
+      if (generation !== connectionGeneration || reconnectStopped) return;
       if (error instanceof Error && error.message === "UNAUTHORIZED") {
         localStorage.removeItem(TOKEN_KEY);
-        showGate("需要重新登录", "这台设备的访问权限已被撤销或密码已更改", { form: true });
+        showLoginGate("需要重新登录", "这台设备的访问权限已被撤销或密码已更改");
         return;
       }
       // Anything else is the server being unreachable: keep waiting, the phone may
@@ -210,33 +348,29 @@ const transport: ApiTransport = {
   invoke: (channel, payload) => {
     const local = localAnswer(channel);
     if (local !== undefined) return Promise.resolve(local === null ? undefined : local);
-    const live = socket;
-    if (!live || live.readyState !== WebSocket.OPEN) {
-      return Promise.reject(new Error("与服务器的连接已断开"));
-    }
-    return new Promise((resolve, reject) => {
-      const id = nextCallId++;
-      pending.set(id, { resolve, reject });
-      live.send(JSON.stringify({ id, method: channel, payload }));
-    });
+    const live = appClient;
+    if (!live) return Promise.reject(new Error("与服务器的连接已断开"));
+    return live.call(channel, payload);
   },
   /**
    * Sent as an ordinary call whose reply is dropped.
    *
-   * The wire has no one-way frame — the server answers every `id` it is given, and
-   * refuses a frame without one — so "fire and forget" is a call nobody awaits. The
-   * rejection is swallowed because these are logs and browser-bridge replies: losing one
-   * while the socket is down must not surface as an error the user has to read.
+   * The wire has no one-way frame — the server answers every call it is given — so
+   * "fire and forget" is a call nobody awaits. The rejection is swallowed because these
+   * are logs and browser-bridge replies: losing one while the socket is down must not
+   * surface as an error the user has to read.
    */
   send: (channel, payload) => {
     void transport.invoke(channel, payload).catch(() => undefined);
   },
   subscribe: (channel, listener) => {
+    const boxed = listener as (payload: unknown) => void;
     const bucket = listeners.get(channel) ?? new Set();
-    bucket.add(listener as (payload: unknown) => void);
+    bucket.add(boxed);
     listeners.set(channel, bucket);
+    flushPending(channel, boxed);
     return () => {
-      bucket.delete(listener as (payload: unknown) => void);
+      bucket.delete(boxed);
       if (bucket.size === 0) listeners.delete(channel);
     };
   },
@@ -288,27 +422,32 @@ function deviceLabel(): string {
 }
 
 /** Ask for the password until one is accepted, and remember the token it buys. */
+function armPasswordForm(onToken: (token: string) => void): void {
+  gateForm.onsubmit = (event) => {
+    event.preventDefault();
+    const password = gatePassword.value;
+    if (!password) return;
+    gateSubmit.disabled = true;
+    showError(null);
+    void login(password)
+      .then((token) => {
+        localStorage.setItem(TOKEN_KEY, token);
+        gatePassword.value = "";
+        reconnectStopped = false;
+        onToken(token);
+      })
+      .catch((error: unknown) => {
+        showError(error instanceof Error ? error.message : "登录失败");
+      })
+      .finally(() => {
+        gateSubmit.disabled = false;
+      });
+  };
+}
+
 function askForPassword(): Promise<string> {
   return new Promise((resolve) => {
-    gateForm.onsubmit = (event) => {
-      event.preventDefault();
-      const password = gatePassword.value;
-      if (!password) return;
-      gateSubmit.disabled = true;
-      showError(null);
-      void login(password)
-        .then((token) => {
-          localStorage.setItem(TOKEN_KEY, token);
-          gatePassword.value = "";
-          resolve(token);
-        })
-        .catch((error: unknown) => {
-          showError(error instanceof Error ? error.message : "登录失败");
-        })
-        .finally(() => {
-          gateSubmit.disabled = false;
-        });
-    };
+    armPasswordForm(resolve);
   });
 }
 
@@ -337,8 +476,10 @@ async function boot(): Promise<void> {
       token = await askForPassword();
     }
     showGate("正在连接…", "FastVibe 远程访问", { spinner: true });
+    const generation = ++connectionGeneration;
     try {
-      await connect(token);
+      await connect(token, generation);
+      live = true;
       break;
     } catch (error) {
       const unauthorized = error instanceof Error && error.message === "UNAUTHORIZED";
