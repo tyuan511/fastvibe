@@ -22,6 +22,7 @@ import {
   USAGE,
   previewFor,
 } from "./preview-data";
+import { websiteFixture, type WebsiteLanguage } from "./website-fixtures";
 
 /**
  * Browser preview harness.
@@ -34,6 +35,13 @@ import {
  */
 
 const params = new URLSearchParams(window.location.search);
+const website = params.get("website") === "1";
+const websiteLanguage: WebsiteLanguage = params.get("lang") === "en" ? "en" : "zh";
+const websiteScene = params.get("scene") ?? "workspace";
+const websiteData = website ? websiteFixture(websiteLanguage) : null;
+// The settings scenes are routes, so they have to be entered before the shell mounts.
+if (website && websiteScene === "models") window.location.hash = "#/settings/providers";
+if (website && websiteScene === "market") window.location.hash = "#/settings/extensions";
 const theme = params.get("theme");
 const pane = params.get("pane");
 const scroll = params.get("scroll");
@@ -81,21 +89,32 @@ const initialSettings: Record<string, unknown> = {
   autoCompact: true,
   interruptMode: "immediate",
   showThinking: true,
-  showTimestamps: true,
-  collapseRuns: params.get("collapse") !== "off",
+  showTimestamps: !website,
+  collapseRuns: website ? false : params.get("collapse") !== "off",
   sendOnEnter: true,
-  themeMode: theme === "light" || theme === "dark" ? theme : "system",
+  ...(website ? { uiLanguage: websiteLanguage, aiLanguage: websiteLanguage } : {}),
+  themeMode: website ? "dark" : theme === "light" || theme === "dark" ? theme : "system",
   lightTheme: "github-light",
-  darkTheme: "tokyo-night",
-  sidebarWidth: 264,
+  darkTheme: website ? "github-dark" : "tokyo-night",
+  sidebarWidth: website ? 260 : 264,
   sidebarCollapsed: sidebar === "collapsed",
-  sidePaneWidth: 384,
+  // The files scene has to be wide enough for the pane's `@min-[32rem]/files` container
+  // query, which is what swaps the preview for tree + preview side by side.
+  sidePaneWidth: website ? (websiteScene === "files" ? 760 : 460) : 384,
 };
 
+const fixtureProjects = websiteData?.projects ?? PROJECTS;
+const fixtureConversations = websiteData?.conversations ?? CONVERSATIONS;
+const fixtureMessages = websiteData?.messages ?? MESSAGES;
+const fixtureSession = websiteData?.session ?? SESSION;
+const fixtureStats = websiteData?.stats ?? STATS;
+const fixtureCwd = websiteData?.cwd ?? PREVIEW_CWD;
+const fixtureActiveId = websiteData?.activeId ?? "conv-theme";
+
 const snapshot = (): WorkspaceSnapshot => ({
-  projects: PROJECTS,
-  conversations: CONVERSATIONS,
-  activeId: "conv-theme",
+  projects: fixtureProjects,
+  conversations: fixtureConversations,
+  activeId: fixtureActiveId,
 });
 
 /**
@@ -105,7 +124,7 @@ const snapshot = (): WorkspaceSnapshot => ({
  * here — module scope — because the app asks `engine:getRunning` *before* it opens the
  * conversation, so a set filled in during `open` would arrive one step too late.
  */
-const runningIds = new Set<string>(params.get("running") === "1" ? ["conv-theme"] : []);
+const runningIds = new Set<string>(params.get("running") === "1" ? [fixtureActiveId] : []);
 
 /**
  * `?running=1` keeps the sidebar's 运行中 mark spinning. Every fixture run has settled,
@@ -119,15 +138,15 @@ const runOnStart = params.get("running") === "1";
 const eventListeners = new Set<(event: unknown) => void>();
 
 const openResult = (id: string): ConversationOpenResult => {
-  const conversation = CONVERSATIONS.find((item) => item.id === id) ?? CONVERSATIONS[0];
-  const isActive = conversation.id === "conv-theme";
+  const conversation = fixtureConversations.find((item) => item.id === id) ?? fixtureConversations[0];
+  const isActive = conversation.id === fixtureActiveId;
   // `?math=1` swaps the thread for the LaTeX fixture, so the math pipeline can be
   // looked at without adding a conversation to the sidebar. `?running=1` puts
   // conv-theme in `engine:getRunning` (see `runningIds`), which the app asks for once
   // at mount — a state reply is not the mark's source, because `setSession` refuses to
   // speak for a conversation that is not on screen when it lands.
-  let messages = isActive ? MESSAGES : [];
-  if (isActive && params.get("math") === "1") messages = [...MESSAGES.slice(0, 2), ...MATH_MESSAGES];
+  let messages = isActive ? fixtureMessages : [];
+  if (!website && isActive && params.get("math") === "1") messages = [...MESSAGES.slice(0, 2), ...MATH_MESSAGES];
   const planFixture = isActive && params.get("plan") === "1";
   const plan = {
     path: `${PREVIEW_CWD}/.tmp/fastvibe-plan.md`,
@@ -142,9 +161,10 @@ const openResult = (id: string): ConversationOpenResult => {
     // sidebar mark (`working`); `engine:getRunning` only seeds the map before the
     // conversation is opened, and a settled-looking state reply would clear it again.
     state: isActive
-      ? { ...SESSION, messageCount: messages.length, running: params.get("running") === "1" }
-      : { ...SESSION, messageCount: 0 },
-    status: { state: "ready", cwd: PREVIEW_CWD },
+      ? { ...fixtureSession, messageCount: messages.length, running: params.get("running") === "1" }
+      : { ...fixtureSession, messageCount: 0 },
+    status: { state: "ready", cwd: fixtureCwd },
+    queue: { conversationId: conversation.id, revision: 0, items: [], pause: null },
     // Only the chat that owns a goal carries one: the panel is conversation-bound, and
     // the preview is where that is checked (`?goal=1`).
     extensionStatus:
@@ -160,7 +180,7 @@ const openResult = (id: string): ConversationOpenResult => {
 const GOAL_OBJECTIVE =
   "分析下作为一个智能体客户端还有哪些比较重要的需求没做的，并把它们拆成本轮可执行的任务";
 
-const status: EngineStatus = { state: "ready", cwd: PREVIEW_CWD };
+const status: EngineStatus = { state: "ready", cwd: fixtureCwd };
 
 const APP_INFO: AppInfo = {
   version: "0.1.0",
@@ -250,7 +270,7 @@ const api = {
     abortSubagent: async () => undefined,
     continue: async () => undefined,
     clearQueue: async () => ({ steering: [], followUp: [] }),
-    compact: async () => SESSION,
+    compact: async () => fixtureSession,
     getCommands: async () => COMMANDS,
     getExtensions: async () => [
       { path: "resources/extensions/plan.ts", name: "plan", commands: 1, tools: 1 },
@@ -297,7 +317,7 @@ const api = {
           conversationId: `imported-${id}`,
         };
       }),
-      snapshot: { projects: PROJECTS, conversations: CONVERSATIONS, activeId: CONVERSATIONS[0]?.id },
+      snapshot: { projects: fixtureProjects, conversations: fixtureConversations, activeId: fixtureConversations[0]?.id },
     }),
     getSubagents: async () => [],
     listAgentConfigs: async () => [],
@@ -306,18 +326,18 @@ const api = {
     getSubagentMessages: async (): Promise<ChatMessage[]> => [],
     respondPermission: async () => undefined,
     newSession: async () => undefined,
-    getState: async () => SESSION,
+    getState: async () => fixtureSession,
     getRunning: async (): Promise<string[]> => [...runningIds],
     getModels: async () => MODELS,
-    setModel: async () => SESSION,
-    setThinking: async () => SESSION,
-    setInterruptMode: async () => SESSION,
-    setAutoCompaction: async () => SESSION,
-    branch: async () => (params.get("math") === "1" ? [...MESSAGES.slice(0, 2), ...MATH_MESSAGES] : MESSAGES),
-    getMessages: async () => (params.get("math") === "1" ? [...MESSAGES.slice(0, 2), ...MATH_MESSAGES] : MESSAGES),
-    getStats: async () => STATS,
-    setSteeringMode: async () => SESSION,
-    setFollowUpMode: async () => SESSION,
+    setModel: async () => fixtureSession,
+    setThinking: async () => fixtureSession,
+    setInterruptMode: async () => fixtureSession,
+    setAutoCompaction: async () => fixtureSession,
+    branch: async () => (!website && params.get("math") === "1" ? [...MESSAGES.slice(0, 2), ...MATH_MESSAGES] : fixtureMessages),
+    getMessages: async () => (!website && params.get("math") === "1" ? [...MESSAGES.slice(0, 2), ...MATH_MESSAGES] : fixtureMessages),
+    getStats: async () => fixtureStats,
+    setSteeringMode: async () => fixtureSession,
+    setFollowUpMode: async () => fixtureSession,
     exportHtml: async () => undefined,
     promptConversation: async () => undefined,
     getConversationMessages: async (): Promise<ChatMessage[]> => [],
@@ -332,7 +352,7 @@ const api = {
       if (runOnStart) {
         window.setTimeout(() => {
           if (eventListeners.has(listener)) {
-            listener({ type: "conversation_running", conversationId: "conv-theme", running: true });
+            listener({ type: "conversation_running", conversationId: fixtureActiveId, running: true });
           }
         }, 0);
       }
@@ -357,6 +377,18 @@ const api = {
     native: async () => [],
     addNative: async () => PROVIDERS,
     fetch: async () => PROVIDERS[0].models,
+    probeGateway: async () => "new-api",
+    identifyGateway: async () => "new-api",
+    setGatewayCredentials: async () => undefined,
+    gatewayBalance: async (id: string) => ({
+      fetchedAt: Date.now(),
+      balance:
+        id === "custom-relay"
+          ? { unlimited: false, available: 14.5 }
+          : id === "custom-sub2api"
+            ? { unlimited: true }
+            : { unlimited: false, available: 18155.71 },
+    }),
     saveFastVibe: async () => PROVIDERS,
     add: async () => PROVIDERS,
     update: async () => PROVIDERS,
@@ -367,17 +399,21 @@ const api = {
   },
   conversations: {
     list: async () => snapshot(),
-    create: async (project?: string) => openResult(CONVERSATIONS[0].id),
+    create: async (project?: string) => openResult(fixtureConversations[0].id),
     open: async (id: string) => openResult(id),
     rename: async () => snapshot(),
-    delete: async () => ({ ...snapshot(), nextId: CONVERSATIONS[0].id }),
+    delete: async () => ({ ...snapshot(), nextId: fixtureConversations[0].id }),
     recordPrompt: async () => snapshot(),
     setProject: async () => snapshot(),
-    createSide: async () => openResult(CONVERSATIONS[0].id),
+    createWorktree: async () => snapshot(),
+    bindWorktree: async () => snapshot(),
+    unbindWorktree: async () => snapshot(),
+    listWorktrees: async () => [],
+    createSide: async () => openResult(fixtureConversations[0].id),
     search: async (query: string) => {
       const needle = query.trim().toLowerCase();
       if (needle.length < 2) return [];
-      return CONVERSATIONS.filter((item) => `${item.title} ${item.preview ?? ""}`.toLowerCase().includes(needle)).map(
+      return fixtureConversations.filter((item) => `${item.title} ${item.preview ?? ""}`.toLowerCase().includes(needle)).map(
         (item) => ({ id: item.id, snippet: item.preview }),
       );
     },
@@ -402,31 +438,33 @@ const api = {
     remove: async () => ({ ...snapshot(), nextId: null }),
     reorder: async (cwds: string[]) => {
       const rank = new Map(cwds.map((cwd, index) => [cwd, index]));
-      PROJECTS.sort((a, b) => (rank.get(a.cwd) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b.cwd) ?? Number.MAX_SAFE_INTEGER));
+      fixtureProjects.sort((a, b) => (rank.get(a.cwd) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b.cwd) ?? Number.MAX_SAFE_INTEGER));
       return snapshot();
     },
   },
   workspace: {
     pick: async () => null,
     reveal: async () => undefined,
-    preview: async (path: string) => previewFor(path),
+    preview: async (path: string) => websiteData?.previewFor(path) ?? previewFor(path),
     fileIcons: loadIconMapping,
     readDir: async (path: string) => {
       const decoded = decodeRemoteProjectKey(path);
       const raw = decoded?.remoteWorkspaceId ?? path;
-      const entries: DirEntry[] = TREE[raw] ?? [];
-      if (!decoded) return entries;
-      return entries.map((entry) => ({
+      const base = websiteData?.tree[raw] ?? TREE[raw] ?? [];
+      if (!decoded) return base;
+      return base.map((entry) => ({
         ...entry,
         path: remoteProjectKey(decoded.serverInstanceId, entry.path),
       }));
     },
-    gitStatus: async (cwd: string): Promise<GitStatus> => ({
+    gitStatus: async (cwd: string): Promise<GitStatus> => websiteData?.gitStatus ?? ({
       cwd,
       isRepository: true,
       branch: "feat/theme-mode",
       changed: 4,
       staged: 1,
+      additions: 128,
+      deletions: 34,
       ahead: 1,
       behind: 0,
       files: [
@@ -442,7 +480,9 @@ const api = {
     gitCreateBranch: async (cwd: string) => api.workspace.gitStatus(cwd),
     gitStage: async (cwd: string) => api.workspace.gitStatus(cwd),
     gitCommit: async (cwd: string) => api.workspace.gitStatus(cwd),
+    gitGenerateCommitMessage: async () => "feat: add repository status shortcuts",
     gitDiff: async (_cwd: string, path?: string) => {
+      if (websiteData) return websiteData.gitDiff(path);
       const file = path?.split("/").pop() ?? "file.tsx";
       return `@@ -12,8 +12,11 @@ export function Example(): JSX.Element {
    return (
@@ -459,7 +499,7 @@ const api = {
     gitDiscard: async (cwd: string) => api.workspace.gitStatus(cwd),
     gitPull: async (cwd: string) => api.workspace.gitStatus(cwd),
     gitPush: async (cwd: string) => api.workspace.gitStatus(cwd),
-    terminalStart: async (cwd?: string) => ({ id: "term-mock", cwd: cwd ?? PREVIEW_CWD }),
+    terminalStart: async (cwd?: string) => ({ id: "term-mock", cwd: cwd ?? fixtureCwd }),
     terminalWrite: async () => undefined,
     terminalResize: async () => undefined,
     terminalKill: async () => undefined,
@@ -476,6 +516,7 @@ const api = {
     // 关于's metadata refresh: the preview has no upstream to fetch, so it reports the
     // same fixture catalog with a fresh date.
     updateModelsDev: async () => ({ ...APP_INFO.modelsDev!, generatedAt: Date.now() }),
+    onModelsDev: () => () => undefined,
     newWindow: async () => undefined,
   },
   settings: {
@@ -531,7 +572,55 @@ const api = {
     onRequest: () => () => undefined,
     respond: () => undefined,
   },
+  /**
+   * 电脑操控 in the preview.
+   *
+   * `?computer=granted` renders the pane a user sees once macOS has agreed — the state
+   * the switches are actually usable in. The default is the ungranted one, because that
+   * is the screen this pane has to get right: it is where every user starts, and it is
+   * the only one that has to explain something.
+   */
+  computer: {
+    permissions: async () => computerStatus(),
+    requestPermissions: async () => computerStatus(),
+    openSettings: async () => undefined,
+    listApps: async () => [
+      { pid: 412, name: "Google Chrome", bundleId: "com.google.Chrome", active: true },
+      { pid: 733, name: "Microsoft Excel", bundleId: "com.microsoft.Excel", active: false },
+      { pid: 901, name: "访达", bundleId: "com.apple.finder", active: false },
+    ],
+    startDrag: async () => undefined,
+    // The flow drives a real Electron window and polls the real OS, so the preview can
+    // only report the shape it would be in: `?computer=granting` renders the pane mid
+    // sequence, which is the state the 授权 button is otherwise hard to look at.
+    startGrantFlow: async () => grantFlowState(),
+    cancelGrantFlow: async () => undefined,
+    getGrantFlow: async () => grantFlowState(),
+    onGrantFlowState: () => () => undefined,
+  },
 };
+
+function grantFlowState(): { active: boolean; permission?: "accessibility" | "screenRecording"; step: number; total: number } {
+  if (params.get("computer") !== "granting") return { active: false, step: 0, total: 0 };
+  return { active: true, permission: "screenRecording", step: 1, total: 2 };
+}
+
+function computerStatus(): {
+  platform: string;
+  accessibility: boolean;
+  screenRecording: boolean;
+  ready: boolean;
+  available: boolean;
+} {
+  const granted = params.get("computer") === "granted";
+  return {
+    platform: params.get("platform") ?? "darwin",
+    accessibility: granted,
+    screenRecording: granted,
+    ready: granted,
+    available: params.get("computer") !== "unavailable",
+  };
+}
 
 /* ------------------------------------------------------------------ 远程访问 fixtures */
 
@@ -646,7 +735,130 @@ window.fastvibe = api as unknown as typeof window.fastvibe;
 
 installIconRewrite();
 
+/**
+ * Website captures run in a browser, so Electron cannot draw macOS window controls.
+ * Keep this strictly inside the dedicated website fixture and inside the 88px title
+ * row clearance used by the real macOS shell.
+ */
+if (website && platform === "darwin" && !remote) {
+  const controls = document.createElement("div");
+  controls.setAttribute("aria-hidden", "true");
+  controls.dataset.websiteTrafficLights = "true";
+  Object.assign(controls.style, {
+    position: "fixed",
+    left: "20px",
+    top: "16px",
+    display: "flex",
+    gap: "8px",
+    zIndex: "1000",
+    pointerEvents: "none",
+  });
+  for (const color of ["#ff5f57", "#febc2e", "#28c840"]) {
+    const light = document.createElement("span");
+    Object.assign(light.style, {
+      width: "12px",
+      height: "12px",
+      borderRadius: "9999px",
+      background: color,
+      boxShadow: "inset 0 0 0 0.5px rgb(0 0 0 / 22%)",
+    });
+    controls.append(light);
+  }
+  document.body.append(controls);
+}
+
 /* ------------------------------------------------------------------ layout tweaks */
+
+/**
+ * Website scenes each have to reach a state the capture cannot click its way to: a pane
+ * opened, a fold expanded, a settings tab switched.
+ *
+ * Each scene is described as a `setup` — done once React has rendered the node it acts on
+ * — plus a `ready` predicate the capture waits for. They are separate on purpose: the
+ * market's setup is a tab click, but its readiness is the catalog rows that click
+ * fetches, and conflating the two would let the capture snap an empty pane.
+ */
+if (websiteData) {
+  const markReady = (): void => {
+    document.body.dataset.websiteSceneReady = websiteScene;
+  };
+  /** React, not a fixed delay on a cold Vite build, is what the setup waits for. */
+  const whenFound = <T,>(find: () => T | null | undefined, act: (value: T) => void, then?: () => boolean): void => {
+    let settled = false;
+    const attempt = (): boolean => {
+      if (settled) return true;
+      const value = find();
+      if (!value) return false;
+      act(value);
+      if (then && !then()) return false;
+      settled = true;
+      markReady();
+      return true;
+    };
+    if (attempt()) return;
+    const observer = new MutationObserver(() => {
+      if (attempt()) observer.disconnect();
+    });
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+    window.setTimeout(() => observer.disconnect(), 15_000);
+  };
+  const byText = (pattern: RegExp) => (): boolean => pattern.test(document.body.innerText);
+  const tabMatching = (pattern: RegExp) => () =>
+    [...document.querySelectorAll<HTMLElement>('[data-slot="tabs-trigger"]')].find((node) =>
+      pattern.test(node.textContent ?? ""),
+    ) ?? null;
+
+  if (websiteScene === "workspace" || websiteScene === "review" || websiteScene === "files") {
+    window.setTimeout(() => {
+      void import("@/stores/side-pane").then(({ useSidePaneStore }) => {
+        const store = useSidePaneStore.getState();
+        if (websiteScene === "review") {
+          store.openGitDiff("src/components/CommandMenu.tsx", "unstaged", websiteData.cwd);
+          return;
+        }
+        store.openFiles();
+        store.openFilePreview(websiteData.previewFor(websiteData.previewPath));
+      });
+    }, 500);
+  }
+
+  if (websiteScene === "workspace") {
+    // 待办 opens so the checklist the fixture finished is legible in the frame.
+    whenFound(
+      () => document.querySelector<HTMLElement>('[data-tool-id="website-todo"]')?.closest("button") as HTMLButtonElement | null,
+      (button) => button.click(),
+    );
+  } else if (websiteScene === "review") {
+    whenFound(
+      () =>
+        [...document.querySelectorAll<HTMLButtonElement>("button")].find((node) =>
+          (node.textContent ?? "").startsWith("CommandMenu.tsxsrc/components"),
+        ) ?? null,
+      (button) => button.click(),
+    );
+  } else if (websiteScene === "files") {
+    // The preview's own header is the signal: the pane is open, and at this width the
+    // tree sits beside it rather than behind the back button.
+    whenFound(
+      () => document.querySelector<HTMLElement>(`span[title="${websiteData.previewPath}"]`),
+      () => undefined,
+    );
+  } else if (websiteScene === "tools") {
+    // Every folded tool row opens, the way the feature reads in the README.
+    whenFound(
+      () => {
+        const rows = [...document.querySelectorAll<HTMLElement>('[data-slot="tool-row"]')];
+        return rows.length ? rows : null;
+      },
+      (rows) => rows.forEach((row) => row.closest("button")?.click()),
+    );
+  } else if (websiteScene === "market") {
+    // The catalog is fetched on the tab switch, so the rows — not the click — are ready.
+    whenFound(tabMatching(/官方市场|Marketplace/), (tab) => tab.click(), byText(/pi-mcp-adapter/));
+  } else if (websiteScene === "models") {
+    whenFound(byText(/API 密钥|API key/), () => undefined);
+  }
+}
 
 if (pane === "files" || pane === "preview" || pane === "git") {
   window.setTimeout(() => {

@@ -15,7 +15,11 @@
     "full": "Full access",
     "askDesc": "Always ask before editing outside files or using the network",
     "smartDesc": "Ask only for detected risky operations",
-    "fullDesc": "Unrestricted access to the internet and any file on your computer"
+    "fullDesc": "Unrestricted access to the internet and any file on your computer",
+    "fullConfirmTitle": "Enable full access?",
+    "fullConfirmDescription": "The agent will be able to access the internet and read, modify, or delete any file on your computer without asking. This warning appears only once, and your choice will be remembered.",
+    "fullConfirmCancel": "Cancel",
+    "fullConfirmAction": "Enable full access"
   },
   "time": {
     "justNow": "Just now",
@@ -41,6 +45,8 @@
     "requestFailed": "Request failed",
     "retryingWithBudget": "Request failed; retrying ({{attempt}}/{{maxAttempts}})",
     "retrying": "Request failed; retrying",
+    "retryingLabel": "Retrying",
+    "retryingAttempt": "{{attempt}}/{{maxAttempts}}",
     "retryAfter": ", retrying in {{seconds}}s",
     "retryDetail": ": {{error}}"
   },
@@ -147,7 +153,6 @@
     "commandPalette": "Command palette",
     "commandPaletteDesc": "Search chats, actions and settings",
     "settings": "Open settings",
-    "newWindow": "New window",
     "newChat": "New chat",
     "openFolder": "Open folder",
     "focusComposer": "Focus composer",
@@ -158,12 +163,14 @@
     "nextChat": "Next chat",
     "toggleSidebar": "Toggle sidebar",
     "toggleSidePane": "Toggle side pane",
-    "findInConversation": "Find in conversation",
-    "findInConversationDesc": "Search this conversation's message text",
     "needModifier": "Shortcuts need a modifier key",
     "reserved": "Reserved by the system"
   },
   "attachments": {
     "seeAttachments": "See the attachment"
+  },
+  "diff": {
+    "more_one": "{{count}} more line — show it",
+    "more_other": "{{count}} more lines — show them"
   }
 }

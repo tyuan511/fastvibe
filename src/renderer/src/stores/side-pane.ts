@@ -277,7 +277,7 @@ const SUBAGENT_TAB_STATUS: Record<string, string> = {
   aborted: "tabs.status.aborted",
 };
 
-/** `子 Agent` tab label: role plus live status, e.g. `scout · 运行中`. */
+/** `子 Agent` tab label: role plus live status, e.g. `explorer · 运行中`. */
 export function subagentTabLabel(tab: SidePaneTab): string {
   const key = tab.subagentStatus ? SUBAGENT_TAB_STATUS[tab.subagentStatus] : undefined;
   const status = key ? (i18n.t(`sidepane:${key}`) as string) : tab.subagentStatus;
@@ -482,9 +482,9 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
         activeTabId: scope.activeTabId,
         maximized: hasTabs ? scope.maximized : false,
         // An explicit choice on this chat wins; otherwise a chat with tabs shows
-        // them, and one with an empty pane inherits the current visibility instead
-        // of popping a blank pane open on its own.
-        collapsed: scope.collapsed ?? (hasTabs ? false : state.collapsed),
+        // them, while a fresh empty scope starts closed instead of inheriting the
+        // previous conversation's visible pane.
+        collapsed: scope.collapsed ?? (hasTabs ? false : true),
       };
     });
   },

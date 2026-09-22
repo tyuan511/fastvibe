@@ -41,6 +41,7 @@ const PER_TASK_OUTPUT_CAP = 50 * 1024;
 type HostSubagentRequest = {
 	subagentId: string;
 	agent: string;
+	agentSource?: "user" | "project";
 	task: string;
 	systemPrompt: string;
 	tools?: string[];
@@ -281,7 +282,6 @@ type OnUpdateCallback = (partial: AgentToolResult<SubagentDetails>) => void;
 
 interface DispatchDefaults {
 	model?: string;
-	thinkingLevel?: ThinkingLevel;
 }
 
 async function runSingleAgent(
@@ -350,12 +350,13 @@ async function runSingleAgent(
 		const response = await host.runSubagent({
 			subagentId,
 			agent: agentName,
+			agentSource: agent.source,
 			task,
 			systemPrompt: agent.systemPrompt,
 			tools: agent.tools,
 			model: agent.model,
 			fallbackModel: dispatchDefaults.model,
-			thinkingLevel: dispatchDefaults.thinkingLevel,
+			thinkingLevel: agent.thinkingLevel,
 			cwd: cwd ?? defaultCwd,
 			signal,
 		});
@@ -452,7 +453,7 @@ export default function (pi: ExtensionAPI) {
 			"Delegate a self-contained task to a subagent with an isolated context (single / parallel / chain)",
 		promptGuidelines: [
 			`Reach for subagent when work is wide or self-contained and would otherwise flood this context: codebase recon, planning, an isolated implementation, or an independent review. Available agents: ${roster}.`,
-			"Route the work by role: scout to gather context, planner to turn requirements into an ordered plan, worker to implement, reviewer to check the result.",
+			"Route the work by role: explorer to gather facts and code context, planner to analyze requirements and produce an ordered plan, worker to implement, reviewer to check the result.",
 			"Keep orchestration, the user-facing reply, and the final judgement in this conversation; hand the subagent only the part it can finish alone.",
 			"When several independent investigations are needed, launch them together with the parallel form instead of one after another.",
 			"Chain agents only when a later step needs an earlier step's output, passing it through the {previous} placeholder.",
@@ -471,7 +472,6 @@ export default function (pi: ExtensionAPI) {
 			}
 			const dispatchDefaults: DispatchDefaults = {
 				model: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
-				thinkingLevel: ctx.thinkingLevel,
 			};
 			const discovery = discoverAgents(ctx.cwd, agentScope);
 			const agents = discovery.agents;

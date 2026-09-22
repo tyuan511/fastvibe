@@ -6,11 +6,11 @@ import { cn } from "@/lib/utils";
 /**
  * The FastVibe mark breathing under a soft halo — the app's global loading mark.
  *
- * The mark is the shipped app icon with its background stripped, so the brand
- * gradient survives; the halo is a blurred radial disc behind it, which keeps the
- * loader legible on both the light and the dark background. `index.html` paints
- * the same mark in its boot splash, so `dismissBootLoader()` hands the screen off
- * with a fade instead of restarting the animation.
+ * The mark is the shipped app icon (white F on the brand-gradient tile); the
+ * halo is a blurred radial disc behind it, which keeps the loader legible on
+ * both the light and the dark background. `index.html` paints the same mark in
+ * its boot splash, so `dismissBootLoader()` hands the screen off with a fade
+ * instead of restarting the animation.
  */
 export function FLoader({
   className,

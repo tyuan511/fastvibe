@@ -20,6 +20,7 @@
     "placeholder": "Ask anything",
     "placeholderQueued": "Keep typing to queue a follow-up",
     "attach": "Add attachment",
+    "pastedTextFile": "pasted-text.txt",
     "permissionAsk": "How should FastVibe approve actions?",
     "contextStats": "View context and turn stats",
     "addModel": "Add a model",
@@ -71,6 +72,8 @@
     "error": "The queue is paused because the current reply failed (nothing was lost)",
     "reorder": "Drag to reorder",
     "sending": "Sending",
+    "submitted": "Submitted",
+    "discardSubmitted": "Remove submitted message",
     "recall": "Recall",
     "delete": "Delete",
     "now": "Now",
@@ -160,13 +163,6 @@
     "nav": "Turn navigation",
     "turn": "Turn {{n}} · {{prompt}}"
   },
-  "find": {
-    "placeholder": "Find in conversation",
-    "position": "{{index}}/{{total}}",
-    "previous": "Previous match",
-    "next": "Next match",
-    "close": "Close find"
-  },
   "message": {
     "elapsed": "{{duration}}",
     "copy": "Copy",
@@ -175,13 +171,16 @@
     "editCancel": "Cancel",
     "editSend": "Send",
     "retry": "Retry",
+    "fork": "Fork from here",
     "working": "Working",
     "workingOn": "Still working",
     "expand": "Expand",
     "collapse": "Collapse",
     "preparing": "Preparing workspace…",
     "loadingConversation": "Loading conversation…",
-    "copied": "Copied"
+    "copied": "Copied",
+    "earlier_one": "Show {{count}} earlier turn",
+    "earlier_other": "Show {{count}} earlier turns"
   },
   "permission": {
     "needConfirm": "Confirmation needed",

@@ -502,6 +502,7 @@ export const PROVIDERS: ProviderConfig[] = [
     hasKey: true,
     hasOAuth: false,
     supportsKey: true,
+    gateway: "sub2api",
     enabled: true,
     models: MODELS.filter((model) => model.provider === "fastvibe").map((model) => ({
       id: model.id,
@@ -527,6 +528,75 @@ export const PROVIDERS: ProviderConfig[] = [
     enabled: true,
     models: [
       { id: "deepseek-chat", name: "DeepSeek V3.2", contextWindow: 128_000, maxTokens: 8_192, reasoning: false, input: ["text"], source: "models.dev" },
+    ],
+  },
+  // The three 余额 states, so `mock.html` renders each without a real relay: a
+  // new-api key with a budget, a sub2api rate, and an endpoint nobody identified.
+  {
+    id: "custom-relay",
+    kind: "custom",
+    name: "New API Relay",
+    baseUrl: "https://relay.example.com/v1",
+    api: "openai-completions",
+    apiKeyEnv: "RELAY_API_KEY",
+    hasKey: true,
+    hasOAuth: false,
+    supportsKey: true,
+    gateway: "new-api",
+    // A stored panel credential is what makes a new-api balance readable at all.
+    gatewayCredential: true,
+    enabled: true,
+    models: [
+      { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", contextWindow: 400_000, maxTokens: 128_000, reasoning: true, input: ["text", "image"], source: "models.dev" },
+    ],
+  },
+  // The same upstream, with no panel credential yet — the state that offers 配置 instead
+  // of a number, and the one a preview is for.
+  {
+    id: "custom-relay-nocred",
+    kind: "custom",
+    name: "Relay (no panel token)",
+    baseUrl: "https://relay2.example.com/v1",
+    api: "openai-completions",
+    apiKeyEnv: "RELAY2_API_KEY",
+    hasKey: true,
+    hasOAuth: false,
+    supportsKey: true,
+    gateway: "new-api",
+    enabled: true,
+    models: [
+      { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", contextWindow: 400_000, maxTokens: 128_000, reasoning: true, input: ["text"], source: "models.dev" },
+    ],
+  },
+  {
+    id: "custom-sub2api",
+    kind: "custom",
+    name: "Subscription Relay",
+    baseUrl: "https://sub.example.com/v1",
+    api: "anthropic-messages",
+    apiKeyEnv: "SUB_API_KEY",
+    hasKey: true,
+    hasOAuth: false,
+    supportsKey: true,
+    gateway: "sub2api",
+    enabled: true,
+    models: [
+      { id: "claude-opus-4-6", name: "Claude Opus 4.6", contextWindow: 200_000, maxTokens: 64_000, reasoning: true, input: ["text", "image"], source: "models.dev" },
+    ],
+  },
+  {
+    id: "custom-plain",
+    kind: "custom",
+    name: "Plain Endpoint",
+    baseUrl: "https://plain.example.com/v1",
+    api: "openai-completions",
+    apiKeyEnv: "PLAIN_API_KEY",
+    hasKey: true,
+    hasOAuth: false,
+    supportsKey: true,
+    enabled: true,
+    models: [
+      { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", contextWindow: 400_000, maxTokens: 128_000, reasoning: true, input: ["text"], source: "models.dev" },
     ],
   },
 ];

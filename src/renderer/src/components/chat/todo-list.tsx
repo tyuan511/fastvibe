@@ -5,7 +5,7 @@ import { ArrowRight01Icon, Cancel01Icon, CircleIcon, ListChecksIcon, Tick02Icon 
 import { Badge } from "@/components/ui/badge";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { RunningMark } from "@/components/running-mark";
-import { activeTodo, latestTodos, todoPosition, type TodoItem, type TodoStatus } from "@/lib/todos";
+import { activeTodo, todoPosition, todoSnapshot, type TodoItem, type TodoStatus } from "@/lib/todos";
 import { cn } from "@/lib/utils";
 import { useConversationWorking, useSessionStore } from "@/stores/session";
 
@@ -104,11 +104,12 @@ export function TodoChecklist({ items }: { items: TodoItem[] }): JSX.Element {
  */
 export function TodoPanel({ className }: { className?: string }): JSX.Element | null {
   const { t } = useTranslation("chat");
-  // Select the transcript itself: `latestTodos` allocates a new array on every
+  // Select the transcript itself: `todoSnapshot` allocates a new object on every
   // call, and Zustand/React's `useSyncExternalStore` treats that as a changed
   // snapshot — "Maximum update depth exceeded" on every paint.
   const messages = useSessionStore((state) => state.messages);
-  const items = useMemo(() => latestTodos(messages), [messages]);
+  const snapshot = useMemo(() => todoSnapshot(messages), [messages]);
+  const items = snapshot.items;
   const [open, setOpen] = useState(false);
   // 「This chat is working」 is this panel's whole premise: an unfinished list is not
   // news once the run that was working through it has stopped — it would sit above
@@ -116,7 +117,11 @@ export function TodoPanel({ className }: { className?: string }): JSX.Element | 
   // still in the transcript's todo card, one collapsed row away.
   const working = useConversationWorking();
   const unfinished = items.some((item) => item.status === "pending" || item.status === "in_progress");
-  if (!working || !unfinished) return null;
+  // And a list from before the user's newest message is not this turn's plan: the
+  // question has moved on, so the checklist is closed until the agent writes one for
+  // the work actually in front of it. Otherwise an unrelated prompt resurfaced the
+  // last task's leftovers the moment its run started.
+  if (!working || !unfinished || snapshot.superseded) return null;
 
   const done = items.filter((item) => item.status === "completed").length;
   const inProgress = items.some((item) => item.status === "in_progress");

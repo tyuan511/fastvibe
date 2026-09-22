@@ -11,6 +11,7 @@ import {
   Download01Icon,
   Loading03Icon,
   PencilEdit02Icon,
+  CircleQuestionMarkIcon,
   RefreshIcon,
   Search01Icon,
   Tick02Icon,
@@ -31,6 +32,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Select,
   SelectContent,
@@ -42,11 +44,13 @@ import { cleanError } from "@/lib/ipc-error";
 import { providerLabel } from "@/lib/provider-label";
 import { cn } from "@/lib/utils";
 import { ProviderIcon } from "@/components/provider-icon";
-import { PROVIDER_APIS, type CcSwitchCandidate, type CcSwitchScan, type NativeProviderConfig, type ProviderApi, type ProviderConfig, type ProviderModel } from "@shared/types";
+import { PROVIDER_APIS, type CcSwitchCandidate, type CcSwitchScan, type GatewayKind, type NativeProviderConfig, type ProviderApi, type ProviderConfig, type ProviderModel } from "@shared/types";
 import { ModelDetailDialog, type ModelDetailTarget } from "./model-detail-dialog";
 import { ModelPicker } from "./model-picker";
 import { OAuthExtraUsageNote } from "./oauth-extra-usage-note";
 import { OAuthLoginDialog, type OAuthTarget } from "./oauth-login-dialog";
+import { GatewayBalance } from "./gateway-balance";
+import { GatewayCredentialDialog } from "./gateway-credential-dialog";
 import { OpenAIQuota } from "./openai-quota";
 import { blockedRemotely } from "@/lib/remote-unavailable";
 import { Ipc } from "@shared/ipc";
@@ -77,6 +81,12 @@ type AddState = {
   baseUrl: string;
   api: ProviderApi;
   apiKey: string;
+  /**
+   * What `providers:probe-gateway` reported for the typed Base URL, if anything. Read
+   * beside the model fetch and stored on the entry so 供应商详情 knows which balance
+   * endpoint applies without probing again.
+   */
+  gateway?: GatewayKind;
   /**
    * Set once a subscription login for the chosen built-in succeeded. The entry can then
    * be created with no key at all, which is the only way to add a login-only built-in.
@@ -130,6 +140,8 @@ export function ProvidersSettings({ onChanged }: { onChanged: () => void }): JSX
    * flow it is.
    */
   const [oauth, setOauth] = useState<{ target: OAuthTarget; next: () => void } | null>(null);
+  /** The provider whose panel credential is being configured (new-api balance). */
+  const [gatewayCredentialFor, setGatewayCredentialFor] = useState<ProviderConfig | null>(null);
 
   async function refresh(): Promise<ProviderConfig[]> {
     const next = await window.fastvibe.providers.list();
@@ -285,6 +297,8 @@ export function ProvidersSettings({ onChanged }: { onChanged: () => void }): JSX
               });
             }}
             onLogout={() => void logout(selected, setProviders, setError, onChanged)}
+            onConfigureGateway={() => setGatewayCredentialFor(selected)}
+            onIdentified={() => void refresh().catch(() => undefined)}
             onChanged={async (next) => {
               setProviders(next);
               onChanged();
@@ -299,6 +313,15 @@ export function ProvidersSettings({ onChanged }: { onChanged: () => void }): JSX
           <p className="py-10 text-center text-xs text-muted-foreground">{t("providers.pickOne")}</p>
         )}
       </div>
+
+      <GatewayCredentialDialog
+        provider={gatewayCredentialFor}
+        onClose={() => setGatewayCredentialFor(null)}
+        onSaved={() => {
+          void refresh().catch(() => undefined);
+          onChanged();
+        }}
+      />
 
       <CcSwitchImportDialog
         open={ccSwitchOpen}
@@ -383,6 +406,37 @@ export function ProvidersSettings({ onChanged }: { onChanged: () => void }): JSX
   );
 }
 
+function FastVibeInfoTooltip(): JSX.Element {
+  const { t } = useTranslation("settings");
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            tabIndex={0}
+            aria-label={t("providers.fastvibeAbout")}
+            className="inline-flex size-4 shrink-0 items-center justify-center rounded text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+          />
+        }
+      >
+        <HugeiconsIcon strokeWidth={2} icon={CircleQuestionMarkIcon} className="size-3.5" />
+      </TooltipTrigger>
+      <TooltipContent side="bottom">
+        <span>
+          {t("providers.fastvibeDescription")} {" "}<a
+            href="https://fastvibe.dev"
+            target="_blank"
+            rel="noreferrer"
+            className="font-medium text-primary underline underline-offset-3 hover:text-primary/80"
+          >
+            {t("providers.fastvibeVisit")}
+          </a>
+        </span>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 function ProviderNavItem({
   provider,
   selected,
@@ -432,6 +486,8 @@ function ProviderDetail({
   onLogout,
   onChanged,
   onRemoved,
+  onConfigureGateway,
+  onIdentified,
 }: {
   provider: ProviderConfig;
   onError: (message: string | null) => void;
@@ -444,6 +500,10 @@ function ProviderDetail({
   onLogout: () => void;
   onChanged: (next: ProviderConfig[]) => Promise<void>;
   onRemoved: (next: ProviderConfig[]) => Promise<void>;
+  /** Opens the panel-credential dialog for a new-api provider's balance. */
+  onConfigureGateway: () => void;
+  /** The gateway probe just identified this provider, so the pane re-reads the list. */
+  onIdentified: () => void;
 }): JSX.Element {
   const { t } = useTranslation("settings");
   const builtin = provider.kind === "builtin";
@@ -527,6 +587,7 @@ function ProviderDetail({
           ) : (
             <h3 className="truncate text-base font-medium">{providerLabel(provider.name || provider.id)}</h3>
           )}
+          {builtin ? <FastVibeInfoTooltip /> : null}
           {editable && !editingName ? (
             <Button size="icon-xs" variant="ghost" onClick={() => setEditingName(true)} aria-label={t("providers.rename")}>
               <HugeiconsIcon strokeWidth={2} icon={PencilEdit02Icon} />
@@ -543,11 +604,14 @@ function ProviderDetail({
             {provider.enabled ? t("providers.disable") : t("providers.enable")}
           </Button>
         </div>
-        {!builtin ? (
-          <Button size="icon-xs" variant="ghost" onClick={() => void remove()} aria-label={t("providers.delete")}>
-            <HugeiconsIcon strokeWidth={2} icon={Delete02Icon} />
-          </Button>
-        ) : null}
+        <div className="flex shrink-0 items-center gap-2">
+          <GatewayBalance provider={provider} onConfigure={onConfigureGateway} onIdentified={onIdentified} />
+          {!builtin ? (
+            <Button size="icon-xs" variant="ghost" onClick={() => void remove()} aria-label={t("providers.delete")}>
+              <HugeiconsIcon strokeWidth={2} icon={Delete02Icon} />
+            </Button>
+          ) : null}
+        </div>
       </div>
 
       {editable ? (
@@ -692,7 +756,9 @@ function ProviderDetail({
           </div>
         </div>
         {provider.models.length ? (
-          <div className="divide-y divide-border overflow-hidden rounded-lg border border-border">
+          // A provider can carry hundreds of models; the list scrolls instead of
+          // stretching the whole pane.
+          <div className="max-h-96 divide-y divide-border overflow-y-auto rounded-lg border border-border">
             {provider.models.map((model) => (
               <div key={model.id} className="flex items-center gap-2 px-3 py-2">
                 <button
@@ -994,6 +1060,22 @@ function AddProviderDialog({
                     </SelectContent>
                   </Select>
                 </Field>
+                {/*
+                  What the endpoint turned out to be. It is a label, not a control: both
+                  relay families answer /chat/completions, /responses and /v1/messages, so
+                  there is no protocol to pick *because* of this — the format above stays
+                  the user's own choice.
+                */}
+                {state.gateway ? (
+                  <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                    <Badge variant="secondary" className="font-normal">
+                      {t("providers.gatewayDetected", {
+                        gateway: state.gateway === "sub2api" ? t("providers.gatewaySub2api") : t("providers.gatewayNewApi"),
+                      })}
+                    </Badge>
+                    {t("providers.gatewayHint")}
+                  </p>
+                ) : null}
               </>
             )}
             {picked?.oauth ? (
@@ -1362,9 +1444,16 @@ async function fetchAddCandidates(
   }
   setAdd({ ...add, busy: true, error: null });
   try {
-    const models = await window.fastvibe.providers.fetch(add.baseUrl, add.apiKey, add.api);
+    // Both calls are independent requests to the same host, so they go together rather
+    // than one after the other — the probe is what lets the dialog say which product
+    // this is, and a relay's panel answers as fast as its model list.
+    const [models, gateway] = await Promise.all([
+      window.fastvibe.providers.fetch(add.baseUrl, add.apiKey, add.api),
+      window.fastvibe.providers.probeGateway(add.baseUrl).catch(() => undefined),
+    ]);
     setAdd({
       ...add,
+      gateway,
       candidates: models,
       selected: new Set(models.map((item) => item.id)),
       busy: false,
@@ -1400,6 +1489,7 @@ async function saveAdd(
           baseUrl: add.baseUrl.trim(),
           apiKey: add.apiKey.trim(),
           api: add.api,
+          ...(add.gateway ? { gateway: add.gateway } : {}),
           models,
         });
     setAdd(null);

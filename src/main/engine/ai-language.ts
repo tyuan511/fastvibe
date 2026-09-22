@@ -8,7 +8,7 @@
  * `FASTVIBE_PERMISSION_MODE`, and it is enough because the extensions re-read it
  * per event — a settings change reaches a running session.
  *
- * Two different things travel through it:
+ * Three different things travel through it:
  *
  * - `FASTVIBE_UI_LANGUAGE` is the *value* (`zh` | `en`) of 界面语言. Extensions that
  *   render their own UI text (permission prompts, status widgets) map it to their
@@ -19,11 +19,16 @@
  *   owns the wording so the prompt cannot drift between the extension that injects
  *   it every turn and the subagent runner that puts it on a delegated role's system
  *   prompt; the extension just appends whatever it finds.
+ * - `FASTVIBE_CUSTOM_SYSTEM_PROMPT` carries the user's personalization text. It is
+ *   kept separate from the language directive so changing either setting takes effect
+ *   without rebuilding existing sessions.
  */
 
 export const UI_LANGUAGE_ENV = "FASTVIBE_UI_LANGUAGE";
 export const AI_LANGUAGE_ENV = "FASTVIBE_AI_LANGUAGE";
 export const AI_LANGUAGE_PROMPT_ENV = "FASTVIBE_AI_LANGUAGE_PROMPT";
+/** Environment variable read by the standalone output-language extension. */
+export const CUSTOM_SYSTEM_PROMPT_ENV = "FASTVIBE_CUSTOM_SYSTEM_PROMPT";
 
 export type UiLanguage = "zh" | "en";
 
@@ -45,6 +50,14 @@ export function aiLanguageDirective(settings: Record<string, unknown>): string {
   return DIRECTIVES[uiLanguageOf(settings.aiLanguage)];
 }
 
+/** A user-authored system-prompt suffix, with whitespace-only values treated as empty. */
+export function customSystemPromptOf(settings: Record<string, unknown>): string | undefined {
+  const value = settings.customSystemPrompt;
+  if (typeof value !== "string") return undefined;
+  const prompt = value.trim();
+  return prompt || undefined;
+}
+
 /**
  * What the extensions and the subagent runner read back, straight from the env: the
  * same string `applyLanguages` last wrote. `undefined` only before the first apply,
@@ -52,6 +65,12 @@ export function aiLanguageDirective(settings: Record<string, unknown>): string {
  */
 export function currentAiLanguageDirective(): string | undefined {
   const value = process.env[AI_LANGUAGE_PROMPT_ENV]?.trim();
+  return value ? value : undefined;
+}
+
+/** Read the latest personalization without rebuilding any existing agent session. */
+export function currentCustomSystemPrompt(): string | undefined {
+  const value = process.env[CUSTOM_SYSTEM_PROMPT_ENV]?.trim();
   return value ? value : undefined;
 }
 
@@ -63,4 +82,7 @@ export function applyLanguages(settings: Record<string, unknown>): void {
   process.env[UI_LANGUAGE_ENV] = ui;
   process.env[AI_LANGUAGE_ENV] = ai;
   process.env[AI_LANGUAGE_PROMPT_ENV] = DIRECTIVES[ai];
+  const customPrompt = customSystemPromptOf(settings);
+  if (customPrompt) process.env[CUSTOM_SYSTEM_PROMPT_ENV] = customPrompt;
+  else delete process.env[CUSTOM_SYSTEM_PROMPT_ENV];
 }

@@ -187,15 +187,63 @@ function cwd(value: string): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function parseBranchHeader(header: string): string {
+  // `main...origin/main [ahead 1]`, `No commits yet on main`, `HEAD (no branch)`.
+  const name = header.split("...")[0]?.split(" ")[0] ?? "";
+  return name === "HEAD" ? "" : name;
+}
+
+function parseGitNumstat(output: string): { additions: number; deletions: number } {
+  let additions = 0;
+  let deletions = 0;
+  for (const line of output.split(/\r?\n/)) {
+    const [added, removed] = line.split("\t", 3);
+    if (/^\d+$/.test(added ?? "")) additions += Number(added);
+    if (/^\d+$/.test(removed ?? "")) deletions += Number(removed);
+  }
+  return { additions, deletions };
+}
+
 async function readGitStatus(root: string): Promise<GitStatus> {
   const dir = cwd(root);
-  if (!dir) return { cwd: dir, isRepository: false, changed: 0, staged: 0, files: [] };
+  const empty: GitStatus = { cwd: dir, isRepository: false, changed: 0, staged: 0, additions: 0, deletions: 0, files: [] };
+  if (!dir) return empty;
   try {
-    const { stdout } = await execFileAsync("git", ["-C", dir, "status", "--short"], { timeout: 5000, maxBuffer: 256 * 1024 });
-    const files = stdout.split(/\r?\n/).filter(Boolean).map((line) => ({ index: line[0] ?? " ", worktree: line[1] ?? " ", path: line.slice(3) }));
-    return { cwd: dir, isRepository: true, changed: files.length, staged: files.filter((item) => item.index !== " ").length, files };
+    const { stdout } = await execFileAsync("git", ["-C", dir, "status", "--short", "--branch"], { timeout: 5000, maxBuffer: 256 * 1024 });
+    const lines = stdout.split(/\r?\n/).filter(Boolean);
+    const header = lines.shift() ?? "";
+    if (!header.startsWith("## ")) return empty;
+    const branch = parseBranchHeader(header.slice(3));
+    const ahead = Number(header.match(/ahead (\d+)/)?.[1] ?? 0);
+    const behind = Number(header.match(/behind (\d+)/)?.[1] ?? 0);
+    let changed = 0;
+    let staged = 0;
+    const files: GitStatus["files"] = [];
+    for (const line of lines) {
+      if (line.length < 2) continue;
+      changed += 1;
+      if (line[0] !== " " && line[0] !== "?") staged += 1;
+      files.push({ index: line[0] === "?" ? "?" : line[0], worktree: line[1] ?? " ", path: line.slice(3).trim() });
+    }
+    let additions = 0;
+    let deletions = 0;
+    try {
+      const diff = await execFileAsync("git", ["-C", dir, "diff", "--numstat", "HEAD", "--"], { timeout: 5000, maxBuffer: 256 * 1024 });
+      ({ additions, deletions } = parseGitNumstat(diff.stdout));
+    } catch {
+      // An unborn branch has no HEAD: sum the staged and unstaged layers instead.
+      const [stagedDiff, workingDiff] = await Promise.all([
+        execFileAsync("git", ["-C", dir, "diff", "--numstat", "--cached", "--"], { timeout: 5000, maxBuffer: 256 * 1024 }).catch(() => ({ stdout: "" })),
+        execFileAsync("git", ["-C", dir, "diff", "--numstat", "--"], { timeout: 5000, maxBuffer: 256 * 1024 }).catch(() => ({ stdout: "" })),
+      ]);
+      const stagedStats = parseGitNumstat(stagedDiff.stdout);
+      const workingStats = parseGitNumstat(workingDiff.stdout);
+      additions = stagedStats.additions + workingStats.additions;
+      deletions = stagedStats.deletions + workingStats.deletions;
+    }
+    return { cwd: dir, isRepository: true, branch, changed, staged, additions, deletions, ahead, behind, files };
   } catch {
-    return { cwd: dir, isRepository: false, changed: 0, staged: 0, files: [] };
+    return empty;
   }
 }
 

@@ -4,10 +4,10 @@ import appIconDark from "@/assets/app-icon-dark.png";
 import { cn } from "@/lib/utils";
 
 /**
- * The FastVibe mark on its rounded tile. Light and dark themes each get a baked
- * asset (white tile / black tile) so the gradient mark keeps its contrast
- * whichever way the app is themed. The swap rides the `dark` class `applyTheme`
- * toggles, so "follow system" is covered too.
+ * The FastVibe mark on its rounded blue tile. The asset is self-contained
+ * (white F on the brand gradient), so the same file reads on light and dark;
+ * the `dark` class swap is kept so a future theme-specific tile can land
+ * without touching call sites.
  */
 export function AppLogo({ className }: { className?: string }): JSX.Element {
   return (

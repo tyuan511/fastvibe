@@ -5,11 +5,13 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import {
   ArrowLeft01Icon,
   ArrowRight01Icon,
+  ChromeIcon,
   LinkSquare02Icon,
   Refresh01Icon,
   Upload01Icon,
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { useSessionStore } from "@/stores/session";
 import { useSidePaneStore } from "@/stores/side-pane";
@@ -94,8 +96,6 @@ const PARKED_LAYER =
   "position:fixed;left:-10000px;top:0;width:1024px;height:768px;overflow:hidden;pointer-events:none;z-index:5;";
 const SHOWN_HOST = "position:absolute;left:0;top:0;width:100%;height:100%;";
 const HIDDEN_HOST = "position:absolute;left:-20000px;top:0;width:1024px;height:768px;";
-/** The pane's splitter (`w-1`) hugs its leading edge; leave it clickable. */
-const SPLITTER_GUTTER = 4;
 
 function getLayer(): HTMLDivElement {
   if (!layer) {
@@ -121,13 +121,15 @@ function clipAncestor(node: HTMLElement): HTMLElement | null {
   return null;
 }
 
-/** The part of the browser viewport actually on screen, splitter left alone. */
+/** The part of the browser viewport actually on screen. */
 function visibleRect(
   node: HTMLElement,
   clip: HTMLElement | null,
 ): { left: number; top: number; width: number; height: number } {
   const box = node.getBoundingClientRect();
-  let left = box.left + SPLITTER_GUTTER;
+  // The splitter is a flex item beside the pane, not an overlay inside it, so the
+  // pane's own left edge is already clear of it — nothing to carve out here.
+  let left = box.left;
   let right = box.right;
   let top = box.top;
   let bottom = box.bottom;
@@ -187,6 +189,12 @@ function createGuest(tabId: string, url: string): Entry {
   host.style.cssText = HIDDEN_HOST;
   const view = document.createElement("webview") as Guest;
   view.setAttribute("allowpopups", "true");
+  // A page's alert/confirm/prompt is a native modal by default: it lands in front of the
+  // user *and* blocks the guest, so a tool call waits on a button nobody is there to
+  // press. Auto-dismissed instead, page JS keeps running — `confirm` answers false, which
+  // is what a browser with dialogs switched off does too. Popups are a different door,
+  // closed in main (`guardGuestPopups`).
+  view.setAttribute("webpreferences", "disableDialogs=true");
   view.setAttribute("partition", "persist:fastvibe-browser");
   view.style.width = "100%";
   view.style.height = "100%";
@@ -1055,7 +1063,21 @@ export function SidePaneBrowser({
         ) : null}
         {importStatus ? <span className="absolute right-3 top-11 z-20 max-w-72 truncate rounded bg-muted px-2 py-1 text-xs text-muted-foreground">{importStatus}</span> : null}
       </form>
-      <div ref={box} className="relative min-h-0 min-w-0 flex-1 overflow-hidden bg-white" />
+      <div ref={box} className="relative min-h-0 min-w-0 flex-1 overflow-hidden bg-white">
+        {!draft.trim() ? (
+          <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-background">
+            <Empty className="flex-none border-0 py-6">
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <HugeiconsIcon strokeWidth={2} icon={ChromeIcon} />
+                </EmptyMedia>
+                <EmptyTitle>{t("browser.emptyTitle")}</EmptyTitle>
+                <EmptyDescription>{t("browser.emptyDescription")}</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }

@@ -16,6 +16,7 @@ function capabilityOf(method: string): AppCapability | null {
   if (method.startsWith("update:")) return "native";
   if (method.startsWith("window:")) return "native";
   if (method.startsWith("browser:")) return "browser";
+  if (method.startsWith("computer:")) return "native";
   if (method.startsWith("remote:")) return null;
   if (method.startsWith("ssh:")) return null;
   return null;

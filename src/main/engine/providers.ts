@@ -6,6 +6,7 @@ import { catalogPrice, enrichModel, loadModelsDev, type ModelsDevIndex } from ".
 import { findNativeProvider, listNativeProviders, selectedNativeModels } from "./native-providers";
 import { engineModelBaseUrl, trimBaseUrl } from "./provider-url";
 import { automaticModelApi } from "./model-api";
+import { isGatewayKind, probeGateway, readGatewayCredentials, type GatewayKind } from "./gateway-probe";
 import { deleteOAuthCredential, readOAuthProviderIds } from "./oauth-store";
 import type { FastVibePaths } from "./paths";
 
@@ -26,6 +27,12 @@ type StoredProvider = {
   baseUrl: string;
   api: string;
   apiKeyEnv: string;
+  /**
+   * Which relay software the Base URL turned out to be, for a custom provider.
+   * Only ever written from what `probeGateway` reported — never guessed from the
+   * model list, which cannot distinguish the two families.
+   */
+  gateway?: GatewayKind;
   enabled: boolean;
   models: ProviderModel[];
 };
@@ -56,6 +63,12 @@ const FASTVIBE_DEFAULT: StoredProvider = {
   baseUrl: FASTVIBE_API_BASE,
   api: "openai-responses",
   apiKeyEnv: FASTVIBE_API_KEY_ENV,
+  /**
+   * The first-party gateway is itself a Sub2API deployment — `GET /v1/sub2api/billing`
+   * answers with this install's key — so it reads its 余额 through the same path a custom
+   * Sub2API provider does, and there is nothing to probe.
+   */
+  gateway: "sub2api",
   enabled: true,
   models: [],
 };
@@ -158,6 +171,7 @@ export function listProviderConfigs(
   keys: Record<string, string>,
 ): ProviderConfig[] {
   const oauth = readOAuthProviderIds(paths.oauthFile);
+  const credentials = readGatewayCredentials(paths.gatewayCredentialsFile);
   return readProviders(paths).map((provider) => {
     const native = provider.kind === "native" ? findNativeProvider(provider.id) : undefined;
     return {
@@ -171,6 +185,14 @@ export function listProviderConfigs(
       hasOAuth: oauth.has(provider.id),
       // Only the SDK can say a built-in has no key login; a user-typed endpoint always does.
       supportsKey: native ? native.supportsKey : true,
+      // Only an endpoint this app talks to directly has an identifiable gateway behind
+      // it; the SDK owns a built-in's identity, and a login-only built-in has no Base
+      // URL to probe. The builtin FastVibe gateway is the one exception — its panel is
+      // known, so its 余额 is readable like any other relay's.
+      ...((provider.kind === "custom" || provider.kind === "builtin") && provider.gateway
+        ? { gateway: provider.gateway }
+        : {}),
+      ...(credentials[provider.id] ? { gatewayCredential: true } : {}),
       ...(native?.oauth ? { oauth: native.oauth } : {}),
       enabled: provider.enabled,
       models: provider.models,
@@ -530,7 +552,7 @@ export async function saveFastVibe(
 
 export async function addProvider(
   paths: FastVibePaths,
-  draft: { name: string; baseUrl: string; apiKey: string; api?: ProviderApi },
+  draft: { name: string; baseUrl: string; apiKey: string; api?: ProviderApi; gateway?: GatewayKind },
   models: ProviderModel[],
 ): Promise<string> {
   const providers = readProviders(paths);
@@ -543,6 +565,7 @@ export async function addProvider(
     baseUrl: draft.baseUrl.trim().replace(/\/+$/, ""),
     api: draft.api && isProviderApi(draft.api) ? draft.api : "openai-completions",
     apiKeyEnv,
+    ...(isGatewayKind(draft.gateway) ? { gateway: draft.gateway } : {}),
     enabled: true,
     models,
   });
@@ -619,6 +642,12 @@ export function updateProvider(
   const next = { ...current };
   for (const [key, value] of Object.entries(patch)) {
     if (value !== undefined) (next as Record<string, unknown>)[key] = value;
+  }
+  // What the gateway probe found describes the endpoint it probed. Re-pointing the
+  // provider at another host leaves a kind that no longer answers for it, so the
+  // balance row would query the wrong panel — drop it and let the next refresh probe again.
+  if (patch.baseUrl !== undefined && patch.baseUrl.trim().replace(/\/+$/, "") !== current.baseUrl) {
+    delete next.gateway;
   }
   if (id === FASTVIBE_PROVIDER_ID) {
     // Identity and endpoint stay code-owned; the protocol is the user's to pick.
@@ -705,6 +734,10 @@ export function providerKeyEnv(paths: FastVibePaths, id: string): string | undef
 /**
  * Refresh a provider's model list. Custom providers re-fetch `/models` with their
  * stored key; native providers re-read the SDK catalog (no request, no key needed).
+ *
+ * A custom endpoint also gets its gateway identified here when it never was, so a
+ * provider added before the probe existed picks up its 余额 row on the next 同步模型
+ * instead of having to be deleted and re-added.
  */
 export async function refreshProviderModels(
   paths: FastVibePaths,
@@ -714,7 +747,22 @@ export async function refreshProviderModels(
   if (!provider) throw new Error("供应商不存在");
   if (provider.kind === "native") return findNativeProvider(id)?.models ?? [];
   const keys = await loadProviderKeys(paths);
-  return fetchProviderModels(provider.baseUrl, keys[provider.apiKeyEnv] ?? "", provider.api);
+  const models = await fetchProviderModels(provider.baseUrl, keys[provider.apiKeyEnv] ?? "", provider.api);
+  if (provider.kind === "custom" && !provider.gateway) {
+    const probe = await probeGateway(provider.baseUrl);
+    if (probe) setProviderGateway(paths, id, probe);
+  }
+  return models;
+}
+
+/** Record what the gateway probe found. Ignored for anything but a custom entry. */
+export function setProviderGateway(paths: FastVibePaths, id: string, kind: GatewayKind): void {
+  const providers = readProviders(paths);
+  const index = providers.findIndex((provider) => provider.id === id);
+  if (index < 0 || providers[index].kind !== "custom") return;
+  if (providers[index].gateway === kind) return;
+  providers[index] = { ...providers[index], gateway: kind };
+  writeProviders(paths, providers);
 }
 
 /* ---------------- helpers ---------------- */
@@ -733,6 +781,7 @@ function hydrateProvider(value: StoredProviderInput): StoredProvider {
     name: typeof value.name === "string" && value.name.trim() ? value.name : value.id,
     baseUrl: typeof value.baseUrl === "string" ? value.baseUrl : "",
     api: isProviderApi(value.api) ? value.api : "openai-completions",
+    ...(isGatewayKind(value.gateway) ? { gateway: value.gateway } : {}),
     apiKeyEnv:
       typeof value.apiKeyEnv === "string" && value.apiKeyEnv ? value.apiKeyEnv : nativeKeyEnv(value.id),
     enabled: value.enabled !== false,

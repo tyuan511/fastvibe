@@ -172,6 +172,8 @@ export type ChatAttachment = {
   mimeType?: string;
   dataUrl?: string;
   path?: string;
+  /** In-memory text for a long paste represented as a file-style chip. */
+  text?: string;
 };
 
 export type ChatMessage = {
@@ -198,6 +200,13 @@ export type ChatMessage = {
   attachments?: ChatAttachment[];
   /** Model/request failure for this assistant turn. Absent on success or user abort. */
   error?: string;
+  /** A transient provider failure that the engine is currently retrying. */
+  retry?: {
+    attempt: number;
+    maxAttempts?: number;
+    delayMs?: number;
+    error?: string;
+  };
   /** Present when `kind` is `"compact"`: running / finished / cancelled compaction. */
   compact?: CompactInfo;
 };
@@ -229,17 +238,20 @@ export type SubagentConfig = {
   tools: string[];
   /** provider/model, or undefined to inherit the parent agent's model. */
   model?: string;
+  /** Reasoning effort. Legacy templates without one migrate to `medium`. */
+  thinkingLevel: ThinkingLevel;
   systemPrompt: string;
   source: "builtin" | "custom";
 };
 
 export type SubagentDraft = {
-  /** Omit for a new custom agent. Builtins may only update their model. */
+  /** Omit for a new custom agent. Builtins may only update model/reasoning overrides. */
   id?: string;
   name: string;
   description: string;
   tools: string[];
   model?: string;
+  thinkingLevel?: ThinkingLevel;
   systemPrompt: string;
 };
 
@@ -424,6 +436,149 @@ export type BrowserRequest = {
   conversationId?: string;
 };
 
+/**
+ * One `computer_*` tool call on its way to Cua Driver.
+ *
+ * A flat bag rather than a discriminated union, matching `BrowserRequest`: the extension
+ * that builds these is loaded from outside the bundle and cannot import this file, so the
+ * type documents the contract for the main-process half and nothing enforces it across
+ * the boundary anyway.
+ */
+export type ComputerRequest = {
+  action: string;
+  /**
+   * For `action: "batch"`: the sequence to run, in order, stopping at the first failure.
+   *
+   * Driving a GUI one tool call at a time costs a model round trip, a confirmation and a
+   * screenshot per click. A sequence collapses the predictable runs into one call.
+   */
+  steps?: ComputerRequest[];
+  /** Process id of the target app, from `computer_list_apps`. */
+  pid?: number;
+  /** Window id as a decimal string — the driver's ids are `bigint` and JSON is not. */
+  windowId?: string;
+  x?: number;
+  y?: number;
+  text?: string;
+  key?: string;
+  keys?: string[];
+  modifiers?: string[];
+  /** Opaque handle for an element from `computer_window_state`, preferred over x/y. */
+  elementToken?: string;
+  button?: "left" | "right" | "middle";
+  count?: number;
+  direction?: "up" | "down" | "left" | "right";
+  amount?: number;
+  /** Menu item path, e.g. ["File", "Save"]. */
+  path?: string[];
+  query?: string;
+  /** Opt in to stealing focus. Background delivery is the default. */
+  foreground?: boolean;
+  includeScreenshot?: boolean;
+  maxElements?: number;
+  onScreenOnly?: boolean;
+  timeoutMs?: number;
+  conversationId?: string;
+};
+
+export type ComputerResult = {
+  text: string;
+  /** Base64 payloads, shaped like the SDK's own image content parts. */
+  images: Array<{ mimeType: string; data: string }>;
+  structured?: string;
+  /** The application the action was routed to, when the call named a window. */
+  targetApp?: { name: string; bundleId?: string };
+};
+
+/**
+ * A computer-use failure the caller can act on, rather than a sentence to read.
+ *
+ * A bare message leaves both the model and the UI guessing: the model retries the same
+ * call, and the pane can only print the text. `code` says what class of failure it was
+ * and `suggestedAction` says what would resolve it — which is the difference between
+ * "computer control is switched off" and a result the renderer can put a button on.
+ */
+export type ComputerErrorCode =
+  | "disabled"
+  | "clipboard_disabled"
+  | "unsupported"
+  | "permission_required"
+  | "engine_unavailable"
+  | "batch_step_failed";
+
+export type ComputerError = {
+  code: ComputerErrorCode;
+  message: string;
+  suggestedAction?: string;
+  /** Present when the failure was about macOS grants, so the UI need not re-query. */
+  permissions?: ComputerPermissionStatus;
+};
+
+/**
+ * Whether this machine will let FastVibe drive it.
+ *
+ * `ready` is the only field a caller should branch on; the two booleans exist so the UI
+ * can name the toggle that is still off rather than saying "permission denied".
+ *
+ * `available` is a different question from `ready`: it is false when the native engine
+ * could not be loaded at all (an architecture with no native package), where no amount
+ * of granting will help and the UI should say so instead of offering a button.
+ */
+export type ComputerPermissionStatus = {
+  platform: string;
+  accessibility: boolean;
+  screenRecording: boolean;
+  ready: boolean;
+  available: boolean;
+  /** Why the engine is unavailable, when it is. */
+  error?: string;
+};
+
+/** The two macOS grants the driver needs, named as `ComputerPermissionStatus` keys. */
+export type GrantPermission = "accessibility" | "screenRecording";
+
+/**
+ * Where the guided grant flow has got to.
+ *
+ * `step`/`total` count the permissions this run still had to collect when it started, so
+ * a machine that already had Screen Recording reports 1/1 rather than a misleading 2/2.
+ */
+export type GrantFlowState = {
+  active: boolean;
+  permission?: GrantPermission;
+  step: number;
+  total: number;
+};
+
+/** One running application, as the Settings allow-list picker lists them. */
+export type ComputerAppInfo = {
+  pid: number;
+  name: string;
+  bundleId?: string;
+  active: boolean;
+};
+
+/**
+ * 电脑操控 preferences.
+ *
+ * Read by the bridge on every call rather than cached, so flipping a switch applies to
+ * a run that is already going — the same contract the permission modes have.
+ */
+export type ComputerSettings = {
+  /** Master switch. Off means the `computer_*` tools refuse before touching the driver. */
+  enabled: boolean;
+  /** Clipboard is shared by every application, so it gets its own switch. */
+  clipboard: boolean;
+  /** Prefer delivery that does not take focus from whatever the user is doing. */
+  preferBackground: boolean;
+  /**
+   * Applications whose windows never raise a confirmation, by bundle id (macOS) or
+   * executable name. "Always allowed" in the sense of the confirmation dialog only —
+   * it does not widen what the tools can do.
+   */
+  allowedApps: string[];
+};
+
 export type BrowserImportResult = {
   browser: string;
   profile: string;
@@ -503,17 +658,39 @@ export type QueueBehavior = "steer" | "followUp";
 
 export type QueuePauseReason = "stopped" | "error";
 
+export type QueuedPromptPreview = {
+  /** Catalog values before this prompt was recorded. */
+  previousTitle: string;
+  previousPreview?: string;
+  /** Catalog values written for this prompt. */
+  nextTitle: string;
+  nextPreview?: string;
+};
+
 export type QueuedPrompt = {
+  /** Stable Main-issued identity; queue operations always address this id. */
   id: string;
-  /** Conversation that owns this renderer-side follow-up. */
   conversationId: string;
+  /** Text shown in the queue tray. */
   text: string;
   behavior: QueueBehavior;
   attachments?: ChatAttachment[];
-  /** Handed to the engine as a steer; waiting to be injected into the live run. */
+  /** True while the exact message object is still waiting in the SDK queue. */
   sending?: boolean;
-  /** Exact payload passed to `engine.steer`, used to match delivery. */
+  /** True only after the SDK agent loop has dequeued the object for injection. */
+  claimed?: boolean;
+  /** Exact engine payload, retained so a pending item survives a process restart. */
   sentText?: string;
+  /** Conditional catalog rollback data for a queued prompt that is discarded. */
+  preview?: QueuedPromptPreview;
+};
+
+export type ConversationQueueState = {
+  conversationId: string;
+  /** Monotonic Main revision; clients ignore an older RPC reply after a newer push. */
+  revision: number;
+  items: QueuedPrompt[];
+  pause: QueuePauseReason | null;
 };
 
 export type EngineEvent = {
@@ -597,6 +774,18 @@ export type ProviderConfig = {
   supportsKey: boolean;
   /** The subscription login this provider offers, when the SDK ships one. */
   oauth?: NativeProviderOAuth;
+  /**
+   * Set once 添加供应商 identified the relay software behind a custom Base URL.
+   * Absent means "not identified" — either the probe ran and found nothing, or the
+   * provider predates the probe — and leaves every gateway-specific row hidden.
+   */
+  gateway?: GatewayKind;
+  /**
+   * **Whether** a panel credential is stored, never the credential: this object is
+   * served to every window and every remote client as `providers:list`, and a new-api
+   * balance needs a dashboard access token that must not travel that way.
+   */
+  gatewayCredential?: boolean;
   enabled: boolean;
   models: ProviderModel[];
 };
@@ -651,6 +840,37 @@ export type CcSwitchScan = {
   found: boolean;
   path: string;
   candidates: CcSwitchCandidate[];
+};
+
+/**
+ * Which relay software a custom provider's Base URL turned out to be.
+ *
+ * The two families answer the same OpenAI/Anthropic protocols, so the model list
+ * cannot tell them apart — only their management panels can, which is what the probe
+ * reads at 添加供应商. Stored on the provider because it decides which balance endpoint
+ * applies, not re-derived on every render.
+ */
+export const GATEWAY_KINDS = ["sub2api", "new-api"] as const;
+export type GatewayKind = (typeof GATEWAY_KINDS)[number];
+
+/**
+ * What a relay panel says is left on the stored key, in USD.
+ *
+ * Both families report money, by different routes — new-api from the key's own quota,
+ * sub2api from the wallet in `/v1/usage` — so one field covers them and the pane does not
+ * have to know which panel answered. `unlimited` is the distinct state a panel can be in
+ * instead of a number.
+ */
+export type GatewayBalance = {
+  unlimited: boolean;
+  /** USD. Absent when unlimited, or when the panel reported no number. */
+  available?: number;
+};
+
+export type GatewayBalanceResult = {
+  /** Epoch milliseconds of the read, so the pane can show its freshness. */
+  fetchedAt: number;
+  balance: GatewayBalance;
 };
 
 /**
@@ -805,18 +1025,23 @@ export type InputModality = (typeof INPUT_MODALITIES)[number];
 export type PermissionMode = "ask" | "smart" | "full";
 
 /**
- * 系统通知: which desktop notifications the app may raise.
+ * 系统通知: the scenarios a desktop notification may be raised for (设置 → 通用).
  *
- * `done` = a run finished, `approval` = a chat is parked on a tool approval while the
- * window is unfocused, `off` = none. Main reads the value from `settings.json` on every
- * event so a change lands immediately; an absent or malformed value means `done`.
+ * One key per scenario rather than one three-valued preference, so someone who wants to
+ * hear about a chat waiting on an approval but not about every finished run can say so.
+ * `done` and `error` are the two verdicts a background run can settle with, `approval`
+ * is a chat parked on a question only the user can answer, `update` is an update that
+ * has finished downloading.
+ *
+ * Main reads each key from `settings.json` on every event, so a change lands immediately.
+ * An absent value means **on**: the switch has to be turned off to stop a notice.
  */
-export const NOTIFICATION_PREFERENCES = ["done", "approval", "off"] as const;
+export const NOTIFICATION_SETTINGS = ["notifyDone", "notifyError", "notifyApproval", "notifyUpdate"] as const;
 
-export type NotificationPreference = (typeof NOTIFICATION_PREFERENCES)[number];
+export type NotificationSetting = (typeof NOTIFICATION_SETTINGS)[number];
 
-export function isNotificationPreference(value: unknown): value is NotificationPreference {
-  return typeof value === "string" && (NOTIFICATION_PREFERENCES as readonly string[]).includes(value);
+export function isNotificationSetting(value: unknown): value is NotificationSetting {
+  return typeof value === "string" && (NOTIFICATION_SETTINGS as readonly string[]).includes(value);
 }
 
 export type Project = {
@@ -875,6 +1100,7 @@ export type Conversation = {
    * foreign session is recognisable instead of silently duplicating it.
    */
   importedFrom?: { source: ImportSourceId; sourceId: string };
+  /** Isolated git worktree this conversation's engine cwd is bound to. */
   worktree?: { path: string; branch: string };
   /** Hidden from the left sidebar; lives in the right side pane. */
   kind?: "side-chat";
@@ -910,12 +1136,26 @@ export type WorkspaceSnapshot = {
  *
  * Every field is read at one instant, so they cannot disagree with each other.
  */
+/**
+ * A transcript read that only carries what the reader is missing.
+ *
+ * `tail` starts at `anchorId` — a row the reader already has — so it is spliced in
+ * from that row and everything above keeps the identity (and therefore the rendered
+ * output) it already had. `full` is the whole transcript, for when the anchor is no
+ * longer on the branch at all.
+ */
+export type TranscriptTail =
+  | { mode: "tail"; anchorId: string; messages: ChatMessage[] }
+  | { mode: "full"; messages: ChatMessage[] };
+
 export type ConversationSnapshot = {
   conversationId: string | null;
   /** The transcript, including the reply in flight while `running`. */
   messages: ChatMessage[];
   /** Whether a run or a compaction is in flight for this conversation. */
   running: boolean;
+  /** Main-owned durable message queue at the same instant as the transcript. */
+  queue: ConversationQueueState;
   /**
    * Extension prompts parked waiting for a human, as the `extension_ui_request` events
    * that announced them. A prompt is delivered only as an event, so without these a
@@ -954,6 +1194,8 @@ export type ConversationOpenResult = WorkspaceSnapshot & {
    * to. Absent/empty means nothing was published.
    */
   extensionStatus?: Record<string, string>;
+  /** Main-owned durable queue, included so reload/open never starts from an empty tray. */
+  queue: ConversationQueueState;
 };
 
 /** Pushed when a conversation finishes initialising in the background. */

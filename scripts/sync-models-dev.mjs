@@ -9,7 +9,7 @@
  * The output `index.json` is a lookup-optimised snapshot (unique models + alias map)
  * so the app can resolve model metadata in O(1) without parsing the 4.5 MB upstream
  * catalog at runtime. The encoding itself lives in `models-dev-encode.mjs`, shared with
- * the app's own update path (Settings → 关于), so both write the same format.
+ * the app's own update path (hourly, and Settings → 关于), so both write the same format.
  */
 import { readFile, rename, writeFile } from "node:fs/promises";
 import { mkdir } from "node:fs/promises";

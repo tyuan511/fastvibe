@@ -18,15 +18,20 @@ export type FastVibePaths = {
   oauthFile: string;
   conversationsFile: string;
   providersFile: string;
+  gatewayCredentialsFile: string;
   mcpFile: string;
   /** Renderer UI preferences (theme, chat behaviour, …). */
   settingsFile: string;
+  /** Main-owned normal window size and maximized state. */
+  windowStateFile: string;
   /** User overrides for built-in subagent models. */
   subagentsFile: string;
   /** Per-thinking-block durations, which the engine's transcripts do not record. */
   reasoningFile: string;
   /** Append-only record of finalized turns, so 使用统计 survives session deletion. */
   usageLedgerFile: string;
+  /** Durable, Main-owned user message queue. */
+  messageQueueFile: string;
   /**
    * Remote-access password hash and device tokens.
    *
@@ -115,11 +120,15 @@ function buildFastVibePaths(): FastVibePaths {
     oauthFile: join(agentDir, "oauth.json"),
     conversationsFile: join(userData, "conversations.json"),
     providersFile: join(userData, "providers.json"),
+    /** Panel credentials for custom relays (new-api); never served, never in providers.json. */
+    gatewayCredentialsFile: join(userData, "gateway-credentials.json"),
     mcpFile: join(userData, "mcp.json"),
     settingsFile: join(userData, "settings.json"),
+    windowStateFile: join(userData, "window-state.json"),
     subagentsFile: join(agentDir, "subagents.json"),
     reasoningFile: join(runtimeRoot, "reasoning.json"),
     usageLedgerFile: join(runtimeRoot, "usage-ledger.jsonl"),
+    messageQueueFile: join(runtimeRoot, "message-queue.json"),
     remoteAccessFile: join(userData, "remote-access.json"),
     sshHostsFile: join(userData, "ssh-hosts.json"),
     projectBindingsFile: join(userData, "project-bindings.json"),

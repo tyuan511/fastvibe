@@ -8,6 +8,8 @@ import type {
   MessagePart,
   ToolCallBlock,
 } from "@shared/types";
+import { extractPromptAttachments } from "@shared/attachment-metadata";
+import { isAbortOutcome } from "@shared/abort";
 import { i18n } from "@/lib/i18n";
 
 export type ApplyResult = {
@@ -71,13 +73,17 @@ function contentText(content: unknown): string {
 
 function userRowFromEngine(message: Record<string, unknown>): ChatMessage {
   const text = contentText(message.content);
-  const attachments: ChatAttachment[] = [];
+  const attachments: ChatAttachment[] = extractPromptAttachments(text);
   if (Array.isArray(message.content)) {
+    let images = 0;
     for (const part of message.content) {
       if (!isRecord(part) || part.type !== "image" || typeof part.data !== "string") continue;
       const mimeType = typeof part.mimeType === "string" ? part.mimeType : "image/png";
       attachments.push({
-        id: crypto.randomUUID(),
+        // Same positional scheme Main's mapping uses (`map-messages.ts`), so the row
+        // this builds optimistically and the row that replaces it after the reload
+        // describe the image identically.
+        id: `image:${images++}`,
         kind: "image",
         name: "image",
         mimeType,
@@ -126,6 +132,22 @@ const MESSAGE_BOUNDARY_EVENTS = new Set([
   "agent_end",
   "tool_execution_start",
   "tool_execution_end",
+]);
+
+/**
+ * The inner types of a `message_update` that write the reply itself, as opposed to
+ * closing it (`done`) or reporting why it stopped (`error`). Only these mean the
+ * attempt a retry was waiting for is now streaming.
+ */
+const STREAMED_CONTENT = new Set([
+  "text_delta",
+  "thinking_delta",
+  "toolcall_start",
+  "tool_call_start",
+  "toolcall_delta",
+  "tool_call_delta",
+  "toolcall_end",
+  "tool_call_end",
 ]);
 
 /** User aborts stay silent; only `stopReason: "error"` becomes a visible failure. */
@@ -247,6 +269,28 @@ function clearTrailingAssistantErrors(messages: ChatMessage[]): ChatMessage[] {
     if (!item.error) continue;
     if (next === messages) next = next.slice();
     next[index] = { ...item, error: undefined };
+  }
+  return next;
+}
+
+/**
+ * Drop a retry banner off every consecutive trailing assistant.
+ *
+ * The banner describes the *wait* for the next attempt — the backoff the SDK is
+ * sitting out, with the provider's error behind it. The moment that attempt
+ * starts writing (a new `message_start`, then its deltas) the wait is over, and
+ * the banner sits on the very row the reply is streaming into: left there it
+ * reads as 正在重试 under live output. `auto_retry_end` only reports the outcome
+ * once the retried message has *finished*, which is far too late to take it down.
+ */
+function clearTrailingAssistantRetry(messages: ChatMessage[]): ChatMessage[] {
+  let next = messages;
+  for (let index = next.length - 1; index >= 0; index -= 1) {
+    const item = next[index];
+    if (item.role !== "assistant") break;
+    if (!item.retry) continue;
+    if (next === messages) next = next.slice();
+    next[index] = { ...item, retry: undefined };
   }
   return next;
 }
@@ -431,7 +475,17 @@ function applyEvent(
   // echo is skipped; `user_message_persisted` adopts its session id.
   if (type === "message_start") {
     const message = isRecord(event.message) ? event.message : undefined;
-    if (message?.role !== "user") return { messages: next, streaming: nextStreaming };
+    if (message?.role !== "user") {
+      // The reply the retry was waiting for has begun streaming, so the banner that
+      // announced the wait for it comes down here, at the very first event of that
+      // stream. It sits on the row the reply is being written into, and
+      // `auto_retry_end` only arrives once the reply has *finished* — by which point
+      // the user has been reading it under a 正在重试.
+      if (message?.role === "assistant") {
+        return { messages: clearTrailingAssistantRetry(next), streaming: nextStreaming };
+      }
+      return { messages: next, streaming: nextStreaming };
+    }
     if (lastUserIsLocal(next)) return { messages: next, streaming: nextStreaming };
     return { messages: appendMessage(next, userRowFromEngine(message)), streaming: nextStreaming };
   }
@@ -486,7 +540,10 @@ function applyEvent(
 
   if (type === "agent_end") {
     const lastEngine = Array.isArray(event.messages) ? event.messages.at(-1) : undefined;
-    const error = errorFromAssistant(lastEngine);
+    // `agent_end` is the failed attempt's boundary, not the final outcome, when the
+    // SDK is about to retry. Keep that transient error out of the red terminal bubble;
+    // the following `auto_retry_start` renders it as the expandable retry row.
+    const error = event.willRetry === true ? undefined : errorFromAssistant(lastEngine);
     // A run that failed or was aborted stopped before the model finished; a clean
     // turn ends with `stopReason` `stop`/`toolUse`/`length`. When the engine is about
     // to auto-retry (`willRetry`), this is a transient failure the SDK is already
@@ -636,6 +693,14 @@ function applyEvent(
     const innerType = asString(inner?.type);
     if (!inner) return { messages: next, streaming: nextStreaming };
 
+    // Content, as opposed to the end of the message. The retried attempt is writing,
+    // so the banner that announced the wait for it goes now rather than riding the
+    // streamed reply (see `clearTrailingAssistantRetry`).
+    if (innerType !== undefined && STREAMED_CONTENT.has(innerType)) {
+      const target = ensureAssistant();
+      if (target.retry) target.retry = undefined;
+    }
+
     if (innerType === "text_delta") {
       const delta = asString(inner.delta) ?? asString(inner.text) ?? "";
       if (delta) {
@@ -708,10 +773,7 @@ function applyEvent(
     }
     if (innerType === "error") {
       nextStreaming = false;
-      const aborted =
-        asString(inner.reason) === "aborted" ||
-        (isRecord(inner.error) && inner.error.stopReason === "aborted") ||
-        (isRecord(inner.message) && inner.message.stopReason === "aborted");
+      const aborted = isAbortOutcome(inner);
       // The round-trip stopped here — a failure or a user abort is still an end, and
       // a failed turn never gets the authoritative transcript re-stamp (the reload is
       // skipped so the error bubble survives), so this is the only reading it gets.
@@ -738,15 +800,15 @@ function applyEvent(
       const attempt = typeof event.attempt === "number" ? event.attempt : 1;
       const maxAttempts = typeof event.maxAttempts === "number" ? event.maxAttempts : undefined;
       const delayMs = typeof event.delayMs === "number" ? event.delayMs : undefined;
-      const retry =
-        maxAttempts != null
-          ? (i18n.t("common:errors.retryingWithBudget", { attempt, maxAttempts }) as string) +
-            (delayMs ? (i18n.t("common:errors.retryAfter", { seconds: Math.round(delayMs / 1000) }) as string) : "") +
-            (error ? (i18n.t("common:errors.retryDetail", { error }) as string) : "")
-          : (i18n.t("common:errors.retrying") as string) +
-            (error ? (i18n.t("common:errors.retryDetail", { error }) as string) : "");
       const list = next.slice();
-      list[list.length - 1] = { ...last, error: retry };
+      // Keep the provider detail as data, not baked into a red error string. The
+      // renderer presents this transient state like a tool call and reveals the
+      // detail only when the row is expanded.
+      list[list.length - 1] = {
+        ...last,
+        error: undefined,
+        retry: { attempt, maxAttempts, delayMs, error: error || undefined },
+      };
       return { messages: list, streaming: true };
     }
     return { messages: next, streaming: true };
@@ -755,12 +817,16 @@ function applyEvent(
   if (type === "auto_retry_end") {
     const last = next.at(-1);
     if (last?.role === "assistant" && event.success === true) {
-      return { messages: clearTrailingAssistantErrors(next), streaming: nextStreaming };
+      const cleared = clearTrailingAssistantErrors(next);
+      const list = cleared.slice();
+      const tail = list.at(-1);
+      if (tail?.role === "assistant") list[list.length - 1] = { ...tail, retry: undefined };
+      return { messages: list, streaming: nextStreaming };
     }
     if (last?.role === "assistant" && event.success === false) {
-      const error = asString(event.finalError) ?? last.error ?? (i18n.t("common:errors.requestFailed") as string);
+      const error = asString(event.finalError) ?? last.retry?.error ?? last.error ?? (i18n.t("common:errors.requestFailed") as string);
       const list = next.slice();
-      list[list.length - 1] = { ...last, error };
+      list[list.length - 1] = { ...last, retry: undefined, error };
       return { messages: list, streaming: false };
     }
     return { messages: next, streaming: nextStreaming };

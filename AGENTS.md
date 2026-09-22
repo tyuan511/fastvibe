@@ -24,7 +24,7 @@ Runtime data lives under the app userData directory:
   conversations.json
   providers.json
   mcp.json
-  models-dev.json        models.dev snapshot refreshed from 设置 → 关于, which wins over the bundled one
+  models-dev.json        models.dev snapshot refreshed hourly and from 设置 → 关于; wins over the bundled one
   runtime/engine/
     agent/sessions       session transcripts, passed to the SDK's SessionManager
     agent/.env           provider API keys, injected into the SDK's in-memory auth storage
@@ -297,9 +297,14 @@ Three things that are easy to get wrong here:
 
 ### 窄视口（手机）
 
-Below `md` the sidebar overlays as a drawer instead of pushing (`CollapsiblePanel
-overlay`), and the right pane is not rendered at all — a 375pt screen has no room for the
-terminal, a diff or the file tree, and the browser pane has no webview to drive anyway.
+Below `md` the sidebar overlays as a drawer instead of pushing (`CollapsiblePanel`), and
+the right pane is not rendered at all — a 375pt screen has no room for the terminal, a diff
+or the file tree, and the browser pane has no webview to drive anyway. Above `md` the three
+columns are one `react-resizable-panels` group: `components/ui/resizable.tsx` (added with
+`pnpm shadcn add resizable`) holds the primitives, `lib/use-resizable-panel.ts` binds one
+side panel to the app's own state, and `App.tsx` owns the group. The library owns *who is
+how wide*; the collapsed flags and the resting widths stay in the stores and in
+`settings.json` exactly as before.
 
 **The drawer is the whole viewport** (`100vw`), and nothing caps it. It used to take
 `86vw` under a `maxWidth` of the remembered column width, which read as a defensive
@@ -313,7 +318,7 @@ Three things follow from the drawer covering everything:
 
 - **No backdrop.** There is no dimmed conversation behind it to tap. The button that used
   to be there sat under a full-screen panel and could never be reached.
-- **No splitter.** `ResizeHandle` is not rendered when narrow: there is no edge to drag,
+- **No splitter.** The separator is not rendered when narrow: there is no edge to drag,
   it sat where a thumb scrolls the list, and its drag ended in `writeSidebarWidth` — one
   stray swipe on a phone rewrote the column width of the desktop it was connected to.
 - **The sidebar's own 收起 is the only way out**, so it has to work. Every control that
@@ -327,10 +332,19 @@ not the persisted `sidebarCollapsed`: that preference lives in one `settings.jso
 by every client of this machine, so swiping the drawer open on a phone would otherwise
 collapse the sidebar on the desktop it is connected to.
 
-`CollapsiblePanel` drives **both** `x` and `width` in either mode. Motion only writes the
-keys an `animate` object names and leaves the rest of what it last wrote in place, so a
-branch animating only `width` inherited the drawer's `translateX(-100%)` and parked the
-sidebar off-screen the moment a window crossed the breakpoint.
+`CollapsiblePanel` is the drawer only now, and it still drives **both** `x` and `width`.
+Motion only writes the keys an `animate` object names and leaves the rest of what it last
+wrote in place, so a branch animating only `width` inherited the drawer's
+`translateX(-100%)` and parked the sidebar off-screen the moment a window crossed the
+breakpoint.
+
+The column layout the library replaced had no such trap, but it had a worse one: its
+splitter listened for `mousemove` / `mouseup` on `window`, and the side pane hosts a
+`<webview>`. A pointer that crossed into the guest stopped reaching the parent document,
+so the drag froze mid-way — and a button released over the guest never fired `mouseup`, so
+the splitter stayed welded to the cursor until the next click. The library drives its
+separators with pointer events and `setPointerCapture`, which is the whole point of using
+it.
 
 ### 目录变更要广播（`workspace:changed`）
 
@@ -407,7 +421,7 @@ Main 每个会话一个 `AgentSession`，但引擎自己只有一个「当前会
 用户正在打的草稿。
 
 会话在等用户时：侧栏行显示 `Alert02Icon`，窗口未聚焦时按
-`settings.notifications === "approval"` 发系统通知。停止只在 composer；归档一个正在
+`settings.notifyApproval` 发系统通知。停止只在 composer；归档一个正在
 运行的会话会 `abort` 它，侧栏行不再提供停止按钮。
 
 Provider credentials are kept in FastVibe's isolated runtime and injected into the SDK's in-memory auth storage. Do not export these variables into the user's login shell or the in-app terminal.
@@ -960,6 +974,17 @@ the user installs at runtime via 设置 → 插件, which writes to the isolated
       not news after the run that was working through it stopped; it would sit above
       the composer with a busy mark, claiming work that is not happening. The plan is
       still in the transcript's todo card, one collapsed row away.
+    - **A newer user prompt closes it.** `todoSnapshot` (`lib/todos.ts`) reports the
+      list together with whether it was written *before* the newest user message, and
+      the panel draws nothing while that is true. A checklist belongs to the request
+      it was written for: asking something else must not resurface the previous
+      task's leftovers the moment the new run starts, which is exactly what the
+      transcript-derived panel did — it only knew the list existed, not which turn it
+      was for. The list is not destroyed (the card keeps it), and it comes back the
+      moment the agent writes one for the work in front of it. The extension's
+      `before_agent_start` reminder is worded the same way — continue the list only
+      if the request does — so the model is not pushed to resume an abandoned plan
+      just because it is unfinished.
     - **Busy marks follow the run.** The header's leading glyph and the leading glyph
       of the item `in_progress` are `RunningMark` (`components/running-mark.tsx`) —
       the same sweeping-arc mark the sidebar puts on a running conversation, shared so
@@ -986,14 +1011,15 @@ the user installs at runtime via 设置 → 插件, which writes to the isolated
   reads no FastVibe internals — keep new rules in the file itself.
   Two settings keys feed it: `defaultPermissionMode` (设置 → 通用 → 默认权限模式, default
   `smart` 帮我批准) is what a launch starts on, while `permissionMode` is the live mode the
-  composer's chip switches. Main resolves the two at startup —
-  `applyStartupPermissionMode` (`engine/app-settings.ts`) re-seeds the live value from the
-  default, writes it back to `settings.json` and exports it — so one session escalated to
-  `full` cannot outlive the app, and the sandbox env cannot disagree with the chip. An
-  absent or malformed value anywhere means `smart`, never `full`.
+  sandbox reads. Every permission picker updates both keys, so a choice made in the composer
+  survives restarts and upgrades; Main's `applyStartupPermissionMode` still re-seeds the live
+  key from the persisted default so the sandbox env and chip agree from the first frame.
+  Entering `full` is guarded by one machine-wide warning. Accepting it stores
+  `fullAccessConfirmed`, so changing away and back never asks again; 恢复默认 is the explicit
+  way to forget that acknowledgement. An absent or malformed mode means `smart`, never `full`.
 - **Subagent** — `subagent/index.ts` registers a `subagent` tool that delegates a
   self-contained task to a role defined by a markdown file under
-  `resources/extensions/subagent/agents/*.md`: `scout`, `planner`, `worker`,
+  `resources/extensions/subagent/agents/*.md`: `explorer`, `planner`, `worker`,
   `reviewer` (user roles under `getAgentDir()/agents` are merged in). Because the
   SDK omits custom tools from the system prompt unless they declare it, the tool sets
   `promptSnippet` + `promptGuidelines` and lists the discovered roles in its
@@ -1025,7 +1051,11 @@ the user installs at runtime via 设置 → 插件, which writes to the isolated
     says this install can authenticate it — the catalog (`getAll()`) holds every
     reseller's models, so a pinned `claude-sonnet-4-5` on a gateway with no
     Anthropic key would otherwise win and fail with “No API key found”. Bare ids
-    resolve against `getAvailable()` **and** are re-checked for auth.
+    resolve against `getAvailable()` **and** are re-checked for auth. A role may also
+    set `thinkingLevel:` (`minimal | low | medium | high | xhigh | max`) in its
+    frontmatter; absent or invalid values migrate to `medium` rather than inheriting
+    the parent run. Built-in role overrides live beside model overrides in
+    `subagents.json`, while custom roles persist the field in their Markdown template.
   - **Renderer.** The sub-session's engine events are re-emitted as
     `subagent_event` / `subagent_state` / `subagent_lifecycle` (see `#trackSubagentEvent`), which the
     renderer folds into `session.subagents` + `subagentStreams`; `App.tsx` applies
@@ -1037,8 +1067,8 @@ the user installs at runtime via 设置 → 插件, which writes to the isolated
     A `subagent` tool card does not dump its parameters — it lists the spawned
     runs (role · brief · status, the whole row opening that run's tab; no
     「查看对话」 button). The collapsed row summarises the fan-out rather than
-    listing every run — at most two distinct roles plus a count (`scout ×5`,
-    `scout, planner 等 4 个`) — and expanding it reveals each run. A run's tab is
+    listing every run — at most two distinct roles plus a count (`explorer ×5`,
+    `explorer, planner 等 4 个`) — and expanding it reveals each run. A run's tab is
     `SidePaneSubagent`: the same `MessageList` as the main thread (follow-the-bottom
     included), plus the main composer in its read-only mode (below) — a delegated run
     is not a conversation the user can steer, but it is one they can read and stop. The
@@ -1103,6 +1133,20 @@ the user installs at runtime via 设置 → 插件, which writes to the isolated
     all) is reported as an error. `tabId` is optional everywhere: an
     omitted id means the current tab, and a stale id with exactly one tab open is adopted with a
     `note`.
+  - **A guest's popup never becomes a second window.** A `window.open` — or a `target="_blank"`
+    link, which the injected click runs like any other click — was answered by Electron's
+    default window-open handling, which *creates a `BrowserWindow`*: a chrome-less guest no pane
+    owns, shown in front of whatever the user was doing, with nothing on screen to explain it.
+    `guardGuestPopups()` (main, registered before any window exists) denies every one of them
+    and loads the address in the tab that was already being driven instead — which is what the
+    model meant by clicking the link, keeps the tab id it holds valid, and leaves the pane's
+    `did-navigate` listener to keep the title and `Entry.url` in step, so a recovery resumes the
+    popup page rather than the page it opened from. Only `http(s)` is followed: every other
+    scheme carries no address of its own or is a hand-off to another program — the same
+    interruption through a different door. The pane's webview carries `disableDialogs` for the
+    same reason one door over: a page's `alert` / `confirm` / `prompt` is a native modal by
+    default, which lands in front of the user *and* parks the guest, so the tool call waits on a
+    button nobody is there to press.
   - **A guest is never re-parented.** Chromium tears the guest down when its `<webview>`
     element is moved in the DOM — every call after that fails with `Invalid guestInstanceId`,
     and re-assigning `src` does not bring it back. So every guest's host lives in one layer
@@ -1112,8 +1156,9 @@ the user installs at runtime via 设置 → 插件, which writes to the isolated
     moved the host out of the park when the pane mounted it, so the guest died on open,
     `usable()` retired the fresh tab, and retiring the last tab collapsed the pane — the
     闪一下 the side pane did when a tool opened the browser. The layer follows the pane's
-    collapse spring through its clipping ancestor's rect and leaves the pane's splitter
-    clickable (`SPLITTER_GUTTER`); a parked or momentarily zero-sized guest stays found
+    width through its clipping ancestor's rect — the panel's own clipping box, which is what
+    shrinks, so the guest is never wider than the pane it sits in; a parked or momentarily
+    zero-sized guest stays found
     (`guestAlive` probes `getURL`), which is what keeps browser-use in a background chat
     working.
 - **Web search** — `web-search.ts` registers a client `web_search` tool only while the
@@ -1231,16 +1276,21 @@ pnpm shadcn add <component> -y
   written before pricing existed leaves `models.json` with no price and every turn is
   billed at $0.
 - `src/main/engine/models-dev.ts` reads the user-updated snapshot first
-  (`models-dev.json` in the app data dir) and the bundled one second, and is otherwise
-  the app's only runtime network call for metadata — always user-initiated, from
-  设置 → 关于 (`models-dev-update.ts`). Deleting the updated file falls back to the copy
-  the app shipped with, and a corrupt one is ignored rather than trusted. Both writers
-  share one encoder (`scripts/models-dev-encode.mjs`, also used by
-  `scripts/sync-models-dev.mjs`), so what 关于 downloads is the format the decoder
-  already reads; a successful update then re-derives `models.json` through
-  `PiProcessManager.reloadModelMetadata()`, which refreshes live sessions like a
-  provider edit but never boots a cold engine. `normalizeModelKey` must stay identical
-  to `normalize` in the sync script.
+  (`models-dev.json` in the app data dir) and the bundled one second. The snapshot is
+  refreshed hourly on the user's machine (`models-dev-refresh.ts`) and on demand from
+  设置 → 关于; both call `models-dev-update.ts`, and a click during the background fetch
+  waits for that same download. A failure is logged and retried an hour later — it is
+  not shown, and it is not polled in a loop. An overdue or missing snapshot is fetched
+  shortly after launch rather than waiting out a full hour; one already inside the hour
+  waits for the rest of it. Deleting the updated file falls back to the copy the app
+  shipped with, and a corrupt one is ignored rather than trusted. Both writers share
+  one encoder (`scripts/models-dev-encode.mjs`, also used by `scripts/sync-models-dev.mjs`),
+  so what is downloaded is the format the decoder already reads. The file is replaced
+  either way (its timestamp is what the schedule waits on), but `models.json` is
+  re-derived through `PiProcessManager.reloadModelMetadata()` only when the catalog
+  content changed — an unchanged hour must not rebind every open session. That reload
+  refreshes live sessions like a provider edit and never boots a cold engine.
+  `normalizeModelKey` must stay identical to `normalize` in the sync script.
 - Resolution order: the updated `models-dev.json`, then
   `process.resourcesPath/models-dev/index.json`, then `resources/models-dev/index.json`.
   Packaging must copy the directory via
@@ -1324,9 +1374,22 @@ Settings → 使用统计 (`components/settings/usage-settings.tsx`) is fed by
   transcript (`PiProcessManager.deleteConversation`), which used to silently rewrite
   history; the ledger is what keeps it. A live transcript is the primary source and the
   ledger only adds turns whose file is gone; the two are deduplicated by
-  `sessionId` + entry id (`turnKey`). Branching is safe because FastVibe branches in
-  place (`navigateTree`) and never calls the SDK's `createBranchedSession`, so a session
-  id — and therefore the key — is stable.
+  `sessionId` + entry id (`turnKey`). Retry/edit branches in place (`navigateTree`),
+  keeping that key stable. Independent conversation forks (`engine:fork`,
+  `engine/session-fork.ts`) instead create a new v3 transcript and session id, copying
+  only the selected branch. Inherited assistant entries carry `fastvibeUsageSessionId`
+  (preserved through repeated forks), so `parseSessionTurns` uses the original usage
+  identity and never bills copied history twice. New turns use the new session id.
+  Forks preserve entry ids for reasoning timing, include pending tool results at the
+  chosen reply boundary, and never rewind workspace files. An unfinished tool exchange
+  does not block a fork: the copy pairs each call with its existing result and supplies
+  an explicit error result only where none exists, without executing any tools. Results
+  are placed after their owning assistant before the next assistant, as required by
+  pi-ai's `transformMessages`; roundtrip tests cover both SDK loading and that conversion.
+  They are ordinary catalog
+  conversations with a nonempty preview, not side chats or disposable empty drafts;
+  creation stays inactive until `#ensureSession` finishes. Isolated worktree forks are
+  refused because deleting the source would otherwise destroy the fork's shared cwd.
 - **The ledger stores raw usage, never a price.** `UsageLedger` (`usage-ledger.ts`)
   appends one line per finalized assistant turn (tokens, model, engine-reported cost,
   timestamp, tool-call count) as the turn lands, and `capture()` folds a whole
@@ -1534,22 +1597,6 @@ from an event payload. So it is as fresh as the last `reloadActiveState()`.
   message would re-read the whole transcript several times a turn for a value that cannot
   change. `turn_end` is the first point where the turn's usage (and its tool results) are in.
 
-## 在会话中查找
-
-`Cmd/Ctrl+F`（`findInConversation`）在转录上方打开一条查找栏（`components/chat/find-bar.tsx`）。
-
-- **在渲染层匹配，不问引擎。** 转录已经在内存里（`findMatches` 只扫 `message.text`），
-  敲一个字就重读一次磁盘会把「在屏幕上找东西」变成一次 IPC 往返。只搜正文：
-  思考与工具输出卡片另有入口，纳入命中列表只会让 `n/N` 数出看不见的位置。
-- **滚动用 scroller 自己的 `scrollToMessage`。** 行 id 是引擎的 entry id，不是位置，
-  所以重试/编辑分支过的会话仍然落得准。`FindBar` 因此必须渲染在
-  `MessageScrollerProvider` **内部**（它用 `useMessageScroller`）。
-- **不在打开状态时什么都不做。** 那条滚动 effect 的依赖里有 `matches`，而它在每个
-  流式 token 上都是新数组——曾经关掉查找栏后转录仍被每个 token 拽回旧命中、不再
-  跟随底部。
-- **从命令面板的正文命中进来时**（`onSelectChat(id, needle)`），会话打开的同时把查找栏
-  预填成那个关键词：它只能告诉你「这个会话里有」，只有转录能告诉你「在哪里」。
-
 ## 顶层错误边界
 
 `components/error-boundary.tsx` 包在 `main.tsx` 的最外层。渲染期抛错会卸载 React 拥有的
@@ -1598,11 +1645,39 @@ from an event payload. So it is as fresh as the last `reloadActiveState()`.
 
 ## 系统通知（设置 → 通用）
 
-`settings.notifications`：`done`（任务完成）/ `approval`（后台会话停在审批上）/ `off`。
-Main 在每个事件上读一次文件，所以改完立即生效。两个通知回答的是不同的问题：跑完是
-「可以回来看结果」，停在审批上是「你不回答它就永远走不下去」——后者才是真正需要打扰用户的。
-只有会阻塞的 dialog 方法算数（`isBlockingPrompt`）；`notify` / `setStatus` / `setWidget`
-是单向的，不能触发通知。
+设置里是一个总开关加四个场景开关，全部**默认打开**。Main 在每个事件上读一次文件，所以改完
+立即生效。四个场景回答的是不同的问题：跑完是「可以回来看结果」，出错是「这次没成功」，停在
+审批上是「你不回答它就永远走不下去」——只有最后一条是真正的阻塞。
+
+- **`settings.notifyDone` / `notifyError` / `notifyApproval` / `notifyUpdate`**，平铺在
+  `settings.json` 里（Main 一次只读一个键）。**缺失即为打开**：开关是用来关的，不是用来开的，
+  否则升级上来的 install 会被静默静音。旧的 `notifications: "done" | "approval" | "off"`
+  被丢掉而不迁移——它的每个取值都是新默认值的子集。
+- **判定与投递分两层。** `src/shared/notifications.ts` 不引 Electron（`node --test` 加载不了），
+  只回答两件事：这个场景开没开、这个事件属于哪个场景。`src/main/engine/notifications.ts`
+  是 Electron 那一半：`new Notification` 和它的 click。这里多出的一个理由是 test 要能跑。
+- **`notifyError` 与 `notifyDone` 分开，`stopped` 两者都不发。** `agent_settled` 上的
+  `#interruptedRuns` 判定既是「队列能不能继续排空」的依据，也是「这次算完成还是失败」的依据；
+  「任务已完成」压在一次用户自己按的停止上，是一条没人要过的通知。
+- **点通知要落到那条会话。** click 里先 `app.focus({ steal: true })`（macOS：只
+  `window.focus()` 拉不回 ⌘H 隐藏或在别的 Space 的窗口）、再 restore/show/focus，然后调
+  `engine.openConversation(id)`。跳转本身不重新实现：把会话设成 active 就是侧栏点一下做的事，
+  每个客户端都已经在跟（`workspace:changed` → `handleOpen`），所以窗口当时**关着**也对——
+  活过来的窗口在启动时 adopt 的正是 catalog 的 activeId。
+- 只有会阻塞的 dialog 方法算数（`isBlockingPrompt`）；`notify` / `setStatus` / `setWidget`
+  是单向的，不能触发通知。
+
+## 单窗口
+
+FastVibe 是一个窗口、一个进程：`app.requestSingleInstanceLock()` 在模块作用域取（输的那个进程
+要在开窗之前就没了），`second-instance` 把已有的窗口恢复并聚焦——再点 Dock 图标不是再开一个
+窗口，而是回到原来那个。`window:new` 同样折进已有窗口而不是 `createWindow()`：每个 push、
+每个不说「谁的」就操作「当前会话」的方法都是按一个客户端设计的。
+
+开发态是例外：`ELECTRON_RENDERER_URL` 有值时跳过锁。`electron-vite dev` 每次改主进程都会异步
+杀掉旧子进程再起新的，新进程可能在旧进程还没释放锁的时候来抢——那会让 `pnpm dev` 变成一个
+没有窗口也没有报错的应用（旧进程以为是自己被替换了，新进程以为旧的那个还在）。在主进程里，
+`false` 恰好是错的那个答案。
 
 ## 测试
 

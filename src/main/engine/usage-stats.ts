@@ -51,7 +51,9 @@ export async function collectUsageStats(
   // from the provider catalog as the pane is built; without this the id would leak
   // straight into 模型用量.
   const providerNames = new Map(readProviders(paths).map((provider) => [provider.id, provider.name]));
-  const parsed = await Promise.all(files.map((file) => parseSessionTurns(file).catch(() => null)));
+  const parsed = await mapLimited(files, PARSE_CONCURRENCY, (file) =>
+    parseSessionTurns(file, { since: parseFloor(range) }).catch(() => null),
+  );
 
   // A transcript on disk wins over the ledger for the same turn; either way the key is
   // `sessionId` + entry id, so a session deleted and reimported cannot double-count.
@@ -186,6 +188,50 @@ function addTurn(metrics: Metrics, turn: UsageTurn, cost: number): void {
   metrics.cost += cost;
   metrics.requests += 1;
   metrics.toolCalls += turn.toolCalls;
+}
+
+/**
+ * Transcripts read at once.
+ *
+ * `Promise.all` over every file opened the lot at the same time: a few hundred
+ * conversations meant a few hundred whole transcripts resident simultaneously, which
+ * is a memory spike for work the event loop can only do one at a time anyway.
+ */
+const PARSE_CONCURRENCY = 8;
+
+async function mapLimited<T, R>(
+  items: T[],
+  limit: number,
+  work: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const runner = async (): Promise<void> => {
+    for (;;) {
+      const index = next;
+      next += 1;
+      if (index >= items.length) return;
+      results[index] = await work(items[index]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, runner));
+  return results;
+}
+
+/**
+ * Oldest write a transcript can have and still matter to this range.
+ *
+ * `all` has no floor. Every other range is a fixed number of days back from today, so
+ * it is known *before* anything is parsed — which is what lets a file untouched since
+ * then be skipped unread. A day of slack absorbs time zones and a clock that was off
+ * when a turn was recorded.
+ */
+function parseFloor(range: UsageRange): number | undefined {
+  if (range === "all") return undefined;
+  const today = localDateKey(Date.now());
+  const from = rangeStart(range, "", today);
+  const [year, month, day] = from.split("-").map(Number);
+  return new Date(year, month - 1, day - 1).getTime();
 }
 
 async function listSessionFiles(root: string): Promise<string[]> {

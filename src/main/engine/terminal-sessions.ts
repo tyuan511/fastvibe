@@ -50,10 +50,17 @@ function loadPty(): { module: typeof import("node-pty"); entry: string } | null 
 
 const pty = loadPty();
 
+/** One frame of coalescing for terminal output, and the burst size that skips it. */
+const FLUSH_MS = 16;
+const MAX_PENDING_CHARS = 256 * 1024;
+
 /** Side-pane shells. Prefer node-pty; unix `script` is a last-resort PTY on Linux only. */
 export class TerminalSessions {
   #sessions = new Map<string, Session>();
   #listeners = new Set<(event: { id: string; data?: string; exited?: boolean }) => void>();
+  /** Output waiting to be pushed, per terminal, in arrival order. */
+  #pending = new Map<string, string>();
+  #flushTimer: NodeJS.Timeout | null = null;
 
   onData(listener: (event: { id: string; data?: string; exited?: boolean }) => void): () => void {
     this.#listeners.add(listener);
@@ -101,6 +108,12 @@ export class TerminalSessions {
 
   dispose(): void {
     for (const id of [...this.#sessions.keys()]) this.kill(id);
+    if (this.#flushTimer !== null) {
+      clearTimeout(this.#flushTimer);
+      this.#flushTimer = null;
+    }
+    // Output of shells that are being torn down has nowhere left to go.
+    this.#pending.clear();
   }
 
   #startPty(id: string, cwd: string, shell: string, cols: number, rows: number): Session {
@@ -111,7 +124,7 @@ export class TerminalSessions {
       cwd,
       env: { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor" },
     });
-    term.onData((data) => this.#emit({ id, data }));
+    term.onData((data) => this.#data(id, data));
     term.onExit(() => {
       this.#sessions.delete(id);
       this.#emit({ id, exited: true });
@@ -133,14 +146,14 @@ export class TerminalSessions {
             cwd,
             env: { ...process.env, TERM: "xterm-256color" },
           });
-    child.stdout.on("data", (chunk: Buffer) => this.#emit({ id, data: chunk.toString("utf8") }));
-    child.stderr.on("data", (chunk: Buffer) => this.#emit({ id, data: chunk.toString("utf8") }));
+    child.stdout.on("data", (chunk: Buffer) => this.#data(id, chunk.toString("utf8")));
+    child.stderr.on("data", (chunk: Buffer) => this.#data(id, chunk.toString("utf8")));
     child.on("close", () => {
       this.#sessions.delete(id);
       this.#emit({ id, exited: true });
     });
     child.on("error", (error) => {
-      this.#emit({ id, data: `\r\n${error.message}\r\n` });
+      this.#data(id, `\r\n${error.message}\r\n`);
       this.#sessions.delete(id);
       this.#emit({ id, exited: true });
     });
@@ -163,7 +176,7 @@ export class TerminalSessions {
   #startFailed(id: string, cwd: string): Session {
     const message = uiText("无法启动终端", "Failed to start terminal");
     setImmediate(() => {
-      this.#emit({ id, data: `\r\n${message}\r\n` });
+      this.#data(id, `\r\n${message}\r\n`);
       this.#sessions.delete(id);
       this.#emit({ id, exited: true });
     });
@@ -176,7 +189,51 @@ export class TerminalSessions {
     };
   }
 
+  /**
+   * Take one chunk of output, to be pushed with the rest of this frame's.
+   *
+   * A shell emits output in whatever pieces the pty hands over — a build log is
+   * thousands of them a second — and each one used to cross the IPC boundary on its
+   * own, to every window and every remote client. Coalescing costs one frame of
+   * latency (imperceptible next to a shell's own echo) and collapses that burst into
+   * one push per terminal per frame.
+   */
+  #data(id: string, chunk: string): void {
+    const buffered = `${this.#pending.get(id) ?? ""}${chunk}`;
+    this.#pending.set(id, buffered);
+    // A burst bigger than a frame's worth goes out immediately rather than growing a
+    // string nobody has read yet.
+    if (buffered.length >= MAX_PENDING_CHARS) {
+      this.#flush(id);
+      return;
+    }
+    if (this.#flushTimer !== null) return;
+    const timer = setTimeout(() => {
+      this.#flushTimer = null;
+      this.#flush();
+    }, FLUSH_MS);
+    timer.unref?.();
+    this.#flushTimer = timer;
+  }
+
+  /** Push what one terminal — or every terminal — has buffered. */
+  #flush(id?: string): void {
+    if (id !== undefined) {
+      const data = this.#pending.get(id);
+      if (data === undefined) return;
+      this.#pending.delete(id);
+      this.#emit({ id, data });
+      return;
+    }
+    const pending = [...this.#pending];
+    this.#pending.clear();
+    for (const [key, data] of pending) this.#emit({ id: key, data });
+  }
+
   #emit(event: { id: string; data?: string; exited?: boolean }): void {
+    // A control event never overtakes output: whatever this terminal has buffered is
+    // pushed first, so 「已结束」 cannot land ahead of the last lines the shell printed.
+    if (event.data === undefined) this.#flush(event.id);
     for (const listener of this.#listeners) listener(event);
   }
 }

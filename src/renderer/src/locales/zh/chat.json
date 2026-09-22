@@ -20,6 +20,7 @@
     "placeholder": "随心输入",
     "placeholderQueued": "继续输入以排队后续修改",
     "attach": "添加附件",
+    "pastedTextFile": "粘贴的文本.txt",
     "permissionAsk": "应如何批准 FastVibe 操作？",
     "contextStats": "查看上下文与轮次统计",
     "addModel": "添加模型",
@@ -71,6 +72,8 @@
     "error": "由于当前响应出错，队列已暂停（内容未丢失）",
     "reorder": "拖动调整顺序",
     "sending": "发送中",
+    "submitted": "已提交",
+    "discardSubmitted": "移除已提交消息",
     "recall": "撤回",
     "delete": "删除",
     "now": "立即",
@@ -160,13 +163,6 @@
     "nav": "轮次导航",
     "turn": "第 {{n}} 轮 · {{prompt}}"
   },
-  "find": {
-    "placeholder": "在会话中查找",
-    "position": "{{index}}/{{total}}",
-    "previous": "上一个结果",
-    "next": "下一个结果",
-    "close": "关闭查找"
-  },
   "message": {
     "elapsed": "用时 {{duration}}",
     "copy": "复制",
@@ -175,13 +171,16 @@
     "editCancel": "取消",
     "editSend": "发送",
     "retry": "重试",
+    "fork": "从此处分叉",
     "working": "正在工作",
     "workingOn": "正在工作",
     "expand": "展开",
     "collapse": "收起",
     "preparing": "正在准备工作区…",
     "loadingConversation": "正在加载会话…",
-    "copied": "已复制"
+    "copied": "已复制",
+    "earlier_one": "显示更早的 {{count}} 个回合",
+    "earlier_other": "显示更早的 {{count}} 个回合"
   },
   "permission": {
     "needConfirm": "需要确认",

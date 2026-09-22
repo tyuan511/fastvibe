@@ -14,7 +14,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import type { EngineModel, FastVibeModel, ImportRunResult, PermissionMode, WorkspaceSnapshot } from "@shared/types";
+import type { EngineModel, FastVibeModel, ImportRunResult, WorkspaceSnapshot } from "@shared/types";
 import { useSettingsStore } from "@/stores/settings";
 import { i18n } from "@/lib/i18n";
 import { UI_LANGUAGES, UI_LANGUAGE_LABELS, type UiLanguage } from "@/lib/language";
@@ -33,14 +33,17 @@ import { ExtensionsSettings } from "./extensions-settings";
 import { McpSettings } from "./mcp-settings";
 import { RemoteSettings } from "./remote-settings";
 import { RemoteHostsSettings } from "./remote-hosts-settings";
+import { ComputerSettings } from "./computer-settings";
 import { SkillsSettings } from "./skills-settings";
 import { THINKING_MENU_ORDER, thinkingMenuItems, thinkingMenuLabel } from "@/lib/thinking-levels";
 import { ThemeSelect } from "./theme-select";
 import { UsageSettings } from "./usage-settings";
 import { ShortcutsSettings } from "./shortcuts-settings";
 import { AboutSettings } from "./about-settings";
+import { PersonalizationSettings } from "./personalization-settings";
 import { SubagentsSettings } from "./subagents-settings";
 import { SettingsGroup as Group, SettingsRow as Row } from "./settings-group";
+import { usePermissionModeSelection } from "@/components/permission-mode-provider";
 import {
   SETTINGS_SECTIONS,
   settingsGroupLabel,
@@ -85,6 +88,7 @@ export function SettingsDialog({
 }): JSX.Element | null {
   const settings = useSettingsStore((state) => state.settings);
   const update = useSettingsStore((state) => state.update);
+  const { setPermissionMode } = usePermissionModeSelection();
   // 始终允许 rules, so the revoke button can say how many there are and disable itself.
   const remembered = settings.permissionAlways ?? [];
   const { t } = useTranslation("settings");
@@ -290,7 +294,7 @@ export function SettingsDialog({
                   }
                 />
               </Group>
-              <Group title={t("common.title")}>
+              <Group title={t("agent.title")}>
                 <Row
                   title={t("common.defaultModel")}
                   description={t("common.defaultModelDesc")}
@@ -324,6 +328,8 @@ export function SettingsDialog({
                     </Select>
                   }
                 />
+              </Group>
+              <Group title={t("security.title")}>
                 <Row
                   title={t("common.permission")}
                   description={t("common.permissionDesc", { mode: permissionDescription(settings.defaultPermissionMode) })}
@@ -331,11 +337,7 @@ export function SettingsDialog({
                     <Select
                       items={permissionModeItems()}
                       value={settings.defaultPermissionMode}
-                      onValueChange={(value) =>
-                        // Also retarget the live mode, so changing the default from here
-                        // does not leave the running session on the old mode.
-                        update({ defaultPermissionMode: value as PermissionMode, permissionMode: value as PermissionMode })
-                      }
+                      onValueChange={(value) => setPermissionMode(value as typeof settings.defaultPermissionMode)}
                     >
                       <SelectTrigger size="sm" className="w-44">
                         <SelectValue />
@@ -346,40 +348,6 @@ export function SettingsDialog({
                             {permissionLabel(mode)}
                           </SelectItem>
                         ))}
-                      </SelectContent>
-                    </Select>
-                  }
-                />
-                <Row
-                  title={t("common.keepAwake")}
-                  description={t("common.keepAwakeDesc")}
-                  control={
-                    <Switch
-                      checked={settings.keepAwake}
-                      onCheckedChange={(checked) => update({ keepAwake: checked })}
-                    />
-                  }
-                />
-                <Row
-                  title={t("common.notifications")}
-                  description={t("common.notificationsDesc")}
-                  control={
-                    <Select
-                      items={{
-                        done: t("common.notifyDone"),
-                        approval: t("common.notifyApproval"),
-                        off: t("common.notifyOff"),
-                      }}
-                      value={settings.notifications}
-                      onValueChange={(value) => update({ notifications: value as typeof settings.notifications })}
-                    >
-                      <SelectTrigger size="sm" className="w-44">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="done">{t("common.notifyDone")}</SelectItem>
-                        <SelectItem value="approval">{t("common.notifyApproval")}</SelectItem>
-                        <SelectItem value="off">{t("common.notifyOff")}</SelectItem>
                       </SelectContent>
                     </Select>
                   }
@@ -396,6 +364,75 @@ export function SettingsDialog({
                     >
                       {t("common.permissionRulesClear")}
                     </Button>
+                  }
+                />
+              </Group>
+              <Group title={t("runtime.title")}>
+                <Row
+                  title={t("common.keepAwake")}
+                  description={t("common.keepAwakeDesc")}
+                  control={
+                    <Switch
+                      checked={settings.keepAwake}
+                      onCheckedChange={(checked) => update({ keepAwake: checked })}
+                    />
+                  }
+                />
+                <Row
+                  title={t("common.notifications")}
+                  description={t("common.notificationsDesc")}
+                  control={
+                    <Switch
+                      checked={settings.notifyDone && settings.notifyError && settings.notifyApproval && settings.notifyUpdate}
+                      onCheckedChange={(checked) =>
+                        update({
+                          notifyDone: checked,
+                          notifyError: checked,
+                          notifyApproval: checked,
+                          notifyUpdate: checked,
+                        })
+                      }
+                    />
+                  }
+                />
+                <Row
+                  title={t("common.notifyDone")}
+                  description={t("common.notifyDoneDesc")}
+                  control={
+                    <Switch
+                      checked={settings.notifyDone}
+                      onCheckedChange={(checked) => update({ notifyDone: checked })}
+                    />
+                  }
+                />
+                <Row
+                  title={t("common.notifyError")}
+                  description={t("common.notifyErrorDesc")}
+                  control={
+                    <Switch
+                      checked={settings.notifyError}
+                      onCheckedChange={(checked) => update({ notifyError: checked })}
+                    />
+                  }
+                />
+                <Row
+                  title={t("common.notifyApproval")}
+                  description={t("common.notifyApprovalDesc")}
+                  control={
+                    <Switch
+                      checked={settings.notifyApproval}
+                      onCheckedChange={(checked) => update({ notifyApproval: checked })}
+                    />
+                  }
+                />
+                <Row
+                  title={t("common.notifyUpdate")}
+                  description={t("common.notifyUpdateDesc")}
+                  control={
+                    <Switch
+                      checked={settings.notifyUpdate}
+                      onCheckedChange={(checked) => update({ notifyUpdate: checked })}
+                    />
                   }
                 />
               </Group>
@@ -448,6 +485,8 @@ export function SettingsDialog({
                     />
                   }
                 />
+              </Group>
+              <Group title={t("display.title")}>
                 <Row
                   title={t("chat.collapseRuns")}
                   description={t("chat.collapseRunsDesc")}
@@ -480,12 +519,14 @@ export function SettingsDialog({
             </div>
           ) : null}
 
+          {section === "personalization" ? <PersonalizationSettings /> : null}
           {section === "shortcuts" ? <ShortcutsSettings /> : null}
           {section === "providers" ? <ProvidersSettings onChanged={() => onProvidersChanged?.()} /> : null}
           {section === "archived" ? <ArchivedSettings onDeleteConversations={onDeleteConversations} /> : null}
           {section === "usage" ? <UsageSettings /> : null}
           {section === "remote" ? <RemoteSettings /> : null}
           {section === "ssh" ? <RemoteHostsSettings /> : null}
+          {section === "computer" ? <ComputerSettings /> : null}
 
           {section === "subagents" ? <SubagentsSettings models={models} /> : null}
           {section === "mcp" ? <McpSettings /> : null}

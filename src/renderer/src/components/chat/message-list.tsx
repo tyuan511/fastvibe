@@ -1,10 +1,11 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { AlertCircleIcon, Copy01Icon, PencilEdit02Icon, RotateCcwIcon, Tick02Icon } from "@hugeicons/core-free-icons";
+import { AlertCircleIcon, Copy01Icon, GitForkIcon, PencilEdit02Icon, RotateCcwIcon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Message, MessageContent, MessageFooter, MessageGroup } from "@/components/ui/message";
 import {
+  MessageRevealProvider,
   MessageScroller,
   MessageScrollerButton,
   MessageScrollerContent,
@@ -12,11 +13,11 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
   useMessageScroller,
+  useMessageScrollerScrollable,
 } from "@/components/ui/message-scroller";
 import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { FindBar } from "@/components/chat/find-bar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatDuration } from "@/lib/time";
 import { stripAttachmentBlock } from "@/lib/attachments";
@@ -33,6 +34,7 @@ import { MarkdownView } from "./markdown-view";
 import { NewSessionHero } from "./new-session";
 import { ThinkingBlock } from "./thinking-block";
 import { ToolCard } from "./tool-card";
+import { ToolRow } from "./tool-row";
 import { ToolGroupRow } from "./tool-group";
 import { CompactNotice } from "./compact-notice";
 import { ModelChangeNotice } from "./model-change-notice";
@@ -123,12 +125,17 @@ function ActionButton({
 
 function MessageActions({
   message,
+  forkEntryId,
+  onFork,
   onRetry,
   onEdit,
   showTimestamp,
   elapsed,
 }: {
   message: ChatMessage;
+  /** Last persisted assistant entry in a visually merged run; never its `running:` row. */
+  forkEntryId?: string;
+  onFork?: (entryId: string) => void;
   onRetry?: (message: ChatMessage) => void;
   onEdit?: (message: ChatMessage) => void;
   showTimestamp: boolean;
@@ -171,6 +178,11 @@ function MessageActions({
           <HugeiconsIcon strokeWidth={2} icon={PencilEdit02Icon} className="size-3.5" />
         </ActionButton>
       ) : null}
+      {message.role === "assistant" && forkEntryId && onFork ? (
+        <ActionButton label={t("message.fork")} onClick={() => onFork(forkEntryId)}>
+          <HugeiconsIcon strokeWidth={2} icon={GitForkIcon} className="size-3.5" />
+        </ActionButton>
+      ) : null}
       {onRetry ? (
         <ActionButton label={t("message.retry")} onClick={() => onRetry(message)}>
           <HugeiconsIcon strokeWidth={2} icon={RotateCcwIcon} className="size-3.5" />
@@ -194,6 +206,35 @@ function WorkingStatus({ message }: { message: ChatMessage }): JSX.Element {
         {message.tools.length > 0 ? t("message.workingOn") : t("message.working")}
       </span>
     </div>
+  );
+}
+
+/**
+ * A transient provider failure is a tool-shaped status, not a terminal error. The
+ * retry count stays visible in the summary; the provider's verbose response is kept
+ * behind the same disclosure affordance as tool parameters and output.
+ */
+function RetryStatus({ message }: { message: ChatMessage }): JSX.Element | null {
+  const { t } = useTranslation("common");
+  const retry = message.retry;
+  if (!retry) return null;
+  const context = retry.maxAttempts
+    ? t("errors.retryingAttempt", { attempt: retry.attempt, maxAttempts: retry.maxAttempts })
+    : undefined;
+  return (
+    <ToolRow
+      icon={<Spinner className="size-3" />}
+      label={t("errors.retryingLabel")}
+      context={context}
+      running
+      title={t("errors.retrying")}
+      canToggle={Boolean(retry.error)}
+      persistKey={`retry:${message.id}`}
+    >
+      {retry.error ? (
+        <div className="whitespace-pre-wrap break-words text-sm text-muted-foreground">{retry.error}</div>
+      ) : null}
+    </ToolRow>
   );
 }
 
@@ -317,6 +358,7 @@ function ChatMessageRowImpl({
   streaming,
   onRetry,
   onEdit,
+  onFork,
   showThinking,
   showTimestamp,
   collapseRuns,
@@ -325,6 +367,7 @@ function ChatMessageRowImpl({
   streaming: boolean;
   onRetry?: (message: ChatMessage) => void;
   onEdit?: (message: ChatMessage, text: string) => void;
+  onFork?: (entryId: string) => void;
   showThinking: boolean;
   showTimestamp: boolean;
   collapseRuns: boolean;
@@ -334,6 +377,16 @@ function ChatMessageRowImpl({
   const [editing, setEditing] = useState(false);
   useEffect(() => setEditing(false), [message.id]);
   const isUser = message.role === "user";
+  // A live snapshot appends `running:<id>` to the persisted round-trips in this
+  // visual run. Fork only from the last real SDK entry, never that display row.
+  const forkEntryId = useMemo(() => {
+    if (message.role !== "assistant") return undefined;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const candidate = messages[index];
+      if (candidate.role === "assistant" && !candidate.id.startsWith("running:")) return candidate.id;
+    }
+    return undefined;
+  }, [message.role, messages]);
   const beginEdit = useCallback(() => setEditing(true), []);
   const submitEdit = useCallback(
     (text: string) => {
@@ -562,9 +615,10 @@ function ChatMessageRowImpl({
           renderPart(part, fold ? fold.cut + index : index),
         )}
 
-        {streaming && !message.error && !liveTail ? <WorkingStatus message={message} /> : null}
+        {message.retry ? <RetryStatus message={message} /> : null}
+        {streaming && !message.error && !message.retry && !liveTail ? <WorkingStatus message={message} /> : null}
 
-        {message.error ? (
+        {message.error && !message.retry ? (
           <Bubble variant="destructive" align="start">
             <BubbleContent className="flex items-start gap-2 text-sm leading-5">
               <HugeiconsIcon strokeWidth={2} icon={AlertCircleIcon} className="mt-0.5 size-3.5 shrink-0" />
@@ -595,6 +649,8 @@ function ChatMessageRowImpl({
         {streaming ? null : (
           <MessageActions
             message={message}
+            forkEntryId={forkEntryId}
+            onFork={onFork}
             onRetry={onRetry}
             onEdit={onEdit ? beginEdit : undefined}
             showTimestamp={showTimestamp}
@@ -629,6 +685,7 @@ const ChatMessageRow = memo(ChatMessageRowImpl, (prev, next) => {
     prev.collapseRuns === next.collapseRuns &&
     prev.onRetry === next.onRetry &&
     prev.onEdit === next.onEdit &&
+    prev.onFork === next.onFork &&
     sameMessages(prev.messages, next.messages)
   );
 });
@@ -636,10 +693,39 @@ const ChatMessageRow = memo(ChatMessageRowImpl, (prev, next) => {
 const PROMPT_LIMIT = 140;
 const REPLY_LIMIT = 180;
 
-/** Collapse to a single line and clip, so a mark's preview always fits its card. */
+/**
+ * Collapse to a single line and clip, so a mark's preview always fits its card.
+ *
+ * Only the head of the text is collapsed: the result is at most `limit` characters,
+ * so running the whitespace regex over a pasted essay — or over a finished reply —
+ * is work thrown away, and `turnMarkers` does it for every turn on every flush. The
+ * window is wide enough that only a prefix which is almost entirely whitespace could
+ * come up short of the limit, and a text cut by the window keeps its ellipsis.
+ */
 function clip(text: string, limit: number): string {
-  const flat = text.replace(/\s+/g, " ").trim();
-  return flat.length > limit ? `${flat.slice(0, limit)}…` : flat;
+  const windowed = text.length > limit * 8;
+  const flat = (windowed ? text.slice(0, limit * 8) : text).replace(/\s+/g, " ").trim();
+  if (flat.length > limit) return `${flat.slice(0, limit)}…`;
+  return windowed && flat ? `${flat}…` : flat;
+}
+
+/**
+ * Prompt previews, kept per message object.
+ *
+ * A user row never changes once it is persisted — the store hands back the same
+ * object on every flush and every turn-end reload (`reconcileMessages`) — so its
+ * preview is computed once instead of at the stream's cadence. `stripAttachmentBlock`
+ * is what makes this worth caching: its pattern is anchored at the end of the text,
+ * so unlike `clip` it cannot be bounded to a window and has to read the whole prompt.
+ */
+const promptPreviews = new WeakMap<ChatMessage, string>();
+
+function promptPreview(message: ChatMessage): string {
+  const cached = promptPreviews.get(message);
+  if (cached !== undefined) return cached;
+  const preview = clip(stripAttachmentBlock(message.text), PROMPT_LIMIT);
+  promptPreviews.set(message, preview);
+  return preview;
 }
 
 /**
@@ -668,7 +754,7 @@ function turnMarkers(rows: MessageRow[]): { markers: TurnMarker[]; rowIds: strin
     markers.push({
       id: row.id,
       rowIndex: index,
-      prompt: clip(stripAttachmentBlock(row.messages[0].text), PROMPT_LIMIT),
+      prompt: promptPreview(row.messages[0]),
       reply: replyPreview(rows[index + 1]),
     });
   }
@@ -880,6 +966,7 @@ function ThreadRow({
   amendable,
   onRetry,
   onEdit,
+  onFork,
   showThinking,
   showTimestamp,
   collapseRuns,
@@ -890,6 +977,7 @@ function ThreadRow({
   amendable: boolean;
   onRetry?: (message: ChatMessage) => void;
   onEdit?: (message: ChatMessage, text: string) => void;
+  onFork?: (entryId: string) => void;
   showThinking: boolean;
   showTimestamp: boolean;
   collapseRuns: boolean;
@@ -909,6 +997,7 @@ function ThreadRow({
         streaming={streaming && last && !isUser}
         onRetry={amendable ? onRetry : undefined}
         onEdit={amendable ? onEdit : undefined}
+        onFork={onFork}
         showThinking={showThinking}
         showTimestamp={showTimestamp}
         collapseRuns={collapseRuns}
@@ -923,6 +1012,46 @@ function ThreadRow({
   );
 }
 
+/**
+ * How much history a thread mounts, in turns.
+ *
+ * Every row used to be mounted for the life of the thread: opening a long
+ * conversation parsed the markdown of every message and highlighted every code block
+ * before it could paint, and all of it stayed in the DOM. `content-visibility` keeps
+ * the off-screen rows from being laid out, but not from being built.
+ *
+ * So only the tail is mounted, and the rest is revealed on demand — by scrolling to
+ * the top, by the button above the first mounted turn, or implicitly when something
+ * scrolls to a row that is not mounted (a rail mark, a find hit). The window only ever
+ * grows while a thread is open, turns that arrive while reading included, so nothing
+ * the reader has already seen is taken back out from under them.
+ */
+const WINDOW_TURNS = 24;
+const WINDOW_STEP = 24;
+/** How long the viewport must sit at the top before more history is mounted. */
+const REVEAL_SETTLE_MS = 250;
+
+/**
+ * Reveal more history once the reader reaches the top of what is mounted.
+ *
+ * Its own component so the scroll state it subscribes to re-renders this and not the
+ * whole thread.
+ */
+function RevealOnReachStart({ hidden, onReveal }: { hidden: number; onReveal: () => void }): null {
+  const { start } = useMessageScrollerScrollable();
+  useEffect(() => {
+    // `start` is "there is more above to scroll to" — false means the viewport is
+    // already at the top of the mounted rows.
+    if (hidden <= 0 || start) return;
+    // Settled, not instantaneous: a thread's first frames sit at the top until the
+    // scroller applies its default position, and revealing on one of those frames
+    // would walk the whole history back into the DOM a step at a time.
+    const timer = window.setTimeout(onReveal, REVEAL_SETTLE_MS);
+    return () => window.clearTimeout(timer);
+  }, [hidden, onReveal, start]);
+  return null;
+}
+
 export function MessageList({
   messages,
   streaming,
@@ -930,14 +1059,11 @@ export function MessageList({
   loadingReplaces = false,
   onRetry,
   onEdit,
+  onFork,
   showThinking = true,
   showTimestamp = true,
   collapseRuns = false,
   emptyState,
-  findOpen = false,
-  onCloseFind,
-  findQuery,
-  onFindQueryConsumed,
 }: {
   messages: ChatMessage[];
   streaming: boolean;
@@ -946,17 +1072,13 @@ export function MessageList({
   loadingReplaces?: boolean;
   onRetry?: (message: ChatMessage) => void;
   onEdit?: (message: ChatMessage, text: string) => void;
+  /** Omit in read-only/secondary panes so their transcripts cannot fork the main catalog. */
+  onFork?: (entryId: string) => void;
   showThinking?: boolean;
   showTimestamp?: boolean;
   /** Fold each reply's process into one 「用时 …」 block (设置 → 对话). */
   collapseRuns?: boolean;
   emptyState?: JSX.Element | null;
-  /** 在会话中查找 is open (the thread's own find bar). */
-  findOpen?: boolean;
-  onCloseFind?: () => void;
-  /** Query the find bar opens with, from a palette body-search hit. */
-  findQuery?: string | null;
-  onFindQueryConsumed?: () => void;
 }): JSX.Element {
   const { t } = useTranslation("chat");
   // One row per user prompt and per assistant reply, not per engine message.
@@ -977,6 +1099,58 @@ export function MessageList({
   // rows, which is long after an effect keyed on a ref object would have run.
   const guardViewport = useNoOpWheelGuard();
 
+  // The thread this window belongs to, by its opening row: a different conversation
+  // (or one whose head was rewritten) starts again at the tail.
+  const threadId = rows[0]?.id ?? "";
+  const [view, setView] = useState({ thread: threadId, turns: turns.length, limit: WINDOW_TURNS });
+  if (view.thread !== threadId) {
+    setView({ thread: threadId, turns: turns.length, limit: WINDOW_TURNS });
+  } else if (view.turns !== turns.length) {
+    // Turns that arrive while the thread is open are mounted on top of the window
+    // rather than pushing the oldest mounted turn out of it.
+    const grew = Math.max(0, turns.length - view.turns);
+    setView({ thread: threadId, turns: turns.length, limit: view.limit + grew });
+  }
+  const mounted = Math.min(view.limit, turns.length);
+  const hiddenTurns = turns.length - mounted;
+  const visibleTurns = hiddenTurns > 0 ? turns.slice(hiddenTurns) : turns;
+
+  // Read through refs so the callbacks below keep one identity for the life of the
+  // thread: `reveal` is handed to a context every descendant's scroller reads.
+  const turnsRef = useRef(turns);
+  turnsRef.current = turns;
+  const limitRef = useRef(view.limit);
+  limitRef.current = view.limit;
+
+  const revealMore = useCallback(() => {
+    setView((current) => ({ ...current, limit: current.limit + WINDOW_STEP }));
+  }, []);
+
+  const reveal = useCallback((messageId: string): boolean => {
+    const all = turnsRef.current;
+    // Walked rather than indexed: this runs when something asks to scroll to a row,
+    // not on every flush, so there is nothing to keep an index warm for.
+    let found = -1;
+    for (let index = all.length - 1; index >= 0 && found < 0; index -= 1) {
+      for (const row of all[index].rows) {
+        if (row.id === messageId || row.messages.some((message) => message.id === messageId)) {
+          found = index;
+          break;
+        }
+      }
+    }
+    if (found < 0) return false;
+    const needed = all.length - found;
+    if (needed <= limitRef.current) return false;
+    setView((current) => ({
+      ...current,
+      limit: Math.max(needed, current.limit + WINDOW_STEP),
+    }));
+    return true;
+  }, []);
+
+  // A remote transcript is on its way (loadingReplaces): cover the row on screen
+  // rather than leaving the previous conversation visible while the fetch lands.
   if (loading && (messages.length === 0 || loadingReplaces)) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-4">
@@ -999,20 +1173,21 @@ export function MessageList({
 
   return (
     <MessageScrollerProvider autoScroll>
+      <MessageRevealProvider reveal={reveal}>
       <div className="flex h-full min-h-0 flex-col">
-        <FindBar
-          messages={messages}
-          open={findOpen}
-          onClose={() => onCloseFind?.()}
-          initialQuery={findQuery ?? undefined}
-          onInitialQueryConsumed={onFindQueryConsumed}
-        />
       {/* Named container: the rail is only worth showing when the gutter beside the
           message column can hold it. */}
       <MessageScroller className="@container/thread">
         <MessageScrollerViewport ref={guardViewport} className="scrollbar-thumb-scrollbar">
           <MessageScrollerContent className={cn(CHAT_COLUMN_CLASS, "py-6")}>
-            {turns.map((turn) => (
+            {hiddenTurns > 0 ? (
+              <div className="flex justify-center pb-1">
+                <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={revealMore}>
+                  {t("message.earlier", { count: Math.min(hiddenTurns, WINDOW_STEP) })}
+                </Button>
+              </div>
+            ) : null}
+            {visibleTurns.map((turn) => (
               <MessageGroup key={turn.id} className="gap-5">
                 {turn.rows.map((row) => (
                   <ThreadRow
@@ -1023,6 +1198,7 @@ export function MessageList({
                     amendable={row.id === lastUserRowId}
                     onRetry={onRetry}
                     onEdit={onEdit}
+                    onFork={onFork}
                     showThinking={showThinking}
                     showTimestamp={showTimestamp}
                     collapseRuns={collapseRuns}
@@ -1035,9 +1211,11 @@ export function MessageList({
         {/* A single turn has nothing to navigate between. */}
         {markers.length > 1 ? <TurnRail markers={markers} rowIds={rowIds} /> : null}
         <MessageScrollerButton />
+        <RevealOnReachStart hidden={hiddenTurns} onReveal={revealMore} />
       </MessageScroller>
       <FollowLatest messages={messages} />
       </div>
+      </MessageRevealProvider>
     </MessageScrollerProvider>
   );
 }

@@ -1,19 +1,29 @@
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { buildSnapshot, downloadCatalog } from "../../../scripts/models-dev-encode.mjs";
-import { loadModelsDev, localIndexPath, reloadModelsDev, type ModelsDevStats } from "./models-dev";
+import { loadModelsDev, localIndexPath, modelsDevCatalogSignature, reloadModelsDev, type ModelsDevStats } from "./models-dev";
 import { uiText } from "./ui-text";
 
+export type ModelsDevUpdateResult = ModelsDevStats & {
+  /** False when the download carries the same catalog already in use. */
+  changed: boolean;
+};
+
 /**
- * Refresh the models.dev metadata from upstream, at the user's request (Settings → 关于).
+ * Refresh the models.dev metadata from upstream.
  *
- * The bundled snapshot only changes when the app does, but model limits and prices move
- * far faster than releases, so 关于 can pull the current catalog into the app's data
- * directory, where `loadModelsDev()` prefers it. The encoding is the same code the build
- * uses (`scripts/models-dev-encode.mjs`), so an updated snapshot is byte-for-byte the
- * format the decoder and the sync script already agree on.
+ * Called hourly (`models-dev-refresh.ts`) and on demand from Settings → 关于. The bundled
+ * snapshot only changes when the app does, but model limits and prices move far faster
+ * than releases, so the current catalog is written into the app's data directory, where
+ * `loadModelsDev()` prefers it. The encoding is the same code the build uses
+ * (`scripts/models-dev-encode.mjs`), so an updated snapshot is byte-for-byte the format
+ * the decoder and the sync script already agree on.
+ *
+ * `changed` is false when the download matches the catalog already loaded. The file is
+ * still replaced — its timestamp is what the hourly schedule waits on — but the caller
+ * can skip rebinding live sessions that would see the same limits and prices.
  */
-export async function updateModelsDevSnapshot(): Promise<ModelsDevStats> {
+export async function updateModelsDevSnapshot(): Promise<ModelsDevUpdateResult> {
   let catalog: unknown;
   try {
     catalog = await downloadCatalog();
@@ -29,6 +39,7 @@ export async function updateModelsDevSnapshot(): Promise<ModelsDevStats> {
     throw new Error(uiText("models.dev 没有返回任何模型", "models.dev returned no models"));
   }
 
+  const changed = modelsDevCatalogSignature() !== JSON.stringify([snapshot.v, snapshot.m, snapshot.x]);
   const path = localIndexPath();
   await mkdir(dirname(path), { recursive: true });
   // Same write-then-rename dance as the build script: a crash mid-write leaves the
@@ -37,5 +48,5 @@ export async function updateModelsDevSnapshot(): Promise<ModelsDevStats> {
   await writeFile(tmp, JSON.stringify(snapshot));
   await rename(tmp, path);
   reloadModelsDev();
-  return loadModelsDev().stats;
+  return { ...loadModelsDev().stats, changed };
 }

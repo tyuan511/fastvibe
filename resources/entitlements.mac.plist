@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened Runtime entitlements for the main app bundle.
+
+  Notarization requires the hardened runtime, and the hardened runtime turns off
+  four things Electron needs. Each key below is one of them; nothing here is
+  aspirational, and nothing is a capability grant (TCC — Accessibility, Screen
+  Recording — is granted by the user at runtime, not by an entitlement).
+-->
+<plist version="1.0">
+  <dict>
+    <!-- V8 compiles JavaScript to machine code at runtime. Without these two the
+         renderer dies on the first optimized function. -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+
+    <!-- Native modules (node-pty, koffi, pi-tui, and any .dylib loaded through
+         dlopen later) are Mach-O files this app did not produce. The hardened
+         runtime refuses to load a library whose Team ID differs from the host's
+         unless library validation is off. electron-builder re-signs everything it
+         finds inside the bundle, so this mostly matters for libraries resolved at
+         runtime from outside it. -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+
+    <!-- node-pty and the agent's shell children are spawned with a prepared
+         environment; the hardened runtime otherwise strips DYLD_* on exec. -->
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+
+    <!-- The macOS update path falls back to `osascript ... with administrator
+         privileges` when it cannot clear quarantine attributes itself
+         (src/main/updater.ts). Sending Apple events from a hardened process needs
+         this entitlement plus NSAppleEventsUsageDescription in Info.plist. -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+  </dict>
+</plist>

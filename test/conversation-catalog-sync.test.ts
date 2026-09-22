@@ -109,6 +109,20 @@ test("the notice never describes a state older than the file", async () => {
   assert.match(onDisk ?? "", new RegExp(created.id));
 });
 
+test("an empty conversation is reserved once per project", () => {
+  const { catalog: cat } = catalog();
+  const first = cat.create("/tmp/one");
+  const other = cat.create("/tmp/two");
+
+  assert.equal(cat.findEmpty("/tmp/one")?.id, first.id);
+  assert.equal(cat.findEmpty("/tmp/two")?.id, other.id);
+  assert.equal(cat.findEmpty(" /tmp/one ")?.id, first.id);
+  assert.equal(cat.findEmpty(undefined), undefined);
+
+  cat.update(first.id, { preview: "the first prompt" });
+  assert.equal(cat.findEmpty("/tmp/one"), undefined, "a sent chat no longer owns the empty slot");
+});
+
 test("flush announces without waiting for the debounce", () => {
   const { catalog: cat, seen } = catalog();
   cat.create(undefined);

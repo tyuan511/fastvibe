@@ -9,6 +9,7 @@ import {
   Loading03Icon,
   Plug01Icon,
 } from "@hugeicons/core-free-icons";
+import { IconButton } from "@/components/icon-button";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -19,9 +20,18 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
+import { Item, ItemActions, ItemContent, ItemDescription, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { McpServerConfig, McpServerStatus } from "@shared/types";
 
 /** The add-server form's draft; also doubles as the dialog's open state. */
@@ -98,7 +108,7 @@ export function McpSettings(): JSX.Element {
       enabled: draft.enabled,
       transport: draft.transport,
       ...(draft.transport === "stdio"
-        ? { command: draft.command.trim(), args: draft.args.trim() ? draft.args.trim().split(/\s+/) : undefined }
+        ? { command: draft.command.trim(), args: parseArgs(draft.args) }
         : { url: draft.url.trim() }),
     };
     if (await save([...servers, { ...config, connected: false, tools: [] }])) setDraft(null);
@@ -106,17 +116,24 @@ export function McpSettings(): JSX.Element {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-medium text-muted-foreground">{t("mcp.configured")}</span>
-        <Button size="xs" variant="outline" onClick={() => { setError(null); setDraft({ ...EMPTY_DRAFT }); }}>
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-sm font-medium">{t("mcp.configured")}</span>
+        <Button
+          size="sm"
+          disabled={saving}
+          onClick={() => {
+            setError(null);
+            setDraft({ ...EMPTY_DRAFT });
+          }}
+        >
           <HugeiconsIcon strokeWidth={2} icon={Add01Icon} />
           {t("mcp.add")}
         </Button>
       </div>
 
-      <div className="space-y-3 rounded-xl border border-border bg-card p-4">
-        {servers.length ? (
-          servers.map((server) => (
+      {servers.length ? (
+        <div className="grid gap-2.5">
+          {servers.map((server) => (
             <ServerRow
               key={server.id}
               server={server}
@@ -125,13 +142,21 @@ export function McpSettings(): JSX.Element {
               }
               onRemove={() => void save(servers.filter((item) => item.id !== server.id))}
             />
-          ))
-        ) : (
-          <p className="py-3 text-center text-xs text-muted-foreground">{t("mcp.empty")}</p>
-        )}
-        {/* Row-level failures have nowhere else to show; the dialog renders its own copy. */}
-        {error && draft === null ? <p className="text-xs text-destructive">{error}</p> : null}
-      </div>
+          ))}
+        </div>
+      ) : (
+        <Empty className="border border-dashed border-border py-10">
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <HugeiconsIcon strokeWidth={2} icon={Plug01Icon} />
+            </EmptyMedia>
+            <EmptyTitle>{t("mcp.empty")}</EmptyTitle>
+            <EmptyDescription>{t("mcp.emptyHint")}</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      )}
+      {/* Row-level failures have nowhere else to show; the dialog renders its own copy. */}
+      {error && draft === null ? <p className="text-xs text-destructive">{error}</p> : null}
 
       <AddServerDialog
         draft={draft}
@@ -156,38 +181,104 @@ function ServerRow({
   onRemove: () => void;
 }): JSX.Element {
   const { t } = useTranslation("settings");
+  const status = server.connected ? (
+    <Badge variant="secondary" className="shrink-0">
+      <HugeiconsIcon strokeWidth={2} icon={CheckmarkCircle02Icon} className="size-3" />
+      {t("mcp.tools", { count: server.tools.length })}
+    </Badge>
+  ) : server.error ? (
+    <Tooltip>
+      <TooltipTrigger
+        render={<span tabIndex={0} aria-label={t("mcp.errorDetails")} className="shrink-0 outline-none" />}
+      >
+        <Badge variant="destructive" className="cursor-help">
+          <HugeiconsIcon strokeWidth={2} icon={AlertCircleIcon} className="size-3" />
+          {t("mcp.connectFailed")}
+        </Badge>
+      </TooltipTrigger>
+      <TooltipContent side="top" align="end" className="max-w-96 whitespace-normal">
+        <div className="space-y-1 text-left">
+          <p className="font-medium">{t("mcp.errorDetails")}</p>
+          <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all font-mono text-xs">{server.error}</pre>
+        </div>
+      </TooltipContent>
+    </Tooltip>
+  ) : (
+    <Badge variant="outline" className="shrink-0">
+      <HugeiconsIcon strokeWidth={2} icon={AlertCircleIcon} className="size-3" />
+      {t("mcp.disconnected")}
+    </Badge>
+  );
+
   return (
-    <div className="flex items-center gap-3 rounded-lg border border-border/70 px-3 py-2.5">
-      <HugeiconsIcon strokeWidth={2} icon={Plug01Icon} className="size-4 text-muted-foreground" />
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium">{server.name}</p>
-        <p className="truncate text-xs text-muted-foreground" title={server.error ?? undefined}>
+    <Item
+      variant="outline"
+      size="sm"
+      className="items-start gap-3 bg-card/80 p-3 transition-colors hover:border-primary/30 hover:bg-muted/20"
+    >
+      <ItemMedia
+        variant="icon"
+        className="mt-0.5 size-9 rounded-xl bg-primary/10 text-primary ring-1 ring-primary/15"
+      >
+        <HugeiconsIcon strokeWidth={2} icon={Plug01Icon} className="size-4" />
+      </ItemMedia>
+      <ItemContent className="min-w-0 gap-1.5">
+        <div className="flex min-w-0 items-center gap-2">
+          <ItemTitle title={server.name} className="min-w-0 truncate text-base">
+            {server.name}
+          </ItemTitle>
+          {status}
+        </div>
+        <ItemDescription className="line-clamp-1" title={server.error ?? undefined}>
           {server.error ??
             (server.transport === "stdio"
               ? `${server.command ?? ""} ${(server.args ?? []).join(" ")}`
               : server.url)}
-        </p>
-      </div>
-      {server.connected ? (
-        <Badge variant="secondary">
-          <HugeiconsIcon strokeWidth={2} icon={CheckmarkCircle02Icon} className="size-3" />
-          {t("mcp.tools", { count: server.tools.length })}
-        </Badge>
-      ) : (
-        <Badge variant={server.error ? "destructive" : "outline"}>
-          <HugeiconsIcon strokeWidth={2} icon={AlertCircleIcon} className="size-3" />
-          {server.error ? t("mcp.connectFailed") : t("mcp.disconnected")}
-        </Badge>
-      )}
-      <Switch checked={server.enabled} onCheckedChange={onToggle} />
-      <Button size="icon-xs" variant="ghost" onClick={onRemove} aria-label={t("mcp.delete")}>
-        <HugeiconsIcon strokeWidth={2} icon={Delete02Icon} />
-      </Button>
-    </div>
+        </ItemDescription>
+      </ItemContent>
+      <ItemActions className="ml-auto shrink-0 self-center">
+        <Switch checked={server.enabled} onCheckedChange={onToggle} />
+        <IconButton label={t("mcp.delete")} size="icon-xs" variant="ghost" onClick={onRemove}>
+          <HugeiconsIcon strokeWidth={2} icon={Delete02Icon} />
+        </IconButton>
+      </ItemActions>
+    </Item>
   );
 }
 
 /** The add form lives in a dialog so the list keeps the whole pane. */
+function parseArgs(value: string): string[] | undefined {
+  const args: string[] = [];
+  let current = "";
+  let quote: '"' | "'" | null = null;
+  let escaped = false;
+
+  for (const char of value.trim()) {
+    if (escaped) {
+      current += char;
+      escaped = false;
+    } else if (char === "\\") {
+      escaped = true;
+    } else if (quote) {
+      if (char === quote) quote = null;
+      else current += char;
+    } else if (char === '"' || char === "'") {
+      quote = char;
+    } else if (/\s/.test(char)) {
+      if (current) {
+        args.push(current);
+        current = "";
+      }
+    } else {
+      current += char;
+    }
+  }
+
+  if (escaped) current += "\\";
+  if (current) args.push(current);
+  return args.length ? args : undefined;
+}
+
 function AddServerDialog({
   draft,
   saving,

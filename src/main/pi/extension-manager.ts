@@ -18,7 +18,9 @@ export const BUILTIN_EXTENSIONS: Array<{ source: string; file: string }> = [
   { source: "fastvibe:permission-sandbox", file: "permission-sandbox.ts" },
   { source: "fastvibe:session-title", file: "session-title.ts" },
   { source: "fastvibe:browser-use", file: "browser-use.ts" },
+  { source: "fastvibe:computer-use", file: "computer-use.ts" },
   { source: "fastvibe:web-search", file: "web-search.ts" },
+  { source: "fastvibe:worktree", file: "worktree.ts" },
   { source: "fastvibe:subagent-team", file: "subagent/index.ts" },
 ];
 
@@ -26,7 +28,7 @@ export const BUILTIN_EXTENSIONS: Array<{ source: string; file: string }> = [
  * renderer and future schedulers can advertise capabilities without loading an
  * extension or starting a process. */
 export const BUILTIN_AGENTS = [
-  { id: "scout", name: "Scout", description: "Quickly locate files, entry points and dependencies; hand off structured context.", tools: ["read", "grep", "find", "ls"] },
+  { id: "explorer", name: "Explorer", description: "Locate and organize codebase evidence only; leave analysis and planning to other roles.", tools: ["read", "grep", "find", "ls"] },
   { id: "planner", name: "Planner", description: "Break a request into executable steps, risks and verification.", tools: ["read", "grep", "find", "ls"] },
   { id: "worker", name: "Worker", description: "Make the code changes in an isolated context and run verification.", tools: ["read", "grep", "find", "ls", "edit", "write", "bash"] },
   { id: "reviewer", name: "Reviewer", description: "Check the implementation, regression risk and test coverage; give actionable feedback.", tools: ["read", "grep", "find", "ls", "bash"] },
@@ -36,10 +38,12 @@ function resourcesRoot(): string {
   return process.env.FASTVIBE_RESOURCES_PATH?.trim() || join(__dirname, "../../resources");
 }
 
+/** Built-in skills, by directory name under `resources/skills`. */
+const BUILTIN_SKILLS = ["browser-use", "computer-use"];
+
 export function builtinSkillPaths(): string[] {
   const dir = join(resourcesRoot(), "skills");
-  const path = join(dir, "browser-use", "SKILL.md");
-  return existsSync(path) ? [path] : [];
+  return BUILTIN_SKILLS.map((name) => join(dir, name, "SKILL.md")).filter((path) => existsSync(path));
 }
 
 /** Directory holding FastVibe's built-in extension entry points (outside the asar). */

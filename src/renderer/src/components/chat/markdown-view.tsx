@@ -1,4 +1,4 @@
-import { memo, useDeferredValue, useState, type JSX, type ReactNode } from "react";
+import { memo, useDeferredValue, useMemo, useState, type JSX, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import Markdown, { type Components } from "react-markdown";
 import type { PluggableList } from "unified";
@@ -10,6 +10,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { Copy01Icon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { useHighlightedCode } from "@/lib/highlight";
+import { splitMarkdownBlocks } from "@/lib/markdown-blocks";
 import { useSessionStore } from "@/stores/session";
 import { DiffView } from "./diff-view";
 
@@ -71,7 +72,7 @@ const CodeBlock = memo(function CodeBlock({ language, code }: { language?: strin
       {diff ? (
         <DiffView text={code} className="mt-0 rounded-none border-0 bg-transparent" />
       ) : (
-        <div className="code-shiki overflow-x-auto p-3 text-sm leading-5">
+        <div className="code-shiki overflow-x-auto text-sm leading-5">
           {html ? (
             <div dangerouslySetInnerHTML={{ __html: html }} />
           ) : (
@@ -130,12 +131,15 @@ const MARKDOWN_COMPONENTS: Components = {
 };
 
 /**
- * Memoised on `text`: without this, every streamed token re-parsed the markdown
- * of every message already on screen.
+ * One block of markdown, memoised on its exact text.
+ *
+ * `react-markdown` re-parses everything it is handed, so what makes a long answer
+ * affordable is that a settled block's text never changes again: this component then
+ * skips the render entirely, and only the block being streamed into is re-parsed.
  */
-export const MarkdownView = memo(function MarkdownView({ text }: { text: string }): JSX.Element {
-  // Re-parsing the whole answer on every streamed token is O(n²); keep the urgent
-  // UI (spinner, scroll) responsive and let React apply the markdown at lower priority.
+const MarkdownBlock = memo(function MarkdownBlock({ text }: { text: string }): JSX.Element {
+  // The block in flight still re-parses on each flush; keep the urgent UI (caret,
+  // scroll) ahead of it and let React apply the markdown at lower priority.
   const deferred = useDeferredValue(text);
   return (
     <Markdown
@@ -145,6 +149,29 @@ export const MarkdownView = memo(function MarkdownView({ text }: { text: string 
     >
       {deferred}
     </Markdown>
+  );
+});
+
+/**
+ * Memoised on `text`: without this, every streamed token re-parsed the markdown
+ * of every message already on screen.
+ *
+ * The text is cut into independently parsed blocks (`splitMarkdownBlocks`), which is
+ * what bounds the cost of a *single* long answer — one pass over 50 KB of prose costs
+ * ~100 ms, and it used to be paid again at every flush. Each block renders as a
+ * sibling in this same parent, exactly as `react-markdown` would have emitted them,
+ * so the DOM is unchanged.
+ */
+export const MarkdownView = memo(function MarkdownView({ text }: { text: string }): JSX.Element {
+  const blocks = useMemo(() => splitMarkdownBlocks(text), [text]);
+  if (blocks.length === 1) return <MarkdownBlock text={blocks[0]} />;
+  return (
+    <>
+      {blocks.map((block, index) => (
+        // Blocks only ever grow at the end, so a position keeps its content.
+        <MarkdownBlock key={index} text={block} />
+      ))}
+    </>
   );
 });
 

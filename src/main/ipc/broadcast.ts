@@ -57,7 +57,11 @@ export function observe(observer: BroadcastObserver): () => void {
 }
 
 /**
- * Push one message to every subscriber, optionally skipping the one that caused it.
+ * Push one message to every subscriber, optionally skipping the one that caused it —
+ * or, with `only`, to the single receiver a message belongs to. `only` exists for
+ * output that is addressed rather than shared: a terminal's bytes belong to the client
+ * that opened that terminal, and every other receiver — a second window, a phone on
+ * the remote tunnel — was being handed a build log it had no pane to draw.
  *
  * A receiver that throws is dropped rather than allowed to break the fan-out: a window
  * destroyed between the last tick and this one would otherwise throw
@@ -65,7 +69,11 @@ export function observe(observer: BroadcastObserver): () => void {
  * to every subscriber after it. That ordering-dependent loss is exactly the kind of
  * thing that never reproduces, so it is handled here once instead of at seven sites.
  */
-export function broadcast(channel: string, payload: unknown, options?: { except?: string }): void {
+export function broadcast(
+  channel: string,
+  payload: unknown,
+  options?: { except?: string; only?: string },
+): void {
   for (const observer of [...observers]) {
     try {
       observer({ channel, payload, except: options?.except });
@@ -75,6 +83,7 @@ export function broadcast(channel: string, payload: unknown, options?: { except?
   }
   for (const subscriber of [...subscribers.values()]) {
     if (options?.except && subscriber.id === options.except) continue;
+    if (options?.only && subscriber.id !== options.only) continue;
     try {
       subscriber.send(channel, payload);
     } catch {

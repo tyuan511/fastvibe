@@ -9,7 +9,6 @@ export type ShortcutGroupId = (typeof SHORTCUT_GROUPS)[number];
 export type ShortcutId =
   | "commandPalette"
   | "settings"
-  | "newWindow"
   | "newChat"
   | "openFolder"
   | "focusComposer"
@@ -18,8 +17,7 @@ export type ShortcutId =
   | "prevChat"
   | "nextChat"
   | "toggleSidebar"
-  | "toggleSidePane"
-  | "findInConversation";
+  | "toggleSidePane";
 
 export type ShortcutDef = {
   id: ShortcutId;
@@ -33,7 +31,6 @@ export type ShortcutDef = {
 export const SHORTCUT_CATALOG: ShortcutDef[] = [
   { id: "commandPalette", group: "general", default: "mod+k" },
   { id: "settings", group: "general", default: "mod+," },
-  { id: "newWindow", group: "general", default: "mod+shift+n" },
   { id: "newChat", group: "chat", default: "mod+n" },
   { id: "openFolder", group: "chat", default: "mod+o" },
   { id: "focusComposer", group: "chat", default: "mod+l" },
@@ -43,7 +40,6 @@ export const SHORTCUT_CATALOG: ShortcutDef[] = [
   { id: "nextChat", group: "chat", default: "mod+]" },
   { id: "toggleSidebar", group: "view", default: "mod+b" },
   { id: "toggleSidePane", group: "view", default: "mod+j" },
-  { id: "findInConversation", group: "chat", default: "mod+f" },
 ];
 
 export function shortcutGroupLabel(group: ShortcutGroupId): string {

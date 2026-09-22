@@ -1,10 +1,12 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useRef, useState, type JSX } from "react";
+import { usePanelRef } from "react-resizable-panels";
 import { motion } from "motion/react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { MessageSquarePlusIcon, PanelLeftOpenIcon, PanelRightOpenIcon } from "@hugeicons/core-free-icons";
 import { useLocation, useMatch, useNavigate, useNavigationType } from "react-router";
 import { Composer } from "@/components/chat/composer";
 import { AddProjectDialog } from "@/components/add-project-dialog";
+import { GitStatusPopover } from "@/components/chat/git-status-popover";
 import { ExtensionNotices, ExtensionWidgets, GoalPanel } from "@/components/chat/extension-surface";
 import { TodoPanel } from "@/components/chat/todo-list";
 import { MessageList } from "@/components/chat/message-list";
@@ -16,6 +18,7 @@ import { Sidebar } from "@/components/layout/sidebar";
 import { SidePane, disposeSidePaneTabs } from "@/components/layout/side-pane";
 import { handleBrowserRequest } from "@/components/layout/side-pane-browser";
 import { PANEL_COLLAPSE_TRANSITION } from "@/components/layout/collapsible-panel";
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { CommandPalette } from "@/components/layout/command-palette";
 import { TitleBar } from "@/components/layout/title-bar";
 import { HAS_CUSTOM_TITLE_BAR, HAS_TRAFFIC_LIGHTS } from "@/lib/platform";
@@ -39,8 +42,6 @@ import { IconButton } from "@/components/icon-button";
 import { attachmentPromptSuffix, attachmentsToImages } from "@/lib/attachments";
 import {
   engine,
-  getCheckpoint,
-  getCommands,
   getModels,
   getStatus,
   getSubagents,
@@ -49,7 +50,6 @@ import {
   onEvent,
   onStatus,
   respondPermission,
-  restoreCheckpoint,
   setAutoCompaction,
   setInterruptMode,
   start,
@@ -57,6 +57,7 @@ import {
 import { dismissBootLoader } from "@/lib/boot-loader";
 import { cn } from "@/lib/utils";
 import { resolvePath } from "@/lib/workspace-path";
+import { shouldQueueSubmission } from "@/lib/composer-race";
 
 import { SETTINGS_SECTIONS, type SectionId } from "@/components/settings/settings-sections";
 import { setSidebarCollapsed, useIsNarrowViewport, useSidebarCollapsed } from "@/lib/sidebar-visibility";
@@ -71,9 +72,12 @@ import type {
   ChatMessage,
   ConversationDeleteResult,
   ConversationOpenResult,
+  EngineModel,
   FastVibeModel,
+  PermissionMode,
   PermissionRequest,
   QueuedPrompt,
+  QueuedPromptPreview,
   SkillInfo,
   SlashCommand,
   WorkspaceSnapshot,
@@ -85,6 +89,9 @@ import { useAppShortcuts, useShortcutLabel } from "@/lib/use-shortcuts";
 import { archiveConversations, archivedIdList, useArchivedIds } from "@/stores/archive";
 import { Ipc } from "@shared/ipc";
 import { blockedRemotely } from "@/lib/remote-unavailable";
+import { useStable } from "@/lib/use-stable";
+import { isAbortOutcome } from "@shared/abort";
+import { usePermissionModeSelection } from "@/components/permission-mode-provider";
 
 
 
@@ -102,20 +109,69 @@ const SettingsDialog = lazy(async () => ({
 
 const DRAFT_KEY = "fastvibe.session-drafts";
 
-function readDrafts(): Record<string, string> {
+type PersistedDraft = {
+  draft: string;
+  attachments: ChatAttachment[];
+  model?: EngineModel;
+  thinkingLevel?: string;
+  permissionMode?: PermissionMode;
+};
+
+function isStoredModel(value: unknown): value is EngineModel {
+  if (!value || typeof value !== "object") return false;
+  const model = value as Partial<EngineModel>;
+  return typeof model.provider === "string" && model.provider.length > 0 && typeof model.id === "string" && model.id.length > 0;
+}
+
+function isStoredAttachment(value: unknown): value is ChatAttachment {
+  if (!value || typeof value !== "object") return false;
+  const attachment = value as Partial<ChatAttachment>;
+  return (
+    typeof attachment.id === "string" &&
+    (attachment.kind === "image" || attachment.kind === "file") &&
+    typeof attachment.name === "string"
+  );
+}
+
+function isStoredPermissionMode(value: unknown): value is PermissionMode {
+  return value === "ask" || value === "smart" || value === "full";
+}
+
+function readDrafts(): Record<string, PersistedDraft> {
   try {
     const parsed = JSON.parse(localStorage.getItem(DRAFT_KEY) ?? "{}");
-    return parsed && typeof parsed === "object" ? parsed as Record<string, string> : {};
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const drafts: Record<string, PersistedDraft> = {};
+    for (const [id, value] of Object.entries(parsed)) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+      const item = value as Partial<PersistedDraft>;
+      if (typeof item.draft !== "string") continue;
+      drafts[id] = {
+        draft: item.draft,
+        attachments: Array.isArray(item.attachments) ? item.attachments.filter(isStoredAttachment) : [],
+        ...(isStoredModel(item.model) ? { model: item.model } : {}),
+        ...(typeof item.thinkingLevel === "string" ? { thinkingLevel: item.thinkingLevel } : {}),
+        ...(isStoredPermissionMode(item.permissionMode) ? { permissionMode: item.permissionMode } : {}),
+      };
+    }
+    return drafts;
   } catch {
     return {};
   }
 }
 
-function writeDraft(id: string | null, text: string): void {
+function writeDraft(id: string | null, state: PersistedDraft): void {
   if (!id) return;
   try {
     const drafts = readDrafts();
-    if (text) drafts[id] = text;
+    const hasPayload = Boolean(
+      state.draft ||
+      state.attachments.length > 0 ||
+      state.model ||
+      state.thinkingLevel ||
+      state.permissionMode,
+    );
+    if (hasPayload) drafts[id] = state;
     else delete drafts[id];
     localStorage.setItem(DRAFT_KEY, JSON.stringify(drafts));
   } catch {
@@ -135,8 +191,16 @@ function writeDraft(id: string | null, text: string): void {
  */
 const DRAFT_DEBOUNCE_MS = 400;
 
-function useDraftPersistence(activeId: string | null, draft: string): void {
-  const pending = useRef<{ id: string | null; text: string } | null>(null);
+function useDraftPersistence(
+  activeId: string | null,
+  draft: string,
+  attachments: ChatAttachment[],
+  model: EngineModel | undefined,
+  thinkingLevel: string | undefined,
+  permissionMode: PermissionMode,
+  emptySession: boolean,
+): void {
+  const pending = useRef<{ id: string | null; state: PersistedDraft } | null>(null);
   const timer = useRef<number | null>(null);
 
   const flush = useCallback(() => {
@@ -146,7 +210,7 @@ function useDraftPersistence(activeId: string | null, draft: string): void {
     }
     const entry = pending.current;
     pending.current = null;
-    if (entry) writeDraft(entry.id, entry.text);
+    if (entry) writeDraft(entry.id, entry.state);
   }, []);
 
   const lastId = useRef(activeId);
@@ -160,9 +224,21 @@ function useDraftPersistence(activeId: string | null, draft: string): void {
       flush();
       lastId.current = activeId;
     }
-    pending.current = { id: activeId, text: draft };
+    pending.current = {
+      id: activeId,
+      state: {
+        draft,
+        attachments,
+        // Model, thinking strength and permission are meaningful as a bundle for an
+        // empty project session. A completed chat keeps only its ordinary composer
+        // draft, so opening history cannot silently change its controls.
+        ...(emptySession && model ? { model } : {}),
+        ...(emptySession && thinkingLevel ? { thinkingLevel } : {}),
+        ...(emptySession ? { permissionMode } : {}),
+      },
+    };
     if (timer.current === null) timer.current = window.setTimeout(flush, DRAFT_DEBOUNCE_MS);
-  }, [activeId, draft, flush]);
+  }, [activeId, attachments, draft, emptySession, flush, model, permissionMode, thinkingLevel]);
 
   // `beforeunload`, not the effect cleanup: a window closing never unmounts.
   useEffect(() => {
@@ -177,6 +253,7 @@ function useDraftPersistence(activeId: string | null, draft: string): void {
 // Capture the displayed conversation for both routing and reply ownership. Calling
 // the raw bridge without an id reads Main's local active chat, even while a remote
 // conversation is on screen — and used to replace that remote transcript every turn.
+// The incremental tail read (`getMessagesSince`) lives in the same module.
 const { refreshStats, reloadActiveState, reloadActiveMessages } =
   createConversationRefresh(engine, useSessionStore.getState);
 
@@ -206,26 +283,20 @@ const MessageThread = memo(function MessageThread({
   loadingReplaces = false,
   onRetry,
   onEdit,
+  onFork,
   showThinking,
   showTimestamp,
   collapseRuns,
-  findOpen,
-  onCloseFind,
-  findQuery,
-  onFindQueryConsumed,
 }: {
   loading: boolean;
   /** Show the loader in place of whatever transcript is already on screen. */
   loadingReplaces?: boolean;
   onRetry: (message: ChatMessage) => void;
   onEdit: (message: ChatMessage, text: string) => void;
+  onFork: (entryId: string) => void;
   showThinking: boolean;
   showTimestamp: boolean;
   collapseRuns: boolean;
-  findOpen: boolean;
-  onCloseFind: () => void;
-  findQuery: string | null;
-  onFindQueryConsumed: () => void;
 }): JSX.Element {
   const messages = useSessionStore((state) => state.messages);
   const streaming = useSessionStore((state) => state.streaming);
@@ -237,16 +308,53 @@ const MessageThread = memo(function MessageThread({
       loadingReplaces={loadingReplaces}
       onRetry={onRetry}
       onEdit={onEdit}
+      onFork={onFork}
       showThinking={showThinking}
       showTimestamp={showTimestamp}
       collapseRuns={collapseRuns}
-      findOpen={findOpen}
-      onCloseFind={onCloseFind}
-      findQuery={findQuery}
-      onFindQueryConsumed={onFindQueryConsumed}
     />
   );
 });
+
+/**
+ * The composer's own subscription to what is being typed.
+ *
+ * `draft` and `attachments` change on every keystroke, and `App` is the shell: the
+ * sidebar, the transcript, the side pane and every dialog are built in its render, so
+ * reading them there re-rendered all of it per character — a cost that grows with the
+ * number of conversations in the sidebar and the number of rows mounted in the thread.
+ * The composer's element is built by `render` instead, so a keystroke re-renders this
+ * and the composer alone. The same trick `MessageThread` uses for the transcript.
+ */
+function ComposerSlot({
+  render,
+}: {
+  render: (draft: string, attachments: ChatAttachment[]) => JSX.Element;
+}): JSX.Element {
+  const draft = useSessionStore((state) => state.draft);
+  const attachments = useSessionStore((state) => state.attachments);
+  return render(draft, attachments);
+}
+
+/**
+ * Draft persistence, kept out of the shell for the same reason — and out of the
+ * composer's own slot, which an extension prompt takes over while a question is
+ * parked, so the debounce is not torn down and re-armed by an approval.
+ */
+function DraftKeeper(): null {
+  const activeId = useSessionStore((state) => state.activeId);
+  const draft = useSessionStore((state) => state.draft);
+  const attachments = useSessionStore((state) => state.attachments);
+  const model = useSessionStore((state) => state.session?.model);
+  const thinkingLevel = useSessionStore((state) => state.session?.thinkingLevel);
+  const permissionMode = useSettingsStore((state) => state.settings.permissionMode);
+  const emptySession = useSessionStore((state) => {
+    const conversation = state.conversations.find((item) => item.id === state.activeId);
+    return Boolean(conversation && !conversation.preview);
+  });
+  useDraftPersistence(activeId, draft, attachments, model, thinkingLevel, permissionMode, emptySession);
+  return null;
+}
 
 export function App(): JSX.Element {
   // Applies light/dark theme selection (and reacts to OS changes in system mode).
@@ -307,7 +415,6 @@ export function App(): JSX.Element {
   const running = useSessionStore((state) => state.running);
   const waitingForUser = useSessionStore((state) => state.waitingForUser);
   const stats = useSessionStore((state) => state.stats);
-  const draft = useSessionStore((state) => state.draft);
   const setStatus = useSessionStore((state) => state.setStatus);
   const setSession = useSessionStore((state) => state.setSession);
   const setModels = useSessionStore((state) => state.setModels);
@@ -328,29 +435,23 @@ export function App(): JSX.Element {
   const applyEvent = useSessionStore((state) => state.applyEvent);
   const setStreaming = useSessionStore((state) => state.setStreaming);
   const dropEmptyAssistant = useSessionStore((state) => state.dropEmptyAssistant);
+  const rollbackOptimisticPrompt = useSessionStore((state) => state.rollbackOptimisticPrompt);
   const resetConversation = useSessionStore((state) => state.resetConversation);
   const commands = useSessionStore((state) => state.commands);
   const permission = useSessionStore((state) => state.permission);
   const setCommands = useSessionStore((state) => state.setCommands);
   const setSubagents = useSessionStore((state) => state.setSubagents);
   const resolvePermission = useSessionStore((state) => state.resolvePermission);
-  const attachments = useSessionStore((state) => state.attachments);
   const allQueued = useSessionStore((state) => state.queued);
   const queued = activeId
     ? allQueued.filter((item) => item.conversationId === activeId)
     : [];
   const permissionAlways = usePermissionAlways();
   const setAttachments = useSessionStore((state) => state.setAttachments);
+  const setComposer = useSessionStore((state) => state.setComposer);
+  const restoreComposer = useSessionStore((state) => state.restoreComposer);
   const queuePause = useSessionStore((state) => state.queuePause);
-  const enqueue = useSessionStore((state) => state.enqueue);
-  const removeQueued = useSessionStore((state) => state.removeQueued);
-  const setQueuedOrder = useSessionStore((state) => state.setQueuedOrder);
-  const prependQueued = useSessionStore((state) => state.prependQueued);
-  const markQueuedSending = useSessionStore((state) => state.markQueuedSending);
-  const unmarkQueuedSending = useSessionStore((state) => state.unmarkQueuedSending);
-  const unmarkAllQueuedSending = useSessionStore((state) => state.unmarkAllQueuedSending);
-  const setQueuePause = useSessionStore((state) => state.setQueuePause);
-  const setQueuePauseFor = useSessionStore((state) => state.setQueuePauseFor);
+  const setQueueState = useSessionStore((state) => state.setQueueState);
   const setRunInterrupted = useSessionStore((state) => state.setRunInterrupted);
   const setCanResume = useSessionStore((state) => state.setCanResume);
   const restoreId = useRef<string | null>(null);
@@ -388,10 +489,15 @@ export function App(): JSX.Element {
   const openingTicket = useRef(0);
   const [opening, setOpening] = useState(false);
   const [openingId, setOpeningId] = useState<string | null>(null);
-  const draining = useRef(new Set<string>());
+  // Invalidates model/thinking restoration from an older conversation open. A slow
+  // provider reply must never overwrite a choice made after the user switched again.
+  const openGeneration = useRef(0);
   // One send at a time. A second click / Enter while this send is still being handed
   // over is not a second message — see `handleSubmit`.
   const submitting = useRef(false);
+  // A send made while Stop is still settling must wait for that stop, then start a
+  // fresh run rather than being mistaken for a follow-up to the run being stopped.
+  const abortInFlight = useRef(new Map<string, Promise<void>>());
   // Settings lives at #/settings/<section>; no match means we are in the app.
   const settingsMatch = useMatch("/settings/*");
   const location = useLocation();
@@ -417,13 +523,6 @@ export function App(): JSX.Element {
   }, [settingsOpen, settingsSection, navigate]);
   const [commandOpen, setCommandOpen] = useState(false);
   const [addProjectOpen, setAddProjectOpen] = useState(false);
-  /** 在会话中查找 (Cmd+F) over the open transcript. */
-  const [findOpen, setFindOpen] = useState(false);
-  /**
-   * A query the find bar should open with — set when the palette opens a chat from a
-   * body search hit, so the match is on screen rather than just «this chat contains it».
-   */
-  const [pendingFind, setPendingFind] = useState<string | null>(null);
   // `getStatus()` is async, so until it resolves the store still holds the "idle"
   // placeholder. Track whether the real status has landed: the shell shows the F
   // loader (and keeps the boot splash up) until it has.
@@ -451,12 +550,41 @@ export function App(): JSX.Element {
   const paneMaximized = useSidePaneStore((state) => state.maximized);
   const togglePane = useSidePaneStore((state) => state.toggle);
   const settings = useSettingsStore((state) => state.settings);
+  const { setPermissionMode } = usePermissionModeSelection();
   const updateSettings = useSettingsStore((state) => state.update);
   const sidebarCollapsed = useSidebarCollapsed();
   // A phone has no width to give the sidebar or the right pane; the first overlays
   // (`CollapsiblePanel overlay`) and the second is simply not there.
   const narrow = useIsNarrowViewport();
   const archivedIds = useArchivedIds();
+  // Maximised hands the window to the side pane. Emptying the conversation column
+  // rather than unmounting it keeps the shell one three-panel group the library can
+  // undo, and keeps the transcript (and its scroll position) where it was.
+  //
+  // Two details. A frame's delay, because the pane lifts its own size ceiling in
+  // response to this flag and that lands a render later: empty the column first and the
+  // pane is still capped at two thirds, which hands the leftover back to the sidebar.
+  // And `resize` rather than the library's `collapse`, because a collapsible column is
+  // one a stray End or Enter on a splitter can park, and the conversation is the one
+  // panel that must never disappear on a keypress.
+  const conversationPanel = usePanelRef();
+  const conversationWidth = useRef<number | null>(null);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      const panel = conversationPanel.current;
+      if (!panel) return;
+      if (paneMaximized) {
+        // A share, not pixels: the column keeps its proportion if the window is
+        // resized while the pane owns it.
+        conversationWidth.current = panel.getSize().asPercentage;
+        panel.resize(0);
+      } else if (conversationWidth.current !== null) {
+        panel.resize(`${conversationWidth.current}%`);
+        conversationWidth.current = null;
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [paneMaximized]);
   const toggleSidebarShortcut = useShortcutLabel("toggleSidebar");
   const toggleSidePaneShortcut = useShortcutLabel("toggleSidePane");  const newChatShortcut = useShortcutLabel("newChat");
 
@@ -562,6 +690,20 @@ export function App(): JSX.Element {
       // which chats are working, even while the user is looking at another one.
       if (event.type === "conversation_running" && conversationId) {
         useSessionStore.getState().setConversationRunning(conversationId, event.running === true);
+        // A failed/timeout Stop stays as a barrier until Main explicitly confirms
+        // that the conversation is idle. This also releases a barrier kept after a
+        // timeout when the SDK eventually settles on its own.
+        if (event.running !== true) abortInFlight.current.delete(conversationId);
+      }
+      // Queue state is Main-owned and applies for every conversation. It must cross
+      // the focus filter so a background drain, failure or second window stays visible.
+      if (event.type === "queue_changed" && event.queue && typeof event.queue === "object") {
+        useSessionStore.getState().setQueueState(event.queue as import("@shared/types").ConversationQueueState);
+        return;
+      }
+      if (event.type === "queue_delivered") {
+        useSessionStore.getState().applyEvent(event);
+        return;
       }
       // Blocking prompts and their withdrawal are handled for *every* conversation
       // before the focus routing below, which sends a background chat's events to the
@@ -601,7 +743,7 @@ export function App(): JSX.Element {
               brief: info?.detail,
             });
           }
-          void getSubagents(useSessionStore.getState().activeId ?? undefined).then(setSubagents).catch(() => undefined);
+          void getSubagents().then(setSubagents).catch(() => undefined);
         }
         return;
       }
@@ -718,10 +860,6 @@ export function App(): JSX.Element {
     settings: () => {
       if (!settingsOpen) navigate("/settings/general");
     },
-    newWindow: () => {
-      if (blockedRemotely(Ipc.windowNew)) return;
-      void window.fastvibe.app.newWindow();
-    },
     newChat: () => {
       setCommandOpen(false);
       void handleNewChat();
@@ -729,7 +867,7 @@ export function App(): JSX.Element {
     openFolder: () => {
       setCommandOpen(false);
       if (settingsOpen) navigate(workspacePath(activeId));
-      void handleAddLocalProject();
+      void handleAddProject();
     },
     focusComposer: () => {
       setCommandOpen(false);
@@ -770,7 +908,6 @@ export function App(): JSX.Element {
     },
     toggleSidebar: () => setSidebarCollapsed(!sidebarCollapsed),
     toggleSidePane: () => togglePane(),
-    findInConversation: () => setFindOpen((open) => !open),
   });
 
   useEffect(() => {
@@ -815,17 +952,20 @@ export function App(): JSX.Element {
     // start rather than on every status flip. `modelsLoaded` records that the answer
     // has landed: an empty list then means 没有模型 rather than 还没问到.
     if (useSessionStore.getState().models.length === 0) {
-      void getModels()
+      void window.fastvibe.engine
+        .getModels()
         .then(setModels)
         .catch(() => undefined)
         .finally(() => setModelsLoaded(true));
     } else {
       setModelsLoaded(true);
     }
-    void getCommands()
+    void window.fastvibe.engine
+      .getCommands()
       .then(setCommands)
       .catch(() => undefined);
-    void getSubagents(activeId ?? undefined)
+    void window.fastvibe.engine
+      .getSubagents()
       .then(setSubagents)
       .catch(() => undefined);
     const pending = restoreId.current;
@@ -876,8 +1016,6 @@ export function App(): JSX.Element {
   // Unbound conversations run in a hidden scratch dir, so never surface that path.
   const workspaceLabel = activeProject?.name ?? t("workspace.noProject");
 
-  useDraftPersistence(activeId, draft);
-
   // The composer's `/` palette lists skills: re-list when 设置 → 技能 is left (the
   // shell stays mounted behind that route) and when the conversation switches,
   // since project skills are discovered from the active workspace.
@@ -919,21 +1057,77 @@ export function App(): JSX.Element {
       },
     });
   }, [needsModel, navigate, t]);
+
   function applyOpen(result: ConversationOpenResult): void {
     applySnapshot(result);
     // Every path that makes a conversation active locally ends here — a click, a new
     // chat, a side chat, plan mode's handoff — so this is where the claim is kept
     // honest for the ones that could not know the id before they called.
     intendedActiveId.current = result.conversation.id;
+    const generation = ++openGeneration.current;
+    const savedComposer = useSessionStore.getState().composerDrafts[result.conversation.id];
+    const persisted = readDrafts()[result.conversation.id];
+    const emptySession = !result.conversation.preview;
+    const restorePersistedState = emptySession && !savedComposer;
+    // Hydrate the visible session state synchronously as well as correcting Main below.
+    // Otherwise DraftKeeper could see Main's default model for one render and overwrite
+    // the project's saved choice before the asynchronous setModel call returned. An
+    // in-memory composer is newer than localStorage, so it wins on same-window switches.
+    const restoredState = restorePersistedState && result.state
+      ? {
+          ...result.state,
+          ...(persisted?.model ? { model: persisted.model } : {}),
+          ...(persisted?.thinkingLevel ? { thinkingLevel: persisted.thinkingLevel } : {}),
+        }
+      : result.state;
     setActiveId(result.conversation.id);
     setMessages(result.messages, result.conversation.id);
-    setSession(result.state);
+    setSession(restoredState);
     setStatus(result.status);
+    setQueueState(result.queue);
     // The goal (or plan mode) this conversation already had, replayed by the engine:
     // its own `setStatus` fired during session creation, which on a cold start is
     // before this window was listening.
     useSessionStore.getState().setExtensionStatus(result.conversation.id, result.extensionStatus ?? {});
-    setDraft(readDrafts()[result.conversation.id] ?? "");
+    // In-memory composer state is newer than the debounced localStorage write and
+    // includes attachments. Only hydrate from disk the first time this window opens it.
+    if (!savedComposer) {
+      setComposer(persisted?.draft ?? "", persisted?.attachments ?? []);
+    }
+    if (emptySession && persisted?.permissionMode && persisted.permissionMode !== settings.permissionMode) {
+      // The normal permission picker still owns the full-access confirmation. A saved
+      // full choice is therefore restored through the same guarded path, never by
+      // writing the sandbox setting directly.
+      setPermissionMode(persisted.permissionMode);
+    }
+    if (restorePersistedState && (persisted?.model || persisted?.thinkingLevel)) {
+      // Keep the two SDK mutations ordered: changing the model re-clamps thinking,
+      // so a concurrent restore could let the model response overwrite the saved
+      // thinking level again.
+      void (async () => {
+        let next = result.state;
+        const current = (): boolean =>
+          openGeneration.current === generation && useSessionStore.getState().activeId === result.conversation.id;
+        if (!current()) return;
+        if (persisted.model) {
+          try {
+            next = await engine.setModel(persisted.model.provider, persisted.model.id, result.conversation.id);
+          } catch {
+            // The provider may have been removed since this draft was saved; retain
+            // Main's authoritative state rather than the invalid saved model.
+          }
+        }
+        if (!current()) return;
+        if (persisted.thinkingLevel) {
+          try {
+            next = await engine.setThinking(persisted.thinkingLevel, result.conversation.id);
+          } catch {
+            // The model may no longer support the saved thinking level.
+          }
+        }
+        if (next && current()) setSession(next);
+      })();
+    }
     setError(null);
     setRunInterrupted(null);
     // `canResume` is deliberately not touched here: it is not a leftover of the chat
@@ -943,16 +1137,6 @@ export function App(): JSX.Element {
     // Drop the previous chat's numbers before the new ones arrive.
     useSessionStore.getState().setStats(null);
     refreshStats();
-    const openedId = result.conversation.id;
-    void getModels(openedId).then((next) => {
-      if (useSessionStore.getState().activeId === openedId) setModels(next);
-    }).catch(() => undefined);
-    void getCommands(openedId).then((next) => {
-      if (useSessionStore.getState().activeId === openedId) setCommands(next);
-    }).catch(() => undefined);
-    void getSubagents(openedId).then((next) => {
-      if (useSessionStore.getState().activeId === openedId) setSubagents(next);
-    }).catch(() => undefined);
   }
 
   /** Push or replace the conversation URL so back/forward walk real history. */
@@ -973,29 +1157,69 @@ export function App(): JSX.Element {
     // or hundreds of ms — a second click or Enter in that window used to send the
     // same prompt again, without its text (`请查看附件` + the same attachments).
     if (submitting.current) return;
-    const text = draft.trim();
-    const currentAttachments = useSessionStore.getState().attachments;
-    if ((!text && currentAttachments.length === 0) || !canChat) return;
-    const compact = parseCompactCommand(text);
-    if (compact) {
-      if (!activeId) return;
-      setDraft("");
-      try {
-        await engine.compact(compact.instructions);
-        void engine.getState().then(setSession).catch(() => undefined);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
-      }
-      return;
-    }
+    // Reserve the send before any await, including waiting for Stop. Otherwise two
+    // Enter presses can both resume after the same abort and submit twice.
     submitting.current = true;
+    let consumedOwner: string | null = null;
+    let consumedVersion: number | undefined;
+    let submitOwner: string | null = null;
+    let text = "";
+    let currentAttachments: ChatAttachment[] = [];
+    let queuePreview: QueuedPromptPreview | undefined;
     try {
+      // Stop and Send are separate UI events. If Send wins the renderer race, wait for
+      // Main to finish the stop instead of putting this fresh prompt into the queue of
+      // the run the user just stopped. Re-read the composer after the await: the user
+      // may have edited it while the stop was settling.
+      const initialOwner = useSessionStore.getState().activeId;
+      const abortPromise = initialOwner ? abortInFlight.current.get(initialOwner) : undefined;
+      if (abortPromise) {
+        try {
+          await abortPromise;
+        } catch {
+          // handleAbort already reported the failed stop. Do not send into a session
+          // whose termination was not confirmed.
+          return;
+        }
+        if (useSessionStore.getState().activeId !== initialOwner) return;
+      }
+
+      const submitState = useSessionStore.getState();
+      submitOwner = submitState.activeId;
+      text = submitState.draft.trim();
+      const queueAtSubmit = shouldQueueSubmission({
+        hasConversation: submitOwner !== null,
+        running: Boolean(submitOwner && submitState.running[submitOwner]),
+        pauseReason: submitOwner ? submitState.queuePauseByConversation[submitOwner] ?? null : null,
+        hasQueuedItems: Boolean(
+          submitOwner && submitState.queued.some((item) => item.conversationId === submitOwner),
+        ),
+        stopConfirmed: Boolean(abortPromise),
+      });
+      const queueBehavior = settings.queueBehavior;
+      currentAttachments = submitState.attachments;
+      if ((!text && currentAttachments.length === 0) || !canChat) return;
+      const compact = parseCompactCommand(text);
+      if (compact) {
+        if (!activeId) return;
+        setDraft("");
+        try {
+          await engine.compact(compact.instructions);
+          void engine.getState().then(setSession).catch(() => undefined);
+        } catch (err) {
+          setError(err instanceof Error ? err.message : String(err));
+        }
+        return;
+      }
       // Nothing to run a turn on: keep the draft and ask for a model. Creating the
       // conversation first would leave a chat whose prompt the engine then refuses.
       if ((await availableModels()).length === 0) {
-        setNeedsModel(true);
+        if (useSessionStore.getState().activeId === submitOwner) setNeedsModel(true);
         return;
       }
+      // An await above may have crossed a chat switch. This submission still belongs
+      // to the composer it captured; it must not clear or send the incoming chat's draft.
+      if (useSessionStore.getState().activeId !== submitOwner) return;
       // The text the engine will actually receive, and therefore also the text the
       // row shows: they used to differ (file names in the bubble, `请查看附件` in the
       // engine), so re-reading the transcript silently rewrote the message.
@@ -1004,73 +1228,105 @@ export function App(): JSX.Element {
       // attachments belong to this call, so a second click finds an empty composer
       // (and a disabled send button) instead of re-sending the same prompt without
       // its text.
-      setDraft("");
-      setAttachments([]);
-      let conversationId = activeId;
+      setComposer("", []);
+      let conversationId = submitOwner;
       if (!conversationId) {
         const created = await window.fastvibe.conversations.create(active?.project);
         applyOpen(created);
         conversationId = created.conversation.id;
         revealConversation(conversationId);
       }
+      consumedOwner = conversationId;
+      consumedVersion = useSessionStore.getState().composerDrafts[conversationId]?.version;
+      const beforePrompt = useSessionStore.getState().conversations.find((item) => item.id === conversationId);
       const nextList = await window.fastvibe.conversations.recordPrompt(conversationId, promptText);
       applyList(nextList);
-      if (streaming) {
-        setQueuePause(null);
-        if (settings.queueBehavior === "steer") {
-          const id = crypto.randomUUID();
-          const payload = `${promptText}${attachmentPromptSuffix(currentAttachments)}`;
-          enqueue({
-            id,
+      const afterPrompt = nextList.conversations.find((item) => item.id === conversationId);
+      if (beforePrompt && afterPrompt) {
+        queuePreview = {
+          previousTitle: beforePrompt.title,
+          previousPreview: beforePrompt.preview,
+          nextTitle: afterPrompt.title,
+          nextPreview: afterPrompt.preview,
+        };
+      }
+      // Queue semantics belong to the instant Send was pressed. A stop can settle the
+      // run during recordPrompt; routing an actual follow-up through prompt() would
+      // restart it and a late renderer reply could also erase Main's stopped pause.
+      // A send that raced Stop waited above and is intentionally a fresh prompt.
+      if (queueAtSubmit) {
+        const payload = `${promptText}${attachmentPromptSuffix(currentAttachments)}`;
+        try {
+          const queue = await window.fastvibe.engine.queueAdd({
             conversationId,
             text: promptText,
-            behavior: "steer",
+            message: payload,
+            behavior: queueBehavior,
             attachments: currentAttachments,
-            sending: true,
-            sentText: payload,
+            images: attachmentsToImages(currentAttachments),
+            preview: queuePreview,
           });
-          // Not awaited: `steer()` waits for the run when the engine has already
-          // settled, and the guard must not stay held for the length of a run.
-          void engine
-            .steer(payload, attachmentsToImages(currentAttachments), conversationId)
-            .then(() => engine.getState(conversationId))
-            .then((next) => {
-              if (useSessionStore.getState().activeId === conversationId) setSession(next);
-            })
-            .catch((err: unknown) => {
-              unmarkQueuedSending(id);
-              if (useSessionStore.getState().activeId === conversationId) {
-                setError(err instanceof Error ? err.message : String(err));
-              }
-            });
-        } else {
-          enqueue({
-            id: crypto.randomUUID(),
-            conversationId,
-            text: promptText,
-            behavior: "followUp",
-            attachments: currentAttachments,
-          });
+          setQueueState(queue);
+        } catch (err) {
+          // Main never accepted the item. Restore only the composer this submission
+          // consumed; a chat switch gives ownership to a different draft.
+          if (consumedVersion !== undefined) {
+            restoreComposer(conversationId, text, currentAttachments, consumedVersion);
+          }
+          if (queuePreview) {
+            void window.fastvibe.conversations
+              .restorePrompt({
+                id: conversationId,
+                expectedTitle: queuePreview.nextTitle,
+                expectedPreview: queuePreview.nextPreview,
+                title: queuePreview.previousTitle,
+                preview: queuePreview.previousPreview,
+              })
+              .then(applyList)
+              .catch(() => undefined);
+          }
+          if (useSessionStore.getState().activeId === conversationId) {
+            setError(err instanceof Error ? err.message : String(err));
+          }
         }
         return;
       }
-      addUserMessage(promptText, currentAttachments);
+      // recordPrompt is another switch-sized IPC hop. Sending still belongs to the
+      // captured conversation, but its optimistic row must never land in the chat
+      // that is on screen now (nor clear that chat's attachments).
+      const stillActive = useSessionStore.getState().activeId === conversationId;
+      if (stillActive) addUserMessage(promptText, currentAttachments);
       // A fresh prompt supersedes an interrupted turn: drop the resume affordance now
       // so the button does not linger until the engine's `agent_start` lands.
-      setRunInterrupted(null);
-      setCanResume(false);
+      if (stillActive) {
+        setRunInterrupted(null);
+        setCanResume(false);
+      }
       // Not awaited either: `prompt()` resolves only when the whole run is over, and
       // holding the guard until then would refuse every follow-up sent mid-run.
-      void dispatchPrompt(text, currentAttachments, "prompt", conversationId).catch((err: unknown) => {
-        if (useSessionStore.getState().activeId !== conversationId) return;
-        dropEmptyAssistant();
-        setError(err instanceof Error ? err.message : String(err));
+      void dispatchPrompt(text, currentAttachments, conversationId).catch((err: unknown) => {
+        // Stop rejects some transports with the original AbortError. The engine has
+        // already retained the interrupted turn, so rolling it back or showing a red
+        // toast would misreport an intentional cancellation as a failed send.
+        if (isAbortOutcome(err)) return;
+        if (stillActive && useSessionStore.getState().activeId === conversationId) {
+          rollbackOptimisticPrompt();
+          setError(err instanceof Error ? err.message : String(err));
+        }
+        if (consumedVersion !== undefined) {
+          restoreComposer(conversationId, text, currentAttachments, consumedVersion);
+        }
       });
     } catch (err) {
-      // Nothing reached the engine: hand the composer back what this call consumed.
-      setDraft(text);
-      setAttachments(currentAttachments);
-      setError(err instanceof Error ? err.message : String(err));
+      // Nothing reached the engine: hand back only the composer this call consumed.
+      if (consumedOwner && consumedVersion !== undefined) {
+        restoreComposer(consumedOwner, text, currentAttachments, consumedVersion);
+      } else if (useSessionStore.getState().activeId === submitOwner) {
+        setComposer(text, currentAttachments);
+      }
+      if (useSessionStore.getState().activeId === (consumedOwner ?? submitOwner)) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
     } finally {
       submitting.current = false;
     }
@@ -1079,13 +1335,11 @@ export function App(): JSX.Element {
   async function dispatchPrompt(
     text: string,
     files: ChatAttachment[],
-    mode: "prompt" | "steer",
     conversationId: string,
   ): Promise<void> {
     const payload = `${text || t("composer.seeAttachments")}${attachmentPromptSuffix(files)}`;
     const images = attachmentsToImages(files);
-    if (mode === "steer") await engine.steer(payload, images, conversationId);
-    else await engine.prompt(payload, { images, conversationId });
+    await engine.prompt(payload, { images, conversationId });
     void engine
       .getState(conversationId)
       .then((next) => {
@@ -1094,120 +1348,94 @@ export function App(): JSX.Element {
       .catch(() => undefined);
   }
 
-  async function drainQueued(item: QueuedPrompt): Promise<void> {
-    const conversationId = item.conversationId;
-    removeQueued(item.id);
-    if (useSessionStore.getState().activeId === conversationId) {
-      addUserMessage(item.text, item.attachments);
-    }
-    try {
-      await dispatchPrompt(item.text, item.attachments ?? [], "prompt", conversationId);
-    } catch (err) {
-      if (useSessionStore.getState().activeId === conversationId) dropEmptyAssistant();
-      prependQueued(item);
-      setQueuePauseFor(conversationId, "error");
-      if (useSessionStore.getState().activeId === conversationId) {
-        setError(err instanceof Error ? err.message : String(err));
-      }
-    }
-  }
-
-  async function replaceEngineSteering(conversationId: string, exceptId?: string): Promise<void> {
-    const remaining = useSessionStore
-      .getState()
-      .queued.filter(
-        (item) => item.conversationId === conversationId && item.sending && item.id !== exceptId,
-      );
-    try {
-      await engine.replaceSteering(
-        remaining.map((item) => ({
-          text: item.sentText ?? item.text,
-          images: attachmentsToImages(item.attachments ?? []),
-        })),
-        conversationId,
-      );
-    } catch {
-      // The engine may already have drained the item; the tray still updates.
+  function queueActionError(err: unknown, conversationId?: string): void {
+    if (!conversationId || useSessionStore.getState().activeId === conversationId) {
+      setError(err instanceof Error ? err.message : String(err));
     }
   }
 
   async function handleRemoveQueued(id: string): Promise<void> {
-    const item = useSessionStore.getState().queued.find((entry) => entry.id === id);
-    if (item?.sending) await replaceEngineSteering(item.conversationId, id);
-    removeQueued(id);
+    const owner = useSessionStore.getState().queued.find((entry) => entry.id === id)?.conversationId;
+    try {
+      const queue = await window.fastvibe.engine.queueCancel(id);
+      if (queue) setQueueState(queue);
+    } catch (err) {
+      queueActionError(err, owner);
+    }
   }
 
   function handleEditQueued(id: string): void {
-    const item = useSessionStore.getState().queued.find((entry) => entry.id === id);
-    if (!item || item.sending || draft.trim()) return;
-    removeQueued(id);
-    setDraft(item.text);
-    if (item.attachments?.length) setAttachments(item.attachments);
+    const state = useSessionStore.getState();
+    const item = state.queued.find((entry) => entry.id === id);
+    // A queued item replaces the whole composer payload. Existing files count as a
+    // draft just as much as text does; silently overwriting them loses user input.
+    if (!item || item.sending || state.draft.trim() || state.attachments.length > 0) return;
+    const previous = { draft: state.draft, attachments: state.attachments };
+    // Reserve the payload before asking Main to delete the queue row. If the user
+    // switches chats, this reservation follows its owner and is waiting on return.
+    setComposer(item.text, item.attachments ?? []);
+    const reservedVersion = useSessionStore.getState().composerDrafts[item.conversationId]?.version;
+    void window.fastvibe.engine.queueCancel(id).then((queue) => {
+      if (!queue) {
+        if (reservedVersion !== undefined) {
+          restoreComposer(item.conversationId, previous.draft, previous.attachments, reservedVersion);
+        }
+        return;
+      }
+      setQueueState(queue);
+    }).catch((err: unknown) => {
+      if (reservedVersion !== undefined) {
+        restoreComposer(item.conversationId, previous.draft, previous.attachments, reservedVersion);
+      }
+      queueActionError(err, item.conversationId);
+    });
   }
 
   async function handleRecallQueued(id: string): Promise<void> {
-    const item = useSessionStore.getState().queued.find((entry) => entry.id === id);
-    if (!item?.sending) return;
-    await replaceEngineSteering(item.conversationId, id);
-    unmarkQueuedSending(id);
+    const owner = useSessionStore.getState().queued.find((entry) => entry.id === id)?.conversationId;
+    try {
+      const queue = await window.fastvibe.engine.queueRecall(id);
+      if (queue) setQueueState(queue);
+    } catch (err) {
+      queueActionError(err, owner);
+    }
   }
 
   async function handleSendQueuedNow(id: string): Promise<void> {
-    const item = useSessionStore.getState().queued.find((entry) => entry.id === id);
-    if (!item || item.sending) return;
-    if (useSessionStore.getState().streaming) {
-      const payload = `${item.text || t("composer.seeAttachments")}${attachmentPromptSuffix(item.attachments ?? [])}`;
-      markQueuedSending(id, payload);
-      try {
-        await engine.steer(payload, attachmentsToImages(item.attachments ?? []), item.conversationId);
-        void engine
-          .getState(item.conversationId)
-          .then((next) => {
-            if (useSessionStore.getState().activeId === item.conversationId) setSession(next);
-          })
-          .catch(() => undefined);
-      } catch (err) {
-        unmarkQueuedSending(id);
-        if (useSessionStore.getState().activeId === item.conversationId) {
-          setError(err instanceof Error ? err.message : String(err));
-        }
-      }
-      return;
-    }
-    removeQueued(id);
-    addUserMessage(item.text, item.attachments);
+    const owner = useSessionStore.getState().queued.find((entry) => entry.id === id)?.conversationId;
     try {
-      await dispatchPrompt(item.text, item.attachments ?? [], "prompt", item.conversationId);
+      const queue = await window.fastvibe.engine.queueSendNow(id);
+      if (queue) setQueueState(queue);
     } catch (err) {
-      if (useSessionStore.getState().activeId === item.conversationId) dropEmptyAssistant();
-      prependQueued(item);
-      setQueuePauseFor(item.conversationId, "error");
-      if (useSessionStore.getState().activeId === item.conversationId) {
-        setError(err instanceof Error ? err.message : String(err));
-      }
+      queueActionError(err, owner);
     }
+  }
+
+  function handleReorderQueued(ids: string[]): void {
+    const conversationId = useSessionStore.getState().activeId;
+    if (!conversationId) return;
+    void window.fastvibe.engine.queueReorder(conversationId, ids).then(setQueueState)
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+  }
+
+  function handleResumeQueue(): void {
+    const conversationId = useSessionStore.getState().activeId;
+    if (!conversationId) return;
+    void window.fastvibe.engine.queueResume(conversationId).then(setQueueState)
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
   }
 
   async function handleAbort(): Promise<void> {
     const conversationId = useSessionStore.getState().activeId;
     if (!conversationId) return;
-    const pending = useSessionStore
-      .getState()
-      .queued.filter((item) => item.conversationId === conversationId);
-    if (pending.length > 0) setQueuePauseFor(conversationId, "stopped");
-    try {
-      try {
-        await engine.clearQueue(conversationId);
-      } catch {
-        // older engines may not support clear_queue
-      }
-      unmarkAllQueuedSending();
+
+    // Publish the promise before awaiting it so a concurrent Send can establish an
+    // ordering point. The promise rejects on an unconfirmed stop; Send then leaves
+    // the composer alone instead of racing a still-running SDK session.
+    let abortConfirmed = false;
+    const abortPromise = (async (): Promise<void> => {
       await engine.abort(conversationId);
-    } catch (err) {
-      if (useSessionStore.getState().activeId === conversationId) {
-        setError(err instanceof Error ? err.message : String(err));
-      }
-    } finally {
+      abortConfirmed = true;
       if (useSessionStore.getState().activeId === conversationId) setStreaming(false);
       void engine
         .getState(conversationId)
@@ -1215,6 +1443,20 @@ export function App(): JSX.Element {
           if (useSessionStore.getState().activeId === conversationId) setSession(next);
         })
         .catch(() => undefined);
+    })();
+    abortInFlight.current.set(conversationId, abortPromise);
+    try {
+      await abortPromise;
+    } catch (err) {
+      if (useSessionStore.getState().activeId === conversationId) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    } finally {
+      // Keep a failed stop as a barrier until the running=false event arrives. A
+      // later Send must not infer that the SDK is idle just because a timeout fired.
+      if (abortConfirmed && abortInFlight.current.get(conversationId) === abortPromise) {
+        abortInFlight.current.delete(conversationId);
+      }
     }
   }
 
@@ -1236,46 +1478,14 @@ export function App(): JSX.Element {
     try {
       await engine.continue();
     } catch (err) {
-      setRunInterrupted("error");
-      setError(err instanceof Error ? err.message : String(err));
+      if (!isAbortOutcome(err)) {
+        setRunInterrupted("error");
+        setError(err instanceof Error ? err.message : String(err));
+      }
     } finally {
       void engine.getState().then(setSession).catch(() => undefined);
     }
   }
-
-  // Each dispatch resolves only once its whole run finishes, so drain the queue in
-  // a loop. A one-shot effect would stop after the first item: resetting `draining`
-  // in `.finally` does not re-render, so the next queued message would never fire.
-  useEffect(() => {
-    if (
-      !activeId ||
-      streaming ||
-      queuePause ||
-      !queued.some((item) => !item.sending) ||
-      draining.current.has(activeId)
-    ) return;
-    const conversationId = activeId;
-    draining.current.add(conversationId);
-    void (async () => {
-      try {
-        for (;;) {
-          const state = useSessionStore.getState();
-          if (
-            state.activeId !== conversationId ||
-            state.queuePauseByConversation[conversationId] ||
-            state.streaming
-          ) break;
-          const next = state.queued.find(
-            (item) => item.conversationId === conversationId && !item.sending,
-          );
-          if (!next) break;
-          await drainQueued(next);
-        }
-      } finally {
-        draining.current.delete(conversationId);
-      }
-    })();
-  }, [activeId, streaming, queuePause, queued]);
 
   // Stable identities so the memoised transcript rows do not re-render (or hold a
   // stale closure) when unrelated shell state changes.
@@ -1334,14 +1544,18 @@ export function App(): JSX.Element {
       }
       setDraft("");
       addUserMessage(text, source?.attachments);
+      const hasAttachmentMetadata = text.includes("<fastvibe-attachments>") || text.includes("<fastvibe-pasted-text>");
+      const payload = hasAttachmentMetadata ? text : `${text}${attachmentPromptSuffix(source?.attachments ?? [])}`;
       try {
-        await engine.prompt(text, {
+        await engine.prompt(payload, {
           images: source?.attachments ? attachmentsToImages(source.attachments) : undefined,
         });
         void engine.getState().then(setSession).catch(() => undefined);
       } catch (err) {
-        dropEmptyAssistant();
-        setError(err instanceof Error ? err.message : String(err));
+        if (!isAbortOutcome(err)) {
+          dropEmptyAssistant();
+          setError(err instanceof Error ? err.message : String(err));
+        }
       }
     } finally {
       retrying.current = false;
@@ -1353,7 +1567,7 @@ export function App(): JSX.Element {
     // leaves everything exactly as it was.
     const owner = useSessionStore.getState().activeId;
     if (owner) {
-      const checkpoint = await getCheckpoint(owner).catch(() => null);
+      const checkpoint = await window.fastvibe.engine.getCheckpoint(owner).catch(() => null);
       if (checkpoint && checkpoint.paths.length > 0) {
         setRetryRewind({ message, paths: checkpoint.paths });
         return;
@@ -1361,6 +1575,25 @@ export function App(): JSX.Element {
     }
     await runRetry(message);
   }, [runRetry]);
+
+  const handleFork = useCallback(async (conversationId: string, entryId?: string): Promise<void> => {
+    try {
+      const forked = await engine.fork(entryId, conversationId);
+      applyOpen(forked);
+      revealConversation(forked.conversation.id);
+    } catch (err) {
+      toast.error(t("errors.fork"), {
+        description: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }, [t]);
+
+  // Stable for MessageThread/ChatMessageRow memoisation; resolve the owner at click
+  // time so a stale toolbar can never fork the conversation now on screen by mistake.
+  const handleForkFromEntry = useCallback((entryId: string): void => {
+    const owner = useSessionStore.getState().activeId;
+    if (owner) void handleFork(owner, entryId);
+  }, [handleFork]);
 
   const handleEdit = useCallback(async (message: ChatMessage, editedText: string): Promise<void> => {
     const owner = useSessionStore.getState().activeId;
@@ -1398,23 +1631,12 @@ export function App(): JSX.Element {
       });
       void engine.getState(owner).then(setSession).catch(() => undefined);
     } catch (err) {
-      dropEmptyAssistant();
-      setError(err instanceof Error ? err.message : String(err));
+      if (!isAbortOutcome(err)) {
+        dropEmptyAssistant();
+        setError(err instanceof Error ? err.message : String(err));
+      }
     }
   }, [addUserMessage, canChat, dropEmptyAssistant, setError, setMessages, setRunInterrupted, setCanResume, setSession]);
-
-  async function discardDraft(id: string | null | undefined): Promise<void> {
-    if (!id) return;
-    const item = useSessionStore.getState().conversations.find((entry) => entry.id === id);
-    if (!item || item.preview) return;
-    try {
-      applyList(await window.fastvibe.conversations.delete(id));
-      disposeSidePaneTabs(useSidePaneStore.getState().forgetScope(id));
-      useSessionStore.getState().forgetConversationExtensionState(id);
-    } catch {
-      // Draft cleanup is best-effort.
-    }
-  }
 
   /**
    * Mark a transcript fetch in flight.
@@ -1450,26 +1672,20 @@ export function App(): JSX.Element {
       // An empty draft can be reused only on the server that already owns it. A remote
       // project is not a folder this conversation can be moved into — that call is
       // refused, and it is what made 新建远程会话 fail while a local draft was open.
-      if (current && !current.preview && sameServerScope(current.id, project)) {
+      if (current && !current.preview && sameServerScope(current.id, project) && (current.project ?? undefined) === (project || undefined)) {
         ticket = beginOpening(current.id, false);
-        if ((current.project ?? undefined) !== (project || undefined)) {
-          applyList(await window.fastvibe.conversations.setProject(current.id, project ?? null));
-          void getStatus().then(setStatus).catch(() => undefined);
-          void engine.getState().then(setSession).catch(() => undefined);
-        }
         setMessages([], current.id);
-        setDraft(readDrafts()[current.id] ?? "");
         setError(null);
         revealConversation(current.id);
         return;
       }
-      const previousId = activeId;
+      // Main reuses the unfinished conversation for this project. Do not retarget the
+      // current empty chat: its draft belongs to its old project and must remain there.
       ticket = beginOpening(null, isRemoteRef(project));
       const created = await window.fastvibe.conversations.create(project);
       if (!openingStillCurrent(ticket)) return;
       applyOpen(created);
       revealConversation(created.conversation.id);
-      await discardDraft(previousId);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1485,23 +1701,14 @@ export function App(): JSX.Element {
    * `"remote"` follow — another window or a phone opened this chat — replaces, because
    * the jump was not this person's navigation and should not sit in their back stack.
    * Everything else is the same path on purpose: a followed switch reloads the
-   * transcript and collects the abandoned empty draft exactly as a local one does,
-   * which is what keeps the two clients from ending up in states that differ in ways
-   * nobody chose.
+   * transcript while leaving the project's unfinished composer session intact, which
+   * keeps the two clients from ending up in states that differ in ways nobody chose.
    */
   async function handleOpen(
     id: string,
     source: "user" | "history" | "remote" = "user",
-    findQuery?: string,
   ): Promise<void> {
     const store = useSessionStore.getState();
-    // A search hit opens the chat *and* the find bar on the query that found it: the
-    // palette can say which conversation matched, but only the transcript can show
-    // where, and scrolling there by hand is the work the search was meant to save.
-    if (findQuery) {
-      setPendingFind(findQuery);
-      setFindOpen(true);
-    }
     // Re-opening the active chat is pointless once it has content or a reply is
     // streaming, but it is how an empty/failed conversation gets retried.
     if (id === store.activeId && (store.messages.length > 0 || store.streaming)) {
@@ -1510,7 +1717,6 @@ export function App(): JSX.Element {
       if (source === "user") revealConversation(id);
       return;
     }
-    const previousId = store.activeId;
     // Claimed before the hop, not after: the push this call is about to cause can beat
     // its own reply back here (see `intendedActiveId`).
     intendedActiveId.current = id;
@@ -1521,7 +1727,6 @@ export function App(): JSX.Element {
       applyOpen(opened);
       if (source === "user") revealConversation(id);
       else if (source === "remote") revealConversation(id, true);
-      if (previousId && previousId !== id) await discardDraft(previousId);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1545,7 +1750,10 @@ export function App(): JSX.Element {
     void handleOpen(id, "history");
   }, [location.key, location.pathname, navigationType]);
 
-  async function handleAddLocalProject(): Promise<void> {
+  async function handleAddProject(): Promise<void> {
+    // The picker would open on the machine running the server, where nobody is looking,
+    // and the promise would never settle. Guarded here because three different controls
+    // reach this one function.
     if (blockedRemotely(Ipc.projectsAdd)) return;
     try {
       const added = await window.fastvibe.projects.add();
@@ -1580,17 +1788,32 @@ export function App(): JSX.Element {
    * can no longer reach. The composer's stop is the only explicit one; archive is
    * the implicit one.
    */
+  /**
+   * Delete an abandoned empty draft.
+   *
+   * An empty conversation stays off the sidebar until its first prompt, so opening a
+   * different chat (or project) leaves it as an invisible row. Discarding it here is
+   * best-effort: a failure must not block the navigation that already happened.
+   */
+  async function discardDraft(id: string | null | undefined): Promise<void> {
+    if (!id) return;
+    const item = useSessionStore.getState().conversations.find((entry) => entry.id === id);
+    if (!item || item.preview) return;
+    try {
+      applyList(await window.fastvibe.conversations.delete(id));
+      disposeSidePaneTabs(useSidePaneStore.getState().forgetScope(id));
+      useSessionStore.getState().forgetConversationExtensionState(id);
+    } catch {
+      // Best-effort cleanup of a draft nothing points at any more.
+    }
+  }
+
   async function handleArchiveSession(id: string): Promise<void> {
     const busy = useSessionStore.getState().running[id] === true;
     archiveConversations(id);
     if (busy) {
       void (async () => {
         try {
-          try {
-            await engine.clearQueue(id);
-          } catch {
-            // older engines may not support clear_queue
-          }
           await engine.abort(id);
         } catch (err) {
           setError(err instanceof Error ? err.message : String(err));
@@ -1719,7 +1942,13 @@ export function App(): JSX.Element {
    */
   async function handleSetProject(project: string | null): Promise<void> {
     try {
-      if (!activeId || !sameServerScope(activeId, project)) {
+      const current = conversations.find((item) => item.id === activeId);
+      // A conversation can only be moved within the server that owns it. Picking a
+      // project on another server creates a conversation there instead — retargeting
+      // this one is refused by the gateway.
+      if (!current || !current.preview || !sameServerScope(current.id, project)) {
+        // Project selection on the hero is a switch between project-owned empty
+        // sessions, not a mutation that would strand the current project's draft.
         const previousId = activeId;
         const ticket = beginOpening(null, isRemoteRef(project));
         try {
@@ -1733,7 +1962,8 @@ export function App(): JSX.Element {
         }
         return;
       }
-      const snapshot = await window.fastvibe.conversations.setProject(activeId, project);
+      if ((current.project ?? null) === project) return;
+      const snapshot = await window.fastvibe.conversations.setProject(activeId!, project);
       applyList(snapshot);
       void getStatus().then(setStatus).catch(() => undefined);
     } catch (err) {
@@ -1751,6 +1981,7 @@ export function App(): JSX.Element {
   }
 
   async function handleModelChange(provider: string, modelId: string): Promise<void> {
+    openGeneration.current += 1;
     try {
       let next = await engine.setModel(provider, modelId);
       const catalog = models.find((item) => item.provider === provider && item.id === modelId);
@@ -1769,6 +2000,7 @@ export function App(): JSX.Element {
   }
 
   async function handleThinkingChange(level: string): Promise<void> {
+    openGeneration.current += 1;
     try {
       const next = await engine.setThinking(level);
       setSession(next);
@@ -1809,49 +2041,81 @@ export function App(): JSX.Element {
     ...commands,
   ];
 
+  /**
+   * Stable identities for the shell's two biggest subtrees.
+   *
+   * `Sidebar` and `SidePane` are memoised, and the handlers below are the only props
+   * they take that would otherwise be new on every render of this component — which
+   * would have made those memos do nothing at all. `useStable` fixes the identity
+   * while still calling the newest closure, so neither subtree is rebuilt for a
+   * transcript reload, a stats refresh or a run flag flipping.
+   */
+  const onSidebarNewChat = useStable((cwd?: string) => void handleNewChat(cwd));
+  const onSidebarOpen = useStable((id: string) => void handleOpen(id));
+  const onSidebarFork = useStable((id: string) => void handleFork(id));
+  const onSidebarArchive = useStable((id: string) => void handleArchiveSession(id));
+  const onSidebarAddProject = useStable(() => void handleAddProject());
+  const onSidebarAddRemoteProject = useStable(() => handleAddRemoteProject());
+  const onSidebarRenameSession = useStable((id: string, title: string) => void handleRenameSession(id, title));
+  const onSidebarRenameProject = useStable((cwd: string, name: string) => void handleRenameProject(cwd, name));
+  const onSidebarRemoveProject = useStable((cwd: string) => void handleRemoveProject(cwd));
+  const onSidebarRevealProject = useStable((cwd: string) => {
+    if (blockedRemotely(Ipc.workspaceReveal)) return;
+    void window.fastvibe.workspace.reveal(cwd);
+  });
+  const onSidebarReorderProjects = useStable((cwds: string[]) => void handleReorderProjects(cwds));
+  const onSidebarOpenSettings = useStable(() => navigate("/settings/general"));
+  const onSidebarOpenMarket = useStable(() => navigate("/settings/extensions"));
+  const onSidebarSearch = useStable(() => setCommandOpen(true));
+  const onSidePaneNewChat = useStable(() => void handleNewChat());
+
   const composer = (
-    <Composer
-      value={draft}
-      disabled={!canChat}
-      streaming={streaming}
-      working={conversationWorking}
-      placeholder={canChat ? t("composer.ready") : modelsLoaded && !hasModel ? t("composer.needModel") : t("composer.preparing")}
-      models={models}
-      model={session?.model}
-      thinkingLevel={session?.thinkingLevel}
-      workspaceLabel={workspaceLabel}
-      projects={projects}
-      project={active?.project}
-      newSession={isNewSession}
-      commands={paletteCommands}
-      permissionMode={settings.permissionMode}
-      onPermissionModeChange={(mode) => updateSettings({ permissionMode: mode })}
-      queued={queued}
-      queuePause={queuePause}
-      attachments={attachments}
-      history={inputHistory}
-      contextPercent={usagePercent(session)}
-      contextUsage={session?.contextUsage}
-      stats={stats}
-      onChange={setDraft}
-      onSubmit={() => void handleSubmit()}
-      onAbort={() => void handleAbort()}
-      onPickWorkspace={() => void handlePickWorkspace()}
-      onSelectProject={(project) => void handleSetProject(project)}
-      onModelChange={(provider, modelId) => void handleModelChange(provider, modelId)}
-      onThinkingChange={(level) => void handleThinkingChange(level)}
-      onAttachmentsChange={setAttachments}
-      onRemoveQueued={(id) => void handleRemoveQueued(id)}
-      onEditQueued={handleEditQueued}
-      onSendQueuedNow={(id) => void handleSendQueuedNow(id)}
-      onRecallQueued={(id) => void handleRecallQueued(id)}
-      onReorderQueued={setQueuedOrder}
-      onResumeQueue={() => setQueuePause(null)}
-      canResume={canResume}
-      onResumeRun={() => void handleResumeRun()}
-      sendOnEnter={settings.sendOnEnter}
-      focusSignal={composerFocus}
-      onManageModels={() => navigate("/settings/providers")}
+    <ComposerSlot
+      render={(draft, attachments) => (
+        <Composer
+          value={draft}
+          disabled={!canChat}
+          streaming={streaming}
+          working={conversationWorking}
+          placeholder={canChat ? t("composer.ready") : modelsLoaded && !hasModel ? t("composer.needModel") : t("composer.preparing")}
+          models={models}
+          model={session?.model}
+          thinkingLevel={session?.thinkingLevel}
+          workspaceLabel={workspaceLabel}
+          projects={projects}
+          project={active?.project}
+          newSession={isNewSession}
+          commands={paletteCommands}
+          permissionMode={settings.permissionMode}
+          onPermissionModeChange={setPermissionMode}
+          queued={queued}
+          queuePause={queuePause}
+          attachments={attachments}
+          history={inputHistory}
+          contextPercent={usagePercent(session)}
+          contextUsage={session?.contextUsage}
+          stats={stats}
+          onChange={setDraft}
+          onSubmit={() => void handleSubmit()}
+          onAbort={() => void handleAbort()}
+          onPickWorkspace={() => void handlePickWorkspace()}
+          onSelectProject={(project) => void handleSetProject(project)}
+          onModelChange={(provider, modelId) => void handleModelChange(provider, modelId)}
+          onThinkingChange={(level) => void handleThinkingChange(level)}
+          onAttachmentsChange={setAttachments}
+          onRemoveQueued={(id) => void handleRemoveQueued(id)}
+          onEditQueued={handleEditQueued}
+          onSendQueuedNow={(id) => void handleSendQueuedNow(id)}
+          onRecallQueued={(id) => void handleRecallQueued(id)}
+          onReorderQueued={handleReorderQueued}
+          onResumeQueue={handleResumeQueue}
+          canResume={canResume}
+          onResumeRun={() => void handleResumeRun()}
+          sendOnEnter={settings.sendOnEnter}
+          focusSignal={composerFocus}
+          onManageModels={() => navigate("/settings/providers")}
+        />
+      )}
     />
   );
 
@@ -1888,151 +2152,187 @@ export function App(): JSX.Element {
           controls the OS used to provide are never missing and never fight the
           sidebar or the right pane for the window's top-right corner. */}
       {HAS_CUSTOM_TITLE_BAR ? <TitleBar onSearch={() => setCommandOpen(true)} /> : null}
+      {/* Draws nothing; it is where the draft's debounced write lives, outside the
+          composer's slot so a parked approval does not take it down with it. */}
+      <DraftKeeper />
+      {/*
+       * The three columns are one resizable group: the library owns who is how wide,
+       * the stores own who is open. Splitters are only rendered where there is a
+       * column on both sides to trade width with — a collapsed sidebar or side pane
+       * has no edge to drag, and on a narrow layout the sidebar is a full-screen
+       * drawer with nothing to give back.
+       */}
       <div className="relative flex min-h-0 flex-1">
-        {/* No backdrop: the drawer covers the whole viewport, so there is no dimmed
-            conversation behind it to tap. The button that was here sat under a
-            full-screen panel and could never be reached — the sidebar's own
-            「收起」 is what closes it. */}
-        <Sidebar
-          projects={projects}
-          conversations={conversations}
-          activeId={openingId ?? activeId}
-          running={running}
-          waitingForUser={waitingForUser}
-          onNewChat={(cwd) => void handleNewChat(cwd)}
-          onOpen={(id) => void handleOpen(id)}
-          onArchive={(id) => void handleArchiveSession(id)}
-          onAddProject={() => void handleAddLocalProject()}
-          onAddRemoteProject={handleAddRemoteProject}
-          onRenameSession={(id, title) => void handleRenameSession(id, title)}
-          onRenameProject={(cwd, name) => void handleRenameProject(cwd, name)}
-          onRemoveProject={(cwd) => void handleRemoveProject(cwd)}
-          onRevealProject={(cwd) => {
-            if (blockedRemotely(Ipc.workspaceReveal)) return;
-            void window.fastvibe.workspace.reveal(cwd);
-          }}
-          onReorderProjects={(cwds) => void handleReorderProjects(cwds)}
-          onOpenSettings={() => navigate("/settings/general")}
-          onOpenMarket={() => navigate("/settings/extensions")}
-          onSearch={() => setCommandOpen(true)}
-        />
-        <main className={cn("flex min-w-0 flex-1 flex-col", !paneCollapsed && paneMaximized && "hidden")}>
-          <motion.header
-            initial={false}
-            // Expanded: the collapse control lives on the sidebar, next to the
-            // traffic lights — or in the window's title bar, where there is one.
-            // Collapsed: inset this bar on macOS so the expand control, title and
-            // lights share one vertically centred row.
-            animate={{ paddingLeft: sidebarCollapsed && HAS_TRAFFIC_LIGHTS ? "5.5rem" : "1rem" }}
-            transition={PANEL_COLLAPSE_TRANSITION}
-            className="drag-region flex h-11 items-center justify-between pr-4"
+        <ResizablePanelGroup>
+          {/* No backdrop: the drawer covers the whole viewport, so there is no dimmed
+              conversation behind it to tap. The button that was here sat under a
+              full-screen panel and could never be reached — the sidebar's own
+              「收起」 is what closes it. */}
+          <Sidebar
+            projects={projects}
+            conversations={conversations}
+            activeId={openingId ?? activeId}
+            running={running}
+            waitingForUser={waitingForUser}
+            onNewChat={onSidebarNewChat}
+            onOpen={onSidebarOpen}
+            onFork={onSidebarFork}
+            onArchive={onSidebarArchive}
+            onAddProject={onSidebarAddProject}
+            onAddRemoteProject={onSidebarAddRemoteProject}
+            onRenameSession={onSidebarRenameSession}
+            onRenameProject={onSidebarRenameProject}
+            onRemoveProject={onSidebarRemoveProject}
+            onRevealProject={onSidebarRevealProject}
+            onReorderProjects={onSidebarReorderProjects}
+            onOpenSettings={onSidebarOpenSettings}
+            onOpenMarket={onSidebarOpenMarket}
+            onSearch={onSidebarSearch}
+          />
+          {narrow || sidebarCollapsed ? null : <ResizableHandle />}
+          <ResizablePanel
+            id="conversation"
+            minSize={0}
+            panelRef={conversationPanel}
+            inert={paneMaximized || undefined}
+            aria-hidden={paneMaximized || undefined}
           >
-            <div className="no-drag flex min-w-0 flex-1 items-center gap-1 pr-3">
-              {sidebarCollapsed ? (
-                <div className="flex items-center gap-1">
-                  {/* With a title bar of our own the sidebar's toggle lives up there,
-                      on the same screen as this one; two of them read as a bug. */}
-                  {HAS_CUSTOM_TITLE_BAR ? null : (
+            <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <motion.header
+              initial={false}
+              // Expanded: the collapse control lives on the sidebar, next to the
+              // traffic lights — or in the window's title bar, where there is one.
+              // Collapsed: inset this bar on macOS so the expand control, title and
+              // lights share one vertically centred row.
+              animate={{ paddingLeft: sidebarCollapsed && HAS_TRAFFIC_LIGHTS ? "5.5rem" : "1rem" }}
+              transition={PANEL_COLLAPSE_TRANSITION}
+              className="drag-region flex h-11 items-center justify-between pr-4"
+            >
+              <div className="no-drag flex min-w-0 flex-1 items-center gap-1 pr-3">
+                {sidebarCollapsed ? (
+                  <div className="flex items-center gap-1">
+                    {/* With a title bar of our own the sidebar's toggle lives up there,
+                        on the same screen as this one; two of them read as a bug. */}
+                    {HAS_CUSTOM_TITLE_BAR ? null : (
+                      <IconButton
+                        size="icon-sm"
+                        variant="ghost"
+                        label={t("workspace.expandSidebar")}
+                        shortcut={toggleSidebarShortcut}
+                        onClick={() => setSidebarCollapsed(false)}
+                      >
+                        <HugeiconsIcon strokeWidth={2} icon={PanelLeftOpenIcon} />
+                      </IconButton>
+                    )}
                     <IconButton
                       size="icon-sm"
                       variant="ghost"
-                      label={t("workspace.expandSidebar")}
-                      shortcut={toggleSidebarShortcut}
-                      onClick={() => setSidebarCollapsed(false)}
+                      label={t("workspace.newChat")}
+                      shortcut={newChatShortcut}
+                      onClick={() => void handleNewChat()}
                     >
-                      <HugeiconsIcon strokeWidth={2} icon={PanelLeftOpenIcon} />
+                      <HugeiconsIcon strokeWidth={2} icon={MessageSquarePlusIcon} />
                     </IconButton>
-                  )}
+                  </div>
+                ) : null}
+                {sidebarCollapsed && !isNewSession ? (
+                  <span className="mx-1.5 h-4 w-px shrink-0 bg-border" aria-hidden />
+                ) : null}
+                {isNewSession ? null : (
+                  <>
+                    {activeProject ? (
+                      <>
+                        <span className="max-w-32 shrink-0 truncate text-sm text-muted-foreground" title={activeProject.name}>
+                          {activeProject.name}
+                        </span>
+                        <span className="shrink-0 text-sm text-muted-foreground" aria-hidden>/</span>
+                      </>
+                    ) : null}
+                    <h1 className="min-w-0 truncate text-sm font-semibold text-foreground" title={headerTitle}>
+                      {headerTitle}
+                    </h1>
+                    <GitStatusPopover
+                      key={`${activeId ?? ""}:${active?.cwd ?? ""}`}
+                      cwd={active?.project ? active.cwd : undefined}
+                      conversationId={activeId ?? undefined}
+                      worktree={active?.worktree}
+                      refreshKey={conversationWorking}
+                      canReview={!narrow}
+                    />
+                  </>
+                )}
+              </div>
+              {paneCollapsed ? (
+                <div className="no-drag flex items-center">
                   <IconButton
                     size="icon-sm"
                     variant="ghost"
-                    label={t("workspace.newChat")}
-                    shortcut={newChatShortcut}
-                    onClick={() => void handleNewChat()}
+                    label={t("workspace.expandSidePane")}
+                    shortcut={toggleSidePaneShortcut}
+                    onClick={togglePane}
                   >
-                    <HugeiconsIcon strokeWidth={2} icon={MessageSquarePlusIcon} />
+                    <HugeiconsIcon strokeWidth={2} icon={PanelRightOpenIcon} />
                   </IconButton>
                 </div>
               ) : null}
-              {sidebarCollapsed && !isNewSession ? (
-                <span className="mx-1.5 h-4 w-px shrink-0 bg-border" aria-hidden />
-              ) : null}
-              {isNewSession ? null : (
-                <h1 className="min-w-0 truncate text-sm font-semibold text-foreground" title={headerTitle}>
-                  {headerTitle}
-                </h1>
-              )}
-            </div>
-            {paneCollapsed ? (
-              <div className="no-drag flex items-center">
-                <IconButton
-                  size="icon-sm"
-                  variant="ghost"
-                  label={t("workspace.expandSidePane")}
-                  shortcut={toggleSidePaneShortcut}
-                  onClick={togglePane}
-                >
-                  <HugeiconsIcon strokeWidth={2} icon={PanelRightOpenIcon} />
-                </IconButton>
-              </div>
-            ) : null}
-          </motion.header>
-          {showHero ? (
-            // New conversation: the greeting hero sits above the composer and the
-            // suggestion chips below it, with the group centred like the reference.
-            <div className="flex min-h-0 w-full flex-1 flex-col items-center justify-center gap-6">
-              <NewSessionHero />
-              <ExtensionWidgets className="pb-2" />
-              <GoalPanel className="pb-2" disabled={conversationWorking} />
-              <TodoPanel className="pb-2" />
-              {composerSlot}
-              {/* The suggestion chips write the draft, which a model-less composer refuses to
-                  type — offering them there would fill a box the user cannot send from. */}
-              {hasModel ? <SuggestionChips onSelect={setDraft} /> : null}
-            </div>
-          ) : (
-            <>
-              <div className="relative min-h-0 flex-1">
-                <MessageThread
-                  loading={loading || opening}
-                  loadingReplaces={opening}
-                  onRetry={handleRetry}
-                  onEdit={handleEdit}
-                  showThinking={settings.showThinking}
-                  showTimestamp={settings.showTimestamps}
-                  collapseRuns={settings.collapseRuns}
-                  findOpen={findOpen}
-                  onCloseFind={() => setFindOpen(false)}
-                  findQuery={pendingFind}
-                  onFindQueryConsumed={() => setPendingFind(null)}
-                />
-              </div>
-              {/* Everything under the transcript shares its column: the transcript's
-                  scroller reserves a scrollbar gutter, so this box reserves the same one
-                  (`transcript-gutter`) and both columns land on the same edges. */}
-              <div className="safe-bottom transcript-gutter overflow-hidden">
+            </motion.header>
+            {showHero ? (
+              // New conversation: the greeting hero sits above the composer and the
+              // suggestion chips below it, with the group centred like the reference.
+              <div className="flex min-h-0 w-full flex-1 flex-col items-center justify-center gap-6">
+                <NewSessionHero />
                 <ExtensionWidgets className="pb-2" />
                 <GoalPanel className="pb-2" disabled={conversationWorking} />
                 <TodoPanel className="pb-2" />
                 {composerSlot}
+                {/* The suggestion chips write the draft, which a model-less composer refuses to
+                    type — offering them there would fill a box the user cannot send from. */}
+                {hasModel ? <SuggestionChips onSelect={setDraft} /> : null}
               </div>
-            </>
+            ) : (
+              <>
+                <div className="relative min-h-0 flex-1">
+                  <MessageThread
+                    loading={loading || opening}
+                    loadingReplaces={opening}
+                    onRetry={handleRetry}
+                    onEdit={handleEdit}
+                    onFork={handleForkFromEntry}
+                    showThinking={settings.showThinking}
+                    showTimestamp={settings.showTimestamps}
+                    collapseRuns={settings.collapseRuns}
+                  />
+                </div>
+                {/* Everything under the transcript shares its column: the transcript's
+                    scroller reserves a scrollbar gutter, so this box reserves the same one
+                    (`transcript-gutter`) and both columns land on the same edges. */}
+                <div className="safe-bottom transcript-gutter overflow-hidden">
+                  <ExtensionWidgets className="pb-2" />
+                  <GoalPanel className="pb-2" disabled={conversationWorking} />
+                  <TodoPanel className="pb-2" />
+                  {composerSlot}
+                </div>
+              </>
+            )}
+            </main>
+          </ResizablePanel>
+          {/* Terminal, git diffs, the file tree and the embedded browser all want room a
+              phone does not have — and the browser pane has no webview to drive out here
+              at all. The conversation is what a narrow screen is for. A maximised pane
+              has swallowed the conversation column, so its splitter has nothing to
+              resize against either. */}
+          {narrow || paneCollapsed || paneMaximized ? null : <ResizableHandle />}
+          {narrow ? null : (
+            <SidePane
+              cwd={active?.project ? active.cwd : activeProject?.cwd}
+              project={active?.project}
+              parentId={activeId ?? undefined}
+              canSideChat={Boolean(activeId && hasTranscript)}
+              onNewChat={onSidePaneNewChat}
+              onError={setError}
+            />
           )}
-        </main>
-        {/* Terminal, git diffs, the file tree and the embedded browser all want room a
-            phone does not have — and the browser pane has no webview to drive out here
-            at all. The conversation is what a narrow screen is for. */}
-        {narrow ? null : (
-          <SidePane
-            cwd={activeProject?.cwd}
-            workspace={activeProject}
-            project={active?.project}
-            parentId={activeId ?? undefined}
-            canSideChat={Boolean(activeId && hasTranscript)}
-            onNewChat={() => void handleNewChat()}
-            onError={setError}
-          />
-        )}
+        </ResizablePanelGroup>
       </div>
       {/* Mounted from the first time 设置 is opened and left mounted after, so the
           dialog keeps its own close animation and a section switch costs nothing. */}
@@ -2065,9 +2365,9 @@ export function App(): JSX.Element {
         projects={projects}
         activeId={activeId}
         onOpenChange={setCommandOpen}
-        onSelectChat={(id, findQuery) => void handleOpen(id, "user", findQuery)}
+        onSelectChat={(id) => void handleOpen(id, "user")}
         onNewChat={() => void handleNewChat()}
-        onAddProject={() => void handleAddLocalProject()}
+        onAddProject={() => void handleAddProject()}
         onOpenSettings={(section) => navigate(`/settings/${section}`)}
       />
       <PermissionDialog
@@ -2119,7 +2419,7 @@ export function App(): JSX.Element {
                 void (async () => {
                   if (owner) {
                     try {
-                      const result = await restoreCheckpoint(owner);
+                      const result = await window.fastvibe.engine.restoreCheckpoint(owner);
                       // A file the turn created but could not be put back (binary, too
                       // large, or a path git will not hand over) must be said out loud —
                       // silently "reverting" and then retrying on a half-restored tree is

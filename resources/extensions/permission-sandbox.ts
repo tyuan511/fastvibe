@@ -39,13 +39,148 @@ function modeDescription(mode: PermissionMode): string {
 }
 
 /** Tools with no side effects; they are never worth a confirmation. */
-const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls", "todo"]);
+const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls", "todo", "worktree_list"]);
 
 /** Built-in network lookup; `ask` confirms it, `smart` does not. */
 const NETWORK_TOOLS = new Set(["web_search"]);
 
 /** Built-in tools this extension knows how to classify. */
-const KNOWN_TOOLS = new Set(["read", "write", "edit", "bash", "powershell", "grep", "find", "ls"]);
+const KNOWN_TOOLS = new Set([
+  "read",
+  "write",
+  "edit",
+  "bash",
+  "powershell",
+  "grep",
+  "find",
+  "ls",
+  "worktree_create",
+  "worktree_bind",
+  "worktree_unbind",
+]);
+
+/**
+ * Cua-driven desktop control, split by whether the call changes anything.
+ *
+ * Observation is classified as neither network nor external, so it confirms in no mode —
+ * a loop that has to ask before every screenshot is a loop nobody will use. Note that
+ * this does mean a full-desktop capture reaches the model without a prompt.
+ *
+ * The action tools are marked `external`, because "outside the workspace" is exactly
+ * what they are: they reach applications and documents the conversation never named, on
+ * a desktop the user may be using at the same time. That places them under `smart` and
+ * `ask` alongside a write outside the project — and, like every other tool, outside
+ * `full`, which promises no prompts at all.
+ */
+const COMPUTER_OBSERVE_TOOLS = new Set([
+  "computer_screenshot",
+  "computer_list_apps",
+  "computer_list_windows",
+  "computer_window_state",
+  "computer_clipboard_read",
+]);
+
+const COMPUTER_ACTION_TOOLS = new Set([
+  "computer_click",
+  "computer_type",
+  "computer_key",
+  "computer_hotkey",
+  "computer_scroll",
+  "computer_menu",
+  "computer_clipboard_write",
+  "computer_batch",
+]);
+
+/** The step actions inside a batch that change something, named as the bridge names them. */
+const BATCH_ACTING_STEPS = new Set(["click", "type", "key", "hotkey", "scroll", "menu", "clipboard_write"]);
+
+/**
+ * A batch is confirmed once, for the sequence as a whole.
+ *
+ * Asking per step would defeat the reason the batch exists — the point is to stop
+ * charging a round trip and a dialog to each click — but a single "run 6 actions?" is
+ * not consent either. So the prompt lists what the sequence will do, in order, and the
+ * user agrees to that list rather than to a count.
+ */
+function describeBatch(input: unknown): string | undefined {
+  const steps = input && typeof input === "object" ? (input as Record<string, unknown>).steps : undefined;
+  if (!Array.isArray(steps) || steps.length === 0) return undefined;
+  const acting = steps.filter(
+    (step) => step && typeof step === "object" && BATCH_ACTING_STEPS.has(String((step as Record<string, unknown>).action)),
+  );
+  // Observation-only sequences change nothing; they are not what the dialog is for.
+  if (acting.length === 0) return undefined;
+  const parts = steps.map((step) => {
+    const record = (step ?? {}) as Record<string, unknown>;
+    const action = String(record.action ?? "?");
+    const text = typeof record.text === "string" ? record.text : "";
+    if (action === "type" && text) return T(`输入「${firstLine(text, 24)}」`, `type "${firstLine(text, 24)}"`);
+    if (action === "key" && typeof record.key === "string") return T(`按 ${record.key}`, `press ${record.key}`);
+    if (action === "menu" && Array.isArray(record.path)) return T(`菜单 ${record.path.join(" › ")}`, `menu ${record.path.join(" › ")}`);
+    return action;
+  });
+  // Long sequences are summarised rather than truncated mid-list: a dialog the user
+  // cannot read in one glance is one they will approve without reading.
+  const shown = parts.slice(0, 6).join(" → ");
+  return parts.length > 6
+    ? T(`${shown} …共 ${parts.length} 步`, `${shown} … ${parts.length} steps in total`)
+    : shown;
+}
+
+/**
+ * 始终允许的应用, as 设置 › 电脑操控 wrote them.
+ *
+ * Passed through the environment for the same reason the permission mode is: this file
+ * is loaded from outside the bundle and cannot read FastVibe's settings store. Main
+ * re-exports it whenever the list changes, and it is re-read per call so an app added
+ * mid-run takes effect without restarting the session.
+ */
+const ALLOWED_APPS_ENV = "FASTVIBE_COMPUTER_ALLOWED_APPS";
+
+function allowedApps(): string[] {
+  const raw = process.env[ALLOWED_APPS_ENV];
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Which application a `computer_*` call targets, asked of the bridge in Main.
+ *
+ * The tool arguments carry a pid, and a pid means nothing to a user reading a dialog.
+ * The bridge is in this same process and already caches the mapping, so resolving it
+ * here costs a map lookup and turns 「操作 pid 4711」 into 「操作 Microsoft Excel」.
+ */
+async function computerApp(input: unknown): Promise<{ name: string; bundleId?: string } | undefined> {
+  const pid = input && typeof input === "object" ? (input as Record<string, unknown>).pid : undefined;
+  if (typeof pid !== "number") return undefined;
+  const resolve = (globalThis as Record<string, unknown>).__fastvibeComputerAppForPid;
+  if (typeof resolve !== "function") return undefined;
+  try {
+    return (await (resolve as (pid: number) => Promise<{ name: string; bundleId?: string } | undefined>)(pid)) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** What the confirmation dialog shows: the intended effect, not the tool name. */
+function describeComputer(toolName: string, input: unknown): string {
+  const text = inputString(input, "text");
+  const key = inputString(input, "key");
+  if (toolName === "computer_type" && text) return T(`输入「${firstLine(text, 80)}」`, `Type "${firstLine(text, 80)}"`);
+  if (toolName === "computer_clipboard_write" && text) return T("写入剪贴板", "Write to the clipboard");
+  if (toolName === "computer_key" && key) return T(`按下 ${key}`, `Press ${key}`);
+  if (toolName === "computer_menu") {
+    const path = input && typeof input === "object" ? (input as Record<string, unknown>).path : undefined;
+    if (Array.isArray(path)) return T(`菜单 ${path.join(" › ")}`, `Menu ${path.join(" › ")}`);
+  }
+  if (toolName === "computer_batch") return describeBatch(input) ?? toolName;
+  return toolName;
+}
 
 /** Shell activity that reaches the network ("使用互联网"). */
 const NETWORK_RULES: RegExp[] = [
@@ -205,6 +340,41 @@ function assess(toolName: string, input: unknown, cwd: string): Assessment | nul
     };
   }
 
+  if (COMPUTER_OBSERVE_TOOLS.has(toolName)) {
+    return {
+      action: T("查看电脑屏幕", "Read the screen"),
+      detail: toolName,
+      network: false,
+      external: false,
+      risks: [],
+      opaque: false,
+    };
+  }
+
+  // A batch that only looks at things belongs with the observation tools, not with the
+  // ones that change something.
+  if (toolName === "computer_batch" && !describeBatch(input)) {
+    return {
+      action: T("查看电脑屏幕", "Read the screen"),
+      detail: toolName,
+      network: false,
+      external: false,
+      risks: [],
+      opaque: false,
+    };
+  }
+
+  if (COMPUTER_ACTION_TOOLS.has(toolName)) {
+    return {
+      action: T("操作电脑", "Control the computer"),
+      detail: describeComputer(toolName, input),
+      network: false,
+      external: true,
+      risks: [T("操作其他应用", "Control another application")],
+      opaque: false,
+    };
+  }
+
   if (KNOWN_TOOLS.has(toolName)) return null;
 
   // Custom / MCP tool: scan the serialized arguments so an obviously destructive
@@ -256,6 +426,22 @@ export default function permissionSandbox(pi: ExtensionAPI): void {
 
     const assessment = assess(event.toolName, event.input, ctx.cwd);
     if (!assessment || !shouldConfirm(mode, assessment)) return undefined;
+
+    if (COMPUTER_ACTION_TOOLS.has(event.toolName)) {
+      const target = await computerApp(event.input);
+      // 始终允许的应用: the user has already said yes to this application, for good.
+      // Matched on bundle id first because a display name is not an identity — two
+      // applications can share one, and a rename must not silently widen the list.
+      const allowed = allowedApps();
+      if (target && (allowed.includes(target.bundleId ?? " ") || allowed.includes(target.name))) {
+        return undefined;
+      }
+      // Name the application in the dialog. 「在 Microsoft Excel 中点击」 is a question
+      // the user can answer; 「computer_click」 is not.
+      if (target) {
+        assessment.detail = T(`在 ${target.name} 中${assessment.detail}`, `${assessment.detail} in ${target.name}`);
+      }
+    }
 
     const reasons = reasonsFor(assessment);
     if (!ctx.hasUI) {

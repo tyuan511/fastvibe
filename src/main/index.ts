@@ -1,7 +1,7 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, Notification, protocol, session, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, protocol, screen, session, shell } from "electron";
 import type { WebContents } from "electron";
 import { statSync } from "node:fs";
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -11,7 +11,15 @@ import { dispatch, handle, handlerChannels, type CallerContext } from "./ipc/reg
 import { registerRemoteIpc, restoreRemoteServer, stopRemoteServer } from "./remote";
 import { readFilePreview } from "./engine/file-preview";
 import { readWorkspaceDir } from "./engine/workspace-fs";
+import {
+  classifyCommitFile,
+  countPatchLines,
+  parseCommitPorcelain,
+  type CommitFileMaterial,
+  type CommitStatusPath,
+} from "./engine/commit-message";
 import { loadModelsDev, type ModelsDevStats } from "./engine/models-dev";
+import { startModelsDevRefresh } from "./engine/models-dev-refresh";
 import { updateModelsDevSnapshot } from "./engine/models-dev-update";
 import {
   applyNativeTheme,
@@ -24,8 +32,10 @@ import {
   writeAppSettings,
 } from "./engine/app-settings";
 import { configureFastVibeUserData, getFastVibePaths, type FastVibePaths } from "./engine/paths";
+import { readWindowState, writeWindowState } from "./engine/window-state";
+import { presentNotification, readNotificationSettings } from "./engine/notifications";
 import { readAgentConfig } from "./engine/runtime-config";
-import { isNotificationPreference, type NotificationPreference } from "@shared/types";
+import { notificationEnabled, notificationForEvent, type NotificationRequest } from "@shared/notifications";
 import { applyLanguages } from "./engine/ai-language";
 import { uiText } from "./engine/ui-text";
 import { applyShellPath } from "./engine/shell-path";
@@ -49,7 +59,16 @@ import { loadOrCreateServerIdentity } from "./server/identity";
 import { APP_CAPABILITIES } from "@shared/app-protocol";
 import { wireElectronAppTransport } from "./transport/electron";
 import type { RemoteHostProfile, RemoteHostConnectionState } from "@shared/remote-host";
-import { attachBrowserRenderer, installBrowserGlobal, respondBrowserRequest } from "./pi/browser-bridge";
+import { attachBrowserRenderer, guardGuestPopups, installBrowserGlobal, respondBrowserRequest } from "./pi/browser-bridge";
+import {
+  computerPermissions,
+  installComputerGlobal,
+  listComputerApps,
+  openComputerSettings,
+  requestComputerPermissions,
+  startComputerDrag,
+} from "./pi/cua-bridge";
+import { cancelGrantFlow, grantFlowState, startGrantFlow } from "./pi/computer-grant-flow";
 import { importBrowserProfile, listBrowserProfiles } from "./engine/browser-profiles";
 import type { ImportSourceId, ProviderModel, UsageRange } from "@shared/types";
 import type { GitBranch, GitDiffSource, GitStatus } from "@shared/ipc";
@@ -67,6 +86,10 @@ applyShellPath();
 // Privileged schemes must be declared before the app is ready.
 registerFileIconScheme();
 
+// A guest's popup must never become a second window — see `guardGuestPopups`. Registered
+// here, before any window exists, so no guest can be created ahead of it.
+guardGuestPopups();
+
 // File logger before anything that can throw: engine construction, IPC, windows.
 initLogger();
 
@@ -77,6 +100,15 @@ if (app.isPackaged) process.env.JITI_FS_CACHE = "false";
 
 const engine = new PiProcessManager();
 const terminals = new TerminalSessions();
+/**
+ * Which client each shell belongs to, by broadcast identity.
+ *
+ * A terminal pane starts its own shell (`terminalStart` returns a fresh id) and is the
+ * only receiver that can draw it, so its output is delivered to that one client rather
+ * than pushed to every window and every remote session.
+ */
+const terminalOwners = new Map<string, string>();
+
 const sshManager = new SshManager({
   paths: getFastVibePaths(),
   onState: (state) => broadcast(Ipc.sshState, state),
@@ -185,13 +217,21 @@ function applyAppIcon(): void {
  * history and its own minimise/maximise/close (`components/layout/title-bar.tsx`).
  */
 const IS_MAC = process.platform === "darwin";
+const DEFAULT_WINDOW_SIZE = { width: 1280, height: 840 } as const;
+const MIN_WINDOW_SIZE = { width: 920, height: 640 } as const;
+const WINDOW_STATE_SAVE_DELAY_MS = 250;
 
 function createWindow(): void {
+  const paths = getFastVibePaths();
+  const restored = readWindowState(paths.windowStateFile);
+  const workArea = screen.getPrimaryDisplay().workAreaSize;
+  const width = clampWindowDimension(restored?.width ?? DEFAULT_WINDOW_SIZE.width, MIN_WINDOW_SIZE.width, workArea.width);
+  const height = clampWindowDimension(restored?.height ?? DEFAULT_WINDOW_SIZE.height, MIN_WINDOW_SIZE.height, workArea.height);
   const window = new BrowserWindow({
-    width: 1280,
-    height: 840,
-    minWidth: 920,
-    minHeight: 640,
+    width,
+    height,
+    minWidth: MIN_WINDOW_SIZE.width,
+    minHeight: MIN_WINDOW_SIZE.height,
     title: "FastVibe",
     icon: resolveAppIcon(),
     backgroundColor: windowBackgroundColor(),
@@ -211,17 +251,55 @@ function createWindow(): void {
       },
   });
 
-  window.on("ready-to-show", () => window.show());
+  let stateSaveTimer: ReturnType<typeof setTimeout> | undefined;
+  const persistWindowState = (): void => {
+    if (window.isDestroyed()) return;
+    const bounds = window.getNormalBounds();
+    try {
+      writeWindowState(paths.windowStateFile, {
+        width: bounds.width,
+        height: bounds.height,
+        maximized: window.isMaximized(),
+      });
+    } catch (error) {
+      log.warn(`window state save failed: ${String(error)}`);
+    }
+  };
+  const scheduleWindowStateSave = (): void => {
+    if (stateSaveTimer) clearTimeout(stateSaveTimer);
+    stateSaveTimer = setTimeout(() => {
+      stateSaveTimer = undefined;
+      persistWindowState();
+    }, WINDOW_STATE_SAVE_DELAY_MS);
+  };
+
+  window.on("ready-to-show", () => {
+    if (restored?.maximized) window.maximize();
+    window.show();
+  });
+  window.on("resize", scheduleWindowStateSave);
+  window.on("close", () => {
+    if (stateSaveTimer) clearTimeout(stateSaveTimer);
+    stateSaveTimer = undefined;
+    persistWindowState();
+  });
   // The title bar's maximise control swaps its glyph on this; Main owns the truth
   // because the OS can also maximise the window (snap, double-click, a WM key).
   const sendWindowState = (): void => {
     if (window.isDestroyed()) return;
     window.webContents.send(Ipc.windowState, { maximized: window.isMaximized() });
   };
-  window.on("maximize", sendWindowState);
-  window.on("unmaximize", sendWindowState);
-  // Window events are subscribed through its App Protocol session in the transport.
+  const handleMaximizedStateChange = (): void => {
+    sendWindowState();
+    scheduleWindowStateSave();
+  };
+  window.on("maximize", handleMaximizedStateChange);
+  window.on("unmaximize", handleMaximizedStateChange);
+  // Window events are subscribed through its App Protocol session in the transport, so
+  // there is no per-window `subscribe({...})` here — the hub does not know what a
+  // window is, and the transport's session is what hands it pushes.
   window.on("closed", () => {
+    if (stateSaveTimer) clearTimeout(stateSaveTimer);
     windows.delete(window);
     if (mainWindow === window) mainWindow = windows.values().next().value ?? null;
   });
@@ -245,6 +323,10 @@ function createWindow(): void {
   mainWindow = window;
   windows.add(window);
   log.info("window opened");
+}
+
+function clampWindowDimension(value: number, minimum: number, available: number): number {
+  return Math.min(Math.max(value, minimum), Math.max(minimum, available));
 }
 
 /**
@@ -308,6 +390,35 @@ function registerSshIpc(): void {
   });
 }
 
+/**
+ * One in-flight refresh, shared by the hourly timer and 设置 → 关于.
+ *
+ * A click during the background fetch waits for that same download rather than
+ * starting a second one. The snapshot is applied to the running engine only when
+ * the catalog itself moved — an unchanged hour must not rebind every open session —
+ * and a cold engine is left alone: its next start reads the file either way.
+ */
+let modelsDevInflight: Promise<AppModelsDevInfo> | null = null;
+
+function refreshModelsDev(): Promise<AppModelsDevInfo> {
+  if (modelsDevInflight) return modelsDevInflight;
+  modelsDevInflight = (async () => {
+    const result = await updateModelsDevSnapshot();
+    if (shutdownPhase === "running" && result.changed) {
+      await engine.reloadModelMetadata().catch((error: unknown) => {
+        log.warn(`models.dev reload failed: ${String(error)}`);
+      });
+    }
+    const info = modelsDevInfo(result);
+    if (shutdownPhase === "running") broadcast(Ipc.modelsDevChanged, info);
+    log.info(`models.dev refreshed models=${info.models} changed=${result.changed}`);
+    return info;
+  })().finally(() => {
+    modelsDevInflight = null;
+  });
+  return modelsDevInflight;
+}
+
 function registerIpc(): void {
   handle(Ipc.browserResponse, (payload: { id: string; ok: boolean; result?: unknown; error?: string }) => {
     respondBrowserRequest(payload);
@@ -319,6 +430,22 @@ function registerIpc(): void {
     if (!allowed) throw new Error(uiText("浏览器配置文件未通过校验，请重新打开导入列表", "Browser profile failed validation. Open the list again."));
     return importBrowserProfile(allowed, (cookie) => session.fromPartition("persist:fastvibe-browser").cookies.set(cookie));
   });
+  handle(Ipc.computerPermissions, () => computerPermissions());
+  handle(Ipc.computerRequestPermissions, () => requestComputerPermissions());
+  handle(Ipc.computerOpenSettings, () => openComputerSettings());
+  handle(Ipc.computerListApps, () => listComputerApps());
+  handle(Ipc.computerStartDrag, (_payload, ctx) => {
+    // A drag belongs to the window the gesture started in — in practice the floating
+    // grant panel, which is a window of its own. A remote caller has no `webContents`
+    // to drag from, which is why the policy denies this method outright.
+    const contents = ctx.window?.webContents;
+    if (!contents) throw new Error(uiText("需要在桌面端窗口中拖拽", "Dragging requires a desktop window"));
+    startComputerDrag(contents);
+  });
+  handle(Ipc.computerStartGrantFlow, () => startGrantFlow());
+  handle(Ipc.computerCancelGrantFlow, () => cancelGrantFlow());
+  handle(Ipc.computerGetGrantFlow, () => grantFlowState());
+
   handle(Ipc.engineGetStatus, () => engine.status);
 
   handle(Ipc.engineStart, async (payload?: { cwd?: string }) => {
@@ -394,6 +521,17 @@ function registerIpc(): void {
       await engine.replaceSteering(payload.items, payload.conversationId);
     },
   );
+
+  handle(Ipc.engineQueueAdd, async (payload: Parameters<typeof engine.enqueueMessage>[0]) => {
+    return engine.enqueueMessage(payload);
+  });
+  handle(Ipc.engineQueueCancel, async (payload: { id: string }) => engine.cancelQueued(payload.id));
+  handle(Ipc.engineQueueRecall, async (payload: { id: string }) => engine.recallQueued(payload.id));
+  handle(Ipc.engineQueueSendNow, async (payload: { id: string }) => engine.sendQueuedNow(payload.id));
+  handle(Ipc.engineQueueReorder, async (payload: { conversationId: string; ids: string[] }) =>
+    engine.reorderQueued(payload.conversationId, payload.ids));
+  handle(Ipc.engineQueueResume, async (payload: { conversationId: string }) =>
+    engine.resumeQueue(payload.conversationId));
 
   handle(Ipc.engineCompact, async (payload?: { customInstructions?: string; conversationId?: string }) => {
     return engine.compact(payload?.customInstructions, payload?.conversationId);
@@ -504,8 +642,16 @@ function registerIpc(): void {
   handle(Ipc.engineBranch, async (payload: { entryId: string; conversationId?: string }) => {
     return engine.branch(payload.entryId, payload.conversationId);
   });
+  handle(Ipc.engineFork, async (payload?: { entryId?: string; conversationId?: string }) => {
+    return engine.fork(payload?.entryId, payload?.conversationId);
+  });
   handle(Ipc.engineGetMessages, async (payload?: { conversationId?: string }) => {
     return engine.loadMessages(payload?.conversationId);
+  });
+  handle(Ipc.engineGetMessagesSince, async (payload?: { anchorEntryId?: string; conversationId?: string }) => {
+    const anchor = payload?.anchorEntryId;
+    if (!anchor) return { mode: "full", messages: await engine.loadMessages(payload?.conversationId) };
+    return engine.loadMessagesSince(anchor, payload?.conversationId);
   });
   handle(Ipc.engineGetSnapshot, async (payload?: { conversationId?: string }) => {
     return engine.getSnapshot(payload?.conversationId);
@@ -552,6 +698,18 @@ function registerIpc(): void {
       return engine.fetchModels(payload.baseUrl, payload.apiKey, payload.api);
     },
   );
+  handle(Ipc.providersProbeGateway, async (payload: { baseUrl: string }) => {
+    return engine.probeGateway(payload.baseUrl);
+  });
+  handle(Ipc.providersGatewayBalance, async (payload: { id: string; force?: boolean }) => {
+    return engine.getGatewayBalance(payload.id, payload.force === true);
+  });
+  handle(Ipc.providersGatewayCredentials, async (payload: { id: string; accessToken: string; userId: string }) => {
+    await engine.setGatewayCredentials(payload.id, { accessToken: payload.accessToken, userId: payload.userId });
+  });
+  handle(Ipc.providersIdentifyGateway, async (payload: { id: string }) => {
+    return engine.identifyGateway(payload.id);
+  });
   handle(
     Ipc.providersSaveFastVibe,
     async (payload: { apiKey: string; models: ProviderModel[] }) => {
@@ -560,9 +718,9 @@ function registerIpc(): void {
   );
   handle(
     Ipc.providersAdd,
-    async (payload: { name: string; baseUrl: string; apiKey: string; api?: import("@shared/types").ProviderApi; models: ProviderModel[] }) => {
+    async (payload: { name: string; baseUrl: string; apiKey: string; api?: import("@shared/types").ProviderApi; gateway?: import("@shared/types").GatewayKind; models: ProviderModel[] }) => {
       return engine.addProvider(
-        { name: payload.name, baseUrl: payload.baseUrl, apiKey: payload.apiKey, api: payload.api },
+        { name: payload.name, baseUrl: payload.baseUrl, apiKey: payload.apiKey, api: payload.api, gateway: payload.gateway },
         payload.models,
       );
     },
@@ -632,8 +790,23 @@ function registerIpc(): void {
   handle(Ipc.conversationsRecordPrompt, (payload: { id: string; text: string }) => {
     return engine.recordPrompt(payload.id, payload.text);
   });
+  handle(Ipc.conversationsRestorePrompt, (payload: { id: string; expectedTitle: string; expectedPreview?: string; title: string; preview?: string }) => {
+    return engine.restorePromptPreview(payload);
+  });
   handle(Ipc.conversationsSetProject, async (payload: { id: string; project: string | null }) => {
     return engine.setConversationProject(payload.id, payload.project);
+  });
+  handle(Ipc.conversationsCreateWorktree, async (payload: { id: string; path?: string; branch?: string; label?: string }) => {
+    return engine.createConversationWorktree(payload.id, payload);
+  });
+  handle(Ipc.conversationsBindWorktree, async (payload: { id: string; path: string }) => {
+    return engine.bindConversationWorktree(payload.id, payload.path);
+  });
+  handle(Ipc.conversationsUnbindWorktree, async (payload: { id: string; remove?: boolean }) => {
+    return engine.unbindConversationWorktree(payload.id, payload);
+  });
+  handle(Ipc.conversationsListWorktrees, async (payload: { id: string }) => {
+    return engine.listConversationWorktrees(payload.id);
   });
   handle(Ipc.projectsAdd, async () => {
     const result = await dialog.showOpenDialog({
@@ -683,7 +856,7 @@ function registerIpc(): void {
   });
   handle(Ipc.workspaceGitStatus, async (payload: { cwd: string }): Promise<GitStatus> => {
     const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
-    if (!cwd) return { cwd, isRepository: false, changed: 0, staged: 0, files: [] };
+    if (!cwd) return { cwd, isRepository: false, changed: 0, staged: 0, additions: 0, deletions: 0, files: [] };
     return readGitStatus(cwd);
   });
   handle(Ipc.workspaceOpenTerminal, async (payload: { cwd: string }): Promise<void> => {
@@ -740,6 +913,15 @@ function registerIpc(): void {
     await execFileAsync("git", ["-C", cwd, "commit", "-m", message], { timeout: 30000, maxBuffer: 256 * 1024 });
     return readGitStatus(cwd);
   });
+  handle(Ipc.workspaceGitGenerateCommitMessage, async (payload: { cwd: string; conversationId?: string }): Promise<string> => {
+    const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
+    const conversationId = typeof payload.conversationId === "string" ? payload.conversationId : undefined;
+    if (!cwd) throw new Error(uiText("项目路径无效", "Invalid project path"));
+    const statusFiles = await readCommitStatusFiles(cwd);
+    if (statusFiles.length === 0) throw new Error(uiText("没有要提交的改动", "No changes to commit"));
+    const files = await collectCommitMessageMaterial(cwd, statusFiles);
+    return engine.generateCommitMessage(files, conversationId);
+  });
   handle(Ipc.workspaceGitDiff, async (payload: { cwd: string; path?: string; source?: GitDiffSource }): Promise<string> => {
     const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
     if (!cwd) return "";
@@ -776,13 +958,20 @@ function registerIpc(): void {
     });
     return readGitStatus(cwd);
   });
-  handle(Ipc.workspaceTerminalStart, (payload: { cwd?: string; cols?: number; rows?: number }) => {
+  handle(Ipc.workspaceTerminalStart, (payload: { cwd?: string; cols?: number; rows?: number }, ctx) => {
     const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
     // A terminal is not tied to a project: with no workspace bound it opens in home.
-    return terminals.start(cwd || homedir(), { cols: payload.cols, rows: payload.rows });
+    const session = terminals.start(cwd || homedir(), { cols: payload.cols, rows: payload.rows });
+    // Each pane starts its own shell and is the only client that can draw it, so its
+    // output is addressed back to whoever asked for it (see `terminals.onData`).
+    if (ctx.origin) terminalOwners.set(session.id, ctx.origin);
+    return session;
   });
-  handle(Ipc.workspaceTerminalWrite, (payload: { id: string; data: string }) => {
+  handle(Ipc.workspaceTerminalWrite, (payload: { id: string; data: string }, ctx) => {
     if (!payload.id || typeof payload.data !== "string") return;
+    // Typing into a terminal claims it: a client that reattached to a shell it did not
+    // start (a reloaded window) is where its output belongs from now on.
+    if (ctx.origin) terminalOwners.set(payload.id, ctx.origin);
     terminals.write(payload.id, payload.data);
   });
   handle(Ipc.workspaceTerminalResize, (payload: { id: string; cols: number; rows: number }) => {
@@ -790,7 +979,9 @@ function registerIpc(): void {
     terminals.resize(payload.id, payload.cols, payload.rows);
   });
   handle(Ipc.workspaceTerminalKill, (payload: { id: string }) => {
-    if (payload.id) terminals.kill(payload.id);
+    if (!payload.id) return;
+    terminalOwners.delete(payload.id);
+    terminals.kill(payload.id);
   });
   handle(
     Ipc.enginePromptConversation,
@@ -830,19 +1021,28 @@ function registerIpc(): void {
   });
   /**
    * Pull the current models.dev catalog (Settings → 关于) and apply it to the running
-   * engine. A refresh that cannot reach the registry has still updated the snapshot,
-   * which is durable and read on the next start, so it is reported as a success rather
-   * than as a failure the user would have to undo.
+   * engine. The hourly refresh calls the same function. A refresh that cannot reach the
+   * registry has still updated the snapshot, which is durable and read on the next
+   * start, so it is reported as a success rather than as a failure the user would have
+   * to undo.
    */
-  handle(Ipc.modelsDevUpdate, async () => {
-    const stats = await updateModelsDevSnapshot();
-    await engine.reloadModelMetadata().catch(() => undefined);
-    return modelsDevInfo(stats);
-  });
+  handle(Ipc.modelsDevUpdate, () => refreshModelsDev());
   handle(Ipc.statsUsage, (payload?: { range?: UsageRange }) => {
     return collectUsageStats(getFastVibePaths(), payload?.range ?? "30d");
   });
   handle(Ipc.windowNew, () => {
+    // FastVibe is a single-window app: every push, and every method that acts on "the
+    // active conversation" without saying whose, is addressed to one client by design.
+    // Rather than answer a second window with a second, subtly different view of the
+    // same state, the request is folded into the window that already exists — which is
+    // what the shortcut is really asking for.
+    for (const window of windows) {
+      if (window.isDestroyed()) continue;
+      if (window.isMinimized()) window.restore();
+      window.show();
+      window.focus();
+      return;
+    }
     createWindow();
   });
 
@@ -955,9 +1155,41 @@ function wireElectronTransport(): void {
   });
 }
 
+type ShutdownPhase = "running" | "cleaning" | "exiting";
+
+const SHUTDOWN_TIMEOUT_MS = 5_000;
+const EXIT_FALLBACK_MS = 1_000;
+let shutdownPhase: ShutdownPhase = "running";
+let stopModelsDevRefresh: (() => void) | undefined;
+let shutdownDeadline: NodeJS.Timeout | undefined;
+let devParentWatch: NodeJS.Timeout | undefined;
+
+// FastVibe is a single-window app, and one *process*: a second launch — the Dock icon, or
+// opening the .app again — must bring the window that already exists forward rather than
+// start a second copy holding its own engine over the same catalog and transcripts. The
+// lock is taken at module scope, before anything is ready, because the process that loses
+// it has to be gone before it opens a window.
+//
+// `electron-vite dev` relaunches the app on every main-process edit, and it terminates
+// the old child asynchronously — so the new one can ask for the lock while the previous
+// is still releasing it, which would leave `pnpm dev` showing an app with no window and
+// no error. `ELECTRON_RENDERER_URL` is set by that dev server and by nothing else, and
+// this is exactly the case where `false` is the *wrong* answer: in development a second
+// window is the point, because it is how the reload is visible.
+const singleInstance = Boolean(process.env.ELECTRON_RENDERER_URL) || app.requestSingleInstanceLock();
+
 app.whenReady().then(async () => {
+  if (!singleInstance) return;
+  if (shutdownPhase !== "running") return;
   log.info("app ready");
   installBrowserGlobal();
+  // Registers the bridge global and an at-quit driver shutdown. The native library is
+  // still not loaded here — `cua-bridge` imports it on the first `computer_*` call, so a
+  // user who never touches the feature pays nothing for it.
+  installComputerGlobal();
+  // The grant panel is a window, so it is torn down where the other windows are, not
+  // inside the bridge — which would make the bridge and the flow import each other.
+  app.once("will-quit", () => cancelGrantFlow());
   applyAppIcon();
   const startupSettings = readAppSettings(getFastVibePaths());
   applyNativeTheme(startupSettings);
@@ -973,7 +1205,10 @@ app.whenReady().then(async () => {
   // registered on the next line — landed in the table after the loop had already run,
   // so they were reachable by nothing.
   registerIpc();
-  registerUpdater(() => windows);
+  registerUpdater(
+    () => windows,
+    () => createWindow(),
+  );
   registerRemoteIpc();
   registerSshIpc();
   createAppServer({
@@ -1030,41 +1265,20 @@ app.whenReady().then(async () => {
     broadcast(Ipc.providersOAuthEvent, payload);
   });
   terminals.onData((event) => {
-    broadcast(Ipc.workspaceTerminalData, event);
+    // Addressed to the pane that opened this shell. A build log used to reach every
+    // window and every remote client, which on a phone over the tunnel meant megabytes
+    // of output for a terminal it had never opened. An unknown owner (a shell started
+    // before this map existed) still goes to everyone, so nothing can go missing.
+    const owner = terminalOwners.get(event.id);
+    broadcast(Ipc.workspaceTerminalData, event, owner ? { only: owner } : undefined);
+    if (event.exited) terminalOwners.delete(event.id);
   });
 
   engine.onEvent((event) => {
-    // Only two event types can raise a 系统通知. Everything else — every streamed
-    // token among them — must fall straight through to the fan-out below: reading
-    // the preference (and resolving the paths) ahead of this gate put a settings
-    // parse and six `mkdirSync` calls on the main process's event loop for every
-    // delta of every reply.
-    const notifiable =
-      (event.type === "conversation_activity" && event.status === "completed") ||
-      (event.type === "extension_ui_request" && isBlockingPrompt(event));
-    if (notifiable && Notification.isSupported()) {
-      const unfocused = ![...windows].some((window) => !window.isDestroyed() && window.isFocused());
-      // 系统通知 is a preference with three values (设置 → 通用), read per event so a
-      // change lands without a restart. `done` and `approval` are separate choices
-      // because the two notifications answer different questions: a finished run is
-      // something to come back to, a parked approval is something that *cannot* proceed
-      // without the user.
-      const notifications = unfocused ? readNotificationPreference(getFastVibePaths()) : undefined;
-      if (event.type === "conversation_activity" && notifications === "done") {
-        new Notification({
-          title: String(event.title ?? uiText("会话", "Chat")),
-          body: uiText("任务已完成，可以回来查看结果。", "The task is done. Come back to see the result."),
-        }).show();
-      } else if (event.type === "extension_ui_request" && notifications === "approval") {
-        // A blocking prompt parks the tool until it is answered, and its panel is only
-        // drawn for the conversation on screen — so without this notice a background
-        // chat could sit waiting with nothing anywhere to say so.
-        new Notification({
-          title: uiText("有一个会话在等你", "A chat is waiting for you"),
-          body: uiText("切换到这个会话继续处理。", "Switch to that conversation to continue."),
-        }).show();
-      }
-    }
+    // Raise a desktop notice when a background chat needs the user, or when an update
+    // lands. Everything else — every streamed token among them — must fall straight
+    // through to the fan-out below.
+    if (NOTIFIABLE_EVENTS.has(String(event.type))) raiseNotification(event);
     if (event.type === "extension_ui_request") {
       void engine.handleExtensionUi(event);
     }
@@ -1083,11 +1297,20 @@ app.whenReady().then(async () => {
   void gateway.restoreBoundServers().then((failures) => {
     for (const failure of failures) log.warn(`remote startup connection failed server=${failure.serverInstanceId}: ${failure.error}`);
   }).catch((error: unknown) => log.warn(`remote startup restore failed: ${String(error)}`));
+  // Limits and prices move faster than releases. Refresh hourly; a snapshot already
+  // within the hour waits out the rest of it instead of fetching at every launch.
+  stopModelsDevRefresh = startModelsDevRefresh({
+    generatedAt: () => loadModelsDev().stats.generatedAt,
+    refresh: () => refreshModelsDev().then(() => undefined),
+    onError: (error) => {
+      log.warn(`models.dev refresh failed: ${error instanceof Error ? error.message : String(error)}`);
+    },
+  });
   // Brought back only if it was running before, and never without a password.
   void restoreRemoteServer();
 
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (shutdownPhase === "running" && BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
 
@@ -1095,20 +1318,143 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-let stopping = false;
+/**
+ * A second launch is not a second window: the lock is what makes this one process, and
+ * the event is the arriving second process asking to be let in.
+ */
+app.on("second-instance", () => {
+  if (!singleInstance || shutdownPhase !== "running") return;
+  for (const window of windows) {
+    if (window.isDestroyed()) continue;
+    if (window.isMinimized()) window.restore();
+    window.show();
+    window.focus();
+    return;
+  }
+  createWindow();
+});
+
+/**
+ * End the process after one quit request, but give sessions and child processes a
+ * short bounded window to shut down first. A second Cmd+Q must not be the mechanism
+ * that escapes a cleanup promise which never settles.
+ */
+function requestShutdown(reason: string): void {
+  if (shutdownPhase !== "running") return;
+  shutdownPhase = "cleaning";
+  log.info(`app quitting reason=${reason}`);
+
+  if (devParentWatch) clearInterval(devParentWatch);
+  devParentWatch = undefined;
+  stopModelsDevRefresh?.();
+  stopModelsDevRefresh = undefined;
+  // Establish the deadline before calling any cleanup owner. A synchronous failure
+  // must not strand the process in the cleaning phase either.
+  shutdownDeadline = setTimeout(() => finishShutdown(true), SHUTDOWN_TIMEOUT_MS);
+
+  // These are synchronous and should happen even if one of the asynchronous owners
+  // below never settles.
+  try {
+    terminals.dispose();
+  } catch (error) {
+    log.warn(`terminal cleanup failed: ${String(error)}`);
+  }
+  try {
+    clearRunningConversations();
+  } catch (error) {
+    log.warn(`keep-awake cleanup failed: ${String(error)}`);
+  }
+  try {
+    engine.flush();
+  } catch (error) {
+    log.warn(`engine flush failed: ${String(error)}`);
+  }
+
+  void Promise.allSettled([engine.stop(), stopRemoteServer(), remoteConnections.closeAll()]).then((results) => {
+    for (const result of results) {
+      if (result.status === "rejected") log.warn(`shutdown cleanup failed: ${String(result.reason)}`);
+    }
+    try {
+      engine.flush();
+    } catch (error) {
+      log.warn(`final engine flush failed: ${String(error)}`);
+    }
+    finishShutdown(false);
+  });
+}
+
+function finishShutdown(timedOut: boolean): void {
+  if (shutdownPhase !== "cleaning") return;
+  shutdownPhase = "exiting";
+  if (shutdownDeadline) clearTimeout(shutdownDeadline);
+  shutdownDeadline = undefined;
+  if (timedOut) log.warn(`shutdown cleanup timed out after ${SHUTDOWN_TIMEOUT_MS}ms`);
+
+  // Keep this timer referenced: it is the guarantee that one quit request ends the
+  // process even when Electron or the updater does not complete its own exit path.
+  const fallback = setTimeout(() => app.exit(0), EXIT_FALLBACK_MS);
+
+  // On Windows/Linux quitAndInstall owns the normal exit. Keep a longer bound there,
+  // since an updater handoff must not leave a Dock/taskbar process forever.
+  let installing = false;
+  try {
+    installing = applyPendingInstall();
+  } catch (error) {
+    log.warn(`update handoff failed: ${String(error)}`);
+  }
+  if (installing) {
+    clearTimeout(fallback);
+    setTimeout(() => app.exit(0), 10_000);
+  } else {
+    app.quit();
+  }
+}
 
 app.on("before-quit", (event) => {
-  if (stopping) return;
+  if (shutdownPhase === "exiting") return;
   event.preventDefault();
-  stopping = true;
-  log.info("app quitting");
-  void Promise.allSettled([stopRemoteServer(), remoteConnections.closeAll(), engine.stop()]).finally(() => {
-    terminals.dispose();
-    clearRunningConversations();
-    engine.flush();
-    if (!applyPendingInstall()) app.quit();
-  });
+  requestShutdown("app request");
 });
+
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+  process.on(signal, () => requestShutdown(signal));
+}
+
+// electron-vite launches Electron as a child. Some IDE stop buttons terminate only
+// that development host, leaving its child alive and visible in the Dock. A packaged
+// app must not care who launched it, so this parent-liveness rule is development-only.
+if (!app.isPackaged && process.env.ELECTRON_RENDERER_URL) {
+  const parentPid = process.ppid;
+  let launcherPid: number | undefined;
+  if (process.platform !== "win32" && parentPid > 1) {
+    try {
+      const value = execFileSync("ps", ["-o", "ppid=", "-p", String(parentPid)], { encoding: "utf8" }).trim();
+      const parsed = Number(value);
+      if (Number.isSafeInteger(parsed) && parsed > 1) launcherPid = parsed;
+    } catch {
+      // Direct-parent tracking still covers electron-vite itself.
+    }
+  }
+  const alive = (pid: number): boolean => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      return error instanceof Error && "code" in error && error.code === "EPERM";
+    }
+  };
+  devParentWatch = setInterval(() => {
+    if (
+      parentPid <= 1 ||
+      process.ppid !== parentPid ||
+      !alive(parentPid) ||
+      (launcherPid !== undefined && !alive(launcherPid))
+    ) {
+      requestShutdown("development host ended");
+    }
+  }, 500);
+  devParentWatch.unref();
+}
 
 /**
  * `git status --short --branch` heads with `## main...origin/main [ahead 1]`,
@@ -1122,34 +1468,54 @@ function parseBranchHeader(header: string): string | undefined {
 }
 
 /**
- * Which desktop notifications the user asked for, from `settings.json`.
+ * The two engine events a desktop notice can come from.
  *
- * Read per event rather than cached: the switch in 设置 → 通用 writes the file, and a
- * notification is rare enough that one small read costs nothing. An absent or
- * malformed value is `done`, which is what every install had before the preference
- * existed.
+ * A set rather than a call to `notificationForEvent`, because this is the hot path — it
+ * runs once per streamed token of every reply.
  */
-function readNotificationPreference(paths: FastVibePaths): NotificationPreference {
-  const value = readAppSettings(paths).notifications;
-  return isNotificationPreference(value) ? value : "done";
-}
+const NOTIFIABLE_EVENTS = new Set(["conversation_activity", "extension_ui_request"]);
 
 /**
- * Whether an extension UI request is one that parks the run until a human answers.
+ * Raise one notice, if the user asked for that scenario and no window is in front.
  *
- * `notify` / `setStatus` / `setWidget` are one-way and must not raise a notification;
- * only the dialog methods block. `editor` is a dialog too, and it is answered through
- * the modal — the user still has to act, so it counts.
+ * The wording lives here rather than in `notificationForEvent`: that function is a pure
+ * scenario decision the tests load without a process environment, while every user-facing
+ * string in Main goes through `uiText` so it follows 界面语言.
+ *
+ * The window check comes first on purpose. It is the cheap part of the gate and it is true
+ * for every streamed token of a reply the user is watching, so nothing expensive —
+ * resolving the paths behind `settings.json`, let alone parsing it — happens until the
+ * app is genuinely in the background and an event worth noticing has actually arrived.
  */
-function isBlockingPrompt(event: Record<string, unknown>): boolean {
-  const method = event.method;
-  return (
-    method === "confirm" ||
-    method === "select" ||
-    method === "input" ||
-    method === "editor" ||
-    method === "questions"
-  );
+function raiseNotification(event: Record<string, unknown>): void {
+  const focused = [...windows].some((window) => !window.isDestroyed() && window.isFocused());
+  if (focused) return;
+  const notice = notificationForEvent(event);
+  if (!notice) return;
+  if (!notificationEnabled(readNotificationSettings(), notice.setting)) return;
+  // A blocking prompt parks the tool until it is answered, and its panel is only drawn for
+  // the conversation on screen — so without this notice a background chat could sit
+  // waiting with nothing anywhere to say so.
+  const request: NotificationRequest =
+    notice.setting === "notifyApproval"
+      ? {
+          ...notice,
+          title: uiText("有一个会话在等你", "A chat is waiting for you"),
+          body: uiText("切换到这个会话继续处理。", "Switch to that conversation to continue."),
+        }
+      : {
+          ...notice,
+          title: notice.title ?? uiText("会话", "Chat"),
+          body:
+            notice.setting === "notifyError"
+              ? uiText("任务出错了，可以回来看看。", "The task failed. Come back to see what happened.")
+              : uiText("任务已完成，可以回来查看结果。", "The task is done. Come back to see the result."),
+        };
+  presentNotification(request, {
+    windows: () => windows,
+    createWindow: () => createWindow(),
+    openConversation: (id) => engine.openConversation(id),
+  });
 }
 
 /**
@@ -1164,8 +1530,122 @@ function broadcastSettings(origin: string | undefined, settings: Record<string, 
   broadcast(Ipc.settingsChanged, settings, { except: origin });
 }
 
+async function readCommitStatusFiles(cwd: string): Promise<CommitStatusPath[]> {
+  const { stdout } = await execFileAsync(
+    "git",
+    ["--no-optional-locks", "-C", cwd, "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+    { timeout: 10_000, maxBuffer: 4 * 1024 * 1024 },
+  );
+  return parseCommitPorcelain(stdout);
+}
+
+async function collectCommitMessageMaterial(
+  cwd: string,
+  files: CommitStatusPath[],
+): Promise<CommitFileMaterial[]> {
+  const results: CommitFileMaterial[] = new Array(files.length);
+  // Read bodies from at most 128 files, rotating across top-level directories so one
+  // generated subtree cannot consume the whole collection budget. Every other path
+  // still reaches the planner as metadata.
+  const queues = new Map<string, number[]>();
+  files.forEach((file, index) => {
+    const kind = classifyCommitFile(file.path);
+    if (file.index === "?" || file.worktree === "?" || kind === "lock" || kind === "generated") return;
+    const slash = file.path.indexOf("/");
+    const area = slash > 0 ? file.path.slice(0, slash) : "root";
+    const queue = queues.get(area) ?? [];
+    queue.push(index);
+    queues.set(area, queue);
+  });
+  const bodyIndexes = new Set<number>();
+  while (bodyIndexes.size < 128) {
+    let added = false;
+    for (const queue of queues.values()) {
+      const index = queue.shift();
+      if (index === undefined) continue;
+      bodyIndexes.add(index);
+      added = true;
+      if (bodyIndexes.size >= 128) break;
+    }
+    if (!added) break;
+  }
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(4, files.length) }, async () => {
+    for (;;) {
+      const index = cursor;
+      cursor += 1;
+      const file = files[index];
+      if (!file) return;
+      const status = `${file.index}${file.worktree}`;
+      const initialKind = classifyCommitFile(file.path);
+      if (!bodyIndexes.has(index)) {
+        results[index] = {
+          path: file.displayPath,
+          status,
+          kind: initialKind,
+          omitted: file.index === "?" || file.worktree === "?"
+            ? "untracked: metadata only"
+            : initialKind === "lock" || initialKind === "generated"
+              ? undefined
+              : "content collection limit",
+        };
+        continue;
+      }
+      // Porcelain paths are repository-root relative even when the bound workspace is
+      // a subdirectory. `top` keeps the literal path anchored to that same root.
+      const pathspec = `:(top,literal)${file.path}`;
+      let patch = "";
+      let omitted: string | undefined;
+      try {
+        patch = (await execFileAsync(
+          "git",
+          ["-C", cwd, "diff", "HEAD", "--no-ext-diff", "--no-textconv", "--unified=3", "--", pathspec],
+          { timeout: 5000, maxBuffer: 128 * 1024 },
+        )).stdout;
+      } catch (error) {
+        const partial = error && typeof error === "object" && "stdout" in error && typeof error.stdout === "string"
+          ? error.stdout
+          : "";
+        if (partial) {
+          patch = partial;
+          omitted = "diff truncated";
+        } else {
+          const [staged, working] = await Promise.all([
+            execFileAsync("git", ["-C", cwd, "diff", "--cached", "--no-ext-diff", "--no-textconv", "--unified=3", "--", pathspec], { timeout: 5000, maxBuffer: 64 * 1024 }).catch(() => ({ stdout: "" })),
+            execFileAsync("git", ["-C", cwd, "diff", "--no-ext-diff", "--no-textconv", "--unified=3", "--", pathspec], { timeout: 5000, maxBuffer: 64 * 1024 }).catch(() => ({ stdout: "" })),
+          ]);
+          patch = `${staged.stdout}\n${working.stdout}`.trim();
+          if (!patch) omitted = "diff unavailable";
+        }
+      }
+      const stats = countPatchLines(patch);
+      results[index] = {
+        path: file.displayPath,
+        status,
+        patch,
+        ...stats,
+        kind: classifyCommitFile(file.path, patch),
+        omitted,
+      };
+    }
+  });
+  await Promise.all(workers);
+  return results.filter(Boolean);
+}
+
+function parseGitNumstat(output: string): { additions: number; deletions: number } {
+  let additions = 0;
+  let deletions = 0;
+  for (const line of output.split(/\r?\n/)) {
+    const [added, removed] = line.split("\t", 3);
+    if (/^\d+$/.test(added ?? "")) additions += Number(added);
+    if (/^\d+$/.test(removed ?? "")) deletions += Number(removed);
+  }
+  return { additions, deletions };
+}
+
 async function readGitStatus(cwd: string): Promise<GitStatus> {
-  const empty: GitStatus = { cwd, isRepository: false, changed: 0, staged: 0, files: [] };
+  const empty: GitStatus = { cwd, isRepository: false, changed: 0, staged: 0, additions: 0, deletions: 0, files: [] };
   try {
     const { stdout } = await execFileAsync("git", ["-C", cwd, "status", "--short", "--branch"], { timeout: 5000, maxBuffer: 256 * 1024 });
     const lines = stdout.split(/\r?\n/).filter(Boolean);
@@ -1183,7 +1663,24 @@ async function readGitStatus(cwd: string): Promise<GitStatus> {
       if (line[0] !== " " && line[0] !== "?") staged += 1;
       files.push({ index: line[0] === "?" ? "?" : line[0], worktree: line[1] ?? " ", path: line.slice(3).trim() });
     }
-    return { cwd, isRepository: true, branch, changed, staged, ahead, behind, files };
+    let additions = 0;
+    let deletions = 0;
+    try {
+      const diff = await execFileAsync("git", ["-C", cwd, "diff", "--numstat", "HEAD", "--"], { timeout: 5000, maxBuffer: 256 * 1024 });
+      ({ additions, deletions } = parseGitNumstat(diff.stdout));
+    } catch {
+      // An unborn branch has no HEAD. Its staged and unstaged layers are still useful,
+      // and summing them is the closest line-level status available before first commit.
+      const [stagedDiff, workingDiff] = await Promise.all([
+        execFileAsync("git", ["-C", cwd, "diff", "--numstat", "--cached", "--"], { timeout: 5000, maxBuffer: 256 * 1024 }).catch(() => ({ stdout: "" })),
+        execFileAsync("git", ["-C", cwd, "diff", "--numstat", "--"], { timeout: 5000, maxBuffer: 256 * 1024 }).catch(() => ({ stdout: "" })),
+      ]);
+      const stagedStats = parseGitNumstat(stagedDiff.stdout);
+      const workingStats = parseGitNumstat(workingDiff.stdout);
+      additions = stagedStats.additions + workingStats.additions;
+      deletions = stagedStats.deletions + workingStats.deletions;
+    }
+    return { cwd, isRepository: true, branch, changed, staged, additions, deletions, ahead, behind, files };
   } catch {
     return empty;
   }

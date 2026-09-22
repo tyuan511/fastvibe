@@ -120,8 +120,8 @@ function reminder(todos: Todo[]): string | null {
   if (open.length === 0) return null;
   const lines = todos.map((item) => `- [${mark(item.status)}] ${item.content}`);
   return [
-    "## Current todos",
-    "Unfinished items remain. Update the todo list as you go (send the complete list each time). Keep exactly one item in_progress.",
+    "## Current todos (from earlier in this session)",
+    "These items are still unfinished. If the user's current request continues that work, keep updating the list as you go (send the complete list each time, exactly one item in_progress). If it is a different request, ignore this list — do not resume it just because it is unfinished — and replace it with a new one when the new work warrants a checklist.",
     ...lines,
   ].join("\n");
 }

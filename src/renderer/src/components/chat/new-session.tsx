@@ -4,7 +4,6 @@ import { i18n } from "@/lib/i18n";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Bug01Icon, Compass01Icon, MagicWand02Icon, ShieldCheckIcon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
-import { F_MARK_FILL } from "@/lib/f-mark";
 
 /**
  * Task templates offered under the composer on a fresh conversation. Kept here
@@ -45,38 +44,12 @@ export function greetingForHour(hour: number): string {
   return i18n.t("chat:newSession.night") as string;
 }
 
-/**
- * Faint brand watermark. The mark is rendered as a thin outline and tinted with
- * the theme foreground so it stays subtle in both light and dark.
- */
-function FWatermark(): JSX.Element {
-  return (
-    <div className="pointer-events-none absolute bottom-full left-1/2 h-[28rem] w-[28rem] -translate-x-1/2 overflow-hidden">
-    <svg
-      viewBox="0 0 1095 1095"
-      aria-hidden="true"
-      className="absolute left-0 top-0 size-[28rem] translate-y-1/2 text-foreground opacity-[0.10] dark:opacity-[0.12] [mask-image:linear-gradient(to_bottom,black_0%,black_22%,transparent_50%)] [-webkit-mask-image:linear-gradient(to_bottom,black_0%,black_22%,transparent_50%)]"
-    >
-      <path
-        d={F_MARK_FILL}
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2.5"
-        strokeLinejoin="round"
-        vectorEffect="non-scaling-stroke"
-      />
-    </svg>
-    </div>
-  );
-}
-
-/** Watermark + greeting, shown above the composer on a brand-new conversation. */
+/** Greeting shown above the composer on a brand-new conversation. */
 export function NewSessionHero(): JSX.Element {
   useTranslation("chat");
   return (
-    <div className="relative flex flex-col items-center">
-      <FWatermark />
-      <h2 className="relative z-10 text-2xl font-semibold tracking-tight">
+    <div className="flex flex-col items-center">
+      <h2 className="text-2xl font-semibold tracking-tight">
         {greetingForHour(new Date().getHours())}
       </h2>
     </div>

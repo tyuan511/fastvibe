@@ -1,6 +1,7 @@
 import { Ipc } from "@shared/ipc";
 import type {
   ChatMessage,
+  TranscriptTail,
   ConversationDeleteResult,
   ConversationOpenResult,
   ConversationSearchHit,
@@ -20,6 +21,8 @@ import type {
   OAuthEventPayload,
   OAuthLoginResult,
   OpenAIAccountQuota,
+  GatewayBalanceResult,
+  GatewayKind,
   CcSwitchScan,
   SlashCommand,
   FilePreview,
@@ -43,6 +46,10 @@ import type {
   BrowserImportResult,
   BrowserProfileInfo,
   BrowserRequest,
+  ChatAttachment,
+  ConversationQueueState,
+  QueueBehavior,
+  QueuedPromptPreview,
 } from "@shared/types";
 import type { RemoteHostProfile, RemoteHostConnectionState } from "@shared/remote-host";
 import type {
@@ -50,6 +57,7 @@ import type {
   GitBranch,
   GitDiffSource,
   GitStatus,
+  GitWorktree,
   TerminalDataEvent,
   WindowChromeState,
   TerminalSessionInfo,
@@ -136,6 +144,25 @@ export function createFastVibeApi(t: ApiTransport) {
         items: Array<{ text: string; images?: PromptImage[] }>,
         conversationId?: string,
       ): Promise<void> => t.invoke(Ipc.engineReplaceSteering, { items, conversationId }),
+      queueAdd: (payload: {
+        conversationId: string;
+        text: string;
+        message: string;
+        behavior: QueueBehavior;
+        attachments?: ChatAttachment[];
+        images?: PromptImage[];
+        preview?: QueuedPromptPreview;
+      }): Promise<ConversationQueueState> => t.invoke(Ipc.engineQueueAdd, payload),
+      queueCancel: (id: string): Promise<ConversationQueueState | null> =>
+        t.invoke(Ipc.engineQueueCancel, { id }),
+      queueRecall: (id: string): Promise<ConversationQueueState | null> =>
+        t.invoke(Ipc.engineQueueRecall, { id }),
+      queueSendNow: (id: string): Promise<ConversationQueueState | null> =>
+        t.invoke(Ipc.engineQueueSendNow, { id }),
+      queueReorder: (conversationId: string, ids: string[]): Promise<ConversationQueueState> =>
+        t.invoke(Ipc.engineQueueReorder, { conversationId, ids }),
+      queueResume: (conversationId: string): Promise<ConversationQueueState> =>
+        t.invoke(Ipc.engineQueueResume, { conversationId }),
       compact: (customInstructions?: string, conversationId?: string): Promise<EngineSessionState> =>
         t.invoke(Ipc.engineCompact, { customInstructions, conversationId }),
       getCommands: (conversationId?: string): Promise<SlashCommand[]> =>
@@ -197,8 +224,17 @@ export function createFastVibeApi(t: ApiTransport) {
         t.invoke(Ipc.engineSetAutoCompact, { enabled, conversationId }),
       branch: (entryId: string, conversationId?: string): Promise<ChatMessage[]> =>
         t.invoke(Ipc.engineBranch, { entryId, conversationId }),
+      fork: (entryId?: string, conversationId?: string): Promise<ConversationOpenResult> =>
+        t.invoke(Ipc.engineFork, { entryId, conversationId }),
       getMessages: (conversationId?: string): Promise<ChatMessage[]> =>
         t.invoke(Ipc.engineGetMessages, { conversationId }),
+      /**
+       * The transcript from `anchorEntryId` onward. The reply says whether the anchor
+       * was still on the branch (`tail`) or the whole transcript had to be sent
+       * (`full`, after an edit/retry/fork rewound past it).
+       */
+      getMessagesSince: (anchorEntryId: string, conversationId?: string): Promise<TranscriptTail> =>
+        t.invoke(Ipc.engineGetMessagesSince, { anchorEntryId, conversationId }),
       /**
        * Transcript plus the turn in flight, taken at one instant. What a client reads to
        * rebuild a conversation exactly — including one whose run is still going.
@@ -243,6 +279,8 @@ export function createFastVibeApi(t: ApiTransport) {
         baseUrl: string;
         apiKey: string;
         api?: import("@shared/types").ProviderApi;
+        /** What `probeGateway` reported, so the new entry starts identified. */
+        gateway?: GatewayKind;
         models: ProviderModel[];
       }): Promise<ProviderConfig[]> => t.invoke(Ipc.providersAdd, payload),
       update: (payload: {
@@ -259,6 +297,24 @@ export function createFastVibeApi(t: ApiTransport) {
         t.invoke(Ipc.providersRefresh, { id }),
       quota: (id: "openai" | "openai-codex", force = false): Promise<OpenAIAccountQuota> =>
         t.invoke(Ipc.providersQuota, { id, force }),
+      /**
+       * Which relay software answers at a Base URL. Undefined means "not identified",
+       * which is the ordinary answer for any OpenAI-compatible gateway.
+       */
+      probeGateway: (baseUrl: string): Promise<GatewayKind | undefined> =>
+        t.invoke(Ipc.providersProbeGateway, { baseUrl }),
+      /** The 余额 a custom provider's own panel reports for the stored key. */
+      gatewayBalance: (id: string, force = false): Promise<GatewayBalanceResult> =>
+        t.invoke(Ipc.providersGatewayBalance, { id, force }),
+      /**
+       * The panel credential a new-api balance needs. Write-only: an empty token clears
+       * it, and nothing ever reads it back across this bridge.
+       */
+      setGatewayCredentials: (payload: { id: string; accessToken: string; userId: string }): Promise<void> =>
+        t.invoke(Ipc.providersGatewayCredentials, payload),
+      /** Probe a stored provider's endpoint, remember what it is, and report the verdict. */
+      identifyGateway: (id: string): Promise<GatewayKind | undefined> =>
+        t.invoke(Ipc.providersIdentifyGateway, { id }),
       scanCcSwitch: (): Promise<CcSwitchScan> =>
         t.invoke(Ipc.providersCcSwitchScan),
       importCcSwitch: (ids: string[]): Promise<ProviderConfig[]> =>
@@ -287,8 +343,18 @@ export function createFastVibeApi(t: ApiTransport) {
         t.invoke(Ipc.conversationsDelete, { id }),
       recordPrompt: (id: string, text: string): Promise<WorkspaceSnapshot> =>
         t.invoke(Ipc.conversationsRecordPrompt, { id, text }),
+      restorePrompt: (payload: { id: string; expectedTitle: string; expectedPreview?: string; title: string; preview?: string }): Promise<WorkspaceSnapshot> =>
+        t.invoke(Ipc.conversationsRestorePrompt, payload),
       setProject: (id: string, project: string | null): Promise<WorkspaceSnapshot> =>
         t.invoke(Ipc.conversationsSetProject, { id, project }),
+      createWorktree: (id: string, options?: { path?: string; branch?: string; label?: string }): Promise<WorkspaceSnapshot> =>
+        t.invoke(Ipc.conversationsCreateWorktree, { id, ...options }),
+      bindWorktree: (id: string, path: string): Promise<WorkspaceSnapshot> =>
+        t.invoke(Ipc.conversationsBindWorktree, { id, path }),
+      unbindWorktree: (id: string, options?: { remove?: boolean }): Promise<WorkspaceSnapshot> =>
+        t.invoke(Ipc.conversationsUnbindWorktree, { id, ...options }),
+      listWorktrees: (id: string): Promise<GitWorktree[]> =>
+        t.invoke(Ipc.conversationsListWorktrees, { id }),
       createSide: (payload: { project?: string; parentId?: string; title?: string }): Promise<ConversationOpenResult> =>
         t.invoke(Ipc.conversationsCreateSide, payload),
       search: (query: string): Promise<ConversationSearchHit[]> =>
@@ -331,6 +397,8 @@ export function createFastVibeApi(t: ApiTransport) {
       gitCreateBranch: (cwd: string, branch: string): Promise<GitStatus> => t.invoke(Ipc.workspaceGitCreateBranch, { cwd, branch }),
       gitStage: (cwd: string, paths?: string[], all?: boolean): Promise<GitStatus> => t.invoke(Ipc.workspaceGitStage, { cwd, paths, all }),
       gitCommit: (cwd: string, message: string): Promise<GitStatus> => t.invoke(Ipc.workspaceGitCommit, { cwd, message }),
+      gitGenerateCommitMessage: (cwd: string, conversationId?: string): Promise<string> =>
+        t.invoke(Ipc.workspaceGitGenerateCommitMessage, { cwd, conversationId }),
       gitDiff: (cwd: string, path?: string, source?: GitDiffSource): Promise<string> =>
         t.invoke(Ipc.workspaceGitDiff, { cwd, path, source }),
       gitUnstage: (cwd: string, paths: string[]): Promise<GitStatus> =>
@@ -362,6 +430,8 @@ export function createFastVibeApi(t: ApiTransport) {
       exportLogs: (): Promise<string | undefined> => t.invoke(Ipc.appExportLogs),
       updateModelsDev: (): Promise<import("@shared/ipc").AppModelsDevInfo> =>
         t.invoke(Ipc.modelsDevUpdate),
+      onModelsDev: (listener: (info: import("@shared/ipc").AppModelsDevInfo) => void): (() => void) =>
+        t.subscribe(Ipc.modelsDevChanged, listener),
       newWindow: (): Promise<void> => t.invoke(Ipc.windowNew),
     },
     /** The hand-drawn title bar's window controls (Windows / Linux only). */
@@ -432,6 +502,19 @@ export function createFastVibeApi(t: ApiTransport) {
     },
     stats: {
       usage: (range: UsageRange): Promise<UsageStats> => t.invoke(Ipc.statsUsage, { range }),
+    },
+    computer: {
+      permissions: (): Promise<import("@shared/types").ComputerPermissionStatus> => t.invoke(Ipc.computerPermissions),
+      requestPermissions: (): Promise<import("@shared/types").ComputerPermissionStatus> =>
+        t.invoke(Ipc.computerRequestPermissions),
+      openSettings: (): Promise<void> => t.invoke(Ipc.computerOpenSettings),
+      listApps: (): Promise<import("@shared/types").ComputerAppInfo[]> => t.invoke(Ipc.computerListApps),
+      startDrag: (): Promise<void> => t.invoke(Ipc.computerStartDrag),
+      startGrantFlow: (): Promise<import("@shared/types").GrantFlowState> => t.invoke(Ipc.computerStartGrantFlow),
+      cancelGrantFlow: (): Promise<void> => t.invoke(Ipc.computerCancelGrantFlow),
+      getGrantFlow: (): Promise<import("@shared/types").GrantFlowState> => t.invoke(Ipc.computerGetGrantFlow),
+      onGrantFlowState: (listener: (state: import("@shared/types").GrantFlowState) => void): (() => void) =>
+        t.subscribe(Ipc.computerGrantFlowState, listener),
     },
     browser: {
       listProfiles: (): Promise<BrowserProfileInfo[]> => t.invoke(Ipc.browserListProfiles),

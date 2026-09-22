@@ -11,25 +11,19 @@ import {
   type ThemeMode,
 } from "@/lib/themes";
 import { isPermissionMode } from "@/lib/permission-modes";
-import { isNotificationPreference, type NotificationPreference } from "@shared/types";
+import { NOTIFICATION_SETTINGS } from "@shared/types";
 import { detectSystemLanguage, isUiLanguage, type UiLanguage } from "@/lib/language";
 import { sanitizeShortcutOverrides, type ShortcutOverrides } from "@/lib/shortcuts";
 
 const KEY = "fastvibe.settings";
 
 export type AppSettings = {
-  /**
-   * The mode the sandbox enforces right now; the composer's chip is its view. Written
-   * by the composer, and re-seeded from `defaultPermissionMode` by Main on every launch
-   * (`applyStartupPermissionMode`) so an escalated session does not outlive the app.
-   */
+  /** The mode the sandbox enforces now. Every picker persists it as the startup mode too. */
   permissionMode: PermissionMode;
-  /**
-   * 默认权限模式: what a launch starts on (设置 → 通用 → 默认权限模式). Separate from the
-   * live mode so escalating one run to 完全访问 in the composer cannot silently carry
-   * over to the next launch.
-   */
+  /** 默认权限模式: kept in sync with `permissionMode` by every permission picker. */
   defaultPermissionMode: PermissionMode;
+  /** Whether the machine-wide risk warning for 完全访问 has already been accepted. */
+  fullAccessConfirmed: boolean;
   thinkingLevel: ThinkingLevel | "auto";
   queueBehavior: QueueBehavior;
   autoCompact: boolean;
@@ -48,14 +42,21 @@ export type AppSettings = {
   /** When true, the packaged app checks for updates after launch. */
   autoCheckUpdates: boolean;
   /**
-   * 系统通知: which desktop notifications FastVibe may raise.
+   * 系统通知: one switch per scenario (设置 → 通用). Flat keys, because `settings.json`
+   * is a flat bag Main reads one preference at a time, and **on** when absent — the
+   * user has to turn a notice off, never on.
    *
-   * `done` is the run-finished notice (any conversation), `approval` the one for a
-   * chat that parked on a tool approval while the window was unfocused, `off`
-   * nothing. A single switch could not express the difference: someone who works in
-   * a terminal all day wants to know a chat needs them but not that a run finished.
+   * `notifyDone` is an ordinary finish, `notifyError` a run that settled on an error,
+   * `notifyApproval` a background chat parked on a question, `notifyUpdate` a downloaded
+   * update. They are separate because they answer different questions: someone who works
+   * in a terminal all day wants to know a chat *cannot* proceed without them and may not
+   * care that a run finished, and a failed run is worth saying out loud even when an
+   * ordinary one is not.
    */
-  notifications: NotificationPreference;
+  notifyDone: boolean;
+  notifyError: boolean;
+  notifyApproval: boolean;
+  notifyUpdate: boolean;
   /**
    * Provider/model a brand-new conversation starts on. Persisted like every other
    * preference and read by the engine when it creates a session — the SDK's own
@@ -75,6 +76,8 @@ export type AppSettings = {
    * which one the user typed in. Independent of `uiLanguage` on purpose.
    */
   aiLanguage: UiLanguage;
+  /** Extra instructions appended to the default system prompt on every turn. */
+  customSystemPrompt: string;
   /** Whether the active theme follows the OS or is pinned light/dark. */
   themeMode: ThemeMode;
   /** Theme used while in light mode. */
@@ -119,6 +122,22 @@ export type AppSettings = {
    * is not asked for again in the next (see `lib/permission-rules.ts`).
    */
   permissionAlways?: string[];
+  /**
+   * 电脑操控 (设置 → 电脑操控). Mirrors `ComputerSettings`; kept as flat keys because
+   * `settings.json` is a flat bag that Main reads one preference at a time.
+   */
+  computerEnabled: boolean;
+  computerClipboard: boolean;
+  computerPreferBackground: boolean;
+  /**
+   * Apps whose windows skip the tool confirmation.
+   *
+   * `id` is the identity that is matched — a bundle id where the platform has one,
+   * otherwise the executable name. `name` rides along purely so the list can be read by
+   * a human; matching never looks at it, because a display name is not an identity and
+   * two applications can share one.
+   */
+  computerAllowedApps?: Array<{ id: string; name: string }>;
   sidebarOrder?: Record<string, string[]>;
   /**
    * Shortcut overrides keyed by command id. Absent keys keep the catalog default;
@@ -130,6 +149,7 @@ export type AppSettings = {
 const DEFAULTS: AppSettings = {
   permissionMode: "smart",
   defaultPermissionMode: "smart",
+  fullAccessConfirmed: false,
   thinkingLevel: "auto",
   queueBehavior: "followUp",
   autoCompact: true,
@@ -142,12 +162,23 @@ const DEFAULTS: AppSettings = {
   sendOnEnter: true,
   uiLanguage: "zh",
   aiLanguage: "zh",
+  customSystemPrompt: "",
   themeMode: DEFAULT_THEME_MODE,
   lightTheme: DEFAULT_LIGHT_THEME,
   darkTheme: DEFAULT_DARK_THEME,
   uiFontSize: DEFAULT_UI_FONT_SIZE,
   autoCheckUpdates: true,
-  notifications: "done",
+  // 系统通知 (设置 → 通用): every scenario on, so a fresh install is not a silent one.
+  notifyDone: true,
+  notifyError: true,
+  notifyApproval: true,
+  notifyUpdate: true,
+  // Off until the user turns it on. Driving the desktop is not something an app should
+  // start doing because it was installed — unlike every other default here, the cost of
+  // guessing wrong is an action taken in someone else's application.
+  computerEnabled: false,
+  computerClipboard: false,
+  computerPreferBackground: true,
 };
 
 /** Drop malformed persisted theme values so a stale id can never crash the app. */
@@ -155,8 +186,10 @@ function sanitize(parsed: Partial<AppSettings>): Partial<AppSettings> {
   const next = { ...parsed };
   if (!isPermissionMode(next.permissionMode)) delete next.permissionMode;
   if (!isPermissionMode(next.defaultPermissionMode)) delete next.defaultPermissionMode;
+  if (typeof next.fullAccessConfirmed !== "boolean") delete next.fullAccessConfirmed;
   if (!isUiLanguage(next.uiLanguage)) delete next.uiLanguage;
   if (!isUiLanguage(next.aiLanguage)) delete next.aiLanguage;
+  if (typeof next.customSystemPrompt !== "string") delete next.customSystemPrompt;
   if (!isThemeMode(next.themeMode)) delete next.themeMode;
   if (!isThemeId(next.lightTheme)) delete next.lightTheme;
   if (!isThemeId(next.darkTheme)) delete next.darkTheme;
@@ -168,9 +201,19 @@ function sanitize(parsed: Partial<AppSettings>): Partial<AppSettings> {
   if (!isFiniteNumber(next.sidePaneWidth)) delete next.sidePaneWidth;
   if (!isIdList(next.archivedConversations)) delete next.archivedConversations;
   if (!isIdList(next.permissionAlways)) delete next.permissionAlways;
+  if (typeof next.computerEnabled !== "boolean") delete next.computerEnabled;
+  if (typeof next.computerClipboard !== "boolean") delete next.computerClipboard;
+  if (typeof next.computerPreferBackground !== "boolean") delete next.computerPreferBackground;
+  if (!isAllowedAppList(next.computerAllowedApps)) delete next.computerAllowedApps;
   if (!isIdListMap(next.sidebarOrder)) delete next.sidebarOrder;
   if (typeof next.autoCheckUpdates !== "boolean") delete next.autoCheckUpdates;
-  if (!isNotificationPreference(next.notifications)) delete next.notifications;
+  // A malformed switch drops, which reads back as the default — on. `notifications` is
+  // the three-valued key this replaced, and a stale one is dropped rather than migrated:
+  // every one of its values is the new default's superset.
+  for (const key of NOTIFICATION_SETTINGS) {
+    if (typeof next[key] !== "boolean") delete next[key];
+  }
+  delete (next as Record<string, unknown>).notifications;
   if (typeof next.keepAwake !== "boolean") delete next.keepAwake;
   if (typeof next.collapseRuns !== "boolean") delete next.collapseRuns;
   const shortcuts = sanitizeShortcutOverrides(next.shortcuts);
@@ -196,6 +239,20 @@ function isFontSize(value: unknown): value is number {
  */
 function isThinkingLevel(value: unknown): value is ThinkingLevel | "auto" {
   return value === "auto" || (typeof value === "string" && (THINKING_EFFORT_LEVELS as readonly string[]).includes(value));
+}
+
+/** 始终允许的应用 entries; one malformed pair drops the whole list, as elsewhere here. */
+function isAllowedAppList(value: unknown): value is Array<{ id: string; name: string }> {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (item) =>
+        typeof item === "object" &&
+        item !== null &&
+        typeof (item as { id?: unknown }).id === "string" &&
+        typeof (item as { name?: unknown }).name === "string",
+    )
+  );
 }
 
 function isIdList(value: unknown): value is string[] {
@@ -265,7 +322,17 @@ function read(): AppSettings {
   const disk = peekDisk();
   const existing = Object.keys(local).length > 0 || Object.keys(disk).length > 0;
   const defaults = existing ? DEFAULTS : { ...DEFAULTS, ...firstRunLanguages() };
-  return { ...defaults, ...local, ...disk };
+  const merged = { ...defaults, ...local, ...disk };
+  // Before the one-time warning existed, selecting full access was already an explicit
+  // grant. Preserve that grant across the migration rather than asking an existing user.
+  if (
+    local.fullAccessConfirmed === undefined &&
+    disk.fullAccessConfirmed === undefined &&
+    (merged.permissionMode === "full" || merged.defaultPermissionMode === "full")
+  ) {
+    merged.fullAccessConfirmed = true;
+  }
+  return merged;
 }
 
 function firstRunLanguages(): Pick<AppSettings, "uiLanguage" | "aiLanguage"> {

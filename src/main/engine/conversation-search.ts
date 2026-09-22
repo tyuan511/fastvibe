@@ -1,11 +1,35 @@
 import { readFile, stat } from "node:fs/promises";
 import type { Conversation, ConversationSearchHit } from "@shared/types";
 
-type CachedTranscript = { mtimeMs: number; size: number; texts: string[] };
+type CachedTranscript = { mtimeMs: number; size: number; texts: string[]; chars: number };
 
 const cache = new Map<string, CachedTranscript>();
 const MAX_FILE_BYTES = 2_000_000;
 const MAX_HITS = 20;
+/**
+ * How much transcript text stays parsed between searches.
+ *
+ * The cache exists so typing in the palette does not re-read every session file, but
+ * it used to keep the extracted text of every conversation ever searched, for the life
+ * of the process — one palette search over a few hundred chats pinned hundreds of
+ * megabytes that nothing would ever release. Past the cap the least recently used
+ * entries go; re-reading one costs a file read the search was going to do anyway.
+ */
+const MAX_CACHED_CHARS = 8_000_000;
+let cachedChars = 0;
+
+function remember(file: string, entry: CachedTranscript): void {
+  const existing = cache.get(file);
+  if (existing) cachedChars -= existing.chars;
+  cache.set(file, entry);
+  cachedChars += entry.chars;
+  while (cachedChars > MAX_CACHED_CHARS && cache.size > 1) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined || oldest === file) break;
+    cachedChars -= cache.get(oldest)?.chars ?? 0;
+    cache.delete(oldest);
+  }
+}
 
 /**
  * Scan session transcripts for `query` without spinning up AgentSessions.
@@ -39,7 +63,12 @@ async function textsFor(file: string): Promise<string[]> {
   }
   if (info.size > MAX_FILE_BYTES) return [];
   const cached = cache.get(file);
-  if (cached && cached.mtimeMs === info.mtimeMs && cached.size === info.size) return cached.texts;
+  if (cached && cached.mtimeMs === info.mtimeMs && cached.size === info.size) {
+    // Re-inserted so key order is recency order, which is what the cap evicts by.
+    cache.delete(file);
+    cache.set(file, cached);
+    return cached.texts;
+  }
 
   let raw: string;
   try {
@@ -49,7 +78,9 @@ async function textsFor(file: string): Promise<string[]> {
   }
 
   const texts = extractTexts(raw);
-  cache.set(file, { mtimeMs: info.mtimeMs, size: info.size, texts });
+  let chars = 0;
+  for (const text of texts) chars += text.length;
+  remember(file, { mtimeMs: info.mtimeMs, size: info.size, texts, chars });
   return texts;
 }
 

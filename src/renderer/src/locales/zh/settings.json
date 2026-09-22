@@ -7,12 +7,15 @@
   "aiDesc": "每轮对话都会提示 AI 用该语言回复"
  },
  "groups": {
-  "personal": "个人",
-  "integrations": "集成",
+  "preferences": "偏好设置",
+  "workspace": "工作区与数据",
+  "integrations": "模型与扩展",
+  "system": "系统",
   "about": "关于"
  },
  "sections": {
-  "general": "通用",
+  "general": "偏好设置",
+  "personalization": "个性化",
   "shortcuts": "快捷键",
   "archived": "归档对话",
   "usage": "使用统计",
@@ -24,9 +27,17 @@
   "import": "导入",
   "about": "关于",
   "remote": "远程访问",
-  "ssh": "SSH 远程主机"
+  "ssh": "SSH 远程主机",
+  "computer": "电脑操控"
  },
  "backToApp": "返回应用",
+ "personalization": {
+  "promptTitle": "Agent 说明",
+  "promptDesc": "为所有聊天中的 Agent 提供额外说明和上下文。此内容会追加到默认系统提示词之后。",
+  "placeholder": "例如：始终使用简体中文回答；修改代码前先说明计划。",
+  "promptHint": "每次新的 Agent 回合都会使用这段说明。留空即可停用。",
+  "save": "保存"
+ },
  "appearance": {
   "title": "外观",
   "themeMode": "主题模式",
@@ -40,6 +51,18 @@
   "darkThemeDesc": "暗色模式下使用的主题",
   "uiFontSize": "界面字号"
  },
+ "agent": {
+  "title": "Agent 默认行为"
+ },
+ "security": {
+  "title": "安全与权限"
+ },
+ "runtime": {
+  "title": "运行时"
+ },
+ "display": {
+  "title": "显示"
+ },
  "common": {
   "title": "通用",
   "defaultModel": "默认模型",
@@ -51,10 +74,15 @@
   "keepAwake": "运行时保持唤醒",
   "keepAwakeDesc": "Agent 运行期间阻止系统休眠，回合结束后恢复",
   "notifications": "系统通知",
-  "notificationsDesc": "窗口不在前台时发送桌面通知",
-  "notifyDone": "任务完成时",
-  "notifyApproval": "需要确认时",
-  "notifyOff": "不通知",
+  "notificationsDesc": "总开关；关闭后下列所有通知都不再发送",
+  "notifyDone": "任务完成",
+  "notifyDoneDesc": "后台会话跑完一轮时提醒",
+  "notifyError": "任务出错",
+  "notifyErrorDesc": "后台会话以错误结束时提醒，例如重试失败或供应商拒绝",
+  "notifyApproval": "需要确认",
+  "notifyApprovalDesc": "后台会话停在等待你回答的确认或提问上时提醒",
+  "notifyUpdate": "应用更新",
+  "notifyUpdateDesc": "新版本下载完成后提醒重启",
   "permissionRules": "已记住的授权",
   "permissionRulesDesc": "选择「始终允许」的工具调用会跳过确认，共 {{count}} 条",
   "permissionRulesClear": "全部清除"
@@ -77,10 +105,12 @@
   "showTimestamps": "显示消息时间"
  },
  "about": {
+  "more": "更多",
   "tagline": "桌面智能体工作台",
   "modelsDev": "模型元数据",
   "generatedAt": "生成于 {{date}}",
   "counts": "models.dev · {{models}} 个模型 / {{aliases}} 条索引",
+  "autoRefresh": "每小时自动更新一次",
   "missing": "未内置快照，将使用默认值",
   "update": "更新",
   "updating": "更新中…",
@@ -103,16 +133,21 @@
  },
  "subagents": {
   "title": "子 Agent 工作台",
-  "desc": "管理主 Agent 可以委派的角色。每个子 Agent 都可以使用独立模型。",
-  "fallback": "未指定模型时，自动使用发起委派的主 Agent 模型；若该模型不可用，再使用默认模型。",
+  "desc": "管理主 Agent 可以委派的角色。每个子 Agent 都可以使用独立模型和推理强度。",
+  "fallback": "未指定模型时跟随发起委派的主 Agent；旧模板未设置推理强度时统一使用中等。父模型不可用时再使用默认模型。",
   "builtins": "内置子 Agent",
   "customs": "自定义子 Agent",
   "builtin": "内置",
   "custom": "自定义",
   "model": "使用模型",
-  "modelDesc": "留空表示跟随主 Agent",
+  "modelDesc": "留空表示跟随主 Agent 的模型",
+  "thinking": "推理强度",
+  "thinkingDesc": "旧模板未设置时使用中等强度",
+  "modelAndThinking": "模型与推理强度",
+  "modelAndThinkingDesc": "在同一个选择器中设置模型与推理强度；模型可跟随主 Agent，推理强度默认为中等",
   "configured": "已指定",
   "inherit": "跟随主 Agent",
+  "inheritModel": "跟随主模型",
   "refresh": "刷新",
   "add": "添加子 Agent",
   "loading": "正在加载…",
@@ -269,9 +304,30 @@
   ]
  },
  "providers": {
+  "gatewayIdentify": "识别上游",
+  "gatewayIdentifyNone": "未识别到已知面板，可手动填写余额配置",
+  "gatewayCredentialHint": "需要面板访问令牌",
+  "gatewayCredentialConfigure": "配置面板凭据",
+  "gatewayCredentialTitle": "配置 New API 面板凭据",
+  "gatewayCredentialDesc": "「{{name}}」的余额由 New API 面板提供，需要面板访问令牌，而不是中转密钥。",
+  "gatewayCredentialUser": "用户 ID",
+  "gatewayCredentialToken": "面板访问令牌",
+  "gatewayCredentialTokenPlaceholder": "粘贴面板访问令牌",
+  "gatewayCredentialStored": "已保存，输入新令牌可更新",
+  "gatewayCredentialHintWhere": "在面板「个人设置 → 生成系统访问令牌」获取；用户 ID 在「个人设置」页可见。令牌只保存在本机，不会同步给其他客户端。",
+  "gatewayCredentialClear": "清除",
+  "gatewayDetected": "已识别为 {{gateway}}",
+  "gatewaySub2api": "Sub2API（订阅中转）",
+  "gatewayNewApi": "New API（中转面板）",
+  "gatewayHint": "该站点同时提供 Anthropic 与 OpenAI 协议，可按需选择。",
+  "gatewayBalanceRefresh": "刷新站点余额",
+  "gatewayBalanceUnlimited": "不限额度",
   "missing": "供应商不存在",
   "loading": "正在加载供应商…",
   "builtin": "内置",
+  "fastvibeAbout": "了解 FastVibe",
+  "fastvibeDescription": "FastVibe 中转站提供全面、低价、稳定的模型服务，",
+  "fastvibeVisit": "立即访问。",
   "providers": "供应商",
   "custom": "自定义供应商",
   "add": "添加供应商",
@@ -442,8 +498,10 @@
   "configured": "已配置",
   "add": "添加服务器",
   "empty": "尚未配置 MCP 服务器",
+  "emptyHint": "添加服务器后会出现在这里",
   "tools": "{{count}} 个工具",
   "connectFailed": "连接失败",
+  "errorDetails": "连接错误详情",
   "disconnected": "未连接",
   "delete": "删除服务器",
   "dialogTitle": "添加 MCP 服务器",
@@ -663,5 +721,39 @@
   "cancel": "取消",
   "localOnly": "SSH 主机只能在本机管理",
   "localOnlyDesc": "远程客户端不能修改或启动这台机器的 SSH 隧道。"
+ },
+ "computer": {
+  "permissionTitle": "系统权限",
+  "checking": "正在检查权限…",
+  "granted": "已授权",
+  "notGranted": "未授权",
+  "accessibility": "辅助功能",
+  "accessibilityDesc": "允许 FastVibe 读取窗口内容并代你点击、输入",
+  "screenRecording": "屏幕录制",
+  "screenRecordingDesc": "允许 FastVibe 截取屏幕，从而看到界面现在是什么样",
+  "grant": "开始授权",
+  "recheck": "重新检查",
+  "unavailable": "当前系统或架构没有可用的电脑操控组件",
+  "windowsNote": "Windows 无需额外授权，可直接开启电脑操控。",
+  "linuxNote": "Linux 无需额外授权；Wayland 下的支持取决于桌面合成器。",
+  "remoteOnly": "电脑操控的权限与开关只能在本机的 FastVibe 中查看和修改。",
+  "controlTitle": "控制",
+  "enable": "允许操作电脑",
+  "enableDesc": "允许 FastVibe 控制你电脑上的其他应用",
+  "background": "优先后台投递",
+  "backgroundDesc": "不抢占前台焦点，你可以继续做自己的事；目标不支持时会直接报错而不是强行抢焦点",
+  "clipboard": "读写剪贴板",
+  "clipboardDesc": "剪贴板为所有应用共用，写入会覆盖你原有的内容",
+  "allowedTitle": "始终允许的应用",
+  "allowedDesc": "对这些应用的操作不再逐次确认。其余应用仍按当前权限模式询问。",
+  "allowedEmpty": "暂无",
+  "allowedPick": "选择运行中的应用",
+  "allowedAdd": "添加",
+  "allowedRemove": "移除",
+  "grantHint": "点一次「开始授权」，FastVibe 会依次带你完成：先打开「屏幕录制」的设置页并弹出一个浮层，把浮层拖进列表即可；检测到添加成功后会自动打开下一项「辅助功能」，同样拖进去就完成了。",
+  "dragNow": "拖进列表",
+  "flowProgress": "第 {{step}}/{{total}} 步 · 等待你把浮层拖进列表",
+  "flowHint": "浮层已经浮在系统设置上方。把它拖进当前这一项的列表；完成后会自动进入下一项。按 Esc 可以中止。",
+  "cancelFlow": "中止授权"
  }
 }

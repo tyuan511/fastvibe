@@ -53,6 +53,20 @@ const DENIED = new Map<string, string>([
   [Ipc.browserResponse, "\u6d4f\u89c8\u5668\u5de5\u5177\u4f9d\u8d56\u684c\u9762\u7aef\u7684\u5185\u5d4c\u6d4f\u89c8\u5668"],
   [Ipc.browserListProfiles, "\u6d4f\u89c8\u5668\u5de5\u5177\u4f9d\u8d56\u684c\u9762\u7aef\u7684\u5185\u5d4c\u6d4f\u89c8\u5668"],
   [Ipc.browserImportProfile, "\u6d4f\u89c8\u5668\u5de5\u5177\u4f9d\u8d56\u684c\u9762\u7aef\u7684\u5185\u5d4c\u6d4f\u89c8\u5668"],
+  // Granting the driver its macOS permissions opens System Settings and a TCC prompt on
+  // the machine running the server \u2014 (a) and (b) at once. The `computer_*` tools
+  // themselves stay available remotely: the agent runs on the host, so driving the host's
+  // desktop is what a remote client is asking for, not a misdirected action.
+  [Ipc.computerPermissions, "\u7535\u8111\u64cd\u4f5c\u6743\u9650\u53ea\u80fd\u5728\u672c\u673a\u67e5\u770b\u548c\u6388\u6743"],
+  [Ipc.computerRequestPermissions, "\u7535\u8111\u64cd\u4f5c\u6743\u9650\u53ea\u80fd\u5728\u672c\u673a\u67e5\u770b\u548c\u6388\u6743"],
+  [Ipc.computerOpenSettings, "\u7535\u8111\u64cd\u4f5c\u6743\u9650\u53ea\u80fd\u5728\u672c\u673a\u67e5\u770b\u548c\u6388\u6743"],
+  [Ipc.computerListApps, "\u7535\u8111\u64cd\u4f5c\u6743\u9650\u53ea\u80fd\u5728\u672c\u673a\u67e5\u770b\u548c\u6388\u6743"],
+  // A drag has to start from a real window's webContents, and the panel it starts from
+  // is a window opened on the server's own screen. A web client has neither.
+  [Ipc.computerStartDrag, "\u62d6\u62fd\u6388\u6743\u53ea\u80fd\u5728\u684c\u9762\u7aef\u5b8c\u6210"],
+  [Ipc.computerStartGrantFlow, "\u62d6\u62fd\u6388\u6743\u53ea\u80fd\u5728\u684c\u9762\u7aef\u5b8c\u6210"],
+  [Ipc.computerCancelGrantFlow, "\u62d6\u62fd\u6388\u6743\u53ea\u80fd\u5728\u684c\u9762\u7aef\u5b8c\u6210"],
+  [Ipc.computerGetGrantFlow, "\u62d6\u62fd\u6388\u6743\u53ea\u80fd\u5728\u684c\u9762\u7aef\u5b8c\u6210"],
   // A subscription login opens the system browser on the server's machine and waits on
   // a loopback callback there. Nothing about it can complete from another device.
   [Ipc.providersOAuthLogin, "\u8ba2\u9605\u767b\u5f55\u9700\u8981\u5728\u672c\u673a\u6d4f\u89c8\u5668\u4e2d\u5b8c\u6210"],
@@ -87,6 +101,11 @@ const DENIED = new Map<string, string>([
   // names, issued from this machine and from this network. That is a probe into
   // whatever the machine can reach, and it needs no agent to use.
   [Ipc.providersFetch, "\u8be5\u64cd\u4f5c\u4f1a\u4ece\u670d\u52a1\u7aef\u53d1\u8d77\u4efb\u610f\u5916\u90e8\u8bf7\u6c42\uff0c\u8fdc\u7a0b\u4e0d\u53ef\u7528"],
+  // The same arbitrary-URL request as `providers:fetch`, minus the credential — which
+  // makes it the more useful probe, not the less: no key is needed to map what this
+  // machine can reach.
+  [Ipc.providersProbeGateway, "\u8be5\u64cd\u4f5c\u4f1a\u4ece\u670d\u52a1\u7aef\u53d1\u8d77\u4efb\u610f\u5916\u90e8\u8bf7\u6c42\uff0c\u8fdc\u7a0b\u4e0d\u53ef\u7528"],
+  [Ipc.providersIdentifyGateway, "\u8be5\u64cd\u4f5c\u4f1a\u4ece\u670d\u52a1\u7aef\u53d1\u8d77\u4efb\u610f\u5916\u90e8\u8bf7\u6c42\uff0c\u8fdc\u7a0b\u4e0d\u53ef\u7528"],
 ]);
 
 /**
@@ -104,9 +123,14 @@ const ALLOWED = new Set<string>([
   Ipc.conversationsList,
   Ipc.conversationsOpen,
   Ipc.conversationsRecordPrompt,
+  Ipc.conversationsRestorePrompt,
   Ipc.conversationsRename,
   Ipc.conversationsSearch,
   Ipc.conversationsSetProject,
+  Ipc.conversationsCreateWorktree,
+  Ipc.conversationsBindWorktree,
+  Ipc.conversationsUnbindWorktree,
+  Ipc.conversationsListWorktrees,
   Ipc.engineAbort,
   Ipc.engineAbortSubagent,
   Ipc.engineBranch,
@@ -115,11 +139,13 @@ const ALLOWED = new Set<string>([
   Ipc.engineContinue,
   Ipc.engineCreateSkill,
   Ipc.engineFollowUp,
+  Ipc.engineFork,
   Ipc.engineGetCheckpoint,
   Ipc.engineGetCommands,
   Ipc.engineGetConversationMessages,
   Ipc.engineGetExtensions,
   Ipc.engineGetMessages,
+  Ipc.engineGetMessagesSince,
   Ipc.engineGetModels,
   Ipc.engineGetRunning,
   Ipc.engineGetSnapshot,
@@ -143,6 +169,12 @@ const ALLOWED = new Set<string>([
   Ipc.enginePermissionRespond,
   Ipc.enginePrompt,
   Ipc.enginePromptConversation,
+  Ipc.engineQueueAdd,
+  Ipc.engineQueueCancel,
+  Ipc.engineQueueRecall,
+  Ipc.engineQueueReorder,
+  Ipc.engineQueueResume,
+  Ipc.engineQueueSendNow,
   Ipc.engineRemoveExtensionPackage,
   Ipc.engineRemoveSkill,
   Ipc.engineReplaceSteering,
@@ -172,6 +204,11 @@ const ALLOWED = new Set<string>([
   Ipc.providersList,
   Ipc.providersLogout,
   Ipc.providersNative,
+  // Balance reads are allowed: the URL comes from the stored provider and the key from
+  // the engine's own store, so the call can only read an allowance this install already
+  // holds — the same bargain `providers:quota` makes for the OpenAI providers.
+  Ipc.providersGatewayBalance,
+  Ipc.providersGatewayCredentials,
   Ipc.providersQuota,
   Ipc.providersRefresh,
   Ipc.providersRemove,
@@ -186,6 +223,7 @@ const ALLOWED = new Set<string>([
   Ipc.workspaceGitBranches,
   Ipc.workspaceGitCheckout,
   Ipc.workspaceGitCommit,
+  Ipc.workspaceGitGenerateCommitMessage,
   Ipc.workspaceGitCreateBranch,
   Ipc.workspaceGitDiff,
   Ipc.workspaceGitDiscard,

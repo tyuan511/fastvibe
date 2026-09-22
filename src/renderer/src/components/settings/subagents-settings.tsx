@@ -24,6 +24,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { ModelThinkingSelect } from "@/components/model-thinking-select";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -34,8 +35,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import type { EngineModel, FastVibeModel, SubagentConfig, SubagentDraft } from "@shared/types";
-import { DefaultModelSelect } from "./default-model-select";
+import { THINKING_EFFORT_LEVELS, type EngineModel, type FastVibeModel, type SubagentConfig, type SubagentDraft, type ThinkingLevel } from "@shared/types";
+import { thinkingLabel } from "@/lib/thinking-levels";
+import { cn } from "@/lib/utils";
 
 function modelValue(model?: string): EngineModel | undefined {
   if (!model) return undefined;
@@ -57,6 +59,7 @@ type FormState = {
   description: string;
   tools: string[];
   model?: EngineModel;
+  thinkingLevel: ThinkingLevel;
   systemPrompt: string;
 };
 
@@ -67,6 +70,7 @@ function formFrom(config?: SubagentConfig): FormState {
     description: config?.description ?? "",
     tools: config?.tools ?? ["read", "grep", "find", "ls"],
     model: modelValue(config?.model),
+    thinkingLevel: config?.thinkingLevel ?? "medium",
     systemPrompt: config?.systemPrompt ?? "",
   };
 }
@@ -99,7 +103,10 @@ export function SubagentsSettings({ models }: { models: FastVibeModel[] }): JSX.
   const builtins = useMemo(() => agents.filter((agent) => agent.source === "builtin"), [agents]);
   const custom = useMemo(() => agents.filter((agent) => agent.source === "custom"), [agents]);
 
-  async function saveBuiltin(agent: SubagentConfig, model?: EngineModel): Promise<void> {
+  async function saveBuiltin(
+    agent: SubagentConfig,
+    patch: { model?: EngineModel; thinkingLevel: ThinkingLevel },
+  ): Promise<void> {
     setSaving(true);
     try {
       setAgents(await window.fastvibe.engine.saveAgentConfig({
@@ -107,7 +114,8 @@ export function SubagentsSettings({ models }: { models: FastVibeModel[] }): JSX.
         name: agent.name,
         description: agent.description,
         tools: agent.tools,
-        model: modelText(model),
+        model: modelText(patch.model),
+        thinkingLevel: patch.thinkingLevel,
         systemPrompt: agent.systemPrompt,
       }));
       setError(null);
@@ -127,6 +135,7 @@ export function SubagentsSettings({ models }: { models: FastVibeModel[] }): JSX.
       description: editor.description,
       tools: editor.tools,
       model: modelText(editor.model),
+      thinkingLevel: editor.thinkingLevel,
       systemPrompt: editor.systemPrompt,
     };
     try {
@@ -154,15 +163,22 @@ export function SubagentsSettings({ models }: { models: FastVibeModel[] }): JSX.
     }
   }
 
-  function renderModel(agent: SubagentConfig): JSX.Element {
+  function renderConfig(agent: SubagentConfig): JSX.Element {
     return (
-      <DefaultModelSelect
+      <ModelThinkingSelect
         models={models}
-        value={modelValue(agent.model)}
-        emptyLabel={t("subagents.inherit")}
-        className="max-h-12 w-full overflow-hidden"
-        wrapLabel
-        onChange={(model) => void saveBuiltin(agent, model)}
+        model={modelValue(agent.model)}
+        thinkingLevel={agent.thinkingLevel}
+        fallbackThinkingLevels={THINKING_EFFORT_LEVELS}
+        inheritModelLabel={t("subagents.inheritModel")}
+        surface="settings"
+        disabled={saving}
+        ariaLabel={`${agent.name} · ${t("subagents.modelAndThinking")}`}
+        onModelChange={(model) => void saveBuiltin(agent, { model, thinkingLevel: agent.thinkingLevel })}
+        onThinkingChange={(thinkingLevel) => void saveBuiltin(agent, {
+          model: modelValue(agent.model),
+          thinkingLevel,
+        })}
       />
     );
   }
@@ -170,7 +186,15 @@ export function SubagentsSettings({ models }: { models: FastVibeModel[] }): JSX.
   function renderCard(agent: SubagentConfig): JSX.Element {
     const isBuiltin = agent.source === "builtin";
     return (
-      <Item key={agent.id} variant="outline" size="sm" className="items-start gap-3 bg-card/80 p-3 transition-colors hover:border-primary/30 hover:bg-muted/20">
+      <Item
+        key={agent.id}
+        variant="outline"
+        size="sm"
+        className={cn(
+          "items-start gap-3 bg-card/80 p-3 transition-colors hover:border-primary/30 hover:bg-muted/20",
+          isBuiltin && "flex-wrap sm:flex-nowrap",
+        )}
+      >
         <ItemMedia variant="icon" className="mt-0.5 size-9 rounded-xl bg-primary/10 text-primary ring-1 ring-primary/15">
           <HugeiconsIcon icon={BotIcon} strokeWidth={1.8} className="size-5" />
         </ItemMedia>
@@ -190,11 +214,18 @@ export function SubagentsSettings({ models }: { models: FastVibeModel[] }): JSX.
             ))}
           </div>
         </ItemContent>
-        <ItemActions className="ml-auto shrink-0 self-center">
+        {isBuiltin ? (
+          <ItemActions className="w-full sm:hidden">
+            <div className="w-full">{renderConfig(agent)}</div>
+          </ItemActions>
+        ) : null}
+        <ItemActions className={cn("ml-auto shrink-0 self-center", isBuiltin && "hidden sm:flex")}>
           <div className="hidden min-w-44 sm:block">
-            {isBuiltin ? renderModel(agent) : (
+            {isBuiltin ? renderConfig(agent) : (
               <button type="button" className="flex w-full items-center justify-between gap-2 rounded-lg border border-border bg-background px-3 py-1.5 text-left text-sm hover:border-primary/40" onClick={() => setEditor(formFrom(agent))}>
-                <span className="min-w-0 truncate text-muted-foreground">{agent.model ?? t("subagents.inherit")}</span>
+                <span className="min-w-0 truncate text-muted-foreground">
+                  {agent.model ?? t("subagents.inheritModel")} · {thinkingLabel(agent.thinkingLevel)}
+                </span>
                 <HugeiconsIcon icon={ArrowRight01Icon} strokeWidth={2} className="size-4 shrink-0 text-primary" />
               </button>
             )}
@@ -261,76 +292,69 @@ export function SubagentsSettings({ models }: { models: FastVibeModel[] }): JSX.
       {!loading && custom.length === 0 ? <p className="rounded-xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground">{t("subagents.empty")}</p> : null}
 
       <Dialog open={editor !== null} onOpenChange={(open) => { if (!open && !saving) setEditor(null); }}>
-        <DialogContent className="flex max-h-[min(84vh,48rem)] min-h-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl">
-          <DialogHeader className="shrink-0 border-b border-border/70 bg-gradient-to-br from-primary/10 via-background to-background px-5 py-4 pr-12">
-            <div className="mb-2.5 flex size-9 items-center justify-center rounded-xl bg-primary/10 text-primary ring-1 ring-primary/15">
-              <HugeiconsIcon icon={BotIcon} strokeWidth={1.8} className="size-4.5" />
-            </div>
-            <DialogTitle className="text-lg">{editor?.id ? t("subagents.editTitle") : t("subagents.addTitle")}</DialogTitle>
-            <DialogDescription className="mt-1 max-w-lg text-sm leading-5">{t("subagents.formDesc")}</DialogDescription>
+        <DialogContent className="max-h-[85vh] min-h-0 overflow-hidden sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{editor?.id ? t("subagents.editTitle") : t("subagents.addTitle")}</DialogTitle>
+            <DialogDescription>{t("subagents.formDesc")}</DialogDescription>
           </DialogHeader>
           {editor ? (
-            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-              <div className="grid gap-3.5">
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="grid content-start gap-2">
-                    <Label htmlFor="subagent-name">{t("subagents.name")}</Label>
-                    <Input id="subagent-name" value={editor.name} onChange={(event) => setEditor({ ...editor, name: event.target.value })} />
-                    <p className="text-xs leading-4 text-muted-foreground">{t("subagents.nameHint")}</p>
-                  </div>
-                  <div className="grid content-start gap-2">
-                    <Label htmlFor="subagent-description">{t("subagents.description")}</Label>
-                    <Input id="subagent-description" value={editor.description} onChange={(event) => setEditor({ ...editor, description: event.target.value })} />
-                  </div>
+            <div className="-mx-1 grid min-h-0 gap-4 overflow-y-auto px-1">
+              <div className="grid gap-1.5">
+                <Label htmlFor="subagent-name">{t("subagents.name")}</Label>
+                <Input id="subagent-name" value={editor.name} onChange={(event) => setEditor({ ...editor, name: event.target.value })} />
+                <p className="text-xs text-muted-foreground">{t("subagents.nameHint")}</p>
+              </div>
+              <div className="grid gap-1.5">
+                <Label htmlFor="subagent-description">{t("subagents.description")}</Label>
+                <Input id="subagent-description" value={editor.description} onChange={(event) => setEditor({ ...editor, description: event.target.value })} />
+              </div>
+              <div className="grid gap-2">
+                <div>
+                  <Label>{t("subagents.tools")}</Label>
+                  <p className="mt-1 text-xs text-muted-foreground">{t("subagents.toolsHint")}</p>
                 </div>
-                <section className="grid gap-2.5 rounded-xl border border-border/70 bg-muted/25 p-3.5">
-                  <div>
-                    <Label>{t("subagents.tools")}</Label>
-                    <p className="mt-1 text-xs leading-4 text-muted-foreground">{t("subagents.toolsHint")}</p>
-                  </div>
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                    {AGENT_TOOLS.map((tool) => {
-                      const checked = editor.tools.includes(tool);
-                      return (
-                        <label key={tool} className="group/field flex cursor-pointer items-start gap-2 rounded-lg border border-transparent bg-background/60 p-2.5 transition-colors hover:border-primary/25 hover:bg-background">
-                          <Checkbox
-                            checked={checked}
-                            onCheckedChange={(value) => setEditor({
-                              ...editor,
-                              tools: value === true
-                                ? [...new Set([...editor.tools, tool])]
-                                : editor.tools.filter((item) => item !== tool),
-                            })}
-                          />
-                          <span className="min-w-0">
-                            <span className="block text-sm font-medium leading-4">{t(`subagents.toolOptions.${tool}.label`)}</span>
-                            <span className="mt-1 block text-xs leading-4 text-muted-foreground">{t(`subagents.toolOptions.${tool}.description`)}</span>
-                          </span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                </section>
-                <section className="grid gap-2 rounded-xl border border-border/70 bg-muted/25 p-3.5">
-                  <Label>{t("subagents.model")}</Label>
-                  <p className="text-xs text-muted-foreground">{t("subagents.modelDesc")}</p>
-                  <DefaultModelSelect
-                    models={models}
-                    value={editor.model}
-                    emptyLabel={t("subagents.inherit")}
-                    className="w-full"
-                    wrapLabel
-                    onChange={(model) => setEditor({ ...editor, model })}
-                  />
-                </section>
-                <section className="grid gap-2">
-                  <Label htmlFor="subagent-prompt">{t("subagents.prompt")}</Label>
-                  <Textarea id="subagent-prompt" className="min-h-28 resize-y leading-6" value={editor.systemPrompt} onChange={(event) => setEditor({ ...editor, systemPrompt: event.target.value })} />
-                </section>
+                <div className="flex flex-wrap gap-x-4 gap-y-2">
+                  {AGENT_TOOLS.map((tool) => {
+                    const checked = editor.tools.includes(tool);
+                    return (
+                      <label key={tool} className="flex cursor-pointer items-center gap-1.5 text-sm">
+                        <Checkbox
+                          checked={checked}
+                          onCheckedChange={(value) => setEditor({
+                            ...editor,
+                            tools: value === true
+                              ? [...new Set([...editor.tools, tool])]
+                              : editor.tools.filter((item) => item !== tool),
+                          })}
+                        />
+                        <span>{t(`subagents.toolOptions.${tool}.label`)}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="grid gap-1.5">
+                <Label>{t("subagents.modelAndThinking")}</Label>
+                <ModelThinkingSelect
+                  models={models}
+                  model={editor.model}
+                  thinkingLevel={editor.thinkingLevel}
+                  fallbackThinkingLevels={THINKING_EFFORT_LEVELS}
+                  inheritModelLabel={t("subagents.inheritModel")}
+                  surface="settings"
+                  disabled={saving}
+                  ariaLabel={t("subagents.modelAndThinking")}
+                  onModelChange={(model) => setEditor({ ...editor, model })}
+                  onThinkingChange={(thinkingLevel) => setEditor({ ...editor, thinkingLevel })}
+                />
+              </div>
+              <div className="grid gap-1.5">
+                <Label htmlFor="subagent-prompt">{t("subagents.prompt")}</Label>
+                <Textarea id="subagent-prompt" className="min-h-24 resize-y leading-6" value={editor.systemPrompt} onChange={(event) => setEditor({ ...editor, systemPrompt: event.target.value })} />
               </div>
             </div>
           ) : null}
-          <DialogFooter className="m-0 shrink-0 gap-2 rounded-b-xl border-t border-border/70 bg-muted/20 px-5 py-3.5 sm:gap-2">
+          <DialogFooter>
             <Button variant="outline" onClick={() => setEditor(null)} disabled={saving}>{t("subagents.cancel")}</Button>
             <Button onClick={() => void saveCustom()} disabled={saving}>{t("subagents.save")}</Button>
           </DialogFooter>

@@ -1,4 +1,6 @@
 node_modules
+.next
+apps/website/.next-*/
 out
 dist
 dist-electron
@@ -20,3 +22,15 @@ resources/models-dev/**
 !resources/models-dev/.gitkeep
 .firecrawl
 .openchamber
+.claude
+# Signing material. Nothing here is ever meant to be committed: the certificate
+# lives in the login keychain and in the APPLE_CERT_P12 secret, the App Store
+# Connect key in ~/private_keys and in APPLE_API_KEY_P8. A rule costs nothing and
+# catches the one time somebody exports a .p12 into the repo to "just try it".
+*.p12
+*.p8
+*.mobileprovision
+
+# Fetched at build time by scripts/fetch-cua-driver.mjs, pinned and checksummed there.
+# 63 MB of third-party executable belongs in the release artifact, not in history.
+resources/cua-driver/

@@ -10,6 +10,12 @@ export const Ipc = {
   engineContinue: "engine:continue",
   engineClearQueue: "engine:clear-queue",
   engineReplaceSteering: "engine:replace-steering",
+  engineQueueAdd: "engine:queue-add",
+  engineQueueCancel: "engine:queue-cancel",
+  engineQueueRecall: "engine:queue-recall",
+  engineQueueSendNow: "engine:queue-send-now",
+  engineQueueReorder: "engine:queue-reorder",
+  engineQueueResume: "engine:queue-resume",
   engineCompact: "engine:compact",
   engineGetCommands: "engine:get-commands",
   engineGetExtensions: "engine:get-extensions",
@@ -43,7 +49,14 @@ export const Ipc = {
   engineSetInterrupt: "engine:set-interrupt",
   engineSetAutoCompact: "engine:set-auto-compact",
   engineBranch: "engine:branch",
+  engineFork: "engine:fork",
   engineGetMessages: "engine:get-messages",
+  /**
+   * The transcript from one entry onward, for a client that already holds the rest
+   * (`TranscriptTail`). What the end-of-turn reload uses, so its cost is the turn
+   * rather than the whole conversation.
+   */
+  engineGetMessagesSince: "engine:get-messages-since",
   /** Transcript + the turn in flight, read at one instant (`ConversationSnapshot`). */
   engineGetSnapshot: "engine:get-snapshot",
   engineGetStats: "engine:get-stats",
@@ -62,7 +75,12 @@ export const Ipc = {
   conversationsRename: "conversations:rename",
   conversationsDelete: "conversations:delete",
   conversationsRecordPrompt: "conversations:record-prompt",
+  conversationsRestorePrompt: "conversations:restore-prompt",
   conversationsSetProject: "conversations:set-project",
+  conversationsCreateWorktree: "conversations:create-worktree",
+  conversationsBindWorktree: "conversations:bind-worktree",
+  conversationsUnbindWorktree: "conversations:unbind-worktree",
+  conversationsListWorktrees: "conversations:list-worktrees",
   conversationsSearch: "conversations:search",
   conversationReady: "conversations:ready",
   /**
@@ -90,6 +108,7 @@ export const Ipc = {
   workspaceGitCreateBranch: "workspace:git-create-branch",
   workspaceGitStage: "workspace:git-stage",
   workspaceGitCommit: "workspace:git-commit",
+  workspaceGitGenerateCommitMessage: "workspace:git-generate-commit-message",
   workspaceGitDiff: "workspace:git-diff",
   workspaceGitUnstage: "workspace:git-unstage",
   workspaceGitDiscard: "workspace:git-discard",
@@ -105,6 +124,21 @@ export const Ipc = {
   browserResponse: "browser:response",
   browserListProfiles: "browser:list-profiles",
   browserImportProfile: "browser:import-profile",
+  /** Cua Driver permission state. The tools themselves need no IPC — the driver is
+   * loaded into Main, so a `computer_*` call never leaves the process. */
+  computerPermissions: "computer:permissions",
+  computerRequestPermissions: "computer:request-permissions",
+  computerOpenSettings: "computer:open-settings",
+  computerListApps: "computer:list-apps",
+  /** Starts the native drag that carries FastVibe.app into the Privacy & Security list. */
+  computerStartDrag: "computer:start-drag",
+  /** The guided grant sequence, and the floating panel it drives. */
+  computerStartGrantFlow: "computer:start-grant-flow",
+  computerCancelGrantFlow: "computer:cancel-grant-flow",
+  /** Read once on mount; the broadcast below only fires when a step changes, so a
+   * Settings pane opened mid-sequence would otherwise show nothing for 1.5 seconds. */
+  computerGetGrantFlow: "computer:get-grant-flow",
+  computerGrantFlowState: "computer:grant-flow-state",
   enginePromptConversation: "engine:prompt-conversation",
   engineGetConversationMessages: "engine:get-conversation-messages",
   conversationsCreateSide: "conversations:create-side",
@@ -112,6 +146,8 @@ export const Ipc = {
   appLog: "app:log",
   appExportLogs: "app:export-logs",
   modelsDevUpdate: "models-dev:update",
+  /** Pushed after a models.dev refresh (hourly, or 设置 → 关于) so an open About pane stays current. */
+  modelsDevChanged: "models-dev:changed",
   statsUsage: "stats:usage",
   windowNew: "window:new",
   /** Window controls for the hand-drawn title bar (Windows / Linux). */
@@ -141,6 +177,14 @@ export const Ipc = {
   providersRemove: "providers:remove",
   providersRefresh: "providers:refresh",
   providersQuota: "providers:quota",
+  /** Identify the relay software behind a custom Base URL (添加供应商). */
+  providersProbeGateway: "providers:probe-gateway",
+  /** Read a custom provider's panel balance; the kind decides which endpoint. */
+  providersGatewayBalance: "providers:gateway-balance",
+  /** Store the panel credential a new-api deployment needs for its balance. */
+  providersGatewayCredentials: "providers:gateway-credentials",
+  /** Identify (and remember) the upstream behind an already-stored provider. */
+  providersIdentifyGateway: "providers:identify-gateway",
   providersTest: "providers:test",
   providersCcSwitchScan: "providers:cc-switch-scan",
   providersCcSwitchImport: "providers:cc-switch-import",
@@ -231,12 +275,26 @@ export type GitStatus = {
   branch?: string;
   changed: number;
   staged: number;
+  /** Text-line totals across the tracked working tree relative to HEAD. */
+  additions: number;
+  deletions: number;
   ahead?: number;
   behind?: number;
   files: Array<{ path: string; index: string; worktree: string }>;
 };
 
 export type GitBranch = { name: string; current: boolean; upstream?: string };
+
+export type GitWorktree = {
+  path: string;
+  branch?: string;
+  head?: string;
+  bare?: boolean;
+  detached?: boolean;
+  locked?: boolean;
+  /** This conversation's engine cwd. */
+  current?: boolean;
+};
 
 export type GitDiffSource = "unstaged" | "staged" | "branch" | "last-turn";
 

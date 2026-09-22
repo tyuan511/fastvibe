@@ -55,14 +55,30 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build:
-    name: Package (${{ matrix.platform }})
+    name: Package (${{ matrix.platform }}${{ matrix.arch && format(' {0}', matrix.arch) || '' }})
     runs-on: ${{ matrix.os }}
+    # GitHub does not expose the `secrets` context to `if:`, so the "are the
+    # macOS signing credentials configured?" gate has to be read through `env`,
+    # which `if:` does see. These land in every matrix leg; none of the names is
+    # one electron-builder reads, so the win and linux legs simply ignore them.
+    env:
+      APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+      APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
     strategy:
       fail-fast: false
       matrix:
         include:
+          # The two macOS architectures are separate legs so they package and
+          # notarize at the same time instead of one after the other — four notary
+          # round trips are most of this workflow's wall clock. They each write a
+          # manifest covering only their own arch; `mac-manifest` merges them.
           - os: macos-latest
             platform: mac
+            arch: arm64
+          - os: macos-latest
+            platform: mac
+            arch: x64
           - os: ubuntu-latest
             platform: linux
           - os: windows-latest
@@ -71,7 +87,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Verify tag version
-        run: test "${GITHUB_REF_NAME}" = "v$(node -p \"require('./package.json').version\")"
+        run: node -e "const fs=require('fs');const v=JSON.parse(fs.readFileSync('package.json','utf8')).version;if(process.env.GITHUB_REF_NAME !== 'v'+v) process.exit(1)"
 
       - uses: pnpm/action-setup@v6
 
@@ -90,9 +106,9 @@ jobs:
             ~/Library/Caches/electron-builder
             ~/AppData/Local/electron/Cache
             ~/AppData/Local/electron-builder/Cache
-          key: ${{ runner.os }}-electron-${{ hashFiles('pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-${{ matrix.arch || 'default' }}-electron-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: |
-            ${{ runner.os }}-electron-
+            ${{ runner.os }}-${{ matrix.arch || 'default' }}-electron-
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -103,10 +119,129 @@ jobs:
       - name: Stage app
         run: pnpm stage:app
 
+      # notarytool takes the App Store Connect key as a *file*, so the secret is
+      # materialised under RUNNER_TEMP, which the runner discards with the job.
+      - name: Write notarization key
+        if: matrix.platform == 'mac' && env.APPLE_API_KEY_P8 != ''
+        run: |
+          mkdir -p "$RUNNER_TEMP/private_keys"
+          printf '%s' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/private_keys/AuthKey.p8"
+          chmod 600 "$RUNNER_TEMP/private_keys/AuthKey.p8"
+
+      # electron-builder imports the certificate into a temporary keychain of its
+      # own and tears that keychain down when it finishes — so by the time the dmg
+      # exists there is no identity left to sign it with, and `notarize-dmg.mjs`
+      # fails with "no identity found". This keychain belongs to the job and
+      # outlives the packaging step.
+      - name: Prepare signing keychain
+        if: matrix.platform == 'mac' && env.APPLE_CERT_P12 != ''
+        env:
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password="$(openssl rand -base64 24)"
+          printf '%s' "$APPLE_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$password" "$keychain"
+          # Without this the keychain re-locks on a timer mid-build and signing fails
+          # with an error that names neither the keychain nor the lock.
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" \
+            -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
+          # Lets codesign use the key without a UI prompt nobody is there to answer.
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security find-identity -v -p codesigning "$keychain"
+
+      # Two steps so Windows never sees a bash script (the runner's default
+      # shell is pwsh). Empty CSC_LINK is also not "unset": electron-builder
+      # treats it as a file path and fails against the repo root.
       - name: Package
-        run: pnpm exec electron-builder --${{ matrix.platform }} --publish never
+        if: matrix.platform != 'mac' || env.APPLE_CERT_P12 == ''
+        run: pnpm exec electron-builder --${{ matrix.platform }} ${{ matrix.arch && format('--{0}', matrix.arch) || '' }} --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - name: Package signed mac
+        if: matrix.platform == 'mac' && env.APPLE_CERT_P12 != ''
+        run: pnpm exec electron-builder --mac --${{ matrix.arch }} --publish never
+        env:
+          CSC_LINK: ${{ secrets.APPLE_CERT_P12 }}
+          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          APPLE_API_KEY: ${{ env.APPLE_API_KEY_P8 != '' && format('{0}/private_keys/AuthKey.p8', runner.temp) || '' }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+
+      # electron-builder notarizes the .app and staples the ticket to it — which is
+      # what the zip, and so the updater, carries. The .dmg it then builds around that
+      # app is a new disk image nobody signed, and Gatekeeper assesses a downloaded
+      # image on its own signature: `rejected (source=no usable signature)`. This signs,
+      # notarizes and staples the image too, and asserts the result.
+      - name: Notarize the dmg
+        if: matrix.platform == 'mac' && env.APPLE_CERT_P12 != '' && env.APPLE_API_KEY_P8 != ''
+        run: node scripts/notarize-dmg.mjs
+        env:
+          APPLE_API_KEY: ${{ format('{0}/private_keys/AuthKey.p8', runner.temp) }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+
+      # electron-builder only *warns* when it cannot sign or notarize, so a
+      # release would otherwise ship unsigned and nobody would notice until a
+      # user's Gatekeeper blocked it — or, worse, until their Accessibility grant
+      # stopped surviving updates. Assert it here instead.
+      - name: Verify signature and notarization
+        if: matrix.platform == 'mac' && env.APPLE_CERT_P12 != ''
+        run: |
+          set -euo pipefail
+          found=0
+          for app in release/mac*/*.app; do
+            [ -d "$app" ] || continue
+            found=1
+            echo "::group::$app"
+            codesign --verify --deep --strict --verbose=2 "$app"
+            codesign --display --entitlements - --verbose=4 "$app" 2>&1 | head -40
+            if [ -n "${APPLE_API_KEY_ID:-}" ]; then
+              xcrun stapler validate "$app"
+              spctl --assess --type execute --verbose=4 "$app"
+            fi
+            echo "::endgroup::"
+          done
+          [ "$found" = 1 ] || { echo "no .app found under release/"; exit 1; }
+
+      # The updater follows the installer filename from latest.yml. Fail the release
+      # before publishing if the manifest points at a differently named asset — GitHub
+      # otherwise accepts both files and every Windows download fails with 404.
+      - name: Verify Windows update manifest
+        if: matrix.platform == 'win'
+        shell: pwsh
+        run: |
+          $manifest = Get-Content release/latest.yml -Raw
+          $match = [regex]::Match($manifest, '(?m)^path:\s*(.+)$')
+          if (-not $match.Success) { throw 'release/latest.yml has no installer path' }
+          $installer = Join-Path 'release' $match.Groups[1].Value.Trim().Trim("'").Trim('"')
+          if (-not (Test-Path -LiteralPath $installer)) {
+            throw "latest.yml points to '$installer', but that file was not produced"
+          }
+
+      # One manifest covers both architectures and only one file can carry the name
+      # the updater fetches, so neither mac leg may publish its own: the second to
+      # finish would overwrite the first, and the loser's users would be updating from
+      # a manifest that does not list their architecture. `mac-manifest` merges them.
+      - name: Set the mac manifest aside
+        if: matrix.platform == 'mac'
+        run: |
+          mkdir -p manifest
+          mv release/latest-mac.yml "manifest/latest-mac-${{ matrix.arch }}.yml"
+
+      - name: Upload the mac manifest
+        if: matrix.platform == 'mac'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-manifest-${{ matrix.arch }}
+          path: manifest/latest-mac-${{ matrix.arch }}.yml
+          retention-days: 1
 
       - name: Publish release assets
         uses: softprops/action-gh-release@v3
@@ -116,7 +251,14 @@ jobs:
           # freshly generated notes to an existing release's body, so three legs
           # publishing the same tag stack the changelog three times over. The other
           # legs pass no body and keep whatever is already there.
-          generate_release_notes: ${{ matrix.platform == 'mac' }}
+          generate_release_notes: ${{ matrix.platform == 'mac' && matrix.arch == 'arm64' }}
+          # A tag carrying a semver prerelease component (v0.8.3-rc.1) has to be
+          # flagged as one on GitHub, because that flag is the only thing keeping it
+          # away from existing users: electron-updater with allowPrerelease=false
+          # resolves updates through `/releases/latest`, which GitHub answers by
+          # excluding prereleases. It never looks at the version string, so an rc
+          # published as a normal release is offered to everybody within the hour.
+          prerelease: ${{ contains(github.ref_name, '-') }}
           fail_on_unmatched_files: false
           files: |
             release/*.dmg
@@ -126,5 +268,52 @@ jobs:
             release/*.AppImage
             release/*.deb
             release/latest*.yml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  mac-manifest:
+    name: Merge mac update manifest
+    # Every leg has to have succeeded. A merged manifest describing a release whose
+    # other half never uploaded would point users at files that are not there, and the
+    # absence of a manifest is the safe failure: the app simply finds no update.
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download the per-architecture manifests
+        uses: actions/download-artifact@v4
+        with:
+          pattern: mac-manifest-*
+          path: manifests
+          merge-multiple: true
+
+      - name: Merge
+        run: |
+          set -euo pipefail
+          # Both must exist. Merging one would publish a manifest that silently moves
+          # every arm64 user onto x64 builds, or breaks x64 updates outright.
+          test -f manifests/latest-mac-arm64.yml
+          test -f manifests/latest-mac-x64.yml
+          mkdir -p release
+          node scripts/merge-mac-manifest.mjs release/latest-mac.yml \
+            manifests/latest-mac-arm64.yml manifests/latest-mac-x64.yml
+          echo "::group::latest-mac.yml"
+          cat release/latest-mac.yml
+          echo "::endgroup::"
+
+      - name: Publish the merged manifest
+        uses: softprops/action-gh-release@v3
+        with:
+          draft: false
+          # A tag carrying a semver prerelease component (v0.8.3-rc.1) has to be
+          # flagged as one on GitHub, because that flag is the only thing keeping it
+          # away from existing users: electron-updater with allowPrerelease=false
+          # resolves updates through `/releases/latest`, which GitHub answers by
+          # excluding prereleases. It never looks at the version string, so an rc
+          # published as a normal release is offered to everybody within the hour.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          fail_on_unmatched_files: true
+          files: release/latest-mac.yml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

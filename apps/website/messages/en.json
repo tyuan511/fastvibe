@@ -1,0 +1,87 @@
+{
+  "title": "FastVibe — Your desktop, ready for agent work",
+  "description": "An open-source desktop workspace built on pi-coding-agent. Choose your models, extend your tools, and inspect the source from interface to agent engine.",
+  "home": "FastVibe home",
+  "navigation": "Main navigation",
+  "skip": "Skip to main content",
+  "languageLabel": "Choose language",
+  "nav": { "badge": "Desktop", "product": "Product", "download": "Download", "github": "GitHub" },
+  "hero": {
+    "eyebrow": "FastVibe · Open-source desktop workspace",
+    "title": "A workspace for your agents",
+    "description": "Powered by <strong>pi-coding-agent</strong>, with support for the <strong>Pi plugin ecosystem</strong> and a <strong>full desktop GUI</strong> for agent work.",
+    "detail": "Chat, tool calls, approvals and file review in one place. <strong>Open source from interface to engine</strong>, with tools and workflows you can extend.",
+    "download": "Download FastVibe",
+    "source": "View on GitHub",
+    "docs": "Getting started",
+    "platforms": "macOS, Windows & Linux",
+    "cardTitle": "FastVibe for desktop",
+    "latest": "Latest release",
+    "allDownloads": "All downloads",
+    "format": "Installer",
+    "platformLabel": "Select an operating system"
+  },
+  "overview": {
+    "eyebrow": "BUILT ON PI",
+    "word": "Pi + FastVibe",
+    "title": "Your workflow comes first.\nYour tools should follow.",
+    "description": "Pi provides a minimal, extensible agent core.\nFastVibe brings that freedom to your desktop.",
+    "items": {
+      "minimal": { "title": "Minimal core. Room for your workflow.", "copy": "Pi starts with a lean system prompt and essential tools, leaving workflows to extensions. FastVibe adds planning, subagents and permission controls for a ready-to-use desktop experience." },
+      "models": { "title": "Change models, not your workspace.", "copy": "Build on Pi’s multi-model foundation. Switch configured models within the same conversation, choosing a provider and reasoning level for the task instead of tying your workflow to one model." },
+      "extensible": { "title": "Extend beyond the defaults.", "copy": "Add tools and workflows through skills and TypeScript extensions. FastVibe integrates Pi’s extension system and adds an MCP bridge, bringing your existing tools into the workspace." }
+    },
+    "piLink": "Explore the ideas behind Pi",
+    "sourceTitle": "Open beyond the interface",
+    "sourceCopy": "FastVibe embeds the pi-coding-agent SDK directly. Follow the source from desktop interactions and session management to the agent loop and model adapters.",
+    "sourceLabel": "Open-source call chain",
+    "layers": {
+      "desktop": "Desktop interface & integrations",
+      "session": "Sessions, tools & extensions",
+      "agent": "Agent loop & events",
+      "models": "Model APIs & streaming"
+    },
+    "scope": "The application and agent-core layers above are MIT-licensed. Models and third-party services have their own terms."
+  },
+  "features": {
+    "eyebrow": "DESIGNED FOR REAL WORK",
+    "title": "One workspace.\nEvery step in view.",
+    "workspace": { "title": "Work with the full context", "copy": "Keep your conversation beside the files you're working on. Let your agent explore the project, make a plan and carry it through — while code previews and progress stay within reach.", "alt": "FastVibe in English: a Fieldnotes quick-search task, completed checklist and TypeScript file preview" },
+    "review": { "title": "See what changed, and why", "copy": "Tool calls and file changes are part of the conversation, not a separate trail to track down. Open a diff, review each edit and work with Git without leaving your task.", "alt": "FastVibe in English: reviewing the CommandMenu keyboard-navigation diff in the Git pane" },
+    "models": { "title": "Make the workspace your own", "copy": "Use the models you trust and the tools you already know. Configure providers, connect MCP servers and install skills and extensions. Your workflow doesn't have to fit a single provider.", "alt": "FastVibe in English: model and provider configuration" },
+    "enlarge": "Enlarge screenshot",
+    "close": "Close screenshot"
+  },
+  "download": {
+    "eyebrow": "GET STARTED",
+    "title": "A new workspace on your desktop",
+    "copy": "Choose your platform, connect a model and start working.",
+    "latest": "Latest release",
+    "releaseNotes": "Release notes",
+    "macTitle": "macOS",
+    "macCopy": "Apple Silicon and Intel builds",
+    "appleSilicon": "Apple Silicon",
+    "intel": "Intel",
+    "windowsTitle": "Windows",
+    "windowsCopy": "64-bit installer",
+    "downloadExe": "Download .exe",
+    "linuxTitle": "Linux",
+    "linuxCopy": "AppImage and Debian packages",
+    "appImage": "AppImage",
+    "deb": ".deb",
+    "allFiles": "All releases & installers",
+    "fallback": "Get the latest release on GitHub",
+    "unavailable": "View installers",
+    "macNote": "macOS builds are currently unsigned.",
+    "setupNote": "Free and open source. Your model provider may charge for usage.",
+    "installGuide": "Installation guide"
+  },
+  "openSource": {
+    "title": "Build your way of working",
+    "copy": "FastVibe is open source under the MIT license. Explore the code, share an idea or help shape what comes next. A good workspace gets better with the people who use it.",
+    "github": "View on GitHub",
+    "issues": "Share feedback",
+    "download": "Download FastVibe"
+  },
+  "footer": { "changelog": "Changelog", "contact": "Contact", "license": "Open source · MIT", "note": "Built for agent work." }
+}

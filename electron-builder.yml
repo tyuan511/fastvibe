@@ -43,6 +43,28 @@ extraResources:
   # they must stay outside the asar archive.
   - from: resources/extensions
     to: extensions
+  # Built-in skills are read from `resourcesPath/skills` at runtime
+  # (`builtinSkillPaths`). Without this entry that lookup finds nothing in a packaged
+  # build and the skills silently apply only in development.
+  - from: resources/skills
+    to: skills
+  # The floating grant panel is a static page loaded by path into its own window, and
+  # it references `../icon.png` — which is why it sits next to the icon out here rather
+  # than becoming a third renderer entry point.
+  - from: resources/grant-overlay
+    to: grant-overlay
+  # The `cua-driver` worker (macOS only). It is an executable, so it must live outside
+  # the asar; electron-builder re-signs every Mach-O file it finds in the bundle, which
+  # is what puts this one under our Developer ID rather than Cua's. Fetched by
+  # `scripts/fetch-cua-driver.mjs`, which pins the release, verifies its checksum and
+  # splits the universal archive per architecture.
+  #
+  # `${arch}` matters: `pnpm dist:mac` packages arm64 and x64 from one invocation, so a
+  # single path would put the same slice in both. The macro is expanded per build
+  # (`platformPackager` passes the current arch into the file matchers), which is what
+  # keeps each package to the ~30 MB it can actually run.
+  - from: resources/cua-driver/${arch}/cua-driver
+    to: cua-driver
   - from: resources/icon.icns
     to: icon.icns
   - from: resources/icon.png
@@ -54,6 +76,12 @@ asarUnpack:
   - "**/*.node"
   - "**/*.wasm"
   - "**/node-pty/prebuilds/**"
+  # cua-driver's native packages ship a shared library (.dylib/.so/.dll) *beside* their
+  # .node addon, and the loader resolves it by path from the package directory. Only the
+  # .node is covered by the glob above; the shared library would be left inside the asar
+  # archive, which dlopen cannot open. Unpack the package so both halves land on disk
+  # together — the per-platform `files` filters below keep it to one architecture.
+  - "**/node_modules/@trycua/cua-driver-*/**"
 
 # node-pty / koffi / photon ship N-API prebuilds that already work in Electron.
 # Avoid running node-gyp against a toolchain the CI image may not have.
@@ -68,12 +96,40 @@ electronLanguages:
 mac:
   icon: resources/icon.icns
   category: public.app-category.developer-tools
-  # Local builds must never sign: without this, electron-builder discovers a
-  # Developer ID in the login keychain and signs/notarizes the dev build.
-  # Packaged Mac updates do not go through Squirrel.Mac (that needs a Developer
-  # ID Apple trusts); the app swaps the .app from the GitHub zip instead.
-  identity: null
-  notarize: false
+  # Personal Developer ID identity. This machine also carries a company
+  # "Developer ID Application" certificate (Team BLSLB9GA43), and
+  # electron-builder's auto-discovery returns the first match it finds, so the
+  # identity has to be pinned explicitly rather than left to discovery.
+  #
+  # The value deliberately omits the `Developer ID Application:` prefix:
+  # app-builder-lib's checkPrefix() throws InvalidConfigurationError when the
+  # configured name starts with one of appleCertificatePrefixes, on the
+  # assumption the prefix is redundant because the cert type is already known.
+  #
+  # CI keeps working without this certificate in the runner's keychain: when the
+  # name matches nothing, reportError() only warns (it throws for MAS builds
+  # only), so the unsigned `Package` step still succeeds.
+  identity: tang yuan (J24Y9W38D8)
+  hardenedRuntime: true
+  # Notarization is driven entirely by environment variables (APPLE_API_KEY,
+  # APPLE_API_KEY_ID, APPLE_API_ISSUER — see .github/workflows/release.yml).
+  # electron-builder 26 accepts only a boolean here: there is no `teamId` under
+  # `notarize`, and the team is implied by the signing identity above plus the
+  # notarization key. With no credentials in the environment this logs a warning
+  # and skips the upload, so a plain `pnpm dist:mac` never talks to Apple.
+  notarize: true
+
+  # Entitlements are deliberately *not* named here. electron-builder picks up
+  # `entitlements.mac.plist` and `entitlements.mac.inherit.plist` from
+  # buildResources (`resources/`) by filename and resolves them to absolute
+  # paths; an explicit value is instead passed to codesign verbatim and resolved
+  # against whatever directory the build was started from.
+
+  # Shown in the system dialog when the updater's fallback path sends an Apple
+  # event (`osascript ... with administrator privileges`). A hardened app that
+  # sends one without this string is killed by the OS rather than prompted.
+  extendInfo:
+    NSAppleEventsUsageDescription: FastVibe 需要发送 Apple 事件来完成应用更新。
   files:
     - "!**/node_modules/node-pty/prebuilds/{win32,linux}-*/**"
     - "!**/node_modules/node-pty/prebuilds/darwin-!(${arch}){,/**/*}"
@@ -88,15 +144,19 @@ mac:
     # runners, which may not have clipboard-darwin-x64 installed). Drop the
     # other arch's package; the loader tries universal first, then ${arch}.
     - "!**/node_modules/@mariozechner/clipboard-darwin-!(${arch}|universal){,/**/*}"
+    # ~50 MB per architecture, so shipping the other one doubles the cost of a feature
+    # it cannot serve. pnpm normally installs only the host's package anyway; these
+    # filters matter when a build host installs several (`supportedArchitectures`).
+    - "!**/node_modules/@trycua/cua-driver-{win32,linux}-*{,/**/*}"
+    - "!**/node_modules/@trycua/cua-driver-darwin-!(${arch}){,/**/*}"
+  # No `arch:` here on purpose. `computeArchToTargetNamesMap` only falls back to the
+  # architectures named on the command line when a target declares none of its own
+  # (`archs == null ? defaultArchs : asArray(archs)`), so listing them here made
+  # `--arm64` and `--x64` silently do nothing and every mac job built both. The
+  # release workflow packages one architecture per job; `pnpm dist:mac` asks for both.
   target:
-    - target: dmg
-      arch:
-        - arm64
-        - x64
-    - target: zip
-      arch:
-        - arm64
-        - x64
+    - dmg
+    - zip
 
 win:
   icon: resources/icon.png
@@ -111,6 +171,8 @@ win:
     - "!**/node_modules/@earendil-works/pi-tui/native/win32/prebuilds/win32-!(${arch}){,/**/*}"
     - "!**/node_modules/@mariozechner/clipboard-{darwin,linux}-*/**"
     - "!**/node_modules/@mariozechner/clipboard-win32-!(${arch}*){,/**/*}"
+    - "!**/node_modules/@trycua/cua-driver-{darwin,linux}-*{,/**/*}"
+    - "!**/node_modules/@trycua/cua-driver-win32-!(${arch}*){,/**/*}"
   target:
     - target: nsis
       arch:
@@ -119,6 +181,12 @@ win:
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
+  # Keep the installer name identical to the name written into latest.yml, and keep
+  # the separators hyphens like every other artifact (the mac dmg/zip, the AppImage).
+  # Without an explicit pattern electron-builder may sanitize the generated GitHub
+  # asset name differently from the manifest, making Windows updates request a
+  # non-existent installer and return 404.
+  artifactName: FastVibe-Setup-${version}.${ext}
 
 linux:
   icon: resources/icon.png
@@ -131,6 +199,8 @@ linux:
     - "!**/node_modules/@earendil-works/pi-tui/native/{darwin,win32}{,/**/*}"
     - "!**/node_modules/@mariozechner/clipboard-{darwin,win32}-*/**"
     - "!**/node_modules/@mariozechner/clipboard-linux-!(${arch}*){,/**/*}"
+    - "!**/node_modules/@trycua/cua-driver-{darwin,win32}-*{,/**/*}"
+    - "!**/node_modules/@trycua/cua-driver-linux-!(${arch}*){,/**/*}"
   target:
     - AppImage
     - deb

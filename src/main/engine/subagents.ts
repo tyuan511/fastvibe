@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync, renameSync } from "node:fs";
 import { join, basename } from "node:path";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
-import type { SubagentConfig, SubagentDraft } from "@shared/types";
+import { THINKING_EFFORT_LEVELS, type SubagentConfig, type SubagentDraft, type ThinkingLevel } from "@shared/types";
 import { BUILTIN_AGENTS, builtinExtensionFile } from "../pi/extension-manager";
 import type { FastVibePaths } from "./paths";
 import { uiText } from "./ui-text";
@@ -11,14 +11,17 @@ type Frontmatter = {
   description?: unknown;
   tools?: unknown;
   model?: unknown;
+  thinkingLevel?: unknown;
 };
 
 type StoredOverrides = {
-  version: 1;
+  version: 2;
   models: Record<string, string>;
+  thinkingLevels: Record<string, ThinkingLevel>;
 };
 
-const BUILTIN_IDS = ["scout", "planner", "worker", "reviewer"] as const;
+const BUILTIN_IDS = ["explorer", "planner", "worker", "reviewer"] as const;
+const LEGACY_SCOUT_ID = "scout";
 const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const MODEL_PATTERN = /^[^\s/]+\/[^\s]+$/;
 
@@ -38,6 +41,7 @@ function readMarkdown(filePath: string, source: "builtin" | "custom", id: string
       description: frontmatter.description,
       tools: parseTools(frontmatter.tools),
       model: typeof frontmatter.model === "string" && frontmatter.model.trim() ? frontmatter.model.trim() : undefined,
+      thinkingLevel: safeThinkingLevel(frontmatter.thinkingLevel) ?? "medium",
       systemPrompt: body.trim(),
       source,
     };
@@ -58,6 +62,7 @@ function renderMarkdown(draft: SubagentDraft): string {
     `tools: ${JSON.stringify(draft.tools)}`,
   ];
   if (draft.model) lines.push(`model: ${quote(draft.model)}`);
+  lines.push(`thinkingLevel: ${quote(safeThinkingLevel(draft.thinkingLevel) ?? "medium")}`);
   lines.push("---", "", draft.systemPrompt.trim(), "");
   return `${lines.join("\n")}\n`;
 }
@@ -66,6 +71,12 @@ function safeModel(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const model = value.trim();
   return model && MODEL_PATTERN.test(model) ? model : undefined;
+}
+
+function safeThinkingLevel(value: unknown): ThinkingLevel | undefined {
+  return typeof value === "string" && THINKING_EFFORT_LEVELS.includes(value as ThinkingLevel)
+    ? value as ThinkingLevel
+    : undefined;
 }
 
 export class SubagentManager {
@@ -91,7 +102,8 @@ export class SubagentManager {
         tools: config?.tools ?? [...(fallback?.tools ?? [])],
         systemPrompt: config?.systemPrompt ?? "",
         source: "builtin" as const,
-        ...(overrides.models[id] ? { model: overrides.models[id] } : {}),
+        thinkingLevel: overrides.thinkingLevels[id] ?? config?.thinkingLevel ?? "medium",
+        ...((overrides.models[id] ?? config?.model) ? { model: overrides.models[id] ?? config?.model } : {}),
       } satisfies SubagentConfig;
     });
 
@@ -107,9 +119,20 @@ export class SubagentManager {
     return [...builtins, ...custom];
   }
 
-  modelFor(agentName: string, declared?: string): string | undefined {
+  modelFor(agentName: string, declared?: string, source?: "user" | "project"): string | undefined {
+    if (source === "project" || declared) return declared;
     const config = this.list().find((item) => item.id === agentName || item.name === agentName);
-    return config?.model ?? declared;
+    return config?.model;
+  }
+
+  thinkingLevelFor(
+    agentName: string,
+    declared?: ThinkingLevel,
+    source?: "user" | "project",
+  ): ThinkingLevel {
+    if (source === "project" || declared) return declared ?? "medium";
+    const config = this.list().find((item) => item.id === agentName || item.name === agentName);
+    return config?.thinkingLevel ?? "medium";
   }
 
   save(draft: SubagentDraft): SubagentConfig[] {
@@ -119,13 +142,14 @@ export class SubagentManager {
     const tools = [...new Set(draft.tools.map((tool) => tool.trim()).filter(Boolean))];
     const current = draft.id ? this.list().find((item) => item.id === draft.id) : undefined;
 
-    // Built-in agents only persist a model override. Their prompt comes from the
-    // bundled role file and is intentionally not sent back by the settings form.
+    // Built-in agents only persist model and reasoning overrides. Their prompt comes
+    // from the bundled role file and is intentionally not sent back by the settings form.
     if (current?.source === "builtin") {
       if (draft.model && !MODEL_PATTERN.test(draft.model.trim())) throw new Error(uiText("模型格式应为 provider/model", "Model must use the provider/model format"));
       const overrides = this.#readOverrides();
       if (draft.model?.trim()) overrides.models[current.id] = draft.model.trim();
       else delete overrides.models[current.id];
+      overrides.thinkingLevels[current.id] = safeThinkingLevel(draft.thinkingLevel) ?? "medium";
       this.#writeOverrides(overrides);
       return this.list();
     }
@@ -138,7 +162,15 @@ export class SubagentManager {
     const id = current?.id ?? this.#newId(name);
     const duplicate = this.list().find((item) => item.id !== id && item.name.toLowerCase() === name.toLowerCase());
     if (duplicate) throw new Error(uiText("已经存在同名的子 Agent", "A subagent with that name already exists"));
-    const next: SubagentDraft = { id, name, description, tools, systemPrompt, model: draft.model?.trim() || undefined };
+    const next: SubagentDraft = {
+      id,
+      name,
+      description,
+      tools,
+      systemPrompt,
+      model: draft.model?.trim() || undefined,
+      thinkingLevel: safeThinkingLevel(draft.thinkingLevel) ?? "medium",
+    };
     const filePath = join(this.#customDir, `${id}.md`);
     const tempPath = `${filePath}.tmp-${process.pid}`;
     writeFileSync(tempPath, renderMarkdown(next), { mode: 0o600 });
@@ -168,14 +200,28 @@ export class SubagentManager {
     try {
       const value = JSON.parse(readFileSync(this.#paths.subagentsFile, "utf8")) as Partial<StoredOverrides>;
       const models = value.models && typeof value.models === "object" ? value.models : {};
-      return {
-        version: 1,
-        models: Object.fromEntries(
-          Object.entries(models).filter(([key, model]) => Boolean(key) && typeof model === "string" && MODEL_PATTERN.test(model)),
-        ),
-      };
+      const thinkingLevels = value.thinkingLevels && typeof value.thinkingLevels === "object" ? value.thinkingLevels : {};
+      const safeModels = Object.fromEntries(
+        Object.entries(models).filter(([key, model]) => Boolean(key) && typeof model === "string" && MODEL_PATTERN.test(model)),
+      );
+      const safeThinkingLevels = Object.fromEntries(
+        Object.entries(thinkingLevels).filter(([key, level]) => Boolean(key) && Boolean(safeThinkingLevel(level))),
+      ) as Record<string, ThinkingLevel>;
+
+      // `scout` was renamed to `explorer`; preserve an existing built-in override
+      // unless the user has already saved an explicit value under the new id.
+      if (safeModels.explorer === undefined && safeModels[LEGACY_SCOUT_ID] !== undefined) {
+        safeModels.explorer = safeModels[LEGACY_SCOUT_ID];
+      }
+      if (safeThinkingLevels.explorer === undefined && safeThinkingLevels[LEGACY_SCOUT_ID] !== undefined) {
+        safeThinkingLevels.explorer = safeThinkingLevels[LEGACY_SCOUT_ID];
+      }
+      delete safeModels[LEGACY_SCOUT_ID];
+      delete safeThinkingLevels[LEGACY_SCOUT_ID];
+
+      return { version: 2, models: safeModels, thinkingLevels: safeThinkingLevels };
     } catch {
-      return { version: 1, models: {} };
+      return { version: 2, models: {}, thinkingLevels: {} };
     }
   }
 

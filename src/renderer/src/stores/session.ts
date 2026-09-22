@@ -5,6 +5,7 @@ import type {
   ChatMessage,
   ContextUsage,
   Conversation,
+  ConversationQueueState,
   EngineModel,
   FastVibeModel,
   EngineSessionState,
@@ -25,10 +26,11 @@ import type {
   SubagentInfo,
   WorkspaceSnapshot,
 } from "@shared/types";
-import { applyEngineEvent, lastUserIsLocal, userMessageText } from "@/lib/apply-engine-event";
+import { applyEngineEvent, userMessageText } from "@/lib/apply-engine-event";
 import { i18n } from "@/lib/i18n";
 import { resolvePath } from "@/lib/workspace-path";
-import { useSidePaneStore } from "@/stores/side-pane";
+import { canRestoreComposer } from "@/lib/composer-race";
+import { useSidePaneStore, type SidePaneTab } from "@/stores/side-pane";
 
 type SessionStore = {
   status: EngineStatus;
@@ -95,8 +97,17 @@ type SessionStore = {
   /** String-line widgets (`ctx.ui.setWidget`), bucketed by conversation. */
   extensionWidgets: Record<string, Record<string, ExtensionWidget>>;
   attachments: ChatAttachment[];
+  /**
+   * Composer payloads are conversation-owned. Attachments used to be one global slot,
+   * so opening another chat either leaked the previous files into it or cleared them
+   * before returning. The version lets async queue edits restore only the reservation
+   * they made, never text the user typed while an IPC call was in flight.
+   */
+  composerDrafts: Record<string, { draft: string; attachments: ChatAttachment[]; version: number }>;
   /** Renderer-side follow-ups for every conversation, retained across chat switches. */
   queued: QueuedPrompt[];
+  /** Last Main revision applied per conversation; rejects stale multi-window replies. */
+  queueRevisionByConversation: Record<string, number>;
   /** Pause reasons retained per conversation; `queuePause` mirrors the active chat. */
   queuePauseByConversation: Record<string, QueuePauseReason | null>;
   queuePause: QueuePauseReason | null;
@@ -147,6 +158,17 @@ type SessionStore = {
    */
   setMessages: (messages: ChatMessage[], conversationId?: string) => void;
   /**
+   * Replace the transcript from `anchorId` down, keeping every row above it untouched.
+   *
+   * What the end-of-turn reload applies: Main answers with the turn rather than the
+   * whole conversation, so nothing above the anchor is re-read, re-compared or
+   * re-rendered. `false` means the anchor was not in the transcript after all (the
+   * chat moved under the reply), and the caller falls back to a full read; a tail for
+   * a conversation that is no longer on screen is dropped, and reports no failure
+   * because there is nothing left to read for it.
+   */
+  spliceMessages: (anchorId: string, tail: ChatMessage[], conversationId?: string) => boolean;
+  /**
    * Seed a conversation's extension statuses from a fresh engine read.
    *
    * The engine replays what `session_start` published (a goal restored from its
@@ -173,22 +195,21 @@ type SessionStore = {
   resolvePermission: (id: string) => void;
   dismissNotice: (id: string) => void;
   addUserMessage: (text: string, attachments?: ChatAttachment[]) => void;
+  /** Remove a fresh prompt that Main rejected before it entered the transcript. */
+  rollbackOptimisticPrompt: () => void;
   dropEmptyAssistant: () => void;
   setAttachments: (attachments: ChatAttachment[]) => void;
-  enqueue: (item: QueuedPrompt) => void;
-  removeQueued: (id: string) => void;
-  /** Drag-to-reorder: persist the full id order the sortable list produced. */
-  setQueuedOrder: (ids: string[]) => void;
-  prependQueued: (item: QueuedPrompt) => void;
-  /** Mark a queued row as 发送中 and record the payload the engine was given. */
-  markQueuedSending: (id: string, sentText: string) => void;
-  /** 撤回: put a 发送中 row back to pending. */
-  unmarkQueuedSending: (id: string) => void;
-  /** Abort dropped the engine's steering queue; those rows are pending again. */
-  unmarkAllQueuedSending: () => void;
-  clearQueued: () => void;
-  setQueuePause: (reason: QueuePauseReason | null) => void;
-  setQueuePauseFor: (conversationId: string, reason: QueuePauseReason | null) => void;
+  /** Atomically replace the active conversation's complete composer payload. */
+  setComposer: (draft: string, attachments: ChatAttachment[]) => void;
+  /** Restore an async operation's payload iff that conversation has not changed since. */
+  restoreComposer: (
+    conversationId: string,
+    draft: string,
+    attachments: ChatAttachment[],
+    expectedVersion: number,
+  ) => boolean;
+  /** Replace one conversation's queue from Main's authoritative snapshot. */
+  setQueueState: (queue: ConversationQueueState) => void;
   /** Clear the interrupted-run marker once a resume (or fresh prompt) takes over. */
   setRunInterrupted: (reason: "aborted" | "error" | null) => void;
   /**
@@ -604,16 +625,11 @@ function reduceEvents(state: SessionStore, events: EngineEvent[]): Partial<Sessi
    */
   let broadcast: { id: string; running: boolean } | undefined;
   for (const event of events) {
-    // A steered user turn has no optimistic copy. Once the engine injects it,
-    // drop the matching 发送中 row so the tray no longer shows it.
-    const delivered = userMessageText(event);
-    if (delivered !== undefined && !lastUserIsLocal(messages)) {
-      const owner = typeof event.conversationId === "string" ? event.conversationId : state.activeId;
-      const sending = queued.filter((item) => item.sending && item.conversationId === owner);
-      if (sending.length > 0) {
-        const match = sending.find((item) => item.sentText === delivered) ?? sending[0];
-        queued = queued.filter((item) => item.id !== match.id);
-      }
+    // Main associates delivery with the exact durable queue id. Never infer it from
+    // text: duplicate prompts and different attachments are valid and can arrive out
+    // of order. If an older client/event has no id, queue_changed remains authoritative.
+    if (event.type === "queue_delivered" && typeof event.queueId === "string") {
+      queued = queued.filter((item) => item.id !== event.queueId);
     }
     const applied = applyEngineEvent(messages, event, streaming, partBoundary);
     messages = applied.messages;
@@ -718,7 +734,7 @@ function reduceEvents(state: SessionStore, events: EngineEvent[]): Partial<Sessi
       workingOverride = streaming;
     }
     subagents = upsertSubagent(subagents, event);
-    subagentStreams = applySubagentStream(subagentStreams, event);
+    subagentStreams = applySubagentStream(subagentStreams, event, subagents);
   }
   return {
     messages,
@@ -841,7 +857,9 @@ export const useSessionStore = create<SessionStore>((set, get) => {
   extensionStatus: {},
   extensionWidgets: {},
   attachments: [],
+  composerDrafts: {},
   queued: [],
+  queueRevisionByConversation: {},
   queuePauseByConversation: {},
   queuePause: null,
   runInterrupted: null,
@@ -851,17 +869,18 @@ export const useSessionStore = create<SessionStore>((set, get) => {
   setStatus: (status) => set({ status, error: status.state === "error" ? status.message ?? null : null }),
   setSession: (session) =>
     set((state) => {
-      // Reject the entire foreign reply, not just its run flags: model, context
-      // usage and thinking level belong to the addressed conversation too.
+      // Reject the entire foreign reply, not just its run flags: model, context usage
+      // and thinking level belong to the addressed conversation too. A reply that names
+      // no conversation is a draft state, which only a chat-less surface may adopt.
       if (!sessionBelongsToConversation(session, state.activeId)) return state;
       const conversationId = state.activeId;
-      const hasQueued = conversationId
-        ? state.queued.some((item) => item.conversationId === conversationId)
-        : false;
-      const resumedQueuePause =
-        conversationId && session?.canResume && hasQueued
-          ? { ...state.queuePauseByConversation, [conversationId]: "stopped" as const }
-          : state.queuePauseByConversation;
+      // `canResume` only says that the transcript can be continued. It does not say why
+      // the run stopped: a state refresh can observe a resumable transcript after an
+      // error, a reload, or a retry failure as well. Inferring `stopped` here made any
+      // queued follow-up show “由于你中断了当前响应” even when no abort happened. Queue
+      // pauses are owned by the live event verdict (or handleAbort), both of which have
+      // an actual stop reason; a state snapshot must not invent one.
+      const resumedQueuePause = state.queuePauseByConversation;
       return {
         session,
         streaming: session?.running ?? false,
@@ -906,7 +925,9 @@ export const useSessionStore = create<SessionStore>((set, get) => {
         pendingPermissions: prune(state.pendingPermissions),
         waitingForUser: prune(state.waitingForUser),
         running: prune(state.running),
+        composerDrafts: prune(state.composerDrafts),
         queued: state.queued.filter((item) => live.has(item.conversationId)),
+        queueRevisionByConversation: prune(state.queueRevisionByConversation),
         queuePauseByConversation: prune(state.queuePauseByConversation),
       };
     }),
@@ -914,11 +935,22 @@ export const useSessionStore = create<SessionStore>((set, get) => {
     // The right pane is conversation-bound: switching chats swaps its tabs, its
     // active tab and its collapsed/maximized state onto the incoming chat.
     useSidePaneStore.getState().setScope(activeId);
-    set((state) => ({
-      activeId,
-      permission: activePermission(state.pendingPermissions, activeId),
-      queuePause: activeId ? state.queuePauseByConversation[activeId] ?? null : null,
-    }));
+    set((state) => {
+      if (state.activeId === activeId) {
+        return {
+          permission: activePermission(state.pendingPermissions, activeId),
+          queuePause: activeId ? state.queuePauseByConversation[activeId] ?? null : null,
+        };
+      }
+      const composer = activeId ? state.composerDrafts[activeId] : undefined;
+      return {
+        activeId,
+        draft: composer?.draft ?? "",
+        attachments: composer?.attachments ?? [],
+        permission: activePermission(state.pendingPermissions, activeId),
+        queuePause: activeId ? state.queuePauseByConversation[activeId] ?? null : null,
+      };
+    });
   },
   setMessages: (messages, conversationId) => {
     // A stale read must not even discard the active chat's queued stream deltas.
@@ -947,6 +979,34 @@ export const useSessionStore = create<SessionStore>((set, get) => {
       };
     });
   },
+  spliceMessages: (anchorId, tail, conversationId) => {
+    const state = get();
+    if (conversationId && state.activeId && conversationId !== state.activeId) return true;
+    const index = state.messages.findIndex((message) => message.id === anchorId);
+    if (index < 0) return false;
+    dropQueued();
+    set((current) => {
+      // Re-read inside the update: `dropQueued` can flush pending events between the
+      // lookup above and here, which moves the rows.
+      const at = current.messages.findIndex((message) => message.id === anchorId);
+      if (at < 0) return current;
+      const previousTail = current.messages.slice(at);
+      const reconciled = reconcileMessages(previousTail, tail);
+      // `reconcileMessages` hands back the array it was given when every row was
+      // reused, and `previousTail` is fresh here — so this is "the turn is unchanged".
+      if (reconciled === previousTail) return current;
+      const messages = [...current.messages.slice(0, at), ...reconciled];
+      return {
+        messages,
+        // Same reasoning as `setMessages`: a transcript read says nothing about
+        // whether a run is in flight, and Main owns those flags.
+        streaming: current.streaming,
+        partBoundary: settledBoundary(messages),
+        running: current.running,
+      };
+    });
+    return true;
+  },
   setExtensionStatus: (conversationId, status) =>
     set((state) => {
       const extensionStatus = { ...state.extensionStatus };
@@ -954,7 +1014,22 @@ export const useSessionStore = create<SessionStore>((set, get) => {
       else delete extensionStatus[conversationId];
       return { extensionStatus };
     }),
-  setDraft: (draft) => set({ draft }),
+  setDraft: (draft) =>
+    set((state) => {
+      if (!state.activeId) return { draft };
+      const previous = state.composerDrafts[state.activeId];
+      return {
+        draft,
+        composerDrafts: {
+          ...state.composerDrafts,
+          [state.activeId]: {
+            draft,
+            attachments: state.attachments,
+            version: (previous?.version ?? 0) + 1,
+          },
+        },
+      };
+    }),
   setError: (error) => set({ error }),
   setCommands: (commands) => set({ commands }),
   setSubagents: (subagents) =>
@@ -1043,6 +1118,16 @@ export const useSessionStore = create<SessionStore>((set, get) => {
         running: activeRunning(state, startsTurn),
       };
     }),
+  rollbackOptimisticPrompt: () =>
+    set((state) => {
+      const messages = [...state.messages];
+      const assistant = messages.at(-1);
+      if (assistant?.role === "assistant" && !assistant.text && !assistant.thinking && assistant.tools.length === 0) {
+        messages.pop();
+      }
+      if (messages.at(-1)?.role === "user" && messages.at(-1)?.id.startsWith("local:")) messages.pop();
+      return { messages, streaming: false, running: activeRunning(state, false) };
+    }),
   dropEmptyAssistant: () =>
     set((state) => {
       const last = state.messages.at(-1);
@@ -1057,70 +1142,74 @@ export const useSessionStore = create<SessionStore>((set, get) => {
       }
       return { streaming: false, running: activeRunning(state, false) };
     }),
-  setAttachments: (attachments) => set({ attachments }),
-  enqueue: (item) => set((state) => ({ queued: [...state.queued, item] })),
-  removeQueued: (id) => set((state) => ({ queued: state.queued.filter((item) => item.id !== id) })),
-  setQueuedOrder: (ids) =>
+  setAttachments: (attachments) =>
     set((state) => {
-      const rank = new Map(ids.map((id, index) => [id, index]));
-      // Unknown ids keep their relative order at the end, so a stale drop can't drop items.
-      const queued = [...state.queued].sort((a, b) => {
-        const left = rank.get(a.id);
-        const right = rank.get(b.id);
-        if (left === undefined && right === undefined) return 0;
-        if (left === undefined) return 1;
-        if (right === undefined) return -1;
-        return left - right;
-      });
-      return { queued };
-    }),
-  prependQueued: (item) => set((state) => ({ queued: [item, ...state.queued] })),
-  markQueuedSending: (id, sentText) =>
-    set((state) => ({
-      queued: state.queued.map((item) => (item.id === id ? { ...item, sending: true, sentText } : item)),
-    })),
-  unmarkQueuedSending: (id) =>
-    set((state) => ({
-      queued: state.queued.map((item) =>
-        item.id === id ? { ...item, sending: false, sentText: undefined } : item,
-      ),
-    })),
-  unmarkAllQueuedSending: () =>
-    set((state) => ({
-      queued: state.queued.map((item) =>
-        item.conversationId === state.activeId && item.sending
-          ? { ...item, sending: false, sentText: undefined }
-          : item,
-      ),
-    })),
-  clearQueued: () =>
-    set((state) => {
-      const conversationId = state.activeId;
-      if (!conversationId) return { queuePause: null };
-      const queuePauseByConversation = { ...state.queuePauseByConversation };
-      delete queuePauseByConversation[conversationId];
+      if (!state.activeId) return { attachments };
+      const previous = state.composerDrafts[state.activeId];
       return {
-        queued: state.queued.filter((item) => item.conversationId !== conversationId),
-        queuePauseByConversation,
-        queuePause: null,
+        attachments,
+        composerDrafts: {
+          ...state.composerDrafts,
+          [state.activeId]: {
+            draft: state.draft,
+            attachments,
+            version: (previous?.version ?? 0) + 1,
+          },
+        },
       };
     }),
-  setQueuePause: (queuePause) => {
-    const conversationId = get().activeId;
-    if (!conversationId) {
-      set({ queuePause });
-      return;
-    }
-    get().setQueuePauseFor(conversationId, queuePause);
-  },
-  setQueuePauseFor: (conversationId, reason) =>
+  setComposer: (draft, attachments) =>
     set((state) => {
-      const queuePauseByConversation = { ...state.queuePauseByConversation };
-      if (reason) queuePauseByConversation[conversationId] = reason;
-      else delete queuePauseByConversation[conversationId];
+      if (!state.activeId) return { draft, attachments };
+      const previous = state.composerDrafts[state.activeId];
       return {
+        draft,
+        attachments,
+        composerDrafts: {
+          ...state.composerDrafts,
+          [state.activeId]: {
+            draft,
+            attachments,
+            version: (previous?.version ?? 0) + 1,
+          },
+        },
+      };
+    }),
+  restoreComposer: (conversationId, draft, attachments, expectedVersion) => {
+    let restored = false;
+    set((state) => {
+      const previous = state.composerDrafts[conversationId];
+      if (!previous || !canRestoreComposer(previous.version, expectedVersion)) return state;
+      restored = true;
+      const next = {
+        draft,
+        attachments,
+        version: previous.version + 1,
+      };
+      return {
+        composerDrafts: { ...state.composerDrafts, [conversationId]: next },
+        ...(state.activeId === conversationId ? { draft, attachments } : {}),
+      };
+    });
+    return restored;
+  },
+  setQueueState: (queue) =>
+    set((state) => {
+      if ((state.queueRevisionByConversation[queue.conversationId] ?? -1) > queue.revision) return state;
+      const queuePauseByConversation = { ...state.queuePauseByConversation };
+      if (queue.pause) queuePauseByConversation[queue.conversationId] = queue.pause;
+      else delete queuePauseByConversation[queue.conversationId];
+      return {
+        queued: [
+          ...state.queued.filter((item) => item.conversationId !== queue.conversationId),
+          ...queue.items,
+        ],
+        queueRevisionByConversation: {
+          ...state.queueRevisionByConversation,
+          [queue.conversationId]: queue.revision,
+        },
         queuePauseByConversation,
-        queuePause: state.activeId === conversationId ? reason : state.queuePause,
+        queuePause: state.activeId === queue.conversationId ? queue.pause : state.queuePause,
       };
     }),
   setRunInterrupted: (runInterrupted) => set({ runInterrupted }),
@@ -1156,10 +1245,11 @@ export const useSessionStore = create<SessionStore>((set, get) => {
   applyEvent: (event) => {
     const owner = typeof event.conversationId === "string" ? event.conversationId : null;
     // A steer can be delivered while its conversation is in the background. The
-    // transcript event is intentionally filtered below, but the renderer-side row
-    // still has to disappear or it would come back forever when the chat is reopened.
+    // transcript event is filtered below, but the renderer-side row still has to
+    // disappear or it would come back forever when the chat is reopened. An event that
+    // names no conversation is not permission to write into whichever chat is visible.
     if (!belongsToTranscript(event, get().activeId)) {
-      const delivered = userMessageText(event);
+      const delivered = owner ? userMessageText(event) : undefined;
       if (owner && delivered !== undefined) {
         set((state) => {
           const sending = state.queued.filter(
@@ -1194,6 +1284,8 @@ export const useSessionStore = create<SessionStore>((set, get) => {
       stats: null,
       error: null,
       activeId: null,
+      draft: "",
+      attachments: [],
       permission: null,
       // Prompts of *other* conversations are deliberately kept, like `running`: a
       // background chat parked on an approval must not lose its question because the
@@ -1216,6 +1308,11 @@ export const useSessionStore = create<SessionStore>((set, get) => {
       queued: state.activeId
         ? state.queued.filter((item) => item.conversationId !== state.activeId)
         : state.queued,
+      queueRevisionByConversation: state.activeId
+        ? Object.fromEntries(
+            Object.entries(state.queueRevisionByConversation).filter(([key]) => key !== state.activeId),
+          )
+        : state.queueRevisionByConversation,
       queuePauseByConversation: state.activeId
         ? Object.fromEntries(
             Object.entries(state.queuePauseByConversation).filter(([key]) => key !== state.activeId),
@@ -1317,9 +1414,67 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+/**
+ * How many delegated runs keep their live transcript in the renderer.
+ *
+ * Nothing used to drop these: `subagentStreams` is keyed by run id, subagent traffic
+ * is deliberately exempt from the active-conversation filter (so a background chat's
+ * pane stays live), and a new session does not clear it either — so every run of
+ * every conversation accumulated a full transcript, tool results included, for as
+ * long as the window stayed open. A fan-out-heavy afternoon leaked hundreds of MB.
+ *
+ * The cap is on *finished, unwatched* runs only: a run that is still going, and any
+ * run open in a right-pane tab, is never dropped. A dropped run is not lost either —
+ * the pane reads the authoritative transcript back from Main (`getSubagentMessages`)
+ * once the run is over, and the live stream is only its fallback.
+ */
+const MAX_SUBAGENT_STREAMS = 12;
+
+/** Run ids with a pane open on them, in any conversation's scope. */
+function watchedSubagentIds(): Set<string> {
+  const pane = useSidePaneStore.getState();
+  const watched = new Set<string>();
+  const collect = (tabs: SidePaneTab[]): void => {
+    for (const tab of tabs) if (tab.subagentId) watched.add(tab.subagentId);
+  };
+  collect(pane.tabs);
+  for (const scope of Object.values(pane.scopes)) collect(scope.tabs);
+  return watched;
+}
+
+/**
+ * Drop the least recently active finished runs once the cap is exceeded.
+ *
+ * Key order is recency order — `applySubagentStream` re-inserts the run that just
+ * spoke at the end — so the oldest candidates come first.
+ */
+function pruneSubagentStreams(
+  streams: Record<string, ChatMessage[]>,
+  keep: string,
+  subagents: SubagentInfo[],
+): Record<string, ChatMessage[]> {
+  const keys = Object.keys(streams);
+  if (keys.length <= MAX_SUBAGENT_STREAMS) return streams;
+  const running = new Set(subagents.filter((item) => item.status === "running").map((item) => item.id));
+  const watched = watchedSubagentIds();
+  const dropped = new Set<string>();
+  let over = keys.length - MAX_SUBAGENT_STREAMS;
+  for (const key of keys) {
+    if (over === 0) break;
+    if (key === keep || running.has(key) || watched.has(key)) continue;
+    dropped.add(key);
+    over -= 1;
+  }
+  if (dropped.size === 0) return streams;
+  const next: Record<string, ChatMessage[]> = {};
+  for (const key of keys) if (!dropped.has(key)) next[key] = streams[key];
+  return next;
+}
+
 function applySubagentStream(
   streams: Record<string, ChatMessage[]>,
   event: EngineEvent,
+  subagents: SubagentInfo[],
 ): Record<string, ChatMessage[]> {
   if (event.type !== "subagent_event") return streams;
   const id =
@@ -1344,6 +1499,18 @@ function applySubagentStream(
       return streams;
     }
   }
-  const applied = applyEngineEvent(streams[id] ?? [], nested, true);
-  return { ...streams, [id]: applied.messages };
+  const known = streams[id];
+  const applied = applyEngineEvent(known ?? [], nested, true);
+  // Rebuilt rather than spread over, so the run that just spoke moves to the end:
+  // a plain `{ ...streams, [id]: … }` keeps an existing key in its original slot,
+  // and the cap prunes by exactly this order.
+  const next: Record<string, ChatMessage[]> = {};
+  for (const key of Object.keys(streams)) {
+    if (key !== id) next[key] = streams[key];
+  }
+  next[id] = applied.messages;
+  // Only a run that was not being tracked yet can push the count over the cap, and
+  // this runs for every delta of every delegated run — so the pruning pass (which
+  // reads the pane's tabs) is reached once per run rather than once per token.
+  return known === undefined ? pruneSubagentStreams(next, id, subagents) : next;
 }

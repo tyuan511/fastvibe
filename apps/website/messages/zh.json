@@ -1,0 +1,87 @@
+{
+  "title": "FastVibe — 为 Agent 打造的桌面工作区",
+  "description": "基于 pi-coding-agent 的开源桌面工作台。自由选择模型，按需扩展工具，从界面到 Agent 引擎，源码可查。",
+  "home": "FastVibe 首页",
+  "navigation": "主导航",
+  "skip": "跳转到主要内容",
+  "languageLabel": "选择语言",
+  "nav": { "badge": "桌面版", "product": "产品", "download": "下载", "github": "GitHub" },
+  "hero": {
+    "eyebrow": "FastVibe · 开源桌面智能体工作台",
+    "title": "为 Agent，\n准备一个工作区",
+    "description": "以 <strong>pi-coding-agent</strong> 为核心，<strong>兼容 Pi 插件生态</strong>，为 Agent 工作提供<strong>完整的桌面 GUI</strong>。",
+    "detail": "对话、工具调用、权限审批与文件审阅，尽在一个界面。<strong>从界面到引擎开源可查</strong>，工具与工作流按需扩展。",
+    "download": "下载 FastVibe",
+    "source": "查看 GitHub",
+    "docs": "使用指南",
+    "platforms": "支持 macOS、Windows 与 Linux",
+    "cardTitle": "FastVibe 桌面版",
+    "latest": "最新版本",
+    "allDownloads": "所有下载",
+    "format": "安装包",
+    "platformLabel": "选择操作系统"
+  },
+  "overview": {
+    "eyebrow": "基于 PI 构建",
+    "word": "Pi + FastVibe",
+    "title": "让工具适应你，而不是反过来。",
+    "description": "Pi 提供精简、可扩展的 Agent 核心。\nFastVibe 把这份自由，带到你的桌面。",
+    "items": {
+      "minimal": { "title": "精简核心，不预设你的流程", "copy": "Pi 从简洁的系统提示和基础工具出发，把工作流留给扩展。FastVibe 在此之上加入计划、子 Agent 与权限审批，组成开箱即用的桌面体验。" },
+      "models": { "title": "换模型，不换工作区", "copy": "沿用 Pi 的多模型能力，在同一会话中切换已配置的模型。按任务选择供应商与思考强度，不必把工作流绑定到单一模型。" },
+      "extensible": { "title": "按需扩展，不止于内置", "copy": "通过技能和 TypeScript 扩展添加工具与工作流。FastVibe 接入 Pi 的扩展机制，并补上 MCP 桥接，让你熟悉的工具参与协作。" }
+    },
+    "piLink": "了解 Pi 的设计理念",
+    "sourceTitle": "不止界面开源，核心链路也可查",
+    "sourceCopy": "FastVibe 直接嵌入 pi-coding-agent SDK。沿着调用链，从桌面交互、会话管理到 Agent 循环与模型适配，都能找到源码。",
+    "sourceLabel": "开源调用链",
+    "layers": {
+      "desktop": "桌面界面与集成",
+      "session": "会话、工具与扩展",
+      "agent": "Agent 循环与事件",
+      "models": "模型 API 与流式响应"
+    },
+    "scope": "以上应用与 Agent 核心均以 MIT 协议开源；模型及第三方服务遵循各自条款。"
+  },
+  "features": {
+    "eyebrow": "为实际工作设计",
+    "title": "一个工作区，\n每一步都看得见。",
+    "workspace": { "title": "在完整的上下文里工作", "copy": "把对话放在正在处理的文件旁边。让 Agent 探索项目、制定计划并推进任务，代码预览与执行进度始终就在手边。", "alt": "FastVibe 中文界面：Fieldnotes 快速搜索任务、已完成的待办和 TypeScript 文件预览" },
+    "review": { "title": "看清改了什么，为什么改", "copy": "工具调用和文件改动本来就是对话的一部分，不需要另找线索。打开 diff，逐项审阅修改，在当前任务中完成 Git 操作。", "alt": "FastVibe 中文界面：在 Git 审查面板查看命令菜单键盘导航的代码改动" },
+    "models": { "title": "按自己的方式，组织工作", "copy": "使用信任的模型和熟悉的工具。配置供应商、连接 MCP 服务、安装技能和插件。你的工作方式，不必由某一家供应商决定。", "alt": "FastVibe 中文界面：模型与供应商配置" },
+    "enlarge": "放大查看截图",
+    "close": "关闭截图"
+  },
+  "download": {
+    "eyebrow": "开始使用",
+    "title": "把工作区，带到你的桌面",
+    "copy": "选择系统，连接模型，就可以开始工作。",
+    "latest": "最新版本",
+    "releaseNotes": "更新日志",
+    "macTitle": "macOS",
+    "macCopy": "适用于 Apple Silicon 与 Intel 芯片",
+    "appleSilicon": "Apple Silicon",
+    "intel": "Intel",
+    "windowsTitle": "Windows",
+    "windowsCopy": "64 位安装程序",
+    "downloadExe": "下载 .exe",
+    "linuxTitle": "Linux",
+    "linuxCopy": "AppImage 和 Debian 安装包",
+    "appImage": "AppImage",
+    "deb": ".deb",
+    "allFiles": "所有版本与安装包",
+    "fallback": "前往 GitHub 获取最新版本",
+    "unavailable": "查看安装包",
+    "macNote": "macOS 版本目前未签名。",
+    "setupNote": "应用免费开源；模型服务可能由所选供应商另行收费。",
+    "installGuide": "安装说明"
+  },
+  "openSource": {
+    "title": "一起构建，更适合你的工作方式",
+    "copy": "FastVibe 以 MIT 协议开源。阅读源码，分享想法，或参与下一个版本的开发。好的工作区，会和使用它的人一起成长。",
+    "github": "查看 GitHub",
+    "issues": "交流反馈",
+    "download": "下载 FastVibe"
+  },
+  "footer": { "changelog": "更新日志", "contact": "联系", "license": "开源 · MIT", "note": "为 Agent 工作而构建。" }
+}

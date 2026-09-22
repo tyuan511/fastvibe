@@ -5,6 +5,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { CONFIG_DIR_NAME, getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 
 export type AgentScope = "user" | "project" | "both";
@@ -14,6 +15,7 @@ export interface AgentConfig {
 	description: string;
 	tools?: string[];
 	model?: string;
+	thinkingLevel: ThinkingLevel;
 	systemPrompt: string;
 	source: "user" | "project";
 	filePath: string;
@@ -37,7 +39,16 @@ type AgentFrontmatter = {
 	description?: unknown;
 	tools?: unknown;
 	model?: unknown;
+	thinkingLevel?: unknown;
 };
+
+const THINKING_LEVELS = new Set<ThinkingLevel>(["minimal", "low", "medium", "high", "xhigh", "max"]);
+
+export function parseAgentThinkingLevel(value: unknown): ThinkingLevel {
+	return typeof value === "string" && THINKING_LEVELS.has(value as ThinkingLevel)
+		? value as ThinkingLevel
+		: "medium";
+}
 
 /**
  * Normalize a frontmatter `tools` value to a list of tool names.
@@ -97,6 +108,7 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
 			description: frontmatter.description,
 			tools: parseToolList(frontmatter.tools),
 			model: typeof frontmatter.model === "string" ? frontmatter.model : undefined,
+			thinkingLevel: parseAgentThinkingLevel(frontmatter.thinkingLevel),
 			systemPrompt: body,
 			source,
 			filePath,

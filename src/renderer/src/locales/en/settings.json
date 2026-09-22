@@ -7,12 +7,15 @@
   "aiDesc": "Tell the AI, on every turn, which language to reply in"
  },
  "groups": {
-  "personal": "Personal",
-  "integrations": "Integrations",
+  "preferences": "Preferences",
+  "workspace": "Workspace & data",
+  "integrations": "Models & extensions",
+  "system": "System",
   "about": "About"
  },
  "sections": {
-  "general": "General",
+  "general": "Preferences",
+  "personalization": "Personalization",
   "shortcuts": "Shortcuts",
   "archived": "Archived chats",
   "usage": "Usage",
@@ -24,9 +27,17 @@
   "import": "Import",
   "about": "About",
   "remote": "Remote access",
-  "ssh": "SSH hosts"
+  "ssh": "SSH hosts",
+  "computer": "Computer control"
  },
  "backToApp": "Back to app",
+ "personalization": {
+  "promptTitle": "Agent instructions",
+  "promptDesc": "Give the Agent extra instructions and context for every chat. This is appended after the default system prompt.",
+  "placeholder": "For example: Always answer in Simplified Chinese; explain your plan before editing code.",
+  "promptHint": "This text is used on every new Agent turn. Leave it empty to disable it.",
+  "save": "Save"
+ },
  "appearance": {
   "title": "Appearance",
   "themeMode": "Theme mode",
@@ -40,6 +51,18 @@
   "darkThemeDesc": "Theme used in dark mode",
   "uiFontSize": "Interface size"
  },
+ "agent": {
+  "title": "Agent defaults"
+ },
+ "security": {
+  "title": "Security & permissions"
+ },
+ "runtime": {
+  "title": "Runtime"
+ },
+ "display": {
+  "title": "Display"
+ },
  "common": {
   "title": "General",
   "defaultModel": "Default model",
@@ -51,10 +74,15 @@
   "keepAwake": "Keep awake while running",
   "keepAwakeDesc": "Prevents sleep while an agent is running; restores afterwards",
   "notifications": "Desktop notifications",
-  "notificationsDesc": "Send a notification while the window is in the background",
-  "notifyDone": "When a task finishes",
-  "notifyApproval": "When approval is needed",
-  "notifyOff": "Never",
+  "notificationsDesc": "Master switch; turning it off silences every notice below",
+  "notifyDone": "Task finished",
+  "notifyDoneDesc": "A background chat settles its run",
+  "notifyError": "Task failed",
+  "notifyErrorDesc": "A background chat settles on an error — a retry that gave up, a refused request",
+  "notifyApproval": "Needs an answer",
+  "notifyApprovalDesc": "A background chat is parked on a confirmation or question only you can answer",
+  "notifyUpdate": "App update",
+  "notifyUpdateDesc": "A new version has finished downloading",
   "permissionRules": "Remembered approvals",
   "permissionRulesDesc": "Tool calls you chose 「Always allow」 for skip confirmation; {{count}} in total",
   "permissionRulesClear": "Clear all"
@@ -77,10 +105,12 @@
   "showTimestamps": "Show timestamps"
  },
  "about": {
+  "more": "More",
   "tagline": "Desktop client for agent work, code, and cowork",
   "modelsDev": "Model metadata",
   "generatedAt": "Generated {{date}}",
   "counts": "models.dev · {{models}} models / {{aliases}} aliases",
+  "autoRefresh": "Refreshes automatically every hour",
   "missing": "No bundled snapshot; defaults will be used",
   "update": "Update",
   "updating": "Updating…",
@@ -103,16 +133,21 @@
  },
  "subagents": {
   "title": "Subagent workspace",
-  "desc": "Manage the roles the main agent can delegate to. Each subagent can use its own model.",
-  "fallback": "When no model is configured, the delegated run uses the parent agent's model, then the default model if needed.",
+  "desc": "Manage the roles the main agent can delegate to. Each subagent can use its own model and reasoning effort.",
+  "fallback": "An unset model follows the parent agent. Legacy templates without reasoning use Medium. If the parent model is unavailable, the default model is used.",
   "builtins": "Built-in subagents",
   "customs": "Custom subagents",
   "builtin": "Built-in",
   "custom": "Custom",
   "model": "Model",
-  "modelDesc": "Leave empty to follow the parent agent",
+  "modelDesc": "Leave empty to follow the parent agent's model",
+  "thinking": "Reasoning effort",
+  "thinkingDesc": "Legacy templates without a value use Medium",
+  "modelAndThinking": "Model and reasoning",
+  "modelAndThinkingDesc": "Choose both in one selector; the model may follow the parent agent and reasoning defaults to Medium",
   "configured": "Configured",
   "inherit": "Follow parent agent",
+  "inheritModel": "Follow parent model",
   "refresh": "Refresh",
   "add": "Add subagent",
   "loading": "Loading…",
@@ -271,9 +306,30 @@
   ]
  },
  "providers": {
+  "gatewayIdentify": "Identify upstream",
+  "gatewayIdentifyNone": "No known panel found — the balance cannot be read for this endpoint",
+  "gatewayCredentialHint": "Needs a panel token",
+  "gatewayCredentialConfigure": "Configure panel credential",
+  "gatewayCredentialTitle": "New API panel credential",
+  "gatewayCredentialDesc": "The balance for “{{name}}” comes from the New API panel, which wants its own access token rather than the relay key.",
+  "gatewayCredentialUser": "User ID",
+  "gatewayCredentialToken": "Panel access token",
+  "gatewayCredentialTokenPlaceholder": "Paste the panel access token",
+  "gatewayCredentialStored": "Saved — enter a new token to replace it",
+  "gatewayCredentialHintWhere": "Find it under 个人设置 → 生成系统访问令牌 in the panel; the user ID is shown on the 个人设置 page. The token stays on this machine and is never sent to other clients.",
+  "gatewayCredentialClear": "Clear",
+  "gatewayDetected": "Detected {{gateway}}",
+  "gatewaySub2api": "Sub2API (subscription relay)",
+  "gatewayNewApi": "New API (relay panel)",
+  "gatewayHint": "This site speaks both Anthropic and OpenAI protocols, so pick either.",
+  "gatewayBalanceRefresh": "Refresh site balance",
+  "gatewayBalanceUnlimited": "Unlimited",
   "missing": "Provider not found",
   "loading": "Loading providers…",
   "builtin": "Built-in",
+  "fastvibeAbout": "About FastVibe",
+  "fastvibeDescription": "FastVibe provides comprehensive, affordable, and reliable model gateway services,",
+  "fastvibeVisit": "visit now.",
   "providers": "Providers",
   "custom": "Custom providers",
   "add": "Add provider",
@@ -444,8 +500,10 @@
   "configured": "Configured",
   "add": "Add server",
   "empty": "No MCP servers configured",
+  "emptyHint": "Add a server to see it here",
   "tools": "{{count}} tools",
   "connectFailed": "Failed",
+  "errorDetails": "Connection error details",
   "disconnected": "Disconnected",
   "delete": "Delete server",
   "dialogTitle": "Add MCP server",
@@ -665,5 +723,39 @@
   "cancel": "Cancel",
   "localOnly": "SSH hosts can only be managed on this computer",
   "localOnlyDesc": "A remote client cannot edit or start SSH tunnels on this machine."
+ },
+ "computer": {
+  "permissionTitle": "System permissions",
+  "checking": "Checking permissions…",
+  "granted": "Granted",
+  "notGranted": "Not granted",
+  "accessibility": "Accessibility",
+  "accessibilityDesc": "Lets FastVibe read window contents and click and type for you",
+  "screenRecording": "Screen Recording",
+  "screenRecordingDesc": "Lets FastVibe capture the screen, so it can see what is on it",
+  "grant": "Start granting",
+  "recheck": "Check again",
+  "unavailable": "No computer-control engine is available for this OS or architecture",
+  "windowsNote": "Windows needs no extra permission — computer control can be switched on directly.",
+  "linuxNote": "Linux needs no extra permission; support under Wayland depends on the compositor.",
+  "remoteOnly": "Computer-control permissions and switches can only be viewed and changed in FastVibe on that machine.",
+  "controlTitle": "Control",
+  "enable": "Allow controlling the computer",
+  "enableDesc": "Let FastVibe control other applications on your computer",
+  "background": "Prefer background delivery",
+  "backgroundDesc": "Does not take focus, so you can carry on working; a target that cannot accept it reports an error instead of grabbing focus anyway",
+  "clipboard": "Read and write the clipboard",
+  "clipboardDesc": "The clipboard is shared by every application, and writing replaces what you had on it",
+  "allowedTitle": "Always allowed apps",
+  "allowedDesc": "Actions in these applications are not confirmed each time. Everything else still asks, per the current permission mode.",
+  "allowedEmpty": "None",
+  "allowedPick": "Pick a running app",
+  "allowedAdd": "Add",
+  "allowedRemove": "Remove",
+  "grantHint": "Press Start granting once and FastVibe walks you through it: Screen Recording first — its settings page opens with a floating panel, which you drag into the list — and once the grant is detected, Accessibility opens by itself for the same gesture.",
+  "dragNow": "Drag it in",
+  "flowProgress": "Step {{step}}/{{total}} · waiting for the drop",
+  "flowHint": "The panel is floating above System Settings. Drag it into the list for this step; the next one opens by itself. Esc cancels.",
+  "cancelFlow": "Cancel"
  }
 }

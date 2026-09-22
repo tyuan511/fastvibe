@@ -15,7 +15,11 @@
     "full": "完全访问",
     "askDesc": "编辑外部文件和使用互联网时始终询问",
     "smartDesc": "仅对检测到的风险操作请求批准",
-    "fullDesc": "可不受限制地访问互联网和你电脑上的任何文件"
+    "fullDesc": "可不受限制地访问互联网和你电脑上的任何文件",
+    "fullConfirmTitle": "开启完全访问？",
+    "fullConfirmDescription": "开启后，智能体可以不经询问访问互联网，并读取、修改或删除你电脑上的任何文件。此确认只会显示一次，之后会记住你的选择。",
+    "fullConfirmCancel": "取消",
+    "fullConfirmAction": "确认开启"
   },
   "time": {
     "justNow": "刚刚",
@@ -41,6 +45,8 @@
     "requestFailed": "请求失败",
     "retryingWithBudget": "请求失败，正在重试（{{attempt}}/{{maxAttempts}}）",
     "retrying": "请求失败，正在重试",
+    "retryingLabel": "正在重试",
+    "retryingAttempt": "{{attempt}}/{{maxAttempts}}",
     "retryAfter": "，{{seconds}} 秒后重试",
     "retryDetail": "：{{error}}"
   },
@@ -147,7 +153,6 @@
     "commandPalette": "命令面板",
     "commandPaletteDesc": "搜索对话、操作和设置",
     "settings": "打开设置",
-    "newWindow": "新建窗口",
     "newChat": "新对话",
     "openFolder": "打开文件夹",
     "focusComposer": "聚焦输入框",
@@ -158,12 +163,14 @@
     "nextChat": "下一个对话",
     "toggleSidebar": "切换侧边栏",
     "toggleSidePane": "切换侧边面板",
-    "findInConversation": "在会话中查找",
-    "findInConversationDesc": "在当前对话的消息文本中查找",
     "needModifier": "快捷键需要包含修饰键",
     "reserved": "系统保留快捷键"
   },
   "attachments": {
     "seeAttachments": "请查看附件"
+  },
+  "diff": {
+    "more_one": "还有 {{count}} 行，点击展开",
+    "more_other": "还有 {{count}} 行，点击展开"
   }
 }

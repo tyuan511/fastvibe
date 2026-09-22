@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState, type JSX } from "react";
+import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
@@ -33,11 +33,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
-import { ResizeHandle } from "@/components/resize-handle";
-import { CollapsiblePanel } from "@/components/layout/collapsible-panel";
+import { ResizablePanel } from "@/components/ui/resizable";
 import { setSidebarCollapsed } from "@/lib/sidebar-visibility";
 import { useShortcutLabel } from "@/lib/use-shortcuts";
 import { useSettingsStore } from "@/stores/settings";
+import { useSidePanel } from "@/lib/use-resizable-panel";
 import { MIN_WIDTH, useSidePaneStore, type SidePaneTab, sidePaneTabTitle } from "@/stores/side-pane";
 import { releaseBrowser, SidePaneBrowser } from "./side-pane-browser";
 import { SidePaneChat } from "./side-pane-chat";
@@ -181,7 +181,12 @@ function BrowserTabIcon({ src }: { src?: string | null }): JSX.Element {
   return <HugeiconsIcon strokeWidth={2} icon={ChromeIcon} className="size-3.5 shrink-0" />;
 }
 
-export function SidePane({
+/**
+ * The right pane, held still for the same reason as the sidebar: its tabs own a
+ * terminal, a browser view and a file tree, none of which have anything to say about
+ * a reply arriving. Its callback props are stabilised by the caller (`useStable`).
+ */
+export const SidePane = memo(function SidePane({
   cwd,
   project,
   workspace,
@@ -207,7 +212,6 @@ export function SidePane({
   const leadWithSidebarChrome = maximized && sidebarCollapsed;
   const tabs = useSidePaneStore((state) => state.tabs);
   const activeTabId = useSidePaneStore((state) => state.activeTabId);
-  const setWidth = useSidePaneStore((state) => state.setWidth);
   const setCollapsed = useSidePaneStore((state) => state.setCollapsed);
   const persistWidth = useSidePaneStore((state) => state.persistWidth);
   const activate = useSidePaneStore((state) => state.activate);
@@ -220,13 +224,19 @@ export function SidePane({
   const openSideChat = useSidePaneStore((state) => state.openSideChat);
   const nextSideChatOrdinal = useSidePaneStore((state) => state.nextSideChatOrdinal);
   const hasReviewTab = useSidePaneStore((state) => state.tabs.some((item) => item.type === "git"));
-  const startWidth = useRef(width);
-  // Set once the drag has crossed the minimum, so collapsing fires a single
-  // store write instead of one per mousemove until the drag ends.
-  const collapsing = useRef(false);
+  const panePanel = useSidePanel({
+    id: "side-pane",
+    width,
+    collapsed,
+    minSize: MIN_WIDTH,
+    // Two thirds of the window, whatever the sidebar is doing. Maximised, the
+    // conversation column is gone and the pane owns the rest — see `liftCeiling`.
+    maxSize: "65%",
+    persist: persistWidth,
+    reportCollapsed: setCollapsed,
+    liftCeiling: maximized,
+  });
   const tabsViewportRef = useRef<HTMLDivElement>(null);
-  // Live splitter drags skip the spring so the edge tracks the pointer.
-  const [resizing, setResizing] = useState(false);
 
   const visibleTabs = useMemo(
     () =>
@@ -330,8 +340,9 @@ export function SidePane({
   ].filter((item): item is NonNullable<typeof item> => item !== null);
 
   return (
-    <CollapsiblePanel collapsed={collapsed} width={width} side="right" instant={resizing} maximized={maximized}>
+    <ResizablePanel {...panePanel}>
     <aside
+      data-slot="panel-frame"
       className={cn(
         "relative flex h-full min-h-0 w-full flex-col bg-background",
         // Maximized, the conversation column is gone and this pane sits against
@@ -339,34 +350,6 @@ export function SidePane({
         !maximized && "border-l border-border",
       )}
     >
-      {maximized ? null : (
-      <ResizeHandle
-        side="left"
-        onDragStart={() => {
-          startWidth.current = width;
-          collapsing.current = false;
-          setResizing(true);
-        }}
-        onDrag={(delta) => {
-          const next = startWidth.current - delta;
-          // Dragging past the minimum width collapses the pane instead of
-          // clamping to it; the header toggle reopens it at the stored width.
-          if (next < MIN_WIDTH) {
-            if (!collapsing.current) {
-              collapsing.current = true;
-              setCollapsed(true);
-            }
-            return;
-          }
-          const max = Math.round(window.innerWidth * 0.65);
-          setWidth(Math.min(max, next));
-        }}
-        onDragEnd={() => {
-          setResizing(false);
-          persistWidth();
-        }}
-      />
-      )}
       {visibleTabs.length > 0 ? (
         <div
           className={cn(
@@ -555,6 +538,6 @@ export function SidePane({
         </div>
       )}
     </aside>
-    </CollapsiblePanel>
+    </ResizablePanel>
   );
-}
+});
