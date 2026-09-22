@@ -24,13 +24,13 @@ type Harness = {
   dispatched: Array<{ method: string; payload: unknown }>;
 };
 
-async function withServer(fn: (h: Harness) => Promise<void>): Promise<void> {
+async function withServer(fn: (h: Harness) => Promise<void>, options?: { loopbackToken?: string; password?: boolean }): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), "fastvibe-app-ws-"));
   const accessFile = join(dir, "remote-access.json");
   const webRoot = join(dir, "web");
   await mkdir(webRoot, { recursive: true });
   await writeFile(join(webRoot, "remote.html"), "<!doctype html><title>client</title>", "utf8");
-  setPassword(accessFile, PASSWORD);
+  if (options?.password !== false) setPassword(accessFile, PASSWORD);
   const dispatched: Array<{ method: string; payload: unknown }> = [];
   const server = new RemoteServer({
     accessFile,
@@ -42,6 +42,7 @@ async function withServer(fn: (h: Harness) => Promise<void>): Promise<void> {
     subscribe: () => () => undefined,
     webRoot,
     log: silent,
+    ...(options?.loopbackToken ? { loopbackToken: options.loopbackToken } : {}),
   });
   const { port } = await server.start({ port: 0, host: "127.0.0.1" });
   try {
@@ -357,4 +358,33 @@ test("wildcard subscribe is live-only", async () => {
     assert.equal(frames.some((frame) => frame.kind === "event" && (frame.payload as { n?: number }).n === 1), true);
     client.close();
   });
+});
+
+test("SSH loopback auth needs the bootstrap token, not just a loopback address", async () => {
+  const token = "a".repeat(64);
+  await withServer(async ({ port }) => {
+    // Any local user on the host can reach loopback; an empty or wrong token is refused.
+    for (const attempt of ["", "b".repeat(64)]) {
+      const socket = await connectSocket(port);
+      const reply = nextMessage(socket);
+      const code = closed(socket);
+      socket.send(JSON.stringify({ type: "auth", token: attempt }));
+      assert.deepEqual({ type: (await reply).type, ok: (await reply).ok }, { type: "auth", ok: false });
+      assert.equal(await code, 4001);
+    }
+    const socket = await connectSocket(port);
+    const reply = nextMessage(socket);
+    socket.send(JSON.stringify({ type: "auth", token }));
+    assert.equal((await reply).ok, true);
+    socket.close();
+  }, { loopbackToken: token, password: false });
+});
+
+test("a socket that sends nothing is not authenticated just for being on loopback", async () => {
+  await withServer(async ({ port }) => {
+    const socket = await connectSocket(port);
+    const code = closed(socket);
+    socket.send(JSON.stringify({ kind: "hello", hello: { protocol: APP_PROTOCOL, protocolVersion: APP_PROTOCOL_VERSION, client: { kind: "test", version: "0.0.0" } } }));
+    assert.equal(await code, 4001);
+  }, { loopbackToken: "c".repeat(64), password: false });
 });

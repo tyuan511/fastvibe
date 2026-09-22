@@ -10,6 +10,7 @@ import type {
 } from "@shared/types";
 import { extractPromptAttachments } from "@shared/attachment-metadata";
 import { isAbortOutcome } from "@shared/abort";
+import { toolResultStatus } from "@shared/tool-result";
 import { i18n } from "@/lib/i18n";
 
 export type ApplyResult = {
@@ -863,12 +864,14 @@ function applyEvent(
     if (existing) {
       const target = ensureAssistant();
       const id = resolveToolId(target, asString(event.toolCallId) ?? asString(event.id));
+      const name = asString(event.toolName);
+      const details = toolDetails(event.result) ?? event.details;
       upsertTool(target, {
         id,
-        name: asString(event.toolName),
+        name,
         result: toolText(event.result) ?? toolText(event.output),
-        details: toolDetails(event.result) ?? event.details,
-        status: event.isError === true ? "error" : "done",
+        details,
+        status: toolResultStatus(name ?? target.tools.find((tool) => tool.id === id)?.name, event.isError === true, details),
       });
     }
     return { messages: next, streaming: nextStreaming };

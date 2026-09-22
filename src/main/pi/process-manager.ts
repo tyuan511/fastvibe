@@ -83,7 +83,7 @@ import {
   scanImportCandidates,
   scanImportSources,
 } from "../engine/import/runner";
-import { readAutoCompact, readDefaultModel } from "../engine/app-settings";
+import { readAutoCompact, readDefaultModel } from "../engine/runtime-settings";
 import { currentAiLanguageDirective, currentCustomSystemPrompt } from "../engine/ai-language";
 import { uiText } from "../engine/ui-text";
 import { mapEngineMessages } from "../engine/map-messages";
@@ -100,7 +100,7 @@ import {
   sanitizeSegment,
   type GitWorktreeInfo,
 } from "../engine/worktree";
-import { MessageQueueStore, SdkQueueClaims, type StoredQueuedPrompt } from "../engine/message-queue";
+import { findDeliveredClaims, MessageQueueStore, SdkQueueClaims, type StoredQueuedPrompt } from "../engine/message-queue";
 import { installSdkQueueAdapter, type SdkQueueAdapter } from "./sdk-queue-adapter";
 import {
   addNativeProvider as addNativeProviderConfig,
@@ -138,8 +138,7 @@ import { McpManager, type McpServerConfig, type McpServerStatus } from "./mcp-ma
 import { assistantErrorSummary, finalAssistantErrorSummary } from "./assistant-error-summary";
 import { SkillManager } from "./skill-manager";
 import { builtinExtensionFile, builtinExtensionPaths, builtinSkillPaths, ExtensionManager } from "./extension-manager";
-import { bindBrowserConversation } from "./browser-bridge";
-import { bindComputerConversation } from "./cua-bridge";
+import { bindBrowserConversation, bindComputerConversation } from "./conversation-binding";
 import { createTuiWidget, renderExtensionMessage, renderTuiComponent, type TuiComponent } from "./tui-bridge";
 
 type ManagedSession = { conversationId: string; cwd: string; session: AgentSession; extensions: LoadExtensionsResult; unsubscribe: () => void };
@@ -352,6 +351,22 @@ function sessionCompletionTimes(session: AgentSession): Map<string, number> {
     if (Number.isFinite(at)) times.set(entry.id, at);
   }
   return times;
+}
+
+/** Every user turn in the session tree, as payload text, for queue reconciliation. */
+function sessionUserTurns(session: AgentSession): Array<{ text: string; timestamp?: number }> {
+  const turns: Array<{ text: string; timestamp?: number }> = [];
+  for (const entry of session.sessionManager.getEntries()) {
+    if (entry.type !== "message" || !isUserEngineMessage(entry.message)) continue;
+    const { content, timestamp } = entry.message as { content?: unknown; timestamp?: unknown };
+    const text = typeof content === "string"
+      ? content
+      : Array.isArray(content)
+        ? content.map((part) => (part && typeof part === "object" && (part as { type?: unknown }).type === "text" ? String((part as { text?: unknown }).text ?? "") : "")).join("")
+        : "";
+    turns.push({ text, timestamp: typeof timestamp === "number" ? timestamp : undefined });
+  }
+  return turns;
 }
 
 function isUserEngineMessage(message: unknown): message is Record<string, unknown> {
@@ -875,9 +890,10 @@ export class PiProcessManager {
   ): Promise<void> {
     const { id, session } = await this.#sessionFor(options?.conversationId);
     if (await this.#compactIfCommand(session, message)) return;
-    // A fresh user turn explicitly resumes a queue paused by an earlier run. A submit
-    // that merely arrives late after Stop never reaches this path; it only adds an item.
-    if (id && this.#messageQueue.state(id).pause) {
+    // A pause with nothing held is a leftover (Stop on an idle chat); clear it so it
+    // cannot catch this turn's follow-ups. A pause over held rows is the user's to
+    // release (立即 / 继续发送) — a fresh turn does not release it.
+    if (id && this.#messageQueue.state(id).pause && this.#messageQueue.all(id).length === 0) {
       this.#messageQueue.pause(id, null);
       this.#emitQueue(id);
     }
@@ -909,7 +925,8 @@ export class PiProcessManager {
     await this.#ensureReady();
     const managed = await this.#ensureSession(conversation);
     if (await this.#compactIfCommand(managed.session, message)) return;
-    if (this.#messageQueue.state(id).pause) {
+    // Same rule as prompt(): only a pause over an empty queue is cleared here.
+    if (this.#messageQueue.state(id).pause && this.#messageQueue.all(id).length === 0) {
       this.#messageQueue.pause(id, null);
       this.#emitQueue(id);
     }
@@ -1048,20 +1065,18 @@ export class PiProcessManager {
     return this.#withQueue(item.conversationId, async () => {
       const current = this.#messageQueue.get(id);
       if (!current) return this.#messageQueue.state(item.conversationId);
-      // A claimed row may already be in the transcript, so it must never be replayed.
-      // Removing only the durable tracking row is safe and gives the user a way to
-      // clear an uncertainty left by Stop or a failed persistence acknowledgement.
-      if (current.claimed) {
+      // A claimed row — or a 发送中 row whose object has left the SDK queue, which the
+      // engine therefore took — may already be in the transcript, so it must never be
+      // replayed. Removing only the durable tracking row is safe and is the user's way
+      // out; refusing it left the row on screen forever.
+      const adapter = this.#sdkQueueAdapters.get(item.conversationId);
+      if (current.claimed || (current.sending && !adapter?.hasPending(id))) {
         this.#messageQueue.remove(id);
         // Claimed means the prompt may already be in the transcript; keep the catalog
         // preview rather than pretending an uncertain delivery never happened.
         if (this.#messageQueue.all(item.conversationId).length === 0) this.#messageQueue.pause(item.conversationId, null);
         this.#emitQueue(item.conversationId);
         return this.#messageQueue.state(item.conversationId);
-      }
-      const adapter = this.#sdkQueueAdapters.get(item.conversationId);
-      if (current.sending && !adapter?.hasPending(id)) {
-        throw new Error(uiText("消息已由引擎领取，无法取消", "The engine has already claimed this message"));
       }
       // No await separates the durable commit and exact-object filter. If the SDK object
       // disappears between the membership check and removal, restore an explicitly
@@ -1139,13 +1154,11 @@ export class PiProcessManager {
     return this.#withQueue(conversationId, async () => {
       this.#bumpQueueEpoch(conversationId);
       this.#queueDrainFaults.delete(conversationId);
-      // A claimed row is an unresolved delivery, not a row that can safely replay.
-      // Keep the pause visible until the user removes that tracking row explicitly.
-      if (this.#messageQueue.all(conversationId).some((item) => item.claimed)) {
-        this.#messageQueue.pause(conversationId, "error");
-        this.#emitQueue(conversationId);
-        return this.#messageQueue.state(conversationId);
-      }
+      // 继续发送 always releases the pause. A claimed row left without an
+      // acknowledgement is settled against the transcript first, so it is neither
+      // replayed after it was delivered nor left behind to hold the queue forever.
+      // One still claimed here belongs to a live run and is acknowledged normally.
+      this.#reconcileClaims(conversationId);
       this.#messageQueue.pause(conversationId, null);
       this.#emitQueue(conversationId);
       this.#scheduleQueueDrain(conversationId);
@@ -1256,8 +1269,7 @@ export class PiProcessManager {
    * prompt (the row shows up in the transcript) but it never crosses the adapter's
    * claim boundary, so FastVibe's queue row stays on screen over a message that has
    * already been sent. The resumed run skips one read of each queue instead; the rows
-   * stay pending and only leave when the user resumes the queue, or when the resumed
-   * run settles cleanly and the ordinary drain sends them.
+   * stay pending and only leave when the user resumes the queue (立即 / 继续发送).
    */
   async continueTurn(conversationId?: string): Promise<void> {
     // Only this conversation's parked prompt is answered: continue is a per-chat action.
@@ -2876,15 +2888,12 @@ export class PiProcessManager {
         // compaction was running otherwise remains pending until another user action.
         this.#scheduleQueueDrain(conversation.id);
       }
+      // Read once: the verdict is cleared below, and the background notification at
+      // the end of this handler needs the same answer.
+      const settledVerdict = event.type === "agent_settled" ? this.#interruptedRuns.get(conversation.id) : undefined;
       if (event.type === "agent_settled") {
-        const interrupted = this.#interruptedRuns.get(conversation.id);
         this.#interruptedRuns.delete(conversation.id);
-        if (interrupted && this.#messageQueue.all(conversation.id).length > 0) {
-          this.#messageQueue.pause(conversation.id, interrupted);
-          this.#emitQueue(conversation.id);
-        } else if (!interrupted) {
-          this.#scheduleQueueDrain(conversation.id);
-        }
+        this.#settleQueue(conversation.id, settledVerdict);
         if (this.#pendingCwdRebind.has(conversation.id)) {
           this.#pendingCwdRebind.delete(conversation.id);
           void this.#rebindSessionCwd(conversation.id).catch(() => undefined);
@@ -2944,7 +2953,7 @@ export class PiProcessManager {
       // that ended because the user stopped it is neither: they were there for it, and
       // 「任务已完成」 over a deliberate Stop would be a notification nobody asked for.
       if (event.type === "agent_settled") {
-        const interrupted = this.#interruptedRuns.get(conversation.id);
+        const interrupted = settledVerdict;
         if (interrupted !== "stopped") {
           this.#emit({
             type: "conversation_activity",
@@ -2978,6 +2987,10 @@ export class PiProcessManager {
       extensionStatus: this.#extensionStatusSnapshot(conversation.id),
     };
     for (const listener of this.#readyListeners) listener(payload);
+    // Rows claimed before a restart are settled against the transcript that loaded.
+    void this.#withQueue(conversation.id, async () => {
+      if (this.#reconcileClaims(conversation.id)) this.#emitQueue(conversation.id);
+    }).catch(() => this.#queueDrainFaults.add(conversation.id));
     this.#scheduleQueueDrain(conversation.id);
     return managed;
   }
@@ -3204,6 +3217,71 @@ export class PiProcessManager {
     }
   }
 
+  /**
+   * Apply a settled run's verdict to its durable queue.
+   *
+   * Serialized on the queue lock so an in-flight `#insertQueuedSteer` finishes first:
+   * it either withdrew its own steer (the run was no longer live) or marked the row
+   * `sending`, and only the latter is ours to release here.
+   *
+   * A steer that reached the SDK queue after the loop's last read is never read by
+   * this run. Left there, its row stays 发送中 forever — never drained, and every
+   * later Send is routed into the queue behind it. Withdraw it and make it pending.
+   *
+   * A pause over held rows survives any later run, clean or not: only the user
+   * releases it (立即 / 继续发送). A pause with nothing left to hold is cleared, so a
+   * leftover cannot catch the next follow-up queued during a live run.
+   */
+  #settleQueue(conversationId: string, interrupted: "stopped" | "error" | undefined): void {
+    void this.#withQueue(conversationId, async () => {
+      const adapter = this.#sdkQueueAdapters.get(conversationId);
+      let changed = false;
+      if (adapter) {
+        for (const id of adapter.pendingIds()) {
+          const item = this.#messageQueue.get(id);
+          if (!item || item.conversationId !== conversationId || item.claimed || !item.sending) continue;
+          if (adapter.cancelPending(id)) {
+            this.#messageQueue.update(id, { sending: false });
+            changed = true;
+          }
+        }
+      }
+      if (this.#reconcileClaims(conversationId)) changed = true;
+      const items = this.#messageQueue.all(conversationId);
+      const pause = this.#messageQueue.state(conversationId).pause;
+      if (interrupted) {
+        if (items.length > 0 && pause !== interrupted) {
+          this.#messageQueue.pause(conversationId, interrupted);
+          changed = true;
+        }
+      } else if (pause && items.length === 0) {
+        this.#messageQueue.pause(conversationId, null);
+        changed = true;
+      }
+      if (changed) this.#emitQueue(conversationId);
+      if (!interrupted) this.#scheduleQueueDrain(conversationId);
+    }).catch(() => {
+      // A failed durable write must not spin; an explicit resume clears the fault.
+      this.#queueDrainFaults.add(conversationId);
+    });
+  }
+
+  /**
+   * Settle claimed rows whose acknowledgement never came (a failed flush, a restart).
+   *
+   * Only while idle: a live run's claimed row is still waiting for its `message_end`.
+   * A row found in the transcript was delivered and leaves; one that is not was never
+   * sent — the transcript is what the model sees — and becomes pending again.
+   */
+  #reconcileClaims(conversationId: string): boolean {
+    if (this.#busy(conversationId)) return false;
+    const session = this.#sessions.get(conversationId)?.session;
+    if (!session) return false;
+    const items = this.#messageQueue.all(conversationId);
+    if (!items.some((item) => item.claimed)) return false;
+    return this.#messageQueue.resolveClaims(conversationId, findDeliveredClaims(items, sessionUserTurns(session)));
+  }
+
   /** Install the version-limited adapter at pi-agent-core's real dequeue boundary. */
   #installQueueBoundary(conversationId: string, session: AgentSession): void {
     if (this.#sdkQueueAdapters.has(conversationId)) return;
@@ -3219,6 +3297,16 @@ export class PiProcessManager {
         }
         this.#messageQueue.update(id, { claimed: true, sending: true });
         this.#emitQueue(conversationId);
+      },
+      onWithdraw: (id) => {
+        // The object never reached the run, so the row is pending again. A failed
+        // write leaves it 发送中; cancel still removes it (see cancelQueued).
+        try {
+          if (this.#messageQueue.get(id)?.sending) this.#messageQueue.update(id, { sending: false });
+          this.#emitQueue(conversationId);
+        } catch {
+          this.#queueDrainFaults.add(conversationId);
+        }
       },
       claims: this.#queuedSdkMessages,
     });
@@ -3290,17 +3378,11 @@ export class PiProcessManager {
         { conversationId, id: candidate.id },
         () => this.#promptWhenIdle(session, candidate!.sentText ?? candidate!.text, candidate!.images),
       );
-      // A resumed queue prompts while the session is idle, so the message goes out as
-      // the run's opening prompt rather than through a queue the adapter can claim.
-      // The adapter's wrapped `agent.prompt` is the claim boundary for that shape, but
-      // the session drains its own steering queue on the way there and prompts the
-      // agent with what it drained — a different object, which the wrapper never sees.
-      // Without a claim the delivery acknowledgement has nothing to match, so the row
-      // stays on screen over a turn that was already sent. The exact object is still
-      // in the session's steering queue here: claim it, and the acknowledgement
-      // removes the row once the transcript entry lands.
+      // The wrapped `agent.prompt` claims the opening prompt the moment the run takes
+      // it. Still unclaimed after a successful return means no turn was started at all:
+      // an extension command, an input handler or `/compact` consumed the text.
       const handedToSession = this.#messageQueue.get(candidate.id);
-      if (handedToSession && !handedToSession.claimed) this.#claimSessionQueuedPrompt(conversationId, candidate.id);
+      if (handedToSession && !handedToSession.claimed) this.#dropConsumedPrompt(conversationId, candidate.id);
       this.#scheduleQueueDrain(conversationId);
     } catch {
       await this.#withQueue(conversationId, async () => {
@@ -3326,37 +3408,17 @@ export class PiProcessManager {
   }
 
   /**
-   * Claim a row the session queued and then drained itself.
+   * Remove a queued row the session consumed without starting a turn.
    *
-   * `session.prompt` steers into the SDK queue and, while idle, immediately drains
-   * that queue to build the run's opening prompt. The adapter only claims what
-   * `agent.prompt` receives, so the drained object is left unclaimed and the row can
-   * never be acknowledged. The object is still remembered by the adapter at this
-   * point, which is how the exact object is found again and recorded for the
-   * acknowledgement. A slash command the session handled itself never reaches that
-   * queue and never produces a message, so its row is removed on the successful
-   * return instead.
+   * The row never crossed a claim boundary, so nothing was delivered and nothing can
+   * be acknowledged. Keeping it used to mark it claimed and pause the queue — a row
+   * that looked 发送中 forever over a command that had already run.
    */
-  #claimSessionQueuedPrompt(conversationId: string, id: string): void {
+  #dropConsumedPrompt(conversationId: string, id: string): void {
     const item = this.#messageQueue.get(id);
     if (!item || item.claimed) return;
-    const message = this.#sdkQueueAdapters.get(conversationId)?.takePending(id);
-    if (!message) {
-      // A command is handled before the SDK sees a user message, so it is safe to
-      // remove. For ordinary text, a missing identity means the prompt may already
-      // have reached the agent; retain it as an explicit uncertainty instead of
-      // silently dropping the only durable evidence or replaying it later.
-      if (parseCompactCommand(item.sentText ?? item.text)) {
-        this.#messageQueue.remove(id);
-      } else {
-        this.#messageQueue.update(id, { claimed: true, sending: true });
-        this.#messageQueue.pause(conversationId, "error");
-      }
-      this.#emitQueue(conversationId);
-      return;
-    }
-    this.#messageQueue.update(id, { claimed: true, sending: true });
-    this.#queuedSdkMessages.claim(message, id);
+    this.#messageQueue.remove(id);
+    if (this.#messageQueue.all(conversationId).length === 0) this.#messageQueue.pause(conversationId, null);
     this.#emitQueue(conversationId);
   }
 

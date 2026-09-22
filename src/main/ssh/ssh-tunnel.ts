@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createConnection } from "node:net";
-import type { RemoteHostProfile } from "@shared/remote-host";
+import type { RemoteHostProfile, RemoteHostTestResult, SshErrorCode } from "@shared/remote-host";
 
 export type SshHostProfile = Omit<RemoteHostProfile, "label"> & { label?: string };
 
@@ -42,6 +42,34 @@ export type SshCommandOptions = {
   controlPath?: string;
 };
 
+/** An SSH failure OpenSSH explained well enough to decide what to do next. */
+export class SshError extends Error {
+  readonly code: SshErrorCode;
+  constructor(message: string, code: SshErrorCode) {
+    super(message);
+    this.name = "SshError";
+    this.code = code;
+  }
+}
+
+/**
+ * Read OpenSSH's own stderr for a failure worth acting on.
+ *
+ * Order matters: a changed key also prints "Host key verification failed", and must never
+ * be mistaken for an unknown one — the unknown case is the only one the GUI offers to trust.
+ */
+export function classifySshFailure(text: string): SshErrorCode | undefined {
+  if (/REMOTE HOST IDENTIFICATION HAS CHANGED|Host key for .* has changed/i.test(text)) return "host-key-changed";
+  if (/Host key verification failed|No \S+ host key is known for/i.test(text)) return "host-key-unknown";
+  if (/Permission denied|Too many authentication failures|Authentication failed|no more authentication methods/i.test(text)) return "auth-failed";
+  return undefined;
+}
+
+/** The OpenSSH line that explains a failure: the last non-empty one it printed. */
+function lastLine(text: string): string {
+  return text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).at(-1) ?? "";
+}
+
 export type SshTunnelState =
   | { status: "idle" }
   | { status: "starting" }
@@ -70,7 +98,7 @@ export function buildSshTunnelArgs(options: SshTunnelOptions): string[] {
     throw new Error("SSH 主机端口无效");
   }
 
-  const destination = host.user?.trim() ? `${host.user.trim()}@${host.host.trim()}` : host.host.trim();
+  const destination = sshDestination(host);
   const args = [
     "-N",
     "-T",
@@ -87,9 +115,8 @@ export function buildSshTunnelArgs(options: SshTunnelOptions): string[] {
     "-o",
     "ConnectTimeout=10",
   ];
-  if (host.port !== undefined) args.push("-p", String(host.port));
-  if (host.identityFile?.trim()) args.push("-i", host.identityFile.trim());
-  if (host.knownHostsFile?.trim()) args.push("-o", `UserKnownHostsFile=${host.knownHostsFile.trim()}`);
+  args.push(...explicitHostArgs(host));
+  if (!options.controlPath) args.push(...passwordPromptArgs(options.password));
   if (options.controlPath) args.push("-S", options.controlPath, "-o", "ControlMaster=no");
   args.push("-L", `${localPort}:${options.remoteHost?.trim() || "127.0.0.1"}:${remotePort}`, destination);
   return args;
@@ -121,6 +148,22 @@ async function waitForForward(child: ChildProcess, port: number, timeoutMs: numb
   throw new Error(`SSH 隧道未能连接本地转发端口（${port}）`);
 }
 
+/** Wait for a forward the control master listens on; no child of ours to watch. */
+async function waitForMasterForward(port: number, timeoutMs: number, signal?: AbortSignal): Promise<void> {
+  const deadline = Date.now() + Math.max(250, timeoutMs);
+  while (Date.now() < deadline) {
+    if (signal?.aborted) throw new Error("远程连接已取消");
+    const up = await new Promise<boolean>((resolve) => {
+      const socket = createConnection({ host: "127.0.0.1", port });
+      socket.once("connect", () => { socket.destroy(); resolve(true); });
+      socket.once("error", () => { socket.destroy(); resolve(false); });
+    });
+    if (up) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`SSH 隧道未能连接本地转发端口（${port}）`);
+}
+
 /**
  * Owns one SSH forwarding process. It is intentionally unaware of Electron and of the
  * remote FastVibe protocol: the tunnel is only a transport, so it can later be reused by
@@ -132,6 +175,8 @@ export class SshTunnel {
   #askpassFile: string | null = null;
   #state: SshTunnelState = { status: "idle" };
   #stopping = false;
+  /** A forward added to the control master (`-O forward`), which owns it from then on. */
+  #muxForward = false;
 
   constructor(options: SshTunnelOptions) {
     this.#options = options;
@@ -142,12 +187,16 @@ export class SshTunnel {
   }
 
   get running(): boolean {
-    return this.#child !== null && this.#state.status === "online";
+    return (this.#child !== null || this.#muxForward) && this.#state.status === "online";
   }
 
   async start(): Promise<void> {
-    if (this.#child) return;
+    if (this.#child || this.#muxForward) return;
     if (this.#options.signal?.aborted) throw new Error("远程连接已取消");
+    if (this.#options.controlPath) {
+      await this.#startOnMaster(this.#options.controlPath);
+      return;
+    }
     const binary = this.#options.sshBinary?.trim() || "ssh";
     const args = buildSshTunnelArgs(this.#options);
     this.#stopping = false;
@@ -214,7 +263,63 @@ export class SshTunnel {
     }
   }
 
+  /**
+   * Ask the control master to listen, instead of running a client of our own.
+   *
+   * A mux client ignores `-N`: it opens a login session, which reads EOF from the
+   * ignored stdin and exits at once — the forward stays up on the master, but the tunnel
+   * looked "exited early" whenever that won the race with the port probe. `-O forward`
+   * is the multiplexing way to say the same thing: it returns once the master listens.
+   */
+  async #startOnMaster(controlPath: string): Promise<void> {
+    this.#stopping = false;
+    this.#setState({ status: "starting" });
+    try {
+      await this.#control(controlPath, "forward");
+      this.#muxForward = true;
+      await waitForMasterForward(this.#options.localPort, this.#options.connectTimeoutMs ?? 10_000, this.#options.signal);
+      if (this.#options.signal?.aborted) throw new Error("远程连接已取消");
+      this.#setState({ status: "online" });
+    } catch (error) {
+      const failure = this.#options.signal?.aborted
+        ? new Error("远程连接已取消")
+        : error instanceof Error ? error : new Error(String(error));
+      await this.stop().catch(() => undefined);
+      this.#setState({ status: "error", message: failure.message });
+      throw failure;
+    }
+  }
+
+  /** `ssh -S <socket> -O forward|cancel -L <spec> <dest>`, resolved on exit 0. */
+  #control(controlPath: string, operation: "forward" | "cancel"): Promise<void> {
+    const binary = this.#options.sshBinary?.trim() || "ssh";
+    const spec = `${this.#options.localPort}:${this.#options.remoteHost?.trim() || "127.0.0.1"}:${this.#options.remotePort}`;
+    const args = ["-S", controlPath, "-O", operation, "-L", spec, sshDestination(this.#options.host)];
+    return new Promise((resolve, reject) => {
+      const child = spawn(binary, args, { stdio: ["ignore", "pipe", "pipe"], env: this.#options.env ?? process.env, windowsHide: true });
+      let text = "";
+      child.stdout?.setEncoding("utf8").on("data", (chunk: string) => { text += chunk; });
+      child.stderr?.setEncoding("utf8").on("data", (chunk: string) => { text += chunk; });
+      const timer = setTimeout(() => child.kill("SIGTERM"), 10_000);
+      child.once("error", (error) => { clearTimeout(timer); reject(error); });
+      child.once("exit", (code) => {
+        clearTimeout(timer);
+        if (text.trim()) this.#options.onOutput?.(text);
+        if (code === 0) resolve();
+        else reject(new Error(lastLine(text) || `SSH 端口转发失败（exit ${code ?? "unknown"}）`));
+      });
+    });
+  }
+
   async stop(): Promise<void> {
+    if (this.#muxForward && this.#options.controlPath) {
+      this.#muxForward = false;
+      this.#stopping = true;
+      // The master may already be gone (it takes its forwards with it); either way ends it.
+      await this.#control(this.#options.controlPath, "cancel").catch(() => undefined);
+      if (this.#state.status !== "error") this.#setState({ status: "stopped" });
+      return;
+    }
     const child = this.#child;
     if (!child) {
       this.#removeAskpass();
@@ -248,17 +353,101 @@ export class SshTunnel {
   }
 }
 
+export type SshProbeResult = RemoteHostTestResult;
+
+/**
+ * A host read from `~/.ssh/config` is passed to OpenSSH by alias alone.
+ *
+ * The user, port and key parsed from that file are for display: OpenSSH resolves them
+ * itself — `Match` blocks, first-value-wins, `Host *` defaults — and an explicit `-p` or
+ * `user@` built from our reading of the file would override its answer with a worse one.
+ */
+function fromSshConfig(host: SshHostProfile): boolean {
+  return host.source === "config";
+}
+
+/** `user@host`, or the bare host when no user is set (or the config decides it). */
+export function sshDestination(host: SshHostProfile): string {
+  const user = fromSshConfig(host) ? "" : host.user?.trim();
+  return user ? `${user}@${host.host.trim()}` : host.host.trim();
+}
+
+/** `-p` / `-i` / known-hosts options FastVibe adds on top of the user's own ssh config. */
+export function explicitHostArgs(host: SshHostProfile): string[] {
+  const args: string[] = [];
+  if (!fromSshConfig(host)) {
+    if (host.port !== undefined) args.push("-p", String(host.port));
+    if (host.identityFile?.trim()) args.push("-i", host.identityFile.trim());
+  }
+  if (host.knownHostsFile?.trim()) args.push("-o", `UserKnownHostsFile=${host.knownHostsFile.trim()}`);
+  return args;
+}
+
+/**
+ * Answer "can this machine log in to that host" in one round trip.
+ *
+ * Deliberately stops at the login: no Agent deploy, no port forward, nothing written to
+ * the remote machine. The test exists to separate "my key is not loaded" from "the
+ * tunnel came up but the remote Agent is not running", and it can only do that if it
+ * performs *less* than a connect does.
+ *
+ * A failure is a value, not a rejection: the callers are a settings row and a toast, and
+ * neither has anywhere to put an exception.
+ */
+export async function probeSshHost(options: {
+  host: SshHostProfile;
+  password?: string;
+  sshBinary?: string;
+  env?: NodeJS.ProcessEnv;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  /** Run on the host after the login; its output comes back as `output`. Nothing by default. */
+  command?: string;
+}): Promise<SshProbeResult & { output?: string }> {
+  const target = sshDestination(options.host);
+  const seen: string[] = [];
+  let output: string;
+  try {
+    output = await runSshCommand({
+      host: options.host,
+      command: options.command ?? "exit 0",
+      ...(options.password ? { password: options.password } : {}),
+      ...(options.sshBinary ? { sshBinary: options.sshBinary } : {}),
+      ...(options.env ? { env: options.env } : {}),
+      timeoutMs: options.timeoutMs ?? 15_000,
+      ...(options.signal ? { signal: options.signal } : {}),
+      onOutput: (text) => {
+        for (const line of text.split(/\r?\n/)) {
+          const trimmed = line.trim();
+          if (trimmed) seen.push(trimmed);
+        }
+      },
+    });
+  } catch (error) {
+    // OpenSSH writes its own reason to stderr before exiting 255, and that line says far
+    // more than our exit-code wrapper (`Permission denied (publickey).`, `Connection
+    // refused`, `Host key verification failed.`). Ours is the fallback, not the answer —
+    // a timeout or a cancel prints nothing at all, and then there is nothing better.
+    const errorCode = error instanceof SshError ? error.code : undefined;
+    return {
+      ok: false,
+      target,
+      error: seen.at(-1) || (error instanceof Error ? error.message : String(error)),
+      ...(errorCode ? { errorCode } : {}),
+    };
+  }
+  return options.command === undefined ? { ok: true, target } : { ok: true, target, output };
+}
+
 export async function runSshCommand(options: SshCommandOptions): Promise<string> {
   if (options.signal?.aborted) throw new Error("远程连接已取消");
   const binary = options.sshBinary?.trim() || "ssh";
   const host = options.host;
-  const destination = host.user?.trim() ? `${host.user.trim()}@${host.host.trim()}` : host.host.trim();
+  const destination = sshDestination(host);
   const args = options.controlPath
     ? ["-S", options.controlPath, "-T", "-o", "BatchMode=yes", "-o", "ControlMaster=no"]
-    : ["-T", "-o", `BatchMode=${options.password ? "no" : "yes"}`, "-o", "StrictHostKeyChecking=yes", "-o", "ConnectTimeout=10"];
-  if (!options.controlPath && host.port !== undefined) args.push("-p", String(host.port));
-  if (!options.controlPath && host.identityFile?.trim()) args.push("-i", host.identityFile.trim());
-  if (!options.controlPath && host.knownHostsFile?.trim()) args.push("-o", `UserKnownHostsFile=${host.knownHostsFile.trim()}`);
+    : ["-T", "-o", `BatchMode=${options.password ? "no" : "yes"}`, "-o", "StrictHostKeyChecking=yes", "-o", "ConnectTimeout=10", ...passwordPromptArgs(options.password)];
+  if (!options.controlPath) args.push(...explicitHostArgs(host));
   args.push(destination, options.command);
 
   const env = { ...(options.env ?? process.env) };
@@ -308,8 +497,15 @@ export async function runSshCommand(options: SshCommandOptions): Promise<string>
           finish(() => reject(new Error("远程连接已取消")));
           return;
         }
-        if (code === 0) finish(() => resolve());
-        else finish(() => reject(new Error(`SSH 远程初始化失败（${signal ? `signal ${signal}` : `exit ${code ?? "unknown"}`}）`)));
+        if (code === 0) {
+          finish(() => resolve());
+          return;
+        }
+        const message = `SSH 远程初始化失败（${signal ? `signal ${signal}` : `exit ${code ?? "unknown"}`}）`;
+        // 255 is OpenSSH's own failure; anything else is the remote command's exit code,
+        // and a remote script is free to print "Permission denied" about its own files.
+        const failure = code === 255 ? classifySshFailure(output) : undefined;
+        finish(() => reject(failure ? new SshError(lastLine(output) || message, failure) : new Error(message)));
       });
     });
   } finally {
@@ -318,6 +514,14 @@ export async function runSshCommand(options: SshCommandOptions): Promise<string>
     }
   }
   return output;
+}
+
+/**
+ * The askpass answers every prompt with the same saved password, so a second or third
+ * prompt can only be refused again — while costing the server's failure delay each time.
+ */
+function passwordPromptArgs(password: string | undefined): string[] {
+  return password ? ["-o", "NumberOfPasswordPrompts=1"] : [];
 }
 
 function createAskpass(): string {
@@ -351,7 +555,7 @@ export async function startSshMaster(options: {
   if (options.signal?.aborted) throw new Error("远程连接已取消");
   const host = options.host;
   if (!host.host.trim()) throw new Error("SSH 主机不能为空");
-  const destination = host.user?.trim() ? `${host.user.trim()}@${host.host.trim()}` : host.host.trim();
+  const destination = sshDestination(host);
   // OpenSSH rejects a control socket whose path exceeds the platform's sun_path, and macOS
   // tmpdir is already most of that budget. /tmp keeps it short.
   const socket = `/tmp/fv-${process.pid}-${randomUUID().slice(0, 8)}`;
@@ -359,14 +563,13 @@ export async function startSshMaster(options: {
     "-M", "-S", socket, "-N", "-T",
     "-o", "ControlPersist=no",
     "-o", `BatchMode=${options.password ? "no" : "yes"}`,
+    ...passwordPromptArgs(options.password),
     "-o", "StrictHostKeyChecking=yes",
     "-o", "ServerAliveInterval=30",
     "-o", "ServerAliveCountMax=3",
     "-o", "ConnectTimeout=10",
   ];
-  if (host.port !== undefined) args.push("-p", String(host.port));
-  if (host.identityFile?.trim()) args.push("-i", host.identityFile.trim());
-  if (host.knownHostsFile?.trim()) args.push("-o", `UserKnownHostsFile=${host.knownHostsFile.trim()}`);
+  args.push(...explicitHostArgs(host));
   args.push(destination);
 
   const env = { ...(options.env ?? process.env) };
@@ -417,8 +620,9 @@ export async function startSshMaster(options: {
       });
       child.once("exit", (code, signal) => {
         clearInterval(ready);
-        const detail = stderr.trim().split("\n").at(-1);
-        finish(() => reject(new Error(detail || `SSH 连接失败（${signal ? `signal ${signal}` : `exit ${code ?? "unknown"}`}）`)));
+        const detail = lastLine(stderr) || `SSH 连接失败（${signal ? `signal ${signal}` : `exit ${code ?? "unknown"}`}）`;
+        const failure = classifySshFailure(stderr);
+        finish(() => reject(failure ? new SshError(detail, failure) : new Error(detail)));
       });
     });
   } catch (error) {

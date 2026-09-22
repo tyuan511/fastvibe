@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { createReadStream, existsSync, statSync } from "node:fs";
 import { extname, join, normalize, resolve, sep } from "node:path";
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, type WebSocket } from "ws";
 import { LoginThrottle, passwordProblem } from "./auth.ts";
@@ -43,8 +43,16 @@ export type RemoteServerDeps = {
   channels: () => readonly string[];
   /** Headless Agent registers a supported subset; desktop server keeps the full table. */
   policyScope?: "full" | "subset";
-  /** SSH port forwards are authenticated by SSH itself and arrive from loopback. */
-  allowLoopbackAuth?: boolean;
+  /**
+   * Secret an SSH port forward presents from loopback instead of a device token.
+   *
+   * Loopback alone is not a credential: on a shared host every local user can reach
+   * 127.0.0.1, and on the desktop so can any process (or a DNS-rebound page) that finds
+   * the forwarded port. The bootstrap hands this token to the desktop over SSH, so only
+   * the side that authenticated to SSH can present it. Setting it also pins the listen
+   * address to loopback.
+   */
+  loopbackToken?: string;
   /** Run one method. The same function the Electron transport calls. Used for legacy frames. */
   dispatch: (method: string, payload: unknown, clientId: string) => Promise<unknown>;
   /**
@@ -144,6 +152,8 @@ const CLOSE_TOO_LARGE = 4003;
 type Client = {
   id: string;
   socket: WebSocket;
+  /** Arrived from 127.0.0.1 / ::1, so it may present the SSH loopback token. */
+  loopback: boolean;
   deviceId: string | null;
   detach: (() => void) | null;
   timer: NodeJS.Timeout | null;
@@ -215,13 +225,13 @@ export class RemoteServer {
    */
   async start(options: { port: number; host?: string }): Promise<RemoteServerStatus> {
     if (this.#http) return this.status;
-    if (!isConfigured(this.#deps.accessFile) && !this.#deps.allowLoopbackAuth) {
+    if (!isConfigured(this.#deps.accessFile) && !this.#deps.loopbackToken) {
       throw new Error("请先设置远程访问密码");
     }
     assertPolicyCoverage(this.#deps.channels(), { requireAll: this.#deps.policyScope !== "subset" });
 
     const host = options.host?.trim() || "127.0.0.1";
-    if (this.#deps.allowLoopbackAuth && host !== "127.0.0.1" && host !== "localhost" && host !== "::1") {
+    if (this.#deps.loopbackToken && host !== "127.0.0.1" && host !== "localhost" && host !== "::1") {
       throw new Error("SSH loopback鉴权服务只能监听本机");
     }
     // Both handlers are the outermost frame of their own call: anything thrown here
@@ -565,6 +575,7 @@ export class RemoteServer {
     const client: Client = {
       id: `remote:${randomUUID()}`,
       socket,
+      loopback,
       deviceId: null,
       detach: null,
       // Nothing is served before the first frame authenticates, and a socket that never
@@ -575,7 +586,6 @@ export class RemoteServer {
       appSession: null,
     };
     this.#clients.set(client.id, client);
-    if (this.#deps.allowLoopbackAuth && loopback) this.#authenticateLoopback(client);
 
     socket.on("message", (raw) => {
       void this.#handleFrame(client, raw as Buffer).catch((error: unknown) => {
@@ -697,7 +707,11 @@ export class RemoteServer {
   }
 
   #authenticate(client: Client, token: string): void {
-    const device = authenticate(this.#deps.accessFile, token);
+    if (client.loopback && tokenMatches(this.#deps.loopbackToken, token)) {
+      this.#authenticateLoopback(client);
+      return;
+    }
+    const device = token ? authenticate(this.#deps.accessFile, token) : null;
     if (!device) {
       this.#send(client, { type: "auth", ok: false, error: "令牌无效" });
       client.socket.close(CLOSE_UNAUTHORIZED, "unauthorized");
@@ -801,6 +815,13 @@ async function readBody(request: IncomingMessage, limit: number): Promise<string
 function firstHeader(value: string | string[] | undefined): string | undefined {
   const raw = Array.isArray(value) ? value[0] : value;
   return raw?.split(",")[0]?.trim() || undefined;
+}
+
+function tokenMatches(expected: string | undefined, actual: string): boolean {
+  if (!expected || !actual) return false;
+  const a = Buffer.from(expected);
+  const b = Buffer.from(actual);
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 function isLoopbackAddress(value: string | undefined): boolean {

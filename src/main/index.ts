@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, protocol, screen, session, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, protocol, safeStorage, screen, session, shell } from "electron";
 import type { WebContents } from "electron";
 import { statSync } from "node:fs";
 import { execFile, execFileSync } from "node:child_process";
@@ -58,7 +58,7 @@ import { createAppServer, initAppServer, getAppServer } from "./app-server/runti
 import { loadOrCreateServerIdentity } from "./server/identity";
 import { APP_CAPABILITIES } from "@shared/app-protocol";
 import { wireElectronAppTransport } from "./transport/electron";
-import type { RemoteHostProfile, RemoteHostConnectionState } from "@shared/remote-host";
+import type { RemoteHostProfile, RemoteHostConnectionState, SshErrorCode } from "@shared/remote-host";
 import { attachBrowserRenderer, guardGuestPopups, installBrowserGlobal, respondBrowserRequest } from "./pi/browser-bridge";
 import {
   computerPermissions,
@@ -113,6 +113,15 @@ const terminalOwners = new Map<string, string>();
 
 const sshManager = new SshManager({
   paths: getFastVibePaths(),
+  // Linux without a secret service falls back to a hard-coded key ("basic_text"), which
+  // is obfuscation rather than encryption; the 0600 file is no worse than that.
+  secrets: {
+    available: () => app.isReady()
+      && safeStorage.isEncryptionAvailable()
+      && (process.platform !== "linux" || safeStorage.getSelectedStorageBackend() !== "basic_text"),
+    seal: (plain) => safeStorage.encryptString(plain).toString("base64"),
+    open: (sealed) => safeStorage.decryptString(Buffer.from(sealed, "base64")),
+  },
   onState: (state) => broadcast(Ipc.sshState, state),
   onPush: (channel, payload) => broadcast(channel, payload),
   log: {
@@ -146,24 +155,35 @@ const remoteConnections = new RemoteConnectionManager({
     warn: (message) => log.warn(message),
   },
   onStatus: (status) => {
-    const profile = sshManager.hosts().saved.find((item) => item.id === status.connectionId)
-      ?? sshManager.hosts().discovered.find((item) => item.id === status.connectionId);
+    const profile = sshManager.profile(status.connectionId);
     const localPort = profile?.localPort;
     const previous = sshUiStates.get(status.connectionId);
     const output = previous?.output?.length ? { output: previous.output } : {};
+    const home = remoteConnections.server(status.connectionId)?.home;
     const next: RemoteHostConnectionState = status.state === "ready"
-      ? { hostId: status.connectionId, serverInstanceId: status.serverInstanceId, status: "connected", ...(localPort ? { localPort } : {}) }
+      ? { hostId: status.connectionId, serverInstanceId: status.serverInstanceId, status: "connected", ...(localPort ? { localPort } : {}), ...(home ? { home } : {}) }
       : status.state === "connecting"
         ? { hostId: status.connectionId, serverInstanceId: null, status: "connecting", ...(localPort ? { localPort } : {}) }
         : status.state === "closed"
           ? { hostId: status.connectionId, serverInstanceId: status.serverInstanceId, status: "disconnected" }
-          : { hostId: status.connectionId, serverInstanceId: status.serverInstanceId, status: "error", ...(status.error ? { error: status.error } : {}), ...output };
+          : { hostId: status.connectionId, serverInstanceId: status.serverInstanceId, status: "error", ...(status.error ? { error: status.error } : {}), ...(status.errorCode ? { errorCode: status.errorCode as SshErrorCode } : {}), ...output };
     sshUiStates.set(status.connectionId, next);
     broadcast(Ipc.sshState, next);
     broadcast(Ipc.sshStates, [...sshUiStates.values()]);
     gateway.publishLocalSnapshot(engine.listWorkspace());
   },
   onPush: (channel, payload, serverInstanceId) => gateway.acceptNamespacedRemotePush(channel, payload, serverInstanceId),
+  // A dropped tunnel (sleep, Wi-Fi change) comes back on its own. The resident Agent is
+  // still running, so each attempt is the preflight's fast path: one round trip, no deploy.
+  reconnect: {
+    delaysMs: [1_000, 3_000, 10_000, 30_000, 60_000, 120_000],
+    profile: (connectionId) => sshManager.profile(connectionId),
+    onReconnected: (server) => {
+      void gateway.refreshServer(server.serverInstanceId).catch((error: unknown) => {
+        log.warn(`remote refresh after reconnect failed: ${String(error)}`);
+      });
+    },
+  },
   openTransport: (profile, signal) => openSshAppTransport({
     profile,
     onOutput: (message) => publishSshOutput(profile.id, message),
@@ -356,7 +376,7 @@ function modelsDevInfo(stats: ModelsDevStats): AppModelsDevInfo {
 function registerSshIpc(): void {
   handle(Ipc.sshState, () => ({ hostId: null, status: "disconnected" } satisfies RemoteHostConnectionState));
   handle(Ipc.sshStates, () => [...sshUiStates.values()]);
-  handle(Ipc.sshHosts, () => sshManager.hosts());
+  handle(Ipc.sshHosts, () => sshManager.publicHosts());
   handle(Ipc.sshHostSave, (payload: { host?: RemoteHostProfile }) => {
     if (!payload?.host) throw new Error("SSH 主机配置无效");
     return sshManager.saveHost(payload.host);
@@ -367,6 +387,24 @@ function registerSshIpc(): void {
     await remoteConnections.disconnect(id);
     return sshManager.removeHost(id);
   });
+  handle(Ipc.sshHostKeyScan, async (payload: { hostId?: string }) => {
+    const hostId = typeof payload?.hostId === "string" ? payload.hostId.trim() : "";
+    if (!hostId) throw new Error("SSH 主机无效");
+    return sshManager.scanHostKey(hostId);
+  });
+  handle(Ipc.sshHostKeyTrust, (payload: { hostId?: string; fingerprints?: unknown }) => {
+    const hostId = typeof payload?.hostId === "string" ? payload.hostId.trim() : "";
+    const fingerprints = Array.isArray(payload?.fingerprints) ? payload.fingerprints.filter((item): item is string => typeof item === "string") : [];
+    if (!hostId) throw new Error("SSH 主机无效");
+    sshManager.trustHostKey(hostId, fingerprints);
+  });
+  handle(Ipc.sshStopAgent, async (payload: { hostId?: string }) => {
+    const hostId = typeof payload?.hostId === "string" ? payload.hostId.trim() : "";
+    if (!hostId) throw new Error("SSH 主机无效");
+    // Disconnect first: a live tunnel to an Agent being killed would only reconnect it.
+    await remoteConnections.disconnect(hostId);
+    return sshManager.stopAgent(hostId);
+  });
   handle(Ipc.sshPickIdentityFile, async () => {
     const result = await dialog.showOpenDialog({
       title: uiText("选择 SSH 私钥", "Choose SSH private key"),
@@ -374,15 +412,20 @@ function registerSshIpc(): void {
     });
     return result.canceled || !result.filePaths[0] ? null : result.filePaths[0];
   });
+  handle(Ipc.sshTest, async (payload: { hostId?: string }) => {
+    const hostId = typeof payload?.hostId === "string" ? payload.hostId.trim() : "";
+    if (!hostId) throw new Error("SSH 主机无效");
+    return sshManager.test(hostId);
+  });
   handle(Ipc.sshConnect, async (payload: { hostId?: string }) => {
     const hostId = typeof payload?.hostId === "string" ? payload.hostId.trim() : "";
     if (!hostId) throw new Error("SSH 主机无效");
-    const hosts = sshManager.hosts();
-    const profile = [...hosts.saved, ...hosts.discovered].find((item) => item.id === hostId);
+    const profile = sshManager.profile(hostId);
     if (!profile) throw new Error("SSH 主机不存在");
     const connected = await remoteConnections.connect(profile);
     await gateway.refreshServer(connected.serverInstanceId);
-    return sshUiStates.get(hostId);
+    const state = sshUiStates.get(hostId);
+    return state && connected.home ? { ...state, home: connected.home } : state;
   });
   handle(Ipc.sshDisconnect, async (payload?: { hostId?: string }) => {
     const hostId = typeof payload?.hostId === "string" ? payload.hostId.trim() : "";

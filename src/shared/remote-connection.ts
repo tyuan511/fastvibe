@@ -16,6 +16,8 @@ export type RemoteConnectionStatus = {
   state: RemoteConnectionState;
   capabilities: AppCapability[];
   error?: string;
+  /** `SshErrorCode` when the transport could classify the failure. */
+  errorCode?: string;
 };
 
 /**

@@ -2,6 +2,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, write
 import { execFileSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { checkAgentRuntime } from "./check-agent-runtime.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
@@ -22,6 +23,9 @@ if (process.arch !== expectedArch) {
   throw new Error(`构建架构不匹配：需要 ${expectedArch}，当前是 ${process.arch}`);
 }
 
+// Fail before staging cleanup, dependency installation, or archive creation.
+checkAgentRuntime(join(root, "out", "main", "agent.js"));
+
 const outputDir = resolve(root, String(args.get("output") || "release/agent-runtime"));
 const staging = join(outputDir, `.staging-${platform}-${arch}`);
 const archive = join(outputDir, `fastvibe-agent-${platform}-${arch}.tar.gz`);
@@ -30,10 +34,6 @@ mkdirSync(staging, { recursive: true });
 mkdirSync(outputDir, { recursive: true });
 
 try {
-  if (!existsSync(join(root, "out", "main", "agent.js"))) {
-    throw new Error("缺少 out/main/agent.js，请先执行 pnpm build");
-  }
-
   cpSync(join(root, "package.json"), join(staging, "package.json"));
   cpSync(join(root, "pnpm-lock.yaml"), join(staging, "pnpm-lock.yaml"));
   cpSync(join(root, "pnpm-workspace.yaml"), join(staging, "pnpm-workspace.yaml"));

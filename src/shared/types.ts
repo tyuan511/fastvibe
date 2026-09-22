@@ -116,7 +116,7 @@ export type EngineSessionState = {
   interruptMode?: string;
 };
 
-export type ToolCallStatus = "running" | "done" | "error";
+export type ToolCallStatus = "running" | "done" | "error" | "aborted";
 
 export type ToolCallBlock = {
   id: string;

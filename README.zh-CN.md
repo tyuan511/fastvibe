@@ -213,6 +213,12 @@ FastVibe 的核心承诺是：**pi 扩展在终端里能做什么，在这里就
 - 在 设置 → SSH 远程主机 里添加主机（默认读取 `~/.ssh/config`，支持默认私钥 / SSH Agent、
   指定私钥文件，或密码）。连接时应用会把 **headless 的 `fastvibe-agent`** 部署到远端并启动，
   再通过 OpenSSH 的 loopback 端口转发承载 App Protocol。
+- **运行包由远端主机自己下载。** 部署本身就是一条命令：用远端自己的 `curl`/`wget` 拉取
+  `fastvibe-agent-<target>.tar.gz`，校验解压出的 `manifest.json` 版本与期望一致后再链接为
+  `current` —— 桌面端既不下载也不上传这个包。这样安排是因为桌面端常常不是网络更好的那一方，
+  而这个包本身是公开的 release 资源。只有在远端拉不到时（没有外网出口、没有 `curl`/`wget`），
+  才回退到「本机下载 + 走 SSH stdin 上传」；这条回退路径会把包缓存到
+  `runtime/ssh-agent-runtimes/<version>/`，重试不必再访问 GitHub。
 - 「添加项目」对话框可以选择主机、浏览远端目录，把选中的工作区作为**远程项目**加入侧栏。
 - **一台机器可同时接多台服务器**：没有全局的「当前连接主机」，远程会话 id 形如
   `remote:<serverInstanceId>:<id>`，每个调用按这个 id 路由到具体的那台服务器。绑定只是**引用**，

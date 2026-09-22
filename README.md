@@ -235,6 +235,14 @@ this workspace.
   key / ssh-agent, an explicit identity file, or a password). On connect the app deploys the
   **headless `fastvibe-agent`** to that machine, starts it, and carries the App Protocol over an
   OpenSSH loopback forward.
+- **The host fetches the Agent release itself.** The deploy is one command that downloads
+  `fastvibe-agent-<target>.tar.gz` with the host's own `curl`/`wget`, verifies the unpacked
+  `manifest.json` names the expected version, and links it as `current` — the desktop neither
+  downloads nor uploads the archive. This matters because the desktop is often not the machine with
+  the good link, and the asset is public. Only when the host cannot reach the release (no egress, no
+  `curl`/`wget`) does the app fall back to downloading here and pushing the archive through SSH
+  stdin; that path caches the archive under `runtime/ssh-agent-runtimes/<version>/` so a retry does
+  not hit GitHub again.
 - The Add project dialog lets you pick a host, browse its directories, and add the chosen workspace as
   a **remote project** in the sidebar.
 - **Several servers at once.** There is no global “connected host”: a remote conversation's id is

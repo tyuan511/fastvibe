@@ -1,5 +1,6 @@
 import type { ChatAttachment, ChatMessage, MessagePart, ThinkingTiming, ToolCallBlock, TuiRun } from "@shared/types";
 import { extractPromptAttachments } from "@shared/attachment-metadata";
+import { toolResultStatus } from "@shared/tool-result";
 import { uiText } from "./ui-text";
 
 /**
@@ -93,7 +94,7 @@ export function mapEngineMessages(
         if (tool) {
           if (result) tool.result = result;
           if (message.details !== undefined) tool.details = message.details;
-          tool.status = message.isError === true ? "error" : "done";
+          tool.status = toolResultStatus(tool.name, message.isError === true, message.details);
         }
       }
       continue;

@@ -1466,10 +1466,15 @@ means either: an agent **run** and a **compaction**.
   stopped early — a terminal `agent_end` (`error` / `aborted`), or an `auto_retry_end`
   reporting failure with no such verdict on record (a retry chain the user stopped while it
   waited out the backoff, which the SDK ends after already dropping the failed attempt from
-  agent state, so no errored message and no `agent_end` ever describe it). It pauses the
-  follow-up queue when a run stops early, and its nullness is what tells that cancelled
-  retry chain from one whose failure `agent_end` already reported; `agent_start`,
-  `turn_start` and a fresh prompt clear it again.
+  agent state, so no errored message and no `agent_end` ever describe it). Its nullness
+  tells that cancelled retry chain from one whose failure `agent_end` already reported;
+  `agent_start`, `turn_start` and a fresh prompt clear it again. **It does not pause the
+  queue.** Main owns durable queue pauses, and the renderer adopts only revisioned
+  `queue_changed` / queue-call snapshots through `setQueueState`. Deriving another
+  pause on `agent_settled` can overwrite a newer resume with an old failure. Likewise,
+  a pause on an empty queue is not a reason to enqueue fresh input: once the chat is
+  idle, Send starts a new turn even after an error. Existing queued items still retain
+  their order and explicit resume policy (`lib/composer-race.ts`).
 - A compaction keeps its own flag `#compacting`, for when it is not part of a run at all:
   `/compact`, and the threshold check a fresh prompt runs before it is sent. It is the only
   thing that can say such a chat is busy, and it is used to re-serve the 正在压缩上下文 card.

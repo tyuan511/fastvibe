@@ -986,33 +986,6 @@ function appBundlePath(): string | null {
   return exe.slice(0, marker + ".app".length);
 }
 
-const BIND_KEY = "__fastvibeComputerConversationId";
-let bindTail: Promise<unknown> = Promise.resolve();
-
-/**
- * Stamp the conversation that is about to load `computer-use`, so the extension factory
- * can close over it — the same hand-off `bindBrowserConversation` performs, serialised
- * for the same reason: factories run during `resourceLoader.reload()`, and two sessions
- * created at once would otherwise share one mutating global.
- */
-export function bindComputerConversation<T>(conversationId: string, fn: () => Promise<T>): Promise<T> {
-  const run = bindTail.then(async () => {
-    const g = globalThis as Record<string, unknown>;
-    const previous = g[BIND_KEY];
-    g[BIND_KEY] = conversationId;
-    try {
-      return await fn();
-    } finally {
-      g[BIND_KEY] = previous;
-    }
-  });
-  bindTail = run.then(
-    () => undefined,
-    () => undefined,
-  );
-  return run;
-}
-
 /**
  * Drop the worker so the next action starts a fresh one.
  *

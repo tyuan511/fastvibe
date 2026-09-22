@@ -2,8 +2,12 @@ import { randomUUID } from "node:crypto";
 import { chmodSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import type { PromptImage, QueuePauseReason, QueuedPrompt } from "@shared/types";
 
-/** `claimed` means the SDK agent loop has taken the object from its private queue. */
-export type StoredQueuedPrompt = QueuedPrompt & { images?: PromptImage[]; claimed?: boolean };
+/**
+ * `claimed` means the SDK agent loop has taken the object from its private queue.
+ * `queuedAt` bounds transcript reconciliation: the engine message is always created
+ * after its row, so an equal-text user turn older than the row cannot be it.
+ */
+export type StoredQueuedPrompt = QueuedPrompt & { images?: PromptImage[]; claimed?: boolean; queuedAt?: number };
 export type ConversationQueueState = {
   conversationId: string;
   revision: number;
@@ -42,13 +46,17 @@ export function normalizeQueueFile(value: unknown): QueueFile {
   if (!value || typeof value !== "object") return cloneState(EMPTY);
   const source = value as { items?: unknown; pauses?: unknown; revisions?: unknown };
   const loaded = Array.isArray(source.items) ? source.items.filter(validItem) : [];
-  // The process died before it could reconcile these objects with the transcript.
-  // Preserve every row, make it explicitly pending, and pause its conversation. An
-  // explicit Resume may replay it; Cancel may discard it. Startup itself does neither.
+  // The process died before it could acknowledge these rows. A row the run never took
+  // (`sending` alone) was never delivered and becomes pending. A claimed row may be in
+  // the transcript, so it stays claimed until the session loads and is reconciled
+  // against it (`findDeliveredClaims`) — turning it pending here replayed turns that
+  // had already been sent. Either way the conversation is paused for the user.
   const uncertainConversations = new Set(
     loaded.filter((item) => item.claimed === true || item.sending === true).map((item) => item.conversationId),
   );
-  const items = loaded.map((item) => ({ ...item, claimed: undefined, sending: undefined }));
+  const items = loaded.map((item) =>
+    item.claimed === true ? { ...item, claimed: true, sending: true } : { ...item, claimed: undefined, sending: undefined },
+  );
   const pauses: Record<string, QueuePauseReason> = {};
   if (source.pauses && typeof source.pauses === "object") {
     for (const [id, reason] of Object.entries(source.pauses)) {
@@ -82,6 +90,32 @@ export function reorderConversationItems(
   for (const item of movable) if (byId.delete(item.id)) ordered.push(item);
   let index = 0;
   return items.map((item) => item.conversationId === conversationId && !item.claimed ? ordered[index++] : item);
+}
+
+/**
+ * Which claimed rows the transcript shows were delivered.
+ *
+ * Identity is gone once the acknowledgement was missed (a failed flush, a restart),
+ * so this falls back to the payload text, bounded below by the row's `queuedAt` and
+ * matching each transcript turn at most once, oldest first. A claimed row with no
+ * match never reached the transcript and is safe to send again.
+ */
+export function findDeliveredClaims(
+  items: StoredQueuedPrompt[],
+  userTurns: Array<{ text: string; timestamp?: number }>,
+): Set<string> {
+  const delivered = new Set<string>();
+  const used = new Set<number>();
+  for (const item of items) {
+    if (!item.claimed) continue;
+    const text = item.sentText ?? item.text;
+    const index = userTurns.findIndex((turn, at) =>
+      !used.has(at) && turn.text === text && (item.queuedAt === undefined || (turn.timestamp ?? 0) >= item.queuedAt));
+    if (index < 0) continue;
+    used.add(index);
+    delivered.add(item.id);
+  }
+  return delivered;
 }
 
 function writeQueueFile(file: string, state: QueueFile): void {
@@ -152,7 +186,7 @@ export class MessageQueueStore {
   }
 
   add(input: Omit<StoredQueuedPrompt, "id">): StoredQueuedPrompt {
-    const item = { ...input, id: randomUUID() };
+    const item = { ...input, id: randomUUID(), queuedAt: Date.now() };
     this.#mutate((next) => { next.items.push(item); this.#touch(next, item.conversationId); });
     return { ...item };
   }
@@ -252,6 +286,28 @@ export class MessageQueueStore {
         changed = true;
       }
       if (!changed) return false;
+      this.#touch(next, conversationId);
+    });
+    return changed;
+  }
+
+  /**
+   * Settle every claimed row in one commit: delivered rows leave, the rest become
+   * pending. The pause is released only when nothing is left to hold.
+   */
+  resolveClaims(conversationId: string, delivered: ReadonlySet<string>): boolean {
+    let changed = false;
+    this.#mutate((next) => {
+      next.items = next.items.filter((item) => {
+        if (item.conversationId !== conversationId || !item.claimed) return true;
+        changed = true;
+        if (delivered.has(item.id)) return false;
+        item.claimed = false;
+        item.sending = false;
+        return true;
+      });
+      if (!changed) return false;
+      if (!next.items.some((item) => item.conversationId === conversationId)) delete next.pauses[conversationId];
       this.#touch(next, conversationId);
     });
     return changed;

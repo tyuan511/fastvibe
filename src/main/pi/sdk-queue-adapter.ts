@@ -30,16 +30,6 @@ export type SdkQueueAdapter = {
   /** Ids still physically present in either SDK queue. */
   pendingIds(): string[];
   /**
-   * Detach one pending object without touching the SDK queue.
-   *
-   * The session drains its own steering queue to build an idle run's opening
-   * prompt, and the object it drained is no longer in the queue the adapter
-   * watches — but the caller still has to claim that exact object, because the
-   * delivery acknowledgement matches on object identity. Returns nothing once the
-   * agent loop has already taken it.
-   */
-  takePending(id: string): AgentMessage | undefined;
-  /**
    * Make the SDK's next queue read return nothing, once per queue.
    *
    * `agent.continue()` starts a fresh run when the transcript ends on an assistant
@@ -71,6 +61,8 @@ export function installSdkQueueAdapter(
   options: {
     currentId: () => string | undefined;
     onClaim: (id: string) => void;
+    /** A loop read refused this row's claim; its object was taken out of the SDK queue. */
+    onWithdraw?: (id: string) => void;
     claims: SdkQueueClaims;
   },
 ): SdkQueueAdapter {
@@ -87,8 +79,17 @@ export function installSdkQueueAdapter(
 
   const byId = new Map<string, AgentMessage>();
   const idByMessage = new WeakMap<object, string>();
-  const remember = (message: AgentMessage): void => {
+  // Ids whose object the run already took. A queue token stays in async scope for the
+  // whole run it started, so an extension's own steer/followUp (goal mode continuing
+  // from `agent_end`) or a later prompt would otherwise be filed under that spent id —
+  // and claiming it a second time is refused, which failed the run.
+  const spent = new Set<string>();
+  const tokenId = (): string | undefined => {
     const id = options.currentId();
+    return id && !spent.has(id) ? id : undefined;
+  };
+  const remember = (message: AgentMessage): void => {
+    const id = tokenId();
     if (!id) return;
     byId.set(id, message);
     idByMessage.set(message as object, id);
@@ -124,28 +125,42 @@ export function installSdkQueueAdapter(
         skipDrains.delete(queue);
         return [];
       }
-      const selected = queue.mode === "all" ? queue.messages.slice() : queue.messages.slice(0, 1);
-      // The agent loop's own read is the claim boundary, and it always happens
-      // inside a submission. A drain made outside one — the session builds an idle
-      // run's opening prompt by draining this queue itself — leaves the object
-      // unclaimed, because that prompt is a different object and the claim on
-      // `agent.prompt` never sees this one. The caller reclaims it by identity
-      // afterwards (`takePending`). Committing the claim before the SDK removes the
-      // objects means a failed write leaves its queue untouched.
-      if (options.currentId()) {
+      // Every drain in 0.86.1 is a delivery: the agent loop's steering/follow-up
+      // polls and `agent.continue()` both hand the drained objects to the run as-is.
+      // The claim therefore cannot depend on which submission the read happens in.
+      // It used to: a steer read by a run the user started directly (no queue token
+      // in scope) was delivered unclaimed, so its row stayed 发送中 forever and could
+      // not even be cancelled ("already claimed").
+      //
+      // Commit each claim before the SDK removes the objects. The read is the loop's
+      // and must never throw into it: an object whose claim is refused (its queue was
+      // paused, its row is gone, or the write failed) is withdrawn, not delivered.
+      const claimedHere = new Set<string>();
+      for (;;) {
+        const selected = queue.mode === "all" ? queue.messages.slice() : queue.messages.slice(0, 1);
+        let withdrawn = false;
         for (const message of selected) {
           const id = idByMessage.get(message as object);
-          if (id) options.onClaim(id);
+          if (!id || claimedHere.has(id)) continue;
+          try {
+            options.onClaim(id);
+            claimedHere.add(id);
+            spent.add(id);
+          } catch {
+            queue.messages = queue.messages.filter((entry) => entry !== message);
+            forget(message);
+            options.onWithdraw?.(id);
+            withdrawn = true;
+          }
         }
+        if (!withdrawn) break;
       }
       const drained = original();
-      if (options.currentId()) {
-        for (const message of drained) {
-          const id = idByMessage.get(message as object);
-          if (!id) continue;
-          options.claims.claim(message as object, id);
-          forget(message);
-        }
+      for (const message of drained) {
+        const id = idByMessage.get(message as object);
+        if (!id) continue;
+        options.claims.claim(message as object, id);
+        forget(message);
       }
       return drained;
     };
@@ -162,9 +177,10 @@ export function installSdkQueueAdapter(
   agent.prompt = async (messages: AgentMessage | AgentMessage[]) => {
     const list = Array.isArray(messages) ? messages : [messages];
     const message = list.find((entry) => entry.role === "user");
-    const id = message ? options.currentId() : undefined;
+    const id = message ? tokenId() : undefined;
     if (message && id) {
       options.onClaim(id);
+      spent.add(id);
       options.claims.claim(message as object, id);
     }
     await prompt(messages);
@@ -202,15 +218,6 @@ export function installSdkQueueAdapter(
     suppressNextDrain() {
       skipDrains.add(agent.steeringQueue!);
       skipDrains.add(agent.followUpQueue!);
-    },
-    takePending(id) {
-      const message = byId.get(id);
-      if (!message) return undefined;
-      // Still physically queued: the agent loop has not taken it, so claiming it
-      // here would acknowledge a delivery that has not happened.
-      if ([agent.steeringQueue!, agent.followUpQueue!].some((queue) => queue.messages.includes(message))) return undefined;
-      forget(message);
-      return message;
     },
   };
 }

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { Agent, type AgentMessage } from "@earendil-works/pi-agent-core";
-import { MessageQueueStore, SdkQueueClaims, normalizeQueueFile, reorderConversationItems } from "../src/main/engine/message-queue.ts";
+import { MessageQueueStore, SdkQueueClaims, findDeliveredClaims, normalizeQueueFile, reorderConversationItems } from "../src/main/engine/message-queue.ts";
 import { installSdkQueueAdapter, SUPPORTED_PI_AGENT_CORE_VERSION } from "../src/main/pi/sdk-queue-adapter.ts";
 
 const item = (id: string, conversationId = "a", claimed = false) => ({
@@ -27,14 +27,14 @@ test("only the exact SDK message object acknowledges a claimed row", () => {
   assert.equal(claims.take(queued), undefined);
 });
 
-test("recovery preserves uncertain rows, pauses them, and does not auto-replay", () => {
+test("recovery keeps claimed rows claimed for reconciliation, pauses them, and does not auto-replay", () => {
   const state = normalizeQueueFile({
     version: 2,
     items: [item("claimed", "a", true), item("pending")],
     pauses: { a: "stopped", bad: "unknown" },
   });
   assert.deepEqual(state.items.map(({ id, sentText, claimed, sending }) => ({ id, sentText, claimed, sending })), [
-    { id: "claimed", sentText: "payload:claimed", claimed: undefined, sending: undefined },
+    { id: "claimed", sentText: "payload:claimed", claimed: true, sending: true },
     { id: "pending", sentText: "payload:pending", claimed: undefined, sending: undefined },
   ]);
   assert.deepEqual(state.pauses, { a: "error" });
@@ -48,6 +48,39 @@ test("legacy sending state is preserved but paused for an explicit decision", ()
   assert.equal(state.items[0]?.id, "legacy");
   assert.equal(state.items[0]?.sending, undefined);
   assert.deepEqual(state.pauses, { a: "error" });
+});
+
+test("transcript reconciliation matches each claimed row to one later user turn", () => {
+  const rows = [
+    { ...item("old-text", "a", true), queuedAt: 100 },
+    { ...item("twin-1", "a", true), sentText: "same", queuedAt: 200 },
+    { ...item("twin-2", "a", true), sentText: "same", queuedAt: 200 },
+    { ...item("pending"), sentText: "same" },
+  ];
+  const delivered = findDeliveredClaims(rows, [
+    // Equal text sent before the row existed is a different turn.
+    { text: "payload:old-text", timestamp: 50 },
+    { text: "same", timestamp: 250 },
+  ]);
+  // One transcript turn acknowledges one row; its twin was never sent.
+  assert.deepEqual([...delivered], ["twin-1"]);
+});
+
+test("resolving claims removes delivered rows, re-queues the rest, and keeps a held pause", () => {
+  const store = new MessageQueueStore("unused", () => undefined);
+  const sent = store.add({ conversationId: "a", text: "sent", behavior: "steer", claimed: true, sending: true });
+  const lost = store.add({ conversationId: "a", text: "lost", behavior: "steer", claimed: true, sending: true });
+  store.pause("a", "error");
+  assert.equal(store.resolveClaims("a", new Set([sent.id])), true);
+  assert.equal(store.get(sent.id), undefined);
+  assert.equal(store.get(lost.id)?.claimed, false);
+  assert.equal(store.get(lost.id)?.sending, false);
+  assert.equal(store.state("a").pause, "error");
+  // Nothing left to hold: the pause goes with the last row.
+  store.update(lost.id, { claimed: true });
+  store.resolveClaims("a", new Set([lost.id]));
+  assert.equal(store.state("a").pause, null);
+  assert.equal(store.resolveClaims("a", new Set()), false);
 });
 
 test("id reorder is conversation-scoped, keeps claimed positions, and cannot drop additions", () => {
@@ -129,7 +162,7 @@ test("adapter version matches the exact pinned SDK dependency", () => {
   assert.equal(pkg.dependencies["@earendil-works/pi-agent-core"], SUPPORTED_PI_AGENT_CORE_VERSION);
 });
 
-test("actual SDK getSteeringMessages claims only when it drains the exact object", async () => {
+test("actual SDK getSteeringMessages claims the exact object it drains, in any run", async () => {
   const agent = sdkAgent();
   const claims = new SdkQueueClaims();
   let currentId: string | undefined = "queued-1";
@@ -149,22 +182,22 @@ test("actual SDK getSteeringMessages claims only when it drains the exact object
   const config = (agent as unknown as {
     createLoopConfig(): { getSteeringMessages(): Promise<AgentMessage[]> };
   }).createLoopConfig();
-  // A drain only claims inside a submission. The session's own drain, which builds
-  // an idle run's opening prompt, happens outside one and must not.
+  // A run the user started directly has no queue token in scope. Its read is still
+  // a delivery and must claim, or the row stays 发送中 forever.
   const drainedOutside = await config.getSteeringMessages();
   assert.deepEqual(drainedOutside, [message]);
-  assert.deepEqual(claimed, []);
-  assert.equal(claims.take(message as object), undefined);
-
-  currentId = "queued-1";
-  agent.steer(message);
-  currentId = "run";
-  const drained = await config.getSteeringMessages();
-  currentId = undefined;
-  assert.deepEqual(drained, [message]);
   assert.deepEqual(claimed, ["queued-1"]);
   assert.equal(claims.take(message as object), "queued-1");
   assert.equal(adapter.cancelPending("queued-1"), false);
+
+  const second = sdkUser("two");
+  currentId = "queued-2";
+  agent.steer(second);
+  currentId = "run";
+  assert.deepEqual(await config.getSteeringMessages(), [second]);
+  currentId = undefined;
+  assert.deepEqual(claimed, ["queued-1", "queued-2"]);
+  assert.equal(claims.take(second as object), "queued-2");
 });
 
 test("identity cancellation filters one SDK object without clearing or replaying survivors", async () => {
@@ -188,10 +221,7 @@ test("identity cancellation filters one SDK object without clearing or replaying
   const config = (agent as unknown as {
     createLoopConfig(): { getSteeringMessages(): Promise<AgentMessage[]> };
   }).createLoopConfig();
-  // The loop's own read is the claim, and it only happens inside a submission.
-  currentId = "run";
   assert.deepEqual(await config.getSteeringMessages(), [second]);
-  currentId = undefined;
   assert.equal(claims.take(second as object), "second");
 });
 
@@ -237,65 +267,92 @@ test("a resumed run skips one read of each queue and leaves the steered rows pen
 
   // The suppression is exactly one read per queue. The resumed run's later polls
   // deliver what it held back, in the order it was queued, and claim it normally.
-  // The resumed run's later polls happen inside its own submission, which is what
-  // makes a drain a claim. Outside one, the drain is the session building a prompt
-  // and the row stays pending for the caller to reclaim.
-  currentId = "resumed-run";
   assert.deepEqual(await config.getSteeringMessages(), [steered]);
   assert.deepEqual(await config.getSteeringMessages(), [later]);
-  currentId = undefined;
   assert.deepEqual(claimed, ["steer-1", "steer-2"]);
   assert.equal(claims.take(later as object), "steer-2");
   assert.deepEqual(adapter.pendingIds(), ["follow-1"]);
 });
 
-test("a drained steering object can be reclaimed by identity, a queued one cannot", async () => {
+test("a loop read outside a submission withdraws a refused object instead of throwing", async () => {
   const agent = sdkAgent();
   const claims = new SdkQueueClaims();
   let currentId: string | undefined;
+  const withdrawn: string[] = [];
   const adapter = installSdkQueueAdapter(agent, {
     currentId: () => currentId,
-    onClaim: () => undefined,
-    claims,
-  });
-  const steered = sdkUser("sent from a resumed queue");
-  currentId = "row-1";
-  agent.steer(steered);
-  currentId = undefined;
-
-  // Still inside the SDK queue: nothing has delivered it, so it must not be claimable.
-  assert.equal(adapter.takePending("row-1"), undefined);
-  assert.deepEqual(adapter.pendingIds(), ["row-1"]);
-
-  // What session.prompt does while idle: drain the queue and prompt with the drained
-  // object. The object is no longer queued, and reclaiming it hands back that exact
-  // one — the only identity the delivery acknowledgement can match.
-  const drained = agent.steeringQueue.drain();
-  assert.equal(adapter.takePending("row-1"), steered);
-  assert.deepEqual(drained, [steered]);
-  assert.deepEqual(adapter.pendingIds(), []);
-  assert.equal(adapter.takePending("row-1"), undefined);
-});
-
-test("failed durable claim leaves the real SDK queue undrained", async () => {
-  const agent = sdkAgent();
-  const claims = new SdkQueueClaims();
-  let fail = true;
-  const adapter = installSdkQueueAdapter(agent, {
-    currentId: () => "queued",
-    onClaim: () => {
-      if (fail) throw new Error("disk full");
+    onClaim: (id) => {
+      if (id === "paused") throw new Error("queue paused");
     },
+    onWithdraw: (id) => withdrawn.push(id),
     claims,
   });
-  const message = sdkUser("one");
-  agent.steer(message);
+  const refused = sdkUser("held by a paused queue");
+  const accepted = sdkUser("still deliverable");
+  currentId = "paused";
+  agent.steer(refused);
+  currentId = "ok";
+  agent.steer(accepted);
+  currentId = undefined;
   const config = (agent as unknown as {
     createLoopConfig(): { getSteeringMessages(): Promise<AgentMessage[]> };
   }).createLoopConfig();
 
-  await assert.rejects(config.getSteeringMessages(), /disk full/);
-  assert.deepEqual(adapter.pendingIds(), ["queued"]);
-  fail = false;
-  assert.deepEqual(await config.getSteeringMessages(), [message]);
+  // One-at-a-time: the refused head is withdrawn and the read moves on to the next.
+  assert.deepEqual(await config.getSteeringMessages(), [accepted]);
+  assert.deepEqual(withdrawn, ["paused"]);
+  assert.deepEqual(adapter.pendingIds(), []);
+  assert.equal(claims.take(refused as object), undefined);
+  assert.equal(claims.take(accepted as object), "ok");
+});
+
+test("a failed durable claim withdraws the object instead of failing the run", async () => {
+  const agent = sdkAgent();
+  const claims = new SdkQueueClaims();
+  const withdrawn: string[] = [];
+  const adapter = installSdkQueueAdapter(agent, {
+    currentId: () => "queued",
+    onClaim: () => {
+      throw new Error("disk full");
+    },
+    onWithdraw: (id) => withdrawn.push(id),
+    claims,
+  });
+  agent.steer(sdkUser("one"));
+  const config = (agent as unknown as {
+    createLoopConfig(): { getSteeringMessages(): Promise<AgentMessage[]> };
+  }).createLoopConfig();
+
+  assert.deepEqual(await config.getSteeringMessages(), []);
+  assert.deepEqual(withdrawn, ["queued"]);
+  assert.deepEqual(adapter.pendingIds(), []);
+});
+
+test("messages enqueued later in a queue-started run are not filed under its spent id", async () => {
+  const agent = sdkAgent();
+  const claims = new SdkQueueClaims();
+  const claimed: string[] = [];
+  const adapter = installSdkQueueAdapter(agent, {
+    // The drain's token stays in scope for the whole run it started.
+    currentId: () => "opening",
+    onClaim: (id) => {
+      if (claimed.includes(id)) throw new Error("already claimed");
+      claimed.push(id);
+    },
+    claims,
+  });
+  const opening = sdkUser("queued prompt");
+  // The opening prompt's claim; the provider stream is never reached.
+  await agent.prompt(opening).catch(() => undefined);
+  assert.deepEqual(claimed, ["opening"]);
+
+  // Goal mode continuing from agent_end, still inside the same async scope.
+  const continuation = sdkUser("extension follow-up");
+  agent.followUp(continuation);
+  assert.deepEqual(adapter.pendingIds(), []);
+  const config = (agent as unknown as {
+    createLoopConfig(): { getFollowUpMessages(): Promise<AgentMessage[]> };
+  }).createLoopConfig();
+  assert.deepEqual(await config.getFollowUpMessages(), [continuation]);
+  assert.deepEqual(claimed, ["opening"]);
 });

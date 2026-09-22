@@ -1,5 +1,26 @@
 name: Release
 
+# A release has to stay invisible until *every* asset is up, and that is a property of
+# the sequence below rather than of any single step.
+#
+# electron-updater's GitHub provider resolves an update through the tag's release entry,
+# and everything a client can see before the release is published is a draft: GitHub
+# omits drafts from the Atom feed the provider parses and from `/releases/latest`, the
+# client finds no published version at all, and `gh release view <tag>` — whose REST
+# `releases/tags/<tag>` half answers 404 for a draft — reaches it over GraphQL only
+# because an authenticated caller may see it. So every leg that produces an artifact
+# uploads it into a **draft**, and one job publishes the release once all of them have
+# reported success.
+#
+# What that buys: the update manifest and the files it names cannot be read at different
+# times. The old order published the release as soon as a leg finished uploading, so
+# `latest.yml` was downloadable — and every running client was offered the version — for
+# as long as the ~130 MB installer still took to arrive behind it. Draft-first makes the
+# window impossible instead of making it shorter: nothing is public until all of it is.
+#
+# Do not "simplify" a leg back to `draft: false`. It looks like one keystroke and returns
+# to announcing an update whose installer 404s.
+
 on:
   push:
     tags:
@@ -50,10 +71,16 @@ jobs:
           pnpm build
           pnpm build:agent-runtime -- --platform=linux --arch=${{ matrix.arch }}
 
-      - name: Publish Agent runtime
+      # Draft: the release is published by `publish` once every job has succeeded. The
+      # first leg to get here creates it (`createRelease` defaults `draft` to true unless
+      # the release is being created *as* a prerelease), and the rest find that draft and
+      # append to it — action-gh-release lists releases rather than trusting
+      # `releases/tags/<tag>`, which hides drafts, so the second leg does not create a
+      # second release for the same tag.
+      - name: Upload Agent runtime
         uses: softprops/action-gh-release@v3
         with:
-          draft: false
+          draft: true
           fail_on_unmatched_files: true
           files: release/agent-runtime/fastvibe-agent-linux-${{ matrix.arch }}.tar.gz
         env:
@@ -77,7 +104,7 @@ jobs:
           # The two macOS architectures are separate legs so they package and
           # notarize at the same time instead of one after the other — four notary
           # round trips are most of this workflow's wall clock. They each write a
-          # manifest covering only their own arch; `mac-manifest` merges them.
+          # manifest covering only their own arch; `publish` merges them.
           - os: macos-latest
             platform: mac
             arch: arm64
@@ -233,7 +260,7 @@ jobs:
       # One manifest covers both architectures and only one file can carry the name
       # the updater fetches, so neither mac leg may publish its own: the second to
       # finish would overwrite the first, and the loser's users would be updating from
-      # a manifest that does not list their architecture. `mac-manifest` merges them.
+      # a manifest that does not list their architecture. `publish` merges them.
       - name: Set the mac manifest aside
         if: matrix.platform == 'mac'
         run: |
@@ -248,10 +275,15 @@ jobs:
           path: manifest/latest-mac-${{ matrix.arch }}.yml
           retention-days: 1
 
-      - name: Publish release assets
+      # Uploaded into the draft — see the header. `latest*.yml` rides along here rather
+      # than being held back to `publish`: what makes it harmless is that the release is
+      # still a draft, not which job put it there. The mac leg is the exception only
+      # because its manifest cannot be written until both mac legs have run, and the
+      # `publish` job is where they finally meet.
+      - name: Upload release assets
         uses: softprops/action-gh-release@v3
         with:
-          draft: false
+          draft: true
           # Only one matrix leg may generate the notes. `action-gh-release` appends
           # freshly generated notes to an existing release's body, so three legs
           # publishing the same tag stack the changelog three times over. The other
@@ -264,6 +296,10 @@ jobs:
           # excluding prereleases. It never looks at the version string, so an rc
           # published as a normal release is offered to everybody within the hour.
           prerelease: ${{ contains(github.ref_name, '-') }}
+          # Every leg uploads some subset of these and none of them uploads all of it (a
+          # mac runner has no .exe, a linux runner no .dmg), so an unmatched glob is
+          # expected rather than a mistake. The one glob that must match lives on the
+          # `publish` job.
           fail_on_unmatched_files: false
           files: |
             release/*.dmg
@@ -276,12 +312,16 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  mac-manifest:
-    name: Merge mac update manifest
-    # Every leg has to have succeeded. A merged manifest describing a release whose
-    # other half never uploaded would point users at files that are not there, and the
-    # absence of a manifest is the safe failure: the app simply finds no update.
-    needs: build
+  # The release's publisher: merge the two mac manifests, upload the result, and only
+  # then unmark the draft.
+  publish:
+    name: Publish the release
+    # Every leg has to have succeeded — the packaging jobs *and* the Agent runtime ones,
+    # whose archive is a release asset a connecting client downloads by URL. A merged
+    # manifest describing a release whose other half never uploaded would point users at
+    # files that are not there, and the absence of a manifest is the safe failure: the
+    # app simply finds no update.
+    needs: [agent-runtime, build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -307,7 +347,14 @@ jobs:
           cat release/latest-mac.yml
           echo "::endgroup::"
 
-      - name: Publish the merged manifest
+      # This is the release's publish step, and `draft: false` is the switch.
+      # action-gh-release uploads every listed file and only then unmarks the draft, so
+      # the order that matters is inside this call: a client that finds the release at the
+      # instant it appears can already download `latest-mac.yml`, which is the point of
+      # every leg above uploading into a draft instead of publishing. The flip side is
+      # that a tag whose workflow stops before this job ends up with a draft release and
+      # no update offered — the safe failure, and one `gh run rerun --failed` away.
+      - name: Upload the merged manifest and publish
         uses: softprops/action-gh-release@v3
         with:
           draft: false

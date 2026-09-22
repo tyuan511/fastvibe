@@ -51,7 +51,7 @@ import type {
   QueueBehavior,
   QueuedPromptPreview,
 } from "@shared/types";
-import type { RemoteHostProfile, RemoteHostConnectionState } from "@shared/remote-host";
+import type { RemoteHostProfile, RemoteHostConnectionState, RemoteHostTestResult, SshHostKeyScan } from "@shared/remote-host";
 import type {
   AppUpdateState,
   GitBranch,
@@ -472,6 +472,10 @@ export function createFastVibeApi(t: ApiTransport) {
       removeHost: (id: string): Promise<{ saved: RemoteHostProfile[]; discovered: RemoteHostProfile[] }> =>
         t.invoke(Ipc.sshHostRemove, { id }),
       pickIdentityFile: (): Promise<string | null> => t.invoke(Ipc.sshPickIdentityFile),
+      test: (hostId: string): Promise<RemoteHostTestResult> => t.invoke(Ipc.sshTest, { hostId }),
+      scanHostKey: (hostId: string): Promise<SshHostKeyScan> => t.invoke(Ipc.sshHostKeyScan, { hostId }),
+      trustHostKey: (hostId: string, fingerprints: string[]): Promise<void> => t.invoke(Ipc.sshHostKeyTrust, { hostId, fingerprints }),
+      stopAgent: (hostId: string): Promise<string> => t.invoke(Ipc.sshStopAgent, { hostId }),
       connect: (hostId: string): Promise<RemoteHostConnectionState> => t.invoke(Ipc.sshConnect, { hostId }),
       disconnect: (hostId?: string): Promise<RemoteHostConnectionState> =>
         t.invoke(Ipc.sshDisconnect, hostId ? { hostId } : undefined),

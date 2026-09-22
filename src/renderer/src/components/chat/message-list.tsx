@@ -315,6 +315,19 @@ function InlinePromptEditor({
 }): JSX.Element {
   const { t } = useTranslation("chat");
   const [text, setText] = useState(value);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Entering the editor means "the user is being put into this draft", so the caret
+  // belongs at the end of what is already there. A plain `autoFocus` focuses the
+  // element before the controlled value lands, and the browser parks the caret at
+  // offset 0 for that — the same trap the composer's focus effect documents.
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.focus();
+    const end = el.value.length;
+    el.setSelectionRange(end, end);
+  }, []);
 
   function submit(): void {
     const next = text.trim();
@@ -324,7 +337,7 @@ function InlinePromptEditor({
   return (
     <div className="w-full max-w-2xl rounded-xl border border-border bg-secondary/50 p-2">
       <Textarea
-        autoFocus
+        ref={textareaRef}
         rows={2}
         value={text}
         aria-label={t("message.editPlaceholder")}

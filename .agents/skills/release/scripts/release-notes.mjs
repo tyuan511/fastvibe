@@ -7,9 +7,10 @@
  *
  * Markdown goes to stdout (nothing else); the range being summarised goes to
  * stderr. The output is a *draft*: every entry is still an English commit
- * subject. Rewrite it into user-facing Chinese prose before publishing — see
- * SKILL.md. Run it BEFORE the version-bump commit so the notes cover only
- * shipped work; `chore: release vX.Y.Z` is skipped either way.
+ * subject. Rewrite it into user-facing English prose before publishing — the
+ * release note is read on GitHub by an international audience, so it must
+ * contain no Chinese; see SKILL.md. Run it BEFORE the version-bump commit so the
+ * notes cover only shipped work; `chore: release vX.Y.Z` is skipped either way.
  */
 import { execFileSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
@@ -53,13 +54,14 @@ const commitUrl = (hash) => (repo ? `https://github.com/${repo[1]}/${repo[2]}/co
 const compareUrl = repo && from ? `https://github.com/${repo[1]}/${repo[2]}/compare/${from}...${tag}` : "";
 
 const SECTIONS = [
-  ["feat", "新增"],
-  ["fix", "修复"],
-  ["perf", "性能"],
-  ["refactor", "重构"],
-  ["docs", "文档"],
+  ["feat", "Added"],
+  ["fix", "Fixed"],
+  ["perf", "Performance"],
+  ["refactor", "Refactor"],
+  ["docs", "Docs"],
 ];
-const MISC = "构建与杂项";
+const BREAKING = "Breaking changes";
+const MISC = "Build & chores";
 const TRAILER = /^(Co-authored-by|Signed-off-by|Reviewed-by|Generated with|🤖)/i;
 
 /** One bullet per `- ` item, one bullet per prose block; wrapped lines rejoin. */
@@ -124,7 +126,7 @@ const commits = log
 const breaking = commits.filter((commit) => commit.breaking);
 const sections = [];
 // A breaking commit is listed once, at the top, not again under its own type.
-if (breaking.length) sections.push(["破坏性变更", breaking]);
+if (breaking.length) sections.push([BREAKING, breaking]);
 for (const [type, title] of SECTIONS) {
   const group = commits.filter((commit) => commit.type === type && !commit.breaking);
   if (group.length) sections.push([title, group]);
@@ -151,7 +153,7 @@ const body = sections
   .join("\n\n");
 
 console.log(
-  [body || "### 变更\n\n- 无", compareUrl ? `**Full Changelog**: ${compareUrl}` : ""]
+  [body || "### Changes\n\n- None", compareUrl ? `**Full Changelog**: ${compareUrl}` : ""]
     .filter(Boolean)
     .join("\n\n"),
 );

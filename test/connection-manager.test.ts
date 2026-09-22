@@ -395,3 +395,65 @@ test("webSocketTransport auth deadline settles when no ack arrives", async () =>
     await server.close();
   }
 });
+
+test("webSocketTransport authenticates with the SSH bootstrap token", async () => {
+  const inbound: Array<Record<string, unknown>> = [];
+  const server = await withWsServer((socket) => {
+    socket.on("message", (data) => inbound.push(JSON.parse(String(data)) as Record<string, unknown>));
+  });
+  try {
+    const transport = webSocketTransport(server.port, { token: "d".repeat(64) });
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    assert.deepEqual(inbound[0], { type: "auth", token: "d".repeat(64) });
+    transport.close();
+  } finally {
+    await server.close();
+  }
+});
+
+test("a connection that drops on its own is brought back, and a disconnect stops that", async () => {
+  const first = fakeClient(handshake("srv_one"));
+  const second = fakeClient(handshake("srv_one"));
+  const clients: RemoteAppClient[] = [first, second];
+  const reconnected: string[] = [];
+  const instance = new RemoteConnectionManager({
+    log: { info() {}, warn() {} },
+    onStatus: () => undefined,
+    onPush: () => undefined,
+    openTransport: async () => ({ port: 1, close: async () => undefined }),
+    createClient: () => clients.shift()!,
+    reconnect: { delaysMs: [5], onReconnected: (server) => reconnected.push(server.serverInstanceId) },
+  });
+  await instance.connect(profile("host-a"));
+  first.drop({ state: "error", message: "远程 App Server 连接已断开" });
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.deepEqual(reconnected, ["srv_one"]);
+  assert.equal(instance.server("host-a")?.client, second);
+
+  // A user disconnect is not a drop: nothing comes back after it.
+  await instance.disconnect("host-a");
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(instance.server("host-a"), undefined);
+});
+
+test("a refused credential is not retried", async () => {
+  const client = fakeClient(handshake("srv_one"));
+  let opens = 0;
+  const instance = new RemoteConnectionManager({
+    log: { info() {}, warn() {} },
+    onStatus: () => undefined,
+    onPush: () => undefined,
+    openTransport: async () => {
+      opens += 1;
+      if (opens > 1) throw Object.assign(new Error("Permission denied (publickey)."), { code: "auth-failed" });
+      return { port: 1, close: async () => undefined };
+    },
+    createClient: () => client,
+    reconnect: { delaysMs: [5, 5, 5] },
+  });
+  await instance.connect(profile("host-a"));
+  client.drop({ state: "error", message: "gone" });
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.equal(opens, 2);
+  assert.equal(instance.status("host-a")?.errorCode, "auth-failed");
+});

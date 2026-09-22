@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { cleanError } from "@/lib/ipc-error";
+import { SshHostKeyNotice } from "@/components/ssh-host-key";
 import { displayRemotePath, encodeRemoteReadPath, parentRemotePath } from "@/lib/remote-project";
 import type { RemoteHostConnectionState, RemoteHostProfile } from "@shared/remote-host";
 import type { DirEntry, ProjectAddResult, WorkspaceSnapshot } from "@shared/types";
@@ -30,11 +31,21 @@ export function AddProjectDialog({ open, onOpenChange, onAdded }: Props): JSX.El
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const requestRef = useRef(0);
+  /**
+   * A connect this dialog started and has not seen finish. Closing the dialog or picking
+   * another host disconnects it, so a deploy nobody is waiting for does not run on for
+   * minutes. A host that was already connected is never recorded here: it may be serving
+   * projects that are open elsewhere.
+   */
+  const pendingConnectRef = useRef<string | null>(null);
   const openRef = useRef(open);
   openRef.current = open;
 
   const selectedHost = hosts.find((host) => host.id === hostId);
   const directories = useMemo(() => entries.filter((entry) => entry.kind === "directory"), [entries]);
+  const connectionLines = connection.output?.filter(Boolean) ?? [];
+  const connectionOutput = connectionLines.join("\n") || t("projectDialog.initializing");
+  const currentConnectionStep = connectionLines.at(-1) || t("projectDialog.initializing");
 
   function nextRequest(): number {
     requestRef.current += 1;
@@ -84,8 +95,15 @@ export function AddProjectDialog({ open, onOpenChange, onAdded }: Props): JSX.El
     return () => { cancelled = true; };
   }, [open, t]);
 
+  function abandonPendingConnect(): void {
+    const pending = pendingConnectRef.current;
+    pendingConnectRef.current = null;
+    if (pending) void window.fastvibe.ssh.disconnect(pending).catch(() => undefined);
+  }
+
   function close(): void {
     nextRequest();
+    abandonPendingConnect();
     onOpenChange(false);
     setHosts([]);
     setHostId("");
@@ -115,8 +133,13 @@ export function AddProjectDialog({ open, onOpenChange, onAdded }: Props): JSX.El
     setServerInstanceId(null);
     setEntries([]);
     setRawPath("/");
+    setConnection({ hostId: requested, status: "connecting" });
     try {
+      const live = await window.fastvibe.ssh.states().catch(() => [] as RemoteHostConnectionState[]);
+      if (stale(token)) return;
+      if (!live.some((item) => item.hostId === requested && item.status === "connected")) pendingConnectRef.current = requested;
       const state = await window.fastvibe.ssh.connect(requested);
+      if (pendingConnectRef.current === requested) pendingConnectRef.current = null;
       if (stale(token) || state.hostId !== requested) return;
       setConnection(state);
       if (state.status === "error") {
@@ -129,10 +152,15 @@ export function AddProjectDialog({ open, onOpenChange, onAdded }: Props): JSX.El
         return;
       }
       setServerInstanceId(server);
-      await readPath("/", server, token);
+      // Start where the user's projects almost always are, not at `/`.
+      await readPath(state.home ?? "/", server, token).catch(async (err: unknown) => {
+        if (!state.home) throw err;
+        await readPath("/", server, token);
+      });
       if (stale(token)) return;
       setConnected(true);
     } catch (err) {
+      if (pendingConnectRef.current === requested) pendingConnectRef.current = null;
       if (stale(token)) return;
       setError(t("projectDialog.errors.connect", { message: cleanError(err) }));
     } finally {
@@ -186,6 +214,7 @@ export function AddProjectDialog({ open, onOpenChange, onAdded }: Props): JSX.El
   function selectHost(id: string): void {
     if (id === hostId) return;
     nextRequest();
+    abandonPendingConnect();
     setHostId(id);
     setConnected(false);
     setServerInstanceId(null);
@@ -204,16 +233,21 @@ export function AddProjectDialog({ open, onOpenChange, onAdded }: Props): JSX.El
 
   return (
     <Dialog open={open} onOpenChange={(next) => next ? onOpenChange(true) : close()}>
-      <DialogContent className="max-h-[80vh] overflow-hidden sm:max-w-xl">
-        <DialogHeader>
+      <DialogContent className="max-h-[80vh] min-w-0 overflow-hidden sm:max-w-xl">
+        <DialogHeader className="min-w-0 pr-8">
           <DialogTitle>{busy ? t("projectDialog.initializing") : connected ? t("projectDialog.folderTitle") : t("projectDialog.remoteTitle")}</DialogTitle>
           <DialogDescription>{busy ? t("projectDialog.initializingDescription") : connected ? t("projectDialog.folderDescription") : t("projectDialog.remoteDescription")}</DialogDescription>
         </DialogHeader>
 
         {!connected && busy ? (
-          <div className="space-y-3 py-2">
-            <p className="text-sm font-medium">{t("projectDialog.initializing")}</p>
-            <pre className="h-40 max-h-40 max-w-full overflow-x-auto overflow-y-auto whitespace-pre rounded-lg bg-muted px-3 py-2 font-mono text-xs leading-5 text-muted-foreground">{connection.output?.join("\n") || t("projectDialog.initializing")}</pre>
+          <div className="min-w-0 py-1">
+            <div className="min-w-0 rounded-xl border border-border bg-muted/40 p-3">
+              <div className="flex min-w-0 items-center gap-2 text-sm font-medium">
+                <span className="size-2 shrink-0 animate-pulse rounded-full bg-primary" />
+                <span className="truncate">{currentConnectionStep}</span>
+              </div>
+              <pre className="mt-3 max-h-44 min-h-28 w-full min-w-0 overflow-auto whitespace-pre-wrap break-words border-t border-border/70 pt-3 font-mono text-xs leading-5 text-muted-foreground">{connectionOutput}</pre>
+            </div>
           </div>
         ) : !connected ? (
           <div className="space-y-3 py-2">
@@ -247,8 +281,18 @@ export function AddProjectDialog({ open, onOpenChange, onAdded }: Props): JSX.El
                 <Button variant="link" onClick={() => { close(); navigate("/settings/ssh"); }}>{t("projectDialog.addHost")}</Button>
               </div>
             )}
+            {connection.status === "error" && connection.errorCode && connection.hostId === hostId ? (
+              <SshHostKeyNotice
+                key={`${hostId}:${connection.errorCode}`}
+                hostId={hostId}
+                code={connection.errorCode}
+                trustLabel={t("projectDialog.hostKey.trust")}
+                onTrusted={() => void connect()}
+                onEditHost={() => { close(); navigate("/settings/ssh"); }}
+              />
+            ) : null}
             {connection.status === "error" && connection.output?.length ? (
-              <pre className="max-h-48 max-w-full overflow-x-auto overflow-y-auto whitespace-pre rounded-lg bg-muted px-3 py-2 font-mono text-xs leading-5 text-muted-foreground">{connection.output.join("\n")}</pre>
+              <pre className="max-h-48 w-full min-w-0 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-muted px-3 py-2 font-mono text-xs leading-5 text-muted-foreground">{connection.output.join("\n")}</pre>
             ) : null}
           </div>
         ) : (
@@ -281,22 +325,23 @@ export function AddProjectDialog({ open, onOpenChange, onAdded }: Props): JSX.El
             </div>
           </div>
         )}
-        {error ? <p className="max-w-full overflow-x-auto whitespace-nowrap rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">{error}</p> : null}
-        <DialogFooter className="justify-between">
+        {error ? <p className="min-w-0 whitespace-pre-wrap break-words rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs leading-5 text-destructive">{error}</p> : null}
+        <DialogFooter className="min-w-0 sm:justify-between">
           {!connected && !busy ? (
-            <Button variant="link" className="mr-auto px-0 text-xs text-muted-foreground" onClick={() => { close(); navigate("/settings/ssh"); }}>
-              {t("projectDialog.manageHosts")}
+            <Button variant="link" className="min-w-0 px-0 text-left text-xs text-muted-foreground" onClick={() => { close(); navigate("/settings/ssh"); }}>
+              <span className="truncate">{t("projectDialog.manageHosts")}</span>
             </Button>
-          ) : <span />}
-          <div className="flex items-center gap-2">
+          ) : <span className="min-w-0" />}
+          <div className="flex shrink-0 items-center justify-end gap-2">
             <Button variant="ghost" onClick={close}>{t("projectDialog.cancel")}</Button>
-          {!connected ? (
-            <Button disabled={busy || !hostId} onClick={() => void connect()}>
-              <HugeiconsIcon icon={Link01Icon} />{busy ? t("projectDialog.initializing") : t("projectDialog.connect")}
-            </Button>
-          ) : (
-            <Button disabled={busy || rawPath === "/"} onClick={() => void addRemote()}>{t("projectDialog.addRemote")}</Button>
-          )}
+            {!connected ? (
+              <Button className="whitespace-nowrap" disabled={busy || !hostId} onClick={() => void connect()}>
+                <HugeiconsIcon icon={busy ? RefreshIcon : Link01Icon} className={busy ? "animate-spin" : undefined} />
+                {busy ? t("projectDialog.initializing") : t("projectDialog.connect")}
+              </Button>
+            ) : (
+              <Button className="whitespace-nowrap" disabled={busy || rawPath === "/"} onClick={() => void addRemote()}>{t("projectDialog.addRemote")}</Button>
+            )}
           </div>
         </DialogFooter>
       </DialogContent>

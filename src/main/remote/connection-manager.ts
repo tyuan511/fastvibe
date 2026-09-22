@@ -54,14 +54,29 @@ export type ConnectionManagerDeps = {
   openTransport: (
     profile: RemoteHostProfile,
     signal?: AbortSignal,
-  ) => Promise<{ port: number; close: () => Promise<void>; configSyncToken?: string }>;
+  ) => Promise<{ port: number; close: () => Promise<void>; configSyncToken?: string; home?: string }>;
+  /**
+   * Bring a connection back after it drops on its own (a tunnel that died, a laptop that
+   * slept). Absent, a dropped connection stays down until something connects it again.
+   *
+   * Only an *unrequested* loss is retried: `disconnect` bumps the generation, which
+   * cancels any pending attempt. A refused credential or host key is not retried either —
+   * it would fail identically, and a password retried in a loop trips fail2ban.
+   */
+  reconnect?: {
+    /** Wait before each attempt; one attempt per entry, then the connection stays down. */
+    delaysMs: number[];
+    /** The profile as it is now — the user may have edited it since the first connect. */
+    profile?: (connectionId: string) => RemoteHostProfile | undefined;
+    onReconnected?: (server: ConnectedServer) => void;
+  };
   /**
    * Build the framed transport on top of a local port.
    *
    * Injected so a test can drive the manager without SSH or a socket. Production uses
    * `webSocketTransport`. Skipped when `createClient` is provided and this is absent.
    */
-  createTransport?: (port: number) => MessageTransport;
+  createTransport?: (port: number, token?: string) => MessageTransport;
   /**
    * Build the protocol client on a framed transport.
    *
@@ -81,7 +96,12 @@ export type ConnectedServer = {
   closeTransport: () => Promise<void>;
   /** Secret established by the SSH bootstrap for desktop → Agent config replication. */
   configSyncToken?: string;
+  /** The remote user's home directory, when the transport learned it. */
+  home?: string;
 };
+
+/** Failures a retry would only repeat. */
+const FATAL_ERROR_CODES = new Set(["auth-failed", "host-key-unknown", "host-key-changed"]);
 
 /** How long a call may wait for a remote server before it is given up on. */
 const CALL_TIMEOUT_MS = 120_000;
@@ -101,6 +121,8 @@ export class RemoteConnectionManager {
   #inflight = new Map<string, InFlightOpen>();
   #statuses = new Map<string, RemoteConnectionStatus>();
   #generation = new Map<string, number>();
+  #profiles = new Map<string, RemoteHostProfile>();
+  #reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(deps: ConnectionManagerDeps) {
     this.#deps = deps;
@@ -144,6 +166,8 @@ export class RemoteConnectionManager {
   async connect(profile: RemoteHostProfile): Promise<ConnectedServer> {
     const existing = this.#servers.get(profile.id);
     if (existing) return existing;
+    this.#profiles.set(profile.id, profile);
+    this.#clearReconnect(profile.id);
     const inFlight = this.#connecting.get(profile.id);
     if (inFlight) return inFlight;
 
@@ -171,7 +195,7 @@ export class RemoteConnectionManager {
         throw new Error(CANCELLED);
       }
 
-      const framed = this.#framedTransport(transport.port);
+      const framed = this.#framedTransport(transport.port, transport.configSyncToken);
       client = await this.#makeClient(framed);
       slot.client = client;
       if (this.#stale(profile.id, generation) || controller.signal.aborted) {
@@ -223,6 +247,7 @@ export class RemoteConnectionManager {
         client,
         closeTransport,
         configSyncToken: transport.configSyncToken,
+        ...(transport.home ? { home: transport.home } : {}),
       };
       this.#inflight.delete(profile.id);
       this.#servers.set(profile.id, server);
@@ -242,12 +267,14 @@ export class RemoteConnectionManager {
       }
       if (error instanceof DuplicateServerIdentityError) throw error;
       const message = error instanceof Error ? error.message : String(error);
+      const code = errorCode(error);
       this.#setStatus({
         connectionId: profile.id,
         serverInstanceId: null,
         state: /不兼容/.test(message) ? "incompatible" : "error",
         capabilities: [],
         error: message,
+        ...(code ? { errorCode: code } : {}),
       });
       throw error instanceof Error ? error : new Error(message);
     }
@@ -287,6 +314,7 @@ export class RemoteConnectionManager {
 
   async disconnect(connectionId: string): Promise<void> {
     this.#bump(connectionId);
+    this.#clearReconnect(connectionId);
     const inFlight = this.#connecting.get(connectionId);
     // Drop the shared attempt so a caller that connects while we wait does not join
     // the dying one — it starts a new generation instead.
@@ -315,7 +343,7 @@ export class RemoteConnectionManager {
    */
   async closeAll(): Promise<void> {
     const connecting = [...this.#connecting.values()];
-    const ids = new Set([...this.#servers.keys(), ...this.#connecting.keys(), ...this.#inflight.keys()]);
+    const ids = new Set([...this.#servers.keys(), ...this.#connecting.keys(), ...this.#inflight.keys(), ...this.#reconnectTimers.keys()]);
     await Promise.all([...ids].map((id) => this.disconnect(id).catch(() => undefined)));
     await Promise.all(connecting.map((attempt) => attempt.catch(() => undefined)));
   }
@@ -344,7 +372,41 @@ export class RemoteConnectionManager {
         capabilities: live.capabilities,
         ...(status.state === "error" || status.state === "incompatible" ? { error: status.message } : {}),
       });
+      if (status.state !== "incompatible") this.#scheduleReconnect(connectionId, generation, 0);
     });
+  }
+
+  #scheduleReconnect(connectionId: string, generation: number, attempt: number): void {
+    const policy = this.#deps.reconnect;
+    const delay = policy?.delaysMs[attempt];
+    if (!policy || delay === undefined || this.#stale(connectionId, generation)) return;
+    this.#clearReconnect(connectionId);
+    const timer = setTimeout(() => {
+      if (this.#reconnectTimers.get(connectionId) === timer) this.#reconnectTimers.delete(connectionId);
+      if (this.#stale(connectionId, generation)) return;
+      if (this.#servers.has(connectionId) || this.#connecting.has(connectionId)) return;
+      const profile = policy.profile?.(connectionId) ?? this.#profiles.get(connectionId);
+      if (!profile) return;
+      this.#deps.log.info(`[remote:${connectionId}] reconnecting (attempt ${attempt + 1}/${policy.delaysMs.length})`);
+      this.connect(profile).then(
+        (server) => policy.onReconnected?.(server),
+        (error: unknown) => {
+          const code = errorCode(error);
+          if (code && FATAL_ERROR_CODES.has(code)) return;
+          // `connect` does not bump the generation, so a user disconnect in the meantime
+          // is what makes this stale — and then nothing more is scheduled.
+          this.#scheduleReconnect(connectionId, generation, attempt + 1);
+        },
+      );
+    }, delay);
+    timer.unref?.();
+    this.#reconnectTimers.set(connectionId, timer);
+  }
+
+  #clearReconnect(connectionId: string): void {
+    const timer = this.#reconnectTimers.get(connectionId);
+    if (timer) clearTimeout(timer);
+    this.#reconnectTimers.delete(connectionId);
   }
 
   async #abortInflight(connectionId: string): Promise<void> {
@@ -355,10 +417,10 @@ export class RemoteConnectionManager {
     if (pending?.closeTransport) await pending.closeTransport().catch(() => undefined);
   }
 
-  #framedTransport(port: number): MessageTransport {
-    if (this.#deps.createTransport) return this.#deps.createTransport(port);
+  #framedTransport(port: number, token?: string): MessageTransport {
+    if (this.#deps.createTransport) return this.#deps.createTransport(port, token);
     if (this.#deps.createClient) return noopTransport();
-    return webSocketTransport(port);
+    return webSocketTransport(port, { token });
   }
 
   async #makeClient(transport: MessageTransport): Promise<RemoteAppClient> {
@@ -395,6 +457,11 @@ export class RemoteConnectionManager {
   }
 }
 
+function errorCode(error: unknown): string | undefined {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === "string" ? code : undefined;
+}
+
 async function loadAppClient(): Promise<typeof import("./app-client.ts")> {
   return import("./app-client.ts");
 }
@@ -413,13 +480,16 @@ const AUTH_TIMEOUT_MS = 10_000;
 
 export type WebSocketTransportOptions = {
   authTimeoutMs?: number;
+  /** Secret the SSH bootstrap printed; the remote Agent refuses loopback clients without it. */
+  token?: string;
 };
 
 /**
  * A framed transport over the loopback port an SSH forward provides.
  *
- * Outbound frames (hello included) queue until the auth acknowledgement. The SSH
- * forward is the credential — the empty token is not a password bypass. Close and
+ * Outbound frames (hello included) queue until the auth acknowledgement. Loopback is
+ * not the credential — any local user on either machine can reach it — so the first
+ * frame carries the token the bootstrap handed over through SSH. Close and
  * error settle once; a listener attached afterwards still sees the reason.
  * Legacy `{ push }` frames never reach a canonical AppClient.
  */
@@ -468,9 +538,7 @@ export function webSocketTransport(port: number, options?: WebSocketTransportOpt
       authTimer = setTimeout(() => settle("远程 App Server 鉴权超时"), timeoutMs);
       authTimer.unref?.();
     }
-    // The loopback forward is already authenticated by SSH: the tunnel is the
-    // credential, and the server on the other end is reached only through it.
-    socket.send(JSON.stringify({ type: "auth", token: "" }));
+    socket.send(JSON.stringify({ type: "auth", token: options?.token ?? "" }));
   });
   socket.on("message", (data) => {
     if (settled) return;

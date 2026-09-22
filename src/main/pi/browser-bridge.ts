@@ -49,32 +49,6 @@ export function requestBrowser(request: BrowserRequest): Promise<unknown> {
   });
 }
 
-const BIND_KEY = "__fastvibeBrowserConversationId";
-let bindTail: Promise<unknown> = Promise.resolve();
-
-/**
- * Stamp the conversation that is about to load `browser-use`, so the extension
- * factory can close over it. Factories run during `resourceLoader.reload()`, and
- * two sessions creating at once would otherwise share one mutating global.
- */
-export function bindBrowserConversation<T>(conversationId: string, fn: () => Promise<T>): Promise<T> {
-  const run = bindTail.then(async () => {
-    const g = globalThis as Record<string, unknown>;
-    const previous = g[BIND_KEY];
-    g[BIND_KEY] = conversationId;
-    try {
-      return await fn();
-    } finally {
-      g[BIND_KEY] = previous;
-    }
-  });
-  bindTail = run.then(
-    () => undefined,
-    () => undefined,
-  );
-  return run;
-}
-
 /** Exposed for the resource-loaded extension without importing FastVibe internals. */
 export function installBrowserGlobal(): void {
   (globalThis as Record<string, unknown>).__fastvibeBrowserRequest = requestBrowser;

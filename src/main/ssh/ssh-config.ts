@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
-import { readFileSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { globSync, readFileSync } from "node:fs";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { RemoteHostProfile } from "@shared/remote-host";
 
 export type SshConfigHost = RemoteHostProfile & {
@@ -15,6 +15,13 @@ type Draft = {
   identityFile?: string;
 };
 
+type ParseState = {
+  drafts: Draft[];
+  current: Draft | null;
+};
+
+const MAX_INCLUDE_DEPTH = 32;
+
 /**
  * Read the useful, host-like entries from OpenSSH config without invoking ssh.
  *
@@ -24,42 +31,13 @@ type Draft = {
  * other options in the user's config continue to work.
  */
 export function readSshConfig(file = join(homedir(), ".ssh", "config")): SshConfigHost[] {
-  let text: string;
-  try {
-    text = readFileSync(file, "utf8");
-  } catch {
-    return [];
-  }
-
-  const drafts: Draft[] = [];
-  let current: Draft | null = null;
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.replace(/\s+#.*$/, "").trim();
-    if (!line || line.startsWith("#")) continue;
-    const match = line.match(/^(\S+)\s+(.*?)\s*$/);
-    if (!match) continue;
-    const key = match[1].toLowerCase();
-    const value = stripQuotes(match[2]);
-    if (key === "host") {
-      const aliases = value.split(/\s+/).filter((item) => item && !/[*!?]/.test(item));
-      current = aliases.length > 0 ? { aliases } : null;
-      if (current) drafts.push(current);
-      continue;
-    }
-    if (!current) continue;
-    if (key === "hostname" && value) current.hostName = value;
-    else if (key === "user" && value) current.user = value;
-    else if (key === "port" && /^\d+$/.test(value)) {
-      const port = Number(value);
-      if (port >= 1 && port <= 65_535) current.port = port;
-    } else if (key === "identityfile" && value && !value.startsWith("-") && !value.includes("%")) {
-      current.identityFile = expandHome(value);
-    }
-  }
+  const state: ParseState = { drafts: [], current: null };
+  const rootFile = resolve(file);
+  parseFile(rootFile, dirname(rootFile), state, new Set(), 0);
 
   const result: SshConfigHost[] = [];
   const seen = new Set<string>();
-  for (const draft of drafts) {
+  for (const draft of state.drafts) {
     for (const alias of draft.aliases) {
       const id = `ssh:${alias}`;
       if (seen.has(id)) continue;
@@ -76,6 +54,138 @@ export function readSshConfig(file = join(homedir(), ".ssh", "config")): SshConf
       });
     }
   }
+  return result;
+}
+
+function parseFile(file: string, includeBase: string, state: ParseState, activeFiles: Set<string>, depth: number): void {
+  if (depth >= MAX_INCLUDE_DEPTH || activeFiles.has(file)) return;
+
+  let text: string;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch {
+    return;
+  }
+
+  activeFiles.add(file);
+  try {
+    for (const raw of text.split(/\r?\n/)) {
+      const line = stripInlineComment(raw).trim();
+      if (!line) continue;
+      const match = line.match(/^([^\s=]+)(?:\s*=\s*|\s+)(.*?)\s*$/);
+      if (!match) continue;
+      const key = match[1].toLowerCase();
+      const rawValue = match[2];
+
+      if (key === "include") {
+        for (const pattern of splitArguments(rawValue)) {
+          for (const included of resolveIncludes(pattern, includeBase)) {
+            parseFile(included, includeBase, state, activeFiles, depth + 1);
+          }
+        }
+        continue;
+      }
+
+      const value = stripQuotes(rawValue);
+      if (key === "host") {
+        const aliases = splitArguments(rawValue).filter((item) => item && !/[*!?]/.test(item));
+        state.current = aliases.length > 0 ? { aliases } : null;
+        if (state.current) state.drafts.push(state.current);
+        continue;
+      }
+      // A `Match` block is conditional on things this parser cannot evaluate, and it ends
+      // the preceding `Host` block: its options must not be credited to that alias.
+      if (key === "match") {
+        state.current = null;
+        continue;
+      }
+      if (!state.current) continue;
+      // OpenSSH keeps the first value it obtains for each option, not the last.
+      if (key === "hostname" && value) state.current.hostName ??= value;
+      else if (key === "user" && value) state.current.user ??= value;
+      else if (key === "port" && /^\d+$/.test(value)) {
+        const port = Number(value);
+        if (port >= 1 && port <= 65_535) state.current.port ??= port;
+      } else if (key === "identityfile" && value && !value.startsWith("-") && !value.includes("%")) {
+        state.current.identityFile ??= expandHome(value);
+      }
+    }
+  } finally {
+    activeFiles.delete(file);
+  }
+}
+
+function resolveIncludes(pattern: string, includeBase: string): string[] {
+  const expanded = expandHome(pattern);
+  const absolutePattern = isAbsolute(expanded) ? expanded : resolve(includeBase, expanded);
+  try {
+    return globSync(absolutePattern).sort();
+  } catch {
+    return [];
+  }
+}
+
+function stripInlineComment(line: string): string {
+  let quote = "";
+  let escaped = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) quote = "";
+      continue;
+    }
+    if (char === "\"" || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === "#" && (index === 0 || /\s/.test(line[index - 1]))) return line.slice(0, index);
+  }
+  return line;
+}
+
+function splitArguments(value: string): string[] {
+  const result: string[] = [];
+  let current = "";
+  let quote = "";
+  let escaped = false;
+  for (const char of value.trim()) {
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) quote = "";
+      else current += char;
+      continue;
+    }
+    if (char === "\"" || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (current) {
+        result.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += char;
+  }
+  if (escaped) current += "\\";
+  if (current) result.push(current);
   return result;
 }
 

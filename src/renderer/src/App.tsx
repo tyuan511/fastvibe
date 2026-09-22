@@ -1188,7 +1188,6 @@ export function App(): JSX.Element {
       const queueAtSubmit = shouldQueueSubmission({
         hasConversation: submitOwner !== null,
         running: Boolean(submitOwner && submitState.running[submitOwner]),
-        pauseReason: submitOwner ? submitState.queuePauseByConversation[submitOwner] ?? null : null,
         hasQueuedItems: Boolean(
           submitOwner && submitState.queued.some((item) => item.conversationId === submitOwner),
         ),
@@ -1463,7 +1462,7 @@ export function App(): JSX.Element {
    * (no new user message), and the queue stays held: resume must not flush queued
    * follow-ups onto a half-finished reply. Once the resumed run starts, `agent_start`
    * clears `runInterrupted` and unpauses nothing — the queue only resumes when the
-   * user explicitly continues it (or a later clean turn ends).
+   * user explicitly continues it (立即 / 继续发送).
    *
    * `canResume` is dropped here rather than left to the engine's reply: the flag is
    * derived state, and clicking 继续 twice inside one IPC round trip would otherwise

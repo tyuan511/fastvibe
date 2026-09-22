@@ -199,6 +199,14 @@ export const Ipc = {
   sshHostSave: "ssh:host-save",
   sshHostRemove: "ssh:host-remove",
   sshPickIdentityFile: "ssh:pick-identity-file",
+  /** One-shot SSH login check for a host; never deploys or forwards anything. */
+  sshTest: "ssh:test",
+  /** Read the key an unknown host presents, so the user can compare its fingerprint. */
+  sshHostKeyScan: "ssh:host-key-scan",
+  /** Add the key last scanned for a host to known_hosts, if the confirmed fingerprints match. */
+  sshHostKeyTrust: "ssh:host-key-trust",
+  /** Stop the resident Agent on a host (disconnecting it first). */
+  sshStopAgent: "ssh:stop-agent",
   /** SSH tunnel lifecycle for a selected remote FastVibe service. */
   sshConnect: "ssh:connect",
   sshDisconnect: "ssh:disconnect",

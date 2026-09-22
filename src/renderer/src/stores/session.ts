@@ -607,8 +607,6 @@ function reduceEvents(state: SessionStore, events: EngineEvent[]): Partial<Sessi
   let draft = state.draft;
   let pendingPermissions = state.pendingPermissions;
   let queued = state.queued;
-  let queuePauseByConversation = state.queuePauseByConversation;
-  let queuePause = state.queuePause;
   let runInterrupted = state.runInterrupted;
   /** Sidebar mark for this batch when it is not simply `streaming` (a compaction). */
   let workingOverride: boolean | undefined;
@@ -652,25 +650,13 @@ function reduceEvents(state: SessionStore, events: EngineEvent[]): Partial<Sessi
         ? "aborted"
         : undefined;
     if (stoppedEarly) {
-      // Remember the early verdict, but do not pause the queue yet. `agent_end` can
-      // describe an attempt that the SDK is about to retry; older SDK event payloads
-      // do not always include `willRetry: true`. Pausing here made a retry that was
-      // still visibly running show 「队列已暂停」. The queue is paused only below, when
-      // the enclosing run reaches `agent_settled` without starting another attempt.
+      // Keep the live interruption verdict separate from queue state. Only Main's
+      // revisioned queue snapshot may set a pause (via setQueueState); deriving one
+      // here can overwrite a newer resume/delivery with a stale attempt's failure.
       runInterrupted = stoppedEarly;
     } else if (event.type === "agent_start" || event.type === "turn_start") {
       // A new run (resume, retry, or fresh prompt) clears the interrupted state.
       runInterrupted = null;
-    }
-    if (event.type === "agent_settled" && runInterrupted) {
-      // `agent_settled` is the first reliable terminal boundary: retries,
-      // auto-compaction and extension continuations have all had their chance to
-      // start another attempt. Only now can a queued follow-up safely be held.
-      const owner = typeof event.conversationId === "string" ? event.conversationId : state.activeId;
-      if (owner && queued.some((item) => item.conversationId === owner && !item.sending)) {
-        queuePause = runInterrupted === "error" ? "error" : "stopped";
-        queuePauseByConversation = { ...queuePauseByConversation, [owner]: queuePause };
-      }
     }
     const parsed = parsePermission(event);
     if (parsed) {
@@ -755,8 +741,6 @@ function reduceEvents(state: SessionStore, events: EngineEvent[]): Partial<Sessi
     subagents,
     subagentStreams,
     queued,
-    queuePauseByConversation,
-    queuePause,
     runInterrupted,
     waitingForUser: waitingFrom(pendingPermissions, state.waitingForUser),
   };
@@ -878,8 +862,8 @@ export const useSessionStore = create<SessionStore>((set, get) => {
       // the run stopped: a state refresh can observe a resumable transcript after an
       // error, a reload, or a retry failure as well. Inferring `stopped` here made any
       // queued follow-up show “由于你中断了当前响应” even when no abort happened. Queue
-      // pauses are owned by the live event verdict (or handleAbort), both of which have
-      // an actual stop reason; a state snapshot must not invent one.
+      // pauses are owned by Main's revisioned queue snapshots; a session state reply
+      // or a transcript event must not invent one.
       const resumedQueuePause = state.queuePauseByConversation;
       return {
         session,
