@@ -31,7 +31,6 @@ export function RemoteHostsSettings(): JSX.Element {
   const [saved, setSaved] = useState<RemoteHostProfile[]>([]);
   const [discovered, setDiscovered] = useState<RemoteHostProfile[]>([]);
   const [form, setForm] = useState<Form>(EMPTY);
-  const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [testingId, setTestingId] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -47,7 +46,7 @@ export function RemoteHostsSettings(): JSX.Element {
       setSaved(next.saved);
       setDiscovered(next.discovered);
     } catch (err) {
-      setError(cleanError(err));
+      toast.error(cleanError(err));
     }
   }
 
@@ -115,7 +114,6 @@ export function RemoteHostsSettings(): JSX.Element {
 
   function edit(host: RemoteHostProfile): void {
     setOriginal(host);
-    setError(null);
     setForm({
       id: host.id,
       label: host.label,
@@ -137,11 +135,10 @@ export function RemoteHostsSettings(): JSX.Element {
     const port = parsePort(form.port);
     const servicePort = parsePort(form.servicePort);
     if (port === null || servicePort === null) {
-      setError(t("remoteHosts.invalidPort"));
+      toast.error(t("remoteHosts.invalidPort"));
       return;
     }
     setBusy(true);
-    setError(null);
     // Carried over from the stored profile, then overwritten by what the form shows, so an
     // edit keeps `localPort`, `knownHostsFile` and `hostName` instead of silently dropping them.
     const {
@@ -170,7 +167,7 @@ export function RemoteHostsSettings(): JSX.Element {
       setOriginal(null);
       setDialogOpen(false);
     } catch (err) {
-      setError(cleanError(err));
+      toast.error(cleanError(err));
     } finally {
       setBusy(false);
     }
@@ -183,7 +180,7 @@ export function RemoteHostsSettings(): JSX.Element {
       setSaved(next.saved);
       setDiscovered(next.discovered);
     } catch (err) {
-      setError(cleanError(err));
+      toast.error(cleanError(err));
     } finally {
       setBusy(false);
     }
@@ -203,7 +200,6 @@ export function RemoteHostsSettings(): JSX.Element {
   return (
     <div className="space-y-4">
       <p className="px-1 text-xs leading-5 text-muted-foreground">{t("remoteHosts.intro")}</p>
-      {error && !dialogOpen ? <p className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">{error}</p> : null}
       <div className="flex items-center justify-between gap-3 px-1">
         <h3 className="text-sm font-medium">{t("remoteHosts.list")}</h3>
         <div className="flex items-center gap-2">
@@ -287,7 +283,6 @@ export function RemoteHostsSettings(): JSX.Element {
         open={dialogOpen}
         onOpenChange={(open) => {
           setDialogOpen(open);
-          setError(null);
           if (!open) {
             setForm(EMPTY);
             setOriginal(null);
@@ -300,8 +295,6 @@ export function RemoteHostsSettings(): JSX.Element {
             <DialogDescription>{t("remoteHosts.dialogDesc")}</DialogDescription>
           </DialogHeader>
           <div className="grid min-w-0 gap-4 py-2">
-            {/* Save errors belong in the dialog: the page behind it is covered by the overlay. */}
-            {error ? <p className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">{error}</p> : null}
             <div className="grid min-w-0 gap-1.5">
               <Label htmlFor="ssh-label">{t("remoteHosts.label")}</Label>
               <Input id="ssh-label" placeholder={t("remoteHosts.labelPlaceholder")} value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} />
@@ -348,7 +341,7 @@ export function RemoteHostsSettings(): JSX.Element {
                   onClick={() => {
                     void window.fastvibe.ssh.pickIdentityFile().then((path) => {
                       if (path) setForm((current) => ({ ...current, identityFile: path }));
-                    }).catch((err) => setError(cleanError(err)));
+                    }).catch((err) => toast.error(cleanError(err)));
                   }}
                 >
                   <span className={form.identityFile ? "min-w-0 flex-1 truncate text-foreground" : "min-w-0 flex-1 truncate text-muted-foreground"}>

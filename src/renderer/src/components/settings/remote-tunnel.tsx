@@ -14,6 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Spinner } from "@/components/ui/spinner";
 import { APP_PLATFORM } from "@/lib/platform";
 import type { RemoteServerState, RemoteTunnelProvider, RemoteTunnelTools } from "@shared/ipc";
+import { RemoteFrp } from "./remote-frp";
 import { SettingsGroup, SettingsRow } from "./settings-group";
 
 /**
@@ -43,6 +44,11 @@ const INSTALL: Record<RemoteTunnelProvider, Partial<Record<string, string>>> = {
     win32: "winget install --id ngrok.ngrok",
     linux: "sudo snap install ngrok",
   },
+  // Homebrew is the one package manager with an official-looking frpc. Elsewhere the
+  // release archive is the install, which the 安装文档 link points at.
+  frp: {
+    darwin: "brew install frpc",
+  },
 };
 
 /** Where to go when the command above is not how this machine installs things. */
@@ -50,6 +56,7 @@ const DOCS: Record<RemoteTunnelProvider, string> = {
   cloudflared:
     "https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/",
   ngrok: "https://ngrok.com/download",
+  frp: "https://github.com/fatedier/frp/releases",
 };
 
 /**
@@ -69,6 +76,14 @@ const AUTH: Partial<Record<RemoteTunnelProvider, { command: string; page: string
 const LABELS: Record<RemoteTunnelProvider, string> = {
   cloudflared: "Cloudflare Tunnel",
   ngrok: "ngrok",
+  frp: "frp",
+};
+
+/** What each provider's missing-binary block says about the setup around the binary. */
+const SETUP_TEXT: Record<RemoteTunnelProvider, string> = {
+  cloudflared: "remote.tunnelSetupCloudflared",
+  ngrok: "remote.tunnelSetupNgrok",
+  frp: "remote.tunnelSetupFrp",
 };
 
 export function RemoteTunnel({
@@ -107,7 +122,11 @@ export function RemoteTunnel({
     };
   }, [tunnel.phase, tunnelChoice]);
 
-  const items: Record<string, string> = { none: t("remote.tunnelNone"), ...LABELS };
+  const items: Record<string, string> = {
+    none: t("remote.tunnelNone"),
+    ...LABELS,
+    frp: t("remote.tunnelFrpLabel"),
+  };
   const tool = tunnelChoice ? tools?.[tunnelChoice] : undefined;
   const missing = tunnelChoice !== null && tools !== null && tool?.installed !== true;
   /**
@@ -177,6 +196,10 @@ export function RemoteTunnel({
         />
       ) : null}
 
+      {/* The self-hosted server's settings. Shown even while frpc is missing, so the
+          form can be filled in before the binary is installed. */}
+      {tunnelChoice === "frp" ? <RemoteFrp busy={busy} /> : null}
+
       {!missing && !needsAuth && tunnelChoice && !state.running ? (
         <p className="px-4 py-3 text-xs leading-5 text-muted-foreground">{t("remote.tunnelIdle")}</p>
       ) : null}
@@ -188,7 +211,9 @@ export function RemoteTunnel({
         </div>
       ) : null}
 
-      {tunnel.phase === "online" && tunnel.url ? <Online url={tunnel.url} /> : null}
+      {tunnel.phase === "online" && tunnel.url ? (
+        <Online url={tunnel.url} stable={tunnel.provider === "frp"} />
+      ) : null}
 
       {/* Not while the credential block is up: that one already carries this reason and
           its own 重试, and two retry buttons for one failure is a question, not an answer. */}
@@ -205,7 +230,7 @@ export function RemoteTunnel({
 }
 
 /** The public address, the way it is actually used: scanned, or copied into a browser. */
-function Online({ url }: { url: string }): JSX.Element {
+function Online({ url, stable }: { url: string; stable: boolean }): JSX.Element {
   const { t } = useTranslation("settings");
 
   return (
@@ -213,7 +238,10 @@ function Online({ url }: { url: string }): JSX.Element {
       <QrCode value={url} title={url} className="size-36 shrink-0" />
       <div className="min-w-0 flex-1 space-y-2">
         <p className="text-sm font-medium">{t("remote.tunnelOnline")}</p>
-        <p className="text-xs leading-5 text-muted-foreground">{t("remote.tunnelScan")}</p>
+        <p className="text-xs leading-5 text-muted-foreground">
+          {/* A quick tunnel's hostname is new every run; the user's own frps is not. */}
+          {t(stable ? "remote.tunnelScanStable" : "remote.tunnelScan")}
+        </p>
         {/*
          * Breaking anywhere is the point: a tunnel hostname is a single unbroken token
          * of 30-odd characters, and without this it either overflows the card or is
@@ -363,7 +391,7 @@ function Setup({
     <div className="space-y-2 px-4 py-3">
       <p className="text-sm font-medium">{t("remote.tunnelMissing", { name: LABELS[provider] })}</p>
       <p className="text-xs leading-5 text-muted-foreground">
-        {t(step ? "remote.tunnelSetupNgrok" : "remote.tunnelSetupCloudflared")}
+        {t(SETUP_TEXT[provider])}
       </p>
       {command ? (
         <div className="flex items-center gap-2 rounded-lg bg-muted px-3 py-2">

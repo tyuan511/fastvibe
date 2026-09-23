@@ -1,5 +1,6 @@
 import { useEffect, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Add01Icon,
@@ -58,7 +59,6 @@ export function McpSettings(): JSX.Element {
   const [servers, setServers] = useState<McpServerStatus[]>([]);
   const [draft, setDraft] = useState<ServerDraft | null>(null);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   async function refresh(): Promise<void> {
     try {
@@ -73,15 +73,14 @@ export function McpSettings(): JSX.Element {
   }, []);
 
   /** Never throws: callers act on the boolean so row edits cannot produce an
-   *  unhandled rejection, and failures surface in the same `error` the dialog uses. */
+   *  unhandled rejection, and failures surface as a toast. */
   async function save(next: McpServerConfig[]): Promise<boolean> {
     setSaving(true);
     try {
       setServers(await window.fastvibe.engine.saveMcpServers(next));
-      setError(null);
       return true;
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("mcp.saveFailed"));
+      toast.error(err instanceof Error ? err.message : t("mcp.saveFailed"));
       return false;
     } finally {
       setSaving(false);
@@ -122,7 +121,6 @@ export function McpSettings(): JSX.Element {
           size="sm"
           disabled={saving}
           onClick={() => {
-            setError(null);
             setDraft({ ...EMPTY_DRAFT });
           }}
         >
@@ -155,13 +153,10 @@ export function McpSettings(): JSX.Element {
           </EmptyHeader>
         </Empty>
       )}
-      {/* Row-level failures have nowhere else to show; the dialog renders its own copy. */}
-      {error && draft === null ? <p className="text-xs text-destructive">{error}</p> : null}
 
       <AddServerDialog
         draft={draft}
         saving={saving}
-        error={error}
         valid={valid}
         onPatch={patchDraft}
         onClose={() => setDraft(null)}
@@ -282,7 +277,6 @@ function parseArgs(value: string): string[] | undefined {
 function AddServerDialog({
   draft,
   saving,
-  error,
   valid,
   onPatch,
   onClose,
@@ -290,7 +284,6 @@ function AddServerDialog({
 }: {
   draft: ServerDraft | null;
   saving: boolean;
-  error: string | null;
   valid: boolean;
   onPatch: (next: Partial<ServerDraft>) => void;
   onClose: () => void;
@@ -367,7 +360,6 @@ function AddServerDialog({
           </div>
         ) : null}
 
-        {error ? <p className="text-xs text-destructive">{error}</p> : null}
 
         <DialogFooter className="gap-2">
           <Button variant="outline" onClick={onClose}>

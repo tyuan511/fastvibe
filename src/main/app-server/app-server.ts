@@ -280,16 +280,25 @@ export class AppServer {
   publish(
     channel: string,
     payload: unknown,
-    options?: { conversationId?: string | null; except?: string },
+    options?: { conversationId?: string | null; except?: string; namedOnly?: boolean },
   ): AppEventMessage {
     const scope: AppScope = scopeForChannel(channel, payload, options?.conversationId);
     const event = this.bus.publish(scope, channel, payload, options);
     const except = options?.except;
+    const namedOnly = options?.namedOnly === true;
     for (const session of this.#sessions.values()) {
       if (except && (session.origin === except || session.id === except)) continue;
-      if (!session.deliver(event)) this.detach(session);
+      if (!session.deliver(event, { namedOnly })) this.detach(session);
     }
     return event;
+  }
+
+  /** Whether any client subscribed to `scope` by name (the `*` catch-all does not count). */
+  hasNamedSubscriber(scope: AppScope): boolean {
+    for (const session of this.#sessions.values()) {
+      if (session.isSubscribedByName(scope)) return true;
+    }
+    return false;
   }
 
   sessionsForSubject(subject: string): ClientSession[] {

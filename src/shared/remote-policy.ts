@@ -108,6 +108,9 @@ const DENIED = new Map<string, string>([
   [Ipc.remoteRevokeDevice, "远程访问的设置只能在本机更改"],
   [Ipc.remoteTunnelTools, "远程访问的设置只能在本机更改"],
   [Ipc.remoteTunnelSet, "远程访问的设置只能在本机更改"],
+  [Ipc.remoteFrpGet, "远程访问的设置只能在本机更改"],
+  [Ipc.remoteFrpSet, "远程访问的设置只能在本机更改"],
+  [Ipc.remoteFrpCheckDns, "远程访问的设置只能在本机更改"],
 
   // (c) A request to any URL the caller names, carrying any credential the caller
   // names, issued from this machine and from this network. That is a probe into
@@ -165,6 +168,7 @@ const ALLOWED = new Set<string>([
   Ipc.engineGetModels,
   Ipc.engineGetRunning,
   Ipc.engineGetSnapshot,
+  Ipc.engineGetPendingUi,
   Ipc.engineGetState,
   Ipc.engineGetStats,
   Ipc.engineGetStatus,

@@ -214,7 +214,13 @@
     "commitFailed": "提交失败",
     "worktree": "隔离工作区",
     "unbindWorktree": "回到项目",
-    "unbindWorktreeFailed": "解除工作区绑定失败"
+    "unbindWorktreeFailed": "解除工作区绑定失败",
+    "pullDone": "已拉取 {{branch}} 的最新提交",
+    "pushDone": "已推送 {{branch}} 到远端",
+    "commitDone": "已提交：{{subject}}",
+    "commitPushDone": "已提交并推送：{{subject}}",
+    "discardDone": "已丢弃 {{path}} 的改动",
+    "unbindWorktreeDone": "已回到项目目录"
   },
   "gitDialog": {
     "title": "工作区变更",

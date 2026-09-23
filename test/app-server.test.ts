@@ -408,3 +408,39 @@ test("a declaration cannot open headless-native methods", async () => {
   assert.equal(result.ok, false);
   assert.equal(result.error?.code, "capability.unsupported");
 });
+
+test("a named-only event reaches the client that watches its scope, not the `*` windows", async () => {
+  const { server, session: window, cap: windowCap } = createHarness({ kind: "window", origin: "win" });
+  const phoneMessages: AppServerMessage[] = [];
+  const phone = server.attach({
+    identity: { subject: "device-2", kind: "remote", clientKind: "browser", clientVersion: "1" },
+    send: (message) => {
+      phoneMessages.push(message);
+      return true;
+    },
+    origin: "phone",
+  });
+  await server.receive(window, hello);
+  await server.receive(phone, hello);
+  await server.receive(window, { kind: "subscribe", scopes: [ALL_SCOPES] });
+  await server.receive(phone, { kind: "subscribe", scopes: [ALL_SCOPES] });
+  assert.equal(server.hasNamedSubscriber("conversation:c1"), false, "`*` is not a watch");
+  await server.receive(phone, { kind: "subscribe", scopes: ["conversation:c1"] });
+  assert.equal(server.hasNamedSubscriber("conversation:c1"), true);
+  windowCap.messages.length = 0;
+  phoneMessages.length = 0;
+
+  server.publish(Ipc.event, { type: "message_update", conversationId: "c1" }, { namedOnly: true });
+  assert.equal(windowCap.messages.length, 0);
+  assert.equal(phoneMessages.length, 1);
+  // Delivered once, although the phone is also subscribed to `*`.
+  assert.equal(phoneMessages[0]?.kind, "event");
+
+  // An ordinary publish still reaches both.
+  server.publish(Ipc.event, { type: "conversation_running", conversationId: "c1" });
+  assert.equal(windowCap.messages.length, 1);
+  assert.equal(phoneMessages.length, 2);
+
+  await server.receive(phone, { kind: "unsubscribe", scopes: ["conversation:c1"] });
+  assert.equal(server.hasNamedSubscriber("conversation:c1"), false);
+});

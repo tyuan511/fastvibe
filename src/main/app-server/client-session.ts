@@ -167,7 +167,21 @@ export class ClientSession {
     );
   }
 
-  deliver(event: AppEventMessage): boolean {
+  /** Subscribed to this scope by name — not merely covered by the `*` catch-all. */
+  isSubscribedByName(scope: AppScope): boolean {
+    return scope !== ALL_SCOPES && this.#subscriptions.has(scope);
+  }
+
+  /**
+   * Hand one event to this client if it asked for it.
+   *
+   * `namedOnly` events reach only a client that subscribed to their scope by name: a
+   * background conversation's token stream, published because *someone* is watching
+   * that chat, is not something every `*` subscriber (each desktop window) should be
+   * made to receive and discard per token.
+   */
+  deliver(event: AppEventMessage, options?: { namedOnly?: boolean }): boolean {
+    if (options?.namedOnly && !this.#subscriptions.has(event.scope)) return true;
     if (!this.#subscriptions.has(event.scope) && !this.#subscriptions.has(ALL_SCOPES)) return true;
     if (this.#canReceive && !this.#canReceive(event.channel, this.#capabilities)) return true;
     const sent = this.write(event);

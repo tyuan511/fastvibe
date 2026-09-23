@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Add01Icon,
@@ -80,7 +81,6 @@ export function SubagentsSettings({ models }: { models: FastVibeModel[] }): JSX.
   const [agents, setAgents] = useState<SubagentConfig[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [editor, setEditor] = useState<FormState | null>(null);
   const [removeId, setRemoveId] = useState<string | null>(null);
 
@@ -88,9 +88,8 @@ export function SubagentsSettings({ models }: { models: FastVibeModel[] }): JSX.
     setLoading(true);
     try {
       setAgents(await window.fastvibe.engine.listAgentConfigs());
-      setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("subagents.loadFailed"));
+      toast.error(err instanceof Error ? err.message : t("subagents.loadFailed"));
     } finally {
       setLoading(false);
     }
@@ -118,9 +117,8 @@ export function SubagentsSettings({ models }: { models: FastVibeModel[] }): JSX.
         thinkingLevel: patch.thinkingLevel,
         systemPrompt: agent.systemPrompt,
       }));
-      setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("subagents.saveFailed"));
+      toast.error(err instanceof Error ? err.message : t("subagents.saveFailed"));
     } finally {
       setSaving(false);
     }
@@ -141,9 +139,8 @@ export function SubagentsSettings({ models }: { models: FastVibeModel[] }): JSX.
     try {
       setAgents(await window.fastvibe.engine.saveAgentConfig(draft));
       setEditor(null);
-      setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("subagents.saveFailed"));
+      toast.error(err instanceof Error ? err.message : t("subagents.saveFailed"));
     } finally {
       setSaving(false);
     }
@@ -155,9 +152,8 @@ export function SubagentsSettings({ models }: { models: FastVibeModel[] }): JSX.
     try {
       setAgents(await window.fastvibe.engine.removeAgentConfig(removeId));
       setRemoveId(null);
-      setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("subagents.removeFailed"));
+      toast.error(err instanceof Error ? err.message : t("subagents.removeFailed"));
     } finally {
       setSaving(false);
     }
@@ -269,7 +265,6 @@ export function SubagentsSettings({ models }: { models: FastVibeModel[] }): JSX.
         </div>
       </div>
 
-      {error ? <p className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">{error}</p> : null}
       {loading ? <p className="text-sm text-muted-foreground">{t("subagents.loading")}</p> : null}
       {!loading && builtins.length > 0 ? (
         <section className="space-y-3">

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { i18n } from "@/lib/i18n";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
@@ -322,6 +323,7 @@ export function SidePaneGit({
   const [message, setMessage] = useState("");
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
+  const [syncing, setSyncing] = useState<"pull" | "push" | null>(null);
   const [reloading, setReloading] = useState(false);
   const lastTurn = useMemo(() => lastTurnPaths(messages), [messages]);
   const counts = useMemo(() => sourceCounts(status, lastTurn), [status, lastTurn]);
@@ -354,11 +356,15 @@ export function SidePaneGit({
     }
   }
 
-  async function run(action: () => Promise<GitStatus>, fail: string): Promise<void> {
+  /** `done` names what happened when the result is not visible in the list itself —
+   *  a pull, a push or a commit changes nothing on screen when it succeeds. */
+  async function run(action: () => Promise<GitStatus>, fail: string, done?: (next: GitStatus) => string): Promise<void> {
     if (!cwd || busy) return;
     setBusy(true);
     try {
-      setStatus(await action());
+      const next = await action();
+      setStatus(next);
+      if (done) toast.success(done(next));
     } catch (error) {
       onError(error instanceof Error ? error.message : fail);
     } finally {
@@ -443,18 +449,26 @@ export function SidePaneGit({
           variant="ghost"
           label={t("git.pull")}
           disabled={busy}
-          onClick={() => void run(() => window.fastvibe.workspace.gitPull(cwd), t("git.pullFailed"))}
+          onClick={() => {
+            setSyncing("pull");
+            void run(() => window.fastvibe.workspace.gitPull(cwd), t("git.pullFailed"), (next) => t("git.pullDone", { branch: next.branch ?? "HEAD" }))
+              .finally(() => setSyncing(null));
+          }}
         >
-          <HugeiconsIcon strokeWidth={2} icon={ArrowDown02Icon} />
+          {syncing === "pull" ? <Spinner className="size-3.5" /> : <HugeiconsIcon strokeWidth={2} icon={ArrowDown02Icon} />}
         </IconButton>
         <IconButton
           size="icon-xs"
           variant="ghost"
           label={t("git.push")}
           disabled={busy}
-          onClick={() => void run(() => window.fastvibe.workspace.gitPush(cwd), t("git.pushFailed"))}
+          onClick={() => {
+            setSyncing("push");
+            void run(() => window.fastvibe.workspace.gitPush(cwd), t("git.pushFailed"), (next) => t("git.pushDone", { branch: next.branch ?? "HEAD" }))
+              .finally(() => setSyncing(null));
+          }}
         >
-          <HugeiconsIcon strokeWidth={2} icon={ArrowUp02Icon} />
+          {syncing === "push" ? <Spinner className="size-3.5" /> : <HugeiconsIcon strokeWidth={2} icon={ArrowUp02Icon} />}
         </IconButton>
         <IconButton size="icon-xs" variant="ghost" label={t("git.refresh")} disabled={reloading} onClick={() => void reload()}>
           <HugeiconsIcon strokeWidth={2} icon={RefreshIcon} className={cn(reloading && "animate-spin")} />
@@ -572,7 +586,7 @@ export function SidePaneGit({
             onBack={() => setSelected(undefined)}
             onStage={() => void run(() => window.fastvibe.workspace.gitStage(cwd, [selected]), t("git.stageFailed"))}
             onUnstage={() => void run(() => window.fastvibe.workspace.gitUnstage(cwd, [selected]), t("git.unstageFailed"))}
-            onDiscard={() => void run(() => window.fastvibe.workspace.gitDiscard(cwd, [selected]), t("git.discardFailed"))}
+            onDiscard={() => void run(() => window.fastvibe.workspace.gitDiscard(cwd, [selected]), t("git.discardFailed"), () => t("git.discardDone", { path: selected }))}
           />
         ) : (
           <div className="hidden min-h-0 min-w-0 flex-1 items-center justify-center px-8 text-center text-xs leading-5 text-muted-foreground @min-[32rem]/git:flex">
@@ -590,11 +604,12 @@ export function SidePaneGit({
           onChange={(event) => setMessage(event.target.value)}
           onKeyDown={(event) => {
             if (event.key !== "Enter" || !message.trim() || !status?.staged) return;
+            const subject = message.trim();
             void run(async () => {
-              const next = await window.fastvibe.workspace.gitCommit(cwd, message.trim());
+              const next = await window.fastvibe.workspace.gitCommit(cwd, subject);
               setMessage("");
               return next;
-            }, t("git.commitFailed"));
+            }, t("git.commitFailed"), () => t("git.commitDone", { subject }));
           }}
         />
         <Button
@@ -602,11 +617,12 @@ export function SidePaneGit({
           disabled={busy || !message.trim() || !status?.staged}
           onClick={() => {
             if (!message.trim() || !status?.staged) return;
+            const subject = message.trim();
             void run(async () => {
-              const next = await window.fastvibe.workspace.gitCommit(cwd, message.trim());
+              const next = await window.fastvibe.workspace.gitCommit(cwd, subject);
               setMessage("");
               return next;
-            }, t("git.commitFailed"));
+            }, t("git.commitFailed"), () => t("git.commitDone", { subject }));
           }}
         >
           <HugeiconsIcon strokeWidth={2} icon={Tick02Icon} />

@@ -9,6 +9,7 @@ import { Ipc, type AppModelsDevInfo } from "@shared/ipc";
 import { broadcast } from "./ipc/broadcast";
 import { dispatch, handle, handlerChannels, type CallerContext } from "./ipc/registry";
 import { registerRemoteIpc, restoreRemoteServer, stopRemoteServer } from "./remote";
+import { runAppConfig } from "./app-config";
 import { readFilePreview } from "./engine/file-preview";
 import { readWorkspaceDir } from "./engine/workspace-fs";
 import {
@@ -37,6 +38,7 @@ import { testJevConnection } from "./engine/decision/backends/jev";
 import { decisionModelConfigOf, JEV_KEY_ENV, type DecisionKeyState, type DecisionModelConfig, type DecisionTestResult } from "@shared/decision";
 import { installBrowserTaskGlobal } from "./pi/browser-task-runner";
 import { installComputerTaskGlobal } from "./pi/computer-task-runner";
+import { installDecisionScenarioGlobals } from "./pi/decision-scenarios";
 import { installDecisionTaskDependencies, revokeDecisionTasks } from "./pi/decision-task-runner";
 import { loadProviderKeys, setProviderKey } from "./engine/providers";
 import { readWindowState, writeWindowState } from "./engine/window-state";
@@ -65,7 +67,7 @@ import { RemoteConnectionManager } from "./remote/connection-manager";
 import { RemoteGateway, shouldSyncAgentConfig } from "./remote/gateway";
 import { createAppServer, initAppServer, getAppServer } from "./app-server/runtime";
 import { loadOrCreateServerIdentity } from "./server/identity";
-import { APP_CAPABILITIES } from "@shared/app-protocol";
+import { APP_CAPABILITIES, conversationScope } from "@shared/app-protocol";
 import { wireElectronAppTransport } from "./transport/electron";
 import type { RemoteHostProfile, RemoteHostConnectionState, RemoteTransferProgress, SshErrorCode } from "@shared/remote-host";
 import { stopBrowserCdp } from "./engine/browser-cdp";
@@ -731,6 +733,8 @@ function registerIpc(): void {
     return engine.getRunningConversations();
   });
 
+  handle(Ipc.engineGetPendingUi, () => engine.getPendingUi());
+
   handle(Ipc.engineGetModels, async () => {
     return engine.getAvailableModels();
   });
@@ -896,8 +900,8 @@ function registerIpc(): void {
   });
 
   handle(Ipc.conversationsList, () => engine.listWorkspace());
-  handle(Ipc.conversationsCreate, async (payload?: { project?: string }) => {
-    return engine.createConversation(payload?.project);
+  handle(Ipc.conversationsCreate, async (payload?: { project?: string; activate?: boolean }) => {
+    return engine.createConversation(payload?.project, { activate: payload?.activate !== false });
   });
   handle(Ipc.conversationsOpen, async (payload: { id: string }) => {
     return engine.openConversation(payload.id);
@@ -1331,6 +1335,7 @@ app.whenReady().then(async () => {
   });
   installBrowserTaskGlobal();
   installComputerTaskGlobal();
+  installDecisionScenarioGlobals();
   // Registers the bridge global and an at-quit driver shutdown. The native library is
   // still not loaded here — `cua-bridge` imports it on the first `computer_*` call, so a
   // user who never touches the feature pays nothing for it.
@@ -1445,6 +1450,18 @@ app.whenReady().then(async () => {
       setConversationRunning(String(event.conversationId ?? ""), event.running === true);
     }
     gateway.publishLocalEvent(event);
+  });
+  // A background chat's live stream, for the clients that asked for it by name — the
+  // phone page watching a conversation the desktop is not showing. Published straight
+  // to the App Server rather than through `broadcast`, so it reaches those subscribers
+  // and never the windows.
+  // The `fastvibe_config_*` tools: the agent filling in FastVibe's own settings panes.
+  engine.setAppConfigHost(runAppConfig);
+  engine.setStreamWatch({
+    isWatched: (conversationId) => getAppServer().hasNamedSubscriber(conversationScope(conversationId)),
+    publish: (event) => {
+      getAppServer().publish(Ipc.event, event, { namedOnly: true });
+    },
   });
 
   createWindow();

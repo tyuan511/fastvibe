@@ -68,6 +68,7 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
   handle(Ipc.engineNewSession, () => engine.newSession());
   handle(Ipc.engineGetState, (payload?: { conversationId?: string }) => engine.getState(payload?.conversationId));
   handle(Ipc.engineGetRunning, () => engine.getRunningConversations());
+  handle(Ipc.engineGetPendingUi, () => engine.getPendingUi());
   handle(Ipc.engineGetModels, () => engine.getAvailableModels());
   handle(Ipc.engineSyncConfig, async (payload: AgentConfigSyncPayload) => {
     const expectedToken = process.env.FASTVIBE_AGENT_SYNC_TOKEN;
@@ -99,7 +100,7 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
   handle(Ipc.engineGetConversationMessages, (payload: { id: string }) => engine.getConversationMessages(payload.id));
 
   handle(Ipc.conversationsList, () => engine.listWorkspace());
-  handle(Ipc.conversationsCreate, (payload?: { project?: string }) => engine.createConversation(payload?.project));
+  handle(Ipc.conversationsCreate, (payload?: { project?: string; activate?: boolean }) => engine.createConversation(payload?.project, { activate: payload?.activate !== false }));
   handle(Ipc.conversationsOpen, (payload: { id: string }) => engine.openConversation(payload.id));
   handle(Ipc.conversationsRename, (payload: { id: string; title: string }) => engine.renameConversation(payload.id, payload.title));
   handle(Ipc.conversationsDelete, (payload: { id: string }) => engine.deleteConversation(payload.id));

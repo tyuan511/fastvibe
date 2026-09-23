@@ -246,8 +246,44 @@ in the pane as a link and a QR code (`components/ui/qr-code.tsx`).
   it spends a moment publishing a port with nothing behind it, which a phone reads as a
   dead site rather than as remote access having been switched off.
 
-`?tunnel=online`, `?tunnel=missing` and `?tunnel=noauth` on `mock.html` render the three
-states in a browser — the real thing needs a password, a port and somebody else's binary.
+- **frp is the self-hosted one, and the only one configured rather than discovered.**
+  The user brings a server running `frps`; 远程访问 → 内网穿透 → frp shows a form
+  (`remote-frp.tsx`), and `src/shared/frp.ts` is the one place that validates it, derives
+  the public URL and renders `frpc.toml` — shared so the pane cannot accept what Main then
+  refuses. Three things differ from the other two:
+  - **The token lives in `frp.json` (0600), never `settings.json`**, and the rendered
+    `frpc.toml` beside it is 0600 too. `remote:frp-get` serves `hasToken` instead; a save
+    with no `token` keeps the stored one, `""` clears it. The proxy name is minted once and
+    kept, so two installs on one frps do not collide and a restart does not orphan it.
+  - **frpc never prints the public URL** — it depends on how the *server* is set up — so
+    the URL is derived (`http` → the domain on `vhostHTTPPort`, `tcp` → server:`remotePort`)
+    or overridden, which is also how HTTPS in front of frps is expressed. `start proxy
+    success` is the online signal; `TunnelOptions` carries the config path and URL in.
+  - **`loginFailExit = true` is load-bearing**: a wrong token then exits instead of
+    retrying forever, and `frpFatal` ends a run on `start error:` (port taken, domain
+    conflict) for the same reason. A connection refused is *not* fatal — that is frps
+    restarting, which frpc should ride out. The TOML format needs frpc ≥ 0.52.
+  - **`http` mode needs a domain that already resolves to frps, and the pane checks it.**
+    This is the one step the user takes outside both FastVibe and frps, and frpc cannot
+    see it — it registers the proxy and reports success whatever the DNS says, so a missing
+    record surfaced only as a phone that could not open the link. The form says what to add
+    (an A record to the server's IP, or a CNAME to its hostname; `vhostHTTPPort` on frps; TCP
+    mode for anyone without a domain) and looks the domain up as it is typed
+    (`remote:frp-check-dns` → `server/frp-dns.ts`, the system resolver, 5s cap). The verdict
+    (`frpDnsVerdict`) is advice, never a gate: `mismatch` is also what a CDN-proxied record
+    looks like, and a miss can be propagation that the phone's resolver has already seen past.
+    `?dns=match|mismatch|unresolved` with `?tunnel=frp` previews the three answers.
+  - **A blocked port is the user's to open, never ours to route around.** A first login
+    that times out is almost always the cloud provider's security group, which nothing on
+    either machine can change, so `frpFatal` ends that run with a sentence naming the port
+    and the console (`frpUnreachable`) instead of quoting `i/o timeout`; a refusal gets a
+    different sentence (frps down or on another port). The `fastvibe-setup` skill holds its
+    agent to the same line: stop, tell the user exactly which inbound TCP rule to add, and
+    re-check once they say it is done — no switching to a port that happens to be open, no
+    `ssh -R`, no quiet change of tunnel provider.
+
+`?tunnel=online`, `?tunnel=missing`, `?tunnel=noauth` and `?tunnel=frp` on `mock.html` render
+those states in a browser — the real thing needs a password, a port and somebody else's binary.
 
 ### 网页客户端（`remote.html`）
 
@@ -294,6 +330,47 @@ Three things that are easy to get wrong here:
   is the *build* output, so a client checked under `pnpm dev` is whatever `pnpm build`
   last produced — run it before testing the web client, or you are debugging an old
   bundle.
+
+### 手机页（`mobile.html`）
+
+A phone gets its own page, not the desktop tree at 375pt. `/` serves `mobile.html` to a
+phone (`prefersMobileEntry`: iPhone, or Android *with* `Mobile` — tablets keep the full
+client) and `remote.html` to everything else; the phone page offers no way over to the
+full client. It
+boots through the same bridge (`bootRemote` in `remote/bridge.ts`; `remote/web.ts` and
+`mobile/entry.ts` are the two entries, and both pages share `remote/gate.css`) and reuses
+the desktop's session store, `MessageList` and `PermissionPanel`, so a reply reads the same
+on both screens. What it adds is a list sorted by 「does this need me」 (等你处理 → 运行中 →
+最近) and one chat at a time with a composer that sends, queues, stops and continues.
+
+- **It never calls `conversations.open`.** That sets the engine's active conversation, which
+  every desktop window follows — reading a chat on the phone used to drag the desktop onto
+  it. The phone reads a chat with `engine:get-snapshot` and asks for its live stream by
+  subscribing to `conversation:<id>` **by name** (`lib/live-scopes.ts`). Main forwards a
+  background chat's stream only to such subscribers: `PiProcessManager.setStreamWatch`
+  asks `AppServer.hasNamedSubscriber`, and publishes with `namedOnly`, which a `*`-only
+  session (every desktop window) never receives. Without that, a token stream for a chat
+  nobody on the desktop is showing would cross IPC once per token.
+- **Subscribe, then snapshot, then drop by `seq`.** `mobile/live.ts` subscribes before it
+  asks, holds the chat's events while the snapshot is in flight, and applies only those
+  above the snapshot's `seq`. The snapshot's `pendingUi` is the whole truth for that chat:
+  a prompt answered on the desktop meanwhile is dismissed, not left as a dead panel.
+- **新对话 does not activate.** `conversations.create(project, { activate: false })` creates
+  and loads the session without touching the active id, for the same reason.
+- **等你 on the list needs `engine:get-pending-ui`**, every parked prompt across chats. A
+  prompt is announced once, as an event; a page that connected afterwards would otherwise
+  show a stuck chat as merely running.
+- **A dropped socket resumes in place** (`resumeInPlace`), unlike the full client, which
+  reloads. A phone loses its socket every time the screen locks, and a reload there was a
+  white page and a lost scroll position on every return. The bridge re-subscribes `*` plus
+  the watched scopes and calls `onLiveReconnected`, which re-reads the list and the chat on
+  screen; a journal `resync` takes the same path. Coming back into view also probes the
+  socket with a 4s call (`probeOnReturn`), because iOS freezes a page with its socket and
+  nothing on this side hears the server give up on it.
+- **A remembered 始终允许 is answered on the phone too.** The phone may be the only client
+  looking at a chat that runs in the background on the desktop.
+- **Preview**: `mock-mobile.html` (`?waiting=1` parks an approval, `?running=1` a run) —
+  the fixture bridge from `mock.html` with the phone page behind it.
 
 ### 窄视口（手机）
 
@@ -955,10 +1032,10 @@ engine is gone because the SDK never read them.
 ## Plugins & extensions
 
 FastVibe hosts pi extensions (the SDK's plugin system) and bridges their
-terminal-only surface onto the GUI. Twelve **built-in** extensions ship with the app
+terminal-only surface onto the GUI. Fourteen **built-in** extensions ship with the app
 (`resources/extensions/plan.ts`, `goal.ts`, `todo.ts`, `permission-sandbox.ts`, `session-title.ts`,
 `browser-use.ts`, `computer-use.ts`, `web-search.ts`, `conversation-search.ts`, `worktree.ts`,
-`output-language.ts`, `subagent/index.ts`); anything else
+`output-language.ts`, `batch-decide.ts`, `app-config.ts`, `subagent/index.ts`); anything else
 the user installs at runtime via 设置 → 插件, which writes to the isolated `agentDir`
 (`ExtensionManager` → SDK `DefaultPackageManager`), never `~/.pi`.
 
@@ -1228,6 +1305,29 @@ the user installs at runtime via 设置 → 插件, which writes to the isolated
   or rewrite the transcript. System prompts, thinking blocks, images and hidden custom messages
   are excluded. It is read-only in the permission sandbox and available to main sessions only;
   throwaway subagents still load just the sandbox.
+- **Batch decide** — `batch-decide.ts` registers `batch_decide`, the decision engine as a tool
+  for the main agent: one closed question (choice / score / yes_no) answered per item for 5–500
+  items. Offered only while 设置 → 决策引擎 › 批量决策 is on (re-read every turn); the scope
+  rules live in the shape (`engine/decision/batch.ts`) and the prompt guidelines, and
+  low-confidence items come back as `review` for the agent to judge itself. The sandbox treats
+  it as network (items leave the machine). `帮我批准` on the decision model
+  (应用场景 › 帮我批准) is the sandbox's other consumer: see docs/decision-layer.md §7.10–7.11.
+- **App config** — `app-config.ts` registers `fastvibe_config_get` / `fastvibe_config_apply`, the
+  agent's hands on FastVibe's *own* settings panes; the built-in skill `resources/skills/fastvibe-setup`
+  is the playbook (install frps on the user's VPS over ssh, then fill 远程访问 → frp and start it).
+  The extension holds no settings code: `ctx.ui.appConfig` reaches `runAppConfig`
+  (`src/main/app-config.ts`, injected with `engine.setAppConfigHost` so an SSH Agent runtime answers
+  "not available"), which dispatches the very methods the panes call, so writes broadcast like a click.
+  - **An allowlist, never a channel pass-through.** Actions are named in `src/shared/app-config.ts`
+    (Main's table is typed against it); `overview` and every unknown-action error serve the catalog,
+    because the extension ships as a loose file and cannot import `@shared` to list it.
+  - **No action returns a secret** (SSH passwords stripped, frp serves `hasToken`), and
+    **`settings.set` refuses permission, `remote*` and `proxy*` keys** — a model that could write
+    `permissionMode` would approve itself.
+  - **The remote-access password never reaches the model**: `remote.set_password` collects it with
+    `ctx.ui.input` inside the extension. Every other write confirms in the extension itself (unless
+    `full`), so the sandbox lists `fastvibe_config_apply` in `KNOWN_TOOLS` and does not ask twice;
+    `fastvibe_config_get` is read-only.
 - **Worktree** — `worktree.ts` exposes list / create / bind / unbind over the host's
   worktree methods. Creating or binding **switches the conversation's workspace**, which is
   a change to the user's machine they never asked for, so the tool's prompt guidelines make

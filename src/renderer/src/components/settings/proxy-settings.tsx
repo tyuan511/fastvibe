@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { proxySettingsOf, validProxyHost, validProxyPort, type ProxySettings as ProxyPreferences } from "@shared/proxy";
 import { useSettingsStore } from "@/stores/settings";
 import { Button } from "@/components/ui/button";
@@ -16,14 +17,12 @@ export function ProxySettings() {
   const [draft, setDraft] = useState(() => proxySettingsOf(settings));
   const [port, setPort] = useState(String(draft.proxyPort));
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
 
   // External changes/reset replace the draft; unrelated preferences leave it alone.
   useEffect(() => {
     const saved = JSON.parse(savedKey) as ProxyPreferences;
     setDraft(saved);
     setPort(String(saved.proxyPort));
-    setError("");
   }, [savedKey, resetVersion]);
 
   const custom = draft.proxyEnabled && draft.proxyMode === "custom";
@@ -39,15 +38,13 @@ export function ProxySettings() {
   const dirty = JSON.stringify(next) !== savedKey || port !== String(draft.proxyPort);
   const change = (patch: Partial<ProxyPreferences>) => {
     setDraft((value) => ({ ...value, ...patch }));
-    setError("");
   };
   async function apply() {
     setSaving(true);
-    setError("");
     try {
       await useSettingsStore.getState().saveProxy(next);
     } catch (cause) {
-      setError(t("proxy.saveFailed", { error: cause instanceof Error ? cause.message : String(cause) }));
+      toast.error(t("proxy.saveFailed", { error: cause instanceof Error ? cause.message : String(cause) }));
     } finally {
       setSaving(false);
     }
@@ -83,7 +80,7 @@ export function ProxySettings() {
           } />
           <SettingsRow title={t("proxy.port")} description={!portValid ? t("proxy.invalidPort") : undefined} control={
             <Input aria-label={t("proxy.port")} aria-invalid={!portValid} className="w-36" inputMode="numeric" value={port} disabled={saving}
-              onChange={(event) => { setPort(event.target.value); setError(""); }} />
+              onChange={(event) => setPort(event.target.value)} />
           } />
         </>}
       </>}
@@ -91,7 +88,6 @@ export function ProxySettings() {
         <Button size="sm" variant="outline" disabled={saving || !dirty || (custom && (!hostValid || !portValid))}
           onClick={() => void apply()}>{t(saving ? "proxy.saving" : "proxy.apply")}</Button>
       } />
-      {error && <p role="alert" className="px-4 py-3 text-xs text-destructive">{error}</p>}
     </SettingsGroup>
   );
 }

@@ -90,6 +90,7 @@ export default defineConfig({
       entries: [
         "index.html",
         "remote.html",
+        "mobile.html",
         "src/components/settings/settings-dialog.tsx",
         "src/components/layout/side-pane-terminal.tsx",
       ],
@@ -112,10 +113,13 @@ export default defineConfig({
          * preload. `remote.html` is what the remote server serves to a browser, reaching
          * the same Main over a WebSocket. They share every chunk below the entry — it is
          * the same React tree — and differ only in how `window.fastvibe` is installed.
+         * `mobile.html` is the third: the same bridge as `remote.html`, with the phone
+         * page behind it instead of the desktop shell.
          */
         input: {
           index: resolve("src/renderer/index.html"),
           remote: resolve("src/renderer/remote.html"),
+          mobile: resolve("src/renderer/mobile.html"),
         },
       },
     },

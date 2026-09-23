@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { CheckmarkCircle02Icon, Copy01Icon, Delete02Icon, RefreshIcon } from "@hugeicons/core-free-icons";
 import { Badge } from "@/components/ui/badge";
@@ -24,7 +25,6 @@ export function RemoteSettings(): JSX.Element {
   const [devices, setDevices] = useState<RemoteDeviceInfo[]>([]);
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
-  const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   /** Shows the password form again over an already-configured server, to replace it. */
@@ -77,11 +77,10 @@ export function RemoteSettings(): JSX.Element {
 
   async function run<T>(action: () => Promise<T>): Promise<T | null> {
     setBusy(true);
-    setError(null);
     try {
       return await action();
     } catch (err) {
-      setError(cleanError(err));
+      toast.error(cleanError(err));
       return null;
     } finally {
       setBusy(false);
@@ -90,7 +89,7 @@ export function RemoteSettings(): JSX.Element {
 
   async function setNewPassword(): Promise<void> {
     if (password !== confirm) {
-      setError(t("remote.passwordMismatch"));
+      toast.error(t("remote.passwordMismatch"));
       return;
     }
     const next = await run(() => window.fastvibe.remote.setPassword(password));
@@ -147,12 +146,6 @@ export function RemoteSettings(): JSX.Element {
     <div className="space-y-4">
       <p className="px-1 text-xs leading-5 text-muted-foreground">{t("remote.intro")}</p>
 
-      {error ? (
-        <p className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-          {error}
-        </p>
-      ) : null}
-
       {unavailable ? (
         <SettingsGroup>
           <div className="px-4 py-3">
@@ -196,7 +189,6 @@ export function RemoteSettings(): JSX.Element {
                     setChangingPassword(false);
                     setPassword("");
                     setConfirm("");
-                    setError(null);
                   }}
                 >
                   {t("remote.cancel")}

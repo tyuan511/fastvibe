@@ -128,7 +128,9 @@
     "branches": "分支",
     "loading": "读取分支…",
     "none": "没有匹配的分支",
-    "createNew": "创建并检出新分支..."
+    "createNew": "创建并检出新分支...",
+    "switched": "已切换到分支 {{branch}}",
+    "created": "已创建并检出分支 {{branch}}"
   },
   "plan": {
     "label": "计划模式",

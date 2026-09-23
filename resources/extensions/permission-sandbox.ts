@@ -22,6 +22,12 @@ import type { PermissionMode } from "@shared/types";
  * Custom / MCP tools cannot be classified from their name or schema, so `ask`
  * confirms them by default; `smart` only confirms them when their arguments
  * happen to match a known risk pattern.
+ *
+ * With 设置 → 决策引擎 › 帮我批准 on, `smart` asks the decision model instead of
+ * trusting the patterns alone (docs/decision-layer.md §7.11): shell commands,
+ * flagged writes and custom tools are judged `allow` / `ask`, and when the model
+ * gives no usable answer — off, no key, unreachable, unsure — the patterns decide
+ * exactly as before. `hard` rules are never put to the model: those prompts stay.
  */
 const MODE_ENV = "FASTVIBE_PERMISSION_MODE";
 const T = (zh: string, en: string): string => (process.env.FASTVIBE_UI_LANGUAGE === "en" ? en : zh);
@@ -39,10 +45,13 @@ function modeDescription(mode: PermissionMode): string {
 }
 
 /** Tools with no side effects; they are never worth a confirmation. */
-const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls", "todo", "conversation_search", "worktree_list"]);
+const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls", "todo", "conversation_search", "worktree_list", "fastvibe_config_get"]);
 
-/** Built-in network lookup; `ask` confirms it, `smart` does not. */
-const NETWORK_TOOLS = new Set(["web_search"]);
+/**
+ * Tools that send something off the machine; `ask` confirms them, `smart` does not.
+ * `batch_decide` belongs here: its items go to the decision engine's service.
+ */
+const NETWORK_TOOLS = new Set(["web_search", "batch_decide"]);
 
 /** Built-in tools this extension knows how to classify. */
 const KNOWN_TOOLS = new Set([
@@ -57,6 +66,9 @@ const KNOWN_TOOLS = new Set([
   "worktree_create",
   "worktree_bind",
   "worktree_unbind",
+  // Confirms every change itself (and collects the remote-access password itself), so a
+  // sandbox prompt on top would ask the same question twice.
+  "fastvibe_config_apply",
 ]);
 
 /**
@@ -203,15 +215,22 @@ const NETWORK_RULES: RegExp[] = [
   /\b(brew|apt|apt-get|yum|dnf|pacman|apk|snap|zypper)\b[^;&|]*\b(install|update|upgrade|add|remove)\b/i,
 ];
 
+/**
+ * A matched rule. `hard` marks the ones the decision model may not waive in 帮我批准:
+ * operations on the system itself or on credentials, where no workspace context can
+ * make the call routine and a wrong `allow` has no undo.
+ */
+type Rule = { label: string; pattern: RegExp; hard?: true };
+
 /** Operations `smart` treats as "检测到的风险操作". */
-const RISK_RULES: Array<{ label: string; pattern: RegExp }> = [
+const RISK_RULES: Rule[] = [
   { label: "递归删除文件", pattern: /\brm\b[^;&|]*\s-[a-z]*r/i },
   { label: "强制删除文件", pattern: /\brm\b[^;&|]*\s-[a-z]*f/i },
-  { label: "提权执行", pattern: /\b(sudo|doas)\b/i },
+  { label: "提权执行", pattern: /\b(sudo|doas)\b/i, hard: true },
   { label: "开放全部权限", pattern: /\bchmod\b[^;&|]*\s777\b/i },
   { label: "递归修改所有者", pattern: /\bchown\b[^;&|]*-R\b/i },
-  { label: "磁盘级操作", pattern: /\b(mkfs|fdisk|parted|dd)\b/i },
-  { label: "关机或重启", pattern: /\b(shutdown|reboot|halt|poweroff)\b/i },
+  { label: "磁盘级操作", pattern: /\b(mkfs|fdisk|parted|dd)\b/i, hard: true },
+  { label: "关机或重启", pattern: /\b(shutdown|reboot|halt|poweroff)\b/i, hard: true },
   { label: "批量结束进程", pattern: /\b(killall|pkill)\b/i },
   { label: "管道执行脚本", pattern: /\|\s*(sudo\s+)?(sh|bash|zsh|dash|python3?|node|perl|ruby)\b/i },
   { label: "强制推送", pattern: /\bgit\b[^;&|]*\bpush\b[^;&|]*\s(-f|--force|--force-with-lease)\b/i },
@@ -220,18 +239,18 @@ const RISK_RULES: Array<{ label: string; pattern: RegExp }> = [
     pattern: /\bgit\b[^;&|]*\b(reset\s+--hard|clean\b[^;&|]*-[a-z]*f|branch\b[^;&|]*-D|checkout\s+--?\s*\.)/i,
   },
   { label: "发布软件包", pattern: /\b(npm|pnpm|yarn|bun)\b[^;&|]*\b(publish|unpublish)\b/i },
-  { label: "写入磁盘设备", pattern: />\s*\/dev\/(sd|disk|nvme|rdisk)/i },
-  { label: "修改系统账号文件", pattern: /\/etc\/(passwd|shadow|sudoers|hosts)\b/i },
+  { label: "写入磁盘设备", pattern: />\s*\/dev\/(sd|disk|nvme|rdisk)/i, hard: true },
+  { label: "修改系统账号文件", pattern: /\/etc\/(passwd|shadow|sudoers|hosts)\b/i, hard: true },
 ];
 
 /** Files `smart` should not let the agent rewrite silently. */
-const SENSITIVE_PATH_RULES: Array<{ label: string; pattern: RegExp }> = [
+const SENSITIVE_PATH_RULES: Rule[] = [
   { label: "环境变量文件", pattern: /(^|[/\\])\.env(\.[^/\\]+)?$/i },
   { label: "Git 内部目录", pattern: /(^|[/\\])\.git([/\\]|$)/i },
-  { label: "SSH 密钥", pattern: /(^|[/\\])\.ssh([/\\]|$)|(^|[/\\])id_(rsa|ed25519|ecdsa)(\.[^/\\]+)?$/i },
-  { label: "云凭证", pattern: /(^|[/\\])\.(aws|gnupg|kube|docker)([/\\]|$)|(^|[/\\])credentials(\.json)?$/i },
-  { label: "私钥或证书", pattern: /\.(pem|key|p12|pfx|keystore)$/i },
-  { label: "包管理器凭证", pattern: /(^|[/\\])\.(npmrc|pypirc)$/i },
+  { label: "SSH 密钥", pattern: /(^|[/\\])\.ssh([/\\]|$)|(^|[/\\])id_(rsa|ed25519|ecdsa)(\.[^/\\]+)?$/i, hard: true },
+  { label: "云凭证", pattern: /(^|[/\\])\.(aws|gnupg|kube|docker)([/\\]|$)|(^|[/\\])credentials(\.json)?$/i, hard: true },
+  { label: "私钥或证书", pattern: /\.(pem|key|p12|pfx|keystore)$/i, hard: true },
+  { label: "包管理器凭证", pattern: /(^|[/\\])\.(npmrc|pypirc)$/i, hard: true },
 ];
 
 type Assessment = {
@@ -247,6 +266,12 @@ type Assessment = {
   risks: string[];
   /** A tool whose behaviour cannot be inferred (custom / MCP). */
   opaque: boolean;
+  /** A matched rule is `hard`: 帮我批准's decision model may not waive this prompt. */
+  hard?: boolean;
+  /** Matched rules in English, for the decision model. */
+  flags?: string[];
+  /** The whole command or argument dump, for the decision model (`detail` is one line). */
+  subject?: string;
 };
 
 function currentMode(): PermissionMode {
@@ -299,13 +324,33 @@ const LABEL_EN: Record<string, string> = {
   包管理器凭证: "Package-manager credentials",
 };
 
-function matchedLabels(rules: Array<{ label: string; pattern: RegExp }>, text: string): string[] {
+function matchedLabels(rules: Rule[], text: string): string[] {
   return rules.filter((rule) => rule.pattern.test(text)).map((rule) => T(rule.label, LABEL_EN[rule.label] ?? rule.label));
+}
+
+/** What the decision model is told about the rule matches, and whether any may not be waived. */
+function ruleMatches(rules: Rule[], text: string): { flags: string[]; hard: boolean } {
+  const matched = rules.filter((rule) => rule.pattern.test(text));
+  return { flags: matched.map((rule) => LABEL_EN[rule.label] ?? rule.label), hard: matched.some((rule) => rule.hard) };
 }
 
 /** Classify a tool call, or `null` when it can never need a confirmation. */
 function assess(toolName: string, input: unknown, cwd: string): Assessment | null {
   if (READ_ONLY_TOOLS.has(toolName)) return null;
+
+  if (toolName === "batch_decide") {
+    const items = input && typeof input === "object" ? (input as Record<string, unknown>).items : undefined;
+    const count = Array.isArray(items) ? items.length : 0;
+    const instructions = firstLine(inputString(input, "instructions"), 80);
+    return {
+      action: T("发送给决策模型批量判断", "Send to the decision model"),
+      detail: T(`${count} 条：${instructions}`, `${count} items: ${instructions}`),
+      network: true,
+      external: false,
+      risks: [],
+      opaque: false,
+    };
+  }
 
   if (NETWORK_TOOLS.has(toolName)) {
     return {
@@ -328,6 +373,8 @@ function assess(toolName: string, input: unknown, cwd: string): Assessment | nul
       external: false,
       risks: matchedLabels(RISK_RULES, command),
       opaque: false,
+      ...ruleMatches(RISK_RULES, command),
+      subject: command,
     };
   }
 
@@ -335,13 +382,18 @@ function assess(toolName: string, input: unknown, cwd: string): Assessment | nul
     const raw = inputString(input, "path");
     if (!raw) return null;
     const absolute = resolveToolPath(cwd, raw);
+    const external = !isInside(cwd, absolute);
+    const matches = ruleMatches(SENSITIVE_PATH_RULES, absolute);
     return {
       action: T("写入文件", "Write file"),
       detail: raw,
       network: false,
-      external: !isInside(cwd, absolute),
+      external,
       risks: matchedLabels(SENSITIVE_PATH_RULES, absolute),
       opaque: false,
+      hard: matches.hard,
+      flags: external ? [...matches.flags, "Outside the workspace"] : matches.flags,
+      subject: absolute,
     };
   }
 
@@ -385,13 +437,18 @@ function assess(toolName: string, input: unknown, cwd: string): Assessment | nul
   // Custom / MCP tool: scan the serialized arguments so an obviously destructive
   // call is still caught even though the tool itself is unknown.
   const serialized = JSON.stringify(input ?? {}).slice(0, 4000);
+  const network = NETWORK_RULES.some((rule) => rule.test(serialized));
+  const matches = ruleMatches(RISK_RULES, serialized);
   return {
     action: T("调用工具", "Call tool"),
     detail: toolName,
-    network: NETWORK_RULES.some((rule) => rule.test(serialized)),
+    network,
     external: false,
     risks: matchedLabels(RISK_RULES, serialized),
     opaque: true,
+    hard: matches.hard,
+    flags: network ? [...matches.flags, "Network access"] : matches.flags,
+    subject: serialized,
   };
 }
 
@@ -400,6 +457,44 @@ function shouldConfirm(mode: PermissionMode, assessment: Assessment): boolean {
   if (assessment.opaque) return mode === "ask" || assessment.risks.length > 0;
   if (mode === "ask") return assessment.network || assessment.external || assessment.risks.length > 0;
   return assessment.external || assessment.risks.length > 0;
+}
+
+type ApprovalJudge = (
+  call: { tool: string; subject: string; workspace: string; insideWorkspace?: boolean; ruleFlags: string[] },
+  signal?: AbortSignal,
+) => Promise<"allow" | "ask" | null>;
+
+/**
+ * The decision model's verdict on a call in 帮我批准, or `null` to leave it to the rules.
+ *
+ * Only what the rules can get wrong in either direction is put to it: every shell
+ * command (the patterns miss `find -delete` and flag `rm -rf dist` alike), writes the
+ * rules flagged, and custom tools. Writes inside the workspace that the rules pass are
+ * the agent's job and are not sent; nor are computer actions, which have their own
+ * per-application allow list, nor anything a `hard` rule matched.
+ */
+async function judge(toolName: string, assessment: Assessment, rulesConfirm: boolean, cwd: string, signal?: AbortSignal): Promise<"allow" | "ask" | null> {
+  if (assessment.hard || assessment.subject === undefined) return null;
+  const shell = toolName === "bash" || toolName === "powershell";
+  const write = toolName === "write" || toolName === "edit";
+  if (!shell && !(write && rulesConfirm) && !assessment.opaque) return null;
+  const scope = globalThis as Record<string, unknown>;
+  const run = scope.__fastvibeApprovalJudge;
+  if (typeof run !== "function") return null;
+  try {
+    return await (run as ApprovalJudge)(
+      {
+        tool: toolName,
+        subject: assessment.subject,
+        workspace: cwd,
+        ...(write ? { insideWorkspace: !assessment.external } : {}),
+        ruleFlags: assessment.flags ?? [],
+      },
+      signal,
+    );
+  } catch {
+    return null;
+  }
 }
 
 function reasonsFor(assessment: Assessment): string[] {
@@ -430,7 +525,17 @@ export default function permissionSandbox(pi: ExtensionAPI): void {
     if (mode === "full") return undefined;
 
     const assessment = assess(event.toolName, event.input, ctx.cwd);
-    if (!assessment || !shouldConfirm(mode, assessment)) return undefined;
+    if (!assessment) return undefined;
+    let confirm = shouldConfirm(mode, assessment);
+    if (mode === "smart") {
+      const verdict = await judge(event.toolName, assessment, confirm, ctx.cwd, ctx.signal);
+      if (verdict === "allow") confirm = false;
+      else if (verdict === "ask") {
+        confirm = true;
+        assessment.risks.push(T("决策模型判断需要确认", "The decision model flagged this call"));
+      }
+    }
+    if (!confirm) return undefined;
 
     if (COMPUTER_ACTION_TOOLS.has(event.toolName)) {
       const target = await computerApp(event.input);

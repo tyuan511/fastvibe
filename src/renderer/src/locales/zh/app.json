@@ -42,7 +42,8 @@
   "description": "上一轮改动了 {{count}} 个文件。回退会把工作区恢复到那一轮之前的状态，你之后手动做的修改也会一并丢失。",
   "revert": "回退并重试",
   "keep": "保留文件改动",
-  "partial": "有 {{count}} 个文件无法回退（二进制、过大或未被 git 跟踪）"
+  "partial": "有 {{count}} 个文件无法回退（二进制、过大或未被 git 跟踪）",
+  "restored": "已回退 {{count}} 个文件"
  },
  "composer": {
   "ready": "随心输入",
@@ -124,7 +125,10 @@
   "removeProjectTitle": "从列表移除项目？",
   "removeProjectDesc": "「{{name}}」下的对话会从列表中移除，不会删除磁盘上的项目文件。",
   "cancel": "取消",
-  "removeAction": "移除"
+  "removeAction": "移除",
+  "archived": "已归档「{{title}}」",
+  "undo": "撤销",
+  "projectRemoved": "已移除项目 {{name}}"
  },
  "projectDialog": {
   "title": "添加项目",
@@ -184,5 +188,36 @@
   "maximize": "最大化",
   "restore": "还原",
   "close": "关闭"
+ },
+ "mobile": {
+  "newChat": "新对话",
+  "search": "搜索对话",
+  "allProjects": "全部",
+  "noProject": "无项目",
+  "empty": "还没有对话",
+  "emptyHint": "点右上角的 + 开始一个新对话",
+  "noMatch": "没有匹配的对话",
+  "sectionWaiting": "等你处理",
+  "sectionRunning": "运行中",
+  "sectionRecent": "最近",
+  "back": "返回",
+  "waiting": "等你",
+  "placeholder": "给 FastVibe 发消息",
+  "placeholderQueue": "追加到队列，当前回合结束后发送",
+  "needModel": "还没有可用的模型，请先在电脑上添加",
+  "send": "发送",
+  "stop": "停止",
+  "continue": "继续",
+  "queued": "{{count}} 条排队中",
+  "queuePaused": "队列已暂停",
+  "resumeQueue": "继续发送",
+  "removeQueued": "移除",
+  "loadFailed": "读取对话失败：{{message}}",
+  "sendFailed": "发送失败：{{message}}",
+  "project": "项目",
+  "newChatHint": "新对话会在这台电脑上运行，不会切换电脑上正在看的对话。",
+  "emptyChat": "还没有消息",
+  "model": "模型",
+  "untitled": "新会话"
  }
 }

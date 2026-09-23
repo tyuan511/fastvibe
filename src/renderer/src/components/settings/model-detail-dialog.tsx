@@ -1,5 +1,6 @@
 import { useEffect, useState, type JSX, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { i18n } from "@/lib/i18n";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -113,7 +114,6 @@ export function ModelDetailDialog({
   const [traits, setTraits] = useState<Set<TraitKey>>(new Set());
   const [levels, setLevels] = useState<Set<ThinkingLevel>>(new Set());
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!model) return;
@@ -124,7 +124,6 @@ export function ModelDetailDialog({
     setTraits(traitsOf(model));
     setLevels(new Set(model.thinkingLevels ?? DEFAULT_EFFORTS));
     setBusy(false);
-    setError(null);
   }, [model]);
 
   const reasoning = traits.has("reasoning");
@@ -138,23 +137,22 @@ export function ModelDetailDialog({
     });
     // Levels are meaningless without reasoning; keep the selection for the moment the
     // user re-enables it, but the saved model drops them.
-    if (key === "reasoning" && !on) setError(null);
-  }
+      }
 
   async function submit(): Promise<void> {
     if (!model) return;
     const contextWindow = Number.parseInt(context.trim(), 10);
     const maxTokens = Number.parseInt(output.trim(), 10);
     if (!Number.isFinite(contextWindow) || contextWindow <= 0) {
-      setError(t("modelDetail.contextInvalid"));
+      toast.error(t("modelDetail.contextInvalid"));
       return;
     }
     if (!Number.isFinite(maxTokens) || maxTokens <= 0) {
-      setError(t("modelDetail.outputInvalid"));
+      toast.error(t("modelDetail.outputInvalid"));
       return;
     }
     if (reasoning && levels.size === 0) {
-      setError(t("modelDetail.needEffort"));
+      toast.error(t("modelDetail.needEffort"));
       return;
     }
 
@@ -175,7 +173,7 @@ export function ModelDetailDialog({
       });
     } catch (err) {
       setBusy(false);
-      setError(cleanError(err));
+      toast.error(cleanError(err));
     }
   }
 
@@ -299,7 +297,6 @@ export function ModelDetailDialog({
           </div>
         ) : null}
 
-        {error ? <p className="text-xs text-destructive">{error}</p> : null}
 
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>

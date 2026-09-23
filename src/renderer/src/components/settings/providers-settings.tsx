@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { i18n } from "@/lib/i18n";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
@@ -96,7 +97,6 @@ type AddState = {
   candidates: ProviderModel[] | null;
   selected: Set<string>;
   busy: boolean;
-  error: string | null;
 };
 
 type PickerState = {
@@ -106,7 +106,6 @@ type PickerState = {
   candidates: ProviderModel[] | null;
   selected: Set<string>;
   busy: boolean;
-  error: string | null;
 };
 
 const EMPTY_ADD: AddState = {
@@ -120,7 +119,6 @@ const EMPTY_ADD: AddState = {
   candidates: null,
   selected: new Set(),
   busy: false,
-  error: null,
 };
 
 export function ProvidersSettings({ onChanged }: { onChanged: () => void }): JSX.Element {
@@ -128,7 +126,6 @@ export function ProvidersSettings({ onChanged }: { onChanged: () => void }): JSX
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
   const [natives, setNatives] = useState<NativeProviderConfig[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Phone: the provider list and a provider's detail are two pages, not two columns —
   // side by side at 375pt the detail was a strip one word wide. Picking a provider opens
@@ -171,7 +168,6 @@ export function ProvidersSettings({ onChanged }: { onChanged: () => void }): JSX
   async function mutate(action: () => Promise<ProviderConfig[]>): Promise<ProviderConfig[]> {
     const next = await action();
     setProviders(next);
-    setError(null);
     onChanged();
     return next;
   }
@@ -291,20 +287,18 @@ export function ProvidersSettings({ onChanged }: { onChanged: () => void }): JSX
             {t("providers.providers")}
           </Button>
         ) : null}
-        {error ? <p className="mb-3 text-xs text-destructive">{error}</p> : null}
         {selected ? (
           <ProviderDetail
             provider={selected}
-            onError={setError}
             onConnectFastVibe={(apiKey) => {
               // Discovering a model list is a request to the provider's URL issued from
               // the host's network, which the policy refuses.
               if (blockedRemotely(Ipc.providersFetch)) return;
-              void startConnect(selected, apiKey, setPicker, setError);
+              void startConnect(selected, apiKey, setPicker);
             }}
             onAddModels={() => {
               if (blockedRemotely(Ipc.providersFetch)) return;
-              void startAddModels(selected, setPicker, setError);
+              void startAddModels(selected, setPicker);
             }}
             onEditModel={(model) => setDetail({ providerId: selected.id, model })}
             onOAuth={() => {
@@ -322,7 +316,7 @@ export function ProvidersSettings({ onChanged }: { onChanged: () => void }): JSX
                 },
               });
             }}
-            onLogout={() => void logout(selected, setProviders, setError, onChanged)}
+            onLogout={() => void logout(selected, setProviders, onChanged)}
             onConfigureGateway={() => setGatewayCredentialFor(selected)}
             onIdentified={() => void refresh().catch(() => undefined)}
             onChanged={async (next) => {
@@ -390,7 +384,6 @@ export function ProvidersSettings({ onChanged }: { onChanged: () => void }): JSX
                       apiKey: "",
                       candidates: provider.models,
                       selected: new Set(provider.models.map((model) => model.id)),
-                      error: null,
                     }
                   : current,
               ),
@@ -505,7 +498,6 @@ function ProviderNavItem({
 
 function ProviderDetail({
   provider,
-  onError,
   onConnectFastVibe,
   onAddModels,
   onEditModel,
@@ -517,7 +509,6 @@ function ProviderDetail({
   onIdentified,
 }: {
   provider: ProviderConfig;
-  onError: (message: string | null) => void;
   onConnectFastVibe: (apiKey: string) => void;
   onAddModels: () => void;
   /** Opens 模型详情 for one entry of the model list. */
@@ -566,10 +557,9 @@ function ProviderDetail({
     setSaving(true);
     try {
       await onChanged(await window.fastvibe.providers.update({ id: provider.id, ...patch }));
-      onError(null);
       if (patch.apiKey !== undefined) setApiKey("");
     } catch (err) {
-      onError(cleanError(err));
+      toast.error(cleanError(err));
     } finally {
       setSaving(false);
     }
@@ -579,7 +569,7 @@ function ProviderDetail({
     try {
       await onRemoved(await window.fastvibe.providers.remove(provider.id));
     } catch (err) {
-      onError(cleanError(err));
+      toast.error(cleanError(err));
     }
   }
 
@@ -856,14 +846,12 @@ function CcSwitchImportDialog({
   const [scan, setScan] = useState<CcSwitchScan | null>(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
     setLoading(true);
-    setError(null);
     setScan(null);
     void window.fastvibe.providers
       .scanCcSwitch()
@@ -873,7 +861,7 @@ function CcSwitchImportDialog({
         setSelected(new Set(next.candidates.filter((item) => item.importable).map((item) => item.id)));
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError(cleanError(err));
+        if (!cancelled) toast.error(cleanError(err));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -899,11 +887,10 @@ function CcSwitchImportDialog({
   async function importSelected(): Promise<void> {
     if (chosen.length === 0) return;
     setBusy(true);
-    setError(null);
     try {
       await onImported(await window.fastvibe.providers.importCcSwitch(chosen.map((item) => item.id)));
     } catch (err) {
-      setError(cleanError(err));
+      toast.error(cleanError(err));
     } finally {
       setBusy(false);
     }
@@ -968,7 +955,6 @@ function CcSwitchImportDialog({
             ))}
           </div>
         )}
-        {error ? <p className="text-xs text-destructive">{error}</p> : null}
         <DialogFooter>
           <Button variant="outline" disabled={busy} onClick={onClose}>
             {t("providers.cancel")}
@@ -1013,7 +999,7 @@ function AddProviderDialog({
     // Switching source resets the picked provider, any fetched candidates and the
     // login it may have completed — a token for one provider is not a credential for
     // the next one.
-    onPatch({ mode, nativeId: null, oauthDone: false, candidates: null, selected: new Set(), error: null });
+    onPatch({ mode, nativeId: null, oauthDone: false, candidates: null, selected: new Set() });
   }
 
   return (
@@ -1061,7 +1047,7 @@ function AddProviderDialog({
                 providers={natives}
                 addedIds={addedIds}
                 value={state.nativeId}
-                onSelect={(nativeId) => onPatch({ nativeId, oauthDone: false, error: null })}
+                onSelect={(nativeId) => onPatch({ nativeId, oauthDone: false })}
               />
             ) : (
               <>
@@ -1134,7 +1120,6 @@ function AddProviderDialog({
             ) : null}
           </div>
         ) : null}
-        {state?.error ? <p className="text-xs text-destructive">{state.error}</p> : null}
         <DialogFooter className="gap-2">
           {state?.candidates ? (
             <>
@@ -1337,9 +1322,8 @@ function ModelPickDialog({
             onSelectedChange={(selected) => onPatch({ selected })}
           />
         ) : (
-          <p className="text-xs text-destructive">{state?.error ?? t("providers.fetchFailed")}</p>
+          <p className="text-xs text-destructive">{t("providers.fetchFailed")}</p>
         )}
-        {state?.error && state.candidates ? <p className="text-xs text-destructive">{state.error}</p> : null}
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>
             {t("providers.cancel")}
@@ -1357,7 +1341,6 @@ async function startConnect(
   provider: ProviderConfig,
   apiKey: string,
   setPicker: (state: PickerState) => void,
-  setError: (message: string | null) => void,
 ): Promise<void> {
   setPicker({
     kind: "connect",
@@ -1366,7 +1349,6 @@ async function startConnect(
     candidates: null,
     selected: new Set(),
     busy: true,
-    error: null,
   });
   try {
     const models = await window.fastvibe.providers.fetch(provider.baseUrl, apiKey, provider.api);
@@ -1377,10 +1359,9 @@ async function startConnect(
       candidates: models,
       selected: new Set(models.map((item) => item.id)),
       busy: false,
-      error: null,
     });
-    setError(null);
   } catch (err) {
+    toast.error(cleanError(err));
     setPicker({
       kind: "connect",
       providerId: provider.id,
@@ -1388,7 +1369,6 @@ async function startConnect(
       candidates: null,
       selected: new Set(),
       busy: false,
-      error: cleanError(err),
     });
   }
 }
@@ -1396,7 +1376,6 @@ async function startConnect(
 async function startAddModels(
   provider: ProviderConfig,
   setPicker: (state: PickerState) => void,
-  setError: (message: string | null) => void,
 ): Promise<void> {
   setPicker({
     kind: "models",
@@ -1404,7 +1383,6 @@ async function startAddModels(
     candidates: null,
     selected: new Set(provider.models.map((item) => item.id)),
     busy: true,
-    error: null,
   });
   try {
     const models = await window.fastvibe.providers.refresh(provider.id);
@@ -1415,17 +1393,15 @@ async function startAddModels(
       candidates: models,
       selected: new Set(models.filter((item) => kept.has(item.id)).map((item) => item.id)),
       busy: false,
-      error: null,
     });
-    setError(null);
   } catch (err) {
+    toast.error(cleanError(err));
     setPicker({
       kind: "models",
       providerId: provider.id,
       candidates: null,
       selected: new Set(),
       busy: false,
-      error: cleanError(err),
     });
   }
 }
@@ -1442,19 +1418,16 @@ async function fetchAddCandidates(
   if (add.mode === "native") {
     const provider = natives.find((item) => item.id === add.nativeId);
     if (!provider) {
-      setAdd({ ...add, error: i18n.t("settings:providers.needBuiltin") as string });
+      toast.error(i18n.t("settings:providers.needBuiltin") as string);
       return;
     }
     if (!provider.supported) {
-      setAdd({ ...add, error: provider.unsupportedReason ?? (i18n.t("settings:providers.unsupportedKey") as string) });
+      toast.error(provider.unsupportedReason ?? (i18n.t("settings:providers.unsupportedKey") as string));
       return;
     }
     // Either credential is enough: a pasted key, or a login that just completed.
     if (!add.apiKey.trim() && !add.oauthDone) {
-      setAdd({
-        ...add,
-        error: i18n.t(provider.oauth ? "settings:providers.needKeyOrLogin" : "settings:providers.needKey") as string,
-      });
+      toast.error(i18n.t(provider.oauth ? "settings:providers.needKeyOrLogin" : "settings:providers.needKey") as string);
       return;
     }
     setAdd({
@@ -1462,16 +1435,15 @@ async function fetchAddCandidates(
       candidates: provider.models,
       selected: new Set(provider.models.map((item) => item.id)),
       busy: false,
-      error: null,
     });
     return;
   }
 
   if (!add.name.trim() || !add.baseUrl.trim() || !add.apiKey.trim()) {
-    setAdd({ ...add, error: i18n.t("settings:providers.needFields") as string });
+    toast.error(i18n.t("settings:providers.needFields") as string);
     return;
   }
-  setAdd({ ...add, busy: true, error: null });
+  setAdd({ ...add, busy: true });
   try {
     // Both calls are independent requests to the same host, so they go together rather
     // than one after the other — the probe is what lets the dialog say which product
@@ -1486,10 +1458,10 @@ async function fetchAddCandidates(
       candidates: models,
       selected: new Set(models.map((item) => item.id)),
       busy: false,
-      error: null,
     });
   } catch (err) {
-    setAdd({ ...add, busy: false, error: cleanError(err) });
+    toast.error(cleanError(err));
+    setAdd({ ...add, busy: false });
   }
 }
 
@@ -1501,14 +1473,14 @@ async function saveAdd(
   if (!add?.candidates) return;
   const models = add.candidates.filter((item) => add.selected.has(item.id));
   if (models.length === 0) {
-    setAdd({ ...add, error: i18n.t("settings:providers.needModel") as string });
+    toast.error(i18n.t("settings:providers.needModel") as string);
     return;
   }
   if (add.mode === "native" && !add.nativeId) {
-    setAdd({ ...add, error: i18n.t("settings:providers.needBuiltin") as string });
+    toast.error(i18n.t("settings:providers.needBuiltin") as string);
     return;
   }
-  setAdd({ ...add, busy: true, error: null });
+  setAdd({ ...add, busy: true });
   try {
     const next =
       add.mode === "native"
@@ -1524,7 +1496,8 @@ async function saveAdd(
     setAdd(null);
     await onSaved(next);
   } catch (err) {
-    setAdd({ ...add, busy: false, error: cleanError(err) });
+    toast.error(cleanError(err));
+    setAdd({ ...add, busy: false });
   }
 }
 
@@ -1532,15 +1505,13 @@ async function saveAdd(
 async function logout(
   provider: ProviderConfig,
   setProviders: (next: ProviderConfig[]) => void,
-  setError: (message: string | null) => void,
   onChanged: () => void,
 ): Promise<void> {
   try {
     setProviders(await window.fastvibe.providers.logout(provider.id));
-    setError(null);
     onChanged();
   } catch (err) {
-    setError(cleanError(err));
+    toast.error(cleanError(err));
   }
 }
 
@@ -1580,7 +1551,7 @@ async function savePicker(
       edited: true,
     };
   });
-  setPicker((current) => (current ? { ...current, busy: true, error: null } : current));
+  setPicker((current) => (current ? { ...current, busy: true } : current));
   try {
     if (picker.kind === "connect" && picker.apiKey) {
       await mutate(() => window.fastvibe.providers.saveFastVibe(picker.apiKey!, nextModels));
@@ -1589,7 +1560,8 @@ async function savePicker(
     }
     setPicker(null);
   } catch (err) {
-    setPicker((current) => (current ? { ...current, busy: false, error: cleanError(err) } : current));
+    toast.error(cleanError(err));
+    setPicker((current) => (current ? { ...current, busy: false } : current));
   }
 }
 

@@ -124,7 +124,19 @@ const snapshot = (): WorkspaceSnapshot => ({
  * here — module scope — because the app asks `engine:getRunning` *before* it opens the
  * conversation, so a set filled in during `open` would arrive one step too late.
  */
-const runningIds = new Set<string>(params.get("running") === "1" ? [fixtureActiveId] : []);
+const runningIds = new Set<string>(params.get("running") === "1" || params.get("waiting") === "1" ? [fixtureActiveId] : []);
+
+function parkedPrompts(): Array<Record<string, unknown>> {
+  if (params.get("waiting") !== "1") return [];
+  return [{
+    type: "extension_ui_request",
+    id: "approval-preview",
+    conversationId: fixtureActiveId,
+    method: "confirm",
+    title: "运行命令",
+    message: "pnpm test -- --watch=false",
+  }];
+}
 
 /**
  * `?running=1` keeps the sidebar's 运行中 mark spinning. Every fixture run has settled,
@@ -328,6 +340,18 @@ const api = {
     newSession: async () => undefined,
     getState: async () => fixtureSession,
     getRunning: async (): Promise<string[]> => [...runningIds],
+    // `?waiting=1` parks a tool approval on the active chat, for the phone page's 等你.
+    getPendingUi: async (): Promise<Array<Record<string, unknown>>> => parkedPrompts(),
+    getSnapshot: async (conversationId?: string) => ({
+      conversationId: conversationId ?? fixtureActiveId,
+      messages: conversationId && conversationId !== fixtureActiveId ? fixtureMessages.slice(0, 2) : fixtureMessages,
+      running: runningIds.has(conversationId ?? fixtureActiveId),
+      queue: { conversationId: conversationId ?? fixtureActiveId, revision: 0, items: [], pause: null },
+      pendingUi: parkedPrompts().filter((request) => request.conversationId === (conversationId ?? fixtureActiveId)),
+      turnEvents: [],
+      overflowed: false,
+      seq: 0,
+    }),
     getModels: async () => MODELS,
     setModel: async () => fixtureSession,
     setThinking: async () => fixtureSession,
@@ -577,6 +601,23 @@ const api = {
     revokeDevice: async () => [],
     tunnelTools: async () => REMOTE_TOOLS,
     setTunnel: async () => REMOTE_STATE,
+    frpGet: async () => REMOTE_FRP,
+    frpSet: async (input: Omit<typeof REMOTE_FRP, "hasToken" | "proxyName"> & { token?: string }) => ({
+      ...input,
+      proxyName: "fastvibe-3fa9c2",
+      hasToken: input.token === undefined ? true : input.token.length > 0,
+    }),
+    // `?dns=match|mismatch|unresolved` picks what the domain check answers.
+    frpCheckDns: async ({ domain }: { domain: string; serverAddr: string }) => {
+      const verdict = (params.get("dns") ?? "unresolved") as "match" | "mismatch" | "unresolved";
+      await new Promise((settle) => window.setTimeout(settle, 400));
+      return {
+        domain,
+        verdict,
+        domainAddresses: verdict === "unresolved" ? [] : verdict === "match" ? ["203.0.113.7"] : ["104.16.1.1"],
+        serverAddresses: ["203.0.113.7"],
+      };
+    },
     onState: () => () => undefined,
   },
   // The browser-use bridge is main-process driven: in the preview nothing ever
@@ -653,6 +694,7 @@ function computerStatus(): {
  *   which is the only way to see the public address and its QR code here.
  * - `?tunnel=missing`: a server running with ngrok chosen and nothing installed, which
  *   is the state most machines are actually in the first time the pane is opened.
+ * - `?tunnel=frp`: the user's own frps, online, with its settings form filled in.
  */
 const TUNNEL_IDLE = {
   provider: null,
@@ -714,7 +756,34 @@ const REMOTE_NOAUTH = {
   tunnelChoice: "ngrok" as const,
 };
 
+/** frp online through the user's own server, whose address does not change. */
+const REMOTE_FRP_ONLINE = {
+  ...REMOTE_ONLINE,
+  tunnel: {
+    ...TUNNEL_IDLE,
+    provider: "frp" as const,
+    phase: "online" as const,
+    url: "http://fastvibe.example.com:8080",
+  },
+  tunnelChoice: "frp" as const,
+};
+
 const tunnelFixture = params.get("tunnel");
+
+const REMOTE_FRP =
+  tunnelFixture === "frp"
+    ? {
+        serverAddr: "frp.example.com",
+        serverPort: 7000,
+        mode: "http" as const,
+        domain: "fastvibe.example.com",
+        vhostPort: 8080 as number | null,
+        remotePort: null as number | null,
+        publicUrl: "",
+        proxyName: "fastvibe-3fa9c2",
+        hasToken: true,
+      }
+    : null;
 
 const REMOTE_STATE =
   tunnelFixture === "online"
@@ -723,7 +792,9 @@ const REMOTE_STATE =
       ? REMOTE_MISSING
       : tunnelFixture === "noauth"
         ? REMOTE_NOAUTH
-        : REMOTE_OFF;
+        : tunnelFixture === "frp"
+          ? REMOTE_FRP_ONLINE
+          : REMOTE_OFF;
 
 const REMOTE_DEVICES =
   tunnelFixture === "online"
@@ -742,10 +813,15 @@ const REMOTE_TOOLS =
     ? {
         cloudflared: { installed: true, path: "/opt/homebrew/bin/cloudflared", version: "cloudflared version 2026.9.0", authenticated: null },
         ngrok: { installed: true, path: "/opt/homebrew/bin/ngrok", version: "ngrok version 3.30.0", authenticated: false },
+        frp: { installed: false, path: null, version: null, authenticated: null },
       }
     : {
         cloudflared: { installed: true, path: "/opt/homebrew/bin/cloudflared", version: "cloudflared version 2026.9.0", authenticated: null },
         ngrok: { installed: false, path: null, version: null, authenticated: false },
+        frp:
+          tunnelFixture === "frp"
+            ? { installed: true, path: "/opt/homebrew/bin/frpc", version: "0.71.0", authenticated: null }
+            : { installed: false, path: null, version: null, authenticated: null },
       };
 
 window.fastvibe = api as unknown as typeof window.fastvibe;

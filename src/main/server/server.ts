@@ -119,6 +119,20 @@ export type RemoteServerStatus = {
 const CLIENT_ENTRY = "remote.html";
 
 /**
+ * The phone page: its own entry, not the desktop tree squeezed into 375pt.
+ *
+ * `/` hands it to a phone and the full client to everything else. Both stay reachable
+ * by name (`/mobile.html`, `/remote.html`).
+ */
+const MOBILE_ENTRY = "mobile.html";
+
+/** Phones, not tablets: an iPad has the width the full client is laid out for. */
+export function prefersMobileEntry(userAgent: string | undefined): boolean {
+  if (!userAgent) return false;
+  return /iphone|ipod/i.test(userAgent) || (/android/i.test(userAgent) && /mobile/i.test(userAgent));
+}
+
+/**
  * Where file icons are served.
  *
  * Unauthenticated, like the client bundle itself: these are ~1250 SVGs from a public
@@ -334,7 +348,7 @@ export class RemoteServer {
       });
       return;
     }
-    this.#serveStatic(url.pathname, response);
+    this.#serveStatic(url.pathname, response, request.headers["user-agent"]);
   }
 
   async #handleLogin(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -440,7 +454,7 @@ export class RemoteServer {
    * A path that resolves inside the root but names no file falls through to the client
    * entry, which is what lets the client own its own routes.
    */
-  #serveStatic(pathname: string, response: ServerResponse): void {
+  #serveStatic(pathname: string, response: ServerResponse, userAgent?: string): void {
     const root = this.#deps.webRoot;
     if (!root) {
       this.#json(response, 404, { error: "not found" });
@@ -452,7 +466,8 @@ export class RemoteServer {
     // to the client. Asking for it by name gets the client instead of a page that would
     // only white-screen.
     const desktopEntry = normalizePath(pathname) === "/index.html";
-    const requested = pathname === "/" || desktopEntry ? `/${CLIENT_ENTRY}` : pathname;
+    const home = prefersMobileEntry(userAgent) && existsSync(join(rootPath, MOBILE_ENTRY)) ? MOBILE_ENTRY : CLIENT_ENTRY;
+    const requested = pathname === "/" || desktopEntry ? `/${home}` : pathname;
     const candidate = resolve(join(rootPath, normalizePath(requested)));
     const inside = candidate === rootPath || candidate.startsWith(rootPath + sep);
     const file = inside && existsSync(candidate) && statSync(candidate).isFile() ? candidate : entry;

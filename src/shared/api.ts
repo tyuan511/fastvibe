@@ -212,6 +212,8 @@ export function createFastVibeApi(t: ApiTransport) {
       getState: (conversationId?: string): Promise<EngineSessionState> =>
         t.invoke(Ipc.engineGetState, { conversationId }),
       getRunning: (): Promise<string[]> => t.invoke(Ipc.engineGetRunning),
+      /** Every parked extension prompt across conversations, as its request event. */
+      getPendingUi: (): Promise<Array<Record<string, unknown>>> => t.invoke(Ipc.engineGetPendingUi),
       getModels: (conversationId?: string): Promise<FastVibeModel[]> =>
         t.invoke(Ipc.engineGetModels, { conversationId }),
       setModel: (provider: string, modelId: string, conversationId?: string): Promise<EngineSessionState> =>
@@ -333,8 +335,13 @@ export function createFastVibeApi(t: ApiTransport) {
     },
     conversations: {
       list: (): Promise<WorkspaceSnapshot> => t.invoke(Ipc.conversationsList),
-      create: (project?: string): Promise<ConversationOpenResult> =>
-        t.invoke(Ipc.conversationsCreate, { project }),
+      /**
+       * `activate: false` creates the chat without making it the engine's active one — the
+       * one every desktop window follows. The phone page uses it so 新对话 there does not
+       * pull the desktop onto an empty chat.
+       */
+      create: (project?: string, options?: { activate?: boolean }): Promise<ConversationOpenResult> =>
+        t.invoke(Ipc.conversationsCreate, options?.activate === false ? { project, activate: false } : { project }),
       open: (id: string): Promise<ConversationOpenResult> =>
         t.invoke(Ipc.conversationsOpen, { id }),
       rename: (id: string, title: string): Promise<WorkspaceSnapshot> =>
@@ -516,6 +523,14 @@ export function createFastVibeApi(t: ApiTransport) {
       setTunnel: (
         provider: import("@shared/ipc").RemoteTunnelProvider | null,
       ): Promise<import("@shared/ipc").RemoteServerState> => t.invoke(Ipc.remoteTunnelSet, { provider }),
+      /** The frp tunnel's settings, without the token (`hasToken` says whether one is saved). */
+      frpGet: (): Promise<import("@shared/frp").FrpSettingsView | null> => t.invoke(Ipc.remoteFrpGet),
+      /** Save them; restarts a running frp tunnel onto the new config. `token` absent keeps it. */
+      frpSet: (settings: import("@shared/frp").FrpSettingsInput): Promise<import("@shared/frp").FrpSettingsView | null> =>
+        t.invoke(Ipc.remoteFrpSet, settings),
+      /** Where `domain` resolves, compared with the frps server (`FrpDnsCheck`). */
+      frpCheckDns: (payload: { domain: string; serverAddr: string }): Promise<import("@shared/frp").FrpDnsCheck> =>
+        t.invoke(Ipc.remoteFrpCheckDns, payload),
       onState: (listener: (state: import("@shared/ipc").RemoteServerState) => void): (() => void) => t.subscribe(Ipc.remoteState, listener),
     },
     stats: {

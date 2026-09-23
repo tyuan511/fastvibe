@@ -131,6 +131,11 @@ test("the denied set is exactly what the UI explains, so a new denial cannot go 
     "providers:oauth-login",
     "providers:probe-gateway",
     "remote:clear-password",
+    // 设置 › 远程访问 renders 「只能在本机管理」 from a remote client, so the frp form
+    // these two serve is never on screen there.
+    "remote:frp-check-dns",
+    "remote:frp-get",
+    "remote:frp-set",
     "remote:get-state",
     "remote:list-devices",
     "remote:revoke-device",

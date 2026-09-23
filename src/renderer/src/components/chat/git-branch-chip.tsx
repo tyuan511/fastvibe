@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Add01Icon,
@@ -80,6 +81,7 @@ export function GitBranchChip({
       const next = await window.fastvibe.workspace.gitCheckout(cwd, branch);
       onBranchChange?.(next);
       setOpen(false);
+      toast.success(t("git.switched", { branch: next.branch ?? branch }));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : t("git.switchFailed"));
     } finally {
@@ -96,6 +98,7 @@ export function GitBranchChip({
       const next = await window.fastvibe.workspace.gitCreateBranch(cwd, name);
       onBranchChange?.(next);
       setOpen(false);
+      toast.success(t("git.created", { branch: next.branch ?? name }));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : t("git.createFailed"));
     } finally {

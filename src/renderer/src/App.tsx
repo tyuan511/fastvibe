@@ -87,7 +87,7 @@ import { parseCompactCommand } from "@shared/slash";
 import { conversationIdFromHash, conversationIdFromPath, conversationPath, workspacePath } from "@/lib/routes";
 import { useSidePaneStore } from "@/stores/side-pane";
 import { useAppShortcuts, useShortcutLabel } from "@/lib/use-shortcuts";
-import { archiveConversations, archivedIdList, useArchivedIds } from "@/stores/archive";
+import { archiveConversations, archivedIdList, restoreConversations, useArchivedIds } from "@/stores/archive";
 import { Ipc } from "@shared/ipc";
 import { blockedRemotely } from "@/lib/remote-unavailable";
 import { useStable } from "@/lib/use-stable";
@@ -1810,7 +1810,14 @@ export function App(): JSX.Element {
 
   async function handleArchiveSession(id: string): Promise<void> {
     const busy = useSessionStore.getState().running[id] === true;
+    const title = useSessionStore.getState().conversations.find((item) => item.id === id)?.title || t("workspace.newChat");
     archiveConversations(id);
+    // The row simply vanishes, so say where it went — and offer the way back, since a
+    // context-menu slip is the usual way a chat gets archived by accident.
+    toast.success(t("sidebar.archived", { title }), {
+      id: `archived:${id}`,
+      action: { label: t("sidebar.undo"), onClick: () => restoreConversations(id) },
+    });
     if (busy) {
       void (async () => {
         try {
@@ -1879,6 +1886,7 @@ export function App(): JSX.Element {
   }
 
   async function handleRemoveProject(cwd: string): Promise<void> {
+    const name = useSessionStore.getState().projects.find((item) => item.cwd === cwd)?.name ?? cwd;
     try {
       // The catalog drops the project's conversations with it; their panes go too.
       const doomed = useSessionStore.getState().conversations.filter((item) => item.project === cwd).map((item) => item.id);
@@ -1891,6 +1899,7 @@ export function App(): JSX.Element {
       useSidePaneStore.getState().forgetWidths(doomed);
       forgetFileTree(cwd);
       forgetSidebarProject(cwd);
+      toast.success(t("sidebar.projectRemoved", { name }));
       if (result.nextId) {
         applyOpen(await window.fastvibe.conversations.open(result.nextId));
         revealConversation(result.nextId, true);
@@ -2434,6 +2443,8 @@ export function App(): JSX.Element {
                       // the failure this whole feature exists to prevent.
                       if (result.skipped > 0) {
                         setError(t("rewind.partial", { count: result.skipped }));
+                      } else if (result.restored + result.removed > 0) {
+                        toast.success(t("rewind.restored", { count: result.restored + result.removed }));
                       }
                     } catch (err) {
                       setError(err instanceof Error ? err.message : String(err));

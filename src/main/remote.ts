@@ -12,11 +12,15 @@ import { passwordProblem } from "./server/auth";
 import { clearRemoteAccess, isConfigured, listDevices, revokeDevice, setPassword } from "./server/store";
 import { RemoteServer } from "./server/server";
 import { getAppServer } from "./app-server/runtime";
+import { readFrpSettings, saveFrpSettings, writeFrpcConfig } from "./server/frp-store";
+import { checkFrpDns } from "./server/frp-dns";
+import { frpProblems, frpPublicUrl, frpView, type FrpSettingsInput, type FrpSettingsView } from "@shared/frp";
 import {
   TunnelRunner,
   TUNNEL_OFF,
   isTunnelProvider,
   probeTunnelTools,
+  type TunnelOptions,
   type TunnelProvider,
 } from "./server/tunnel";
 
@@ -149,7 +153,30 @@ function announceFromServer(): void {
 function launchTunnel(port: number): void {
   const provider = readTunnelChoice();
   if (!provider) return;
-  void tunnelInstance().start(provider, port);
+  void tunnelInstance().start(provider, port, provider === "frp" ? frpOptions(port) : {});
+}
+
+/**
+ * Render `frpc.toml` for this start and work out the URL it will be reachable at.
+ *
+ * Rendered per start rather than per save because the local port is part of it, and the
+ * port is only certain once the server is listening. An absent or invalid config returns
+ * no options, which the runner turns into 「请先填写 frp 服务器配置」 in the pane rather
+ * than a frpc usage dump.
+ */
+function frpOptions(port: number): TunnelOptions {
+  const paths = getFastVibePaths();
+  const config = readFrpSettings(paths.frpFile);
+  if (!config || frpProblems(config).length > 0) return {};
+  const publicUrl = frpPublicUrl(config);
+  if (!publicUrl) return {};
+  try {
+    writeFrpcConfig(paths.frpcConfigFile, config, port);
+  } catch (error) {
+    log.error("frpc config write failed", error);
+    return {};
+  }
+  return { configFile: paths.frpcConfigFile, publicUrl };
 }
 
 export function registerRemoteIpc(): void {
@@ -218,6 +245,29 @@ export function registerRemoteIpc(): void {
   });
 
   handle(Ipc.remoteTunnelTools, (): Promise<RemoteTunnelTools> => probeTunnelTools());
+
+  handle(Ipc.remoteFrpGet, (): FrpSettingsView | null => frpView(readFrpSettings(getFastVibePaths().frpFile)));
+
+  handle(Ipc.remoteFrpCheckDns, (payload: { domain?: unknown; serverAddr?: unknown }) => checkFrpDns(payload ?? {}));
+
+  /**
+   * Save the frp settings, and put a running frp tunnel onto them.
+   *
+   * A restart only when frp is the tunnel in use and the server is up: saving the form
+   * while cloudflared runs must not take that tunnel down, and with the server off there
+   * is nothing to publish yet — `remote:start` renders the new config when it happens.
+   */
+  handle(Ipc.remoteFrpSet, async (payload: FrpSettingsInput): Promise<FrpSettingsView | null> => {
+    if (!payload || typeof payload !== "object") throw new Error("frp 配置无效");
+    const saved = saveFrpSettings(getFastVibePaths().frpFile, payload);
+    const status = instance().status;
+    if (readTunnelChoice() === "frp" && status.running && status.port !== null) {
+      await tunnelInstance().stop();
+      launchTunnel(status.port);
+      announce();
+    }
+    return frpView(saved);
+  });
 
   /**
    * Pick the tunnel, or none.

@@ -42,7 +42,8 @@
   "description": "The last turn changed {{count}} files. Rewinding restores the workspace to its state before that turn; any edits you made by hand since are lost too.",
   "revert": "Rewind and retry",
   "keep": "Keep the file changes",
-  "partial": "{{count}} files could not be rewound (binary, too large, or untracked by git)"
+  "partial": "{{count}} files could not be rewound (binary, too large, or untracked by git)",
+  "restored": "Reverted {{count}} files"
  },
  "composer": {
   "ready": "Ask anything",
@@ -124,7 +125,10 @@
   "removeProjectTitle": "Remove this project from the list?",
   "removeProjectDesc": "Chats under “{{name}}” will leave the list. Files on disk are not deleted.",
   "cancel": "Cancel",
-  "removeAction": "Remove"
+  "removeAction": "Remove",
+  "archived": "Archived \"{{title}}\"",
+  "undo": "Undo",
+  "projectRemoved": "Removed project {{name}}"
  },
  "projectDialog": {
   "title": "Add project",
@@ -184,5 +188,36 @@
   "maximize": "Maximize",
   "restore": "Restore",
   "close": "Close"
+ },
+ "mobile": {
+  "newChat": "New chat",
+  "search": "Search chats",
+  "allProjects": "All",
+  "noProject": "No project",
+  "empty": "No chats yet",
+  "emptyHint": "Tap + in the top right to start one",
+  "noMatch": "No matching chats",
+  "sectionWaiting": "Needs you",
+  "sectionRunning": "Running",
+  "sectionRecent": "Recent",
+  "back": "Back",
+  "waiting": "Waiting",
+  "placeholder": "Message FastVibe",
+  "placeholderQueue": "Queue a message for when this turn ends",
+  "needModel": "No model is available yet — add one on the desktop",
+  "send": "Send",
+  "stop": "Stop",
+  "continue": "Continue",
+  "queued": "{{count}} queued",
+  "queuePaused": "Queue paused",
+  "resumeQueue": "Resume",
+  "removeQueued": "Remove",
+  "loadFailed": "Couldn't load this chat: {{message}}",
+  "sendFailed": "Couldn't send: {{message}}",
+  "project": "Project",
+  "newChatHint": "The new chat runs on this computer without switching the chat open on its screen.",
+  "emptyChat": "No messages yet",
+  "model": "Model",
+  "untitled": "New chat"
  }
 }

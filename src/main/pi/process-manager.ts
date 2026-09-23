@@ -137,6 +137,7 @@ import { isAbortOutcome } from "@shared/abort";
 import { McpManager, type McpServerConfig, type McpServerStatus } from "./mcp-manager";
 import { assistantErrorSummary, finalAssistantErrorSummary } from "./assistant-error-summary";
 import { SkillManager } from "./skill-manager";
+import type { AppConfigHostRequest, AppConfigHostResult } from "@shared/app-config";
 import { builtinExtensionFile, builtinExtensionPaths, builtinSkillPaths, ExtensionManager } from "./extension-manager";
 import { bindBrowserConversation, bindComputerConversation } from "./conversation-binding";
 import { createTuiWidget, renderExtensionMessage, renderTuiComponent, type TuiComponent } from "./tui-bridge";
@@ -159,6 +160,8 @@ type FastVibeExtensionUIContext = ExtensionUIContext & {
   bindWorktree(path: string): Promise<WorktreeHostResult>;
   unbindWorktree(options?: { remove?: boolean }): Promise<{ cwd: string }>;
   listWorktrees(): Promise<GitWorktreeInfo[]>;
+  /** FastVibe's own settings, for the built-in `app-config` extension (`src/main/app-config.ts`). */
+  appConfig(request: AppConfigHostRequest): Promise<AppConfigHostResult>;
 };
 
 type ConversationSearchHostRequest = ConversationTranscriptSearchRequest & {
@@ -500,6 +503,12 @@ const SESSION_IDLE_MS = 15 * 60_000;
 const SESSION_SWEEP_MS = 60_000;
 const MAX_RESIDENT_SESSIONS = 8;
 
+/** A host's view of which background conversations some client is watching live. */
+export type StreamWatch = {
+  isWatched(conversationId: string): boolean;
+  publish(event: Record<string, unknown>): void;
+};
+
 /** Host adapter backed by pi-coding-agent. It keeps one AgentSession per conversation in one Node process. */
 export class PiProcessManager {
   #paths: FastVibePaths;
@@ -514,6 +523,11 @@ export class PiProcessManager {
   #statusListeners = new Set<(status: EngineStatus) => void>();
   #workspaceListeners = new Set<(snapshot: WorkspaceSnapshot) => void>();
   #eventListeners = new Set<(event: Record<string, unknown>) => void>();
+  /**
+   * Who is watching a conversation that is not the active one (see `setStreamWatch`).
+   * Null until a host wires it: the headless Agent and tests keep the old behaviour.
+   */
+  #streamWatch: StreamWatch | null = null;
   #readyListeners = new Set<(payload: ConversationReadyEvent) => void>();
   #runtime: ModelRuntime | null = null;
   #models: ModelRegistry | null = null;
@@ -649,6 +663,7 @@ export class PiProcessManager {
   #interruptMode: "immediate" | "wait" = "immediate";
   #mcp: McpManager;
   #skills: SkillManager;
+  #appConfigHost: ((request: AppConfigHostRequest) => Promise<AppConfigHostResult>) | null = null;
   /** pi package installs (extensions), kept in the isolated agentDir. */
   #extensions: ExtensionManager;
   #subagentManager: SubagentManager;
@@ -764,6 +779,35 @@ export class PiProcessManager {
   /** The conversation/project catalog moved: a chat created, renamed, deleted, opened. */
   onWorkspaceChange(listener: (snapshot: WorkspaceSnapshot) => void): () => void { this.#workspaceListeners.add(listener); return () => this.#workspaceListeners.delete(listener); }
   onEvent(listener: (event: Record<string, unknown>) => void): () => void { this.#eventListeners.add(listener); return () => this.#eventListeners.delete(listener); }
+  /**
+   * Deliver a background conversation's live stream to whoever asked for it by name.
+   *
+   * A streamed payload is forwarded to `onEvent` only for the engine's active
+   * conversation — the one chat every desktop window follows. That filter is why a
+   * second client had to *open* a chat (and move every window onto it) just to watch a
+   * reply arrive. With a watch installed, a background payload is handed to `publish`
+   * whenever `isWatched` says some client subscribed to that conversation's scope; the
+   * host publishes it to those subscribers only, so a desktop window never receives a
+   * token stream for a chat it is not showing.
+   */
+  setStreamWatch(watch: StreamWatch | null): void {
+    this.#streamWatch = watch;
+  }
+  /**
+   * Where the `fastvibe_config_*` tools land. Injected rather than imported because the
+   * actions dispatch into the desktop's call table, which an SSH Agent runtime (the same
+   * engine, no Electron) does not have — there the tools answer "not available".
+   */
+  setAppConfigHost(host: ((request: AppConfigHostRequest) => Promise<AppConfigHostResult>) | null): void {
+    this.#appConfigHost = host;
+  }
+  /** Stamp and hand one background event to the stream watch, if its chat is watched. */
+  #publishWatched(conversationId: string, event: Record<string, unknown>): void {
+    const watch = this.#streamWatch;
+    if (!watch || !watch.isWatched(conversationId)) return;
+    this.#stamp(event);
+    watch.publish(event);
+  }
   onConversationReady(listener: (payload: ConversationReadyEvent) => void): () => void { this.#readyListeners.add(listener); return () => this.#readyListeners.delete(listener); }
   onOAuthEvent(listener: (payload: OAuthEventPayload) => void): () => void { this.#oauthListeners.add(listener); return () => this.#oauthListeners.delete(listener); }
 
@@ -1618,15 +1662,24 @@ export class PiProcessManager {
   }
   async newSession(): Promise<void> { await (await this.#active()).abort(); }
 
-  async createConversation(project?: string): Promise<ConversationOpenResult> {
+  async createConversation(project?: string, options?: { activate?: boolean }): Promise<ConversationOpenResult> {
       // An unfinished chat is the project's composer workspace. Keep it around when
       // the user opens another chat, and reuse it instead of creating a second empty
       // session for the same project. The old global cleanup deleted the only place
       // where a long prompt (and its model choices) could live before Send.
+      const activate = options?.activate !== false;
       const existing = this.#catalog.findEmpty(project);
-      if (existing) return this.openConversation(existing.id);
-      const conversation = this.#catalog.create(project);
-      return this.#openFresh(conversation);
+      if (existing && activate) return this.openConversation(existing.id);
+      const conversation = existing ?? this.#catalog.create(project, undefined, { activate });
+      if (activate) return this.#openFresh(conversation);
+      // The phone page's 新对话. The engine's active id is one value every desktop window
+      // follows, so a chat started on the phone must not move it: the desktop would jump
+      // to an empty chat it never asked for. Every call on it carries its own id instead.
+      await this.#ensureReady();
+      const managed = await this.#ensureSession(conversation);
+      const state = this.#state(managed.session, conversation.id);
+      const updated = this.#catalog.update(conversation.id, { sessionFile: state.sessionFile, sessionId: state.sessionId }) ?? conversation;
+      return this.#opened(updated, this.#messages(managed.session, conversation.id), state);
   }
 
   async openConversation(id: string): Promise<ConversationOpenResult> {
@@ -2119,6 +2172,17 @@ export class PiProcessManager {
   /** Conversation ids with work in flight (a run or a compaction), for the sidebar's indicators. */
   getRunningConversations(): string[] {
     return [...new Set([...this.#running.keys(), ...this.#compacting.keys()])].filter((id) => this.#busy(id));
+  }
+  /**
+   * Every prompt parked waiting for a human, in every conversation, as the
+   * `extension_ui_request` events that announced them.
+   *
+   * `getRunning` answers which chats are busy; this answers which of them are stuck on
+   * a question — what a client that connected after the prompt was raised needs to draw
+   * 等你 on its list without reading every running chat's whole transcript.
+   */
+  getPendingUi(): Array<Record<string, unknown>> {
+    return [...this.#pendingUi.values()].map((pending) => pending.request);
   }
   /**
    * Whether a conversation is still working: a run in flight, or a compaction.
@@ -2967,8 +3031,13 @@ export class PiProcessManager {
           // object reached message_end and its transcript entry exists and was flushed.
           // A crash between those writes leaves a paused uncertainty, never silent loss.
           if (entry && persisted) this.#queuedMessageDelivered(conversation.id, userMessage as object);
-          if (this.#activeId !== conversation.id && conversation.kind !== "side-chat") return;
-          if (entry) this.#emit({ type: "user_message_persisted", conversationId: conversation.id, entryId: entry.id });
+          if (!entry) return;
+          const persistedEvent = { type: "user_message_persisted", conversationId: conversation.id, entryId: entry.id };
+          if (this.#activeId !== conversation.id && conversation.kind !== "side-chat") {
+            this.#publishWatched(conversation.id, persistedEvent);
+            return;
+          }
+          this.#emit(persistedEvent);
         });
       }
       const payload: Record<string, unknown> = {
@@ -2997,6 +3066,7 @@ export class PiProcessManager {
         this.#emit(payload);
         return;
       }
+      this.#publishWatched(conversation.id, payload);
       // A settled run in a background chat is the one moment the user cannot see for
       // themselves, so it is reported — as `completed` or `failed`, the same
       // `#interruptedRuns` verdict that decides whether the queued work may drain. A run
@@ -4104,6 +4174,8 @@ export class PiProcessManager {
       bindWorktree: (path) => this.#hostBindWorktree(conversationId, path),
       unbindWorktree: (options) => this.#hostUnbindWorktree(conversationId, options),
       listWorktrees: () => this.#listGitWorktrees(conversationId),
+      appConfig: (request) =>
+        this.#appConfigHost ? this.#appConfigHost(request) : Promise.resolve({ ok: false, error: uiText("当前宿主不支持修改 FastVibe 设置", "This host cannot change FastVibe settings") }),
       // 需求批准 has no timeout of its own, and an unanswered prompt parks the tool (and
       // the run's settle) forever. A generous default keeps a background chat from
       // hanging for the rest of the session while still leaving the user time to answer

@@ -22,6 +22,8 @@ export const BUILTIN_EXTENSIONS: Array<{ source: string; file: string }> = [
   { source: "fastvibe:web-search", file: "web-search.ts" },
   { source: "fastvibe:conversation-search", file: "conversation-search.ts" },
   { source: "fastvibe:worktree", file: "worktree.ts" },
+  { source: "fastvibe:batch-decide", file: "batch-decide.ts" },
+  { source: "fastvibe:app-config", file: "app-config.ts" },
   { source: "fastvibe:subagent-team", file: "subagent/index.ts" },
 ];
 
@@ -44,7 +46,7 @@ function resourcesRoot(): string {
 }
 
 /** Built-in skills, by directory name under `resources/skills`. */
-const BUILTIN_SKILLS = ["browser-use", "computer-use"];
+const BUILTIN_SKILLS = ["browser-use", "computer-use", "fastvibe-setup"];
 
 export function builtinSkillPaths(): string[] {
   const dir = join(resourcesRoot(), "skills");

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
-  Alert01Icon,
   CheckmarkCircle02Icon,
   ImportIcon,
   RefreshIcon,
@@ -58,16 +58,14 @@ export function ImportSettings({
   const { t } = useTranslation("settings");
   const [sources, setSources] = useState<ImportSourceStatus[] | null>(null);
   const [scanning, setScanning] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [active, setActive] = useState<ImportSourceStatus | null>(null);
 
   const refresh = useCallback(async (): Promise<void> => {
     setScanning(true);
     try {
       setSources(await window.fastvibe.engine.importSources());
-      setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("import.scanFailed"));
+      toast.error(err instanceof Error ? err.message : t("import.scanFailed"));
       setSources([]);
     } finally {
       setScanning(false);
@@ -112,12 +110,6 @@ export function ImportSettings({
             </IconButton>
           </div>
 
-          {error ? (
-            <p className="flex items-start gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-              <HugeiconsIcon strokeWidth={2} icon={Alert01Icon} className="mt-0.5 size-3.5 shrink-0" />
-              {error}
-            </p>
-          ) : null}
 
           {/* 
             * The list is only drawn when it has rows: every source FastVibe knows about
@@ -218,7 +210,6 @@ function ImportPickerDialog({
   const [showArchived, setShowArchived] = useState(false);
   const [running, setRunning] = useState(false);
   const [outcomes, setOutcomes] = useState<ImportOutcome[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -230,7 +221,7 @@ function ImportPickerDialog({
       .catch((err: unknown) => {
         if (cancelled) return;
         setCandidates([]);
-        setError(err instanceof Error ? err.message : t("import.listFailed"));
+        toast.error(err instanceof Error ? err.message : t("import.listFailed"));
       });
     return () => {
       cancelled = true;
@@ -292,7 +283,6 @@ function ImportPickerDialog({
   async function run(): Promise<void> {
     if (selected.size === 0) return;
     setRunning(true);
-    setError(null);
     try {
       const result = await window.fastvibe.engine.importSessions(source.id, [...selected]);
       setOutcomes(result.outcomes);
@@ -306,7 +296,7 @@ function ImportPickerDialog({
       );
       onImported(result.snapshot, result);
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("import.runFailed"));
+      toast.error(err instanceof Error ? err.message : t("import.runFailed"));
     } finally {
       setRunning(false);
     }
@@ -419,12 +409,6 @@ function ImportPickerDialog({
           </div>
         )}
 
-        {error ? (
-          <p className="flex items-start gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-            <HugeiconsIcon strokeWidth={2} icon={Alert01Icon} className="mt-0.5 size-3.5 shrink-0" />
-            {error}
-          </p>
-        ) : null}
 
         {/* 取消 and 导入 split the row evenly — both carry `flex-1`, so they always take
             an equal share of the footer whatever else is in it. `sm:flex-1` rather than

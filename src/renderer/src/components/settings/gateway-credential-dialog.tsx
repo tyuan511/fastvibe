@@ -1,5 +1,6 @@
 import { useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Loading03Icon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
@@ -44,12 +45,10 @@ export function GatewayCredentialDialog({
   const [accessToken, setAccessToken] = useState("");
   const [userId, setUserId] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   async function save(clear = false): Promise<void> {
     if (!provider) return;
     setBusy(true);
-    setError(null);
     try {
       await window.fastvibe.providers.setGatewayCredentials({
         id: provider.id,
@@ -61,7 +60,7 @@ export function GatewayCredentialDialog({
       onSaved();
       onClose();
     } catch (err) {
-      setError(cleanError(err));
+      toast.error(cleanError(err));
     } finally {
       setBusy(false);
     }
@@ -74,7 +73,6 @@ export function GatewayCredentialDialog({
         if (!open) {
           setAccessToken("");
           setUserId("");
-          setError(null);
           onClose();
         }
       }}
@@ -114,7 +112,6 @@ export function GatewayCredentialDialog({
           {/* Where to get the two values; the panel calls it 系统访问令牌 and hides it in 个人设置. */}
           <p className="text-xs text-muted-foreground">{t("providers.gatewayCredentialHintWhere")}</p>
         </div>
-        {error ? <p className="text-xs text-destructive">{error}</p> : null}
         <DialogFooter className="gap-2">
           {provider?.gatewayCredential ? (
             <Button variant="outline" disabled={busy} onClick={() => void save(true)}>

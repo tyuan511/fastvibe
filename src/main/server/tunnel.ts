@@ -24,7 +24,18 @@ import { delimiter, join } from "node:path";
  * `src/main/remote.ts`.
  */
 
-export type TunnelProvider = "cloudflared" | "ngrok";
+export type TunnelProvider = "cloudflared" | "ngrok" | "frp";
+
+/**
+ * What a run needs beyond the port, for a provider that is configured rather than
+ * discovered. Only frp has any: the config file `frpc` reads, and the public URL, which
+ * frpc never prints (it depends on how the *server* was set up) and is therefore worked
+ * out from the config before the run instead of read out of its output.
+ */
+export type TunnelOptions = {
+  configFile?: string;
+  publicUrl?: string;
+};
 
 /**
  * `off` → nothing running. `starting` → the process is up but has not printed a URL
@@ -79,7 +90,7 @@ export type TunnelToolInfo = {
 
 export type TunnelTools = Record<TunnelProvider, TunnelToolInfo>;
 
-export const TUNNEL_PROVIDERS: readonly TunnelProvider[] = ["cloudflared", "ngrok"];
+export const TUNNEL_PROVIDERS: readonly TunnelProvider[] = ["cloudflared", "ngrok", "frp"];
 
 /** The status of a runner that has never been asked to do anything. */
 export const TUNNEL_OFF: TunnelStatus = {
@@ -125,9 +136,16 @@ type ProviderSpec = {
   /** The binary's name, as each project's own install instructions spell it. */
   command: string;
   /** Arguments that publish `port` and keep the output parseable. */
-  args: (port: number) => string[];
+  args: (port: number, options: TunnelOptions) => string[];
   /** The public URL in one line of output, or null. */
-  url: (line: string) => string | null;
+  url: (line: string, options: TunnelOptions) => string | null;
+  /**
+   * Why this run cannot start with the options it was given, or null.
+   *
+   * A configured provider with no configuration would otherwise spawn, fail to parse
+   * nothing, and quote the tool's usage text back at the user.
+   */
+  unconfigured?: (options: TunnelOptions) => string | null;
   /** A line worth quoting back as the reason it failed, or null. */
   problem: (line: string) => string | null;
   /**
@@ -197,7 +215,95 @@ const PROVIDERS: Record<TunnelProvider, ProviderSpec> = {
       missing: "ngrok \u8fd8\u6ca1\u6709\u914d\u7f6e authtoken\uff0c\u672a\u8ba4\u8bc1\u65f6\u5b83\u4e0d\u4f1a\u5efa\u7acb\u96a7\u9053",
     },
   },
+
+  /**
+   * The user's own frps, dialled by `frpc -c <file>`.
+   *
+   * The config is written by `remote.ts` from 远程访问 → 内网穿透 (the token lives in
+   * `frp.json`, never in `settings.json`), so all this side passes is the path. The URL
+   * is not in the output at all — frpc says a proxy was registered, not where it can be
+   * reached — so `start proxy success` is the "online" signal and the address is the one
+   * derived from the config.
+   */
+  frp: {
+    command: "frpc",
+    args: (_port, options) => ["-c", options.configFile ?? ""],
+    url: (line, options) => (options.publicUrl && frpOnline(line) ? options.publicUrl : null),
+    problem: (line) => (/\[(?:E|W)\]|\berror\b|failed/i.test(line) ? line : null),
+    fatal: frpFatal,
+    unconfigured: (options) =>
+      options.configFile && options.publicUrl
+        ? null
+        : "\u8bf7\u5148\u586b\u5199 frp \u670d\u52a1\u5668\u914d\u7f6e",
+  },
 };
+
+/** frpc's line for a proxy frps accepted: `[fastvibe-ab12cd] start proxy success`. */
+function frpOnline(line: string): boolean {
+  return /start proxy success/i.test(line);
+}
+
+/**
+ * frpc lines that mean this run is over.
+ *
+ * A refused proxy (`start error: port already used`, `router config conflict`, a domain
+ * frps does not allow) is retried by frpc every so often, forever, with the same answer;
+ * a refused token exits by itself only because the config sets `loginFailExit`. Both are
+ * a fix the user has to make on one side or the other, so both end the run with frpc's
+ * own words. A connection refused or a timeout is *not* here: frps restarting is the
+ * normal case of that, and frpc recovering from it is the behaviour we want.
+ *
+ * Exported for its test, like `authtokenInConfig`: it is matching someone else's prose.
+ */
+export function frpFatal(line: string): Failure | null {
+  const unreachable = frpUnreachable(line);
+  if (unreachable) return { message: unreachable, needsAuth: false };
+  if (/token in login doesn't match|authorization failed|invalid token/i.test(line)) {
+    return { message: "frp \u8ba4\u8bc1\u5931\u8d25\uff1atoken \u4e0e frps \u7684 auth.token \u4e0d\u4e00\u81f4", needsAuth: false };
+  }
+  const refused = line.match(/start error:\s*(.+)$/i);
+  if (refused) {
+    return { message: `frps \u62d2\u7edd\u4e86\u8fd9\u4e2a\u4ee3\u7406\uff1a${refused[1].trim()}`, needsAuth: false };
+  }
+  return null;
+}
+
+/**
+ * The first login never reached frps — the one failure the user has to fix outside
+ * both FastVibe and frpc.
+ *
+ * Only the *login* line: `loginFailExit` makes frpc exit on it anyway, so this changes
+ * the sentence, not the outcome. A dropped connection later (`connect to server error`)
+ * is still frps restarting, which frpc rides out.
+ *
+ * The sentence is the point. A timeout is packets dropped on the way — on a cloud server
+ * almost always the provider's security group, which nothing on this machine or on the
+ * server can open — so it names the port and sends the user to the console for it,
+ * instead of quoting `i/o timeout` and leaving them (or an agent) to route around it
+ * with another port or another tunnel. A refusal is the port answering with nobody
+ * behind it: frps is down or listens elsewhere, or a host firewall rejects.
+ */
+function frpUnreachable(line: string): string | null {
+  if (!/login to (?:the )?server failed/i.test(line)) return null;
+  const target = line.match(/dial tcp (\S+?):\s/i)?.[1] ?? "";
+  const port = target.match(/:(\d+)$/)?.[1] ?? "";
+  const where = target ? `\uff08${target}\uff09` : "";
+  if (/i\/o timeout|timed out|no route to host/i.test(line)) {
+    return (
+      `\u8fde\u4e0d\u4e0a frps \u670d\u52a1\u5668${where}\uff1a\u8fde\u63a5\u8d85\u65f6\u3002` +
+      `\u670d\u52a1\u5668\u4e0a frps \u5728\u8fd0\u884c\u7684\u8bdd\uff0c\u51e0\u4e4e\u4e00\u5b9a\u662f\u4e91\u5382\u5546\u7684\u5b89\u5168\u7ec4\u6216\u670d\u52a1\u5668\u9632\u706b\u5899\u6ca1\u6709\u653e\u884c` +
+      (port ? ` TCP ${port}` : "\u8fd9\u4e2a\u7aef\u53e3") +
+      `\u3002\u8bf7\u5230\u4e91\u670d\u52a1\u5668\u63a7\u5236\u53f0\u7684\u5b89\u5168\u7ec4\u91cc\u6dfb\u52a0\u5165\u65b9\u5411\u89c4\u5219\u653e\u884c\u5b83\uff0c\u7136\u540e\u91cd\u8bd5\u3002`
+    );
+  }
+  if (/connection refused/i.test(line)) {
+    return (
+      `frps \u670d\u52a1\u5668${where}\u62d2\u7edd\u4e86\u8fde\u63a5\uff1a\u8fd9\u4e2a\u7aef\u53e3\u4e0a\u6ca1\u6709\u7a0b\u5e8f\u5728\u76d1\u542c\u3002` +
+      `\u8bf7\u786e\u8ba4 frps \u5df2\u542f\u52a8\u3001bindPort \u4e0e\u8fd9\u91cc\u586b\u7684\u7aef\u53e3\u4e00\u81f4\uff0c\u6216\u670d\u52a1\u5668\u9632\u706b\u5899\u6ca1\u6709\u62d2\u7edd\u8fd9\u4e2a\u7aef\u53e3\u3002`
+    );
+  }
+  return null;
+}
 
 function firstMatch(line: string, pattern: RegExp): string | null {
   return line.match(pattern)?.[0] ?? null;
@@ -355,7 +461,7 @@ export type TunnelDeps = {
    * of output — is the code that actually has bugs, and it is the same code in a test as
    * in the app.
    */
-  launch?: (provider: TunnelProvider, port: number) => ChildProcess;
+  launch?: (provider: TunnelProvider, port: number, options: TunnelOptions) => ChildProcess;
   /**
    * Answer the credential question instead of inspecting this machine.
    *
@@ -409,11 +515,14 @@ export class TunnelRunner {
    * in the pushed status next to the phase, not in a rejected promise that only one of
    * the two callers is in a position to catch.
    */
-  async start(provider: TunnelProvider, port: number): Promise<TunnelStatus> {
+  async start(provider: TunnelProvider, port: number, options: TunnelOptions = {}): Promise<TunnelStatus> {
     await this.stop();
     const spec = PROVIDERS[provider];
     const run = ++this.#run;
     this.#set({ provider, phase: "starting", url: null, error: null, output: [], needsAuth: false });
+
+    const unconfigured = spec.unconfigured?.(options) ?? null;
+    if (unconfigured) return this.#fail(run, unconfigured);
 
     /*
      * Refuse before spawning, when the tool already tells us it cannot work.
@@ -439,8 +548,8 @@ export class TunnelRunner {
     let child: ChildProcess;
     try {
       child = this.#deps.launch
-        ? this.#deps.launch(provider, port)
-        : spawn(resolveOrThrow(spec.command), spec.args(port), {
+        ? this.#deps.launch(provider, port, options)
+        : spawn(resolveOrThrow(spec.command), spec.args(port, options), {
             stdio: ["ignore", "pipe", "pipe"],
             // No shell: the port is the only thing interpolated and it is a number, but
             // a shell here would also mean the user's rc files decide what runs.
@@ -457,7 +566,7 @@ export class TunnelRunner {
 
     child.stdout?.setEncoding("utf8");
     child.stderr?.setEncoding("utf8");
-    const read = (chunk: string): void => this.#consume(run, spec, String(chunk));
+    const read = (chunk: string): void => this.#consume(run, spec, options, String(chunk));
     child.stdout?.on("data", read);
     child.stderr?.on("data", read);
 
@@ -544,7 +653,7 @@ export class TunnelRunner {
 
   // ---------------------------------------------------------------- internals
 
-  #consume(run: number, spec: ProviderSpec, chunk: string): void {
+  #consume(run: number, spec: ProviderSpec, options: TunnelOptions, chunk: string): void {
     if (run !== this.#run) return;
     const lines = chunk.split(/\r?\n/).filter((line) => line.trim().length > 0);
     if (lines.length === 0) return;
@@ -554,7 +663,7 @@ export class TunnelRunner {
     let url: string | null = null;
     let fatal: Failure | null = null;
     for (const line of lines) {
-      url = spec.url(line) ?? url;
+      url = spec.url(line, options) ?? url;
       fatal = fatal ?? spec.fatal?.(line) ?? null;
     }
 

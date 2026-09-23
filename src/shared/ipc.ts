@@ -59,6 +59,8 @@ export const Ipc = {
   engineGetMessagesSince: "engine:get-messages-since",
   /** Transcript + the turn in flight, read at one instant (`ConversationSnapshot`). */
   engineGetSnapshot: "engine:get-snapshot",
+  /** Every parked extension prompt, across conversations (`getPendingUi`). */
+  engineGetPendingUi: "engine:get-pending-ui",
   engineGetStats: "engine:get-stats",
   engineSetSteering: "engine:set-steering",
   engineSetFollowUp: "engine:set-follow-up",
@@ -240,6 +242,11 @@ export const Ipc = {
   /** 内网穿透: which tunnel binaries this machine has, and which one to run. */
   remoteTunnelTools: "remote:tunnel-tools",
   remoteTunnelSet: "remote:tunnel-set",
+  /** The self-hosted frp tunnel's settings (token redacted), and saving them. */
+  remoteFrpGet: "remote:frp-get",
+  remoteFrpSet: "remote:frp-set",
+  /** Look an frp domain up and compare it with the frps server's address. */
+  remoteFrpCheckDns: "remote:frp-check-dns",
   /** Pushed when the server starts, stops, gains a client, or the tunnel changes phase. */
   remoteState: "remote:state",
 } as const;
@@ -350,7 +357,7 @@ export type StartRequest = {
  * `url` is the address to hand a phone. `error` → `error` says why, and `output` holds
  * the tail of what the tool itself said about it.
  */
-export type RemoteTunnelProvider = "cloudflared" | "ngrok";
+export type RemoteTunnelProvider = "cloudflared" | "ngrok" | "frp";
 export type RemoteTunnelPhase = "off" | "starting" | "online" | "error";
 
 export type RemoteTunnelState = {

@@ -1,5 +1,6 @@
 import { useEffect, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Download01Icon, RefreshIcon, RotateCcwIcon } from "@hugeicons/core-free-icons";
 import { AppLogo } from "@/components/app-logo";
@@ -27,12 +28,9 @@ export function AboutSettings(): JSX.Element {
   const reset = useSettingsStore((state) => state.reset);
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [updating, setUpdating] = useState(false);
-  const [error, setError] = useState("");
   const [exporting, setExporting] = useState(false);
-  const [exportError, setExportError] = useState("");
   const [exportedPath, setExportedPath] = useState("");
   const [resetting, setResetting] = useState(false);
-  const [resetError, setResetError] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -57,12 +55,12 @@ export function AboutSettings(): JSX.Element {
 
   async function updateModelsDev(): Promise<void> {
     setUpdating(true);
-    setError("");
     try {
       const modelsDev = await window.fastvibe.app.updateModelsDev();
       setInfo((prev) => (prev ? { ...prev, modelsDev } : prev));
+      toast.success(t("about.updated"));
     } catch (err) {
-      setError(cleanError(err));
+      toast.error(cleanError(err));
     } finally {
       setUpdating(false);
     }
@@ -72,12 +70,11 @@ export function AboutSettings(): JSX.Element {
     // The zip lands in the host's downloads, where a remote caller cannot get at it.
     if (blockedRemotely(Ipc.appExportLogs)) return;
     setExporting(true);
-    setExportError("");
     try {
       const path = await window.fastvibe.app.exportLogs();
       if (path) setExportedPath(path);
     } catch (err) {
-      setExportError(cleanError(err) || t("about.exportFailed"));
+      toast.error(cleanError(err) || t("about.exportFailed"));
     } finally {
       setExporting(false);
     }
@@ -112,7 +109,6 @@ export function AboutSettings(): JSX.Element {
                 : t("about.missing")}
               <span className="mt-0.5 block">{t("about.autoRefresh")}</span>
               {/* The failure replaces nothing: the counts above are still the ones in use. */}
-              {error ? <span className="mt-0.5 block text-destructive">{error}</span> : null}
             </>
           }
           control={
@@ -156,7 +152,6 @@ export function AboutSettings(): JSX.Element {
           description={
             <>
               {t("about.exportLogsDesc")}
-              {exportError ? <span className="mt-0.5 block text-destructive">{exportError}</span> : null}
               {exportedPath ? (
                 <span className="mt-0.5 block break-all font-mono">{t("about.exported", { path: exportedPath })}</span>
               ) : null}
@@ -171,12 +166,11 @@ export function AboutSettings(): JSX.Element {
         />
         <SettingsRow
           title={t("about.reset")}
-          description={<>{t("about.resetDesc")}{resetError && <span role="alert" className="mt-0.5 block text-destructive">{resetError}</span>}</>}
+          description={<>{t("about.resetDesc")}</>}
           control={
             <Button variant="outline" size="xs" disabled={resetting} onClick={() => {
               setResetting(true);
-              setResetError("");
-              void reset().catch((error) => setResetError(cleanError(error))).finally(() => setResetting(false));
+              void reset().catch((error) => toast.error(cleanError(error))).finally(() => setResetting(false));
             }}>
               <HugeiconsIcon strokeWidth={2} icon={RotateCcwIcon} />
               {t("about.resetAction")}

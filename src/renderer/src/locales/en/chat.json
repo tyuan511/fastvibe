@@ -128,7 +128,9 @@
     "branches": "Branches",
     "loading": "Reading branches…",
     "none": "No matching branches",
-    "createNew": "Create and check out a new branch…"
+    "createNew": "Create and check out a new branch…",
+    "switched": "Switched to branch {{branch}}",
+    "created": "Created and checked out branch {{branch}}"
   },
   "plan": {
     "label": "Plan mode",

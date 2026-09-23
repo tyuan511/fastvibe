@@ -78,7 +78,17 @@ export class PermissionDenied extends Error {
   }
 }
 
-async function backendFor(config: DecisionModelConfig): Promise<DecisionBackend | string> {
+/**
+ * Put a controller under 决策引擎's revocation: switching the model off or clearing its
+ * key aborts it like a running task. Returns the release to call when the work ends.
+ */
+export function trackDecisionWork(stop: AbortController): () => void {
+  running.add(stop);
+  return () => running.delete(stop);
+}
+
+/** The backend the saved config selects, or the sentence explaining why there is none. */
+export async function backendFor(config: DecisionModelConfig): Promise<DecisionBackend | string> {
   if (config.kind === "jev") {
     const key = (await loadProviderKeys(getFastVibePaths()))[JEV_KEY_ENV];
     if (!key) return uiText("还没有配置 Jev API key（设置 → 决策引擎）", "No Jev API key is configured (Settings → Decision engine)");

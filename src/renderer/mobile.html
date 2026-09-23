@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <!--
+      The phone page. Same bridge and gate as remote.html; a different app behind them.
+      Same policy as the desktop page, with the two differences a browser needs:
+      `font-src` admits the `data:` faces the CSS pipeline inlines (KaTeX's smallest
+      cuts land under Vite's inline limit), and `connect-src` admits the WebSocket this
+      client talks to Main over. `fastvibe-icon:` is left out because that scheme is an
+      Electron protocol handler that does not exist here; the file icons come from
+      `/file-icon/` on this origin instead, which `img-src 'self'` already covers.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: http:; font-src 'self' data:; connect-src 'self' ws: wss:"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
+    <meta name="color-scheme" content="light dark" />
+    <!-- Added to the home screen, the page opens without Safari's chrome: the closest a
+         web page gets to an app, and the address bar is the first thing a phone wastes. -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="FastVibe" />
+    <link rel="apple-touch-icon" href="/icon.png" />
+    <link rel="icon" type="image/png" href="/icon-light.png" media="(prefers-color-scheme: light)" />
+    <link rel="icon" type="image/png" href="/icon-dark.png" media="(prefers-color-scheme: dark)" />
+    <link rel="icon" type="image/png" href="/icon.png" />
+    <title>FastVibe</title>
+    <!-- The gate, shared with remote.html. Linked rather than part of the app stylesheet:
+         nothing of the app is imported until a password has been accepted. -->
+    <link rel="stylesheet" href="/src/remote/gate.css" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <div id="fastvibe-gate" role="status">
+      <div class="gate-card">
+        <img class="gate-mark" src="./src/assets/f-mark.png" alt="" aria-hidden="true" />
+        <p class="gate-title" id="gate-title">正在连接…</p>
+        <p class="gate-hint" id="gate-hint">FastVibe 远程访问</p>
+        <div class="gate-spinner" id="gate-spinner"></div>
+        <form class="gate-form" id="gate-form" hidden>
+          <input
+            class="gate-input"
+            id="gate-password"
+            type="password"
+            autocomplete="current-password"
+            placeholder="访问密码"
+            aria-label="访问密码"
+          />
+          <button class="gate-button" id="gate-submit" type="submit">连接</button>
+        </form>
+        <p class="gate-error" id="gate-error" hidden></p>
+      </div>
+    </div>
+    <!-- The gate owns the boot: it authenticates, installs `window.fastvibe`, and only
+         then imports the app, which reads that bridge synchronously as it loads. -->
+    <script type="module" src="/src/mobile/entry.ts"></script>
+  </body>
+</html>

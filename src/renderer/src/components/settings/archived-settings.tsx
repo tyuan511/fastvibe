@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { AlertCircleIcon, Archive04Icon, ArchiveRestoreIcon, Delete02Icon } from "@hugeicons/core-free-icons";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Archive04Icon, ArchiveRestoreIcon, Delete02Icon } from "@hugeicons/core-free-icons";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -61,7 +61,6 @@ export function ArchivedSettings({
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [confirm, setConfirm] = useState<ConfirmTarget | null>(null);
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState<{ kind: "info" | "error"; text: string } | null>(null);
 
   const items = useMemo(
     () => conversations.filter((item) => archived.has(item.id)).sort(sortArchived),
@@ -91,7 +90,7 @@ export function ArchivedSettings({
 
   function restore(removeIds: string[]): void {
     restoreConversations(removeIds);
-    setNotice(removeIds.length ? { kind: "info", text: t("archived.restored", { count: removeIds.length }) } : null);
+    if (removeIds.length) toast.success(t("archived.restored", { count: removeIds.length }));
     setSelected((prev) => {
       const next = new Set(prev);
       for (const id of removeIds) next.delete(id);
@@ -103,7 +102,6 @@ export function ArchivedSettings({
     const removeIds = target.kind === "single" ? [target.id] : target.ids;
     if (removeIds.length === 0) return;
     setBusy(true);
-    setNotice(null);
     try {
       const outcome = onDeleteConversations
         ? await onDeleteConversations(removeIds)
@@ -120,18 +118,12 @@ export function ArchivedSettings({
       }
       const failed = removeIds.length - outcome.deleted.length;
       if (outcome.deleted.length > 0 && failed === 0) {
-        setNotice({ kind: "info", text: t("archived.deleted", { count: outcome.deleted.length }) });
+        toast.success(t("archived.deleted", { count: outcome.deleted.length }));
       } else {
-        setNotice({
-          kind: "error",
-          text: t("archived.deletePartial", { failed, detail: outcome.error ? `（${outcome.error}）` : "" }),
-        });
+        toast.error(t("archived.deletePartial", { failed, detail: outcome.error ? `（${outcome.error}）` : "" }));
       }
     } catch (err) {
-      setNotice({
-        kind: "error",
-        text: t("archived.deleteFailed", { detail: err instanceof Error ? `（${err.message}）` : "" }),
-      });
+      toast.error(t("archived.deleteFailed", { detail: err instanceof Error ? `（${err.message}）` : "" }));
     } finally {
       setBusy(false);
       setConfirm(null);
@@ -145,13 +137,6 @@ export function ArchivedSettings({
       <p className="px-1 text-xs leading-4 text-muted-foreground">
         {t("archived.intro")}
       </p>
-
-      {notice ? (
-        <Alert variant={notice.kind === "error" ? "destructive" : "default"} className="px-3 py-2">
-          <HugeiconsIcon strokeWidth={2} icon={notice.kind === "error" ? AlertCircleIcon : ArchiveRestoreIcon} />
-          <AlertDescription className="text-xs">{notice.text}</AlertDescription>
-        </Alert>
-      ) : null}
 
       {items.length === 0 ? (
         <Empty className="border border-solid border-border bg-card">

@@ -39,6 +39,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { IconButton } from "@/components/icon-button";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { i18n } from "@/lib/i18n";
 import { formatRelativeTime } from "@/lib/time";
 import { cn } from "@/lib/utils";
@@ -107,7 +108,6 @@ export function ExtensionsSettings(): JSX.Element {
   const [sort, setSort] = useState<NonNullable<MarketPackageQuery["sort"]>>("downloads");
   const [pageIndex, setPageIndex] = useState(1);
   const [pending, setPending] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
 
   const installedNames = useMemo(
     () => new Set(packages.map((item) => packageName(item.source))),
@@ -123,9 +123,8 @@ export function ExtensionsSettings(): JSX.Element {
       ]);
       setPackages(next);
       setLoaded(extensions);
-      setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("extensions.listFailed"));
+      toast.error(err instanceof Error ? err.message : t("extensions.listFailed"));
     } finally {
       setInstalledBusy(false);
     }
@@ -153,11 +152,10 @@ export function ExtensionsSettings(): JSX.Element {
       .then((result) => {
         if (cancelled) return;
         setPage(result);
-        setError(null);
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        setError(err instanceof Error ? err.message : t("extensions.catalogFailed"));
+        toast.error(err instanceof Error ? err.message : t("extensions.catalogFailed"));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -172,10 +170,10 @@ export function ExtensionsSettings(): JSX.Element {
     setPending(item.name);
     try {
       setPackages(await window.fastvibe.engine.installExtensionPackage(`npm:${item.name}`));
-      setError(null);
       await refreshInstalled();
+      toast.success(t("extensions.installDone", { name: item.name }));
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("extensions.installFailed"));
+      toast.error(err instanceof Error ? err.message : t("extensions.installFailed"));
     } finally {
       setPending(null);
     }
@@ -186,10 +184,10 @@ export function ExtensionsSettings(): JSX.Element {
     setPending(item.source);
     try {
       setPackages(await window.fastvibe.engine.removeExtensionPackage(item.source));
-      setError(null);
       await refreshInstalled();
+      toast.success(t("extensions.removeDone", { name: packageName(item.source) }));
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("extensions.removeFailed"));
+      toast.error(err instanceof Error ? err.message : t("extensions.removeFailed"));
     } finally {
       setPending(null);
     }
@@ -333,7 +331,6 @@ export function ExtensionsSettings(): JSX.Element {
         </TabsContent>
       </Tabs>
 
-      {error ? <p className="text-xs text-destructive">{error}</p> : null}
     </div>
   );
 }

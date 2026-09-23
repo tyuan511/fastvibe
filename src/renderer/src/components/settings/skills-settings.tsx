@@ -1,5 +1,6 @@
 import { useEffect, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Add01Icon,
@@ -56,7 +57,6 @@ export function SkillsSettings(): JSX.Element {
   const [query, setQuery] = useState("");
   const [draft, setDraft] = useState<SkillDraft | null>(null);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   async function refresh(): Promise<void> {
     try {
@@ -88,10 +88,10 @@ export function SkillsSettings(): JSX.Element {
     setSaving(true);
     try {
       setSkills(await window.fastvibe.engine.createSkill(draft));
-      setError(null);
       setDraft(null);
+      toast.success(t("skills.addDone", { name: draft.name.trim() }));
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("skills.addFailed"));
+      toast.error(err instanceof Error ? err.message : t("skills.addFailed"));
     } finally {
       setSaving(false);
     }
@@ -106,10 +106,10 @@ export function SkillsSettings(): JSX.Element {
       const next = await window.fastvibe.engine.importSkill();
       if (next) {
         setSkills(next);
-        setError(null);
+        toast.success(t("skills.importDone"));
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("skills.importFailed"));
+      toast.error(err instanceof Error ? err.message : t("skills.importFailed"));
     } finally {
       setSaving(false);
     }
@@ -119,16 +119,15 @@ export function SkillsSettings(): JSX.Element {
     setSaving(true);
     try {
       setSkills(await window.fastvibe.engine.removeSkill(name));
-      setError(null);
+      toast.success(t("skills.deleteDone", { name }));
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("skills.deleteFailed"));
+      toast.error(err instanceof Error ? err.message : t("skills.deleteFailed"));
     } finally {
       setSaving(false);
     }
   }
 
   function openCreate(): void {
-    setError(null);
     setDraft({ ...EMPTY_DRAFT });
   }
 
@@ -198,12 +197,10 @@ export function SkillsSettings(): JSX.Element {
           </EmptyHeader>
         </Empty>
       )}
-      {error && draft === null ? <p className="text-xs text-destructive">{error}</p> : null}
 
       <AddSkillDialog
         draft={draft}
         saving={saving}
-        error={error}
         valid={valid}
         onPatch={patchDraft}
         onClose={() => setDraft(null)}
@@ -247,7 +244,6 @@ function SkillCard({ skill, onRemove }: { skill: SkillInfo; onRemove: () => void
 function AddSkillDialog({
   draft,
   saving,
-  error,
   valid,
   onPatch,
   onClose,
@@ -255,7 +251,6 @@ function AddSkillDialog({
 }: {
   draft: SkillDraft | null;
   saving: boolean;
-  error: string | null;
   valid: boolean;
   onPatch: (next: Partial<SkillDraft>) => void;
   onClose: () => void;
@@ -303,7 +298,6 @@ function AddSkillDialog({
           </div>
         ) : null}
 
-        {error ? <p className="text-xs text-destructive">{error}</p> : null}
 
         <DialogFooter className="gap-2">
           <Button variant="outline" onClick={onClose}>

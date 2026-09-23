@@ -3,6 +3,7 @@ import { createFastVibeApi, type ApiTransport } from "@shared/api";
 import { ALL_SCOPES } from "@shared/app-protocol";
 import { AppClient, type MessageTransport } from "@shared/app-client";
 import { planResume } from "@shared/app-resume";
+import { installLiveScopeHost, notifyLiveReconnected, watchedScopes } from "@/lib/live-scopes";
 
 /**
  * The web client's half of `window.fastvibe`.
@@ -15,7 +16,8 @@ import { planResume } from "@shared/app-resume";
  * It owns the boot because the renderer reads the bridge as it loads — `stores/settings`
  * takes the settings snapshot synchronously at module scope — so the app cannot be
  * imported until a connection exists and that snapshot has been fetched. That is why
- * `remote.html` loads only this file.
+ * each page loads only a tiny entry that calls `bootRemote` with the app to import:
+ * `remote.html` the full client, `mobile.html` the phone page.
  */
 
 /**
@@ -38,6 +40,15 @@ let reconnecting: Promise<void> | null = null;
 let reconnectStopped = false;
 /** After the first successful boot connect; onStatus on that path must not start reconnect. */
 let live = false;
+/**
+ * Come back from a dropped socket (or a journal gap) in place instead of reloading.
+ *
+ * The full client reloads, because it has no path that re-reads everything it shows.
+ * The phone page does (`onLiveReconnected`), and a reload there is the worst possible
+ * answer: a phone drops its socket every time the screen locks or the user switches
+ * apps, and each return used to be a white page, a spinner and a lost scroll position.
+ */
+let resumeInPlace = false;
 const listeners = new Map<string, Set<(payload: unknown) => void>>();
 /** Pushes that arrived before any React subscriber. Dropping them was a silent stall. */
 const pendingPushes: Array<{ channel: string; payload: unknown }> = [];
@@ -150,8 +161,10 @@ function bindClient(client: AppClient, generation: number): void {
   client.onResync(() => {
     if (generation !== connectionGeneration) return;
     // A gap the journal cannot fill: the transcript on screen would look complete and
-    // would not be. Reload (and the boot snapshot) is the honest resume.
-    window.location.reload();
+    // would not be. Reload (and the boot snapshot) is the honest resume — or, for a
+    // page that can re-read what it shows, exactly that re-read.
+    if (resumeInPlace) notifyLiveReconnected();
+    else window.location.reload();
   });
   client.onStatus((status) => {
     if (generation !== connectionGeneration) return;
@@ -280,6 +293,62 @@ function showLoginGate(title: string, hint: string, error?: string): void {
 }
 
 /**
+ * Wait out one reconnect delay, cut short when the page comes back into view.
+ *
+ * A phone that was locked for a minute has walked the backoff up to its ceiling; making
+ * the user stare at a banner for another ten seconds after unlocking is the delay they
+ * notice, and the network is most likely back by then anyway.
+ */
+function backoff(ms: number): Promise<void> {
+  return new Promise((settle) => {
+    const done = (): void => {
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+      settle();
+    };
+    const onVisible = (): void => {
+      if (document.visibilityState === "visible") done();
+    };
+    const timer = window.setTimeout(done, ms);
+    document.addEventListener("visibilitychange", onVisible);
+  });
+}
+
+let banner: HTMLElement | null = null;
+
+/** The in-place reconnect's only chrome: one line pinned to the top of the page. */
+function setReconnectBanner(visible: boolean): void {
+  if (!visible) {
+    banner?.remove();
+    banner = null;
+    return;
+  }
+  if (banner) return;
+  banner = document.createElement("div");
+  banner.className = "fastvibe-reconnect";
+  banner.setAttribute("role", "status");
+  banner.textContent = document.documentElement.lang.startsWith("en") ? "Reconnecting…" : "正在重新连接…";
+  document.body.appendChild(banner);
+}
+
+/**
+ * A socket a phone suspended can look open for minutes: iOS freezes the page with the
+ * connection, and nothing on this side hears the server give up on it. So coming back
+ * into view asks one cheap question with a short deadline, and a socket that cannot
+ * answer it is closed — which is the `close` the reconnect starts from.
+ */
+function probeOnReturn(): void {
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible") return;
+    const client = appClient;
+    if (!client || !live || reconnectStopped) return;
+    client.call(Ipc.appGetInfo, undefined, { timeoutMs: 4_000 }).catch(() => {
+      if (appClient === client) client.close();
+    });
+  });
+}
+
+/**
  * Come back after a dropped socket.
  *
  * Wildcard resume cannot guarantee scope coverage, and a numeric seq without its
@@ -294,15 +363,26 @@ async function runReconnect(): Promise<void> {
     showLoginGate("连接已断开", "请重新登录");
     return;
   }
-  showGate("连接已断开", "正在重新连接…", { spinner: true });
+  // In place, the page stays readable behind a thin banner rather than a full-screen
+  // gate: what was on screen is still true up to the moment the socket went.
+  if (resumeInPlace) setReconnectBanner(true);
+  else showGate("连接已断开", "正在重新连接…", { spinner: true });
   for (let attempt = 0; ; attempt += 1) {
     if (reconnectStopped) return;
-    await new Promise((settle) => window.setTimeout(settle, Math.min(10_000, 500 * 2 ** attempt)));
+    await backoff(Math.min(10_000, 500 * 2 ** attempt));
     if (reconnectStopped) return;
     const generation = ++connectionGeneration;
     try {
       await connect(token, generation, { subscribe: false });
       if (generation !== connectionGeneration || reconnectStopped) return;
+      if (resumeInPlace) {
+        // Live from here, then re-read: the page drops anything at or below the seq of
+        // the snapshot it takes, so subscribing first loses nothing in between.
+        appClient?.subscribe([ALL_SCOPES, ...watchedScopes()]);
+        setReconnectBanner(false);
+        notifyLiveReconnected();
+        return;
+      }
       const plan = planResume({
         welcomeEpoch: appClient?.epoch ?? "",
         cursors: appClient?.eventCursors() ?? {},
@@ -318,6 +398,7 @@ async function runReconnect(): Promise<void> {
       if (generation !== connectionGeneration || reconnectStopped) return;
       if (error instanceof Error && error.message === "UNAUTHORIZED") {
         localStorage.removeItem(TOKEN_KEY);
+        setReconnectBanner(false);
         showLoginGate("需要重新登录", "这台设备的访问权限已被撤销或密码已更改");
         return;
       }
@@ -451,7 +532,24 @@ function askForPassword(): Promise<string> {
   });
 }
 
-async function boot(): Promise<void> {
+export type RemoteBootOptions = {
+  /** Import the app. Runs once the bridge is installed and the settings are in hand. */
+  load: () => Promise<unknown>;
+  /** Re-read in place after a reconnect instead of reloading (see `resumeInPlace`). */
+  resumeInPlace?: boolean;
+};
+
+export function bootRemote(options: RemoteBootOptions): void {
+  resumeInPlace = options.resumeInPlace === true;
+  installLiveScopeHost({
+    subscribe: (scopes) => appClient?.subscribe(scopes),
+    unsubscribe: (scopes) => appClient?.unsubscribe(scopes),
+  });
+  if (resumeInPlace) probeOnReturn();
+  void boot(options.load);
+}
+
+async function boot(load: () => Promise<unknown>): Promise<void> {
   showGate("正在连接…", "FastVibe 远程访问", { spinner: true });
 
   let configured = false;
@@ -501,8 +599,6 @@ async function boot(): Promise<void> {
 
   window.fastvibe = createFastVibeApi(transport);
 
-  await import("@/main");
+  await load();
   hideGate();
 }
-
-void boot();

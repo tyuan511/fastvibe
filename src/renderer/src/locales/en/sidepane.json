@@ -214,7 +214,13 @@
     "commitFailed": "Commit failed",
     "worktree": "Worktree",
     "unbindWorktree": "Back to project",
-    "unbindWorktreeFailed": "Could not unbind the worktree"
+    "unbindWorktreeFailed": "Could not unbind the worktree",
+    "pullDone": "Pulled the latest commits on {{branch}}",
+    "pushDone": "Pushed {{branch}} to the remote",
+    "commitDone": "Committed: {{subject}}",
+    "commitPushDone": "Committed and pushed: {{subject}}",
+    "discardDone": "Discarded changes to {{path}}",
+    "unbindWorktreeDone": "Back in the project directory"
   },
   "gitDialog": {
     "title": "Workspace changes",

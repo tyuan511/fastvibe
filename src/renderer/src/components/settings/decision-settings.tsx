@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { CircleQuestionMarkIcon } from "@hugeicons/core-free-icons";
 import { Ipc } from "@shared/ipc";
-import { decisionModelConfigOf, type DecisionKeyState, type DecisionModelConfig } from "@shared/decision";
+import { DECISION_SCENARIOS, DEFAULT_DECISION_MODEL, decisionModelConfigOf, type DecisionKeyState, type DecisionModelConfig, type DecisionScenario } from "@shared/decision";
 import { blockedRemotely } from "@/lib/remote-unavailable";
 import { cleanError } from "@/lib/ipc-error";
 import { IS_REMOTE } from "@/lib/platform";
@@ -16,13 +16,17 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { SettingsGroup, SettingsRow } from "./settings-group";
 
-const EMPTY: DecisionModelConfig = { kind: "off", browserControl: false, computerControl: false };
+const EMPTY: DecisionModelConfig = DEFAULT_DECISION_MODEL;
+
+function scenariosOf(config: DecisionModelConfig): Record<DecisionScenario, boolean> {
+  return Object.fromEntries(DECISION_SCENARIOS.map((key) => [key, config[key]])) as Record<DecisionScenario, boolean>;
+}
 
 /**
- * 设置 → 决策引擎 (docs/decision-layer.md §5): which decision model browser use runs on.
- * Off keeps the `browser_*` tools the main model drives. The engine select saves as soon
- * as it changes; Save belongs to 应用场景 alone, and Jev is offered `browser_task` only
- * after 浏览器控制 is checked and saved. With the engine off the scenarios are hidden.
+ * 设置 → 决策引擎 (docs/decision-layer.md §5): which decision model runs, and for what.
+ * Off keeps every scenario on its default path. The engine select saves as soon as it
+ * changes; Save belongs to 应用场景 alone, and each scenario starts only once its box is
+ * checked and saved. With the engine off the scenarios are hidden.
  * A new Jev key is checked by Main before it is stored; this pane never reads it back.
  */
 export function DecisionSettings() {
@@ -31,7 +35,6 @@ export function DecisionSettings() {
   const [draft, setDraft] = useState<DecisionModelConfig>(EMPTY);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
   const [keys, setKeys] = useState<DecisionKeyState>({ jev: false });
   const [keyDraft, setKeyDraft] = useState("");
   const [keySaving, setKeySaving] = useState(false);
@@ -58,21 +61,19 @@ export function DecisionSettings() {
     const next = decisionModelConfigOf(config);
     setSaved(next);
     setDraft(next);
-    setError("");
   }
 
   const kind = draft.kind;
-  const dirty = draft.browserControl !== saved.browserControl || draft.computerControl !== saved.computerControl;
+  const dirty = DECISION_SCENARIOS.some((key) => draft[key] !== saved[key]);
 
   async function save(next: DecisionModelConfig) {
     if (blockedRemotely(Ipc.decisionSaveConfig)) return;
     setSaving(true);
-    setError("");
     try {
       applyExternal(await window.fastvibe.decision.saveConfig(next));
       toast.success(t("decision.saved"));
     } catch (cause) {
-      setError(t("decision.saveFailed", { error: cleanError(cause) }));
+      toast.error(t("decision.saveFailed", { error: cleanError(cause) }));
     } finally {
       setSaving(false);
     }
@@ -84,16 +85,15 @@ export function DecisionSettings() {
    */
   async function saveKind(nextKind: DecisionModelConfig["kind"]) {
     if (blockedRemotely(Ipc.decisionSaveConfig)) return;
-    const pending = { browserControl: draft.browserControl, computerControl: draft.computerControl };
+    const pending = scenariosOf(draft);
     setSaving(true);
-    setError("");
     try {
       const stored = decisionModelConfigOf(await window.fastvibe.decision.saveConfig({ ...saved, kind: nextKind }));
       setSaved(stored);
       setDraft({ ...stored, ...pending });
       toast.success(t("decision.saved"));
     } catch (cause) {
-      setError(t("decision.saveFailed", { error: cleanError(cause) }));
+      toast.error(t("decision.saveFailed", { error: cleanError(cause) }));
     } finally {
       setSaving(false);
     }
@@ -102,13 +102,12 @@ export function DecisionSettings() {
   async function saveKey(value: string) {
     if (blockedRemotely(Ipc.decisionSetKey)) return;
     setKeySaving(true);
-    setError("");
     try {
       setKeys(await window.fastvibe.decision.setKey(value));
       setKeyDraft("");
       toast.success(t(value.trim() ? "decision.keyStored" : "decision.keyCleared"));
     } catch (cause) {
-      setError(t("decision.saveFailed", { error: cleanError(cause) }));
+      toast.error(t("decision.saveFailed", { error: cleanError(cause) }));
     } finally {
       setKeySaving(false);
     }
@@ -182,25 +181,22 @@ export function DecisionSettings() {
           description={
             // The switches sit under the title so Save lines up with 应用场景 on the right,
             // rather than floating mid-way down a block of checkboxes.
-            <span className="mt-2 flex flex-col items-start gap-2 text-sm text-foreground">
-              <button
-                type="button"
-                className="flex items-center gap-2"
-                disabled={loading || saving}
-                onClick={() => setDraft((current) => ({ ...current, browserControl: !current.browserControl }))}
-              >
-                <Checkbox checked={draft.browserControl} className="pointer-events-none" />
-                <span>{t("decision.browserControl")}</span>
-              </button>
-              <button
-                type="button"
-                className="flex items-center gap-2"
-                disabled={loading || saving}
-                onClick={() => setDraft((current) => ({ ...current, computerControl: !current.computerControl }))}
-              >
-                <Checkbox checked={draft.computerControl} className="pointer-events-none" />
-                <span>{t("decision.computerControl")}</span>
-              </button>
+            <span className="mt-2 flex flex-col items-start gap-2.5 text-sm text-foreground">
+              {DECISION_SCENARIOS.map((key) => (
+                <button
+                  key={key}
+                  type="button"
+                  className="flex items-start gap-2 text-left"
+                  disabled={loading || saving}
+                  onClick={() => setDraft((current) => ({ ...current, [key]: !current[key] }))}
+                >
+                  <Checkbox checked={draft[key]} className="pointer-events-none mt-0.5" />
+                  <span className="flex flex-col gap-0.5">
+                    <span>{t(`decision.${key}`)}</span>
+                    <span className="text-xs text-muted-foreground">{t(`decision.${key}Hint`)}</span>
+                  </span>
+                </button>
+              ))}
             </span>
           }
           control={
@@ -209,11 +205,6 @@ export function DecisionSettings() {
             </Button>
           }
         />
-      )}
-      {error && (
-        <p role="alert" className="px-4 py-3 text-xs text-destructive">
-          {error}
-        </p>
       )}
     </SettingsGroup>
   );

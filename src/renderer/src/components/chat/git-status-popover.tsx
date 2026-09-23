@@ -1,5 +1,6 @@
 import { useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   ArrowDown01Icon,
@@ -84,6 +85,7 @@ export function GitStatusPopover({
     action: BusyAction,
     operation: () => Promise<GitStatus>,
     fallback: string,
+    done: (next: GitStatus) => string,
   ): Promise<GitStatus | null> {
     if (busy || !cwd) return null;
     setBusy(action);
@@ -91,6 +93,7 @@ export function GitStatusPopover({
     try {
       const next = await operation();
       refreshed(next);
+      toast.success(done(next));
       return next;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : fallback);
@@ -107,6 +110,7 @@ export function GitStatusPopover({
     try {
       await window.fastvibe.conversations.unbindWorktree(conversationId);
       setOpen(false);
+      toast.success(t("git.unbindWorktreeDone"));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : t("git.unbindWorktreeFailed"));
     } finally {
@@ -147,6 +151,7 @@ export function GitStatusPopover({
       refreshed();
       if (push) await window.fastvibe.workspace.gitPush(repository.cwd);
       refreshed();
+      toast.success(t(push ? "git.commitPushDone" : "git.commitDone", { subject }));
     } catch (cause) {
       const detail = cause instanceof Error
         ? cause.message
@@ -201,7 +206,7 @@ export function GitStatusPopover({
                 size="icon-xs"
                 label={t("git.pull")}
                 disabled={Boolean(busy)}
-                onClick={() => void run("pull", () => window.fastvibe.workspace.gitPull(status.cwd), t("git.pullFailed"))}
+                onClick={() => void run("pull", () => window.fastvibe.workspace.gitPull(status.cwd), t("git.pullFailed"), (next) => t("git.pullDone", { branch: next.branch ?? status.branch }))}
               >
                 {busy === "pull" ? <Spinner className="size-3.5" /> : <HugeiconsIcon strokeWidth={2} icon={ArrowDown02Icon} />}
               </IconButton>
@@ -211,7 +216,7 @@ export function GitStatusPopover({
                 size="icon-xs"
                 label={t("git.push")}
                 disabled={Boolean(busy)}
-                onClick={() => void run("push", () => window.fastvibe.workspace.gitPush(status.cwd), t("git.pushFailed"))}
+                onClick={() => void run("push", () => window.fastvibe.workspace.gitPush(status.cwd), t("git.pushFailed"), (next) => t("git.pushDone", { branch: next.branch ?? status.branch }))}
               >
                 {busy === "push" ? <Spinner className="size-3.5" /> : <HugeiconsIcon strokeWidth={2} icon={ArrowUp02Icon} />}
               </IconButton>
