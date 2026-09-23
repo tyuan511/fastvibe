@@ -39,7 +39,9 @@ a field that already contains the requested value. Choose only an offered elemen
  */
 export const OFFSCREEN_RULE = `Elements marked offscreen exist on this page outside the viewport. CLICK, TYPE_TEXT or SELECT
 them directly when they are the right target; they are scrolled into view automatically. Do not choose
-BLOCKED because a needed control is off screen.`;
+BLOCKED because a needed control is off screen. If a needed control is not listed at all and SCROLL_DOWN
+or SCROLL_UP is offered, scroll toward where it would be (pagers and "next" links sit at the bottom)
+instead of choosing BLOCKED; BLOCKED is for pages that cannot scroll further.`;
 
 const OPERATION_RULES = `${NEXT_ACTION_RULES}\n${OFFSCREEN_RULE}`;
 

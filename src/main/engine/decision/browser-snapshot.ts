@@ -18,6 +18,8 @@
  * off-screen controls are offered too, marked `offscreen`, and the target script scrolls
  * one into view before acting: with only on-screen controls, a target below the fold
  * (a "Next" link, a pager, a directory further down a list) left Jev choosing BLOCKED.
+ * Pagers (`rel=next`, "More", "下一章" …) are offered at any distance: on a long page they
+ * sit past the nearest-N window, and scrolling a whole page to find one was unreliable.
  */
 
 /** One executable candidate, as the observe script reports it. */
@@ -154,6 +156,10 @@ export const OBSERVE_SCRIPT = String.raw`(() => {
   // (a "Next" link, a pager) can be chosen directly; the executor scrolls it into view.
   offscreen.sort((a,b)=>a[3]-b[3]);
   for (const [e,r,rname] of offscreen.slice(0,${OFFSCREEN_LIMIT})) add(e,r,rname,true);
+  // Pagers sit at the far end of long pages, beyond any nearest-N window: offer them always.
+  const pager=/^\s*(more|next|next page|older|load more|下一页|下一章|下一篇|更多|加载更多)\s*(›|»|>|→)?\s*$/i;
+  for (const [e,r,rname] of offscreen.slice(${OFFSCREEN_LIMIT}))
+    if (e.getAttribute('rel')==='next' || pager.test(name(e))) add(e,r,rname,true);
   const words=[], walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);
   const range=document.createRange(); let node,length=0;
   while ((node=walker.nextNode()) && length<6000) {
