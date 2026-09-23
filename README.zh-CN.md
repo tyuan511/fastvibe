@@ -1,431 +1,129 @@
 # FastVibe
 
-[English README](README.md) · [中文 README](README.zh-CN.md)
+[English README](README.md) · 中文 README
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Electron](https://img.shields.io/badge/Electron-44.4.0-47848F?logo=electron&logoColor=white)](https://www.electronjs.org/)
 [![pi coding agent](https://img.shields.io/badge/pi%20coding%20agent-0.85.1-6E56CF)](https://github.com/badlogic/pi-mono)
 [![最新版本](https://img.shields.io/github/v/release/tyuan511/fastvibe?display_name=tag&sort=semver)](https://github.com/tyuan511/fastvibe/releases/latest)
 
-> 基于 **pi coding agent** 构建的桌面智能体工作台。
-> 内嵌 `@earendil-works/pi-coding-agent` SDK，兼容 pi 插件机制。
+> 基于 **pi coding agent** 的桌面智能体工作台。
 
-FastVibe 是一个 Electron 桌面客户端。它没有另起炉灶重写一套 Agent 内核，而是把
-pi（pi coding agent）作为默认引擎直接跑在主进程里，再把原本只存在于终端里的交互
-（工具调用、思考过程、扩展对话框、计划 / 目标模式……）原生地呈现为 GUI。
+FastVibe 将 pi coding agent 嵌入 Electron 主进程，把会话、工具调用、扩展和项目工作区整合到一个桌面界面中。
 
 ![FastVibe 界面](apps/website/public/screenshots/zh/workspace.webp)
 
 ## 下载
 
-以下链接始终打开 **GitHub 最新 release**，请选择对应平台的安装包：
+前往 [GitHub Releases](https://github.com/tyuan511/fastvibe/releases/latest) 下载对应平台的安装包：
 
-- [macOS — 下载 `.dmg` 或 `.zip`](https://github.com/tyuan511/fastvibe/releases/latest)
-- [Windows — 下载 `.exe` 安装程序](https://github.com/tyuan511/fastvibe/releases/latest)
-- [Linux — 下载 `.AppImage` 或 `.deb`](https://github.com/tyuan511/fastvibe/releases/latest)
+- macOS：`.dmg` 或 `.zip`
+- Windows：`.exe`
+- Linux：`.AppImage` 或 `.deb`
 
-这里使用 GitHub 的 `releases/latest` 重定向，因此无需在 README 中写死版本号。
+## 功能
 
-## 特性
+- 基于原生 pi SDK，支持会话、工具调用和 pi 扩展。
+- 多项目工作区，支持会话归档、分支、附件和隔离的 scratch 工作区。
+- 工具调用、编辑 diff、终端输出、思考过程和权限请求可视化。
+- 三档权限模式：请求批准、帮我批准、完全访问；另有计划模式和目标模式。
+- 支持 FastVibe、OpenAI 兼容供应商、模型协议配置和 OAuth 登录。
+- 支持 MCP、技能、待办、子 Agent、Git worktree 和用量统计。
+- 可选决策引擎 Jev，用于浏览器操控、电脑操控、批量决策、帮我批准和增强记忆。
+- 长期记忆：默认 / 语义 / JEV 增强三种模式，本地存储，自动捕获并注入相关记忆。
+- 集成文件预览、终端、浏览器操控、电脑操控和 Git 审查侧栏。
+- 支持远程网页 / 手机客户端，以及通过 SSH 连接远程 Linux Agent。
+- 多主题、界面字号、自定义快捷键和自动更新。
 
-- **真正的 pi，而不是仿制品**：会话、消息、工具调用、扩展都来自 pi SDK，行为与终端版一致。
-- **兼容 pi 插件机制**：pi 包可从官方市场安装运行，命令、工具、UI 上下文桥接到 GUI。
-- **多项目工作区**：侧边栏按项目分组会话，支持置顶与归档；未绑定项目的对话落在隔离的 scratch 工作区。
-- **工具调用可视化**：读取 / 搜索 / 列表归组，编辑展示 diff，终端展示 `$ command` 与输出。
-- **权限沙箱三档**：`请求批准` / `帮我批准` / `完全访问`，由内置扩展在每次工具调用时判定。
-- **计划模式与目标模式**：`/plan` 先只读探索再给方案；`/goal` 驱动长周期执行，可在面板中查看进度。
-- **模型随你选**：内置 FastVibe（默认 OpenAI Responses 协议），也可接入任意 OpenAI 兼容供应商。
-- **MCP 与技能**：stdio / Streamable HTTP MCP 服务器在设置里增删启停；技能以 `SKILL.md` 管理，可新建或从文件夹导入。
-- **使用统计**：按日汇总请求与 Token，删除会话后仍能从 ledger 还原用量。
-- **工作区侧栏**：文件树与预览、终端、浏览器、Git 审查、辅助对话。
-- **内置浏览器（browser use）**：模型通过 `browser_*` 工具驱动侧栏里的浏览器打开、快照、点击与填表，并可导入本机 Chrome / Edge 等的 Cookie 登录态。
-- **电脑操控（computer use）**：模型通过 `computer_*` 工具操作本机的原生应用——读窗口元素、点击、输入、走菜单、批量执行；默认后台投递，不抢你的焦点。
-- **远程项目（SSH / App Server）**：通过 SSH 把另一台 Linux 机器上的 headless Agent 接入工作台，把那边的工作区绑定为项目；一台机器可同时接多台服务器。
-- **Git 与附件**：输入框可切换 / 创建分支；支持图片与文件附件、消息队列；编辑或重试历史消息即在原处分支。
-- **20 套主题**：亮色 / 暗色各自独立选择，支持跟随系统；界面字号可整体缩放。
-- **自动更新**：启动后每 10 分钟检查一次新版本，发现后可从侧栏或手动检查的弹窗下载，下载完一键重启安装。
+## 决策引擎（Jev）
+
+设置 → 决策引擎 可以选择用 **Jev（TypeSafe）** 承担一批「下一步做什么」的判断，逐步应用于以下场景（各自独立开关）：
+
+| 场景 | 作用 |
+| --- | --- |
+| 浏览器控制 | 浏览器里的连续点击和输入交给决策模型（`browser_task`） |
+| 电脑控制 | 桌面窗口里的操作交给决策模型（`computer_task`） |
+| 批量决策 | 主 Agent 获得 `batch_decide` 工具 |
+| 帮我批准 | 权限沙箱的判定交给决策模型 |
+| 增强记忆 | 记忆的写入、关系与检索判断交给决策模型 |
+
+关闭时各场景都走默认路径：主模型直接调用 `browser_*` / `computer_*` 工具，权限沙箱用内置规则判断。Jev 只服务决策场景，不作为普通对话模型出现在模型列表里，API key 保存在本机，不会回传渲染层。
+
+## 长期记忆
+
+设置 → 长期记忆 提供三种模式，共用同一份本地 SQLite 存储：
+
+- **默认记忆**：始终开启，不下载 embedding 模型，用 SQLite 全文检索保存和召回对话。
+- **语义记忆**：额外使用本地多语言 embedding 模型（约 118 MB，需确认后下载）。
+- **JEV 增强记忆**：在本地存储之上引入 Jev 的决策层，负责写入分类、关系与整合、以及检索路径的判断；需要决策引擎选择 Jev 并勾选「增强记忆」场景。
+
+记忆在每轮开始前作为临时系统提示注入，不写入会话记录；捕获发生在用户消息或回复完成之后，思考块、工具结果与敏感字段不会被记录。
 
 ## 与 pi 的关系
 
-FastVibe 的核心承诺是：**pi 扩展在终端里能做什么，在这里就能做什么。**
+FastVibe 使用 `@earendil-works/pi-coding-agent` SDK，并将运行数据保存在自己的 userData 目录中，不读写用户的 `~/.pi`。
 
-> **兼容限制：`ctx.ui.custom()` 不支持。** FastVibe 不会尝试在 GUI 中模拟任意
-> pi-tui 全屏组件、原始键盘事件、鼠标事件或自定义 overlay。扩展调用此 API 会收到
-> 明确的错误，而不是得到一个空结果或永远等待。请将交互改写为 pi 提供的语义 API：
-> `ctx.ui.select`、`confirm`、`input`、`editor` 或 `questions`。`setWidget` 和
-> `registerMessageRenderer` 仍支持只读的文本 / 组件渲染，但组件内部的 TUI 交互不会
-> 被 FastVibe 接管。依赖 `ctx.ui.custom()` 才能工作的插件会被标记为未兼容。
+常用的 pi UI API 已映射到桌面界面：
 
-- 引擎是 `@earendil-works/pi-coding-agent`，通过 `createAgentSession` 编程式启动；
-  `agentDir`、`sessionManager`、`settingsManager` 全部指向 FastVibe 自己的目录。
-- 扩展以 `mode: "rpc"` 绑定（而非默认的 `print`），所以依赖 TUI 的插件不会拒绝运行。
-- pi 的 UI 上下文被逐一桥接到 GUI：
-
-  | pi 扩展 API | FastVibe 呈现 |
-  | --- | --- |
-  | `ctx.ui.confirm` | 输入框上方的内联批准面板 |
-  | `ctx.ui.select` / `input` / `questions` | 内联选择、输入与分页多问题表单 |
-  | `ctx.ui.editor` | 多行预填对话框 |
-  | `ctx.ui.notify` | 右下角通知 |
-  | `ctx.ui.setStatus` / `setWidget` | 状态行与输入框上方组件（字符串或 pi-tui 组件） |
-  | `ctx.ui.set_editor_text` | 输入框预填 |
-  | `ctx.newSession` / `switchSession` | 基于会话目录创建 / 切换会话 |
-
-- `registerMessageRenderer` 产出的 pi-tui 组件会被解析回结构化文本并渲染，
-  ANSI 颜色映射到当前主题。
-- 插件安装走 SDK 的 `DefaultPackageManager`，写入隔离的 `agentDir`，
-  **不写入你自己的 `~/.pi`**。
-
-### 插件与市场
-
-**设置 → 插件**分「已安装」与「市场」两个标签页。市场直接读取 pi.dev 的包目录
-（扩展 / 技能 / 主题 / 提示词），一键安装 / 卸载；已安装页展示随应用内置的扩展与
-运行时安装的插件。
-
-![插件市场](apps/website/public/screenshots/zh/market.webp)
-
-### 内置扩展
-
-随应用内置十一个扩展，无需安装：
-
-- **`plan.ts`** —— `/plan` 进入计划模式：工具收窄为只读集合，可通过 `question`
-  工具一次性提出多个澄清问题，确认后把方案作为执行提示词发回。
-- **`goal.ts`** —— `/goal` 进入目标模式：每轮回溯目标、推进任务，直到模型以
-  `GOAL_COMPLETE` 结束；面板可查看 / 暂停 / 继续 / 清除。
-- **`todo.ts`** —— 始终可用的待办工具：模型每次提交完整列表（进行中只能有一项），
-  未完成项会出现在输入框上方。
-- **`session-title.ts`** —— 始终可用：首条用户消息会被摘要成会话标题；手动重命名
-  后不再覆盖。
-- **`browser-use.ts`** —— 内置浏览器的工具集：`browser_open` / `snapshot` / `click` /
-  `type` / `press` / `history` 等九个工具，把网页操作桥接到侧栏的浏览器标签。
-  （快照驱动的工作方式见下面「内置浏览器」一节，这套提示词同时作为
-  `resources/skills/browser-use` 内含技能提供。）
-- **`computer-use.ts`** —— 电脑操控的工具集：`computer_screenshot` / `list_apps` /
-  `list_windows` / `window_state` / `click` / `type` / `key` / `hotkey` / `menu` / `scroll` /
-  `clipboard_*`，以及一次跑完一串步骤的 `computer_batch`，把桌面操作桥接到
-  Cua Driver（见下面「电脑操控」一节）。
-- **`permission-sandbox.ts`** —— 权限沙箱的执行侧：识别网络、工作区外写入、
-  敏感路径与破坏性命令，并按模式决定是否请求批准。
-- **`web-search.ts`** —— 会话模型走 OpenAI Responses 协议时注册 `web_search` 工具，
-  以旁路请求完成搜索，不注入主对话。
-- **`output-language.ts`** —— 始终可用：每轮把宿主的 AI 偏好语言要求追加到系统提示词。
-- **`subagent/`** —— 注册 `subagent` 工具，把独立任务委派给角色文件
-  （`explorer` / `planner` / `worker` / `reviewer`），支持单路、并行与链式。
-- **`worktree.ts`** —— 把对话绑定到独立的 git worktree（`worktree_list` / `create` /
-  `bind` / `unbind`），隔离的改动不会弄脏主检出。
-
-## 功能一览
-
-### 工具调用与 diff
-
-读取 / 搜索 / 列目录相邻调用自动折叠成一组，编辑展开为行号 diff，终端保留原始命令与输出。
-每条回复结束时，本轮改动过的文件会以带 `+n / -m` 的标签行汇总。
-
-![工具调用与 diff](apps/website/public/screenshots/zh/tools.webp)
-
-### 工作区侧栏
-
-文件树使用 Material Icon Theme 图标，点击即在同一面板中预览（代码高亮由 shikiji 提供；
-同时支持图片、PDF、CSV、HTML 与 diff）。侧栏还包含终端、内置浏览器、Git 审查与辅助对话——
-其中浏览器不只是给人看的，agent 也能通过工具驱动它。
-
-![文件与预览](apps/website/public/screenshots/zh/files.webp)
-
-### 内置浏览器（browser use）
-
-侧栏的**浏览器**标签是一个真实的 Electron webview，跑在独立的持久化会话
-（`persist:fastvibe-browser`）里。agent 通过九个 `browser_*` 工具直接操作这个
-浏览器，操作的就是你眼前的那一个标签页，而不是另开一份看不见的副本：
-
-| 工具 | 作用 |
+| pi API | FastVibe 呈现 |
 | --- | --- |
-| `browser_open` | 打开或复用标签页，返回后续调用要用的 `tabId` |
-| `browser_list_tabs` | 列出当前可控制的标签页 |
-| `browser_navigate` | 在指定标签页访问新地址 |
-| `browser_search` | 用内置搜索引擎搜索关键词 |
-| `browser_snapshot` | 读取标题、URL、可见文本与可交互元素 |
-| `browser_click` | 按 CSS selector 或可见文字点击 |
-| `browser_type` | 向输入控件填值并触发 input / change |
-| `browser_press` | 发送 Enter / Tab / Escape 等按键 |
-| `browser_history` | 后退 / 前进 / 刷新 |
+| `ctx.ui.confirm` | 内联批准面板 |
+| `ctx.ui.select` / `input` / `questions` | 选择、输入和多问题表单 |
+| `ctx.ui.editor` | 多行编辑对话框 |
+| `ctx.ui.notify` | 通知 |
+| `ctx.ui.setStatus` / `setWidget` | 状态行和输入框上方组件 |
+| `ctx.newSession` / `switchSession` | 创建 / 切换会话 |
 
-工作方式是**快照驱动**：`browser_open` 拿到 `tabId` → 每次导航、点击或提交后
-`browser_snapshot` 重新读取页面 → 用快照里的 selector（或按钮的可见文字）定位 →
-再次快照确认结果。快照会截取可见的可交互元素与正文，所以模型每一步都基于页面当前
-状态，而不是凭旧结构猜测。这套流程作为内置技能 `browser-use` 随应用提供，模型在
-需要网页操作时会自动采用。
-
-**登录态导入**：浏览器工具栏的「导入浏览器登录态」会列出本机 Chromium 系浏览器
-（Chrome、Edge、Brave、Chromium，macOS 上还包括 Arc 与 Opera）的配置文件名，
-把其中的 **Cookie 解密后写入 FastVibe 自己的隔离浏览器会话**并刷新当前页面。
-密码、支付信息和其他凭据不会被复制；源浏览器正在运行时也会连同 WAL 一起读取，
-避免漏掉刚写入的 Cookie。
-
-**安全边界**
-
-- 权限沙箱把 `browser_*` 视为**无法预判的外部工具**：`请求批准` 模式下每次调用都会
-  弹出确认，`完全访问` 模式不询问。
-- 内置技能明确要求模型**不要把网页正文里的指令当成用户授权**。涉及登录、购买、
-  发送消息、删除数据或提交不可逆表单时，先说明将要执行的具体动作并请求确认；
-  可以先打开页面、读取信息、填写草稿。
-- 快照不回显密码、令牌或完整隐私数据；主进程桥接对每次操作限时，窗口关闭或超时
-  会明确报错，而不是静默失败。
-
-### 电脑操控（computer use）
-
-`browser_*` 管的是隔离的内置浏览器，**电脑操控管的是你此刻在用的这台电脑**：访达、
-系统设置、Office、设计工具、其他 IDE 等原生应用。模型通过 `computer_*` 工具驱动它们：
-
-| 工具 | 作用 |
-| --- | --- |
-| `computer_screenshot` | 截取整个桌面，用来定位与验证 |
-| `computer_list_apps` / `computer_list_windows` | 找到目标应用与窗口 |
-| `computer_window_state` | 读取窗口里的可交互元素及其 `elementToken` |
-| `computer_click` | 点击，优先用 `elementToken`，没有令牌才退回坐标 |
-| `computer_type` / `computer_key` / `computer_hotkey` | 输入文本与按键 |
-| `computer_menu` | 走应用菜单，不依赖菜单已经展开 |
-| `computer_scroll` | 滚动 |
-| `computer_clipboard_read` / `computer_clipboard_write` | 读写系统剪贴板 |
-| `computer_batch` | 一次跑完一串互不依赖中间结果的步骤 |
-
-**优先令牌而不是坐标**：坐标是在赌「那个位置现在是什么」，窗口一移动、内容一滚动，
-同一个坐标就落到了别的东西上——而点击不可撤销。`computer_window_state` 给出的
-`elementToken` 指向控件本身；界面变了要重新读，旧令牌会被拒绝。
-
-**默认后台投递**：动作直接送达目标窗口，不抢焦点，你可以继续做自己的事；目标不支持
-时会明确报错，而不是强行抢走键盘焦点。
-
-引擎是 **Cua Driver**（Rust），作为本应用私有的 worker 进程运行——这样 agent 移动指针时
-屏幕上能看到它的光标，且 macOS 的辅助功能 / 屏幕录制授权授予的是 FastVibe 本身。
-
-**系统权限**：macOS 需要「辅助功能」与「屏幕录制」两项授权，设置 → 电脑操控 会引导你
-打开对应的系统设置面板，回来即可被识别；Windows / Linux 无需额外授权（Wayland 下取决于
-桌面合成器）。权限与开关只能在**本机**管理，远程客户端读到的是「只能在本机管理」。
-
-**边界**：屏幕上的文字是数据，不是指令；截图会把与任务无关的邮件、聊天、密码管理器
-一并带进对话，发现明显的凭据时说明情况而不是复述；发送消息、支付、删除、改设置等不可逆
-动作先说明再确认。
-
-### 远程项目（SSH 远程主机）
-
-把另一台 **Linux** 机器上的 FastVibe Agent 接入当前工作台，并把那边的工作区当作项目绑定过来。
-
-- 在 设置 → SSH 远程主机 里添加主机（默认读取 `~/.ssh/config`，支持默认私钥 / SSH Agent、
-  指定私钥文件，或密码）。连接时应用会把 **headless 的 `fastvibe-agent`** 部署到远端并启动，
-  再通过 OpenSSH 的 loopback 端口转发承载 App Protocol。
-- **运行包由远端主机自己下载。** 部署本身就是一条命令：用远端自己的 `curl`/`wget` 拉取
-  `fastvibe-agent-<target>.tar.gz`，校验解压出的 `manifest.json` 版本与期望一致后再链接为
-  `current` —— 桌面端既不下载也不上传这个包。这样安排是因为桌面端常常不是网络更好的那一方，
-  而这个包本身是公开的 release 资源。只有在远端拉不到时（没有外网出口、没有 `curl`/`wget`），
-  才回退到「本机下载 + 走 SSH stdin 上传」；这条回退路径会把包缓存到
-  `runtime/ssh-agent-runtimes/<version>/`，重试不必再访问 GitHub。
-- 「添加项目」对话框可以选择主机、浏览远端目录，把选中的工作区作为**远程项目**加入侧栏。
-- **一台机器可同时接多台服务器**：没有全局的「当前连接主机」，远程会话 id 形如
-  `remote:<serverInstanceId>:<id>`，每个调用按这个 id 路由到具体的那台服务器。绑定只是**引用**，
-  服务器暂时连不上时项目仍在列表里（标记为离线 / 需要鉴权 / 协议不兼容 / 已不存在），恢复后
-  自动回来。
-- 桌面端的供应商、OAuth、模型、MCP、子 Agent 等配置会随隧道复制到远端 Agent；凭据以 0600
-  文件承载，不写入远端的 shell 环境。
-
-远端 Agent 跑的是**同一个内嵌引擎**（`src/agent/runtime.ts` → `PiProcessManager`），只是抽掉了
-Electron：它的能力集是桌面能力的子集（没有 `browser` 与 `native`），所以原生对话框、电脑操控、
-浏览器标签这些本机能力在远端会话里本就不存在。
-
-### 模型管理
-
-FastVibe 是众多供应商之一，而非强制的入门门槛。配置供应商后拉取其 `/models` 列表，
-选择要保留的模型；协议可在供应商级设置默认值，也可在模型详情里单独指定。
-已安装 [CC Switch](https://github.com/farion1231/cc-switch) 的用户可以在同一页一键
-导入其自定义供应商与密钥。上下文窗口、最大输出、输入模态、推理档位与价格来自
-内置的 models.dev 快照，可在 设置 → 关于 从上游更新。
-
-![模型管理](apps/website/public/screenshots/zh/models.webp)
-
-### 主题
-
-二十套主题（十亮十暗），亮色与暗色分别记忆选择，`themeMode` 决定当前生效的一套。
-每个主题都由语义 token 派生，代码高亮与组件外观自动跟随。
-
-## 架构（App Server）
-
-FastVibe 把「方法表」和「传输」分开：每个方法只在 `ipc/registry.ts` 里注册一次，
-另一头是谁由传输决定。桌面窗口、网页 / 手机客户端、SSH 另一端的 headless Agent，
-连的都是**同一个 `AppServer`**（`src/main/app-server/`），差别只在传输方式与它被授予的能力子集。
-
-```mermaid
-flowchart TB
-  subgraph Desktop["桌面端 · Electron 主进程"]
-    UI["渲染窗口 · React<br/>window.fastvibe"]
-    IPCT["Electron 传输<br/>transport/electron.ts"]
-    APP["AppServer · app-server/<br/>会话 · 能力协商 · 事件总线"]
-    TABLE["方法表 · ipc/registry.ts"]
-    HUB["推送总线 · ipc/broadcast.ts"]
-    GW["RemoteGateway · remote/gateway.ts"]
-    ENGINE["PiProcessManager<br/>内嵌 pi 引擎"]
-    CM["RemoteConnectionManager"]
-    SRV["RemoteServer + 隧道 · server/"]
-    UI --> IPCT --> APP --> TABLE --> GW
-    TABLE --> HUB
-    HUB -. "observe" .-> APP
-    GW -->|"本地 id"| ENGINE
-    GW -->|"带命名空间的 id"| CM
-    SRV --> APP
-  end
-
-  subgraph Web["浏览器 · 手机"]
-    BROWSER["网页客户端 remote.html"]
-  end
-
-  subgraph Remote["远程 Linux 主机"]
-    AGENT["fastvibe-agent · src/agent/"]
-    AAPP["AppServer<br/>HEADLESS_CAPABILITIES"]
-    AENGINE["PiProcessManager"]
-    ASRV["RemoteServer · 127.0.0.1"]
-    AGENT --> AAPP --> AENGINE
-    AGENT --> ASRV --> AAPP
-  end
-
-  BROWSER -. "WebSocket · 密码换设备令牌" .-> SRV
-  CM -. "SSH 本地转发 · App Protocol" .-> ASRV
-```
-
-三条传输，一张方法表：
-
-| 传输 | 客户端 | 入口 | 鉴权 |
-| --- | --- | --- | --- |
-| Electron IPC | 桌面窗口 | `transport/electron.ts` → `AppServer` | 进程内，窗口本身即身份 |
-| WebSocket | 网页 / 手机 | `server/server.ts` | 密码换设备令牌 |
-| App Protocol over SSH | 本机 → 远端 Agent | `remote/connection-manager.ts` + `ssh/` | SSH（密钥 / Agent / 密码） |
-
-贯穿始终的几条规则：
-
-- **`AppServer` 只负责会话、能力与事件分发。** 握手协商双方的**能力交集**；`remote:*` /
-  `ssh:*` 这类管理方法对任何远程调用者一律拒绝；事件按 scope 记录并带 `seq`，断线重连按游标
-  补齐，落后太多则明确要求重新同步（resync）。
-- **路由从标识符推导，不靠「当前连了哪台」。** 形如 `remote:<server>:<id>` 的参数决定目标服务器
-  （`server-scope.ts`）；一个 payload 里出现两台不同服务器的 id 会直接报错，而不是猜一个。
-- **远端推送先改名再转发。** 对面广播的是它自己的 id，`remote-events.ts` 会给会话 / 工作区 id
-  加上 `remote:<server>:` 前缀后再送给本地客户端；本版本未分类的通道直接丢弃，不会误用。
-- **headless Agent 是同一份代码。** `src/agent/` 不引入 Electron 就能构造 `PiProcessManager`，
-  以 `HEADLESS_CAPABILITIES` 起一个 `AppServer`，在 `127.0.0.1` 上监听、等 SSH 转发过来。
+扩展通过 SDK 的包管理器安装到 FastVibe 的隔离目录。`ctx.ui.custom()` 等依赖终端全屏交互的能力暂不支持，建议使用 `select`、`confirm`、`input`、`editor` 或 `questions` 等语义化 API。
 
 ## 安装与开发
 
-打包版见 [GitHub Releases](https://github.com/tyuan511/fastvibe/releases)。macOS 构建未签名，第一次打开会被隔离，把应用拖到「应用程序」后执行：
-
-```bash
-xattr -cr /Applications/FastVibe.app
-```
-
-需要 **Node.js 24** 与 **pnpm 11**。macOS / Windows / Linux 均可开发与打包。
+需要 **Node.js 24** 与 **pnpm 11**。macOS、Windows、Linux 均可开发与打包。
 
 ```bash
 pnpm install
-pnpm dev          # 同步 models.dev 快照后启动 electron-vite
+pnpm dev          # 启动 electron-vite
 ```
 
-其它常用命令：
+常用命令：
 
 ```bash
-pnpm typecheck    # 主进程 + 渲染进程类型检查
-pnpm sync:models  # 重新生成 models.dev 快照
+pnpm typecheck    # 类型检查
+pnpm test         # 运行测试
+pnpm sync:models  # 更新 models.dev 快照
 pnpm build        # 构建到 out/
-pnpm dist:mac     # 打包 macOS（win / linux 同理）
+pnpm dist:mac     # 打包 macOS（另有 dist:win / dist:linux）
 ```
 
-### 界面预览（无 Electron）
-
-`src/renderer/mock.html` 是一个仅用于开发与文档的浏览器预览页：它会在应用挂载前
-注入一份 mock 的 `window.fastvibe`，用固定数据渲染真实界面，便于视觉走查与截图。
+浏览器预览：
 
 ```bash
-pnpm exec vite src/renderer --config vite.config.ts   # 访问 /mock.html?theme=dark
+pnpm exec vite src/renderer --config vite.config.ts
+# 访问 /mock.html?theme=dark
 ```
 
 ## 数据与隐私
 
-所有运行数据都保存在应用自己的 userData 目录，**不读写原生 `~/.pi`**：
+运行数据保存在 FastVibe 自己的目录中：
 
-| 平台 | 数据目录 |
+| 平台 | 目录 |
 | --- | --- |
 | macOS | `~/Library/Application Support/FastVibe/` |
 | Windows | `%APPDATA%\FastVibe\` |
 | Linux | `~/.config/FastVibe/` |
 
+供应商凭据保存在隔离运行时，并注入 SDK 的内存认证存储，不会导出到登录 shell 或应用内终端。浏览器登录 Cookie 只写入 FastVibe 自己的隔离浏览器会话。长期记忆保存在本地的 `runtime/engine/memory.sqlite`：默认与语义模式完全本地，只有选择 JEV 增强记忆时，才会把相关内容发给已配置的决策模型做判断。
+
+## 项目结构
+
+```text
+src/main/       Electron 主进程、IPC、内嵌 Agent 与远程服务
+src/agent/      headless FastVibe Agent
+src/preload/    contextBridge API
+src/renderer/   React 界面
+src/shared/     IPC、App Protocol 与共享类型
+resources/      内置扩展、技能和模型资源
 ```
-settings.json          界面偏好（主题、界面字号、对话行为）
-conversations.json     会话目录
-providers.json         供应商与模型
-mcp.json               MCP 服务器
-remote-access.json     远程访问的密码哈希与设备令牌（0600）
-ssh-hosts.json         保存的 SSH 主机（可能含密码，0600）
-project-bindings.json  远程项目的绑定（是引用，不是副本）
-server-identity.json   本机 App Server 的稳定身份
-logs/                  运行日志
-Partitions/
-  fastvibe-browser/    内置浏览器的隔离会话（Cookie 等）
-runtime/engine/
-  agent/sessions       会话记录
-  agent/skills         用户技能（SKILL.md）
-  agent/models.json    交给 SDK 的模型注册表
-  agent/.env           供应商密钥（权限 0600）
-  reasoning.json       思考块起止时间（用于思考用时统计）
-  usage-ledger.jsonl   用量账本（删除会话后仍可统计）
-  wt                   隔离对话使用的 git worktree
-  scratch              未绑定项目的对话工作区
-```
-
-供应商密钥保存在 FastVibe 的隔离运行时中，并在启动时注入 SDK 的内存认证存储，
-不会导出到用户的登录 shell 或应用内终端。内置浏览器同样用自己的会话分区，
-导入的登录 Cookie 只写进这里，不会改动本机浏览器的任何数据。
-
-## 快捷键
-
-默认快捷键如下，**设置 → 快捷键**可逐项自定义或恢复默认：
-
-| 快捷键 | 作用 |
-| --- | --- |
-| `⌘/Ctrl + K` | 命令面板（搜索对话、快捷操作与设置） |
-| `⌘/Ctrl + ,` | 打开设置 |
-| `⌘/Ctrl + N` | 新对话 |
-| `⌘/Ctrl + ⇧ + N` | 新建窗口 |
-| `⌘/Ctrl + O` | 打开文件夹 |
-| `⌘/Ctrl + L` | 聚焦输入框 |
-| `⌘/Ctrl + Enter` | 发送消息（或加入队列） |
-| `Esc` | 停止生成 |
-| `⌘/Ctrl + [` / `⌘/Ctrl + ]` | 上一个 / 下一个对话 |
-| `⌘/Ctrl + B` | 显示 / 隐藏侧边栏 |
-| `⌘/Ctrl + J` | 显示 / 隐藏侧边面板 |
-
-回车是否直接发送由**设置 → 快捷键 → 回车发送**控制。
-
-## 目录结构
-
-```
-src/main/          Electron 主进程：窗口、IPC 与内嵌 Agent 生命周期
-  app-server/      AppServer：会话、能力协商、事件总线与断线重连
-  transport/       Electron IPC / 窗口会话到 AppServer 的适配
-  server/          远程访问的 HTTP + WebSocket 服务与内网穿透
-  ssh/             SSH 主机、隧道、远端 Agent 部署与配置同步
-  remote/          远程项目绑定、多服务器连接管理与路由网关
-  engine/          隔离运行时路径、供应商配置、模型与文件辅助
-  pi/              内嵌 pi-coding-agent 宿主、MCP 桥接、多会话管理
-src/agent/         headless FastVibe Agent（部署在远端 Linux 机器上）
-src/preload/       contextBridge API（window.fastvibe）
-src/renderer/      React 界面（Vite）
-src/shared/        IPC 通道、App Protocol、远程绑定与作用域类型
-resources/extensions/  随应用内置的 pi 扩展
-resources/skills/      随应用内置的 pi 技能（browser-use / computer-use）
-```
-
-## 兼容性边界
-
-pi 扩展能通过 `ctx.mode` / `ctx.hasUI` 自行降级，以下纯终端能力不由 FastVibe 接管：
-
-- `registerShortcut` 注册的快捷键尚未转发到界面。
-- `registerEntryRenderer` 的自定义条目暂未合并进会话视图。
-- `ctx.ui.custom()` 的全屏交互组件不支持，调用会收到明确错误；请使用 `select`、`confirm`、`input`、`editor` 或 `questions`。
-- `registerMarkdownTransformer`、`setEditorComponent`、`addAutocompleteProvider`、主题选择暂为空实现。
 
 ## 许可
 

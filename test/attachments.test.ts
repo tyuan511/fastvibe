@@ -4,6 +4,7 @@ import {
   attachmentPromptSuffix,
   PASTED_TEXT_ATTACHMENT_THRESHOLD,
   pastedTextAttachmentName,
+  resolveDroppedPath,
   shouldAttachPastedText,
   stripAttachmentBlock,
 } from "../src/renderer/src/lib/attachments.ts";
@@ -15,9 +16,9 @@ test("only clipboard text above the composer threshold becomes an attachment", (
   assert.equal(shouldAttachPastedText("短文本"), false);
 });
 
-test("a long paste is named from its first ten characters", () => {
-  assert.equal(pastedTextAttachmentName("你好世界这是一段很长的粘贴内容，后面还有很多字"), "你好世界这是一段很长…");
-  assert.equal(pastedTextAttachmentName("\n\n  Hello world, this is long"), "Hello worl…");
+test("a long paste is named from its first 32 graphemes", () => {
+  assert.equal(pastedTextAttachmentName("你好世界这是一段很长的粘贴内容，后面还有很多字"), "你好世界这是一段很长的粘贴内容，后面还有很多字");
+  assert.equal(pastedTextAttachmentName("\n\n  Hello world, this is long"), "Hello world, this is long");
   assert.equal(pastedTextAttachmentName("   \n\n   "), "");
 });
 
@@ -40,6 +41,20 @@ test("a long paste stays model-visible but is hidden behind a file-style chip", 
     name: "粘贴的文本.txt",
     mimeType: "text/plain",
   }]);
+});
+
+test("a dropped file keeps the preload path, not the empty File.path Electron left behind", () => {
+  assert.equal(resolveDroppedPath(undefined, "/Users/me/paper.pdf"), "/Users/me/paper.pdf");
+  assert.equal(resolveDroppedPath("", "/Users/me/paper.pdf"), "/Users/me/paper.pdf");
+  assert.equal(resolveDroppedPath("/legacy/notes.md", ""), "/legacy/notes.md");
+  assert.equal(resolveDroppedPath(undefined, ""), undefined);
+  assert.equal(resolveDroppedPath("   ", "  "), undefined);
+});
+
+test("a file chip with no path adds nothing for the model to open", () => {
+  assert.equal(attachmentPromptSuffix([
+    { id: "pdf", kind: "file", name: "paper.pdf", mimeType: "application/pdf" },
+  ]), "");
 });
 
 test("real file chips are still rebuilt from the persisted prompt suffix", () => {

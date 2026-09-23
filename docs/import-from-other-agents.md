@@ -90,7 +90,7 @@
 | R6 | **每个 `toolCall` 必须有配对的 `toolResult` 条目，且紧跟在承载它的那条 assistant 之后**（中间不能插入 user/assistant）。SDK 对条目内容不做修补（只把 `content == null` 补成 `[]`），悬空 tool_use 会在下一次真实请求里被 provider 拒绝（Anthropic 400） | session-manager.js:166-189；实测见 §9 |
 | R7 | **外来 thinking 的 `signature` 必须剥掉**。有 signature 时 pi 会原样回传 `signature`（anthropic-messages.js:996-1023），外来签名会被拒绝或语义错误；无 signature 的 thinking 会被安全降级成 `text` 发送 | anthropic-messages.js:985-1023 |
 | R8 | 会话文件**复制**进 FastVibe 根，不做软链/引用。删除会话会 `unlink(sessionFile)`（process-manager.ts:747-752），引用会毁掉用户原始数据；同时绝不写 `~/.pi`、`~/.claude` 等外部目录（独立数据目录约束） | process-manager.ts:371-373,747-752 |
-| R9 | `cwd` 必须**真实存在**才能绑项目；否则退回 `runtime/engine/scratch`，不能把不存在的路径交给 bash 工具当工作目录 | process-manager.ts:1097 |
+| R9 | `cwd` 必须**真实存在**才能绑项目；否则落到 `runtime/engine/scratch/<sessionId>`（每个会话各自一份，不共用根目录），不能把不存在的路径交给 bash 工具当工作目录 | writer.ts |
 | R10 | **上下文不是无上限的**。`session.messages`（`buildSessionContext`）= 送进 LLM 的全部历史；一个 2000 条消息的导入会话首轮就会超窗 | session-manager.js:232-237 |
 
 ### 2.5 写出后会自然获得的能力
@@ -140,7 +140,7 @@ interface ImportSource {
 
 写出器 `writeImportedSession(ir): Promise<Conversation>`：
 
-1. cwd 存在 → 编码目录，否则 scratch（R9）；
+1. cwd 存在 → 编码目录，否则 `scratch/<sessionId>`（R9）；
 2. 逐条把 IR 转成 v3 条目，维护 `prevId` 链（R3），id 用 `crypto.randomUUID()` 或 `nameIndex` 风格稳定 id；
 3. 为悬空 `toolCall` 合成 `isError:true` + 「该工具调用在原 agent 中未返回结果」的 `toolResult`（R6）；
 4. 剥离 thinking 签名（R7）；
@@ -301,7 +301,7 @@ part(id, message_id, session_id, time_created, time_updated, data)  -- data 是 
 8. **大文件**：单条工具输出可达数百 KB～MB（本机 opencode 3.4 GB、Codex 4.8 GB）。→ 流式逐行解析（不要 `JSON.parse(整个文件)`）、单条输出按阈值截断并在文本里注明「已截断 N 字节」、`scan()` 阶段不读内容。
 9. **非 UTF-8 / 损坏行 / 无尾换行**：逐行 try/catch；写出时必须**每条一行 + 结尾换行**（`_persist` 直接 append，没有尾换行会把两条记录粘成一行非法 JSON）。
 10. **上下文超限**（R10）：导入长会话后首轮就可能爆窗。→ 导入前用「估算 token」提示，超阈值时建议：只导入最近 N 轮、或自动在尾部写一条 `compaction` 摘要条目（摘要可让模型生成，成本计入用户）。
-11. **cwd 不存在**（R9）：外来会话的项目路径常已删除。→ 落到 scratch，并在标题后缀或 preview 里标注原路径。
+11. **cwd 不存在**（R9）：外来会话的项目路径常已删除。→ 落到 `scratch/<sessionId>`，并在标题后缀或 preview 里标注原路径。
 12. **图片/附件**：Claude Code 的 base64 image、Codex 的附件目录、opencode `file` part。→ 只支持内联 base64 图片（`{type:"image",data,mimeType}`），其余在报告里列为「未导入」。
 13. **隐私**：不导入凭证类文件（`auth.json`、`config.toml` 密钥、`.env`）。凭证导入已有独立通路（`src/main/engine/cc-switch.ts` 从 `~/.cc-switch/cc-switch.db` 读 provider），不要混进会话导入。日志里不打印消息正文。
 14. **只读**：所有外部根以只读方式打开，绝不创建/修改/加锁（SQLite 需复制或 immutable 打开）。
@@ -345,7 +345,7 @@ part(id, message_id, session_id, time_created, time_updated, data)  -- data 是 
 - 每个 `toolCall` 都有配对 `toolResult`（含合成的），且**顺序为 assistant→toolResult 就地相邻**（断言子序列，不是断言集合）。
 - 任一 thinking 无 `thinkingSignature`；`usage-stats` 能统计到该会话的回合，金额非 NaN。
 - 原来源目录在导入前后**字节级不变**（hash 校验），且不含对来源路径的引用。
-- cwd 不存在时落到 scratch，且 `conversation.project` 为空。
+- cwd 不存在时落到 `scratch/<sessionId>`，且 `conversation.project` 为空。
 - 重复导入不产生第二个副本。
 
 ---

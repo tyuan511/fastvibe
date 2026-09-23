@@ -145,7 +145,7 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
     clearAppSettings(paths);
     applyPermissionMode({});
   });
-  handle(Ipc.appGetInfo, () => ({ version: process.env.FASTVIBE_VERSION ?? "0.7.0", userData: paths.userData, runtimeRoot: paths.runtimeRoot, platform: process.platform }));
+  handle(Ipc.appGetInfo, () => ({ version: process.env.FASTVIBE_VERSION ?? "agent", userData: paths.userData, runtimeRoot: paths.runtimeRoot, platform: process.platform }));
   handle(Ipc.workspaceFileIcons, () => ({ files: {}, folders: {} }));
   handle(Ipc.statsUsage, (_payload?: { range?: UsageRange }) => ({ range: "30d", from: "", to: "", totals: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, tokens: 0, cost: 0, requests: 0, toolCalls: 0, activeDays: 0 }, days: [], models: [], sessions: 0, longestSessionMinutes: 0, currentStreak: 0, longestStreak: 0 }));
 

@@ -120,6 +120,8 @@
     "webSources_one": "{{count}} source",
     "webSources_other": "{{count}} sources",
     "questionFallback": "Clarifying question",
+    "memory": "Long-term memory",
+    "memoryRecent": "Recent memories",
     "questionCount_one": "{{count}} question",
     "questionCount_other": "{{count}} questions",
     "todoUpdating": "Updating tasks",

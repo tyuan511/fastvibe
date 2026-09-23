@@ -18,6 +18,7 @@ allowBuilds:
   esbuild: true
   koffi: false
   node-pty: true
+  onnxruntime-node: true
   protobufjs: false
   unrs-resolver: false
 

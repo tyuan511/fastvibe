@@ -31,6 +31,7 @@ import { ImagePreview } from "@/components/image-preview";
 import { AttachmentChip } from "./attachment-chip";
 import { collectChangedFiles, TurnFileChips } from "./file-chips";
 import { MarkdownView } from "./markdown-view";
+import { SelectionActionBar } from "./selection-action-bar";
 import { NewSessionHero } from "./new-session";
 import { ThinkingBlock } from "./thinking-block";
 import { ToolCard } from "./tool-card";
@@ -1080,6 +1081,8 @@ export function MessageList({
   showTimestamp = true,
   collapseRuns = false,
   emptyState,
+  onAddSelectionToConversation,
+  onAskSelectionInSideChat,
 }: {
   messages: ChatMessage[];
   streaming: boolean;
@@ -1095,8 +1098,11 @@ export function MessageList({
   /** Fold each reply's process into one 「用时 …」 block (设置 → 对话). */
   collapseRuns?: boolean;
   emptyState?: JSX.Element | null;
+  onAddSelectionToConversation?: (text: string) => void;
+  onAskSelectionInSideChat?: (text: string) => void;
 }): JSX.Element {
   const { t } = useTranslation("chat");
+  const selectionRootRef = useRef<HTMLDivElement>(null);
   // One row per user prompt and per assistant reply, not per engine message.
   const rows = useMemo(() => groupMessageRows(messages), [messages]);
   // Retry/edit rewind the conversation, so they are only offered on the newest
@@ -1190,7 +1196,7 @@ export function MessageList({
   return (
     <MessageScrollerProvider autoScroll>
       <MessageRevealProvider reveal={reveal}>
-      <div className="flex h-full min-h-0 flex-col">
+      <div ref={selectionRootRef} className="relative flex h-full min-h-0 flex-col">
       {/* Named container: the rail is only worth showing when the gutter beside the
           message column can hold it. */}
       <MessageScroller className="@container/thread">
@@ -1229,6 +1235,11 @@ export function MessageList({
         <MessageScrollerButton />
         <RevealOnReachStart hidden={hiddenTurns} onReveal={revealMore} />
       </MessageScroller>
+      <SelectionActionBar
+        containerRef={selectionRootRef}
+        onAddToConversation={onAddSelectionToConversation}
+        onAskInSideChat={onAskSelectionInSideChat}
+      />
       <FollowLatest messages={messages} />
       </div>
       </MessageRevealProvider>

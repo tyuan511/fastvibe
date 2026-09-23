@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { Ipc } from "@shared/ipc";
 import { createFastVibeApi, type FastVibeApi } from "@shared/api";
 
@@ -34,6 +34,9 @@ const api = createFastVibeApi({
    */
   platform: process.platform,
   remote: false,
+  // `File.path` is gone. The page cannot reach electron, and Main cannot see the
+  // File object, so the path has to be read here and handed back as a string.
+  pathForFile: (file) => webUtils.getPathForFile(file as Parameters<typeof webUtils.getPathForFile>[0]),
 });
 
 export type { FastVibeApi };

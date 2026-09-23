@@ -47,6 +47,20 @@ async function main() {
     recursive: true,
     filter: (source) => !source.endsWith(".map"),
   });
+
+  // The SSH deployer needs the runtime release metadata, but it must not make the
+  // desktop package depend on the desktop semver. CI downloads this generated file
+  // after the independent Agent runtime release job; local packaging can provide it by
+  // running `pnpm build:agent-runtime` first.
+  const runtimeMetadata = join(ROOT, "release", "agent-runtime", "agent-runtime.json");
+  try {
+    await stat(runtimeMetadata);
+    await mkdir(join(DEST, "agent-runtimes"), { recursive: true });
+    await cp(runtimeMetadata, join(DEST, "agent-runtimes", "agent-runtime.json"));
+  } catch {
+    // SSH remains unavailable in a package built without runtime metadata; the desktop
+    // itself still packages normally and Main reports the missing metadata clearly.
+  }
 }
 
 main().catch((error) => {

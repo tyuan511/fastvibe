@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { execFileSync, spawn } from "node:child_process";
 import { mkdtempSync } from "node:fs";
@@ -5,6 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { agentRuntimePackages, checkAgentRuntime } from "./check-agent-runtime.mjs";
+import { hashRuntimeDirectory } from "./agent-runtime-hash.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
@@ -27,12 +29,14 @@ if (process.arch !== expectedArch) {
 
 // Fail before staging cleanup, dependency installation, or archive creation.
 const agentEntry = join(root, "out", "main", "agent.js");
-checkAgentRuntime(agentEntry);
+const agentFiles = checkAgentRuntime(agentEntry);
 const runtimeDependencies = agentDependencies(agentRuntimePackages(agentEntry));
 
 const outputDir = resolve(root, String(args.get("output") || "release/agent-runtime"));
 const staging = join(outputDir, `.staging-${platform}-${arch}`);
-const archive = join(outputDir, `fastvibe-agent-${platform}-${arch}.tar.gz`);
+const target = `${platform}-${arch}`;
+const archive = join(outputDir, `fastvibe-agent-${target}.tar.gz`);
+const metadataFile = join(outputDir, `runtime-metadata-${target}.json`);
 rmSync(staging, { recursive: true, force: true });
 mkdirSync(staging, { recursive: true });
 mkdirSync(outputDir, { recursive: true });
@@ -45,7 +49,9 @@ try {
   // the lockfile may change here (`--no-frozen-lockfile`) but no version can.
   writeFileSync(join(staging, "package.json"), JSON.stringify({
     name: `${packageJson.name}-agent`,
-    version: packageJson.version,
+    // This is an isolated package, not a release of the desktop application. Keeping
+    // the desktop semver out of it is important: the runtime is deduplicated by content.
+    version: "0.0.0",
     private: true,
     type: packageJson.type,
     packageManager: packageJson.packageManager,
@@ -74,8 +80,22 @@ try {
   // Node is intentionally not copied into the Agent archive. The remote bootstrap
   // reuses a compatible system Node, or installs the exact build version under the
   // user's ~/.fastvibe-agent directory when the host has none.
+  const runtimeHash = hashRuntimeDirectory(staging, {
+    target,
+    // CI tracks the Node major/minor line. Patch updates do not change the Agent
+    // payload and must not manufacture a new runtime release.
+    node: process.versions.node.split(".").slice(0, 2).join("."),
+    // `out/main` also contains the Electron desktop entry. It is shipped for the
+    // existing relative-module layout, but a desktop-only change must not create a new
+    // Agent release when no file reachable from agent.js changed.
+    ignore: (name) => name === "node_modules/.modules.yaml"
+      || name === "node_modules/.pnpm/lock.yaml"
+      || (name.startsWith("out/main/") && !agentFiles.has(join(root, name))),
+  });
   writeFileSync(join(staging, "manifest.json"), JSON.stringify({
-    version: packageJson.version,
+    // `version` remains for old bootstrap readers; new clients validate runtimeHash.
+    version: runtimeHash,
+    runtimeHash,
     platform,
     arch,
     node: process.version,
@@ -88,7 +108,18 @@ try {
     stdio: "inherit",
     env: { ...process.env, COPYFILE_DISABLE: "1", GZIP: "-9" },
   });
+  const archiveSha256 = createHash("sha256").update(readFileSync(archive)).digest("hex");
+  const metadata = {
+    schema: 1,
+    target,
+    runtimeHash,
+    archive: `fastvibe-agent-${target}.tar.gz`,
+    archiveSha256,
+    node: process.version,
+  };
+  writeFileSync(metadataFile, JSON.stringify(metadata, null, 2) + "\n");
   console.log(`Agent runtime written to ${archive}`);
+  console.log(`Agent runtime metadata written to ${metadataFile}`);
 } finally {
   rmSync(staging, { recursive: true, force: true });
 }

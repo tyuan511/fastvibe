@@ -231,6 +231,17 @@ export const Ipc = {
   decisionSetKey: "decision:set-key",
   /** 配置变化的广播，不带秘密——Jev key 只在 Main 的 .env 里。 */
   decisionChanged: "decision:changed",
+  /** Long-term memory: model-free default, local semantic retrieval, or JEV control plane. */
+  memoryGetState: "memory:get-state",
+  memoryPrepareModel: "memory:prepare-model",
+  memorySetConfig: "memory:set-config",
+  memorySearch: "memory:search",
+  /** 设置 → 长期记忆 → 关系图: nodes and edges to draw, and one memory in full. */
+  memoryGraph: "memory:graph",
+  memoryDetail: "memory:detail",
+  memoryDelete: "memory:delete",
+  memoryClear: "memory:clear",
+  memoryChanged: "memory:changed",
   /** 远程访问（网页/手机）: server lifecycle, credentials and devices. */
   remoteGetState: "remote:get-state",
   remoteSetPassword: "remote:set-password",
@@ -249,6 +260,12 @@ export const Ipc = {
   remoteFrpCheckDns: "remote:frp-check-dns",
   /** Pushed when the server starts, stops, gains a client, or the tunnel changes phase. */
   remoteState: "remote:state",
+  /** Whether this process can read locations macOS guards with Full Disk Access. */
+  systemFullDiskAccess: "system:full-disk-access",
+  /** Opens System Settings on that list. The grant itself cannot be requested. */
+  systemOpenFullDiskAccess: "system:open-full-disk-access",
+  /** Reveals the .app the user has to drag into the list when it is not there yet. */
+  systemRevealApp: "system:reveal-app",
 } as const;
 
 export type AppModelsDevInfo = {
@@ -265,6 +282,18 @@ export type AppInfo = {
   runtimeRoot: string;
   platform: string;
   modelsDev?: AppModelsDevInfo;
+};
+
+/** macOS Full Disk Access, as far as this process can tell. Meaningless elsewhere. */
+export type FullDiskAccessStatus = {
+  /** False on Windows and Linux: there is no such grant, and nothing to ask. */
+  applicable: boolean;
+  granted: boolean;
+  /**
+   * False in a dev checkout. The Privacy list then shows Electron, because that is
+   * the bundle macOS signed — `app.setName` does not change which row the toggle is.
+   */
+  packaged: boolean;
 };
 
 export type AppLogLevel = "debug" | "info" | "warn" | "error";

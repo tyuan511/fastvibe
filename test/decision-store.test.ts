@@ -96,3 +96,12 @@ test("the batch and approval scenarios default off and round-trip", () => {
     assert.deepEqual(readDecisionConfig(file), { kind: "jev", browserControl: false, computerControl: false, batchDecide: true, smartApproval: true });
   });
 });
+
+test("enhanced memory is an explicit Jev scenario", () => {
+  withTempFile((file) => {
+    writeFileSync(file, JSON.stringify({ version: 1, decisionModel: { kind: "jev", browserControl: true } }));
+    assert.equal(readDecisionConfig(file).memoryControl, undefined);
+    writeDecisionConfig(file, { kind: "jev", browserControl: false, computerControl: false, batchDecide: false, smartApproval: false, memoryControl: true });
+    assert.equal(readDecisionConfig(file).memoryControl, true);
+  });
+});

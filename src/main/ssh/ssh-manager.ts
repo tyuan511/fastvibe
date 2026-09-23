@@ -4,7 +4,7 @@ import type { FastVibePaths } from "../engine/paths.ts";
 import type { RemoteHostConnectionState, RemoteHostProfile, RemoteHostTestResult, RemoteTransferProgress, SshHostKeyScan } from "../../shared/remote-host.ts";
 import { readSshHosts, redactSshHosts, removeSshHost, saveSshHost, type SecretBox, type SshHostSnapshot } from "./ssh-hosts.ts";
 import { captureHostKey, writeTrustedHostKey, type CapturedHostKey } from "./ssh-known-hosts.ts";
-import { loadAgentRuntime, agentRuntimeTarget, agentRuntimeRemoteDownloadCommand, agentRuntimeUploadCommand, sha256Helper } from "./agent-runtime.ts";
+import { loadAgentRuntime, agentRuntimeTarget, agentRuntimeRemoteDownloadCommand, agentRuntimeUploadCommand, sha256Helper, type AgentRuntimeSource, type AgentRuntimeTarget } from "./agent-runtime.ts";
 import { downloadHelpers, loginEnvironment, NODE_MIRROR, remoteShellCommand, shellQuote } from "./remote-shell.ts";
 import { probeSshHost, runSshCommand, SshError, SshTunnel, startSshMaster, type SshMaster } from "./ssh-tunnel.ts";
 
@@ -16,12 +16,7 @@ export type SshManagerDeps = {
   /** OS keychain for saved passwords; without one they stay in the 0600 file. */
   secrets?: SecretBox;
   /** Precompiled Linux Agent package source and release metadata. */
-  agentRuntime: {
-    version: string;
-    artifactDirectory?: string;
-    cacheDirectory?: string;
-    releaseBaseUrl?: string;
-  };
+  agentRuntime: AgentRuntimeSource;
 };
 
 /**
@@ -71,7 +66,7 @@ export class SshManager {
     const { output, ...result } = await probeSshHost({
       host: profile,
       ...(profile.authMethod === "password" && profile.password ? { password: profile.password } : {}),
-      command: agentPreflightCommand(this.#deps.agentRuntime.version),
+      command: agentPreflightCommand(this.#deps.agentRuntime),
     });
     if (!result.ok || output === undefined) return result;
     const status = parsePreflight(output);
@@ -214,13 +209,13 @@ export async function openSshAppTransport(options: {
     throwIfAborted(signal);
     output("检查远程系统与常驻 Agent…");
     // One round trip answers everything the connect needs before deciding what to do:
-    // the platform, the installed version, the home directory, and — when this exact
-    // version is already running — its token, which skips the deploy altogether.
+    // the platform, the installed runtime release and hash, the home directory, and —
+    // when this exact release is already running — its token, which skips deployment.
     const preflight = parsePreflight(await runSshCommand({
       host: profile,
       password,
       controlPath,
-      command: agentPreflightCommand(agentRuntime.version),
+      command: agentPreflightCommand(agentRuntime),
       timeoutMs: 20_000,
       onOutput: remote(),
       signal,
@@ -247,8 +242,10 @@ export async function openSshAppTransport(options: {
     }
     const target = agentRuntimeTarget(preflight.os, preflight.arch);
     output(`远程系统：${preflight.os} ${preflight.arch}，常驻 Agent 不在运行，开始初始化…`);
-    if (preflight.installed === agentRuntime.version) {
-      output(`远程已有 ${agentRuntime.version} Agent，跳过上传`);
+    const artifact = agentRuntime.targets[target];
+    if (!artifact) throw new Error(`当前构建不包含 ${target} 的 Agent runtime（${agentRuntime.release}）`);
+    if (preflight.installed === agentRuntime.release && preflight.installedHash === artifact.runtimeHash) {
+      output(`远程已有 ${agentRuntime.release} Agent，跳过上传`);
     } else {
       output(`准备 ${target} Agent…`);
       // The host fetches the release itself, and only falls back to a download here plus
@@ -292,7 +289,7 @@ export async function openSshAppTransport(options: {
           host: profile,
           password,
           controlPath,
-          command: agentRuntimeUploadCommand(agentRuntime, createHash("sha256").update(runtime.archive).digest("hex")),
+          command: agentRuntimeUploadCommand(agentRuntime, target, createHash("sha256").update(runtime.archive).digest("hex")),
           input: runtime.archive,
           onInputProgress: (sent, total) => progress.report("agent-upload", sent, total),
           timeoutMs: 300_000,
@@ -307,7 +304,7 @@ export async function openSshAppTransport(options: {
       host: profile,
       password,
       controlPath,
-      command: buildAgentBootstrapCommand(profile.servicePort, agentRuntime.version, target, randomBytes(32).toString("hex")),
+      command: buildAgentBootstrapCommand(profile.servicePort, agentRuntime, target, randomBytes(32).toString("hex")),
       // Long enough for a first deploy that also has to download Node.js from a mirror.
       timeoutMs: 900_000,
       onOutput: remote(),
@@ -345,18 +342,27 @@ function throwIfAborted(signal?: AbortSignal): void {
  * One round trip that tells the connect what it is dealing with.
  *
  * Prints `FASTVIBE_OS/ARCH/HOME/INSTALLED/RUNNING/PORT` unconditionally, and the sync
- * token only when this exact version is installed, running, answering on the port its
- * state file names, and holding a token. Anything less prints no token, and the caller
- * deploys. Nothing here installs, downloads or stops anything.
+ * token only when this exact runtime release and hash are installed, running, answering
+ * on the port its state file names, and holding a token. Anything less prints no token,
+ * and the caller deploys. Nothing here installs, downloads or stops anything.
  */
-export function agentPreflightCommand(version: string): string {
-  const safeVersion = version.replace(/[^0-9A-Za-z._-]/g, "_");
+export function agentPreflightCommand(source: AgentRuntimeSource): string {
+  const safeRelease = source.release.replace(/[^0-9A-Za-z._-]/g, "_");
+  const x64 = source.targets["linux-x64"]?.runtimeHash ?? "";
+  const arm64 = source.targets["linux-arm64"]?.runtimeHash ?? "";
+  if (!x64 || !arm64) throw new Error(`当前构建缺少 Agent runtime 元数据（${source.release}）`);
   const script = [
-    `VERSION='${safeVersion}'`,
+    `VERSION='${safeRelease}'`,
+    `EXPECTED_X64='${x64}'`,
+    `EXPECTED_ARM64='${arm64}'`,
     ...agentStatusLines(),
+    'expected_hash() { case "$1" in x86_64|amd64) printf "%s" "$EXPECTED_X64" ;; aarch64|arm64) printf "%s" "$EXPECTED_ARM64" ;; esac; }',
     'resident() {',
     '  [ -f "$ROOT/releases/$VERSION/out/main/agent.js" ] || return 0',
+    '  EXPECTED=$(expected_hash "$ARCH")',
+    '  [ -n "$EXPECTED" ] || return 0',
     '  [ "$INSTALLED" = "$VERSION" ] || return 0',
+    '  [ "$INSTALLED_HASH" = "$EXPECTED" ] || return 0',
     '  [ "$RUNNING" = "$VERSION" ] || return 0',
     '  TOKEN=$(agent_token "$pid")',
     '  [ -n "$TOKEN" ] || return 0',
@@ -381,8 +387,10 @@ function agentStatusLines(): string[] {
     'printf "FASTVIBE_ARCH=%s\\n" "$(uname -m)"',
     'printf "FASTVIBE_HOME=%s\\n" "$HOME"',
     'INSTALLED=""',
-    'if [ -f "$ROOT/current/manifest.json" ] && [ -f "$ROOT/current/out/main/agent.js" ]; then INSTALLED=$(awk -F\'"\' \'/"version"/ { print $4; exit }\' "$ROOT/current/manifest.json" 2>/dev/null); fi',
+    'INSTALLED_HASH=""',
+    'if [ -f "$ROOT/current/manifest.json" ] && [ -f "$ROOT/current/out/main/agent.js" ]; then CURRENT=$(readlink -f "$ROOT/current" 2>/dev/null || printf "%s" "$ROOT/current"); INSTALLED=${CURRENT##*/}; INSTALLED_HASH=$(awk -F\'"\' \'/"runtimeHash"/ { print $4; exit }\' "$ROOT/current/manifest.json" 2>/dev/null); if [ -z "$INSTALLED_HASH" ]; then INSTALLED_HASH=$(awk -F\'"\' \'/"version"/ { print $4; exit }\' "$ROOT/current/manifest.json" 2>/dev/null); fi; fi',
     'printf "FASTVIBE_INSTALLED=%s\\n" "$INSTALLED"',
+    'printf "FASTVIBE_INSTALLED_HASH=%s\\n" "$INSTALLED_HASH"',
     ...agentProcessHelpers(),
     'RUNNING=""',
     'find_agent',
@@ -409,10 +417,11 @@ function agentPaths(): string[] {
 }
 
 /** What the connect, and the settings pane, read out of `agentPreflightCommand`. */
-export function parsePreflight(output: string): { os: string; arch: string; home?: string; installed?: string; running?: string; port?: number; token?: string } {
+export function parsePreflight(output: string): { os: string; arch: string; home?: string; installed?: string; installedHash?: string; running?: string; port?: number; token?: string } {
   const field = (name: string): string => new RegExp(`^FASTVIBE_${name}=(.*)$`, "m").exec(output)?.[1]?.trim() ?? "";
   const home = field("HOME");
   const installed = field("INSTALLED");
+  const installedHash = field("INSTALLED_HASH");
   const running = field("RUNNING");
   const port = Number(field("PORT"));
   const token = extractSyncToken(output);
@@ -421,6 +430,7 @@ export function parsePreflight(output: string): { os: string; arch: string; home
     arch: field("ARCH"),
     ...(home.startsWith("/") ? { home } : {}),
     ...(installed ? { installed } : {}),
+    ...(installedHash ? { installedHash } : {}),
     ...(running ? { running } : {}),
     ...(Number.isInteger(port) && port >= 1 && port <= 65_535 ? { port } : {}),
     ...(token ? { token } : {}),
@@ -477,23 +487,27 @@ function agentProcessHelpers(): string[] {
 }
 
 /**
- * Start the versioned Agent on the remote machine.
+ * Start the independently versioned Agent on the remote machine.
  *
  * One resident Agent per remote user. It listens on `--port=0` — whatever free port the
  * OS hands out, so no fixed port can collide with another user or program — unless the
  * profile pins `servicePort`. Either way the Agent writes the port to its state file,
- * and this prints it back as `FASTVIBE_PORT=`. A running Agent of this version with the
- * right token is reused; any other FastVibe Agent is stopped first.
+ * and this prints it back as `FASTVIBE_PORT=`. A running Agent of this runtime release
+ * with the right token is reused; any other FastVibe Agent is stopped first.
  */
-export function buildAgentBootstrapCommand(port: number | undefined, version: string, target: "linux-x64" | "linux-arm64" = "linux-x64", syncToken = ""): string {
+export function buildAgentBootstrapCommand(port: number | undefined, source: AgentRuntimeSource, target: AgentRuntimeTarget = "linux-x64", syncToken = ""): string {
   const requested = port && Number.isInteger(port) && port >= 1 && port <= 65_535 ? port : 0;
-  const safeVersion = version.replace(/[^0-9A-Za-z._-]/g, "_");
+  const safeVersion = source.release.replace(/[^0-9A-Za-z._-]/g, "_");
   const safeTarget = target === "linux-arm64" ? "linux-arm64" : "linux-x64";
+  const artifact = source.targets[target];
+  if (!artifact) throw new Error(`当前构建不包含 ${target} 的 Agent runtime（${source.release}）`);
+  const safeRuntimeHash = artifact.runtimeHash;
   const safeSyncToken = /^[a-f0-9]{64}$/.test(syncToken) ? syncToken : "";
   const script = [
     `REQUESTED_PORT=${requested}`,
     `VERSION='${safeVersion}'`,
     `TARGET='${safeTarget}'`,
+    `EXPECTED_RUNTIME_HASH='${safeRuntimeHash}'`,
     ...agentPaths(),
     'MAIN="$ROOT/releases/$VERSION/out/main/agent.js"',
     // Not /tmp: that is shared, and a file another user left there (umask 077 on theirs)
@@ -506,6 +520,9 @@ export function buildAgentBootstrapCommand(port: number | undefined, version: st
     'umask 077',
     'if [ -s "$SYNC_TOKEN_FILE" ]; then SYNC_TOKEN=$(cat "$SYNC_TOKEN_FILE"); elif [ -n "$SYNC_TOKEN_INPUT" ]; then printf "%s\\n" "$SYNC_TOKEN_INPUT" > "$SYNC_TOKEN_FILE"; SYNC_TOKEN="$SYNC_TOKEN_INPUT"; TOKEN_CREATED=1; fi',
     'if [ ! -f "$MAIN" ]; then echo "FastVibe Agent runtime upload is incomplete" >&2; exit 127; fi',
+    'INSTALLED_RUNTIME_HASH=$(awk -F\'"\' \'/"runtimeHash"/ { print $4; exit }\' "$ROOT/releases/$VERSION/manifest.json" 2>/dev/null)',
+    'if [ -z "$INSTALLED_RUNTIME_HASH" ]; then INSTALLED_RUNTIME_HASH=$(awk -F\'"\' \'/"version"/ { print $4; exit }\' "$ROOT/releases/$VERSION/manifest.json" 2>/dev/null); fi',
+    '[ "$INSTALLED_RUNTIME_HASH" = "$EXPECTED_RUNTIME_HASH" ] || { echo "FastVibe Agent runtime hash mismatch" >&2; exit 127; }',
     ...sha256Helper(),
     ...downloadHelpers(),
     "node_version() { awk -F'\"' '/\"node\"/ { print $4; exit }' \"$ROOT/releases/$VERSION/manifest.json\"; }",
@@ -561,9 +578,9 @@ export function buildAgentBootstrapCommand(port: number | undefined, version: st
     'paths_for() { if [ ! -r "/proc/$1/cmdline" ]; then return 1; fi; tr \'\\000\' " " < "/proc/$1/cmdline"; echo " "; readlink "/proc/$1/exe" 2>/dev/null || true; }',
     ...agentProcessHelpers(),
     ...stopPidHelper(),
-    // Every deploy leaves a ~100 MB release behind. Once this version is up, anything no
-    // running process still executes from is only disk: another port's Agent keeps its
-    // release, and the Node this version runs on is never touched.
+    // Every deploy leaves a ~100 MB release behind. Once this runtime release is up,
+    // anything no running process still executes from is only disk: another port's Agent
+    // keeps its release, and the Node this runtime uses is never touched.
     'in_use() { for c in /proc/[0-9]*/cmdline; do if tr "\\000" " " < "$c" 2>/dev/null | grep -qF "$1/"; then return 0; fi; done; return 1; }',
     'prune() {',
     '  for dir in "$ROOT"/releases/*; do',

@@ -3,8 +3,9 @@ import { randomUUID } from "node:crypto";
 // chain without the Vite aliases: the catalog's change notice is what every client's
 // conversation list rides on, and that deserves a test that loads the real module.
 import { uiText } from "./ui-text.ts";
-import { readFileSync, writeFileSync } from "node:fs";
-import { basename } from "node:path";
+import { ensureScratchWorkspace, scratchWorkspace } from "./paths.ts";
+import { readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { basename, join, resolve } from "node:path";
 import type { Conversation, Project, WorkspaceSnapshot } from "@shared/types";
 
 type CatalogFile = {
@@ -166,10 +167,10 @@ export class ConversationCatalog {
     const bound = normalizeProject(project);
     if (bound) this.ensureProject(bound);
     const now = Date.now();
-    const conversation: Conversation = {
+    const conversation = this.#assignCwd({
       id,
       title: options?.title?.trim() || uiText("新会话", "New chat"),
-      cwd: session?.cwd ?? bound ?? this.#scratchRoot,
+      cwd: session?.cwd ?? bound ?? "",
       project: bound,
       sessionFile: session?.sessionFile,
       sessionId: session?.sessionId,
@@ -179,7 +180,7 @@ export class ConversationCatalog {
       kind: options?.kind,
       parentId: options?.parentId,
       preview: options?.preview?.trim() || (options?.kind === "side-chat" ? options.title?.trim() || uiText("辅助对话", "Side chat") : undefined),
-    };
+    });
     this.#items = [conversation, ...this.#items.filter((item) => item.id !== conversation.id)];
     if (options?.activate !== false) this.#activeId = conversation.id;
     this.#write();
@@ -190,7 +191,7 @@ export class ConversationCatalog {
   setProject(id: string, project: string | undefined): Conversation | undefined {
     const bound = normalizeProject(project);
     if (bound) this.ensureProject(bound);
-    return this.update(id, { project: bound, cwd: bound ?? this.#scratchRoot, worktree: undefined });
+    return this.update(id, { project: bound, cwd: bound ?? this.#scratchFor(id), worktree: undefined });
   }
 
   /** Point the engine cwd at a git worktree, or restore it to the bound project. */
@@ -202,7 +203,7 @@ export class ConversationCatalog {
     if (worktree) {
       return this.update(id, { project: bound, cwd: worktree.path, worktree });
     }
-    return this.update(id, { project: bound, cwd: bound ?? this.#scratchRoot, worktree: undefined });
+    return this.update(id, { project: bound, cwd: bound ?? this.#scratchFor(id), worktree: undefined });
   }
 
   /** Restore a prompt preview only if no later catalog mutation replaced it. */
@@ -222,20 +223,24 @@ export class ConversationCatalog {
     if (index < 0) return undefined;
     const current = this.#items[index];
     // `createdAt` is immutable: it is the sidebar's sort key.
-    const next = { ...current, ...patch, id, createdAt: current.createdAt, updatedAt: Date.now() };
+    const next: Conversation = {
+      ...current,
+      ...patch,
+      id,
+      createdAt: current.createdAt,
+      updatedAt: Date.now(),
+    };
     if ("project" in patch) {
       next.project = normalizeProject(patch.project);
       // An explicit cwd wins: binding a worktree sets `project` *and* a checkout that
       // is not the project path. Only fill cwd from the project when the caller left it alone.
-      if (!("cwd" in patch)) next.cwd = next.project ?? this.#scratchRoot;
+      if (!("cwd" in patch)) next.cwd = next.project ?? "";
     }
-    if (!next.cwd) {
-      next.cwd = next.project ?? this.#scratchRoot;
-    }
-    this.#items[index] = next;
-    if (next.project) this.ensureProject(next.project);
+    const assigned = this.#assignCwd(next);
+    this.#items[index] = assigned;
+    if (assigned.project) this.ensureProject(assigned.project);
     this.#write();
-    return next;
+    return assigned;
   }
 
   remove(id: string): Conversation | undefined {
@@ -271,6 +276,7 @@ export class ConversationCatalog {
         this.#items = parsed.filter(isConversation).map((item) => this.#migrateLegacy(item));
         this.#projects = projectsFromConversations(this.#items).sort(byProjectCreatedDesc);
         this.#activeId = this.#items[0]?.id;
+        this.#isolateScratch();
         this.#write();
         return;
       }
@@ -301,11 +307,91 @@ export class ConversationCatalog {
         }
         if (needsProjectMigration) this.#projects.sort(byProjectCreatedDesc);
         this.#activeId = typeof parsed.activeId === "string" ? parsed.activeId : this.#items[0]?.id;
-        if (legacy || needsProjectMigration) this.#write();
+        const scratchMigrated = this.#isolateScratch();
+        if (legacy || needsProjectMigration || scratchMigrated) this.#write();
         return;
       }
     } catch {
       // empty catalog
+    }
+  }
+
+  /** `scratch/<id>`, created on disk so the engine can use it as a cwd. */
+  #scratchFor(id: string): string {
+    return ensureScratchWorkspace(this.#scratchRoot, id);
+  }
+
+  /** True when `cwd` is missing or is the shared scratch root every chat used to share. */
+  #isSharedScratch(cwd: string | undefined): boolean {
+    if (!cwd?.trim()) return true;
+    return resolve(cwd) === resolve(this.#scratchRoot);
+  }
+
+  /**
+   * Keep an explicit workspace, and send an unbound chat to its own scratch directory.
+   *
+   * A path equal to the scratch root is not an explicit workspace: that is the old
+   * shared directory. A bound project wins over it, including when the project path
+   * itself is that root.
+   */
+  #assignCwd(conversation: Conversation): Conversation {
+    if (conversation.worktree) return { ...conversation, cwd: conversation.worktree.path };
+    if (conversation.project) {
+      const cwd = conversation.cwd && !this.#isSharedScratch(conversation.cwd) ? conversation.cwd : conversation.project;
+      return { ...conversation, cwd };
+    }
+    if (!conversation.cwd || this.#isSharedScratch(conversation.cwd)) {
+      return { ...conversation, cwd: this.#scratchFor(conversation.id) };
+    }
+    return conversation;
+  }
+
+  /**
+   * Give every unbound chat that still points at the shared scratch root its own
+   * `scratch/<id>`. A side chat follows its parent: it was opened to work in that
+   * same directory, not to start a second one.
+   *
+   * Files already in the shared root move only when a single chat owns them. Several
+   * chats writing into one directory leave no record of which file was whose, and
+   * guessing would hide work from the rest — those files stay where they are.
+   */
+  #isolateScratch(): boolean {
+    const shared = this.#items.filter((item) => !item.project && !item.worktree && this.#isSharedScratch(item.cwd));
+    if (shared.length === 0) return false;
+    const owners = shared.filter((item) => item.kind !== "side-chat");
+    if (owners.length === 1) this.#adoptSharedScratch(owners[0].id);
+    const byId = new Map(this.#items.map((item) => [item.id, item]));
+    this.#items = this.#items.map((item) => {
+      if (item.project || item.worktree || !this.#isSharedScratch(item.cwd)) return item;
+      if (item.kind === "side-chat" && item.parentId) {
+        const parent = byId.get(item.parentId);
+        if (parent && !parent.project && !parent.worktree) return { ...item, cwd: this.#scratchFor(parent.id) };
+        if (parent?.cwd && !this.#isSharedScratch(parent.cwd)) return { ...item, cwd: parent.cwd };
+      }
+      return { ...item, cwd: this.#scratchFor(item.id) };
+    });
+    return true;
+  }
+
+  /** Move the shared root's entries into one chat's directory. Other chats' directories are left alone. */
+  #adoptSharedScratch(id: string): void {
+    const dest = this.#scratchFor(id);
+    const reserved = new Set(this.#items.map((item) => basename(scratchWorkspace(this.#scratchRoot, item.id))));
+    let names: string[];
+    try {
+      names = readdirSync(this.#scratchRoot);
+    } catch {
+      return;
+    }
+    const destName = basename(dest);
+    for (const name of names) {
+      if (name === destName || reserved.has(name)) continue;
+      try {
+        renameSync(join(this.#scratchRoot, name), join(dest, name));
+      } catch {
+        // A file that cannot be moved stays in the shared root. The chat still gets
+        // its own directory; leaving the file is safer than failing startup.
+      }
     }
   }
 

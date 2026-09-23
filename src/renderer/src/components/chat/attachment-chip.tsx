@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { AttachmentIcon, Cancel01Icon } from "@hugeicons/core-free-icons";
 import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { ChatAttachment } from "@shared/types";
 
 /**
@@ -52,17 +53,24 @@ export function AttachmentChip({
     className,
   );
 
-  if (onOpen) {
-    return (
-      <button type="button" className={shell} title={item.name} onClick={onOpen}>
-        {body}
-      </button>
-    );
-  }
-
-  return (
-    <span className={shell} title={item.name}>
+  const content = item.text ?? item.name;
+  const chip = onOpen ? (
+    <button type="button" className={shell} title={content} onClick={onOpen}>
+      {body}
+    </button>
+  ) : (
+    <span className={shell} title={content}>
       {body}
     </span>
+  );
+
+  if (!item.text) return chip;
+  return (
+    <Tooltip>
+      <TooltipTrigger render={chip} />
+      <TooltipContent side="top" align="start" className="max-h-64 max-w-96 overflow-auto">
+        <div className="whitespace-pre-wrap break-words text-sm">{item.text}</div>
+      </TooltipContent>
+    </Tooltip>
   );
 }

@@ -5,8 +5,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { downloadHelpers, loginEnvironment, loginEnvProbe, remoteShellCommand, shellQuote } from "../src/main/ssh/remote-shell.ts";
-import { agentRuntimeRemoteDownloadCommand, agentRuntimeUploadCommand } from "../src/main/ssh/agent-runtime.ts";
+import { agentRuntimeRemoteDownloadCommand, agentRuntimeUploadCommand, type AgentRuntimeSource } from "../src/main/ssh/agent-runtime.ts";
 import { agentPreflightCommand, agentStopCommand, buildAgentBootstrapCommand } from "../src/main/ssh/ssh-manager.ts";
+
+const runtime: AgentRuntimeSource = {
+  release: "agent-runtime-v1",
+  targets: {
+    "linux-x64": { runtimeHash: "a".repeat(64) },
+    "linux-arm64": { runtimeHash: "b".repeat(64) },
+  },
+};
 
 const unix = process.platform !== "win32";
 
@@ -47,11 +55,15 @@ function fixture(t: { after(fn: () => void): void }, bash: boolean) {
   }
   const path = `${home}:${tools}`;
   const env = { ...process.env, HOME: home, PATH: path, SHELL: join(home, "sh"), BASH_ENV: "", ENV: "" };
+  // The test must not inherit the developer machine's proxy (the app's relay is
+  // commonly exported by the test harness). The profile below is the only proxy
+  // source this fixture is meant to exercise.
+  for (const key of ["http_proxy", "https_proxy", "all_proxy", "no_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"]) delete env[key];
   return { home, path, env, run: (command: string, input = "", timeout = 5000) => spawnSync("/bin/sh", ["-c", command], { env, input, encoding: "utf8", timeout }) };
 }
 
 test("all SSH control/deploy scripts select Bash before loading profiles", () => {
-  const commands = [agentPreflightCommand("1.0.0"), agentStopCommand(), buildAgentBootstrapCommand(undefined, "1.0.0"), agentRuntimeRemoteDownloadCommand({ version: "1.0.0" }, "linux-x64"), agentRuntimeUploadCommand({ version: "1.0.0" }, "a".repeat(64))];
+  const commands = [agentPreflightCommand(runtime), agentStopCommand(), buildAgentBootstrapCommand(undefined, runtime), agentRuntimeRemoteDownloadCommand(runtime, "linux-x64"), agentRuntimeUploadCommand(runtime, "linux-x64", "a".repeat(64))];
   for (const command of commands) {
     assert.ok(command.startsWith("sh -c "));
     assert.match(command, /command -v bash/);

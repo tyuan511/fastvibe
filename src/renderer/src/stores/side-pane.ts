@@ -3,7 +3,7 @@ import { applyEngineEvent } from "@/lib/apply-engine-event";
 import { i18n } from "@/lib/i18n";
 import { useSettingsStore } from "@/stores/settings";
 import type { ChangedFile } from "@/lib/changed-files";
-import type { ChatMessage, EngineEvent, FilePreview } from "@shared/types";
+import type { ChatAttachment, ChatMessage, EngineEvent, FilePreview } from "@shared/types";
 import type { GitDiffSource } from "@shared/ipc";
 
 export type SidePaneTabType =
@@ -53,6 +53,9 @@ export type SidePaneTab = {
   messages?: ChatMessage[];
   streaming?: boolean;
   draft?: string;
+  /** Send the initial draft immediately after the side conversation is created. */
+  sendOnCreate?: boolean;
+  initialAttachments?: ChatAttachment[];
   /** The subagent run this tab shows (`type: "subagent"`). */
   subagentId?: string;
   /** The conversation whose tool call spawned that run; scopes the tab. */
@@ -227,7 +230,13 @@ type SidePaneStore = {
   openBrowser: (url?: string, conversationId?: string) => string;
   /** Browser tab ids in one conversation's pane (the active chat when omitted). */
   browserTabIds: (conversationId?: string) => string[];
-  openSideChat: (parentSessionId: string, ordinal: number) => void;
+  openSideChat: (
+    parentSessionId: string,
+    ordinal: number,
+    initialDraft?: string,
+    sendOnCreate?: boolean,
+    initialAttachments?: ChatAttachment[],
+  ) => void;
   /** Open (or focus) the project file view, starting on the directory tree. */
   openFiles: () => void;
   /**
@@ -708,7 +717,7 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
     });
     return tabId;
   },
-  openSideChat: (parentSessionId, ordinal) =>
+  openSideChat: (parentSessionId, ordinal, initialDraft, sendOnCreate = false, initialAttachments) =>
     set((state) => {
       if (!parentSessionId) return state;
       const scope = scopeOf(state);
@@ -721,7 +730,9 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
         parentSessionId,
         messages: [],
         streaming: false,
-        draft: "",
+        draft: initialDraft ?? "",
+        sendOnCreate,
+        initialAttachments,
       };
       return writeScope(
         state,

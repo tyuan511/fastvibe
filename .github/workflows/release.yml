@@ -47,69 +47,112 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Runtime packages are candidates first. The next job compares both target hashes with
+  # the latest independent runtime release and only creates a new runtime release when the
+  # content changed. This keeps desktop tags and Agent runtime tags completely separate.
   agent-runtime:
-    name: Agent runtime (${{ matrix.arch }})
+    name: Build Agent runtime candidate (${{ matrix.arch }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Pinned rather than `ubuntu-latest`: that label migrates to Ubuntu 26 in
-          # October 2026 and every run in between warns about it. The arm leg below
-          # is already a pinned image, so both halves stay on the same release.
           - os: ubuntu-24.04
             arch: x64
           - os: ubuntu-24.04-arm
             arch: arm64
     steps:
       - uses: actions/checkout@v7
-
-      # Deliberately the same form the `build` legs use. The previous spelling here was
-      # `test "${GITHUB_REF_NAME}" = "v$(node -p \"require('./package.json').version\")"`,
-      # which never reaches the build at all: inside `$( )` within a double-quoted string the
-      # `\"` is not an escaped quote, so bash parses `require('./package.json')` unquoted and
-      # dies with `syntax error near unexpected token `(` (exit 2) before anything is compiled.
       - name: Verify tag version
         run: node -e "const fs=require('fs');const v=JSON.parse(fs.readFileSync('package.json','utf8')).version;if(process.env.GITHUB_REF_NAME !== 'v'+v) process.exit(1)"
-
-      # The release body is `docs/release/<tag>.md` — see the header. Asserted here rather than
-      # only in the job that reads it: a tag whose note is missing must fail in the first few
-      # seconds, not after twenty minutes of packaging.
-      - name: Verify release note
-        run: node scripts/check-release-note.mjs
-
       - uses: pnpm/action-setup@v6
-
       - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm
-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-
-      - name: Build desktop and Agent runtime
+      - name: Build Agent runtime candidate
         run: |
           pnpm build
           pnpm build:agent-runtime -- --platform=linux --arch=${{ matrix.arch }}
-
-      # Draft: the release is published by `publish` once every job has succeeded. The
-      # first leg to get here creates it (`createRelease` defaults `draft` to true unless
-      # the release is being created *as* a prerelease), and the rest find that draft and
-      # append to it — action-gh-release lists releases rather than trusting
-      # `releases/tags/<tag>`, which hides drafts, so the second leg does not create a
-      # second release for the same tag.
-      - name: Upload Agent runtime
-        uses: softprops/action-gh-release@v3
+      - name: Upload Agent runtime candidate
+        uses: actions/upload-artifact@v7
         with:
-          draft: true
-          fail_on_unmatched_files: true
-          files: release/agent-runtime/fastvibe-agent-linux-${{ matrix.arch }}.tar.gz
+          name: agent-runtime-candidate-${{ matrix.arch }}
+          path: |
+            release/agent-runtime/fastvibe-agent-linux-${{ matrix.arch }}.tar.gz
+            release/agent-runtime/runtime-metadata-linux-${{ matrix.arch }}.json
+          retention-days: 1
+
+  agent-runtime-release:
+    name: Publish changed Agent runtime
+    needs: [agent-runtime]
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: agent-runtime-release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+      - name: Download runtime candidates
+        uses: actions/download-artifact@v8
+        with:
+          pattern: agent-runtime-candidate-*
+          path: runtime/candidates
+          merge-multiple: true
+      - name: Merge runtime candidates
+        run: |
+          node scripts/merge-agent-runtime-metadata.mjs \
+            --output=runtime/candidates.json \
+            runtime/candidates/runtime-metadata-linux-x64.json \
+            runtime/candidates/runtime-metadata-linux-arm64.json
+      - name: Compare with latest runtime and publish if changed
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p runtime/latest
+          latest="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
+            --json tagName,isDraft,isPrerelease,publishedAt \
+            --jq '([.[] | select(.isDraft == false and .isPrerelease == true and (.tagName | startswith("agent-runtime-v")))] | sort_by(.publishedAt) | last | .tagName) // ""')"
+          if [ -n "$latest" ]; then
+            gh release download "$latest" --repo "$GITHUB_REPOSITORY" \
+              --pattern agent-runtime.json --dir runtime/latest
+          fi
+          node scripts/resolve-agent-runtime-release.mjs \
+            --candidates=runtime/candidates.json \
+            --latest=runtime/latest/agent-runtime.json \
+            --output=runtime/agent-runtime.json
+          release="$(node -p "JSON.parse(require('fs').readFileSync('runtime/agent-runtime.json','utf8')).release")"
+          if [ -n "$latest" ] && [ "$release" = "$latest" ]; then
+            echo "Agent runtime unchanged; reusing $release"
+          elif gh release view "$release" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$release" --repo "$GITHUB_REPOSITORY" \
+              runtime/candidates/fastvibe-agent-linux-x64.tar.gz \
+              runtime/candidates/fastvibe-agent-linux-arm64.tar.gz \
+              runtime/agent-runtime.json --clobber
+            gh release edit "$release" --repo "$GITHUB_REPOSITORY" \
+              --title "FastVibe Agent runtime ${release#agent-runtime-}" \
+              --draft=false --prerelease --latest=false
+          else
+            gh release create "$release" --repo "$GITHUB_REPOSITORY" \
+              --title "FastVibe Agent runtime ${release#agent-runtime-}" \
+              --notes "Content-addressed Agent runtime release; desktop version is independent." \
+              --prerelease --latest=false \
+              runtime/candidates/fastvibe-agent-linux-x64.tar.gz \
+              runtime/candidates/fastvibe-agent-linux-arm64.tar.gz \
+              runtime/agent-runtime.json
+          fi
+      - name: Upload runtime metadata for desktop packaging
+        uses: actions/upload-artifact@v7
+        with:
+          name: agent-runtime-source
+          path: runtime/agent-runtime.json
+          retention-days: 1
 
   build:
     name: Package (${{ matrix.platform }}${{ matrix.arch && format(' {0}', matrix.arch) || '' }})
+    needs: [agent-runtime-release]
     runs-on: ${{ matrix.os }}
     # GitHub does not expose the `secrets` context to `if:`, so the "are the
     # macOS signing credentials configured?" gate has to be read through `env`,
@@ -139,6 +182,12 @@ jobs:
             platform: win
     steps:
       - uses: actions/checkout@v7
+
+      - name: Download Agent runtime metadata
+        uses: actions/download-artifact@v8
+        with:
+          name: agent-runtime-source
+          path: release/agent-runtime
 
       - name: Verify tag version
         run: node -e "const fs=require('fs');const v=JSON.parse(fs.readFileSync('package.json','utf8')).version;if(process.env.GITHUB_REF_NAME !== 'v'+v) process.exit(1)"
@@ -351,12 +400,11 @@ jobs:
   # then unmark the draft.
   publish:
     name: Publish the release
-    # Every leg has to have succeeded — the packaging jobs *and* the Agent runtime ones,
-    # whose archive is a release asset a connecting client downloads by URL. A merged
-    # manifest describing a release whose other half never uploaded would point users at
-    # files that are not there, and the absence of a manifest is the safe failure: the
-    # app simply finds no update.
-    needs: [agent-runtime, build]
+    # Every leg has to have succeeded — the packaging jobs and the independent Agent
+    # runtime release job. Desktop packages embed the runtime metadata produced by that
+    # job, so publishing a desktop release without it would make future SSH connections
+    # point at a runtime release that was never made available.
+    needs: [agent-runtime-release, build]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7

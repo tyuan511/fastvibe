@@ -6,12 +6,23 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import { remarkStrictInlineMath } from "@/lib/remark-strict-inline-math";
+import { isPathLike, remarkPathLinks } from "@/lib/remark-path-links";
+import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Copy01Icon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { useHighlightedCode } from "@/lib/highlight";
 import { splitMarkdownBlocks } from "@/lib/markdown-blocks";
 import { useSessionStore } from "@/stores/session";
+import { resolvePath } from "@/lib/workspace-path";
+import { blockedRemotely } from "@/lib/remote-unavailable";
+import { Ipc } from "@shared/ipc";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { DiffView } from "./diff-view";
 
 /**
@@ -25,7 +36,7 @@ import { DiffView } from "./diff-view";
  * `remarkStrictInlineMath` follows `remark-math` because it inspects what that
  * plugin tokenized: `$HOME`, `$PATH` and `$5 到 $10` are prose here, not formulas.
  */
-const REMARK_PLUGINS: PluggableList = [remarkGfm, remarkMath, remarkStrictInlineMath];
+const REMARK_PLUGINS: PluggableList = [remarkGfm, remarkMath, remarkStrictInlineMath, remarkPathLinks];
 const REHYPE_PLUGINS: PluggableList = [
   [
     rehypeKatex,
@@ -84,25 +95,60 @@ const CodeBlock = memo(function CodeBlock({ language, code }: { language?: strin
   );
 });
 
+function markdownPath(href: string): string | undefined {
+  if (href.startsWith("fvpath:")) return decodeURIComponent(href.slice("fvpath:".length));
+  if (href.startsWith("file:")) return decodeURI(href.replace("file://", ""));
+  if (href.startsWith("/")) return href;
+  return undefined;
+}
+
+function resolvedMarkdownPath(path: string): string {
+  const { conversations, activeId } = useSessionStore.getState();
+  const cwd = conversations.find((item) => item.id === activeId)?.cwd;
+  // Keep this in sync with openPreview: context-menu actions need the absolute path
+  // before they call the host, while preview itself accepts the original path.
+  return resolvePath(path, cwd);
+}
+
+async function revealMarkdownPath(path: string, missing: string): Promise<void> {
+  if (blockedRemotely(Ipc.workspaceReveal)) return;
+  const result = await window.fastvibe.workspace.reveal(path);
+  if (result && result.ok === false) toast.error(missing);
+}
+
+function PathLink({ path, children }: { path: string; children: ReactNode }): JSX.Element {
+  const { t } = useTranslation("chat");
+  const resolved = resolvedMarkdownPath(path);
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger
+        className="inline"
+        onClick={() => void useSessionStore.getState().openPreview(resolved)}
+      >
+        <span className="text-primary underline decoration-primary/40 underline-offset-2 hover:decoration-primary">
+          {children}
+        </span>
+      </ContextMenuTrigger>
+      <ContextMenuContent className="w-48">
+        <ContextMenuItem onClick={() => void useSessionStore.getState().openPreview(resolved)}>{t("preview.pathPreview")}</ContextMenuItem>
+        <ContextMenuItem onClick={() => void revealMarkdownPath(resolved, t("preview.pathMissing"))}>{t("preview.pathReveal")}</ContextMenuItem>
+        <ContextMenuItem onClick={() => void navigator.clipboard?.writeText(resolved)}>{t("preview.pathCopy")}</ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
 // Stable component identities keep streamed updates from remounting CodeBlock.
 const MARKDOWN_COMPONENTS: Components = {
-  a: ({ href, children }) => (
-    <a
-      href={href}
-      target="_blank"
-      rel="noreferrer"
-      onClick={(event) => {
-        if (!href) return;
-        if (href.startsWith("file:") || href.startsWith("/")) {
-          event.preventDefault();
-          const path = href.startsWith("file:") ? decodeURI(href.replace("file://", "")) : href;
-          void useSessionStore.getState().openPreview(path);
-        }
-      }}
-    >
-      {children}
-    </a>
-  ),
+  a: ({ href, children }) => {
+    const path = href ? markdownPath(href) : undefined;
+    if (path) return <PathLink path={path}>{children}</PathLink>;
+    return (
+      <a href={href} target="_blank" rel="noreferrer">
+        {children}
+      </a>
+    );
+  },
   img: ({ src, alt }) => (
     <img src={src} alt={alt ?? ""} className="my-2 max-h-80 max-w-full rounded-lg border border-border" />
   ),
@@ -124,7 +170,19 @@ const MARKDOWN_COMPONENTS: Components = {
     const language = /language-([^\s]+)/.exec(className)?.[1];
     return <CodeBlock language={language} code={nodeText(children).replace(/\n$/, "")} />;
   },
-  code: ({ children }) => <code>{children}</code>,
+  code: ({ children }) => {
+    const text = nodeText(children);
+    // File paths are commonly written as inline code in agent replies. Keep the
+    // code styling, but make the whole span behave like a previewable path.
+    if (isPathLike(text)) {
+      return (
+        <code>
+          <PathLink path={text}>{children}</PathLink>
+        </code>
+      );
+    }
+    return <code>{children}</code>;
+  },
   blockquote: ({ children }) => (
     <blockquote className="my-2 border-l-2 border-border pl-3 text-muted-foreground">{children}</blockquote>
   ),

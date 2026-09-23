@@ -120,6 +120,8 @@
     "webSources_one": "{{count}} 个来源",
     "webSources_other": "{{count}} 个来源",
     "questionFallback": "澄清问题",
+    "memory": "长期记忆",
+    "memoryRecent": "最近的记忆",
     "questionCount_one": "共 {{count}} 个问题",
     "questionCount_other": "共 {{count}} 个问题",
     "todoUpdating": "正在更新待办",

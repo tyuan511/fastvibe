@@ -42,6 +42,8 @@ export type DecisionRuntimeOptions = {
   trace?: DecisionTraceSink;
   /** Ceiling for one request including its retries. Never reset per attempt. */
   requestTimeoutMs?: number;
+  /** Ceiling for a single attempt inside that window; unbounded by default. */
+  attemptTimeoutMs?: number;
   /** Retries after the first attempt, for retryable failures only. */
   maxRetries?: number;
   /** Delay before retry n (0-based); the last entry repeats. */
@@ -74,6 +76,7 @@ export class DecisionRuntime {
   constructor(options: DecisionRuntimeOptions) {
     this.#options = {
       requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+      attemptTimeoutMs: Number.POSITIVE_INFINITY,
       maxRetries: 2,
       backoffMs: DEFAULT_BACKOFF_MS,
       sizeLimits: JEV_SIZE_LIMITS,
@@ -212,7 +215,11 @@ export class DecisionRun {
       }
       if (outcome.kind === "cancelled") return record({ status: "cancelled" }, { attempts, errors });
       errors.push(outcome.error.kind + (outcome.error.status ? `:${outcome.error.status}` : ""));
-      if (outcome.error.kind === "timeout" && windowEnd >= this.deadlineAt) {
+      // An attempt that ran out the window the deadline set (a timer may fire a tick
+      // early) or that finished past the deadline is the deadline, not a failure. One
+      // cut short by its own attempt cap, with time left, is retried instead.
+      const windowWasDeadline = windowEnd >= this.deadlineAt && !outcome.error.retryable;
+      if (outcome.error.kind === "timeout" && (windowWasDeadline || config.now() >= this.deadlineAt)) {
         return record({ status: "exhausted", reason: "deadline" }, { attempts, errors });
       }
       const delay = config.backoffMs[Math.min(attempts - 1, config.backoffMs.length - 1)] ?? 0;
@@ -238,7 +245,10 @@ export class DecisionRun {
     external: AbortSignal | undefined,
   ): Promise<{ kind: "ok"; response: DecideResponse } | { kind: "cancelled" } | { kind: "error"; error: DecisionBackendError }> {
     const config = this.#config;
-    const remaining = windowEnd - config.now();
+    const window = windowEnd - config.now();
+    const remaining = Math.min(window, config.attemptTimeoutMs);
+    // An attempt cut short by its own cap, with window left over, may be tried again.
+    const capped = remaining < window;
     if (remaining <= 0) return { kind: "error", error: new DecisionBackendError("timeout", "request window elapsed") };
     const attempt = new AbortController();
     let timedOut = false;
@@ -255,7 +265,7 @@ export class DecisionRun {
       return { kind: "ok", response };
     } catch (error) {
       if (this.cancelled || external?.aborted) return { kind: "cancelled" };
-      if (timedOut) return { kind: "error", error: new DecisionBackendError("timeout", `no response within ${remaining}ms`) };
+      if (timedOut) return { kind: "error", error: new DecisionBackendError("timeout", `no response within ${remaining}ms`, { retryable: capped }) };
       if (error instanceof DecisionBackendError) return { kind: "error", error };
       return { kind: "error", error: new DecisionBackendError("network", error instanceof Error ? error.message : String(error)) };
     } finally {

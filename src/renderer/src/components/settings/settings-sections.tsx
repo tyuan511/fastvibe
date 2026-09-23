@@ -17,6 +17,7 @@ import {
   Settings02Icon,
   ServerStack01Icon,
   SparklesIcon,
+  StickyNote01Icon,
   Wifi01Icon,
 } from "@hugeicons/core-free-icons";
 import { i18n } from "@/lib/i18n";
@@ -39,6 +40,7 @@ export type SectionId =
   | "providers"
   | "subagents"
   | "decision"
+  | "memory"
   | "mcp"
   | "skills"
   | "extensions"
@@ -85,6 +87,7 @@ export const SETTINGS_SECTIONS: Array<{
       { id: "providers", icon: <HugeiconsIcon strokeWidth={2} icon={BoxesIcon} /> },
       { id: "subagents", icon: <HugeiconsIcon strokeWidth={2} icon={BotIcon} /> },
       { id: "decision", icon: <HugeiconsIcon strokeWidth={2} icon={BrainCircuitIcon} /> },
+      { id: "memory", icon: <HugeiconsIcon strokeWidth={2} icon={StickyNote01Icon} /> },
       { id: "mcp", icon: <HugeiconsIcon strokeWidth={2} icon={Plug01Icon} /> },
       { id: "skills", icon: <HugeiconsIcon strokeWidth={2} icon={SparklesIcon} /> },
       { id: "extensions", icon: <HugeiconsIcon strokeWidth={2} icon={PuzzleIcon} /> },

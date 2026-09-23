@@ -32,7 +32,10 @@ export class SkillManager {
       description: skill.description,
       filePath: skill.filePath,
       baseDir: skill.baseDir,
-      scope: skill.sourceInfo.scope,
+      // Built-ins are passed through the SDK's additionalSkillPaths API, which
+      // marks them as temporary CLI resources. That describes the loader
+      // lifetime, not where the skill comes from in FastVibe's UI.
+      scope: skill.sourceInfo.scope === "temporary" ? "system" : skill.sourceInfo.scope,
       source: skill.sourceInfo.source,
       removable: isManagedSkill(this.#skillsDir, skill.baseDir),
     }));

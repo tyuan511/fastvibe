@@ -313,6 +313,25 @@ export class MessageQueueStore {
     return changed;
   }
 
+  /**
+   * Drop a pause with nothing left to hold.
+   *
+   * Stop latches `stopped` even over an empty queue, so a Send that raced it is held
+   * rather than sent into the run just stopped. Once nothing is held, the latch is a
+   * leftover — and left in place it caught the next Send made during a later run,
+   * holding that row under 「你中断了当前响应」 although nothing had been interrupted.
+   */
+  releaseEmptyPause(conversationId: string): boolean {
+    let changed = false;
+    this.#mutate((next) => {
+      if (!next.pauses[conversationId] || next.items.some((item) => item.conversationId === conversationId)) return false;
+      delete next.pauses[conversationId];
+      this.#touch(next, conversationId);
+      changed = true;
+    });
+    return changed;
+  }
+
   clear(conversationId: string): void {
     this.#mutate((next) => {
       next.items = next.items.filter((item) => item.conversationId !== conversationId);

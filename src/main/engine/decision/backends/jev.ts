@@ -34,7 +34,7 @@ export function buildJevBody(request: DecideRequest): Record<string, unknown> {
     const instructions = typeof given === "string" ? given.trim() || DEFAULT_INSTRUCTIONS[question.type] : given ?? DEFAULT_INSTRUCTIONS[question.type];
     if (question.type === "choice") questions[id] = { type: "choice", instructions, criteria: question.criteria };
     else if (question.type === "score") questions[id] = { type: "score", instructions, criteria: question.criteria };
-    else questions[id] = { type: "noul", instructions };
+    else questions[id] = { type: "noul", instructions, ...(question.criteria ? { criteria: question.criteria } : {}) };
   }
   return { model: request.model ?? JEV_DEFAULT_MODEL, state: request.state, questions };
 }

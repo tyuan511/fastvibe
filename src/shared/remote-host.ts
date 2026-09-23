@@ -65,9 +65,9 @@ export type RemoteHostTestResult = {
 };
 
 export type RemoteAgentStatus = {
-  /** Version linked as `~/.fastvibe-agent/current`, if any. */
+  /** Readable independent runtime release linked as `~/.fastvibe-agent/current`, if any. */
   installed?: string;
-  /** Version of the Agent listening on the service port, if one is. */
+  /** Runtime release of the Agent listening on the service port, if one is. */
   running?: string;
 };
 

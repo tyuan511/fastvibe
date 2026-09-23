@@ -146,6 +146,11 @@ export type AppSettings = ProxySettings & {
    */
   permissionAlways?: string[];
   /**
+   * The user chose 以后再说 on the macOS Full Disk Access prompt. Absent means they
+   * have not dismissed it, so the next launch asks once. The settings row stays either way.
+   */
+  fullDiskAccessDismissed?: boolean;
+  /**
    * 电脑操控 (设置 → 电脑操控). Mirrors `ComputerSettings`; kept as flat keys because
    * `settings.json` is a flat bag that Main reads one preference at a time.
    */
@@ -236,6 +241,7 @@ function sanitize(parsed: Partial<AppSettings>): Partial<AppSettings> {
   if (!isIdListMap(next.fileTreeExpanded)) delete next.fileTreeExpanded;
   if (!isIdList(next.archivedConversations)) delete next.archivedConversations;
   if (!isIdList(next.permissionAlways)) delete next.permissionAlways;
+  if (typeof next.fullDiskAccessDismissed !== "boolean") delete next.fullDiskAccessDismissed;
   if (typeof next.computerEnabled !== "boolean") delete next.computerEnabled;
   if (typeof next.computerClipboard !== "boolean") delete next.computerClipboard;
   if (typeof next.computerPreferBackground !== "boolean") delete next.computerPreferBackground;

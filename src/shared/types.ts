@@ -381,7 +381,8 @@ export type SkillInfo = {
   description: string;
   filePath: string;
   baseDir: string;
-  scope: "user" | "project" | "temporary";
+  /** User/project skills are discovered by scope; bundled FastVibe skills are system skills. */
+  scope: "user" | "project" | "system";
   source: string;
   /** True when the skill lives under FastVibe's isolated agentDir/skills. */
   removable: boolean;
@@ -1091,7 +1092,7 @@ export type RemoteWorkspace = {
 export type Conversation = {
   id: string;
   title: string;
-  /** Engine working directory: the project path, else the shared scratch workspace. */
+  /** Engine working directory: the project path, else this conversation's own scratch directory. */
   cwd: string;
   /** Bound project path. Absent when the conversation is not attached to a project. */
   project?: string;
@@ -1346,7 +1347,7 @@ export type ImportOutcome = {
   messages?: number;
   /** What the adapter dropped, for the report. */
   skipped?: string[];
-  /** Where the session landed: the original project, or the scratch workspace. */
+  /** Where the session landed: the original project, or its own scratch directory. */
   cwd?: string;
   conversationId?: string;
   error?: string;

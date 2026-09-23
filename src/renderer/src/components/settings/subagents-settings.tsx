@@ -249,7 +249,7 @@ export function SubagentsSettings({ models }: { models: FastVibeModel[] }): JSX.
             <HugeiconsIcon icon={BotIcon} strokeWidth={1.8} className="size-5" />
           </div>
           <div className="min-w-0">
-            <p className="text-sm font-medium">{t("subagents.desc")}</p>
+            <p className="truncate text-sm font-medium">{t("subagents.desc")}</p>
             <p className="mt-1 truncate text-xs text-muted-foreground">{t("subagents.fallback")}</p>
           </div>
         </div>

@@ -45,7 +45,7 @@ function modeDescription(mode: PermissionMode): string {
 }
 
 /** Tools with no side effects; they are never worth a confirmation. */
-const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls", "todo", "conversation_search", "worktree_list", "fastvibe_config_get"]);
+const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls", "todo", "conversation_search", "memory_search", "memory_recent", "worktree_list", "fastvibe_config_get"]);
 
 /**
  * Tools that send something off the machine; `ask` confirms them, `smart` does not.

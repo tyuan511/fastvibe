@@ -565,6 +565,10 @@ computer use 和 browser use 是同一类任务：每一步都从窗口里一组
 - **延迟**：单次 3 s 窗口、最多重试一次；连不上服务后 60 s 内只用规则，避免断网时每条命令都等超时。同一工作区内相同调用的结论缓存（256 条），`npm test` 只问一次。
 - 送出的 state 只有工具名、命令或路径（截断到 4000 字符）、工作区路径与规则命中项，不含文件内容；trace 只记哈希。命令会发送给 Jev，设置页的说明写明了这一点。
 
+### 7.12 增强记忆：`memoryControl`
+
+长期记忆有一个不依赖模型的默认模式；用户选择 JEV 增强记忆时，必须先选择 Jev、保存 API key，并在本页的应用场景中勾选增强记忆（`memoryControl`）。该开关只授权记忆的类型标注、关系、整理和检索判断（按 Jev-Mem 论文不做准入过滤，每条观察都保留），不会打开浏览器或电脑操控。记忆模块在 `memory.write`、`memory.relation`、`memory.maintenance` 和 `memory.read.route` / `.score` / `.assess` 上使用同一决策运行时，请求构造与阈值集中在 `src/main/engine/memory-jev.ts`（见 `docs/memory.md`）；Jev 不可用时回到本地文本检索。
+
 ### 7.7 `subagent.role`（未来）
 
 未来可在 `resources/extensions/subagent/index.ts` 里，把“选哪个角色”变成 `decide("subagent.role", …)`。注入点现成——和 `questions` / `runSubagent` / `createWorktree` 同一个 `#extensionUi()`（`src/main/pi/process-manager.ts`）。

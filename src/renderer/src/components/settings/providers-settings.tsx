@@ -1220,7 +1220,7 @@ function NativeProviderPicker({
           <HugeiconsIcon strokeWidth={2} icon={ArrowDown01Icon} className="size-3.5 shrink-0 text-muted-foreground" />
         </Button>
         {open ? (
-          <div className="absolute top-[calc(100%+0.375rem)] left-0 z-50 w-full rounded-lg bg-popover p-1 shadow-md ring-1 ring-foreground/10">
+          <div className="overlay-surface absolute top-[calc(100%+0.375rem)] left-0 z-50 w-full rounded-md bg-popover/95 p-1">
             <div className="relative mb-0.5 px-0.5 pt-0.5">
               <HugeiconsIcon
                 strokeWidth={2}

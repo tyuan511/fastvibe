@@ -63,6 +63,7 @@ import { PiProcessManager } from "./pi/process-manager";
 import { fetchPackageCatalog } from "./pi/package-catalog";
 import { TerminalSessions } from "./engine/terminal-sessions";
 import { SshManager, openSshAppTransport } from "./ssh/ssh-manager";
+import { readAgentRuntimeSource, type AgentRuntimeSource } from "./ssh/agent-runtime";
 import { RemoteConnectionManager } from "./remote/connection-manager";
 import { RemoteGateway, shouldSyncAgentConfig } from "./remote/gateway";
 import { createAppServer, initAppServer, getAppServer } from "./app-server/runtime";
@@ -81,6 +82,7 @@ import {
   startComputerDrag,
 } from "./pi/cua-bridge";
 import { cancelGrantFlow, grantFlowState, startGrantFlow } from "./pi/computer-grant-flow";
+import { fullDiskAccessStatus, openFullDiskAccessSettings, revealFullDiskApp } from "./system/full-disk-access";
 import { importBrowserProfile, listBrowserProfiles } from "./engine/browser-profiles";
 import { browserProfileDir, importIntoBrowserProfile, installedBrowsers, type ProfileCookie } from "./engine/browser-cdp";
 import type { ImportSourceId, ProviderModel, UsageRange } from "@shared/types";
@@ -113,6 +115,22 @@ initLogger();
 // cache for faster reloads.
 if (app.isPackaged) process.env.JITI_FS_CACHE = "false";
 
+function bundledAgentRuntime(): AgentRuntimeSource {
+  const metadata = app.isPackaged
+    ? join(app.getAppPath(), "agent-runtimes", "agent-runtime.json")
+    : join(__dirname, "../../release/agent-runtime/agent-runtime.json");
+  try {
+    return readAgentRuntimeSource(metadata);
+  } catch (error) {
+    // A development checkout may not have built the Linux runtime yet. Keep the desktop
+    // usable and make an SSH attempt fail with the actionable metadata error instead of
+    // silently using the desktop version as a fake runtime version.
+    log.warn(`Agent runtime metadata unavailable at ${metadata}: ${String(error)}`);
+    return { release: "agent-runtime-v0", targets: {} };
+  }
+}
+
+const agentRuntime = bundledAgentRuntime();
 const engine = new PiProcessManager();
 const terminals = new TerminalSessions();
 /**
@@ -142,9 +160,9 @@ const sshManager = new SshManager({
     warn: (message) => log.warn(message),
   },
   agentRuntime: {
-    version: app.getVersion(),
+    ...agentRuntime,
     artifactDirectory: app.isPackaged
-      ? join(process.resourcesPath, "agent-runtimes")
+      ? join(app.getAppPath(), "agent-runtimes")
       : join(__dirname, "../../release/agent-runtime"),
     cacheDirectory: join(getFastVibePaths().runtimeRoot, "ssh-agent-runtimes"),
     releaseBaseUrl: process.env.FASTVIBE_AGENT_RELEASE_BASE_URL,
@@ -214,9 +232,9 @@ const remoteConnections = new RemoteConnectionManager({
     onProgress: (progress) => publishSshProgress(profile.id, progress),
     signal,
     agentRuntime: {
-      version: app.getVersion(),
+      ...agentRuntime,
       artifactDirectory: app.isPackaged
-        ? join(process.resourcesPath, "agent-runtimes")
+        ? join(app.getAppPath(), "agent-runtimes")
         : join(__dirname, "../../release/agent-runtime"),
       cacheDirectory: join(getFastVibePaths().runtimeRoot, "ssh-agent-runtimes"),
       releaseBaseUrl: process.env.FASTVIBE_AGENT_RELEASE_BASE_URL,
@@ -531,6 +549,29 @@ function refreshModelsDev(): Promise<AppModelsDevInfo> {
 }
 
 function registerIpc(): void {
+  handle(Ipc.memoryGetState, () => engine.memory.state());
+  handle(Ipc.memoryPrepareModel, () => engine.memory.prepareModel());
+  handle(Ipc.memorySetConfig, async (payload: unknown, ctx) => {
+    const state = await engine.memory.setConfig(payload);
+    broadcast(Ipc.memoryChanged, state, { except: ctx.origin });
+    return state;
+  });
+  handle(Ipc.memorySearch, async (payload: import("@shared/memory").MemorySearchRequest) => engine.memory.search(payload ?? { query: "" }));
+  handle(Ipc.memoryGraph, (payload: import("@shared/memory").MemoryGraphRequest | undefined) => engine.memory.graph(payload ?? {}));
+  // `null`, not `undefined`, for a memory that is gone: an undefined reply does not survive the remote client's JSON.
+  handle(Ipc.memoryDetail, (payload: { id?: unknown }) => (typeof payload?.id === "string" ? engine.memory.detail(payload.id) ?? null : null));
+  handle(Ipc.memoryDelete, (payload: { id?: unknown }, ctx) => {
+    const id = typeof payload?.id === "string" ? payload.id.trim() : "";
+    if (!id) throw new Error("记忆 ID 不能为空");
+    const state = engine.memory.delete(id);
+    broadcast(Ipc.memoryChanged, state, { except: ctx.origin });
+    return state;
+  });
+  handle(Ipc.memoryClear, (_payload: void, ctx) => {
+    const state = engine.memory.clear();
+    broadcast(Ipc.memoryChanged, state, { except: ctx.origin });
+    return state;
+  });
   handle(Ipc.browserResponse, (payload: { id: string; ok: boolean; result?: unknown; error?: string }) => {
     respondBrowserRequest(payload);
   });
@@ -568,6 +609,10 @@ function registerIpc(): void {
   handle(Ipc.computerStartGrantFlow, () => startGrantFlow());
   handle(Ipc.computerCancelGrantFlow, () => cancelGrantFlow());
   handle(Ipc.computerGetGrantFlow, () => grantFlowState());
+
+  handle(Ipc.systemFullDiskAccess, () => fullDiskAccessStatus());
+  handle(Ipc.systemOpenFullDiskAccess, () => openFullDiskAccessSettings());
+  handle(Ipc.systemRevealApp, () => revealFullDiskApp());
 
   handle(Ipc.engineGetStatus, () => engine.status);
 
@@ -956,16 +1001,21 @@ function registerIpc(): void {
     return engine.reorderProjects(Array.isArray(payload?.cwds) ? payload.cwds : []);
   });
   handle(Ipc.workspaceReveal, async (payload: { cwd: string }) => {
-    if (!payload.cwd) return;
+    if (!payload.cwd) return { ok: false as const, reason: "invalid" as const };
     try {
-      if (statSync(payload.cwd).isFile()) {
-        shell.showItemInFolder(payload.cwd);
-        return;
+      const stat = statSync(payload.cwd);
+      if (stat.isFile()) shell.showItemInFolder(payload.cwd);
+      else {
+        const error = await shell.openPath(payload.cwd);
+        if (error) return { ok: false as const, reason: "missing" as const };
       }
-    } catch {
-      // fall through
+      return { ok: true as const };
+    } catch (error) {
+      // A missing path used to fall through to openPath, which can open a parent
+      // and look like the action did nothing. Report it so the caller can toast.
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { ok: false as const, reason: "missing" as const };
+      throw error;
     }
-    await shell.openPath(payload.cwd);
   });
   handle(Ipc.workspacePreview, (payload: { path: string }) => {
     if (!payload.path) return { kind: "error", path: "", name: "", message: uiText("路径无效", "Invalid path") };
@@ -1404,6 +1454,7 @@ app.whenReady().then(async () => {
   scheduleUpdateCheck(startupSettings.autoCheckUpdates !== false);
 
   engine.onStatus(() => broadcastStatus());
+  engine.memory.onChange((state) => broadcast(Ipc.memoryChanged, state));
   engine.onConversationReady((payload) => {
     broadcast(Ipc.conversationReady, payload);
   });

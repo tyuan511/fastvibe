@@ -181,6 +181,11 @@
     "preparing": "正在准备工作区…",
     "loadingConversation": "正在加载会话…",
     "copied": "已复制",
+    "selection": {
+      "label": "选中文本操作",
+      "addToConversation": "添加到对话",
+      "askInSideChat": "在侧边聊天中提问"
+    },
     "earlier_one": "显示更早的 {{count}} 个回合",
     "earlier_other": "显示更早的 {{count}} 个回合"
   },
@@ -227,7 +232,11 @@
   "preview": {
     "reveal": "在访达中显示",
     "close": "关闭",
-    "tooLarge": "文件过大（{{size}} KB），请在访达中打开。"
+    "tooLarge": "文件过大（{{size}} KB），请在访达中打开。",
+    "pathPreview": "预览",
+    "pathReveal": "在文件夹中显示",
+    "pathCopy": "复制完整路径",
+    "pathMissing": "文件不存在"
   },
   "model": {
     "switched": "模型已切换至"

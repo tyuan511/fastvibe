@@ -33,7 +33,7 @@ Runtime data lives under the app userData directory:
     reasoning.json       thinking-block start/end times Main timed from the live stream
     usage-ledger.jsonl   append-only record of finalized turns, so 使用统计 survives deletion
     wt                   git worktrees for isolated conversations
-    scratch              workspace for conversations not bound to a project
+    scratch/<conversationId>   workspace for one conversation not bound to a project
 ```
 
 Paths are handed to `createAgentSession` programmatically (`agentDir`, `sessionManager`,
@@ -1039,6 +1039,42 @@ terminal-only surface onto the GUI. Fourteen **built-in** extensions ship with t
 the user installs at runtime via 设置 → 插件, which writes to the isolated `agentDir`
 (`ExtensionManager` → SDK `DefaultPackageManager`), never `~/.pi`.
 
+**内置技能是另一套东西**：`resources/skills/<name>/SKILL.md`，由 `builtinSkillPaths()`（`BUILTIN_SKILLS`，
+新增一个就要在那里加一行）列进每个会话的 `additionalSkillPaths`。它们只是提示词，不注册工具，也不需要
+`extraResources` 之外的处理（`resources/skills` 已经整目录拷到 `resourcesPath/skills`）。目前五个：
+`browser-use`、`computer-use`、`fastvibe-setup`、`skill-creator`、`find-skills`。前两个是 FastVibe 自写；
+后三个是 vendored：`skill-creator` 来自 anthropics/claude-plugins-official（Apache-2.0），`find-skills` 来自
+vercel-labs/skills（MIT）——各自目录里带 `LICENSE.txt`，`SKILL.md` 的 description 都改成了中文，并加了
+「你运行在 FastVibe 里」一节纠正原文里不成立的部分（`skill-creator`：`claude -p` 子进程、评测 HTML
+viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`：`npx skills add` 默认装到
+`~/.claude/skills` 这类目录，FastVibe 读不到，必须加 `--agent universal`）。它们不可删除：`SkillManager`
+的 `removable` 只看 `agentDir/skills`，所以内置技能在 设置 → 技能 里显示为全局且没有删除按钮。
+
+**同名技能会静默遮蔽，且用户目录胜出。** `loadSkills` 按名称去重（`addSkills`），先到先得：`additionalSkillPaths`
+（内置）在 `enabledSkills` 之后，所以 `~/.agents/skills/find-skills` 会把内置的同名技能顶掉，只留一条
+`type: "collision"` 诊断——而 设置 → 技能 只渲染 `skills`，**界面上看不出发生了遮蔽**。本机就碰上了这样的
+组合（用户目录里有一个 `find-skills`）。所以新增内置技能前先确认没有常用名字会被用户版本盖住；真要确认
+生效，得看 `filePath` 指向哪个目录，不能只看列表里有这一行。
+
+**人写的技能落在 `.agents/skills/`，这是 SDK 原生发现路径，不是 FastVibe 自己加的**（`package-manager.js`
+的 `resolve()`：`~/.agents/skills` 恒为 user，`<cwd>/.agents/skills` 及各级祖先目录为 project——后者还要
+过项目信任，`SettingsManager.create` 默认 `projectTrusted: true`，FastVibe 不开 preTrust 那套）。所以
+「技能放哪」有四种答案，而 设置 → 技能 只能把前三个里的一部分标成「全局」/「项目」：
+
+| 路径 | scope | FastVibe 里可见 | 备注 |
+| --- | --- | --- | --- |
+| `~/.agents/skills/<name>/` | user | ✅ | 全局，机器上每个项目（**推荐**） |
+| `<cwd>/.agents/skills/<name>/` | project | ✅ | 只在该项目及子目录（**推荐**） |
+| `<cwd>/.pi/skills/<name>/` | project | ✅ | pi CLI 的位置；能用但没人知道，别用 |
+| `~/.pi/agent/skills/<name>/` | user | ❌ | agentDir 被指到 FastVibe 自己的目录，读不到 |
+| `runtime/engine/agent/skills/` | user | ✅ | FastVibe 私有（`paths.skillsDir`），设置里可删 |
+| `resources/skills/` | user | ✅ | 内置，随包发布，不可删 |
+
+祖先目录里的 `.agents/skills` 也会被扫（到 git 仓库根为止），但会盖到同项目下一堆无关子目录上，几乎总是弄错。
+
+`skill-creator` 的「技能写到哪里」一节把这件事写成了一条硬规则：**先问用户全局还是项目，再动手写**，
+不能默认往 `.agents/` 里塞。
+
 - **Built-ins** — `plan.ts` and `goal.ts` are FastVibe's own replacements for the
   `@narumitw/pi-plan-mode` / `pi-goal-x` packages (deliberately not bundled as
   dependencies). Only `/plan` and `/goal` are registered. `todo.ts` is always on
@@ -1628,7 +1664,11 @@ means either: an agent **run** and a **compaction**.
   pause on `agent_settled` can overwrite a newer resume with an old failure. Likewise,
   a pause on an empty queue is not a reason to enqueue fresh input: once the chat is
   idle, Send starts a new turn even after an error. Existing queued items still retain
-  their order and explicit resume policy (`lib/composer-race.ts`).
+  their order and explicit resume policy (`lib/composer-race.ts`). Nor may such a pause
+  catch a Send made *during* a run: Stop latches `stopped` even over an empty queue (so a
+  Send racing the Stop is held), and every new run releases a latch that holds nothing
+  (`releaseEmptyPause` on `agent_start`), not just a run started by `prompt()`. Before
+  that, Stop → 继续 → Send held the message under 「由于你中断了当前响应」.
 - A compaction keeps its own flag `#compacting`, for when it is not part of a run at all:
   `/compact`, and the threshold check a fresh prompt runs before it is sent. It is the only
   thing that can say such a chat is busy, and it is used to re-serve the 正在压缩上下文 card.

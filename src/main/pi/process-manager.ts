@@ -20,6 +20,7 @@ import {
   type ExtensionUIContext,
   type LoadExtensionsResult,
   type SessionStartEvent,
+  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type {
   ChatMessage,
@@ -128,7 +129,8 @@ import { hasOAuthCredential, OAuthCredentialStore } from "../engine/oauth-store"
 import { priceUsage } from "../engine/pricing";
 import { fetchOpenAIAccountQuota, openAICodexAccountId } from "../engine/openai-quota";
 import { fetchGatewayBalance, gatewayTargets, probeGateway, readGatewayCredentials, writeGatewayCredentials } from "../engine/gateway-probe";
-import { getFastVibePaths, type FastVibePaths } from "../engine/paths";
+import { ensureScratchWorkspace, getFastVibePaths, scratchWorkspace, type FastVibePaths } from "../engine/paths";
+import { MemoryManager } from "../engine/memory";
 import { SubagentManager } from "../engine/subagents";
 import { reduceSubagent } from "@shared/subagent-state";
 import { SubagentControl } from "./subagent-control";
@@ -389,6 +391,16 @@ function isUserEngineMessage(message: unknown): message is Record<string, unknow
 
 function isAssistantEngineMessage(message: unknown): message is Record<string, unknown> {
   return typeof message === "object" && message !== null && (message as { role?: unknown }).role === "assistant";
+}
+
+function messageText(message: Record<string, unknown>): string {
+  const content = message.content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) => isRecord(part) && part.type === "text" ? String(part.text ?? "") : "")
+    .join("")
+    .trim();
 }
 
 const COMPACT_REASONS: ReadonlySet<string> = new Set<CompactReason>(["manual", "threshold", "overflow"]);
@@ -662,10 +674,14 @@ export class PiProcessManager {
   #pendingCwdRebind = new Set<string>();
   #interruptMode: "immediate" | "wait" = "immediate";
   #mcp: McpManager;
+  /** Sessions whose MCP tool registry must be refreshed after a config change. */
+  #pendingMcpReloads = new Set<string>();
+  #mcpReloadPromise: Promise<void> | null = null;
   #skills: SkillManager;
   #appConfigHost: ((request: AppConfigHostRequest) => Promise<AppConfigHostResult>) | null = null;
   /** pi package installs (extensions), kept in the isolated agentDir. */
   #extensions: ExtensionManager;
+  #memory: MemoryManager;
   #subagentManager: SubagentManager;
   /** Live subagent registry and bounded transcript cache. */
   #subagents = new Map<string, SubagentInfo>();
@@ -702,6 +718,10 @@ export class PiProcessManager {
 
   constructor(paths: FastVibePaths = getFastVibePaths()) {
     this.#paths = paths;
+    this.#memory = new MemoryManager(this.#paths);
+    this.#memory.setSystemTwoGenerator((conversationId, model, system, user, signal) =>
+      this.completeDecisionText(conversationId, system, user, signal, model),
+    );
     this.#catalog = new ConversationCatalog(this.#paths.conversationsFile, this.#paths.scratchDir);
     // Every catalog change, from one place. The alternative was announcing at each of
     // the dozen methods below that mutate it, which is how a new one silently stops
@@ -724,8 +744,11 @@ export class PiProcessManager {
     // after a crash. Best-effort: a missing file just means no checkpoint is offered.
     void loadCheckpoints(checkpointFile(this.#paths.runtimeRoot)).catch(() => undefined);
     const active = this.#catalog.activeId ? this.#catalog.get(this.#catalog.activeId) : undefined;
-    this.#cwd = active?.project ?? this.#paths.scratchDir;
+    this.#cwd = active?.cwd || this.#paths.scratchDir;
   }
+
+  /** Main-owned memory service used by IPC and the session extension. */
+  get memory(): MemoryManager { return this.#memory; }
 
   listWorkspace(): WorkspaceSnapshot { return this.#catalog.snapshot(); }
   searchConversations(query: string): Promise<ConversationSearchHit[]> {
@@ -874,6 +897,7 @@ export class PiProcessManager {
       this.#sessions.clear();
       this.#sessionTouched.clear();
       this.#sessionPromises.clear();
+      this.#pendingMcpReloads.clear();
       this.#resolvePendingUi();
       for (const control of this.#subagentControls.values()) void control.abort().catch(() => undefined);
       // A login in flight owns a loopback callback server and waits on a human who is
@@ -948,10 +972,7 @@ export class PiProcessManager {
     // A pause with nothing held is a leftover (Stop on an idle chat); clear it so it
     // cannot catch this turn's follow-ups. A pause over held rows is the user's to
     // release (立即 / 继续发送) — a fresh turn does not release it.
-    if (id && this.#messageQueue.state(id).pause && this.#messageQueue.all(id).length === 0) {
-      this.#messageQueue.pause(id, null);
-      this.#emitQueue(id);
-    }
+    if (id && this.#messageQueue.releaseEmptyPause(id)) this.#emitQueue(id);
     if (id) this.#queueDrainFaults.delete(id);
     // A user turn begins: this turn's file checkpoint starts empty (see `#beginTurn`).
     this.#beginTurn(id);
@@ -981,10 +1002,7 @@ export class PiProcessManager {
     const managed = await this.#ensureSession(conversation);
     if (await this.#compactIfCommand(managed.session, message)) return;
     // Same rule as prompt(): only a pause over an empty queue is cleared here.
-    if (this.#messageQueue.state(id).pause && this.#messageQueue.all(id).length === 0) {
-      this.#messageQueue.pause(id, null);
-      this.#emitQueue(id);
-    }
+    if (this.#messageQueue.releaseEmptyPause(id)) this.#emitQueue(id);
     this.#queueDrainFaults.delete(id);
     this.#beginTurn(id);
     await this.#flushModelRebind(id);
@@ -1421,7 +1439,11 @@ export class PiProcessManager {
       throw new Error(messages[error.code]);
     }
 
-    const cwd = resolved.session.sessionManager.getCwd() || source.cwd || source.project || this.#paths.scratchDir;
+    const inherited = resolved.session.sessionManager.getCwd() || source.cwd || source.project;
+    // A fork keeps the source workspace. Only a chat with no cwd at all gets a fresh
+    // scratch directory, named with the new session id so it does not land in the shared root.
+    const minted = inherited ? undefined : randomUUID();
+    const cwd = inherited || ensureScratchWorkspace(this.#paths.scratchDir, minted!);
     const worktreePaths = this.#catalog.listAll().flatMap((item) => item.worktree ? [item.worktree.path] : []);
     if (source.worktree || cwdUsesWorktree(cwd, worktreePaths)) {
       throw new Error(uiText(
@@ -1437,6 +1459,7 @@ export class PiProcessManager {
       sourceSessionId: resolved.session.sessionId,
       sourceSessionFile: resolved.session.sessionFile,
       entries,
+      ...(minted ? { sessionId: minted } : {}),
     });
     const title = uiText(`${source.title}（分叉）`, `${source.title} (fork)`);
     const preview = forkPreview(entries, source.preview, source.title);
@@ -1551,7 +1574,39 @@ export class PiProcessManager {
     return [...loaded, ...errors];
   }
   async listMcpServers(): Promise<McpServerStatus[]> { await this.#mcp.load(); return this.#mcp.list(); }
-  async saveMcpServers(configs: McpServerConfig[]): Promise<McpServerStatus[]> { await this.#mcp.save(configs); if (this.#status.state === "ready") { await this.stop(); await this.start(this.#cwd); } return this.#mcp.list(); }
+  async #scheduleMcpReload(): Promise<void> {
+    if (this.#mcpReloadPromise) return this.#mcpReloadPromise;
+    this.#mcpReloadPromise = (async () => {
+      for (const conversationId of [...this.#pendingMcpReloads]) {
+        const managed = this.#sessions.get(conversationId);
+        if (!managed) {
+          this.#pendingMcpReloads.delete(conversationId);
+          continue;
+        }
+        // The running session is deliberately left alone. Its next settled event
+        // calls us again, after the current tool result has been delivered.
+        if (!managed.session.isIdle) continue;
+        try {
+          await managed.session.reload();
+          this.#pendingMcpReloads.delete(conversationId);
+        } catch {
+          // Keep it pending so a later settled event or settings change can retry.
+        }
+      }
+    })().finally(() => {
+      this.#mcpReloadPromise = null;
+    });
+    return this.#mcpReloadPromise;
+  }
+  async saveMcpServers(configs: McpServerConfig[]): Promise<McpServerStatus[]> {
+    await this.#mcp.save(configs);
+    await this.#mcp.connectAll();
+    for (const conversationId of this.#sessions.keys()) this.#pendingMcpReloads.add(conversationId);
+    // Never restart the engine here. This method is callable by the agent itself;
+    // restarting would dispose the session that is currently executing the tool.
+    void this.#scheduleMcpReload();
+    return this.#mcp.list();
+  }
   async listSkills(): Promise<SkillInfo[]> { return this.#skills.list(this.#cwd); }
   async createSkill(draft: SkillDraft): Promise<SkillInfo[]> { const skills = await this.#skills.create(this.#cwd, draft); await this.#reloadSkills(); return skills; }
   async importSkill(sourceDir: string): Promise<SkillInfo[]> { const skills = await this.#skills.importFrom(this.#cwd, sourceDir); await this.#reloadSkills(); return skills; }
@@ -1951,12 +2006,12 @@ export class PiProcessManager {
    * is the point — the helper returns `{"text": …}` and nothing it could think about
    * changes that; with reasoning on it only cost more time per field.
    */
-  async completeDecisionText(conversationId: string, system: string, user: string, signal?: AbortSignal): Promise<string> {
+  async completeDecisionText(conversationId: string, system: string, user: string, signal?: AbortSignal, modelOverride?: EngineModel): Promise<string> {
     await this.#ensureReady();
     const registry = this.#models;
     if (!registry) throw new Error(uiText("模型尚未就绪", "Model is not ready"));
     const { session } = await this.#sessionFor(conversationId);
-    const model = session.model;
+    const model = modelOverride ? registry.find(modelOverride.provider, modelOverride.id) : session.model;
     if (!model || !registry.hasConfiguredAuth(model)) {
       throw new Error(uiText("还没有可用的模型", "No model is available"));
     }
@@ -2510,11 +2565,13 @@ export class PiProcessManager {
     },
   ): Promise<{ cancelled: boolean }> {
     const source = this.#catalog.get(sourceId);
-    const cwd = this.#sessions.get(sourceId)?.cwd ?? source?.cwd ?? this.#paths.scratchDir;
+    const inherited = this.#sessions.get(sourceId)?.cwd ?? source?.cwd ?? source?.project;
+    const minted = inherited ? undefined : randomUUID();
+    const cwd = inherited || ensureScratchWorkspace(this.#paths.scratchDir, minted!);
     const sessionDir = join(this.#paths.sessionsDir, `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`);
     const sessionManager = SessionManager.create(cwd, sessionDir);
     if (options?.setup) await options.setup(sessionManager);
-    const conversation = this.#catalog.create(source?.project, { cwd });
+    const conversation = this.#catalog.create(source?.project, minted ? { cwd, sessionId: minted } : { cwd });
     const managed = await this.#createSession(conversation, cwd, sessionManager, {
       type: "session_start",
       reason: "new",
@@ -2725,7 +2782,7 @@ export class PiProcessManager {
       await this.#removeWorktree(previous.path, conversation.project);
     }
     await this.#rebindSessionCwd(id);
-    return { cwd: updated?.cwd || conversation.project || this.#paths.scratchDir };
+    return { cwd: updated?.cwd || conversation.project || ensureScratchWorkspace(this.#paths.scratchDir, id) };
   }
 
   async #reloadSkills(): Promise<void> {
@@ -2804,7 +2861,7 @@ export class PiProcessManager {
     const pending = this.#sessionPromises.get(conversation.id);
     if (pending) return pending;
     if (!this.#runtime || !this.#models) throw new Error("engine not ready");
-    const cwd = conversation.cwd || conversation.project || this.#paths.scratchDir;
+    const cwd = conversation.cwd || conversation.project || ensureScratchWorkspace(this.#paths.scratchDir, conversation.id);
     const sessionDir = join(this.#paths.sessionsDir, `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`);
     const sessionManager = conversation.sessionFile
       ? SessionManager.open(conversation.sessionFile, undefined, cwd)
@@ -2834,6 +2891,20 @@ export class PiProcessManager {
       settingsManager,
       additionalExtensionPaths: builtinExtensionPaths(),
       additionalSkillPaths: builtinSkillPaths(),
+      extensionFactories: [{
+        name: "fastvibe-memory",
+        hidden: true,
+        factory: this.#memory.extension(conversation.id, conversation.project ?? cwd),
+      }, {
+        // MCP tools are registered through an extension factory rather than the
+        // SDK's one-shot `customTools` option. That lets session.reload() rebuild
+        // the registry after MCP settings change without replacing the session.
+        name: "fastvibe-mcp",
+        hidden: true,
+        factory: async (pi) => {
+          for (const tool of await this.#mcp.tools()) pi.registerTool(tool as ToolDefinition);
+        },
+      }],
     });
     // browser-use and computer-use both close over the conversation id at factory time,
     // which is this reload. Nested rather than merged: each bridge owns its own global
@@ -2848,7 +2919,6 @@ export class PiProcessManager {
       sessionManager,
       settingsManager,
       resourceLoader,
-      customTools: await this.#mcp.tools(),
       ...(sessionStartEvent ? { sessionStartEvent } : {}),
     });
     await result.session.bindExtensions({
@@ -2917,6 +2987,25 @@ export class PiProcessManager {
       if (event.type === "message_end" && isAssistantEngineMessage(event.message)) {
         this.#recordUsage(event.message, result.session, now);
       }
+      if (event.type === "message_end" && (isUserEngineMessage(event.message) || isAssistantEngineMessage(event.message))) {
+        const role = isUserEngineMessage(event.message) ? "user" : "assistant";
+        const text = messageText(event.message);
+        if (text) {
+          const messageRef: unknown = event.message;
+          queueMicrotask(() => {
+            const entry = [...result.session.sessionManager.getEntries()]
+              .reverse()
+              .find((item) => item.type === "message" && item.message === messageRef);
+            void this.#memory.capture({
+              conversationId: conversation.id,
+              project: conversation.project ?? cwd,
+              role,
+              content: text,
+              sourceEntryId: entry?.type === "message" ? entry.id : undefined,
+            }).catch(() => undefined);
+          });
+        }
+      }
       // A model switch is announced when the new model actually starts answering, not
       // when it was picked: `#announceModelUse` compares this reply against the last
       // one in the transcript before the payload is forwarded, so the renderer's
@@ -2943,6 +3032,15 @@ export class PiProcessManager {
       // that means this conversation is really idle again.
       if (event.type === "agent_start" || event.type === "turn_start") {
         this.#interruptedRuns.delete(conversation.id);
+        // A run that began without `prompt()` — 继续, or one an extension started —
+        // skipped its leftover-pause release, so an earlier Stop's latch would hold the
+        // first Send made during this run. Rows that are actually held keep theirs.
+        if (event.type === "agent_start" && this.#messageQueue.state(conversation.id).pause) {
+          const id = conversation.id;
+          void this.#withQueue(id, async () => {
+            if (this.#messageQueue.releaseEmptyPause(id)) this.#emitQueue(id);
+          }).catch(() => undefined);
+        }
       } else if (event.type === "agent_end") {
         const messages = Array.isArray(event.messages) ? event.messages : [];
         // The role is read through a cast, not through `isRecord`: narrowing a union by a
@@ -3008,6 +3106,14 @@ export class PiProcessManager {
       if (event.type === "agent_settled") {
         this.#interruptedRuns.delete(conversation.id);
         this.#settleQueue(conversation.id, settledVerdict);
+        // A configuration tool can update MCP while this very session is running.
+        // Do not reload it from inside that tool: the SDK would invalidate the
+        // extension context before the tool result reaches the model. Refresh only
+        // after the run has genuinely settled.
+        if (this.#pendingMcpReloads.has(conversation.id)) {
+          // Let the SDK finish flipping its idle flag after publishing the event.
+          setTimeout(() => { void this.#scheduleMcpReload(); }, 0);
+        }
         if (this.#pendingCwdRebind.has(conversation.id)) {
           this.#pendingCwdRebind.delete(conversation.id);
           void this.#rebindSessionCwd(conversation.id).catch(() => undefined);
@@ -3603,10 +3709,11 @@ export class PiProcessManager {
     const args = event.args as Record<string, unknown> | undefined;
     const raw = typeof args?.path === "string" ? args.path : typeof args?.file_path === "string" ? args.file_path : "";
     if (!raw) return;
-    const absolute = raw.startsWith("/") ? raw : join(cwd ?? this.#paths.scratchDir, raw);
+    const base = cwd || scratchWorkspace(this.#paths.scratchDir, conversationId);
+    const absolute = raw.startsWith("/") ? raw : join(base, raw);
     let touched = this.#runTouchedFiles.get(conversationId);
     if (!touched) {
-      touched = { cwd: cwd ?? this.#paths.scratchDir, files: new Map<string, CheckpointFile>(), pending: Promise.resolve() };
+      touched = { cwd: base, files: new Map<string, CheckpointFile>(), pending: Promise.resolve() };
       this.#runTouchedFiles.set(conversationId, touched);
     }
     // Read once, on first sight. A second `edit` of the same file must not re-read it:

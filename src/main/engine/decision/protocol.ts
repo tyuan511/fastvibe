@@ -26,7 +26,8 @@ type QuestionMeta = {
 
 export type ChoiceQuestion = { type: "choice"; criteria: Record<string, CriterionDescription> } & QuestionMeta;
 export type ScoreQuestion = { type: "score"; criteria: string[]; min?: number; max?: number } & QuestionMeta;
-export type NoulQuestion = { type: "noul" } & QuestionMeta;
+/** A binary proposition; `criteria` says what makes it true or false (Jev's optional `true`/`false`). */
+export type NoulQuestion = { type: "noul"; criteria?: { true?: string; false?: string } } & QuestionMeta;
 export type Question = ChoiceQuestion | ScoreQuestion | NoulQuestion;
 
 export type DecisionConfidence =

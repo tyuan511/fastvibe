@@ -12,10 +12,10 @@ export function shouldAttachPastedText(text: string): boolean {
 }
 
 /** How many characters of a long paste become its chip name. */
-const PASTED_TEXT_NAME_LENGTH = 10;
+const PASTED_TEXT_NAME_LENGTH = 32;
 
 /**
- * Name a pasted-text chip from the paste itself: the first ten characters, then
+ * Name a pasted-text chip from the paste itself: the first 32 characters, then
  * an ellipsis. Whitespace collapses to a single line so a leading newline does
  * not become the name. An empty result (a paste of only whitespace) is `""`,
  * and the caller falls back to the generic label.
@@ -35,10 +35,37 @@ function graphemes(text: string): string[] {
   return [...text];
 }
 
+/**
+ * The path a dropped or picked file will be handed to the model.
+ *
+ * Electron 32 removed `File.path`, so a chip built from that property had a name
+ * and nothing else — the prompt suffix skips a file with no path, and the model
+ * never hears that a file was attached. `bridged` is
+ * `webUtils.getPathForFile`, read in the preload. An empty string from it means
+ * "not a real file" (a blob, or a remote browser), which must not be stored.
+ * A leftover `File.path` is only a fallback for a host that still sets one.
+ */
+export function resolveDroppedPath(legacyPath: string | undefined, bridged: string | undefined): string | undefined {
+  const path = (bridged || legacyPath || "").trim();
+  return path.length > 0 ? path : undefined;
+}
+
+function pathFromBridge(file: File): string | undefined {
+  if (typeof window === "undefined") return undefined;
+  const read = window.fastvibe?.pathForFile;
+  if (!read) return undefined;
+  try {
+    const path = read(file);
+    return typeof path === "string" ? path : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function filesToAttachments(files: File[]): Promise<ChatAttachment[]> {
   const result: ChatAttachment[] = [];
   for (const file of files) {
-    const native = file as NativeFile;
+    const path = resolveDroppedPath((file as NativeFile).path, pathFromBridge(file));
     const mime = file.type || guessMime(file.name);
     if (IMAGE_TYPES.has(mime) && file.size <= MAX_IMAGE_BYTES) {
       const dataUrl = await readDataUrl(file);
@@ -48,7 +75,7 @@ export async function filesToAttachments(files: File[]): Promise<ChatAttachment[
         name: file.name,
         mimeType: mime,
         dataUrl,
-        path: native.path,
+        path,
       });
       continue;
     }
@@ -57,7 +84,7 @@ export async function filesToAttachments(files: File[]): Promise<ChatAttachment[
       kind: "file",
       name: file.name,
       mimeType: mime || undefined,
-      path: native.path,
+      path,
     });
   }
   return result;

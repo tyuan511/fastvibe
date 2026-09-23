@@ -54,6 +54,7 @@ import type {
 import type { RemoteHostProfile, RemoteHostConnectionState, RemoteHostTestResult, SshHostKeyScan } from "@shared/remote-host";
 import type {
   AppUpdateState,
+  FullDiskAccessStatus,
   GitBranch,
   GitDiffSource,
   GitStatus,
@@ -108,6 +109,15 @@ export type ApiTransport = {
    * whether there is any window chrome here at all, and only the transport knows.
    */
   remote: boolean;
+  /**
+   * Absolute path of a file the user dropped or picked in this window.
+   *
+   * Not an IPC call. Electron removed `File.path`, and the replacement
+   * (`webUtils.getPathForFile`) only works in the preload that can see the real
+   * `File` — handing the file to Main drops the path. A remote browser has no path
+   * on the host, so that transport leaves this unset and the bridge answers "".
+   */
+  pathForFile?: (file: unknown) => string;
 };
 
 /** Build the bridge object for one transport. */
@@ -393,7 +403,8 @@ export function createFastVibeApi(t: ApiTransport) {
     workspace: {
       pick: (): Promise<{ cwd: string; status: EngineStatus } | null> =>
         t.invoke(Ipc.workspacePick),
-      reveal: (cwd: string): Promise<void> => t.invoke(Ipc.workspaceReveal, { cwd }),
+      reveal: (cwd: string): Promise<{ ok: boolean; reason?: "missing" | "invalid" } | void> =>
+        t.invoke(Ipc.workspaceReveal, { cwd }),
       preview: (path: string): Promise<FilePreview> => t.invoke(Ipc.workspacePreview, { path }),
       fileIcons: (): Promise<FileIconMapping> => t.invoke(Ipc.workspaceFileIcons),
       readDir: (path: string): Promise<DirEntry[]> => t.invoke(Ipc.workspaceReadDir, { path }),
@@ -506,6 +517,21 @@ export function createFastVibeApi(t: ApiTransport) {
       onChanged: (listener: (config: import("./decision").DecisionModelConfig) => void): (() => void) =>
         t.subscribe(Ipc.decisionChanged, listener),
     },
+    memory: {
+      getState: (): Promise<import("./memory").MemoryState> => t.invoke(Ipc.memoryGetState),
+      prepareModel: (): Promise<import("./memory").MemoryState> => t.invoke(Ipc.memoryPrepareModel),
+      setConfig: (patch: Partial<import("./memory").MemoryConfig>): Promise<import("./memory").MemoryState> =>
+        t.invoke(Ipc.memorySetConfig, patch),
+      search: (request: import("./memory").MemorySearchRequest): Promise<import("./memory").MemorySearchResult> =>
+        t.invoke(Ipc.memorySearch, request),
+      graph: (request: import("./memory").MemoryGraphRequest = {}): Promise<import("./memory").MemoryGraph> =>
+        t.invoke(Ipc.memoryGraph, request),
+      detail: (id: string): Promise<import("./memory").MemoryDetail | null> => t.invoke(Ipc.memoryDetail, { id }),
+      delete: (id: string): Promise<import("./memory").MemoryState> => t.invoke(Ipc.memoryDelete, { id }),
+      clear: (): Promise<import("./memory").MemoryState> => t.invoke(Ipc.memoryClear),
+      onChanged: (listener: (state: import("./memory").MemoryState) => void): (() => void) =>
+        t.subscribe(Ipc.memoryChanged, listener),
+    },
     /** 远程访问：把这台机器上的 agent 通过网页开放给其他设备。 */
     remote: {
       getState: (): Promise<import("@shared/ipc").RemoteServerState> => t.invoke(Ipc.remoteGetState),
@@ -549,6 +575,12 @@ export function createFastVibeApi(t: ApiTransport) {
       onGrantFlowState: (listener: (state: import("@shared/types").GrantFlowState) => void): (() => void) =>
         t.subscribe(Ipc.computerGrantFlowState, listener),
     },
+    /** macOS Full Disk Access. The grant is a switch in System Settings; nothing here flips it. */
+    system: {
+      fullDiskAccess: (): Promise<FullDiskAccessStatus> => t.invoke(Ipc.systemFullDiskAccess),
+      openFullDiskAccess: (): Promise<void> => t.invoke(Ipc.systemOpenFullDiskAccess),
+      revealApp: (): Promise<void> => t.invoke(Ipc.systemRevealApp),
+    },
     browser: {
       listProfiles: (): Promise<BrowserProfileInfo[]> => t.invoke(Ipc.browserListProfiles),
       importProfile: (profile: BrowserProfileInfo, target?: "builtin" | "system"): Promise<BrowserImportResult> => t.invoke(Ipc.browserImportProfile, { profile, target }),
@@ -558,6 +590,19 @@ export function createFastVibeApi(t: ApiTransport) {
       respond: (payload: { id: string; ok: boolean; result?: unknown; error?: string }): void => {
         t.send(Ipc.browserResponse, payload);
       },
+    },
+    /**
+     * Disk path for a file picked in this window, or "" when this client has none
+     * (a remote browser, or a blob that was never a file on disk).
+     */
+    pathForFile: (file: unknown): string => {
+      if (!t.pathForFile) return "";
+      try {
+        const path = t.pathForFile(file);
+        return typeof path === "string" ? path : "";
+      } catch {
+        return "";
+      }
     },
   };
 

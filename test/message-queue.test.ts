@@ -83,6 +83,25 @@ test("resolving claims removes delivered rows, re-queues the rest, and keeps a h
   assert.equal(store.resolveClaims("a", new Set()), false);
 });
 
+test("a pause is released only once it holds nothing", () => {
+  const store = new MessageQueueStore("unused", () => undefined);
+  // Stop over an empty queue: a leftover latch, released without touching others.
+  store.pause("a", "stopped");
+  store.pause("b", "stopped");
+  const held = store.add({ conversationId: "b", text: "held", behavior: "followUp" });
+  const revision = store.state("a").revision;
+  assert.equal(store.releaseEmptyPause("a"), true);
+  assert.equal(store.state("a").pause, null);
+  assert.equal(store.state("a").revision, revision + 1);
+  assert.equal(store.releaseEmptyPause("a"), false);
+  assert.equal(store.state("a").revision, revision + 1);
+  // A pause over a held row is the user's to release.
+  assert.equal(store.releaseEmptyPause("b"), false);
+  assert.equal(store.state("b").pause, "stopped");
+  store.remove(held.id);
+  assert.equal(store.releaseEmptyPause("b"), true);
+});
+
 test("id reorder is conversation-scoped, keeps claimed positions, and cannot drop additions", () => {
   const items = [item("a1"), item("owned", "a", true), item("b1", "b"), item("a2"), item("a3")];
   const reordered = reorderConversationItems(items, "a", ["a3", "owned", "missing", "a1"]);

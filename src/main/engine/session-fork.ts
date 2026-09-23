@@ -134,9 +134,11 @@ export function writeForkSession(options: {
   sourceSessionId: string;
   sourceSessionFile?: string;
   entries: readonly SessionEntry[];
+  /** Used when the fork's cwd is a new scratch directory named with this id. */
+  sessionId?: string;
 }): { sessionFile: string; sessionId: string } {
   mkdirSync(options.sessionDir, { recursive: true });
-  const sessionId = randomUUID();
+  const sessionId = options.sessionId ?? randomUUID();
   const timestamp = new Date().toISOString();
   const sessionFile = join(options.sessionDir, `${timestamp.replace(/[:.]/g, "-")}_${sessionId}.jsonl`);
   const inherited = inheritedForkEntries(options.entries, options.sourceSessionId);

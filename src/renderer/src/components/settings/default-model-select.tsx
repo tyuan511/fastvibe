@@ -38,6 +38,7 @@ export function DefaultModelSelect({
   emptyLabel,
   className,
   wrapLabel,
+  required,
 }: {
   models: FastVibeModel[];
   value?: EngineModel;
@@ -48,6 +49,8 @@ export function DefaultModelSelect({
   className?: string;
   /** Keep a long provider/model label readable instead of truncating it. */
   wrapLabel?: boolean;
+  /** Offer no way back to the unpinned value, for a caller that cannot run without a model. */
+  required?: boolean;
 }): JSX.Element {
   const { t } = useTranslation("settings");
   const groups = useMemo(() => {
@@ -92,13 +95,17 @@ export function DefaultModelSelect({
         }
       />
       <DropdownMenuContent align="end" className="min-w-52">
-        <DropdownMenuItem onClick={() => onChange(undefined)}>
-          <span className="min-w-0 flex-1 truncate">{emptyLabel ?? t("defaultModel.followLast")}</span>
-          <span className="ml-auto flex size-4 shrink-0 items-center justify-center">
-            {value ? null : <HugeiconsIcon strokeWidth={2} icon={Tick02Icon} className="size-4" />}
-          </span>
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
+        {required ? null : (
+          <>
+            <DropdownMenuItem onClick={() => onChange(undefined)}>
+              <span className="min-w-0 flex-1 truncate">{emptyLabel ?? t("defaultModel.followLast")}</span>
+              <span className="ml-auto flex size-4 shrink-0 items-center justify-center">
+                {value ? null : <HugeiconsIcon strokeWidth={2} icon={Tick02Icon} className="size-4" />}
+              </span>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+          </>
+        )}
         {models.length === 0 ? (
           // A label is Base UI's `Menu.GroupLabel`: bare, it throws
           // (`MenuGroupContext is missing`) and takes the whole app down.

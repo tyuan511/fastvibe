@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { ensureScratchWorkspace } from "../paths.ts";
 import type { ImportedSession } from "./types";
 
 /**
@@ -65,12 +66,13 @@ export function writeImportedSession(
 ): WrittenSession {
   // A source's working directory often no longer exists (deleted worktree, moved
   // repo). Binding the conversation to a missing path would hand the agent a cwd it
-  // cannot use, so those imports land in the shared scratch workspace instead.
+  // cannot use, so the session lands in its own scratch directory instead. The
+  // catalog uses this session id as the conversation id, so the directory is
+  // `scratch/<conversationId>` — the same place a chat created here would get.
   const original = session.cwd?.trim();
   const project = original && isDirectory(original) ? original : undefined;
-  const cwd = project ?? options.scratchDir;
-
   const sessionId = randomUUID();
+  const cwd = project ?? ensureScratchWorkspace(options.scratchDir, sessionId);
   const createdAt = Number.isFinite(session.createdAt) && session.createdAt > 0 ? session.createdAt : Date.now();
   const updatedAt = Number.isFinite(session.updatedAt) && session.updatedAt > 0 ? session.updatedAt : createdAt;
 

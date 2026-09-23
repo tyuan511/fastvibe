@@ -12,6 +12,8 @@ build
 *.log
 *.tsbuildinfo
 *.tgz
+*.pyc
+__pycache__/
 .env
 .env.*
 .firecrawl

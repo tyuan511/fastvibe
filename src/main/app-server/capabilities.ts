@@ -12,12 +12,14 @@ function capabilityOf(method: string): AppCapability | null {
   if (method.startsWith("models-dev:")) return "providers";
   if (method.startsWith("settings:")) return "settings";
   if (method.startsWith("decision:")) return "settings";
+  if (method.startsWith("memory:")) return "settings";
   if (method.startsWith("stats:")) return "stats";
   if (method.startsWith("app:")) return "settings";
   if (method.startsWith("update:")) return "native";
   if (method.startsWith("window:")) return "native";
   if (method.startsWith("browser:")) return "browser";
   if (method.startsWith("computer:")) return "native";
+  if (method.startsWith("system:")) return "native";
   if (method.startsWith("remote:")) return null;
   if (method.startsWith("ssh:")) return null;
   return null;

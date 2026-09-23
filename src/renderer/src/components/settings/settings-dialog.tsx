@@ -33,6 +33,7 @@ import { DefaultModelSelect } from "./default-model-select";
 import { ExtensionsSettings } from "./extensions-settings";
 import { McpSettings } from "./mcp-settings";
 import { DecisionSettings } from "./decision-settings";
+import { MemorySettings } from "./memory-settings";
 import { RemoteSettings } from "./remote-settings";
 import { RemoteHostsSettings } from "./remote-hosts-settings";
 import { ComputerSettings } from "./computer-settings";
@@ -47,6 +48,7 @@ import { AboutSettings } from "./about-settings";
 import { PersonalizationSettings } from "./personalization-settings";
 import { SubagentsSettings } from "./subagents-settings";
 import { SettingsGroup as Group, SettingsRow as Row } from "./settings-group";
+import { FullDiskAccessRow } from "@/components/full-disk-access";
 import { usePermissionModeSelection } from "@/components/permission-mode-provider";
 import {
   SETTINGS_SECTIONS,
@@ -408,6 +410,7 @@ export function SettingsDialog({
                     </Button>
                   }
                 />
+                <FullDiskAccessRow />
               </Group>
               <Group title={t("runtime.title")}>
                 <Row
@@ -574,6 +577,7 @@ export function SettingsDialog({
 
           {section === "subagents" ? <SubagentsSettings models={models} /> : null}
           {section === "decision" ? <DecisionSettings /> : null}
+          {section === "memory" ? <MemorySettings models={models} /> : null}
           {section === "mcp" ? <McpSettings /> : null}
           {section === "skills" ? <SkillsSettings /> : null}
           {section === "extensions" ? <ExtensionsSettings /> : null}

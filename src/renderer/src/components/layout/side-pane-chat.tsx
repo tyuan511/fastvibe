@@ -50,7 +50,8 @@ export function SidePaneChat({
   const commands = useSessionStore((state) => state.commands);
   const settings = useSettingsStore((state) => state.settings);
   const { setPermissionMode } = usePermissionModeSelection();
-  const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
+  const [attachments, setAttachments] = useState<ChatAttachment[]>(() => tab.initialAttachments ?? []);
+  const initialSent = useRef(false);
   const messages = tab.messages ?? [];
   const streaming = Boolean(tab.streaming);
   // The busy mark for the conversation this tab shows — the same per-conversation map
@@ -86,6 +87,12 @@ export function SidePaneChat({
     };
   }, [parentId, patchTab, tab.conversationId, tab.id, tab.title]);
 
+  useEffect(() => {
+    if (!tab.conversationId || !tab.sendOnCreate || initialSent.current) return;
+    initialSent.current = true;
+    void send();
+  }, [tab.conversationId, tab.sendOnCreate]);
+
   async function send(): Promise<void> {
     const text = tab.draft?.trim() ?? "";
     const id = tab.conversationId;
@@ -101,7 +108,12 @@ export function SidePaneChat({
       return;
     }
     const promptText = text || translate("chat:composer.seeAttachments");
-    const payload = `${promptText}${attachmentPromptSuffix(items)}`;
+    // The selected-text reference is displayed below the message, but the selected
+    // question itself is the prompt. Do not append the reference metadata a second
+    // time on the first automatic send.
+    const initialIds = new Set((tab.sendOnCreate ? tab.initialAttachments : undefined)?.map((item) => item.id));
+    const promptAttachments = items.filter((item) => !initialIds.has(item.id));
+    const payload = `${promptText}${attachmentPromptSuffix(promptAttachments)}`;
     // The row is optimistic and minted with a `local:` id, exactly like the main
     // thread's: the engine echoes this prompt back as a `message_start`, and without
     // the id the pane appended that echo as a second copy of the same message.
@@ -178,7 +190,9 @@ export function SidePaneChat({
           onSubmit={() => {
             void send();
           }}
-          onAbort={() => undefined}
+          onAbort={() => {
+            if (tab.conversationId) void engine.abort(tab.conversationId);
+          }}
           onPickWorkspace={() => undefined}
           onSelectProject={() => undefined}
           onModelChange={(provider, modelId) => {

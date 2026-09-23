@@ -190,7 +190,7 @@ export function DecisionSettings() {
                   disabled={loading || saving}
                   onClick={() => setDraft((current) => ({ ...current, [key]: !current[key] }))}
                 >
-                  <Checkbox checked={draft[key]} className="pointer-events-none mt-0.5" />
+                  <Checkbox checked={draft[key] === true} className="pointer-events-none mt-0.5" />
                   <span className="flex flex-col gap-0.5">
                     <span>{t(`decision.${key}`)}</span>
                     <span className="text-xs text-muted-foreground">{t(`decision.${key}Hint`)}</span>

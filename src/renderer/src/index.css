@@ -2,6 +2,7 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
+@import "@xyflow/react/dist/style.css";
 /*
  * KaTeX's stylesheet, for the LaTeX in replies and file previews
  * (`components/chat/markdown-view.tsx` → `rehype-katex`). Importing it here rather
@@ -146,6 +147,47 @@ body {
   color: var(--foreground);
   overflow: hidden;
   user-select: none;
+}
+
+/* Overlay surfaces ----------------------------------------------------------
+   Menus and popovers should feel attached to the desktop window, rather than
+   like cards floating over a web page. Keep the treatment in one place so a
+   context menu and a settings popover share the same edge, depth, and motion.
+   The shadow deliberately stays black in both light and dark themes: using the
+   foreground token would make dark-mode overlays glow instead of lift. */
+.overlay-surface {
+  border: 1px solid color-mix(in oklab, var(--foreground) 12%, transparent);
+  background-clip: padding-box;
+  box-shadow:
+    0 10px 24px -18px rgb(0 0 0 / 14%),
+    0 2px 6px rgb(0 0 0 / 5%);
+  -webkit-backdrop-filter: blur(18px) saturate(1.08);
+  backdrop-filter: blur(18px) saturate(1.08);
+}
+
+@keyframes overlay-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes overlay-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+[data-overlay-surface][data-open] {
+  animation: overlay-fade-in 110ms ease-out both;
+}
+
+[data-overlay-surface][data-closed] {
+  animation: overlay-fade-out 90ms ease-in both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-overlay-surface][data-open],
+  [data-overlay-surface][data-closed] {
+    animation: none;
+  }
 }
 
 /* The desktop client does not use browser-style focus chrome. Keep focus itself
@@ -646,4 +688,44 @@ body {
     touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
   }
+}
+
+/* React Flow chrome uses the same semantic tokens as the rest of the app. */
+.memory-flow {
+  --xy-background-pattern-dots-color: var(--border);
+  --xy-edge-stroke-default: var(--border);
+  --xy-handle-background-color-default: var(--muted-foreground);
+  --xy-handle-border-color-default: var(--background);
+}
+.memory-flow .react-flow__controls {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 0.625rem;
+  background: var(--card);
+  box-shadow: 0 4px 16px color-mix(in oklab, var(--foreground) 10%, transparent);
+}
+.memory-flow .react-flow__controls-button {
+  border-bottom: 1px solid var(--border);
+  background: var(--card);
+  fill: var(--foreground);
+}
+.memory-flow .react-flow__controls-button:last-child {
+  border-bottom: 0;
+}
+.memory-flow .react-flow__controls-button:hover {
+  background: var(--muted);
+}
+.memory-flow .react-flow__attribution {
+  display: none;
+}
+.memory-flow .react-flow__edge-path {
+  transition: opacity 160ms ease, stroke-width 160ms ease;
+}
+.memory-flow .react-flow__handle {
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+.memory-flow .react-flow__node:hover .react-flow__handle,
+.memory-flow .react-flow__node.selected .react-flow__handle {
+  opacity: 1;
 }

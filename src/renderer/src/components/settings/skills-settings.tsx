@@ -215,8 +215,8 @@ function SkillCard({ skill, onRemove }: { skill: SkillInfo; onRemove: () => void
   const scopeLabel =
     skill.scope === "project"
       ? t("skills.scopeProject")
-      : skill.scope === "temporary"
-        ? t("skills.scopeTemporary")
+      : skill.scope === "system"
+        ? t("skills.scopeSystem")
         : t("skills.scopeGlobal");
   return (
     <Item variant="outline" size="sm" className="items-start gap-3 bg-card/80 p-3 transition-colors hover:border-primary/30 hover:bg-muted/20">

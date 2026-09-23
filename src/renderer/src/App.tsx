@@ -12,6 +12,7 @@ import { TodoPanel } from "@/components/chat/todo-list";
 import { MessageList } from "@/components/chat/message-list";
 import { NewSessionHero, SuggestionChips } from "@/components/chat/new-session";
 import { PermissionDialog } from "@/components/chat/permission-dialog";
+import { FullDiskAccessPrompt } from "@/components/full-disk-access";
 import { PermissionPanel, type PermissionResponse } from "@/components/chat/permission-panel";
 import { usagePercent } from "@/components/chat/session-controls";
 import { Sidebar } from "@/components/layout/sidebar";
@@ -41,7 +42,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/icon-button";
-import { attachmentPromptSuffix, attachmentsToImages } from "@/lib/attachments";
+import { attachmentPromptSuffix, attachmentsToImages, pastedTextAttachmentName } from "@/lib/attachments";
 import {
   engine,
   getModels,
@@ -301,6 +302,36 @@ const MessageThread = memo(function MessageThread({
 }): JSX.Element {
   const messages = useSessionStore((state) => state.messages);
   const streaming = useSessionStore((state) => state.streaming);
+  const activeId = useSessionStore((state) => state.activeId);
+  const addSelectionToConversation = useCallback((text: string) => {
+    const store = useSessionStore.getState();
+    const attachment: ChatAttachment = {
+      id: crypto.randomUUID(),
+      kind: "file",
+      name: pastedTextAttachmentName(text),
+      mimeType: "text/plain",
+      text,
+    };
+    store.setComposer(store.draft, [...store.attachments, attachment]);
+  }, []);
+  const askSelectionInSideChat = useCallback((text: string) => {
+    if (!activeId) return;
+    const sidePane = useSidePaneStore.getState();
+    const attachment: ChatAttachment = {
+      id: crypto.randomUUID(),
+      kind: "file",
+      name: pastedTextAttachmentName(text),
+      mimeType: "text/plain",
+      text,
+    };
+    sidePane.openSideChat(
+      activeId,
+      sidePane.nextSideChatOrdinal(activeId),
+      text,
+      true,
+      [attachment],
+    );
+  }, [activeId]);
   return (
     <MessageList
       messages={messages}
@@ -310,6 +341,8 @@ const MessageThread = memo(function MessageThread({
       onRetry={onRetry}
       onEdit={onEdit}
       onFork={onFork}
+      onAddSelectionToConversation={activeId ? addSelectionToConversation : undefined}
+      onAskSelectionInSideChat={activeId ? askSelectionInSideChat : undefined}
       showThinking={showThinking}
       showTimestamp={showTimestamp}
       collapseRuns={collapseRuns}
@@ -1463,8 +1496,9 @@ export function App(): JSX.Element {
    * Continue the interrupted turn. The engine re-enters the loop from the transcript
    * (no new user message), and the queue stays held: resume must not flush queued
    * follow-ups onto a half-finished reply. Once the resumed run starts, `agent_start`
-   * clears `runInterrupted` and unpauses nothing — the queue only resumes when the
-   * user explicitly continues it (立即 / 继续发送).
+   * clears `runInterrupted` and unpauses no held row — the queue only resumes when the
+   * user explicitly continues it (立即 / 继续发送). Main does drop a pause that holds
+   * nothing, so a Send made during the resumed run queues without a stop notice.
    *
    * `canResume` is dropped here rather than left to the engine's reply: the flag is
    * derived state, and clicking 继续 twice inside one IPC round trip would otherwise
@@ -2392,6 +2426,7 @@ export function App(): JSX.Element {
         request={pendingDialog}
         onRespond={handlePermissionRespond}
       />
+      <FullDiskAccessPrompt />
       {/* 重试时询问文件回退. A retry rewinds the conversation, and this is the same
           question for the working tree the turn wrote — asked, not assumed, because
           the user may have touched those files by hand since. */}

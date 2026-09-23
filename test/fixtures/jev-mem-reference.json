@@ -1,0 +1,526 @@
+{
+ "questions": {
+  "type": {
+   "episodic": {
+    "type": "noul",
+    "instructions": "Does `observation` describe a particular experience or event involving a participant?",
+    "criteria": {
+     "true": "A specific past, current or planned event, even if its exact time is unstated.",
+     "false": "Only a general fact, procedure or preference with no particular event."
+    }
+   },
+   "semantic": {
+    "type": "noul",
+    "instructions": "Does `observation` state a fact about a person, entity or the world that remains useful beyond this conversational turn?",
+    "criteria": {
+     "true": "An attributable fact or relationship, even when it also appears in an episodic account.",
+     "false": "Only a transient conversational acknowledgement or a question with no asserted fact."
+    }
+   },
+   "procedural": {
+    "type": "noul",
+    "instructions": "Does `observation` describe how to carry out a task?",
+    "criteria": {
+     "true": "An instruction, ordered step, method or actionable rule for performing a task.",
+     "false": "Merely mentions doing a task without describing how."
+    }
+   },
+   "preference": {
+    "type": "noul",
+    "instructions": "Does `observation` express a participant's preference, aversion or habitual choice?",
+    "criteria": {
+     "true": "An attributable like, dislike, preferred option or habitual choice.",
+     "false": "An isolated action alone, another person's unattributed preference, or no preference evidence."
+    }
+   }
+  },
+  "relation0": {
+   "semantic": {
+    "type": "noul",
+    "instructions": "Compare `new_memory.content` with `candidates[0].content`. Would a semantic link between these observations help retrieve a shared specific topic or fact?",
+    "criteria": {
+     "true": "A specific shared topic, fact or event makes the connection useful.",
+     "false": "Only generic conversational vocabulary or no meaningful semantic connection."
+    }
+   },
+   "causes": {
+    "type": "noul",
+    "instructions": "Compare `new_memory.content` with `candidates[0].content`. Does the event in `new_memory.content` cause, enable or explain the candidate event?",
+    "criteria": {
+     "true": "The supplied accounts support this direction of causal influence.",
+     "false": "Only similarity, chronology, a shared entity, or insufficient causal evidence."
+    }
+   },
+   "caused_by": {
+    "type": "noul",
+    "instructions": "Compare `new_memory.content` with `candidates[0].content`. Does the candidate event cause, enable or explain the event in `new_memory.content`?",
+    "criteria": {
+     "true": "The supplied accounts support this direction of causal influence.",
+     "false": "Only similarity, chronology, a shared entity, or insufficient causal evidence."
+    }
+   },
+   "entity": {
+    "type": "noul",
+    "instructions": "Compare `new_memory.content` with `candidates[0].content`. Using `new_memory.entities` and `candidates[0].entities`, do any names or aliases refer to the same real-world entity?",
+    "criteria": {
+     "true": "Context supports a shared identity despite differing names or aliases.",
+     "false": "Distinct entities or insufficient evidence to resolve the alias; similar names alone are insufficient."
+    }
+   }
+  },
+  "relation3_exact": {
+   "semantic": {
+    "type": "noul",
+    "instructions": "Compare `new_memory.content` with `candidates[3].content`. Would a semantic link between these observations help retrieve a shared specific topic or fact?",
+    "criteria": {
+     "true": "A specific shared topic, fact or event makes the connection useful.",
+     "false": "Only generic conversational vocabulary or no meaningful semantic connection."
+    }
+   },
+   "causes": {
+    "type": "noul",
+    "instructions": "Compare `new_memory.content` with `candidates[3].content`. Does the event in `new_memory.content` cause, enable or explain the candidate event?",
+    "criteria": {
+     "true": "The supplied accounts support this direction of causal influence.",
+     "false": "Only similarity, chronology, a shared entity, or insufficient causal evidence."
+    }
+   },
+   "caused_by": {
+    "type": "noul",
+    "instructions": "Compare `new_memory.content` with `candidates[3].content`. Does the candidate event cause, enable or explain the event in `new_memory.content`?",
+    "criteria": {
+     "true": "The supplied accounts support this direction of causal influence.",
+     "false": "Only similarity, chronology, a shared entity, or insufficient causal evidence."
+    }
+   }
+  },
+  "consolidation1": {
+   "redundant": {
+    "type": "noul",
+    "instructions": "Compare `new_memory.content` with `candidates[1].content`. Do these observations repeat the same fact with no additional recallable detail?",
+    "criteria": {
+     "true": "One is a duplicate or paraphrase without a new detail or time-specific update.",
+     "false": "They provide different details or describe distinct occurrences."
+    }
+   },
+   "contradiction": {
+    "type": "noul",
+    "instructions": "Compare `new_memory.content` with `candidates[1].content`. Do these accounts assert incompatible facts about the same subject at the same time?",
+    "criteria": {
+     "true": "Claims cannot both hold at the stated time and context.",
+     "false": "Compatible claims, uncertainty, or a change over time that explains the difference."
+    }
+   },
+   "obsolete": {
+    "type": "noul",
+    "instructions": "Compare `new_memory.content` with `candidates[1].content`. Does the new memory explicitly replace the candidate's previously valid fact with an updated fact?",
+    "criteria": {
+     "true": "An explicit update supersedes the earlier fact for current-state questions.",
+     "false": "No explicit replacement; mere recency or a separate event is insufficient."
+    }
+   },
+   "link": {
+    "type": "noul",
+    "instructions": "Compare `new_memory.content` with `candidates[1].content`. Would following a link between these observations help answer a future recall question?",
+    "criteria": {
+     "true": "The connection supplies related, corroborating, correcting or contrasting evidence.",
+     "false": "There is no specific connection useful for recall."
+    }
+   },
+   "representation": {
+    "type": "choice",
+    "instructions": "Compare `new_memory.content` with `candidates[1].content`. Which representation best fits the relationship between these two observations? Judge from the supplied accounts; do not assume answers to other questions.",
+    "criteria": {
+     "keep_separate": "Contradictory accounts, unique details that a combined representation would lose, or distinct facts/events without a supported general pattern.",
+     "merge": "Compatible accounts of the same fact or event can be combined without losing unique details.",
+     "promote": "Distinct repeated episodes explicitly support a stable general pattern suitable for semantic abstraction; prefer this over merge for repeated events.",
+     "uncertain": "Insufficient evidence to choose a safe combined or separate representation."
+    }
+   }
+  },
+  "routing": {
+   "semantic": {
+    "type": "noul",
+    "instructions": "Would finding topically or semantically related memories help answer `query`?",
+    "criteria": {
+     "true": "Recall of related facts is useful.",
+     "false": "No related-memory lookup is needed."
+    }
+   },
+   "temporal": {
+    "type": "noul",
+    "instructions": "Does answering `query` require event dates, durations, ordering or changes over time?",
+    "criteria": {
+     "true": "A time relation is needed to answer correctly.",
+     "false": "Dates or ordering are incidental to the answer."
+    }
+   },
+   "causal": {
+    "type": "noul",
+    "instructions": "Does answering `query` require explaining a cause, motivation, enabling condition or effect?",
+    "criteria": {
+     "true": "Causal or explanatory evidence is needed.",
+     "false": "Only factual association or chronology is requested."
+    }
+   },
+   "entity": {
+    "type": "noul",
+    "instructions": "Would connecting mentions of the same person, place, object or organization help answer `query`?",
+    "criteria": {
+     "true": "Combining entity-specific facts or aliases is useful.",
+     "false": "Entity identity is irrelevant to the answer."
+    }
+   },
+   "multi_hop_need": {
+    "type": "noul",
+    "instructions": "Does `query` require combining at least two distinct pieces of remembered evidence?",
+    "criteria": {
+     "true": "The question asks for a comparison, aggregation or chained inference.",
+     "false": "One direct remembered fact suffices."
+    }
+   },
+   "recency_importance": {
+    "type": "noul",
+    "instructions": "Does `query` require the latest applicable fact rather than a historical fact?",
+    "criteria": {
+     "true": "Current state, latest update or recent status is requested.",
+     "false": "Historical or timeless facts answer the question."
+    }
+   }
+  },
+  "stopping": {
+   "evidence_sufficient": {
+    "type": "noul",
+    "instructions": "Does `evidence` contain support for every factual part of an answer to `query`?",
+    "criteria": {
+     "true": "A grounded answer can be given from these memories without inventing missing facts.",
+     "false": "Any required fact or reasoning link is unsupported; related topics alone are insufficient."
+    }
+   },
+   "continue_useful": {
+    "type": "noul",
+    "instructions": "Given `query` and `evidence`, is another retrieval round likely to fill a specific gap or resolve a conflict?",
+    "criteria": {
+     "true": "An identifiable missing fact or conflict could benefit from more memory retrieval.",
+     "false": "No identifiable retrieval need remains or more memories are unlikely to help."
+    }
+   },
+   "missing_evidence": {
+    "type": "noul",
+    "instructions": "Is at least one fact required by `query` absent from `evidence`?",
+    "criteria": {
+     "true": "A required detail, date, identity, count or linking fact is not supported.",
+     "false": "All required facts have explicit support in the supplied evidence."
+    }
+   },
+   "contradiction": {
+    "type": "noul",
+    "instructions": "Does `evidence` contain conflicting claims relevant to `query` that the supplied time/context cannot reconcile?",
+    "criteria": {
+     "true": "A conflict still affects which answer is correct.",
+     "false": "Claims agree, differ only by explained temporal updates, or do not affect the answer."
+    }
+   }
+  },
+  "traversal2": {
+   "relevance": {
+    "type": "noul",
+    "instructions": "Does `candidates[2].content` contain a fact needed to answer `query`?",
+    "criteria": {
+     "true": "Direct answer evidence or a necessary intermediate fact.",
+     "false": "Only topic overlap or unrelated content."
+    }
+   },
+   "relation_usefulness": {
+    "type": "noul",
+    "instructions": "Does the stated graph relation of `candidates[2]` connect `evidence` to information useful for `query`?",
+    "criteria": {
+     "true": "The relation and its direction support an answer-relevant connection.",
+     "false": "A graph edge exists but has no demonstrated usefulness for this question."
+    }
+   },
+   "new_information": {
+    "type": "noul",
+    "instructions": "Does `candidates[2].content` add an answer-relevant detail absent from `evidence`?",
+    "criteria": {
+     "true": "A distinct relevant detail or missing reasoning link.",
+     "false": "Only duplicated evidence or irrelevant new details."
+    }
+   },
+   "supports_current_evidence": {
+    "type": "noul",
+    "instructions": "Does `candidates[2].content` independently corroborate a claim in `evidence` relevant to `query`?",
+    "criteria": {
+     "true": "Provides compatible corroborating evidence for a specific claim.",
+     "false": "No specific corroboration, or contradicts that claim."
+    }
+   }
+  }
+ },
+ "budgets": [
+  {
+   "semantic": 50,
+   "temporal": 0,
+   "causal": 23,
+   "entity": 7
+  },
+  {
+   "semantic": 24,
+   "temporal": 27,
+   "causal": 8,
+   "entity": 21
+  },
+  {
+   "semantic": 20,
+   "temporal": 20,
+   "causal": 20,
+   "entity": 20
+  },
+  {
+   "semantic": 63,
+   "temporal": 0,
+   "causal": 9,
+   "entity": 8
+  },
+  {
+   "semantic": 0,
+   "temporal": 0,
+   "causal": 0,
+   "entity": 0
+  },
+  {
+   "semantic": 23,
+   "temporal": 14,
+   "causal": 31,
+   "entity": 12
+  }
+ ],
+ "refs": [
+  [
+   {
+    "original": "yesterday",
+    "normalized": "15 May 2024",
+    "precision": "day",
+    "anchor_date": "2024-05-16"
+   }
+  ],
+  [
+   {
+    "original": "last night",
+    "normalized": "15 May 2024",
+    "precision": "day",
+    "anchor_date": "2024-05-16"
+   },
+   {
+    "original": "last Friday",
+    "normalized": "10 May 2024",
+    "precision": "day",
+    "anchor_date": "2024-05-16"
+   }
+  ],
+  [
+   {
+    "original": "Next monday",
+    "normalized": "20 May 2024",
+    "precision": "day",
+    "anchor_date": "2024-05-16"
+   },
+   {
+    "original": "three weeks ago",
+    "normalized": "3 weeks before 16 May 2024",
+    "precision": "week",
+    "anchor_date": "2024-05-16"
+   },
+   {
+    "original": "This past weekend",
+    "normalized": "The weekend before 16 May 2024",
+    "precision": "weekend",
+    "anchor_date": "2024-05-16"
+   }
+  ],
+  [
+   {
+    "original": "2 months ago",
+    "normalized": "March 2024",
+    "precision": "month",
+    "anchor_date": "2024-05-16"
+   },
+   {
+    "original": "last year",
+    "normalized": "2023",
+    "precision": "year",
+    "anchor_date": "2024-05-16"
+   },
+   {
+    "original": "this week",
+    "normalized": "The week of 16 May 2024",
+    "precision": "week",
+    "anchor_date": "2024-05-16"
+   },
+   {
+    "original": "next weekend",
+    "normalized": "The weekend after 16 May 2024",
+    "precision": "weekend",
+    "anchor_date": "2024-05-16"
+   }
+  ],
+  [
+   {
+    "original": "today",
+    "normalized": "16 May 2024",
+    "precision": "day",
+    "anchor_date": "2024-05-16"
+   },
+   {
+    "original": "tomorrow",
+    "normalized": "17 May 2024",
+    "precision": "day",
+    "anchor_date": "2024-05-16"
+   },
+   {
+    "original": "last month",
+    "normalized": "April 2024",
+    "precision": "month",
+    "anchor_date": "2024-05-16"
+   }
+  ]
+ ],
+ "keywords": [
+  [
+   "caroline",
+   "went",
+   "lgbtq",
+   "support",
+   "group",
+   "yesterday",
+   "powerful",
+   "lgbtq_support",
+   "support_group",
+   "group_yesterday"
+  ],
+  [
+   "melanie",
+   "wow",
+   "caroline",
+   "20",
+   "may",
+   "5/7",
+   "10:30 am",
+   "lake",
+   "sunrise",
+   "great",
+   "painted",
+   "lake_sunrise",
+   "melanie_wow",
+   "wow_caroline"
+  ],
+  [
+   "hello there",
+   "quick brown fox",
+   "jean luc",
+   "paris",
+   "mira",
+   "hello",
+   "there",
+   "quick",
+   "brown",
+   "fox",
+   "met",
+   "jean",
+   "luc",
+   "happy",
+   "hello_there"
+  ]
+ ],
+ "entities": [
+  [
+   "Caroline"
+  ],
+  [
+   "Melanie",
+   "Caroline",
+   "In May"
+  ],
+  [
+   "Hello There",
+   "The Quick Brown Fox",
+   "Jean Luc",
+   "Paris",
+   "Mira"
+  ]
+ ],
+ "fallback": {
+  "extractionPrompt": "Extract structured event information from the following content.\n            Identify the main narrative, key entities, keywords, and emotional tone.\n\n            Content: {content}\n\n            Return as JSON with:\n            - content_narrative: Concise narrative summary\n            - entities: List of named entities (people, places, organizations)\n            - keywords: List of important keywords\n            - emotion: Dominant emotional tone (if any)\n            ",
+  "responseSchema": {
+   "type": "json_schema",
+   "json_schema": {
+    "name": "event_extraction",
+    "schema": {
+     "type": "object",
+     "properties": {
+      "content_narrative": {
+       "type": "string"
+      },
+      "entities": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       }
+      },
+      "keywords": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       }
+      },
+      "emotion": {
+       "type": [
+        "string",
+        "null"
+       ]
+      }
+     },
+     "required": [
+      "content_narrative",
+      "entities",
+      "keywords",
+      "emotion"
+     ],
+     "additionalProperties": false
+    },
+    "strict": true
+   }
+  },
+  "simple": [
+   {
+    "content_narrative": "[Caroline]: I went to the LGBTQ support group yesterday and it was so powerful.",
+    "entities": [
+     "Caroline"
+    ],
+    "keywords": [
+     "[Caroline]:",
+     "support",
+     "yesterday",
+     "powerful."
+    ]
+   },
+   {
+    "content_narrative": "Hello There. Mira met Jean in Paris; Mira laughed. filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler filler f",
+    "entities": [
+     "Hello",
+     "Jean",
+     "Mira",
+     "Paris",
+     "There"
+    ],
+    "keywords": [
+     "There.",
+     "Paris;",
+     "laughed.",
+     "filler",
+     "filler"
+    ]
+   }
+  ]
+ }
+}

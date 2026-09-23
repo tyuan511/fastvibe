@@ -9,7 +9,11 @@ export type FastVibePaths = {
   skillsDir: string;
   sessionsDir: string;
   worktreesDir: string;
-  /** Scratch workspaces for conversations that are not bound to a project. */
+  /**
+   * Parent of the scratch workspaces for conversations that are not bound to a project.
+   * Each such conversation gets its own `scratch/<conversationId>` directory — they must
+   * not share one, or one chat's files are the other's.
+   */
   scratchDir: string;
   /** pi-coding-agent SDK model registry configuration. */
   modelsJson: string;
@@ -34,6 +38,12 @@ export type FastVibePaths = {
   reasoningFile: string;
   /** Append-only record of finalized turns, so 使用统计 survives session deletion. */
   usageLedgerFile: string;
+  /** Durable memory configuration, separate from renderer settings. */
+  memoryFile: string;
+  /** SQLite semantic/JEV memory index. */
+  memoryDatabaseFile: string;
+  /** On-demand local embedding model cache. */
+  memoryModelsDir: string;
   /** Durable, Main-owned user message queue. */
   messageQueueFile: string;
   /**
@@ -78,6 +88,25 @@ export type FastVibePaths = {
  * streamed event), where re-running six `mkdirSync` syscalls per token blocked the
  * main process's event loop for the whole of a fast reply.
  */
+/**
+ * Scratch directory for one unbound conversation: `scratch/<conversationId>`.
+ *
+ * The id is sanitized so a session id cannot escape the scratch root. Callers that
+ * are about to use the path as a cwd want `ensureScratchWorkspace` instead, which
+ * creates it.
+ */
+export function scratchWorkspace(scratchDir: string, conversationId: string): string {
+  const safe = conversationId.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^\.+/g, "").slice(0, 128);
+  return join(scratchDir, safe || "chat");
+}
+
+/** Create `scratch/<conversationId>` and return it. */
+export function ensureScratchWorkspace(scratchDir: string, conversationId: string): string {
+  const dir = scratchWorkspace(scratchDir, conversationId);
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
 let cached: FastVibePaths | null = null;
 let configuredUserData: string | undefined;
 
@@ -109,8 +138,9 @@ function buildFastVibePaths(): FastVibePaths {
   const sessionsDir = join(agentDir, "sessions");
   const worktreesDir = join(runtimeRoot, "wt");
   const scratchDir = join(runtimeRoot, "scratch");
+  const memoryModelsDir = join(runtimeRoot, "models", "memory");
 
-  for (const dir of [logs, agentDir, skillsDir, sessionsDir, worktreesDir, scratchDir]) {
+  for (const dir of [logs, agentDir, skillsDir, sessionsDir, worktreesDir, scratchDir, memoryModelsDir]) {
     mkdirSync(dir, { recursive: true });
   }
 
@@ -138,6 +168,9 @@ function buildFastVibePaths(): FastVibePaths {
     subagentsFile: join(agentDir, "subagents.json"),
     reasoningFile: join(runtimeRoot, "reasoning.json"),
     usageLedgerFile: join(runtimeRoot, "usage-ledger.jsonl"),
+    memoryFile: join(runtimeRoot, "memory.json"),
+    memoryDatabaseFile: join(runtimeRoot, "memory.sqlite"),
+    memoryModelsDir,
     messageQueueFile: join(runtimeRoot, "message-queue.json"),
     remoteAccessFile: join(userData, "remote-access.json"),
     sshHostsFile: join(userData, "ssh-hosts.json"),

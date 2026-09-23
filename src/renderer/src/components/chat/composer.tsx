@@ -620,7 +620,7 @@ export function Composer({
       onDrop={handleDrop}
     >
       {slash.length > 0 ? (
-        <div className="mb-2 overflow-hidden rounded-xl border border-border bg-popover shadow-sm" role="listbox">
+        <div className="overlay-surface mb-2 overflow-hidden rounded-lg bg-popover/95" role="listbox">
           {slash.map((item, index) => (
             <button
               key={item.name}

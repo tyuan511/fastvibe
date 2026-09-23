@@ -1,6 +1,7 @@
 import { decodeRemoteProjectKey, remoteProjectKey } from "@shared/project-binding";
 import type { ChatMessage, ConversationOpenResult, DirEntry, EngineStatus, ImportSourceId, WorkspaceSnapshot } from "@shared/types";
 import type { AppInfo, GitStatus } from "@shared/ipc";
+import type { MemoryState } from "@shared/memory";
 import {
   COMMANDS,
   CONVERSATIONS,
@@ -23,6 +24,7 @@ import {
   previewFor,
 } from "./preview-data";
 import { websiteFixture, type WebsiteLanguage } from "./website-fixtures";
+import { MEMORY_FIXTURE_COUNTS, memoryDetailFixture, memoryGraphFixture } from "./memory-fixtures";
 
 /**
  * Browser preview harness.
@@ -589,6 +591,64 @@ const api = {
     setKey: async (key: string) => ({ jev: Boolean(key.trim()) }),
     onChanged: () => () => undefined,
   },
+  // `?memory=semantic|jev` picks the mode 设置 → 长期记忆 opens on, `?memoryModel=missing|error`
+  // the embedding model's state. setConfig echoes the patch; prepareModel plays a ~3s download.
+  memory: (() => {
+    const mode = params.get("memory");
+    const modelParam = params.get("memoryModel");
+    const TOTAL = 118 * 1024 ** 2;
+    const listeners = new Set<(state: MemoryState) => void>();
+    let state: MemoryState = {
+      config: {
+        enabled: true,
+        mode: mode === "semantic" || mode === "jev" ? mode : "default",
+        autoCapture: true,
+        embeddingProvider: "local-minilm-multilingual-q8",
+        maxResults: 8,
+        maxContextChars: 4000,
+        ...(mode === "jev" ? { systemTwoModel: { provider: MODELS[0].provider, id: MODELS[0].id } } : {}),
+      },
+      model: {
+        provider: "local-minilm-multilingual-q8",
+        status: modelParam === "error" ? "error" : modelParam === "missing" || !(mode === "semantic" || mode === "jev") ? "not-installed" : "ready",
+        ...(modelParam === "error" ? { error: "fetch failed: ECONNRESET" } : {}),
+      },
+      // `?memory=jev` also fills the index, so 关系图 has a graph to draw.
+      ...(mode === "jev" ? MEMORY_FIXTURE_COUNTS : { items: 0, edges: 0 }),
+    };
+    const emit = (next: MemoryState): MemoryState => {
+      state = next;
+      for (const listener of listeners) listener(state);
+      return state;
+    };
+    const download = async (): Promise<MemoryState> => {
+      for (let step = 0; step <= 30; step += 1) {
+        const progress = step / 30;
+        emit({ ...state, model: { ...state.model, status: "downloading", progress, loadedBytes: Math.round(TOTAL * progress), totalBytes: TOTAL, error: undefined } });
+        await new Promise((settle) => window.setTimeout(settle, 100));
+      }
+      return emit({ ...state, model: { provider: state.model.provider, status: "ready", progress: 1 } });
+    };
+    return {
+      getState: async () => state,
+      prepareModel: async () => (state.model.status === "ready" ? state : download()),
+      setConfig: async (patch: Record<string, unknown>) => {
+        const config = { ...state.config, ...patch } as MemoryState["config"];
+        if (patch.systemTwoModel === null) delete config.systemTwoModel;
+        const next = emit({ ...state, config });
+        return config.mode !== "default" && next.model.status !== "ready" ? download() : next;
+      },
+      search: async () => ({ items: [], mode: state.config.mode, usedEmbedding: false, usedJev: false }),
+      graph: async (request: { project?: string } = {}) => (state.items === 0 ? { nodes: [], edges: [], projects: [], total: 0 } : memoryGraphFixture(request.project)),
+      detail: async (id: string) => (state.items === 0 ? null : memoryDetailFixture(id)),
+      delete: async () => state,
+      clear: async () => emit({ ...state, items: 0, edges: 0 }),
+      onChanged: (listener: (state: MemoryState) => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    };
+  })(),
   // Remote access is a real server in the main process; the preview has none to show,
   // so every action is a no-op over one of the two fixtures `?tunnel=` picks.
   remote: {
@@ -655,6 +715,16 @@ const api = {
     cancelGrantFlow: async () => undefined,
     getGrantFlow: async () => grantFlowState(),
     onGrantFlowState: () => () => undefined,
+  },
+  // `?fda=1` is the launch prompt. Granted by default so the preview is not covered.
+  system: {
+    fullDiskAccess: async () => ({
+      applicable: platform === "darwin" && !remote,
+      granted: params.get("fda") !== "1" && params.get("fda") !== "dev",
+      packaged: params.get("fda") !== "dev",
+    }),
+    openFullDiskAccess: async () => undefined,
+    revealApp: async () => undefined,
   },
 };
 
