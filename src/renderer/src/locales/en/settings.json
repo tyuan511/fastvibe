@@ -73,7 +73,9 @@
   "about": "About",
   "remote": "Remote access",
   "ssh": "SSH hosts",
-  "computer": "Computer control"
+  "computer": "Computer control",
+  "proxy": "Network proxy",
+  "browser": "Browser control"
  },
  "backToApp": "Back to app",
  "personalization": {
@@ -808,5 +810,27 @@
   "flowProgress": "Step {{step}}/{{total}} · waiting for the drop",
   "flowHint": "The panel is floating above System Settings. Drag it into the list for this step; the next one opens by itself. Esc cancels.",
   "cancelFlow": "Cancel"
+ },
+ "browser": {
+  "control": "Browser control",
+  "useSystem": "Use the system browser",
+  "useSystemDesc": "browser-use drives an installed browser over its debugging port instead of the side-pane browser. It opens its own window and profile, and leaves the browser you are using alone.",
+  "engine": "Default browser",
+  "engineDesc": "Which installed browser runs the tools. Automatic uses the first one found, in order: Chrome, Edge, Brave, Chromium.",
+  "auto": "Automatic",
+  "import": "Import data",
+  "importTitle": "Import from a browser on this machine",
+  "importDesc": "Copy another browser's cookies and login state into the built-in browser. The source browser is not changed, and passwords are never read.",
+  "importDescSystem": "Copies into the browser chosen above. The window FastVibe opened is closed first, then written. The source browser is not changed, and passwords are never read.",
+  "importAction": "Import",
+  "importing": "Importing…",
+  "importDone": "Imported {{browser}} · {{profile}}",
+  "importFailed": "Import failed",
+  "profileDesc": "Import this profile's cookies",
+  "loading": "Looking for browsers…",
+  "noProfiles": "No profiles to import",
+  "noProfilesDesc": "Looks for the default and named profiles of Chrome, Edge, Brave, Chromium, Arc and Opera.",
+  "remote": "Import only works on this machine",
+  "remoteDesc": "Import reads the browsers on the computer running the server, which a remote client cannot do."
  }
 }

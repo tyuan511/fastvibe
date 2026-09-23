@@ -536,7 +536,9 @@ export function createFastVibeApi(t: ApiTransport) {
     },
     browser: {
       listProfiles: (): Promise<BrowserProfileInfo[]> => t.invoke(Ipc.browserListProfiles),
-      importProfile: (profile: BrowserProfileInfo): Promise<BrowserImportResult> => t.invoke(Ipc.browserImportProfile, { profile }),
+      importProfile: (profile: BrowserProfileInfo, target?: "builtin" | "system"): Promise<BrowserImportResult> => t.invoke(Ipc.browserImportProfile, { profile, target }),
+      clearData: (): Promise<void> => t.invoke(Ipc.browserClearData),
+      listEngines: (): Promise<Array<{ id: string; label: string }>> => t.invoke(Ipc.browserListEngines),
       onRequest: (listener: (payload: { id: string; request: BrowserRequest }) => void): (() => void) => t.subscribe(Ipc.browserRequest, listener),
       respond: (payload: { id: string; ok: boolean; result?: unknown; error?: string }): void => {
         t.send(Ipc.browserResponse, payload);

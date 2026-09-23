@@ -53,6 +53,8 @@ const DENIED = new Map<string, string>([
   [Ipc.browserResponse, "\u6d4f\u89c8\u5668\u5de5\u5177\u4f9d\u8d56\u684c\u9762\u7aef\u7684\u5185\u5d4c\u6d4f\u89c8\u5668"],
   [Ipc.browserListProfiles, "\u6d4f\u89c8\u5668\u5de5\u5177\u4f9d\u8d56\u684c\u9762\u7aef\u7684\u5185\u5d4c\u6d4f\u89c8\u5668"],
   [Ipc.browserImportProfile, "\u6d4f\u89c8\u5668\u5de5\u5177\u4f9d\u8d56\u684c\u9762\u7aef\u7684\u5185\u5d4c\u6d4f\u89c8\u5668"],
+  [Ipc.browserClearData, "\u6d4f\u89c8\u5668\u5de5\u5177\u4f9d\u8d56\u684c\u9762\u7aef\u7684\u5185\u5d4c\u6d4f\u89c8\u5668"],
+  [Ipc.browserListEngines, "\u6d4f\u89c8\u5668\u5de5\u5177\u4f9d\u8d56\u684c\u9762\u7aef\u7684\u5185\u5d4c\u6d4f\u89c8\u5668"],
   // Granting the driver its macOS permissions opens System Settings and a TCC prompt on
   // the machine running the server \u2014 (a) and (b) at once. The `computer_*` tools
   // themselves stay available remotely: the agent runs on the host, so driving the host's

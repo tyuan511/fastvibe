@@ -103,6 +103,7 @@ test("the denied set is exactly what the UI explains, so a new denial cannot go 
   // add it below, and guard whatever offers it.
   assert.deepEqual([...deniedMethods()].sort(), [
     "app:export-logs",
+    "browser:clear-data",
     "browser:import-profile",
     "browser:list-profiles",
     "browser:response",

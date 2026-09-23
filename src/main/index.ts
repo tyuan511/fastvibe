@@ -66,6 +66,7 @@ import { loadOrCreateServerIdentity } from "./server/identity";
 import { APP_CAPABILITIES } from "@shared/app-protocol";
 import { wireElectronAppTransport } from "./transport/electron";
 import type { RemoteHostProfile, RemoteHostConnectionState, RemoteTransferProgress, SshErrorCode } from "@shared/remote-host";
+import { stopBrowserCdp } from "./engine/browser-cdp";
 import { attachBrowserRenderer, guardGuestPopups, installBrowserGlobal, respondBrowserRequest } from "./pi/browser-bridge";
 import {
   computerPermissions,
@@ -77,6 +78,7 @@ import {
 } from "./pi/cua-bridge";
 import { cancelGrantFlow, grantFlowState, startGrantFlow } from "./pi/computer-grant-flow";
 import { importBrowserProfile, listBrowserProfiles } from "./engine/browser-profiles";
+import { browserProfileDir, importIntoBrowserProfile, installedBrowsers, type ProfileCookie } from "./engine/browser-cdp";
 import type { ImportSourceId, ProviderModel, UsageRange } from "@shared/types";
 import type { GitBranch, GitDiffSource, GitStatus } from "@shared/ipc";
 
@@ -524,12 +526,24 @@ function registerIpc(): void {
     respondBrowserRequest(payload);
   });
   handle(Ipc.browserListProfiles, () => listBrowserProfiles());
-  handle(Ipc.browserImportProfile, async (payload: { profile: import("@shared/types").BrowserProfileInfo }) => {
+  handle(Ipc.browserImportProfile, async (payload: { profile: import("@shared/types").BrowserProfileInfo; target?: "builtin" | "system" }) => {
     if (!payload?.profile?.cookiePath) throw new Error(uiText("浏览器配置文件无效", "Invalid browser profile"));
     const allowed = (await listBrowserProfiles()).find((profile) => profile.id === payload.profile.id && profile.cookiePath === payload.profile.cookiePath);
     if (!allowed) throw new Error(uiText("浏览器配置文件未通过校验，请重新打开导入列表", "Browser profile failed validation. Open the list again."));
+    // The settings pane follows the browser chosen above it. The side pane's own
+    // import keeps writing the built-in browser, which is the one on screen there.
+    if (payload.target === "system") {
+      const collected: ProfileCookie[] = [];
+      const result = await importBrowserProfile(allowed, async (cookie) => { collected.push(cookie); });
+      const written = await importIntoBrowserProfile(browserProfileDir(), collected);
+      return { ...result, cookies: written, message: uiText(`已导入 ${written} 个 Cookie 到所选浏览器`, `Imported ${written} cookies into the selected browser`) };
+    }
     return importBrowserProfile(allowed, (cookie) => session.fromPartition("persist:fastvibe-browser").cookies.set(cookie));
   });
+  handle(Ipc.browserClearData, () =>
+    session.fromPartition("persist:fastvibe-browser").clearStorageData(),
+  );
+  handle(Ipc.browserListEngines, () => installedBrowsers());
   handle(Ipc.computerPermissions, () => computerPermissions());
   handle(Ipc.computerRequestPermissions, () => requestComputerPermissions());
   handle(Ipc.computerOpenSettings, () => openComputerSettings());
@@ -1497,6 +1511,11 @@ function requestShutdown(reason: string): void {
     clearRunningConversations();
   } catch (error) {
     log.warn(`keep-awake cleanup failed: ${String(error)}`);
+  }
+  try {
+    stopBrowserCdp();
+  } catch (error) {
+    log.warn(`system browser cleanup failed: ${String(error)}`);
   }
   try {
     engine.flush();

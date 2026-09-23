@@ -1,21 +1,52 @@
 import { useEffect, useRef, useState, type FormEvent, type JSX } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { i18n } from "@/lib/i18n";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
+  ArrowDown01Icon,
   ArrowLeft01Icon,
   ArrowRight01Icon,
+  ArrowUp01Icon,
   ChromeIcon,
+  ComputerIcon,
+  Copy01Icon,
+  CursorRectangleSelection01Icon,
+  Delete02Icon,
   LinkSquare02Icon,
+  MoreHorizontalIcon,
   Refresh01Icon,
+  Search01Icon,
+  SmartPhone01Icon,
+  Tablet01Icon,
+  Tick02Icon,
   Upload01Icon,
+  ZoomInAreaIcon,
+  ZoomOutAreaIcon,
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
+import { blockedRemotely } from "@/lib/remote-unavailable";
 import { useSessionStore } from "@/stores/session";
 import { useSidePaneStore } from "@/stores/side-pane";
-import type { BrowserImportResult, BrowserProfileInfo, BrowserRequest } from "@shared/types";
+import { clickBody, pageProgram, pressBody, SNAPSHOT_BODY, typeBody } from "@shared/browser-page";
+import { Ipc } from "@shared/ipc";
+import type { BrowserImportResult, BrowserProfileInfo, BrowserRequest, ChatAttachment } from "@shared/types";
 
 function be(key: string, options?: Record<string, unknown>): string {
   return i18n.t(`sidepane:browser.${key}`, options) as string;
@@ -39,6 +70,12 @@ type Guest = HTMLElement & {
   sendInputEvent(event: Record<string, unknown>): void;
   selectAll(): void;
   insertText(text: string): Promise<void>;
+  setZoomFactor(factor: number): void;
+  getZoomFactor(): number;
+  setUserAgent(userAgent: string): void;
+  getUserAgent(): string;
+  findInPage(text: string, options?: { forward?: boolean; findNext?: boolean }): number;
+  stopFindInPage(action: "clearSelection" | "keepSelection" | "activateSelection"): void;
 };
 
 type FaviconEvent = Event & { favicons?: string[] };
@@ -100,6 +137,78 @@ const PARKED_LAYER =
   "position:fixed;left:-10000px;top:0;width:1024px;height:768px;overflow:hidden;pointer-events:none;z-index:5;";
 const SHOWN_HOST = "position:absolute;left:0;top:0;width:100%;height:100%;";
 const HIDDEN_HOST = "position:absolute;left:-20000px;top:0;width:1024px;height:768px;";
+
+/**
+ * Viewport presets the bottom bar offers. Responsive is the pane itself at 100%;
+ * the two devices are CSS pixels, matching Chrome's device mode, and the page is
+ * laid out at that width while the pane stays whatever size the user dragged it to.
+ */
+type ViewportMode = "responsive" | "mobile" | "tablet";
+const VIEWPORTS: Record<Exclude<ViewportMode, "responsive">, { width: number; height: number }> = {
+  mobile: { width: 375, height: 812 },
+  tablet: { width: 768, height: 1024 },
+};
+const ZOOM_STEPS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
+/** How much of a picked element's text rides along as the chip's readable content. */
+const PICK_TEXT_LIMIT = 8_000;
+
+const PICK_BODY = `
+  if (window.__fvPick) return { listening: true };
+  const box = document.createElement("div");
+  box.style.cssText = "position:fixed;z-index:2147483646;pointer-events:none;border:2px solid #1a73e8;background:rgba(26,115,232,.12);border-radius:2px;display:none;";
+  const label = document.createElement("div");
+  label.style.cssText = "position:fixed;z-index:2147483647;pointer-events:none;background:#1a73e8;color:#fff;font:12px/1.4 -apple-system,sans-serif;padding:2px 6px;border-radius:4px;display:none;max-width:320px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+  document.documentElement.append(box, label);
+  const describe = (node) => {
+    const tag = node.tagName.toLowerCase();
+    const id = node.id ? "#" + node.id : "";
+    const cls = typeof node.className === "string" && node.className.trim()
+      ? "." + node.className.trim().split(/\\s+/).slice(0, 2).join(".")
+      : "";
+    return tag + id + cls;
+  };
+  const onMove = (event) => {
+    const node = event.target;
+    if (!(node instanceof Element) || node === box || node === label) return;
+    const rect = node.getBoundingClientRect();
+    box.style.display = "block";
+    box.style.left = rect.left + "px";
+    box.style.top = rect.top + "px";
+    box.style.width = rect.width + "px";
+    box.style.height = rect.height + "px";
+    label.style.display = "block";
+    label.textContent = describe(node);
+    label.style.left = Math.max(4, rect.left) + "px";
+    label.style.top = Math.max(4, rect.top - 22) + "px";
+  };
+  const onClick = (event) => {
+    const node = event.target;
+    if (!(node instanceof Element)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const text = (node.innerText || node.textContent || "").replace(/\\s+/g, " ").trim().slice(0, ${PICK_TEXT_LIMIT});
+    const html = (node.outerHTML || "").slice(0, ${PICK_TEXT_LIMIT});
+    window.__fvPicked = { selector: describe(node), tag: node.tagName.toLowerCase(), text, html, url: location.href };
+  };
+  document.addEventListener("mousemove", onMove, true);
+  document.addEventListener("click", onClick, true);
+  window.__fvPick = { box, label, onMove, onClick };
+  return { listening: true };
+`;
+
+const PICK_READ_BODY = `
+  const picked = window.__fvPicked || null;
+  const stop = window.__fvPick;
+  if (stop) {
+    document.removeEventListener("mousemove", stop.onMove, true);
+    document.removeEventListener("click", stop.onClick, true);
+    stop.box.remove();
+    stop.label.remove();
+    delete window.__fvPick;
+  }
+  delete window.__fvPicked;
+  return picked;
+`;
 
 function getLayer(): HTMLDivElement {
   if (!layer) {
@@ -171,6 +280,36 @@ function showGuest(entry: Entry, rect: { left: number; top: number; width: numbe
   node.style.width = `${Math.round(rect.width)}px`;
   node.style.height = `${Math.round(rect.height)}px`;
   node.style.pointerEvents = "auto";
+}
+
+/**
+ * Lay a device viewport out inside the pane's box.
+ *
+ * The guest has to be laid out *at the preset's own CSS pixels* — a host merely
+ * drawn smaller still reports the pane's width to the page, which is why picking
+ * Mobile changed nothing. So the host stays the preset size and is scaled down to
+ * fit, centred, with the layer's own background letterboxing whatever is left.
+ */
+function placeDevice(entry: Entry, mode: ViewportMode, box: { width: number; height: number }): void {
+  if (mode === "responsive" || box.width <= 0 || box.height <= 0) {
+    entry.host.style.cssText = SHOWN_HOST;
+    return;
+  }
+  const preset = VIEWPORTS[mode];
+  const scale = Math.min(1, box.width / preset.width, box.height / preset.height);
+  const left = Math.max(0, (box.width - preset.width * scale) / 2);
+  const top = Math.max(0, (box.height - preset.height * scale) / 2);
+  entry.host.style.cssText = [
+    "position:absolute",
+    "transform-origin:top left",
+    `left:${left}px`,
+    `top:${top}px`,
+    `width:${preset.width}px`,
+    `height:${preset.height}px`,
+    `transform:scale(${scale})`,
+    "box-shadow:0 0 0 1px rgba(0,0,0,.18)",
+    "background:#fff",
+  ].join(";");
 }
 
 /** Stop showing a guest, but only if it is the one that owns the viewport. */
@@ -403,8 +542,7 @@ async function usable(entry: Entry): Promise<boolean> {
  * function — cannot break the call either.
  */
 async function inject(entry: Entry, body: string): Promise<unknown> {
-  const code = `(() => { try { const value = (() => { ${body} })(); return { ok: true, value: JSON.parse(JSON.stringify(value === undefined ? null : value)) }; } catch (error) { return { ok: false, error: String((error && error.message) || error) }; } })()`;
-  const result = (await execute(entry, code)) as Injected | undefined;
+  const result = (await execute(entry, pageProgram(body))) as Injected | undefined;
   if (!result || typeof result !== "object") throw new Error(be("invalidResult"));
   if (!result.ok) throw new Error(be("opFailed", { error: result.error ?? be("scriptError") }));
   return result.value;
@@ -521,90 +659,6 @@ async function waitForReady(entry: Entry, timeout = 15_000): Promise<void> {  le
     if (timer !== undefined) window.clearTimeout(timer);
   }
 }
-
-const SNAPSHOT_ELEMENT_LIMIT = 150;
-const SNAPSHOT_TEXT_LIMIT = 8_000;
-
-/**
- * In-page helpers shared by the click / type scripts. An element is addressed by
- * `ref` (stamped by the last snapshot), then by `selector` (also from the snapshot),
- * then by visible text. A miss lists the labels that were on offer, so the model can
- * retry without another round trip.
- */
-const PAGE_HELPERS = `
-  const visible = (el) => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 1 && r.height > 1 && s.visibility !== 'hidden' && s.display !== 'none' && Number(s.opacity) > 0.05; };
-  const clean = (value) => String(value == null ? '' : value).replace(/\\s+/g, ' ').trim();
-  const secret = (el) => el.tagName === 'INPUT' && /^(password|file)$/i.test(el.type || '');
-  const label = (el) => clean((secret(el) ? '' : el.innerText || el.value) || el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('placeholder') || el.getAttribute('name') || '');
-  const TARGETS = 'a,button,summary,label,[role="button"],[role="link"],[role="tab"],[role="menuitem"],[role="option"],[role="checkbox"],[role="switch"],[contenteditable="true"],input:not([type="hidden"]),textarea,select';
-  const resolve = () => {
-    if (ref) { const hit = document.querySelector('[data-fv-ref="' + ref + '"]'); if (hit) return hit; }
-    if (selector) { try { const hit = document.querySelector(selector); if (hit) return hit; } catch (error) { throw new Error('invalid selector: ' + selector); } }
-    const needle = clean(text).toLowerCase();
-    if (!needle) return null;
-    const pool = [...document.querySelectorAll(TARGETS)].filter(visible);
-    return pool.find((el) => label(el).toLowerCase() === needle)
-      || pool.find((el) => label(el).toLowerCase().startsWith(needle))
-      || pool.find((el) => label(el).toLowerCase().includes(needle))
-      || null;
-  };
-  const nearby = () => [...document.querySelectorAll(TARGETS)].filter(visible).map(label).filter(Boolean).slice(0, 12);
-`;
-
-/**
- * The snapshot. Elements carry a `ref` (stamped as `data-fv-ref`, so a click can
- * address the exact element even after the page mutates) and a `selector` (an `#id`
- * or a short `nth-of-type` path), and a miss is data, never a throw.
- */
-const SNAPSHOT_BODY = `
-  const visible = (el) => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 1 && r.height > 1 && s.visibility !== 'hidden' && s.display !== 'none' && Number(s.opacity) > 0.05; };
-  const clean = (value) => String(value == null ? '' : value).replace(/\\s+/g, ' ').trim();
-  const path = (el) => {
-    const parts = [];
-    let node = el;
-    while (node && node.nodeType === 1 && node !== document.body && parts.length < 6) {
-      let part = node.tagName.toLowerCase();
-      const parent = node.parentElement;
-      if (parent) {
-        const same = [...parent.children].filter((child) => child.tagName === node.tagName);
-        if (same.length > 1) part += ':nth-of-type(' + (same.indexOf(node) + 1) + ')';
-      }
-      parts.unshift(part);
-      node = parent;
-    }
-    return parts.length ? 'body > ' + parts.join(' > ') : 'body';
-  };
-  const TARGETS = 'a,button,summary,label,[role="button"],[role="link"],[role="tab"],[role="menuitem"],[role="option"],[role="checkbox"],[role="switch"],[contenteditable="true"],input:not([type="hidden"]),textarea,select';
-  const secret = (el) => el.tagName === 'INPUT' && /^(password|file)$/i.test(el.type || '');
-  // Refs from an earlier snapshot must not survive it: resolve() takes the first match
-  // in document order, which could otherwise be a stale element that reused the name.
-  for (const stale of document.querySelectorAll('[data-fv-ref]')) stale.removeAttribute('data-fv-ref');
-  const all = [...document.querySelectorAll(TARGETS)].filter(visible);
-  const elements = all.slice(0, ${SNAPSHOT_ELEMENT_LIMIT}).map((el, index) => {
-    const ref = 'e' + index;
-    try { el.setAttribute('data-fv-ref', ref); } catch (error) { void error; }
-    const tag = el.tagName.toLowerCase();
-    return {
-      ref,
-      tag,
-      type: el.getAttribute('type') || undefined,
-      role: el.getAttribute('role') || undefined,
-      text: clean((secret(el) ? '' : el.innerText || el.value) || el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('placeholder') || el.getAttribute('name') || '').slice(0, 200),
-      name: el.getAttribute('name') || undefined,
-      href: tag === 'a' ? el.href : undefined,
-      disabled: el.disabled === true ? true : undefined,
-      selector: el.id ? '#' + CSS.escape(el.id) : path(el),
-    };
-  });
-  return {
-    url: location.href,
-    title: document.title,
-    elementCount: all.length,
-    truncated: all.length > elements.length,
-    elements,
-    text: (document.body ? document.body.innerText : '').replace(/\\n{3,}/g, '\\n\\n').slice(0, ${SNAPSHOT_TEXT_LIMIT}),
-  };
-`;
 
 /**
  * Open (or reuse) the side pane's browser tab.
@@ -762,94 +816,14 @@ async function dispatch(request: BrowserAutomationRequest, entry: Entry): Promis
     }
     case "click": {
       if (!request.selector && !request.ref && !request.text) throw new Error(be("needClick"));
-      return act(
-        entry,
-        `
-        const selector = ${JSON.stringify(request.selector ?? "")};
-        const ref = ${JSON.stringify(request.ref ?? "")};
-        const text = ${JSON.stringify(request.text ?? "")};
-        ${PAGE_HELPERS}
-        const el = resolve();
-        if (!el) return { clicked: false, error: 'No clickable element found', candidates: nearby() };
-        el.scrollIntoView({ block: 'center', inline: 'center' });
-        if (el.focus) el.focus();
-        for (const type of ['pointerover', 'mouseover', 'pointerdown', 'mousedown', 'pointerup', 'mouseup']) {
-          const ctor = type.indexOf('pointer') === 0 ? window.PointerEvent : MouseEvent;
-          el.dispatchEvent(new ctor(type, { bubbles: true, cancelable: true, view: window, detail: 1 }));
-        }
-        el.click();
-        return { clicked: true, tag: el.tagName.toLowerCase(), text: label(el).slice(0, 200), href: el.tagName === 'A' ? el.getAttribute('href') || undefined : undefined };
-      `,
-        { clicked: true, warning: be("clickNav") },
-      );
+      return act(entry, clickBody(request), { clicked: true, warning: be("clickNav") });
     }
     case "type": {
       if (!request.selector && !request.ref) throw new Error(be("needType"));
-      return act(
-        entry,
-        `
-        const selector = ${JSON.stringify(request.selector ?? "")};
-        const ref = ${JSON.stringify(request.ref ?? "")};
-        const text = ${JSON.stringify(request.text ?? "")};
-        ${PAGE_HELPERS}
-        const el = resolve();
-        if (!el) return { filled: false, error: 'No input element found', candidates: nearby() };
-        el.scrollIntoView({ block: 'center' });
-        el.focus();
-        const value = text;
-        if (el.tagName === 'SELECT') {
-          const wanted = clean(value).toLowerCase();
-          const options = [...el.options];
-          const option = options.find((item) => item.value.toLowerCase() === wanted || clean(item.text).toLowerCase() === wanted) || options.find((item) => clean(item.text).toLowerCase().includes(wanted));
-          if (!option) return { filled: false, error: 'No matching option in select', options: options.slice(0, 30).map((item) => ({ value: item.value, text: clean(item.text) })) };
-          el.value = option.value;
-          el.dispatchEvent(new Event('input', { bubbles: true }));
-          el.dispatchEvent(new Event('change', { bubbles: true }));
-          return { filled: true, tag: 'select', value: el.value };
-        }
-        if (el.type === 'checkbox' || el.type === 'radio') {
-          const next = !/^(false|0|no|off)$/i.test(clean(value));
-          if (el.checked !== next) {
-            el.checked = next;
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-          }
-          return { filled: true, tag: el.tagName.toLowerCase(), checked: el.checked };
-        }
-        if (el.isContentEditable) {
-          el.textContent = value;
-          el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }));
-          el.dispatchEvent(new Event('change', { bubbles: true }));
-          return { filled: true, tag: 'contenteditable', value: el.textContent };
-        }
-        if (!('value' in el)) return { filled: false, error: 'Element does not accept text (' + el.tagName.toLowerCase() + ')' };
-        const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-        const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
-        if (setter) setter.call(el, value); else el.value = value;
-        el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-        return { filled: true, tag: el.tagName.toLowerCase(), value: el.value };
-      `,
-        { filled: true, warning: be("typeNav") },
-        300,
-      );
+      return act(entry, typeBody(request), { filled: true, warning: be("typeNav") }, 300);
     }
-    case "press": {
-      const key = JSON.stringify(request.key ?? "Enter");
-      return act(
-        entry,
-        `
-        const key = ${key};
-        const target = document.activeElement || document.body;
-        const LEGACY = { Enter: 13, Tab: 9, Escape: 27, Backspace: 8, Delete: 46, ArrowUp: 38, ArrowDown: 40, ArrowLeft: 37, ArrowRight: 39, ' ': 32, PageUp: 33, PageDown: 34, Home: 36, End: 35 };
-        const keyCode = LEGACY[key] || (key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0);
-        const options = { key, code: key === ' ' ? 'Space' : key, keyCode, which: keyCode, bubbles: true, cancelable: true };
-        for (const type of ['keydown', 'keypress', 'keyup']) target.dispatchEvent(new KeyboardEvent(type, options));
-        return { pressed: key, target: target.tagName.toLowerCase() };
-      `,
-        { pressed: request.key ?? "Enter", warning: be("pressNav") },
-      );
-    }
+    case "press":
+      return act(entry, pressBody(request.key ?? "Enter"), { pressed: request.key ?? "Enter", warning: be("pressNav") });
     case "evaluate":
       if (!request.script) throw new Error(be("needScript"));
       return execute(entry, request.script);
@@ -957,10 +931,19 @@ export function SidePaneBrowser({
   const [canGoForward, setCanGoForward] = useState(false);
   const [loading, setLoading] = useState(false);
   const [profiles, setProfiles] = useState<BrowserProfileInfo[]>([]);
-  const [showImport, setShowImport] = useState(false);
   const [importing, setImporting] = useState(false);
-  const [importStatus, setImportStatus] = useState<string | null>(null);
+  const [viewport, setViewport] = useState<ViewportMode>("responsive");
+  const [zoom, setZoom] = useState(1);
+  const [picking, setPicking] = useState(false);
+  const [finding, setFinding] = useState(false);
+  const [findText, setFindText] = useState("");
+  const [findCount, setFindCount] = useState<{ active: number; total: number } | null>(null);
+  const findBox = useRef<HTMLFormElement>(null);
   const faviconRef = useRef<string | undefined>(undefined);
+  const viewportRef = useRef<ViewportMode>("responsive");
+  const defaultAgent = useRef<string | null>(null);
+  const takePickRef = useRef<() => Promise<void>>(async () => undefined);
+  viewportRef.current = viewport;
 
   function setFavicon(url: string | undefined): void {
     if (faviconRef.current === url) return;
@@ -1007,9 +990,16 @@ export function SidePaneBrowser({
     view.addEventListener("did-navigate-in-page", onInPageNav);
     view.addEventListener("page-title-updated", onInPageNav);
     view.addEventListener("page-favicon-updated", onFavicon);
+    const onFound = (event: Event): void => {
+      const detail = event as Event & { result?: { activeMatchOrdinal?: number; matches?: number } };
+      const total = detail.result?.matches ?? 0;
+      setFindCount(total > 0 ? { active: detail.result?.activeMatchOrdinal ?? 0, total } : null);
+    };
     view.addEventListener("did-start-loading", onStart);
     view.addEventListener("did-stop-loading", onStop);
+    view.addEventListener("found-in-page", onFound);
     sync(view);
+    setZoom(safe(() => view.getZoomFactor(), 1));
 
     return () => {
       view.removeEventListener("did-navigate", onNav);
@@ -1018,6 +1008,7 @@ export function SidePaneBrowser({
       view.removeEventListener("page-favicon-updated", onFavicon);
       view.removeEventListener("did-start-loading", onStart);
       view.removeEventListener("did-stop-loading", onStop);
+      view.removeEventListener("found-in-page", onFound);
     };
   }, [patchTab, tabId]);
 
@@ -1041,7 +1032,12 @@ export function SidePaneBrowser({
     const clip = clipAncestor(mount);
     const place = (): void => {
       const node = box.current;
-      if (node) showGuest(entry, visibleRect(node, clip));
+      if (!node) return;
+      const rect = visibleRect(node, clip);
+      showGuest(entry, rect);
+      // Read the preset live: this also runs from the resize observer, which must
+      // not put back the size the pane had when the effect was set up.
+      if (owner === tabId) placeDevice(entry, viewportRef.current, rect);
     };
     place();
     const observer = new ResizeObserver(place);
@@ -1053,7 +1049,16 @@ export function SidePaneBrowser({
       window.removeEventListener("resize", place);
       parkGuest(tabId);
     };
-  }, [collapsed, tabId, visible]);
+    // `viewport` is a dependency on purpose, even though `place` reads it through
+    // the ref: changing it has to lay the guest out again immediately, and the
+    // resize observer will not fire for a change that does not move the pane.
+  }, [collapsed, tabId, viewport, visible]);
+
+  /** A device size has to look like that device to the page, not only be that wide. */
+  useEffect(() => {
+    if (!visible) return;
+    void applyUserAgent(viewport);
+  }, [tabId, viewport, visible]);
 
   function go(next = draft): void {
     const href = normalizeUrl(next);
@@ -1066,36 +1071,201 @@ export function SidePaneBrowser({
     go();
   }
 
-  async function openImportMenu(): Promise<void> {
-    setImportStatus(null);
+  async function loadProfiles(): Promise<void> {
+    if (blockedRemotely(Ipc.browserListProfiles)) return;
     try {
       setProfiles(await window.fastvibe.browser.listProfiles());
-      setShowImport(true);
     } catch (error) {
-      setImportStatus(error instanceof Error ? error.message : String(error));
+      toast.error(error instanceof Error ? error.message : String(error));
     }
   }
 
   async function importProfile(profile: BrowserProfileInfo): Promise<void> {
+    if (blockedRemotely(Ipc.browserImportProfile)) return;
     setImporting(true);
-    setImportStatus(null);
     try {
       const result: BrowserImportResult = await window.fastvibe.browser.importProfile(profile);
-      setImportStatus(result.message);
-      setShowImport(false);
+      toast.success(t("browser.importDone", { browser: result.browser, profile: result.profile }), {
+        description: result.message,
+      });
       const stopped = guest.current ? waitForNavigation(guest.current, 4_000) : null;
       guest.current?.reload();
       if (stopped) await stopped;
     } catch (error) {
-      setImportStatus(error instanceof Error ? error.message : String(error));
+      toast.error(t("browser.importFailed"), {
+        description: error instanceof Error ? error.message : String(error),
+      });
     } finally {
       setImporting(false);
     }
   }
 
+  /**
+   * A device preset has to look like that device to the page, not only be that wide:
+   * sites that branch on the user agent never reach their mobile layout otherwise.
+   * The desktop agent is whatever the guest booted with, remembered once.
+   */
+  async function applyUserAgent(mode: ViewportMode): Promise<void> {
+    const view = guest.current;
+    if (!view?.setUserAgent) return;
+    if (!defaultAgent.current) defaultAgent.current = safe(() => view.getUserAgent(), "");
+    const base = defaultAgent.current;
+    if (!base) return;
+    const mobile = mode !== "responsive";
+    const next = mobile
+      ? base.replace(/\(Macintosh;[^)]*\)/, "(iPhone; CPU iPhone OS 17_0 like Mac OS X)").replace("Safari/", "Mobile/15E148 Safari/")
+      : base;
+    if (safe(() => view.getUserAgent(), "") === next) return;
+    view.setUserAgent(next);
+    const href = safe(() => view.getURL(), "");
+    if (href && href !== "about:blank") view.reload();
+  }
+
+  function changeZoom(next: number): void {
+    const clamped = Math.min(2, Math.max(0.5, next));
+    setZoom(clamped);
+    guest.current?.setZoomFactor(clamped);
+  }
+
+  function stepZoom(direction: 1 | -1): void {
+    const current = zoom;
+    const target = direction > 0
+      ? ZOOM_STEPS.find((step) => step > current + 0.01)
+      : [...ZOOM_STEPS].reverse().find((step) => step < current - 0.01);
+    changeZoom(target ?? current);
+  }
+
+  function runFind(text: string, again = false): void {
+    const view = guest.current;
+    if (!view?.findInPage) return;
+    if (!text) {
+      view.stopFindInPage?.("clearSelection");
+      setFindCount(null);
+      return;
+    }
+    view.findInPage(text, { forward: true, findNext: again });
+  }
+
+  function closeFind(): void {
+    setFinding(false);
+    setFindCount(null);
+    guest.current?.stopFindInPage?.("clearSelection");
+  }
+
+  async function togglePick(): Promise<void> {
+    const view = guest.current;
+    if (!view) return;
+    if (picking) {
+      setPicking(false);
+      await inject(registry.get(tabId) as Entry, PICK_READ_BODY).catch(() => undefined);
+      return;
+    }
+    const href = safe(() => view.getURL(), "");
+    if (!href || href === "about:blank") {
+      toast.error(t("browser.pickNeedPage"));
+      return;
+    }
+    const entry = registry.get(tabId);
+    if (!entry) return;
+    setPicking(true);
+    try {
+      await inject(entry, PICK_BODY);
+    } catch (error) {
+      setPicking(false);
+      toast.error(t("browser.attachFailed"), {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /** Read whatever the page click stored and drop it into the composer's chips. */
+  async function takePick(): Promise<void> {
+    const entry = registry.get(tabId);
+    if (!entry) return;
+    setPicking(false);
+    type Picked = { selector?: string; text?: string; html?: string; url?: string };
+    let picked: Picked | null = null;
+    try {
+      picked = (await inject(entry, PICK_READ_BODY)) as Picked | null;
+    } catch (error) {
+      toast.error(t("browser.attachFailed"), {
+        description: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    if (!picked?.selector && !picked?.text) return;
+    const activeId = useSessionStore.getState().activeId;
+    if (!activeId) {
+      toast.error(t("browser.noConversation"));
+      return;
+    }
+    const body = [
+      picked.url ? `URL: ${picked.url}` : "",
+      picked.selector ? `Selector: ${picked.selector}` : "",
+      picked.text ? `\n${picked.text}` : "",
+      picked.html && picked.html !== picked.text ? `\n\n${picked.html}` : "",
+    ].filter(Boolean).join("\n");
+    const name = (picked.selector || t("browser.pick")).slice(0, 48);
+    const attachment: ChatAttachment = {
+      id: crypto.randomUUID(),
+      kind: "file",
+      name,
+      mimeType: "text/plain",
+      text: body.slice(0, PICK_TEXT_LIMIT),
+    };
+    const { attachments, setAttachments } = useSessionStore.getState();
+    setAttachments([...attachments, attachment]);
+    toast.success(t("browser.attached"));
+  }
+  takePickRef.current = takePick;
+
+  useEffect(() => {
+    if (!picking) return;
+    const timer = window.setInterval(() => {
+      const entry = registry.get(tabId);
+      if (!entry) return;
+      void inject(entry, "return Boolean(window.__fvPicked)")
+        .then((hit) => {
+          if (hit) void takePickRef.current();
+        })
+        .catch(() => undefined);
+    }, 250);
+    return () => window.clearInterval(timer);
+  }, [picking, tabId]);
+
+  async function copyUrl(): Promise<void> {
+    const href = safe(() => guest.current?.getURL() ?? "", "") || normalizeUrl(draft);
+    if (!href || href === "about:blank") return;
+    try {
+      await navigator.clipboard.writeText(href);
+      toast.success(t("browser.copiedUrl"));
+    } catch {
+      toast.error(t("browser.copyFailed"));
+    }
+  }
+
+  async function clearData(): Promise<void> {
+    if (blockedRemotely(Ipc.browserClearData)) return;
+    if (!window.confirm(t("browser.clearConfirm"))) return;
+    try {
+      await window.fastvibe.browser.clearData();
+      guest.current?.reload();
+      toast.success(t("browser.cleared"));
+    } catch (error) {
+      toast.error(t("browser.clearFailed"), {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  const viewportIcon = viewport === "mobile" ? SmartPhone01Icon : viewport === "tablet" ? Tablet01Icon : ComputerIcon;
+  const viewportTitle = viewport === "responsive"
+    ? `${t("browser.responsive")} · ${t("browser.responsiveSize")}`
+    : `${t(`browser.${viewport}`)} · ${viewport === "mobile" ? "375 × 812" : "768 × 1024"}`;
+
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-background" aria-hidden={!visible}>
-      <form className="relative flex h-12 items-center gap-2 px-3" onSubmit={onSubmit}>
+      <form className="relative flex h-12 items-center gap-1.5 px-3" onSubmit={onSubmit}>
         <Button type="button" size="icon-xs" variant="ghost" disabled={!canGoBack} title={t("browser.back")} onClick={() => guest.current?.goBack()}>
           <HugeiconsIcon strokeWidth={2} icon={ArrowLeft01Icon} />
         </Button>
@@ -1112,36 +1282,123 @@ export function SidePaneBrowser({
           spellCheck={false}
           onChange={(event) => setDraft(event.target.value)}
         />
-        <Button
-          type="button"
-          size="icon-xs"
-          variant="ghost"
-          title={t("browser.openExternal")}
-          onClick={() => {
-            const href = safe(() => guest.current?.getURL() ?? "", "") || normalizeUrl(draft);
-            if (href && href !== "about:blank") window.open(href, "_blank");
-          }}
-        >
-          <HugeiconsIcon strokeWidth={2} icon={LinkSquare02Icon} />
-        </Button>
-        <Button type="button" size="icon-xs" variant="ghost" title={t("browser.importTitle")} onClick={() => void openImportMenu()}>
-          <HugeiconsIcon strokeWidth={2} icon={Upload01Icon} />
-        </Button>
-        {showImport ? (
-          <div className="absolute right-3 top-10 z-30 w-72 rounded-xl border border-border bg-popover p-2 text-popover-foreground shadow-xl">
-            <div className="px-2 pb-2 text-xs font-medium text-muted-foreground">{t("browser.importHeading")}</div>
-            {profiles.length === 0 ? <div className="px-2 py-3 text-xs text-muted-foreground">{t("browser.noProfiles")}</div> : null}
-            {profiles.map((profile) => (
-              <button key={profile.id} type="button" disabled={importing} className="flex w-full items-center rounded-lg px-2 py-2 text-left text-xs hover:bg-accent disabled:opacity-50" onClick={() => void importProfile(profile)}>
-                <span className="min-w-0 flex-1 truncate">{profile.browser} · {profile.name}</span>
-                <span className="ml-2 text-muted-foreground">Cookie</span>
-              </button>
-            ))}
-            <button type="button" className="mt-1 w-full rounded-lg px-2 py-1.5 text-left text-xs text-muted-foreground hover:bg-accent" onClick={() => setShowImport(false)}>{t("browser.cancel")}</button>
-          </div>
-        ) : null}
-        {importStatus ? <span className="absolute right-3 top-11 z-20 max-w-72 truncate rounded bg-muted px-2 py-1 text-xs text-muted-foreground">{importStatus}</span> : null}
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button type="button" size="icon-xs" variant="ghost" title={viewportTitle} aria-label={viewportTitle}>
+                <HugeiconsIcon strokeWidth={2} icon={viewportIcon} />
+              </Button>
+            }
+          />
+          <DropdownMenuContent align="end" className="min-w-56">
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>{t("browser.viewport")}</DropdownMenuLabel>
+              <DropdownMenuRadioGroup value={viewport} onValueChange={(value) => setViewport(value as ViewportMode)}>
+                <DropdownMenuRadioItem value="responsive">
+                  <HugeiconsIcon strokeWidth={2} icon={ComputerIcon} />
+                  <span className="flex-1">{t("browser.responsive")}</span>
+                  <span className="text-xs text-muted-foreground">{t("browser.responsiveSize")}</span>
+                </DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="mobile">
+                  <HugeiconsIcon strokeWidth={2} icon={SmartPhone01Icon} />
+                  <span className="flex-1">{t("browser.mobile")}</span>
+                  <span className="text-xs text-muted-foreground">375 × 812</span>
+                </DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="tablet">
+                  <HugeiconsIcon strokeWidth={2} icon={Tablet01Icon} />
+                  <span className="flex-1">{t("browser.tablet")}</span>
+                  <span className="text-xs text-muted-foreground">768 × 1024</span>
+                </DropdownMenuRadioItem>
+              </DropdownMenuRadioGroup>
+            </DropdownMenuGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button type="button" size="icon-xs" variant="ghost" title={t("browser.more")}>
+                <HugeiconsIcon strokeWidth={2} icon={MoreHorizontalIcon} />
+                <span className="sr-only">{t("browser.more")}</span>
+              </Button>
+            }
+          />
+          <DropdownMenuContent align="end" className="min-w-56">
+            <DropdownMenuGroup>
+              <DropdownMenuItem onClick={() => void togglePick()}>
+                <HugeiconsIcon strokeWidth={2} icon={picking ? Tick02Icon : CursorRectangleSelection01Icon} />
+                {picking ? t("browser.pickCancel") : t("browser.pick")}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => {
+                  setFinding(true);
+                  window.setTimeout(() => findBox.current?.querySelector("input")?.focus(), 0);
+                }}
+              >
+                <HugeiconsIcon strokeWidth={2} icon={Search01Icon} />
+                {t("browser.find")}
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
+            <DropdownMenuSeparator />
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>{t("browser.zoom")}</DropdownMenuLabel>
+              <DropdownMenuItem onClick={() => stepZoom(1)}>
+                <HugeiconsIcon strokeWidth={2} icon={ZoomInAreaIcon} />
+                {t("browser.zoomIn")}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => stepZoom(-1)}>
+                <HugeiconsIcon strokeWidth={2} icon={ZoomOutAreaIcon} />
+                {t("browser.zoomOut")}
+              </DropdownMenuItem>
+              <DropdownMenuItem disabled={zoom === 1} onClick={() => changeZoom(1)}>
+                {t("browser.zoomReset")}
+                <span className="ml-auto text-xs text-muted-foreground">{t("browser.zoomLevel", { percent: Math.round(zoom * 100) })}</span>
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
+            <DropdownMenuSeparator />
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger onMouseEnter={() => void loadProfiles()}>
+                <HugeiconsIcon strokeWidth={2} icon={Upload01Icon} />
+                {t("browser.importHeading")}
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="max-h-72 min-w-64">
+                <DropdownMenuGroup>
+                  <DropdownMenuLabel>{t("browser.importTitle")}</DropdownMenuLabel>
+                  {profiles.length === 0 ? (
+                    <DropdownMenuItem disabled>{t("browser.noProfiles")}</DropdownMenuItem>
+                  ) : (
+                    profiles.map((profile) => (
+                      <DropdownMenuItem key={profile.id} disabled={importing} onClick={() => void importProfile(profile)}>
+                        <span className="min-w-0 flex-1 truncate">{profile.browser} · {profile.name}</span>
+                      </DropdownMenuItem>
+                    ))
+                  )}
+                </DropdownMenuGroup>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+            <DropdownMenuItem
+              onClick={() => {
+                const href = safe(() => guest.current?.getURL() ?? "", "") || normalizeUrl(draft);
+                if (href && href !== "about:blank") window.open(href, "_blank");
+              }}
+            >
+              <HugeiconsIcon strokeWidth={2} icon={LinkSquare02Icon} />
+              {t("browser.openExternal")}
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => void copyUrl()}>
+              <HugeiconsIcon strokeWidth={2} icon={Copy01Icon} />
+              {t("browser.copyUrl")}
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem variant="destructive" onClick={() => void clearData()}>
+              <HugeiconsIcon strokeWidth={2} icon={Delete02Icon} />
+              {t("browser.clearData")}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </form>
+      {picking ? (
+        <div className="truncate px-3 pb-1 text-xs text-muted-foreground">{t("browser.pickHint")}</div>
+      ) : null}
       <div ref={box} className="relative min-h-0 min-w-0 flex-1 overflow-hidden bg-white">
         {!draft.trim() ? (
           <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-background">
@@ -1157,6 +1414,41 @@ export function SidePaneBrowser({
           </div>
         ) : null}
       </div>
+      {finding ? (
+        <form
+          ref={findBox}
+          className="flex h-9 items-center gap-1 border-t border-border px-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            runFind(findText, true);
+          }}
+        >
+          <HugeiconsIcon strokeWidth={2} icon={Search01Icon} className="size-3.5 text-muted-foreground" />
+          <Input
+            value={findText}
+            placeholder={t("browser.findPlaceholder")}
+            className="h-6 flex-1 border-0 bg-transparent px-1 text-xs shadow-none focus-visible:ring-0"
+            spellCheck={false}
+            autoFocus
+            onChange={(event) => {
+              setFindText(event.target.value);
+              runFind(event.target.value);
+            }}
+          />
+          <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+            {findText && findCount ? t("browser.findCount", findCount) : findText ? t("browser.findEmpty") : ""}
+          </span>
+          <Button type="button" size="icon-xs" variant="ghost" title={t("browser.findPrev")} onClick={() => guest.current?.findInPage(findText, { forward: false, findNext: true })}>
+            <HugeiconsIcon strokeWidth={2} icon={ArrowUp01Icon} />
+          </Button>
+          <Button type="submit" size="icon-xs" variant="ghost" title={t("browser.findNext")}>
+            <HugeiconsIcon strokeWidth={2} icon={ArrowDown01Icon} />
+          </Button>
+          <Button type="button" size="icon-xs" variant="ghost" title={t("browser.findClose")} onClick={closeFind}>
+            <HugeiconsIcon strokeWidth={2} icon={Delete02Icon} />
+          </Button>
+        </form>
+      ) : null}
     </div>
   );
 }

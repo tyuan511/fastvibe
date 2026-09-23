@@ -333,6 +333,17 @@ function sessionEntryIds(session: AgentSession): Map<unknown, string> {
   return ids;
 }
 
+/** Last assistant on the branch with this stop reason, when the projected object is a copy. */
+function interruptedAssistantEntryId(session: AgentSession, stopReason: string): string | undefined {
+  const branch = session.sessionManager.getBranch();
+  for (let i = branch.length - 1; i >= 0; i -= 1) {
+    const entry = branch[i];
+    if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+    if ((entry.message as { stopReason?: string }).stopReason === stopReason) return entry.id;
+  }
+  return undefined;
+}
+
 /**
  * The instant each message's session entry was persisted, keyed by entry id.
  *
@@ -1253,10 +1264,10 @@ export class PiProcessManager {
    * the transcript's last user/tool-result message, so a run a user aborted or that
    * failed mid-turn picks up where it stopped.
    *
-   * The trailing errored assistant message is dropped from agent state first: a
-   * continuation rejects a transcript whose last message is an assistant, and that
-   * failed attempt is deliberately kept out of the running transcript so the resumed
-   * turn does not stack on top of it.
+   * The trailing errored assistant message is omitted from the provider projection
+   * first: a continuation rejects a transcript whose last message is an assistant,
+   * and that failed attempt must stay out of the next request so the resumed turn
+   * does not stack on top of it. The thread still shows it.
    *
    * The resume goes through the SDK's run wrapper, not the bare `agent.continue()`
    * loop — see `#runContinuation`. A resume is half a turn, but it is still a *run*,
@@ -1276,19 +1287,33 @@ export class PiProcessManager {
     const owner = conversationId ?? this.#activeId ?? undefined;
     this.#resolvePendingUi(owner);
     const { session } = await this.#sessionFor(conversationId);
-    const messages = session.agent.state.messages;
-    const last = messages[messages.length - 1];
-    if (last?.role === "assistant") {
-      const stopReason = (last as { stopReason?: string }).stopReason;
-      if (stopReason === "error" || stopReason === "aborted" || stopReason === "length") {
-        session.agent.state.messages = messages.slice(0, -1);
-      }
-    }
+    // 0.87.0 made the session projection the provider context. Splicing
+    // `agent.state.messages` is overwritten by the next request, so a failed attempt
+    // has to be omitted with a context edit or the resume stacks on top of it. The
+    // raw transcript still shows the attempt; only the model context drops it.
+    this.#omitInterruptedAttempt(session);
     // The session is resolved first, so the adapter exists even for a chat whose
     // session was created by this call. Arming it after the run started would be too
     // late: the loop drains both queues before its first model request.
     if (owner) this.#sdkQueueAdapters.get(owner)?.suppressNextDrain();
     await this.#runContinuation(session);
+  }
+
+  /**
+   * Drop a trailing unfinished assistant reply from the next provider request.
+   *
+   * The reply stays in the session file, so the thread still shows the failure. A
+   * context edit is what the projection honors; assigning `agent.state.messages`
+   * does not survive `prepareRequest`.
+   */
+  #omitInterruptedAttempt(session: AgentSession): void {
+    const last = session.agent.state.messages.at(-1);
+    if (!last || last.role !== "assistant") return;
+    const stopReason = (last as { stopReason?: string }).stopReason;
+    if (stopReason !== "error" && stopReason !== "aborted" && stopReason !== "length") return;
+    const entryId = sessionEntryIds(session).get(last) ?? interruptedAssistantEntryId(session, stopReason);
+    if (entryId) session.sessionManager.appendContextEdit(entryId, null);
+    session.refreshContext();
   }
   /**
    * Drive a resumed turn the way the SDK drives a run.
@@ -1305,10 +1330,10 @@ export class PiProcessManager {
    * 502 mid-resume left the composer stuck on 停止 with no 继续 button at all.
    *
    * An empty message list is the continuation: the loop still starts from the
-   * transcript's last user/tool-result message, with everything the SDK wraps around a
-   * run kept intact. The wrapper is private (0.86.1 has no public entry point for
-   * continuing an interrupted turn), hence the cast — so a version that renames it must
-   * fail loudly here rather than silently go back to driving runs by hand.
+   * projected transcript's last user/tool-result message, with everything the SDK wraps
+   * around a run kept intact. The wrapper is private (0.87.1 has no public entry point
+   * for continuing an interrupted turn), hence the cast — so a version that renames it
+   * must fail loudly here rather than silently go back to driving runs by hand.
    */
   async #runContinuation(session: AgentSession): Promise<void> {
     const run = (session as unknown as { _runAgentPrompt?: (messages: unknown[]) => Promise<void> })._runAgentPrompt;
