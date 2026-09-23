@@ -141,6 +141,7 @@
     "decisionStatus": {
       "blocked": "未能继续",
       "no_progress": "无进展已停止",
+      "unstable": "页面一直在变化",
       "handed_off": "已交回",
       "exhausted": "预算用尽",
       "cancelled": "已取消",

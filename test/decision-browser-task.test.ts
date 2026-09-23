@@ -39,3 +39,15 @@ test("risk is decided by what the action is: commitments and leaving the start o
   assert.equal(riskOf(click("Next page"), { ...page, url: "https://pay.example/" }, "https://shop.test/", false), "origin");
   assert.equal(riskOf(click("Next page"), { ...page, url: "https://pay.example/" }, "https://shop.test/", true), null, "asked once already");
 });
+
+test("a failed freshness check says which part of the page moved", async () => {
+  const { describeMarkerChange, describeScopedChange } = await import("../src/main/engine/decision/browser-snapshot.ts");
+  const key = [1, "https://a.test/", 0, 0, 1120, 780, []];
+  const guard = [7, "button", "Toggle Sidebar", null, null, null, null, false, null, "false", null, null, null, "Toggle Sidebar TYPESAFE AI"];
+  assert.equal(describeScopedChange([key, guard], [[1, "https://a.test/", 0, 3, 1120, 780, []], guard]), "page scrollY 0→3");
+  assert.equal(describeScopedChange([key, guard], [key, [...guard.slice(0, 13), "Toggle Sidebar TYPESAFE AI 12:01"]]), "target nearby text");
+  assert.equal(describeScopedChange([key, guard], [key, null]), "target hidden or detached");
+  assert.equal(describeScopedChange([key, guard], null), "target no longer on the page");
+  assert.equal(describeScopedChange([key, guard], [key, guard]), null);
+  assert.equal(describeMarkerChange([1, "u", 0, 0, 1, 1, "t", "a", [], []], [1, "u", 0, 0, 1, 1, "t", "b", [], []]), "visible text");
+});

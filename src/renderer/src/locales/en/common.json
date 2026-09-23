@@ -141,6 +141,7 @@
     "decisionStatus": {
       "blocked": "could not continue",
       "no_progress": "stopped, no progress",
+      "unstable": "page kept changing",
       "handed_off": "handed back",
       "exhausted": "budget used up",
       "cancelled": "cancelled",

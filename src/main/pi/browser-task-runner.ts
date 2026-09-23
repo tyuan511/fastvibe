@@ -1,5 +1,5 @@
 import { pageFingerprint, StalePage, type BrowserControl, type ObservedPage } from "../engine/decision/browser-agent";
-import { guardScript, MARKER_SCRIPT, OBSERVE_SCRIPT, settleScript, targetScript, type ObservedAction } from "../engine/decision/browser-snapshot";
+import { describeMarkerChange, describeScopedChange, guardScript, MARKER_SCRIPT, OBSERVE_SCRIPT, settleScript, targetScript, type ObservedAction } from "../engine/decision/browser-snapshot";
 import { uiText } from "../engine/ui-text";
 import { requestBrowser } from "./browser-bridge";
 import { browserTasksEnabled, runDecisionTask, type DecisionTaskRequest, type DecisionTaskResult } from "./decision-task-runner";
@@ -40,16 +40,21 @@ function webviewControl(conversationId: string | undefined, tabId: string | unde
     async fresh(page, action) {
       try {
         if (action && (action.kind === "click" || action.kind === "select") && typeof action.node === "number") {
-          const current = await call("decision-eval", { script: guardScript(action.node) });
-          return JSON.stringify(current) === JSON.stringify([page.page_key, page.guards[String(action.node)] ?? null]);
+          const current = (await call("decision-eval", { script: guardScript(action.node) })) as [unknown, unknown] | null;
+          const expected: [unknown, unknown] = [page.page_key, page.guards[String(action.node)] ?? null];
+          if (JSON.stringify(current) === JSON.stringify(expected)) return true;
+          return describeScopedChange(expected, current) ?? "target context changed";
         }
-        return JSON.stringify(await call("decision-eval", { script: MARKER_SCRIPT })) === JSON.stringify(page.marker);
-      } catch {
-        return false;
+        const marker = await call("decision-eval", { script: MARKER_SCRIPT });
+        if (JSON.stringify(marker) === JSON.stringify(page.marker)) return true;
+        return describeMarkerChange(page.marker, marker) ?? "page changed";
+      } catch (error) {
+        return `freshness check failed: ${error instanceof Error ? error.message : String(error)}`;
       }
     },
     async act(action: ObservedAction, page, text) {
-      if (!(await control.fresh(page, action))) throw new StalePage();
+      const fresh = await control.fresh(page, action);
+      if (fresh !== true) throw new StalePage(typeof fresh === "string" ? fresh : undefined);
       if (action.kind === "wait") {
         await new Promise((resolve) => setTimeout(resolve, 100));
         return;

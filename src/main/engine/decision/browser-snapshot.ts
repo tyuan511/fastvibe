@@ -249,3 +249,52 @@ export function settleScript(action: ObservedAction): string {
   requestAnimationFrame(ready);
 }))(${JSON.stringify({ node: action.node ?? null, kind: action.kind })})`;
 }
+
+/**
+ * Why a freshness check failed, in words — so a run that keeps re-deciding can say which
+ * part of the page would not hold still (a ticking scroll offset, a resizing viewport, a
+ * live region next to the target) instead of only "stale".
+ *
+ * The positions follow the observe script: `pageKey` is [document, url, scrollX, scrollY,
+ * width, height, form values], a guard is [node, role, name, value, checked, selectedIndex,
+ * readOnly, disabled, aria-disabled, aria-expanded, aria-checked, aria-selected, href,
+ * nearby text], and the marker is [document, url, scrollX, scrollY, width, height, title,
+ * text, actions, form values].
+ */
+const PAGE_KEY_PARTS = ["document", "url", "scrollX", "scrollY", "viewport width", "viewport height", "form values"];
+const GUARD_PARTS = ["node", "role", "name", "value", "checked", "selected option", "read-only", "disabled", "aria-disabled", "aria-expanded", "aria-checked", "aria-selected", "href", "nearby text"];
+const MARKER_PARTS = ["document", "url", "scrollX", "scrollY", "viewport width", "viewport height", "title", "visible text", "actions", "form values"];
+
+function describeParts(names: string[], before: unknown, after: unknown): string[] {
+  if (!Array.isArray(before) || !Array.isArray(after)) return JSON.stringify(before) === JSON.stringify(after) ? [] : ["whole state"];
+  const changed: string[] = [];
+  for (let index = 0; index < Math.max(before.length, after.length, names.length); index++) {
+    const a = before[index];
+    const b = after[index];
+    if (JSON.stringify(a) === JSON.stringify(b)) continue;
+    const name = names[index] ?? `part ${index}`;
+    const short = (value: unknown) => {
+      const text = typeof value === "string" ? value : JSON.stringify(value);
+      return text === undefined ? "∅" : text.length > 40 ? `${text.slice(0, 40)}…` : text;
+    };
+    changed.push(typeof a === "number" || typeof b === "number" ? `${name} ${short(a)}→${short(b)}` : name);
+  }
+  return changed;
+}
+
+/** What differs between a click/select target's page key and guard then and now. */
+export function describeScopedChange(before: [unknown, unknown], after: [unknown, unknown] | null): string | null {
+  if (!after) return "target no longer on the page";
+  const changes = [
+    ...describeParts(PAGE_KEY_PARTS, before[0], after[0]).map((part) => `page ${part}`),
+    ...(after[1] === null ? ["target hidden or detached"] : describeParts(GUARD_PARTS, before[1], after[1]).map((part) => `target ${part}`)),
+  ];
+  return changes.length ? changes.join(", ") : null;
+}
+
+/** What differs between two full semantic markers. */
+export function describeMarkerChange(before: unknown, after: unknown): string | null {
+  if (after === null || after === undefined) return "page is navigating";
+  const changes = describeParts(MARKER_PARTS, before, after);
+  return changes.length ? changes.join(", ") : null;
+}

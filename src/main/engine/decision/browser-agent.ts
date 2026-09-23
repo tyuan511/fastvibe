@@ -36,8 +36,11 @@ export type ObservedPage = DecisionObservation & { fingerprint: string };
 /** Everything the loop needs from a browser. Implementations throw `StalePage` from `act`. */
 export type BrowserControl = {
   observe(): Promise<ObservedPage>;
-  /** Scoped freshness for click/select, full semantic freshness otherwise. */
-  fresh(page: ObservedPage, action?: ObservedAction): Promise<boolean>;
+  /**
+   * Scoped freshness for click/select, full semantic freshness otherwise: `true` when
+   * the page is still the one decided on, otherwise `false` or a reason for the trace.
+   */
+  fresh(page: ObservedPage, action?: ObservedAction): Promise<boolean | string>;
   act(action: ObservedAction, page: ObservedPage, text?: string): Promise<void>;
 };
 
@@ -50,7 +53,7 @@ export function pageFingerprint(page: DecisionObservation): string {
 export type AgentStep = StepHistoryEntry & { step: number; operation: string; decisionMs: number; textMs?: number };
 
 export type AgentResult = {
-  status: "done" | "blocked" | "no_progress" | "handed_off" | "exhausted" | "cancelled" | "missing_value";
+  status: "done" | "blocked" | "no_progress" | "unstable" | "handed_off" | "exhausted" | "cancelled" | "missing_value";
   detail?: string;
   steps: AgentStep[];
   decisions: number;
@@ -68,6 +71,8 @@ export type BrowserAgentOptions = {
   onStep?(step: AgentStep): void;
   maxActions?: number;
   maxDecisions?: number;
+  /** Stop after this many consecutive stale decisions with nothing executed between. */
+  maxStaleInARow?: number;
   /**
    * Page-settling after an action: poll interval, how long a changed page must stay
    * unchanged, how long to wait for a late change, hard cap.
@@ -75,6 +80,7 @@ export type BrowserAgentOptions = {
   settle?: { intervalMs?: number; stableMs?: number; quietMs?: number; maxMs?: number };
 };
 
+const MAX_STALE_IN_A_ROW = 5;
 const SETTLE_INTERVAL_MS = 100;
 const SETTLE_STABLE_MS = 300;
 const SETTLE_QUIET_MS = 600;
@@ -119,9 +125,21 @@ export async function runBrowserAgent(options: BrowserAgentOptions): Promise<Age
   const { goal, control, run, policy } = options;
   const maxActions = options.maxActions ?? MAX_ACTIONS;
   const maxDecisions = options.maxDecisions ?? MAX_DECISIONS;
+  const maxStaleInARow = options.maxStaleInARow ?? MAX_STALE_IN_A_ROW;
   const steps: AgentStep[] = [];
   let decisions = 0;
   let staleDecisions = 0;
+  // Consecutive decisions thrown away as stale with nothing executed between them. A page
+  // that never holds still (a ticking scroll, a live region) would otherwise burn the
+  // whole decision budget re-deciding the same click — 120 decisions, 0 steps.
+  let staleInARow = 0;
+  let staleReason = "";
+  const markStale = (reason: unknown): boolean => {
+    staleDecisions++;
+    staleInARow++;
+    if (typeof reason === "string" && reason) staleReason = reason;
+    return staleInARow >= maxStaleInARow;
+  };
   // A generated value is reused only while the helper's whole input is identical, and is
   // dropped after a successful mutation — so a stale re-decision does not pay for it twice.
   let pendingText = null as { key: string; text: string } | null;
@@ -139,7 +157,7 @@ export async function runBrowserAgent(options: BrowserAgentOptions): Promise<Age
   for (;;) {
     if (decisions >= maxDecisions) return finish("exhausted", "decision budget");
     if (steps.length >= maxActions) return finish("exhausted", "action budget");
-    if (!(await control.fresh(page))) page = await control.observe();
+    if ((await control.fresh(page)) !== true) page = await control.observe();
 
     const step = buildBrowserStep({ goal, observation: page, history: steps });
     decisions++;
@@ -153,8 +171,9 @@ export async function runBrowserAgent(options: BrowserAgentOptions): Promise<Age
     const { operation, action } = resolveDecision(step, outcome.answers);
     if (operation === "DONE" || operation === "BLOCKED") {
       // A terminal choice about a page that has since changed is not about this page.
-      if (!(await control.fresh(page))) {
-        staleDecisions++;
+      const fresh = await control.fresh(page);
+      if (fresh !== true) {
+        if (markStale(fresh)) return finish("unstable", staleReason || "the page kept changing");
         page = await control.observe();
         continue;
       }
@@ -166,7 +185,8 @@ export async function runBrowserAgent(options: BrowserAgentOptions): Promise<Age
     let textMs: number | undefined;
     try {
       if (action.kind === "fill") {
-        if (!(await control.fresh(page))) throw new StalePage("Page changed before text generation.");
+        const fresh = await control.fresh(page);
+        if (fresh !== true) throw new StalePage(typeof fresh === "string" ? fresh : "Page changed before text generation.");
         const context = fieldContext(goal, action, page, steps);
         const key = JSON.stringify(context);
         if (pendingText?.key === key) text = pendingText.text;
@@ -184,11 +204,12 @@ export async function runBrowserAgent(options: BrowserAgentOptions): Promise<Age
       await control.act(action, page, text);
     } catch (error) {
       if (!(error instanceof StalePage)) throw error;
-      staleDecisions++;
+      if (markStale(error.message)) return finish("unstable", staleReason || "the page kept changing");
       page = await control.observe();
       continue;
     }
     pendingText = null;
+    staleInARow = 0;
 
     // Record the execution before observing: a failed observation must not erase it.
     const entry: AgentStep = {

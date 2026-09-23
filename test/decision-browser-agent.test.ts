@@ -191,3 +191,23 @@ test("after a click, the next decision waits for a single-page app to finish swa
   assert.deepEqual(acted, ["Lib"], "Lib is clicked once, not again on the half-loaded page");
   assert.deepEqual(seen, ["README", "Lib listing"]);
 });
+
+test("a page that never holds still stops after five stale decisions, with the reason", async () => {
+  const { control, acted } = fakeControl();
+  const unstable: BrowserControl = {
+    ...control,
+    async fresh() {
+      return "page scrollY 0→3";
+    },
+    async act(action, page) {
+      const fresh = await unstable.fresh(page, action);
+      if (fresh !== true) throw new StalePage(String(fresh));
+    },
+  };
+  const backend = scripted([["CLICK", "2"]]);
+  const result = await runBrowserAgent({ goal: "g", control: unstable, run: run(backend), policy: acceptValid("t"), settle: FAST, fieldText: async () => "x" });
+  assert.equal(result.status, "unstable");
+  assert.equal(result.detail, "page scrollY 0→3");
+  assert.equal(result.decisions, 5, "not the whole 120-decision budget");
+  assert.deepEqual(acted, []);
+});

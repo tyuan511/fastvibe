@@ -55,7 +55,7 @@ function computerControl(pid: number, windowId: string): BrowserControl {
       }
     },
     async act(action: ObservedAction, page, text) {
-      if (!(await control.fresh(page, action)) || !latest) throw new StalePage();
+      if ((await control.fresh(page, action)) !== true || !latest) throw new StalePage(uiText("窗口内容已变化", "The window changed"));
       const current = latest;
       if (action.kind === "wait") {
         await new Promise((resolve) => setTimeout(resolve, 300));
