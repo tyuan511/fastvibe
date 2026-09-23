@@ -72,3 +72,12 @@ export const HAS_TRAFFIC_LIGHTS = !IS_REMOTE && APP_PLATFORM === "darwin";
  * macOS arrangement — the sidebar's own first row — minus the inset.
  */
 export const HAS_CUSTOM_TITLE_BAR = !IS_REMOTE && APP_PLATFORM !== "darwin";
+
+/**
+ * A touchscreen with no mouse: a phone or tablet. Asked at the moment of use rather than
+ * at load, because a tablet can gain a trackpad mid-session. This is the same condition
+ * the CSS keys its touch rules on (`index.css`), so the two cannot disagree.
+ */
+export function isTouchOnly(): boolean {
+  return typeof window !== "undefined" && window.matchMedia("(hover: none) and (pointer: coarse)").matches;
+}

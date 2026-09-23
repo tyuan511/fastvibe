@@ -15,6 +15,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Textarea } from "@/components/ui/textarea";
+import { isTouchOnly } from "@/lib/platform";
 import { engine } from "@/lib/engine-client";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -512,8 +513,12 @@ export function Composer({
       if (!event.repeat) submit();
       return;
     }
+    // A phone's on-screen keyboard has no Shift+Enter to fall back on, so there Enter
+    // is a newline and the send button sends — otherwise a multi-line prompt could not
+    // be typed at all, and the Return key sent every half-written thought.
     if (
       sendOnEnter &&
+      !isTouchOnly() &&
       event.key === "Enter" &&
       !event.shiftKey &&
       !event.metaKey &&
@@ -668,6 +673,11 @@ export function Composer({
                   aria-label={project ? t("composer.clearProject") : undefined}
                   title={project ? t("composer.clearProject") : undefined}
                   onClick={project ? (event) => {
+                    // On a touchscreen the × never shows (no hover), so this icon is just
+                    // the left half of the chip: a tap there has to open the picker like
+                    // the rest of it, not silently unbind the project. The picker carries
+                    // its own 清除项目 row for touch.
+                    if (isTouchOnly()) return;
                     event.preventDefault();
                     event.stopPropagation();
                     onSelectProject(null);
@@ -712,6 +722,19 @@ export function Composer({
                   )}
                 </div>
                 <div className="my-0.5 border-t border-border" />
+                {project ? (
+                  <button
+                    type="button"
+                    className="hidden w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm text-muted-foreground hover:bg-muted hover:text-foreground pointer-coarse:flex"
+                    onClick={() => {
+                      setProjectOpen(false);
+                      onSelectProject(null);
+                    }}
+                  >
+                    <HugeiconsIcon strokeWidth={2} icon={Cancel01Icon} className="size-3.5" />
+                    <span>{t("composer.clearProject")}</span>
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm text-muted-foreground hover:bg-muted hover:text-foreground"

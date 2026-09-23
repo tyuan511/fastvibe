@@ -1,9 +1,10 @@
 /**
  * Theme system.
  *
- * Ten first-party themes — five light and five dark — modelled on the most
- * installed VS Code colour themes (GitHub, One Dark Pro, Dracula, Catppuccin,
- * Tokyo Night, Solarized, Quiet Light, Atom One Light). Each theme is a compact
+ * Twenty-four first-party themes — twelve light and twelve dark — modelled on
+ * the most installed VS Code colour themes (GitHub, One Dark Pro, Dracula,
+ * Catppuccin, Tokyo Night, Solarized, Quiet Light, …) plus the Codex desktop
+ * and Claude Code palettes. Each theme is a compact
  * seed palette; the full shadcn / Base UI token set is derived from it by
  * `buildTokens`, so a theme only has to describe its intent.
  *
@@ -31,6 +32,8 @@ export type ThemeId =
   | "gruvbox-dark"
   | "monokai"
   | "rose-pine"
+  | "codex-dark"
+  | "claude-dark"
   // light
   | "github-light"
   | "one-light"
@@ -41,7 +44,9 @@ export type ThemeId =
   | "gruvbox-light"
   | "everforest-light"
   | "night-owl-light"
-  | "rose-pine-dawn";
+  | "rose-pine-dawn"
+  | "codex-light"
+  | "claude-light";
 
 /** The raw palette a theme is built from. */
 export type ThemeSeed = {
@@ -360,6 +365,49 @@ const SEEDS: Record<ThemeId, ThemeSeed> = {
     charts: ["#ebbcba", "#9ccfd8", "#f6c177", "#c4a7e7", "#eb6f92"],
   },
 
+  "codex-dark": {
+    label: "Codex Dark",
+    source: "Codex Desktop",
+    kind: "dark",
+    bg: "#181818",
+    fg: "#ececec",
+    surface: "#212121",
+    border: "#2f2f2f",
+    muted: "#2a2a2a",
+    mutedFg: "#a3a3a3",
+    accent: "#ececec",
+    accentFg: "#0d0d0d",
+    destructive: "#ff6369",
+    warning: "#e0a526",
+    success: "#10a37f",
+    sidebar: "#121212",
+    sidebarMuted: "#232323",
+    codeBg: "#1f1f1f",
+    syntax: { keyword: "#c792ea", string: "#7ee787", comment: "#7a7a7a", number: "#79c0ff" },
+    charts: ["#339cff", "#10a37f", "#e0a526", "#c792ea", "#ff6369"],
+  },
+  "claude-dark": {
+    label: "Claude Dark",
+    source: "Claude Code",
+    kind: "dark",
+    bg: "#1c1c1b",
+    fg: "#ececea",
+    surface: "#252524",
+    border: "#2f2f2d",
+    muted: "#2a2a28",
+    mutedFg: "#9c9a95",
+    accent: "#d97757",
+    accentFg: "#ffffff",
+    destructive: "#ff6b80",
+    warning: "#ffc107",
+    success: "#4eba65",
+    sidebar: "#181817",
+    sidebarMuted: "#2a2a28",
+    codeBg: "#222221",
+    syntax: { keyword: "#e08a6b", string: "#a3b88a", comment: "#8a8984", number: "#8fb3dc" },
+    charts: ["#d97757", "#6a9bcc", "#788c5d", "#e0b25b", "#9c9a95"],
+  },
+
   /* ----------------------------------------------------------------- light */
 
   "github-light": {
@@ -572,6 +620,48 @@ const SEEDS: Record<ThemeId, ThemeSeed> = {
     syntax: { keyword: "#286983", string: "#ea9d34", comment: "#9893a5", number: "#d7827e" },
     charts: ["#d7827e", "#56949f", "#ea9d34", "#907aa9", "#b4637a"],
   },
+  "codex-light": {
+    label: "Codex Light",
+    source: "Codex Desktop",
+    kind: "light",
+    bg: "#ffffff",
+    fg: "#0d0d0d",
+    surface: "#ffffff",
+    border: "#e5e5e5",
+    muted: "#f3f3f3",
+    mutedFg: "#5d5d5d",
+    accent: "#0d0d0d",
+    accentFg: "#ffffff",
+    destructive: "#e02e2a",
+    warning: "#c27c00",
+    success: "#00a240",
+    sidebar: "#f9f9f9",
+    sidebarMuted: "#ececec",
+    codeBg: "#f7f7f7",
+    syntax: { keyword: "#8b3fd9", string: "#1a7f37", comment: "#8f8f8f", number: "#0969da" },
+    charts: ["#0285ff", "#00a240", "#c27c00", "#8b3fd9", "#e02e2a"],
+  },
+  "claude-light": {
+    label: "Claude Light",
+    source: "Claude Code",
+    kind: "light",
+    bg: "#fcfbfb",
+    fg: "#141413",
+    surface: "#ffffff",
+    border: "#ebebe8",
+    muted: "#f0efec",
+    mutedFg: "#858480",
+    accent: "#d97757",
+    accentFg: "#ffffff",
+    destructive: "#ab2b3f",
+    warning: "#966c1e",
+    success: "#2c7a39",
+    sidebar: "#fafaf8",
+    sidebarMuted: "#edebe7",
+    codeBg: "#f7f6f4",
+    syntax: { keyword: "#c6613f", string: "#5f7a3f", comment: "#858480", number: "#3f73b0" },
+    charts: ["#d97757", "#6a9bcc", "#788c5d", "#c49a3a", "#858480"],
+  },
 };
 
 export const THEMES = Object.fromEntries(
@@ -593,6 +683,8 @@ export const LIGHT_THEME_IDS: ThemeId[] = [
   "everforest-light",
   "night-owl-light",
   "rose-pine-dawn",
+  "codex-light",
+  "claude-light",
 ];
 
 export const DARK_THEME_IDS: ThemeId[] = [
@@ -606,6 +698,8 @@ export const DARK_THEME_IDS: ThemeId[] = [
   "gruvbox-dark",
   "monokai",
   "rose-pine",
+  "codex-dark",
+  "claude-dark",
 ];
 
 export const DEFAULT_LIGHT_THEME: ThemeId = "github-light";

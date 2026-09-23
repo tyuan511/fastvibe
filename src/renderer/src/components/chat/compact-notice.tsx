@@ -74,7 +74,7 @@ export function CompactNotice({ message }: { message: ChatMessage }): JSX.Elemen
           icon={ArrowRight01Icon}
           className={cn(
             "size-4 shrink-0 text-muted-foreground/60 transition-all duration-200",
-            "opacity-0 group-hover/compact:opacity-100",
+            "opacity-0 group-hover/compact:opacity-100 pointer-coarse:opacity-100",
             open && "rotate-90 opacity-100",
           )}
         />

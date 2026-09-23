@@ -159,7 +159,8 @@ async function backendFor(config: DecisionModelConfig): Promise<DecisionBackend 
 
 /** Whether sessions should be offered `browser_task` (read when a session's tools load). */
 export function browserTaskEnabled(): boolean {
-  return readDecisionConfig(getFastVibePaths().decisionFile).kind !== "off";
+  const config = readDecisionConfig(getFastVibePaths().decisionFile);
+  return config.kind === "jev" && config.browserControl;
 }
 
 export async function runBrowserTask(request: BrowserTaskRequest): Promise<BrowserTaskResult> {

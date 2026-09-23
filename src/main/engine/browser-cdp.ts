@@ -492,7 +492,7 @@ export async function importIntoBrowserProfile(profileDir: string, cookies: Prof
   try {
     await writeFile(join(extension, "manifest.json"), JSON.stringify({
       manifest_version: 3,
-      name: "FastVibe cookie import",
+      name: "FastVibe cookies",
       version: "1.0.0",
       permissions: ["cookies"],
       host_permissions: ["http://127.0.0.1/*"],

@@ -1425,6 +1425,7 @@ export class PiProcessManager {
           try { await managed.session.dispose(); } catch { /* best-effort rollback */ }
           this.#sessions.delete(conversation.id);
         }
+        this.#sdkQueueAdapters.delete(conversation.id);
         this.#clearBusy(conversation.id);
         this.#extensionStatuses.delete(conversation.id);
         this.#catalog.remove(conversation.id);
@@ -3331,9 +3332,16 @@ export class PiProcessManager {
     return this.#messageQueue.resolveClaims(conversationId, findDeliveredClaims(items, sessionUserTurns(session)));
   }
 
-  /** Install the version-limited adapter at pi-agent-core's real dequeue boundary. */
+  /**
+   * Install the version-limited adapter at pi-agent-core's real dequeue boundary.
+   *
+   * Called once per `AgentSession`, and always replaces what the map holds: an entry
+   * left by an earlier session of the same conversation wraps an agent that has been
+   * disposed. Keeping it (an early return on `has`) left a reopened chat's agent
+   * unwrapped, so every queued steer was delivered with no claim and its row sat at
+   * 发送中 forever.
+   */
   #installQueueBoundary(conversationId: string, session: AgentSession): void {
-    if (this.#sdkQueueAdapters.has(conversationId)) return;
     const adapter = installSdkQueueAdapter(session.agent, {
       currentId: () => {
         const token = this.#queueSubmission.getStore();
@@ -4214,6 +4222,7 @@ export class PiProcessManager {
     const managed = this.#sessions.get(id);
     if (!managed) return;
     this.#sessions.delete(id);
+    this.#sdkQueueAdapters.delete(id);
     this.#sessionTouched.delete(id);
     this.#clearConversationWidgets(id);
     managed.unsubscribe();

@@ -23,42 +23,56 @@ function withTempFile(fn: (file: string) => void) {
 
 test("a missing file reads as off, without creating one", () => {
   withTempFile((file) => {
-    assert.deepEqual(readDecisionConfig(file), { kind: "off" });
+    assert.deepEqual(readDecisionConfig(file), { kind: "off", browserControl: false });
   });
 });
 
 test("round-trips a jev config", () => {
   withTempFile((file) => {
-    writeDecisionConfig(file, { kind: "jev" });
-    assert.deepEqual(readDecisionConfig(file), { kind: "jev" });
+    writeDecisionConfig(file, { kind: "jev", browserControl: true });
+    assert.deepEqual(readDecisionConfig(file), { kind: "jev", browserControl: true });
+  });
+});
+
+test("a jev config written before browser control existed keeps the tool on", () => {
+  withTempFile((file) => {
+    writeFileSync(file, JSON.stringify({ version: 1, decisionModel: { kind: "jev" } }));
+    assert.deepEqual(readDecisionConfig(file), { kind: "jev", browserControl: true });
+  });
+});
+
+test("an explicit browser-control opt-out is kept", () => {
+  withTempFile((file) => {
+    writeDecisionConfig(file, { kind: "jev", browserControl: false });
+    assert.deepEqual(readDecisionConfig(file), { kind: "jev", browserControl: false });
   });
 });
 
 test("a laya config from an earlier build reads as off", () => {
   withTempFile((file) => {
     writeFileSync(file, JSON.stringify({ version: 1, decisionModel: { kind: "laya", baseUrl: "http://127.0.0.1:8787" } }));
-    assert.deepEqual(readDecisionConfig(file), { kind: "off" });
+    assert.deepEqual(readDecisionConfig(file), { kind: "off", browserControl: false });
   });
 });
 
 test("corrupt JSON reads as off, not thrown", () => {
   withTempFile((file) => {
     writeFileSync(file, "{not json");
-    assert.deepEqual(readDecisionConfig(file), { kind: "off" });
+    assert.deepEqual(readDecisionConfig(file), { kind: "off", browserControl: false });
   });
 });
 
 test("an unknown file version reads as off rather than being reinterpreted", () => {
   withTempFile((file) => {
     writeFileSync(file, JSON.stringify({ version: 2, decisionModel: { kind: "jev" } }));
-    assert.deepEqual(readDecisionConfig(file), { kind: "off" });
+    assert.deepEqual(readDecisionConfig(file), { kind: "off", browserControl: false });
   });
 });
 
 test("write is atomic: no partial file survives a rename", () => {
   withTempFile((file) => {
-    writeDecisionConfig(file, { kind: "jev" });
-    writeDecisionConfig(file, { kind: "off" });
-    assert.deepEqual(readDecisionConfig(file), { kind: "off" });
+    writeDecisionConfig(file, { kind: "jev", browserControl: true });
+    writeDecisionConfig(file, { kind: "off", browserControl: false });
+    assert.deepEqual(readDecisionConfig(file), { kind: "off", browserControl: false });
   });
 });

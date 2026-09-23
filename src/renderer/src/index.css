@@ -612,3 +612,38 @@ body {
 .safe-bottom {
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
+
+/*
+ * The rest of a phone's edges. The top is the status bar of a home-screen web app, the
+ * sides are the notch in landscape; the bottom stays with `.safe-bottom`, which the
+ * composer row owns. All zero on a desktop.
+ */
+#root {
+  box-sizing: border-box;
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) 0 env(safe-area-inset-left, 0px);
+}
+
+/*
+ * A touchscreen with no mouse — a phone or tablet on the remote client.
+ *
+ * - Inputs are 16px: iOS zooms the whole page into any field smaller than that the
+ *   moment it is focused, and does not zoom back out, so tapping the composer left the
+ *   chat half off-screen. `!important` because the size is a utility on each input.
+ * - No grey tap flash: every row and chip here draws its own pressed/active state.
+ * - `manipulation` drops the double-tap-to-zoom wait, so a tap lands at once.
+ * - No pull-to-refresh: a drag down at the top of the transcript reloaded the page,
+ *   which on the remote client is a reconnect in the middle of reading.
+ */
+@media (hover: none) and (pointer: coarse) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+  html,
+  body {
+    overscroll-behavior: none;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+}

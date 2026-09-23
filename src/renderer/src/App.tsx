@@ -2237,7 +2237,10 @@ export function App(): JSX.Element {
                 ) : null}
                 {isNewSession ? null : (
                   <>
-                    {activeProject ? (
+                    {/* The project prefix is the first thing to go on a phone: it is
+                        `shrink-0`, so beside the diff chip it squeezed the chat's own
+                        title down to nothing. The drawer already says which project. */}
+                    {activeProject && !narrow ? (
                       <>
                         <span className="max-w-32 shrink-0 truncate text-sm text-muted-foreground" title={activeProject.name}>
                           {activeProject.name}
@@ -2259,7 +2262,8 @@ export function App(): JSX.Element {
                   </>
                 )}
               </div>
-              {paneCollapsed ? (
+              {/* A narrow layout renders no side pane at all, so this would open nothing. */}
+              {paneCollapsed && !narrow ? (
                 <div className="no-drag flex items-center">
                   <IconButton
                     size="icon-sm"

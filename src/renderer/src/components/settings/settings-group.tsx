@@ -25,14 +25,21 @@ export function SettingsRow({
   description,
   control,
 }: {
-  title: string;
+  title: ReactNode;
   description?: ReactNode;
   control: ReactNode;
 }): JSX.Element {
   return (
-    <div className="flex items-center justify-between gap-6 px-4 py-3">
-      <div className="min-w-0">
-        <Label className="text-sm font-medium">{title}</Label>
+    // The label claims a 12rem basis and the row wraps: on a desktop pane nothing changes,
+    // while on a phone a wide control (a 44-unit select) drops under its label instead of
+    // squeezing the label down to a word per line.
+    <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 px-4 py-3">
+      <div className="min-w-0 flex-1 basis-48">
+        {typeof title === "string" ? (
+          <Label className="text-sm font-medium">{title}</Label>
+        ) : (
+          <div className="flex items-center gap-1 text-sm font-medium">{title}</div>
+        )}
         {description ? (
           <p className="mt-0.5 text-xs leading-4 text-muted-foreground">{description}</p>
         ) : null}

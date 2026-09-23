@@ -14,7 +14,8 @@ import {
   DndContext,
   DragOverlay,
   KeyboardSensor,
-  PointerSensor,
+  MouseSensor,
+  TouchSensor,
   closestCenter,
   defaultDropAnimationSideEffects,
   useSensor,
@@ -254,7 +255,10 @@ export function MessageQueue({
   const [dragId, setDragId] = useState<string | null>(null);
   const sensors = useSensors(
     // A small threshold keeps the row's "立即 / 编辑 / 移除" buttons clickable.
-    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(MouseSensor, { activationConstraint: { distance: 5 } }),
+    // A finger has to hold still first: with a distance threshold, scrolling the page
+    // over the tray picked up whichever row the thumb started on.
+    useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 5 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 

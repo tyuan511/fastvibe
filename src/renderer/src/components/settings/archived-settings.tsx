@@ -214,7 +214,7 @@ export function ArchivedSettings({
                       {project?.name ?? t("archived.noProject")} · {formatRelativeTime(item.updatedAt)}
                     </p>
                   </div>
-                  <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/row:opacity-100">
+                  <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/row:opacity-100 pointer-coarse:opacity-100">
                     <IconButton
                       size="icon-xs"
                       variant="ghost"
