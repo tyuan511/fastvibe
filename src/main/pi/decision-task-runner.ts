@@ -51,9 +51,16 @@ export function installDecisionTaskDependencies(deps: DecisionTaskDependencies):
   dependencies = deps;
 }
 
-/** Whether sessions should be offered the `*_task` tools (read when a session's tools load). */
-export function decisionTasksEnabled(): boolean {
-  return readDecisionConfig(getFastVibePaths().decisionFile).kind !== "off";
+/** Whether sessions should be offered `browser_task` (read when a session's tools load). */
+export function browserTasksEnabled(): boolean {
+  const config = readDecisionConfig(getFastVibePaths().decisionFile);
+  return config.kind === "jev" && config.browserControl;
+}
+
+/** Whether sessions should be offered `computer_task` (read when a session's tools load). */
+export function computerTasksEnabled(): boolean {
+  const config = readDecisionConfig(getFastVibePaths().decisionFile);
+  return config.kind === "jev" && config.computerControl;
 }
 
 /**

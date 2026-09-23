@@ -43,6 +43,7 @@ import {
 import { cleanError } from "@/lib/ipc-error";
 import { providerLabel } from "@/lib/provider-label";
 import { cn } from "@/lib/utils";
+import { useIsNarrowViewport } from "@/lib/sidebar-visibility";
 import { ProviderIcon } from "@/components/provider-icon";
 import { PROVIDER_APIS, type CcSwitchCandidate, type CcSwitchScan, type GatewayKind, type NativeProviderConfig, type ProviderApi, type ProviderConfig, type ProviderModel } from "@shared/types";
 import { ModelDetailDialog, type ModelDetailTarget } from "./model-detail-dialog";
@@ -129,6 +130,15 @@ export function ProvidersSettings({ onChanged }: { onChanged: () => void }): JSX
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Phone: the provider list and a provider's detail are two pages, not two columns —
+  // side by side at 375pt the detail was a strip one word wide. Picking a provider opens
+  // its page; the page's 返回 comes back. Desktop ignores this and shows both.
+  const narrow = useIsNarrowViewport();
+  const [detailOpen, setDetailOpen] = useState(false);
+  const openProvider = (id: string): void => {
+    setSelectedId(id);
+    setDetailOpen(true);
+  };
   const [add, setAdd] = useState<AddState | null>(null);
   const [ccSwitchOpen, setCcSwitchOpen] = useState(false);
   const [picker, setPicker] = useState<PickerState | null>(null);
@@ -199,7 +209,12 @@ export function ProvidersSettings({ onChanged }: { onChanged: () => void }): JSX
 
   return (
     <div className="flex min-h-80 overflow-hidden rounded-xl border border-border bg-card">
-      <aside className="flex w-52 shrink-0 flex-col border-r border-border">
+      <aside
+        className={cn(
+          "flex w-52 shrink-0 flex-col border-r border-border",
+          narrow && (detailOpen ? "hidden" : "w-full border-r-0"),
+        )}
+      >
         <ScrollArea className="min-h-0 flex-1">
           <div className="p-2">
             {builtin ? (
@@ -207,8 +222,8 @@ export function ProvidersSettings({ onChanged }: { onChanged: () => void }): JSX
                 <p className="px-2 pb-1 text-xs font-medium text-muted-foreground">{t("providers.builtin")}</p>
                 <ProviderNavItem
                   provider={builtin}
-                  selected={selected?.id === builtin.id}
-                  onSelect={() => setSelectedId(builtin.id)}
+                  selected={!narrow && selected?.id === builtin.id}
+                  onSelect={() => openProvider(builtin.id)}
                 />
               </div>
             ) : null}
@@ -220,8 +235,8 @@ export function ProvidersSettings({ onChanged }: { onChanged: () => void }): JSX
                     <ProviderNavItem
                       key={provider.id}
                       provider={provider}
-                      selected={selected?.id === provider.id}
-                      onSelect={() => setSelectedId(provider.id)}
+                      selected={!narrow && selected?.id === provider.id}
+                      onSelect={() => openProvider(provider.id)}
                     />
                   ))}
                 </div>
@@ -235,8 +250,8 @@ export function ProvidersSettings({ onChanged }: { onChanged: () => void }): JSX
                     <ProviderNavItem
                       key={provider.id}
                       provider={provider}
-                      selected={selected?.id === provider.id}
-                      onSelect={() => setSelectedId(provider.id)}
+                      selected={!narrow && selected?.id === provider.id}
+                      onSelect={() => openProvider(provider.id)}
                     />
                   ))}
                 </div>
@@ -264,7 +279,18 @@ export function ProvidersSettings({ onChanged }: { onChanged: () => void }): JSX
         </div>
       </aside>
 
-      <div className="min-w-0 flex-1 p-5">
+      <div className={cn("min-w-0 flex-1 p-5", narrow && (detailOpen ? "p-4" : "hidden"))}>
+        {narrow ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="-ml-2 mb-3 h-8 gap-1.5 px-2 text-sm text-muted-foreground"
+            onClick={() => setDetailOpen(false)}
+          >
+            <HugeiconsIcon strokeWidth={2} icon={ArrowLeft01Icon} className="size-4" />
+            {t("providers.providers")}
+          </Button>
+        ) : null}
         {error ? <p className="mb-3 text-xs text-destructive">{error}</p> : null}
         {selected ? (
           <ProviderDetail
@@ -306,6 +332,7 @@ export function ProvidersSettings({ onChanged }: { onChanged: () => void }): JSX
             onRemoved={async (next) => {
               setProviders(next);
               setSelectedId(builtin?.id ?? next[0]?.id ?? null);
+              setDetailOpen(false);
               onChanged();
             }}
           />
@@ -329,7 +356,7 @@ export function ProvidersSettings({ onChanged }: { onChanged: () => void }): JSX
         onImported={async (next) => {
           setProviders(next);
           const created = next.filter((item) => item.kind !== "builtin").at(-1);
-          if (created) setSelectedId(created.id);
+          if (created) openProvider(created.id);
           onChanged();
           setCcSwitchOpen(false);
         }}
@@ -373,7 +400,7 @@ export function ProvidersSettings({ onChanged }: { onChanged: () => void }): JSX
           void saveAdd(add, setAdd, async (next) => {
             const saved = await mutate(async () => next);
             const created = saved.filter((item) => item.kind !== "builtin").at(-1);
-            if (created) setSelectedId(created.id);
+            if (created) openProvider(created.id);
           })
         }
       />
@@ -562,7 +589,9 @@ function ProviderDetail({
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between gap-3">
+      {/* Wraps rather than truncating the name: on a phone the actions on the right
+          left the provider's own name as a single letter and an ellipsis. */}
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
         <div className="flex min-w-0 items-center gap-2">
           {provider.kind === "native" ? <ProviderIcon provider={provider.id} /> : null}
           {editingName && editable ? (

@@ -558,8 +558,8 @@ const api = {
     onStates: () => () => undefined,
   },
   decision: {
-    getConfig: async () => ({ kind: "off" as const }),
-    saveConfig: async (config: unknown) => config as { kind: "off" },
+    getConfig: async () => ({ kind: "off" as const, browserControl: false }),
+    saveConfig: async (config: unknown) => config as { kind: "off"; browserControl: boolean },
     test: async () => ({ ok: true as const }),
     keyState: async () => ({ jev: false }),
     setKey: async (key: string) => ({ jev: Boolean(key.trim()) }),

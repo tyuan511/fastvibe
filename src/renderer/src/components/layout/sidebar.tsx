@@ -299,7 +299,7 @@ function DraggableProject({
                 setActivatorNodeRef(node);
               }}
               className={cn(
-                "group/project flex h-8 touch-pan-y items-center gap-0.5 rounded-md pr-1 pl-2 transition-opacity hover:bg-sidebar-accent/50",
+                "group/project flex h-8 pointer-coarse:h-10 touch-pan-y items-center gap-0.5 rounded-md pr-1 pl-2 transition-opacity hover:bg-sidebar-accent/50",
                 isDragging && "opacity-40",
               )}
               {...listeners}
@@ -345,7 +345,10 @@ function DraggableProject({
                   </TooltipContent>
                 )}
               </Tooltip>
-              <div className="flex shrink-0 items-center gap-0.5 opacity-0 group-hover/project:opacity-100 focus-within:opacity-100 has-[[aria-expanded=true]]:opacity-100">
+              {/* A touchscreen has no hover to reveal these, and an invisible button is still
+                  a tappable one: a tap near the row's right edge used to create a chat or
+                  open the menu from nothing on screen. So there they simply show. */}
+              <div className="flex shrink-0 items-center gap-0.5 opacity-0 group-hover/project:opacity-100 focus-within:opacity-100 has-[[aria-expanded=true]]:opacity-100 pointer-coarse:opacity-100">
                 <DropdownMenu>
                   <DropdownMenuTrigger
                     render={<Button size="icon-xs" variant="ghost" className="text-muted-foreground" />}
@@ -463,7 +466,7 @@ function SessionRowContent({
   return (
     <div
       className={cn(
-        "group/session flex h-8 cursor-pointer items-center gap-2.5 rounded-md pr-1 pl-2 text-sm transition-colors",
+        "group/session flex h-8 pointer-coarse:h-10 cursor-pointer items-center gap-2.5 rounded-md pr-1 pl-2 text-sm transition-colors",
         active ? "bg-sidebar-accent text-sidebar-accent-foreground" : "hover:bg-sidebar-accent/50",
       )}
       onClick={onOpen}
@@ -740,11 +743,21 @@ export const Sidebar = memo(function Sidebar({
     persist: writeSidebarWidth,
     reportCollapsed: setSidebarCollapsed,
   });
-  const sensors = useSensors(
-    // A small threshold keeps a plain click (open the chat) from starting a drag,
-    // and lets the row's nested pin/archive buttons stop propagation untouched.
-    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
-  );
+  // A small threshold keeps a plain click (open the chat) from starting a drag,
+  // and lets the row's nested pin/archive buttons stop propagation untouched.
+  const pointerSensor = useSensor(PointerSensor, { activationConstraint: { distance: 5 } });
+  // No reordering in the phone drawer: a thumb scrolling the list is a pointer moving
+  // more than 5px over a row, so every scroll that began on a chat picked it up.
+  const sensors = useSensors(...(narrow ? [] : [pointerSensor]));
+
+  /**
+   * The drawer covers the whole screen, so whatever a tap in it asked for — a chat,
+   * a new one, settings — happens behind it. Closing it is part of the action there;
+   * the desktop column stays exactly as it was.
+   */
+  function dismissDrawer(): void {
+    if (narrow) setSidebarCollapsed(true);
+  }
 
   function setOpen(cwd: string, open: boolean): void {
     setCollapsed((prev) => {
@@ -914,7 +927,10 @@ export const Sidebar = memo(function Sidebar({
         waiting={waitingForUser[item.id] === true}
         renamingThis={renaming?.type === "session" && renaming.id === item.id}
         leadSlot={leadSlot}
-        onOpen={() => onOpen(item.id)}
+        onOpen={() => {
+          onOpen(item.id);
+          dismissDrawer();
+        }}
         onTogglePin={() => togglePinned(item.id)}
         onFork={() => onFork(item.id)}
         onArchive={() => onArchive(item.id)}
@@ -1057,7 +1073,10 @@ export const Sidebar = memo(function Sidebar({
                   className="text-muted-foreground"
                   label={t("sidebar.search")}
                   shortcut={searchShortcut}
-                  onClick={onSearch}
+                  onClick={() => {
+                    onSearch();
+                    dismissDrawer();
+                  }}
                 >
                   <HugeiconsIcon strokeWidth={2} icon={Search01Icon} />
                 </IconButton>
@@ -1068,16 +1087,22 @@ export const Sidebar = memo(function Sidebar({
           <div className={cn("space-y-0.5", HAS_CUSTOM_TITLE_BAR ? null : "mt-1")}>
             <button
               type="button"
-              className="flex h-8 w-full items-center gap-2.5 rounded-md px-2 text-sm hover:bg-sidebar-accent/50"
-              onClick={() => onNewChat()}
+              className="flex h-8 pointer-coarse:h-10 w-full items-center gap-2.5 rounded-md px-2 text-sm hover:bg-sidebar-accent/50"
+              onClick={() => {
+                onNewChat();
+                dismissDrawer();
+              }}
             >
               <HugeiconsIcon strokeWidth={2} icon={MessageSquarePlusIcon} className="size-3.5 text-muted-foreground" />
               {t("workspace.newChat")}
             </button>
             <button
               type="button"
-              className="flex h-8 w-full items-center gap-2.5 rounded-md px-2 text-sm hover:bg-sidebar-accent/50"
-              onClick={onOpenMarket}
+              className="flex h-8 pointer-coarse:h-10 w-full items-center gap-2.5 rounded-md px-2 text-sm hover:bg-sidebar-accent/50"
+              onClick={() => {
+                onOpenMarket();
+                dismissDrawer();
+              }}
             >
               <HugeiconsIcon strokeWidth={2} icon={PuzzleIcon} className="size-3.5 text-muted-foreground" />
               {t("sidebar.plugins")}
@@ -1102,7 +1127,7 @@ export const Sidebar = memo(function Sidebar({
                       size="icon-xs"
                       variant="ghost"
                       label={t("sidebar.newProject")}
-                      className="text-muted-foreground opacity-0 transition-opacity focus-visible:opacity-100 group-hover/section:opacity-100"
+                      className="text-muted-foreground opacity-0 transition-opacity focus-visible:opacity-100 group-hover/section:opacity-100 pointer-coarse:opacity-100"
                     >
                       <HugeiconsIcon strokeWidth={2} icon={Add01Icon} className="size-3.5" />
                     </IconButton>}
@@ -1130,7 +1155,10 @@ export const Sidebar = memo(function Sidebar({
                       open={open}
                       renaming={renamingProject}
                       onOpenChange={(next) => setOpen(group.cwd, next)}
-                      onNewChat={() => onNewChat(group.cwd)}
+                      onNewChat={() => {
+                        onNewChat(group.cwd);
+                        dismissDrawer();
+                      }}
                       onStartRename={() => setRenaming({ type: "project", cwd: group.cwd })}
                       onRename={(next) => {
                         onRenameProject(group.cwd, next);
@@ -1153,8 +1181,11 @@ export const Sidebar = memo(function Sidebar({
                   size="icon-xs"
                   variant="ghost"
                   label={t("sidebar.newSession")}
-                  className="text-muted-foreground opacity-0 transition-opacity focus-visible:opacity-100 group-hover/section:opacity-100"
-                  onClick={() => onNewChat()}
+                  className="text-muted-foreground opacity-0 transition-opacity focus-visible:opacity-100 group-hover/section:opacity-100 pointer-coarse:opacity-100"
+                  onClick={() => {
+                    onNewChat();
+                    dismissDrawer();
+                  }}
                 >
                   <HugeiconsIcon strokeWidth={2} icon={PencilEdit02Icon} className="size-3.5" />
                 </IconButton>
@@ -1178,8 +1209,11 @@ export const Sidebar = memo(function Sidebar({
       <div className="no-drag flex items-center gap-1 p-2">
         <button
           type="button"
-          className="flex h-8 min-w-0 flex-1 items-center gap-2.5 rounded-md px-2 text-sm hover:bg-sidebar-accent/50"
-          onClick={onOpenSettings}
+          className="flex h-8 pointer-coarse:h-10 min-w-0 flex-1 items-center gap-2.5 rounded-md px-2 text-sm hover:bg-sidebar-accent/50"
+          onClick={() => {
+            onOpenSettings();
+            dismissDrawer();
+          }}
         >
           <HugeiconsIcon strokeWidth={2} icon={Settings01Icon} className="size-3.5 text-muted-foreground" />
           {t("palette.settings")}

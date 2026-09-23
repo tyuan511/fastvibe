@@ -152,7 +152,10 @@ function MessageActions({
   // are comparable at a glance.
   const ended = message.completedAt ?? message.createdAt;
   return (
-    <MessageFooter className="gap-1 px-0 opacity-0 transition-opacity group-hover/row:opacity-100 focus-within:opacity-100">
+    // Revealed on hover — and simply shown on a touchscreen, which has no hover: an
+    // invisible row of copy / edit / retry is still tappable, so a tap just below a
+    // message could retry it from nothing on screen.
+    <MessageFooter className="gap-1 px-0 opacity-0 transition-opacity group-hover/row:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100">
       {showTimestamp ? (
         <span className="tabular-nums">
           {formatTime(ended)}

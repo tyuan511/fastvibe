@@ -4,7 +4,7 @@ import { windowObservation, type WindowObservation, type WindowStateInfo } from 
 import { uiText } from "../engine/ui-text";
 import type { ComputerRequest } from "@shared/types";
 import { requestComputer } from "./cua-bridge";
-import { decisionTasksEnabled, runDecisionTask, type DecisionTaskRequest, type DecisionTaskResult } from "./decision-task-runner";
+import { computerTasksEnabled, runDecisionTask, type DecisionTaskRequest, type DecisionTaskResult } from "./decision-task-runner";
 
 /**
  * `computer_task`: the decision-model path of computer use (docs/decision-layer.md §7.9).
@@ -96,5 +96,5 @@ export function runComputerTask(request: ComputerTaskRequest): Promise<ComputerT
 export function installComputerTaskGlobal(): void {
   const scope = globalThis as Record<string, unknown>;
   scope.__fastvibeComputerTask = runComputerTask;
-  scope.__fastvibeComputerTaskEnabled = decisionTasksEnabled;
+  scope.__fastvibeComputerTaskEnabled = computerTasksEnabled;
 }

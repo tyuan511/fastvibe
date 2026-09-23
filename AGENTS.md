@@ -327,6 +327,42 @@ Three things follow from the drawer covering everything:
   did, and on a phone both did the wrong thing twice at once: the drawer stayed open,
   because it does not read that key, and the desktop collapsed its sidebar.
 
+Because it covers everything, the drawer is also a place you pass *through*, not a place
+you stay:
+
+- **Picking something closes it.** Opening a chat, 新对话 (global or a project's),
+  插件, 搜索 and 设置 all end in `dismissDrawer()` (`sidebar.tsx`) — what was asked for
+  happens behind the drawer, so leaving it open made every tap a two-step.
+- **No drag-to-reorder.** The `PointerSensor` is not registered when narrow: a thumb
+  scrolling the list moves more than its 5px threshold over a row, so a scroll that began
+  on a chat picked it up and reordered it. Long-press still opens the context menu.
+- **Touch gets its own row rules, keyed on `pointer-coarse:`** rather than the width:
+  rows grow to `h-10`, and hover-only actions (a project's ⋯ / new chat, a section's +)
+  are drawn instead of `opacity-0` — an invisible button is still a tappable one.
+
+The same two rules reach past the sidebar. **Touch** is `pointer-coarse:` in classes and
+`isTouchOnly()` (`lib/platform.ts`, the same media query) in code; **width** is
+`useIsNarrowViewport()`.
+
+- Every hover-revealed control shows on touch: a message's copy / edit / retry / fork
+  footer, the expand chevrons, 归档对话's row actions.
+- `index.css` has one touch-only block: inputs are 16px (iOS zooms into anything smaller
+  on focus and never zooms back), no tap flash, no double-tap delay, no pull-to-refresh.
+  `#root` pads the safe-area top and sides; the bottom stays with `.safe-bottom`.
+  `remote.html` asks for `interactive-widget=resizes-content`, so on Android the keyboard
+  shrinks the layout and the composer sits on top of it rather than under it.
+- The composer: on touch, Enter is a newline (a soft keyboard has no Shift+Enter), and the
+  project chip's folder icon is not a hidden 清除项目 — the picker grows that row instead.
+- The follow-up queue reorders on touch only after a 250ms hold (`TouchSensor`), so a
+  scroll starting on a row does not pick it up.
+- Narrow drops the header's project prefix (it is `shrink-0` and ate the title) and the
+  side-pane toggle (there is no side pane to open).
+- **Settings is master/detail when narrow**: the section list is a page, a section is a
+  page with 〈 设置 to go back (`listOpen`), and 模型管理 does the same one level down
+  (`detailOpen`). Opening at `/settings/general` — what the sidebar does — lands on the
+  list; any other deep link lands on that pane. `SettingsRow` wraps (label `basis-48`), so
+  a wide select drops under its label instead of squeezing it.
+
 The drawer's open/closed state is **local to the device** (`lib/sidebar-visibility.ts`),
 not the persisted `sidebarCollapsed`: that preference lives in one `settings.json` shared
 by every client of this machine, so swiping the drawer open on a phone would otherwise
@@ -543,7 +579,7 @@ No CSP change is needed.
 
 - **Colour is inherited, so there is nothing per-theme to do** — and nothing that
   *could* be done: KaTeX reads no custom properties of its own. It inherits `color`
-  and the font stack, so all twenty themes work untouched. The one exception is the
+  and the font stack, so every theme works untouched. The one exception is the
   error fragment, which gets `errorColor: "var(--destructive)"` from the plugin
   options. `index.css` only adds layout (a display block scrolls instead of
   stretching the bubble).
@@ -569,10 +605,11 @@ No CSP change is needed.
 
 The app ships light **and** dark themes; never assume light.
 
-- `src/renderer/src/lib/themes.ts` is the single source of truth. It holds twenty
-  first-party themes (ten light, ten dark) modelled on the most-installed VS
+- `src/renderer/src/lib/themes.ts` is the single source of truth. It holds twenty-four
+  first-party themes (twelve light, twelve dark) modelled on the most-installed VS
   Code themes — GitHub, One Dark Pro, Dracula, Tokyo Night, Catppuccin, Nord,
-  Night Owl, Gruvbox, Monokai, Rosé Pine, Ayu, Everforest, Solarized, Quiet Light.
+  Night Owl, Gruvbox, Monokai, Rosé Pine, Ayu, Everforest, Solarized, Quiet Light —
+  plus the Codex desktop and Claude Code palettes.
   Each theme is a compact `ThemeSeed`; `buildTokens` derives the full
   shadcn / Base UI token set from it (`--background`, `--primary`, `--sidebar-*`,
   `--warning/--success/--info`, `--code-*`, …), plus `--destructive-foreground` for the text

@@ -418,6 +418,11 @@ function registerDecisionIpc(): void {
   handle(Ipc.decisionKeyState, keyState);
   handle(Ipc.decisionSetKey, async (payload: { key?: unknown }): Promise<DecisionKeyState> => {
     const key = typeof payload?.key === "string" ? payload.key.trim() : "";
+    // A new key is checked before it is stored. A failed check leaves the previous key in place.
+    if (key) {
+      const result = await testJevConnection(key);
+      if (!result.ok) throw new Error(uiText(`API key 验证失败：${result.message}`, `API key check failed: ${result.message}`));
+    }
     await setProviderKey(paths(), JEV_KEY_ENV, key);
     if (!key) revokeDecisionTasks();
     return keyState();

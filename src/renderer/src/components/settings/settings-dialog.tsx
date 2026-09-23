@@ -16,6 +16,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import type { EngineModel, FastVibeModel, ImportRunResult, WorkspaceSnapshot } from "@shared/types";
 import { useSettingsStore } from "@/stores/settings";
+import { useIsNarrowViewport } from "@/lib/sidebar-visibility";
 import { i18n } from "@/lib/i18n";
 import { UI_LANGUAGES, UI_LANGUAGE_LABELS, type UiLanguage } from "@/lib/language";
 import { PERMISSION_MODES, permissionDescription, permissionLabel, permissionModeItems } from "@/lib/permission-modes";
@@ -23,7 +24,7 @@ import { clearRememberedPermissions } from "@/lib/permission-rules";
 import type { ThemeMode } from "@/lib/themes";
 import { UI_FONT_SIZE_MAX, UI_FONT_SIZE_MIN, UI_FONT_SIZE_STEP } from "@/lib/themes";
 import { readSidebarWidth } from "@/lib/sidebar-width";
-import { HAS_CUSTOM_TITLE_BAR } from "@/lib/platform";
+import { HAS_CUSTOM_TITLE_BAR, HAS_TRAFFIC_LIGHTS } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import { ProvidersSettings } from "./providers-settings";
 import { ArchivedSettings, type DeleteConversationsResult } from "./archived-settings";
@@ -97,6 +98,16 @@ export function SettingsDialog({
   const { t } = useTranslation("settings");
   const navigate = useNavigate();
   const [section, setSection] = useState<SectionId>(controlledSection ?? "general");
+  /**
+   * A phone has no room for the section list *and* a pane beside it — the list alone
+   * is most of a 375pt screen, which squeezed every row into a one-word-per-line strip.
+   * So there it is master/detail: the list is a page, a section is a page, and each has
+   * its own way back. Opening Settings from the sidebar lands on 偏好设置 by route, which
+   * on a phone means "show me Settings" — the list; a deep link to any other pane (the
+   * composer's 管理模型) goes straight to that pane.
+   */
+  const narrow = useIsNarrowViewport();
+  const [listOpen, setListOpen] = useState(() => (controlledSection ?? "general") === "general");
   // The conversation sidebar is resizable; match whatever width it currently has.
   const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
 
@@ -108,6 +119,13 @@ export function SettingsDialog({
   useEffect(() => {
     if (open && controlledSection) setSection(controlledSection);
   }, [open, controlledSection]);
+
+  useEffect(() => {
+    if (open) setListOpen((controlledSection ?? "general") === "general");
+    // Only on open: a section switch while open replaces the route too, and must not
+    // throw the phone back to the list.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -124,6 +142,7 @@ export function SettingsDialog({
   // Every sidebar entry is a real URL, so history (and back/forward) just works.
   const goToSection = (id: SectionId): void => {
     setSection(id);
+    setListOpen(false);
     navigate(`/settings/${id}`, { replace: true });
   };
 
@@ -132,12 +151,16 @@ export function SettingsDialog({
   return (
     <div className={cn("fixed inset-x-0 bottom-0 z-50 flex bg-background", HAS_CUSTOM_TITLE_BAR ? "top-11" : "top-0")}>
       <aside
-        className="flex shrink-0 flex-col border-r border-border bg-sidebar"
-        style={{ width: sidebarWidth }}
+        className={cn(
+          "flex shrink-0 flex-col border-r border-border bg-sidebar",
+          narrow && (listOpen ? "w-full border-r-0" : "hidden"),
+        )}
+        style={narrow ? undefined : { width: sidebarWidth }}
       >
         {/* Under a title bar of our own this row is the bar's job; the pane itself
             starts at the top. On macOS it is the traffic lights' clearance. */}
-        {HAS_CUSTOM_TITLE_BAR ? null : <div className="drag-region h-11 shrink-0" />}
+        {/* The browser client has neither, so it just starts. */}
+        {HAS_TRAFFIC_LIGHTS ? <div className="drag-region h-11 shrink-0" /> : HAS_CUSTOM_TITLE_BAR ? null : <div className="h-2 shrink-0" />}
         <div className="no-drag px-2 pt-1">
           <Button
             variant="ghost"
@@ -159,8 +182,9 @@ export function SettingsDialog({
                     key={item.id}
                     type="button"
                     className={cn(
-                      "flex h-8 w-full items-center gap-2.5 rounded-md px-2 text-sm",
-                      section === item.id ? "bg-sidebar-accent font-medium" : "hover:bg-sidebar-accent/50",
+                      "flex h-8 w-full items-center gap-2.5 rounded-md px-2 text-sm pointer-coarse:h-10",
+                      // On a phone the list is a page of its own, so no row is "current".
+                      section === item.id && !narrow ? "bg-sidebar-accent font-medium" : "hover:bg-sidebar-accent/50",
                     )}
                     onClick={() => goToSection(item.id)}
                   >
@@ -174,9 +198,24 @@ export function SettingsDialog({
         </ScrollArea>
       </aside>
 
+      <div className={cn("flex min-h-0 min-w-0 flex-1 flex-col", narrow && listOpen && "hidden")}>
+      {narrow ? (
+        <div className="flex h-11 shrink-0 items-center gap-1 border-b border-border px-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 gap-1.5 px-2 text-sm text-muted-foreground"
+            onClick={() => setListOpen(true)}
+          >
+            <HugeiconsIcon strokeWidth={2} icon={ArrowLeft01Icon} className="size-4" />
+            {t("palette.settings", { ns: "app" })}
+          </Button>
+          <span className="min-w-0 truncate text-sm font-medium">{settingsSectionLabel(section)}</span>
+        </div>
+      ) : null}
       <ScrollArea className="min-h-0 flex-1">
-        <div className="mx-auto w-full max-w-200 px-8 py-8">
-          <h2 className={cn("mb-5 text-xl font-medium tracking-tight", section === "usage" && "hidden")}>
+        <div className="mx-auto w-full max-w-200 px-4 py-5 md:px-8 md:py-8">
+          <h2 className={cn("mb-5 text-xl font-medium tracking-tight max-md:hidden", section === "usage" && "hidden")}>
             {settingsSectionLabel(section)}
           </h2>
 
@@ -543,6 +582,7 @@ export function SettingsDialog({
           {section === "about" ? <AboutSettings /> : null}
         </div>
       </ScrollArea>
+      </div>
     </div>
   );
 }

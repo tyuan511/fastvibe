@@ -1,28 +1,35 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { CircleQuestionMarkIcon } from "@hugeicons/core-free-icons";
 import { Ipc } from "@shared/ipc";
-import type { DecisionKeyState, DecisionModelConfig, DecisionTestResult } from "@shared/decision";
+import { decisionModelConfigOf, type DecisionKeyState, type DecisionModelConfig } from "@shared/decision";
 import { blockedRemotely } from "@/lib/remote-unavailable";
+import { cleanError } from "@/lib/ipc-error";
 import { IS_REMOTE } from "@/lib/platform";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { SettingsGroup, SettingsRow } from "./settings-group";
+
+const EMPTY: DecisionModelConfig = { kind: "off", browserControl: false, computerControl: false };
 
 /**
  * 设置 → 决策引擎 (docs/decision-layer.md §5): which decision model browser use runs on.
- * Off keeps the `browser_*` tools the main model drives; Jev adds `browser_task`,
- * the per-step decision loop. The Jev key is written by Main and never read back — this
- * pane only learns whether one is stored.
+ * Off keeps the `browser_*` tools the main model drives. Jev is offered `browser_task`
+ * only after 浏览器控制 is checked and saved. A new Jev key is checked by Main before
+ * it is stored; this pane never reads the key back.
  */
 export function DecisionSettings() {
   const { t } = useTranslation("settings");
-  const [saved, setSaved] = useState<DecisionModelConfig>({ kind: "off" });
-  const [draft, setDraft] = useState<DecisionModelConfig>({ kind: "off" });
+  const [saved, setSaved] = useState<DecisionModelConfig>(EMPTY);
+  const [draft, setDraft] = useState<DecisionModelConfig>(EMPTY);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [testState, setTestState] = useState<{ pending: boolean; result?: DecisionTestResult }>({ pending: false });
   const [keys, setKeys] = useState<DecisionKeyState>({ jev: false });
   const [keyDraft, setKeyDraft] = useState("");
   const [keySaving, setKeySaving] = useState(false);
@@ -46,35 +53,27 @@ export function DecisionSettings() {
   }, []);
 
   function applyExternal(config: DecisionModelConfig) {
-    setSaved(config);
-    setDraft(config);
+    const next = decisionModelConfigOf(config);
+    setSaved(next);
+    setDraft(next);
     setError("");
-    setTestState({ pending: false });
   }
 
   const kind = draft.kind;
-  const next: DecisionModelConfig = kind === "jev" ? { kind: "jev" } : { kind: "off" };
-  const dirty = JSON.stringify(next) !== JSON.stringify(saved);
+  const dirty =
+    draft.kind !== saved.kind || draft.browserControl !== saved.browserControl || draft.computerControl !== saved.computerControl;
 
-  async function apply() {
+  async function save(next: DecisionModelConfig) {
     if (blockedRemotely(Ipc.decisionSaveConfig)) return;
     setSaving(true);
     setError("");
     try {
-      const result = await window.fastvibe.decision.saveConfig(next);
-      applyExternal(result);
+      applyExternal(await window.fastvibe.decision.saveConfig(next));
     } catch (cause) {
-      setError(t("decision.saveFailed", { error: cause instanceof Error ? cause.message : String(cause) }));
+      setError(t("decision.saveFailed", { error: cleanError(cause) }));
     } finally {
       setSaving(false);
     }
-  }
-
-  async function test() {
-    if (blockedRemotely(Ipc.decisionTest)) return;
-    setTestState({ pending: true });
-    const result = await window.fastvibe.decision.test(next);
-    setTestState({ pending: false, result });
   }
 
   async function saveKey(value: string) {
@@ -84,24 +83,21 @@ export function DecisionSettings() {
     try {
       setKeys(await window.fastvibe.decision.setKey(value));
       setKeyDraft("");
-      setTestState({ pending: false });
     } catch (cause) {
-      setError(t("decision.saveFailed", { error: cause instanceof Error ? cause.message : String(cause) }));
+      setError(t("decision.saveFailed", { error: cleanError(cause) }));
     } finally {
       setKeySaving(false);
     }
   }
 
   const models = { off: t("decision.off"), jev: t("decision.jev") };
-  const hint = kind === "jev" ? t("decision.jevHint") : t("decision.offHint");
+  const verifying = keySaving && Boolean(keyDraft.trim());
 
   return (
-    <div className="space-y-2">
-      <p className="px-1 text-xs text-muted-foreground">{t("decision.description")}</p>
-      <SettingsGroup title={t("decision.title")}>
+    <SettingsGroup>
       <SettingsRow
         title={t("decision.model")}
-        description={IS_REMOTE ? t("decision.remoteHint") : hint}
+        description={IS_REMOTE ? t("decision.remoteHint") : undefined}
         control={
           <Select
             value={kind}
@@ -110,8 +106,7 @@ export function DecisionSettings() {
             onValueChange={(value) => {
               if (!value) return;
               setError("");
-              setTestState({ pending: false });
-              setDraft(value === "jev" ? { kind: "jev" } : { kind: "off" });
+              setDraft((current) => ({ ...current, kind: value === "jev" ? "jev" : "off" }));
             }}
           >
             <SelectTrigger aria-label={t("decision.model")} className="w-44">
@@ -125,56 +120,64 @@ export function DecisionSettings() {
         }
       />
       {kind === "jev" && (
-        <>
-          <SettingsRow
-            title={t("decision.apiKey")}
-            description={keys.jev ? t("decision.keySaved") : t("decision.keyMissing")}
-            control={
-              <div className="flex items-center gap-2">
-                <Input
-                  type="password"
-                  aria-label={t("decision.apiKey")}
-                  className="w-44"
-                  placeholder={keys.jev ? "••••••••" : t("decision.keyPlaceholder")}
-                  value={keyDraft}
-                  disabled={keySaving}
-                  onChange={(event) => setKeyDraft(event.target.value)}
-                />
-                <Button size="sm" variant="outline" disabled={keySaving || !keyDraft.trim()} onClick={() => void saveKey(keyDraft)}>
-                  {t("decision.keySave")}
+        <SettingsRow
+          title={
+            <>
+              <Label>{t("decision.apiKey")}</Label>
+              <KeyHelp />
+            </>
+          }
+          description={keys.jev ? t("decision.keySaved") : t("decision.keyMissing")}
+          control={
+            <div className="flex items-center gap-2">
+              <Input
+                type="password"
+                aria-label={t("decision.apiKey")}
+                className="w-44"
+                placeholder={keys.jev ? "••••••••" : t("decision.keyPlaceholder")}
+                value={keyDraft}
+                disabled={keySaving}
+                onChange={(event) => setKeyDraft(event.target.value)}
+              />
+              <Button size="sm" variant="outline" disabled={keySaving || !keyDraft.trim()} onClick={() => void saveKey(keyDraft)}>
+                {t(verifying ? "decision.keyVerifying" : "decision.keySave")}
+              </Button>
+              {keys.jev && (
+                <Button size="sm" variant="ghost" disabled={keySaving} onClick={() => void saveKey("")}>
+                  {t("decision.keyClear")}
                 </Button>
-                {keys.jev && (
-                  <Button size="sm" variant="ghost" disabled={keySaving} onClick={() => void saveKey("")}>
-                    {t("decision.keyClear")}
-                  </Button>
-                )}
-              </div>
-            }
-          />
-          <SettingsRow
-            title={t("decision.test")}
-            control={
-              <div className="flex items-center gap-2">
-                {testState.result &&
-                  (testState.result.ok ? (
-                    <span className="text-xs text-success">{t("decision.testOkNoModel")}</span>
-                  ) : (
-                    <span className="text-xs text-destructive">{t("decision.testFailed", { error: testState.result.error })}</span>
-                  ))}
-                <Button size="sm" variant="outline" disabled={!keys.jev || testState.pending} onClick={() => void test()}>
-                  {t(testState.pending ? "decision.testing" : "decision.test")}
-                </Button>
-              </div>
-            }
-          />
-          <p className="px-4 py-3 text-xs text-muted-foreground">{t("decision.jevPrivacy")}</p>
-        </>
+              )}
+            </div>
+          }
+        />
       )}
       <SettingsRow
-        title={t("decision.apply")}
+        title={
+          <div className="space-y-2">
+            <div>{t("decision.scenarios")}</div>
+            <button
+              type="button"
+              className="flex items-center gap-2 font-normal"
+              disabled={loading || saving}
+              onClick={() => setDraft((current) => ({ ...current, browserControl: !current.browserControl }))}
+            >
+              <Checkbox checked={draft.browserControl} className="pointer-events-none" />
+              <span>{t("decision.browserControl")}</span>
+            </button>
+            <button
+              type="button"
+              className="flex items-center gap-2 font-normal"
+              disabled={loading || saving}
+              onClick={() => setDraft((current) => ({ ...current, computerControl: !current.computerControl }))}
+            >
+              <Checkbox checked={draft.computerControl} className="pointer-events-none" />
+              <span>{t("decision.computerControl")}</span>
+            </button>
+          </div>
+        }
         control={
-          <Button size="sm" variant="outline" disabled={saving || !dirty} onClick={() => void apply()}>
-            {t(saving ? "decision.saving" : "decision.apply")}
+          <Button size="sm" variant="outline" disabled={saving || !dirty} onClick={() => void save(draft)}>
+            {t(saving ? "decision.saving" : "decision.keySave")}
           </Button>
         }
       />
@@ -183,7 +186,39 @@ export function DecisionSettings() {
           {error}
         </p>
       )}
-      </SettingsGroup>
-    </div>
+    </SettingsGroup>
+  );
+}
+
+function KeyHelp(): JSX.Element {
+  const { t } = useTranslation("settings");
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            tabIndex={0}
+            aria-label={t("decision.keyHelp")}
+            className="inline-flex size-4 shrink-0 items-center justify-center rounded text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+          />
+        }
+      >
+        <HugeiconsIcon strokeWidth={2} icon={CircleQuestionMarkIcon} className="size-3.5" />
+      </TooltipTrigger>
+      <TooltipContent side="bottom" className="max-w-80 whitespace-normal">
+        <span>
+          {t("decision.keyHelp")}{" "}
+          <a
+            href="https://console.typesafe.ai"
+            target="_blank"
+            rel="noreferrer"
+            className="font-medium text-primary underline underline-offset-3 hover:text-primary/80"
+          >
+            {t("decision.keyConsole")}
+          </a>{" "}
+          {t("decision.keySteps")}
+        </span>
+      </TooltipContent>
+    </Tooltip>
   );
 }

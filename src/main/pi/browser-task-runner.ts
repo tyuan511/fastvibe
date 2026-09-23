@@ -2,7 +2,7 @@ import { pageFingerprint, StalePage, type BrowserControl, type ObservedPage } fr
 import { guardScript, MARKER_SCRIPT, OBSERVE_SCRIPT, settleScript, targetScript, type ObservedAction } from "../engine/decision/browser-snapshot";
 import { uiText } from "../engine/ui-text";
 import { requestBrowser } from "./browser-bridge";
-import { decisionTasksEnabled, runDecisionTask, type DecisionTaskRequest, type DecisionTaskResult } from "./decision-task-runner";
+import { browserTasksEnabled, runDecisionTask, type DecisionTaskRequest, type DecisionTaskResult } from "./decision-task-runner";
 
 /**
  * `browser_task`: the decision-model path of browser use (docs/decision-layer.md §7.2).
@@ -95,5 +95,5 @@ function safeHost(url: string): string {
 export function installBrowserTaskGlobal(): void {
   const scope = globalThis as Record<string, unknown>;
   scope.__fastvibeBrowserTask = runBrowserTask;
-  scope.__fastvibeBrowserTaskEnabled = decisionTasksEnabled;
+  scope.__fastvibeBrowserTaskEnabled = browserTasksEnabled;
 }
