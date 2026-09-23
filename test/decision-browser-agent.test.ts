@@ -65,6 +65,8 @@ function scripted(script: Array<[string, string?]>): DecisionBackend & { calls: 
   return backend;
 }
 
+const FAST = { intervalMs: 1, stableMs: 2, quietMs: 3, maxMs: 20 };
+
 const run = (backend: DecisionBackend) => new DecisionRuntime({ backend }).startRun({ budgetKey: "t", deadlineAt: Date.now() + 60_000 });
 
 test("type, click, done: each step executes once and the value comes from the helper", async () => {
@@ -76,6 +78,7 @@ test("type, click, done: each step executes once and the value comes from the he
     control,
     run: run(backend),
     policy: acceptValid("t"),
+    settle: FAST,
     fieldText: async (context) => {
       texts.push(context.field.label);
       return "cats";
@@ -97,6 +100,7 @@ test("a stale page is re-observed and re-decided, and the generated value is reu
     control,
     run: run(backend),
     policy: acceptValid("t"),
+    settle: FAST,
     fieldText: async () => {
       helperCalls++;
       return "cats";
@@ -115,6 +119,7 @@ test("three actions that change nothing stop the run", async () => {
     control,
     run: run(scripted([["CLICK", "2"]])),
     policy: acceptValid("t"),
+    settle: FAST,
     fieldText: async () => "x",
   });
   assert.equal(result.status, "no_progress");
@@ -128,6 +133,7 @@ test("an invented target hands off without acting", async () => {
     control,
     run: run(scripted([["CLICK", "99"]])),
     policy: acceptValid("t"),
+    settle: FAST,
     fieldText: async () => "x",
   });
   assert.equal(result.status, "handed_off");
@@ -142,8 +148,46 @@ test("a missing field value stops rather than guessing", async () => {
     control,
     run: run(scripted([["TYPE_TEXT", "1"]])),
     policy: acceptValid("t"),
+    settle: FAST,
     fieldText: async () => null,
   });
   assert.equal(result.status, "missing_value");
   assert.deepEqual(acted, []);
+});
+
+test("after a click, the next decision waits for a single-page app to finish swapping content", async () => {
+  // The click changes the URL at once, then the listing arrives two reads later.
+  let clicked = false;
+  let readsAfterClick = 0;
+  const acted: string[] = [];
+  const list = page("https://x.test/repo", [{ id: "e1", kind: "click", node: 1, role: "link", label: "Lib" }], "README");
+  const control: BrowserControl = {
+    async observe() {
+      if (!clicked) return list;
+      readsAfterClick++;
+      if (readsAfterClick < 3) return page("https://x.test/repo/Lib", [{ id: "e1", kind: "click", node: 1, role: "link", label: "Lib" }], "README");
+      return page("https://x.test/repo/Lib", [{ id: "e2", kind: "click", node: 2, role: "link", label: "json" }], "Lib listing");
+    },
+    async fresh() {
+      return true;
+    },
+    async act(action) {
+      acted.push(action.label);
+      clicked = true;
+    },
+  };
+  const seen: string[] = [];
+  const backend: DecisionBackend = {
+    id: "fake",
+    async decide(request) {
+      const state = request.state as { page: { text: string } };
+      seen.push(state.page.text);
+      if (state.page.text === "Lib listing") return { version: 1, backend: "fake", answers: { operation: { type: "choice", choice: "DONE" } } };
+      return { version: 1, backend: "fake", answers: { operation: { type: "choice", choice: "CLICK" }, click_target: { type: "choice", choice: "1" } } };
+    },
+  };
+  const result = await runBrowserAgent({ goal: "open Lib", control, run: run(backend), policy: acceptValid("t"), fieldText: async () => null, settle: { intervalMs: 1, stableMs: 20, quietMs: 50, maxMs: 300 } });
+  assert.equal(result.status, "done");
+  assert.deepEqual(acted, ["Lib"], "Lib is clicked once, not again on the half-loaded page");
+  assert.deepEqual(seen, ["README", "Lib listing"]);
 });

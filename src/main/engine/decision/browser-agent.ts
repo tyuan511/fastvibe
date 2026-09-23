@@ -68,7 +68,52 @@ export type BrowserAgentOptions = {
   onStep?(step: AgentStep): void;
   maxActions?: number;
   maxDecisions?: number;
+  /**
+   * Page-settling after an action: poll interval, how long a changed page must stay
+   * unchanged, how long to wait for a late change, hard cap.
+   */
+  settle?: { intervalMs?: number; stableMs?: number; quietMs?: number; maxMs?: number };
 };
+
+const SETTLE_INTERVAL_MS = 100;
+const SETTLE_STABLE_MS = 300;
+const SETTLE_QUIET_MS = 600;
+const SETTLE_MAX_MS = 2_000;
+
+/**
+ * Observe after an action until the page has stopped changing.
+ *
+ * A single read right after a click catches a single-page app mid-transition: GitHub
+ * changes the URL first and swaps the listing in afterwards, so the next decision saw
+ * the old listing and clicked the same link again — harmless on a directory link, a
+ * second submission on a form. Two identical reads are not enough either: the
+ * half-loaded state can itself last a few reads. So a page that changed is read until it
+ * has held still for `stableMs`; a page that has not changed yet is given `quietMs` for a
+ * late update; nothing waits past `maxMs`.
+ */
+async function settledObservation(
+  control: BrowserControl,
+  before: ObservedPage,
+  options: BrowserAgentOptions["settle"] = {},
+): Promise<ObservedPage> {
+  const interval = options.intervalMs ?? SETTLE_INTERVAL_MS;
+  const stable = options.stableMs ?? SETTLE_STABLE_MS;
+  const quiet = options.quietMs ?? SETTLE_QUIET_MS;
+  const started = Date.now();
+  const deadline = started + (options.maxMs ?? SETTLE_MAX_MS);
+  let last = await control.observe();
+  let lastChange = last.fingerprint !== before.fingerprint ? Date.now() : undefined;
+  for (;;) {
+    const now = Date.now();
+    if (lastChange === undefined && now - started >= quiet) return last;
+    if (lastChange !== undefined && now - lastChange >= stable) return last;
+    if (now + interval > deadline) return last;
+    await new Promise((resolve) => setTimeout(resolve, interval));
+    const next = await control.observe();
+    if (next.fingerprint !== last.fingerprint) lastChange = Date.now();
+    last = next;
+  }
+}
 
 export async function runBrowserAgent(options: BrowserAgentOptions): Promise<AgentResult> {
   const { goal, control, run, policy } = options;
@@ -157,7 +202,7 @@ export async function runBrowserAgent(options: BrowserAgentOptions): Promise<Age
       ...(textMs !== undefined ? { textMs } : {}),
     };
     steps.push(entry);
-    const next = await control.observe();
+    const next = action.kind === "wait" ? await control.observe() : await settledObservation(control, page, options.settle);
     entry.page_changed = next.fingerprint !== page.fingerprint;
     page = next;
     options.onStep?.(entry);
