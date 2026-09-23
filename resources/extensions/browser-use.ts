@@ -130,54 +130,60 @@ export default function browserUse(pi: ExtensionAPI): void {
     },
   });
 
-  pi.registerTool({
-    name: "browser_click",
-    label: "浏览器点击",
-    description:
-      "点击页面元素：优先传 ref 或 selector（都来自 browser_snapshot 的 elements），也可以用 text 按可见文字匹配。找不到时会返回 candidates（页面上可点击的文字）供你改用。",
-    promptSnippet: "点击网页元素",
-    parameters: Type.Object({
-      tabId: TAB_ID(false),
-      ref: Type.Optional(Type.String({ description: "快照中的元素 ref，例如 e3" })),
-      selector: Type.Optional(Type.String({ description: "CSS selector，例如 #submit 或 body > div:nth-of-type(2) > a" })),
-      text: Type.Optional(Type.String({ description: "元素可见文字，作为兜底匹配" })),
-    }),
-    async execute(_id, params) {
-      return call("click", { tabId: params.tabId, ref: params.ref, selector: params.selector, text: params.text });
-    },
-  });
-
-  pi.registerTool({
-    name: "browser_type",
-    label: "浏览器输入",
-    description:
-      "向输入框、文本域、contenteditable 或 select 填入文字（会自动聚焦并触发 input/change 事件，配合 React 等框架的受控输入）。目标优先用 ref，其次 selector。",
-    promptSnippet: "在网页输入框中填写文字",
-    parameters: Type.Object({
-      tabId: TAB_ID(false),
-      ref: Type.Optional(Type.String({ description: "快照中的元素 ref，例如 e3" })),
-      selector: Type.Optional(Type.String({ description: "CSS selector" })),
-      text: Type.String({ description: "要填入的文字；select 传选项文字或 value" }),
-    }),
-    async execute(_id, params) {
-      return call("type", { tabId: params.tabId, ref: params.ref, selector: params.selector, text: params.text });
-    },
-  });
-
-  pi.registerTool({
-    name: "browser_press",
-    label: "浏览器按键",
-    description: "向当前焦点元素发送键盘按键，例如 Enter、Tab、Escape（Enter 常用于提交搜索框）。",
-    promptSnippet: "发送浏览器键盘按键",
-    parameters: Type.Object({ tabId: TAB_ID(false), key: Type.String() }),
-    async execute(_id, params) {
-      return call("press", { tabId: params.tabId, key: params.key });
-    },
-  });
-
-  // Offered only while a decision model is selected (设置 → 决策引擎), read when this
-  // session's tools load; with none, browser use stays on the tools above.
+  // browser_task is offered only while a decision model and 浏览器控制 are on
+  // (设置 → 决策引擎), read when this session's tools load.
   const runTask = browserTaskRunner();
+
+  // With a decision model selected, page interaction goes through browser_task only:
+  // offering click/type/press beside it let the main model keep stepping through the
+  // page itself, so Jev never ran. Reading (open, navigate, snapshot, history) stays.
+  if (!runTask) {
+    pi.registerTool({
+      name: "browser_click",
+      label: "浏览器点击",
+      description:
+        "点击页面元素：优先传 ref 或 selector（都来自 browser_snapshot 的 elements），也可以用 text 按可见文字匹配。找不到时会返回 candidates（页面上可点击的文字）供你改用。",
+      promptSnippet: "点击网页元素",
+      parameters: Type.Object({
+        tabId: TAB_ID(false),
+        ref: Type.Optional(Type.String({ description: "快照中的元素 ref，例如 e3" })),
+        selector: Type.Optional(Type.String({ description: "CSS selector，例如 #submit 或 body > div:nth-of-type(2) > a" })),
+        text: Type.Optional(Type.String({ description: "元素可见文字，作为兜底匹配" })),
+      }),
+      async execute(_id, params) {
+        return call("click", { tabId: params.tabId, ref: params.ref, selector: params.selector, text: params.text });
+      },
+    });
+
+    pi.registerTool({
+      name: "browser_type",
+      label: "浏览器输入",
+      description:
+        "向输入框、文本域、contenteditable 或 select 填入文字（会自动聚焦并触发 input/change 事件，配合 React 等框架的受控输入）。目标优先用 ref，其次 selector。",
+      promptSnippet: "在网页输入框中填写文字",
+      parameters: Type.Object({
+        tabId: TAB_ID(false),
+        ref: Type.Optional(Type.String({ description: "快照中的元素 ref，例如 e3" })),
+        selector: Type.Optional(Type.String({ description: "CSS selector" })),
+        text: Type.String({ description: "要填入的文字；select 传选项文字或 value" }),
+      }),
+      async execute(_id, params) {
+        return call("type", { tabId: params.tabId, ref: params.ref, selector: params.selector, text: params.text });
+      },
+    });
+
+    pi.registerTool({
+      name: "browser_press",
+      label: "浏览器按键",
+      description: "向当前焦点元素发送键盘按键，例如 Enter、Tab、Escape（Enter 常用于提交搜索框）。",
+      promptSnippet: "发送浏览器键盘按键",
+      parameters: Type.Object({ tabId: TAB_ID(false), key: Type.String() }),
+      async execute(_id, params) {
+        return call("press", { tabId: params.tabId, key: params.key });
+      },
+    });
+  }
+
   if (runTask) {
     pi.registerTool({
       name: "browser_task",
