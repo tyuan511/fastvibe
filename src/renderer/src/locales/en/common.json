@@ -125,7 +125,29 @@
     "todoUpdating": "Updating tasks",
     "todoUpdated": "Tasks updated",
     "agentFallback": "Subagent",
-    "agentMore": "{{shown}} +{{count}}"
+    "agentMore": "{{shown}} +{{count}}",
+    "browserTask": {
+      "running": "Running browser task",
+      "done": "Browser task"
+    },
+    "computerTask": {
+      "running": "Running computer task",
+      "done": "Computer task"
+    },
+    "decisionRunning": "{{engine}} deciding",
+    "decisionSteps_one": "{{count}} step",
+    "decisionSteps_other": "{{count}} steps",
+    "decisionSeconds": "{{seconds}} s",
+    "decisionStatus": {
+      "blocked": "could not continue",
+      "no_progress": "stopped, no progress",
+      "handed_off": "handed back",
+      "exhausted": "budget used up",
+      "cancelled": "cancelled",
+      "missing_value": "missing information",
+      "denied": "declined",
+      "error": "failed"
+    }
   },
   "group": {
     "explore": "Explore",

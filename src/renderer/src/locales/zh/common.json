@@ -125,7 +125,29 @@
     "todoUpdating": "正在更新待办",
     "todoUpdated": "已更新待办",
     "agentFallback": "子 Agent",
-    "agentMore": "{{shown}} 等 {{count}} 个"
+    "agentMore": "{{shown}} 等 {{count}} 个",
+    "browserTask": {
+      "running": "浏览器任务执行中",
+      "done": "浏览器任务"
+    },
+    "computerTask": {
+      "running": "电脑任务执行中",
+      "done": "电脑任务"
+    },
+    "decisionRunning": "{{engine}} 决策中",
+    "decisionSteps_one": "{{count}} 步",
+    "decisionSteps_other": "{{count}} 步",
+    "decisionSeconds": "{{seconds}} 秒",
+    "decisionStatus": {
+      "blocked": "未能继续",
+      "no_progress": "无进展已停止",
+      "handed_off": "已交回",
+      "exhausted": "预算用尽",
+      "cancelled": "已取消",
+      "missing_value": "缺少信息",
+      "denied": "已被拒绝",
+      "error": "出错"
+    }
   },
   "group": {
     "explore": "查阅",

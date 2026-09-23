@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { BotIcon, ChromeIcon, FileEditIcon, FileMinusIcon, FilePlusIcon, FileTextIcon, FolderTreeIcon, ListChecksIcon, MessageQuestionIcon, Plug01Icon, Search01Icon, SparklesIcon, SquareTerminalIcon, Wrench01Icon } from "@hugeicons/core-free-icons";
+import { BotIcon, ChromeIcon, ComputerIcon, FileEditIcon, FileMinusIcon, FilePlusIcon, FileTextIcon, FolderTreeIcon, ListChecksIcon, MessageQuestionIcon, Plug01Icon, Search01Icon, SparklesIcon, SquareTerminalIcon, Wrench01Icon } from "@hugeicons/core-free-icons";
 import type { ToolCallBlock } from "@shared/types";
 import { i18n } from "@/lib/i18n";
 import { activeTodo, parseToolTodos, todoIndexOf } from "./todos";
@@ -149,6 +149,7 @@ export function describeTool(tool: ToolCallBlock, cwd?: string): ToolView {
   const label = familyLabel(family, running);
   const statusLabel = tool.status === "error" ? (i18n.t("common:tool.failed") as string) : undefined;
   const view: ToolView = { family, icon: ICONS[family], label, statusLabel, running };
+  if (tool.name === "browser_task" || tool.name === "computer_task") return describeDecisionTask(tool, view);
 
   switch (family) {
     case "read":
@@ -273,6 +274,37 @@ export function describeTool(tool: ToolCallBlock, cwd?: string): ToolView {
       return view;
     }
   }
+}
+
+/**
+ * `browser_task` / `computer_task`: a whole run decided by the decision model (Jev), not
+ * one step. The row says so — which engine, how many steps, how long, and whether it got
+ * to the end — because the only other way to tell a Jev run from the main model clicking
+ * through `browser_*` tools itself was to open the raw result.
+ */
+function describeDecisionTask(tool: ToolCallBlock, view: ToolView): ToolView {
+  const computer = tool.name === "computer_task";
+  view.icon = computer ? <HugeiconsIcon strokeWidth={2} icon={ComputerIcon} className="size-3.5" /> : ICONS.browser;
+  view.label = i18n.t(`common:tool.${computer ? "computerTask" : "browserTask"}.${view.running ? "running" : "done"}`) as string;
+  const goal = argString(tool.args, ["goal"]);
+  view.subject = goal || tool.name;
+  view.title = goal || tool.name;
+  const result = asRecord(tool.details);
+  const engine = typeof result?.backend === "string" && result.backend === "jev" ? "Jev" : typeof result?.backend === "string" ? result.backend : "Jev";
+  if (view.running) {
+    view.context = i18n.t("common:tool.decisionRunning", { engine }) as string;
+    return view;
+  }
+  if (!result) return view;
+  const steps = Array.isArray(result.steps) ? result.steps.length : 0;
+  const seconds = typeof result.ms === "number" ? (result.ms / 1000).toFixed(1) : undefined;
+  const parts = [engine, i18n.t("common:tool.decisionSteps", { count: steps }) as string];
+  if (seconds) parts.push(i18n.t("common:tool.decisionSeconds", { seconds }) as string);
+  if (typeof result.status === "string" && result.status !== "done") {
+    parts.push(i18n.t(`common:tool.decisionStatus.${result.status}`, { defaultValue: result.status }) as string);
+  }
+  view.context = parts.join(" · ");
+  return view;
 }
 
 /** Single-line command/prose summary used by group rows. */
