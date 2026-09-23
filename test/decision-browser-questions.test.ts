@@ -83,3 +83,18 @@ test("only the chosen operation's head resolves to an action", () => {
   assert.equal(scroll.action?.kind, "scroll");
   assert.deepEqual(resolveDecision(step, { operation: { type: "choice", choice: "DONE" } }), { operation: "DONE" });
 });
+
+test("off-screen elements are marked in the table and the target options, and the rule says they are actionable", () => {
+  const withOffscreen: DecisionObservation = {
+    ...observation,
+    actions: [...actions.slice(0, -2), { id: "e7", kind: "click", node: 20, role: "link", label: "Next chapter", offscreen: true }, ...actions.slice(-2)],
+  };
+  const step = buildBrowserStep({ goal: "go to the next chapter", observation: withOffscreen });
+  const next = step.space.elements.find((e) => e.label === "Next chapter");
+  assert.equal(next?.offscreen, true);
+  const target = step.request.questions.click_target;
+  assert.ok(target.type === "choice");
+  if (target.type !== "choice") return;
+  assert.deepEqual((target.criteria[next!.index] as { offscreen?: boolean }).offscreen, true);
+  assert.match(JSON.stringify(step.request.questions.operation.instructions), /offscreen/);
+});

@@ -15,7 +15,13 @@ import { DecisionBackendError, type DecisionBackend } from "../runtime.ts";
 
 export type ChatCompletion = { text: string; model?: string; usage?: { inputTokens?: number; outputTokens?: number } };
 
-export type ChatComplete = (input: { system: string; user: string; signal: AbortSignal }) => Promise<ChatCompletion>;
+/**
+ * `schema` is a strict JSON Schema for the reply. Pass it to the provider's structured
+ * output when it has one: it confines every choice to the legal option keys, which is
+ * where a chat model otherwise goes wrong — picking an index from the page's element
+ * table that is not a legal target for the chosen operation.
+ */
+export type ChatComplete = (input: { system: string; user: string; schema: Record<string, JsonValue>; signal: AbortSignal }) => Promise<ChatCompletion>;
 
 export type ChatBackendOptions = {
   /** Trace id, e.g. `llm:packy/deepseek-flash`. */
@@ -51,6 +57,25 @@ function describe(question: Question): JsonValue {
 }
 
 /**
+ * The reply's JSON Schema: one property per question. A choice is an enum of its option
+ * keys; a conditional question may also be `null` (strict schemas require every
+ * property, so "not applicable" needs a value).
+ */
+export function decisionSchema(questions: Record<string, Question>): Record<string, JsonValue> {
+  const properties: Record<string, JsonValue> = {};
+  for (const [id, question] of Object.entries(questions)) {
+    const optional = question.requiredWhen !== undefined;
+    if (question.type === "choice") {
+      const keys: JsonValue[] = Object.keys(question.criteria);
+      properties[id] = optional ? { type: ["string", "null"], enum: [...keys, null] } : { type: "string", enum: keys };
+    } else {
+      properties[id] = { type: optional ? ["number", "null"] : "number" };
+    }
+  }
+  return { type: "object", additionalProperties: false, required: Object.keys(questions), properties };
+}
+
+/**
  * Turn the model's reply into protocol answers, typed by each question. Anything that is
  * not a JSON object is malformed; values are passed through for the protocol to judge.
  */
@@ -66,6 +91,8 @@ export function parseChatAnswers(text: string, questions: Record<string, Questio
   }
   const answers: Record<string, unknown> = {};
   for (const [id, value] of Object.entries(parsed as Record<string, unknown>)) {
+    // `null` is the schema's "not applicable" for a conditional question: no answer.
+    if (value === null) continue;
     const question = questions[id];
     if (!question) {
       answers[id] = value;
@@ -82,7 +109,12 @@ export function createChatBackend(options: ChatBackendOptions): DecisionBackend 
   return {
     id: options.id ?? "llm",
     async decide(request, { signal }): Promise<DecideResponse> {
-      const completion = await options.complete({ system: CHAT_DECISION_SYSTEM, user: buildChatPrompt(request), signal });
+      const completion = await options.complete({
+        system: CHAT_DECISION_SYSTEM,
+        user: buildChatPrompt(request),
+        schema: decisionSchema(request.questions),
+        signal,
+      });
       return {
         version: 1,
         backend: options.id ?? "llm",

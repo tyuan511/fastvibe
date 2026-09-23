@@ -32,6 +32,17 @@ Use the user's entire goal, field values, nearby text, and recent actions. This 
 a target for that operation; another question decides which operation to execute. Do not choose
 a field that already contains the requested value. Choose only an offered element index.`;
 
+/**
+ * FastVibe addition to the ported rules: the observation also offers the nearest
+ * off-screen controls (see browser-snapshot.ts), and the model must know it may act on
+ * them directly rather than treat "not on screen" as "not possible".
+ */
+export const OFFSCREEN_RULE = `Elements marked offscreen exist on this page outside the viewport. CLICK, TYPE_TEXT or SELECT
+them directly when they are the right target; they are scrolled into view automatically. Do not choose
+BLOCKED because a needed control is off screen.`;
+
+const OPERATION_RULES = `${NEXT_ACTION_RULES}\n${OFFSCREEN_RULE}`;
+
 export type ElementOperation = "CLICK" | "TYPE_TEXT" | "SELECT";
 
 const OPERATION_LABELS: Record<ElementOperation, string> = {
@@ -56,6 +67,7 @@ export type ObservedElement = {
   checked?: string;
   selected?: string;
   expanded?: string;
+  offscreen?: boolean;
   options?: Array<{ index: string; label: string; value?: string }>;
 };
 
@@ -87,6 +99,7 @@ export function actionSpace(actions: readonly ObservedAction[]): ActionSpace {
       for (const key of ["role", "value", "checked", "selected", "expanded"] as const) {
         if (action[key] !== undefined) element[key] = action[key];
       }
+      if (action.offscreen) element.offscreen = true;
       if (action.kind === "select") {
         element.value = action.current_value ?? "";
         element.options = [];
@@ -144,7 +157,7 @@ export function buildBrowserStep(input: BrowserStepInput): BrowserStep {
   const operationQuestion: ChoiceQuestion = {
     type: "choice",
     criteria: operations,
-    instructions: { goal, rules: NEXT_ACTION_RULES },
+    instructions: { goal, rules: OPERATION_RULES },
   };
   questions.operation = operationQuestion;
   const targetQuestion: BrowserStep["targetQuestion"] = {};
@@ -159,12 +172,13 @@ export function buildBrowserStep(input: BrowserStepInput): BrowserStep {
       for (const key of ["role", "checked", "selected", "expanded"] as const) {
         if (action[key] !== undefined) description[key] = action[key];
       }
+      if (action.offscreen) description.offscreen = true;
       criteria[index] = description;
     }
     questions[id] = {
       type: "choice",
       criteria,
-      instructions: { goal, operation, rules: [NEXT_ACTION_RULES, TARGET_RULES] },
+      instructions: { goal, operation, rules: [OPERATION_RULES, TARGET_RULES] },
       requiredWhen: { question: "operation", equals: operation },
     };
     targetQuestion[operation] = id;

@@ -48,3 +48,20 @@ test("a reply that is not a JSON object is malformed", () => {
   assert.throws(() => parseChatAnswers("CLICK", request.questions), DecisionBackendError);
   assert.throws(() => parseChatAnswers('["CLICK"]', request.questions), DecisionBackendError);
 });
+
+test("the reply schema confines choices to legal keys; conditional heads may be null", async () => {
+  let seen: Record<string, unknown> | undefined;
+  const backend = createChatBackend({
+    complete: async ({ schema }) => {
+      seen = schema;
+      return { text: '{"operation":"DONE","click_target":null}' };
+    },
+  });
+  const response = await backend.decide(request, { signal: new AbortController().signal });
+  const properties = (seen as { properties: Record<string, { enum: unknown[] }> }).properties;
+  assert.deepEqual(properties.operation.enum, ["CLICK", "DONE"]);
+  assert.deepEqual(properties.click_target.enum, ["1", null]);
+  assert.deepEqual((seen as { required: string[] }).required, ["operation", "click_target"]);
+  assert.equal("click_target" in response.answers, false, "null means not answered");
+  assert.equal(adoptAnswers(request.questions, response.answers, acceptValid("t")).outcome.status, "decided");
+});

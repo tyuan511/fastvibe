@@ -14,7 +14,10 @@
  * Adaptations: the page global is `__fastvibeDecision`, and the scripts are strings the
  * host injects (webview `executeJavaScript`), not CDP evaluations. Date/time inputs are
  * offered as text fields: the original skips them, which left a form's delivery-time
- * field invisible and the loop re-typing a neighbouring field instead.
+ * field invisible and the loop re-typing a neighbouring field instead. The nearest
+ * off-screen controls are offered too, marked `offscreen`, and the target script scrolls
+ * one into view before acting: with only on-screen controls, a target below the fold
+ * (a "Next" link, a pager, a directory further down a list) left Jev choosing BLOCKED.
  */
 
 /** One executable candidate, as the observe script reports it. */
@@ -34,6 +37,8 @@ export type ObservedAction = {
   expanded?: string;
   rect?: { x: number; y: number; w: number; h: number };
   delta?: number;
+  /** Outside the viewport; acting on it scrolls it into view first. */
+  offscreen?: boolean;
 };
 
 export type DecisionObservation = {
@@ -53,6 +58,9 @@ export type DecisionObservation = {
   guards: Record<string, unknown>;
   omitted_actions: number;
 };
+
+/** Off-screen controls offered in addition to the on-screen ones, nearest first. */
+export const OFFSCREEN_LIMIT = 60;
 
 /** Observe the page. Returns `null` while the document has no body (navigating). */
 export const OBSERVE_SCRIPT = String.raw`(() => {
@@ -110,14 +118,11 @@ export const OBSERVE_SCRIPT = String.raw`(() => {
       e.getAttribute('aria-expanded'),e.getAttribute('aria-checked'),e.getAttribute('aria-selected'),
       e.getAttribute('href'),scope?.innerText?.slice(0,6000)||''];
   };
-  const actions=[];
-  for (const e of document.querySelectorAll(selector)) {
-    if (!safe(e) || !visible(e) || e.matches(':disabled') || e.closest('[aria-disabled="true"]')) continue;
-    const r=e.getBoundingClientRect(), x=r.x+r.width/2, y=r.y+r.height/2, rname=role(e);
-    if (!rname || r.width<=0 || r.height<=0 || x<0 || y<0 || x>=innerWidth || y>=innerHeight) continue;
-    if (rname==='gridcell' && e.querySelector('button,[role="button"]')) continue;
+  const actions=[], offscreen=[];
+  const add=(e,r,rname,far)=>{
     const base={node:identity(e),role:rname,label:name(e)||rname,
       rect:{x:r.x,y:r.y,w:r.width,h:r.height}};
+    if (far) base.offscreen=true;
     for (const key of ['checked','selected','expanded']) {
       const value=e.getAttribute('aria-'+key);
       if (value!==null) base[key]=value;
@@ -136,7 +141,19 @@ export const OBSERVE_SCRIPT = String.raw`(() => {
       actions.push({...base,kind:editable?'fill':'click',value});
       if (editable) actions.push({...base,kind:'click',value,label:'Open '+base.label});
     }
+  };
+  for (const e of document.querySelectorAll(selector)) {
+    if (!safe(e) || !visible(e) || e.matches(':disabled') || e.closest('[aria-disabled="true"]')) continue;
+    const r=e.getBoundingClientRect(), x=r.x+r.width/2, y=r.y+r.height/2, rname=role(e);
+    if (!rname || r.width<=0 || r.height<=0 || x<0 || x>=innerWidth) continue;
+    if (rname==='gridcell' && e.querySelector('button,[role="button"]')) continue;
+    if (y<0 || y>=innerHeight) { offscreen.push([e,r,rname,y<0 ? -y : y-innerHeight]); continue; }
+    add(e,r,rname,false);
   }
+  // FastVibe addition: the nearest off-screen controls, marked, so a target below the fold
+  // (a "Next" link, a pager) can be chosen directly; the executor scrolls it into view.
+  offscreen.sort((a,b)=>a[3]-b[3]);
+  for (const [e,r,rname] of offscreen.slice(0,${OFFSCREEN_LIMIT})) add(e,r,rname,true);
   const words=[], walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);
   const range=document.createRange(); let node,length=0;
   while ((node=walker.nextNode()) && length<6000) {
@@ -182,7 +199,9 @@ export function targetScript(action: ObservedAction): string {
   if (!e?.isConnected || e.matches(':disabled') || e.closest('[aria-disabled="true"],[inert]') ||
       !e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})) return null;
   if (action.kind==='fill' && (e.readOnly || e.getAttribute('aria-readonly')==='true')) return null;
-  const r=e.getBoundingClientRect(), x=r.x+r.width/2, y=r.y+r.height/2;
+  let r=e.getBoundingClientRect();
+  if (r.y+r.height/2<0 || r.y+r.height/2>=innerHeight) { e.scrollIntoView({block:'center',inline:'nearest'}); r=e.getBoundingClientRect(); }
+  const x=r.x+r.width/2, y=r.y+r.height/2;
   if (!r.width || !r.height || x<0 || y<0 || x>=innerWidth || y>=innerHeight) return null;
   if (!e.contains(document.elementFromPoint(x,y))) return null;
   if (action.kind==='select') {
