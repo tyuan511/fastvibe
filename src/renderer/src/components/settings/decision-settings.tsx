@@ -20,9 +20,10 @@ const EMPTY: DecisionModelConfig = { kind: "off", browserControl: false, compute
 
 /**
  * 设置 → 决策引擎 (docs/decision-layer.md §5): which decision model browser use runs on.
- * Off keeps the `browser_*` tools the main model drives. Jev is offered `browser_task`
- * only after 浏览器控制 is checked and saved. A new Jev key is checked by Main before
- * it is stored; this pane never reads the key back.
+ * Off keeps the `browser_*` tools the main model drives. The engine select saves as soon
+ * as it changes; Save belongs to 应用场景 alone, and Jev is offered `browser_task` only
+ * after 浏览器控制 is checked and saved. With the engine off the scenarios are hidden.
+ * A new Jev key is checked by Main before it is stored; this pane never reads it back.
  */
 export function DecisionSettings() {
   const { t } = useTranslation("settings");
@@ -61,8 +62,7 @@ export function DecisionSettings() {
   }
 
   const kind = draft.kind;
-  const dirty =
-    draft.kind !== saved.kind || draft.browserControl !== saved.browserControl || draft.computerControl !== saved.computerControl;
+  const dirty = draft.browserControl !== saved.browserControl || draft.computerControl !== saved.computerControl;
 
   async function save(next: DecisionModelConfig) {
     if (blockedRemotely(Ipc.decisionSaveConfig)) return;
@@ -70,6 +70,27 @@ export function DecisionSettings() {
     setError("");
     try {
       applyExternal(await window.fastvibe.decision.saveConfig(next));
+      toast.success(t("decision.saved"));
+    } catch (cause) {
+      setError(t("decision.saveFailed", { error: cleanError(cause) }));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  /**
+   * Switch the engine at once, with the scenarios as last *saved*: an unsaved tick in
+   * 应用场景 stays a draft (still shown, still needing Save) rather than riding along.
+   */
+  async function saveKind(nextKind: DecisionModelConfig["kind"]) {
+    if (blockedRemotely(Ipc.decisionSaveConfig)) return;
+    const pending = { browserControl: draft.browserControl, computerControl: draft.computerControl };
+    setSaving(true);
+    setError("");
+    try {
+      const stored = decisionModelConfigOf(await window.fastvibe.decision.saveConfig({ ...saved, kind: nextKind }));
+      setSaved(stored);
+      setDraft({ ...stored, ...pending });
       toast.success(t("decision.saved"));
     } catch (cause) {
       setError(t("decision.saveFailed", { error: cleanError(cause) }));
@@ -107,9 +128,9 @@ export function DecisionSettings() {
             items={models}
             disabled={loading || saving}
             onValueChange={(value) => {
-              if (!value) return;
-              setError("");
-              setDraft((current) => ({ ...current, kind: value === "jev" ? "jev" : "off" }));
+              const next = value === "jev" ? "jev" : "off";
+              if (!value || next === saved.kind) return;
+              void saveKind(next);
             }}
           >
             <SelectTrigger aria-label={t("decision.model")} className="w-44">
@@ -154,39 +175,41 @@ export function DecisionSettings() {
           }
         />
       )}
-      <SettingsRow
-        align="start"
-        title={t("decision.scenarios")}
-        description={
-          // The switches sit under the title so Save lines up with 应用场景 on the right,
-          // rather than floating mid-way down a block of checkboxes.
-          <span className="mt-2 flex flex-col items-start gap-2 text-sm text-foreground">
-            <button
-              type="button"
-              className="flex items-center gap-2"
-              disabled={loading || saving}
-              onClick={() => setDraft((current) => ({ ...current, browserControl: !current.browserControl }))}
-            >
-              <Checkbox checked={draft.browserControl} className="pointer-events-none" />
-              <span>{t("decision.browserControl")}</span>
-            </button>
-            <button
-              type="button"
-              className="flex items-center gap-2"
-              disabled={loading || saving}
-              onClick={() => setDraft((current) => ({ ...current, computerControl: !current.computerControl }))}
-            >
-              <Checkbox checked={draft.computerControl} className="pointer-events-none" />
-              <span>{t("decision.computerControl")}</span>
-            </button>
-          </span>
-        }
-        control={
-          <Button size="sm" variant="outline" disabled={saving || !dirty} onClick={() => void save(draft)}>
-            {t(saving ? "decision.saving" : "decision.keySave")}
-          </Button>
-        }
-      />
+      {kind === "jev" && (
+        <SettingsRow
+          align="start"
+          title={t("decision.scenarios")}
+          description={
+            // The switches sit under the title so Save lines up with 应用场景 on the right,
+            // rather than floating mid-way down a block of checkboxes.
+            <span className="mt-2 flex flex-col items-start gap-2 text-sm text-foreground">
+              <button
+                type="button"
+                className="flex items-center gap-2"
+                disabled={loading || saving}
+                onClick={() => setDraft((current) => ({ ...current, browserControl: !current.browserControl }))}
+              >
+                <Checkbox checked={draft.browserControl} className="pointer-events-none" />
+                <span>{t("decision.browserControl")}</span>
+              </button>
+              <button
+                type="button"
+                className="flex items-center gap-2"
+                disabled={loading || saving}
+                onClick={() => setDraft((current) => ({ ...current, computerControl: !current.computerControl }))}
+              >
+                <Checkbox checked={draft.computerControl} className="pointer-events-none" />
+                <span>{t("decision.computerControl")}</span>
+              </button>
+            </span>
+          }
+          control={
+            <Button size="sm" variant="outline" disabled={saving || !dirty} onClick={() => void save(draft)}>
+              {t(saving ? "decision.saving" : "decision.keySave")}
+            </Button>
+          }
+        />
+      )}
       {error && (
         <p role="alert" className="px-4 py-3 text-xs text-destructive">
           {error}
