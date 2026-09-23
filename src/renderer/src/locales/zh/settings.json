@@ -1,4 +1,24 @@
 {
+ "proxy": {
+  "title": "网络代理",
+  "enabled": "启用代理",
+  "scope": "统一代理客户端 HTTP(S) / WebSocket：模型、登录令牌交换、更新、下载和内置浏览器。关闭时直连。",
+  "mode": "代理方式",
+  "system": "系统代理",
+  "custom": "自定义代理",
+  "systemHint": "系统代理遵循系统设置及 PAC 的直连规则。",
+  "protocol": "协议",
+  "host": "主机",
+  "hostHint": "仅填写主机名或 IP，不含协议、路径或账号。IPv6 使用方括号。",
+  "port": "端口",
+  "invalidHost": "请输入有效主机名或 IP，不含协议、路径、空格或账号。",
+  "invalidPort": "端口必须是 1–65535 的整数。",
+  "applyTitle": "保存后生效",
+  "limits": "应用会断开现有网络连接。本机回调直连；SSH、穿透隧道、外部浏览器及外部程序不受此设置控制。暂不支持认证代理或系统 SOCKS4。",
+  "apply": "应用",
+  "saving": "保存中…",
+  "saveFailed": "代理设置保存失败：{{error}}"
+ },
  "language": {
   "title": "语言",
   "ui": "界面语言",

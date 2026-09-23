@@ -15,9 +15,11 @@ import { NOTIFICATION_SETTINGS } from "@shared/types";
 import { detectSystemLanguage, isUiLanguage, type UiLanguage } from "@/lib/language";
 import { sanitizeShortcutOverrides, type ShortcutOverrides } from "@/lib/shortcuts";
 
+import { DEFAULT_PROXY_SETTINGS, proxySettingsOf, type ProxySettings } from "@shared/proxy";
+
 const KEY = "fastvibe.settings";
 
-export type AppSettings = {
+export type AppSettings = ProxySettings & {
   /** The mode the sandbox enforces now. Every picker persists it as the startup mode too. */
   permissionMode: PermissionMode;
   /** 默认权限模式: kept in sync with `permissionMode` by every permission picker. */
@@ -147,6 +149,7 @@ export type AppSettings = {
 };
 
 const DEFAULTS: AppSettings = {
+  ...DEFAULT_PROXY_SETTINGS,
   permissionMode: "smart",
   defaultPermissionMode: "smart",
   fullAccessConfirmed: false,
@@ -184,6 +187,9 @@ const DEFAULTS: AppSettings = {
 /** Drop malformed persisted theme values so a stale id can never crash the app. */
 function sanitize(parsed: Partial<AppSettings>): Partial<AppSettings> {
   const next = { ...parsed };
+  if (Object.keys(DEFAULT_PROXY_SETTINGS).some((key) => key in parsed)) {
+    Object.assign(next, proxySettingsOf(parsed));
+  }
   if (!isPermissionMode(next.permissionMode)) delete next.permissionMode;
   if (!isPermissionMode(next.defaultPermissionMode)) delete next.defaultPermissionMode;
   if (typeof next.fullAccessConfirmed !== "boolean") delete next.fullAccessConfirmed;
@@ -304,8 +310,17 @@ function writeLocal(settings: AppSettings): void {
   }
 }
 
-function writeDisk(settings: AppSettings): void {
-  void window.fastvibe?.settings?.save(settings).catch(() => undefined);
+// Serialize writes so a concurrent preference change cannot restore an old proxy.
+let pendingWrite: Promise<unknown> = Promise.resolve();
+let resetGeneration = 0;
+function persist(task: () => Promise<unknown>): Promise<void> {
+  const result = pendingWrite.then(task).then(() => undefined);
+  pendingWrite = result.catch(() => undefined);
+  return result;
+}
+
+function writeDisk(): void {
+  void persist(() => window.fastvibe.settings.save(useSettingsStore.getState().settings)).catch(() => undefined);
 }
 
 /**
@@ -342,24 +357,37 @@ function firstRunLanguages(): Pick<AppSettings, "uiLanguage" | "aiLanguage"> {
 
 type SettingsStore = {
   settings: AppSettings;
+  resetVersion: number;
   update: (patch: Partial<AppSettings>) => void;
+  /** Commit proxy preferences only after Main successfully applies them. */
+  saveProxy: (patch: ProxySettings) => Promise<void>;
   /**
    * Adopt preferences another window wrote. Deliberately does **not** write back:
    * the file already holds them, and echoing would make two windows sync forever.
    */
   applyRemote: (settings: Record<string, unknown>) => void;
-  reset: () => void;
+  reset: () => Promise<void>;
 };
 
 export const useSettingsStore = create<SettingsStore>((set) => ({
   settings: read(),
+  resetVersion: 0,
   update: (patch) =>
     set((state) => {
       const next = { ...state.settings, ...patch };
       writeLocal(next);
-      writeDisk(next);
+      writeDisk();
       return { settings: next };
     }),
+  saveProxy: (patch) => {
+    const generation = resetGeneration;
+    return persist(async () => {
+      if (generation !== resetGeneration) return;
+      await window.fastvibe.settings.saveProxy(patch);
+      // Reflect an acknowledged save even if a reset is queued: the reset can fail.
+      useSettingsStore.getState().applyRemote({ ...useSettingsStore.getState().settings, ...patch });
+    });
+  },
   applyRemote: (remote) =>
     set(() => {
       const next = { ...DEFAULTS, ...sanitize(remote as Partial<AppSettings>) } as AppSettings;
@@ -367,13 +395,17 @@ export const useSettingsStore = create<SettingsStore>((set) => ({
       return { settings: next };
     }),
   reset: () => {
-    try {
-      localStorage.removeItem(KEY);
-    } catch {
-      // ignore
-    }
-    void window.fastvibe?.settings?.clear().catch(() => undefined);
-    set({ settings: DEFAULTS });
+    resetGeneration += 1;
+    return persist(async () => {
+      const before = useSettingsStore.getState().settings;
+      await window.fastvibe.settings.clear();
+      // Preserve preference changes made after reset was requested.
+      const after = useSettingsStore.getState().settings;
+      const changed = Object.fromEntries(Object.entries(after).filter(([key, value]) => value !== before[key as keyof AppSettings]));
+      const next = { ...DEFAULTS, ...changed };
+      writeLocal(next);
+      set((state) => ({ settings: next, resetVersion: state.resetVersion + 1 }));
+    });
   },
 }));
 
@@ -381,6 +413,6 @@ export const useSettingsStore = create<SettingsStore>((set) => ({
 if (typeof window !== "undefined" && window.fastvibe?.settings) {
   const disk = window.fastvibe.settings.initial;
   if (!disk || Object.keys(disk).length === 0) {
-    writeDisk(useSettingsStore.getState().settings);
+    writeDisk();
   }
 }

@@ -523,6 +523,7 @@ const api = {
     initial: initialSettings,
     load: async () => initialSettings,
     save: async () => undefined,
+    saveProxy: async () => undefined,
     clear: async () => undefined,
     // The real bridge pushes cross-window settings writes; the preview has one window.
     onChanged: () => () => undefined,

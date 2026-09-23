@@ -96,11 +96,7 @@ export function writeAppSettings(paths: FastVibePaths, settings: PersistedSettin
 
 export function clearAppSettings(paths: FastVibePaths): void {
   cache = null;
-  try {
-    if (existsSync(paths.settingsFile)) unlinkSync(paths.settingsFile);
-  } catch {
-    // ignore
-  }
+  if (existsSync(paths.settingsFile)) unlinkSync(paths.settingsFile);
 }
 
 export function applyNativeTheme(settings: PersistedSettings): void {

@@ -41,6 +41,8 @@ import { uiText } from "./engine/ui-text";
 import { applyShellPath } from "./engine/shell-path";
 import { exportLogs, initLogger, log, writeRendererLog } from "./engine/logger";
 import { applyKeepAwake, clearRunningConversations, setConversationRunning } from "./engine/keep-awake";
+import { createNetworkProxy } from "./engine/network-proxy";
+import { assertProxySettings, mergeSettingsPreservingProxy, proxySettingsOf } from "../shared/proxy";
 import {
   getFileIconMapping,
   registerFileIconProtocol,
@@ -1122,10 +1124,13 @@ function registerIpc(): void {
   handle(Ipc.windowIsMaximized, (_payload: void, ctx) => ctx.window?.isMaximized() ?? false);
 
   handle(Ipc.settingsGet, () => readAppSettings(getFastVibePaths()));
-  handle(Ipc.settingsSet, (settings: Record<string, unknown>, ctx) => {
-    const payload = settings && typeof settings === "object" ? settings : {};
+  const commitSettings = async (payload: Record<string, unknown>, ctx: CallerContext) => {
+    assertProxySettings(payload);
     const paths = getFastVibePaths();
-    writeAppSettings(paths, payload);
+    const previous = readAppSettings(paths);
+    await networkProxy?.apply(payload);
+    try { writeAppSettings(paths, payload); }
+    catch (error) { await networkProxy?.apply(previous); throw error; }
     applyNativeTheme(payload);
     applyPermissionMode(payload);
     applyLanguages(payload);
@@ -1134,10 +1139,22 @@ function registerIpc(): void {
     scheduleUpdateCheck(payload.autoCheckUpdates !== false);
     // The other windows hold their own copy, loaded once at startup.
     broadcastSettings(ctx.origin, payload);
-  });
-  handle(Ipc.settingsClear, (_payload: void, ctx) => {
+  };
+  handle(Ipc.settingsSet, (settings: Record<string, unknown>, ctx) => queueSettingsWrite(async () => {
+    const incoming = settings && typeof settings === "object" ? settings : {};
+    await commitSettings(mergeSettingsPreservingProxy(readAppSettings(getFastVibePaths()), incoming), ctx);
+  }));
+  handle(Ipc.settingsProxySet, (settings: Record<string, unknown>, ctx) => queueSettingsWrite(async () => {
+    const incoming = settings && typeof settings === "object" ? settings : {};
+    assertProxySettings(incoming);
+    await commitSettings({ ...readAppSettings(getFastVibePaths()), ...proxySettingsOf(incoming) }, ctx);
+  }));
+  handle(Ipc.settingsClear, (_payload: void, ctx) => queueSettingsWrite(async () => {
     const paths = getFastVibePaths();
-    clearAppSettings(paths);
+    const previous = readAppSettings(paths);
+    await networkProxy?.apply({});
+    try { clearAppSettings(paths); }
+    catch (error) { await networkProxy?.apply(previous); throw error; }
     applyNativeTheme({});
     applyPermissionMode({});
     applyLanguages({});
@@ -1146,7 +1163,7 @@ function registerIpc(): void {
     // 恢复默认 is a write like any other: the other windows hold their own copy and
     // would otherwise keep — and later re-save — the settings that were just reset.
     broadcastSettings(ctx.origin, {});
-  });
+  }));
 
   handle(Ipc.workspacePick, async () => {
     const result = await dialog.showOpenDialog({
@@ -1218,6 +1235,13 @@ const SHUTDOWN_TIMEOUT_MS = 5_000;
 const EXIT_FALLBACK_MS = 1_000;
 let shutdownPhase: ShutdownPhase = "running";
 let stopModelsDevRefresh: (() => void) | undefined;
+let networkProxy: Awaited<ReturnType<typeof createNetworkProxy>> | undefined;
+let settingsWrite: Promise<void> = Promise.resolve();
+function queueSettingsWrite(task: () => Promise<void>): Promise<void> {
+  const result = settingsWrite.then(task);
+  settingsWrite = result.catch(() => undefined);
+  return result;
+}
 let shutdownDeadline: NodeJS.Timeout | undefined;
 let devParentWatch: NodeJS.Timeout | undefined;
 
@@ -1249,12 +1273,20 @@ app.whenReady().then(async () => {
   app.once("will-quit", () => cancelGrantFlow());
   applyAppIcon();
   const startupSettings = readAppSettings(getFastVibePaths());
+  networkProxy = await createNetworkProxy(startupSettings);
   applyNativeTheme(startupSettings);
   applyStartupPermissionMode(getFastVibePaths());
   // Seed the sandbox/extensions' UI language and the AI 偏好语言 prompt before any
   // session starts. A first launch has no settings file yet; the renderer writes one
   // (with the OS-detected language) on boot, which re-applies these.
   applyLanguages(startupSettings);
+  if (networkProxy.error) {
+    log.warn(`network proxy setup failed: ${String(networkProxy.error)}`);
+    dialog.showErrorBox(uiText("网络代理初始化失败", "Network proxy setup failed"), uiText(
+      "已暂停客户端联网。请打开设置 → 通用 → 网络代理，修改配置后应用以重试。",
+      "Client networking is paused. Open Settings → General → Network proxy and apply a configuration change to retry.",
+    ));
+  }
   applyKeepAwake(startupSettings);
   registerFileIconProtocol();
   // Every module that owns methods registers them first; the transport is attached
@@ -1427,7 +1459,7 @@ function requestShutdown(reason: string): void {
     log.warn(`engine flush failed: ${String(error)}`);
   }
 
-  void Promise.allSettled([engine.stop(), stopRemoteServer(), remoteConnections.closeAll()]).then((results) => {
+  void Promise.allSettled([engine.stop(), stopRemoteServer(), remoteConnections.closeAll(), networkProxy?.close()]).then((results) => {
     for (const result of results) {
       if (result.status === "rejected") log.warn(`shutdown cleanup failed: ${String(result.reason)}`);
     }

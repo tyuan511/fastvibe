@@ -159,6 +159,7 @@ export const Ipc = {
   settingsGet: "settings:get",
   settingsGetSync: "settings:get-sync",
   settingsSet: "settings:set",
+  settingsProxySet: "settings:proxy-set",
   /** Pushed to the *other* windows after one writes, so their copy cannot go stale. */
   settingsChanged: "settings:changed",
   settingsClear: "settings:clear",
