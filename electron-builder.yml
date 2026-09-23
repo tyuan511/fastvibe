@@ -33,6 +33,10 @@ files:
   - "!**/node_modules/@anthropic-ai/sdk/src{,/**/*}"
   - "!**/node_modules/@mistralai/mistralai/{src,tests,examples}{,/**/*}"
   - "!**/node_modules/@google/genai/dist/web{,/**/*}"
+  # Transformers.js uses the Node ONNX backend in Main. Its web package is a
+  # dependency for browser builds only and carries roughly 140 MB of WASM and
+  # alternate bundles that must not enter a desktop package.
+  - "!**/node_modules/onnxruntime-web{,/**/*}"
 
 # Runtime assets are looked up under process.resourcesPath (src/main/index.ts,
 # src/main/engine/models-dev.ts), so they must live outside the asar archive.
@@ -149,6 +153,9 @@ mac:
     # filters matter when a build host installs several (`supportedArchitectures`).
     - "!**/node_modules/@trycua/cua-driver-{win32,linux}-*{,/**/*}"
     - "!**/node_modules/@trycua/cua-driver-darwin-!(${arch}){,/**/*}"
+    # Keep only the ONNX Runtime native slice used by this macOS build.
+    - "!**/node_modules/onnxruntime-node/bin/napi-v6/{linux,win32}{,/**/*}"
+    - "!**/node_modules/onnxruntime-node/bin/napi-v6/darwin/!(${arch}){,/**/*}"
   # No `arch:` here on purpose. `computeArchToTargetNamesMap` only falls back to the
   # architectures named on the command line when a target declares none of its own
   # (`archs == null ? defaultArchs : asArray(archs)`), so listing them here made
@@ -173,6 +180,9 @@ win:
     - "!**/node_modules/@mariozechner/clipboard-win32-!(${arch}*){,/**/*}"
     - "!**/node_modules/@trycua/cua-driver-{darwin,linux}-*{,/**/*}"
     - "!**/node_modules/@trycua/cua-driver-win32-!(${arch}*){,/**/*}"
+    # Keep only the ONNX Runtime native slice used by this Windows build.
+    - "!**/node_modules/onnxruntime-node/bin/napi-v6/{darwin,linux}{,/**/*}"
+    - "!**/node_modules/onnxruntime-node/bin/napi-v6/win32/!(${arch}){,/**/*}"
   target:
     - target: nsis
       arch:
@@ -201,6 +211,9 @@ linux:
     - "!**/node_modules/@mariozechner/clipboard-linux-!(${arch}*){,/**/*}"
     - "!**/node_modules/@trycua/cua-driver-{darwin,win32}-*{,/**/*}"
     - "!**/node_modules/@trycua/cua-driver-linux-!(${arch}*){,/**/*}"
+    # Keep only the ONNX Runtime native slice used by this Linux build.
+    - "!**/node_modules/onnxruntime-node/bin/napi-v6/{darwin,win32}{,/**/*}"
+    - "!**/node_modules/onnxruntime-node/bin/napi-v6/linux/!(${arch}){,/**/*}"
   target:
     - AppImage
     - deb
