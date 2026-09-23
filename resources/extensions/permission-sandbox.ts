@@ -89,6 +89,9 @@ const COMPUTER_ACTION_TOOLS = new Set([
   "computer_menu",
   "computer_clipboard_write",
   "computer_batch",
+  // A whole decision-model run in one window: asked once per call like any other action,
+  // named by its goal, and covered by the same per-application allow list.
+  "computer_task",
 ]);
 
 /** The step actions inside a batch that change something, named as the bridge names them. */
@@ -179,6 +182,8 @@ function describeComputer(toolName: string, input: unknown): string {
     if (Array.isArray(path)) return T(`菜单 ${path.join(" › ")}`, `Menu ${path.join(" › ")}`);
   }
   if (toolName === "computer_batch") return describeBatch(input) ?? toolName;
+  const goal = inputString(input, "goal");
+  if (toolName === "computer_task" && goal) return T(`执行任务「${firstLine(goal, 80)}」`, `Run the task "${firstLine(goal, 80)}"`);
   return toolName;
 }
 

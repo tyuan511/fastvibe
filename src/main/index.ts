@@ -35,7 +35,9 @@ import { configureFastVibeUserData, getFastVibePaths, type FastVibePaths } from 
 import { readDecisionConfig, writeDecisionConfig } from "./engine/decision/store";
 import { testJevConnection } from "./engine/decision/backends/jev";
 import { decisionModelConfigOf, JEV_KEY_ENV, type DecisionKeyState, type DecisionModelConfig, type DecisionTestResult } from "@shared/decision";
-import { installBrowserTaskGlobal, revokeBrowserTasks } from "./pi/browser-task-runner";
+import { installBrowserTaskGlobal } from "./pi/browser-task-runner";
+import { installComputerTaskGlobal } from "./pi/computer-task-runner";
+import { installDecisionTaskDependencies, revokeDecisionTasks } from "./pi/decision-task-runner";
 import { loadProviderKeys, setProviderKey } from "./engine/providers";
 import { readWindowState, writeWindowState } from "./engine/window-state";
 import { presentNotification, readNotificationSettings } from "./engine/notifications";
@@ -408,7 +410,7 @@ function registerDecisionIpc(): void {
     const previous = readDecisionConfig(paths().decisionFile);
     writeDecisionConfig(paths().decisionFile, config);
     // Switching the model withdraws the old one's authority: running tasks stop at their next decision.
-    if (JSON.stringify(previous) !== JSON.stringify(config)) revokeBrowserTasks();
+    if (JSON.stringify(previous) !== JSON.stringify(config)) revokeDecisionTasks();
     // Each window holds its own copy, loaded once — same rule as `settings:changed`.
     broadcast(Ipc.decisionChanged, config, { except: ctx.origin });
     return config;
@@ -417,7 +419,7 @@ function registerDecisionIpc(): void {
   handle(Ipc.decisionSetKey, async (payload: { key?: unknown }): Promise<DecisionKeyState> => {
     const key = typeof payload?.key === "string" ? payload.key.trim() : "";
     await setProviderKey(paths(), JEV_KEY_ENV, key);
-    if (!key) revokeBrowserTasks();
+    if (!key) revokeDecisionTasks();
     return keyState();
   });
   handle(Ipc.decisionTest, async (payload: unknown): Promise<DecisionTestResult> => {
@@ -1319,9 +1321,11 @@ app.whenReady().then(async () => {
   if (shutdownPhase !== "running") return;
   log.info("app ready");
   installBrowserGlobal();
-  installBrowserTaskGlobal({
+  installDecisionTaskDependencies({
     completeText: (conversationId, system, user, signal) => engine.completeDecisionText(conversationId, system, user, signal),
   });
+  installBrowserTaskGlobal();
+  installComputerTaskGlobal();
   // Registers the bridge global and an at-quit driver shutdown. The native library is
   // still not loaded here — `cua-bridge` imports it on the first `computer_*` call, so a
   // user who never touches the feature pays nothing for it.

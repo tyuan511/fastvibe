@@ -535,6 +535,15 @@ type DecisionBackend =
 
 G1、G2 已修。G3–G8（严格 ref、pageKey、视口、select、滚动、等待）在决策模型路径上由移植来的观察和执行脚本解决；大模型路径暂不改动。G9（bridge 的 runId 与取消）和 G10（权限）在接入产品时实现。
 
+### 7.9 computer use：`computer_task`
+
+computer use 和 browser use 是同一类任务：每一步都从窗口里一组明确的控件中选一个。所以 `computer_task` 复用同一个循环（`runBrowserAgent`）和同一个执行器（`decision-task-runner.ts`：决策后端、文字模型、权限确认、撤销、结果格式），只换控制层：
+
+- **观察**：`computer-observation.ts` 把 Cua Driver 的 `window_state` 映射成同一种观察格式。按钮、链接、复选框、菜单项，以及带 AXPress 的元素是可点击目标；文本框、搜索框是可输入目标；安全文本框（密码框）整体排除。复选框的状态取自 value 和 selected，静态文本作为“可见文字”，窗口里有滚动区域时提供滚动控制项。为此 `window_state` 的输出补上了 `actions`、`selected` 和无 token 的静态文本 `texts`。
+- **执行**：全部通过 `requestComputer`，所以“电脑操控”开关、macOS 授权和驱动自己的审批照常生效。token 只对一次读取有效，所以每个动作前都会重新读取窗口，内容确认没变后，用这次读取的 token 执行。输入的做法是先点击字段，再全选（cmd/ctrl+A），然后输入。
+- **权限**：`computer_task` 归入沙箱的电脑操作类，外层按应用确认，并遵守“始终允许的应用”列表；内部遇到高风险按钮（提交、删除、支付等）再单独确认。
+- **现状**：映射逻辑有单测，控制层和工具只经过类型检查，**还没有在真实桌面上运行过**。开发会话没有 macOS 辅助功能和录屏授权，也没有下载驱动二进制；需要在已授权的 FastVibe 里实测。
+
 ### 7.7 `subagent.role`（未来）
 
 未来可在 `resources/extensions/subagent/index.ts` 里，把“选哪个角色”变成 `decide("subagent.role", …)`。注入点现成——和 `questions` / `runSubagent` / `createWorktree` 同一个 `#extensionUi()`（`src/main/pi/process-manager.ts`）。

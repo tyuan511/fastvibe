@@ -748,8 +748,18 @@ async function dispatch(
           label: element.label,
           value: element.value,
           enabled: element.enabled,
+          // What the element can do and whether it is on: the decision loop reads a
+          // checkbox's state and an element's AXPress off these (computer_task).
+          ...(element.selected !== undefined ? { selected: element.selected } : {}),
+          ...(element.actions?.length ? { actions: element.actions } : {}),
           frame: element.frame,
         }));
+      // Static text usually carries no token — it cannot be acted on — but it is what the
+      // window *says*, which a model deciding the next step needs as much as the controls.
+      const texts = (output.elements ?? [])
+        .filter((element) => !element.elementToken && /statictext|^text$/i.test(element.role.replace(/^AX/, "")))
+        .map((element) => (element.value || element.label || "").trim())
+        .filter(Boolean);
       return {
         text: JSON.stringify(
           {
@@ -758,6 +768,7 @@ async function dispatch(
             truncated: output.truncated ?? false,
             truncationReason: output.truncationReason,
             elements,
+            ...(texts.length ? { texts } : {}),
           },
           null,
           2,

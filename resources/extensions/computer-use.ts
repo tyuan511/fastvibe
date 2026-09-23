@@ -65,6 +65,30 @@ function boundConversationId(): string | undefined {
 const WINDOW_ID = Type.String({ description: "computer_list_windows 返回的 windowId（字符串形式的整数）" });
 const PID = Type.Number({ description: "computer_list_apps 返回的进程 pid" });
 
+/** The decision-model loop Main installs (src/main/pi/computer-task-runner.ts). */
+type ComputerTaskRunner = (request: {
+  conversationId?: string;
+  goal: string;
+  pid: number;
+  windowId: string;
+  signal?: AbortSignal;
+  mode?: string;
+  confirm?: (message: string) => Promise<boolean>;
+  onStep?: (line: string) => void;
+}) => Promise<{ status: string; detail?: string; steps: unknown[]; page?: unknown; backend: string; ms: number }>;
+
+function computerTaskRunner(): ComputerTaskRunner | undefined {
+  const scope = globalThis as Record<string, unknown>;
+  const enabled = scope.__fastvibeComputerTaskEnabled;
+  const runner = scope.__fastvibeComputerTask;
+  if (typeof enabled !== "function" || typeof runner !== "function") return undefined;
+  try {
+    return enabled() ? (runner as ComputerTaskRunner) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export default function computerUse(pi: ExtensionAPI): void {
   const conversationId = boundConversationId();
 
@@ -92,6 +116,41 @@ export default function computerUse(pi: ExtensionAPI): void {
     for (const image of result.images) content.push({ type: "image", data: image.data, mimeType: image.mimeType });
     if (content.length === 0) content.push({ type: "text", text: "(无输出)" });
     return { content, details: result.structured ? { structured: result.structured } : undefined };
+  }
+
+  // Offered only while a decision model is selected (设置 → 决策引擎), read when this
+  // session's tools load; with none, computer use stays on the step-by-step tools below.
+  const runTask = computerTaskRunner();
+  if (runTask) {
+    pi.registerTool({
+      name: "computer_task",
+      label: "电脑任务",
+      description:
+        "快速电脑执行器：在一个指定窗口里由决策模型逐步点击、输入、滚动，直到完成目标或无法继续。先用 computer_list_windows 找到 pid 和 windowId，再把用户的完整目标原文一次交给它（例如“在这个窗口新建一条提醒：标题 X，备注 Y，然后保存”），不要拆成小步，也不要写“然后告诉我……”——它只负责操作，不负责回答。返回执行过的每一步和最终窗口内容；由你据此回答用户，需要时再用 computer_window_state 或 computer_screenshot 核对。它只操作这一个窗口。",
+      promptSnippet: "让决策模型在一个窗口里连续执行一个目标",
+      parameters: Type.Object({
+        pid: PID,
+        windowId: WINDOW_ID,
+        goal: Type.String({ description: "用户的完整目标原文（或尚未完成的部分）" }),
+      }),
+      async execute(_id, params, signal, onUpdate, ctx) {
+        const lines: string[] = [];
+        const result = await runTask({
+          conversationId,
+          goal: params.goal,
+          pid: params.pid,
+          windowId: params.windowId,
+          signal,
+          mode: process.env.FASTVIBE_PERMISSION_MODE,
+          confirm: (message) => (ctx?.hasUI ? ctx.ui.confirm("FastVibe 电脑任务", message) : Promise.resolve(false)),
+          onStep: (line) => {
+            lines.push(line);
+            onUpdate?.({ content: [{ type: "text", text: lines.join("\n") }], details: undefined });
+          },
+        });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
+      },
+    });
   }
 
   pi.registerTool({

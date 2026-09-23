@@ -1,7 +1,7 @@
 {
  "decision": {
   "title": "决策模型",
-  "description": "选择 browser use 的决策模型：关闭时由主模型直接操作浏览器；选择决策模型后，会话多出 browser_task，由决策模型逐步点击和输入，速度更快。",
+  "description": "选择浏览器与电脑操控的决策模型：关闭时由主模型逐步操作；选择决策模型后，会话多出 browser_task 与 computer_task，由决策模型逐步点击和输入，速度更快。",
   "model": "决策模型",
   "off": "关闭",
   "test": "测试连接",
@@ -14,7 +14,7 @@
   "remoteHint": "决策模型只能在本机配置。",
   "jev": "Jev（TypeSafe）",
   "offHint": "主模型直接调用浏览器工具，逐步决定点哪里。",
-  "jevHint": "由 Jev 逐步决定浏览器操作，单步约 0.3 秒；需要 API key。",
+  "jevHint": "由 Jev 逐步决定浏览器和桌面窗口里的操作，单步约 0.3 秒；需要 API key。",
   "apiKey": "API key",
   "keyPlaceholder": "粘贴 Jev API key",
   "keySave": "保存",

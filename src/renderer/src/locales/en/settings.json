@@ -1,7 +1,7 @@
 {
  "decision": {
   "title": "Decision model",
-  "description": "Pick the decision model for browser use. Off: the main model drives the browser itself. With a decision model, sessions also get browser_task, where the decision model clicks and types step by step, faster.",
+  "description": "Pick the decision model for browser and computer use. Off: the main model drives step by step. With a decision model, sessions also get browser_task and computer_task, where the decision model clicks and types step by step, faster.",
   "model": "Decision model",
   "off": "Off",
   "test": "Test connection",
@@ -14,7 +14,7 @@
   "remoteHint": "The decision model can only be configured on this machine.",
   "jev": "Jev (TypeSafe)",
   "offHint": "The main model calls the browser tools and decides each step itself.",
-  "jevHint": "Jev decides each browser step, about 0.3 s per step. Needs an API key.",
+  "jevHint": "Jev decides each step in the browser and in desktop windows, about 0.3 s per step. Needs an API key.",
   "apiKey": "API key",
   "keyPlaceholder": "Paste your Jev API key",
   "keySave": "Save",
