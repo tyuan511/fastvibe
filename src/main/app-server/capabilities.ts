@@ -11,6 +11,7 @@ function capabilityOf(method: string): AppCapability | null {
   if (method.startsWith("providers:")) return "providers";
   if (method.startsWith("models-dev:")) return "providers";
   if (method.startsWith("settings:")) return "settings";
+  if (method.startsWith("decision:")) return "settings";
   if (method.startsWith("stats:")) return "stats";
   if (method.startsWith("app:")) return "settings";
   if (method.startsWith("update:")) return "native";

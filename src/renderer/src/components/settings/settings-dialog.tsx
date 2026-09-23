@@ -31,9 +31,11 @@ import { ImportSettings } from "./import-settings";
 import { DefaultModelSelect } from "./default-model-select";
 import { ExtensionsSettings } from "./extensions-settings";
 import { McpSettings } from "./mcp-settings";
+import { DecisionSettings } from "./decision-settings";
 import { RemoteSettings } from "./remote-settings";
 import { RemoteHostsSettings } from "./remote-hosts-settings";
 import { ComputerSettings } from "./computer-settings";
+import { ProxySettings } from "./proxy-settings";
 import { SkillsSettings } from "./skills-settings";
 import { THINKING_MENU_ORDER, thinkingMenuItems, thinkingMenuLabel } from "@/lib/thinking-levels";
 import { ThemeSelect } from "./theme-select";
@@ -367,6 +369,7 @@ export function SettingsDialog({
                   }
                 />
               </Group>
+              <ProxySettings />
               <Group title={t("runtime.title")}>
                 <Row
                   title={t("common.keepAwake")}
@@ -529,6 +532,7 @@ export function SettingsDialog({
           {section === "computer" ? <ComputerSettings /> : null}
 
           {section === "subagents" ? <SubagentsSettings models={models} /> : null}
+          {section === "decision" ? <DecisionSettings /> : null}
           {section === "mcp" ? <McpSettings /> : null}
           {section === "skills" ? <SkillsSettings /> : null}
           {section === "extensions" ? <ExtensionsSettings /> : null}

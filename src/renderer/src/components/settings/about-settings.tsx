@@ -31,6 +31,8 @@ export function AboutSettings(): JSX.Element {
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState("");
   const [exportedPath, setExportedPath] = useState("");
+  const [resetting, setResetting] = useState(false);
+  const [resetError, setResetError] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -169,9 +171,13 @@ export function AboutSettings(): JSX.Element {
         />
         <SettingsRow
           title={t("about.reset")}
-          description={t("about.resetDesc")}
+          description={<>{t("about.resetDesc")}{resetError && <span role="alert" className="mt-0.5 block text-destructive">{resetError}</span>}</>}
           control={
-            <Button variant="outline" size="xs" onClick={reset}>
+            <Button variant="outline" size="xs" disabled={resetting} onClick={() => {
+              setResetting(true);
+              setResetError("");
+              void reset().catch((error) => setResetError(cleanError(error))).finally(() => setResetting(false));
+            }}>
               <HugeiconsIcon strokeWidth={2} icon={RotateCcwIcon} />
               {t("about.resetAction")}
             </Button>

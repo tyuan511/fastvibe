@@ -20,6 +20,8 @@ export type FastVibePaths = {
   providersFile: string;
   gatewayCredentialsFile: string;
   mcpFile: string;
+  /** Which decision-layer backend (off / Laya) is selected; see `src/main/engine/decision/`. */
+  decisionFile: string;
   /** Renderer UI preferences (theme, chat behaviour, …). */
   settingsFile: string;
   /** Main-owned normal window size and maximized state. */
@@ -123,6 +125,7 @@ function buildFastVibePaths(): FastVibePaths {
     /** Panel credentials for custom relays (new-api); never served, never in providers.json. */
     gatewayCredentialsFile: join(userData, "gateway-credentials.json"),
     mcpFile: join(userData, "mcp.json"),
+    decisionFile: join(userData, "decision.json"),
     settingsFile: join(userData, "settings.json"),
     windowStateFile: join(userData, "window-state.json"),
     subagentsFile: join(agentDir, "subagents.json"),

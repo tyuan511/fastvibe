@@ -523,6 +523,7 @@ const api = {
     initial: initialSettings,
     load: async () => initialSettings,
     save: async () => undefined,
+    saveProxy: async () => undefined,
     clear: async () => undefined,
     // The real bridge pushes cross-window settings writes; the preview has one window.
     onChanged: () => () => undefined,
@@ -555,6 +556,12 @@ const api = {
     states: async () => [],
     onState: () => () => undefined,
     onStates: () => () => undefined,
+  },
+  decision: {
+    getConfig: async () => ({ kind: "off" as const }),
+    saveConfig: async (config: unknown) => config as { kind: "off" },
+    test: async () => ({ ok: true as const, model: "aac6fef/laya-mlx" }),
+    onChanged: () => () => undefined,
   },
   // Remote access is a real server in the main process; the preview has none to show,
   // so every action is a no-op over one of the two fixtures `?tunnel=` picks.

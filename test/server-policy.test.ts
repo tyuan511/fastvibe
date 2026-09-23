@@ -117,6 +117,8 @@ test("the denied set is exactly what the UI explains, so a new denial cannot go 
     "computer:request-permissions",
     "computer:start-drag",
     "computer:start-grant-flow",
+    "decision:save-config",
+    "decision:test",
     "engine:export-html",
     "engine:import-skill",
     "projects:add",

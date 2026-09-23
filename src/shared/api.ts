@@ -457,6 +457,7 @@ export function createFastVibeApi(t: ApiTransport) {
       initial: t.settingsInitial,
       load: (): Promise<Record<string, unknown>> => t.invoke(Ipc.settingsGet),
       save: (settings: Record<string, unknown>): Promise<void> => t.invoke(Ipc.settingsSet, settings),
+      saveProxy: (settings: import("./proxy").ProxySettings): Promise<void> => t.invoke(Ipc.settingsProxySet, settings),
       clear: (): Promise<void> => t.invoke(Ipc.settingsClear),
       /**
        * A write made by *another* window. Each window holds its own copy of the
@@ -484,6 +485,16 @@ export function createFastVibeApi(t: ApiTransport) {
       onState: (listener: (state: RemoteHostConnectionState) => void): (() => void) => t.subscribe(Ipc.sshState, listener),
       onStates: (listener: (states: RemoteHostConnectionState[]) => void): (() => void) =>
         t.subscribe(Ipc.sshStates, listener),
+    },
+    /** 决策引擎：`state + questions → answers` 的本地结构化判断后端；目前只有 Laya。 */
+    decision: {
+      getConfig: (): Promise<import("./decision").DecisionModelConfig> => t.invoke(Ipc.decisionGetConfig),
+      saveConfig: (config: import("./decision").DecisionModelConfig): Promise<import("./decision").DecisionModelConfig> =>
+        t.invoke(Ipc.decisionSaveConfig, config),
+      test: (baseUrl?: string): Promise<import("./decision").DecisionTestResult> => t.invoke(Ipc.decisionTest, { baseUrl }),
+      /** A save made by *another* window; each window holds its own copy, loaded once. */
+      onChanged: (listener: (config: import("./decision").DecisionModelConfig) => void): (() => void) =>
+        t.subscribe(Ipc.decisionChanged, listener),
     },
     /** 远程访问：把这台机器上的 agent 通过网页开放给其他设备。 */
     remote: {
