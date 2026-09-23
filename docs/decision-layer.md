@@ -2,7 +2,7 @@
 
 > 目标：给 FastVibe 加一个**统一的可配置决策层**。第一版只服务 browser use：用答案空间受代码约束的决策模型，替代主模型逐步判断“下一步做什么、操作哪个元素”；后续再服务子 agent 角色选择和 agent team 协作调度。
 >
-> 代码基线 `973f375`（v0.9.0），调研日期 2026-09-22。协议形状来自 TypeSafe 的 System One / Jev（`docs.typesafe.ai`，`browser-use/jev-ultrafast` 为参考实现）；交接机制补充参考 `shitianfang/jev-use@358819d`。以下均为设计，未实现或实测的能力不作产品承诺。
+> 代码基线 `973f375`（v0.9.0），调研日期 2026-09-22；2026-09-23 按 `cebc1cb`（v0.10.2）复核现有 browser 实现、权限沙箱与 App Server 能力分类，并按 TypeSafe API 参考核对线格式（§3.7、§7.1.1–7.1.4、§10 切片 0）。协议形状来自 TypeSafe 的 System One / Jev（`docs.typesafe.ai`，`browser-use/jev-ultrafast` 为参考实现）；交接机制补充参考 `shitianfang/jev-use@358819d`。以下均为设计，未实现或实测的能力不作产品承诺。
 
 ---
 
@@ -156,6 +156,7 @@ export type DecisionOutcome =
 - `estimated` 必须注明算法。choice 可用前两名概率差 `top-two-margin`；noul 可用 `2 × |p - 0.5|`（`binary-distance`）。两者只是决策信号，不是任务正确率。
 - 缺失就是缺失，不能伪造为 0 或 1；noul 的 `P(yes)` 与“离不确定有多远”必须分开。
 - `score` 暂不从分布估算 confidence，保留 provider reported 或缺失；有序尺度不能套用 choice 的解释。
+- **Jev 的 reported confidence 本身就是分布形状统计量**（官方 `confidence.md`：由概率集中程度计算，三选项时约为 `(3 × 最大概率 − 1) / 2`），不是“置信度为 x 时正确率为 x”的校准值；noul 答案官方不返回 confidence 和 probabilities。因此 reported 与 estimated 在 Jev 上信息量相近，真正的“可采纳”信号只能来自本机评测（§10 切片 0）。官方给出的 <0.5 / 0.5–0.9 / >0.9 三档只作起点参考，且明说“阈值取决于领域”。
 
 binding 的采纳策略需区分模型版本、问题类型、候选规模与 confidence 来源；v1 不增加阈值设置项，也不直接复制 jev-use 的 0.5/0.4。用本机评测确定内部策略版本并写入 trace。缺少可信采纳信号的模型判断走 `handoff: unsure`，不是默认放行；代码确定的单候选目标不伪造模型 confidence。
 
@@ -187,7 +188,8 @@ Jev 只做结构化决策，不生成文本。浏览器输入城市、关键词�
 | `requiredWhen` 只决定答案是否必需 | speculative target 可以缺失；只有 operation 选中了它的条件时，目标答案才必须存在 |
 | 只执行选中 operation 对应的 head | 未选中的 target head 即使返回，也不能触发动作 |
 | 有 probabilities 时必须自洽 | key 集合等于 criteria、数值有限且在 0..1、总和容差 2%、argmax 等于 choice |
-| score 必须在题目声明的范围内 | criteria 至少两项，默认范围为 0..criteria.length-1（可为期望值小数）；显式 min/max 必须有限且 min < max。adapter 负责尺度映射，不能静默截断 |
+| choice 候选数有上限 | 发往 Jev 的 choice criteria ≤ 255（官方上限）；超出由 consumer 裁剪或分层提问，runtime 不静默截断 |
+| score 必须在题目声明的范围内 | criteria 2–10 项（Jev 上限；其他后端可放宽，但 v1 协议统一按 10 校验），默认范围为 0..criteria.length-1（可为期望值小数）；显式 min/max 必须有限且 min < max。adapter 负责尺度映射，不能静默截断 |
 | noul 必须在 0..1 | 它表示一个命题成立的置信值，不是自由文本 |
 | 缺少 operation 或已提交且被选中的 target → invalid_response | 单候选目标由 consumer 代码确定且不提交该 target 问题，见 §7.1；其余缺答案不能补默认值 |
 | `usage` 先归一化再计量 | 不同后端字段名不同，不能直接信任原始响应 |
@@ -232,6 +234,40 @@ browser 的处理顺序必须是：
 4. 必要目标不满足策略才 handoff；不把每个投机 head 的 `escalate` 做全局 OR。
 
 概率接近的多个目标可能都合理，但不能通过随意降低阈值换取更多自动执行。评测同时记录采纳率、交接率、误操作率与候选分布，尤其检查某类答案是否从未被选中。
+
+### 3.7 Jev adapter 线格式映射
+
+以下按 TypeSafe API 参考（`docs.typesafe.ai/api.md`、`models`、`confidence.md`、`primitives/choice.md`，2026-09-23 读取）整理；实现前需重新核实，协议版本变化须体现在 adapter 版本号与 trace 中。
+
+| 我们的字段 | Jev `POST https://api.typesafe.ai/v1/systemone` | adapter 规则 |
+| --- | --- | --- |
+| 鉴权 | `Authorization: Bearer <key>` | key 只在 Main 读取；日志与错误文案不回显 header |
+| `state: JsonValue` | `state`: string / object / array | 原样发送 canonical JSON；不转成大段拼接字符串，便于 hash 对齐 |
+| `model` | `model`（如 `jev-latest`，当前指向 `jev-1.13.0`） | trace 记录**响应**里的 `model`，不是请求别名 |
+| `Question.instructions?` | `instructions` **必填**（string / object / array） | 缺省时由 binding 提供固定默认说明；不能发空串 |
+| `choice.criteria` | `criteria`: map，≤255 项 | 候选 id 保持代码生成的短 id；描述放 value，不把 selector 当描述 |
+| `score.criteria` | `criteria`: 2–10 个等级描述 | 响应 `score` 为加权期望值，另有 `legend`；按 §3.3 校验范围 |
+| `noul` | 可选 `criteria.true/false` 说明 | 响应只有 `noul`（0..1），无 confidence / probabilities |
+| `requiredWhen` | —（不发送） | 宿主元数据，只在本地校验时使用 |
+| `binding` | —（不发送） | 只用于本地选择 instructions 模板和采纳策略 |
+| `usage` | `usage.input_tokens` / `usage.output_tokens` | 归一化为 `inputTokens/outputTokens`；官方口径 output 不计费 |
+
+请求上限：单次请求 64k tokens，其中 `state` + 最长问题 ≤ 32k；速率 1,200 次/分钟、250k tokens/秒（账号级，实际以返回为准）。筛查（§3.5）按这两个上限做 `oversized` 判断，估算方式写入 trace。
+
+错误映射：
+
+| HTTP | 含义 | 归类 | 重试 |
+| --- | --- | --- | --- |
+| 401 | key 缺失或无效 | `unreachable`（子类 auth） | 否；设置页状态改为“key 无效” |
+| 422 | 请求校验失败 | 实现错误，按 `invalid_request` 诊断记录；本次步骤 `unreachable` | 否 |
+| 429 | 限流 | `unreachable`（子类 rate_limit） | 是，指数退避，受 §4.3 单次超时约束 |
+| 529 | 服务过载 | `unreachable`（子类 overloaded） | 是，同上 |
+| 其他 5xx / 网络错误 | 服务或网络故障 | `unreachable` | 是，同上 |
+| 200 但答案非法 | 违反 §3.3 | `invalid_response` | 否 |
+
+官方文档也提到 `GET /v1/models`，但 API 参考未给出其字段；“测试连接”只以 2xx/401 区分连通与鉴权，不解析返回体。
+
+成本量级（官方价，读时定价）：输入 $0.042 / 百万 tokens，输出免费。按 jev-use 报告里约 15k 输入 tokens/步估算，单步约 $0.0006，决策层的主要成本会来自大模型的文本生成与审议，而不是 Jev；计量与评测应按此分开统计。
 
 ---
 
@@ -306,7 +342,7 @@ v1 固定使用 Jev adapter，不实现任意 fallback 链。流程是：
 | 运行总 deadline | consumer 创建 run 时确定，所有 Jev/text/review 请求继承同一截止时间；先检查取消，再检查总预算/总 deadline。耗尽返回 exhausted，不进入 unreachable 或接管。实际请求时限取剩余 run 时间与单次上限的较小者 |
 | 单轮预算 | consumer 为每次运行传 `budgetKey`，Jev、大模型填值、审议、修正和重试共同计数；初始上限为 200 次模型请求，另有总 deadline 和动作上限 |
 | 接管预算 | v1 初始策略：每个步骤最多一次大模型审议、每轮最多三次审议/修正；失败后交回主 agent，不在 Jev 与大模型之间无限来回。这些是待评测内部值，不新增设置项 |
-| 重试 | 429 / 5xx / 网络错误最多退避重试 2 次 |
+| 重试 | 429 / 529 / 其他 5xx / 网络错误最多退避重试 2 次；401 / 422 不重试（映射见 §3.7） |
 | 重试安全性 | 决策不改变工作区或网页，但重试可能重复计费、给出不同答案；Abort 不重试，鉴权/参数错误不重试。浏览器变更不能因传输错误重试 |
 | 缓存 | v1 不做跨运行决策缓存；仅允许同一 run、同一观测版本的未执行决策/文本复用。后续 key 须含 protocol/binding/config/model 版本、完整有效载荷和候选身份 |
 | 缓存前提 | canonicalize 固定对象键顺序、保留数组顺序，拒绝非 JSON 值。不能为提高命中率删除 pageKey、node id 等新鲜度信息；命中也必须重新做执行前 guard |
@@ -538,7 +574,7 @@ observe(渲染进程)
 
 - `pageKey` 标识文档生命周期，稳定 node ref 绑定实际 DOM 节点；导航或节点替换使旧引用失效，不能静默退回模糊匹配。
 - 同一 tab 的运行必须串行或独占，用户仍可操作页面，因此每次 mutation 前都做 guard。文本生成之后也要再校验。
-- consumer 在发送 mutation 前检查权限与取消信号；不得因只有外层 browser_task 获批而绕过 ask/smart/full 的动作权限。需要把现有权限判定复用到宿主执行路径；付费、发送、删除等超出原授权的行为仍须审批。审批按 conversation + owner 归属。
+- consumer 在发送 mutation 前检查权限与取消信号；不得因只有外层 browser_task 获批而绕过 ask/smart/full 的动作权限。现有沙箱并未给 browser_* 单独分类，宿主执行路径需要自己的动作权限判定（§7.1.3）；付费、发送、删除等超出原授权的行为仍须审批。审批按 conversation + owner 归属。
 - mutation 先记录已发出/确认/结果未知，再观察。执行结果不明或导航打断时返回 uncertain，不重放；stale 且确认未执行时才可重新观察再决策。
 - WAIT 有次数与总时限，每次等待后重新观察；BLOCKED 带原因交回主 agent；DONE 只是完成候选，必须用最新页面证据核验目标，无法验证时不能报告成功。
 - SELECT 引用本次观测里的合法 option，执行前确认 option 仍存在且可用。
@@ -547,6 +583,89 @@ observe(渲染进程)
 - browser state 的裁剪由 consumer 完成，候选表、criteria、ref 映射必须一致；通用 runtime 超过预算应拒绝而非任意截断 JSON。
 
 Jev 返回的选择概率不是授权，也不是任务成功证明。
+
+#### 7.1.1 现有实现与上述不变量的差距（v0.10.2 核对）
+
+上面的不变量大多**还不存在**。它们是切片 3 的前置工作，其中两条是现有 browser_* 工具本身的缺陷，不依赖决策层，应先单独修：
+
+| # | 现状（文件） | 问题 | 需要的改动 |
+| --- | --- | --- | --- |
+| G1 | `SNAPSHOT_BODY` 的 `text` 取 `el.innerText \|\| el.value …`（`side-pane-browser.tsx`） | `input[type=password]` 的 innerText 为空，会回落到 **明文密码值**进入快照；`PAGE_HELPERS.label/nearby` 也会把它放进 `candidates` 返回给模型。**已是现有泄漏，与决策层无关** | 快照与 label 对 password/file 类型只取 aria-label/placeholder/name，永不取 value；先修 |
+| G2 | 每次快照 `setAttribute('data-fv-ref', 'e'+index)`，不清除旧标记；`resolve()` 用 `querySelector` 取第一个匹配 | 上次快照的 `e5` 若仍在 DOM 中且排在前面，会点到**旧元素**；也是现有缺陷 | 快照前清除全部旧 `data-fv-ref`，或 ref 带快照代号（`s12:e5`） |
+| G3 | `resolve()` 依次回落 ref → selector → 可见文字模糊匹配 | 与 §7.1“旧引用失效不能退回模糊匹配”冲突 | 新增 strict 模式：browser_task 路径只按 ref 解析，失配即 stale |
+| G4 | 快照无 `pageKey` / 快照版本；元素无几何、无视口标记 | 无法做 freshness guard，也无法只给视口内候选 | 快照返回 `pageKey`（导航代号 + 文档 URL）、`snapshotId`、每个元素的 `inViewport`、`rect` |
+| G5 | `text` 为整页 `body.innerText` 前 8,000 字；元素按 DOM 顺序截前 150 个 | 首屏外元素可能占满名额，视口内按钮反而缺失 | 决策用快照优先视口内元素、再按距离补足；阅读用快照保持原行为 |
+| G6 | select 走 `type` 动作，按 value/文字**模糊**匹配 option | 与“SELECT 引用唯一 option id”冲突 | 新增 `select` 动作：按 option 下标 + value 精确匹配，失配报 stale |
+| G7 | 没有 scroll 动作；`press` 发给 `document.activeElement` | SCROLL 无法执行；PRESS_ENTER 可能打到用户刚点过的别处 | 新增 `scroll`；按键前校验焦点仍在上一步输入的 ref 上 |
+| G8 | `act()` 的 grace 固定 500ms（`waitForNavigation`） | §7.1 要求有界、状态感知的等待 | 保留导航监听，加 DOM 静默/网络空闲的有界等待，上限仍由 run deadline 截断 |
+| G9 | `browser-bridge.ts` 只绑定**最后 attach 的那个 renderer**，请求不带 runId，也无取消 | 主会话停止无法中断正在等待的 browser 请求；多窗口时路由依赖单一 target | 请求增加 `runId` 与取消消息；Main 侧 pending 按 runId 可批量 reject |
+| G10 | `permission-sandbox.ts` 没有为 browser_* 分类，它们落入“opaque 未知工具” | ask 模式每次调用都确认，smart 只看参数是否命中风险正则，full 不确认。§7.1 所说“复用现有权限判定”并不存在 | 见 §7.1.3 |
+
+G1、G2 建议作为独立修复先行，不等决策层立项。
+
+#### 7.1.2 操作集合与现有动作的对应
+
+operation 的候选全部映射到 renderer 已有或需新增的动作；没有映射的能力不出现在 criteria 里：
+
+| operation | 出现条件 | target 问题 | 执行 |
+| --- | --- | --- | --- |
+| `CLICK` | 视口内有 ≥1 个可点击元素 | `click_target` | `click`（strict ref） |
+| `TYPE_TEXT` | 有可编辑且非 password/file 的元素 | `type_text_target` | `resolveText` → `type`（strict ref） |
+| `SELECT` | 有可用 `<select>` option | `select_target`（`select:e7:option:2`） | 新 `select` 动作（G6） |
+| `PRESS_ENTER` | 上一步是对某输入框的 TYPE_TEXT，且焦点仍在该框 | 无（目标由代码确定） | `press Enter`，先校验焦点（G7） |
+| `SCROLL_DOWN` / `SCROLL_UP` | 视口可继续滚动 | 无 | 新 `scroll` 动作 |
+| `BACK` | `canGoBack` | 无 | `back` |
+| `WAIT` | 页面仍在加载或最近一步触发了异步变化 | 无 | 宿主有界等待，计入 WAIT 次数 |
+| `DONE` | 总是 | 无 | 宿主核验（§7.1 不变量） |
+| `BLOCKED` | 总是 | 无 | 交回主 agent，附原因 |
+
+有意**不提供**的：任意 URL 导航与搜索（需要生成文本且可能越出任务范围，归 `open_ended`/`writing` 交回主 agent；run 的起始页由主 agent 用现有 `browser_open` 决定）、`evaluate` 脚本、新开标签页。
+
+每个 target 问题都附加一个 `NONE` 候选，描述为“没有合适的元素”（官方建议 choice 总是包含 none-of-the-above）。选中 `NONE` 等价于 operation 不可执行，走 `handoff: unsure`，不执行任何动作。
+
+候选描述由代码拼装：`[角色/标签] 可见文字 · name/placeholder · 所在区域（header/form/dialog）`，截断到固定长度；不放 selector、不放 href 的查询串（可能含 token），只放 origin + path。
+
+#### 7.1.3 动作权限：browser_task 需要自己的分类
+
+现状是 browser_* 在沙箱中被当作未知工具（G10）。`browser_task` 在一次工具调用里执行多个动作，沙箱的 `tool_call` 钩子只会看到外层那一次，所以内部每次 mutation 前必须由宿主自己判定。建议：
+
+| 模式 | 外层 `browser_task` | 内部普通动作 | 内部高风险动作 |
+| --- | --- | --- | --- |
+| ask | 确认一次，对话框显示 goal 与起始页 origin | 不再逐步确认 | 逐次确认 |
+| smart | 不确认（与 web 访问同级，`network: true`） | 不确认 | 逐次确认 |
+| full | 不确认 | 不确认 | 不确认 |
+
+- **高风险动作**由代码判定，不由模型置信度判定：点击 `type=submit` 或位于含 password/支付字段表单内的按钮；可见文字或 aria-label 命中“支付/购买/下单/删除/发送/提交/确认订单/pay/buy/order/delete/send/submit/confirm”等词表；离开起始 origin 的导航后第一次 mutation。
+- 确认通过该会话的 `#extensionUi(conversationId)` 发出（与沙箱同一 confirm 通道），对话框写明“在 {origin} 点击「{label}」”；拒绝即 `blocked`，交回主 agent。
+- 无确认 UI 的会话（`ctx.hasUI === false`）遇到需要确认的动作一律 blocked，与沙箱现有行为一致。
+- 这改变了 ask 模式的体验：原来每次 browser_click 都确认，现在变为一次任务确认 + 高风险确认。**需产品确认**；若不接受，ask 模式下不提供 browser_task，只保留逐步工具。
+
+#### 7.1.4 `browser_task` 工具契约
+
+```ts
+// 参数
+{ goal: string; tabId?: string; maxSteps?: number /* 默认 20，上限 40 */ }
+
+// 结果（details 字段；content 为同内容的简短文本摘要）
+type BrowserTaskResult = {
+  status: "completed" | "blocked" | "handed_off" | "degraded" | "uncertain" | "cancelled" | "exhausted";
+  summary: string;                       // 给主 agent 的一句话
+  actions: Array<{
+    step: number;
+    operation: string;                   // CLICK / TYPE_TEXT / …
+    target?: { label: string; role?: string };  // 不含 selector、不含填写值
+    decidedBy: "jev" | "deterministic" | "review";
+    status: "confirmed" | "unknown" | "rejected_stale" | "denied";
+  }>;
+  observation: { tabId: string; url: string; title: string };
+  handoff?: { reason: HandoffReason | "verification_failed" | "permission_denied"; remaining?: string };
+  usage: { jevRequests: number; largeModelRequests: number };
+};
+```
+
+- 填入字段的文本不写入结果，只写“已填写 {字段 label}（N 字）”；主 agent 需要时自行 `browser_snapshot`。
+- `completed` 必须附带 DONE 核验通过的依据（哪条页面事实）；否则只能是 `uncertain`。
+- 工具描述必须说明：它只在已打开的标签页内执行点击/填写/选择/滚动，不会自行打开新站点；目标需要搜索或打开网址时先用 `browser_open`。
 
 ### 7.2 大模型在 browser use 中的职责
 
@@ -629,7 +748,8 @@ type BrowserReviewResult =
 
 ## 8. 安全、远程与 i18n（硬规则）
 
-1. **所有新 IPC 方法必须进 `src/shared/remote-policy.ts` 分类。** `assertPolicyCoverage` 会在方法既不在 `DENIED` 也不在 `ALLOWED` 时拒绝启动服务器；新增 `handle()` 不等于自动可远程。
+1. **所有新 IPC 方法必须同时进两层分类。** 一是 `src/shared/remote-policy.ts`：`assertPolicyCoverage` 会在方法既不在 `DENIED` 也不在 `ALLOWED` 时拒绝启动服务器。二是 v0.10 新增的 `src/main/app-server/capabilities.ts`：`capabilityOf()` 按前缀映射能力，未识别的前缀会让 `assertCapabilityCoverage` 失败。`decision:*` 需新增一条映射，建议归入 `settings`（配置读写）；`decision:test` 会从本机发起网络请求，即使能力匹配也由 remote-policy 拒绝。新增 `handle()` 不等于自动可远程。
+1a. **只在桌面 Main 内运行的会话提供 `browser_task`。** Headless App Server 的能力集不含 `browser`（`HEADLESS_CAPABILITIES`），SSH 远程 Agent 也没有 `__fastvibeBrowserRequest` 桥；这两类会话不注册该工具，也不显示“Browser use 优化”为已生效。
 2. **决策配置管理只允许本机。** `decision:save-config`、`decision:set-key`、`decision:test` v1 均拒绝远程调用；远程 renderer 不显示可提交的设置表单，只显示“决策引擎只能在本机管理”。
 3. **决策 key 不从 Main 读回或广播到 renderer。** 用户录入时 renderer 暂时持有输入值，提交后清空；不进入 localStorage、日志、模型 state、trace 或设置快照。
 4. **v1 不接受任意 endpoint。** Jev adapter 固定 endpoint；未来自建 endpoint 需要 HTTPS、固定 allowlist、禁止未经确认的重定向、禁止从 renderer 传入 headers/代理/credential 名称，并由 Main 发起请求。
@@ -660,6 +780,8 @@ type BrowserReviewResult =
 
 | 切片 | 内容 | 新凭证 | 验收 |
 | --- | --- | --- | --- |
+| **前置** | 修复 §7.1.1 的 G1（快照泄漏密码值）、G2（旧 ref 残留） | 否 | 与决策层无关，独立 PR；快照与 candidates 中不出现 password 值；连续两次快照后旧 ref 不可解析 |
+| **0** | 离线评测：不做 UI、不接主流程，用脚本验证 Jev 在我们的 state/questions 上是否值得做（见 §10.1） | 开发者自己的 Jev key | 产出评测报告与 go / no-go 结论；no-go 则本方案后续切片不启动 |
 | **1** | `protocol.ts` + dispatch/validator + DecisionOutcome + `executor/runtime` + trace + 假后端 | 否 | 覆盖 reported/estimated/missing、预筛不请求、未选 head 不升级、cancelled/exhausted 不接管、必要答案校验及总预算 |
 | **2** | 设置 → 决策引擎：大模型选择、Jev 选择、API key、Browser use 勾选、状态机、i18n、IPC/policy | Jev key | 大模型可选任意已配置模型；默认跟随主模型；key 只写 Main；测试连接不发送真实 state；多窗口收到脱敏变化；远程管理被拒 |
 | **3** | browser consumer：Jev 决策、TextResolver、有限 reviewStep、freshness guard、视口文本、敏感字段过滤 | 使用已配置大模型 | 多步任务跑通；不执行低置信度答案；接管后仍验证引用和权限；修正携带真实证据且有界；服务故障可见；停止后无新请求 |
@@ -669,6 +791,33 @@ type BrowserReviewResult =
 
 `pnpm test` 只测纯模块（无 DOM、不引 zustand/React）。browser 的注入脚本继续由 `pnpm check:scripts` 检查；浏览器语义测试需要本地 fixture，不能只靠 TypeScript。
 
+### 10.1 切片 0：离线评测与止损标准
+
+§11 的三个 UNVERIFIED 决定整个方案值不值得做，而切片 1–3 的工作量主要在设置页、权限和 browser 不变量上。先用最小代价回答“Jev 在我们的输入上选得准不准、快不快”，再决定是否投入。
+
+**数据集**
+
+- 录制：用现有 browser_* 工具让主模型完成一批任务，每步保存快照（经 G1 过滤）与主模型实际选择的动作；人工复核后作为标注。不录入登录态页面与个人数据。
+- 规模建议：英文站点与中文站点各 ≥ 15 个任务、合计 ≥ 300 步；另加本地 fixture 页面覆盖 SELECT、分页、弹窗、同名按钮等难例。
+- 每步离线重放：按 §7.1.2 构造 questions，只调用 Jev，不执行动作。
+
+**指标**
+
+- operation 准确率、target 准确率（按中/英、候选数分桶：≤20 / 21–80 / >80）；
+- 按 confidence 阈值扫描：采纳率与“采纳后错误率”的曲线，确认存在一个阈值使错误率足够低时采纳率仍有意义；
+- 延迟 p50 / p95（含网络）、输入 tokens / 步；
+- 对照：同样输入下主模型用 enum/schema 约束一次性给出 operation + target 的准确率与延迟（§11 要求的公平基线）。
+
+**建议止损线**（数值待评审确认，写进报告而不是代码）
+
+| 条件 | 结论 |
+| --- | --- |
+| 英文：存在阈值使采纳率 ≥ 60% 且采纳后错误率 ≤ 2%；p95 延迟不高于基线的 1/2 | 继续切片 1–3，v1 先只宣称英文站点收益 |
+| 中文单独达到上述标准 | 中文站点同样启用；否则设置页说明中文效果有限，或中文页面直接走现有路径 |
+| 英文也达不到，或延迟优势在交接计入后消失 | no-go：保留本协议文档作为未来其他后端的设计，不接 Jev |
+
+评测脚本放 `scripts/`，不进入产品包；key 从开发者环境变量读取，不写入仓库、不复用产品的 `.env`。
+
 ---
 
 ## 11. 未验证 / 待补
@@ -676,7 +825,9 @@ type BrowserReviewResult =
 - **`UNVERIFIED`：Jev 在中文页面上的实际质量。** 官方文档写明英语是主要训练语言，CJK 准确率不等同；必须在真实中文站点和英文站点分别测。
 - **`UNVERIFIED`：Jev + 现有大模型的 browser 端到端收益。** 比较主模型直接 browser use、Jev + 大模型生成/有限接管两条路径，真实计入交接、重试、修正和失败成本。基线使用合法 enum/schema 约束与合理推理设置，不能用未优化的长输出基线夸大收益。
 - **`UNVERIFIED`：置信度采纳策略。** 按中英文、模型版本、候选数量和 confidence 来源分组测准确率/误操作率/交接率，记录从未被选中的选项。不能因交接率高就直接降低阈值，也不能把 reported 信号当授权。
-- **Jev 版本策略。** v1 可以默认 `jev-latest`，但 trace 必须记录响应里的 versioned model；稳定用户需要后续支持 pin 版本。
+- **Jev 版本策略。** v1 可以默认 `jev-latest`（2026-09-23 指向 `jev-1.13.0`，`jev-preview` 同），但 trace 必须记录响应里的 versioned model；切片 0 的评测结论绑定具体版本，别名漂移后需重跑评测，稳定用户需要后续支持 pin 版本。
+- **已核实（2026-09-23，官方文档）：** 请求上限 64k tokens（state + 最长问题 ≤ 32k）；choice ≤ 255 候选；score 2–10 级；noul 无 confidence；错误码 401 / 422 / 429 / 529；输入 $0.042 / 百万 tokens，输出免费。实现时仍需重新核对。
+- **ask 模式下 browser_task 的确认粒度**（§7.1.3）需要产品决定。
 - **Jev 的动态速率限制与错误体验。** 429、超时、额度不足、key 失效需要分别映射为用户能理解的状态，而不是统一显示“决策失败”。
 - **自建 endpoint 的产品入口。** 协议先保留，v1 不暴露任意 URL；未来是否提供自建服务参考实现另立设计。
 - **trace 展示形态。** v1 先落盘和显示摘要；完整 inspector 需要另做隐私、清理和筛选设计。
@@ -708,6 +859,15 @@ type BrowserReviewResult =
 - `bench/RESULTS.md` 的性能是作者单一环境报告，非 FastVibe 验证。公平配置下的延迟优势约 3 倍而非演示直观的十几倍；报告也披露有示例在 escalate 后仍使用答案，真实有限交接必须计入额外时间/费用。阈值和速度都不能直接移植。
 
 本次补充不增加 v1 场景或用户配置项；只扩充两个已配置模型如何合作的契约，以及相应 trace/计量/验收。
+
+### 12.2 v0.10.2 代码复核与线格式核对（2026-09-23）
+
+- 对照 `side-pane-browser.tsx`、`browser-bridge.ts`、`permission-sandbox.ts` 列出 §7.1 不变量的实现差距（§7.1.1），发现两处与决策层无关的现有缺陷（快照泄漏密码值、旧 ref 残留），前移为独立修复。
+- 纠正“复用现有 browser 权限判定”：browser_* 目前没有专门分类；补 §7.1.3 宿主侧动作权限，并把 ask 模式确认粒度列为待决策。
+- 补 §7.1.2 操作集合到实际动作的映射、target 问题的 `NONE` 候选、候选描述规则，以及 §7.1.4 `browser_task` 结果契约。
+- 按 TypeSafe API 参考补 §3.7 线格式、上限、错误码与成本量级；修正 Jev confidence 的性质（分布形状统计量，noul 无 confidence）和重试码（加入 529）。
+- 补 v0.10 引入的 App Server 能力分类（`capabilities.ts`）与 SSH/headless 会话不提供 browser_task 的规则。
+- 新增切片 0 离线评测与止损标准，先验证价值再投入设置页和 browser consumer。
 
 参考（源码/公开文档静态调研）：
 
