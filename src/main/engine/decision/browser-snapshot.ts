@@ -12,7 +12,9 @@
  * code-owned identity and the semantic keys the executor compares before acting.
  *
  * Adaptations: the page global is `__fastvibeDecision`, and the scripts are strings the
- * host injects (webview `executeJavaScript`), not CDP evaluations.
+ * host injects (webview `executeJavaScript`), not CDP evaluations. Date/time inputs are
+ * offered as text fields: the original skips them, which left a form's delivery-time
+ * field invisible and the loop re-typing a neighbouring field instead.
  */
 
 /** One executable candidate, as the observe script reports it. */
@@ -93,6 +95,7 @@ export const OBSERVE_SCRIPT = String.raw`(() => {
       if (e.type==='search') return 'searchbox';
       if (e.type==='number') return 'spinbutton';
       if (['text','email','url','tel'].includes(e.type)) return 'textbox';
+      if (['date','time','datetime-local','month','week'].includes(e.type)) return 'textbox';
     }
     return null;
   };
