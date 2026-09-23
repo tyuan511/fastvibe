@@ -380,118 +380,48 @@ trace 还须区分 phase（decide/text/review）、confidence 来源与算法、
 
 ## 5. 产品形态：设置 → 决策引擎
 
+> 2026-09-23 修订：决策模型改为“关闭 / Jev / Laya”三选一；“大模型审议”取消，大模型不再进入决策循环。依据见 §7.1 与 §10.1.1。
+
 ### 5.1 设置入口
 
-新增设置 section：**设置 → 决策引擎**，section id 为 `decision`，加入 `SETTINGS_SECTIONS`。页面使用现有 `SettingsGroup` / `SettingsRow`，不另造一套表单布局。
+**设置 → 决策引擎**（section id `decision`）已随 `claude/laya-mlx-local-setup-730b65` 合入：`decision-settings.tsx` 使用 `SettingsGroup` / `SettingsRow`，配置存 `decision.json`，经 `decision:get-config` / `decision:save-config` / `decision:test` 读写，`decision:changed` 跨窗口同步。目前可选“关闭 / Laya”，需要补上 Jev。
 
-这不是供应商设置的子项：大模型复用供应商模型，但 Jev 不是对话模型，必须在这里配置。
+页面顺序：当前状态 → 决策模型 → 文字模型 → 数据与隐私说明。
 
-页面顺序：
+### 5.2 决策模型（决定 browser use 走哪条路径）
 
-1. 当前状态卡；
-2. 大模型；
-3. 决策模型；
-4. 启用场景；
-5. 数据与隐私说明。
-
-### 5.2 大模型
-
-**大模型**负责生成与有限接管：为 TYPE_TEXT 生成字段值；在 Jev 不确定或不可达时，审议当前步骤；根据新的页面证据修正输入。它不是另一个自主 agent，不能自行调用浏览器工具或扩大任务授权。三种工作复用这一处模型选择，不增加“接管模型”设置。
-
-产品行为：
-
-- 可选择已添加供应商中用户配置的任意模型；复用现有模型选择器，不另设预选白名单。缺失认证或不可用的条目标注状态并禁止新选入，已有失效选择保留供修复；
-- 默认值为**跟随主模型**，内部保存为 `{ kind: "main" }`，而不是复制当前 provider/model；
-- **主模型指发起本次 browser run 的主 agent 会话模型**，不是全局 `settings.defaultModel`，也不是最后激活窗口的模型。按明确的 `conversationId` 获取；会话确实没有模型时才尝试全局默认模型，仍不可用则提示配置；
-- 每个 browser run 开始时解析并固定 provider/model 与配置版本；主会话中途切换模型只影响下一次 run。设置页可显示当前会话的解析结果，但不同会话各自跟随自己的模型；
-- 用户也可以选择任意已连接供应商的具体模型 `{ kind: "model", provider, id }`；
-- provider 被删除、模型失去认证或模型不再存在时，状态显示“模型不可用”，不静默改写用户选择；运行时按 fallback 规则回到当前 browser use 行为；
-- 修改大模型不重启 engine，下一次 browser run 生效；不修改主对话的模型选择，也不生成主对话“模型切换”分隔线。
-
-这里的“大模型”不是新增供应商，也不接受新的 API key。模型凭证继续由现有供应商设置管理。
-
-### 5.3 决策模型
-
-第一版只提供一个决策模型：**Jev**。
-
-UI：
-
-- 决策模型选择器显示 Jev；预留未来模型列表的扩展点，但 v1 不展示自建 endpoint 或任意 URL；
-- API key 输入框为密码控件，提供保存、清除、测试连接；
-- key 由 Main 写入 `runtime/engine/agent/.env`，renderer 只能读到“已配置 / 未配置”，永远不能读回原文；
-- Jev endpoint 和 API 协议由内置 adapter 持有，用户不填写 `apiKeyEnv`、headers 或 URL；
-- “测试连接”调用固定 Jev `GET /v1/models` 验证认证与连通性，不假定有 health 端点，也不发送网页或会话内容。成功只表示连接可用，不保证有推理额度或 browser 任务成功；
-- Jev 的输入 token 计入决策层使用统计，output token 按 provider 返回值归一化。
-
-状态显示：
-
-| 状态 | 含义 | browser 行为 |
+| 选项 | browser use | 配置 |
 | --- | --- | --- |
-| 未配置 | 没有 Jev key | 决策层不可用，使用现有 browser use |
-| 待配置大模型 | Jev key 有，但大模型没有可用解析结果 | 决策层不可用，使用现有 browser use |
-| 已就绪 | 本地配置检查通过；另展示上次连接测试时间/结果 | 可以尝试 browser 决策循环，不承诺实际推理一定成功 |
-| 降级 | 本次 Jev 超时、限流或协议错误 | 剩余预算允许时有限接管，否则交回主 agent；显示具体原因 |
+| 关闭（默认） | 现有方式：主模型直接调用 `browser_*` 工具 | 无 |
+| Jev | jev-ultrafast 循环（§7.2），Jev 逐步决策 | API key（密码控件、保存/清除/测试连接）；endpoint 固定 |
+| Laya | 同上，决策由本机 laya-mlx 完成 | 本机服务地址，默认 `http://127.0.0.1:8787`；测试连接走 `GET /health` |
 
-正常的 writing/unsure 交接不改变设置页的服务可用状态；运行卡片显示“由大模型生成 / 审议”，统计可分别查看正常交接与故障降级。
+- 选择 Jev 或 Laya 后，会话额外获得 `browser_task` 工具；现有 `browser_*` 工具保留，供主模型读页面和处理循环交回的情况。
+- **大模型不是决策模型选项。** 试点中大模型逐步回答选择题，单步平均 3.5 s，并且频繁选出不在候选里的编号（§10.1.1）。大模型边看边规划的现有方式更适合它，所以“关闭”就是大模型路径。
+- Jev key 由 Main 写入 `runtime/engine/agent/.env`，renderer 只能读到“已配置 / 未配置”；测试连接调用固定的 `GET /v1/models`，不发送网页内容。
+- Laya 是本机服务，没有凭证；地址只接受 http/https（`validDecisionBaseUrl`）。由用户填写的地址若指向远端，就等于把页面内容发往那里，§5.4 的出站提示同样适用。
 
-### 5.4 启用场景
+### 5.3 文字模型
 
-页面提供一个**场景勾选区**。第一版只有一个可启用场景：
+决策循环选中 TYPE_TEXT 后，由文字模型根据目标与字段上下文生成输入值（§7.2）。默认**跟随发起会话的主模型并关闭推理**，也可以选择任意已配置模型。它只返回 `{"text": ...}`，不调用工具、不参与决策。试点里 packy/deepseek-flash 关闭推理后单次约 0.8–1.0 s，开启推理则为 1.2–1.8 s。
 
-| 场景 | v1 | 使用的能力 | 默认值 |
-| --- | --- | --- | --- |
-| Browser use 优化 | 可勾选 | `browser.step` + `browser.text` + `browser.review`（消费方专用） | 关闭 |
+### 5.4 数据与隐私提示
 
-后续的“子 agent 选择”“agent team 调度”暂不出现在 v1 的可选列表中，避免用户看到不能工作的半成品；它们只作为内部 binding 预留。
+> 选择 Jev 后，任务目标、屏幕内可见文字、控件名称与当前值、操作历史会发送给 Jev；生成输入内容时，相关上下文会发送给文字模型的供应商。密码、文件与隐藏输入字段不会被读取。选择 Laya 时这些数据留在本机（除非地址指向其他机器）。
 
-勾选行为：
+首次选择远端决策模型（Jev）时必须确认一次；之后页面保留出站说明与关闭入口。
 
-- 勾选只保存用户意图；如果 Jev key 或大模型缺失，行内显示“待配置”，并提供跳转到对应设置行的入口；
-- 运行时再次检查配置，不会因为勾选状态绕过认证或权限；
-- 取消勾选后，不删除 key 或大模型选择；新任务回到现有工具路径。正在运行的 browser consumer 在下一个安全边界停止继续调用决策层，返回已执行动作与当前状态，不撤销或重放已经发生的动作；
-- 开启场景、修改模型或替换 key 不重启 engine，新配置在下一次 browser run 生效；关闭场景和清除 key 属于撤销授权，阻止旧运行继续发起新的请求；
-- browser use 的工具描述或工具结果应能告诉主 agent 当前场景是否启用，避免主 agent 误以为所有浏览器动作都由 Jev 接管。
+### 5.5 持久化与 IPC
 
-### 5.5 数据与隐私提示
-
-决策引擎页面必须明确说明：
-
-> 启用 Browser use 优化后，任务目标、可见页面文本、控件信息和必要操作历史会发送给 Jev；生成输入内容、审议步骤或修正输入时，相关上下文也会发送给所选大模型的供应商。程序会排除密码、文件和隐藏输入字段，但页面正文仍可能包含隐私信息，请确认允许这些数据出站。
-
-这不是一条藏在高级设置里的提示。用户勾选 Browser use 场景时，如果决策模型是远端 Jev，首次启用必须确认一次；之后页面仍保留可见的出站说明与关闭入口。
-
-### 5.6 持久化形状（v1）
-
-`decision.json` 放在 userData 根目录，与 `providers.json` / `mcp.json` 同级：
+`decision.json`（userData 根目录）目前是 `{ kind: "off" } | { kind: "laya", baseUrl? }`，由 `decisionModelConfigOf` 归一化，写入走临时文件原子替换。需要扩展：
 
 ```jsonc
-{
-  "version": 1,
-  "largeModel": { "kind": "main" },
-  "decisionModel": { "kind": "jev", "model": "jev-latest" },
-  "scenarios": { "browserUse": false },
-  "consents": { "browserUse": { "version": 1, "accepted": false } },
-  "trace": { "keep": 2000 }
-}
+{ "kind": "jev", "model": "jev-latest" }        // key 不在此文件，在 .env
+{ "textModel": { "kind": "main" } }              // 或 { kind: "model", provider, id }
+{ "consents": { "jev": { "version": 1, "accepted": true } } }
 ```
 
-v1 不把 backend registry、endpoint、`apiKeyEnv` 暴露给用户。未来支持自建决策服务时再扩展 schema，并由 Main 做固定 allowlist、HTTPS、重定向和凭证映射校验。
-
-### 5.7 IPC 与同步
-
-建议增加以下共享 IPC 方法，全部通过 `src/main/ipc/registry.ts` 的 `handle()` 注册，不能直接写 `ipcMain.handle`：
-
-- `decision:get-config`：返回脱敏配置与状态；
-- `decision:save-config`：保存大模型选择和场景开关；
-- `decision:set-key`：设置或清除 Jev key，只接受 key 值，不返回 key；
-- `decision:test`：测试固定 Jev endpoint，不带真实 state；
-- `decision:changed`：配置变化的广播事件，不带秘密。
-
-配置写入后使用现有 broadcast hub 同步窗口。renderer 只拿到 `hasKey`、模型可用性、启用场景和错误状态；`decision.json`、`.env` 原文不会进入 settings snapshot。`src/shared/api.ts` 是 Electron/Web 共用入口，不能只改 preload。
-
-远程策略：`get-config` 允许读脱敏配置/状态；save-config、set-key、test 拒绝远程。`decision:changed` 仅广播同样的脱敏 DTO。主进程内部 decide/resolveText/reviewStep 不暴露为 renderer 可自由调用的通用网络 RPC；未来 trace 查询需单独分类，v1 不推送原始 trace。
-
-配置读取：首次缺文件采用“大模型跟随主模型 + Jev 未配置 + Browser use 未勾选”；损坏或未知 version 保留原文件、报告状态并停用优化，不直接覆盖。保存校验后通过临时文件原子替换，串行化写入。旧安装只新增此默认配置，不改变现有 browser use 行为。
+IPC 继续通过 `handle()` 注册；Jev 还需要 `decision:set-key`，它只接受 key，不回传。远程策略：`get-config` 可以远程读（脱敏），`save-config`、`set-key`、`test` 一律拒绝远程。所有新方法同时登记 `remote-policy.ts` 与 `app-server/capabilities.ts`（§8）。
 
 ---
 
@@ -530,217 +460,90 @@ type DecisionBackend =
 
 ## 7. 消费者
 
-### 7.1 `browser.step`（第一版唯一 consumer）
+### 7.1 browser use：两条路径
 
-循环在 Main，观测/执行经 `browser:request` 往返渲染进程（现有 `src/main/pi/browser-bridge.ts` + `handleBrowserRequest`）。建议新增任务级工具 `browser_task({ goal, tabId? })`：主 agent 一次委派一个目标，Main 自行跑闭环，而不是每步再向主模型询问“是否调用 Jev”。只有场景已启用、配置可用时才对该会话提供工具；现有 browser_* 工具保留。
+| | 大模型路径（决策模型 = 关闭） | 决策模型路径（Jev / Laya） |
+| --- | --- | --- |
+| 谁决定下一步 | 主模型，逐次调用 `browser_*` 工具 | 决策模型，在 `browser_task` 内逐步选择 |
+| 主模型参与 | 全程 | 调用一次 `browser_task`（交出用户完整目标），拿到结果后读页面作答 |
+| 代码 | `resources/extensions/browser-use.ts`（现有） | `src/main/engine/decision/browser-*.ts` + 控制层 |
 
-配置关闭或失败后，consumer 返回明确的 `blocked/degraded/cancelled/uncertain/completed` 状态、已执行动作和当前观察，让主 agent 从当前状态继续。**回退不是自动重跑原目标**；已经点击过提交的任务不能因为换了后端再提交一次。任务运行绑定 conversation/run/tab/owner，主会话停止必须取消其请求、等待和所属审批；宿主维护 busy 状态，切换窗口不能丢失归属。
+两条路径共用侧边栏浏览器。决策模型路径把大模型从逐步决策里拿掉：主模型只在开始和收尾出现，中间每一步是一次约 0.3 s 的 Jev 请求。
 
-```text
-observe(渲染进程)
-  → state = { url, title, text(视口内), elements[], recentActions[] }
-  → questions = {
-       operation:        Choice(本次可用操作 + WAIT / DONE / BLOCKED),
-       click_target:     Choice(仅可点击元素, requiredWhen operation=CLICK),
-       type_text_target: Choice(仅可编辑元素, requiredWhen operation=TYPE_TEXT),
-       select_target:    Choice(控件与 option 的唯一组合 id, requiredWhen operation=SELECT),
-     }
-  → outcome = decide(request, context)
-  → cancelled / exhausted：结束，不接管
-  → handoff：按 §3.5 分派，不把所有原因统一送去 reviewStep
-      writing + 已确认输入目标：resolveText（没有合法目标则交回主 agent）
-      unsure/unreachable/invalid_response：预算允许才有限 reviewStep
-      oversized：重建有界观测；open_ended：交回主 agent
-  → decided：读取 activeQuestionIds 答案，目标也可由本次观测的单候选映射确定
-  → 若 operation=TYPE_TEXT，进入同一 writing 分支，显式调用 resolveText
-  → 再次检查权限 / 取消 / freshness guard
-  → act(ref, text) → observe again
+### 7.2 决策模型路径 = jev-ultrafast 的架构
+
+整体照搬 [browser-use/jev-ultrafast](https://github.com/browser-use/jev-ultrafast)（commit `1231850`，MIT），只替换控制层。决策模型通过决策层的 `DecisionBackend` 接入，属于适配层。
+
+| 模块 | 来源 | 内容 |
+| --- | --- | --- |
+| `browser-snapshot.ts` | `snapshot.js`、`browser.py` | 观察脚本（屏幕内控件：角色、可访问名称、当前值、选中/展开状态；下拉选项作为独立目标；滚动/等待作为控制项；屏幕内可见文字 ≤6000 字）、新鲜度 key 与 guard、执行前目标检查与命中测试、动作后等待 |
+| `browser-questions.ts` | `model.py`、`questions.py` | 每个节点一个编号的元素表放进 state；一个 operation 问题，加上每种操作一个 target 问题；每题都带同一套 next-step 规则 |
+| `browser-task.ts` | `model.py`、`agent.py` | 文字模型契约 `{"text": …}`、预算（60 个动作 / 120 次决策）、连续 3 步无变化即停 |
+| `browser-agent.ts` | `agent.py` | 循环：观察 → 决策 → 执行 → 再观察；页面过期就重新观察、重新决策；同一输入的文字不重复生成；执行记录先于观察写入 |
+| `backends/jev.ts`、`backends/laya.ts` | — | 决策模型适配器 |
+
+沿用它的取舍：
+- **不设置信度阈值，也不让大模型审议**（`acceptValid`）。安全网由执行前的新鲜度校验和无进展停止承担；confidence 仍会校验并写入 trace。
+- **不从目标里直接取引号内的文字**，输入值一律由文字模型根据字段上下文生成。
+- DONE 只是决策模型的判断。循环结束后由主模型读最终页面作答，读不到就如实说明。
+
+对原版的改动（都写在代码注释里）：
+1. **控制层换成 Electron webview**（§7.3）。
+2. **日期、时间类输入框**视为可输入字段：原版会忽略它们，导致表单的送达时间字段不可见，循环反复往相邻字段里输入。
+3. **附带离视口最近的 60 个屏幕外控件**，标记 `offscreen`，并补一条规则说明它们可以直接操作，执行前自动滚进视口。原版只观察屏幕内，目标在首屏以下时 Jev 会直接判 BLOCKED（试点中 8 次失败里有 6 次）。离视口更远的目标仍未解决，见 §11。
+4. **循环不负责作答**：jev-ultrafast 只执行，结果由外部核验；我们由主模型读最终页面回答。
+
+### 7.3 控制层（Electron）
+
+`BrowserControl` 接口只有三个方法：`observe` / `fresh` / `act`，由侧边栏 webview 实现：
+- 观察和校验通过 guest 的 `executeJavaScript` 执行上面的脚本。
+- 点击用 `sendInputEvent`（mouseDown/mouseUp）；输入先确认焦点已落在可编辑元素上，再 `selectAll` + `insertText`。焦点未到位时调用 `insertText` 会让渲染进程卡死。日期、时间字段插入无效时，改为直接设值并触发 input/change 事件。
+- 滚动用 mouseWheel。注意 Electron 的 deltaY 符号与 CDP 相反。
+- **所有页面脚本调用都必须有时限。** 页面一跳转，旧文档上执行的 promise 永远不会返回。动作后的等待脚本限 1 s，其余 15 s。
+- 同一标签页同时只允许一个 run；主会话停止时，取消该 run 的请求与等待（原 G9：browser bridge 需要携带 runId 并支持取消）。
+
+### 7.4 `browser_task` 工具契约
+
+```ts
+// 参数：用户的完整目标原文（或剩余部分）；主模型不拆解、不改写成“点击后报告……”
+{ goal: string; tabId?: string }
+
+// 结果
+{
+  status: "done" | "blocked" | "no_progress" | "handed_off" | "exhausted" | "cancelled" | "missing_value";
+  detail?: string;
+  steps: Array<{ operation: string; action: string; text?: string; page_changed: boolean | null }>;
+  page: { url; title; text; elements };   // 最终屏幕，与读取工具同形
+}
 ```
 
-问题构建规则：没有合法目标的操作不进入 operation 的 criteria，对应 target 问题也不创建；不允许空 choice。SCROLL_UP/DOWN 只在当前视口可滚动时出现。SELECT 候选使用代码生成的唯一 id（如 `select:e7:option:2`），宿主映射到本次观测的 select node + option identity/value；不能只返回一个跨控件有歧义的 option 索引。所有动态候选由快照构建，模型不能自行拼接 id。单候选目标不构造 target 问题：`DecideRequest.questions` 和 `activeQuestionIds` 都不含它，因此不触发“缺少必要答案”校验。consumer 单独持有 `localTargets: Record<operation, { observationId, candidateId }>`，在 operation 已采纳后取本次观测的唯一目标。它不写入 answers、不伪造模型 confidence，trace 将目标来源标为 `deterministic`。新鲜度与权限校验照常执行；若此时唯一目标已变化则重新观察，不自动替换。
+两轮测评中，主模型如果把目标拆成“点击 X 后报告 Y”，决策模型会因为“报告”不是可执行操作而判 BLOCKED。所以工具描述要写明：把用户原话一次交进来；循环只负责操作，作答由主模型完成。
 
-这里有三种上下文，必须分开：
+### 7.5 动作权限
 
-- **决策语义上下文**：state、questions、binding，发给 Jev；
-- **运行路由上下文**：conversationId、runId、tabId、AbortSignal，负责找到正确 browser tab 和取消运行，不发给模型；
-- **安全上下文**：owner、permission mode、数据出境确认，负责判定是否允许这次运行。
-
-这个循环依赖两件不在决策协议里的东西，但必须先有：
-
-1. **观测与执行的新鲜度 guard。** 决策和变更之间隔着网络往返，页面可能已经变化。click/select 前比对 `pageKey + guard(node)`；执行前再校验 connected / 可见 / 非 disabled / 非 inert / 几何 / `elementFromPoint` 遮挡；不一致就**不重试变更**、重新观察再决策。
-2. **快照排除敏感字段。** `password` / `file` / `hidden` 类型的输入值不得进入 state。
-
-观测/执行不变量：
-
-- `pageKey` 标识文档生命周期，稳定 node ref 绑定实际 DOM 节点；导航或节点替换使旧引用失效，不能静默退回模糊匹配。
-- 同一 tab 的运行必须串行或独占，用户仍可操作页面，因此每次 mutation 前都做 guard。文本生成之后也要再校验。
-- consumer 在发送 mutation 前检查权限与取消信号；不得因只有外层 browser_task 获批而绕过 ask/smart/full 的动作权限。现有沙箱并未给 browser_* 单独分类，宿主执行路径需要自己的动作权限判定（§7.1.3）；付费、发送、删除等超出原授权的行为仍须审批。审批按 conversation + owner 归属。
-- mutation 先记录已发出/确认/结果未知，再观察。执行结果不明或导航打断时返回 uncertain，不重放；stale 且确认未执行时才可重新观察再决策。
-- WAIT 有次数与总时限，每次等待后重新观察；BLOCKED 带原因交回主 agent；DONE 只是完成候选，必须用最新页面证据核验目标，无法验证时不能报告成功。
-- SELECT 引用本次观测里的合法 option，执行前确认 option 仍存在且可用。
-- 视口摘要适用于动作决策；保留完整页面阅读能力，不能把文章阅读也强制裁成首屏。
-- 将固定 500ms 等待改为有界、状态感知的等待，仍监听真正的导航和加载失败。后台节流策略需实测，不能仅缩短计时器而丢掉延迟导航。
-- browser state 的裁剪由 consumer 完成，候选表、criteria、ref 映射必须一致；通用 runtime 超过预算应拒绝而非任意截断 JSON。
-
-Jev 返回的选择概率不是授权，也不是任务成功证明。
-
-#### 7.1.1 现有实现与上述不变量的差距（v0.10.2 核对）
-
-上面的不变量大多**还不存在**。它们是切片 3 的前置工作，其中两条是现有 browser_* 工具本身的缺陷，不依赖决策层，应先单独修：
-
-| # | 现状（文件） | 问题 | 需要的改动 |
-| --- | --- | --- | --- |
-| G1 | `SNAPSHOT_BODY` 的 `text` 取 `el.innerText \|\| el.value …`（`side-pane-browser.tsx`） | `input[type=password]` 的 innerText 为空，会回落到 **明文密码值**进入快照；`PAGE_HELPERS.label/nearby` 也会把它放进 `candidates` 返回给模型。**已是现有泄漏，与决策层无关** | 快照与 label 对 password/file 类型只取 aria-label/placeholder/name，永不取 value；先修 |
-| G2 | 每次快照 `setAttribute('data-fv-ref', 'e'+index)`，不清除旧标记；`resolve()` 用 `querySelector` 取第一个匹配 | 上次快照的 `e5` 若仍在 DOM 中且排在前面，会点到**旧元素**；也是现有缺陷 | 快照前清除全部旧 `data-fv-ref`，或 ref 带快照代号（`s12:e5`） |
-| G3 | `resolve()` 依次回落 ref → selector → 可见文字模糊匹配 | 与 §7.1“旧引用失效不能退回模糊匹配”冲突 | 新增 strict 模式：browser_task 路径只按 ref 解析，失配即 stale |
-| G4 | 快照无 `pageKey` / 快照版本；元素无几何、无视口标记 | 无法做 freshness guard，也无法只给视口内候选 | 快照返回 `pageKey`（导航代号 + 文档 URL）、`snapshotId`、每个元素的 `inViewport`、`rect` |
-| G5 | `text` 为整页 `body.innerText` 前 8,000 字；元素按 DOM 顺序截前 150 个 | 首屏外元素可能占满名额，视口内按钮反而缺失 | 决策用快照优先视口内元素、再按距离补足；阅读用快照保持原行为 |
-| G6 | select 走 `type` 动作，按 value/文字**模糊**匹配 option | 与“SELECT 引用唯一 option id”冲突 | 新增 `select` 动作：按 option 下标 + value 精确匹配，失配报 stale |
-| G7 | 没有 scroll 动作；`press` 发给 `document.activeElement` | SCROLL 无法执行；PRESS_ENTER 可能打到用户刚点过的别处 | 新增 `scroll`；按键前校验焦点仍在上一步输入的 ref 上 |
-| G8 | `act()` 的 grace 固定 500ms（`waitForNavigation`） | §7.1 要求有界、状态感知的等待 | 保留导航监听，加 DOM 静默/网络空闲的有界等待，上限仍由 run deadline 截断 |
-| G9 | `browser-bridge.ts` 只绑定**最后 attach 的那个 renderer**，请求不带 runId，也无取消 | 主会话停止无法中断正在等待的 browser 请求；多窗口时路由依赖单一 target | 请求增加 `runId` 与取消消息；Main 侧 pending 按 runId 可批量 reject |
-| G10 | `permission-sandbox.ts` 没有为 browser_* 分类，它们落入“opaque 未知工具” | ask 模式每次调用都确认，smart 只看参数是否命中风险正则，full 不确认。§7.1 所说“复用现有权限判定”并不存在 | 见 §7.1.3 |
-
-G1、G2 建议作为独立修复先行，不等决策层立项。
-
-#### 7.1.2 操作集合与现有动作的对应
-
-operation 的候选全部映射到 renderer 已有或需新增的动作；没有映射的能力不出现在 criteria 里：
-
-| operation | 出现条件 | target 问题 | 执行 |
-| --- | --- | --- | --- |
-| `CLICK` | 视口内有 ≥1 个可点击元素 | `click_target` | `click`（strict ref） |
-| `TYPE_TEXT` | 有可编辑且非 password/file 的元素 | `type_text_target` | `resolveText` → `type`（strict ref） |
-| `SELECT` | 有可用 `<select>` option | `select_target`（`select:e7:option:2`） | 新 `select` 动作（G6） |
-| `PRESS_ENTER` | 上一步是对某输入框的 TYPE_TEXT，且焦点仍在该框 | 无（目标由代码确定） | `press Enter`，先校验焦点（G7） |
-| `SCROLL_DOWN` / `SCROLL_UP` | 视口可继续滚动 | 无 | 新 `scroll` 动作 |
-| `BACK` | `canGoBack` | 无 | `back` |
-| `WAIT` | 页面仍在加载或最近一步触发了异步变化 | 无 | 宿主有界等待，计入 WAIT 次数 |
-| `DONE` | 总是 | 无 | 宿主核验（§7.1 不变量） |
-| `BLOCKED` | 总是 | 无 | 交回主 agent，附原因 |
-
-有意**不提供**的：任意 URL 导航与搜索（需要生成文本且可能越出任务范围，归 `open_ended`/`writing` 交回主 agent；run 的起始页由主 agent 用现有 `browser_open` 决定）、`evaluate` 脚本、新开标签页。
-
-每个 target 问题都附加一个 `NONE` 候选，描述为“没有合适的元素”（官方建议 choice 总是包含 none-of-the-above）。选中 `NONE` 等价于 operation 不可执行，走 `handoff: unsure`，不执行任何动作。
-
-候选描述由代码拼装：`[角色/标签] 可见文字 · name/placeholder · 所在区域（header/form/dialog）`，截断到固定长度；不放 selector、不放 href 的查询串（可能含 token），只放 origin + path。
-
-#### 7.1.3 动作权限：browser_task 需要自己的分类
-
-现状是 browser_* 在沙箱中被当作未知工具（G10）。`browser_task` 在一次工具调用里执行多个动作，沙箱的 `tool_call` 钩子只会看到外层那一次，所以内部每次 mutation 前必须由宿主自己判定。建议：
+`browser_task` 在一次工具调用里执行多个动作，沙箱的 `tool_call` 钩子只看到外层那一次，所以内部每次 mutation 前由宿主自己判定：
 
 | 模式 | 外层 `browser_task` | 内部普通动作 | 内部高风险动作 |
 | --- | --- | --- | --- |
-| ask | 确认一次，对话框显示 goal 与起始页 origin | 不再逐步确认 | 逐次确认 |
-| smart | 不确认（与 web 访问同级，`network: true`） | 不确认 | 逐次确认 |
+| ask | 确认一次（显示目标与起始页 origin） | 不确认 | 逐次确认 |
+| smart | 不确认 | 不确认 | 逐次确认 |
 | full | 不确认 | 不确认 | 不确认 |
 
-- **高风险动作**由代码判定，不由模型置信度判定：点击 `type=submit` 或位于含 password/支付字段表单内的按钮；可见文字或 aria-label 命中“支付/购买/下单/删除/发送/提交/确认订单/pay/buy/order/delete/send/submit/confirm”等词表；离开起始 origin 的导航后第一次 mutation。
-- 确认通过该会话的 `#extensionUi(conversationId)` 发出（与沙箱同一 confirm 通道），对话框写明“在 {origin} 点击「{label}」”；拒绝即 `blocked`，交回主 agent。
-- 无确认 UI 的会话（`ctx.hasUI === false`）遇到需要确认的动作一律 blocked，与沙箱现有行为一致。
-- 这改变了 ask 模式的体验：原来每次 browser_click 都确认，现在变为一次任务确认 + 高风险确认。**需产品确认**；若不接受，ask 模式下不提供 browser_task，只保留逐步工具。
+- 高风险动作由代码判定：点击 `type=submit` 或位于含支付/密码字段表单内的按钮；标签命中“支付/购买/下单/删除/发送/提交/pay/buy/order/delete/send/submit/confirm”等词表；离开起始 origin 后的第一次 mutation。
+- 确认走该会话的 `#extensionUi(conversationId)`；被拒绝则返回 `blocked`。没有确认 UI 的会话遇到需要确认的动作一律 blocked。
+- ask 模式由“每次点击都确认”变为“任务确认一次 + 高风险动作确认”，**需要产品确认**。
 
-#### 7.1.4 `browser_task` 工具契约
+### 7.6 原差距表（§7.1.1 旧版）的去向
 
-```ts
-// 参数
-{ goal: string; tabId?: string; maxSteps?: number /* 默认 20，上限 40 */ }
+G1、G2 已修。G3–G8（严格 ref、pageKey、视口、select、滚动、等待）在决策模型路径上由移植来的观察和执行脚本解决；大模型路径暂不改动。G9（bridge 的 runId 与取消）和 G10（权限）在接入产品时实现。
 
-// 结果（details 字段；content 为同内容的简短文本摘要）
-type BrowserTaskResult = {
-  status: "completed" | "blocked" | "handed_off" | "degraded" | "uncertain" | "cancelled" | "exhausted";
-  summary: string;                       // 给主 agent 的一句话
-  actions: Array<{
-    step: number;
-    operation: string;                   // CLICK / TYPE_TEXT / …
-    target?: { label: string; role?: string };  // 不含 selector、不含填写值
-    decidedBy: "jev" | "deterministic" | "review";
-    status: "confirmed" | "unknown" | "rejected_stale" | "denied";
-  }>;
-  observation: { tabId: string; url: string; title: string };
-  handoff?: { reason: HandoffReason | "verification_failed" | "permission_denied"; remaining?: string };
-  usage: { jevRequests: number; largeModelRequests: number };
-};
-```
-
-- 填入字段的文本不写入结果，只写“已填写 {字段 label}（N 字）”；主 agent 需要时自行 `browser_snapshot`。
-- `completed` 必须附带 DONE 核验通过的依据（哪条页面事实）；否则只能是 `uncertain`。
-- 工具描述必须说明：它只在已打开的标签页内执行点击/填写/选择/滚动，不会自行打开新站点；目标需要搜索或打开网址时先用 `browser_open`。
-
-### 7.2 大模型在 browser use 中的职责
-
-Jev 负责快速选择，大模型负责**生成、审议与修正**。设置仍只有一个“大模型”选项，下面两个能力由同一模型提供。
-
-#### 7.2.1 生成字段文本
-
-TYPE_TEXT 已选定目标后才调用 TextResolver，不为未选中的输入 head 投机生成文本：
-
-```ts
-// runtime 在 run 开始时已解析并固定该 run 使用的大模型。
-const result = await decisionRuntime.resolveText(
-  {
-    binding: "browser.text",
-    state: {
-      goal,
-      field: { label, role, currentValue },
-      page: { title, visibleText },
-      recentActions,
-    },
-    instructions: "只返回要填入所选字段的文本，不生成动作或脚本；缺少必要信息则返回不可用。",
-    maxLength: 2000,
-  },
-  { budgetKey: runId, signal, route: { conversationId, runId, tabId, owner } },
-);
-```
-
-TextResolver 返回 `{ status: "ok", text: string } | { status: "unavailable", reason: string } | { status: "cancelled" } | { status: "exhausted", reason: "budget" | "deadline" }`。仅 ok 分支可执行，需限制长度并保留合法空串（用户明确要求清空字段时）。内容始终作为字段数据插入，不能作为动作、selector 或脚本执行。unavailable 可交回主 agent，不能重复执行上一次 mutation；cancelled/exhausted 必须终止 run，不走 reviewStep 或其他模型。
-
-#### 7.2.2 有限审议与证据驱动修正
-
-browser consumer 的专用接口如下，不注册为任意 agent 工具，不启用 tools，不加载整个主会话历史：
-
-```ts
-type BrowserReviewRequest = {
-  binding: "browser.review";
-  observationId: string;
-  goal: string;
-  state: DecisionState;              // 最新的、经过出站过滤的观测
-  questions: Record<string, Question>; // 当前合法 operation/target 候选
-  cause:
-    | { kind: "handoff"; reason: HandoffReason }
-    | { kind: "verification_failed" };
-  partialAnswers?: Record<string, Answer>; // 仅线索，不是模型必须遵从的指令
-  evidence?: DecisionState;          // 观察到的差异，不是猜测的失败原因
-};
-
-type BrowserReviewResult =
-  | { status: "proposed"; answers: Record<string, Answer> }
-  | { status: "return_to_agent" }
-  | { status: "cancelled" }
-  | { status: "exhausted"; reason: "budget" | "deadline" };
-```
-
-`reviewStep(request, context)` 在 proposed 分支返回**动作提议**；cancelled/exhausted 直接终止，不能改写成普通 return_to_agent 继续运行。提议须经过同一 choice 成员/依赖关系校验、权限判定、取消检查和新鲜度 guard；无需要求大模型编造 confidence。它不直接执行、不生成任意脚本/selector、不因接管而获得更多工具。
-
-规则：
-
-1. operation 不确定时从最新完整候选重审；只有选中 target 不确定时可聚焦该步骤，但旧答案不构成授权。
-2. partialAnswers 可保留用于解释交接，绝不能先执行低置信度答案再让大模型追认。未选中的 speculative head 不触发接管。
-3. 页面变化使旧候选无效，必须重新观察；超限输入先裁剪/重建，不能把它原样交给大模型。
-4. 若实际结果不符合目标，携带**新的可观察证据**（如网站解析出的地点与目标不同），让大模型提议下一步；需要重新填值时再显式调用 TextResolver。
-5. 修正只允许目标范围内、已确认可安全继续的步骤。付款/提交结果未知等情况直接交回，不把“修正”用作重复提交的理由。
-6. 每步至多一次审议、每轮最多三次审议/修正（初始内部预算）；审议失败、所选模型不可用或需要开放式规划，交回主 agent，不启动递归子 agent。
-7. proposed 之后仍要重新观察结果；重复让 Jev 给一个 DONE 不是独立验证，有可确定性核验的页面事实时优先用代码。
-
-主 agent 收到的交接摘要包括：原因、已确认执行的动作、结果未知的动作、当前观测/证据和剩余问题；不得包含 Jev key、未过滤 state 或所谓隐藏思维。取消/预算耗尽必须标记为终止，不提示系统自动继续。
-
-### 7.3 `subagent.role`（未来）
+### 7.7 `subagent.role`（未来）
 
 未来可在 `resources/extensions/subagent/index.ts` 里，把“选哪个角色”变成 `decide("subagent.role", …)`。注入点现成——和 `questions` / `runSubagent` / `createWorktree` 同一个 `#extensionUi()`（`src/main/pi/process-manager.ts`）。
 
 扩展 UI 上下文按会话存在，决策运行时全机共享；桥接只携带调用路由上下文，不把 conversationId 变成模型 state。
 
-### 7.4 agent team 调度（现在不设计）
+### 7.8 agent team 调度（现在不设计）
 
 调度器是决策层的 consumer，不是决策层的一部分：它读取团队状态当 state，问一组 Choice 问题（下一个该谁动、是否并行、是否收敛），拿到答案后自己执行。只要守住 §4.1 的语义无状态约束，未来不需要重写协议。
 
@@ -859,6 +662,15 @@ type BrowserReviewResult =
 
 初步判断：Jev 在“下一步点哪里”上又快又准，中文页面表现良好；但 browser_task 的收益取决于任务形态。多步表单、站内导航这类交互密集型任务更可能受益，而“读多个页面再汇总”的调研任务瓶颈在主模型阅读。切片 0 的正式评测应把这两类任务分开统计，并先补上 SCROLL 与循环检测。
 
+#### 10.1.2 jev-ultrafast 架构下的端到端结果（2026-09-23，jev-1.13.0，主模型 packy/deepseek-flash）
+
+上面的 A/B/A'/B' 用的是“主模型逐个委派小目标”的旧接法，**不能代表 Jev 的实际表现**：那几轮里 Jev 只占总时间的一小部分，拖慢的是主模型反复拆解，以及拆出来的“点击后报告”这类目标（Jev 会判 BLOCKED）。改用 §7.2 的架构后，同一批 7 个交互型任务、同一个控制层：
+
+- **单次决策**：Jev p50 0.33 s、p95 0.62 s（284 次）；大模型作为决策后端平均 3.5 s。
+- **成功率**：Jev 与“大模型进循环”相当（5/13 对 5/14），但失败原因不同。Jev 主要是目标在首屏以下时判 BLOCKED，已部分修复（§7.2 改动 3）；大模型主要是选出不存在的编号。据此决定大模型不进循环（§7.1）。
+- **固定测评任务**：httpbin 披萨表单（7 个字段 + 提交 + 核对返回的 JSON）。Jev 循环 3 轮均一次完成，全程 13–14.5 s；主模型直接操作 `browser_*` 工具为 31.7 s。
+- 以后的对比默认只跑这一个任务；需要扩大范围时再加。
+
 评测脚本放 `scripts/`，不进入产品包；key 从开发者环境变量读取，不写入仓库、不复用产品的 `.env`。
 
 ---
@@ -870,7 +682,9 @@ type BrowserReviewResult =
 - **`UNVERIFIED`：置信度采纳策略。** 按中英文、模型版本、候选数量和 confidence 来源分组测准确率/误操作率/交接率，记录从未被选中的选项。不能因交接率高就直接降低阈值，也不能把 reported 信号当授权。
 - **Jev 版本策略。** v1 可以默认 `jev-latest`（2026-09-23 指向 `jev-1.13.0`，`jev-preview` 同），但 trace 必须记录响应里的 versioned model；切片 0 的评测结论绑定具体版本，别名漂移后需重跑评测，稳定用户需要后续支持 pin 版本。
 - **已核实（2026-09-23，官方文档）：** 请求上限 64k tokens（state + 最长问题 ≤ 32k）；choice ≤ 255 候选；score 2–10 级；noul 无 confidence；错误码 401 / 422 / 429 / 529；输入 $0.042 / 百万 tokens，输出免费。实现时仍需重新核对。
-- **ask 模式下 browser_task 的确认粒度**（§7.1.3）需要产品决定。
+- **ask 模式下 browser_task 的确认粒度**（§7.5）需要产品决定。
+- **离视口很远的目标**：HN 的 “More”、菜鸟教程的“下一章”在长页面底部，超出最近 60 个屏幕外控件的范围，Jev 仍然第一步就判 BLOCKED。
+- **Laya 的输入格式**：laya-mlx 对对象形式的 instructions 和候选描述，给出的置信度接近均匀分布（约 0.015）；用字符串形式时表现正常。已按你的决定暂不测试 Laya，适配器保留。
 - **Jev 的动态速率限制与错误体验。** 429、超时、额度不足、key 失效需要分别映射为用户能理解的状态，而不是统一显示“决策失败”。
 - **自建 endpoint 的产品入口。** 协议先保留，v1 不暴露任意 URL；未来是否提供自建服务参考实现另立设计。
 - **trace 展示形态。** v1 先落盘和显示摘要；完整 inspector 需要另做隐私、清理和筛选设计。
@@ -889,6 +703,12 @@ type BrowserReviewResult =
 - 修正将“用户自己的供应商”等同本地计算的表述；大模型和 Jev 都可能把数据发往远端。
 - 补齐取消、权限、mutation 结果不明、回退不重放、配置迁移与用量去重边界。
 - 未来规则/chat/自建后端是扩展方向，不是 v1 必做入口；不承诺仅靠协议获得 Jev 同等性能。
+
+### 12.0 架构修订（2026-09-23）
+
+- browser use 分两条路径：大模型沿用现有 `browser_*` 工具；Jev / Laya 走照搬 jev-ultrafast 的循环，只替换 Electron 控制层（§7.1–7.3）。
+- 删除原 §7.2 的“大模型审议 / 修正”和置信度阈值：jev-ultrafast 不这样做，试点中审议单次 7–29 s，还会在同一个锚点上循环点击。
+- 合并 `claude/laya-mlx-local-setup-730b65`：决策引擎设置页、`decision.json`、Laya 适配器。§5 据此改写。
 
 ### 12.1 jev-use 补充调研（358819d）
 
