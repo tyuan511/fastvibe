@@ -15,7 +15,9 @@ import type { DecisionRun } from "./runtime.ts";
  * - `control` — the control layer: observing and acting on a real page (the side pane's
  *   webview in the product). The only part that is not jev-ultrafast's.
  * - `run` — a decision run on the decision layer, whose backend answers the questions:
- *   Jev, or a large model through the same protocol.
+ *   a decision model such as Jev or Laya. A large model does not run this loop: with no
+ *   decision model selected, browser use stays on the `browser_*` tools the main agent
+ *   drives itself, which suits a model that plans and reads better than per-step choices.
  * - `fieldText` — the helper that writes a field's value when TYPE_TEXT is chosen.
  *
  * The loop only acts. It does not read answers off the page; whoever asked for the task
