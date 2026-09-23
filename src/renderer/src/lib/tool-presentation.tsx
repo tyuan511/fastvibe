@@ -40,6 +40,11 @@ export type ToolView = {
   subject?: string;
   /** Muted trailing context: directory, glob, or the raw tool name. */
   context?: string;
+  /**
+   * A short tag that must stay visible however long the subject is (context is the
+   * flexible item and is the first thing a long subject squeezes out).
+   */
+  badge?: string;
   /** Only rendered when the tool failed. */
   statusLabel?: string;
   /** Full value for the native title tooltip. */
@@ -289,10 +294,10 @@ function describeDecisionTask(tool: ToolCallBlock, view: ToolView): ToolView {
   const goal = argString(tool.args, ["goal"]);
   view.subject = goal || tool.name;
   view.title = goal || tool.name;
-  const result = asRecord(tool.details);
+  const result = asRecord(tool.details) ?? parsedResult(tool.result);
   const engine = typeof result?.backend === "string" && result.backend === "jev" ? "Jev" : typeof result?.backend === "string" ? result.backend : "Jev";
   if (view.running) {
-    view.context = i18n.t("common:tool.decisionRunning", { engine }) as string;
+    view.badge = i18n.t("common:tool.decisionRunning", { engine }) as string;
     return view;
   }
   if (!result) return view;
@@ -303,8 +308,18 @@ function describeDecisionTask(tool: ToolCallBlock, view: ToolView): ToolView {
   if (typeof result.status === "string" && result.status !== "done") {
     parts.push(i18n.t(`common:tool.decisionStatus.${result.status}`, { defaultValue: result.status }) as string);
   }
-  view.context = parts.join(" · ");
+  view.badge = parts.join(" · ");
   return view;
+}
+
+/** The tool's text result as an object, when it is the JSON a task tool returns. */
+function parsedResult(text: string | undefined): Record<string, unknown> | null {
+  if (!text?.trim().startsWith("{")) return null;
+  try {
+    return asRecord(JSON.parse(text));
+  } catch {
+    return null;
+  }
 }
 
 /** Single-line command/prose summary used by group rows. */

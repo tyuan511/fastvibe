@@ -353,7 +353,13 @@ export const ToolCard = memo(function ToolCard({
       canToggle={!inline}
       showIcon={showIcon}
       persistKey={tool.id}
-      trailing={view.family === "agent" ? <SubagentSummary tool={tool} /> : undefined}
+      trailing={
+        view.family === "agent" ? (
+          <SubagentSummary tool={tool} />
+        ) : view.badge ? (
+          <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">{view.badge}</span>
+        ) : undefined
+      }
       onSubjectClick={
         view.family === "read" && path ? () => void useSessionStore.getState().openPreview(path) : undefined
       }
