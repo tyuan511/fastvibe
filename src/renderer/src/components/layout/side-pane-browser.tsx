@@ -530,7 +530,8 @@ const SNAPSHOT_TEXT_LIMIT = 8_000;
 const PAGE_HELPERS = `
   const visible = (el) => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 1 && r.height > 1 && s.visibility !== 'hidden' && s.display !== 'none' && Number(s.opacity) > 0.05; };
   const clean = (value) => String(value == null ? '' : value).replace(/\\s+/g, ' ').trim();
-  const label = (el) => clean(el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('placeholder') || el.getAttribute('name') || '');
+  const secret = (el) => el.tagName === 'INPUT' && /^(password|file)$/i.test(el.type || '');
+  const label = (el) => clean((secret(el) ? '' : el.innerText || el.value) || el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('placeholder') || el.getAttribute('name') || '');
   const TARGETS = 'a,button,summary,label,[role="button"],[role="link"],[role="tab"],[role="menuitem"],[role="option"],[role="checkbox"],[role="switch"],[contenteditable="true"],input:not([type="hidden"]),textarea,select';
   const resolve = () => {
     if (ref) { const hit = document.querySelector('[data-fv-ref="' + ref + '"]'); if (hit) return hit; }
@@ -570,6 +571,10 @@ const SNAPSHOT_BODY = `
     return parts.length ? 'body > ' + parts.join(' > ') : 'body';
   };
   const TARGETS = 'a,button,summary,label,[role="button"],[role="link"],[role="tab"],[role="menuitem"],[role="option"],[role="checkbox"],[role="switch"],[contenteditable="true"],input:not([type="hidden"]),textarea,select';
+  const secret = (el) => el.tagName === 'INPUT' && /^(password|file)$/i.test(el.type || '');
+  // Refs from an earlier snapshot must not survive it: resolve() takes the first match
+  // in document order, which could otherwise be a stale element that reused the name.
+  for (const stale of document.querySelectorAll('[data-fv-ref]')) stale.removeAttribute('data-fv-ref');
   const all = [...document.querySelectorAll(TARGETS)].filter(visible);
   const elements = all.slice(0, ${SNAPSHOT_ELEMENT_LIMIT}).map((el, index) => {
     const ref = 'e' + index;
@@ -580,7 +585,7 @@ const SNAPSHOT_BODY = `
       tag,
       type: el.getAttribute('type') || undefined,
       role: el.getAttribute('role') || undefined,
-      text: clean(el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('placeholder') || el.getAttribute('name') || '').slice(0, 200),
+      text: clean((secret(el) ? '' : el.innerText || el.value) || el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('placeholder') || el.getAttribute('name') || '').slice(0, 200),
       name: el.getAttribute('name') || undefined,
       href: tag === 'a' ? el.href : undefined,
       disabled: el.disabled === true ? true : undefined,
