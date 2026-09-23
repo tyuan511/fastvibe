@@ -36,14 +36,40 @@ export type LayaBackendOptions = {
   fetch?: Fetch;
 };
 
+/**
+ * Structured guidance as plain text, for Laya's small window.
+ *
+ * laya-mlx turns a non-string `instructions` into `json.dumps(...)`, which escapes every
+ * non-ASCII character — a Chinese goal reaches the model as `\u586b\u5199…` — and its
+ * question head is capped at 192 tokens with the options served first, so instructions
+ * are cut from the end, sometimes to a couple of dozen tokens. Rendering here keeps the
+ * text readable and in the order it was given, so what survives the cut is the first
+ * field (the goal), not the escaped opening of a JSON object. Criteria get the same
+ * treatment, compacted to one line each.
+ */
+export function layaText(value: unknown, separator = "\n"): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map((item) => layaText(item, separator)).join(separator);
+  if (value && typeof value === "object") {
+    return Object.entries(value as Record<string, unknown>)
+      .filter(([, item]) => item !== undefined && item !== null && item !== "")
+      .map(([key, item]) => `${key}: ${typeof item === "string" ? item : JSON.stringify(item)}`)
+      .join(separator);
+  }
+  return value === undefined || value === null ? "" : String(value);
+}
+
 /** The body Laya's wrapper receives. Host-only metadata (`requiredWhen`, `binding`) never leaves. */
 export function buildLayaBody(request: DecideRequest): Record<string, unknown> {
   const questions: Record<string, unknown> = {};
   for (const [id, question] of Object.entries(request.questions)) {
     const given = question.instructions;
-    const instructions = typeof given === "string" ? given.trim() || DEFAULT_INSTRUCTIONS[question.type] : (given ?? DEFAULT_INSTRUCTIONS[question.type]);
-    if (question.type === "choice") questions[id] = { type: "choice", instructions, criteria: question.criteria };
-    else if (question.type === "score") questions[id] = { type: "score", instructions, criteria: question.criteria };
+    const instructions = (given === undefined ? "" : layaText(given).trim()) || DEFAULT_INSTRUCTIONS[question.type];
+    if (question.type === "choice") {
+      const criteria: Record<string, string> = {};
+      for (const [key, description] of Object.entries(question.criteria)) criteria[key] = layaText(description, "; ");
+      questions[id] = { type: "choice", instructions, criteria };
+    } else if (question.type === "score") questions[id] = { type: "score", instructions, criteria: question.criteria };
     else questions[id] = { type: "noul", instructions };
   }
   return { state: request.state, questions };

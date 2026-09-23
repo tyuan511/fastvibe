@@ -93,3 +93,17 @@ test("test connection sends no state and reports its model", async () => {
   const result = await testLayaConnection(LAYA_DEFAULT_BASE_URL, { fetch: down });
   assert.equal(result.ok === false && result.kind, "network");
 });
+
+test("structured instructions and criteria reach Laya as readable text, goal first", () => {
+  const body = buildLayaBody({
+    version: 1,
+    state: {},
+    questions: {
+      operation: { type: "choice", instructions: { goal: "填写表单", rules: "long rules" }, criteria: { CLICK: "click" } },
+      click_target: { type: "choice", instructions: { goal: "填写表单" }, criteria: { "1": { element: "[1] 姓名", current_value: "", role: "textbox" } } },
+    },
+  }) as { questions: Record<string, { instructions: string; criteria: Record<string, string> }> };
+  assert.equal(body.questions.operation.instructions, "goal: 填写表单\nrules: long rules");
+  assert.ok(!body.questions.operation.instructions.includes("\\u"), "no escaped non-ASCII");
+  assert.equal(body.questions.click_target.criteria["1"], "element: [1] 姓名; role: textbox", "empty values dropped, one line");
+});
