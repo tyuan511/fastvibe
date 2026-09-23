@@ -35,6 +35,7 @@ import { RemoteSettings } from "./remote-settings";
 import { RemoteHostsSettings } from "./remote-hosts-settings";
 import { ComputerSettings } from "./computer-settings";
 import { ProxySettings } from "./proxy-settings";
+import { BrowserSettings } from "./browser-settings";
 import { SkillsSettings } from "./skills-settings";
 import { THINKING_MENU_ORDER, thinkingMenuItems, thinkingMenuLabel } from "@/lib/thinking-levels";
 import { ThemeSelect } from "./theme-select";
@@ -368,7 +369,6 @@ export function SettingsDialog({
                   }
                 />
               </Group>
-              <ProxySettings />
               <Group title={t("runtime.title")}>
                 <Row
                   title={t("common.keepAwake")}
@@ -529,6 +529,8 @@ export function SettingsDialog({
           {section === "remote" ? <RemoteSettings /> : null}
           {section === "ssh" ? <RemoteHostsSettings /> : null}
           {section === "computer" ? <ComputerSettings /> : null}
+          {section === "proxy" ? <ProxySettings /> : null}
+          {section === "browser" ? <BrowserSettings /> : null}
 
           {section === "subagents" ? <SubagentsSettings models={models} /> : null}
           {section === "mcp" ? <McpSettings /> : null}

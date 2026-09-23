@@ -1,6 +1,7 @@
 import type {
   AgentEndEvent,
   ExtensionAPI,
+  ExtensionCommandContext,
   ExtensionContext,
   MessageEndEvent,
   SessionStartEvent,
@@ -166,6 +167,25 @@ export default function goalMode(pi: ExtensionAPI): void {
   const continuePrompt = (): string =>
     "继续执行目标。对照最终目标检查当前进展，列出并完成下一批任务；若目标已完全达成，请在最后一行输出 GOAL_COMPLETE。";
 
+  /**
+   * Start a goal turn from a slash command and do not return while it is still idle.
+   *
+   * `pi.sendUserMessage` does not return the prompt promise — the SDK fires it and
+   * swallows a failure. 0.87.1 only marks the session busy after several awaits, so a
+   * command that returned immediately left `prompt("/goal …")` idle. The host's
+   * `waitForIdle()` then saw nothing in flight and the goal never ran.
+   */
+  const armTurn = async (
+    ctx: ExtensionCommandContext,
+    text: string,
+    deliverAs?: "followUp",
+  ): Promise<void> => {
+    pi.sendUserMessage(text, deliverAs ? { deliverAs } : undefined);
+    for (let i = 0; i < 20 && ctx.isIdle(); i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  };
+
   pi.registerCommand("goal", {
     description: "设置或控制长期目标（/goal <目标>，/goal pause|resume|clear）",
     handler: async (args, ctx) => {
@@ -219,7 +239,7 @@ export default function goalMode(pi: ExtensionAPI): void {
           ctx.ui.notify(T("目标已继续。", "Goal resumed."), "info");
           // Same `deliverAs` rule as the loop below: the command runs on a session the
           // engine may still be mid-run on, and a plain prompt would be refused there.
-          pi.sendUserMessage(continuePrompt(), { deliverAs: "followUp" });
+          await armTurn(ctx, continuePrompt(), "followUp");
         }
         return;
       }
@@ -231,7 +251,7 @@ export default function goalMode(pi: ExtensionAPI): void {
       completed = false;
       remember();
       publish(ctx);
-      pi.sendUserMessage(T(`开始执行目标：${text}`, `Start working towards the goal: ${text}`));
+      await armTurn(ctx, T(`开始执行目标：${text}`, `Start working towards the goal: ${text}`));
     },
   });
 

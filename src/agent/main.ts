@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createAgentRuntime } from "./runtime";
+import { configureAgentHttpProxy } from "./http-proxy";
 import { registerAgentIpc, agentChannels } from "./handlers";
 import { TerminalSessions } from "../main/engine/terminal-sessions";
 import { RemoteServer } from "../main/server/server";
@@ -40,6 +41,7 @@ if (!Number.isInteger(port) || port < 0 || port > 65_535) throw new Error("FASTV
 
 // The headless service can also start outside a login shell.
 applyShellPath();
+configureAgentHttpProxy();
 
 const runtime = createAgentRuntime({ userData, resourcesPath });
 const terminals = new TerminalSessions();

@@ -124,6 +124,9 @@ export const Ipc = {
   browserResponse: "browser:response",
   browserListProfiles: "browser:list-profiles",
   browserImportProfile: "browser:import-profile",
+  browserClearData: "browser:clear-data",
+  /** Browsers installed on this machine, so the settings picker can offer them. */
+  browserListEngines: "browser:list-engines",
   /** Cua Driver permission state. The tools themselves need no IPC — the driver is
    * loaded into Main, so a `computer_*` call never leaves the process. */
   computerPermissions: "computer:permissions",

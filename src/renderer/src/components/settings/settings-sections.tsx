@@ -6,11 +6,13 @@ import {
   BotIcon,
   BoxesIcon,
   ComputerIcon,
+  Globe02Icon,
   ImportIcon,
   InformationCircleIcon,
   KeyboardIcon,
   Plug01Icon,
   PuzzleIcon,
+  Router01Icon,
   Settings02Icon,
   ServerStack01Icon,
   SparklesIcon,
@@ -42,6 +44,8 @@ export type SectionId =
   | "remote"
   | "ssh"
   | "computer"
+  | "proxy"
+  | "browser"
   | "about";
 
 export type SettingsGroupId = "preferences" | "workspace" | "integrations" | "system" | "about";
@@ -87,6 +91,8 @@ export const SETTINGS_SECTIONS: Array<{
     group: "system",
     items: [
       { id: "computer", icon: <HugeiconsIcon strokeWidth={2} icon={ComputerIcon} /> },
+      { id: "browser", icon: <HugeiconsIcon strokeWidth={2} icon={Globe02Icon} /> },
+      { id: "proxy", icon: <HugeiconsIcon strokeWidth={2} icon={Router01Icon} /> },
       { id: "remote", icon: <HugeiconsIcon strokeWidth={2} icon={Wifi01Icon} /> },
       { id: "ssh", icon: <HugeiconsIcon strokeWidth={2} icon={ServerStack01Icon} /> },
     ],

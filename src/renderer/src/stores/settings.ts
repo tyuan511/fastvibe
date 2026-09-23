@@ -39,6 +39,17 @@ export type AppSettings = ProxySettings & {
   collapseRuns: boolean;
   /** When true, an agent run holds the machine awake (`powerSaveBlocker`). */
   keepAwake: boolean;
+  /**
+   * browser-use drives the system browser over CDP instead of the side-pane webview.
+   * Off by default: it opens a separate Chrome window with its own profile.
+   */
+  browserUseSystem: boolean;
+  /**
+   * Which installed browser that window is. `auto` launches the first one found
+   * (Chrome, then Edge, Brave, Chromium). A pin that is not installed falls back
+   * the same way rather than failing the tool.
+   */
+  browserEngine: "auto" | "chrome" | "edge" | "brave" | "chromium" | "arc" | "opera";
   compactCode: boolean;
   sendOnEnter: boolean;
   /** When true, the packaged app checks for updates after launch. */
@@ -161,6 +172,8 @@ const DEFAULTS: AppSettings = {
   showTimestamps: true,
   collapseRuns: true,
   keepAwake: true,
+  browserUseSystem: false,
+  browserEngine: "auto",
   compactCode: false,
   sendOnEnter: true,
   uiLanguage: "zh",
@@ -221,6 +234,8 @@ function sanitize(parsed: Partial<AppSettings>): Partial<AppSettings> {
   }
   delete (next as Record<string, unknown>).notifications;
   if (typeof next.keepAwake !== "boolean") delete next.keepAwake;
+  if (typeof next.browserUseSystem !== "boolean") delete next.browserUseSystem;
+  if (!isBrowserEngine(next.browserEngine)) delete next.browserEngine;
   if (typeof next.collapseRuns !== "boolean") delete next.collapseRuns;
   const shortcuts = sanitizeShortcutOverrides(next.shortcuts);
   if (shortcuts) next.shortcuts = shortcuts;
@@ -243,6 +258,12 @@ function isFontSize(value: unknown): value is number {
  * would otherwise keep sending a parameter some models 400 on, so it resets to the
  * default (跟随模型默认).
  */
+const BROWSER_ENGINES = ["auto", "chrome", "edge", "brave", "chromium", "arc", "opera"] as const;
+
+function isBrowserEngine(value: unknown): value is AppSettings["browserEngine"] {
+  return typeof value === "string" && (BROWSER_ENGINES as readonly string[]).includes(value);
+}
+
 function isThinkingLevel(value: unknown): value is ThinkingLevel | "auto" {
   return value === "auto" || (typeof value === "string" && (THINKING_EFFORT_LEVELS as readonly string[]).includes(value));
 }

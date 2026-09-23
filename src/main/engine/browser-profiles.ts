@@ -16,11 +16,40 @@ type CookieRow = {
   path: string;
   value?: string;
   encrypted_value?: Buffer | Uint8Array | string;
-  expires_utc?: number;
+  /**
+   * Chromium stores this as microseconds since 1601, which no longer fits in a
+   * safe JS integer — a recent expiry is ~1.3e16, past 2^53. Read as text so
+   * `node:sqlite` never tries to box it as a number (that throws for the whole
+   * query, not just the one row).
+   */
+  expires_utc?: string | null;
   is_secure?: number;
   is_httponly?: number;
   samesite?: number;
 };
+
+/** Chromium epoch (1601-01-01) in microseconds, as text so the subtraction stays exact. */
+const CHROME_EPOCH_US = 11_644_473_600_000_000n;
+
+/**
+ * A Chromium `expires_utc` as a Unix timestamp in seconds, or undefined for a
+ * session cookie (0) and for anything already in the past. Electron wants seconds,
+ * and a value past its own range is rejected outright, so an unreadable or
+ * absurd expiry is dropped rather than failing the cookie.
+ */
+function expirationSeconds(raw: string | null | undefined): number | undefined {
+  if (!raw) return undefined;
+  let micros: bigint;
+  try {
+    micros = BigInt(raw);
+  } catch {
+    return undefined;
+  }
+  if (micros <= CHROME_EPOCH_US) return undefined;
+  const seconds = Number((micros - CHROME_EPOCH_US) / 1_000_000n);
+  if (!Number.isFinite(seconds) || seconds <= Math.floor(Date.now() / 1000)) return undefined;
+  return seconds;
+}
 
 function roots(): BrowserRoot[] {
   const home = homedir();
@@ -138,13 +167,16 @@ export async function importBrowserProfile(profile: BrowserProfileInfo, setCooki
     }
     const { DatabaseSync } = await import("node:sqlite");
     const db = new DatabaseSync(copy, { readOnly: true });
-    const rows = db.prepare("SELECT host_key,name,path,value,encrypted_value,expires_utc,is_secure,is_httponly,samesite FROM cookies").all() as unknown as CookieRow[];
+    // `expires_utc` is cast to text: node:sqlite throws
+    // "Value is too large to be represented as a JavaScript number" the moment one
+    // row's expiry exceeds 2^53, and that aborts the whole import.
+    const rows = db.prepare("SELECT host_key,name,path,value,encrypted_value,CAST(expires_utc AS TEXT) AS expires_utc,is_secure,is_httponly,samesite FROM cookies").all() as unknown as CookieRow[];
     let imported = 0;
     for (const row of rows) {
       const value = row.value || decryptCookie(row.encrypted_value, key);
       if (!value || !row.host_key || !row.name) continue;
       const host = row.host_key.replace(/^\.+/, "");
-      const expirationDate = typeof row.expires_utc === "number" && row.expires_utc > 11_644_473_600_000_000 ? (row.expires_utc - 11_644_473_600_000_000) / 1_000_000 : undefined;
+      const expirationDate = expirationSeconds(row.expires_utc);
       try {
         const details = { url: `https://${host}${row.path?.startsWith("/") ? row.path : "/"}`, name: row.name, value, domain: row.host_key, path: row.path || "/", secure: row.is_secure === 1, httpOnly: row.is_httponly === 1, ...(expirationDate ? { expirationDate } : {}), sameSite: sameSite(row.samesite) };
         try {
@@ -167,3 +199,5 @@ export async function importBrowserProfile(profile: BrowserProfileInfo, setCooki
     await rm(temp, { recursive: true, force: true }).catch(() => undefined);
   }
 }
+
+

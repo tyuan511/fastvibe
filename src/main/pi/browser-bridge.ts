@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
+import { join } from "node:path";
 import { uiText } from "../engine/ui-text";
+import { readAppSettings } from "../engine/app-settings";
+import { runBrowserCdp } from "../engine/browser-cdp";
+import { getFastVibePaths } from "../engine/paths";
 import { app, type WebContents } from "electron";
 import { Ipc } from "@shared/ipc";
 import type { BrowserRequest } from "@shared/types";
@@ -34,8 +38,25 @@ export function respondBrowserRequest(response: BrowserResponse): void {
   else request.reject(new Error(response.error || uiText("浏览器操作失败", "Browser action failed")));
 }
 
+/**
+ * Whether browser-use should drive the system browser. Read per call, the same way
+ * the computer-use switch is, so flipping it takes effect on the next tool call
+ * rather than the next launch.
+ */
+function useSystemBrowser(): boolean {
+  try {
+    return readAppSettings(getFastVibePaths()).browserUseSystem === true;
+  } catch {
+    return false;
+  }
+}
+
 /** Called by the browser-use extension running in the main process. */
 export function requestBrowser(request: BrowserRequest): Promise<unknown> {
+  if (useSystemBrowser()) {
+    const profileDir = join(getFastVibePaths().runtimeRoot, "browser-profile");
+    return runBrowserCdp(request, profileDir);
+  }
   if (!target || target.isDestroyed()) return Promise.reject(new Error(uiText("内置浏览器尚未打开", "Built-in browser is not open")));
   const id = randomUUID();
   const timeout = Math.max(1_000, Math.min(request.timeoutMs ?? 30_000, 120_000));

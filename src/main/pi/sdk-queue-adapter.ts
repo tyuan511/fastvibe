@@ -2,11 +2,14 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { SdkQueueClaims } from "../engine/message-queue";
 
 /**
- * This adapter intentionally targets the private queue shape in pi-agent-core 0.86.1.
+ * This adapter intentionally targets the private queue shape in pi-agent-core 0.87.1.
  * package.json pins that exact version; fail closed if the shape changes instead of
  * silently turning a cancellation into clear-and-replay.
+ *
+ * `peek()` is a preview and must stay unwrapped. Only `drain()` delivers a message
+ * into a run, and that is the claim boundary.
  */
-export const SUPPORTED_PI_AGENT_CORE_VERSION = "0.86.1";
+export const SUPPORTED_PI_AGENT_CORE_VERSION = "0.87.1";
 
 type PendingQueue = {
   messages: AgentMessage[];
@@ -125,8 +128,9 @@ export function installSdkQueueAdapter(
         skipDrains.delete(queue);
         return [];
       }
-      // Every drain in 0.86.1 is a delivery: the agent loop's steering/follow-up
-      // polls and `agent.continue()` both hand the drained objects to the run as-is.
+      // Every drain is a delivery: the agent loop's steering/follow-up polls and
+      // `agent.continue()` both hand the drained objects to the run as-is. `peek()`
+      // only previews the next selection and is not a claim.
       // The claim therefore cannot depend on which submission the read happens in.
       // It used to: a steer read by a run the user started directly (no queue token
       // in scope) was delivered unclaimed, so its row stayed 发送中 forever and could

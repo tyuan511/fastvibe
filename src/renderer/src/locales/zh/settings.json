@@ -48,7 +48,9 @@
   "about": "关于",
   "remote": "远程访问",
   "ssh": "SSH 远程主机",
-  "computer": "电脑操控"
+  "computer": "电脑操控",
+  "proxy": "网络代理",
+  "browser": "浏览器控制"
  },
  "backToApp": "返回应用",
  "personalization": {
@@ -781,5 +783,27 @@
   "flowProgress": "第 {{step}}/{{total}} 步 · 等待你把浮层拖进列表",
   "flowHint": "浮层已经浮在系统设置上方。把它拖进当前这一项的列表；完成后会自动进入下一项。按 Esc 可以中止。",
   "cancelFlow": "中止授权"
+ },
+ "browser": {
+  "control": "浏览器控制",
+  "useSystem": "使用系统浏览器",
+  "useSystemDesc": "browser-use 通过调试端口驱动本机浏览器，而不是侧边栏里的内置浏览器。会另开一个独立窗口和配置，不占用你正在使用的浏览器。",
+  "engine": "默认浏览器",
+  "engineDesc": "选择由哪个已安装的浏览器来执行。自动会按 Chrome、Edge、Brave、Chromium 的顺序使用第一个找到的。",
+  "auto": "自动",
+  "import": "导入数据",
+  "importTitle": "从本机浏览器导入",
+  "importDesc": "把其他浏览器的 Cookie 和登录态复制到内置浏览器。不会改动源浏览器，也不会读取密码。",
+  "importDescSystem": "复制到上方选择的浏览器。会先关闭 FastVibe 打开的那个窗口再写入，不会改动源浏览器，也不会读取密码。",
+  "importAction": "导入",
+  "importing": "正在导入…",
+  "importDone": "已导入 {{browser}} · {{profile}}",
+  "importFailed": "导入失败",
+  "profileDesc": "导入该配置的 Cookie",
+  "loading": "正在查找本机浏览器…",
+  "noProfiles": "没有找到可导入的配置",
+  "noProfilesDesc": "支持 Chrome、Edge、Brave、Chromium、Arc 和 Opera 的默认配置与已命名配置。",
+  "remote": "只能在本机导入",
+  "remoteDesc": "导入会读取运行服务端电脑上的浏览器数据，远程无法完成。"
  }
 }

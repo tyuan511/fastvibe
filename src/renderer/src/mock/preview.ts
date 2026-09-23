@@ -574,6 +574,10 @@ const api = {
   // The browser-use bridge is main-process driven: in the preview nothing ever
   // requests a browser action, so `onRequest` just returns its unsubscribe.
   browser: {
+    listProfiles: async () => [],
+    importProfile: async () => ({ browser: "", profile: "", cookies: 0, encryptedCookiesSkipped: 0, message: "" }),
+    clearData: async () => undefined,
+    listEngines: async () => [{ id: "auto", label: "" }],
     onRequest: () => () => undefined,
     respond: () => undefined,
   },
