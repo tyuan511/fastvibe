@@ -121,6 +121,10 @@ export default function computerUse(pi: ExtensionAPI): void {
   // Offered only while a decision model is selected (设置 → 决策引擎), read when this
   // session's tools load; with none, computer use stays on the step-by-step tools below.
   const runTask = computerTaskRunner();
+  // With it on, in-window interaction goes through computer_task only: click, type, key,
+  // hotkey, scroll and batch are not offered, or the main model keeps stepping through the
+  // window itself and Jev never runs (as browser use showed). Reading the desktop, menus
+  // (outside the window's tree, so computer_task cannot see them) and the clipboard stay.
   if (runTask) {
     pi.registerTool({
       name: "computer_task",
@@ -214,107 +218,117 @@ export default function computerUse(pi: ExtensionAPI): void {
     },
   });
 
-  pi.registerTool({
-    name: "computer_click",
-    label: "点击",
-    description:
-      "点击一个控件。优先传 elementToken（来自 computer_window_state）；只有在确实没有令牌时才传 x/y 坐标。默认使用后台投递，不会抢走用户正在使用的窗口焦点；如果目标不支持后台投递会直接报错，此时再决定是否传 foreground: true——那会打断用户当前的操作。",
-    promptSnippet: "点击那个按钮",
-    parameters: Type.Object({
-      elementToken: Type.Optional(Type.String({ description: "computer_window_state 返回的元素令牌，优先使用" })),
-      pid: Type.Optional(PID),
-      windowId: Type.Optional(WINDOW_ID),
-      x: Type.Optional(Type.Number({ description: "屏幕坐标 X，没有令牌时才用" })),
-      y: Type.Optional(Type.Number({ description: "屏幕坐标 Y，没有令牌时才用" })),
-      button: Type.Optional(Type.String({ description: "left（默认）、right 或 middle" })),
-      count: Type.Optional(Type.Number({ description: "点击次数，双击传 2" })),
-      foreground: Type.Optional(Type.Boolean({ description: "抢占前台焦点，会打断用户，默认 false" })),
-    }),
-    async execute(_id, params) {
-      return call("click", {
-        elementToken: params.elementToken,
-        pid: params.pid,
-        windowId: params.windowId,
-        x: params.x,
-        y: params.y,
-        button: params.button,
-        count: params.count,
-        foreground: params.foreground,
-      });
-    },
-  });
+  if (!runTask) {
+    pi.registerTool({
+      name: "computer_click",
+      label: "点击",
+      description:
+        "点击一个控件。优先传 elementToken（来自 computer_window_state）；只有在确实没有令牌时才传 x/y 坐标。默认使用后台投递，不会抢走用户正在使用的窗口焦点；如果目标不支持后台投递会直接报错，此时再决定是否传 foreground: true——那会打断用户当前的操作。",
+      promptSnippet: "点击那个按钮",
+      parameters: Type.Object({
+        elementToken: Type.Optional(Type.String({ description: "computer_window_state 返回的元素令牌，优先使用" })),
+        pid: Type.Optional(PID),
+        windowId: Type.Optional(WINDOW_ID),
+        x: Type.Optional(Type.Number({ description: "屏幕坐标 X，没有令牌时才用" })),
+        y: Type.Optional(Type.Number({ description: "屏幕坐标 Y，没有令牌时才用" })),
+        button: Type.Optional(Type.String({ description: "left（默认）、right 或 middle" })),
+        count: Type.Optional(Type.Number({ description: "点击次数，双击传 2" })),
+        foreground: Type.Optional(Type.Boolean({ description: "抢占前台焦点，会打断用户，默认 false" })),
+      }),
+      async execute(_id, params) {
+        return call("click", {
+          elementToken: params.elementToken,
+          pid: params.pid,
+          windowId: params.windowId,
+          x: params.x,
+          y: params.y,
+          button: params.button,
+          count: params.count,
+          foreground: params.foreground,
+        });
+      },
+    });
+  }
 
-  pi.registerTool({
-    name: "computer_type",
-    label: "输入文本",
-    description:
-      "向当前焦点所在的位置输入文本。传 pid + windowId 可以把输入限定在某个窗口内。注意这会真的把字符打进去——确认焦点在预期的输入框里再调用。",
-    promptSnippet: "输入一段文本",
-    parameters: Type.Object({
-      text: Type.String({ description: "要输入的文本" }),
-      pid: Type.Optional(PID),
-      windowId: Type.Optional(WINDOW_ID),
-    }),
-    async execute(_id, params) {
-      return call("type", { text: params.text, pid: params.pid, windowId: params.windowId });
-    },
-  });
+  if (!runTask) {
+    pi.registerTool({
+      name: "computer_type",
+      label: "输入文本",
+      description:
+        "向当前焦点所在的位置输入文本。传 pid + windowId 可以把输入限定在某个窗口内。注意这会真的把字符打进去——确认焦点在预期的输入框里再调用。",
+      promptSnippet: "输入一段文本",
+      parameters: Type.Object({
+        text: Type.String({ description: "要输入的文本" }),
+        pid: Type.Optional(PID),
+        windowId: Type.Optional(WINDOW_ID),
+      }),
+      async execute(_id, params) {
+        return call("type", { text: params.text, pid: params.pid, windowId: params.windowId });
+      },
+    });
+  }
 
-  pi.registerTool({
-    name: "computer_key",
-    label: "按键",
-    description: "按一个键，可带修饰键。例如 key: \"Return\"，或 key: \"a\" 配合 modifiers: [\"cmd\"]。",
-    promptSnippet: "按一个键",
-    parameters: Type.Object({
-      key: Type.String({ description: "键名，例如 Return、Escape、Tab、a" }),
-      modifiers: Type.Optional(Type.Array(Type.String(), { description: "修饰键，例如 [\"cmd\", \"shift\"]" })),
-      pid: Type.Optional(PID),
-      windowId: Type.Optional(WINDOW_ID),
-    }),
-    async execute(_id, params) {
-      return call("key", { key: params.key, modifiers: params.modifiers, pid: params.pid, windowId: params.windowId });
-    },
-  });
+  if (!runTask) {
+    pi.registerTool({
+      name: "computer_key",
+      label: "按键",
+      description: "按一个键，可带修饰键。例如 key: \"Return\"，或 key: \"a\" 配合 modifiers: [\"cmd\"]。",
+      promptSnippet: "按一个键",
+      parameters: Type.Object({
+        key: Type.String({ description: "键名，例如 Return、Escape、Tab、a" }),
+        modifiers: Type.Optional(Type.Array(Type.String(), { description: "修饰键，例如 [\"cmd\", \"shift\"]" })),
+        pid: Type.Optional(PID),
+        windowId: Type.Optional(WINDOW_ID),
+      }),
+      async execute(_id, params) {
+        return call("key", { key: params.key, modifiers: params.modifiers, pid: params.pid, windowId: params.windowId });
+      },
+    });
+  }
 
-  pi.registerTool({
-    name: "computer_hotkey",
-    label: "组合键",
-    description: "同时按下一组键，例如 keys: [\"cmd\", \"s\"]。",
-    promptSnippet: "按一个组合键",
-    parameters: Type.Object({
-      keys: Type.Array(Type.String(), { description: "同时按下的键，例如 [\"cmd\", \"s\"]" }),
-      pid: Type.Optional(PID),
-      windowId: Type.Optional(WINDOW_ID),
-    }),
-    async execute(_id, params) {
-      return call("hotkey", { keys: params.keys, pid: params.pid, windowId: params.windowId });
-    },
-  });
+  if (!runTask) {
+    pi.registerTool({
+      name: "computer_hotkey",
+      label: "组合键",
+      description: "同时按下一组键，例如 keys: [\"cmd\", \"s\"]。",
+      promptSnippet: "按一个组合键",
+      parameters: Type.Object({
+        keys: Type.Array(Type.String(), { description: "同时按下的键，例如 [\"cmd\", \"s\"]" }),
+        pid: Type.Optional(PID),
+        windowId: Type.Optional(WINDOW_ID),
+      }),
+      async execute(_id, params) {
+        return call("hotkey", { keys: params.keys, pid: params.pid, windowId: params.windowId });
+      },
+    });
+  }
 
-  pi.registerTool({
-    name: "computer_scroll",
-    label: "滚动",
-    description: "在指定位置滚动。x/y 决定滚动发生在哪个区域上。",
-    promptSnippet: "滚动页面",
-    parameters: Type.Object({
-      x: Type.Number({ description: "滚动位置的屏幕坐标 X" }),
-      y: Type.Number({ description: "滚动位置的屏幕坐标 Y" }),
-      direction: Type.Optional(Type.String({ description: "up、down（默认）、left 或 right" })),
-      amount: Type.Optional(Type.Number({ description: "滚动量" })),
-      pid: Type.Optional(PID),
-      windowId: Type.Optional(WINDOW_ID),
-    }),
-    async execute(_id, params) {
-      return call("scroll", {
-        x: params.x,
-        y: params.y,
-        direction: params.direction,
-        amount: params.amount,
-        pid: params.pid,
-        windowId: params.windowId,
-      });
-    },
-  });
+  if (!runTask) {
+    pi.registerTool({
+      name: "computer_scroll",
+      label: "滚动",
+      description: "在指定位置滚动。x/y 决定滚动发生在哪个区域上。",
+      promptSnippet: "滚动页面",
+      parameters: Type.Object({
+        x: Type.Number({ description: "滚动位置的屏幕坐标 X" }),
+        y: Type.Number({ description: "滚动位置的屏幕坐标 Y" }),
+        direction: Type.Optional(Type.String({ description: "up、down（默认）、left 或 right" })),
+        amount: Type.Optional(Type.Number({ description: "滚动量" })),
+        pid: Type.Optional(PID),
+        windowId: Type.Optional(WINDOW_ID),
+      }),
+      async execute(_id, params) {
+        return call("scroll", {
+          x: params.x,
+          y: params.y,
+          direction: params.direction,
+          amount: params.amount,
+          pid: params.pid,
+          windowId: params.windowId,
+        });
+      },
+    });
+  }
 
   pi.registerTool({
     name: "computer_menu",
@@ -356,45 +370,47 @@ export default function computerUse(pi: ExtensionAPI): void {
     },
   });
 
-  pi.registerTool({
-    name: "computer_batch",
-    label: "连续操作",
-    description:
-      "一次执行一串动作，按顺序跑，任何一步失败就停下并告诉你停在哪。只要下一步不依赖上一步的返回结果，就应该用它，而不是连着发好几个 computer_* 调用——每个单独调用都要多一轮模型往返、一次确认和一张截图。\n" +
-      "典型用法：点击输入框 → 输入文本 → 回车 → 截图。每步的 action 和参数与同名单独工具一致（click、type、key、hotkey、scroll、menu、screenshot、window_state、list_apps、list_windows、clipboard_read、clipboard_write）。\n" +
-      "不要把需要先看结果再决定的步骤放进同一批：元素令牌要先 computer_window_state 拿到，拿令牌和用令牌应该分两次。",
-    promptSnippet: "连续执行几步电脑操作",
-    parameters: Type.Object({
-      steps: Type.Array(
-        Type.Object({
-          action: Type.String({
-            description: "click、type、key、hotkey、scroll、menu、screenshot、window_state、list_apps、list_windows、clipboard_read、clipboard_write",
+  if (!runTask) {
+    pi.registerTool({
+      name: "computer_batch",
+      label: "连续操作",
+      description:
+        "一次执行一串动作，按顺序跑，任何一步失败就停下并告诉你停在哪。只要下一步不依赖上一步的返回结果，就应该用它，而不是连着发好几个 computer_* 调用——每个单独调用都要多一轮模型往返、一次确认和一张截图。\n" +
+        "典型用法：点击输入框 → 输入文本 → 回车 → 截图。每步的 action 和参数与同名单独工具一致（click、type、key、hotkey、scroll、menu、screenshot、window_state、list_apps、list_windows、clipboard_read、clipboard_write）。\n" +
+        "不要把需要先看结果再决定的步骤放进同一批：元素令牌要先 computer_window_state 拿到，拿令牌和用令牌应该分两次。",
+      promptSnippet: "连续执行几步电脑操作",
+      parameters: Type.Object({
+        steps: Type.Array(
+          Type.Object({
+            action: Type.String({
+              description: "click、type、key、hotkey、scroll、menu、screenshot、window_state、list_apps、list_windows、clipboard_read、clipboard_write",
+            }),
+            elementToken: Type.Optional(Type.String()),
+            pid: Type.Optional(Type.Number()),
+            windowId: Type.Optional(Type.String()),
+            x: Type.Optional(Type.Number()),
+            y: Type.Optional(Type.Number()),
+            text: Type.Optional(Type.String()),
+            key: Type.Optional(Type.String()),
+            keys: Type.Optional(Type.Array(Type.String())),
+            modifiers: Type.Optional(Type.Array(Type.String())),
+            button: Type.Optional(Type.String()),
+            count: Type.Optional(Type.Number()),
+            direction: Type.Optional(Type.String()),
+            amount: Type.Optional(Type.Number()),
+            path: Type.Optional(Type.Array(Type.String())),
+            query: Type.Optional(Type.String()),
+            foreground: Type.Optional(Type.Boolean()),
+            includeScreenshot: Type.Optional(Type.Boolean()),
+            maxElements: Type.Optional(Type.Number()),
+            onScreenOnly: Type.Optional(Type.Boolean()),
           }),
-          elementToken: Type.Optional(Type.String()),
-          pid: Type.Optional(Type.Number()),
-          windowId: Type.Optional(Type.String()),
-          x: Type.Optional(Type.Number()),
-          y: Type.Optional(Type.Number()),
-          text: Type.Optional(Type.String()),
-          key: Type.Optional(Type.String()),
-          keys: Type.Optional(Type.Array(Type.String())),
-          modifiers: Type.Optional(Type.Array(Type.String())),
-          button: Type.Optional(Type.String()),
-          count: Type.Optional(Type.Number()),
-          direction: Type.Optional(Type.String()),
-          amount: Type.Optional(Type.Number()),
-          path: Type.Optional(Type.Array(Type.String())),
-          query: Type.Optional(Type.String()),
-          foreground: Type.Optional(Type.Boolean()),
-          includeScreenshot: Type.Optional(Type.Boolean()),
-          maxElements: Type.Optional(Type.Number()),
-          onScreenOnly: Type.Optional(Type.Boolean()),
-        }),
-        { description: "按顺序执行的动作列表" },
-      ),
-    }),
-    async execute(_id, params) {
-      return call("batch", { steps: params.steps as any });
-    },
-  });
+          { description: "按顺序执行的动作列表" },
+        ),
+      }),
+      async execute(_id, params) {
+        return call("batch", { steps: params.steps as any });
+      },
+    });
+  }
 }

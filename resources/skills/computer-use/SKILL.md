@@ -9,7 +9,16 @@ description: 通过 Cua Driver 操作本机桌面上的原生应用与窗口；�
 
 网页任务用 `browser_*`，不要用这组工具去开浏览器——内置浏览器是隔离的、可复用的，而驱动用户自己的浏览器窗口会干扰他们正在做的事。
 
-## 操作流程
+## 开启了决策引擎时（有 `computer_task`）
+
+如果工具列表里有 `computer_task`，说明用户在设置 → 决策引擎里打开了「电脑控制」：窗口里的点击、输入、按键、滚动都由决策模型（Jev）逐步完成，此时没有 `computer_click` / `computer_type` / `computer_key` / `computer_hotkey` / `computer_scroll` / `computer_batch`。
+
+1. `computer_list_apps` 找到 `pid`，`computer_list_windows` 拿到 `windowId`。
+2. 把用户要在这个窗口里完成的**完整目标原文**一次交给 `computer_task`（带上 pid 与 windowId），例如“新建一条提醒：标题 X，备注 Y，然后保存”。不要拆成一步一步的小目标，也不要写“然后告诉我……”——它只负责操作，不负责回答。
+3. 根据它返回的步骤和最终窗口内容回答用户；需要核对时用 `computer_window_state` 或 `computer_screenshot`。没完成时，可以用剩余的目标再调用一次。
+4. 菜单命令仍然用 `computer_menu`：应用菜单栏不在窗口里，`computer_task` 看不到。
+
+## 操作流程（没有 `computer_task` 时）
 
 1. `computer_list_apps` 找到目标应用的 `pid`。
 2. `computer_list_windows`（传 pid）拿到 `windowId`。
