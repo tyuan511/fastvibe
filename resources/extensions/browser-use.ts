@@ -28,16 +28,44 @@ type BrowserTaskRunner = (request: {
   onStep?: (line: string) => void;
 }) => Promise<{ status: string; detail?: string; steps: unknown[]; page?: unknown; backend: string; ms: number }>;
 
-function browserTaskRunner(): BrowserTaskRunner | undefined {
+/** The in-page interaction tools browser_task replaces while 浏览器控制 is on. */
+const BROWSER_STEP_TOOLS = ["browser_click", "browser_type", "browser_press"];
+
+/** Main's decision-model loop and its switch, when this host provides them (not headless). */
+function browserTaskRunner(): { run: BrowserTaskRunner; enabled: () => boolean } | undefined {
   const scope = globalThis as Record<string, unknown>;
   const enabled = scope.__fastvibeBrowserTaskEnabled;
   const runner = scope.__fastvibeBrowserTask;
   if (typeof enabled !== "function" || typeof runner !== "function") return undefined;
-  try {
-    return enabled() ? (runner as BrowserTaskRunner) : undefined;
-  } catch {
-    return undefined;
-  }
+  return {
+    run: runner as BrowserTaskRunner,
+    enabled: () => {
+      try {
+        return Boolean(enabled());
+      } catch {
+        return false;
+      }
+    },
+  };
+}
+
+/**
+ * Make either the task tool or the step tools active, never both, by swapping one group
+ * for the other: tools some other extension deactivated stay as that extension left them.
+ */
+function syncDecisionTools(pi: ExtensionAPI, task: string, steps: string[], on: boolean): void {
+  const active = pi.getActiveTools();
+  // A group comes in only in place of the other one: with neither active (plan mode's
+  // read-only set), nothing is added.
+  const next = on
+    ? active.some((name) => steps.includes(name))
+      ? [...active.filter((name) => !steps.includes(name)), ...(active.includes(task) ? [] : [task])]
+      : active
+    : active.includes(task)
+      ? [...active.filter((name) => name !== task), ...steps.filter((name) => !active.includes(name))]
+      : active;
+  if (next === active) return;
+  pi.setActiveTools(next);
 }
 
 function bridge(): BrowserBridge {
@@ -130,59 +158,62 @@ export default function browserUse(pi: ExtensionAPI): void {
     },
   });
 
-  // browser_task is offered only while a decision model and 浏览器控制 are on
-  // (设置 → 决策引擎), read when this session's tools load.
+  // browser_task and the in-page step tools are both registered, and which of them is
+  // *active* follows 设置 → 决策引擎 › 浏览器控制, re-read at the start of every turn: on,
+  // page interaction goes through browser_task only (offered side by side, the main model
+  // kept clicking itself and Jev never ran); off, browser_task is not offered at all. A
+  // switch flipped mid-conversation therefore applies from the next turn.
   const runTask = browserTaskRunner();
-
-  // With a decision model selected, page interaction goes through browser_task only:
-  // offering click/type/press beside it let the main model keep stepping through the
-  // page itself, so Jev never ran. Reading (open, navigate, snapshot, history) stays.
-  if (!runTask) {
-    pi.registerTool({
-      name: "browser_click",
-      label: "浏览器点击",
-      description:
-        "点击页面元素：优先传 ref 或 selector（都来自 browser_snapshot 的 elements），也可以用 text 按可见文字匹配。找不到时会返回 candidates（页面上可点击的文字）供你改用。",
-      promptSnippet: "点击网页元素",
-      parameters: Type.Object({
-        tabId: TAB_ID(false),
-        ref: Type.Optional(Type.String({ description: "快照中的元素 ref，例如 e3" })),
-        selector: Type.Optional(Type.String({ description: "CSS selector，例如 #submit 或 body > div:nth-of-type(2) > a" })),
-        text: Type.Optional(Type.String({ description: "元素可见文字，作为兜底匹配" })),
-      }),
-      async execute(_id, params) {
-        return call("click", { tabId: params.tabId, ref: params.ref, selector: params.selector, text: params.text });
-      },
-    });
-
-    pi.registerTool({
-      name: "browser_type",
-      label: "浏览器输入",
-      description:
-        "向输入框、文本域、contenteditable 或 select 填入文字（会自动聚焦并触发 input/change 事件，配合 React 等框架的受控输入）。目标优先用 ref，其次 selector。",
-      promptSnippet: "在网页输入框中填写文字",
-      parameters: Type.Object({
-        tabId: TAB_ID(false),
-        ref: Type.Optional(Type.String({ description: "快照中的元素 ref，例如 e3" })),
-        selector: Type.Optional(Type.String({ description: "CSS selector" })),
-        text: Type.String({ description: "要填入的文字；select 传选项文字或 value" }),
-      }),
-      async execute(_id, params) {
-        return call("type", { tabId: params.tabId, ref: params.ref, selector: params.selector, text: params.text });
-      },
-    });
-
-    pi.registerTool({
-      name: "browser_press",
-      label: "浏览器按键",
-      description: "向当前焦点元素发送键盘按键，例如 Enter、Tab、Escape（Enter 常用于提交搜索框）。",
-      promptSnippet: "发送浏览器键盘按键",
-      parameters: Type.Object({ tabId: TAB_ID(false), key: Type.String() }),
-      async execute(_id, params) {
-        return call("press", { tabId: params.tabId, key: params.key });
-      },
-    });
+  if (runTask) {
+    const sync = () => syncDecisionTools(pi, "browser_task", BROWSER_STEP_TOOLS, runTask.enabled());
+    pi.on("session_start", sync);
+    pi.on("before_agent_start", sync);
   }
+
+  pi.registerTool({
+    name: "browser_click",
+    label: "浏览器点击",
+    description:
+      "点击页面元素：优先传 ref 或 selector（都来自 browser_snapshot 的 elements），也可以用 text 按可见文字匹配。找不到时会返回 candidates（页面上可点击的文字）供你改用。",
+    promptSnippet: "点击网页元素",
+    parameters: Type.Object({
+      tabId: TAB_ID(false),
+      ref: Type.Optional(Type.String({ description: "快照中的元素 ref，例如 e3" })),
+      selector: Type.Optional(Type.String({ description: "CSS selector，例如 #submit 或 body > div:nth-of-type(2) > a" })),
+      text: Type.Optional(Type.String({ description: "元素可见文字，作为兜底匹配" })),
+    }),
+    async execute(_id, params) {
+      return call("click", { tabId: params.tabId, ref: params.ref, selector: params.selector, text: params.text });
+    },
+  });
+
+  pi.registerTool({
+    name: "browser_type",
+    label: "浏览器输入",
+    description:
+      "向输入框、文本域、contenteditable 或 select 填入文字（会自动聚焦并触发 input/change 事件，配合 React 等框架的受控输入）。目标优先用 ref，其次 selector。",
+    promptSnippet: "在网页输入框中填写文字",
+    parameters: Type.Object({
+      tabId: TAB_ID(false),
+      ref: Type.Optional(Type.String({ description: "快照中的元素 ref，例如 e3" })),
+      selector: Type.Optional(Type.String({ description: "CSS selector" })),
+      text: Type.String({ description: "要填入的文字；select 传选项文字或 value" }),
+    }),
+    async execute(_id, params) {
+      return call("type", { tabId: params.tabId, ref: params.ref, selector: params.selector, text: params.text });
+    },
+  });
+
+  pi.registerTool({
+    name: "browser_press",
+    label: "浏览器按键",
+    description: "向当前焦点元素发送键盘按键，例如 Enter、Tab、Escape（Enter 常用于提交搜索框）。",
+    promptSnippet: "发送浏览器键盘按键",
+    parameters: Type.Object({ tabId: TAB_ID(false), key: Type.String() }),
+    async execute(_id, params) {
+      return call("press", { tabId: params.tabId, key: params.key });
+    },
+  });
 
   if (runTask) {
     pi.registerTool({
@@ -196,8 +227,12 @@ export default function browserUse(pi: ExtensionAPI): void {
         tabId: TAB_ID(false),
       }),
       async execute(_id, params, signal, onUpdate, ctx) {
+        // Switched off since this turn began: refuse rather than drive the page anyway.
+        if (!runTask.enabled()) {
+          return { content: [{ type: "text", text: "浏览器控制已在设置中关闭，browser_task 从下一轮起不可用；请改用 browser_click / browser_type / browser_press。" }], details: undefined };
+        }
         const lines: string[] = [];
-        const result = await runTask({
+        const result = await runTask.run({
           conversationId,
           goal: params.goal,
           tabId: params.tabId,

@@ -51,13 +51,13 @@ export function installDecisionTaskDependencies(deps: DecisionTaskDependencies):
   dependencies = deps;
 }
 
-/** Whether sessions should be offered `browser_task` (read when a session's tools load). */
+/** Whether sessions should be offered `browser_task` (re-read at the start of every turn). */
 export function browserTasksEnabled(): boolean {
   const config = readDecisionConfig(getFastVibePaths().decisionFile);
   return config.kind === "jev" && config.browserControl;
 }
 
-/** Whether sessions should be offered `computer_task` (read when a session's tools load). */
+/** Whether sessions should be offered `computer_task` (re-read at the start of every turn). */
 export function computerTasksEnabled(): boolean {
   const config = readDecisionConfig(getFastVibePaths().decisionFile);
   return config.kind === "jev" && config.computerControl;
