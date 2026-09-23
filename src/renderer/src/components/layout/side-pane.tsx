@@ -240,9 +240,13 @@ export const SidePane = memo(function SidePane({
     // Two thirds of the window, whatever the sidebar is doing. Maximised, the
     // conversation column is gone and the pane owns the rest — see `liftCeiling`.
     maxSize: "65%",
-    persist: persistWidth,
+    // A maximised pane's size is the window's, not a width to reopen this chat at.
+    persist: (next) => {
+      if (!useSidePaneStore.getState().maximized) persistWidth(next);
+    },
     reportCollapsed: setCollapsed,
     liftCeiling: maximized,
+    followWidth: true,
   });
   const tabsViewportRef = useRef<HTMLDivElement>(null);
 

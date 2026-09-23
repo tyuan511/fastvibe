@@ -16,6 +16,8 @@ import { PermissionPanel, type PermissionResponse } from "@/components/chat/perm
 import { usagePercent } from "@/components/chat/session-controls";
 import { Sidebar } from "@/components/layout/sidebar";
 import { SidePane, disposeSidePaneTabs } from "@/components/layout/side-pane";
+import { forgetFileTree } from "@/lib/file-tree-state";
+import { forgetSidebarProject } from "@/lib/sidebar-project-state";
 import { handleBrowserRequest } from "@/components/layout/side-pane-browser";
 import { PANEL_COLLAPSE_TRANSITION } from "@/components/layout/collapsible-panel";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
@@ -1799,6 +1801,7 @@ export function App(): JSX.Element {
     try {
       applyList(await window.fastvibe.conversations.delete(id));
       disposeSidePaneTabs(useSidePaneStore.getState().forgetScope(id));
+      useSidePaneStore.getState().forgetWidths([id]);
       useSessionStore.getState().forgetConversationExtensionState(id);
     } catch {
       // Best-effort cleanup of a draft nothing points at any more.
@@ -1885,6 +1888,9 @@ export function App(): JSX.Element {
         disposeSidePaneTabs(useSidePaneStore.getState().forgetScope(id));
         useSessionStore.getState().forgetConversationExtensionState(id);
       }
+      useSidePaneStore.getState().forgetWidths(doomed);
+      forgetFileTree(cwd);
+      forgetSidebarProject(cwd);
       if (result.nextId) {
         applyOpen(await window.fastvibe.conversations.open(result.nextId));
         revealConversation(result.nextId, true);
@@ -1911,6 +1917,7 @@ export function App(): JSX.Element {
         result = await window.fastvibe.conversations.delete(id);
         deleted.push(id);
         disposeSidePaneTabs(useSidePaneStore.getState().forgetScope(id));
+        useSidePaneStore.getState().forgetWidths([id]);
         useSessionStore.getState().forgetConversationExtensionState(id);
       } catch (err) {
         error = err instanceof Error ? err.message : String(err);

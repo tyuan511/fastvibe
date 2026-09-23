@@ -113,8 +113,11 @@ const DEFAULT_WIDTH = 380;
  * localStorage kept only as a first-paint cache and a migration source: the
  * localStorage origin differs between dev (`localhost`) and packaged (`file://`).
  */
-function readWidth(): number {
-  const stored = useSettingsStore.getState().settings.sidePaneWidth;
+function readWidth(conversationId?: string | null): number {
+  const settings = useSettingsStore.getState().settings;
+  const own = conversationId ? settings.sidePaneWidths?.[conversationId] : undefined;
+  if (typeof own === "number" && Number.isFinite(own)) return Math.max(MIN_WIDTH, Math.round(own));
+  const stored = settings.sidePaneWidth;
   if (typeof stored === "number" && Number.isFinite(stored)) return Math.max(MIN_WIDTH, Math.round(stored));
   try {
     const raw = localStorage.getItem(WIDTH_KEY);
@@ -185,14 +188,21 @@ type SidePaneStore = {
    * (terminals, browser views, side chats).
    */
   forgetScope: (conversationId: string) => SidePaneTab[];
+  /**
+   * Drop deleted conversations' remembered widths. Separate from `forgetScope`,
+   * which archiving also runs: a restored chat should reopen at its own width.
+   */
+  forgetWidths: (conversationIds: string[]) => void;
   setCollapsed: (collapsed: boolean) => void;
   setMaximized: (maximized: boolean) => void;
   toggle: () => void;
   toggleMaximized: () => void;
-  /** Live width while dragging; call `persistWidth` when the drag ends. */
-  setWidth: (width: number) => void;
-  /** Write the current width to settings.json and the first-paint cache. */
-  persistWidth: () => void;
+  /**
+   * Record a settled width for the chat on screen: kept per conversation (so a
+   * switch restores each chat's own width) and as the default a chat without one
+   * opens at. Written to settings.json and the first-paint cache.
+   */
+  persistWidth: (width: number) => void;
   activate: (id: string) => void;
   /**
    * Close a tab. `collapse` (default `true`) also hides a pane the tab left empty;
@@ -478,6 +488,7 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
       return {
         scopeId: nextId,
         scopes,
+        width: readWidth(nextId),
         tabs: scope.tabs,
         activeTabId: scope.activeTabId,
         maximized: hasTabs ? scope.maximized : false,
@@ -487,6 +498,14 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
         collapsed: scope.collapsed ?? (hasTabs ? false : true),
       };
     });
+  },
+  forgetWidths: (conversationIds) => {
+    const settings = useSettingsStore.getState();
+    const widths = settings.settings.sidePaneWidths;
+    if (!widths || !conversationIds.some((id) => id in widths)) return;
+    const rest = { ...widths };
+    for (const id of conversationIds) delete rest[id];
+    settings.update({ sidePaneWidths: rest });
   },
   forgetScope: (conversationId) => {
     const dropped = get().scopes[conversationId]?.tabs ?? [];
@@ -525,15 +544,22 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
     if (get().collapsed) get().setCollapsed(false);
     get().setMaximized(!get().maximized);
   },
-  setWidth: (width) => set({ width: Math.max(MIN_WIDTH, Math.round(width)) }),
-  persistWidth: () => {
-    const width = get().width;
+  persistWidth: (value) => {
+    const width = Math.max(MIN_WIDTH, Math.round(value));
+    const scopeId = get().scopeId;
+    set({ width });
     try {
       localStorage.setItem(WIDTH_KEY, String(width));
     } catch {
       // ignore
     }
-    useSettingsStore.getState().update({ sidePaneWidth: width });
+    const settings = useSettingsStore.getState();
+    const widths = settings.settings.sidePaneWidths ?? {};
+    if (settings.settings.sidePaneWidth === width && (!scopeId || widths[scopeId] === width)) return;
+    settings.update({
+      sidePaneWidth: width,
+      ...(scopeId ? { sidePaneWidths: { ...widths, [scopeId]: width } } : {}),
+    });
   },
   activate: (id) =>
     set((state) => writeScope(state, scopeKeyOf(state), { ...scopeOf(state), activeTabId: id }, { collapsed: false })),

@@ -113,8 +113,18 @@ export type AppSettings = ProxySettings & {
    * collapsed state survives a restart.
    */
   sidebarCollapsed?: boolean;
-  /** Right-hand side pane width in px; same lifecycle as `sidebarWidth`. */
+  /**
+   * Right-hand side pane width in px; same lifecycle as `sidebarWidth`. The width
+   * last dragged anywhere, and what a conversation with no width of its own opens at.
+   */
   sidePaneWidth?: number;
+  /** Side pane width per conversation id, so switching chats restores each one's. */
+  sidePaneWidths?: Record<string, number>;
+  /**
+   * Expanded directories of the 文件 tab's tree, keyed by project cwd, so a
+   * project's tree reopens as it was left — across chat switches and restarts.
+   */
+  fileTreeExpanded?: Record<string, string[]>;
   /**
    * Conversations the user archived, in archive order. Archived chats are hidden
    * from the sidebar and managed from Settings → 归档对话. Persisted with the other
@@ -152,6 +162,10 @@ export type AppSettings = ProxySettings & {
    */
   computerAllowedApps?: Array<{ id: string; name: string }>;
   sidebarOrder?: Record<string, string[]>;
+  /** Project cwds (and section keys) folded shut in the sidebar. */
+  sidebarCollapsedProjects?: string[];
+  /** Project cwds whose sidebar group shows every chat, past 展开显示. */
+  sidebarExpandedProjects?: string[];
   /**
    * Shortcut overrides keyed by command id. Absent keys keep the catalog default;
    * `null` unbinds. Only deviations are stored so a later default change still lands.
@@ -218,6 +232,8 @@ function sanitize(parsed: Partial<AppSettings>): Partial<AppSettings> {
   if (!isFiniteNumber(next.sidebarWidth)) delete next.sidebarWidth;
   if (typeof next.sidebarCollapsed !== "boolean") delete next.sidebarCollapsed;
   if (!isFiniteNumber(next.sidePaneWidth)) delete next.sidePaneWidth;
+  if (!isNumberMap(next.sidePaneWidths)) delete next.sidePaneWidths;
+  if (!isIdListMap(next.fileTreeExpanded)) delete next.fileTreeExpanded;
   if (!isIdList(next.archivedConversations)) delete next.archivedConversations;
   if (!isIdList(next.permissionAlways)) delete next.permissionAlways;
   if (typeof next.computerEnabled !== "boolean") delete next.computerEnabled;
@@ -225,6 +241,8 @@ function sanitize(parsed: Partial<AppSettings>): Partial<AppSettings> {
   if (typeof next.computerPreferBackground !== "boolean") delete next.computerPreferBackground;
   if (!isAllowedAppList(next.computerAllowedApps)) delete next.computerAllowedApps;
   if (!isIdListMap(next.sidebarOrder)) delete next.sidebarOrder;
+  if (!isIdList(next.sidebarCollapsedProjects)) delete next.sidebarCollapsedProjects;
+  if (!isIdList(next.sidebarExpandedProjects)) delete next.sidebarExpandedProjects;
   if (typeof next.autoCheckUpdates !== "boolean") delete next.autoCheckUpdates;
   // A malformed switch drops, which reads back as the default — on. `notifications` is
   // the three-valued key this replaced, and a stale one is dropped rather than migrated:
@@ -284,6 +302,10 @@ function isAllowedAppList(value: unknown): value is Array<{ id: string; name: st
 
 function isIdList(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function isNumberMap(value: unknown): value is Record<string, number> {
+  return typeof value === "object" && value !== null && !Array.isArray(value) && Object.values(value).every(isFiniteNumber);
 }
 
 /** Section-keyed id lists (`sidebarOrder`); any malformed entry drops the whole map. */

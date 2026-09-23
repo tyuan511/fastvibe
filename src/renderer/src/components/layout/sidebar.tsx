@@ -115,9 +115,6 @@ function readIdSet(key: string): Set<string> {
   }
 }
 
-function persistIdSet(key: string, value: Set<string>): void {
-  localStorage.setItem(key, JSON.stringify([...value]));
-}
 
 /**
  * Pins are stored as `id -> pinnedAt` so the "已置顶" list can be ordered by pin
@@ -723,8 +720,13 @@ export const Sidebar = memo(function Sidebar({
   const toggleSidebarShortcut = useShortcutLabel("toggleSidebar");
   const { canBack, canForward, back, forward } = useHistoryNav();
   const searchShortcut = useShortcutLabel("commandPalette");
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => readIdSet(COLLAPSED_KEY));
-  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => new Set());
+  // Which projects are folded, and which show every chat rather than the first few.
+  // Both live in settings.json so they survive a restart (and the dev/packaged
+  // localStorage split); the legacy localStorage fold list is promoted once.
+  const collapsedList = useSettingsStore((state) => state.settings.sidebarCollapsedProjects);
+  const expandedList = useSettingsStore((state) => state.settings.sidebarExpandedProjects);
+  const collapsed = useMemo(() => new Set(collapsedList ?? readIdSet(COLLAPSED_KEY)), [collapsedList]);
+  const expandedProjects = useMemo(() => new Set(expandedList ?? []), [expandedList]);
   const [pinned, setPinned] = useState<Record<string, number>>(() => readPinned());
   // Shared with Settings → 归档对话, where archived chats can be restored or deleted.
   const archived = useArchivedIds();
@@ -760,13 +762,10 @@ export const Sidebar = memo(function Sidebar({
   }
 
   function setOpen(cwd: string, open: boolean): void {
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (open) next.delete(cwd);
-      else next.add(cwd);
-      persistIdSet(COLLAPSED_KEY, next);
-      return next;
-    });
+    const next = new Set(collapsed);
+    if (open) next.delete(cwd);
+    else next.add(cwd);
+    updateSettings({ sidebarCollapsedProjects: [...next] });
   }
 
   function togglePinned(id: string): void {
@@ -949,12 +948,10 @@ export const Sidebar = memo(function Sidebar({
   }
 
   function toggleProjectExpanded(cwd: string): void {
-    setExpandedProjects((prev) => {
-      const next = new Set(prev);
-      if (next.has(cwd)) next.delete(cwd);
-      else next.add(cwd);
-      return next;
-    });
+    const next = new Set(expandedProjects);
+    if (next.has(cwd)) next.delete(cwd);
+    else next.add(cwd);
+    updateSettings({ sidebarExpandedProjects: [...next] });
   }
 
   function renderProjectSessions(cwd: string, items: Conversation[]): JSX.Element {

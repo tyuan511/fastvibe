@@ -12,6 +12,7 @@ import type { DirEntry, FilePreview } from "@shared/types";
 import { isRemoteRef } from "@/lib/remote-project";
 import { blockedRemotely } from "@/lib/remote-unavailable";
 import { Ipc } from "@shared/ipc";
+import { readExpandedDirs, writeExpandedDirs } from "@/lib/file-tree-state";
 
 type DirMap = Record<string, DirEntry[]>;
 
@@ -77,11 +78,17 @@ export function SidePaneFiles({
     }
   }, []);
 
+  // Opening a project (or refreshing it) restores the folders it was left with
+  // expanded, and reloads each of them: the listing is re-read, the shape is kept.
+  // A folder that has since disappeared just reads back empty.
   const reset = useCallback(
     (path: string | undefined): void => {
       setChildren({});
-      setExpanded(new Set());
-      if (path) void loadDir(path);
+      const restored = path ? readExpandedDirs(path) : new Set<string>();
+      setExpanded(restored);
+      if (!path) return;
+      void loadDir(path);
+      for (const dir of restored) void loadDir(dir);
     },
     [loadDir],
   );
@@ -104,7 +111,9 @@ export function SidePaneFiles({
           changed = true;
         }
       }
-      return changed ? next : prev;
+      if (!changed) return prev;
+      writeExpandedDirs(cwd, next);
+      return next;
     });
     for (const dir of dirs) void loadDir(dir);
   }, [cwd, tab.path, loadDir]);
@@ -114,6 +123,7 @@ export function SidePaneFiles({
       const next = new Set(prev);
       if (next.has(path)) next.delete(path);
       else next.add(path);
+      if (cwd) writeExpandedDirs(cwd, next);
       return next;
     });
     if (!children[path]) void loadDir(path);

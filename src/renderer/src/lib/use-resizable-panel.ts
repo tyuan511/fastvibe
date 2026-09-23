@@ -43,6 +43,12 @@ export type SidePanelOptions = {
    * than the share it may take beside one.
    */
   liftCeiling?: boolean;
+  /**
+   * Resize an open panel whenever `width` changes from outside. The side pane
+   * remembers a width per conversation, so a chat switch hands it a new one; the
+   * sidebar's width only ever comes back from its own drags and leaves this off.
+   */
+  followWidth?: boolean;
 };
 
 /** The `Panel` props this hook drives; everything else is the caller's. */
@@ -93,6 +99,7 @@ export function useSidePanel({
   persist,
   reportCollapsed,
   liftCeiling = false,
+  followWidth = false,
 }: SidePanelOptions): SidePanelProps {
   const panelRef = usePanelRef();
   const elementRef = useRef<HTMLDivElement | null>(null);
@@ -170,6 +177,21 @@ export function useSidePanel({
     });
     return () => cancelAnimationFrame(frame);
   }, [collapsed]);
+
+  // Width → panel, for a width that changed while the panel stayed open. A width
+  // this panel just persisted matches its own size and is left alone; a collapsed
+  // panel is skipped, since the expand above already reopens it at `widthRef`.
+  useEffect(() => {
+    // Maximised, the pane's size belongs to the shell's maximise dance, not to a width.
+    if (!followWidth || collapsed || liftCeiling) return;
+    const frame = requestAnimationFrame(() => {
+      const panel = panelRef.current;
+      if (!panel || panel.isCollapsed()) return;
+      if (Math.abs(panel.getSize().inPixels - width) < 1) return;
+      panel.resize(width);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [followWidth, width]);
 
   const onResize = useCallback((size: PanelSize) => {
     // The ceiling follows the panel rather than the other way round: it is lifted
