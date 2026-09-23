@@ -105,6 +105,7 @@ test("the denied set is exactly what the UI explains, so a new denial cannot go 
     "app:export-logs",
     "browser:clear-data",
     "browser:import-profile",
+    "browser:list-engines",
     "browser:list-profiles",
     "browser:response",
     // 设置 › 电脑操控 guards every one of these with `blockedRemotely`: the pane renders
