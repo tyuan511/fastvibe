@@ -22,6 +22,18 @@ export type SnapshotElement = {
   name?: string;
   href?: string;
   disabled?: boolean;
+  /** Whether the element intersects the viewport. Absent on snapshots that do not say. */
+  inViewport?: boolean;
+};
+
+/** Where the viewport is, so scrolling is a choice the host can offer and the model can judge. */
+export type SnapshotViewport = {
+  canScrollUp: boolean;
+  canScrollDown: boolean;
+  /** 0–100, how far down the document the viewport's bottom edge is. */
+  scrollPercent: number;
+  /** Section headings currently on screen, for "scroll to the X section" goals. */
+  headings?: string[];
 };
 
 export type BrowserSnapshot = {
@@ -29,6 +41,7 @@ export type BrowserSnapshot = {
   title?: string;
   text?: string;
   elements: SnapshotElement[];
+  viewport?: SnapshotViewport;
 };
 
 export type BrowserStepInput = {
@@ -43,7 +56,7 @@ export type BrowserStepInput = {
   maxTextChars?: number;
 };
 
-export type BrowserOperation = "CLICK" | "TYPE_TEXT" | "PRESS_ENTER" | "BACK" | "DONE" | "BLOCKED";
+export type BrowserOperation = "CLICK" | "TYPE_TEXT" | "PRESS_ENTER" | "SCROLL_DOWN" | "SCROLL_UP" | "BACK" | "DONE" | "BLOCKED";
 
 export const NONE = "NONE";
 
@@ -59,6 +72,8 @@ const OPERATION_DESCRIPTIONS: Record<BrowserOperation, string> = {
   CLICK: "Click an element on the page (link, button, tab, checkbox, option).",
   TYPE_TEXT: "Type text into an input field or text area.",
   PRESS_ENTER: "Press Enter in the field that was just typed into, to submit it.",
+  SCROLL_DOWN: "Scroll down one screen to reveal more of the page.",
+  SCROLL_UP: "Scroll up one screen.",
   BACK: "Go back to the previous page.",
   DONE: "The goal is already achieved on the current page; nothing more to do.",
   BLOCKED: "The goal cannot be progressed from this page (login wall, captcha, error, missing information).",
@@ -70,6 +85,8 @@ const CLICKABLE_INPUT_TYPES = new Set(["submit", "button", "checkbox", "radio", 
 /** Inputs a model must never write into. */
 const SECRET_INPUT_TYPES = new Set(["password", "file", "hidden"]);
 const MAX_DESCRIPTION = 120;
+/** Jev's 255-option ceiling, less the NONE escape. */
+const MAX_TARGET_CANDIDATES = 254;
 const DEFAULT_TEXT_CHARS = 3_000;
 
 export function isClickable(element: SnapshotElement): boolean {
@@ -104,7 +121,8 @@ export function describeElement(element: SnapshotElement): string {
     const target = safeHref(element.href);
     if (target) parts.push(`→ ${target}`);
   }
-  return parts.join(" ").slice(0, MAX_DESCRIPTION);
+  const description = parts.join(" ").slice(0, MAX_DESCRIPTION);
+  return element.inViewport === false ? `${description} (off-screen)` : description;
 }
 
 function safeHref(href: string): string | undefined {
@@ -119,8 +137,10 @@ function safeHref(href: string): string | undefined {
 
 export function buildBrowserStep(input: BrowserStepInput): BrowserStepRequest {
   const { snapshot } = input;
-  const clickable = snapshot.elements.filter(isClickable);
-  const editable = snapshot.elements.filter(isEditable);
+  // On-screen elements first, so a cap never drops what the user can actually see.
+  const onScreenFirst = [...snapshot.elements].sort((a, b) => Number(b.inViewport !== false) - Number(a.inViewport !== false));
+  const clickable = onScreenFirst.filter(isClickable).slice(0, MAX_TARGET_CANDIDATES);
+  const editable = onScreenFirst.filter(isEditable).slice(0, MAX_TARGET_CANDIDATES);
   const questions: Record<string, Question> = {};
   const operations: Partial<Record<BrowserOperation, string>> = {};
   const localTargets: BrowserStepRequest["localTargets"] = {};
@@ -146,6 +166,8 @@ export function buildBrowserStep(input: BrowserStepInput): BrowserStepRequest {
     operations.PRESS_ENTER = OPERATION_DESCRIPTIONS.PRESS_ENTER;
     localTargets.PRESS_ENTER = input.typedRef;
   }
+  if (snapshot.viewport?.canScrollDown) operations.SCROLL_DOWN = OPERATION_DESCRIPTIONS.SCROLL_DOWN;
+  if (snapshot.viewport?.canScrollUp) operations.SCROLL_UP = OPERATION_DESCRIPTIONS.SCROLL_UP;
   if (input.canGoBack) operations.BACK = OPERATION_DESCRIPTIONS.BACK;
   operations.DONE = OPERATION_DESCRIPTIONS.DONE;
   operations.BLOCKED = OPERATION_DESCRIPTIONS.BLOCKED;
@@ -164,6 +186,9 @@ export function buildBrowserStep(input: BrowserStepInput): BrowserStepRequest {
       url: snapshot.url,
       title: snapshot.title ?? "",
       text: (snapshot.text ?? "").slice(0, input.maxTextChars ?? DEFAULT_TEXT_CHARS),
+      ...(snapshot.viewport
+        ? { viewport: { scrollPercent: snapshot.viewport.scrollPercent, headingsOnScreen: snapshot.viewport.headings ?? [] } }
+        : {}),
     },
     recentActions: input.recentActions ?? [],
   };

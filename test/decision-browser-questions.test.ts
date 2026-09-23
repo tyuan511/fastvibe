@@ -57,3 +57,21 @@ test("descriptions drop query strings and page text is bounded", () => {
   assert.equal(state.page.text.length, 100);
   assert.ok(!JSON.stringify(request).includes("token=abc"));
 });
+
+test("scrolling is offered only in the direction the viewport can move, and off-screen elements are marked", () => {
+  const withViewport = {
+    ...snapshot,
+    elements: [{ ref: "e9", tag: "a", text: "Footer", inViewport: false }, ...snapshot.elements.map((e) => ({ ...e, inViewport: true }))],
+    viewport: { canScrollUp: false, canScrollDown: true, scrollPercent: 20, headings: ["Intro"] },
+  };
+  const { request } = buildBrowserStep({ goal: "g", snapshot: withViewport });
+  const op = request.questions.operation;
+  assert.ok(op.type === "choice" && "SCROLL_DOWN" in op.criteria && !("SCROLL_UP" in op.criteria));
+  const click = request.questions.click_target;
+  assert.ok(click.type === "choice");
+  if (click.type !== "choice") return;
+  // On-screen candidates come first; the off-screen one is still offered, and says so.
+  assert.equal(Object.keys(click.criteria)[0], "e0");
+  assert.match(click.criteria.e9, /\(off-screen\)$/);
+  assert.deepEqual((request.state as { page: { viewport: unknown } }).page.viewport, { scrollPercent: 20, headingsOnScreen: ["Intro"] });
+});
