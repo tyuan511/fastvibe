@@ -141,8 +141,8 @@ const ALLOWED = new Set<string>([
   Ipc.conversationsBindWorktree,
   Ipc.conversationsUnbindWorktree,
   Ipc.conversationsListWorktrees,
-  // No secret in this shape — Laya runs on the user's own machine, so a remote client
-  // reading which backend is selected costs nothing (see decision.ts).
+  // No secret in either — the Jev key never leaves Main — so a remote client reading
+  // which decision model is selected, and whether a key exists, costs nothing.
   Ipc.decisionGetConfig,
   Ipc.decisionKeyState,
   Ipc.engineAbort,

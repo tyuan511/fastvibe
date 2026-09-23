@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Ipc } from "@shared/ipc";
-import { DEFAULT_LAYA_BASE_URL, validDecisionBaseUrl, type DecisionKeyState, type DecisionModelConfig, type DecisionTestResult } from "@shared/decision";
+import type { DecisionKeyState, DecisionModelConfig, DecisionTestResult } from "@shared/decision";
 import { blockedRemotely } from "@/lib/remote-unavailable";
 import { IS_REMOTE } from "@/lib/platform";
 import { Button } from "@/components/ui/button";
@@ -11,7 +11,7 @@ import { SettingsGroup, SettingsRow } from "./settings-group";
 
 /**
  * 设置 → 决策引擎 (docs/decision-layer.md §5): which decision model browser use runs on.
- * Off keeps the `browser_*` tools the main model drives; Jev or Laya add `browser_task`,
+ * Off keeps the `browser_*` tools the main model drives; Jev adds `browser_task`,
  * the per-step decision loop. The Jev key is written by Main and never read back — this
  * pane only learns whether one is stored.
  */
@@ -19,7 +19,6 @@ export function DecisionSettings() {
   const { t } = useTranslation("settings");
   const [saved, setSaved] = useState<DecisionModelConfig>({ kind: "off" });
   const [draft, setDraft] = useState<DecisionModelConfig>({ kind: "off" });
-  const [baseUrl, setBaseUrl] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -49,19 +48,12 @@ export function DecisionSettings() {
   function applyExternal(config: DecisionModelConfig) {
     setSaved(config);
     setDraft(config);
-    setBaseUrl(config.kind === "laya" ? (config.baseUrl ?? "") : "");
     setError("");
     setTestState({ pending: false });
   }
 
   const kind = draft.kind;
-  const urlValid = baseUrl.trim() === "" || validDecisionBaseUrl(baseUrl.trim());
-  const next: DecisionModelConfig =
-    kind === "laya"
-      ? { kind: "laya", ...(baseUrl.trim() && urlValid ? { baseUrl: baseUrl.trim() } : {}) }
-      : kind === "jev"
-        ? { kind: "jev" }
-        : { kind: "off" };
+  const next: DecisionModelConfig = kind === "jev" ? { kind: "jev" } : { kind: "off" };
   const dirty = JSON.stringify(next) !== JSON.stringify(saved);
 
   async function apply() {
@@ -100,8 +92,8 @@ export function DecisionSettings() {
     }
   }
 
-  const models = { off: t("decision.off"), jev: t("decision.jev"), laya: t("decision.laya") };
-  const hint = kind === "laya" ? t("decision.layaHint") : kind === "jev" ? t("decision.jevHint") : t("decision.offHint");
+  const models = { off: t("decision.off"), jev: t("decision.jev") };
+  const hint = kind === "jev" ? t("decision.jevHint") : t("decision.offHint");
 
   return (
     <div className="space-y-2">
@@ -119,13 +111,7 @@ export function DecisionSettings() {
               if (!value) return;
               setError("");
               setTestState({ pending: false });
-              setDraft(
-                value === "laya"
-                  ? { kind: "laya", baseUrl: saved.kind === "laya" ? saved.baseUrl : undefined }
-                  : value === "jev"
-                    ? { kind: "jev" }
-                    : { kind: "off" },
-              );
+              setDraft(value === "jev" ? { kind: "jev" } : { kind: "off" });
             }}
           >
             <SelectTrigger aria-label={t("decision.model")} className="w-44">
@@ -134,7 +120,6 @@ export function DecisionSettings() {
             <SelectContent>
               <SelectItem value="off">{models.off}</SelectItem>
               <SelectItem value="jev">{models.jev}</SelectItem>
-              <SelectItem value="laya">{models.laya}</SelectItem>
             </SelectContent>
           </Select>
         }
@@ -185,50 +170,10 @@ export function DecisionSettings() {
           <p className="px-4 py-3 text-xs text-muted-foreground">{t("decision.jevPrivacy")}</p>
         </>
       )}
-      {kind === "laya" && (
-        <>
-          <SettingsRow
-            title={t("decision.baseUrl")}
-            description={!urlValid ? t("decision.invalidBaseUrl") : t("decision.baseUrlHint")}
-            control={
-              <Input
-                aria-label={t("decision.baseUrl")}
-                aria-invalid={!urlValid}
-                className="w-56"
-                placeholder={DEFAULT_LAYA_BASE_URL}
-                value={baseUrl}
-                disabled={saving}
-                onChange={(event) => {
-                  setBaseUrl(event.target.value);
-                  setTestState({ pending: false });
-                }}
-              />
-            }
-          />
-          <SettingsRow
-            title={t("decision.test")}
-            control={
-              <div className="flex items-center gap-2">
-                {testState.result &&
-                  (testState.result.ok ? (
-                    <span className="text-xs text-success">
-                      {testState.result.model ? t("decision.testOk", { model: testState.result.model }) : t("decision.testOkNoModel")}
-                    </span>
-                  ) : (
-                    <span className="text-xs text-destructive">{t("decision.testFailed", { error: testState.result.error })}</span>
-                  ))}
-                <Button size="sm" variant="outline" disabled={!urlValid || testState.pending} onClick={() => void test()}>
-                  {t(testState.pending ? "decision.testing" : "decision.test")}
-                </Button>
-              </div>
-            }
-          />
-        </>
-      )}
       <SettingsRow
         title={t("decision.apply")}
         control={
-          <Button size="sm" variant="outline" disabled={saving || !dirty || !urlValid} onClick={() => void apply()}>
+          <Button size="sm" variant="outline" disabled={saving || !dirty} onClick={() => void apply()}>
             {t(saving ? "decision.saving" : "decision.apply")}
           </Button>
         }

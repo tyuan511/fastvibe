@@ -3,13 +3,13 @@ import { dirname } from "node:path";
 import { DEFAULT_DECISION_MODEL, decisionModelConfigOf, type DecisionModelConfig } from "../../../shared/decision.ts";
 
 /**
- * `decision.json`, holding only which decision-model backend is selected.
+ * `decision.json`, holding only which decision model is selected.
  *
  * Kept apart from `settings.json` for the same reason `providers.json`/`mcp.json` are:
  * that file is handed whole to every renderer and re-broadcast on every write (see
  * AGENTS.md "设置跨窗口同步"), and this has nothing to do with UI preferences. Unlike
- * those files, nothing here is a secret — Laya runs locally, so there is no key to keep
- * off the wire the way `remote-access.json` or `gateway-credentials.json` do.
+ * those files, nothing here is a secret — the Jev key lives in the agent `.env`, never
+ * here, so this can be handed to a renderer whole.
  *
  * docs/decision-layer.md §5.6 envisions a richer file (`largeModel`, `scenarios`,
  * `consents`, `trace`); none of those exist yet, so this only ever writes and reads

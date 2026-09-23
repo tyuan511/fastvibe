@@ -560,7 +560,7 @@ const api = {
   decision: {
     getConfig: async () => ({ kind: "off" as const }),
     saveConfig: async (config: unknown) => config as { kind: "off" },
-    test: async () => ({ ok: true as const, model: "aac6fef/laya-mlx" }),
+    test: async () => ({ ok: true as const }),
     keyState: async () => ({ jev: false }),
     setKey: async (key: string) => ({ jev: Boolean(key.trim()) }),
     onChanged: () => () => undefined,

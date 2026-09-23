@@ -33,7 +33,6 @@ import {
 } from "./engine/app-settings";
 import { configureFastVibeUserData, getFastVibePaths, type FastVibePaths } from "./engine/paths";
 import { readDecisionConfig, writeDecisionConfig } from "./engine/decision/store";
-import { testLayaConnection } from "./engine/decision/backends/laya";
 import { testJevConnection } from "./engine/decision/backends/jev";
 import { decisionModelConfigOf, JEV_KEY_ENV, type DecisionKeyState, type DecisionModelConfig, type DecisionTestResult } from "@shared/decision";
 import { installBrowserTaskGlobal, revokeBrowserTasks } from "./pi/browser-task-runner";
@@ -421,14 +420,11 @@ function registerDecisionIpc(): void {
   });
   handle(Ipc.decisionTest, async (payload: unknown): Promise<DecisionTestResult> => {
     const config: DecisionModelConfig = decisionModelConfigOf(payload);
-    if (config.kind === "jev") {
-      const key = (await loadProviderKeys(paths()))[JEV_KEY_ENV];
-      if (!key) return { ok: false, error: uiText("还没有保存 API key", "No API key is saved") };
-      const result = await testJevConnection(key);
-      return result.ok ? { ok: true } : { ok: false, error: result.message };
-    }
-    const result = await testLayaConnection(config.kind === "laya" ? config.baseUrl : undefined);
-    return result.ok ? result : { ok: false, error: result.message };
+    if (config.kind !== "jev") return { ok: false, error: uiText("未选择决策模型", "No decision model is selected") };
+    const key = (await loadProviderKeys(paths()))[JEV_KEY_ENV];
+    if (!key) return { ok: false, error: uiText("还没有保存 API key", "No API key is saved") };
+    const result = await testJevConnection(key);
+    return result.ok ? { ok: true } : { ok: false, error: result.message };
   });
 }
 

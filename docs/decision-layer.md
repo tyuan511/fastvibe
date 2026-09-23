@@ -380,11 +380,11 @@ trace 还须区分 phase（decide/text/review）、confidence 来源与算法、
 
 ## 5. 产品形态：设置 → 决策引擎
 
-> 2026-09-23 修订：决策模型改为“关闭 / Jev / Laya”三选一；“大模型审议”取消，大模型不再进入决策循环。依据见 §7.1 与 §10.1.1。
+> 2026-09-23 修订：决策模型改为“关闭 / Jev”二选一（Laya 曾加入后移除，见 §12.0）；“大模型审议”取消，大模型不再进入决策循环。依据见 §7.1 与 §10.1.1。
 
 ### 5.1 设置入口
 
-**设置 → 决策引擎**（section id `decision`）已随 `claude/laya-mlx-local-setup-730b65` 合入：`decision-settings.tsx` 使用 `SettingsGroup` / `SettingsRow`，配置存 `decision.json`，经 `decision:get-config` / `decision:save-config` / `decision:test` 读写，`decision:changed` 跨窗口同步。目前可选“关闭 / Laya”，需要补上 Jev。
+**设置 → 决策引擎**（section id `decision`）已随 `claude/laya-mlx-local-setup-730b65` 合入：`decision-settings.tsx` 使用 `SettingsGroup` / `SettingsRow`，配置存 `decision.json`，经 `decision:get-config` / `decision:save-config` / `decision:test` 读写，`decision:changed` 跨窗口同步。现在可选“关闭 / Jev”，Jev 的 API key 在此保存与测试。
 
 页面顺序：当前状态 → 决策模型 → 文字模型 → 数据与隐私说明。
 
@@ -394,12 +394,10 @@ trace 还须区分 phase（decide/text/review）、confidence 来源与算法、
 | --- | --- | --- |
 | 关闭（默认） | 现有方式：主模型直接调用 `browser_*` 工具 | 无 |
 | Jev | jev-ultrafast 循环（§7.2），Jev 逐步决策 | API key（密码控件、保存/清除/测试连接）；endpoint 固定 |
-| Laya | 同上，决策由本机 laya-mlx 完成 | 本机服务地址，默认 `http://127.0.0.1:8787`；测试连接走 `GET /health` |
 
-- 选择 Jev 或 Laya 后，会话额外获得 `browser_task` 工具；现有 `browser_*` 工具保留，供主模型读页面和处理循环交回的情况。
+- 选择 Jev 后，会话额外获得 `browser_task` 工具；现有 `browser_*` 工具保留，供主模型读页面和处理循环交回的情况。
 - **大模型不是决策模型选项。** 试点中大模型逐步回答选择题，单步平均 3.5 s，并且频繁选出不在候选里的编号（§10.1.1）。大模型边看边规划的现有方式更适合它，所以“关闭”就是大模型路径。
 - Jev key 由 Main 写入 `runtime/engine/agent/.env`，renderer 只能读到“已配置 / 未配置”；测试连接调用固定的 `GET /v1/models`，不发送网页内容。
-- Laya 是本机服务，没有凭证；地址只接受 http/https（`validDecisionBaseUrl`）。由用户填写的地址若指向远端，就等于把页面内容发往那里，§5.4 的出站提示同样适用。
 
 ### 5.3 文字模型
 
@@ -407,13 +405,13 @@ trace 还须区分 phase（decide/text/review）、confidence 来源与算法、
 
 ### 5.4 数据与隐私提示
 
-> 选择 Jev 后，任务目标、屏幕内可见文字、控件名称与当前值、操作历史会发送给 Jev；生成输入内容时，相关上下文会发送给文字模型的供应商。密码、文件与隐藏输入字段不会被读取。选择 Laya 时这些数据留在本机（除非地址指向其他机器）。
+> 选择 Jev 后，任务目标、屏幕内可见文字、控件名称与当前值、操作历史会发送给 Jev；生成输入内容时，相关上下文会发送给文字模型的供应商。密码、文件与隐藏输入字段不会被读取。
 
 首次选择远端决策模型（Jev）时必须确认一次；之后页面保留出站说明与关闭入口。
 
 ### 5.5 持久化与 IPC
 
-`decision.json`（userData 根目录）目前是 `{ kind: "off" } | { kind: "laya", baseUrl? }`，由 `decisionModelConfigOf` 归一化，写入走临时文件原子替换。需要扩展：
+`decision.json`（userData 根目录）目前是 `{ kind: "off" } | { kind: "jev" }`（旧版本写入的 `{ kind: "laya" }` 读作 off），由 `decisionModelConfigOf` 归一化，写入走临时文件原子替换。需要扩展：
 
 ```jsonc
 { "kind": "jev", "model": "jev-latest" }        // key 不在此文件，在 .env
@@ -462,7 +460,7 @@ type DecisionBackend =
 
 ### 7.1 browser use：两条路径
 
-| | 大模型路径（决策模型 = 关闭） | 决策模型路径（Jev / Laya） |
+| | 大模型路径（决策模型 = 关闭） | 决策模型路径（Jev） |
 | --- | --- | --- |
 | 谁决定下一步 | 主模型，逐次调用 `browser_*` 工具 | 决策模型，在 `browser_task` 内逐步选择 |
 | 主模型参与 | 全程 | 调用一次 `browser_task`（交出用户完整目标），拿到结果后读页面作答 |
@@ -480,7 +478,7 @@ type DecisionBackend =
 | `browser-questions.ts` | `model.py`、`questions.py` | 每个节点一个编号的元素表放进 state；一个 operation 问题，加上每种操作一个 target 问题；每题都带同一套 next-step 规则 |
 | `browser-task.ts` | `model.py`、`agent.py` | 文字模型契约 `{"text": …}`、预算（60 个动作 / 120 次决策）、连续 3 步无变化即停 |
 | `browser-agent.ts` | `agent.py` | 循环：观察 → 决策 → 执行 → 再观察；页面过期就重新观察、重新决策；同一输入的文字不重复生成；执行记录先于观察写入 |
-| `backends/jev.ts`、`backends/laya.ts` | — | 决策模型适配器 |
+| `backends/jev.ts` | — | 决策模型适配器 |
 
 沿用它的取舍：
 - **不设置信度阈值，也不让大模型审议**（`acceptValid`）。安全网由执行前的新鲜度校验和无进展停止承担；confidence 仍会校验并写入 trace。
@@ -684,7 +682,7 @@ G1、G2 已修。G3–G8（严格 ref、pageKey、视口、select、滚动、等
 - **已核实（2026-09-23，官方文档）：** 请求上限 64k tokens（state + 最长问题 ≤ 32k）；choice ≤ 255 候选；score 2–10 级；noul 无 confidence；错误码 401 / 422 / 429 / 529；输入 $0.042 / 百万 tokens，输出免费。实现时仍需重新核对。
 - **ask 模式下 browser_task 的确认粒度**（§7.5）需要产品决定。
 - **离视口很远、又不是翻页控件的目标**：翻页控件已经在任何距离都会提供（§7.2 改动 3）；其他远处目标只能依赖“先滚动”的规则。只有这条规则时，Jev 在 HN 第 2 页没有继续向下滚，而是误点了一条新闻，可靠性仍待验证。
-- **Laya 的输入格式**：laya-mlx 对对象形式的 instructions 和候选描述，给出的置信度接近均匀分布（约 0.015）；用字符串形式时表现正常。已按你的决定暂不测试 Laya，适配器保留。
+- **Laya 已移除**：laya-mlx 每道题只有 512 token（问题头部 192），装不下网页的元素表和正文；instructions 以对象发送时还会被它的 `json.dumps` 转义成 `\uXXXX`。修正编码后，表单任务也只做对第一步就答 DONE，所以从产品中移除（§12.0）。
 - **Jev 的动态速率限制与错误体验。** 429、超时、额度不足、key 失效需要分别映射为用户能理解的状态，而不是统一显示“决策失败”。
 - **自建 endpoint 的产品入口。** 协议先保留，v1 不暴露任意 URL；未来是否提供自建服务参考实现另立设计。
 - **trace 展示形态。** v1 先落盘和显示摘要；完整 inspector 需要另做隐私、清理和筛选设计。
@@ -706,9 +704,10 @@ G1、G2 已修。G3–G8（严格 ref、pageKey、视口、select、滚动、等
 
 ### 12.0 架构修订（2026-09-23）
 
-- browser use 分两条路径：大模型沿用现有 `browser_*` 工具；Jev / Laya 走照搬 jev-ultrafast 的循环，只替换 Electron 控制层（§7.1–7.3）。
+- browser use 分两条路径：大模型沿用现有 `browser_*` 工具；Jev 走照搬 jev-ultrafast 的循环，只替换 Electron 控制层（§7.1–7.3）。
 - 删除原 §7.2 的“大模型审议 / 修正”和置信度阈值：jev-ultrafast 不这样做，试点中审议单次 7–29 s，还会在同一个锚点上循环点击。
-- 合并 `claude/laya-mlx-local-setup-730b65`：决策引擎设置页、`decision.json`、Laya 适配器。§5 据此改写。
+- 合并 `claude/laya-mlx-local-setup-730b65`（决策引擎设置页、`decision.json`、Laya 适配器）。§5 据此改写。
+- 随后移除 Laya：它的 512 token 窗口装不下网页，表单任务上做对一步就停（§11）。设置页与代码只保留 Jev，旧配置读作关闭。
 
 ### 12.1 jev-use 补充调研（358819d）
 

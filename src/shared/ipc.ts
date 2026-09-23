@@ -214,7 +214,7 @@ export const Ipc = {
   sshState: "ssh:state",
   /** Every live SSH host at once. Parent owns the handler; the pane must not treat `ssh:state` as global. */
   sshStates: "ssh:states",
-  /** 决策引擎：目前只有 Laya（本地）一个可选后端；见 docs/decision-layer.md §5.3。 */
+  /** 决策引擎：browser use 的决策模型（关闭 / Jev）；见 docs/decision-layer.md §5。 */
   decisionGetConfig: "decision:get-config",
   /** 本地桌面管理；远程客户端不得调用。 */
   decisionSaveConfig: "decision:save-config",
@@ -224,7 +224,7 @@ export const Ipc = {
   decisionKeyState: "decision:key-state",
   /** Store or clear the Jev key; answers with the new key state. */
   decisionSetKey: "decision:set-key",
-  /** 配置变化的广播，不带秘密——Laya 本地运行没有凭证可言。 */
+  /** 配置变化的广播，不带秘密——Jev key 只在 Main 的 .env 里。 */
   decisionChanged: "decision:changed",
   /** 远程访问（网页/手机）: server lifecycle, credentials and devices. */
   remoteGetState: "remote:get-state",

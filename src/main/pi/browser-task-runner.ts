@@ -3,7 +3,6 @@ import { pageFingerprint, runBrowserAgent, StalePage, type AgentResult, type Bro
 import { guardScript, MARKER_SCRIPT, OBSERVE_SCRIPT, settleScript, targetScript, type ObservedAction } from "../engine/decision/browser-snapshot";
 import { parseTextValue, riskOf, TEXT_VALUE_INSTRUCTIONS } from "../engine/decision/browser-task";
 import { createJevBackend } from "../engine/decision/backends/jev";
-import { createLayaBackend } from "../engine/decision/backends/laya";
 import { acceptValid } from "../engine/decision/dispatch";
 import { DecisionRuntime, type DecisionBackend } from "../engine/decision/runtime";
 import { DecisionTraceFile } from "../engine/decision/trace";
@@ -18,7 +17,7 @@ import { requestBrowser } from "./browser-bridge";
  * `browser_task`: the decision-model path of browser use (docs/decision-layer.md §7.2).
  *
  * The loop is `runBrowserAgent` (jev-ultrafast's); this file supplies its adapters — the
- * side pane's webview as the control layer, Jev or Laya as the decision backend, the
+ * side pane's webview as the control layer, Jev as the decision backend, the
  * conversation's model with reasoning off as the field-text helper — plus what the
  * product adds around it: permission prompts for risky actions, and revocation when the
  * decision model is switched off or its key is cleared mid-run.
@@ -155,7 +154,6 @@ async function backendFor(config: DecisionModelConfig): Promise<DecisionBackend 
     if (!key) return uiText("还没有配置 Jev API key（设置 → 决策引擎）", "No Jev API key is configured (Settings → Decision engine)");
     return createJevBackend({ apiKey: key });
   }
-  if (config.kind === "laya") return createLayaBackend({ baseUrl: config.baseUrl });
   return uiText("决策引擎未启用，请改用 browser_* 工具", "The decision engine is off; use the browser_* tools instead");
 }
 

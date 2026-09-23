@@ -486,7 +486,7 @@ export function createFastVibeApi(t: ApiTransport) {
       onStates: (listener: (states: RemoteHostConnectionState[]) => void): (() => void) =>
         t.subscribe(Ipc.sshStates, listener),
     },
-    /** 决策引擎：`state + questions → answers` 的本地结构化判断后端；目前只有 Laya。 */
+    /** 决策引擎：browser use 用哪个决策模型（关闭 / Jev）；见 docs/decision-layer.md §5。 */
     decision: {
       getConfig: (): Promise<import("./decision").DecisionModelConfig> => t.invoke(Ipc.decisionGetConfig),
       saveConfig: (config: import("./decision").DecisionModelConfig): Promise<import("./decision").DecisionModelConfig> =>

@@ -20,7 +20,7 @@ export type FastVibePaths = {
   providersFile: string;
   gatewayCredentialsFile: string;
   mcpFile: string;
-  /** Which decision-layer backend (off / Laya) is selected; see `src/main/engine/decision/`. */
+  /** Which decision model browser use runs on (off / Jev); see `src/main/engine/decision/`. */
   decisionFile: string;
   /** Append-only record of decision-layer calls: hashes and summaries, never page text. */
   decisionTraceFile: string;
