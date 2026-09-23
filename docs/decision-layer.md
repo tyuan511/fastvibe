@@ -789,6 +789,17 @@ type BrowserReviewResult =
 | **5** | `subagent.role` consumer | 否 | 角色选择有 trace 可查；未启用时现有 subagent 行为完全不变 |
 | **6** | agent team 调度 consumer | 否 | 另立设计，不在本文件承诺具体协作策略 |
 
+**实现状态（2026-09-23）**
+
+- 前置 G1/G2：已修（`side-pane-browser.tsx`）。
+- 切片 1：已完成，尚未接入任何产品路径：
+  - `src/main/engine/decision/protocol.ts`：类型、canonicalize、问题与答案校验、confidence 归一化；
+  - `dispatch.ts`：大小筛查与答案采纳策略；
+  - `runtime.ts`：run 的预算与总 deadline、单次请求时限、重试、取消，以及 revokeAll；§4 设想的 executor 已并入这里；
+  - `trace.ts`：JSONL 记录，只记 hash 和摘要，文件权限 0600，按条数修剪；
+  - `backends/jev.ts`：线格式、错误映射、测试连接。本属切片 4 的范围，提前完成是因为切片 0 的评测脚本要用。
+- 测试：`test/decision-{protocol,runtime,jev}.test.ts`，全部用假后端或假 fetch，不访问网络。
+
 `pnpm test` 只测纯模块（无 DOM、不引 zustand/React）。browser 的注入脚本继续由 `pnpm check:scripts` 检查；浏览器语义测试需要本地 fixture，不能只靠 TypeScript。
 
 ### 10.1 切片 0：离线评测与止损标准
