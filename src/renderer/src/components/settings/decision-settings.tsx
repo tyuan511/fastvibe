@@ -152,12 +152,15 @@ export function DecisionSettings() {
         />
       )}
       <SettingsRow
-        title={
-          <div className="space-y-2">
-            <div>{t("decision.scenarios")}</div>
+        align="start"
+        title={t("decision.scenarios")}
+        description={
+          // The switches sit under the title so Save lines up with 应用场景 on the right,
+          // rather than floating mid-way down a block of checkboxes.
+          <span className="mt-2 flex flex-col items-start gap-2 text-sm text-foreground">
             <button
               type="button"
-              className="flex items-center gap-2 font-normal"
+              className="flex items-center gap-2"
               disabled={loading || saving}
               onClick={() => setDraft((current) => ({ ...current, browserControl: !current.browserControl }))}
             >
@@ -166,14 +169,14 @@ export function DecisionSettings() {
             </button>
             <button
               type="button"
-              className="flex items-center gap-2 font-normal"
+              className="flex items-center gap-2"
               disabled={loading || saving}
               onClick={() => setDraft((current) => ({ ...current, computerControl: !current.computerControl }))}
             >
               <Checkbox checked={draft.computerControl} className="pointer-events-none" />
               <span>{t("decision.computerControl")}</span>
             </button>
-          </div>
+          </span>
         }
         control={
           <Button size="sm" variant="outline" disabled={saving || !dirty} onClick={() => void save(draft)}>
