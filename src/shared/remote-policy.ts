@@ -75,6 +75,11 @@ const DENIED = new Map<string, string>([
 
   // SSH host profiles and tunnels are local desktop controls. A browser already
   // connected to this machine must not be able to rewrite its SSH destinations.
+  // Sanitized config is readable remotely (see ALLOWED below); saving or probing a local
+  // HTTP endpoint from Main is a lever a remote caller should not have, and there is no
+  // benefit to letting a phone configure which model runs on this desktop.
+  [Ipc.decisionSaveConfig, "决策模型只能在本机配置"],
+  [Ipc.decisionTest, "决策模型只能在本机配置"],
   [Ipc.sshHosts, "SSH 主机只能在本机管理"],
   [Ipc.sshHostSave, "SSH 主机只能在本机管理"],
   [Ipc.sshHostRemove, "SSH 主机只能在本机管理"],
@@ -135,6 +140,9 @@ const ALLOWED = new Set<string>([
   Ipc.conversationsBindWorktree,
   Ipc.conversationsUnbindWorktree,
   Ipc.conversationsListWorktrees,
+  // No secret in this shape — Laya runs on the user's own machine, so a remote client
+  // reading which backend is selected costs nothing (see decision.ts).
+  Ipc.decisionGetConfig,
   Ipc.engineAbort,
   Ipc.engineAbortSubagent,
   Ipc.engineBranch,

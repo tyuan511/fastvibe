@@ -214,6 +214,14 @@ export const Ipc = {
   sshState: "ssh:state",
   /** Every live SSH host at once. Parent owns the handler; the pane must not treat `ssh:state` as global. */
   sshStates: "ssh:states",
+  /** 决策引擎：目前只有 Laya（本地）一个可选后端；见 docs/decision-layer.md §5.3。 */
+  decisionGetConfig: "decision:get-config",
+  /** 本地桌面管理；远程客户端不得调用。 */
+  decisionSaveConfig: "decision:save-config",
+  /** 一次性连通性检测（GET /health），不发送任何 state；远程客户端不得调用。 */
+  decisionTest: "decision:test",
+  /** 配置变化的广播，不带秘密——Laya 本地运行没有凭证可言。 */
+  decisionChanged: "decision:changed",
   /** 远程访问（网页/手机）: server lifecycle, credentials and devices. */
   remoteGetState: "remote:get-state",
   remoteSetPassword: "remote:set-password",

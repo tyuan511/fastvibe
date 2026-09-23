@@ -486,6 +486,16 @@ export function createFastVibeApi(t: ApiTransport) {
       onStates: (listener: (states: RemoteHostConnectionState[]) => void): (() => void) =>
         t.subscribe(Ipc.sshStates, listener),
     },
+    /** 决策引擎：`state + questions → answers` 的本地结构化判断后端；目前只有 Laya。 */
+    decision: {
+      getConfig: (): Promise<import("./decision").DecisionModelConfig> => t.invoke(Ipc.decisionGetConfig),
+      saveConfig: (config: import("./decision").DecisionModelConfig): Promise<import("./decision").DecisionModelConfig> =>
+        t.invoke(Ipc.decisionSaveConfig, config),
+      test: (baseUrl?: string): Promise<import("./decision").DecisionTestResult> => t.invoke(Ipc.decisionTest, { baseUrl }),
+      /** A save made by *another* window; each window holds its own copy, loaded once. */
+      onChanged: (listener: (config: import("./decision").DecisionModelConfig) => void): (() => void) =>
+        t.subscribe(Ipc.decisionChanged, listener),
+    },
     /** 远程访问：把这台机器上的 agent 通过网页开放给其他设备。 */
     remote: {
       getState: (): Promise<import("@shared/ipc").RemoteServerState> => t.invoke(Ipc.remoteGetState),

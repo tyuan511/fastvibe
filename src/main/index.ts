@@ -32,6 +32,9 @@ import {
   writeAppSettings,
 } from "./engine/app-settings";
 import { configureFastVibeUserData, getFastVibePaths, type FastVibePaths } from "./engine/paths";
+import { readDecisionConfig, writeDecisionConfig } from "./engine/decision/store";
+import { testLayaConnection } from "./engine/decision/backends/laya";
+import { decisionModelConfigOf } from "@shared/decision";
 import { readWindowState, writeWindowState } from "./engine/window-state";
 import { presentNotification, readNotificationSettings } from "./engine/notifications";
 import { readAgentConfig } from "./engine/runtime-config";
@@ -385,6 +388,24 @@ function modelsDevInfo(stats: ModelsDevStats): AppModelsDevInfo {
     generatedAt: stats.generatedAt,
     path: stats.path,
   };
+}
+
+/**
+ * The decision layer's UI-facing methods: which backend is selected, and whether it is
+ * reachable. Nothing here calls `decide()` — no consumer does yet (see
+ * docs/decision-layer.md; the adapter alone lives in `engine/decision/backends/laya.ts`),
+ * so this only persists the choice for a future one to read.
+ */
+function registerDecisionIpc(): void {
+  handle(Ipc.decisionGetConfig, () => readDecisionConfig(getFastVibePaths().decisionFile));
+  handle(Ipc.decisionSaveConfig, (payload: unknown, ctx) => {
+    const config = decisionModelConfigOf(payload);
+    writeDecisionConfig(getFastVibePaths().decisionFile, config);
+    // Each window holds its own copy, loaded once — same rule as `settings:changed`.
+    broadcast(Ipc.decisionChanged, config, { except: ctx.origin });
+    return config;
+  });
+  handle(Ipc.decisionTest, (payload: { baseUrl?: string }) => testLayaConnection(payload?.baseUrl));
 }
 
 function registerSshIpc(): void {
@@ -1300,6 +1321,7 @@ app.whenReady().then(async () => {
   );
   registerRemoteIpc();
   registerSshIpc();
+  registerDecisionIpc();
   createAppServer({
     identity: loadOrCreateServerIdentity(getFastVibePaths().serverIdentityFile, {
       version: app.getVersion(),

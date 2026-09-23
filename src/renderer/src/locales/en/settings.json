@@ -1,4 +1,25 @@
 {
+ "decision": {
+  "title": "Decision model",
+  "description": "Pick a local decision model for features that need structured judgments (choice / score / yes-no) instead of generated text.",
+  "model": "Decision model",
+  "off": "Off",
+  "laya": "Laya (local)",
+  "layaHint": "Runs aac6fef/laya-mlx on this machine; nothing is sent to an external server.",
+  "baseUrl": "Service URL",
+  "baseUrlPlaceholder": "http://127.0.0.1:8787",
+  "baseUrlHint": "Address of the local laya-mlx HTTP service. Leave blank to use the default.",
+  "invalidBaseUrl": "Enter a valid http(s) URL.",
+  "test": "Test connection",
+  "testing": "Testing…",
+  "testOk": "Connected ({{model}})",
+  "testOkNoModel": "Connected",
+  "testFailed": "Connection failed: {{error}}",
+  "apply": "Apply",
+  "saving": "Saving…",
+  "saveFailed": "Could not save: {{error}}",
+  "remoteHint": "The decision model can only be configured on this machine."
+ },
  "proxy": {
   "title": "Network proxy",
   "enabled": "Enable proxy",
@@ -41,6 +62,7 @@
   "usage": "Usage",
   "providers": "Models",
   "subagents": "Subagents",
+  "decision": "Decision engine",
   "mcp": "MCP tools",
   "skills": "Skills",
   "extensions": "Extensions",

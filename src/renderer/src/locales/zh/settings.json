@@ -1,4 +1,25 @@
 {
+ "decision": {
+  "title": "决策模型",
+  "description": "为需要结构化判断（选择 / 打分 / 是否，而不是生成文本）的功能选择本地决策模型。",
+  "model": "决策模型",
+  "off": "关闭",
+  "laya": "Laya（本地）",
+  "layaHint": "运行在本机的 aac6fef/laya-mlx，不发送任何数据到外部服务器。",
+  "baseUrl": "服务地址",
+  "baseUrlPlaceholder": "http://127.0.0.1:8787",
+  "baseUrlHint": "本地 laya-mlx HTTP 服务地址，留空则使用默认值。",
+  "invalidBaseUrl": "请输入合法的 http(s) 地址。",
+  "test": "测试连接",
+  "testing": "测试中…",
+  "testOk": "连接成功（{{model}}）",
+  "testOkNoModel": "连接成功",
+  "testFailed": "连接失败：{{error}}",
+  "apply": "应用",
+  "saving": "保存中…",
+  "saveFailed": "保存失败：{{error}}",
+  "remoteHint": "决策模型只能在本机配置。"
+ },
  "proxy": {
   "title": "网络代理",
   "enabled": "启用代理",
@@ -41,6 +62,7 @@
   "usage": "使用统计",
   "providers": "模型管理",
   "subagents": "子 Agent",
+  "decision": "决策引擎",
   "mcp": "MCP 工具",
   "skills": "技能",
   "extensions": "插件",
