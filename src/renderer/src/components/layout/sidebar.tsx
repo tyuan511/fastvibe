@@ -878,8 +878,15 @@ export const Sidebar = memo(function Sidebar({
     const overIndex = section.ids.indexOf(String(event.over.id));
     if (overIndex < 0) return null;
     const overRect = event.over.rect;
-    const activeRect = event.active.rect.current.translated;
-    const activeMiddle = activeRect ? activeRect.top + activeRect.height / 2 : overRect.top;
+    // dnd-kit clears `translated` just before firing DragEnd in some versions. Using
+    // the target's top in that case made a project dropped below another project look
+    // like a drop above it (and, when it landed back on its own row, a no-op). Rebuild
+    // the final active rect from the initial rect plus the pointer delta instead.
+    const translated = event.active.rect.current.translated;
+    const initial = event.active.rect.current.initial;
+    const activeTop = translated?.top ?? (initial ? initial.top + event.delta.y : overRect.top);
+    const activeHeight = translated?.height ?? initial?.height ?? overRect.height;
+    const activeMiddle = activeTop + activeHeight / 2;
     const below = activeMiddle > overRect.top + overRect.height / 2;
     const index = below ? overIndex + 1 : overIndex;
     const from = section.ids.indexOf(String(event.active.id));

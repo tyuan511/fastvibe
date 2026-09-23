@@ -130,7 +130,7 @@ import { priceUsage } from "../engine/pricing";
 import { fetchOpenAIAccountQuota, openAICodexAccountId } from "../engine/openai-quota";
 import { fetchGatewayBalance, gatewayTargets, probeGateway, readGatewayCredentials, writeGatewayCredentials } from "../engine/gateway-probe";
 import { ensureScratchWorkspace, getFastVibePaths, scratchWorkspace, type FastVibePaths } from "../engine/paths";
-import { MemoryManager } from "../engine/memory";
+import { DisabledMemoryHost, type MemoryHost } from "../engine/memory-host";
 import { SubagentManager } from "../engine/subagents";
 import { reduceSubagent } from "@shared/subagent-state";
 import { SubagentControl } from "./subagent-control";
@@ -681,7 +681,7 @@ export class PiProcessManager {
   #appConfigHost: ((request: AppConfigHostRequest) => Promise<AppConfigHostResult>) | null = null;
   /** pi package installs (extensions), kept in the isolated agentDir. */
   #extensions: ExtensionManager;
-  #memory: MemoryManager;
+  #memory: MemoryHost;
   #subagentManager: SubagentManager;
   /** Live subagent registry and bounded transcript cache. */
   #subagents = new Map<string, SubagentInfo>();
@@ -716,9 +716,9 @@ export class PiProcessManager {
    */
   #stoppedSubagents = new Set<string>();
 
-  constructor(paths: FastVibePaths = getFastVibePaths()) {
+  constructor(paths: FastVibePaths = getFastVibePaths(), memory: MemoryHost = new DisabledMemoryHost()) {
     this.#paths = paths;
-    this.#memory = new MemoryManager(this.#paths);
+    this.#memory = memory;
     this.#memory.setSystemTwoGenerator((conversationId, model, system, user, signal) =>
       this.completeDecisionText(conversationId, system, user, signal, model),
     );
@@ -748,7 +748,7 @@ export class PiProcessManager {
   }
 
   /** Main-owned memory service used by IPC and the session extension. */
-  get memory(): MemoryManager { return this.#memory; }
+  get memory(): MemoryHost { return this.#memory; }
 
   listWorkspace(): WorkspaceSnapshot { return this.#catalog.snapshot(); }
   searchConversations(query: string): Promise<ConversationSearchHit[]> {

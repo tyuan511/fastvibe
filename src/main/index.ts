@@ -60,6 +60,7 @@ import {
 import { collectUsageStats } from "./engine/usage-stats";
 import { applyPendingInstall, registerUpdater, scheduleUpdateCheck } from "./updater";
 import { PiProcessManager } from "./pi/process-manager";
+import { MemoryManager } from "./engine/memory";
 import { fetchPackageCatalog } from "./pi/package-catalog";
 import { TerminalSessions } from "./engine/terminal-sessions";
 import { SshManager, openSshAppTransport } from "./ssh/ssh-manager";
@@ -131,7 +132,9 @@ function bundledAgentRuntime(): AgentRuntimeSource {
 }
 
 const agentRuntime = bundledAgentRuntime();
-const engine = new PiProcessManager();
+const paths = getFastVibePaths();
+const memory = new MemoryManager(paths);
+const engine = new PiProcessManager(paths, memory);
 const terminals = new TerminalSessions();
 /**
  * Which client each shell belongs to, by broadcast identity.
