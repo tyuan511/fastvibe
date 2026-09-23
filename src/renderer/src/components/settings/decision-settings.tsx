@@ -1,5 +1,6 @@
 import { useEffect, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { CircleQuestionMarkIcon } from "@hugeicons/core-free-icons";
 import { Ipc } from "@shared/ipc";
@@ -69,6 +70,7 @@ export function DecisionSettings() {
     setError("");
     try {
       applyExternal(await window.fastvibe.decision.saveConfig(next));
+      toast.success(t("decision.saved"));
     } catch (cause) {
       setError(t("decision.saveFailed", { error: cleanError(cause) }));
     } finally {
@@ -83,6 +85,7 @@ export function DecisionSettings() {
     try {
       setKeys(await window.fastvibe.decision.setKey(value));
       setKeyDraft("");
+      toast.success(t(value.trim() ? "decision.keyStored" : "decision.keyCleared"));
     } catch (cause) {
       setError(t("decision.saveFailed", { error: cleanError(cause) }));
     } finally {
