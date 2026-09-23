@@ -1,77 +1,85 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildBrowserStep, describeElement, NONE } from "../src/main/engine/decision/browser-questions.ts";
+import { actionSpace, buildBrowserStep, resolveDecision } from "../src/main/engine/decision/browser-questions.ts";
+import type { DecisionObservation, ObservedAction } from "../src/main/engine/decision/browser-snapshot.ts";
+import { adoptAnswers, acceptValid } from "../src/main/engine/decision/dispatch.ts";
 import { assertValidQuestions } from "../src/main/engine/decision/protocol.ts";
 
 /**
- * The browser.step builder decides what the fast model may even choose from. Its
- * invariants (docs/decision-layer.md §7.1.2): no operation without a legal target, no
- * question for a single candidate, a NONE escape on every target question, and no
- * secret inputs or query strings reaching the model.
+ * The browser.step builder (ported from jev-ultrafast) decides what the fast model may
+ * choose from. Invariants: one index per DOM node even when it can be both clicked and
+ * typed into, dropdown options as their own targets, controls as operations, and only the
+ * chosen operation's head resolving to an action.
  */
 
-const snapshot = {
-  url: "https://example.test/",
-  title: "Example",
-  text: "x".repeat(10_000),
-  elements: [
-    { ref: "e0", tag: "a", text: "Docs", href: "https://example.test/docs?token=abc" },
-    { ref: "e1", tag: "button", text: "Search" },
-    { ref: "e2", tag: "input", type: "search", text: "Search the site" },
-    { ref: "e3", tag: "input", type: "password", text: "Password" },
-    { ref: "e4", tag: "button", text: "Disabled", disabled: true },
-  ],
+const actions: ObservedAction[] = [
+  { id: "e1", kind: "fill", node: 7, role: "combobox", label: "Where from?", value: "" },
+  { id: "e2", kind: "click", node: 7, role: "combobox", label: "Open Where from?", value: "" },
+  { id: "e3", kind: "click", node: 9, role: "checkbox", label: "Bacon", checked: "false" },
+  { id: "e4", kind: "select", node: 11, role: "combobox", label: "Size → Medium", value: "medium", current_value: "Small" },
+  { id: "e5", kind: "select", node: 11, role: "combobox", label: "Size → Large", value: "large", current_value: "Small" },
+  { id: "e6", kind: "click", node: 12, role: "button", label: "Submit order" },
+  { id: "scroll_down", kind: "scroll", label: "Scroll down", delta: 560 },
+  { id: "wait", kind: "wait", label: "Wait for the page to update" },
+];
+
+const observation: DecisionObservation = {
+  url: "https://example.test/order",
+  title: "Order",
+  w: 1120,
+  h: 780,
+  text: "Pizza order",
+  scroll: { y: 0, height: 2000 },
+  actions,
+  marker: null,
+  page_key: null,
+  guards: {},
+  omitted_actions: 0,
 };
 
-test("targets are split by kind, secrets excluded, and single candidates resolved locally", () => {
-  const { request, localTargets, targetQuestion } = buildBrowserStep({ goal: "search", snapshot });
-  assert.doesNotThrow(() => assertValidQuestions(request.questions));
-  const operation = request.questions.operation;
-  assert.equal(operation.type, "choice");
-  if (operation.type !== "choice") return;
-  assert.deepEqual(Object.keys(operation.criteria), ["CLICK", "TYPE_TEXT", "DONE", "BLOCKED"]);
-  const click = request.questions.click_target;
-  assert.ok(click.type === "choice" && Object.keys(click.criteria).join() === `e0,e1,${NONE}`);
-  // One editable, non-secret field: no question, the host resolves it.
-  assert.equal(request.questions.type_text_target, undefined);
-  assert.equal(localTargets.TYPE_TEXT, "e2");
-  assert.equal(targetQuestion.CLICK, "click_target");
+test("one index per node, dropdown options as index:n, controls kept apart", () => {
+  const space = actionSpace(actions);
+  assert.deepEqual(space.elements.map((e) => [e.index, e.label, e.operations]), [
+    ["1", "Where from?", ["TYPE_TEXT", "CLICK"]],
+    ["2", "Bacon", ["CLICK"]],
+    ["3", "Size", ["SELECT"]],
+    ["4", "Submit order", ["CLICK"]],
+  ]);
+  assert.equal(space.elements[1].checked, "false");
+  assert.equal(space.elements[2].value, "Small");
+  assert.deepEqual(Object.keys(space.targets.SELECT ?? {}), ["3:1", "3:2"]);
+  assert.deepEqual(Object.keys(space.controls), ["SCROLL_DOWN", "WAIT"]);
 });
 
-test("PRESS_ENTER and BACK only appear when the host can execute them", () => {
-  const plain = buildBrowserStep({ goal: "g", snapshot }).request.questions.operation;
-  assert.ok(plain.type === "choice" && !("PRESS_ENTER" in plain.criteria) && !("BACK" in plain.criteria));
-  const built = buildBrowserStep({ goal: "g", snapshot, typedRef: "e2", canGoBack: true });
-  const op = built.request.questions.operation;
-  assert.ok(op.type === "choice" && "PRESS_ENTER" in op.criteria && "BACK" in op.criteria);
-  assert.equal(built.localTargets.PRESS_ENTER, "e2");
-  // A typedRef that is not an editable field (e.g. the password box) is not pressable.
-  const secret = buildBrowserStep({ goal: "g", snapshot, typedRef: "e3" }).request.questions.operation;
-  assert.ok(secret.type === "choice" && !("PRESS_ENTER" in secret.criteria));
+test("the request carries the element table, rules on every question, and valid questions", () => {
+  const step = buildBrowserStep({ goal: "Order a medium pizza with bacon", observation, history: [{ action: "Where from?", kind: "fill", text: "Zurich", page_changed: true }] });
+  assert.doesNotThrow(() => assertValidQuestions(step.request.questions));
+  const op = step.request.questions.operation;
+  assert.ok(op.type === "choice");
+  if (op.type !== "choice") return;
+  assert.deepEqual(Object.keys(op.criteria), ["TYPE_TEXT", "CLICK", "SELECT", "SCROLL_DOWN", "WAIT", "DONE", "BLOCKED"]);
+  const target = step.request.questions.click_target;
+  assert.ok(target.type === "choice" && target.requiredWhen?.equals === "CLICK");
+  assert.deepEqual((target.instructions as { operation: string }).operation, "CLICK");
+  const state = step.request.state as { elements: unknown[]; recent_actions: Array<{ text: string }> };
+  assert.equal(state.elements.length, 4);
+  assert.equal(state.recent_actions[0].text, "Zurich");
 });
 
-test("descriptions drop query strings and page text is bounded", () => {
-  assert.equal(describeElement(snapshot.elements[0]), '[a] "Docs" → example.test/docs');
-  const { request } = buildBrowserStep({ goal: "g", snapshot, maxTextChars: 100 });
-  const state = request.state as { page: { text: string } };
-  assert.equal(state.page.text.length, 100);
-  assert.ok(!JSON.stringify(request).includes("token=abc"));
-});
-
-test("scrolling is offered only in the direction the viewport can move, and off-screen elements are marked", () => {
-  const withViewport = {
-    ...snapshot,
-    elements: [{ ref: "e9", tag: "a", text: "Footer", inViewport: false }, ...snapshot.elements.map((e) => ({ ...e, inViewport: true }))],
-    viewport: { canScrollUp: false, canScrollDown: true, scrollPercent: 20, headings: ["Intro"] },
+test("only the chosen operation's head resolves to an action", () => {
+  const step = buildBrowserStep({ goal: "g", observation });
+  const raw = {
+    operation: { type: "choice", choice: "SELECT", probabilities: { TYPE_TEXT: 0, CLICK: 0.1, SELECT: 0.9, SCROLL_DOWN: 0, WAIT: 0, DONE: 0, BLOCKED: 0 }, confidence: { value: 0.9, source: "reported" } },
+    select_target: { type: "choice", choice: "3:1", probabilities: { "3:1": 0.8, "3:2": 0.2 }, confidence: { value: 0.7, source: "reported" } },
+    click_target: { type: "choice", choice: "not-a-target" },
   };
-  const { request } = buildBrowserStep({ goal: "g", snapshot: withViewport });
-  const op = request.questions.operation;
-  assert.ok(op.type === "choice" && "SCROLL_DOWN" in op.criteria && !("SCROLL_UP" in op.criteria));
-  const click = request.questions.click_target;
-  assert.ok(click.type === "choice");
-  if (click.type !== "choice") return;
-  // On-screen candidates come first; the off-screen one is still offered, and says so.
-  assert.equal(Object.keys(click.criteria)[0], "e0");
-  assert.match(click.criteria.e9, /\(off-screen\)$/);
-  assert.deepEqual((request.state as { page: { viewport: unknown } }).page.viewport, { scrollPercent: 20, headingsOnScreen: ["Intro"] });
+  const { outcome } = adoptAnswers(step.request.questions, raw, acceptValid("t"));
+  assert.equal(outcome.status, "decided");
+  if (outcome.status !== "decided") return;
+  const decision = resolveDecision(step, outcome.answers as never);
+  assert.equal(decision.action?.id, "e4");
+  assert.equal(decision.action?.value, "medium");
+  const scroll = resolveDecision(step, { operation: { type: "choice", choice: "SCROLL_DOWN" } });
+  assert.equal(scroll.action?.kind, "scroll");
+  assert.deepEqual(resolveDecision(step, { operation: { type: "choice", choice: "DONE" } }), { operation: "DONE" });
 });

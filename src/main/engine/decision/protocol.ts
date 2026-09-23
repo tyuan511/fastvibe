@@ -12,13 +12,19 @@ export type JsonValue = null | boolean | number | string | JsonValue[] | { [key:
 
 export type DecisionState = JsonValue;
 
+/** Guidance for one question: a string, or structured guidance such as `{ goal, rules }`. */
+export type QuestionInstructions = string | { [key: string]: JsonValue } | JsonValue[];
+
+/** What an option means: a short description, or a record of its properties. */
+export type CriterionDescription = string | { [key: string]: JsonValue };
+
 type QuestionMeta = {
-  instructions?: string;
+  instructions?: QuestionInstructions;
   /** A speculative head: its answer is only required when this condition holds. */
   requiredWhen?: { question: string; equals: string };
 };
 
-export type ChoiceQuestion = { type: "choice"; criteria: Record<string, string> } & QuestionMeta;
+export type ChoiceQuestion = { type: "choice"; criteria: Record<string, CriterionDescription> } & QuestionMeta;
 export type ScoreQuestion = { type: "score"; criteria: string[]; min?: number; max?: number } & QuestionMeta;
 export type NoulQuestion = { type: "noul" } & QuestionMeta;
 export type Question = ChoiceQuestion | ScoreQuestion | NoulQuestion;

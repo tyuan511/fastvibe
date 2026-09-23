@@ -114,6 +114,17 @@ export function thresholdPolicy(version: string, min: number): AdoptionPolicy {
   };
 }
 
+/**
+ * Act on any answer that passed validation — the model's most probable legal option.
+ *
+ * jev-ultrafast runs this way: no confidence gate and no second-model review, with
+ * execution-time freshness guards and a no-progress stop as the safety net. Confidence is
+ * still validated and traced, so a gate can be reintroduced from evaluation data.
+ */
+export function acceptValid(version: string): AdoptionPolicy {
+  return { version, accept: () => true };
+}
+
 export type AdoptionResult = {
   outcome: DecisionOutcome;
   /** Every answer that passed validation, active or not — for the trace, never for acting. */

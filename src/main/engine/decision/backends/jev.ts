@@ -30,7 +30,8 @@ export type JevBackendOptions = {
 export function buildJevBody(request: DecideRequest): Record<string, unknown> {
   const questions: Record<string, unknown> = {};
   for (const [id, question] of Object.entries(request.questions)) {
-    const instructions = question.instructions?.trim() || DEFAULT_INSTRUCTIONS[question.type];
+    const given = question.instructions;
+    const instructions = typeof given === "string" ? given.trim() || DEFAULT_INSTRUCTIONS[question.type] : given ?? DEFAULT_INSTRUCTIONS[question.type];
     if (question.type === "choice") questions[id] = { type: "choice", instructions, criteria: question.criteria };
     else if (question.type === "score") questions[id] = { type: "score", instructions, criteria: question.criteria };
     else questions[id] = { type: "noul", instructions };

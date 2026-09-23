@@ -1,23 +1,29 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { literalText, LoopGuard } from "../src/main/engine/decision/browser-task.ts";
+import { noProgress, parseTextValue } from "../src/main/engine/decision/browser-task.ts";
+import { guardScript, MARKER_SCRIPT, OBSERVE_SCRIPT, settleScript, targetScript } from "../src/main/engine/decision/browser-snapshot.ts";
 
-test("the same action on the same state is admitted twice, then refused", () => {
-  const guard = new LoopGuard(2);
-  const state = { url: "https://a.test/", text: "same" };
-  assert.equal(guard.admit(state, "CLICK", "e3"), true);
-  assert.equal(guard.admit({ text: "same", url: "https://a.test/" }, "CLICK", "e3"), true, "key order does not matter");
-  assert.equal(guard.admit(state, "CLICK", "e3"), false);
-  // A different target, or a changed page, is progress.
-  assert.equal(guard.admit(state, "CLICK", "e4"), true);
-  assert.equal(guard.admit({ ...state, text: "scrolled" }, "CLICK", "e3"), true);
+test("the text helper must answer exactly {text}", () => {
+  assert.equal(parseTextValue('{"text": "Zurich"}'), "Zurich");
+  assert.equal(parseTextValue('```json\n{"text":"London"}\n```'), "London");
+  assert.equal(parseTextValue('{"text": null}'), null);
+  assert.throws(() => parseTextValue('{"text": "a", "note": "b"}'));
+  assert.throws(() => parseTextValue("Zurich"));
+  assert.throws(() => parseTextValue('{"text": "  "}'));
 });
 
-test("a single quoted literal is typed as-is; ambiguous or used literals are not", () => {
-  assert.equal(literalText('Search Google for "OpenAI GPT-6 Sol" and press Enter'), "OpenAI GPT-6 Sol");
-  assert.equal(literalText("在搜索框输入“北京天气”并回车"), "北京天气");
-  assert.equal(literalText("输入「机械键盘」，再输入「机械键盘」"), "机械键盘", "one distinct value");
-  assert.equal(literalText('Type "Alice" as name and "a@b.c" as email'), null);
-  assert.equal(literalText("search for weather in Paris"), null);
-  assert.equal(literalText('search "x"', ["x"]), null);
+test("three unchanged non-wait actions in a row stop the run; waits do not count", () => {
+  const same = { action: "x", kind: "click" as const, page_changed: false };
+  assert.equal(noProgress([same, same]), false);
+  assert.equal(noProgress([same, same, same]), true);
+  assert.equal(noProgress([same, { ...same, kind: "wait" as const }, same]), false);
+  assert.equal(noProgress([same, same, { ...same, page_changed: true }]), false);
+});
+
+test("injected page scripts compile", () => {
+  // A script that does not parse fails only at run time inside the page, so parse them here.
+  const action = { id: "e1", kind: "fill" as const, node: 3, label: "q", value: "v" };
+  for (const script of [OBSERVE_SCRIPT, MARKER_SCRIPT, guardScript(3), targetScript(action), settleScript(action)]) {
+    assert.doesNotThrow(() => new Function(`return ${script};`));
+  }
 });
