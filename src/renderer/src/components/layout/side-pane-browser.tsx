@@ -35,6 +35,10 @@ type Guest = HTMLElement & {
   reload(): void;
   loadURL(url: string): void;
   executeJavaScript(code: string): Promise<unknown>;
+  isLoading(): boolean;
+  sendInputEvent(event: Record<string, unknown>): void;
+  selectAll(): void;
+  insertText(text: string): Promise<void>;
 };
 
 type FaviconEvent = Event & { favicons?: string[] };
@@ -849,6 +853,76 @@ async function dispatch(request: BrowserAutomationRequest, entry: Entry): Promis
     case "evaluate":
       if (!request.script) throw new Error(be("needScript"));
       return execute(entry, request.script);
+    case "decision-eval":
+    case "decision-click":
+    case "decision-replace":
+    case "decision-wheel":
+    case "decision-wait-load":
+      return decisionAction(request, entry);
+    default:
+      throw new Error(be("unknownAction", { action: request.action }));
+  }
+}
+
+/**
+ * The decision loop's control layer (docs/decision-layer.md §7.3): raw page scripts and
+ * native input on the guest, the Electron counterpart of jev-ultrafast's CDP calls.
+ *
+ * Scripts run unwrapped — the ported observe/guard/target scripts return their own
+ * values and `null` for "not now" — and Main bounds every call's time, because a script
+ * on a document that navigates away never settles. Input goes through the guest's input
+ * pipeline (`sendInputEvent` / `insertText`), so pages see a real click or keystrokes
+ * rather than synthetic DOM events.
+ */
+async function decisionAction(request: BrowserAutomationRequest, entry: Entry): Promise<unknown> {
+  const view = entry.view;
+  switch (request.action) {
+    case "decision-eval":
+      if (!request.script) throw new Error(be("needScript"));
+      return view.executeJavaScript(request.script);
+    case "decision-click": {
+      const x = Math.round(request.x ?? -1);
+      const y = Math.round(request.y ?? -1);
+      if (x < 0 || y < 0) throw new Error("decision-click needs a point");
+      view.sendInputEvent({ type: "mouseMove", x, y });
+      view.sendInputEvent({ type: "mouseDown", x, y, button: "left", clickCount: 1 });
+      view.sendInputEvent({ type: "mouseUp", x, y, button: "left", clickCount: 1 });
+      return true;
+    }
+    case "decision-replace": {
+      // Input events are asynchronous: wait for the click to focus an editable element.
+      // insertText with nothing editable focused can wedge the guest, so never call it blind.
+      const editable = "(() => { const e = document.activeElement; return !!e && (e.isContentEditable || ((e.tagName === 'INPUT' || e.tagName === 'TEXTAREA') && !e.readOnly)); })()";
+      let focused = false;
+      for (let attempt = 0; attempt < 20 && !(focused = Boolean(await view.executeJavaScript(editable))); attempt++) {
+        await new Promise((resolve) => window.setTimeout(resolve, 25));
+      }
+      if (!focused) throw new Error("The field did not take focus");
+      const text = request.text ?? "";
+      view.selectAll();
+      await Promise.race([view.insertText(text), new Promise((resolve) => window.setTimeout(resolve, 1000))]);
+      // Date/time inputs ignore inserted text; set their value the way a framework expects.
+      return view.executeJavaScript(`(() => { const e = document.activeElement, text = ${JSON.stringify(text)};
+        if (e && /^(date|time|datetime-local|month|week)$/.test(e.type) && e.value !== text) {
+          Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(e, text);
+          e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        return e && 'value' in e ? e.value : e ? e.innerText : null; })()`);
+    }
+    case "decision-wheel": {
+      const box = view.getBoundingClientRect();
+      // Electron's wheel delta is the opposite sign of CDP's: negative scrolls down.
+      view.sendInputEvent({ type: "mouseWheel", x: Math.round(box.width / 2), y: Math.round(box.height / 2), deltaX: 0, deltaY: -(request.delta ?? 560) });
+      return true;
+    }
+    case "decision-wait-load": {
+      const deadline = Date.now() + Math.min(request.timeoutMs ?? 10_000, 20_000);
+      while (safe(() => view.isLoading(), false) && Date.now() < deadline) {
+        await new Promise((resolve) => window.setTimeout(resolve, 50));
+      }
+      rememberUrl(entry);
+      return { url: entry.url, title: safe(() => view.getTitle(), "") };
+    }
     default:
       throw new Error(be("unknownAction", { action: request.action }));
   }

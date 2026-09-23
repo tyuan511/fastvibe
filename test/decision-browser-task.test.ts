@@ -27,3 +27,15 @@ test("injected page scripts compile", () => {
     assert.doesNotThrow(() => new Function(`return ${script};`));
   }
 });
+
+test("risk is decided by what the action is: commitments and leaving the start origin ask", async () => {
+  const { riskOf } = await import("../src/main/engine/decision/browser-task.ts");
+  const page = { url: "https://shop.test/cart", title: "", w: 0, h: 0, text: "", scroll: { y: 0, height: 0 }, actions: [], marker: null, page_key: null, guards: {}, omitted_actions: 0 };
+  const click = (label: string) => ({ id: "e1", kind: "click" as const, node: 1, label });
+  assert.equal(riskOf(click("Place order"), page, "https://shop.test/", false), "label");
+  assert.equal(riskOf(click("提交订单"), page, "https://shop.test/", false), "label");
+  assert.equal(riskOf(click("Next page"), page, "https://shop.test/", false), null);
+  assert.equal(riskOf({ id: "e2", kind: "fill", node: 2, label: "Submit comment" }, page, "https://shop.test/", false), null, "typing never asks");
+  assert.equal(riskOf(click("Next page"), { ...page, url: "https://pay.example/" }, "https://shop.test/", false), "origin");
+  assert.equal(riskOf(click("Next page"), { ...page, url: "https://pay.example/" }, "https://shop.test/", true), null, "asked once already");
+});

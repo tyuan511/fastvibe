@@ -22,6 +22,8 @@ export type FastVibePaths = {
   mcpFile: string;
   /** Which decision-layer backend (off / Laya) is selected; see `src/main/engine/decision/`. */
   decisionFile: string;
+  /** Append-only record of decision-layer calls: hashes and summaries, never page text. */
+  decisionTraceFile: string;
   /** Renderer UI preferences (theme, chat behaviour, …). */
   settingsFile: string;
   /** Main-owned normal window size and maximized state. */
@@ -126,6 +128,7 @@ function buildFastVibePaths(): FastVibePaths {
     gatewayCredentialsFile: join(userData, "gateway-credentials.json"),
     mcpFile: join(userData, "mcp.json"),
     decisionFile: join(userData, "decision.json"),
+    decisionTraceFile: join(runtimeRoot, "decision-trace.jsonl"),
     settingsFile: join(userData, "settings.json"),
     windowStateFile: join(userData, "window-state.json"),
     subagentsFile: join(agentDir, "subagents.json"),

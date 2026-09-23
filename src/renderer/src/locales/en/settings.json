@@ -1,7 +1,7 @@
 {
  "decision": {
   "title": "Decision model",
-  "description": "Pick a local decision model for features that need structured judgments (choice / score / yes-no) instead of generated text.",
+  "description": "Pick the decision model for browser use. Off: the main model drives the browser itself. With a decision model, sessions also get browser_task, where the decision model clicks and types step by step, faster.",
   "model": "Decision model",
   "off": "Off",
   "laya": "Laya (local)",
@@ -18,7 +18,17 @@
   "apply": "Apply",
   "saving": "Saving…",
   "saveFailed": "Could not save: {{error}}",
-  "remoteHint": "The decision model can only be configured on this machine."
+  "remoteHint": "The decision model can only be configured on this machine.",
+  "jev": "Jev (TypeSafe)",
+  "offHint": "The main model calls the browser tools and decides each step itself.",
+  "jevHint": "Jev decides each browser step, about 0.3 s per step. Needs an API key.",
+  "apiKey": "API key",
+  "keyPlaceholder": "Paste your Jev API key",
+  "keySave": "Save",
+  "keyClear": "Clear",
+  "keySaved": "Saved (never shown)",
+  "keyMissing": "Not set",
+  "jevPrivacy": "With Jev selected, the task goal, visible on-screen text, control names and current values, and the step history are sent to Jev (TypeSafe); when a field value is generated, its context is sent to the provider of this conversation's model. Password, file and hidden inputs are never read."
  },
  "proxy": {
   "title": "Network proxy",

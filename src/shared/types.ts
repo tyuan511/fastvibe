@@ -437,6 +437,11 @@ export type BrowserRequest = {
   newTab?: boolean;
   timeoutMs?: number;
   conversationId?: string;
+  /** `decision-click`: point in the guest's viewport, from the decision loop's target script. */
+  x?: number;
+  y?: number;
+  /** `decision-wheel`: pixels to scroll down (negative scrolls up). */
+  delta?: number;
 };
 
 /**

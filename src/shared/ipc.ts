@@ -220,6 +220,10 @@ export const Ipc = {
   decisionSaveConfig: "decision:save-config",
   /** 一次性连通性检测（GET /health），不发送任何 state；远程客户端不得调用。 */
   decisionTest: "decision:test",
+  /** Whether a Jev key is stored (never the key itself). */
+  decisionKeyState: "decision:key-state",
+  /** Store or clear the Jev key; answers with the new key state. */
+  decisionSetKey: "decision:set-key",
   /** 配置变化的广播，不带秘密——Laya 本地运行没有凭证可言。 */
   decisionChanged: "decision:changed",
   /** 远程访问（网页/手机）: server lifecycle, credentials and devices. */

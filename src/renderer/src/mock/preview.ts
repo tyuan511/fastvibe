@@ -561,6 +561,8 @@ const api = {
     getConfig: async () => ({ kind: "off" as const }),
     saveConfig: async (config: unknown) => config as { kind: "off" },
     test: async () => ({ ok: true as const, model: "aac6fef/laya-mlx" }),
+    keyState: async () => ({ jev: false }),
+    setKey: async (key: string) => ({ jev: Boolean(key.trim()) }),
     onChanged: () => () => undefined,
   },
   // Remote access is a real server in the main process; the preview has none to show,

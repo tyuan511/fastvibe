@@ -34,7 +34,10 @@ import {
 import { configureFastVibeUserData, getFastVibePaths, type FastVibePaths } from "./engine/paths";
 import { readDecisionConfig, writeDecisionConfig } from "./engine/decision/store";
 import { testLayaConnection } from "./engine/decision/backends/laya";
-import { decisionModelConfigOf, type DecisionTestResult } from "@shared/decision";
+import { testJevConnection } from "./engine/decision/backends/jev";
+import { decisionModelConfigOf, JEV_KEY_ENV, type DecisionKeyState, type DecisionModelConfig, type DecisionTestResult } from "@shared/decision";
+import { installBrowserTaskGlobal, revokeBrowserTasks } from "./pi/browser-task-runner";
+import { loadProviderKeys, setProviderKey } from "./engine/providers";
 import { readWindowState, writeWindowState } from "./engine/window-state";
 import { presentNotification, readNotificationSettings } from "./engine/notifications";
 import { readAgentConfig } from "./engine/runtime-config";
@@ -391,22 +394,40 @@ function modelsDevInfo(stats: ModelsDevStats): AppModelsDevInfo {
 }
 
 /**
- * The decision layer's UI-facing methods: which backend is selected, and whether it is
- * reachable. Nothing here calls `decide()` — no consumer does yet (see
- * docs/decision-layer.md; the adapter alone lives in `engine/decision/backends/laya.ts`),
- * so this only persists the choice for a future one to read.
+ * The decision engine's UI-facing methods (docs/decision-layer.md §5): which decision
+ * model browser use runs on, the Jev key, and reachability. `browser_task` reads the
+ * config per run; sessions pick up whether to offer the tool when their tools load.
  */
 function registerDecisionIpc(): void {
-  handle(Ipc.decisionGetConfig, () => readDecisionConfig(getFastVibePaths().decisionFile));
+  const paths = () => getFastVibePaths();
+  const keyState = async (): Promise<DecisionKeyState> => ({ jev: Boolean((await loadProviderKeys(paths()))[JEV_KEY_ENV]) });
+  handle(Ipc.decisionGetConfig, () => readDecisionConfig(paths().decisionFile));
   handle(Ipc.decisionSaveConfig, (payload: unknown, ctx) => {
     const config = decisionModelConfigOf(payload);
-    writeDecisionConfig(getFastVibePaths().decisionFile, config);
+    const previous = readDecisionConfig(paths().decisionFile);
+    writeDecisionConfig(paths().decisionFile, config);
+    // Switching the model withdraws the old one's authority: running tasks stop at their next decision.
+    if (JSON.stringify(previous) !== JSON.stringify(config)) revokeBrowserTasks();
     // Each window holds its own copy, loaded once — same rule as `settings:changed`.
     broadcast(Ipc.decisionChanged, config, { except: ctx.origin });
     return config;
   });
-  handle(Ipc.decisionTest, async (payload: { baseUrl?: string }): Promise<DecisionTestResult> => {
-    const result = await testLayaConnection(payload?.baseUrl);
+  handle(Ipc.decisionKeyState, keyState);
+  handle(Ipc.decisionSetKey, async (payload: { key?: unknown }): Promise<DecisionKeyState> => {
+    const key = typeof payload?.key === "string" ? payload.key.trim() : "";
+    await setProviderKey(paths(), JEV_KEY_ENV, key);
+    if (!key) revokeBrowserTasks();
+    return keyState();
+  });
+  handle(Ipc.decisionTest, async (payload: unknown): Promise<DecisionTestResult> => {
+    const config: DecisionModelConfig = decisionModelConfigOf(payload);
+    if (config.kind === "jev") {
+      const key = (await loadProviderKeys(paths()))[JEV_KEY_ENV];
+      if (!key) return { ok: false, error: uiText("还没有保存 API key", "No API key is saved") };
+      const result = await testJevConnection(key);
+      return result.ok ? { ok: true } : { ok: false, error: result.message };
+    }
+    const result = await testLayaConnection(config.kind === "laya" ? config.baseUrl : undefined);
     return result.ok ? result : { ok: false, error: result.message };
   });
 }
@@ -1288,6 +1309,9 @@ app.whenReady().then(async () => {
   if (shutdownPhase !== "running") return;
   log.info("app ready");
   installBrowserGlobal();
+  installBrowserTaskGlobal({
+    completeText: (conversationId, system, user, signal) => engine.completeDecisionText(conversationId, system, user, signal),
+  });
   // Registers the bridge global and an at-quit driver shutdown. The native library is
   // still not loaded here — `cua-bridge` imports it on the first `computer_*` call, so a
   // user who never touches the feature pays nothing for it.

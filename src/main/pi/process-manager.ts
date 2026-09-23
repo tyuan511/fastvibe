@@ -1864,6 +1864,30 @@ export class PiProcessManager {
     await this.#ensureReady();
     return this.#modelsCache ?? [];
   }
+  /**
+   * One field value for the browser_task loop (docs/decision-layer.md §5.3): the
+   * conversation's own model, called outside the conversation with reasoning off.
+   *
+   * `complete` with no reasoning effort sends a reasoning model its "off" effort, which
+   * is the point — the helper returns `{"text": …}` and nothing it could think about
+   * changes that; with reasoning on it only cost more time per field.
+   */
+  async completeDecisionText(conversationId: string, system: string, user: string, signal?: AbortSignal): Promise<string> {
+    await this.#ensureReady();
+    const registry = this.#models;
+    if (!registry) throw new Error(uiText("模型尚未就绪", "Model is not ready"));
+    const { session } = await this.#sessionFor(conversationId);
+    const model = session.model;
+    if (!model || !registry.hasConfiguredAuth(model)) {
+      throw new Error(uiText("还没有可用的模型", "No model is available"));
+    }
+    const response = await registry.complete(
+      model,
+      { systemPrompt: system, messages: [{ role: "user", content: user, timestamp: Date.now() }] },
+      { maxTokens: 512, cacheRetention: "none", timeoutMs: 20_000, ...(signal ? { signal } : {}) },
+    );
+    return response.content.map((block) => (block.type === "text" ? block.text : "")).join("").trim();
+  }
   /** Generate one concise commit subject without adding anything to the conversation. */
   async generateCommitMessage(files: CommitFileMaterial[], conversationId?: string): Promise<string> {
     if (files.length === 0) throw new Error(uiText("没有要提交的改动", "No changes to commit"));

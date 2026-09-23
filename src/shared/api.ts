@@ -491,7 +491,10 @@ export function createFastVibeApi(t: ApiTransport) {
       getConfig: (): Promise<import("./decision").DecisionModelConfig> => t.invoke(Ipc.decisionGetConfig),
       saveConfig: (config: import("./decision").DecisionModelConfig): Promise<import("./decision").DecisionModelConfig> =>
         t.invoke(Ipc.decisionSaveConfig, config),
-      test: (baseUrl?: string): Promise<import("./decision").DecisionTestResult> => t.invoke(Ipc.decisionTest, { baseUrl }),
+      test: (config: import("./decision").DecisionModelConfig): Promise<import("./decision").DecisionTestResult> =>
+        t.invoke(Ipc.decisionTest, config),
+      keyState: (): Promise<import("./decision").DecisionKeyState> => t.invoke(Ipc.decisionKeyState),
+      setKey: (key: string): Promise<import("./decision").DecisionKeyState> => t.invoke(Ipc.decisionSetKey, { key }),
       /** A save made by *another* window; each window holds its own copy, loaded once. */
       onChanged: (listener: (config: import("./decision").DecisionModelConfig) => void): (() => void) =>
         t.subscribe(Ipc.decisionChanged, listener),

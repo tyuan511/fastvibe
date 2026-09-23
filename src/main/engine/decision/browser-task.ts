@@ -62,3 +62,35 @@ export function noProgress(history: readonly StepHistoryEntry[]): boolean {
   const recent = history.slice(-3);
   return recent.length === 3 && recent.every((entry) => entry.page_changed === false && entry.kind !== "wait");
 }
+
+/**
+ * Words that mark an action whose effect leaves the page: paying, ordering, deleting,
+ * sending or submitting something. Matched on the control's accessible name, in the
+ * languages FastVibe ships.
+ */
+const RISKY_LABEL = /支付|付款|购买|下单|结算|删除|移除|发送|提交|确认订单|注销|pay\b|purchase|buy\b|checkout|place order|order now|delete|remove|send\b|submit|confirm/i;
+
+/**
+ * Why an action needs the user's confirmation under the permission modes that ask for
+ * risky operations (docs/decision-layer.md §7.5), or `null` when it does not.
+ *
+ * Decided by code from what the action is, never by the decision model's confidence:
+ * a confident click on "Place order" is exactly the one to ask about. Scrolling, waiting
+ * and typing into a field change nothing outside the page and never ask; a click or a
+ * select asks when its label reads as a commitment, and the first mutation after the run
+ * has left the origin it started on asks once, since the user approved a task on one site.
+ */
+export function riskOf(action: ObservedAction, page: DecisionObservation, startUrl: string, leftOriginConfirmed: boolean): string | null {
+  if (action.kind !== "click" && action.kind !== "select") return null;
+  if (RISKY_LABEL.test(action.label)) return "label";
+  if (!leftOriginConfirmed && originOf(page.url) !== originOf(startUrl)) return "origin";
+  return null;
+}
+
+function originOf(url: string): string {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return url;
+  }
+}

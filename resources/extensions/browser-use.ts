@@ -17,6 +17,29 @@ type BrowserRequest = {
 
 type BrowserBridge = (request: BrowserRequest) => Promise<unknown>;
 
+/** The decision-model loop Main installs (src/main/pi/browser-task-runner.ts). */
+type BrowserTaskRunner = (request: {
+  conversationId?: string;
+  goal: string;
+  tabId?: string;
+  signal?: AbortSignal;
+  mode?: string;
+  confirm?: (message: string) => Promise<boolean>;
+  onStep?: (line: string) => void;
+}) => Promise<{ status: string; detail?: string; steps: unknown[]; page?: unknown; backend: string; ms: number }>;
+
+function browserTaskRunner(): BrowserTaskRunner | undefined {
+  const scope = globalThis as Record<string, unknown>;
+  const enabled = scope.__fastvibeBrowserTaskEnabled;
+  const runner = scope.__fastvibeBrowserTask;
+  if (typeof enabled !== "function" || typeof runner !== "function") return undefined;
+  try {
+    return enabled() ? (runner as BrowserTaskRunner) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function bridge(): BrowserBridge {
   const handler = (globalThis as Record<string, unknown>).__fastvibeBrowserRequest;
   if (typeof handler !== "function") throw new Error("内置浏览器桥接尚未就绪");
@@ -151,6 +174,39 @@ export default function browserUse(pi: ExtensionAPI): void {
       return call("press", { tabId: params.tabId, key: params.key });
     },
   });
+
+  // Offered only while a decision model is selected (设置 → 决策引擎), read when this
+  // session's tools load; with none, browser use stays on the tools above.
+  const runTask = browserTaskRunner();
+  if (runTask) {
+    pi.registerTool({
+      name: "browser_task",
+      label: "浏览器任务",
+      description:
+        "快速浏览器执行器：在当前标签页里由决策模型逐步点击、输入、选择、滚动，直到完成目标或无法继续。把用户的完整目标原文一次交给它（例如“填写并提交这个表单：姓名 X、电话 Y……”），不要拆成小步，也不要写“然后报告……”——它只负责操作，不负责回答。返回执行过的每一步和最终屏幕（url、title、可见文字、元素）；由你读最终屏幕回答用户，信息不够时再用 browser_snapshot。它不会打开新网址：需要时先用 browser_open。",
+      promptSnippet: "让决策模型在浏览器里连续执行一个目标",
+      parameters: Type.Object({
+        goal: Type.String({ description: "用户的完整目标原文（或尚未完成的部分）" }),
+        tabId: TAB_ID(false),
+      }),
+      async execute(_id, params, signal, onUpdate, ctx) {
+        const lines: string[] = [];
+        const result = await runTask({
+          conversationId,
+          goal: params.goal,
+          tabId: params.tabId,
+          signal,
+          mode: process.env.FASTVIBE_PERMISSION_MODE,
+          confirm: (message) => (ctx?.hasUI ? ctx.ui.confirm("FastVibe 浏览器任务", message) : Promise.resolve(false)),
+          onStep: (line) => {
+            lines.push(line);
+            onUpdate?.({ content: [{ type: "text", text: lines.join("\n") }], details: undefined });
+          },
+        });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
+      },
+    });
+  }
 
   pi.registerTool({
     name: "browser_history",
