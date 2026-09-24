@@ -12,12 +12,12 @@ import { THINKING_LEVELS, type NativeProviderOAuth, type ProviderModel, type Thi
  * only) and read straight off it. Nothing touches the network and nothing needs a
  * key, so the settings UI can offer these before the user has configured anything.
  *
- * Native providers are **never** written to `models.json`. Their credential lives
- * outside it — an API key in the engine's in-memory credential overlay, a subscription
- * token in `agent/oauth.json` — and their models already exist in the catalog. Writing
- * them out would be actively harmful: `models.json` resolves
- * `apiKey` as an environment-variable name, so an unresolvable name is sent as the
- * literal bearer token (`Authorization: Bearer FASTVIBE_KEY_OPENAI`).
+ * Native providers never write credentials or complete model lists to `models.json`.
+ * Their credential lives outside it — an API key in the engine's in-memory credential
+ * overlay, a subscription token in `agent/oauth.json` — while a small
+ * `modelOverrides` block may carry user-edited metadata onto the SDK catalog. Writing
+ * a native provider as a complete custom definition would be harmful because
+ * `models.json` resolves `apiKey` as an environment-variable name.
  *
  * What each built-in can be configured *with* is read off the SDK rather than listed:
  * `auth.apiKey.login` says a pasted key is a real path, `auth.oauth` says the SDK ships
@@ -185,4 +185,31 @@ export function selectedNativeModels(id: string, selectedIds: string[]): Provide
   if (!provider) return [];
   const wanted = new Set(selectedIds);
   return provider.models.filter((model) => wanted.has(model.id));
+}
+
+/**
+ * Rebuild a selected native roster from the SDK catalog while retaining FastVibe's
+ * user-edited metadata. Unedited rows deliberately come from the SDK so an upgrade can
+ * refresh its defaults; edited rows only override the fields the detail dialog owns.
+ */
+export function mergeNativeModels(id: string, selected: ProviderModel[]): ProviderModel[] {
+  const provider = findNativeProvider(id);
+  if (!provider) return [];
+  const saved = new Map(selected.map((model) => [model.id, model]));
+  return provider.models
+    .filter((model) => saved.has(model.id))
+    .map((model) => {
+      const override = saved.get(model.id);
+      if (override?.edited !== true) return model;
+      return {
+        ...model,
+        name: override.name,
+        contextWindow: override.contextWindow,
+        maxTokens: override.maxTokens,
+        reasoning: override.reasoning,
+        input: override.input,
+        thinkingLevels: override.thinkingLevels,
+        edited: true,
+      };
+    });
 }

@@ -61,7 +61,7 @@ const DEFAULT_EFFORTS = DEFAULT_THINKING_LEVELS;
  * Everything the dialog can assert about a model: whether it reasons, and which inputs
  * it accepts. `reasoning` flips the `reasoning` flag; the modalities become `input`.
  * The engine only takes `text` and `image`, so the other two are recorded for the
- * roster rather than written to `models.json`.
+ * roster rather than written to the engine configuration.
  */
 const TRAIT_DEFS = [
   { key: "reasoning", labelKey: "modelDetail.reasoning" },
@@ -100,11 +100,12 @@ export function ModelDetailDialog({
   onClose: () => void;
   onSave: (next: ProviderModel) => Promise<void>;
 }): JSX.Element {
-  // A native provider's models live in the SDK registry and `models.json` is never
-  // written for it, so its entry cannot carry an override — show it read-only rather
-  // than accept edits the engine would discard.
+  // Native models remain owned by the SDK, but Main persists the editable metadata as
+  // a `models.json.modelOverrides` entry. Provider identity and protocol stay read-only
+  // because they determine which native auth and streaming implementation is used.
   const { t } = useTranslation("settings");
-  const editable = provider?.kind !== "native" && provider !== undefined;
+  const editable = provider !== undefined;
+  const protocolEditable = editable && provider?.kind !== "native";
   const model = target?.model;
 
   const [name, setName] = useState("");
@@ -169,7 +170,9 @@ export function ModelDetailDialog({
         input,
         thinkingLevels: reasoning ? THINKING_EFFORT_LEVELS.filter((level) => levels.has(level)) : undefined,
         edited: true,
-        ...(api === INHERIT_API ? { api: undefined } : { api: api as ProviderApi }),
+        ...(protocolEditable
+          ? (api === INHERIT_API ? { api: undefined } : { api: api as ProviderApi })
+          : {}),
       });
     } catch (err) {
       setBusy(false);
@@ -199,7 +202,7 @@ export function ModelDetailDialog({
             </Row>
 
             <Row label={t("modelDetail.protocol")}>
-              {editable ? (
+              {protocolEditable ? (
                 <Select
                   items={{
                     [INHERIT_API]: t("modelDetail.followProvider", { api: apiLabel(provider?.api ?? "") }),
@@ -221,7 +224,7 @@ export function ModelDetailDialog({
                   </SelectContent>
                 </Select>
               ) : (
-                <ReadValue>{apiLabel(provider?.api ?? "")}</ReadValue>
+                <ReadValue>{apiLabel(model.api ?? provider?.api ?? "")}</ReadValue>
               )}
             </Row>
 

@@ -31,6 +31,11 @@ export type ClientSessionOptions = {
 
 type Subscription = { epoch: string; seq: number };
 
+const EVENT_BATCH_DELAY_MS = 25;
+const EVENT_BATCH_MAX_EVENTS = 32;
+const EVENT_BATCH_MAX_BYTES = 16 * 1024;
+const BATCHABLE_CHANNELS = new Set(["engine:event", "workspace:terminal-data"]);
+
 export class ClientSession {
   readonly id: string;
   readonly identity: ClientIdentity;
@@ -43,6 +48,12 @@ export class ClientSession {
   #log: ClientSessionOptions["log"];
   #canReceive: ((channel: string, capabilities: readonly AppCapability[]) => boolean) | undefined;
   #subscriptions = new Map<AppScope, Subscription>();
+  #eventBatch = false;
+  #binaryAttachments = false;
+  #pendingEvents: AppEventMessage[] = [];
+  #pendingEventBytes = 0;
+  #eventBatchTimer: ReturnType<typeof setTimeout> | null = null;
+  #flushingEventBatch = false;
   #closed = false;
   #handshaken = false;
 
@@ -78,15 +89,32 @@ export class ClientSession {
   /**
    * Narrow to the hello declaration. Only intersects; cannot grant server-missing caps.
    */
-  markHandshaken(capabilities?: readonly AppCapability[] | null): void {
+  markHandshaken(
+    capabilities?: readonly AppCapability[] | null,
+    features?: { eventBatch?: boolean; binaryAttachments?: boolean } | null,
+  ): void {
     if (this.#handshaken) return;
     this.#capabilities = intersectCapabilities(this.#serverCapabilities, capabilities);
+    this.#eventBatch = features?.eventBatch === true;
+    this.#binaryAttachments = features?.binaryAttachments === true;
     this.#handshaken = true;
+  }
+
+  get supportsEventBatch(): boolean {
+    return this.#eventBatch;
+  }
+
+  get supportsBinaryAttachments(): boolean {
+    return this.#binaryAttachments;
   }
 
   write(message: AppServerMessage): boolean {
     if (this.#closed) return false;
     try {
+      // A control/result frame must never overtake queued stream data. The batch
+      // flush is synchronous from the transport's point of view, so the existing
+      // ordering contract remains true for both old and new clients.
+      if (!this.#flushingEventBatch && message.kind !== "events" && !this.#flushEventBatch()) return false;
       return this.#send(message);
     } catch (error) {
       this.#log?.warn(`client send failed session=${this.id}: ${String(error)}`);
@@ -184,6 +212,7 @@ export class ClientSession {
     if (options?.namedOnly && !this.#subscriptions.has(event.scope)) return true;
     if (!this.#subscriptions.has(event.scope) && !this.#subscriptions.has(ALL_SCOPES)) return true;
     if (this.#canReceive && !this.#canReceive(event.channel, this.#capabilities)) return true;
+    if (this.#eventBatch && BATCHABLE_CHANNELS.has(event.channel)) return this.#queueEvent(event);
     const sent = this.write(event);
     if (sent && this.#subscriptions.has(event.scope)) {
       this.#subscriptions.set(event.scope, { epoch: event.epoch, seq: event.seq });
@@ -193,6 +222,61 @@ export class ClientSession {
 
   close(): void {
     this.#closed = true;
+    if (this.#eventBatchTimer !== null) clearTimeout(this.#eventBatchTimer);
+    this.#eventBatchTimer = null;
+    this.#pendingEvents = [];
+    this.#pendingEventBytes = 0;
     this.#subscriptions.clear();
+  }
+
+  #queueEvent(event: AppEventMessage): boolean {
+    if (this.#closed) return false;
+    this.#pendingEvents.push(event);
+    this.#pendingEventBytes += this.#eventSize(event);
+    if (this.#pendingEvents.length >= EVENT_BATCH_MAX_EVENTS || this.#pendingEventBytes >= EVENT_BATCH_MAX_BYTES) {
+      return this.#flushEventBatch();
+    }
+    if (this.#eventBatchTimer === null) {
+      this.#eventBatchTimer = setTimeout(() => {
+        this.#eventBatchTimer = null;
+        if (!this.#flushEventBatch()) this.#closed = true;
+      }, EVENT_BATCH_DELAY_MS);
+      this.#eventBatchTimer.unref?.();
+    }
+    return true;
+  }
+
+  #flushEventBatch(): boolean {
+    if (this.#pendingEvents.length === 0 || this.#closed) return !this.#closed;
+    if (this.#eventBatchTimer !== null) clearTimeout(this.#eventBatchTimer);
+    this.#eventBatchTimer = null;
+    const events = this.#pendingEvents;
+    this.#pendingEvents = [];
+    this.#pendingEventBytes = 0;
+    this.#flushingEventBatch = true;
+    let sent = false;
+    try {
+      sent = this.#send({ kind: "events", events });
+    } catch (error) {
+      this.#log?.warn(`client batch send failed session=${this.id}: ${String(error)}`);
+      sent = false;
+    } finally {
+      this.#flushingEventBatch = false;
+    }
+    if (!sent) return false;
+    for (const event of events) {
+      if (this.#subscriptions.has(event.scope)) {
+        this.#subscriptions.set(event.scope, { epoch: event.epoch, seq: event.seq });
+      }
+    }
+    return true;
+  }
+
+  #eventSize(event: AppEventMessage): number {
+    try {
+      return JSON.stringify(event).length;
+    } catch {
+      return 0;
+    }
   }
 }

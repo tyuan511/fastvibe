@@ -1,0 +1,119 @@
+name: Agent runtime
+
+on:
+  push:
+    tags:
+      - "agent-runtime-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: agent-runtime-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build Agent runtime candidate (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            arch: x64
+          - os: ubuntu-24.04-arm
+            arch: arm64
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Verify runtime tag
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^agent-runtime-v[0-9]+$ ]]; then
+            echo "Expected an agent-runtime-vN tag, got $GITHUB_REF_NAME"
+            exit 1
+          fi
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Agent runtime candidate
+        run: |
+          pnpm build
+          pnpm build:agent-runtime -- --platform=linux --arch=${{ matrix.arch }}
+
+      - name: Upload Agent runtime candidate
+        uses: actions/upload-artifact@v7
+        with:
+          name: agent-runtime-candidate-${{ matrix.arch }}
+          path: |
+            release/agent-runtime/fastvibe-agent-linux-${{ matrix.arch }}.tar.gz
+            release/agent-runtime/runtime-metadata-linux-${{ matrix.arch }}.json
+          retention-days: 1
+
+  publish:
+    name: Publish Agent runtime
+    needs: [build]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download runtime candidates
+        uses: actions/download-artifact@v8
+        with:
+          pattern: agent-runtime-candidate-*
+          path: runtime/candidates
+          merge-multiple: true
+
+      - name: Merge runtime candidates
+        run: |
+          node scripts/merge-agent-runtime-metadata.mjs \
+            --output=runtime/candidates.json \
+            runtime/candidates/runtime-metadata-linux-x64.json \
+            runtime/candidates/runtime-metadata-linux-arm64.json
+
+      - name: Compare with latest runtime and publish if changed
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p runtime/latest
+          latest="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
+            --json tagName,isDraft,isPrerelease,publishedAt \
+            --jq '([.[] | select(.isDraft == false and .isPrerelease == true and (.tagName | startswith("agent-runtime-v")))] | sort_by(.publishedAt) | last | .tagName) // ""')"
+          if [ -n "$latest" ]; then
+            gh release download "$latest" --repo "$GITHUB_REPOSITORY" \
+              --pattern agent-runtime.json --dir runtime/latest
+          fi
+          node scripts/resolve-agent-runtime-release.mjs \
+            --candidates=runtime/candidates.json \
+            --latest=runtime/latest/agent-runtime.json \
+            --output=runtime/agent-runtime.json
+          release="$(node -p "JSON.parse(require('fs').readFileSync('runtime/agent-runtime.json','utf8')).release")"
+          if [ -n "$latest" ] && [ "$release" = "$latest" ]; then
+            echo "Agent runtime unchanged; reusing $release"
+          elif gh release view "$release" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$release" --repo "$GITHUB_REPOSITORY" \
+              runtime/candidates/fastvibe-agent-linux-x64.tar.gz \
+              runtime/candidates/fastvibe-agent-linux-arm64.tar.gz \
+              runtime/agent-runtime.json --clobber
+            gh release edit "$release" --repo "$GITHUB_REPOSITORY" \
+              --title "FastVibe Agent runtime ${release#agent-runtime-}" \
+              --draft=false --prerelease --latest=false
+          else
+            gh release create "$release" --repo "$GITHUB_REPOSITORY" \
+              --title "FastVibe Agent runtime ${release#agent-runtime-}" \
+              --notes "Content-addressed Agent runtime release; desktop version is independent." \
+              --prerelease --latest=false \
+              runtime/candidates/fastvibe-agent-linux-x64.tar.gz \
+              runtime/candidates/fastvibe-agent-linux-arm64.tar.gz \
+              runtime/agent-runtime.json
+          fi

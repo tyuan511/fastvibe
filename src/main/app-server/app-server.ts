@@ -132,7 +132,7 @@ export class AppServer {
       case "hello": {
         if (!isProtocolCompatible(message.hello)) return this.#drop(session);
         if (session.handshaken) return true;
-        session.markHandshaken(message.hello.capabilities);
+        session.markHandshaken(message.hello.capabilities, message.hello.features);
         session.write({
           kind: "welcome",
           handshake: {
@@ -144,6 +144,10 @@ export class AppServer {
           sessionId: session.id,
           capabilities: session.capabilities,
           epoch: this.bus.epoch,
+          features: {
+            ...(session.supportsEventBatch ? { eventBatch: true } : {}),
+            ...(session.supportsBinaryAttachments ? { binaryAttachments: true } : {}),
+          },
         });
         return true;
       }

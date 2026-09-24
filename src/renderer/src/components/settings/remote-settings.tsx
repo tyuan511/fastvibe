@@ -1,14 +1,15 @@
-import { useEffect, useRef, useState, type JSX } from "react";
+import { useEffect, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { CheckmarkCircle02Icon, Copy01Icon, Delete02Icon, RefreshIcon } from "@hugeicons/core-free-icons";
+import { Delete02Icon, RefreshIcon } from "@hugeicons/core-free-icons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { cleanError } from "@/lib/ipc-error";
 import type { RemoteDeviceInfo, RemoteServerState, RemoteTunnelProvider } from "@shared/ipc";
+import { AddressActions } from "./address-actions";
 import { SettingsGroup, SettingsRow } from "./settings-group";
 import { RemoteTunnel } from "./remote-tunnel";
 
@@ -26,7 +27,6 @@ export function RemoteSettings(): JSX.Element {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
-  const [copied, setCopied] = useState(false);
   /** Shows the password form again over an already-configured server, to replace it. */
   const [changingPassword, setChangingPassword] = useState(false);
   /**
@@ -39,7 +39,6 @@ export function RemoteSettings(): JSX.Element {
    * that remote access is not set up, then failing when they filled the form in.
    */
   const [unavailable, setUnavailable] = useState<string | null>(null);
-  const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   async function refreshDevices(): Promise<void> {
     try {
@@ -72,8 +71,6 @@ export function RemoteSettings(): JSX.Element {
       off();
     };
   }, []);
-
-  useEffect(() => () => clearTimeout(copyTimer.current), []);
 
   async function run<T>(action: () => Promise<T>): Promise<T | null> {
     setBusy(true);
@@ -135,17 +132,6 @@ export function RemoteSettings(): JSX.Element {
   }
 
   const address = state?.port ? `${state.host}:${state.port}` : null;
-
-  async function copyAddress(): Promise<void> {
-    if (!address) return;
-    try {
-      await navigator.clipboard.writeText(address);
-      setCopied(true);
-      copyTimer.current = setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // Clipboard unavailable: the address stays selectable on screen.
-    }
-  }
 
   return (
     <div className="space-y-4">
@@ -211,14 +197,16 @@ export function RemoteSettings(): JSX.Element {
                 state.running && address ? (
                   <span className="flex items-center gap-1.5 font-mono">
                     {address}
-                    <button
-                      type="button"
-                      onClick={() => void copyAddress()}
-                      className="text-muted-foreground/70 hover:text-foreground"
-                      aria-label={t("remote.copyAddress")}
-                    >
-                      <HugeiconsIcon strokeWidth={2} icon={copied ? CheckmarkCircle02Icon : Copy01Icon} className="size-3.5" />
-                    </button>
+                    {/*
+                     * The address, as something another device can act on: copy it,
+                     * open it, and — when it is one a phone could actually reach — scan
+                     * it. The LAN address is, which is the case this row exists for:
+                     * typing a dotted quad plus a port on a phone keyboard is the whole
+                     * cost of getting in. That is what this machine is serving when
+                     * 局域网访问 is on; with it off the server reports loopback instead,
+                     * and `AddressActions` drops the code for it by itself.
+                     */}
+                    <AddressActions value={`http://${address}`} />
                   </span>
                 ) : (
                   t("remote.enableDesc")

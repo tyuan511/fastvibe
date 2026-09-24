@@ -29,6 +29,8 @@ export interface MessageTransport {
   /** Returns an unsubscribe. Fires once, when the connection is gone for any reason. */
   onClose(listener: (reason: string) => void): () => void;
   close(): void;
+  /** Optional transport hook used after welcome to enable negotiated binary frames. */
+  setBinaryAttachments?(enabled: boolean): void;
 }
 
 /**
@@ -53,6 +55,10 @@ export type AppClientOptions = {
   handshakeTimeoutMs?: number;
   /** Optional deadline for `call`. Abandoned locally; the work is not claimed aborted. */
   callTimeoutMs?: number;
+  /** Opt into ordered event batches; omitted keeps the legacy one-event framing. */
+  eventBatch?: boolean;
+  /** Opt into binary image attachment frames on transports that support them. */
+  binaryAttachments?: boolean;
   log?: { info(message: string): void; warn(message: string): void };
 };
 
@@ -83,6 +89,7 @@ type WelcomeOk = {
   sessionId: string;
   epoch: string;
   capabilities: AppCapability[];
+  features: { eventBatch?: boolean; binaryAttachments?: boolean };
 };
 
 export class AppClient {
@@ -206,11 +213,16 @@ export class AppClient {
       timer.unref?.();
       this.#handshakeTimer = timer;
 
+      const features = {
+        ...(this.#options.eventBatch === true ? { eventBatch: true } : {}),
+        ...(this.#options.binaryAttachments === true ? { binaryAttachments: true } : {}),
+      };
       const hello = {
         protocol: APP_PROTOCOL,
         protocolVersion: APP_PROTOCOL_VERSION,
         client: this.#options.client,
         capabilities: this.#options.capabilities ? [...this.#options.capabilities] : undefined,
+        ...(Object.keys(features).length > 0 ? { features } : {}),
       };
       try {
         this.#transport.send({ kind: "hello", hello });
@@ -331,6 +343,13 @@ export class AppClient {
       this.#receiveEvent(record);
       return;
     }
+    if (record.kind === "events") {
+      const events = Array.isArray(record.events) ? record.events : [];
+      for (const event of events) {
+        if (typeof event === "object" && event !== null) this.#receiveEvent(event as Record<string, unknown>);
+      }
+      return;
+    }
     if (record.kind === "resync") {
       this.#receiveResync(record);
       return;
@@ -353,6 +372,7 @@ export class AppClient {
     this.#capabilities = parsed.capabilities;
     this.#epoch = parsed.epoch;
     this.#sessionId = parsed.sessionId;
+    this.#transport.setBinaryAttachments?.(parsed.features.binaryAttachments === true);
     this.#ready = true;
     this.#clearHandshakeTimer();
     this.#setStatus({ state: "ready" });
@@ -566,11 +586,22 @@ function parseWelcome(record: Record<string, unknown>): WelcomeOk | "invalid" | 
   const capabilities = Array.isArray(record.capabilities)
     ? record.capabilities.filter(isAppCapability)
     : handshake.capabilities;
+  const features = parseTransportFeatures(record.features);
   return {
     handshake: { ...handshake, capabilities },
     sessionId: record.sessionId,
     epoch: record.epoch,
     capabilities,
+    features,
+  };
+}
+
+function parseTransportFeatures(value: unknown): { eventBatch?: boolean; binaryAttachments?: boolean } {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  const record = value as Record<string, unknown>;
+  return {
+    ...(record.eventBatch === true ? { eventBatch: true } : {}),
+    ...(record.binaryAttachments === true ? { binaryAttachments: true } : {}),
   };
 }
 

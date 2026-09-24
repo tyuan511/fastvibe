@@ -12,6 +12,7 @@ import {
   APP_PROTOCOL,
   APP_PROTOCOL_VERSION,
 } from "../src/shared/app-protocol.ts";
+import { encodeBinaryAttachment } from "../src/shared/binary-attachment.ts";
 import { Ipc } from "../src/shared/ipc.ts";
 import { registeredChannels } from "./registered-channels.ts";
 
@@ -175,12 +176,13 @@ async function connectedClient(port: number, capabilities?: readonly string[]): 
 
 test("AppClient handshake over a real socket", async () => {
   await withServer(async ({ server, port }) => {
-    const { client } = await connectedClient(port);
+    const { client, socket } = await connectedClient(port);
     assert.equal(client.status.state, "ready");
     assert.equal(client.handshake?.protocol, APP_PROTOCOL);
     assert.equal(client.handshake?.protocolVersion, APP_PROTOCOL_VERSION);
     assert.equal(client.handshake?.server.serverInstanceId, server.appServer.identity.serverInstanceId);
     assert.ok(client.epoch);
+    assert.match(socket.extensions, /permessage-deflate/);
     client.close();
   });
 });
@@ -225,6 +227,36 @@ test("capability narrowing refuses a method the client did not declare", async (
     const result = await client.call(Ipc.settingsGet);
     assert.deepEqual(result, { echoed: Ipc.settingsGet });
     client.close();
+  });
+});
+
+test("binary image attachments are materialized before dispatch", async () => {
+  await withServer(async ({ port, dispatched }) => {
+    const socket = await authedSocket(port);
+    socket.send(JSON.stringify({
+      kind: "hello",
+      hello: {
+        protocol: APP_PROTOCOL,
+        protocolVersion: APP_PROTOCOL_VERSION,
+        client: { kind: "test", version: "0.0.0" },
+        features: { binaryAttachments: true },
+      },
+    }));
+    assert.equal((await nextMessage(socket)).kind, "welcome");
+    const id = "att_12345678";
+    socket.send(Buffer.from(encodeBinaryAttachment(id, new Uint8Array([0, 1, 2, 255]))));
+    socket.send(JSON.stringify({
+      kind: "call",
+      requestId: 1,
+      method: Ipc.enginePrompt,
+      payload: { message: "看图", images: [{ type: "image", mimeType: "image/png", attachmentId: id }] },
+    }));
+    const result = await nextMessage(socket);
+    assert.equal(result.kind, "result");
+    assert.equal(result.ok, true);
+    const payload = dispatched[0]?.payload as { images?: Array<{ data?: string }> };
+    assert.equal(payload.images?.[0]?.data, "AAEC/w==");
+    socket.close();
   });
 });
 

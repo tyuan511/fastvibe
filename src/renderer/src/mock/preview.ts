@@ -131,6 +131,57 @@ const snapshot = (): WorkspaceSnapshot => ({
 });
 
 /**
+ * Push a thread back in time for `?older=1`. Rows move back whole numbers of *calendar*
+ * days — not a fixed hour count, because the rule under test compares calendar days, and
+ * subtracting hours would drift across midnight and make the fixture disagree with
+ * itself. Every timestamp of a row shifts by the same whole days, so the reply's own
+ * spans (耗时 / 用时 / 思考耗时) come out reading exactly as they do without the flag.
+ *
+ * The three states the timestamp rule can produce are all on screen at once: a turn from
+ * today, turns from days ago, and one from a previous year (`msg-u1` / `msg-a1..a3`).
+ */
+function ageThread(messages: ChatMessage[]): ChatMessage[] {
+  // Keyed by message id, not array position: consecutive assistant messages are merged
+  // into one transcript row by `mergeAssistantRun`, which keeps the first row's
+  // `createdAt` and the last row's `completedAt`. Shifting two halves of one merged row
+  // by different day counts would collapse its 耗时 to zero — a fixture that lies about
+  // the very spans it is sitting next to.
+  const dayOffsets: Record<string, number> = {
+    "msg-u1": 400,
+    "msg-a1": 400,
+    "msg-a2": 400,
+    "msg-a3": 400,
+    "msg-compact": 400,
+    "msg-u2": 3,
+    "msg-a4": 3,
+    "msg-a5": 3,
+  };
+  return messages.map((message) => {
+    const days = dayOffsets[message.id] ?? 0;
+    const move = (timestamp: number): number => {
+      const from = new Date(timestamp);
+      return new Date(from.getFullYear(), from.getMonth(), from.getDate() - days, from.getHours(), from.getMinutes(), from.getSeconds(), from.getMilliseconds()).getTime();
+    };
+    return {
+      ...message,
+      createdAt: move(message.createdAt),
+      ...(message.completedAt === undefined ? {} : { completedAt: move(message.completedAt) }),
+      ...(message.parts === undefined
+        ? {}
+        : {
+            parts: message.parts.map((part) => (part.kind === "thinking"
+              ? {
+                  ...part,
+                  ...(part.startedAt === undefined ? {} : { startedAt: move(part.startedAt) }),
+                  ...(part.endedAt === undefined ? {} : { endedAt: move(part.endedAt) }),
+                }
+              : part)),
+          }),
+    };
+  });
+}
+
+/**
  * Which conversations the sidebar draws as 运行中. Every fixture transcript is settled,
  * and the live mark comes from the engine's `conversation_running` push, so `?running=1`
  * is the only way to look at a spinning sidebar row in the harness. It is answered from
@@ -172,6 +223,12 @@ const openResult = (id: string): ConversationOpenResult => {
   // speak for a conversation that is not on screen when it lands.
   let messages = isActive ? fixtureMessages : [];
   if (!website && isActive && params.get("math") === "1") messages = [...MESSAGES.slice(0, 2), ...MATH_MESSAGES];
+  // `?older=1` ages the thread so the footers have to name their day. Every fixture is
+  // from today, so without this the date half of the timestamp rule has nothing to
+  // render and could not be looked at at all. The newest turn is still from today and
+  // the rest are spread over the previous days and a previous year, which is exactly
+  // the mix a reopened old chat has.
+  if (!website && isActive && params.get("older") === "1") messages = ageThread(messages);
   const planFixture = isActive && params.get("plan") === "1";
   const plan = {
     path: `${PREVIEW_CWD}/.tmp/fastvibe-plan.md`,
@@ -814,6 +871,20 @@ const REMOTE_ONLINE = {
   tunnelChoice: "cloudflared" as const,
 };
 
+/**
+ * The one state where the row's own address is reachable and therefore scannable: LAN
+ * access on, no tunnel at all. `?tunnel=lan` renders it — the branch that decides the
+ * QR icon's visibility is only visible here.
+ */
+const REMOTE_LAN = {
+  ...REMOTE_ONLINE,
+  host: "192.168.31.45",
+  lanAccess: true,
+  clients: 0,
+  tunnel: TUNNEL_IDLE,
+  tunnelChoice: null,
+};
+
 const REMOTE_MISSING = {
   ...REMOTE_ONLINE,
   clients: 0,
@@ -870,13 +941,15 @@ const REMOTE_FRP =
 const REMOTE_STATE =
   tunnelFixture === "online"
     ? REMOTE_ONLINE
-    : tunnelFixture === "missing"
-      ? REMOTE_MISSING
-      : tunnelFixture === "noauth"
-        ? REMOTE_NOAUTH
-        : tunnelFixture === "frp"
-          ? REMOTE_FRP_ONLINE
-          : REMOTE_OFF;
+    : tunnelFixture === "lan"
+      ? REMOTE_LAN
+      : tunnelFixture === "missing"
+        ? REMOTE_MISSING
+        : tunnelFixture === "noauth"
+          ? REMOTE_NOAUTH
+          : tunnelFixture === "frp"
+            ? REMOTE_FRP_ONLINE
+            : REMOTE_OFF;
 
 const REMOTE_DEVICES =
   tunnelFixture === "online"

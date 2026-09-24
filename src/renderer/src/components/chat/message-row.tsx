@@ -10,8 +10,10 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatDuration } from "@/lib/time";
+import { formatMessageTime } from "@/lib/message-time";
 import { stripAttachmentBlock } from "@/lib/attachments";
-import { i18n } from "@/lib/i18n";
+import { activeLanguage, i18n } from "@/lib/i18n";
+import { localeTag } from "@/lib/language";
 import { groupParts, mergeAssistantRun, resolveParts, type RenderPart } from "@/lib/group-parts";
 import { cn } from "@/lib/utils";
 import type { ChatAttachment, ChatMessage, MessagePart } from "@shared/types";
@@ -30,16 +32,6 @@ import { TuiLines } from "./tui-lines";
 import { isRemoteRef } from "@/lib/remote-project";
 import { blockedRemotely } from "@/lib/remote-unavailable";
 import { Ipc } from "@shared/ipc";
-
-function formatTime(timestamp: number): string {
-  // 24-hour clock in the reader's own time zone; `h23` avoids locales that render
-  // midnight as 24:00 under a bare `hour12: false`.
-  return new Date(timestamp).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  });
-}
 
 function AttachmentStrip({ items }: { items: ChatAttachment[] }): JSX.Element {
   const [preview, setPreview] = useState<ChatAttachment | null>(null);
@@ -137,6 +129,10 @@ function MessageActions({
   // work the fold hides — so both are shown, and they read in the same spoken form so the two
   // are comparable at a glance.
   const ended = message.completedAt ?? message.createdAt;
+  // Re-derived on every render, and only a mark as old as the reply it belongs to: a
+  // footer that has been up for hours can still read `14:32`, which is the timestamp
+  // it was written with — the row is not claiming the clock is still that day.
+  const stamp = formatMessageTime(ended, localeTag(activeLanguage()));
   return (
     // Revealed on hover — and simply shown on a touchscreen, which has no hover: an
     // invisible row of copy / edit / retry is still tappable, so a tap just below a
@@ -144,7 +140,7 @@ function MessageActions({
     <MessageFooter className="gap-1 px-0 opacity-0 transition-opacity group-hover/row:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100">
       {showTimestamp ? (
         <span className="tabular-nums">
-          {formatTime(ended)}
+          {stamp}
           {elapsed !== undefined && elapsed > 0 ? (
             <span className="text-muted-foreground/60"> · {t("message.elapsed", { duration: formatDuration(elapsed) })}</span>
           ) : null}
@@ -625,6 +621,7 @@ function ChatMessageRowImpl({
   const liveTail =
     lastPart?.kind === "text" ||
     (showThinking && lastPart?.kind === "thinking") ||
+    (lastPart?.kind === "compact" && lastPart.compact?.status === "running") ||
     message.tools.some((tool) => tool.status === "running");
   if (isUser && editing) {
     return (
@@ -684,6 +681,13 @@ function ChatMessageRowImpl({
     if (part.kind === "model") {
       // A transcript-level rule, so it spans the column instead of the reply's cap.
       return <ModelChangeNotice key={`model-${index}`} to={part.to} />;
+    }
+    if (part.kind === "compact") {
+      return (
+        <PartSlot key={`compact-${index}`}>
+          <CompactNotice message={part} />
+        </PartSlot>
+      );
     }
     return (
       <PartSlot key={part.group.id}>

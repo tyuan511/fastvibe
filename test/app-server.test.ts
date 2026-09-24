@@ -355,6 +355,28 @@ test("two subscribers see the same event id from one publish", async () => {
   assert.equal(server.bus.sequence("installation"), 1);
 });
 
+test("opted-in clients receive ordered high-frequency events as one batch", async () => {
+  const { server, session, cap } = createHarness();
+  await server.receive(session, {
+    ...hello,
+    hello: { ...hello.hello, features: { eventBatch: true } },
+  });
+  await server.receive(session, { kind: "subscribe", scopes: ["conversation:c1"] });
+  cap.messages.length = 0;
+  server.publish(Ipc.event, { type: "message_update", conversationId: "c1", delta: "a" });
+  server.publish(Ipc.event, { type: "message_update", conversationId: "c1", delta: "b" });
+  await new Promise((resolve) => setTimeout(resolve, 35));
+  const batches = cap.messages.filter((message) => message.kind === "events");
+  assert.equal(batches.length, 1);
+  assert.deepEqual(
+    batches[0]?.events.map((event) => event.payload),
+    [
+      { type: "message_update", conversationId: "c1", delta: "a" },
+      { type: "message_update", conversationId: "c1", delta: "b" },
+    ],
+  );
+});
+
 test("idempotency cache evicts the oldest key", async () => {
   let n = 0;
   const { server, session } = createHarness({

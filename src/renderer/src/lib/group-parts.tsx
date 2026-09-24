@@ -32,6 +32,7 @@ export type RenderPart =
   | { kind: "text"; text: string }
   | Extract<MessagePart, { kind: "thinking" }>
   | Extract<MessagePart, { kind: "model" }>
+  | Extract<MessagePart, { kind: "compact" }>
   | { kind: "tool"; tool: ToolCallBlock }
   | { kind: "group"; group: ToolGroup };
 
@@ -76,7 +77,17 @@ export function mergeAssistantRun(messages: ChatMessage[]): ChatMessage {
   const first = messages[0];
   if (messages.length === 1) return first;
 
-  const key = messages[messages.length - 1];
+  // Inline compaction metadata is carried in the same row but is not an assistant
+  // round-trip. Use the last assistant for cache/status/timing, otherwise the card
+  // would erase the footer's completion time.
+  let lastAssistant: ChatMessage | undefined;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].role === "assistant") {
+      lastAssistant = messages[index];
+      break;
+    }
+  }
+  const key = lastAssistant ?? messages[messages.length - 1];
   const cached = mergedRuns.get(key);
   if (cached) return cached;
 
@@ -97,8 +108,10 @@ export function mergeAssistantRun(messages: ChatMessage[]): ChatMessage {
       }
       parts.push(part);
     }
-    if (message.text) texts.push(message.text);
-    if (message.thinking) thoughts.push(message.thinking);
+    if (message.role === "assistant") {
+      if (message.text) texts.push(message.text);
+      if (message.thinking) thoughts.push(message.thinking);
+    }
   }
 
   // Same rule as `completedAt`: the row's status is its last round-trip, never a
@@ -106,7 +119,7 @@ export function mergeAssistantRun(messages: ChatMessage[]): ChatMessage {
   // turn) leaves the failed attempt in the transcript, then appends the reply
   // that actually ran. Walking back for `error` pasted that 429 under thinking /
   // todos that were already writing.
-  const last = messages[messages.length - 1];
+  const last = lastAssistant ?? messages[messages.length - 1];
   const error = last?.error;
   // A truncation or stop notice belongs to the round-trip that ended the row, for the
   // same reason: an earlier attempt a 继续 resumed from must not keep its notice.
@@ -142,6 +155,14 @@ export function groupMessageRows(messages: ChatMessage[]): MessageRow[] {
   const rows: MessageRow[] = [];
   for (const message of messages) {
     const last = rows.at(-1);
+    // Compaction is transcript metadata, not another turn. Keep it in the assistant
+    // row it followed so an automatic compaction cannot split one visual reply into
+    // two bubbles/footers. The main projection already does this for persisted data;
+    // this branch also covers older snapshots and live fallback cards.
+    if (message.kind === "compact" && last && last.messages[0].role === "assistant") {
+      last.messages.push(message);
+      continue;
+    }
     if (message.role === "assistant" && last && last.messages[0].role === "assistant") {
       last.messages.push(message);
       continue;
@@ -156,6 +177,9 @@ export function groupMessageRows(messages: ChatMessage[]): MessageRow[] {
  * fall back to the flat fields so nothing renders blank.
  */
 export function resolveParts(message: ChatMessage): MessagePart[] {
+  if (message.kind === "compact") {
+    return [{ kind: "compact", text: message.text, compact: message.compact }];
+  }
   if (message.parts && message.parts.length > 0) return message.parts;
   const parts: MessagePart[] = [];
   if (message.thinking) parts.push({ kind: "thinking", text: message.thinking });

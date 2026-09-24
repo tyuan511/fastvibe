@@ -15,6 +15,10 @@ import {
   type AppCapability,
   type AppServerIdentity,
 } from "../../shared/app-protocol.ts";
+import {
+  decodeBinaryAttachment,
+  materializeBinaryAttachments,
+} from "../../shared/binary-attachment.ts";
 import { AppServer } from "../app-server/app-server.ts";
 import type { ClientSession } from "../app-server/client-session.ts";
 
@@ -162,6 +166,11 @@ const MAX_FRAME_BYTES = 24 * 1024 * 1024;
 const CLOSE_UNAUTHORIZED = 4001;
 const CLOSE_TIMEOUT = 4002;
 const CLOSE_TOO_LARGE = 4003;
+const CLOSE_BACKPRESSURE = 4004;
+/** Do not let one slow tunnel grow an unbounded ws send buffer. */
+const MAX_BUFFERED_BYTES = 2 * 1024 * 1024;
+const MAX_ATTACHMENT_BYTES = 32 * 1024 * 1024;
+const ATTACHMENT_TTL_MS = 60_000;
 
 /** Pick a usable private IPv4 address for the LAN link shown in settings. */
 export function lanAddress(): string | null {
@@ -189,6 +198,8 @@ type Client = {
   /** New App Protocol frames are used after the legacy auth frame. */
   protocolClient: boolean;
   appSession: ClientSession | null;
+  attachments: Map<string, { bytes: Buffer; expiresAt: number }>;
+  attachmentBytes: number;
 };
 
 export class RemoteServer {
@@ -275,7 +286,17 @@ export class RemoteServer {
         this.#fail(response);
       }
     });
-    const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });
+    const wss = new WebSocketServer({
+      noServer: true,
+      maxPayload: MAX_FRAME_BYTES,
+      // Browser and `ws` clients negotiate this extension automatically. A low
+      // zlib level keeps compression from competing with the agent on Main's loop.
+      perMessageDeflate: {
+        threshold: 512,
+        concurrencyLimit: 8,
+        zlibDeflateOptions: { level: 3, memLevel: 7 },
+      },
+    });
     server.on("upgrade", (request, socket, head) => {
       try {
         this.#handleUpgrade(wss, request, socket, head);
@@ -616,11 +637,13 @@ export class RemoteServer {
       alive: true,
       protocolClient: false,
       appSession: null,
+      attachments: new Map(),
+      attachmentBytes: 0,
     };
     this.#clients.set(client.id, client);
 
-    socket.on("message", (raw) => {
-      void this.#handleFrame(client, raw as Buffer).catch((error: unknown) => {
+    socket.on("message", (raw, isBinary) => {
+      void this.#handleFrame(client, raw as Buffer, isBinary).catch((error: unknown) => {
         this.#deps.log.error("remote frame failed", error);
       });
     });
@@ -634,9 +657,22 @@ export class RemoteServer {
     });
   }
 
-  async #handleFrame(client: Client, raw: Buffer): Promise<void> {
+  async #handleFrame(client: Client, raw: Buffer, isBinary = false): Promise<void> {
     if (raw.byteLength > MAX_FRAME_BYTES) {
       client.socket.close(CLOSE_TOO_LARGE, "frame too large");
+      return;
+    }
+    if (isBinary) {
+      if (!client.deviceId || !client.appSession?.supportsBinaryAttachments) {
+        client.socket.close(CLOSE_UNAUTHORIZED, "binary attachments not negotiated");
+        return;
+      }
+      const attachment = decodeBinaryAttachment(raw);
+      if (!attachment || attachment.bytes.byteLength === 0) {
+        client.socket.close(CLOSE_TOO_LARGE, "invalid attachment frame");
+        return;
+      }
+      this.#rememberAttachment(client, attachment.id, Buffer.from(attachment.bytes));
       return;
     }
     let rawMessage: unknown;
@@ -674,10 +710,22 @@ export class RemoteServer {
           },
           origin: client.id,
           send: (message) => {
-            this.#send(client, message);
-            return client.socket.readyState === client.socket.OPEN;
+            return this.#send(client, message);
           },
         });
+      }
+      if (appMessage.kind === "call" || appMessage.kind === "query") {
+        const materialized = materializeBinaryAttachments(rawMessage, (id) => this.#attachment(client, id));
+        if (materialized.missing.length > 0) {
+          this.#send(client, {
+            kind: "result",
+            requestId: appMessage.requestId,
+            ok: false,
+            error: { code: "attachment.missing", message: "附件传输不完整，请重试" },
+          });
+          return;
+        }
+        rawMessage = materialized.value;
       }
       const keep = await this.#appServer.receive(client.appSession, rawMessage, client.socket);
       if (!keep) {
@@ -721,6 +769,35 @@ export class RemoteServer {
     this.#send(client, { push: channel, payload });
   }
 
+  #rememberAttachment(client: Client, id: string, bytes: Buffer): void {
+    this.#pruneAttachments(client);
+    const previous = client.attachments.get(id);
+    const nextBytes = client.attachmentBytes - (previous?.bytes.byteLength ?? 0) + bytes.byteLength;
+    if (nextBytes > MAX_ATTACHMENT_BYTES) {
+      client.socket.close(CLOSE_TOO_LARGE, "attachments too large");
+      return;
+    }
+    client.attachments.set(id, { bytes, expiresAt: Date.now() + ATTACHMENT_TTL_MS });
+    client.attachmentBytes = nextBytes;
+  }
+
+  #attachment(client: Client, id: string): Buffer | undefined {
+    this.#pruneAttachments(client);
+    const attachment = client.attachments.get(id);
+    if (!attachment) return undefined;
+    attachment.expiresAt = Date.now() + ATTACHMENT_TTL_MS;
+    return attachment.bytes;
+  }
+
+  #pruneAttachments(client: Client): void {
+    const now = Date.now();
+    for (const [id, attachment] of client.attachments) {
+      if (attachment.expiresAt > now) continue;
+      client.attachments.delete(id);
+      client.attachmentBytes -= attachment.bytes.byteLength;
+    }
+  }
+
   #ensureLegacySubscription(client: Client): void {
     if (client.detach || client.protocolClient) return;
     client.detach = this.#deps.subscribe({
@@ -762,12 +839,21 @@ export class RemoteServer {
     this.#deps.onStatusChange?.();
   }
 
-  #send(client: Client, message: unknown): void {
-    if (client.socket.readyState !== client.socket.OPEN) return;
+  #send(client: Client, message: unknown): boolean {
+    if (client.socket.readyState !== client.socket.OPEN) return false;
     try {
-      client.socket.send(JSON.stringify(message));
+      const encoded = JSON.stringify(message);
+      const buffered = client.socket.bufferedAmount;
+      if (buffered + Buffer.byteLength(encoded, "utf8") > MAX_BUFFERED_BYTES) {
+        this.#deps.log.warn(`remote socket backpressure device=${client.deviceId ?? "unauthenticated"} buffered=${buffered}`);
+        client.socket.close(CLOSE_BACKPRESSURE, "backpressure");
+        return false;
+      }
+      client.socket.send(encoded);
+      return true;
     } catch (error) {
       this.#deps.log.warn(`remote send failed: ${String(error)}`);
+      return false;
     }
   }
 
@@ -784,6 +870,8 @@ export class RemoteServer {
       this.#appServer.detach(client.appSession);
       client.appSession = null;
     }
+    client.attachments.clear();
+    client.attachmentBytes = 0;
     try {
       client.socket.close();
     } catch {

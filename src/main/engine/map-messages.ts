@@ -74,16 +74,27 @@ export function mapEngineMessages(
       const summary = typeof message.summary === "string" ? message.summary : "";
       const tokensBefore = typeof message.tokensBefore === "number" ? message.tokensBefore : undefined;
       const createdAt = typeof message.timestamp === "number" ? message.timestamp : Date.now();
-      output.push({
-        id: idOf?.(entry) ?? `compact:${createdAt}`,
-        role: "system",
-        text: summary,
-        tools: [],
-        parts: summary ? [{ kind: "text", text: summary }] : [],
-        createdAt,
-        kind: "compact",
-        compact: { status: "done", tokensBefore },
-      });
+      const id = idOf?.(entry) ?? `compact:${createdAt}`;
+      const compact = { status: "done" as const, tokensBefore };
+      const compactPart = { kind: "compact" as const, text: summary, compact };
+      const previous = output.at(-1);
+      if (previous?.role === "assistant") {
+        output[output.length - 1] = {
+          ...previous,
+          parts: [...(previous.parts ?? []), compactPart],
+        };
+      } else {
+        output.push({
+          id,
+          role: "system",
+          text: summary,
+          tools: [],
+          parts: [compactPart],
+          createdAt,
+          kind: "compact",
+          compact,
+        });
+      }
       continue;
     }
     if (message.role === "toolResult") {

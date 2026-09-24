@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createServer } from "node:net";
 import WebSocket from "ws";
 import { ALL_SCOPES, type AppCapability, type AppHandshake } from "../../shared/app-protocol.ts";
+import { encodeBinaryAttachment, extractBinaryAttachments } from "../../shared/binary-attachment.ts";
 import { Ipc } from "../../shared/ipc.ts";
 import { remoteProjectKey } from "../../shared/project-binding.ts";
 import type { ProjectBinding } from "../../shared/project-binding.ts";
@@ -451,6 +452,8 @@ export class RemoteConnectionManager {
       client: { kind: "fastvibe-desktop", version: this.#desktopVersion() },
       log: this.#deps.log,
       callTimeoutMs: CALL_TIMEOUT_MS,
+      eventBatch: true,
+      binaryAttachments: true,
     });
   }
 
@@ -523,6 +526,17 @@ export function webSocketTransport(port: number, options?: WebSocketTransportOpt
   let settled = false;
   let closeReason: string | null = null;
   let authTimer: ReturnType<typeof setTimeout> | null = null;
+  let binaryAttachments = false;
+
+  const sendMessage = (message: unknown): void => {
+    const extracted = binaryAttachments
+      ? extractBinaryAttachments(message)
+      : { message, attachments: [] };
+    for (const attachment of extracted.attachments) {
+      socket.send(Buffer.from(encodeBinaryAttachment(attachment.id, attachment.bytes)));
+    }
+    socket.send(JSON.stringify(extracted.message));
+  };
 
   const settle = (reason: string): void => {
     if (settled) return;
@@ -547,7 +561,7 @@ export function webSocketTransport(port: number, options?: WebSocketTransportOpt
     if (!authed || settled) return;
     for (const message of queued) {
       if (settled) return;
-      socket.send(JSON.stringify(message));
+      sendMessage(message);
     }
     queued.length = 0;
   };
@@ -606,7 +620,7 @@ export function webSocketTransport(port: number, options?: WebSocketTransportOpt
         queued.push(message);
         return;
       }
-      socket.send(JSON.stringify(message));
+      sendMessage(message);
     },
     onMessage: (listener) => {
       listeners.add(listener);
@@ -618,6 +632,9 @@ export function webSocketTransport(port: number, options?: WebSocketTransportOpt
       return () => closeListeners.delete(listener);
     },
     close: () => settle("远程连接已关闭"),
+    setBinaryAttachments: (enabled) => {
+      binaryAttachments = enabled;
+    },
   };
 }
 

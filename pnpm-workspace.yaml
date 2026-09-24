@@ -30,6 +30,18 @@ minimumReleaseAgeExclude:
   - '@earendil-works/pi-coding-agent@0.87.1'
   - '@earendil-works/pi-telemetry@0.87.1'
   - '@earendil-works/pi-tui@0.87.1'
+  # Expo SDK 57 packages for apps/mobile. pnpm 11's release-age gate blocks a
+  # fresh SDK install unless these exact versions are listed.
+  - '@expo/cli@57.0.27'
+  - '@expo/router-server@57.0.11'
+  - babel-preset-expo@57.0.13
+  - expo-modules-core@57.0.19
+  - expo-modules-jsi@57.1.1
+  - expo@57.0.25
+  - '@expo/ui@57.0.20'
+  - expo-glass-effect@57.0.4
+  - expo-linking@57.0.11
+  - expo-router@57.0.23
 
 # Pin the pi runtime to the exact SDK version FastVibe ships so the host and any
 # extension loaded into it share one pi-tui/pi-ai instance.

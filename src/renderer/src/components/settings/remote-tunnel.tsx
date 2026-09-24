@@ -9,11 +9,11 @@ import {
   RefreshIcon,
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
-import { QrCode } from "@/components/ui/qr-code";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { APP_PLATFORM } from "@/lib/platform";
 import type { RemoteServerState, RemoteTunnelProvider, RemoteTunnelTools } from "@shared/ipc";
+import { AddressActions } from "./address-actions";
 import { RemoteFrp } from "./remote-frp";
 import { SettingsGroup, SettingsRow } from "./settings-group";
 
@@ -229,45 +229,35 @@ export function RemoteTunnel({
   );
 }
 
-/** The public address, the way it is actually used: scanned, or copied into a browser. */
+/**
+ * The public address, the way it is actually used: scanned, opened, or copied.
+ *
+ * One row and no code on screen until it is asked for. The square used to sit open beside
+ * the text — 9rem of a settings pane spent on a picture that is scanned once and then is
+ * furniture, and the tallest thing in a pane otherwise made of one-line rows. It is the
+ * same address either way, so it reads exactly like 允许远程连接's row above: the URL and
+ * three icons, two of which name themselves on hover (`AddressActions`).
+ *
+ * The tunnel hostname itself breaks anywhere rather than truncating: it is one unbroken
+ * token of 30-odd characters whose tail is the part that differs between runs.
+ */
 function Online({ url, stable }: { url: string; stable: boolean }): JSX.Element {
   const { t } = useTranslation("settings");
 
   return (
-    <div className="flex items-start gap-4 px-4 py-4">
-      <QrCode value={url} title={url} className="size-36 shrink-0" />
-      <div className="min-w-0 flex-1 space-y-2">
-        <p className="text-sm font-medium">{t("remote.tunnelOnline")}</p>
-        <p className="text-xs leading-5 text-muted-foreground">
-          {/* A quick tunnel's hostname is new every run; the user's own frps is not. */}
-          {t(stable ? "remote.tunnelScanStable" : "remote.tunnelScan")}
-        </p>
-        {/*
-         * Breaking anywhere is the point: a tunnel hostname is a single unbroken token
-         * of 30-odd characters, and without this it either overflows the card or is
-         * truncated at exactly the part that differs between runs.
-         */}
-        <p className="font-mono text-xs break-all text-foreground">{url}</p>
-        <div className="flex gap-2">
-          <CopyButton value={url} label={t("remote.tunnelCopy")} />
-          {/*
-           * `nativeButton={false}` because the rendered element is an anchor, not a
-           * button: base-ui otherwise keeps the native button semantics it assumes and
-           * warns, and the element ends up claiming to be something it is not. An anchor
-           * is what this has to be — the desktop turns a real link into
-           * `shell.openExternal` through `setWindowOpenHandler`.
-           */}
-          <Button
-            size="xs"
-            variant="ghost"
-            nativeButton={false}
-            render={<a href={url} target="_blank" rel="noreferrer" />}
-          >
-            <HugeiconsIcon strokeWidth={2} icon={LinkSquare02Icon} />
-            {t("remote.tunnelOpen")}
-          </Button>
-        </div>
-      </div>
+    <div className="space-y-2 px-4 py-3">
+      <p className="text-sm font-medium">{t("remote.tunnelOnline")}</p>
+      <p className="text-xs leading-5 text-muted-foreground">
+        {/* A quick tunnel's hostname is new every run; the user's own frps is not. */}
+        {t(stable ? "remote.tunnelScanStable" : "remote.tunnelScan")}
+      </p>
+      {/* `min-w-0` so the hostname is what wraps: it is one unbroken token whose tail is
+          the part that differs between runs, and a group that cannot shrink would push
+          the icons out of the card instead. */}
+      <span className="flex min-w-0 items-center gap-1.5 font-mono text-xs">
+        <span className="min-w-0 break-all text-foreground">{url}</span>
+        <AddressActions value={url} className="shrink-0" />
+      </span>
     </div>
   );
 }

@@ -4,6 +4,7 @@ import { ALL_SCOPES } from "@shared/app-protocol";
 import { AppClient, type MessageTransport } from "@shared/app-client";
 import { planResume } from "@shared/app-resume";
 import { installLiveScopeHost, notifyLiveReconnected, watchedScopes } from "@/lib/live-scopes";
+import { encodeBinaryAttachment, extractBinaryAttachments } from "@shared/binary-attachment";
 
 /**
  * The web client's half of `window.fastvibe`.
@@ -123,9 +124,14 @@ function isCanonicalFrame(message: unknown): boolean {
 }
 
 function websocketTransport(ws: WebSocket): MessageTransport {
+  let binaryAttachments = false;
   return {
     send: (message) => {
-      ws.send(JSON.stringify(message));
+      const extracted = binaryAttachments ? extractBinaryAttachments(message) : { message, attachments: [] };
+      for (const attachment of extracted.attachments) {
+        ws.send(encodeBinaryAttachment(attachment.id, attachment.bytes));
+      }
+      ws.send(JSON.stringify(extracted.message));
     },
     onMessage: (listener) => {
       const handler = (event: MessageEvent): void => {
@@ -149,6 +155,9 @@ function websocketTransport(ws: WebSocket): MessageTransport {
     },
     close: () => {
       ws.close();
+    },
+    setBinaryAttachments: (enabled) => {
+      binaryAttachments = enabled;
     },
   };
 }
@@ -242,6 +251,8 @@ function connect(token: string, generation: number, options?: { subscribe?: bool
       const client = new AppClient(websocketTransport(next), {
         client: { kind: "browser", version: "web" },
         handshakeTimeoutMs: HELLO_TIMEOUT_MS,
+        eventBatch: true,
+        binaryAttachments: true,
       });
       bindClient(client, generation);
       void client.connect().then(() => {

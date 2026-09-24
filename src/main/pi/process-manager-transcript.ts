@@ -37,6 +37,11 @@ export function projectSessionMessages(
   const transcript: unknown[] = [];
   for (const entry of entries) {
     for (const message of sessionEntryToContextMessages(entry)) {
+      // The SDK keeps the active system prompt on a compaction entry so the model can
+      // rebuild its context. It is not a user-visible transcript message; projecting
+      // it here used to put a notice between the reply and the compaction card.
+      const role: unknown = isRecord(message) ? message.role : undefined;
+      if (entry.type === "compaction" && role === "system") continue;
       entryIds.set(message, entry.id);
       transcript.push(message);
     }
@@ -75,16 +80,25 @@ export function projectSessionMessages(
     }
   }
   if (conversationId && deps.compacting.has(conversationId)) {
-    messages.push({
-      id: `compact:${conversationId}`,
-      role: "system",
-      text: "",
-      tools: [],
-      parts: [],
-      createdAt: Date.now(),
-      kind: "compact",
-      compact: { status: "running", reason: deps.compacting.get(conversationId) },
-    });
+    const compact = { status: "running" as const, reason: deps.compacting.get(conversationId) };
+    const last = messages.at(-1);
+    if (last?.role === "assistant") {
+      messages[messages.length - 1] = {
+        ...last,
+        parts: [...(last.parts ?? []), { kind: "compact", text: "", compact }],
+      };
+    } else {
+      messages.push({
+        id: `compact:${conversationId}`,
+        role: "system",
+        text: "",
+        tools: [],
+        parts: [{ kind: "compact", text: "", compact }],
+        createdAt: Date.now(),
+        kind: "compact",
+        compact,
+      });
+    }
   }
   return { messages, anchored };
 }

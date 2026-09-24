@@ -321,18 +321,57 @@ function compactFromEnd(event: EngineEvent): { compact: CompactInfo; summary: st
   };
 }
 
+function compactPart(compact: CompactInfo, summary = ""): Extract<MessagePart, { kind: "compact" }> {
+  return {
+    kind: "compact",
+    text: compact.status === "error" ? (compact.error ?? "") : summary,
+    compact,
+  };
+}
+
 function compactMessage(compact: CompactInfo, summary = ""): ChatMessage {
-  const text = compact.status === "error" ? (compact.error ?? "") : summary;
+  const part = compactPart(compact, summary);
   return {
     id: crypto.randomUUID(),
     role: "system",
-    text,
+    text: part.text,
     tools: [],
-    parts: text ? [{ kind: "text", text }] : [],
+    parts: [part],
     createdAt: Date.now(),
     kind: "compact",
     compact,
   };
+}
+
+function appendCompact(messages: ChatMessage[], compact: CompactInfo, summary = ""): ChatMessage[] {
+  const last = messages.at(-1);
+  if (last?.role === "assistant") {
+    const list = messages.slice();
+    list[list.length - 1] = {
+      ...last,
+      parts: [...(last.parts ?? []), compactPart(compact, summary)],
+    };
+    return list;
+  }
+  return appendMessage(messages, compactMessage(compact, summary));
+}
+
+/** Replace the inline card when a running compaction returns its summary. */
+function finishTrailingCompact(
+  messages: ChatMessage[],
+  compact: CompactInfo,
+  summary: string,
+): ChatMessage[] | undefined {
+  const last = messages.at(-1);
+  if (last?.role !== "assistant" || !last.parts) return undefined;
+  let index = last.parts.length - 1;
+  while (index >= 0 && last.parts[index].kind !== "compact") index -= 1;
+  if (index < 0) return undefined;
+  const parts = last.parts.slice();
+  parts[index] = compactPart(compact, summary);
+  const list = messages.slice();
+  list[list.length - 1] = { ...last, parts };
+  return list;
 }
 
 /**
@@ -657,30 +696,31 @@ function applyEvent(
     // is already on screen — the engine re-serves its running card — so a retry
     // updates that card's reason instead of stacking a second one on top of it.
     const last = next.at(-1);
-    if (last?.kind === "compact" && last.compact?.status === "running") {
+    const inlineCompact = last?.role === "assistant" ? last.parts?.at(-1) : undefined;
+    if (
+      (last?.kind === "compact" && last.compact?.status === "running") ||
+      (inlineCompact?.kind === "compact" && inlineCompact.compact?.status === "running")
+    ) {
       return { messages: next, streaming: nextStreaming };
     }
     return {
-      messages: appendMessage(next, compactMessage({ status: "running", reason: compactReason(event) })),
+      messages: appendCompact(next, { status: "running", reason: compactReason(event) }),
       streaming: nextStreaming,
     };
   }
 
   if (type === "compaction_end" || type === "auto_compaction_end") {
     const { compact, summary } = compactFromEnd(event);
+    const inline = finishTrailingCompact(next, compact, summary);
+    if (inline) return { messages: inline, streaming: nextStreaming };
     const last = next.at(-1);
     if (last?.kind === "compact") {
-      const text = compact.status === "error" ? (compact.error ?? "") : summary;
+      const part = compactPart(compact, summary);
       const list = next.slice();
-      list[list.length - 1] = {
-        ...last,
-        text,
-        parts: text ? [{ kind: "text", text }] : [],
-        compact,
-      };
+      list[list.length - 1] = { ...last, text: part.text, parts: [part], compact };
       return { messages: list, streaming: nextStreaming };
     }
-    return { messages: appendMessage(next, compactMessage(compact, summary)), streaming: nextStreaming };
+    return { messages: appendCompact(next, compact, summary), streaming: nextStreaming };
   }
 
   if (type === "todo_reminder" || type === "todo_auto_clear") {

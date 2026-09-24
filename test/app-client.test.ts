@@ -362,6 +362,22 @@ test("a failed push reducer does not advance the cursor", async () => {
   assert.deepEqual(app.cursors(), { installation: 1 });
 });
 
+test("ordered event batches are delivered one event at a time", async () => {
+  const { app, serverWire } = await connected();
+  const pushes: unknown[] = [];
+  app.onPush((_channel, payload) => pushes.push(payload));
+  app.subscribe(["installation"]);
+  serverWire.send({
+    kind: "events",
+    events: [
+      { kind: "event", scope: "installation", seq: 1, eventId: "e1", channel: "x", payload: { n: 1 }, epoch: "ep1" },
+      { kind: "event", scope: "installation", seq: 2, eventId: "e2", channel: "x", payload: { n: 2 }, epoch: "ep1" },
+    ],
+  });
+  assert.deepEqual(pushes, [{ n: 1 }, { n: 2 }]);
+  assert.deepEqual(app.cursors(), { installation: 2 });
+});
+
 test("empty welcome capabilities stay empty; invalid seq is ignored", async () => {
   const { clientWire, serverWire } = pair();
   const app = clientOf(clientWire);

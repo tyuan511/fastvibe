@@ -163,7 +163,9 @@ export type MessagePart =
    * `src/main/pi/process-manager.ts`), so a pick that no reply followed draws nothing.
    */
   | { kind: "model"; from?: EngineModel; to: EngineModel }
-  | { kind: "tool"; toolId: string };
+  | { kind: "tool"; toolId: string }
+  /** Context compaction shown inline with the assistant process, like a tool call. */
+  | { kind: "compact"; text: string; compact?: CompactInfo };
 
 export type PromptImage = {
   type: "image";
@@ -771,8 +773,8 @@ export type ProviderApi = (typeof PROVIDER_APIS)[number];
  * `builtin` is FastVibe's own endpoint, `native` is a pi-coding-agent built-in
  * provider configured with an API key, and `custom` is a user-typed endpoint.
  *
- * The distinction matters to the engine: native providers' models already live in
- * the SDK registry, so they are never written to `models.json`.
+ * The distinction matters to the engine: native providers' models come from the SDK
+ * registry; only user metadata overrides are written to `models.json`.
  */
 export type ProviderKind = "builtin" | "native" | "custom";
 

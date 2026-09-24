@@ -3,7 +3,7 @@ import { chmod, readFile, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { INPUT_MODALITIES, PROVIDER_APIS, THINKING_EFFORT_LEVELS, type CostTier, type FastVibeModel, type ModelCost, type ModelPrice, type NativeProviderConfig, type ProviderApi, type ProviderConfig, type ProviderModel, type ThinkingLevel } from "@shared/types";
 import { catalogPrice, enrichModel, loadModelsDev, type ModelsDevIndex } from "./models-dev";
-import { findNativeProvider, listNativeProviders, selectedNativeModels } from "./native-providers";
+import { findNativeProvider, listNativeProviders, mergeNativeModels, selectedNativeModels } from "./native-providers";
 import { engineModelBaseUrl, trimBaseUrl } from "./provider-url";
 import { automaticModelApi } from "./model-api";
 import { isGatewayKind, probeGateway, readGatewayCredentials, type GatewayKind } from "./gateway-probe";
@@ -18,8 +18,9 @@ export const FASTVIBE_API_KEY_ENV = "FASTVIBE_API_KEY";
 /**
  * `native` entries point at a pi-coding-agent built-in provider: the id is the SDK
  * provider id itself (e.g. `deepseek`) and `models` is the user's chosen subset of
- * the built-in catalog. `baseUrl` / `api` / `name` are derived from the SDK on every
- * read rather than trusted from disk, so an SDK upgrade refreshes them for free.
+ * the built-in catalog, including any edited metadata. `baseUrl` / `api` / `name` are
+ * derived from the SDK on every read rather than trusted from disk, so an SDK upgrade
+ * refreshes unedited defaults for free.
  */
 type StoredProvider = {
   id: string;
@@ -366,17 +367,18 @@ function extractModelList(payload: unknown): unknown[] {
  * menu instead of a preloaded catalog. An API key and a subscription (OAuth) token
  * count equally here (`connectedProviderIds`).
  *
- * Native providers are excluded from the file on purpose: the SDK already knows
- * their endpoint, api and models, and a `models.json` entry would make it resolve
- * `apiKey` as an env-var name — sending the literal name as the bearer token when
- * that name is not exported. Their credentials stay outside `models.json` too: a key in
- * the engine's in-memory overlay, a token in `agent/oauth.json`.
+ * Native providers are not written as complete model definitions or credentials. They
+ * may, however, carry `modelOverrides`: the SDK composes those onto its own native
+ * catalog while keeping the provider's auth and streaming implementation intact.
  */
 export function applyProviders(paths: FastVibePaths): FastVibeModel[] {
   const providers = readProviders(paths);
   const keys = readProviderKeysSync(paths);
   const connected = connectedProviderIds(paths, keys);
-  const writable = providers.filter((provider) => connected.has(provider.id) && provider.kind !== "native");
+  const writable = providers.filter(
+    (provider) => connected.has(provider.id) &&
+      (provider.kind !== "native" || provider.models.some((model) => model.edited === true)),
+  );
   writeFileSync(paths.modelsJson, renderModelsJson(writable), "utf8");
 
   // Only connected providers: returning a keyless provider's models here would put
@@ -423,6 +425,15 @@ function renderModelsJson(providers: StoredProvider[]): string {
   const result: Record<string, unknown> = { providers: {} };
   const output = result.providers as Record<string, unknown>;
   for (const provider of providers) {
+    if (provider.kind === "native") {
+      const modelOverrides = Object.fromEntries(
+        provider.models
+          .filter((model) => model.edited === true)
+          .map((model) => [model.id, nativeModelOverride(model)]),
+      );
+      if (Object.keys(modelOverrides).length > 0) output[provider.id] = { modelOverrides };
+      continue;
+    }
     output[provider.id] = {
       name: provider.name,
       baseUrl: trimBaseUrl(provider.baseUrl),
@@ -459,6 +470,19 @@ function renderModelsJson(providers: StoredProvider[]): string {
     };
   }
   return `${JSON.stringify(result, null, 2)}\n`;
+}
+
+/** Only the metadata fields supported by pi's native modelOverrides are emitted. */
+function nativeModelOverride(model: ProviderModel): Record<string, unknown> {
+  const thinking = thinkingLevelMap(model);
+  return {
+    name: model.name,
+    contextWindow: model.contextWindow,
+    maxTokens: model.maxTokens,
+    reasoning: model.reasoning,
+    input: engineInputs(model.input),
+    ...(thinking ? { thinkingLevelMap: thinking } : {}),
+  };
 }
 
 /**
@@ -506,9 +530,10 @@ export function connectedProviderIds(paths: FastVibePaths, keys: Record<string, 
 /**
  * Providers that have a stored key and so should reach the engine's credential overlay.
  *
- * Native providers are included even though they hold no `models.json` models —
- * their models come from the SDK registry, and requiring a non-empty `models` here
- * would keep them out of the credential overlay no matter what key the user pasted.
+ * Native providers are included even though their complete model list is not written
+ * to `models.json`: their models come from the SDK registry, and requiring a non-empty
+ * `models` here would keep them out of the credential overlay no matter what key the
+ * user pasted.
  * A subscription login is included for the same reason: this list is what
  * `reloadProviders` prunes the overlay against, and a logged-in provider missing from
  * it would have its (unused) overlay entry dropped on every settings write.
@@ -660,15 +685,12 @@ export function updateProvider(
     if (!isProviderApi(next.api)) next.api = FASTVIBE_DEFAULT.api;
   }
   if (current.kind === "native") {
-    // Identity and endpoint stay pinned to the SDK; only enablement and the
-    // selected model subset are user-editable.
+    // Identity, endpoint and provider protocol stay pinned to the SDK; enablement,
+    // selected models and metadata overrides are user-editable.
     next.name = current.name;
     next.baseUrl = current.baseUrl;
     next.api = current.api;
-    next.models = selectedNativeModels(
-      id,
-      (patch.models ?? current.models).map((model) => model.id),
-    );
+    next.models = mergeNativeModels(id, patch.models ?? current.models);
   }
   providers[index] = next;
   writeProviders(paths, providers);
@@ -806,7 +828,9 @@ function hydrateProvider(value: StoredProviderInput): StoredProvider {
       name: native.name,
       baseUrl: native.baseUrl,
       api: native.api,
-      models: base.models.filter((model) => live.has(model.id)),
+      // Keep the selected roster, but let the SDK refresh every unedited row and
+      // re-apply edited metadata on top of the current catalog entry.
+      models: mergeNativeModels(value.id, base.models.filter((model) => live.has(model.id))),
     };
   }
 

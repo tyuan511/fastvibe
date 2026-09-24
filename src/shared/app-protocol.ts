@@ -75,6 +75,11 @@ export type AppClientHello = {
   client: { kind: string; version: string };
   /** Absent or empty: the client accepts the server's set. */
   capabilities?: AppCapability[];
+  /** Optional transport features. Omitted by older clients for compatibility. */
+  features?: {
+    eventBatch?: boolean;
+    binaryAttachments?: boolean;
+  };
 };
 
 /**
@@ -214,6 +219,11 @@ export type AppWelcomeMessage = {
   sessionId: string;
   capabilities: AppCapability[];
   epoch: string;
+  /** Features the server accepted for this session. Absent on older v1 servers. */
+  features?: {
+    eventBatch?: boolean;
+    binaryAttachments?: boolean;
+  };
 };
 
 export type AppResultMessage = {
@@ -234,6 +244,12 @@ export type AppEventMessage = {
   payload?: unknown;
 };
 
+/** A transport-level batch of ordered events. Older clients never opt into this. */
+export type AppEventBatchMessage = {
+  kind: "events";
+  events: AppEventMessage[];
+};
+
 export type AppResyncMessage = {
   kind: "resync";
   scope: AppScope;
@@ -246,6 +262,7 @@ export type AppServerMessage =
   | AppWelcomeMessage
   | AppResultMessage
   | AppEventMessage
+  | AppEventBatchMessage
   | AppResyncMessage
   | AppPongMessage;
 
@@ -268,11 +285,23 @@ function readHello(value: unknown): AppClientHello | null {
     if (record.capabilities.length > 0 && declared.length === 0) return null;
     capabilities = declared;
   }
+  let features: AppClientHello["features"] | undefined;
+  if (record.features !== undefined) {
+    if (typeof record.features !== "object" || record.features === null || Array.isArray(record.features)) return null;
+    const declared = record.features as Record<string, unknown>;
+    if (declared.eventBatch !== undefined && typeof declared.eventBatch !== "boolean") return null;
+    if (declared.binaryAttachments !== undefined && typeof declared.binaryAttachments !== "boolean") return null;
+    features = {
+      ...(declared.eventBatch !== undefined ? { eventBatch: declared.eventBatch } : {}),
+      ...(declared.binaryAttachments !== undefined ? { binaryAttachments: declared.binaryAttachments } : {}),
+    };
+  }
   return {
     protocol: record.protocol,
     protocolVersion: record.protocolVersion as number,
     client: { kind: identity.kind, version: identity.version },
     ...(capabilities ? { capabilities } : {}),
+    ...(features ? { features } : {}),
   };
 }
 

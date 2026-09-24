@@ -47,112 +47,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Runtime packages are candidates first. The next job compares both target hashes with
-  # the latest independent runtime release and only creates a new runtime release when the
-  # content changed. This keeps desktop tags and Agent runtime tags completely separate.
-  agent-runtime:
-    name: Build Agent runtime candidate (${{ matrix.arch }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-24.04
-            arch: x64
-          - os: ubuntu-24.04-arm
-            arch: arm64
-    steps:
-      - uses: actions/checkout@v7
-      - name: Verify tag version
-        run: node -e "const fs=require('fs');const v=JSON.parse(fs.readFileSync('package.json','utf8')).version;if(process.env.GITHUB_REF_NAME !== 'v'+v) process.exit(1)"
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: pnpm
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Build Agent runtime candidate
-        run: |
-          pnpm build
-          pnpm build:agent-runtime -- --platform=linux --arch=${{ matrix.arch }}
-      - name: Upload Agent runtime candidate
-        uses: actions/upload-artifact@v7
-        with:
-          name: agent-runtime-candidate-${{ matrix.arch }}
-          path: |
-            release/agent-runtime/fastvibe-agent-linux-${{ matrix.arch }}.tar.gz
-            release/agent-runtime/runtime-metadata-linux-${{ matrix.arch }}.json
-          retention-days: 1
-
-  agent-runtime-release:
-    name: Publish changed Agent runtime
-    needs: [agent-runtime]
-    runs-on: ubuntu-24.04
-    concurrency:
-      group: agent-runtime-release
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v7
-      - name: Download runtime candidates
-        uses: actions/download-artifact@v8
-        with:
-          pattern: agent-runtime-candidate-*
-          path: runtime/candidates
-          merge-multiple: true
-      - name: Merge runtime candidates
-        run: |
-          node scripts/merge-agent-runtime-metadata.mjs \
-            --output=runtime/candidates.json \
-            runtime/candidates/runtime-metadata-linux-x64.json \
-            runtime/candidates/runtime-metadata-linux-arm64.json
-      - name: Compare with latest runtime and publish if changed
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          mkdir -p runtime/latest
-          latest="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
-            --json tagName,isDraft,isPrerelease,publishedAt \
-            --jq '([.[] | select(.isDraft == false and .isPrerelease == true and (.tagName | startswith("agent-runtime-v")))] | sort_by(.publishedAt) | last | .tagName) // ""')"
-          if [ -n "$latest" ]; then
-            gh release download "$latest" --repo "$GITHUB_REPOSITORY" \
-              --pattern agent-runtime.json --dir runtime/latest
-          fi
-          node scripts/resolve-agent-runtime-release.mjs \
-            --candidates=runtime/candidates.json \
-            --latest=runtime/latest/agent-runtime.json \
-            --output=runtime/agent-runtime.json
-          release="$(node -p "JSON.parse(require('fs').readFileSync('runtime/agent-runtime.json','utf8')).release")"
-          if [ -n "$latest" ] && [ "$release" = "$latest" ]; then
-            echo "Agent runtime unchanged; reusing $release"
-          elif gh release view "$release" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$release" --repo "$GITHUB_REPOSITORY" \
-              runtime/candidates/fastvibe-agent-linux-x64.tar.gz \
-              runtime/candidates/fastvibe-agent-linux-arm64.tar.gz \
-              runtime/agent-runtime.json --clobber
-            gh release edit "$release" --repo "$GITHUB_REPOSITORY" \
-              --title "FastVibe Agent runtime ${release#agent-runtime-}" \
-              --draft=false --prerelease --latest=false
-          else
-            gh release create "$release" --repo "$GITHUB_REPOSITORY" \
-              --title "FastVibe Agent runtime ${release#agent-runtime-}" \
-              --notes "Content-addressed Agent runtime release; desktop version is independent." \
-              --prerelease --latest=false \
-              runtime/candidates/fastvibe-agent-linux-x64.tar.gz \
-              runtime/candidates/fastvibe-agent-linux-arm64.tar.gz \
-              runtime/agent-runtime.json
-          fi
-      - name: Upload runtime metadata for desktop packaging
-        uses: actions/upload-artifact@v7
-        with:
-          name: agent-runtime-source
-          path: runtime/agent-runtime.json
-          retention-days: 1
-
+  # Desktop releases are triggered only by v* tags. Agent runtime releases use the
+  # independent agent-runtime-v* workflow and are downloaded as the latest published
+  # metadata when a desktop package is staged.
   build:
     name: Package (${{ matrix.platform }}${{ matrix.arch && format(' {0}', matrix.arch) || '' }})
-    needs: [agent-runtime-release]
     runs-on: ${{ matrix.os }}
     # GitHub does not expose the `secrets` context to `if:`, so the "are the
     # macOS signing credentials configured?" gate has to be read through `env`,
@@ -183,11 +82,21 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Download Agent runtime metadata
-        uses: actions/download-artifact@v8
-        with:
-          name: agent-runtime-source
-          path: release/agent-runtime
+      - name: Download latest Agent runtime metadata
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p release/agent-runtime
+          latest="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
+            --json tagName,isDraft,isPrerelease,publishedAt \
+            --jq '([.[] | select(.isDraft == false and .isPrerelease == true and (.tagName | startswith("agent-runtime-v")))] | sort_by(.publishedAt) | last | .tagName) // ""')"
+          if [ -n "$latest" ]; then
+            gh release download "$latest" --repo "$GITHUB_REPOSITORY" \
+              --pattern agent-runtime.json --dir release/agent-runtime
+          else
+            echo "No Agent runtime release exists yet; packaging without runtime metadata."
+          fi
 
       - name: Verify tag version
         run: node -e "const fs=require('fs');const v=JSON.parse(fs.readFileSync('package.json','utf8')).version;if(process.env.GITHUB_REF_NAME !== 'v'+v) process.exit(1)"
@@ -400,11 +309,10 @@ jobs:
   # then unmark the draft.
   publish:
     name: Publish the release
-    # Every leg has to have succeeded — the packaging jobs and the independent Agent
-    # runtime release job. Desktop packages embed the runtime metadata produced by that
-    # job, so publishing a desktop release without it would make future SSH connections
-    # point at a runtime release that was never made available.
-    needs: [agent-runtime-release, build]
+    # Every desktop packaging leg has to have succeeded before the release is published.
+    # Agent runtime releases are independent and already published before their metadata
+    # is picked up by a later desktop build.
+    needs: [build]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7

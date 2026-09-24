@@ -28,7 +28,7 @@ function tokenHint(before?: number, after?: number): string | null {
  * Compaction card in the transcript: a thinking-block-like collapsible so a
  * running compact is visible, and the summary is one click away once it lands.
  */
-export function CompactNotice({ message }: { message: ChatMessage }): JSX.Element {
+export function CompactNotice({ message }: { message: Pick<ChatMessage, "text" | "compact"> }): JSX.Element {
   const { t } = useTranslation("chat");
   const [open, setOpen] = useState(false);
   const info = message.compact;

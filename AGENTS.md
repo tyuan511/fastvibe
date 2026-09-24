@@ -242,6 +242,21 @@ in the pane as a link and a QR code (`components/ui/qr-code.tsx`).
   runs) and `tunnelChoice`: without the second, a failed start would reset the pane's
   select to 关闭 and hide the retry. `remote:stop` leaves the choice alone and
   `remote:clear-password` clears it, matching what each of those switches means.
+- **The public address is one row of icons, not a QR square sat open on the pane.** It used
+  to render a 9rem code beside the URL and two labelled buttons under it — 9rem of a
+  settings pane spent on a picture that is scanned once and then is furniture, and the
+  tallest thing in a pane otherwise made of one-line rows. Both address rows (the one
+  under 允许远程连接 and this one) now read the same way: the URL, then copy / code /
+  open as icons with no words. `address-actions.tsx` (`AddressActions`) is the one copy of
+  that trio, so the code and the clipboard cannot drift apart — one `value` is what is
+  copied, what the anchor points at, and what is encoded.
+- **The copy and open icons name themselves on hover; the code appears on hover.** Copy
+  and open carry a tooltip because a glyph alone does not say which is which; the code
+  opens as a *popover* on `openOnHover` (`delay={120}`, `closeDelay={160}`), because a
+  tooltip that closes when the pointer moves cannot be scanned. Click still toggles the
+  code, which is all a touch device has — and `qr={false}` is how the loopback row drops
+  it while keeping copy and open, since a code for `127.0.0.1` leads a phone to 连接被拒绝
+  while the string is still worth pasting and the address is still openable on this machine.
 - **The tunnel goes down before the server and up after it.** Stopped the other way round
   it spends a moment publishing a port with nothing behind it, which a phone reads as a
   dead site rather than as remote access having been switched off.
@@ -282,8 +297,10 @@ in the pane as a link and a QR code (`components/ui/qr-code.tsx`).
     re-check once they say it is done — no switching to a port that happens to be open, no
     `ssh -R`, no quiet change of tunnel provider.
 
-`?tunnel=online`, `?tunnel=missing`, `?tunnel=noauth` and `?tunnel=frp` on `mock.html` render
+`?tunnel=online`, `?tunnel=lan`, `?tunnel=missing`, `?tunnel=noauth` and `?tunnel=frp` on `mock.html` render
 those states in a browser — the real thing needs a password, a port and somebody else's binary.
+(`?tunnel=lan` is the branch the 允许局域网访问 row's QR icon exists for: the address in that row
+is only reachable, and so only scannable, when the server is listening on the LAN.)
 
 ### 网页客户端（`remote.html`）
 
@@ -781,6 +798,31 @@ vars on every settings write (`applyLanguages`) and at startup.
 Do **not** hardcode user-visible copy in product components. Add a key to the matching
 namespace JSON (zh value byte-identical to the original Chinese) and render it with
 `t(...)`. Language picker labels (`简体中文` / `English`) stay untranslated on purpose.
+
+### 设置里的描述只写「做什么」，不写「为什么」
+
+A settings row is a label, one line saying what the switch does, and the control. It is
+not the place to explain how the feature works: that reasoning belongs in the code's own
+comments and in this file, where the next person to touch it will read it, and a pane that
+repeats it reads as documentation rather than as a set of switches. `test/settings-copy.test.ts`
+holds the line — every string in `settings.json` is capped (130 characters of Chinese, 150
+of English; Chinese says the same thing in ~3/4 the length), and it fails on a new
+paragraph before it is ever looked at on screen.
+
+The same pass removed copy that names a *file inside the data directory* — 「写入 FastVibe
+独立的数据目录，不写入你自己的 ~/.pi」, 「读取 ~/.pi、~/.claude、~/.codex 的数据」 — since
+the reader does not know where `~/.pi` is or that it matters. Say what happens, not where
+it is stored.
+
+Two things are deliberately long and are listed as exceptions in that test:
+
+- **`remote.frpIntro` / `remote.frpDomainHelp` are instructions, not descriptions.** They
+  are what the user does on the *server* (open a port, add an A record), there is nowhere
+  else for them to be written down, and a shortened version is somebody who cannot finish
+  the setup.
+- **Diagnostics keep their whole sentence.** `frpDnsMismatch` names the domain, the
+  address, the expected one and what to change — a user reading it has a DNS panel open
+  in another window, and 「解析有误」 helps none of them.
 
 ## Routing
 

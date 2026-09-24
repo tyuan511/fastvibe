@@ -112,6 +112,7 @@ export function attachWindowSession(appServer: AppServer, host: WindowSessionHos
       version: host.clientVersion ?? "desktop",
     },
     handshakeTimeoutMs: host.handshakeTimeoutMs ?? 5_000,
+    eventBatch: true,
   });
   client.onPush((channel, payload) => {
     if (closed()) return;

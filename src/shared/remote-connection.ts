@@ -31,6 +31,7 @@ export type RemoteMessageTransport = {
   onMessage(listener: (message: unknown) => void): () => void;
   onClose(listener: (reason: string) => void): () => void;
   close(): void;
+  setBinaryAttachments?(enabled: boolean): void;
 };
 
 /**
