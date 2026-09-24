@@ -82,7 +82,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # `shell: bash` because the Windows runner's default shell is pwsh, and this is a
+      # bash script (`if [ -n ... ]` is a syntax error to PowerShell). It used to be left
+      # to the default, which packaged all three other legs and failed only on Windows.
       - name: Download latest Agent runtime metadata
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

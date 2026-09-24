@@ -17,7 +17,13 @@ jobs:
   build:
     name: Build Android APK
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
+
+    # The runner image ships the SDK at this path; stating it here (rather than relying on
+    # the image's environment) is what `sdkmanager` and Gradle both read.
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
 
     steps:
       - name: Check out source
@@ -40,11 +46,15 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
+      # `android-actions/setup-android` is deliberately not used: it runs `sdkmanager
+      # tools` as part of its own setup, a package the current SDK manager no longer
+      # publishes ("Warning: Failed to find package 'tools'"), and so the job failed in
+      # its fifth step, before anything was built. The packages this build needs are
+      # installed directly instead.
       - name: Install Android SDK packages
-        run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+        run: |
+          sdkmanager --licenses < /dev/null > /dev/null 2>&1 || true
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
@@ -52,18 +62,24 @@ jobs:
       - name: Typecheck mobile app
         run: pnpm --filter @fastvibe/mobile typecheck
 
-      # The native project is generated only inside CI. Keep the Expo project
-      # managed in the repository and do not commit android/ or ios/ directories.
+      # The native project is generated only inside CI. Keep the Expo project managed in
+      # the repository and do not commit android/ or ios/ directories.
       - name: Generate Android project
         working-directory: apps/mobile
         run: pnpm exec expo prebuild --platform android --clean --no-install --non-interactive
 
+      # The Android project names its own `debug` build type for signing; release builds
+      # are signed with the debug keystore Expo generates, which is why the APK below
+      # sideloads but cannot be published to a store.
       - name: Build release APK
         working-directory: apps/mobile/android
         run: ./gradlew assembleRelease --no-daemon --stacktrace
 
       - name: Name APK
-        run: cp apps/mobile/android/app/build/outputs/apk/release/app-release.apk "FastVibe-${GITHUB_REF_NAME}.apk"
+        run: |
+          cp apps/mobile/android/app/build/outputs/apk/release/app-release.apk \
+            "FastVibe-${GITHUB_REF_NAME}.apk"
+          ls -lh "FastVibe-${GITHUB_REF_NAME}.apk"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
