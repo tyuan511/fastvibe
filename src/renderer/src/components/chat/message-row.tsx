@@ -546,6 +546,39 @@ function ChatMessageRowImpl({
     [isUser, message.tools],
   );
 
+  // Keep all hooks above the role/editing branches below. Editing a user prompt and
+  // rendering a system row both return early, so a hook here would change the order
+  // between renders and unmount the whole transcript with React error #300.
+  const processOverflow = useMemo(() => {
+    if (isUser || fold || parts.length <= MAX_VISIBLE_PROCESS_PARTS) return null;
+    const cutoff = Math.max(0, parts.length - MAX_VISIBLE_PROCESS_PARTS);
+    const hidden = parts
+      .map((part, index) => ({ part, index }))
+      .filter(({ part, index }) => index < cutoff && (part.kind === "tool" || part.kind === "group" || (part.kind === "thinking" && showThinking)));
+    return hidden.length > 0 ? { hidden, firstIndex: hidden[0].index } : null;
+  }, [fold, isUser, parts, showThinking]);
+
+  const plainPartEntries = useMemo(() => {
+    if (!processOverflow) return parts.map((part, index) => ({ kind: "part" as const, part, index }));
+    const hiddenIndexes = new Set(processOverflow.hidden.map(({ index }) => index));
+    const entries: Array<
+      | { kind: "part"; part: RenderPart; index: number }
+      | { kind: "overflow"; hidden: Array<{ part: RenderPart; index: number }> }
+    > = [];
+    let inserted = false;
+    parts.forEach((part, index) => {
+      if (hiddenIndexes.has(index)) {
+        if (!inserted && index === processOverflow.firstIndex) {
+          entries.push({ kind: "overflow", hidden: processOverflow.hidden });
+          inserted = true;
+        }
+        return;
+      }
+      entries.push({ kind: "part", part, index });
+    });
+    return entries;
+  }, [parts, processOverflow]);
+
   if (message.role === "system") {
     if (message.kind === "compact") {
       return (
@@ -607,36 +640,6 @@ function ChatMessageRowImpl({
       </Message>
     );
   }
-
-  const processOverflow = useMemo(() => {
-    if (isUser || fold || parts.length <= MAX_VISIBLE_PROCESS_PARTS) return null;
-    const cutoff = Math.max(0, parts.length - MAX_VISIBLE_PROCESS_PARTS);
-    const hidden = parts
-      .map((part, index) => ({ part, index }))
-      .filter(({ part, index }) => index < cutoff && (part.kind === "tool" || part.kind === "group" || (part.kind === "thinking" && showThinking)));
-    return hidden.length > 0 ? { hidden, firstIndex: hidden[0].index } : null;
-  }, [fold, isUser, parts, showThinking]);
-
-  const plainPartEntries = useMemo(() => {
-    if (!processOverflow) return parts.map((part, index) => ({ kind: "part" as const, part, index }));
-    const hiddenIndexes = new Set(processOverflow.hidden.map(({ index }) => index));
-    const entries: Array<
-      | { kind: "part"; part: RenderPart; index: number }
-      | { kind: "overflow"; hidden: Array<{ part: RenderPart; index: number }> }
-    > = [];
-    let inserted = false;
-    parts.forEach((part, index) => {
-      if (hiddenIndexes.has(index)) {
-        if (!inserted && index === processOverflow.firstIndex) {
-          entries.push({ kind: "overflow", hidden: processOverflow.hidden });
-          inserted = true;
-        }
-        return;
-      }
-      entries.push({ kind: "part", part, index });
-    });
-    return entries;
-  }, [parts, processOverflow]);
 
   const renderPart = (part: RenderPart, index: number): JSX.Element | null => {
     const isTail = index === parts.length - 1;
@@ -789,4 +792,3 @@ export const ChatMessageRow = memo(ChatMessageRowImpl, (prev, next) => {
     sameMessages(prev.messages, next.messages)
   );
 });
-
