@@ -95,6 +95,10 @@
   "graphViews": "关系类型",
   "graphCount": "显示 {{shown}} / 共 {{total}} 条",
   "graphEmpty": "这里还没有记忆。",
+  "graphLayout": "正在排布节点…",
+  "graphZoomIn": "放大",
+  "graphZoomOut": "缩小",
+  "graphFit": "适应窗口",
   "detailEmpty": "点选一个节点查看详情",
   "detailGone": "这条记忆已不存在。",
   "detailFallback": "降级写入",
@@ -201,7 +205,7 @@
   "shortcuts": "快捷键",
   "archived": "归档对话",
   "usage": "使用统计",
-  "providers": "模型管理",
+  "providers": "模型与默认",
   "subagents": "子 Agent",
   "decision": "决策引擎",
   "memory": "长期记忆",
@@ -238,49 +242,24 @@
   "uiFontSize": "界面字号"
  },
  "agent": {
-  "title": "Agent 默认行为"
+  "title": "Agent 设置"
  },
  "security": {
   "title": "安全与权限"
  },
- "fullDisk": {
-  "title": "完全磁盘访问权限",
-  "desc": "一次授权后，桌面、文稿、下载不再逐个询问。打开开关后需完全退出再重新打开",
-  "granted": "已授权",
-  "open": "打开系统设置",
-  "reveal": "在访达中显示",
-  "later": "以后再说",
-  "promptTitle": "先允许访问所有文件",
-  "promptBody": "macOS 会在读取桌面、文稿、下载这些目录时各问一次。系统没有「全部允许」。打开「完全磁盘访问权限」后，这些位置一次就能读，那些对话框就不会再出现。这项权限也能读到邮件、信息等受保护的数据，可以随时在系统设置里关掉。",
-  "promptSteps": "在打开的列表里找到 FastVibe，打开开关。如果没有这一行，点「+」或把访达中的应用拖进去。改完后请完全退出 FastVibe，再重新打开。",
-  "promptStepsDev": "当前是开发版，列表里的名字是 Electron，不是 FastVibe。打开它的开关；没有这一行时，点「+」或拖入访达里的 Electron。开发版重新签名后，这项授权可能会失效。改完后请完全退出再打开。"
- },
  "runtime": {
   "title": "运行时"
- },
- "display": {
-  "title": "显示"
  },
  "common": {
   "title": "通用",
   "defaultModel": "默认模型",
   "defaultModelDesc": "新开会话默认使用的模型",
-  "thinking": "默认推理强度",
-  "thinkingDesc": "模型不支持所选档位时会自动回退",
   "permission": "默认权限模式",
   "permissionDesc": "{{mode}}；启动时默认使用，输入框上方可临时切换",
   "keepAwake": "运行时保持唤醒",
   "keepAwakeDesc": "Agent 运行期间阻止系统休眠，回合结束后恢复",
   "notifications": "系统通知",
-  "notificationsDesc": "总开关；关闭后下列所有通知都不再发送",
-  "notifyDone": "任务完成",
-  "notifyDoneDesc": "后台会话跑完一轮时提醒",
-  "notifyError": "任务出错",
-  "notifyErrorDesc": "后台会话以错误结束时提醒，例如重试失败或供应商拒绝",
-  "notifyApproval": "需要确认",
-  "notifyApprovalDesc": "后台会话停在等待你回答的确认或提问上时提醒",
-  "notifyUpdate": "应用更新",
-  "notifyUpdateDesc": "新版本下载完成后提醒重启",
+  "notificationsDesc": "任务完成、出错、需要确认和应用更新都会提醒；关闭后都不再发送",
   "permissionRules": "已记住的授权",
   "permissionRulesDesc": "选择「始终允许」的工具调用会跳过确认，共 {{count}} 条",
   "permissionRulesClear": "全部清除"
@@ -296,11 +275,7 @@
   "immediate": "立即打断",
   "wait": "等回合结束",
   "autoCompact": "自动压缩",
-  "autoCompactDesc": "上下文接近上限时自动压缩",
-  "collapseRuns": "折叠运行过程",
-  "collapseRunsDesc": "思考与工具调用收进一个「用时」块，只留最后的回答文字；展开可回看过程",
-  "showThinking": "显示思考过程",
-  "showTimestamps": "显示消息时间"
+  "autoCompactDesc": "上下文接近上限时自动压缩"
  },
  "about": {
   "more": "更多",
@@ -326,9 +301,26 @@
   "updated": "模型数据已更新"
  },
  "defaultModel": {
+  "title": "新对话默认模型",
+  "desc": "新建对话会使用这个模型和推理强度；单个对话仍可在输入框上方临时切换。",
+  "emptyHint": "还没有可用模型。先在下方添加或连接一个供应商，再回来选择默认模型。",
   "followLast": "跟随上次使用",
   "unavailable": "{{label}}（已不可用）",
   "empty": "还没有可用的模型"
+ },
+ "projectDefaults": {
+  "title": "按项目设置默认模型",
+  "desc": "为不同项目分别指定新对话使用的模型和推理强度。",
+  "unconfigured": "未设置的项目",
+  "configured": "已设置的项目",
+  "configuredCount": "已配置 {{count}} 个项目",
+  "manage": "管理",
+  "allConfigured": "所有项目都已设置",
+  "noProjects": "还没有添加项目",
+  "selectProject": "从左侧选择一个项目",
+  "modelLabel": "项目默认模型",
+  "inheritGlobal": "跟随全局默认",
+  "hint": "新建该项目的对话会使用这里选择的模型和推理强度。"
  },
  "subagents": {
   "title": "子 Agent 工作台",
@@ -550,6 +542,7 @@
   "models": "模型列表",
   "syncModels": "同步模型",
   "modelDetail": "模型详情",
+  "reorderModel": "调整 {{name}} 顺序",
   "removeModel": "移除模型",
   "noModelsAdd": "还没有模型，点击下方添加",
   "noModelsConnect": "连接后即可选择模型",
@@ -841,7 +834,10 @@
   "cancel": "取消",
   "enable": "允许远程连接",
   "enableDesc": "开启后，其他设备可以通过密码登录并连接这台电脑上的 agent。",
-  "tunnelHint": "{{address}} 只是这台电脑的监听地址，别的设备直接连不上。下面选一个内网穿透工具，应用会帮你把它发布到公网；也可以自己跑任意隧道工具指向这个地址。",
+  "lanAccess": "允许局域网访问",
+  "lanAccessDesc": "开启后，服务会监听局域网地址，同一网络中的设备可以用显示的地址访问。",
+  "lanAccessOnDesc": "局域网地址：{{address}}；仍需输入远程访问密码。",
+  "tunnelHint": "{{address}} 只是本机监听地址，别的设备直接连不上。下面选一个内网穿透工具，应用会帮你把它发布到公网；也可以自己跑任意隧道工具指向这个地址。",
   "tunnel": "内网穿透",
   "tunnelProvider": "穿透方式",
   "tunnelProviderDesc": "应用会在本机启动它，并把拿到的公网地址显示在下面。",

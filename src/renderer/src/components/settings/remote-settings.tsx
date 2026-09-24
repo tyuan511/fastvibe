@@ -111,6 +111,11 @@ export function RemoteSettings(): JSX.Element {
     if (next) setState(next);
   }
 
+  async function toggleLanAccess(enabled: boolean): Promise<void> {
+    const next = await run(() => window.fastvibe.remote.setLanAccess(enabled));
+    if (next) setState(next);
+  }
+
   async function setTunnel(provider: RemoteTunnelProvider | null): Promise<void> {
     const next = await run(() => window.fastvibe.remote.setTunnel(provider));
     if (next) setState(next);
@@ -221,6 +226,17 @@ export function RemoteSettings(): JSX.Element {
               }
               control={<Switch checked={state.running} disabled={busy} onCheckedChange={(v) => void toggle(v)} />}
             />
+            <SettingsRow
+              title={t("remote.lanAccess")}
+              description={
+                state.lanAccess && state.running && address
+                  ? t("remote.lanAccessOnDesc", { address })
+                  : t("remote.lanAccessDesc")
+              }
+              control={
+                <Switch checked={state.lanAccess} disabled={busy} onCheckedChange={(v) => void toggleLanAccess(v)} />
+              }
+            />
             {state.running ? (
               <SettingsRow
                 title={t("remote.clients")}
@@ -233,13 +249,12 @@ export function RemoteSettings(): JSX.Element {
           {/*
            * What the address above actually is.
            *
-           * Loopback is where this server listens, not where a client goes, so the row
-           * can only ever show a string no phone can open. The tunnel below is what turns
-           * it into one — the app runs it now rather than printing instructions — and
-           * this line stays only to say why the address above is not the answer, for
-           * anyone who decides to bring their own.
+           * With LAN access off, loopback is where this server listens, not where a client
+           * goes, so the row can only show a string no phone can open. The tunnel below is
+           * what turns it into one — the app runs it now rather than printing instructions —
+           * and this line stays only to explain that choice for anyone bringing their own.
            */}
-          {state.running && address ? (
+          {state.running && address && !state.lanAccess ? (
             <p className="px-1 text-xs leading-5 text-muted-foreground">{t("remote.tunnelHint", { address })}</p>
           ) : null}
 

@@ -12,6 +12,7 @@ import { Ipc } from "../src/shared/ipc.ts";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
   RemoteConnectionManager,
+  callTimeoutFor,
   webSocketTransport,
 } from "../src/main/remote/connection-manager.ts";
 
@@ -109,6 +110,15 @@ function queuedManager(clients: RemoteAppClient[]) {
   });
   return { instance, statuses, pushes, closes };
 }
+
+test("calls that last as long as model work carry no deadline; everything else keeps one", () => {
+  for (const method of [Ipc.enginePrompt, Ipc.enginePromptConversation, Ipc.engineContinue, Ipc.engineCompact]) {
+    assert.equal(callTimeoutFor(method), 0, method);
+  }
+  for (const method of [Ipc.engineGetState, Ipc.engineFork, Ipc.conversationsOpen, Ipc.engineSteer]) {
+    assert.ok(callTimeoutFor(method) > 0, method);
+  }
+});
 
 test("two profiles stay up at once — there is no global active host", async () => {
   const { instance } = queuedManager([fakeClient(handshake("srv_one")), fakeClient(handshake("srv_two"))]);

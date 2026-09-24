@@ -43,6 +43,7 @@ import {
   memoryGuidance,
   retrievedBlock,
 } from "./memory-tools";
+import { embeddingDownloadBytes } from "./memory-download";
 import { uiText } from "./ui-text";
 import {
   JEV_MEM_PROFILE,
@@ -438,19 +439,21 @@ export class MemoryManager {
       dtype: "fp32",
       model_file_name: MODEL_FILE_NAME,
       cache_dir: this.#paths.memoryModelsDir,
-      // Only the aggregate event: per-file `progress` events restart at 0 for every file,
-      // so a bar fed from them jumps back after the tokenizer finishes. Emit on whole
-      // percents — each emit is a push to every client, and a chunk arrives far more often.
+      // `progress_total` sums every prefetched file, including the fp32 `onnx/model.onnx`
+      // this call never downloads. Recount from the files that are actually fetched, and
+      // only on whole percents — each emit is a push to every client.
       progress_callback: (progress: any) => {
-        if (progress?.status !== "progress_total" || typeof progress.progress !== "number") return;
-        const next = Math.min(1, Math.max(0, progress.progress / 100));
+        if (progress?.status !== "progress_total") return;
+        const bytes = embeddingDownloadBytes(progress.files, MODEL_FILE_NAME);
+        if (!bytes) return;
+        const next = Math.min(1, bytes.loaded / bytes.total);
         const changed = Math.floor(next * 100) !== Math.floor((this.#model.progress ?? 0) * 100);
         this.#model = {
           ...this.#model,
           status: "downloading",
           progress: next,
-          ...(typeof progress.loaded === "number" ? { loadedBytes: progress.loaded } : {}),
-          ...(typeof progress.total === "number" && progress.total > 0 ? { totalBytes: progress.total } : {}),
+          loadedBytes: bytes.loaded,
+          totalBytes: bytes.total,
         };
         if (changed) this.#emit();
       },

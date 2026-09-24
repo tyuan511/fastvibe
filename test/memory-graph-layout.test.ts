@@ -40,6 +40,30 @@ test("connected memories end up closer than unconnected ones", () => {
   assert.ok(within < across, `within ${within} should be < across ${across}`);
 });
 
+test("a dense core does not collapse beside memories with no links", () => {
+  const core = Array.from({ length: 70 }, (_unused, index) => `c${index}`);
+  const outliers = Array.from({ length: 10 }, (_unused, index) => `o${index}`);
+  const edges = core.flatMap((id, index) => [
+    { sourceId: id, targetId: core[(index + 1) % core.length] },
+    { sourceId: id, targetId: core[(index + 5) % core.length] },
+  ]);
+  const points = layoutGraph([...core, ...outliers], edges);
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const point of points.values()) {
+    minX = Math.min(minX, point.x); maxX = Math.max(maxX, point.x);
+    minY = Math.min(minY, point.y); maxY = Math.max(maxY, point.y);
+  }
+  const span = Math.max(maxX - minX, maxY - minY);
+  let nearest = Infinity;
+  for (let i = 0; i < core.length; i++) {
+    const one = points.get(core[i])!;
+    for (let j = i + 1; j < core.length; j++) {
+      nearest = Math.min(nearest, distance(one, points.get(core[j])!));
+    }
+  }
+  assert.ok(nearest / span > 0.025, `core spacing ${nearest} is only ${(nearest / span).toFixed(4)} of the frame`);
+});
+
 test("coincident starts and unconnected nodes still separate", () => {
   const points = layoutGraph(["p", "q", "r"], []);
   const [p, q, r] = ["p", "q", "r"].map((id) => points.get(id)!);

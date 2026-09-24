@@ -15,6 +15,12 @@ export type EngineModel = {
   id: string;
 };
 
+/** Model and reasoning preferences pinned to a project. */
+export type ProjectModelDefault = {
+  model: EngineModel;
+  thinkingLevel: ThinkingLevel | "auto";
+};
+
 export type SessionStats = {
   tokens?: {
     input?: number;
@@ -200,6 +206,13 @@ export type ChatMessage = {
   attachments?: ChatAttachment[];
   /** Model/request failure for this assistant turn. Absent on success or user abort. */
   error?: string;
+  /**
+   * The reply ended early without failing: it hit the model's output limit (`length`), or
+   * the run was stopped (`aborted`). Read off the transcript's own `stopReason`, so the
+   * notice survives a reload — the transcript cannot tell a user's 停止 from any other
+   * abort, and a silent end is exactly what made both look like the agent quitting.
+   */
+  stop?: "length" | "aborted";
   /** A transient provider failure that the engine is currently retrying. */
   retry?: {
     attempt: number;
@@ -797,6 +810,8 @@ export type ProviderConfig = {
   gatewayCredential?: boolean;
   enabled: boolean;
   models: ProviderModel[];
+  /** Model IDs in the order chosen by the user; absent means alphabetical default. */
+  modelOrder?: string[];
 };
 
 /** One rolling allowance returned for a ChatGPT-backed OpenAI Codex account. */
@@ -1034,16 +1049,17 @@ export type InputModality = (typeof INPUT_MODALITIES)[number];
 export type PermissionMode = "ask" | "smart" | "full";
 
 /**
- * 系统通知: the scenarios a desktop notification may be raised for (设置 → 通用).
+ * 系统通知: the scenarios a desktop notification may be raised for.
  *
- * One key per scenario rather than one three-valued preference, so someone who wants to
- * hear about a chat waiting on an approval but not about every finished run can say so.
+ * The settings pane no longer offers one switch per scenario. 系统通知 writes these
+ * four keys together, and a notice is raised for every scenario while that switch is
+ * on. The keys stay separate because the wording still depends on which thing happened:
  * `done` and `error` are the two verdicts a background run can settle with, `approval`
  * is a chat parked on a question only the user can answer, `update` is an update that
  * has finished downloading.
  *
- * Main reads each key from `settings.json` on every event, so a change lands immediately.
- * An absent value means **on**: the switch has to be turned off to stop a notice.
+ * Main reads the keys from `settings.json` on every event, so a change lands immediately.
+ * An absent value means **on**. Only all four explicit falses silence notices.
  */
 export const NOTIFICATION_SETTINGS = ["notifyDone", "notifyError", "notifyApproval", "notifyUpdate"] as const;
 

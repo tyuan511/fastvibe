@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { createReadStream, existsSync, statSync } from "node:fs";
 import { extname, join, normalize, resolve, sep } from "node:path";
 import { randomUUID, timingSafeEqual } from "node:crypto";
+import { networkInterfaces } from "node:os";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, type WebSocket } from "ws";
 import { LoginThrottle, passwordProblem } from "./auth.ts";
@@ -24,10 +25,9 @@ import type { ClientSession } from "../app-server/client-session.ts";
  * nothing about windows, which is what keeps "one behaviour, two transports" true — and
  * what would let this run without a GUI later.
  *
- * It binds to loopback by default and expects a tunnel to publish it. Binding to a real
- * interface is possible but is not the intended shape: the tunnel is where the second
- * layer of authentication belongs, and loopback means a mistake in the settings pane
- * cannot put an agent that runs shell commands onto the local network.
+ * It binds to loopback by default and expects a tunnel to publish it. The user can
+ * explicitly opt into LAN access; in that mode it listens on all local interfaces and
+ * reports the machine's private IPv4 address so another device has an address to open.
  */
 
 export type RemoteLogger = {
@@ -163,6 +163,19 @@ const CLOSE_UNAUTHORIZED = 4001;
 const CLOSE_TIMEOUT = 4002;
 const CLOSE_TOO_LARGE = 4003;
 
+/** Pick a usable private IPv4 address for the LAN link shown in settings. */
+export function lanAddress(): string | null {
+  const addresses = Object.values(networkInterfaces())
+    .flatMap((items) => items ?? [])
+    .filter((item) => item.family === "IPv4" && !item.internal)
+    .map((item) => item.address);
+  return (
+    addresses.find((address) =>
+      /^(10|192\.168)\./.test(address) || /^172\.(1[6-9]|2\d|3[01])\./.test(address),
+    ) ?? addresses[0] ?? null
+  );
+}
+
 type Client = {
   id: string;
   socket: WebSocket;
@@ -186,6 +199,7 @@ export class RemoteServer {
   #throttle = new LoginThrottle();
   #heartbeat: NodeJS.Timeout | null = null;
   #host = "127.0.0.1";
+  #listenHost = "127.0.0.1";
   #port: number | null = null;
   #appServer: AppServer;
   #ownsAppServer: boolean;
@@ -221,7 +235,7 @@ export class RemoteServer {
   get status(): RemoteServerStatus {
     return {
       running: this.#http !== null,
-      host: this.#host,
+      host: this.#listenHost === "0.0.0.0" ? (lanAddress() ?? "0.0.0.0") : this.#host,
       port: this.#port,
       configured: isConfigured(this.#deps.accessFile),
       clients: this.#clients.size,
@@ -284,7 +298,8 @@ export class RemoteServer {
     const address = server.address();
     this.#http = server;
     this.#wss = wss;
-    this.#host = host;
+    this.#listenHost = host;
+    this.#host = host === "0.0.0.0" ? (lanAddress() ?? host) : host;
     this.#port = typeof address === "object" && address ? address.port : options.port;
     this.#heartbeat = this.#beat(this.#deps.heartbeatMs ?? HEARTBEAT_MS);
     // Never the reason the process stays up: the app owns its own lifetime, and a
@@ -308,6 +323,8 @@ export class RemoteServer {
     const server = this.#http;
     this.#http = null;
     this.#wss = null;
+    this.#listenHost = "127.0.0.1";
+    this.#host = "127.0.0.1";
     this.#port = null;
     if (server) {
       await new Promise<void>((settle) => server.close(() => settle()));

@@ -171,10 +171,13 @@ export function SubagentsSettings({ models }: { models: FastVibeModel[] }): JSX.
         disabled={saving}
         ariaLabel={`${agent.name} · ${t("subagents.modelAndThinking")}`}
         onModelChange={(model) => void saveBuiltin(agent, { model, thinkingLevel: agent.thinkingLevel })}
-        onThinkingChange={(thinkingLevel) => void saveBuiltin(agent, {
-          model: modelValue(agent.model),
-          thinkingLevel,
-        })}
+        onThinkingChange={(thinkingLevel) => {
+          if (thinkingLevel === "auto") return;
+          void saveBuiltin(agent, {
+            model: modelValue(agent.model),
+            thinkingLevel,
+          });
+        }}
       />
     );
   }
@@ -212,13 +215,13 @@ export function SubagentsSettings({ models }: { models: FastVibeModel[] }): JSX.
         </ItemContent>
         {isBuiltin ? (
           <ItemActions className="w-full sm:hidden">
-            <div className="w-full">{renderConfig(agent)}</div>
+            <div className="max-w-full">{renderConfig(agent)}</div>
           </ItemActions>
         ) : null}
         <ItemActions className={cn("ml-auto shrink-0 self-center", isBuiltin && "hidden sm:flex")}>
-          <div className="hidden min-w-44 sm:block">
+          <div className="hidden max-w-64 sm:block">
             {isBuiltin ? renderConfig(agent) : (
-              <button type="button" className="flex w-full items-center justify-between gap-2 rounded-lg border border-border bg-background px-3 py-1.5 text-left text-sm hover:border-primary/40" onClick={() => setEditor(formFrom(agent))}>
+              <button type="button" className="flex w-fit max-w-64 items-center gap-2 rounded-lg border border-border bg-background px-3 py-1.5 text-left text-sm hover:border-primary/40" onClick={() => setEditor(formFrom(agent))}>
                 <span className="min-w-0 truncate text-muted-foreground">
                   {agent.model ?? t("subagents.inheritModel")} · {thinkingLabel(agent.thinkingLevel)}
                 </span>
@@ -340,7 +343,9 @@ export function SubagentsSettings({ models }: { models: FastVibeModel[] }): JSX.
                   disabled={saving}
                   ariaLabel={t("subagents.modelAndThinking")}
                   onModelChange={(model) => setEditor({ ...editor, model })}
-                  onThinkingChange={(thinkingLevel) => setEditor({ ...editor, thinkingLevel })}
+                  onThinkingChange={(thinkingLevel) => {
+                    if (thinkingLevel !== "auto") setEditor({ ...editor, thinkingLevel });
+                  }}
                 />
               </div>
               <div className="grid gap-1.5">

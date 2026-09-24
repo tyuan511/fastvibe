@@ -17,7 +17,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ProviderIcon } from "@/components/provider-icon";
-import { thinkingLabel } from "@/lib/thinking-levels";
+import { thinkingLabel, thinkingMenuLabel } from "@/lib/thinking-levels";
 import { cn } from "@/lib/utils";
 import {
   DEFAULT_THINKING_LEVELS,
@@ -40,6 +40,7 @@ export function ModelThinkingSelect({
   model,
   thinkingLevel,
   fallbackThinkingLevels = DEFAULT_THINKING_LEVELS,
+  allowAuto = false,
   emptyModelLabel,
   inheritModelLabel,
   manageModelsLabel,
@@ -54,14 +55,15 @@ export function ModelThinkingSelect({
 }: {
   models: FastVibeModel[];
   model?: EngineModel;
-  thinkingLevel?: ThinkingLevel | string;
+  thinkingLevel?: ThinkingLevel | "auto" | string;
   fallbackThinkingLevels?: ThinkingLevel[];
+  allowAuto?: boolean;
   emptyModelLabel?: string;
   inheritModelLabel?: string;
   manageModelsLabel?: string;
   onManageModels?: () => void;
   onModelChange: (model: EngineModel | undefined) => void;
-  onThinkingChange: (level: ThinkingLevel) => void;
+  onThinkingChange: (level: ThinkingLevel | "auto") => void;
   readOnly?: boolean;
   disabled?: boolean;
   surface?: "composer" | "settings";
@@ -71,14 +73,23 @@ export function ModelThinkingSelect({
   const { t } = useTranslation("chat");
   const selected = model ? modelKey(model) : undefined;
   const selectedModel = models.find((item) => modelKey(item) === selected);
-  const thinkingOptions = selectedModel?.thinkingLevels?.length
-    ? selectedModel.thinkingLevels
-    : fallbackThinkingLevels;
-  const thinkingValue = (THINKING_LEVELS as readonly string[]).includes(thinkingLevel ?? "")
-    ? thinkingLevel as ThinkingLevel
-    : undefined;
-  const selectedThinking = thinkingValue ?? thinkingOptions[0] ?? "medium";
-  const currentThinkingLabel = thinkingLabel(selectedThinking);
+  const thinkingOptions = useMemo(() => {
+    const levels = selectedModel?.thinkingLevels?.length
+      ? selectedModel.thinkingLevels
+      : fallbackThinkingLevels;
+    return allowAuto ? (["auto", ...levels] as const) : levels;
+  }, [allowAuto, fallbackThinkingLevels, selectedModel]);
+  const thinkingValue = thinkingLevel === "auto"
+    ? (allowAuto ? "auto" : undefined)
+    : (THINKING_LEVELS as readonly string[]).includes(thinkingLevel ?? "")
+      ? thinkingLevel as ThinkingLevel
+      : undefined;
+  const selectedThinking: ThinkingLevel | "auto" = thinkingValue && thinkingOptions.some((level) => level === thinkingValue)
+    ? thinkingValue
+    : thinkingOptions[0] ?? "medium";
+  const currentThinkingLabel = selectedThinking === "auto"
+    ? thinkingMenuLabel("auto")
+    : thinkingLabel(selectedThinking);
   const currentModelLabel = selectedModel
     ? `${providerLabel(selectedModel)}/${selectedModel.id}`
     : model
@@ -101,12 +112,15 @@ export function ModelThinkingSelect({
     return result;
   }, [models]);
 
+  const thinkingHidden = !readOnly && surface === "composer" && "hidden @min-[27.5rem]/composer:inline";
+  // One group, not three flex children. justify-between (and any parent that
+  // still forces a width) would otherwise park the effort at the far end.
   const label = (
-    <>
+    <span className="flex min-w-0 items-center gap-1">
       <span className="min-w-0 truncate">{currentModelLabel}</span>
-      <span className={cn("shrink-0 text-border", !readOnly && surface === "composer" && "hidden @min-[27.5rem]/composer:inline")}>·</span>
-      <span className={cn("shrink-0", !readOnly && surface === "composer" && "hidden @min-[27.5rem]/composer:inline")}>{currentThinkingLabel}</span>
-    </>
+      <span className={cn("shrink-0 text-border", thinkingHidden)}>·</span>
+      <span className={cn("shrink-0", thinkingHidden)}>{currentThinkingLabel}</span>
+    </span>
   );
 
   if (readOnly) {
@@ -129,7 +143,7 @@ export function ModelThinkingSelect({
             className={cn(
               "min-w-0 justify-between gap-1 font-normal text-muted-foreground",
               surface === "settings"
-                ? "h-auto min-h-9 w-64 max-w-full rounded-lg py-2"
+                ? "h-auto min-h-9 w-fit max-w-full shrink rounded-lg py-2 sm:max-w-64"
                 : "h-7 max-w-40 shrink rounded-full px-2 @min-[22rem]/composer:max-w-80",
               className,
             )}
@@ -211,7 +225,7 @@ export function ModelThinkingSelect({
                   if (level !== selectedThinking) onThinkingChange(level);
                 }}
               >
-                {thinkingLabel(level)}
+                {level === "auto" ? thinkingMenuLabel("auto") : thinkingLabel(level)}
               </DropdownMenuCheckboxItem>
             ))}
           </DropdownMenuSubContent>

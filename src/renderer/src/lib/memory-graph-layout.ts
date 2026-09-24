@@ -1,15 +1,16 @@
 /**
  * Node positions for 设置 → 长期记忆 → 关系图.
  *
- * The force layout is deliberately kept as a pure module. React Flow owns the
- * viewport and interaction; this module only gives it stable starting positions.
- * Deterministic — the same graph always draws the same way, so reopening the view
- * does not reshuffle it — and pure, so it is tested without a DOM.
+ * The force layout is deliberately kept as a pure module. Sigma owns the viewport
+ * and interaction; this module only gives it stable starting positions, and the
+ * renderer runs it on a worker so the main thread stays free. Deterministic — the
+ * same graph always draws the same way, so reopening the view does not reshuffle
+ * it — and pure, so it is tested without a DOM.
  */
 
 export type LayoutPoint = { x: number; y: number };
 
-/** The visual size of a memory card in the React Flow canvas. */
+/** Card size for `layoutMemoryCards`. The point graph does not use it. */
 export const MEMORY_NODE_WIDTH = 224;
 export const MEMORY_NODE_HEIGHT = 112;
 const MEMORY_NODE_GAP_X = 32;
@@ -17,6 +18,107 @@ const MEMORY_NODE_GAP_Y = 28;
 
 /** Padding kept around the unit square, so no node sits on the plot's edge. */
 const PADDING = 0.06;
+
+export type MemoryLayoutRequest = {
+  id: number;
+  nodeIds: string[];
+  edges: Array<{ sourceId: string; targetId: string }>;
+};
+
+export type MemoryLayoutResponse = {
+  id: number;
+  positions?: Array<[string, LayoutPoint]>;
+  error?: string;
+};
+
+/** Radial stretch: distances near the origin grow more than distances at the rim. */
+function expandCore(x: Float64Array, y: Float64Array, count: number): void {
+  const { cx, cy, dist, max } = radii(x, y, count);
+  const gamma = 0.5;
+  for (let i = 0; i < count; i++) {
+    if (dist[i] < 1e-9) continue;
+    // Floor the ratio: a node sitting on the centroid would otherwise be
+    // thrown past every other node by 1/sqrt(ratio).
+    const ratio = Math.max(dist[i] / max, 0.04);
+    const factor = Math.pow(ratio, gamma - 1);
+    x[i] = cx + (x[i] - cx) * factor;
+    y[i] = cy + (y[i] - cy) * factor;
+  }
+}
+
+/** Push overlapping discs apart. `minDist` is a fraction of the current span, so it survives the final fit. */
+function separateNodes(x: Float64Array, y: Float64Array, count: number, iterations = 28): void {
+  const span = bounds(x, y, count).span;
+  const minDist = span / Math.sqrt(count) * 0.62;
+  for (let step = 0; step < iterations; step++) {
+    for (let i = 0; i < count; i++) {
+      for (let j = i + 1; j < count; j++) {
+        let ox = x[i] - x[j];
+        let oy = y[i] - y[j];
+        let distance = Math.hypot(ox, oy);
+        if (distance >= minDist) continue;
+        if (distance < 1e-9) {
+          ox = ((i % 7) - 3 || 1);
+          oy = ((j % 5) - 2 || 1);
+          distance = Math.hypot(ox, oy);
+        }
+        const push = (minDist - distance) / 2;
+        const ux = ox / distance;
+        const uy = oy / distance;
+        x[i] += ux * push;
+        y[i] += uy * push;
+        x[j] -= ux * push;
+        y[j] -= uy * push;
+      }
+    }
+  }
+}
+
+/** Memories with no links sit on the rim instead of stretching the frame. */
+function clampTails(x: Float64Array, y: Float64Array, count: number): void {
+  const { cx, cy, dist } = radii(x, y, count);
+  const sorted = Array.from(dist).sort((a, b) => a - b);
+  const pivot = sorted[Math.min(count - 1, Math.floor(count * 0.86))] || 1e-9;
+  const limit = pivot * 1.28;
+  for (let i = 0; i < count; i++) {
+    if (dist[i] <= limit || dist[i] < 1e-9) continue;
+    const scale = limit / dist[i];
+    x[i] = cx + (x[i] - cx) * scale;
+    y[i] = cy + (y[i] - cy) * scale;
+  }
+}
+
+function radii(x: Float64Array, y: Float64Array, count: number): { cx: number; cy: number; dist: Float64Array; max: number } {
+  let cx = 0;
+  let cy = 0;
+  for (let i = 0; i < count; i++) {
+    cx += x[i];
+    cy += y[i];
+  }
+  cx /= count;
+  cy /= count;
+  const dist = new Float64Array(count);
+  let max = 1e-9;
+  for (let i = 0; i < count; i++) {
+    dist[i] = Math.hypot(x[i] - cx, y[i] - cy);
+    if (dist[i] > max) max = dist[i];
+  }
+  return { cx, cy, dist, max };
+}
+
+function bounds(x: Float64Array, y: Float64Array, count: number): { span: number } {
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (let i = 0; i < count; i++) {
+    minX = Math.min(minX, x[i]);
+    maxX = Math.max(maxX, x[i]);
+    minY = Math.min(minY, y[i]);
+    maxY = Math.max(maxY, y[i]);
+  }
+  return { span: Math.max(maxX - minX, maxY - minY, 1e-9) };
+}
 
 export function layoutGraph(
   nodeIds: string[],
@@ -35,6 +137,7 @@ export function layoutGraph(
   // One spring per connected pair, whatever the number of edges between them.
   const pairs = new Set<string>();
   const springs: Array<[number, number]> = [];
+  const degree = new Int32Array(count);
   for (const edge of edges) {
     const a = index.get(edge.sourceId);
     const b = index.get(edge.targetId);
@@ -43,6 +146,8 @@ export function layoutGraph(
     if (pairs.has(key)) continue;
     pairs.add(key);
     springs.push([a, b]);
+    degree[a] += 1;
+    degree[b] += 1;
   }
 
   // A golden-angle spiral in list order: spread out, and the same every time.
@@ -55,8 +160,8 @@ export function layoutGraph(
     y[i] = 0.5 + radius * Math.sin(angle);
   }
 
-  const k = 0.9 / Math.sqrt(count);
-  const iterations = options.iterations ?? (count > 150 ? 150 : 300);
+  const k = 1.15 / Math.sqrt(count);
+  const iterations = options.iterations ?? (count > 180 ? 240 : count > 60 ? 320 : 400);
   const dx = new Float64Array(count);
   const dy = new Float64Array(count);
   for (let step = 0; step < iterations; step++) {
@@ -84,16 +189,20 @@ export function layoutGraph(
       const ox = x[a] - x[b];
       const oy = y[a] - y[b];
       const distance = Math.max(1e-9, Math.hypot(ox, oy));
-      const force = (distance * distance) / k;
+      // Divide by degree so a hub with dozens of links cannot collapse its
+      // neighbours onto one point. The raw Fruchterman-Reingold spring is
+      // quadratic and, on a memory graph, wins that fight.
+      const weight = 0.35 / Math.sqrt(degree[a] * degree[b]);
+      const force = (distance * distance) / k * weight;
       dx[a] -= (ox / distance) * force;
       dy[a] -= (oy / distance) * force;
       dx[b] += (ox / distance) * force;
       dy[b] += (oy / distance) * force;
     }
-    const temperature = 0.1 * (1 - step / iterations);
+    const temperature = 0.12 * (1 - step / iterations);
     for (let i = 0; i < count; i++) {
-      dx[i] += (0.5 - x[i]) * k * 1.5;
-      dy[i] += (0.5 - y[i]) * k * 1.5;
+      dx[i] += (0.5 - x[i]) * k * 2.4;
+      dy[i] += (0.5 - y[i]) * k * 2.4;
       const length = Math.hypot(dx[i], dy[i]);
       if (length < 1e-12) continue;
       const move = Math.min(length, temperature);
@@ -101,6 +210,15 @@ export function layoutGraph(
       y[i] += (dy[i] / length) * move;
     }
   }
+
+  // The simulation leaves a tight core and a few memories with no links far
+  // outside it. Fitting that bounding box shrinks the core to a dot. Stretch
+  // the core, then keep every disc a minimum distance apart, then pull the
+  // tails back so they cannot open the frame again.
+  expandCore(x, y, count);
+  separateNodes(x, y, count);
+  clampTails(x, y, count);
+  separateNodes(x, y, count, 8);
 
   // Fit the result into the padded unit square, keeping its aspect ratio.
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
@@ -121,12 +239,10 @@ export function layoutGraph(
 /**
  * Converts the unit-square force result into collision-free card positions.
  *
- * React Flow positions nodes by their top-left corner. A dense memory index can
- * contain hundreds of cards, so merely scaling the force result into a fixed
- * rectangle would make cards overlap. We assign each node to the nearest free
- * slot in a roomy grid instead. The force result still determines the ordering
- * and keeps connected clusters together, while the grid gives a hard no-overlap
- * guarantee without a DOM measurement pass.
+ * The on-screen graph no longer draws cards — Sigma places dots from `layoutGraph`
+ * directly. This grid remains for the collision rule and its tests: a card's
+ * top-left must not overlap another card, while the force result still decides
+ * which slot a node takes.
  */
 export function layoutMemoryCards(
   nodeIds: string[],

@@ -1,4 +1,4 @@
-import { lazy, memo, Suspense, useCallback, useEffect, useRef, useState, type JSX } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type JSX } from "react";
 import { usePanelRef } from "react-resizable-panels";
 import { motion } from "motion/react";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -9,10 +9,10 @@ import { AddProjectDialog } from "@/components/add-project-dialog";
 import { GitStatusPopover } from "@/components/chat/git-status-popover";
 import { ExtensionNotices, ExtensionWidgets, GoalPanel } from "@/components/chat/extension-surface";
 import { TodoPanel } from "@/components/chat/todo-list";
-import { MessageList } from "@/components/chat/message-list";
+import { ComposerSlot, DraftKeeper, MessageThread, availableModels, orderProjectsByCwd } from "@/app-thread";
+import { useAppBootstrap } from "@/use-app-bootstrap";
 import { NewSessionHero, SuggestionChips } from "@/components/chat/new-session";
 import { PermissionDialog } from "@/components/chat/permission-dialog";
-import { FullDiskAccessPrompt } from "@/components/full-disk-access";
 import { PermissionPanel, type PermissionResponse } from "@/components/chat/permission-panel";
 import { usagePercent } from "@/components/chat/session-controls";
 import { Sidebar } from "@/components/layout/sidebar";
@@ -57,9 +57,11 @@ import {
   start,
 } from "@/lib/engine-client";
 import { dismissBootLoader } from "@/lib/boot-loader";
+import { i18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { resolvePath } from "@/lib/workspace-path";
 import { shouldQueueSubmission } from "@/lib/composer-race";
+import { readDrafts, useDraftPersistence } from "@/lib/draft-persistence";
 
 import { SETTINGS_SECTIONS, type SectionId } from "@/components/settings/settings-sections";
 import { setSidebarCollapsed, useIsNarrowViewport, useSidebarCollapsed } from "@/lib/sidebar-visibility";
@@ -109,286 +111,12 @@ const SettingsDialog = lazy(async () => ({
   default: (await import("@/components/settings/settings-dialog")).SettingsDialog,
 }));
 
-const DRAFT_KEY = "fastvibe.session-drafts";
-
-type PersistedDraft = {
-  draft: string;
-  attachments: ChatAttachment[];
-  model?: EngineModel;
-  thinkingLevel?: string;
-  permissionMode?: PermissionMode;
-};
-
-function isStoredModel(value: unknown): value is EngineModel {
-  if (!value || typeof value !== "object") return false;
-  const model = value as Partial<EngineModel>;
-  return typeof model.provider === "string" && model.provider.length > 0 && typeof model.id === "string" && model.id.length > 0;
-}
-
-function isStoredAttachment(value: unknown): value is ChatAttachment {
-  if (!value || typeof value !== "object") return false;
-  const attachment = value as Partial<ChatAttachment>;
-  return (
-    typeof attachment.id === "string" &&
-    (attachment.kind === "image" || attachment.kind === "file") &&
-    typeof attachment.name === "string"
-  );
-}
-
-function isStoredPermissionMode(value: unknown): value is PermissionMode {
-  return value === "ask" || value === "smart" || value === "full";
-}
-
-function readDrafts(): Record<string, PersistedDraft> {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(DRAFT_KEY) ?? "{}");
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    const drafts: Record<string, PersistedDraft> = {};
-    for (const [id, value] of Object.entries(parsed)) {
-      if (!value || typeof value !== "object" || Array.isArray(value)) continue;
-      const item = value as Partial<PersistedDraft>;
-      if (typeof item.draft !== "string") continue;
-      drafts[id] = {
-        draft: item.draft,
-        attachments: Array.isArray(item.attachments) ? item.attachments.filter(isStoredAttachment) : [],
-        ...(isStoredModel(item.model) ? { model: item.model } : {}),
-        ...(typeof item.thinkingLevel === "string" ? { thinkingLevel: item.thinkingLevel } : {}),
-        ...(isStoredPermissionMode(item.permissionMode) ? { permissionMode: item.permissionMode } : {}),
-      };
-    }
-    return drafts;
-  } catch {
-    return {};
-  }
-}
-
-function writeDraft(id: string | null, state: PersistedDraft): void {
-  if (!id) return;
-  try {
-    const drafts = readDrafts();
-    const hasPayload = Boolean(
-      state.draft ||
-      state.attachments.length > 0 ||
-      state.model ||
-      state.thinkingLevel ||
-      state.permissionMode,
-    );
-    if (hasPayload) drafts[id] = state;
-    else delete drafts[id];
-    localStorage.setItem(DRAFT_KEY, JSON.stringify(drafts));
-  } catch {
-    // Ignore storage quota and private-mode errors.
-  }
-}
-
-/**
- * Persist the composer's draft, off the keystroke.
- *
- * `writeDraft` reads *every* saved draft back, re-serialises the lot and writes it —
- * and `localStorage` is synchronous, so doing that per keystroke put a blocking disk
- * write in the middle of typing, growing with the number of conversations that have
- * a draft. A draft is a convenience, not a transaction: a short debounce is
- * invisible to the reader, and the pending write is flushed on the two events that
- * can lose it (leaving the conversation, closing the window).
- */
-const DRAFT_DEBOUNCE_MS = 400;
-
-function useDraftPersistence(
-  activeId: string | null,
-  draft: string,
-  attachments: ChatAttachment[],
-  model: EngineModel | undefined,
-  thinkingLevel: string | undefined,
-  permissionMode: PermissionMode,
-  emptySession: boolean,
-): void {
-  const pending = useRef<{ id: string | null; state: PersistedDraft } | null>(null);
-  const timer = useRef<number | null>(null);
-
-  const flush = useCallback(() => {
-    if (timer.current !== null) {
-      window.clearTimeout(timer.current);
-      timer.current = null;
-    }
-    const entry = pending.current;
-    pending.current = null;
-    if (entry) writeDraft(entry.id, entry.state);
-  }, []);
-
-  const lastId = useRef(activeId);
-
-  useEffect(() => {
-    // A conversation switch must not lose the draft being typed into the chat being
-    // left, so the pending write for the *previous* id goes out now. A keystroke
-    // within the same chat just re-arms the timer — flushing here as well would make
-    // the debounce a no-op and put the synchronous write back on every key.
-    if (lastId.current !== activeId) {
-      flush();
-      lastId.current = activeId;
-    }
-    pending.current = {
-      id: activeId,
-      state: {
-        draft,
-        attachments,
-        // Model, thinking strength and permission are meaningful as a bundle for an
-        // empty project session. A completed chat keeps only its ordinary composer
-        // draft, so opening history cannot silently change its controls.
-        ...(emptySession && model ? { model } : {}),
-        ...(emptySession && thinkingLevel ? { thinkingLevel } : {}),
-        ...(emptySession ? { permissionMode } : {}),
-      },
-    };
-    if (timer.current === null) timer.current = window.setTimeout(flush, DRAFT_DEBOUNCE_MS);
-  }, [activeId, attachments, draft, emptySession, flush, model, permissionMode, thinkingLevel]);
-
-  // `beforeunload`, not the effect cleanup: a window closing never unmounts.
-  useEffect(() => {
-    window.addEventListener("beforeunload", flush);
-    return () => {
-      window.removeEventListener("beforeunload", flush);
-      flush();
-    };
-  }, [flush]);
-}
-
 // Capture the displayed conversation for both routing and reply ownership. Calling
 // the raw bridge without an id reads Main's local active chat, even while a remote
 // conversation is on screen — and used to replace that remote transcript every turn.
 // The incremental tail read (`getMessagesSince`) lives in the same module.
 const { refreshStats, reloadActiveState, reloadActiveMessages } =
   createConversationRefresh(engine, useSessionStore.getState);
-
-/**
- * The models this install can actually chat with.
- *
- * The store holds the list the engine reported once ready and after every 供应商 edit,
- * so a send normally costs nothing; an empty list is re-checked against the engine,
- * because "no models" is the one condition that has to stop a prompt before a
- * conversation is created only for it to fail.
- */
-async function availableModels(): Promise<FastVibeModel[]> {
-  const cached = useSessionStore.getState().models;
-  if (cached.length > 0) return cached;
-  const next = await getModels().catch((): FastVibeModel[] => []);
-  useSessionStore.getState().setModels(next);
-  return next;
-}
-
-/**
- * Subscribes to the transcript itself so a streamed token re-renders only the
- * message list — not the whole shell (sidebar, composer, side pane). App used to
- * read `messages` directly, which re-rendered the entire tree on every token.
- */
-const MessageThread = memo(function MessageThread({
-  loading,
-  loadingReplaces = false,
-  onRetry,
-  onEdit,
-  onFork,
-  showThinking,
-  showTimestamp,
-  collapseRuns,
-}: {
-  loading: boolean;
-  /** Show the loader in place of whatever transcript is already on screen. */
-  loadingReplaces?: boolean;
-  onRetry: (message: ChatMessage) => void;
-  onEdit: (message: ChatMessage, text: string) => void;
-  onFork: (entryId: string) => void;
-  showThinking: boolean;
-  showTimestamp: boolean;
-  collapseRuns: boolean;
-}): JSX.Element {
-  const messages = useSessionStore((state) => state.messages);
-  const streaming = useSessionStore((state) => state.streaming);
-  const activeId = useSessionStore((state) => state.activeId);
-  const addSelectionToConversation = useCallback((text: string) => {
-    const store = useSessionStore.getState();
-    const attachment: ChatAttachment = {
-      id: crypto.randomUUID(),
-      kind: "file",
-      name: pastedTextAttachmentName(text),
-      mimeType: "text/plain",
-      text,
-    };
-    store.setComposer(store.draft, [...store.attachments, attachment]);
-  }, []);
-  const askSelectionInSideChat = useCallback((text: string) => {
-    if (!activeId) return;
-    const sidePane = useSidePaneStore.getState();
-    const attachment: ChatAttachment = {
-      id: crypto.randomUUID(),
-      kind: "file",
-      name: pastedTextAttachmentName(text),
-      mimeType: "text/plain",
-      text,
-    };
-    sidePane.openSideChat(
-      activeId,
-      sidePane.nextSideChatOrdinal(activeId),
-      text,
-      true,
-      [attachment],
-    );
-  }, [activeId]);
-  return (
-    <MessageList
-      messages={messages}
-      streaming={streaming}
-      loading={loading}
-      loadingReplaces={loadingReplaces}
-      onRetry={onRetry}
-      onEdit={onEdit}
-      onFork={onFork}
-      onAddSelectionToConversation={activeId ? addSelectionToConversation : undefined}
-      onAskSelectionInSideChat={activeId ? askSelectionInSideChat : undefined}
-      showThinking={showThinking}
-      showTimestamp={showTimestamp}
-      collapseRuns={collapseRuns}
-    />
-  );
-});
-
-/**
- * The composer's own subscription to what is being typed.
- *
- * `draft` and `attachments` change on every keystroke, and `App` is the shell: the
- * sidebar, the transcript, the side pane and every dialog are built in its render, so
- * reading them there re-rendered all of it per character — a cost that grows with the
- * number of conversations in the sidebar and the number of rows mounted in the thread.
- * The composer's element is built by `render` instead, so a keystroke re-renders this
- * and the composer alone. The same trick `MessageThread` uses for the transcript.
- */
-function ComposerSlot({
-  render,
-}: {
-  render: (draft: string, attachments: ChatAttachment[]) => JSX.Element;
-}): JSX.Element {
-  const draft = useSessionStore((state) => state.draft);
-  const attachments = useSessionStore((state) => state.attachments);
-  return render(draft, attachments);
-}
-
-/**
- * Draft persistence, kept out of the shell for the same reason — and out of the
- * composer's own slot, which an extension prompt takes over while a question is
- * parked, so the debounce is not torn down and re-armed by an approval.
- */
-function DraftKeeper(): null {
-  const activeId = useSessionStore((state) => state.activeId);
-  const draft = useSessionStore((state) => state.draft);
-  const attachments = useSessionStore((state) => state.attachments);
-  const model = useSessionStore((state) => state.session?.model);
-  const thinkingLevel = useSessionStore((state) => state.session?.thinkingLevel);
-  const permissionMode = useSettingsStore((state) => state.settings.permissionMode);
-  const emptySession = useSessionStore((state) => {
-    const conversation = state.conversations.find((item) => item.id === state.activeId);
-    return Boolean(conversation && !conversation.preview);
-  });
-  useDraftPersistence(activeId, draft, attachments, model, thinkingLevel, permissionMode, emptySession);
-  return null;
-}
 
 export function App(): JSX.Element {
   // Applies light/dark theme selection (and reacts to OS changes in system mode).
@@ -448,6 +176,7 @@ export function App(): JSX.Element {
   const canResume = Boolean(activeId) && resumable && !conversationWorking;
   const running = useSessionStore((state) => state.running);
   const waitingForUser = useSessionStore((state) => state.waitingForUser);
+  const failedInBackground = useSessionStore((state) => state.failedInBackground);
   const stats = useSessionStore((state) => state.stats);
   const setStatus = useSessionStore((state) => state.setStatus);
   const setSession = useSessionStore((state) => state.setSession);
@@ -512,6 +241,11 @@ export function App(): JSX.Element {
    * quick succession (the open, then the abandoned-draft cleanup) from doing it either.
    */
   const intendedActiveId = useRef<string | null>(null);
+  // A reorder is optimistic, but catalog pushes and IPC replies can cross it. Keep the
+  // newest requested order visible until its own reply arrives; an older reply must not
+  // make the project rows jump back to the order from before the latest drag.
+  const projectReorderTicket = useRef(0);
+  const pendingProjectOrder = useRef<string[] | null>(null);
   // The catalog push always carries this machine's own active conversation, even when
   // the change came from a remote server. Following it on every push would yank the
   // view back to that local chat whenever a remote project gained a conversation.
@@ -622,253 +356,23 @@ export function App(): JSX.Element {
   const toggleSidebarShortcut = useShortcutLabel("toggleSidebar");
   const toggleSidePaneShortcut = useShortcutLabel("toggleSidePane");  const newChatShortcut = useShortcutLabel("newChat");
 
-  useEffect(() => {
-    void getStatus().then((next) => {
-      setStatus(next);
-      setEngineKnown(true);
-    });
-    // A fresh window has no run history: ask the engine which conversations are
-    // still working so their spinners survive a reload.
-    void window.fastvibe.engine
-      .getRunning()
-      .then((ids) => useSessionStore.getState().setRunningConversations(ids))
-      .catch(() => undefined);
-    void window.fastvibe.conversations.list().then((snapshot) => {
-      applySnapshot(snapshot);
-      const pending = conversationIdFromHash() ?? snapshot.activeId;
-      if (
-        pending &&
-        useSessionStore.getState().status.state === "ready" &&
-        !useSessionStore.getState().activeId
-      ) {
-        restoreId.current = null;
-        void window.fastvibe.conversations
-          .open(pending)
-          .then((opened) => {
-            applyOpen(opened);
-            if (!window.location.hash.includes("/settings") && conversationIdFromHash() !== pending) {
-              navigate(conversationPath(pending), { replace: true });
-            }
-          })
-          .catch(() => undefined);
-      } else {
-        restoreId.current = pending ?? null;
-      }
-    });
-    const offStatus = onStatus(setStatus);
-    // Background conversation init finished: fill in the transcript, unless the
-    // user already sent a message (then their optimistic thread wins and engine
-    // events will replace it).
-    const offReady = onConversationReady((payload) => {
-      const store = useSessionStore.getState();
-      // Seed the sidebar's run indicator even for conversations that are not on screen.
-      // `working` unions the two things the mark covers — a run (`running`, which now
-      // spans the whole run: `agent_start` through `agent_settled`, retries and
-      // auto-compaction included) and the compaction that can run with no run at all.
-      store.setConversationRunning(payload.id, working(payload.state));
-      if (store.activeId !== payload.id || store.streaming) return;
-      store.setMessages(payload.messages, payload.id);
-      store.setSession(payload.state);
-      store.setStatus(payload.status);
-      store.setExtensionStatus(payload.id, payload.extensionStatus ?? {});
-    });
-    /**
-     * The catalog, whenever anything changes it — this window, a second window, or a
-     * phone over remote access.
-     *
-     * `applySnapshot` takes the projects and the conversations only; the active
-     * conversation is followed separately below, because adopting it is a *navigation*
-     * and has to go through the same path a click does.
-     */
-    const offWorkspace = window.fastvibe.conversations.onChanged((snapshot) => {
-      applySnapshot(snapshot);
-      const next = snapshot.activeId ?? null;
-      // A remote catalog change republishes the same local active id. Nothing
-      // navigated; following it would leave the remote conversation just created.
-      if (next === followedActiveId.current) return;
-      followedActiveId.current = next;
-      const current = useSessionStore.getState().activeId;
-      // Equality is what stops this from echoing: the client that made the change is
-      // already there, and Main's `setActive` is a no-op for an unchanged id, so no
-      // push follows the open this one is about to do. A local id is also not a
-      // reason to leave a remote conversation — that push is this machine's catalog,
-      // not the chat on screen.
-      if (!next || !shouldFollowCatalogActive({ next, current, intended: intendedActiveId.current })) return;
-      void openLatest.current?.(next, "remote");
-    });
-    const offEvent = onEvent((event) => {
-      // An extension command replaced the session (plan-mode's fresh handoff):
-      // follow the conversation the engine created and seeded.
-      if (event.type === "conversation_opened" && event.result && typeof event.result === "object") {
-        const opened = event.result as ConversationOpenResult;
-        const openedId = opened.conversation?.id;
-        const viewing = useSessionStore.getState().activeId;
-        // A local session replacement must not steal a remote conversation. The
-        // remote server's own `conversation_opened` is not relayed; this is the
-        // local engine, and its active chat is not the one on screen.
-        if (
-          typeof openedId === "string"
-          && !isRemoteRef(openedId)
-          && (isRemoteRef(viewing) || isRemoteRef(intendedActiveId.current))
-        ) {
-          return;
-        }
-        applyOpen(opened);
-        if (conversationIdFromHash() !== opened.conversation.id) {
-          navigate(conversationPath(opened.conversation.id));
-        }
-        return;
-      }
-      const conversationId = typeof event.conversationId === "string" ? event.conversationId : null;
-      // Run state is broadcast for every conversation so the sidebar keeps showing
-      // which chats are working, even while the user is looking at another one.
-      if (event.type === "conversation_running" && conversationId) {
-        useSessionStore.getState().setConversationRunning(conversationId, event.running === true);
-        // A failed/timeout Stop stays as a barrier until Main explicitly confirms
-        // that the conversation is idle. This also releases a barrier kept after a
-        // timeout when the SDK eventually settles on its own.
-        if (event.running !== true) abortInFlight.current.delete(conversationId);
-      }
-      // Queue state is Main-owned and applies for every conversation. It must cross
-      // the focus filter so a background drain, failure or second window stays visible.
-      if (event.type === "queue_changed" && event.queue && typeof event.queue === "object") {
-        useSessionStore.getState().setQueueState(event.queue as import("@shared/types").ConversationQueueState);
-        return;
-      }
-      if (event.type === "queue_delivered") {
-        useSessionStore.getState().applyEvent(event);
-        return;
-      }
-      // Blocking prompts and their withdrawal are handled for *every* conversation
-      // before the focus routing below, which sends a background chat's events to the
-      // side-pane store. A tool approval is not transcript content: it is the signal
-      // that this chat needs the user, and the sidebar mark and the notification both
-      // have to see it even though its panel is only drawn for the chat on screen.
-      if (event.type === "extension_ui_request" || event.type === "extension_ui_dismiss") {
-        useSessionStore.getState().applyEvent(event);
-        if (conversationId && conversationId !== useSessionStore.getState().activeId) {
-          useSidePaneStore.getState().applyConversationEvent(conversationId, event);
-        }
-        return;
-      }
-      if (event.type === "conversation_renamed" && event.snapshot && typeof event.snapshot === "object") {
-        useSessionStore.getState().applySnapshot(event.snapshot as WorkspaceSnapshot);
-      }
-      const currentId = useSessionStore.getState().activeId;
-      // Subagent traffic feeds the shared subagent store, not a conversation, and a
-      // parent run keeps streaming after the user switches chats: apply it before
-      // the focus routing so every run's tab stays live either way. Each run owns a
-      // tab (`subagent:<toolCallId>:<index>`), keyed to the conversation that
-      // spawned it, so two chats delegating at once never share a view.
-      if (event.type === "subagent_event" || event.type === "subagent_state" || event.type === "subagent_lifecycle" || event.type === "subagent_progress") {
-        applyEvent(event);
-        // A lifecycle event is where a run gets its tab (created, not focused).
-        // Per-token `subagent_event`s and state pushes only feed the transcript / the
-        // pane's read-only composer, which the session store already keys by run id —
-        // no side-pane write per token.
-        if (event.type !== "subagent_event" && event.type !== "subagent_state") {
-          const subagentId = typeof event.subagentId === "string" ? event.subagentId : "";
-          if (subagentId) {
-            const info = useSessionStore.getState().subagents.find((item) => item.id === subagentId);
-            useSidePaneStore.getState().registerSubagent(subagentId, {
-              conversationId: typeof event.conversationId === "string" ? event.conversationId : info?.conversationId,
-              title: info?.name || info?.agent,
-              status: typeof event.status === "string" ? event.status : info?.status,
-              brief: info?.detail,
-            });
-          }
-        }
-        return;
-      }
-      if (conversationId && currentId && conversationId !== currentId) {
-        useSidePaneStore.getState().applyConversationEvent(conversationId, event);
-        return;
-      }
-      applyEvent(event);
-      // Message/stat reloads are expensive (the engine replays the whole
-      // transcript), so only do them when the transcript actually changed.
-      if (
-        event.type === "agent_end" ||
-        event.type === "agent_settled" ||
-        event.type === "compaction_end" ||
-        event.type === "auto_compaction_end"
-      ) {
-        reloadActiveState();
-        // A failed turn is already on the optimistic assistant. Reloading here races
-        // auto-retry (which drops the error message from engine state) and would
-        // blank the bubble we just filled in.
-        const failed =
-          event.type === "agent_end" &&
-          Array.isArray(event.messages) &&
-          event.messages.some(
-            (item) =>
-              item &&
-              typeof item === "object" &&
-              "stopReason" in item &&
-              (item as { stopReason?: unknown }).stopReason === "error",
-          );
-        // A cancelled/failed compact only exists on the live card; reloading would
-        // drop it because the engine never wrote a compaction entry.
-        const compactFailed =
-          (event.type === "compaction_end" || event.type === "auto_compaction_end") &&
-          (event.aborted === true || Boolean(event.errorMessage));
-        if (!failed && !compactFailed) reloadActiveMessages();
-        refreshStats();
-      } else if (event.type === "model_changed" || event.type === "thinking_level_changed") {
-        reloadActiveState();
-      }
-      // The composer's context ring reads `session.contextUsage`, which only a state
-      // reply carries — and the engine derives it from the messages it holds. A run
-      // grows the context at every turn boundary (each LLM round trip, tool calls
-      // included), so the ring has to be re-read there too: only the run boundaries
-      // above did it, which left the ring frozen at whatever the chat was opened with
-      // for the length of a long task. Switching away and back appeared to "fix" it
-      // because `conversations.open` returns a fresh state.
-      if (event.type === "turn_end") reloadActiveState();
-      if (event.type === "available_commands_update") {
-        const raw = Array.isArray(event.commands) ? event.commands : [];
-        setCommands(
-          raw.flatMap((item) => {
-            if (!item || typeof item !== "object" || !("name" in item) || typeof item.name !== "string") return [];
-            return [{ name: item.name, description: "description" in item && typeof item.description === "string" ? item.description : undefined }];
-          }),
-        );
-      }
-      if (event.type === "tool_execution_end" || event.type === "toolcall_end") {
-        // Tool time and token totals advance during a run; keep the popover live.
-        refreshStats();
-        const name = String(event.toolName ?? event.name ?? "");
-        const args = event.args ?? event.arguments;
-        const path =
-          args && typeof args === "object" && args !== null
-            ? String(
-                (args as Record<string, unknown>).path ??
-                  (args as Record<string, unknown>).file_path ??
-                  (args as Record<string, unknown>).filename ??
-                  "",
-              )
-            : "";
-        // Only surface files the agent wrote to: auto-previewing every `read`
-        // fired an IPC file read plus a full app re-render on the hottest path.
-        if (path && /write|edit|apply|create/i.test(name)) {
-          // De-dupe against the *active chat's* file view, so a write in one
-          // conversation still reveals the file when another one previews it too.
-          // Compare the resolved path: after the first preview the tab stores the
-          // absolute file, while tool args stay relative.
-          const store = useSessionStore.getState();
-          const cwd = store.conversations.find((item) => item.id === store.activeId)?.cwd;
-          const resolved = resolvePath(path, cwd);
-          if (useSidePaneStore.getState().filesPreviewPath() !== resolved) void store.openPreview(path);
-        }
-      }
-    });
-    return () => {
-      offStatus();
-      offReady();
-      offEvent();
-      offWorkspace();
-    };
-  }, [applyEvent, applySnapshot, setSession, setStatus]);
+  useAppBootstrap({
+    setStatus,
+    setEngineKnown,
+    applyList,
+    applyOpen,
+    navigate,
+    restoreId,
+    followedActiveId,
+    intendedActiveId,
+    openLatest,
+    abortInFlight,
+    applyEvent,
+    setCommands,
+    applySnapshot,
+    setSession,
+  });
+
 
   function listedChatIds(): string[] {
     return conversations
@@ -1180,7 +684,18 @@ export function App(): JSX.Element {
   }
 
   function applyList(snapshot: WorkspaceSnapshot): void {
-    applySnapshot(snapshot);
+    const pending = pendingProjectOrder.current;
+    applySnapshot(
+      pending
+        ? {
+            ...snapshot,
+            // Keep a pending drag on top of an unrelated catalog update (for example,
+            // a prompt preview write). Projects omitted by a stale request stay at the
+            // end, matching Main's reorder semantics.
+            projects: orderProjectsByCwd(snapshot.projects, pending),
+          }
+        : snapshot,
+    );
   }
 
   async function handleSubmit(): Promise<void> {
@@ -1232,7 +747,10 @@ export function App(): JSX.Element {
       currentAttachments = submitState.attachments;
       if ((!text && currentAttachments.length === 0) || !canChat) return;
       const compact = parseCompactCommand(text);
-      if (compact) {
+      // A `/compact` sent while the chat works joins the queue (below) instead: compacting
+      // a live session aborts its run first, which ended the turn with no notice at all.
+      // The queue hands it to the engine once the run has settled.
+      if (compact && !queueAtSubmit) {
         if (!activeId) return;
         setDraft("");
         try {
@@ -1270,17 +788,21 @@ export function App(): JSX.Element {
       }
       consumedOwner = conversationId;
       consumedVersion = useSessionStore.getState().composerDrafts[conversationId]?.version;
-      const beforePrompt = useSessionStore.getState().conversations.find((item) => item.id === conversationId);
-      const nextList = await window.fastvibe.conversations.recordPrompt(conversationId, promptText);
-      applyList(nextList);
-      const afterPrompt = nextList.conversations.find((item) => item.id === conversationId);
-      if (beforePrompt && afterPrompt) {
-        queuePreview = {
-          previousTitle: beforePrompt.title,
-          previousPreview: beforePrompt.preview,
-          nextTitle: afterPrompt.title,
-          nextPreview: afterPrompt.preview,
-        };
+      // A queued `/compact` is a command, not a prompt: it must not become the chat's
+      // title or preview.
+      if (!compact) {
+        const beforePrompt = useSessionStore.getState().conversations.find((item) => item.id === conversationId);
+        const nextList = await window.fastvibe.conversations.recordPrompt(conversationId, promptText);
+        applyList(nextList);
+        const afterPrompt = nextList.conversations.find((item) => item.id === conversationId);
+        if (beforePrompt && afterPrompt) {
+          queuePreview = {
+            previousTitle: beforePrompt.title,
+            previousPreview: beforePrompt.preview,
+            nextTitle: afterPrompt.title,
+            nextPreview: afterPrompt.preview,
+          };
+        }
       }
       // Queue semantics belong to the instant Send was pressed. A stop can settle the
       // run during recordPrompt; routing an actual follow-up through prompt() would
@@ -1293,7 +815,9 @@ export function App(): JSX.Element {
             conversationId,
             text: promptText,
             message: payload,
-            behavior: queueBehavior,
+            // Never a steer: a steer is injected into the run as a user message, and the
+            // model would be handed the literal `/compact`.
+            behavior: compact ? "followUp" : queueBehavior,
             attachments: currentAttachments,
             images: attachmentsToImages(currentAttachments),
             preview: queuePreview,
@@ -1334,16 +858,33 @@ export function App(): JSX.Element {
         setRunInterrupted(null);
         setCanResume(false);
       }
-      // Not awaited either: `prompt()` resolves only when the whole run is over, and
-      // holding the guard until then would refuse every follow-up sent mid-run.
+      // Not awaited either: `prompt()` resolves once the engine accepts the message, which
+      // can still wait out a settling run or a pre-send compaction, and holding the guard
+      // through that would refuse every follow-up sent meanwhile. A rejection means the
+      // message was refused, never that an accepted run failed — the run's own outcome
+      // arrives as events (`agent_end`, `conversation_activity`) — so rolling back the
+      // row and handing the text back is exactly right here.
       void dispatchPrompt(text, currentAttachments, conversationId).catch((err: unknown) => {
         // Stop rejects some transports with the original AbortError. The engine has
         // already retained the interrupted turn, so rolling it back or showing a red
         // toast would misreport an intentional cancellation as a failed send.
         if (isAbortOutcome(err)) return;
+        const message = err instanceof Error ? err.message : String(err);
         if (stillActive && useSessionStore.getState().activeId === conversationId) {
           rollbackOptimisticPrompt();
-          setError(err instanceof Error ? err.message : String(err));
+          setError(message);
+        } else {
+          // The user moved to another chat while the engine was still deciding (it can
+          // wait out a settling run first). Name the chat, mark its row, and offer the
+          // way back rather than dropping the refusal on the floor.
+          const store = useSessionStore.getState();
+          store.markFailedInBackground(conversationId);
+          const title = store.conversations.find((item) => item.id === conversationId)?.title || t("workspace.newChat");
+          toast.error(t("sidebar.backgroundStopped", { title }), {
+            id: `stopped:${conversationId}`,
+            description: message,
+            action: { label: t("sidebar.backgroundStoppedOpen"), onClick: () => void handleOpen(conversationId) },
+          });
         }
         if (consumedVersion !== undefined) {
           restoreComposer(conversationId, text, currentAttachments, consumedVersion);
@@ -1899,21 +1440,22 @@ export function App(): JSX.Element {
    * lands and the rows visibly snap back — then written through.
    */
   async function handleReorderProjects(cwds: string[]): Promise<void> {
+    const ticket = ++projectReorderTicket.current;
+    pendingProjectOrder.current = [...cwds];
     const { projects: current, conversations: list, activeId: currentActiveId } = useSessionStore.getState();
-    const rank = new Map(cwds.map((cwd, index) => [cwd, index]));
-    const reordered = [...current].sort((a, b) => {
-      const left = rank.get(a.cwd);
-      const right = rank.get(b.cwd);
-      if (left === undefined && right === undefined) return 0;
-      if (left === undefined) return 1;
-      if (right === undefined) return -1;
-      return left - right;
-    });
+    const reordered = orderProjectsByCwd(current, cwds);
     const restore = { projects: current, conversations: list, activeId: currentActiveId ?? undefined };
     applySnapshot({ ...restore, projects: reordered });
     try {
-      applyList(await window.fastvibe.projects.reorder(cwds));
+      const snapshot = await window.fastvibe.projects.reorder(cwds);
+      // A later drag owns the visible order. The older response is still allowed to
+      // finish saving on Main, but it must not overwrite the later optimistic state.
+      if (ticket !== projectReorderTicket.current) return;
+      pendingProjectOrder.current = null;
+      applyList(snapshot);
     } catch (err) {
+      if (ticket !== projectReorderTicket.current) return;
+      pendingProjectOrder.current = null;
       setError(err instanceof Error ? err.message : String(err));
       applySnapshot(restore);
     }
@@ -2221,6 +1763,7 @@ export function App(): JSX.Element {
             activeId={openingId ?? activeId}
             running={running}
             waitingForUser={waitingForUser}
+            failedInBackground={failedInBackground}
             onNewChat={onSidebarNewChat}
             onOpen={onSidebarOpen}
             onFork={onSidebarFork}
@@ -2349,9 +1892,6 @@ export function App(): JSX.Element {
                     onRetry={handleRetry}
                     onEdit={handleEdit}
                     onFork={handleForkFromEntry}
-                    showThinking={settings.showThinking}
-                    showTimestamp={settings.showTimestamps}
-                    collapseRuns={settings.collapseRuns}
                   />
                 </div>
                 {/* Everything under the transcript shares its column: the transcript's
@@ -2426,7 +1966,6 @@ export function App(): JSX.Element {
         request={pendingDialog}
         onRespond={handlePermissionRespond}
       />
-      <FullDiskAccessPrompt />
       {/* 重试时询问文件回退. A retry rewinds the conversation, and this is the same
           question for the working tree the turn wrote — asked, not assumed, because
           the user may have touched those files by hand since. */}

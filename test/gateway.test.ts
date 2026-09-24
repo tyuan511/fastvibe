@@ -3,7 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { readBindings, saveBinding } from "../src/main/remote/binding-store.ts";
+import { readBindings, readProjectOrder, reorderProjectOrder, saveBinding } from "../src/main/remote/binding-store.ts";
 import {
   RemoteGateway,
   type ConnectedServerRef,
@@ -727,6 +727,41 @@ test("permission respond routes by namespaced id and unscopes it", async () => {
   assert.deepEqual(connections.calls[0]!.payload, { id: "prompt-1", confirmed: true });
 });
 
+test("a fork of a remote conversation is routed there and comes back namespaced", async () => {
+  const file = bindingsFile();
+  saveBinding(file, binding());
+  const forked = { id: "c2", title: "远程（分叉）", cwd: "/home/dev/app", project: "/home/dev/app", createdAt: 2, updatedAt: 2 };
+  const connections = fakeConnections({
+    servers: [{ connectionId: "host-a", serverInstanceId: "srv_alpha", capabilities: ["engine"] }],
+    results: {
+      [Ipc.engineFork]: {
+        projects: [{ cwd: "/home/dev/app", name: "app", createdAt: 1, updatedAt: 1 }],
+        conversations: [forked],
+        activeId: "c2",
+        conversation: forked,
+        messages: [{ id: "msg-keep", role: "assistant", text: "hi" }],
+        state: { conversationId: "c2", cwd: "/home/dev/app", isStreaming: false },
+        status: { state: "ready" },
+      },
+    },
+  });
+  const { instance } = gateway({ file, connections });
+  const opened = await instance.dispatch(
+    Ipc.engineFork,
+    { entryId: "entry-1", conversationId: encodeRemoteConversationId("srv_alpha", "c1") },
+    {},
+  ) as { conversation: Conversation; messages: Array<{ id: string }>; state: { conversationId?: string } };
+
+  assert.equal(connections.calls.length, 1);
+  assert.equal(connections.calls[0]!.method, Ipc.engineFork);
+  assert.deepEqual(connections.calls[0]!.payload, { entryId: "entry-1", conversationId: "c1" });
+  const id = encodeRemoteConversationId("srv_alpha", "c2");
+  assert.equal(opened.conversation.id, id);
+  assert.equal(opened.conversation.project, "remote:srv_alpha:/home/dev/app");
+  assert.equal(opened.state.conversationId, id);
+  assert.equal(opened.messages[0]!.id, "msg-keep");
+});
+
 test("extra conversationId routes a subagent abort without rewriting tool ids", async () => {
   const file = bindingsFile();
   saveBinding(file, binding());
@@ -811,4 +846,27 @@ test("mixed project reorder persists the complete local sidebar order", async ()
   assert.deepEqual(localCalls, [{ method: Ipc.projectsReorder, payload: { cwds: ["/Users/me/local"] } }]);
   const snapshot = instance.aggregate(localSnap());
   assert.deepEqual(snapshot.projects.map((item) => item.cwd), [key, "/Users/me/local"]);
+});
+
+test("local project reorder refreshes a stale mixed-order file before overlaying the result", async () => {
+  const file = bindingsFile();
+  const first = localProject();
+  const second: Project = { cwd: "/Users/me/second", name: "second", createdAt: 2, updatedAt: 2 };
+  // Simulate the order file left behind by an earlier remote binding after that
+  // binding was removed.
+  reorderProjectOrder(file, [first.cwd, second.cwd]);
+  const localBefore: WorkspaceSnapshot = {
+    projects: [first, second],
+    conversations: [localConversation()],
+    activeId: "local-c1",
+  };
+  const { instance } = gateway({
+    file,
+    localDispatch: async () => ({ ...localBefore, projects: [second, first] }),
+  });
+  // The stale record contains an order that disagrees with the local catalog reply.
+  // Calling reorder must replace it before the gateway overlays the result.
+  await instance.dispatch(Ipc.projectsReorder, { cwds: [second.cwd, first.cwd] }, {});
+  assert.deepEqual(readProjectOrder(file), [second.cwd, first.cwd]);
+  assert.deepEqual(instance.aggregate({ ...localBefore, projects: [second, first] }).projects.map((item) => item.cwd), [second.cwd, first.cwd]);
 });

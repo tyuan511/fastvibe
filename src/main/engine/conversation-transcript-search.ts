@@ -6,6 +6,7 @@ import {
   type FileEntry,
   type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
+import { relinkDanglingEntries } from "./transcript-file.ts";
 
 export const CONVERSATION_TRANSCRIPT_MAX_FILE_BYTES = 8_000_000;
 export const CONVERSATION_TRANSCRIPT_MAX_QUERY_CHARS = 500;
@@ -107,6 +108,9 @@ export async function loadConversationTranscriptBranch(
     // Old versions are repaired only in this temporary array. The in-memory manager
     // has `persist: false`, so neither this migration nor branch selection can write.
     migrateSessionEntries(entries);
+    // The same relink an opened session gets (`transcript-file.ts`), in memory only:
+    // a gap in the parent chain must not make an otherwise readable chat unsearchable.
+    relinkDanglingEntries(entries);
     validateSessionTree(entries);
     return SessionManager.inMemory(cwd, undefined, entries).getBranch();
   } catch (error) {

@@ -14,7 +14,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import type { EngineModel, FastVibeModel, ImportRunResult, WorkspaceSnapshot } from "@shared/types";
+import type { FastVibeModel, ImportRunResult, WorkspaceSnapshot } from "@shared/types";
+import { notificationsEnabled } from "@shared/notifications";
 import { useSettingsStore } from "@/stores/settings";
 import { useIsNarrowViewport } from "@/lib/sidebar-visibility";
 import { i18n } from "@/lib/i18n";
@@ -29,7 +30,6 @@ import { cn } from "@/lib/utils";
 import { ProvidersSettings } from "./providers-settings";
 import { ArchivedSettings, type DeleteConversationsResult } from "./archived-settings";
 import { ImportSettings } from "./import-settings";
-import { DefaultModelSelect } from "./default-model-select";
 import { ExtensionsSettings } from "./extensions-settings";
 import { McpSettings } from "./mcp-settings";
 import { DecisionSettings } from "./decision-settings";
@@ -40,7 +40,6 @@ import { ComputerSettings } from "./computer-settings";
 import { ProxySettings } from "./proxy-settings";
 import { BrowserSettings } from "./browser-settings";
 import { SkillsSettings } from "./skills-settings";
-import { THINKING_MENU_ORDER, thinkingMenuItems, thinkingMenuLabel } from "@/lib/thinking-levels";
 import { ThemeSelect } from "./theme-select";
 import { UsageSettings } from "./usage-settings";
 import { ShortcutsSettings } from "./shortcuts-settings";
@@ -48,7 +47,6 @@ import { AboutSettings } from "./about-settings";
 import { PersonalizationSettings } from "./personalization-settings";
 import { SubagentsSettings } from "./subagents-settings";
 import { SettingsGroup as Group, SettingsRow as Row } from "./settings-group";
-import { FullDiskAccessRow } from "@/components/full-disk-access";
 import { usePermissionModeSelection } from "@/components/permission-mode-provider";
 import {
   SETTINGS_SECTIONS,
@@ -69,7 +67,7 @@ for (const size of uiFontSizeValues()) UI_FONT_SIZE_ITEMS[String(size)] = `${siz
 /**
  * Settings is a route (`#/settings/<section>`), not a modal: the shell stays
  * mounted behind it and every pane is deep-linkable, so the composer's
- * 「管理模型」 can jump straight to the model-management pane.
+ * 「管理模型」 can jump straight to the combined model and default-settings pane.
  */
 export function SettingsDialog({
   open,
@@ -338,41 +336,6 @@ export function SettingsDialog({
                   }
                 />
               </Group>
-              <Group title={t("agent.title")}>
-                <Row
-                  title={t("common.defaultModel")}
-                  description={t("common.defaultModelDesc")}
-                  control={
-                    <DefaultModelSelect
-                      models={models}
-                      value={settings.defaultModel}
-                      onChange={(model: EngineModel | undefined) => update({ defaultModel: model })}
-                    />
-                  }
-                />
-                <Row
-                  title={t("common.thinking")}
-                  description={t("common.thinkingDesc")}
-                  control={
-                    <Select
-                      items={thinkingMenuItems()}
-                      value={settings.thinkingLevel}
-                      onValueChange={(value) => update({ thinkingLevel: value as typeof settings.thinkingLevel })}
-                    >
-                      <SelectTrigger size="sm" className="w-44">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {THINKING_MENU_ORDER.map((key) => (
-                          <SelectItem key={key} value={key}>
-                            {thinkingMenuLabel(key)}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  }
-                />
-              </Group>
               <Group title={t("security.title")}>
                 <Row
                   title={t("common.permission")}
@@ -410,7 +373,6 @@ export function SettingsDialog({
                     </Button>
                   }
                 />
-                <FullDiskAccessRow />
               </Group>
               <Group title={t("runtime.title")}>
                 <Row
@@ -428,7 +390,7 @@ export function SettingsDialog({
                   description={t("common.notificationsDesc")}
                   control={
                     <Switch
-                      checked={settings.notifyDone && settings.notifyError && settings.notifyApproval && settings.notifyUpdate}
+                      checked={notificationsEnabled(settings)}
                       onCheckedChange={(checked) =>
                         update({
                           notifyDone: checked,
@@ -437,46 +399,6 @@ export function SettingsDialog({
                           notifyUpdate: checked,
                         })
                       }
-                    />
-                  }
-                />
-                <Row
-                  title={t("common.notifyDone")}
-                  description={t("common.notifyDoneDesc")}
-                  control={
-                    <Switch
-                      checked={settings.notifyDone}
-                      onCheckedChange={(checked) => update({ notifyDone: checked })}
-                    />
-                  }
-                />
-                <Row
-                  title={t("common.notifyError")}
-                  description={t("common.notifyErrorDesc")}
-                  control={
-                    <Switch
-                      checked={settings.notifyError}
-                      onCheckedChange={(checked) => update({ notifyError: checked })}
-                    />
-                  }
-                />
-                <Row
-                  title={t("common.notifyApproval")}
-                  description={t("common.notifyApprovalDesc")}
-                  control={
-                    <Switch
-                      checked={settings.notifyApproval}
-                      onCheckedChange={(checked) => update({ notifyApproval: checked })}
-                    />
-                  }
-                />
-                <Row
-                  title={t("common.notifyUpdate")}
-                  description={t("common.notifyUpdateDesc")}
-                  control={
-                    <Switch
-                      checked={settings.notifyUpdate}
-                      onCheckedChange={(checked) => update({ notifyUpdate: checked })}
                     />
                   }
                 />
@@ -531,42 +453,12 @@ export function SettingsDialog({
                   }
                 />
               </Group>
-              <Group title={t("display.title")}>
-                <Row
-                  title={t("chat.collapseRuns")}
-                  description={t("chat.collapseRunsDesc")}
-                  control={
-                    <Switch
-                      checked={settings.collapseRuns}
-                      onCheckedChange={(checked) => update({ collapseRuns: checked })}
-                    />
-                  }
-                />
-                <Row
-                  title={t("chat.showThinking")}
-                  control={
-                    <Switch
-                      checked={settings.showThinking}
-                      onCheckedChange={(checked) => update({ showThinking: checked })}
-                    />
-                  }
-                />
-                <Row
-                  title={t("chat.showTimestamps")}
-                  control={
-                    <Switch
-                      checked={settings.showTimestamps}
-                      onCheckedChange={(checked) => update({ showTimestamps: checked })}
-                    />
-                  }
-                />
-              </Group>
             </div>
           ) : null}
 
           {section === "personalization" ? <PersonalizationSettings /> : null}
           {section === "shortcuts" ? <ShortcutsSettings /> : null}
-          {section === "providers" ? <ProvidersSettings onChanged={() => onProvidersChanged?.()} /> : null}
+          {section === "providers" ? <ProvidersSettings models={models} onChanged={() => onProvidersChanged?.()} /> : null}
           {section === "archived" ? <ArchivedSettings onDeleteConversations={onDeleteConversations} /> : null}
           {section === "usage" ? <UsageSettings /> : null}
           {section === "remote" ? <RemoteSettings /> : null}

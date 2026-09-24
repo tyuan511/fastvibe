@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { THINKING_EFFORT_LEVELS, type EngineModel, type PermissionMode, type QueueBehavior, type ThinkingLevel } from "@shared/types";
+import { THINKING_EFFORT_LEVELS, type EngineModel, type PermissionMode, type ProjectModelDefault, type QueueBehavior, type ThinkingLevel } from "@shared/types";
 import {
   DEFAULT_DARK_THEME,
   DEFAULT_LIGHT_THEME,
@@ -11,7 +11,7 @@ import {
   type ThemeMode,
 } from "@/lib/themes";
 import { isPermissionMode } from "@/lib/permission-modes";
-import { NOTIFICATION_SETTINGS } from "@shared/types";
+import { normalizeNotificationSettings } from "@shared/notifications";
 import { detectSystemLanguage, isUiLanguage, type UiLanguage } from "@/lib/language";
 import { sanitizeShortcutOverrides, type ShortcutOverrides } from "@/lib/shortcuts";
 
@@ -30,13 +30,6 @@ export type AppSettings = ProxySettings & {
   queueBehavior: QueueBehavior;
   autoCompact: boolean;
   interruptMode: "immediate" | "wait";
-  showThinking: boolean;
-  showTimestamps: boolean;
-  /**
-   * 折叠运行过程: fold each reply's process (thinking, tools, intermediate prose)
-   * into one 「用时 …」 block, leaving only the final summary text on screen.
-   */
-  collapseRuns: boolean;
   /** When true, an agent run holds the machine awake (`powerSaveBlocker`). */
   keepAwake: boolean;
   /**
@@ -55,16 +48,10 @@ export type AppSettings = ProxySettings & {
   /** When true, the packaged app checks for updates after launch. */
   autoCheckUpdates: boolean;
   /**
-   * 系统通知: one switch per scenario (设置 → 通用). Flat keys, because `settings.json`
-   * is a flat bag Main reads one preference at a time, and **on** when absent — the
-   * user has to turn a notice off, never on.
-   *
-   * `notifyDone` is an ordinary finish, `notifyError` a run that settled on an error,
-   * `notifyApproval` a background chat parked on a question, `notifyUpdate` a downloaded
-   * update. They are separate because they answer different questions: someone who works
-   * in a terminal all day wants to know a chat *cannot* proceed without them and may not
-   * care that a run finished, and a failed run is worth saying out loud even when an
-   * ordinary one is not.
+   * 系统通知 (设置 → 通用): one switch, stored as the four scenario keys it used to
+   * flip one by one. The pane writes them together. Absent means on; all four `false`
+   * is the switch off. A single `false` left by the removed per-scene rows is dropped
+   * on load (`normalizeNotificationSettings`), so that scenario comes back on.
    */
   notifyDone: boolean;
   notifyError: boolean;
@@ -77,6 +64,8 @@ export type AppSettings = ProxySettings & {
    * rewrites them to the last used model on every switch.
    */
   defaultModel?: EngineModel;
+  /** Per-project model and reasoning defaults, keyed by the project's stable cwd. */
+  projectDefaults?: Record<string, ProjectModelDefault>;
   /**
    * 界面语言: the language every string in the app is rendered in. Applied through
    * react-i18next (`lib/i18n.ts`); changing it re-renders the tree and writes
@@ -146,11 +135,6 @@ export type AppSettings = ProxySettings & {
    */
   permissionAlways?: string[];
   /**
-   * The user chose 以后再说 on the macOS Full Disk Access prompt. Absent means they
-   * have not dismissed it, so the next launch asks once. The settings row stays either way.
-   */
-  fullDiskAccessDismissed?: boolean;
-  /**
    * 电脑操控 (设置 → 电脑操控). Mirrors `ComputerSettings`; kept as flat keys because
    * `settings.json` is a flat bag that Main reads one preference at a time.
    */
@@ -187,9 +171,6 @@ const DEFAULTS: AppSettings = {
   queueBehavior: "followUp",
   autoCompact: true,
   interruptMode: "immediate",
-  showThinking: true,
-  showTimestamps: true,
-  collapseRuns: true,
   keepAwake: true,
   browserUseSystem: false,
   browserEngine: "auto",
@@ -234,6 +215,7 @@ function sanitize(parsed: Partial<AppSettings>): Partial<AppSettings> {
   if (!isFontSize(next.uiFontSize)) delete next.uiFontSize;
   if (!isThinkingLevel(next.thinkingLevel)) delete next.thinkingLevel;
   if (!isEngineModel(next.defaultModel)) delete next.defaultModel;
+  if (!isProjectDefaultMap(next.projectDefaults)) delete next.projectDefaults;
   if (!isFiniteNumber(next.sidebarWidth)) delete next.sidebarWidth;
   if (typeof next.sidebarCollapsed !== "boolean") delete next.sidebarCollapsed;
   if (!isFiniteNumber(next.sidePaneWidth)) delete next.sidePaneWidth;
@@ -241,7 +223,6 @@ function sanitize(parsed: Partial<AppSettings>): Partial<AppSettings> {
   if (!isIdListMap(next.fileTreeExpanded)) delete next.fileTreeExpanded;
   if (!isIdList(next.archivedConversations)) delete next.archivedConversations;
   if (!isIdList(next.permissionAlways)) delete next.permissionAlways;
-  if (typeof next.fullDiskAccessDismissed !== "boolean") delete next.fullDiskAccessDismissed;
   if (typeof next.computerEnabled !== "boolean") delete next.computerEnabled;
   if (typeof next.computerClipboard !== "boolean") delete next.computerClipboard;
   if (typeof next.computerPreferBackground !== "boolean") delete next.computerPreferBackground;
@@ -250,17 +231,21 @@ function sanitize(parsed: Partial<AppSettings>): Partial<AppSettings> {
   if (!isIdList(next.sidebarCollapsedProjects)) delete next.sidebarCollapsedProjects;
   if (!isIdList(next.sidebarExpandedProjects)) delete next.sidebarExpandedProjects;
   if (typeof next.autoCheckUpdates !== "boolean") delete next.autoCheckUpdates;
-  // A malformed switch drops, which reads back as the default — on. `notifications` is
-  // the three-valued key this replaced, and a stale one is dropped rather than migrated:
-  // every one of its values is the new default's superset.
-  for (const key of NOTIFICATION_SETTINGS) {
-    if (typeof next[key] !== "boolean") delete next[key];
-  }
+  // Per-scene rows are gone. A malformed value and a lone false both drop, which
+  // reads back as on; all four falses are the remaining master switch and stay.
+  // `notifications` is the three-valued key this replaced, dropped rather than migrated.
+  normalizeNotificationSettings(next);
   delete (next as Record<string, unknown>).notifications;
+  delete (next as Record<string, unknown>).fullDiskAccessDismissed;
   if (typeof next.keepAwake !== "boolean") delete next.keepAwake;
   if (typeof next.browserUseSystem !== "boolean") delete next.browserUseSystem;
   if (!isBrowserEngine(next.browserEngine)) delete next.browserEngine;
-  if (typeof next.collapseRuns !== "boolean") delete next.collapseRuns;
+  // Retired transcript toggles (折叠运行过程 / 显示思考过程 / 显示消息时间). The
+  // product always folds a finished run and always shows thinking and timestamps.
+  const retired = next as Record<string, unknown>;
+  delete retired.showThinking;
+  delete retired.showTimestamps;
+  delete retired.collapseRuns;
   const shortcuts = sanitizeShortcutOverrides(next.shortcuts);
   if (shortcuts) next.shortcuts = shortcuts;
   else delete next.shortcuts;
@@ -329,6 +314,19 @@ function isEngineModel(value: unknown): value is EngineModel {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Partial<EngineModel>;
   return Boolean(candidate.provider) && Boolean(candidate.id);
+}
+
+function isProjectDefaultMap(value: unknown): value is Record<string, ProjectModelDefault> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.values(value).every((entry) => {
+      if (typeof entry !== "object" || entry === null) return false;
+      const candidate = entry as Partial<ProjectModelDefault>;
+      return isEngineModel(candidate.model) && isThinkingLevel(candidate.thinkingLevel);
+    })
+  );
 }
 
 function peekLocal(): Partial<AppSettings> {

@@ -57,18 +57,6 @@ extraResources:
   # than becoming a third renderer entry point.
   - from: resources/grant-overlay
     to: grant-overlay
-  # The `cua-driver` worker (macOS only). It is an executable, so it must live outside
-  # the asar; electron-builder re-signs every Mach-O file it finds in the bundle, which
-  # is what puts this one under our Developer ID rather than Cua's. Fetched by
-  # `scripts/fetch-cua-driver.mjs`, which pins the release, verifies its checksum and
-  # splits the universal archive per architecture.
-  #
-  # `${arch}` matters: `pnpm dist:mac` packages arm64 and x64 from one invocation, so a
-  # single path would put the same slice in both. The macro is expanded per build
-  # (`platformPackager` passes the current arch into the file matchers), which is what
-  # keeps each package to the ~30 MB it can actually run.
-  - from: resources/cua-driver/${arch}/cua-driver
-    to: cua-driver
   - from: resources/icon.icns
     to: icon.icns
   - from: resources/icon.png
@@ -134,6 +122,11 @@ mac:
   # sends one without this string is killed by the OS rather than prompted.
   extendInfo:
     NSAppleEventsUsageDescription: FastVibe 需要发送 Apple 事件来完成应用更新。
+  # The private worker is only fetched and supported on macOS. Keep it in the
+  # macOS package instead of letting the global resource list copy it to Linux.
+  extraResources:
+    - from: resources/cua-driver/${arch}/cua-driver
+      to: cua-driver
   files:
     - "!**/node_modules/node-pty/prebuilds/{win32,linux}-*/**"
     - "!**/node_modules/node-pty/prebuilds/darwin-!(${arch}){,/**/*}"
@@ -156,6 +149,9 @@ mac:
     # Keep only the ONNX Runtime native slice used by this macOS build.
     - "!**/node_modules/onnxruntime-node/bin/napi-v6/{linux,win32}{,/**/*}"
     - "!**/node_modules/onnxruntime-node/bin/napi-v6/darwin/!(${arch}){,/**/*}"
+    # The binding links libonnxruntime.1.dylib directly; the fully versioned
+    # sibling is a duplicate install artifact and is not loaded at runtime.
+    - "!**/node_modules/onnxruntime-node/bin/napi-v6/darwin/${arch}/libonnxruntime.1.*.dylib"
   # No `arch:` here on purpose. `computeArchToTargetNamesMap` only falls back to the
   # architectures named on the command line when a target declares none of its own
   # (`archs == null ? defaultArchs : asArray(archs)`), so listing them here made
@@ -211,9 +207,18 @@ linux:
     - "!**/node_modules/@mariozechner/clipboard-linux-!(${arch}*){,/**/*}"
     - "!**/node_modules/@trycua/cua-driver-{darwin,win32}-*{,/**/*}"
     - "!**/node_modules/@trycua/cua-driver-linux-!(${arch}*){,/**/*}"
+    # FastVibe does not offer computer use on Linux, so omit the SDK and its
+    # platform bindings rather than shipping the ~40 MB Linux native library.
+    - "!**/node_modules/@trycua/cua-driver{,/**/*}"
+    - "!**/node_modules/@trycua/cua-driver-linux-*{,/**/*}"
+    - "!**/node_modules/@ubjs/{,/**/*}"
     # Keep only the ONNX Runtime native slice used by this Linux build.
     - "!**/node_modules/onnxruntime-node/bin/napi-v6/{darwin,win32}{,/**/*}"
     - "!**/node_modules/onnxruntime-node/bin/napi-v6/linux/!(${arch}){,/**/*}"
+    # Memory runs the CPU backend (`device: cpu`); the Linux package also ships
+    # optional CUDA/TensorRT providers, including a ~268 MB CUDA library.
+    - "!**/node_modules/onnxruntime-node/bin/napi-v6/linux/${arch}/libonnxruntime_providers_cuda.so"
+    - "!**/node_modules/onnxruntime-node/bin/napi-v6/linux/${arch}/libonnxruntime_providers_tensorrt.so"
   target:
     - AppImage
     - deb

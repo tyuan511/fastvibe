@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import type { EngineModel } from "@shared/types";
+import { THINKING_EFFORT_LEVELS, type EngineModel, type ProjectModelDefault, type ThinkingLevel } from "@shared/types";
 import type { FastVibePaths } from "./paths";
 
 /** Settings that are safe to read from both Electron Main and a headless Agent. */
@@ -29,11 +29,46 @@ export function readAppSettings(paths: FastVibePaths): PersistedSettings {
 }
 
 export function readDefaultModel(paths: FastVibePaths): EngineModel | undefined {
-  const value = readAppSettings(paths).defaultModel;
+  return readPreferredModelSettings(paths).model;
+}
+
+/**
+ * Resolve the model and reasoning defaults for a new conversation. A project pin
+ * overrides the global default, while a missing or malformed pin falls back cleanly.
+ */
+export function readPreferredModelSettings(paths: FastVibePaths, project?: string): {
+  model?: EngineModel;
+  thinkingLevel?: ThinkingLevel | "auto";
+} {
+  const settings = readAppSettings(paths);
+  const projectDefaults = settings.projectDefaults;
+  const projectDefault = project && typeof projectDefaults === "object" && projectDefaults !== null && !Array.isArray(projectDefaults)
+    ? (projectDefaults as Record<string, unknown>)[project]
+    : undefined;
+  const projectPreference = isProjectModelDefault(projectDefault) ? projectDefault : undefined;
+  return {
+    model: projectPreference?.model ?? readEngineModel(settings.defaultModel),
+    thinkingLevel: projectPreference?.thinkingLevel ?? readThinkingLevel(settings.thinkingLevel),
+  };
+}
+
+function readEngineModel(value: unknown): EngineModel | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   const { provider, id } = value as Partial<EngineModel>;
   if (typeof provider !== "string" || typeof id !== "string" || !provider || !id) return undefined;
   return { provider, id };
+}
+
+function readThinkingLevel(value: unknown): ThinkingLevel | "auto" | undefined {
+  return value === "auto" || (typeof value === "string" && (THINKING_EFFORT_LEVELS as readonly string[]).includes(value))
+    ? value as ThinkingLevel | "auto"
+    : undefined;
+}
+
+function isProjectModelDefault(value: unknown): value is ProjectModelDefault {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Partial<ProjectModelDefault>;
+  return Boolean(readEngineModel(candidate.model)) && readThinkingLevel(candidate.thinkingLevel) !== undefined;
 }
 
 export function readAutoCompact(paths: FastVibePaths): boolean {

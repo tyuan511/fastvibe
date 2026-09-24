@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { PermissionMode } from "@shared/types";
+import { primeToolFolderConsent } from "./mac-folder-consent.ts";
 
 /**
  * FastVibe's built-in permission sandbox — the enforcement half of the
@@ -521,6 +522,9 @@ function describeCommand(mode: PermissionMode): string {
 
 export default function permissionSandbox(pi: ExtensionAPI): void {
   pi.on("tool_call", async (event, ctx) => {
+    // Before any await, so the stat stays on this turn of the main thread.
+    // macOS forgets a folder grant that was taken from the libuv pool.
+    primeToolFolderConsent(event.toolName, event.input, ctx.cwd);
     const mode = currentMode();
     if (mode === "full") return undefined;
 

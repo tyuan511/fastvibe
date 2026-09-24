@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { mergeSubagentSnapshot, reduceSubagent } from "@shared/subagent-state";
+import { mergeSubagentSnapshot } from "@shared/subagent-state";
 import { belongsToTranscript, sessionBelongsToConversation } from "../lib/conversation-ownership";
 import type {
   ChatAttachment,
@@ -27,12 +27,90 @@ import type {
   WorkspaceSnapshot,
 } from "@shared/types";
 import { applyEngineEvent, userMessageText } from "@/lib/apply-engine-event";
+import { applySubagentStream, upsertSubagent } from "./session-subagents";
 import { i18n } from "@/lib/i18n";
 import { resolvePath } from "@/lib/workspace-path";
 import { canRestoreComposer } from "@/lib/composer-race";
-import { useSidePaneStore, type SidePaneTab } from "@/stores/side-pane";
+import { useSidePaneStore } from "@/stores/side-pane";
+import {
+  COALESCED_EVENTS,
+  activePermission,
+  applyExtensionUi,
+  dropPending,
+  extensionScope,
+  parsePermission,
+  activeRunning,
+  reconcileMessages,
+  settledBoundary,
+  waitingForUserAfter,
+  waitingFrom,
+  withoutKey,
+} from "./session-reducer";
 
-type SessionStore = {
+export { activePermission } from "./session-reducer";
+
+/**
+ * Whether a conversation is still working.
+ *
+ * Two different things can be in flight, and the sidebar's 运行中 mark covers both:
+ * an agent run (`running`, which spans the whole run — `agent_start` through
+ * `agent_settled`, retries, auto-compaction and continuations included), and a
+ * compaction that runs with no run at all (`/compact`, and the threshold check a
+ * fresh prompt runs before it is sent) — so a run flag alone reads a chat that is
+ * mid-compaction as idle.
+ */
+export function working(session: EngineSessionState | null | undefined): boolean {
+  return session?.running === true || session?.isCompacting === true;
+}
+
+/**
+ * Whether the conversation on screen is still working — the same verdict the
+ * sidebar's 运行中 mark carries (an agent run, or the compaction that follows one).
+ *
+ * Read from the per-conversation map rather than `session`: the map is keyed by id,
+ * so it cannot describe the chat the user just left, and it is written on every
+ * `conversation_running` broadcast — the only thing that clears it when a session is
+ * torn down mid-run.
+ */
+export function useConversationWorking(): boolean {
+  return useSessionStore((state) => (state.activeId ? state.running[state.activeId] === true : false));
+}
+
+/**
+ * Working directory of the conversation on screen, or `undefined` when nothing is
+ * bound yet. Tool cards only ever render inside a conversation's transcript — the
+ * main thread, the side pane's chats and the subagent viewer all belong to the
+ * active one — so that conversation is the right frame for every path they show.
+ */
+export function useWorkspacePath(): string | undefined {
+  return useSessionStore((state) => state.conversations.find((item) => item.id === state.activeId)?.cwd);
+}
+
+/**
+ * The extension statuses the conversation on screen owns.
+ *
+ * Status is per-conversation (see `SessionStore.extensionStatus`), so every reader
+ * goes through the active id rather than reaching for the whole map — a chat with
+ * no goal must not draw the one a different chat is running. The empty object is a
+ * module constant so the selector does not allocate a new snapshot per render.
+ */
+const NO_EXTENSION_STATUS: Record<string, string> = {};
+export function useExtensionStatus(): Record<string, string> {
+  return useSessionStore((state) =>
+    state.activeId ? state.extensionStatus[state.activeId] ?? NO_EXTENSION_STATUS : NO_EXTENSION_STATUS,
+  );
+}
+
+/** The string-line widgets the conversation on screen owns. Same rule as status. */
+const NO_EXTENSION_WIDGETS: Record<string, ExtensionWidget> = {};
+export function useExtensionWidgets(): Record<string, ExtensionWidget> {
+  return useSessionStore((state) =>
+    state.activeId ? state.extensionWidgets[state.activeId] ?? NO_EXTENSION_WIDGETS : NO_EXTENSION_WIDGETS,
+  );
+}
+
+
+export type SessionStore = {
   status: EngineStatus;
   session: EngineSessionState | null;
   models: FastVibeModel[];
@@ -81,6 +159,15 @@ type SessionStore = {
    * tool approval looked exactly like an idle one.
    */
   waitingForUser: Record<string, boolean>;
+  /**
+   * Conversations whose run ended abnormally (failed, cut off, stopped by something
+   * other than the user) while another chat was on screen.
+   *
+   * Main's system notification only fires while no window is focused, so a chat that
+   * died behind the one being read just lost its 运行中 mark — exactly what a finished
+   * chat looks like. Cleared when the chat is opened or starts running again.
+   */
+  failedInBackground: Record<string, boolean>;
   /** Transient notices from extension `ctx.ui.notify()`. */
   notices: ExtensionNotice[];
   /**
@@ -228,6 +315,8 @@ type SessionStore = {
   setStreaming: (streaming: boolean) => void;
   setConversationRunning: (id: string, running: boolean) => void;
   setRunningConversations: (ids: string[]) => void;
+  /** Mark a background chat whose run ended abnormally; see `failedInBackground`. */
+  markFailedInBackground: (id: string) => void;
 };
 
 /**
@@ -237,363 +326,35 @@ type SessionStore = {
  * user is reading it trails the last reply; with no reply on screen it opens the next
  * one instead (the reply's own content is inserted after it).
  */
-function settledBoundary(messages: ChatMessage[]): number {
-  const last = messages.at(-1);
-  return last?.role === "assistant" ? (last.parts?.length ?? 0) : 0;
-}
-
 /**
- * Mirror the active conversation's busy state into the per-conversation map so the
- * sidebar lights up the moment a prompt is sent, without waiting for the engine's
- * `agent_start` IPC round-trip.
- */
-function activeRunning(
-  state: { activeId: string | null; running: Record<string, boolean> },
-  running: boolean,
-): Record<string, boolean> {
-  if (!state.activeId || state.running[state.activeId] === running) return state.running;
-  return { ...state.running, [state.activeId]: running };
-}
-
-function parseStringList(value: unknown): string[] | undefined {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : undefined;
-}
-
-/**
- * Whether a conversation is still working.
+ * Does this event belong to the transcript the store is holding?
  *
- * Two different things can be in flight, and the sidebar's 运行中 mark covers both:
- * an agent run (`running`, which spans the whole run — `agent_start` through
- * `agent_settled`, retries, auto-compaction and continuations included), and a
- * compaction that runs with no run at all (`/compact`, and the threshold check a
- * fresh prompt runs before it is sent) — so a run flag alone reads a chat that is
- * mid-compaction as idle.
- */
-export function working(session: EngineSessionState | null | undefined): boolean {
-  return session?.running === true || session?.isCompacting === true;
-}
-
-/**
- * Whether the conversation on screen is still working — the same verdict the
- * sidebar's 运行中 mark carries (an agent run, or the compaction that follows one).
+ * The transcript is one array owned by `activeId`, while every engine event names
+ * the conversation it came from. The subscriber in `App.tsx` routes by that id, but
+ * it compares against the id at *delivery* time — and a switch is not instant: the
+ * `openConversation` round trip (session creation included) leaves the previous
+ * chat on screen for hundreds of milliseconds, so the events that arrive during it
+ * are legitimately applied to the old transcript. Anything still coalesced when the
+ * new chat's transcript lands has to be re-checked against the new owner, or the
+ * tail of the conversation being left is flushed into the one being opened.
  *
- * Read from the per-conversation map rather than `session`: the map is keyed by id,
- * so it cannot describe the chat the user just left, and it is written on every
- * `conversation_running` broadcast — the only thing that clears it when a session is
- * torn down mid-run.
- */
-export function useConversationWorking(): boolean {
-  return useSessionStore((state) => (state.activeId ? state.running[state.activeId] === true : false));
-}
-
-/**
- * Working directory of the conversation on screen, or `undefined` when nothing is
- * bound yet. Tool cards only ever render inside a conversation's transcript — the
- * main thread, the side pane's chats and the subagent viewer all belong to the
- * active one — so that conversation is the right frame for every path they show.
- */
-export function useWorkspacePath(): string | undefined {
-  return useSessionStore((state) => state.conversations.find((item) => item.id === state.activeId)?.cwd);
-}
-
-/**
- * The extension statuses the conversation on screen owns.
+ * Subagent traffic is exempt: it is keyed by run id, feeds `subagentStreams`, and is
+ * deliberately applied whichever chat is on screen so a backgrounded run stays live.
+ * Transcript events without an owner cannot be applied to an open conversation.
  *
- * Status is per-conversation (see `SessionStore.extensionStatus`), so every reader
- * goes through the active id rather than reaching for the whole map — a chat with
- * no goal must not draw the one a different chat is running. The empty object is a
- * module constant so the selector does not allocate a new snapshot per render.
+ * A blocking prompt is exempt for the same reason as subagent traffic: it has nothing
+ * to do with the transcript, and a chat parked on one must be able to raise the
+ * sidebar's 等你 mark and the approval notification while a different chat is on
+ * screen. Only the *panel* is scoped to the active conversation, by `activePermission`.
  */
-const NO_EXTENSION_STATUS: Record<string, string> = {};
-export function useExtensionStatus(): Record<string, string> {
-  return useSessionStore((state) =>
-    state.activeId ? state.extensionStatus[state.activeId] ?? NO_EXTENSION_STATUS : NO_EXTENSION_STATUS,
-  );
-}
-
-/** The string-line widgets the conversation on screen owns. Same rule as status. */
-const NO_EXTENSION_WIDGETS: Record<string, ExtensionWidget> = {};
-export function useExtensionWidgets(): Record<string, ExtensionWidget> {
-  return useSessionStore((state) =>
-    state.activeId ? state.extensionWidgets[state.activeId] ?? NO_EXTENSION_WIDGETS : NO_EXTENSION_WIDGETS,
-  );
-}
-
-function parseOptionDetails(value: unknown): Array<{ description?: string }> | undefined {
-  return Array.isArray(value)
-    ? value.map((item) =>
-        item && typeof item === "object" && "description" in item
-          ? { description: typeof item.description === "string" ? item.description : undefined }
-          : {},
-      )
-    : undefined;
-}
-
-function parseQuestions(value: unknown): PermissionQuestion[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  return value
-    .map((item): PermissionQuestion | null => {
-      if (!item || typeof item !== "object") return null;
-      const entry = item as Record<string, unknown>;
-      if (typeof entry.question !== "string" || !entry.question) return null;
-      return {
-        question: entry.question,
-        header: typeof entry.header === "string" ? entry.header : undefined,
-        options: parseStringList(entry.options),
-        optionDetails: parseOptionDetails(entry.optionDetails),
-        allowOther: typeof entry.allowOther === "boolean" ? entry.allowOther : undefined,
-      };
-    })
-    .filter((item): item is PermissionQuestion => item !== null);
-}
-
-function parsePermission(event: EngineEvent): PermissionRequest | null {
-  if (event.type !== "extension_ui_request") return null;
-  const method = event.method;
-  if (method !== "confirm" && method !== "select" && method !== "input" && method !== "editor" && method !== "questions" && method !== "plan_review") {
-    return null;
-  }
-  const id = typeof event.id === "string" ? event.id : "";
-  if (!id) return null;
-  return {
-    id,
-    conversationId: typeof event.conversationId === "string" ? event.conversationId : undefined,
-    method,
-    title: typeof event.title === "string" ? event.title : undefined,
-    message: typeof event.message === "string" ? event.message : undefined,
-    placeholder: typeof event.placeholder === "string" ? event.placeholder : undefined,
-    options: parseStringList(event.options),
-    optionDetails: parseOptionDetails(event.optionDetails),
-    questions: parseQuestions(event.questions),
-    timeout: typeof event.timeout === "number" ? event.timeout : undefined,
-    plan:
-      event.plan && typeof event.plan === "object"
-        ? (() => {
-            const plan = event.plan as Record<string, unknown>;
-            return typeof plan.path === "string" && typeof plan.title === "string" && typeof plan.summary === "string"
-              ? { path: plan.path, title: plan.title, summary: plan.summary }
-              : undefined;
-          })()
-        : undefined,
-  };
-}
-
-/** Remove one prompt by id, optionally restricted to its owner conversation. */
-function dropPending(
-  pending: Record<string, PermissionRequest[]>,
-  id: string,
-  conversationId?: string,
-): Record<string, PermissionRequest[]> {
-  const next: Record<string, PermissionRequest[]> = {};
-  for (const [key, list] of Object.entries(pending)) {
-    if (conversationId && key !== conversationId) {
-      next[key] = list;
-      continue;
-    }
-    const remaining = list.filter((item) => item.id !== id);
-    if (remaining.length > 0) next[key] = remaining;
-  }
-  return next;
-}
-
-/** The prompt the composer should draw: the head of the active conversation's queue. */
-export function activePermission(
-  pending: Record<string, PermissionRequest[]>,
-  activeId: string | null,
-): PermissionRequest | null {
-  if (!activeId) return null;
-  return pending[activeId]?.[0] ?? null;
-}
-
 /**
- * Waiting-for-user mark, recomputed from the conversation that just reported state.
- *
- * A state reply only says what the engine's own bookkeeping knows; it cannot say
- * whether a prompt is on screen. The pending queue can, so a chat that comes back
- * with a prompt parked on it is marked as waiting even though the `extension_ui_request`
- * itself may have arrived while a different chat was being viewed.
+ * Cap transcript updates at ~30fps. One commit per animation frame was still enough
+ * to saturate layout: the message scroller re-measures its children on every content
+ * mutation (`getBoundingClientRect` + `scrollTo`), so a fast model drove that on
+ * every frame. 30fps text still reads as smooth, and control events flush
+ * synchronously so run start/end stay immediate.
  */
-function waitingForUserAfter(
-  state: { waitingForUser: Record<string, boolean>; pendingPermissions: Record<string, PermissionRequest[]> },
-  session: EngineSessionState | null,
-): Record<string, boolean> {
-  const id = session?.conversationId;
-  if (!id) return state.waitingForUser;
-  const waiting = (state.pendingPermissions[id]?.length ?? 0) > 0;
-  if (state.waitingForUser[id] === waiting) return state.waitingForUser;
-  return { ...state.waitingForUser, [id]: waiting };
-}
-
-/**
- * Structural equality with a node budget, for transcript reconciliation.
- *
- * Bounded because a tool call's `args`/`details` are arbitrary engine payloads: a
- * pathological one must cost a fixed amount rather than walking an unbounded
- * graph. Running out of budget answers "not equal", which is the conservative
- * direction — the caller then takes the fresh object, exactly as it did before any
- * reconciliation existed. Strings are compared with `===`, which the engine does
- * as a length check plus a memcmp; that is far cheaper than re-parsing the
- * markdown the comparison saves.
- */
-function equalValue(a: unknown, b: unknown, budget: { left: number }): boolean {
-  if (a === b) return true;
-  if (budget.left-- <= 0) return false;
-  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
-  if (Array.isArray(a) || Array.isArray(b)) {
-    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
-    return a.every((item, index) => equalValue(item, b[index], budget));
-  }
-  const left = a as Record<string, unknown>;
-  const right = b as Record<string, unknown>;
-  const keys = Object.keys(left);
-  if (keys.length !== Object.keys(right).length) return false;
-  return keys.every((key) => key in right && equalValue(left[key], right[key], budget));
-}
-
-/** Budget per message. Generous enough for a real tool payload, finite for a hostile one. */
-const EQUAL_BUDGET = 20_000;
-
-/**
- * Reconcile an authoritative transcript read against the one already on screen.
- *
- * `reloadActiveMessages()` fires at the end of every turn and its reply is a fresh
- * object graph off the IPC boundary, so every row lost its identity — which made
- * `ChatMessageRow`'s memo miss for the entire thread and re-ran `mergeAssistantRun`,
- * `groupParts` (diff stats included) and a full `react-markdown` parse for every
- * message in the conversation. A hundred-turn chat hitched visibly at each turn's
- * end for a transcript that had changed in one place.
- *
- * Matching is by id rather than position, so an inserted row (a model-change divider,
- * a compaction notice) only costs the rows that actually differ. The array itself
- * keeps its identity when nothing moved at all.
- */
-function reconcileMessages(previous: ChatMessage[], next: ChatMessage[]): ChatMessage[] {
-  if (previous === next) return previous;
-  const byId = new Map<string, ChatMessage>();
-  for (const message of previous) byId.set(message.id, message);
-  let reused = 0;
-  const merged = next.map((message) => {
-    const old = byId.get(message.id);
-    if (old && equalValue(old, message, { left: EQUAL_BUDGET })) {
-      reused += 1;
-      return old;
-    }
-    return message;
-  });
-  return reused === next.length && next.length === previous.length ? previous : merged;
-}
-
-/**
- * Recompute the sidebar's 等你 set from the prompt queue.
- *
- * Returns `previous` unchanged when the set is the same. This runs on every store
- * update, coalesced token batches included, and `App` subscribes to the map by
- * identity — handing back a fresh object each time re-rendered the whole shell
- * (sidebar, composer, side pane) at the stream's flush cadence for a value that
- * only changes when a tool approval appears or is answered.
- */
-function waitingFrom(
-  pending: Record<string, PermissionRequest[]>,
-  previous: Record<string, boolean>,
-): Record<string, boolean> {
-  const next: Record<string, boolean> = {};
-  for (const key of Object.keys(pending)) {
-    if ((pending[key]?.length ?? 0) > 0) next[key] = true;
-  }
-  const keys = Object.keys(next);
-  const same =
-    keys.length === Object.keys(previous).length && keys.every((key) => previous[key] === true);
-  return same ? previous : next;
-}
-
-/**
- * High-frequency events that only grow the trailing assistant. Applying each one in
- * its own `set` re-rendered the whole transcript on every token; under a fast model
- * that saturates the main thread and freezes the UI (spinner included). Coalesce
- * them into a single store update at a capped cadence. Control events still apply
- * synchronously so their ordering and side effects are untouched.
- */
-const COALESCED_EVENTS = new Set([
-  "message_update",
-  "tool_execution_update",
-  "tool_execution_start",
-  "tool_execution_end",
-  "toolcall_start",
-  "toolcall_end",
-  "subagent_event",
-]);
-
-/**
- * The bucket an extension UI event belongs to.
- *
- * Main stamps `conversationId` on everything a session's extension publishes; an
- * event without one (a plugin that loaded globally) falls back to the chat on
- * screen, which is where such a status has always been drawn.
- */
-function extensionScope(ownerId: string | null | undefined, activeId: string | null): string {
-  return ownerId ?? activeId ?? "__active__";
-}
-
-/** Fire-and-forget extension UI (`notify` / `setStatus` / `setWidget` / `set_editor_text`). */
-function applyExtensionUi(
-  event: EngineEvent,
-  ownerId: string,
-  state: {
-    notices: ExtensionNotice[];
-    extensionStatus: Record<string, Record<string, string>>;
-    extensionWidgets: Record<string, Record<string, ExtensionWidget>>;
-    draft: string;
-  },
-): Partial<{
-  notices: ExtensionNotice[];
-  extensionStatus: Record<string, Record<string, string>>;
-  extensionWidgets: Record<string, Record<string, ExtensionWidget>>;
-  draft: string;
-}> {
-  if (event.type !== "extension_ui_request") return {};
-  const method = event.method;
-  if (method === "notify" && typeof event.message === "string") {
-    const level: ExtensionNoticeLevel =
-      event.notifyType === "warning" || event.notifyType === "error" ? event.notifyType : "info";
-    // Drop the oldest so a chatty extension cannot grow the stack without bound.
-    const next = [...state.notices, { id: String(event.id ?? crypto.randomUUID()), message: event.message, level, createdAt: Date.now() }];
-    return { notices: next.slice(-4) };
-  }
-  if (method === "setStatus" && typeof event.statusKey === "string") {
-    const bucket = { ...(state.extensionStatus[ownerId] ?? {}) };
-    if (typeof event.statusText === "string" && event.statusText) bucket[event.statusKey] = event.statusText;
-    else delete bucket[event.statusKey];
-    const extensionStatus = { ...state.extensionStatus };
-    if (Object.keys(bucket).length > 0) extensionStatus[ownerId] = bucket;
-    else delete extensionStatus[ownerId];
-    return { extensionStatus };
-  }
-  if (method === "setWidget" && typeof event.widgetKey === "string") {
-    const bucket = { ...(state.extensionWidgets[ownerId] ?? {}) };
-    const lines = Array.isArray(event.widgetLines)
-      ? event.widgetLines.filter((line): line is string => typeof line === "string")
-      : [];
-    const runs = Array.isArray(event.widgetRuns) ? (event.widgetRuns as TuiRun[][]) : undefined;
-    if (lines.length > 0 || (runs?.length ?? 0) > 0) {
-      bucket[event.widgetKey] = {
-        key: event.widgetKey,
-        lines,
-        runs,
-        placement: typeof event.widgetPlacement === "string" ? event.widgetPlacement : undefined,
-      };
-    } else {
-      delete bucket[event.widgetKey];
-    }
-    const extensionWidgets = { ...state.extensionWidgets };
-    if (Object.keys(bucket).length > 0) extensionWidgets[ownerId] = bucket;
-    else delete extensionWidgets[ownerId];
-    return { extensionWidgets };
-  }
-  if (method === "set_editor_text" && typeof event.text === "string") {
-    return { draft: event.text };
-  }
-  return {};
-}
+const STREAM_FLUSH_MS = 32;
 
 function reduceEvents(state: SessionStore, events: EngineEvent[]): Partial<SessionStore> {
   let messages = state.messages;
@@ -746,35 +507,6 @@ function reduceEvents(state: SessionStore, events: EngineEvent[]): Partial<Sessi
   };
 }
 
-/**
- * Does this event belong to the transcript the store is holding?
- *
- * The transcript is one array owned by `activeId`, while every engine event names
- * the conversation it came from. The subscriber in `App.tsx` routes by that id, but
- * it compares against the id at *delivery* time — and a switch is not instant: the
- * `openConversation` round trip (session creation included) leaves the previous
- * chat on screen for hundreds of milliseconds, so the events that arrive during it
- * are legitimately applied to the old transcript. Anything still coalesced when the
- * new chat's transcript lands has to be re-checked against the new owner, or the
- * tail of the conversation being left is flushed into the one being opened.
- *
- * Subagent traffic is exempt: it is keyed by run id, feeds `subagentStreams`, and is
- * deliberately applied whichever chat is on screen so a backgrounded run stays live.
- * Transcript events without an owner cannot be applied to an open conversation.
- *
- * A blocking prompt is exempt for the same reason as subagent traffic: it has nothing
- * to do with the transcript, and a chat parked on one must be able to raise the
- * sidebar's 等你 mark and the approval notification while a different chat is on
- * screen. Only the *panel* is scoped to the active conversation, by `activePermission`.
- */
-/**
- * Cap transcript updates at ~30fps. One commit per animation frame was still enough
- * to saturate layout: the message scroller re-measures its children on every content
- * mutation (`getBoundingClientRect` + `scrollTo`), so a fast model drove that on
- * every frame. 30fps text still reads as smooth, and control events flush
- * synchronously so run start/end stay immediate.
- */
-const STREAM_FLUSH_MS = 32;
 
 export const useSessionStore = create<SessionStore>((set, get) => {
   let queued: EngineEvent[] = [];
@@ -837,6 +569,7 @@ export const useSessionStore = create<SessionStore>((set, get) => {
   permission: null,
   pendingPermissions: {},
   waitingForUser: {},
+  failedInBackground: {},
   notices: [],
   extensionStatus: {},
   extensionWidgets: {},
@@ -908,6 +641,7 @@ export const useSessionStore = create<SessionStore>((set, get) => {
         conversations: snapshot.conversations,
         pendingPermissions: prune(state.pendingPermissions),
         waitingForUser: prune(state.waitingForUser),
+        failedInBackground: prune(state.failedInBackground),
         running: prune(state.running),
         composerDrafts: prune(state.composerDrafts),
         queued: state.queued.filter((item) => live.has(item.conversationId)),
@@ -929,6 +663,8 @@ export const useSessionStore = create<SessionStore>((set, get) => {
       const composer = activeId ? state.composerDrafts[activeId] : undefined;
       return {
         activeId,
+        // Opening the chat is reading what happened to it; the mark has done its job.
+        failedInBackground: withoutKey(state.failedInBackground, activeId),
         draft: composer?.draft ?? "",
         attachments: composer?.attachments ?? [],
         permission: activePermission(state.pendingPermissions, activeId),
@@ -1078,7 +814,15 @@ export const useSessionStore = create<SessionStore>((set, get) => {
     set((state) => {
       const messages = [...state.messages];
       const assistant = messages.at(-1);
-      if (assistant?.role === "assistant" && !assistant.text && !assistant.thinking && assistant.tools.length === 0) {
+      // An empty reply that carries an error is the explanation, not a placeholder —
+      // popping it (as `dropEmptyAssistant` already refuses to) erased the red bubble.
+      if (
+        assistant?.role === "assistant" &&
+        !assistant.text &&
+        !assistant.thinking &&
+        assistant.tools.length === 0 &&
+        !assistant.error
+      ) {
         messages.pop();
       }
       if (messages.at(-1)?.role === "user" && messages.at(-1)?.id.startsWith("local:")) messages.pop();
@@ -1282,9 +1026,18 @@ export const useSessionStore = create<SessionStore>((set, get) => {
   setStreaming: (streaming) =>
     set((state) => ({ streaming, running: activeRunning(state, streaming) })),
   setConversationRunning: (id, running) =>
-    set((state) =>
-      state.running[id] === running ? state : { running: { ...state.running, [id]: running } },
-    ),
+    set((state) => {
+      // A new run supersedes the failure the mark was about.
+      const failedInBackground = running ? withoutKey(state.failedInBackground, id) : state.failedInBackground;
+      if (state.running[id] === running && failedInBackground === state.failedInBackground) return state;
+      return { running: { ...state.running, [id]: running }, failedInBackground };
+    }),
+  markFailedInBackground: (id) =>
+    set((state) => {
+      // The chat on screen shows its own outcome; the mark is for the ones that are not.
+      if (id === state.activeId || state.failedInBackground[id]) return state;
+      return { failedInBackground: { ...state.failedInBackground, [id]: true } };
+    }),
   /**
    * Seed the sidebar's run marks from a fresh engine read (a new window or reload).
    *
@@ -1313,111 +1066,3 @@ export const useSessionStore = create<SessionStore>((set, get) => {
     }),
   };
 });
-
-function upsertSubagent(list: SubagentInfo[], event: EngineEvent): SubagentInfo[] {
-  const previous = list.find((item) => item.id === event.subagentId);
-  const next = reduceSubagent(previous, event);
-  if (!next || next === previous) return list;
-  return previous ? list.map((item) => item === previous ? next : item) : [next, ...list];
-}
-
-/**
- * How many delegated runs keep their live transcript in the renderer.
- *
- * Nothing used to drop these: `subagentStreams` is keyed by run id, subagent traffic
- * is deliberately exempt from the active-conversation filter (so a background chat's
- * pane stays live), and a new session does not clear it either — so every run of
- * every conversation accumulated a full transcript, tool results included, for as
- * long as the window stayed open. A fan-out-heavy afternoon leaked hundreds of MB.
- *
- * The cap is on *finished, unwatched* runs only: a run that is still going, and any
- * run open in a right-pane tab, is never dropped. A dropped run is not lost either —
- * the pane reads the authoritative transcript back from Main (`getSubagentMessages`)
- * once the run is over, and the live stream is only its fallback.
- */
-const MAX_SUBAGENT_STREAMS = 12;
-
-/** Run ids with a pane open on them, in any conversation's scope. */
-function watchedSubagentIds(): Set<string> {
-  const pane = useSidePaneStore.getState();
-  const watched = new Set<string>();
-  const collect = (tabs: SidePaneTab[]): void => {
-    for (const tab of tabs) if (tab.subagentId) watched.add(tab.subagentId);
-  };
-  collect(pane.tabs);
-  for (const scope of Object.values(pane.scopes)) collect(scope.tabs);
-  return watched;
-}
-
-/**
- * Drop the least recently active finished runs once the cap is exceeded.
- *
- * Key order is recency order — `applySubagentStream` re-inserts the run that just
- * spoke at the end — so the oldest candidates come first.
- */
-function pruneSubagentStreams(
-  streams: Record<string, ChatMessage[]>,
-  keep: string,
-  subagents: SubagentInfo[],
-): Record<string, ChatMessage[]> {
-  const keys = Object.keys(streams);
-  if (keys.length <= MAX_SUBAGENT_STREAMS) return streams;
-  const running = new Set(subagents.filter((item) => item.status === "running").map((item) => item.id));
-  const watched = watchedSubagentIds();
-  const dropped = new Set<string>();
-  let over = keys.length - MAX_SUBAGENT_STREAMS;
-  for (const key of keys) {
-    if (over === 0) break;
-    if (key === keep || running.has(key) || watched.has(key)) continue;
-    dropped.add(key);
-    over -= 1;
-  }
-  if (dropped.size === 0) return streams;
-  const next: Record<string, ChatMessage[]> = {};
-  for (const key of keys) if (!dropped.has(key)) next[key] = streams[key];
-  return next;
-}
-
-function applySubagentStream(
-  streams: Record<string, ChatMessage[]>,
-  event: EngineEvent,
-  subagents: SubagentInfo[],
-): Record<string, ChatMessage[]> {
-  if (event.type !== "subagent_event") return streams;
-  const id =
-    typeof event.subagentId === "string"
-      ? event.subagentId
-      : typeof event.id === "string"
-        ? event.id
-        : "";
-  if (!id) return streams;
-  const nested =
-    event.event && typeof event.event === "object"
-      ? (event.event as EngineEvent)
-      : event.payload && typeof event.payload === "object"
-        ? (event.payload as EngineEvent)
-        : event;
-  if (typeof nested.type !== "string" || nested.type === "subagent_event") return streams;
-  // The delegated brief is rebuilt from the run's `detail`; the engine's echo of
-  // the task would stack a second copy under it.
-  if (nested.type === "message_start") {
-    const message = nested.message;
-    if (message && typeof message === "object" && (message as { role?: unknown }).role === "user") {
-      return streams;
-    }
-  }
-  const known = streams[id];
-  const applied = applyEngineEvent(known ?? [], nested, true);
-  // Rebuilt rather than spread over, so the run that just spoke moves to the end:
-  // a plain `{ ...streams, [id]: … }` keeps an existing key in its original slot,
-  // and the cap prunes by exactly this order.
-  const next: Record<string, ChatMessage[]> = {};
-  for (const key of Object.keys(streams)) {
-    if (key !== id) next[key] = streams[key];
-  }
-  next[id] = applied.messages;
-  // Only a run that was not being tracked yet can push the count over the cap, and
-  // this runs for every delta of every delegated run — so the pruning pass (which
-  // reads the pane's tabs) is reached once per run rather than once per token.
-  return known === undefined ? pruneSubagentStreams(next, id, subagents) : next;
-}

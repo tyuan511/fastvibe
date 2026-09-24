@@ -258,18 +258,19 @@ function appendMessage(messages: ChatMessage[], message: ChatMessage): ChatMessa
   return [...messages, message];
 }
 
-/** Drop a superseded failure off every consecutive trailing assistant.
- *  `ensureAssistant` only clones `at(-1)`, so a transcript that still holds the
- *  429 attempt behind the retry (or a model switch) would otherwise keep the
- *  stale error on an earlier row. */
+/** Drop a superseded failure (or truncation/stop notice) off every consecutive
+ *  trailing assistant. `ensureAssistant` only clones `at(-1)`, so a transcript that
+ *  still holds the 429 attempt behind the retry (or a model switch) would otherwise
+ *  keep the stale error on an earlier row — and a 继续 would keep 「已中断」 under the
+ *  very reply it resumed. */
 function clearTrailingAssistantErrors(messages: ChatMessage[]): ChatMessage[] {
   let next = messages;
   for (let index = next.length - 1; index >= 0; index -= 1) {
     const item = next[index];
     if (item.role !== "assistant") break;
-    if (!item.error) continue;
+    if (!item.error && !item.stop) continue;
     if (next === messages) next = next.slice();
-    next[index] = { ...item, error: undefined };
+    next[index] = { ...item, error: undefined, stop: undefined };
   }
   return next;
 }
@@ -546,12 +547,26 @@ function applyEvent(
     // the following `auto_retry_start` renders it as the expandable retry row.
     const error = event.willRetry === true ? undefined : errorFromAssistant(lastEngine);
     // A run that failed or was aborted stopped before the model finished; a clean
-    // turn ends with `stopReason` `stop`/`toolUse`/`length`. When the engine is about
+    // turn ends with `stopReason` `stop`/`toolUse` (`length` is a truncation, marked
+    // on the row below but not an interruption of the queue). When the engine is about
     // to auto-retry (`willRetry`), this is a transient failure the SDK is already
     // recovering from, so it is not a terminal interruption.
     const stopReason = isRecord(lastEngine) ? asString(lastEngine.stopReason) : undefined;
     const interrupted: ApplyResult["interrupted"] =
       event.willRetry === true ? undefined : error ? "error" : stopReason === "aborted" ? "aborted" : undefined;
+    // A reply that ended early without failing — cut off at the output limit, or
+    // stopped. Neither is a red bubble, but neither may be silent: both used to end
+    // the run with nothing on screen, which read as the agent quitting on its own.
+    const stop: ChatMessage["stop"] =
+      event.willRetry === true || error ? undefined : stopReason === "length" || stopReason === "aborted" ? stopReason : undefined;
+    if (stop) {
+      const last = next.at(-1);
+      if (last?.role === "assistant") {
+        const list = next.slice();
+        list[list.length - 1] = { ...last, stop };
+        return { messages: list, streaming: nextStreaming, interrupted };
+      }
+    }
     if (error) {
       const last = next.at(-1);
       if (last?.role === "assistant") {

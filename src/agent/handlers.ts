@@ -10,6 +10,7 @@ import { dispatch, handle, handlerChannels } from "../main/ipc/registry";
 import type { PiProcessManager } from "../main/pi/process-manager";
 import { readFilePreview } from "../main/engine/file-preview";
 import { readWorkspaceDir } from "../main/engine/workspace-fs";
+import { existingFiles } from "../main/engine/path-exists";
 import { TerminalSessions } from "../main/engine/terminal-sessions";
 import { applyLanguages } from "../main/engine/ai-language";
 import { applyPermissionMode, clearAppSettings, invalidateAppSettingsCache, readAppSettings, writeAppSettings } from "../main/engine/runtime-settings";
@@ -91,6 +92,7 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
   handle(Ipc.engineSetInterrupt, (payload: { mode: "immediate" | "wait"; conversationId?: string }) => engine.setInterruptMode(payload.mode, payload.conversationId));
   handle(Ipc.engineSetAutoCompact, (payload: { enabled: boolean; conversationId?: string }) => engine.setAutoCompaction(payload.enabled, payload.conversationId));
   handle(Ipc.engineBranch, (payload: { entryId: string; conversationId?: string }) => engine.branch(payload.entryId, payload.conversationId));
+  handle(Ipc.engineFork, (payload?: { entryId?: string; conversationId?: string }) => engine.fork(payload?.entryId, payload?.conversationId));
   handle(Ipc.engineGetMessages, (payload?: { conversationId?: string }) => engine.loadMessages(payload?.conversationId));
   handle(Ipc.engineGetSnapshot, (payload?: { conversationId?: string }) => engine.getSnapshot(payload?.conversationId));
   handle(Ipc.engineGetStats, (payload?: { conversationId?: string }) => engine.getSessionStats(payload?.conversationId));
@@ -118,6 +120,9 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
   handle(Ipc.projectsReorder, (payload: { cwds: string[] }) => engine.reorderProjects(Array.isArray(payload?.cwds) ? payload.cwds : []));
 
   handle(Ipc.workspacePreview, (payload: { path: string }) => readFilePreview(payload.path));
+  handle(Ipc.workspaceFilesExist, (payload: { paths?: unknown; cwd?: unknown }) =>
+    existingFiles(payload?.paths, payload?.cwd),
+  );
   handle(Ipc.workspaceReadDir, (payload: { path: string }) => readWorkspaceDir(payload.path));
   handle(Ipc.workspaceGitStatus, (payload: { cwd: string }) => readGitStatus(payload.cwd));
   handle(Ipc.workspaceGitBranches, (payload: { cwd: string }) => gitBranches(payload.cwd));
@@ -152,7 +157,7 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
   handle(Ipc.providersList, () => engine.listProviders());
   handle(Ipc.providersNative, () => engine.listNativeProviders());
   handle(Ipc.providersAdd, (payload: { name: string; baseUrl: string; apiKey: string; api?: any; models: ProviderModel[] }) => engine.addProvider({ name: payload.name, baseUrl: payload.baseUrl, apiKey: payload.apiKey, api: payload.api }, payload.models));
-  handle(Ipc.providersUpdate, (payload: { id: string; name?: string; baseUrl?: string; api?: any; enabled?: boolean; apiKey?: string; models?: ProviderModel[] }) => engine.updateProvider(payload.id, payload));
+  handle(Ipc.providersUpdate, (payload: { id: string; name?: string; baseUrl?: string; api?: any; enabled?: boolean; apiKey?: string; models?: ProviderModel[]; modelOrder?: string[] }) => engine.updateProvider(payload.id, payload));
   handle(Ipc.providersRemove, (payload: { id: string }) => engine.removeProvider(payload.id));
   handle(Ipc.providersRefresh, (payload: { id: string }) => engine.refreshProviderModels(payload.id));
   handle(Ipc.providersSaveFastVibe, (payload: { apiKey: string; models: ProviderModel[] }) => engine.saveFastVibe(payload.apiKey, payload.models));

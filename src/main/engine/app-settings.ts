@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { nativeTheme, type BrowserWindow } from "electron";
-import type { ComputerSettings, EngineModel, PermissionMode } from "@shared/types";
+import { THINKING_EFFORT_LEVELS, type ComputerSettings, type EngineModel, type PermissionMode, type ProjectModelDefault, type ThinkingLevel } from "@shared/types";
 import type { FastVibePaths } from "./paths";
 
 const VERSION = 1;
@@ -10,8 +10,8 @@ type SettingsFile = {
   settings: Record<string, unknown>;
 };
 
-/** Loose bag of renderer UI prefs. Main interprets `themeMode`, `defaultModel`, the two
- * permission-mode keys and `keepAwake`; everything else is the renderer's. */
+/** Loose bag of renderer UI prefs. Main interprets `themeMode`, the global and
+ * project model defaults, the two permission-mode keys and `keepAwake`; everything else is the renderer's. */
 export type PersistedSettings = Record<string, unknown>;
 
 /**
@@ -49,11 +49,46 @@ export function readAppSettings(paths: FastVibePaths): PersistedSettings {
  * they can never hold a preference.
  */
 export function readDefaultModel(paths: FastVibePaths): EngineModel | undefined {
-  const value = readAppSettings(paths).defaultModel;
+  return readPreferredModelSettings(paths).model;
+}
+
+/**
+ * Resolve the model and reasoning defaults for a new conversation. A project pin
+ * overrides the global default, while a missing or malformed pin falls back cleanly.
+ */
+export function readPreferredModelSettings(paths: FastVibePaths, project?: string): {
+  model?: EngineModel;
+  thinkingLevel?: ThinkingLevel | "auto";
+} {
+  const settings = readAppSettings(paths);
+  const projectDefaults = settings.projectDefaults;
+  const projectDefault = project && typeof projectDefaults === "object" && projectDefaults !== null && !Array.isArray(projectDefaults)
+    ? (projectDefaults as Record<string, unknown>)[project]
+    : undefined;
+  const projectPreference = isProjectModelDefault(projectDefault) ? projectDefault : undefined;
+  return {
+    model: projectPreference?.model ?? readEngineModel(settings.defaultModel),
+    thinkingLevel: projectPreference?.thinkingLevel ?? readThinkingLevel(settings.thinkingLevel),
+  };
+}
+
+function readEngineModel(value: unknown): EngineModel | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   const { provider, id } = value as Partial<EngineModel>;
   if (typeof provider !== "string" || typeof id !== "string" || !provider || !id) return undefined;
   return { provider, id };
+}
+
+function readThinkingLevel(value: unknown): ThinkingLevel | "auto" | undefined {
+  return value === "auto" || (typeof value === "string" && (THINKING_EFFORT_LEVELS as readonly string[]).includes(value))
+    ? value as ThinkingLevel | "auto"
+    : undefined;
+}
+
+function isProjectModelDefault(value: unknown): value is ProjectModelDefault {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Partial<ProjectModelDefault>;
+  return Boolean(readEngineModel(candidate.model)) && readThinkingLevel(candidate.thinkingLevel) !== undefined;
 }
 
 /**

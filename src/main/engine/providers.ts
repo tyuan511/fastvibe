@@ -9,6 +9,7 @@ import { automaticModelApi } from "./model-api";
 import { isGatewayKind, probeGateway, readGatewayCredentials, type GatewayKind } from "./gateway-probe";
 import { deleteOAuthCredential, readOAuthProviderIds } from "./oauth-store";
 import type { FastVibePaths } from "./paths";
+import { orderProviderModels } from "@shared/model-order";
 
 export const FASTVIBE_PROVIDER_ID = "fastvibe";
 export const FASTVIBE_API_BASE = "https://fastvibe.dev/v1";
@@ -35,6 +36,8 @@ type StoredProvider = {
   gateway?: GatewayKind;
   enabled: boolean;
   models: ProviderModel[];
+  /** UI-only preference; the model registry uses it when exposing models. */
+  modelOrder?: string[];
 };
 
 type ProvidersFile = {
@@ -195,7 +198,8 @@ export function listProviderConfigs(
       ...(credentials[provider.id] ? { gatewayCredential: true } : {}),
       ...(native?.oauth ? { oauth: native.oauth } : {}),
       enabled: provider.enabled,
-      models: provider.models,
+      models: orderProviderModels(provider.models, provider.modelOrder),
+      ...(provider.modelOrder ? { modelOrder: provider.modelOrder } : {}),
     };
   });
 }
@@ -237,7 +241,7 @@ export async function fetchProviderModels(
     seen.add(entry.id);
     models.push(enrichOne(index, entry.id, entry.name, api));
   }
-  return models;
+  return orderProviderModels(models);
 }
 
 type ListedModel = { id: string; name: string };
@@ -381,7 +385,7 @@ export function applyProviders(paths: FastVibePaths): FastVibeModel[] {
   return providers
     .filter((provider) => connected.has(provider.id))
     .flatMap((provider) =>
-      provider.models.map((model) => ({
+      orderProviderModels(provider.models, provider.modelOrder).map((model) => ({
         provider: provider.id,
         providerName: provider.name,
         id: model.id,
@@ -426,7 +430,7 @@ function renderModelsJson(providers: StoredProvider[]): string {
       apiKey: provider.apiKeyEnv,
       // Gemini authenticates with `x-goog-api-key` via the SDK client, not Bearer.
       authHeader: provider.api !== "google-generative-ai",
-      models: provider.models.map((model) => {
+      models: orderProviderModels(provider.models, provider.modelOrder).map((model) => {
         const api = model.api ?? provider.api;
         const compat = modelCompat(api, model);
         const thinking = thinkingLevelMap(model);
@@ -628,13 +632,13 @@ export async function addNativeProvider(
 export function updateProvider(
   paths: FastVibePaths,
   id: string,
-  patch: Partial<Pick<StoredProvider, "name" | "baseUrl" | "api" | "enabled" | "models">>,
+  patch: Partial<Pick<StoredProvider, "name" | "baseUrl" | "api" | "enabled" | "models" | "modelOrder">>,
 ): void {
   const providers = readProviders(paths);
   const index = providers.findIndex((provider) => provider.id === id);
   if (index < 0) return;
   const current = providers[index];
-  // IPC callers build the whole patch object (`{ name, baseUrl, api, enabled, models }`),
+  // IPC callers build the whole patch object (`{ name, baseUrl, api, enabled, models, modelOrder }`),
   // so the keys they did not touch arrive present but `undefined`. Spreading those in
   // verbatim blanks the field, and `JSON.stringify` then drops the key from the file
   // entirely — a rename would erase `baseUrl`/`models` and the provider would fail
@@ -773,6 +777,7 @@ type StoredProviderInput = Partial<StoredProvider> & { id: string };
 function hydrateProvider(value: StoredProviderInput): StoredProvider {
   const kind: StoredProvider["kind"] =
     value.kind === "native" || value.kind === "builtin" ? value.kind : "custom";
+  const modelOrder = hydrateModelOrder(value.modelOrder);
   // Every field is repaired rather than trusted: a partially written entry must stay
   // visible (and repairable) instead of being filtered out and silently lost.
   const base: StoredProvider = {
@@ -786,6 +791,7 @@ function hydrateProvider(value: StoredProviderInput): StoredProvider {
       typeof value.apiKeyEnv === "string" && value.apiKeyEnv ? value.apiKeyEnv : nativeKeyEnv(value.id),
     enabled: value.enabled !== false,
     models: hydrateModels(value.models),
+    ...(modelOrder ? { modelOrder } : {}),
   };
 
   if (kind === "native") {
@@ -849,6 +855,12 @@ function hydrateModels(value: unknown): ProviderModel[] {
     models.push(model);
   }
   return models;
+}
+
+function hydrateModelOrder(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const ids = [...new Set(value.filter((id): id is string => typeof id === "string" && id.length > 0))];
+  return ids.length > 0 ? ids : undefined;
 }
 
 /**

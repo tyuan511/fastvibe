@@ -1,5 +1,5 @@
 import { decodeRemoteProjectKey, remoteProjectKey } from "@shared/project-binding";
-import type { ChatMessage, ConversationOpenResult, DirEntry, EngineStatus, ImportSourceId, WorkspaceSnapshot } from "@shared/types";
+import type { ChatMessage, ConversationOpenResult, DirEntry, EngineSessionState, EngineStatus, ImportSourceId, WorkspaceSnapshot } from "@shared/types";
 import type { AppInfo, GitStatus } from "@shared/ipc";
 import type { MemoryState } from "@shared/memory";
 import {
@@ -25,6 +25,7 @@ import {
 } from "./preview-data";
 import { websiteFixture, type WebsiteLanguage } from "./website-fixtures";
 import { MEMORY_FIXTURE_COUNTS, memoryDetailFixture, memoryGraphFixture } from "./memory-fixtures";
+import { setTranscriptDisplay } from "@/lib/transcript-display";
 
 /**
  * Browser preview harness.
@@ -67,6 +68,14 @@ const platform = params.get("platform") ?? "darwin";
  */
 const remote = params.get("remote") === "1";
 
+// Transcript presentation is no longer a preference. The website shots still hide
+// timestamps and leave the demo run unfolded; `?collapse=off` does the latter for
+// any other preview.
+setTranscriptDisplay({
+  showTimestamp: !website,
+  collapseRuns: website ? false : params.get("collapse") !== "off",
+});
+
 // Reset persisted UI state so the harness always starts from the same layout.
 try {
   for (const key of [
@@ -90,9 +99,6 @@ const initialSettings: Record<string, unknown> = {
   queueBehavior: "followUp",
   autoCompact: true,
   interruptMode: "immediate",
-  showThinking: true,
-  showTimestamps: !website,
-  collapseRuns: website ? false : params.get("collapse") !== "off",
   sendOnEnter: true,
   ...(website ? { uiLanguage: websiteLanguage, aiLanguage: websiteLanguage } : {}),
   themeMode: website ? "dark" : theme === "light" || theme === "dark" ? theme : "system",
@@ -110,6 +116,11 @@ const fixtureConversations = websiteData?.conversations ?? CONVERSATIONS;
 const fixtureMessages = websiteData?.messages ?? MESSAGES;
 const fixtureSession = websiteData?.session ?? SESSION;
 const fixtureStats = websiteData?.stats ?? STATS;
+/** The model / thinking chips' picks, so a switch in the preview reads back like the engine's. */
+const mockSessionOverrides: { model?: { provider: string; id: string }; thinkingLevel?: string } = {};
+function mockSession(conversationId?: string): EngineSessionState {
+  return { ...fixtureSession, ...mockSessionOverrides, conversationId: conversationId ?? fixtureActiveId } as EngineSessionState;
+}
 const fixtureCwd = websiteData?.cwd ?? PREVIEW_CWD;
 const fixtureActiveId = websiteData?.activeId ?? "conv-theme";
 
@@ -340,7 +351,9 @@ const api = {
     getSubagentMessages: async (): Promise<ChatMessage[]> => [],
     respondPermission: async () => undefined,
     newSession: async () => undefined,
-    getState: async () => fixtureSession,
+    // Answered for the chat that asked, as the engine does: a state reply with no
+    // `conversationId` is a draft, which the store refuses for an open conversation.
+    getState: async (conversationId?: string) => mockSession(conversationId),
     getRunning: async (): Promise<string[]> => [...runningIds],
     // `?waiting=1` parks a tool approval on the active chat, for the phone page's 等你.
     getPendingUi: async (): Promise<Array<Record<string, unknown>>> => parkedPrompts(),
@@ -355,8 +368,14 @@ const api = {
       seq: 0,
     }),
     getModels: async () => MODELS,
-    setModel: async () => fixtureSession,
-    setThinking: async () => fixtureSession,
+    setModel: async (provider: string, modelId: string, conversationId?: string) => {
+      mockSessionOverrides.model = { provider, id: modelId };
+      return mockSession(conversationId);
+    },
+    setThinking: async (level: string, conversationId?: string) => {
+      mockSessionOverrides.thinkingLevel = level;
+      return mockSession(conversationId);
+    },
     setInterruptMode: async () => fixtureSession,
     setAutoCompaction: async () => fixtureSession,
     branch: async () => (!website && params.get("math") === "1" ? [...MESSAGES.slice(0, 2), ...MATH_MESSAGES] : fixtureMessages),
@@ -472,6 +491,7 @@ const api = {
     pick: async () => null,
     reveal: async () => undefined,
     preview: async (path: string) => websiteData?.previewFor(path) ?? previewFor(path),
+    filesExist: async (paths: string[]) => paths.filter((path) => /\.[A-Za-z0-9]{1,12}$/.test(path)),
     fileIcons: loadIconMapping,
     readDir: async (path: string) => {
       const decoded = decodeRemoteProjectKey(path);
@@ -716,16 +736,6 @@ const api = {
     getGrantFlow: async () => grantFlowState(),
     onGrantFlowState: () => () => undefined,
   },
-  // `?fda=1` is the launch prompt. Granted by default so the preview is not covered.
-  system: {
-    fullDiskAccess: async () => ({
-      applicable: platform === "darwin" && !remote,
-      granted: params.get("fda") !== "1" && params.get("fda") !== "dev",
-      packaged: params.get("fda") !== "dev",
-    }),
-    openFullDiskAccess: async () => undefined,
-    revealApp: async () => undefined,
-  },
 };
 
 function grantFlowState(): { active: boolean; permission?: "accessibility" | "screenRecording"; step: number; total: number } {
@@ -780,6 +790,7 @@ const REMOTE_OFF = {
   host: "127.0.0.1",
   port: null,
   configured: false,
+  lanAccess: false,
   clients: 0,
   failedLogins: 0,
   tunnel: TUNNEL_IDLE,
@@ -791,6 +802,7 @@ const REMOTE_ONLINE = {
   host: "127.0.0.1",
   port: 7777,
   configured: true,
+  lanAccess: false,
   clients: 1,
   failedLogins: 0,
   tunnel: {
@@ -1098,4 +1110,3 @@ if (theme === "light" || theme === "dark") {
     });
   }, 200);
 }
-

@@ -159,24 +159,10 @@ async function driverModule(): Promise<DriverModule> {
  * that this architecture has no build.
  */
 export async function computerPermissions(): Promise<ComputerPermissionStatus> {
-  let module: DriverModule;
-  try {
-    module = await driverModule();
-  } catch (error) {
-    return {
-      platform: process.platform,
-      accessibility: false,
-      screenRecording: false,
-      ready: false,
-      available: false,
-      error: error instanceof Error ? error.message : String(error),
-    };
-  }
   const availability = resolveComputerAvailability(process.platform, false);
   if (!availability.supported) {
-    // Decided up front rather than discovered at the first tool call. `available: false`
-    // is what tells Settings to explain the machine instead of offering a grant button
-    // that cannot lead anywhere.
+    // Decide this before loading the optional native SDK. Unsupported platforms do not
+    // ship its package, and Settings should still explain the platform cleanly.
     return {
       platform: process.platform,
       accessibility: false,
@@ -190,6 +176,20 @@ export async function computerPermissions(): Promise<ComputerPermissionStatus> {
               "Computer control on Linux depends on compositor-specific components this app does not ship, so it is not offered.",
             )
           : uiText("当前环境不支持电脑操控。", "Computer control is not supported in this environment."),
+    };
+  }
+
+  let module: DriverModule;
+  try {
+    module = await driverModule();
+  } catch (error) {
+    return {
+      platform: process.platform,
+      accessibility: false,
+      screenRecording: false,
+      ready: false,
+      available: false,
+      error: error instanceof Error ? error.message : String(error),
     };
   }
   if (process.platform !== "darwin") {

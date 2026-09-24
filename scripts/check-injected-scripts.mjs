@@ -20,7 +20,7 @@ import { dirname, join } from "node:path";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const TARGETS = [
-  join(here, "..", "src", "renderer", "src", "components", "layout", "side-pane-browser.tsx"),
+  join(here, "..", "src", "renderer", "src", "components", "layout", "browser-guest.ts"),
   // The same scripts the system-browser CDP backend evaluates. A brace missing here
   // fails every browser-use call once that backend is on, and tsc cannot see it.
   join(here, "..", "src", "shared", "browser-page.ts"),

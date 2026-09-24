@@ -13,7 +13,6 @@ import {
   ModelRegistry,
   ModelRuntime,
   SessionManager,
-  sessionEntryToContextMessages,
   SettingsManager,
   type AgentSession,
   type AgentSessionEvent,
@@ -52,7 +51,6 @@ import type {
   SubagentInfo,
   ThinkingTiming,
   TranscriptTail,
-  TuiRun,
   WorkspaceSnapshot,
   ModelPrice,
   NativeProviderConfig,
@@ -71,6 +69,7 @@ import { parseCompactCommand } from "@shared/slash";
 import { buildCommitMessagePlan, type CommitFileMaterial } from "../engine/commit-message";
 import { ConversationCatalog } from "../engine/conversation-catalog";
 import { searchConversationContent } from "../engine/conversation-search";
+import { repairTranscriptFile, writeTranscriptEntries } from "../engine/transcript-file";
 import {
   ConversationTranscriptError,
   loadConversationTranscriptBranch,
@@ -84,7 +83,7 @@ import {
   scanImportCandidates,
   scanImportSources,
 } from "../engine/import/runner";
-import { readAutoCompact, readDefaultModel } from "../engine/runtime-settings";
+import { readAutoCompact, readDefaultModel, readPreferredModelSettings } from "../engine/runtime-settings";
 import { currentAiLanguageDirective, currentCustomSystemPrompt } from "../engine/ai-language";
 import { uiText } from "../engine/ui-text";
 import { mapEngineMessages } from "../engine/map-messages";
@@ -134,15 +133,35 @@ import { DisabledMemoryHost, type MemoryHost } from "../engine/memory-host";
 import { SubagentManager } from "../engine/subagents";
 import { reduceSubagent } from "@shared/subagent-state";
 import { SubagentControl } from "./subagent-control";
+import { SubagentTurnRunner, type SubagentHostRequest, type SubagentHostResponse } from "./process-manager-subagent";
 import type { SubagentConfig, SubagentDraft, GatewayBalanceResult, GatewayKind } from "@shared/types";
 import { isAbortOutcome } from "@shared/abort";
 import { McpManager, type McpServerConfig, type McpServerStatus } from "./mcp-manager";
-import { assistantErrorSummary, finalAssistantErrorSummary } from "./assistant-error-summary";
+import {
+  compactReasonOf,
+  guardSessionListener,
+  interruptedAssistantEntryId,
+  isAssistantEngineMessage,
+  isRecord,
+  isToolCallPart,
+  isUserEngineMessage,
+  messageText,
+  num,
+  sessionCompletionTimes,
+  sessionEntryIds,
+  sessionUserTurns,
+  slimStreamEvent,
+  summarizeSubagentMessages,
+  type SubagentHostUsage,
+} from "./process-manager-events";
+import { projectSessionMessages } from "./process-manager-transcript";
 import { SkillManager } from "./skill-manager";
+import { promptAccepted } from "./prompt-acceptance";
 import type { AppConfigHostRequest, AppConfigHostResult } from "@shared/app-config";
 import { builtinExtensionFile, builtinExtensionPaths, builtinSkillPaths, ExtensionManager } from "./extension-manager";
+import { branchExists, createGitWorktree, gitBranch, gitCommonRoot, gitToplevel, listGitWorktrees, removeGitWorktree } from "./git-worktree";
 import { bindBrowserConversation, bindComputerConversation } from "./conversation-binding";
-import { createTuiWidget, renderExtensionMessage, renderTuiComponent, type TuiComponent } from "./tui-bridge";
+import { createTuiWidget, renderTuiComponent, type TuiComponent } from "./tui-bridge";
 
 type ManagedSession = { conversationId: string; cwd: string; session: AgentSession; extensions: LoadExtensionsResult; unsubscribe: () => void };
 /** SDK UI context plus FastVibe's single-panel multi-question prompt. */
@@ -183,39 +202,6 @@ type WorktreeHostResult = {
   rebound: boolean;
 };
 
-type SubagentHostUsage = {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  cost: number;
-  contextTokens: number;
-  turns: number;
-};
-
-type SubagentHostRequest = {
-  /** `${parentToolCallId}:${index}` — the same id the tool-call tracker mints. */
-  subagentId: string;
-  agent: string;
-  agentSource?: "user" | "project";
-  task: string;
-  systemPrompt: string;
-  tools?: string[];
-  model?: string;
-  fallbackModel?: string;
-  thinkingLevel?: ThinkingLevel;
-  cwd: string;
-  signal?: AbortSignal;
-};
-
-type SubagentHostResponse = {
-  messages: unknown[];
-  exitCode: number;
-  usage: SubagentHostUsage;
-  model?: string;
-  stopReason?: string;
-  errorMessage?: string;
-};
 /** The command-capable context bound to a replacement session (`withSession` callbacks). */
 type ReplacementContext = ReturnType<AgentSession["createReplacedSessionContext"]>;
 /** Per-conversation wall-clock accounting, measured from engine events. */
@@ -247,218 +233,6 @@ type OAuthLogin = {
 /** Thinking blocks of the message currently streaming, per conversation. */
 type ReasoningRun = { blocks: ThinkingTiming[] };
 const execFileAsync = promisify(execFile);
-
-/**
- * Streaming `message_update` events carry the whole accumulated assistant message
- * plus its full partial content on every token. The renderer only reads
- * `assistantMessageEvent`, so forwarding those fields made long replies O(n²) over
- * IPC (each token re-serialised the entire answer) and was a main cause of the UI
- * freezing mid-run. Strip the unused weight; keep the ordered deltas.
- *
- * `error` and `aborted` are both kept. Only `error` used to be: an aborted assistant
- * message was stripped down to nothing, so `agent_end`'s `stopReason === "aborted"`
- * branch in the renderer was dead code and a user's own 停止 never marked the turn
- * interrupted — the 继续 control only ever appeared for a failure. The composer's
- * 继续 now reads the transcript instead (`canResume`), but the live verdict is still
- * worth carrying: it is what pauses a follow-up queue the moment the user stops a run.
- */
-
-/** The one block of a partial assistant message a tool-call event actually describes. */
-function toolCallBlock(inner: Record<string, unknown>): unknown {
-  const partial = inner.partial;
-  if (typeof partial !== "object" || partial === null) return undefined;
-  const content = (partial as Record<string, unknown>).content;
-  if (!Array.isArray(content)) return undefined;
-  const index = typeof inner.contentIndex === "number" ? inner.contentIndex : undefined;
-  return index === undefined ? content.at(-1) : content[index];
-}
-
-function slimStreamEvent(event: Record<string, unknown>): Record<string, unknown> {
-  if (event.type === "message_update") {
-    const inner = event.assistantMessageEvent;
-    if (typeof inner !== "object" || inner === null) return event;
-    const innerRecord = inner as Record<string, unknown>;
-    const { message: _message, ...rest } = event;
-    if (innerRecord.type === "text_delta" || innerRecord.type === "thinking_delta") {
-      const { partial: _partial, ...deltaOnly } = innerRecord;
-      return { ...rest, assistantMessageEvent: deltaOnly };
-    }
-    if (innerRecord.type === "error") {
-      const { partial: _partial, error, ...deltaOnly } = innerRecord;
-      const summary = assistantErrorSummary(error);
-      // Some clients throw a platform AbortError before an assistant-shaped error
-      // has been completed. Preserve a structured cancellation marker through the
-      // slimming pass; never infer it from error text.
-      const reason = isAbortOutcome(innerRecord) ? "aborted" : deltaOnly.reason;
-      return { ...rest, assistantMessageEvent: { ...deltaOnly, reason, error: summary } };
-    }
-    // A tool-call event needs its `partial` — the call's name and arguments live on
-    // one block of it — but only that block. The whole partial assistant message
-    // carries every word written so far plus every earlier tool call, so a reply
-    // that calls tools as it goes shipped its entire accumulated text across the IPC
-    // boundary again for each argument fragment.
-    if (
-      innerRecord.type === "toolcall_start" ||
-      innerRecord.type === "tool_call_start" ||
-      innerRecord.type === "toolcall_delta" ||
-      innerRecord.type === "tool_call_delta" ||
-      innerRecord.type === "toolcall_end" ||
-      innerRecord.type === "tool_call_end"
-    ) {
-      const block = toolCallBlock(innerRecord);
-      if (block === undefined) return rest;
-      // Rebased onto a one-block `partial`: the reader resolves the call by
-      // `contentIndex`, so the index has to name the block's new position.
-      return { ...rest, assistantMessageEvent: { ...innerRecord, partial: { content: [block] }, contentIndex: 0 } };
-    }
-    return rest;
-  }
-  // `agent_end` / `turn_end` / `message_end` carry the whole transcript. The UI
-  // only needs the current final assistant's stopReason/errorMessage to show a failure.
-  // Do not search for the newest historical error: a failed attempt can be followed
-  // by a successful retry in the same visible run.
-  if (event.type === "agent_end") {
-    const messages = Array.isArray(event.messages) ? event.messages : [];
-    const summary = finalAssistantErrorSummary(messages);
-    const { messages: _messages, ...rest } = event;
-    return summary ? { ...rest, messages: [summary] } : rest;
-  }
-  if (event.type === "turn_end" || event.type === "message_end") {
-    const { message, toolResults: _toolResults, ...rest } = event;
-    const summary = assistantErrorSummary(message);
-    return summary ? { ...rest, message: summary } : rest;
-  }
-  return event;
-}
-function sessionEntryIds(session: AgentSession): Map<unknown, string> {
-  const ids = new Map<unknown, string>();
-  for (const entry of session.sessionManager.getEntries()) {
-    if (entry.type === "message") ids.set(entry.message, entry.id);
-  }
-  return ids;
-}
-
-/** Last assistant on the branch with this stop reason, when the projected object is a copy. */
-function interruptedAssistantEntryId(session: AgentSession, stopReason: string): string | undefined {
-  const branch = session.sessionManager.getBranch();
-  for (let i = branch.length - 1; i >= 0; i -= 1) {
-    const entry = branch[i];
-    if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-    if ((entry.message as { stopReason?: string }).stopReason === stopReason) return entry.id;
-  }
-  return undefined;
-}
-
-/**
- * The instant each message's session entry was persisted, keyed by entry id.
- *
- * An entry is appended once its message has finished streaming, so its timestamp is
- * the reply's *end* — the engine's own message timestamp is only the request start.
- * That is what lets a reply's footer report when it finished and how long it took.
- * User and tool-result entries are written at the same instant they happened, so the
- * distinction only matters for an assistant reply (`mapEngineMessages` applies it
- * there alone).
- */
-function sessionCompletionTimes(session: AgentSession): Map<string, number> {
-  const times = new Map<string, number>();
-  for (const entry of session.sessionManager.getEntries()) {
-    if (entry.type !== "message") continue;
-    const at = Date.parse(entry.timestamp);
-    if (Number.isFinite(at)) times.set(entry.id, at);
-  }
-  return times;
-}
-
-/** Every user turn in the session tree, as payload text, for queue reconciliation. */
-function sessionUserTurns(session: AgentSession): Array<{ text: string; timestamp?: number }> {
-  const turns: Array<{ text: string; timestamp?: number }> = [];
-  for (const entry of session.sessionManager.getEntries()) {
-    if (entry.type !== "message" || !isUserEngineMessage(entry.message)) continue;
-    const { content, timestamp } = entry.message as { content?: unknown; timestamp?: unknown };
-    const text = typeof content === "string"
-      ? content
-      : Array.isArray(content)
-        ? content.map((part) => (part && typeof part === "object" && (part as { type?: unknown }).type === "text" ? String((part as { text?: unknown }).text ?? "") : "")).join("")
-        : "";
-    turns.push({ text, timestamp: typeof timestamp === "number" ? timestamp : undefined });
-  }
-  return turns;
-}
-
-function isUserEngineMessage(message: unknown): message is Record<string, unknown> {
-  return typeof message === "object" && message !== null && (message as { role?: unknown }).role === "user";
-}
-
-function isAssistantEngineMessage(message: unknown): message is Record<string, unknown> {
-  return typeof message === "object" && message !== null && (message as { role?: unknown }).role === "assistant";
-}
-
-function messageText(message: Record<string, unknown>): string {
-  const content = message.content;
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .map((part) => isRecord(part) && part.type === "text" ? String(part.text ?? "") : "")
-    .join("")
-    .trim();
-}
-
-const COMPACT_REASONS: ReadonlySet<string> = new Set<CompactReason>(["manual", "threshold", "overflow"]);
-
-/**
- * Why a `compaction_start` event compacted, when it is a reason the card knows.
- *
- * The transcript's card labels 接近上限 / 超出窗口, so the engine has to carry the
- * reason it later serves with the running card it rebuilds on re-open.
- */
-function compactReasonOf(event: { reason?: unknown }): CompactReason | undefined {
-  const reason = typeof (event as { reason?: unknown }).reason === "string" ? (event as { reason: string }).reason : undefined;
-  return reason && COMPACT_REASONS.has(reason) ? (reason as CompactReason) : undefined;
-}
-
-/**
- * Roll a throwaway subagent session's transcript into the accounting the tool
- * card shows. Tokens come from each assistant message; the final stop reason and
- * error come from the last one that set them.
- */
-function summarizeSubagentMessages(messages: unknown[]): {
-  usage: SubagentHostUsage;
-  stopReason?: string;
-  errorMessage?: string;
-} {
-  const usage: SubagentHostUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 };
-  let stopReason: string | undefined;
-  let errorMessage: string | undefined;
-  for (const raw of messages) {
-    if (!isRecord(raw) || raw.role !== "assistant") continue;
-    usage.turns += 1;
-    const messageUsage = isRecord(raw.usage) ? raw.usage : undefined;
-    if (messageUsage) {
-      usage.input += num(messageUsage.input);
-      usage.output += num(messageUsage.output);
-      usage.cacheRead += num(messageUsage.cacheRead);
-      usage.cacheWrite += num(messageUsage.cacheWrite);
-      usage.cost += isRecord(messageUsage.cost) ? num(messageUsage.cost.total) : num(messageUsage.cost);
-      const total = num(messageUsage.totalTokens);
-      if (total) usage.contextTokens = total;
-    }
-    if (typeof raw.stopReason === "string") stopReason = raw.stopReason;
-    if (typeof raw.errorMessage === "string") errorMessage = raw.errorMessage;
-  }
-  return { usage, stopReason, errorMessage };
-}
-
-function isToolCallPart(type: string): boolean {
-  return type === "toolCall" || type === "tool_use" || type === "tool_call" || type === "toolcall";
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function num(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
-}
 
 /** How long a permission confirmation waits before Main answers it 未批准. */
 const CONFIRM_TIMEOUT_MS = 5 * 60_000;
@@ -983,16 +757,34 @@ export class PiProcessManager {
     // processing"; "Cannot submit a prompt while compaction is in progress" for a
     // standalone `/compact`, which has no run at all), so wait it out.
     if (!session.isIdle && !options?.streamingBehavior) await session.waitForIdle();
+    // The call answers "was this message sent", not "did the run finish". It resolves
+    // the moment the SDK accepts the prompt (`preflightResult(true)`: model, auth, input
+    // hooks and before_agent_start all passed, the user message is built) and rejects
+    // only when it was refused. What the run does afterwards is reported by events —
+    // `agent_end`, `conversation_activity`, the transcript's `stopReason` — which every
+    // client already reads. Holding the call open for the whole run made a caller treat
+    // a failure mid-run, a remote call's deadline or a dropped socket as "never sent":
+    // the optimistic row was rolled back and the text put back in the composer while
+    // the run was still going.
+    //
     // Pass only what the SDK understands: `conversationId` is ours, and the SDK's own
     // options object must not receive a key it never declared.
-    try {
-      await session.prompt(message, { streamingBehavior: options?.streamingBehavior, images: options?.images });
-    } catch (error) {
-      // Stop aborts the in-flight request promise. It is already represented by the
-      // transcript's `stopReason: "aborted"`; do not turn that normal control flow
-      // into a rejected IPC call and a renderer-level error toast.
-      if (!isAbortOutcome(error)) throw error;
-    }
+    await promptAccepted(
+      (preflightResult) => session.prompt(message, {
+        streamingBehavior: options?.streamingBehavior,
+        images: options?.images,
+        preflightResult,
+      }),
+      {
+        // Stop aborts the in-flight request promise. It is already represented by the
+        // transcript's `stopReason: "aborted"`; do not turn that normal control flow
+        // into a rejected IPC call and a renderer-level error toast.
+        isAbort: isAbortOutcome,
+        onLateFailure: (error) => {
+          console.error(`[engine] run failed after the prompt was accepted (${id ?? "no conversation"}):`, error);
+        },
+      },
+    );
   }
 
   async promptConversation(id: string, message: string, images?: Array<{ type: "image"; data: string; mimeType: string }>): Promise<void> {
@@ -1202,7 +994,10 @@ export class PiProcessManager {
       this.#bumpQueueEpoch(item.conversationId);
       this.#queueDrainFaults.delete(item.conversationId);
       this.#messageQueue.pause(item.conversationId, null);
-      if (this.#isLive(item.conversationId) && this.#interruptMode === "immediate") {
+      // A queued `/compact` is a command for the session, not words for the model: it
+      // waits for the run (see `#compactIfCommand`) rather than being steered into it.
+      const command = parseCompactCommand(current.sentText ?? current.text) !== null;
+      if (!command && this.#isLive(item.conversationId) && this.#interruptMode === "immediate") {
         await this.#insertQueuedSteer(current);
       } else {
         this.#emitQueue(item.conversationId);
@@ -1544,7 +1339,12 @@ export class PiProcessManager {
     return total;
   }
   async compact(customInstructions?: string, conversationId?: string): Promise<EngineSessionState> {
-    await (await this.#sessionFor(conversationId)).session.compact(customInstructions);
+    const { session } = await this.#sessionFor(conversationId);
+    // The SDK's `compact()` starts by aborting whatever the session is doing. A
+    // compaction asked for mid-run waits for the run instead of killing it: that abort
+    // ended the turn with no notice at all, which read as the agent quitting.
+    if (!session.isIdle) await session.waitForIdle();
+    await session.compact(customInstructions);
     return this.getState(conversationId);
   }
   async getCommands(conversationId?: string): Promise<SlashCommand[]> {
@@ -1808,6 +1608,18 @@ export class PiProcessManager {
   }
   async setConversationProject(id: string, project: string | null): Promise<WorkspaceSnapshot> {
     const before = this.#catalog.get(id);
+    // Re-homing disposes the session below, and disposing aborts whatever it is doing —
+    // after `unsubscribe()`, so a run in flight simply vanished: no `agent_end`, no error,
+    // no notice, and the reply being written never reached the transcript. Refuse while
+    // the chat works; the phone's 移到项目 shows this sentence.
+    const managedBefore = this.#sessions.get(id);
+    if (
+      before &&
+      (before.project ?? null) !== (project ?? null) &&
+      (this.#busy(id) || (managedBefore !== undefined && !managedBefore.session.isIdle))
+    ) {
+      throw new Error(uiText("会话正在运行，停止后再移到其他项目", "This chat is still running; stop it before moving it to another project"));
+    }
     const updated = this.#catalog.setProject(id, project ?? undefined);
     if (!updated || before?.cwd === updated.cwd) return this.#catalog.snapshot();
 
@@ -2385,7 +2197,7 @@ export class PiProcessManager {
   ): Promise<ProviderConfig[]> { await addProviderConfig(this.#paths, draft, models); await this.reloadProviders(); return this.listProviders(); }
   async scanCcSwitch() { return scanCcSwitch(this.#paths); }
   async importCcSwitch(ids: string[]): Promise<ProviderConfig[]> { await importCcSwitch(this.#paths, ids); await this.reloadProviders(); return this.listProviders(); }
-  async updateProvider(id: string, patch: { name?: string; baseUrl?: string; api?: string; enabled?: boolean; models?: ProviderModel[]; apiKey?: string }): Promise<ProviderConfig[]> { updateProviderConfig(this.#paths, id, { name: patch.name, baseUrl: patch.baseUrl?.trim().replace(/\/+$/, ""), api: patch.api, enabled: patch.enabled, models: patch.models }); if (patch.apiKey !== undefined) { const env = providerKeyEnv(this.#paths, id); if (env) await setProviderKey(this.#paths, env, patch.apiKey); } await this.reloadProviders(); return this.listProviders(); }
+  async updateProvider(id: string, patch: { name?: string; baseUrl?: string; api?: string; enabled?: boolean; models?: ProviderModel[]; modelOrder?: string[]; apiKey?: string }): Promise<ProviderConfig[]> { updateProviderConfig(this.#paths, id, { name: patch.name, baseUrl: patch.baseUrl?.trim().replace(/\/+$/, ""), api: patch.api, enabled: patch.enabled, models: patch.models, modelOrder: patch.modelOrder }); if (patch.apiKey !== undefined) { const env = providerKeyEnv(this.#paths, id); if (env) await setProviderKey(this.#paths, env, patch.apiKey); } await this.reloadProviders(); return this.listProviders(); }
   async removeProvider(id: string): Promise<ProviderConfig[]> { await removeProviderConfig(this.#paths, id); await this.reloadProviders(); return this.listProviders(); }
 
   /**
@@ -2610,76 +2422,32 @@ export class PiProcessManager {
   }
 
   async #gitToplevel(cwd: string): Promise<string> {
-    const root = (await execFileAsync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], { timeout: 5000 })).stdout.trim();
-    if (!root) throw new Error(uiText("无法识别 Git 项目", "Not a Git project"));
-    return root;
+    return gitToplevel(cwd);
   }
 
   async #gitCommonRoot(cwd: string): Promise<string> {
-    const raw = (await execFileAsync("git", ["-C", cwd, "rev-parse", "--git-common-dir"], { timeout: 5000 })).stdout.trim();
-    if (!raw) throw new Error(uiText("无法识别 Git 项目", "Not a Git project"));
-    const common = isAbsolute(raw) ? raw : resolve(cwd, raw);
-    return common.endsWith(".git") ? dirname(common) : await this.#gitToplevel(cwd);
+    return gitCommonRoot(cwd);
   }
 
   async #gitBranch(cwd: string): Promise<string> {
-    const branch = (await execFileAsync("git", ["-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"], { timeout: 5000 })).stdout.trim();
-    return branch && branch !== "HEAD" ? branch : "HEAD";
+    return gitBranch(cwd);
   }
 
   async #branchExists(root: string, branch: string): Promise<boolean> {
-    try {
-      await execFileAsync("git", ["-C", root, "show-ref", "--verify", "--quiet", `refs/heads/${branch}`], { timeout: 5000 });
-      return true;
-    } catch {
-      return false;
-    }
+    return branchExists(root, branch);
   }
 
   async #createGitWorktree(project: string, id: string, options?: { path?: string; branch?: string; label?: string }): Promise<{ path: string; branch: string }> {
-    const root = await this.#gitToplevel(project);
-    const projectName = basename(root);
-    const safe = sanitizeSegment(options?.label || options?.branch || "run") || "run";
-    const branch = (options?.branch?.trim() || `fastvibe/${safe}-${id.slice(0, 8)}`).replace(/^\/+/, "");
-    if (!branch || branch.startsWith("-") || branch.includes("\0") || /\s/.test(branch)) {
-      throw new Error(uiText("分支名称无效", "Invalid branch name"));
-    }
-    let path = options?.path?.trim()
-      ? expandUserPath(options.path)
-      : defaultWorktreePath(projectName, `${safe}-${id.slice(0, 8)}`);
-    if (existsSync(path)) {
-      if (options?.path?.trim()) throw new Error(uiText("该路径已存在", "That path already exists"));
-      path = `${path}-${id.slice(0, 8)}`;
-    }
-    await mkdir(dirname(path), { recursive: true });
-    const exists = await this.#branchExists(root, branch);
-    if (exists) {
-      await execFileAsync("git", ["-C", root, "worktree", "add", path, branch], { timeout: 30000, maxBuffer: 128 * 1024 });
-    } else {
-      await execFileAsync("git", ["-C", root, "worktree", "add", "-b", branch, path, "HEAD"], { timeout: 30000, maxBuffer: 128 * 1024 });
-    }
-    return { path, branch };
+    return createGitWorktree(project, id, options);
   }
 
   async #removeWorktree(path: string, project?: string): Promise<void> {
-    const root = project && existsSync(project) ? project : path;
-    await execFileAsync("git", ["-C", root, "worktree", "remove", "--force", path], { timeout: 30000, maxBuffer: 128 * 1024 }).catch(() => undefined);
+    return removeGitWorktree(path, project);
   }
 
   async #listGitWorktrees(conversationId: string): Promise<GitWorktreeInfo[]> {
     const conversation = this.#catalog.get(conversationId);
-    const cwd = conversation?.cwd || conversation?.project;
-    if (!cwd) return [];
-    try {
-      const { stdout } = await execFileAsync("git", ["-C", cwd, "worktree", "list", "--porcelain"], { timeout: 5000, maxBuffer: 256 * 1024 });
-      const cwdResolved = conversation?.cwd ? resolve(conversation.cwd) : "";
-      return parseWorktreePorcelain(stdout).map((item) => ({
-        ...item,
-        current: Boolean(cwdResolved) && resolve(item.path) === cwdResolved,
-      }));
-    } catch {
-      return [];
-    }
+    return listGitWorktrees(conversation?.cwd, conversation?.project);
   }
 
   async #applyWorktree(id: string, worktree: { path: string; branch: string } | undefined, project?: string): Promise<WorktreeHostResult> {
@@ -2694,7 +2462,10 @@ export class PiProcessManager {
     if (!conversation) return false;
     const managed = this.#sessions.get(id);
     if (managed && managed.cwd === conversation.cwd) return true;
-    if (managed?.session.isStreaming || managed?.session.isCompacting) {
+    // `isIdle`, not `isStreaming`: between an `agent_end` and the retry, compaction or
+    // continuation the SDK still owes the run, nothing is streaming — and disposing the
+    // session there aborts that pending work with no event anyone would see.
+    if (managed && !managed.session.isIdle) {
       this.#pendingCwdRebind.add(id);
       return false;
     }
@@ -2863,6 +2634,16 @@ export class PiProcessManager {
     if (!this.#runtime || !this.#models) throw new Error("engine not ready");
     const cwd = conversation.cwd || conversation.project || ensureScratchWorkspace(this.#paths.scratchDir, conversation.id);
     const sessionDir = join(this.#paths.sessionsDir, `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`);
+    // A transcript with a gap in its parent chain reopens as only what follows the gap.
+    // Relink it first; a repair that fails must not keep the chat from opening.
+    if (conversation.sessionFile) {
+      try {
+        const relinked = repairTranscriptFile(conversation.sessionFile);
+        if (relinked > 0) console.warn(`[transcript] relinked ${relinked} dangling entr${relinked === 1 ? "y" : "ies"} in ${conversation.sessionFile}`);
+      } catch (error) {
+        console.warn(`[transcript] repair failed for ${conversation.sessionFile}`, error);
+      }
+    }
     const sessionManager = conversation.sessionFile
       ? SessionManager.open(conversation.sessionFile, undefined, cwd)
       : SessionManager.create(cwd, sessionDir);
@@ -2946,7 +2727,7 @@ export class PiProcessManager {
       onError: (error) => this.#emit({ type: "extension_error", conversationId: conversation.id, extensionPath: error.extensionPath, event: error.event, error: error.error }),
     });
     const managed: ManagedSession = { conversationId: conversation.id, cwd, session: result.session, extensions: result.extensionsResult, unsubscribe: () => undefined };
-    managed.unsubscribe = result.session.subscribe((event) => {
+    managed.unsubscribe = result.session.subscribe(guardSessionListener(`conversation ${conversation.id}`, (event) => {
       // Accumulate wall-clock timings for the composer's turn statistics. Tools
       // may overlap, so the open count gates a single tool span.
       const now = Date.now();
@@ -3189,7 +2970,7 @@ export class PiProcessManager {
           });
         }
       }
-    });
+    }));
     this.#installQueueBoundary(conversation.id, result.session);
     this.#sessions.set(conversation.id, managed);
     this.#touchSession(conversation.id);
@@ -3201,7 +2982,7 @@ export class PiProcessManager {
     const autoCompact = readAutoCompact(this.#paths);
     if (result.session.autoCompactionEnabled !== autoCompact) result.session.setAutoCompactionEnabled(autoCompact);
     // A conversation with no history yet starts on the user's pinned 默认模型.
-    if (result.session.messages.length === 0) await this.#applyPreferredModel(result.session);
+    if (result.session.messages.length === 0) await this.#applyPreferredModel(result.session, conversation.project);
     const payload: ConversationReadyEvent = {
       id: conversation.id,
       messages: this.#messages(result.session, conversation.id),
@@ -3225,7 +3006,15 @@ export class PiProcessManager {
     const conversationId = event.conversationId;
     if (typeof conversationId === "string") this.#retain(conversationId, event, RETAIN_FROM_EMIT);
     this.#trackSubagentEvent(event);
-    for (const listener of this.#eventListeners) listener(event);
+    // One listener that throws must not deny the event to the rest — nor, since this
+    // runs inside the SDK's own dispatch, fail the run that produced it.
+    for (const listener of this.#eventListeners) {
+      try {
+        listener(event);
+      } catch (error) {
+        console.error(`[engine] event listener failed on ${String(event.type)}`, error);
+      }
+    }
   }
 
   /**
@@ -3617,7 +3406,11 @@ export class PiProcessManager {
       const handedToSession = this.#messageQueue.get(candidate.id);
       if (handedToSession && !handedToSession.claimed) this.#dropConsumedPrompt(conversationId, candidate.id);
       this.#scheduleQueueDrain(conversationId);
-    } catch {
+    } catch (error) {
+      // Nothing else carries the reason: the row only turns 暂停, and a row that was
+      // delivered before the run threw leaves no trace at all. Report it once, unless
+      // Stop (or a newer queue operation) is what ended the attempt.
+      let report = !isAbortOutcome(error);
       await this.#withQueue(conversationId, async () => {
         const current = candidate ? this.#messageQueue.get(candidate.id) : undefined;
         if (!current) return;
@@ -3625,6 +3418,7 @@ export class PiProcessManager {
         // Stop, reorder, resume, or session replacement superseded this attempt. Keep
         // the winner's durable state; an AbortError must not turn stopped into error.
         if (state.pause === "stopped" || (this.#queueEpochs.get(conversationId) ?? 0) !== epoch) {
+          report = false;
           if (state.pause !== "stopped" && !current.claimed && current.sending) {
             this.#messageQueue.update(current.id, { sending: false });
             this.#emitQueue(conversationId);
@@ -3637,6 +3431,9 @@ export class PiProcessManager {
         else this.#messageQueue.fail(current.id, "error");
         this.#emitQueue(conversationId);
       });
+      if (report) {
+        this.#emit({ type: "queue_error", conversationId, message: error instanceof Error ? error.message : String(error) });
+      }
     }
   }
 
@@ -3679,6 +3476,8 @@ export class PiProcessManager {
   async #compactIfCommand(session: AgentSession, message: string): Promise<boolean> {
     const command = parseCompactCommand(message);
     if (!command) return false;
+    // Never through the run: the SDK's `compact()` aborts it first (see `compact`).
+    if (!session.isIdle) await session.waitForIdle();
     await session.compact(command.instructions);
     return true;
   }
@@ -4022,218 +3821,27 @@ export class PiProcessManager {
    * prompt. The built-in `question` tool feature-detects it and falls back to
    * sequential `select`/`input` on hosts that do not provide it (real pi/TUI).
    */
-  /**
-   * Run one subagent role to completion on a throwaway session.
-   *
-   * The whole point is context isolation: the role gets its own session, its own
-   * system prompt and only the tools its definition allows, and streams its
-   * events back under `subagent_event` so the right pane can show the transcript.
-   * A throwaway `DefaultResourceLoader` loads no FastVibe extension (no recursion,
-   * no plan/goal) except the permission sandbox, so a delegated `bash`/`edit` is
-   * still gated by the user's current mode.
-   */
   async #runSubagent(conversationId: string, request: SubagentHostRequest): Promise<SubagentHostResponse> {
-    const { subagentId } = request;
-    const lifecycle = (status: string, error?: string): void => {
-      this.#emit({ type: "subagent_lifecycle", subagentId, conversationId, agent: request.agent, name: request.agent, status, detail: request.task, ...(error ? { error } : {}) });
-    };
-    const control = new SubagentControl(request.signal, () => this.#resolvePendingUi(undefined, subagentId));
-    this.#subagentControls.set(subagentId, control);
-    let session: AgentSession | undefined;
-    let unsubscribe: (() => void) | undefined;
-    let thrown: unknown;
-    let stopReason: string | undefined;
-    let errorMessage: string | undefined;
-    let messages: unknown[] = [];
-    let summary = summarizeSubagentMessages([]);
-    let usedModel: string | undefined;
-    try {
-      lifecycle("running");
-      control.check();
-      if (!this.#runtime || !this.#models) throw new Error("engine not ready");
-      const cwd = request.cwd || this.#cwd;
-      const settingsManager = SettingsManager.create(cwd, this.#paths.agentDir);
-      const sandbox = builtinExtensionFile("permission-sandbox.ts");
-      // A delegated run never loads the `output-language` extension (`noExtensions`), so
-      // its system prompt carries the same AI 偏好语言 requirement directly — a subagent
-      // report the user cannot read is a bug, not a preference.
-      const appendSystemPrompt = [
-        request.systemPrompt.trim(),
-        currentAiLanguageDirective(),
-        currentCustomSystemPrompt(),
-      ].filter(
-        (value): value is string => Boolean(value),
-      );
-      const loader = new DefaultResourceLoader({
-        cwd,
-        agentDir: this.#paths.agentDir,
-        settingsManager,
-        noExtensions: true,
-        noThemes: true,
-        noPromptTemplates: true,
-        noSkills: true,
-        ...(sandbox ? { additionalExtensionPaths: [sandbox] } : {}),
-        ...(appendSystemPrompt.length > 0 ? { appendSystemPrompt } : {}),
-      });
-      await loader.reload();
-      control.check();
-
-      // A role's configured model wins when it is available and authenticated. An empty
-      // role setting inherits the parent conversation's model, keeping delegation on the
-      // gateway the user just proved works; the user's default model is the last resort
-      // for a parent session that has no usable model of its own.
-      const preferred = readDefaultModel(this.#paths);
-      const configuredModel = this.#subagentManager.modelFor(request.agent, request.model, request.agentSource);
-      const thinkingLevel = this.#subagentManager.thinkingLevelFor(request.agent, request.thinkingLevel, request.agentSource);
-      const model = this.#resolveSubagentModel(
-        configuredModel,
-        request.fallbackModel ?? (preferred ? `${preferred.provider}/${preferred.id}` : undefined),
-      );
-      const tools =
-        request.tools && request.tools.length > 0
-          ? request.tools
-          : ["read", "bash", "edit", "write", "grep", "find", "ls"];
-      usedModel = model ? `${model.provider}/${model.id}` : undefined;
-      const created = await createAgentSession({
-        cwd,
-        agentDir: this.#paths.agentDir,
-        modelRuntime: this.#runtime,
-        sessionManager: SessionManager.inMemory(cwd),
-        settingsManager,
-        resourceLoader: loader,
-        tools,
-        ...(model ? { model } : {}),
-        ...(thinkingLevel ? { thinkingLevel } : {}),
-      });
-      session = created.session;
-      control.bind(session);
-      const activeSession = session;
-      // Bind the parent's UI so the sandbox's `confirm` renders in the same
-      // composer panel as a main-tool approval, and `hasUI` is true for the hook.
-      await session.bindExtensions({ mode: "rpc", uiContext: this.#extensionUi(conversationId, subagentId) });
-      this.#subagentSessions.set(subagentId, session);
-      this.#publishSubagentState(subagentId, conversationId, activeSession);
-      unsubscribe = activeSession.subscribe((event) => {
-        // Time each thinking block as it streams. A delegated run's transcript has no
-        // measured bounds of its own, so without this its thinking row could only ever
-        // fall back to the span of the whole round-trip — and while that round-trip was
-        // still running there was nothing to fall back to at all.
-        const now = Date.now();
-        this.#timeReasoning(subagentId, event, activeSession, now, (entryId, blocks) =>
-          this.#fileSubagentReasoning(subagentId, entryId, blocks),
-        );
-        // The bounds belong on the *inner* event: the renderer re-applies that object
-        // (`applySubagentStream` unwraps `event.event`), and `stampThinkingTiming`
-        // reads them off whatever it was handed.
-        const nested = slimStreamEvent(event as unknown as Record<string, unknown>);
-        this.#withThinkingTiming(subagentId, event, nested);
-        this.#emit({ type: "subagent_event", subagentId, conversationId, event: nested });
-        // The context window moves at every turn boundary, exactly as it does on the
-        // main thread, so the read-only composer's ring is refreshed from the same
-        // point rather than only when the run ends.
-        if (event.type === "turn_end" || event.type === "agent_start" || event.type === "agent_settled") {
-          this.#publishSubagentState(subagentId, conversationId, activeSession);
-        }
-      });
-      control.check();
-      await session.prompt(request.task);
-    } catch (error) {
-      thrown = error;
-    }
-    unsubscribe?.();
-    try {
-      if (session) {
-        messages = session.messages.slice();
-        summary = summarizeSubagentMessages(messages);
-        if (session.model) usedModel = `${session.model.provider}/${session.model.id}`;
-        // `message_end` is slimmed for IPC, so the live stream is the only in-flight
-        // transcript; persist the mapped session here so a tab opened after the run
-        // still has the full reply (tools and parts included). The sub-session is
-        // in-memory, but its entries still carry the persist instant, so a completed
-        // pane's footer reads the same as a persisted transcript's.
-        const subEntryIds = sessionEntryIds(session);
-        this.#subagentMessages.set(
-          subagentId,
-          mapEngineMessages(
-            messages,
-            (message) => subEntryIds.get(message),
-            this.#subagentReasoning.get(subagentId),
-            undefined,
-            sessionCompletionTimes(session),
-          ),
-        );
-        this.#publishSubagentState(subagentId, conversationId, session);
-      }
-    } catch (error) {
-      thrown ??= error;
-    } finally {
-      this.#subagentReasoning.delete(subagentId);
-    }
-    // A run cut off mid-thought (aborted, torn down) never emits the `message_end` that
-    // would have dropped this, and the key is the run id — nothing else will reuse it.
-    this.#reasoningRun.delete(subagentId);
-    stopReason = control.aborted ? "aborted" : thrown ? (isAbortOutcome(thrown) ? "aborted" : "error") : summary.stopReason;
-    errorMessage = thrown ? (thrown instanceof Error ? thrown.message : String(thrown)) : summary.errorMessage;
-    // A user stop and a parent abort both arrive as `aborted`, but only the first has a
-    // waiting parent to tell, and it is the message the main agent reads back as the
-    // tool result. Forced, not merely relabelled: the abort can surface here as a
-    // thrown error (`thrown` above), and the tool result must still say the user
-    // stopped it rather than name an engine failure.
-    if (this.#stoppedSubagents.delete(subagentId)) {
-      stopReason = "aborted";
-      errorMessage = uiText("已被用户终止", "Stopped by the user");
-    }
-    const failed = stopReason === "error" || stopReason === "aborted";
-    try {
-      // Cache and state land before the terminal event: a pane reacting to it can
-      // now read the complete transcript, never a half-finalised live session.
-      lifecycle(stopReason === "aborted" ? "aborted" : failed ? "error" : "completed", errorMessage);
-    } finally {
-      control.dispose();
-      this.#subagentControls.delete(subagentId);
-      this.#subagentSessions.delete(subagentId);
-      this.#resolvePendingUi(undefined, subagentId);
-      session?.dispose();
-    }
-
-    return {
-      messages,
-      exitCode: failed ? 1 : 0,
-      usage: summary.usage,
-      model: usedModel,
-      stopReason,
-      errorMessage,
-    };
-  }
-
-  /**
-   * Resolve a subagent's model: the preferred spec first, else the fallback.
-   *
-   * A spec is only honored when this install can actually authenticate it: the
-   * catalog (`getAll()`) carries every reseller's models, and a spec that points at
-   * an unreachable vendor would otherwise be picked and fail the whole delegation
-   * with "No API key found". A spec may omit its provider; an id with no usable auth
-   * falls back instead of failing.
-   */
-  #resolveSubagentModel(spec?: string, fallback?: string): ReturnType<ModelRegistry["find"]> {
-    const registry = this.#models;
-    if (!registry) return undefined;
-    const usable = (model: ReturnType<ModelRegistry["find"]>) =>
-      Boolean(model) && registry.hasConfiguredAuth(model!);
-    const bySpec = (value?: string): ReturnType<ModelRegistry["find"]> => {
-      if (!value) return undefined;
-      const slash = value.indexOf("/");
-      const direct = slash > 0 ? registry.find(value.slice(0, slash), value.slice(slash + 1)) : undefined;
-      if (usable(direct)) return direct;
-      // A bare id (`claude-haiku-4-5`) resolves against the authenticated models only,
-      // so a role's vendor default can never outrank the user's working model. The id
-      // is re-checked for auth: `find`/`getAvailable` can surface a vendor entry whose
-      // provider has no key in *this* install, which is exactly the "No API key found
-      // for anthropic" failure a role's `model:` line used to cause.
-      const bare = registry.getAvailable().find((item) => item.id === value);
-      return usable(bare) ? bare : undefined;
-    };
-    return bySpec(spec) ?? bySpec(fallback);
+    return new SubagentTurnRunner({
+      runtime: this.#runtime,
+      models: this.#models,
+      cwd: this.#cwd,
+      paths: this.#paths,
+      subagentManager: this.#subagentManager,
+      subagentControls: this.#subagentControls,
+      subagentSessions: this.#subagentSessions,
+      subagentMessages: this.#subagentMessages,
+      subagentReasoning: this.#subagentReasoning,
+      reasoningRun: this.#reasoningRun,
+      stoppedSubagents: this.#stoppedSubagents,
+      emit: (event) => this.#emit(event),
+      resolvePendingUi: (conversationId, owner) => this.#resolvePendingUi(conversationId, owner),
+      extensionUi: (conversationId, owner) => this.#extensionUi(conversationId, owner),
+      publishSubagentState: (subagentId, conversationId, session) => this.#publishSubagentState(subagentId, conversationId, session),
+      timeReasoning: (key, event, session, now, file) => this.#timeReasoning(key, event, session, now, file),
+      fileSubagentReasoning: (subagentId, entryId, blocks) => this.#fileSubagentReasoning(subagentId, entryId, blocks),
+      withThinkingTiming: (key, event, payload) => this.#withThinkingTiming(key, event, payload),
+    }).run(conversationId, request);
   }
 
   #extensionUi(conversationId: string, owner: string = conversationId): FastVibeExtensionUIContext {
@@ -4500,167 +4108,42 @@ export class PiProcessManager {
     conversationId: string | undefined,
     fromEntryId?: string,
   ): { messages: ChatMessage[]; anchored: boolean } {
-    const branch = [...session.sessionManager.getBranch()];
-    const start = fromEntryId ? branch.findIndex((entry) => entry.id === fromEntryId) : 0;
-    const anchored = start >= 0;
-    const entries = anchored ? branch.slice(start) : branch;
-    const entryIds = new Map<unknown, string>();
-    const timings = new Map<string, ThinkingTiming[]>();
-    const transcript: unknown[] = [];
-    for (const entry of entries) {
-      for (const message of sessionEntryToContextMessages(entry)) {
-        // The mapper accepts plain engine messages. Keep the owning entry id beside
-        // every projection, including synthetic compaction/custom messages, so rows
-        // remain stable across reads and model dividers can find their reply.
-        entryIds.set(message, entry.id);
-        transcript.push(message);
-      }
-      if (entry.type !== "message") continue;
-      const blocks = this.#reasoning.get(entry.id);
-      if (blocks) timings.set(entry.id, blocks);
-    }
-    // Extension custom messages are drawn by their own registered renderer, so the
-    // plugin's terminal layout (goal's activity/audit cards) shows up in the GUI.
-    const runner = session.extensionRunner;
-    const renderCustom = (message: Record<string, unknown>): TuiRun[][] | undefined => {
-      const customType = typeof message.customType === "string" ? message.customType : undefined;
-      if (!customType) return undefined;
-      const renderer = runner.getMessageRenderer(customType);
-      if (!renderer) return undefined;
-      return renderExtensionMessage(renderer, message, this.#widgetWidth);
-    };
-    const messages = mapEngineMessages(
-      transcript,
-      (message) => entryIds.get(message),
-      timings,
-      renderCustom,
-      sessionCompletionTimes(session),
-    );
-    this.#insertModelSwitches(messages, branch, anchored ? start : 0);
-    // The SDK keeps the reply in flight in `agent.state.streamingMessage` and only
-    // pushes it into `agent.state.messages` on `message_end`. A read taken mid-run
-    // therefore ends at the user prompt with no trailing assistant row — and the
-    // renderer draws 「正在工作」 on that row (its live caret too), so a chat switched
-    // away from and back looked idle with its streamed text gone until the next event
-    // landed: the optimistic bubble `addUserMessage` made is replaced by this read.
-    // Append the reply being streamed, so the transcript says what the composer and
-    // the sidebar already do. An empty stand-in covers the window before the first
-    // `message_start` (run start, or an auto-retry backoff).
-    if (conversationId && this.#running.get(conversationId) === true && !this.#compacting.has(conversationId)) {
-      const [inFlight] = mapEngineMessages(session.state.streamingMessage ? [session.state.streamingMessage] : []);
-      if (inFlight?.role === "assistant") {
-        messages.push({
-          ...inFlight,
-          id: `running:${conversationId}`,
-          // `mapEngineMessages` is a transcript reader, so it marks every tool call
-          // `done`. This one is still forming its arguments — the assistant message
-          // has not ended, so none of its tools can have executed yet.
-          tools: inFlight.tools.map((tool) => ({ ...tool, status: "running" as const })),
-        });
-      } else if (messages.at(-1)?.role !== "assistant") {
-        // Between the run starting and the first `message_start` — the window a
-        // prompt sits in right after it is sent — there is no partial to show, so
-        // stand in the empty bubble the run is about to stream into. An assistant
-        // already on the end means a reply (or an auto-retry's failure) is what the
-        // transcript should show for the rest of the run, not a second working row.
-        messages.push({ id: `running:${conversationId}`, role: "assistant", text: "", tools: [], parts: [], createdAt: Date.now() });
-      }
-    }
-    // A compaction has no transcript entry until it lands, and its own payload only
-    // reaches the renderer while this conversation is on screen. Serving the running
-    // card from here is what makes it survive a chat switch (or a window reload)
-    // instead of vanishing until the summary is finally written.
-    if (conversationId && this.#compacting.has(conversationId)) {
-      messages.push({
-        id: `compact:${conversationId}`,
-        role: "system",
-        text: "",
-        tools: [],
-        parts: [],
-        createdAt: Date.now(),
-        kind: "compact",
-        compact: { status: "running", reason: this.#compacting.get(conversationId) },
-      });
-    }
-    return { messages, anchored };
-  }
-  /**
-   * Fold model switches into the transcript as divider parts, where the replies show them.
-   *
-   * A switch is drawn only where it was *used*, so the reply is the source of truth: every
-   * assistant message carries the `provider`/`model` that produced it, which makes two
-   * consecutive replies on different models a switch — and a pick that nothing followed (or
-   * one reverted before the next prompt) no switch at all. The `model_change` entry the SDK
-   * writes on the pick is deliberately *not* consulted: it is anchored to the last completed
-   * message, which during a run sits *before* the reply still streaming, so the entry alone
-   * cannot say which reply the new model actually wrote.
-   *
-   * The part is unshifted onto the first reply the new model produced — the same slot the
-   * live `model_changed` splice uses, since the transcript reload and the live stream have to
-   * agree. Consecutive engine messages of one reply are merged into a single row by the
-   * renderer, so a switch made mid-run still lands *between that reply's parts* rather than
-   * between turns.
-   */
-  #insertModelSwitches(
-    messages: ChatMessage[],
-    branch: ReturnType<AgentSession["sessionManager"]["getBranch"]>,
-    fromIndex: number,
-  ): void {
-    if (messages.length === 0) return;
-    const indexById = new Map(messages.map((message, index) => [message.id, index]));
-    let previous: EngineModel | undefined;
-    // A tail read still has to know which model answered *before* it, or the first
-    // reply in the tail would compare against nothing and lose its divider. Reading
-    // the model off each entry is a field access, not a projection, so catching up
-    // over the skipped head stays cheap.
-    for (let index = 0; index < fromIndex; index += 1) {
-      const entry = branch[index];
-      if (entry.type !== "message") continue;
-      const raw: unknown = entry.message;
-      if (!isRecord(raw) || raw.role !== "assistant") continue;
-      if (typeof raw.provider !== "string" || typeof raw.model !== "string") continue;
-      previous = { provider: raw.provider, id: raw.model };
-    }
-    for (const entry of branch.slice(fromIndex)) {
-      if (entry.type !== "message") continue;
-      const raw: unknown = entry.message;
-      if (!isRecord(raw) || raw.role !== "assistant") continue;
-      // A reply that does not name its model (nothing the engine produces is silent
-      // about this, but an imported transcript can be) is transparent: it draws no
-      // divider, and does not become the model the next reply is compared against.
-      if (typeof raw.provider !== "string" || typeof raw.model !== "string") continue;
-      const model: EngineModel = { provider: raw.provider, id: raw.model };
-      const from = previous;
-      // Record before the on-screen check below so the divider names the model that
-      // actually answered, including replies before a compaction card.
-      previous = model;
-      if (!from || (from.provider === model.provider && from.id === model.id)) continue;
-      const index = indexById.get(entry.id);
-      // A current-branch reply should be on screen; missing ids are malformed or
-      // filtered messages, not a compaction hiding the conversation's history.
-      if (index === undefined) continue;
-      if (messages[index].role !== "assistant") continue;
-      (messages[index].parts ??= []).unshift({ kind: "model", from, to: model });
-    }
+    return projectSessionMessages({
+      session,
+      conversationId,
+      fromEntryId,
+      reasoning: this.#reasoning,
+      widgetWidth: this.#widgetWidth,
+      running: this.#running,
+      compacting: this.#compacting,
+    });
   }
   /**
    * Force the SDK to write the session file.
    *
    * The SDK defers the first write until an assistant message exists — a deliberate
    * choice so a conversation with no reply leaves no file, and the reason a restart
-   * mid-run otherwise loses the prompt that was just sent. Rewriting the current
+   * mid-run otherwise loses the prompt that was just sent. Writing the current
    * entries and flipping `flushed` keeps the SDK's own persistence a pure append, so
    * the next assistant message does not rewrite (and duplicate) the header.
+   *
+   * Once `flushed` is set there is nothing to write: the SDK appends every entry the
+   * moment it is created. This used to rewrite the whole file from memory anyway, on
+   * every prompt, on release and at quit — truncate, then one write per entry — which
+   * is how transcripts lost their middle: a writer holding an older copy dropped what
+   * another had appended, and a crash or failed write mid-rewrite left a prefix that
+   * later appends pointed past (see `transcript-file.ts`). The one write left is atomic.
    */
   #persist(session: AgentSession): boolean {
     const manager = session.sessionManager as unknown as {
       persist?: boolean;
       flushed?: boolean;
-      _rewriteFile?: () => void;
+      fileEntries?: unknown[];
     };
-    if (!manager.persist || !session.sessionFile || typeof manager._rewriteFile !== "function") return false;
+    if (!manager.persist || !session.sessionFile || !Array.isArray(manager.fileEntries)) return false;
+    if (manager.flushed) return true;
     try {
-      manager._rewriteFile();
+      writeTranscriptEntries(session.sessionFile, manager.fileEntries);
       manager.flushed = true;
       return true;
     } catch {
@@ -4765,8 +4248,8 @@ export class PiProcessManager {
     // unchecked. Move to the pinned 「默认模型」, else to another model of the user's
     // own providers (never a stray SDK built-in that merely has an env key), and let
     // setModel() record the switch the user did not ask for.
-    const pinned = readDefaultModel(this.#paths);
-    let fallback = pinned ? registry.find(pinned.provider, pinned.id) : undefined;
+    const preferred = readPreferredModelSettings(this.#paths, this.#catalog.get(id)?.project);
+    let fallback = preferred.model ? registry.find(preferred.model.provider, preferred.model.id) : undefined;
     if (!fallback) {
       for (const item of this.#modelsCache ?? []) {
         const candidate = registry.find(item.provider, item.id);
@@ -4796,16 +4279,16 @@ export class PiProcessManager {
    * pin whose provider was removed or whose key is gone leaves the engine default in
    * place rather than blocking the session.
    */
-  async #applyPreferredModel(session: AgentSession): Promise<void> {
+  async #applyPreferredModel(session: AgentSession, project?: string): Promise<void> {
     const pending = this.#pendingModel;
-    const thinking = this.#pendingThinking;
-    const pinned = readDefaultModel(this.#paths);
+    const pendingThinking = this.#pendingThinking;
+    const preferred = readPreferredModelSettings(this.#paths, project);
     this.#clearPendingPick();
-    // The pick made on the hero wins; the pin is both its fallback and the normal path
-    // for a conversation that starts with nothing pre-picked.
+    // The pick made on the hero wins; the project pin overrides the global preference
+    // for project conversations, and the global pin is the fallback for all others.
     const model =
       (pending ? this.#models?.find(pending.provider, pending.id) : undefined) ??
-      (pinned ? this.#models?.find(pinned.provider, pinned.id) : undefined);
+      (preferred.model ? this.#models?.find(preferred.model.provider, preferred.model.id) : undefined);
     if (model) {
       try {
         await session.setModel(model);
@@ -4814,7 +4297,9 @@ export class PiProcessManager {
       }
     }
     // `setModel` re-clamps the level to the new model, so the pick lands after it.
-    if (thinking) session.setThinkingLevel(thinking as ThinkingLevel);
+    // "auto" deliberately leaves the model's own default untouched.
+    const thinking = pendingThinking ?? preferred.thinkingLevel;
+    if (thinking && thinking !== "auto") session.setThinkingLevel(thinking as ThinkingLevel);
   }
 
   #clearPendingPick(): void {

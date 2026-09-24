@@ -47,6 +47,7 @@ export function mapEngineMessages(
 ): ChatMessage[] {
   if (!Array.isArray(raw)) return [];
   const output: ChatMessage[] = [];
+  const toolsById = new Map<string, ToolCallBlock>();
   for (const entry of raw) {
     const message = unwrapMessage(entry);
     if (!message) continue;
@@ -89,8 +90,7 @@ export function mapEngineMessages(
       const id = String(message.toolCallId ?? "");
       const result = toolText(message.content ?? message.result ?? message.output);
       if (id) {
-        const assistant = [...output].reverse().find((item) => item.role === "assistant" && item.tools.some((tool) => tool.id === id));
-        const tool = assistant?.tools.find((item) => item.id === id);
+        const tool = toolsById.get(id);
         if (tool) {
           if (result) tool.result = result;
           if (message.details !== undefined) tool.details = message.details;
@@ -105,6 +105,7 @@ export function mapEngineMessages(
     const id = idOf?.(entry) ?? String(message.id ?? crypto.randomUUID());
     applyThinkingTimings(parts, id ? timings?.get(id) : undefined);
     const error = assistantError(message);
+    const stop = error ? undefined : assistantStop(message);
     if (!text && !thinking && tools.length === 0 && attachments.length === 0 && !error && role !== "assistant") continue;
     output.push({
         id,
@@ -120,7 +121,11 @@ export function mapEngineMessages(
         kind: role === "system" ? "notice" : "message",
         attachments: attachments.length > 0 ? attachments : undefined,
         error,
+        stop,
       });
+    if (role === "assistant") {
+      for (const tool of tools) toolsById.set(tool.id, tool);
+    }
   }
   return output;
 }
@@ -139,12 +144,21 @@ function applyThinkingTimings(parts: MessagePart[], timings: ThinkingTiming[] | 
   }
 }
 
-/** Surface a failed model request as an error on the assistant turn.
- *  User aborts (`stopReason: "aborted"`) stay silent — they already stopped on purpose. */
+/** Surface a failed model request as an error on the assistant turn. */
 function assistantError(message: Record<string, unknown>): string | undefined {
   if (message.role !== "assistant" || message.stopReason !== "error") return undefined;
   const text = typeof message.errorMessage === "string" ? message.errorMessage.trim() : "";
   return text || "请求失败";
+}
+
+/**
+ * A reply that ended early without failing. Not an error bubble — a truncation or a stop
+ * is not a failed request — but not silence either: an abort the user did not ask for
+ * (and an output-limit cut) used to end the run with nothing on screen at all.
+ */
+function assistantStop(message: Record<string, unknown>): ChatMessage["stop"] {
+  if (message.role !== "assistant") return undefined;
+  return message.stopReason === "length" || message.stopReason === "aborted" ? message.stopReason : undefined;
 }
 
 function unwrapMessage(entry: unknown): Record<string, unknown> | null {

@@ -17,6 +17,34 @@ export function isPathLike(value: string): boolean {
   return PATH_LIKE.test(value);
 }
 
+/**
+ * Collect the same path-shaped tokens that the Markdown plugin can turn into links.
+ * This is intentionally independent from the AST rewrite: validation is asynchronous
+ * and must happen before the renderer is allowed to make any of those tokens clickable.
+ */
+export function collectPathCandidates(value: string): string[] {
+  const candidates = new Set<string>();
+  let fence: { marker: "`" | "~"; length: number } | undefined;
+  for (const line of value.split(/\r?\n/)) {
+    const fenceMatch = /^( {0,3})(`{3,}|~{3,})/.exec(line);
+    if (fence) {
+      if (fenceMatch && fenceMatch[2]![0] === fence.marker && fenceMatch[2]!.length >= fence.length) fence = undefined;
+      continue;
+    }
+    if (fenceMatch) {
+      fence = { marker: fenceMatch[2]![0] as "`" | "~", length: fenceMatch[2]!.length };
+      continue;
+    }
+    // Indented code blocks are also skipped by remarkPathLinks. Inline code inside
+    // prose remains eligible because it is not a full indented block.
+    if (/^(?: {4}|\t)/.test(line)) continue;
+    PATH.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = PATH.exec(line))) candidates.add(match[1]!);
+  }
+  return [...candidates];
+}
+
 function rewriteChildren(nodes: MdNode[], parentType: string | undefined): void {
   if (parentType === "link" || parentType === "linkReference" || parentType === "inlineCode" || parentType === "code" || parentType === "math" || parentType === "inlineMath") return;
   for (let index = 0; index < nodes.length; index++) {

@@ -340,8 +340,31 @@ full client. It
 boots through the same bridge (`bootRemote` in `remote/bridge.ts`; `remote/web.ts` and
 `mobile/entry.ts` are the two entries, and both pages share `remote/gate.css`) and reuses
 the desktop's session store, `MessageList` and `PermissionPanel`, so a reply reads the same
-on both screens. What it adds is a list sorted by 「does this need me」 (等你处理 → 运行中 →
-最近) and one chat at a time with a composer that sends, queues, stops and continues.
+on both screens. One chat is on screen at a time; every other chat is in a drawer
+(`conversation-drawer.tsx`, the shadcn `sheet`) sorted by 「does this need me」 (等你处理 →
+运行中 → 最近), so going between chats never costs the one behind it. `#/` is the new-chat
+page — there is no list page to land on. The composer sends, queues, stops, continues and
+attaches photos, and its chips pick the model, thinking level, permission mode and — on a
+new chat — the project, each from a bottom sheet (`option-sheet.tsx`). The header's ⋯
+renames, moves to another project, archives and deletes the chat on screen.
+
+- **A new chat's choices are held on the page, not the engine.** The desktop parks a pick
+  made before a conversation exists on the manager (`#pendingModel`), which is one value
+  for every client and is dropped when any conversation is activated. The phone keeps its
+  project / model / thinking in `Draft` and applies them (`applyDraftChoices`) to the
+  conversation its first send creates, before the prompt goes out.
+- **Leaving a deleted or archived chat goes to the new-chat page**, never to 「the next
+  chat」 the way the desktop does it: that path opens the chat, i.e. moves the engine's
+  active conversation.
+- **Photos are re-encoded in the browser** (`images.ts`): decoded (Safari reads HEIC,
+  which `filesToAttachments` would have turned into a path-less file chip), scaled to
+  2048px on the long side and sent as JPEG, so a 10 MB camera shot is not base64'd whole
+  into one WebSocket frame over the tunnel.
+- **The permission chip is the machine-wide setting**, and says so; choosing 完全访问 goes
+  through the same one-time warning (`PermissionModeProvider`) as the desktop.
+- **Another chat needing you, or finishing, is a toast with the way there**
+  (`useOtherChatNotices`). Finishing is read off the busy map, not `conversation_activity`,
+  which is only emitted for chats the *desktop* is not showing.
 
 - **It never calls `conversations.open`.** That sets the engine's active conversation, which
   every desktop window follows — reading a chat on the phone used to drag the desktop onto
@@ -369,8 +392,11 @@ on both screens. What it adds is a list sorted by 「does this need me」 (等�
   nothing on this side hears the server give up on it.
 - **A remembered 始终允许 is answered on the phone too.** The phone may be the only client
   looking at a chat that runs in the background on the desktop.
-- **Preview**: `mock-mobile.html` (`?waiting=1` parks an approval, `?running=1` a run) —
-  the fixture bridge from `mock.html` with the phone page behind it.
+- **Preview**: `mock-mobile.html` (`?waiting=1` parks an approval, `?running=1` a run;
+  `#/c/<id>` opens a chat) — the fixture bridge from `mock.html` with the phone page behind
+  it. The mock's `getState` / `setModel` / `setThinking` answer for the conversation asked
+  about, as the engine does; without a `conversationId` the store rejects a state reply as
+  a draft, and the model chip read 默认模型 on every chat.
 
 ### 窄视口（手机）
 
@@ -534,7 +560,7 @@ Main 每个会话一个 `AgentSession`，但引擎自己只有一个「当前会
 用户正在打的草稿。
 
 会话在等用户时：侧栏行显示 `Alert02Icon`，窗口未聚焦时按
-`settings.notifyApproval` 发系统通知。停止只在 composer；归档一个正在
+系统通知的总开关发通知。停止只在 composer；归档一个正在
 运行的会话会 `abort` 它，侧栏行不再提供停止按钮。
 
 Provider credentials are kept in FastVibe's isolated runtime and injected into the SDK's in-memory auth storage. Do not export these variables into the user's login shell or the in-app terminal.
@@ -1704,6 +1730,15 @@ means either: an agent **run** and a **compaction**.
   the tool cards had settled and the next token had not arrived — a transcript of finished rows that
   read as a hang. The point is that a live element is *last*, so a reply whose text is followed by a
   running tool still shows only the spinner.
+- **`engine:prompt` answers 「sent」, not 「finished」.** It resolves when the SDK accepts the
+  prompt (`preflightResult(true)`, `pi/prompt-acceptance.ts`) and rejects only when it was
+  refused; a run that fails afterwards is logged and reaches clients through its events. So a
+  rejection is the one case where the caller rolls back the optimistic row and hands the text
+  back to the composer. It used to stay open for the whole run, and over an SSH project its
+  120s call deadline — or a dropped socket — rejected it mid-run: the sent message came back
+  into the composer of a chat that was still working. Run-length calls (`prompt`,
+  `prompt-conversation`, `continue`, `compact`) carry no remote deadline either
+  (`callTimeoutFor`); a dead host still ends them through the SSH keepalive.
 - **Main owns the renderer's mark.** `conversation_running` is sent on every change (for
   background chats too), and only Main may lower it. A transcript read must not: `setMessages`
   leaves the run flags alone, because `reloadActiveMessages()` fires at every `agent_end` /
@@ -1721,12 +1756,13 @@ it has no transcript entry until the summary lands — so `#messages()` re-serve
 「正在压缩上下文」 card from `#compacting` for an in-flight compaction. Without it, switching
 away and back mid-compaction lost the card until the summary was finally written.
 
-## 折叠运行过程（设置 → 对话）
+## 折叠运行过程
 
-`settings.collapseRuns` (设置 → 对话, on by default) folds a finished run's thinking and tool
-calls behind one collapsed 「用时 …」 row, leaving the reply written after the last tool call on
-screen. It is modelled on zcode's turn-history fold, including its rule that the fold is gated
-on the turn's own terminal state.
+A finished run's thinking and tool calls always fold behind one collapsed 「用时 …」 row,
+leaving the reply written after the last tool call on screen. It is modelled on zcode's
+turn-history fold, including its rule that the fold is gated on the turn's own terminal state.
+There is no setting for it — 显示思考过程 and 显示消息时间 were removed with it; thinking and
+timestamps always show.
 
 - **The row is only drawn when the run is settled *and* wrote an answer — i.e. when the fold
   can actually happen.** A run still in flight, one that stopped on a tool call, and a failed
@@ -1748,7 +1784,7 @@ on the turn's own terminal state.
 - **It is a render-time view, not a transcript change.** `RunCollapse`
   (`components/chat/run-collapse.tsx`) wraps the parts `groupParts` already produced, so
   the fold re-uses the same thinking / tool-card / model-divider renderers as the unfolded
-  transcript, and toggling the setting needs no engine round-trip.
+  transcript. It is not a preference, so nothing has to round-trip to the engine.
 - **The header's 用时 and the footer's 耗时 are two different numbers, on purpose.** 耗时 is the
   turn's total, first round-trip's request start (`createdAt`) to the instant its last entry was
   persisted (`completedAt`, added by `sessionCompletionTimes` in `process-manager.ts`). 用时 is
@@ -1763,10 +1799,7 @@ on the turn's own terminal state.
   compact formatter it replaced is gone, and `formatDuration` returns `""` for a null span, so
   the statistics popover spells out its own `—`.
 - **Collapsed by default, and entirely the reader's afterwards** — nothing re-folds it under
-  them. The main thread takes the setting as a `MessageList` prop (like `showThinking` /
-  `showTimestamp`) so the memoised rows can skip re-rendering on each streamed token; the
-  辅助对话 and 子 Agent panes read it from the settings store, because they are not memoised
-  against a token stream the same way.
+  them. Every transcript draws it the same way: the main thread, 辅助对话, and 子 Agent.
 
 ## 思考耗时（思考块的「持续了 N 秒」）
 
@@ -1872,6 +1905,22 @@ from an event payload. So it is as fresh as the last `reloadActiveState()`.
   （`restoreCheckpoint` 记进 `skipped`），于是拼一个半还原的工作区再重试——正是这个功能
   要防的事。
 
+## 会话转写落盘（`engine/transcript-file.ts`）
+
+读取方把文件**最后一行**当作叶子，沿 `parentId` 往回走；只要中间有一条的父记录不在文件里，
+重新打开就只剩断点之后那一段（前面的内容其实还在磁盘上）。常驻内存时看不出来，所以用户是在
+归档 → 恢复（会话已被空闲回收，重新从磁盘读）或重启之后才发现「只剩一条消息」。
+
+- **`#persist` 只在 SDK 还没落盘时写一次**（`flushed === false`，即还没有回复的首轮）。之后 SDK
+  每条记录都即时追加，没有东西需要写。它曾经在每次提问、会话回收和退出时调用 SDK 的
+  `_rewriteFile()`——截断后逐条重写——拿着旧副本的写入方（例如共用数据目录的开发版和安装版）
+  会抹掉别人刚追加的记录，写到一半崩溃或出错又会留下一个前缀，后续追加指向不存在的父记录。
+  不要把整文件重写加回来。
+- **剩下那一次写是原子的**（`writeTranscriptEntries`：临时文件 → fsync → rename）。
+- **打开时修复**：`#ensureSession` 在 `SessionManager.open` 之前跑 `repairTranscriptFile`，把父记录缺失的
+  条目接到文件中的前一条上（只重写那几行，坏行原样保留，不会接成环），并在日志里记一条
+  `[transcript] relinked …`。对话搜索（`loadConversationTranscriptBranch`）在内存里做同样的接续，不写盘。
+
 ## 始终允许（permission rules）
 
 `lib/permission-rules.ts`，存在 `settings.permissionAlways`（`method:title:message` 键）。
@@ -1891,16 +1940,16 @@ from an event payload. So it is as fresh as the last `reloadActiveState()`.
 
 ## 系统通知（设置 → 通用）
 
-设置里是一个总开关加四个场景开关，全部**默认打开**。Main 在每个事件上读一次文件，所以改完
-立即生效。四个场景回答的是不同的问题：跑完是「可以回来看结果」，出错是「这次没成功」，停在
-审批上是「你不回答它就永远走不下去」——只有最后一条是真正的阻塞。
+设置里只剩一个总开关，**默认打开**。任务完成、任务出错、需要确认、应用更新不再各自可关：总开关
+开着时四个都提醒。Main 在每个事件上读一次文件，所以改完立即生效。四个场景回答的仍是不同的问题：
+跑完是「可以回来看结果」，出错是「这次没成功」，停在审批上是「你不回答它就永远走不下去」——只有最后一条是真正的阻塞。文案仍按场景区分，只是不再各有开关。
 
 - **`settings.notifyDone` / `notifyError` / `notifyApproval` / `notifyUpdate`**，平铺在
-  `settings.json` 里（Main 一次只读一个键）。**缺失即为打开**：开关是用来关的，不是用来开的，
-  否则升级上来的 install 会被静默静音。旧的 `notifications: "done" | "approval" | "off"`
-  被丢掉而不迁移——它的每个取值都是新默认值的子集。
+  `settings.json` 里，由总开关一起写成同一个值。**缺失即为打开**。只有四个键全部是 `false` 才算总开关关掉——单独一个
+  `false` 是旧的场景开关留下的，加载时丢掉（`normalizeNotificationSettings`），不再单独静音那个场景，否则设置页上
+  已经没有地方把它打开。旧的 `notifications: "done" | "approval" | "off"` 被丢掉而不迁移。
 - **判定与投递分两层。** `src/shared/notifications.ts` 不引 Electron（`node --test` 加载不了），
-  只回答两件事：这个场景开没开、这个事件属于哪个场景。`src/main/engine/notifications.ts`
+  只回答两件事：总开关开没开、这个事件属于哪个场景。`src/main/engine/notifications.ts`
   是 Electron 那一半：`new Notification` 和它的 click。这里多出的一个理由是 test 要能跑。
 - **`notifyError` 与 `notifyDone` 分开，`stopped` 两者都不发。** `agent_settled` 上的
   `#interruptedRuns` 判定既是「队列能不能继续排空」的依据，也是「这次算完成还是失败」的依据；

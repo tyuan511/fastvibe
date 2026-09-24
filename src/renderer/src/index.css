@@ -2,7 +2,6 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
-@import "@xyflow/react/dist/style.css";
 /*
  * KaTeX's stylesheet, for the LaTeX in replies and file previews
  * (`components/chat/markdown-view.tsx` → `rehype-katex`). Importing it here rather
@@ -690,42 +689,13 @@ body {
   }
 }
 
-/* React Flow chrome uses the same semantic tokens as the rest of the app. */
-.memory-flow {
-  --xy-background-pattern-dots-color: var(--border);
-  --xy-edge-stroke-default: var(--border);
-  --xy-handle-background-color-default: var(--muted-foreground);
-  --xy-handle-border-color-default: var(--background);
+/* Sigma fills its container with stacked canvases; the grab cursor is the pan affordance. */
+.memory-sigma .sigma-mouse {
+  cursor: grab;
 }
-.memory-flow .react-flow__controls {
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 0.625rem;
-  background: var(--card);
-  box-shadow: 0 4px 16px color-mix(in oklab, var(--foreground) 10%, transparent);
+.memory-sigma .sigma-mouse:active {
+  cursor: grabbing;
 }
-.memory-flow .react-flow__controls-button {
-  border-bottom: 1px solid var(--border);
-  background: var(--card);
-  fill: var(--foreground);
-}
-.memory-flow .react-flow__controls-button:last-child {
-  border-bottom: 0;
-}
-.memory-flow .react-flow__controls-button:hover {
-  background: var(--muted);
-}
-.memory-flow .react-flow__attribution {
-  display: none;
-}
-.memory-flow .react-flow__edge-path {
-  transition: opacity 160ms ease, stroke-width 160ms ease;
-}
-.memory-flow .react-flow__handle {
-  opacity: 0;
-  transition: opacity 160ms ease;
-}
-.memory-flow .react-flow__node:hover .react-flow__handle,
-.memory-flow .react-flow__node.selected .react-flow__handle {
-  opacity: 1;
+.memory-sigma.is-point .sigma-mouse {
+  cursor: pointer;
 }

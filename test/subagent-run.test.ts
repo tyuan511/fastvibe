@@ -6,7 +6,7 @@ import { SubagentControl } from "../src/main/pi/subagent-control.ts";
 import { reduceSubagent } from "../src/shared/subagent-state.ts";
 
 const ts = createRequire(import.meta.url)("typescript") as typeof import("typescript");
-const source = readFileSync(new URL("../src/main/pi/process-manager.ts", import.meta.url), "utf8");
+const source = readFileSync(new URL("../src/main/pi/process-manager-subagent.ts", import.meta.url), "utf8");
 const file = ts.createSourceFile("manager.ts", source, ts.ScriptTarget.Latest, true);
 let method = "";
 function visit(node: import("typescript").Node): void {
@@ -55,6 +55,9 @@ function fixture(options: { setup?: () => Promise<void>; create?: () => Promise<
     mapEngineMessages: (messages: unknown) => { if (options.cacheFails) throw new Error("cache failed"); return messages; },
     isAbortOutcome: (error: Error) => error.name === "AbortError", uiText: (zh: string) => zh,
     slimStreamEvent: (e: unknown) => e,
+    // #runSubagent now protects its bookkeeping subscription because SDK listeners
+    // execute inside the run. Keep the extracted-method harness equivalent to Main.
+    guardSessionListener: (_owner: string, listener: (event: unknown) => void) => listener,
   };
   const Harness = new Function(...Object.keys(deps), `${compiled}; return Harness;`)(...Object.values(deps));
   const host = new Harness();

@@ -54,7 +54,6 @@ import type {
 import type { RemoteHostProfile, RemoteHostConnectionState, RemoteHostTestResult, SshHostKeyScan } from "@shared/remote-host";
 import type {
   AppUpdateState,
-  FullDiskAccessStatus,
   GitBranch,
   GitDiffSource,
   GitStatus,
@@ -303,6 +302,7 @@ export function createFastVibeApi(t: ApiTransport) {
         enabled?: boolean;
         apiKey?: string;
         models?: ProviderModel[];
+        modelOrder?: string[];
       }): Promise<ProviderConfig[]> => t.invoke(Ipc.providersUpdate, payload),
       remove: (id: string): Promise<ProviderConfig[]> => t.invoke(Ipc.providersRemove, { id }),
       refresh: (id: string): Promise<ProviderModel[]> =>
@@ -406,6 +406,9 @@ export function createFastVibeApi(t: ApiTransport) {
       reveal: (cwd: string): Promise<{ ok: boolean; reason?: "missing" | "invalid" } | void> =>
         t.invoke(Ipc.workspaceReveal, { cwd }),
       preview: (path: string): Promise<FilePreview> => t.invoke(Ipc.workspacePreview, { path }),
+      /** Resolve a batch of candidate paths and return only paths that are regular files. */
+      filesExist: (paths: string[], cwd?: string): Promise<string[]> =>
+        t.invoke(Ipc.workspaceFilesExist, { paths, cwd }),
       fileIcons: (): Promise<FileIconMapping> => t.invoke(Ipc.workspaceFileIcons),
       readDir: (path: string): Promise<DirEntry[]> => t.invoke(Ipc.workspaceReadDir, { path }),
       gitStatus: (cwd: string): Promise<GitStatus> => t.invoke(Ipc.workspaceGitStatus, { cwd }),
@@ -540,6 +543,8 @@ export function createFastVibeApi(t: ApiTransport) {
       clearPassword: (): Promise<import("@shared/ipc").RemoteServerState> => t.invoke(Ipc.remoteClearPassword),
       start: (port?: number): Promise<import("@shared/ipc").RemoteServerState> =>
         t.invoke(Ipc.remoteStart, { port }),
+      setLanAccess: (enabled: boolean): Promise<import("@shared/ipc").RemoteServerState> =>
+        t.invoke(Ipc.remoteSetLanAccess, { enabled }),
       stop: (): Promise<import("@shared/ipc").RemoteServerState> => t.invoke(Ipc.remoteStop),
       listDevices: (): Promise<import("@shared/ipc").RemoteDeviceInfo[]> => t.invoke(Ipc.remoteListDevices),
       revokeDevice: (id: string): Promise<import("@shared/ipc").RemoteDeviceInfo[]> =>
@@ -574,12 +579,6 @@ export function createFastVibeApi(t: ApiTransport) {
       getGrantFlow: (): Promise<import("@shared/types").GrantFlowState> => t.invoke(Ipc.computerGetGrantFlow),
       onGrantFlowState: (listener: (state: import("@shared/types").GrantFlowState) => void): (() => void) =>
         t.subscribe(Ipc.computerGrantFlowState, listener),
-    },
-    /** macOS Full Disk Access. The grant is a switch in System Settings; nothing here flips it. */
-    system: {
-      fullDiskAccess: (): Promise<FullDiskAccessStatus> => t.invoke(Ipc.systemFullDiskAccess),
-      openFullDiskAccess: (): Promise<void> => t.invoke(Ipc.systemOpenFullDiskAccess),
-      revealApp: (): Promise<void> => t.invoke(Ipc.systemRevealApp),
     },
     browser: {
       listProfiles: (): Promise<BrowserProfileInfo[]> => t.invoke(Ipc.browserListProfiles),

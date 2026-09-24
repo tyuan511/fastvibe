@@ -57,9 +57,6 @@ export const SidePaneSubagent = memo(function SidePaneSubagent({ tab }: { tab: S
   );
   const streamed = useSessionStore((state) => (subagentId ? state.subagentStreams[subagentId] : undefined));
   const models = useSessionStore((state) => state.models);
-  const showThinking = useSettingsStore((state) => state.settings.showThinking);
-  const showTimestamp = useSettingsStore((state) => state.settings.showTimestamps);
-  const collapseRuns = useSettingsStore((state) => state.settings.collapseRuns);
   const permissionMode = useSettingsStore((state) => state.settings.permissionMode);
   const [loaded, setLoaded] = useState<ChatMessage[] | null>(null);
 
@@ -124,11 +121,6 @@ export const SidePaneSubagent = memo(function SidePaneSubagent({ tab }: { tab: S
           <MessageList
             messages={messages}
             streaming={running}
-            showThinking={showThinking}
-            showTimestamp={showTimestamp}
-            // A delegated run is an agent run too, and its transcript is read the same
-            // way — a dozen tool rows around one answer — so 折叠运行过程 applies here.
-            collapseRuns={collapseRuns}
           />
         )}
       </div>

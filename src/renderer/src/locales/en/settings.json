@@ -95,6 +95,10 @@
   "graphViews": "Relation kinds",
   "graphCount": "Showing {{shown}} of {{total}}",
   "graphEmpty": "No memories here yet.",
+  "graphLayout": "Laying out nodes…",
+  "graphZoomIn": "Zoom in",
+  "graphZoomOut": "Zoom out",
+  "graphFit": "Fit to view",
   "detailEmpty": "Select a node to see its details",
   "detailGone": "This memory no longer exists.",
   "detailFallback": "Fallback write",
@@ -201,7 +205,7 @@
   "shortcuts": "Shortcuts",
   "archived": "Archived chats",
   "usage": "Usage",
-  "providers": "Models",
+  "providers": "Models & defaults",
   "subagents": "Subagents",
   "decision": "Decision engine",
   "memory": "Long-term memory",
@@ -238,49 +242,24 @@
   "uiFontSize": "Interface size"
  },
  "agent": {
-  "title": "Agent defaults"
+  "title": "Agent settings"
  },
  "security": {
   "title": "Security & permissions"
  },
- "fullDisk": {
-  "title": "Full Disk Access",
-  "desc": "One grant, and macOS stops asking for Desktop, Documents and Downloads one folder at a time. Quit and reopen after turning it on",
-  "granted": "Allowed",
-  "open": "Open System Settings",
-  "reveal": "Show in Finder",
-  "later": "Not now",
-  "promptTitle": "Allow access to all files first",
-  "promptBody": "macOS asks once each for Desktop, Documents and Downloads. Those dialogs have no Allow All. Full Disk Access covers them in one switch, and the dialogs stop. It can also read protected data such as Mail and Messages, and you can turn it off in System Settings at any time.",
-  "promptSteps": "In the list that opens, turn FastVibe on. If the row is missing, click + or drag the app in from Finder. Then quit FastVibe completely and open it again.",
-  "promptStepsDev": "This is a development build, so the list shows Electron, not FastVibe. Turn that on. If the row is missing, click + or drag Electron in from Finder. A new signature can drop the grant. Then quit and open it again."
- },
  "runtime": {
   "title": "Runtime"
- },
- "display": {
-  "title": "Display"
  },
  "common": {
   "title": "General",
   "defaultModel": "Default model",
   "defaultModelDesc": "Model used for new conversations",
-  "thinking": "Default reasoning",
-  "thinkingDesc": "Falls back automatically if the model does not support the chosen level",
   "permission": "Default permission mode",
   "permissionDesc": "{{mode}}; used at launch, and can be switched temporarily above the composer",
   "keepAwake": "Keep awake while running",
   "keepAwakeDesc": "Prevents sleep while an agent is running; restores afterwards",
   "notifications": "Desktop notifications",
-  "notificationsDesc": "Master switch; turning it off silences every notice below",
-  "notifyDone": "Task finished",
-  "notifyDoneDesc": "A background chat settles its run",
-  "notifyError": "Task failed",
-  "notifyErrorDesc": "A background chat settles on an error — a retry that gave up, a refused request",
-  "notifyApproval": "Needs an answer",
-  "notifyApprovalDesc": "A background chat is parked on a confirmation or question only you can answer",
-  "notifyUpdate": "App update",
-  "notifyUpdateDesc": "A new version has finished downloading",
+  "notificationsDesc": "Task finished, failed, needs an answer, and app update all notify; turning it off silences every one",
   "permissionRules": "Remembered approvals",
   "permissionRulesDesc": "Tool calls you chose 「Always allow」 for skip confirmation; {{count}} in total",
   "permissionRulesClear": "Clear all"
@@ -296,11 +275,7 @@
   "immediate": "Interrupt now",
   "wait": "Wait for the turn",
   "autoCompact": "Auto-compact",
-  "autoCompactDesc": "Compact the conversation when context is nearly full",
-  "collapseRuns": "Collapse run process",
-  "collapseRunsDesc": "Fold thinking and tool calls into a duration row, leaving only the final answer; expand to review the process",
-  "showThinking": "Show thinking",
-  "showTimestamps": "Show timestamps"
+  "autoCompactDesc": "Compact the conversation when context is nearly full"
  },
  "about": {
   "more": "More",
@@ -326,9 +301,26 @@
   "updated": "Model data updated"
  },
  "defaultModel": {
+  "title": "Default model for new chats",
+  "desc": "New conversations start with this model and reasoning level. You can still switch a single conversation above the composer.",
+  "emptyHint": "No models are available yet. Add or connect a provider below, then choose a default model here.",
   "followLast": "Follow last used",
   "unavailable": "{{label}} (unavailable)",
   "empty": "No models available yet"
+ },
+ "projectDefaults": {
+  "title": "Project-specific defaults",
+  "desc": "Choose the model and reasoning level used for new chats in each project.",
+  "unconfigured": "Projects without a setting",
+  "configured": "Configured projects",
+  "configuredCount": "{{count}} configured",
+  "manage": "Manage",
+  "allConfigured": "All projects are configured",
+  "noProjects": "No projects have been added yet",
+  "selectProject": "Select a project on the left",
+  "modelLabel": "Project default model",
+  "inheritGlobal": "Follow global default",
+  "hint": "New chats in this project will use the selected model and reasoning level."
  },
  "subagents": {
   "title": "Subagent workspace",
@@ -552,6 +544,7 @@
   "models": "Models",
   "syncModels": "Sync models",
   "modelDetail": "Model details",
+  "reorderModel": "Reorder {{name}}",
   "removeModel": "Remove model",
   "noModelsAdd": "No models yet — add some below",
   "noModelsConnect": "Connect to choose models",
@@ -843,7 +836,10 @@
   "cancel": "Cancel",
   "enable": "Allow remote connections",
   "enableDesc": "When on, other devices can log in with the password and connect to the agent on this computer.",
-  "tunnelHint": "{{address}} is only this computer's listening address, and no other device can reach it. Pick a tunnel below and the app will publish it for you — or point any tunnel tool of your own at that address.",
+  "lanAccess": "Allow LAN access",
+  "lanAccessDesc": "Listen on the local network so devices on the same network can open the address shown here.",
+  "lanAccessOnDesc": "LAN address: {{address}}; the remote-access password is still required.",
+  "tunnelHint": "{{address}} is only this computer's local listening address, and no other device can reach it. Pick a tunnel below and the app will publish it for you — or point any tunnel tool of your own at that address.",
   "tunnel": "Tunnel",
   "tunnelProvider": "Tunnel service",
   "tunnelProviderDesc": "The app starts it on this computer and shows the public address it returns.",

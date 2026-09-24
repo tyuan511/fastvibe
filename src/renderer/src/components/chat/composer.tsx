@@ -323,7 +323,7 @@ export function Composer({
   onPickWorkspace: () => void;
   onSelectProject: (project: string | null) => void;
   onModelChange: (provider: string, modelId: string) => void;
-  /** Opens Settings → 模型管理, where providers and their models are configured. */
+  /** Opens Settings → 模型与默认, where providers, models and the new-chat default are configured. */
   onManageModels: () => void;
   onThinkingChange: (level: string) => void;
   onAttachmentsChange: (attachments: ChatAttachment[]) => void;
@@ -926,7 +926,7 @@ export function Composer({
               if (next) onModelChange(next.provider, next.id);
             }}
             onThinkingChange={(level) => {
-              if (level) onThinkingChange(level);
+              if (level !== "auto") onThinkingChange(level);
             }}
           />
 

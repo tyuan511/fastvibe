@@ -54,9 +54,9 @@ test("the agent cannot write its own permission mode", async () => {
 });
 
 test("settings.set merges the patch into what is stored", async () => {
-  const result = await runAppConfig({ action: "settings.set", input: { patch: { showThinking: false } }, write: true });
+  const result = await runAppConfig({ action: "settings.set", input: { patch: { keepAwake: false } }, write: true });
   assert.equal(result.ok, true);
-  assert.deepEqual(settings, { themeMode: "dark", permissionMode: "smart", showThinking: false });
+  assert.deepEqual(settings, { themeMode: "dark", permissionMode: "smart", keepAwake: false });
 });
 
 test("ssh hosts never carry a password back to the model", async () => {

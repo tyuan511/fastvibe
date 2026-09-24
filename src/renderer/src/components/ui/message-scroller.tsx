@@ -92,6 +92,49 @@ function MessageScrollerButton({
   ...props
 }: React.ComponentProps<typeof MessageScrollerPrimitive.Button> &
   Pick<React.ComponentProps<typeof Button>, "variant" | "size">) {
+  const virtual = React.useContext(VirtualMessageScrollerContext)
+  // The two flags are not symmetric (`scrollMetrics` in message-list): `end` means the
+  // viewport is already *at* the bottom, while `start` means there is room above it. So
+  // 回到底部 is wanted when `end` is false — reading `end` as-is showed the button at the
+  // bottom and hid it everywhere it was needed.
+  const virtualActive = direction === "end" ? virtual?.end === false : virtual?.start === true
+  const buttonClassName = cn(
+    "absolute inset-s-1/2 -translate-x-1/2 border-border bg-background text-foreground transition-[translate,scale,opacity] duration-200 hover:bg-muted hover:text-foreground data-[active=false]:pointer-events-none data-[active=false]:scale-95 data-[active=false]:opacity-0 data-[active=false]:duration-400 data-[active=false]:ease-[cubic-bezier(0.7,0,0.84,0)] data-[active=true]:translate-y-0 data-[active=true]:scale-100 data-[active=true]:opacity-100 data-[active=true]:ease-[cubic-bezier(0.23,1,0.32,1)] data-[direction=end]:bottom-4 data-[direction=end]:data-[active=false]:translate-y-full data-[direction=start]:top-4 data-[direction=start]:data-[active=false]:-translate-y-full rtl:translate-x-1/2 data-[direction=start]:[&_svg]:rotate-180",
+    className,
+  )
+
+  if (virtual) {
+    return (
+      <Button
+        type="button"
+        variant={variant}
+        size={size}
+        data-slot="message-scroller-button"
+        data-direction={direction}
+        data-variant={variant}
+        data-size={size}
+        data-active={virtualActive ? "true" : "false"}
+        className={buttonClassName}
+        disabled={!virtualActive}
+        onClick={(event) => {
+          props.onClick?.(event as never)
+          if (event.defaultPrevented || !virtualActive) return
+          if (direction === "end") virtual.scrollToEnd({ behavior: "auto" })
+          else virtual.scrollToStart({ behavior: "auto" })
+        }}
+      >
+        {children ?? (
+          <>
+            <HugeiconsIcon icon={ArrowDown02Icon} strokeWidth={2} />
+            <span className="sr-only">
+              {direction === "end" ? "Scroll to end" : "Scroll to start"}
+            </span>
+          </>
+        )}
+      </Button>
+    )
+  }
+
   return (
     <MessageScrollerPrimitive.Button
       data-slot="message-scroller-button"
@@ -99,10 +142,7 @@ function MessageScrollerButton({
       data-variant={variant}
       data-size={size}
       direction={direction}
-      className={cn(
-        "absolute inset-s-1/2 -translate-x-1/2 border-border bg-background text-foreground transition-[translate,scale,opacity] duration-200 hover:bg-muted hover:text-foreground data-[active=false]:pointer-events-none data-[active=false]:scale-95 data-[active=false]:opacity-0 data-[active=false]:duration-400 data-[active=false]:ease-[cubic-bezier(0.7,0,0.84,0)] data-[active=true]:translate-y-0 data-[active=true]:scale-100 data-[active=true]:opacity-100 data-[active=true]:ease-[cubic-bezier(0.23,1,0.32,1)] data-[direction=end]:bottom-4 data-[direction=end]:data-[active=false]:translate-y-full data-[direction=start]:top-4 data-[direction=start]:data-[active=false]:-translate-y-full rtl:translate-x-1/2 data-[direction=start]:[&_svg]:rotate-180",
-        className
-      )}
+      className={buttonClassName}
       render={render ?? <Button variant={variant} size={size} />}
       {...props}
     >
@@ -146,22 +186,48 @@ function MessageRevealProvider({
  * `scrollToMessage`, and a fresh function each render would re-run it (and re-scroll)
  * on every streamed flush.
  */
+export type VirtualMessageScroller = {
+  scrollToEnd: (options?: { behavior?: ScrollBehavior }) => boolean
+  scrollToMessage: (messageId: string, options?: { align?: "start" | "center" | "end" | "auto" | "nearest"; behavior?: ScrollBehavior }) => boolean
+  scrollToStart: (options?: { behavior?: ScrollBehavior }) => boolean
+  start: boolean
+  end: boolean
+}
+
+const VirtualMessageScrollerContext = React.createContext<VirtualMessageScroller | null>(null)
+
+export function VirtualMessageScrollerProvider({
+  value,
+  children,
+}: {
+  value: VirtualMessageScroller
+  children: React.ReactNode
+}) {
+  return <VirtualMessageScrollerContext.Provider value={value}>{children}</VirtualMessageScrollerContext.Provider>
+}
+
 function useMessageScroller(): ReturnType<typeof useMessageScrollerPrimitive> {
-  const { scrollToEnd, scrollToMessage: scrollToMounted, scrollToStart } = useMessageScrollerPrimitive()
+  const virtual = React.useContext(VirtualMessageScrollerContext)
+  const { scrollToEnd: scrollToMounted, scrollToMessage: scrollToMountedMessage, scrollToStart } = useMessageScrollerPrimitive()
   const reveal = React.useContext(MessageRevealContext)
-  const scrollToMessage = React.useCallback<typeof scrollToMounted>(
+  const scrollToMessage = React.useCallback<typeof scrollToMountedMessage>(
     (messageId, options) => {
-      if (scrollToMounted(messageId, options)) return true
+      if (virtual) return virtual.scrollToMessage(messageId, options)
+      if (scrollToMountedMessage(messageId, options)) return true
       // Nothing to scroll to yet: mount the row, then scroll once it is in the DOM.
       if (!reveal?.(messageId)) return false
-      requestAnimationFrame(() => scrollToMounted(messageId, options))
+      requestAnimationFrame(() => scrollToMountedMessage(messageId, options))
       return true
     },
-    [reveal, scrollToMounted],
+    [reveal, scrollToMountedMessage, virtual],
   )
   return React.useMemo(
-    () => ({ scrollToEnd, scrollToMessage, scrollToStart }),
-    [scrollToEnd, scrollToMessage, scrollToStart],
+    () => ({
+      scrollToEnd: virtual?.scrollToEnd ?? scrollToMounted,
+      scrollToMessage,
+      scrollToStart: virtual?.scrollToStart ?? scrollToStart,
+    }),
+    [scrollToMessage, scrollToMounted, scrollToStart, virtual],
   )
 }
 

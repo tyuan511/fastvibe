@@ -56,6 +56,13 @@ export type SidePaneTab = {
   /** Send the initial draft immediately after the side conversation is created. */
   sendOnCreate?: boolean;
   initialAttachments?: ChatAttachment[];
+  /**
+   * Move focus into this tab's composer once its conversation exists.
+   *
+   * Set when a selection is parked there for the user to ask about, so the next
+   * keystrokes land in that box rather than the chat they just selected from.
+   */
+  focusComposer?: boolean;
   /** The subagent run this tab shows (`type: "subagent"`). */
   subagentId?: string;
   /** The conversation whose tool call spawned that run; scopes the tab. */
@@ -733,6 +740,7 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
         draft: initialDraft ?? "",
         sendOnCreate,
         initialAttachments,
+        focusComposer: !sendOnCreate && Boolean((initialDraft ?? "").trim() || initialAttachments?.length),
       };
       return writeScope(
         state,

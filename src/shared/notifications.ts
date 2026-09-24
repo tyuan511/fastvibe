@@ -22,13 +22,41 @@ export type NotificationRequest = {
 };
 
 /**
- * Whether the user wants this scenario.
+ * Whether desktop notifications are on.
  *
- * Absent means **on**: the switch in 设置 → 通用 has to be turned off to silence anything,
- * so an install whose `settings.json` predates the switches is not silently muted.
+ * One switch (设置 → 通用 → 系统通知) covers every scenario. It writes the four keys
+ * together, so the install is silent only when every one of them is explicitly false.
+ * A single false is a leftover from when each scenario had its own row; those rows are
+ * gone, and that scenario is on. Absent means on, so an older `settings.json` is not
+ * silently muted.
  */
-export function notificationEnabled(settings: Record<string, unknown>, setting: NotificationSetting): boolean {
-  return settings[setting] !== false;
+export function notificationsEnabled(settings: Partial<Record<NotificationSetting, unknown>>): boolean {
+  return NOTIFICATION_SETTINGS.some((key) => settings[key] !== false);
+}
+
+/** Whether this scenario should raise a notice. Every scenario follows the one switch. */
+export function notificationEnabled(
+  settings: Partial<Record<NotificationSetting, unknown>>,
+  _setting: NotificationSetting,
+): boolean {
+  return notificationsEnabled(settings);
+}
+
+/**
+ * Drop retired per-scene offs so they cannot outlive the rows that set them.
+ *
+ * A non-boolean is not a "no" and is removed. A lone `false` is removed too, which
+ * reads back as the default — on. All four explicit falses are the master switch and
+ * are kept.
+ */
+export function normalizeNotificationSettings(settings: Partial<Record<NotificationSetting, unknown>>): void {
+  for (const key of NOTIFICATION_SETTINGS) {
+    if (typeof settings[key] !== "boolean") delete settings[key];
+  }
+  if (!notificationsEnabled(settings)) return;
+  for (const key of NOTIFICATION_SETTINGS) {
+    if (settings[key] === false) delete settings[key];
+  }
 }
 
 /** Which scenarios a fresh install gets: every one of them, until somebody says no. */
@@ -68,9 +96,8 @@ export function notificationForEvent(
   const conversationId = typeof event.conversationId === "string" ? event.conversationId : undefined;
   if (event.type === "conversation_activity") {
     // `failed` is a run that settled on an error — a retry chain that gave up, a provider
-    // that refused. Someone who works in a terminal all day wants that said out loud even
-    // when they asked not to hear about every ordinary finish, which is why the two are
-    // separate switches rather than one 「任务结束」 one.
+    // that refused. The notice says that out loud instead of 「任务已完成」; the two are not
+    // separate switches anymore, only separate wording.
     return {
       setting: event.status === "failed" ? "notifyError" : "notifyDone",
       title: typeof event.title === "string" ? event.title : undefined,

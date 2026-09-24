@@ -17,6 +17,9 @@ import type { ChatAttachment, ChatMessage } from "@shared/types";
 import { parseCompactCommand } from "@shared/slash";
 import { isAbortOutcome } from "@shared/abort";
 
+/** Side chats already handed the composer once. Survives the tab unmounting. */
+const focusedSideComposers = new Set<string>();
+
 function SideChatEmpty(): JSX.Element {
   const { t } = useTranslation("sidepane");
   return (
@@ -51,6 +54,7 @@ export function SidePaneChat({
   const settings = useSettingsStore((state) => state.settings);
   const { setPermissionMode } = usePermissionModeSelection();
   const [attachments, setAttachments] = useState<ChatAttachment[]>(() => tab.initialAttachments ?? []);
+  const [focusSignal, setFocusSignal] = useState(0);
   const initialSent = useRef(false);
   const messages = tab.messages ?? [];
   const streaming = Boolean(tab.streaming);
@@ -92,6 +96,18 @@ export function SidePaneChat({
     initialSent.current = true;
     void send();
   }, [tab.conversationId, tab.sendOnCreate]);
+
+  useEffect(() => {
+    if (!tab.focusComposer || !tab.conversationId || focusedSideComposers.has(tab.id)) return;
+    // Wait a frame so StrictMode's setup/cleanup pair cancels the first attempt,
+    // and so the composer is enabled (it stays disabled until the conversation exists).
+    const frame = requestAnimationFrame(() => {
+      if (focusedSideComposers.has(tab.id)) return;
+      focusedSideComposers.add(tab.id);
+      setFocusSignal((value) => value + 1);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [tab.conversationId, tab.focusComposer, tab.id]);
 
   async function send(): Promise<void> {
     const text = tab.draft?.trim() ?? "";
@@ -154,9 +170,6 @@ export function SidePaneChat({
           messages={messages}
           streaming={streaming}
           loading={!tab.conversationId}
-          // A 辅助对话 is a normal transcript with its own composer, so it follows the
-          // same 折叠运行过程 preference as the main thread.
-          collapseRuns={settings.collapseRuns}
           emptyState={<SideChatEmpty />}
         />
       </div>
@@ -165,6 +178,7 @@ export function SidePaneChat({
           className="px-0 pb-0"
           value={tab.draft ?? ""}
           disabled={!tab.conversationId}
+          focusSignal={focusSignal || undefined}
           streaming={streaming}
           working={conversationWorking}
           placeholder={t("chat.placeholder")}

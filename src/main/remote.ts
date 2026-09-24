@@ -39,7 +39,7 @@ import {
 let server: RemoteServer | null = null;
 let tunnel: TunnelRunner | null = null;
 
-/** Default port. Loopback only, so a tunnel is what publishes it. */
+/** Default port for the local or LAN listener. */
 const DEFAULT_PORT = 7777;
 
 function instance(): RemoteServer {
@@ -83,6 +83,14 @@ function readPort(): number {
     : DEFAULT_PORT;
 }
 
+function readLanAccess(): boolean {
+  return readAppSettings(getFastVibePaths()).remoteLanAccess === true;
+}
+
+function listenHost(): string {
+  return readLanAccess() ? "0.0.0.0" : "127.0.0.1";
+}
+
 /**
  * The tunnel the user picked, which is a preference rather than a running process.
  *
@@ -105,6 +113,7 @@ function writeTunnelChoice(provider: TunnelProvider | null): void {
 function state(): RemoteServerState {
   return {
     ...instance().status,
+    lanAccess: readLanAccess(),
     tunnel: tunnelInstance().status,
     tunnelChoice: readTunnelChoice(),
   };
@@ -136,6 +145,7 @@ function announceFromServer(): void {
   if (!server) return;
   broadcast(Ipc.remoteState, {
     ...server.status,
+    lanAccess: readLanAccess(),
     tunnel: tunnel?.status ?? TUNNEL_OFF,
     tunnelChoice: readTunnelChoice(),
   } satisfies RemoteServerState);
@@ -203,7 +213,7 @@ export function registerRemoteIpc(): void {
     // about it every time for a setting the user had already turned off on purpose.
     // The tunnel choice goes with it: 关闭远程访问 turns off the whole feature, and a
     // remembered provider would dial out again the moment a password was set.
-    writeAppSettings(paths, { ...readAppSettings(paths), remoteEnabled: false, remoteTunnel: null });
+    writeAppSettings(paths, { ...readAppSettings(paths), remoteEnabled: false, remoteLanAccess: false, remoteTunnel: null });
     return announce();
   });
 
@@ -211,10 +221,31 @@ export function registerRemoteIpc(): void {
     const port = typeof payload?.port === "number" ? payload.port : readPort();
     const paths = getFastVibePaths();
     if (!isConfigured(paths.remoteAccessFile)) throw new Error("请先设置远程访问密码");
-    const status = await instance().start({ port });
+    const status = await instance().start({ port, host: listenHost() });
     writeAppSettings(paths, { ...readAppSettings(paths), remoteEnabled: true, remotePort: status.port ?? port });
     launchTunnel(status.port ?? port);
     return announce();
+  });
+
+  handle(Ipc.remoteSetLanAccess, async (payload?: { enabled?: unknown }) => {
+    const enabled = payload?.enabled === true;
+    const paths = getFastVibePaths();
+    writeAppSettings(paths, { ...readAppSettings(paths), remoteLanAccess: enabled });
+    if (!instance().status.running) return announce();
+
+    // Rebind the listener so the switch takes effect immediately. Stop the tunnel first
+    // because it must never publish a port while the server is between bindings.
+    const port = instance().status.port ?? readPort();
+    try {
+      await tunnelInstance().stop();
+      await instance().stop();
+      const status = await instance().start({ port, host: listenHost() });
+      launchTunnel(status.port ?? port);
+      return announce();
+    } catch (error) {
+      announce();
+      throw error;
+    }
   });
 
   handle(Ipc.remoteStop, async () => {
@@ -306,7 +337,7 @@ export async function restoreRemoteServer(): Promise<void> {
     return;
   }
   try {
-    const status = await instance().start({ port: readPort() });
+    const status = await instance().start({ port: readPort(), host: listenHost() });
     launchTunnel(status.port ?? readPort());
     announce();
   } catch (error) {

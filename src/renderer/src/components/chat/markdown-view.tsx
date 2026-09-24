@@ -1,4 +1,4 @@
-import { memo, useDeferredValue, useMemo, useState, type JSX, type ReactNode } from "react";
+import { createContext, memo, useContext, useDeferredValue, useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import Markdown, { type Components } from "react-markdown";
 import type { PluggableList } from "unified";
@@ -7,6 +7,7 @@ import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import { remarkStrictInlineMath } from "@/lib/remark-strict-inline-math";
 import { isPathLike, remarkPathLinks } from "@/lib/remark-path-links";
+import { useValidatedMarkdownPaths } from "@/lib/markdown-path-validation";
 import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Copy01Icon, Tick02Icon } from "@hugeicons/core-free-icons";
@@ -54,12 +55,31 @@ const REHYPE_PLUGINS: PluggableList = [
 
 /** Fence languages whose body is a diff, drawn by `DiffView` rather than Shiki. */
 const DIFF_LANGUAGES = new Set(["diff", "patch"]);
+const MAX_CODE_PREVIEW_CHARS = 24_000;
+const MarkdownPathContext = createContext<ReadonlySet<string>>(new Set());
 
 const CodeBlock = memo(function CodeBlock({ language, code }: { language?: string; code: string }): JSX.Element {
   const { t } = useTranslation("chat");
   const [copied, setCopied] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  // The head alone is not an identity: two streamed/replaced blocks can share it while
+  // differing in the tail, which would leak the expanded state from one block to another.
+  const identity = `${language ?? ""}:${code.length}:${code.slice(0, 128)}:${code.slice(-128)}`;
+  const previousIdentity = useRef(identity);
+  useEffect(() => {
+    if (previousIdentity.current === identity) return;
+    previousIdentity.current = identity;
+    setExpanded(false);
+  }, [identity]);
   const diff = language !== undefined && DIFF_LANGUAGES.has(language.toLowerCase());
-  const html = useHighlightedCode(diff ? "" : code, diff ? undefined : language);
+  const truncated = code.length > MAX_CODE_PREVIEW_CHARS;
+  const displayCode = truncated && !expanded
+    ? `${code.slice(0, MAX_CODE_PREVIEW_CHARS)}\n…`
+    : code;
+  // Keep copying lossless, but do not parse or syntax-highlight a pathological
+  // block until the reader explicitly asks to see it all. This bounds both the
+  // initial DOM and the work done by a streaming code fence.
+  const html = useHighlightedCode(diff ? "" : displayCode, diff ? undefined : language);
 
   async function copy(): Promise<void> {
     try {
@@ -81,16 +101,23 @@ const CodeBlock = memo(function CodeBlock({ language, code }: { language?: strin
         </Button>
       </div>
       {diff ? (
-        <DiffView text={code} className="mt-0 rounded-none border-0 bg-transparent" />
+        <DiffView text={displayCode} className="mt-0 rounded-none border-0 bg-transparent" />
       ) : (
         <div className="code-shiki overflow-x-auto text-sm leading-5">
           {html ? (
             <div dangerouslySetInnerHTML={{ __html: html }} />
           ) : (
-            <pre className="font-mono">{code}</pre>
+            <pre className="font-mono">{displayCode}</pre>
           )}
         </div>
       )}
+      {truncated ? (
+        <div className="border-t border-border px-2 py-1">
+          <Button size="xs" variant="ghost" onClick={() => setExpanded((value) => !value)}>
+            {t(expanded ? "message.collapseCode" : "message.expandCode", { count: code.length - MAX_CODE_PREVIEW_CHARS })}
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 });
@@ -141,8 +168,12 @@ function PathLink({ path, children }: { path: string; children: ReactNode }): JS
 // Stable component identities keep streamed updates from remounting CodeBlock.
 const MARKDOWN_COMPONENTS: Components = {
   a: ({ href, children }) => {
+    const validPaths = useContext(MarkdownPathContext);
     const path = href ? markdownPath(href) : undefined;
-    if (path) return <PathLink path={path}>{children}</PathLink>;
+    // `remarkPathLinks` deliberately marks candidates before the async stat result
+    // arrives. Keep an invalid candidate as ordinary text; leaving the generated
+    // `fvpath:` anchor in the DOM would still make a branch or endpoint look linked.
+    if (path) return validPaths.has(path) ? <PathLink path={path}>{children}</PathLink> : <>{children}</>;
     return (
       <a href={href} target="_blank" rel="noreferrer">
         {children}
@@ -171,10 +202,11 @@ const MARKDOWN_COMPONENTS: Components = {
     return <CodeBlock language={language} code={nodeText(children).replace(/\n$/, "")} />;
   },
   code: ({ children }) => {
+    const validPaths = useContext(MarkdownPathContext);
     const text = nodeText(children);
     // File paths are commonly written as inline code in agent replies. Keep the
     // code styling, but make the whole span behave like a previewable path.
-    if (isPathLike(text)) {
+    if (isPathLike(text) && validPaths.has(text)) {
       return (
         <code>
           <PathLink path={text}>{children}</PathLink>
@@ -199,14 +231,18 @@ const MarkdownBlock = memo(function MarkdownBlock({ text }: { text: string }): J
   // The block in flight still re-parses on each flush; keep the urgent UI (caret,
   // scroll) ahead of it and let React apply the markdown at lower priority.
   const deferred = useDeferredValue(text);
+  const cwd = useSessionStore((state) => state.conversations.find((item) => item.id === state.activeId)?.cwd);
+  const validPaths = useValidatedMarkdownPaths(deferred, cwd);
   return (
-    <Markdown
-      remarkPlugins={REMARK_PLUGINS}
-      rehypePlugins={REHYPE_PLUGINS}
-      components={MARKDOWN_COMPONENTS}
-    >
-      {deferred}
-    </Markdown>
+    <MarkdownPathContext.Provider value={validPaths}>
+      <Markdown
+        remarkPlugins={REMARK_PLUGINS}
+        rehypePlugins={REHYPE_PLUGINS}
+        components={MARKDOWN_COMPONENTS}
+      >
+        {deferred}
+      </Markdown>
+    </MarkdownPathContext.Provider>
   );
 });
 

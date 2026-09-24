@@ -95,6 +95,7 @@ const OPEN_METHODS: ReadonlySet<string> = new Set([
   Ipc.conversationsOpen,
   Ipc.conversationsCreate,
   Ipc.conversationsCreateSide,
+  Ipc.engineFork,
 ]);
 const STATE_METHODS: ReadonlySet<string> = new Set([
   Ipc.engineGetState,
@@ -420,7 +421,14 @@ export class RemoteGateway {
       this.#deps.broadcast(Ipc.workspaceChanged, snapshot);
       return snapshot;
     }
-    return this.#overlayLocalResult(await this.#deps.localDispatch(Ipc.projectsReorder, payload, ctx));
+    // Keep the mixed-order file in sync for a local-only catalog too. A previous
+    // remote binding may have left `projectOrder` populated after the binding was
+    // removed; if it is not refreshed here, `aggregate()` applies that stale order
+    // over the catalog's freshly reordered local projects and the row snaps back.
+    const localResult = await this.#deps.localDispatch(Ipc.projectsReorder, payload, ctx);
+    if (cwds.length > 0) reorderProjectOrder(this.#deps.bindingsFile, cwds);
+    const result = this.#overlayLocalResult(localResult);
+    return result;
   }
 
   async #setConversationProject(payload: unknown, ctx: unknown): Promise<unknown> {

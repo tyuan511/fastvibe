@@ -100,8 +100,8 @@ function notesOf(info: UpdateInfo): string | undefined {
 function notifyDownloaded(version: string): void {
   const focused = [...windows()].some((window) => !window.isDestroyed() && window.isFocused());
   if (focused) return;
-  // 系统通知 → 应用更新 (设置 → 通用), read here rather than cached so turning the
-  // switch off lands at the next check instead of at the next launch.
+  // 系统通知 (设置 → 通用). One switch covers this notice too; read here rather than
+  // cached so turning it off lands at the next check instead of at the next launch.
   if (!notificationEnabled(readNotificationSettings(), "notifyUpdate")) return;
   presentNotification(
     {

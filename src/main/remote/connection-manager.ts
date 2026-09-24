@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createServer } from "node:net";
 import WebSocket from "ws";
 import { ALL_SCOPES, type AppCapability, type AppHandshake } from "../../shared/app-protocol.ts";
+import { Ipc } from "../../shared/ipc.ts";
 import { remoteProjectKey } from "../../shared/project-binding.ts";
 import type { ProjectBinding } from "../../shared/project-binding.ts";
 import {
@@ -105,6 +106,26 @@ const FATAL_ERROR_CODES = new Set(["auth-failed", "host-key-unknown", "host-key-
 
 /** How long a call may wait for a remote server before it is given up on. */
 const CALL_TIMEOUT_MS = 120_000;
+
+/**
+ * Calls whose answer legitimately takes as long as model work does, so a fixed deadline
+ * is a guess that a long run loses: `prompt` can wait out a settling run or a pre-send
+ * compaction before it accepts, `continue` lasts the resumed run, `compact` the summary.
+ * A deadline there rejected a call whose work was still going on the host — and the
+ * caller took the rejection as a failure it had to undo. Liveness is not given up: a
+ * dead host ends the SSH session (`ServerAliveInterval`), which closes the socket and
+ * rejects every pending call.
+ */
+const UNBOUNDED_METHODS: ReadonlySet<string> = new Set([
+  Ipc.enginePrompt,
+  Ipc.enginePromptConversation,
+  Ipc.engineContinue,
+  Ipc.engineCompact,
+]);
+
+export function callTimeoutFor(method: string): number {
+  return UNBOUNDED_METHODS.has(method) ? 0 : CALL_TIMEOUT_MS;
+}
 
 const CANCELLED = "远程连接已取消";
 
@@ -309,7 +330,7 @@ export class RemoteConnectionManager {
 
   /** One call, with a deadline, against a named server. */
   async call(server: ConnectedServer, method: string, payload: unknown): Promise<unknown> {
-    return server.client.call(method, payload, { timeoutMs: CALL_TIMEOUT_MS });
+    return server.client.call(method, payload, { timeoutMs: callTimeoutFor(method) });
   }
 
   async disconnect(connectionId: string): Promise<void> {

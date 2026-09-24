@@ -101,6 +101,7 @@ export const Ipc = {
   projectsReorder: "projects:reorder",
   workspaceReveal: "workspace:reveal",
   workspacePreview: "workspace:preview",
+  workspaceFilesExist: "workspace:files-exist",
   workspaceFileIcons: "workspace:file-icons",
   workspaceReadDir: "workspace:read-dir",
   workspaceGitStatus: "workspace:git-status",
@@ -247,6 +248,7 @@ export const Ipc = {
   remoteSetPassword: "remote:set-password",
   remoteClearPassword: "remote:clear-password",
   remoteStart: "remote:start",
+  remoteSetLanAccess: "remote:set-lan-access",
   remoteStop: "remote:stop",
   remoteListDevices: "remote:list-devices",
   remoteRevokeDevice: "remote:revoke-device",
@@ -260,12 +262,6 @@ export const Ipc = {
   remoteFrpCheckDns: "remote:frp-check-dns",
   /** Pushed when the server starts, stops, gains a client, or the tunnel changes phase. */
   remoteState: "remote:state",
-  /** Whether this process can read locations macOS guards with Full Disk Access. */
-  systemFullDiskAccess: "system:full-disk-access",
-  /** Opens System Settings on that list. The grant itself cannot be requested. */
-  systemOpenFullDiskAccess: "system:open-full-disk-access",
-  /** Reveals the .app the user has to drag into the list when it is not there yet. */
-  systemRevealApp: "system:reveal-app",
 } as const;
 
 export type AppModelsDevInfo = {
@@ -282,18 +278,6 @@ export type AppInfo = {
   runtimeRoot: string;
   platform: string;
   modelsDev?: AppModelsDevInfo;
-};
-
-/** macOS Full Disk Access, as far as this process can tell. Meaningless elsewhere. */
-export type FullDiskAccessStatus = {
-  /** False on Windows and Linux: there is no such grant, and nothing to ask. */
-  applicable: boolean;
-  granted: boolean;
-  /**
-   * False in a dev checkout. The Privacy list then shows Electron, because that is
-   * the bundle macOS signed — `app.setName` does not change which row the toggle is.
-   */
-  packaged: boolean;
 };
 
 export type AppLogLevel = "debug" | "info" | "warn" | "error";
@@ -427,12 +411,14 @@ export type RemoteServerState = {
   port: number | null;
   /** A password has been set. Without one the server refuses to start at all. */
   configured: boolean;
+  /** Whether the server is listening beyond loopback for devices on the local network. */
+  lanAccess: boolean;
   /** Clients connected right now. */
   clients: number;
   /** Failed logins since the last success; the throttle grows with this. */
   failedLogins: number;
   /**
-   * The tunnel, which is what makes the loopback address above reachable at all.
+   * The optional tunnel, which publishes the local listener beyond this machine.
    *
    * Part of this state rather than its own channel: the pane draws one card out of the
    * two, and two broadcasts would let it render a public URL over a stopped server for

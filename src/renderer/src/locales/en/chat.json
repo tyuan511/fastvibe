@@ -80,7 +80,8 @@
     "edit": "Edit",
     "remove": "Remove queued message",
     "draftBusy": "Send or clear the current draft before editing a queued message.",
-    "continue": "Continue sending"
+    "continue": "Continue sending",
+    "sendFailed": "A queued message could not be sent"
   },
   "compact": {
     "threshold": "Near the limit",
@@ -178,16 +179,21 @@
     "workingOn": "Still working",
     "expand": "Expand",
     "collapse": "Collapse",
+    "expandProcess": "Show {{count}} earlier steps",
     "preparing": "Preparing workspace…",
     "loadingConversation": "Loading conversation…",
     "copied": "Copied",
+    "expandCode": "Show {{count}} more characters",
+    "collapseCode": "Collapse code",
     "selection": {
       "label": "Selected text actions",
       "addToConversation": "Add to conversation",
       "askInSideChat": "Ask in side chat"
     },
     "earlier_one": "Show {{count}} earlier turn",
-    "earlier_other": "Show {{count}} earlier turns"
+    "earlier_other": "Show {{count}} earlier turns",
+    "stoppedAtLength": "The reply hit the model's maximum output length and was cut off. Press Continue to regenerate it, or raise Max output in Settings → Models & defaults → Model details.",
+    "stoppedAborted": "Interrupted"
   },
   "permission": {
     "needConfirm": "Confirmation needed",

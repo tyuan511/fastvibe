@@ -1,64 +1,34 @@
-import { useEffect, useMemo, useState, type JSX, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
-import {
-  Background,
-  Controls,
-  Handle,
-  MarkerType,
-  Position,
-  ReactFlow,
-  ReactFlowProvider,
-  useNodesState,
-  useReactFlow,
-  type Edge,
-  type Node,
-  type NodeProps,
-} from "@xyflow/react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { ArrowLeft01Icon, ArrowRight01Icon } from "@hugeicons/core-free-icons";
+import { MemorySigma } from "@/components/settings/memory-sigma";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { layoutMemoryCards, type LayoutPoint } from "@/lib/memory-graph-layout";
+import { useMemoryLayout, type MemoryLayoutInput } from "@/lib/use-memory-layout";
 import { cn } from "@/lib/utils";
-import type { MemoryDetail, MemoryGraph, MemoryGraphNode, MemoryItem, MemoryRelationView } from "@shared/memory";
+import type { MemoryDetail, MemoryGraph, MemoryItem, MemoryRelationView } from "@shared/memory";
 
 /**
- * 设置 → 长期记忆 → 关系图: every memory as a node, every relation as an edge, drawn
- * with React Flow; clicking a card opens it in full beside the graph. The canvas owns
- * pan, zoom and dragging while the pure layout module supplies stable starting points.
- * The layout uses every edge, whichever views are shown, so toggling a view never moves
- * a node.
+ * 设置 → 长期记忆 → 关系图: every memory as a point, every relation as an edge, drawn
+ * with Sigma. Clicking a point opens it in full beside the graph. The canvas owns pan,
+ * zoom and dragging; a worker runs the force layout and hands back stable coordinates.
+ * That layout sees every edge, whichever views are shown, so toggling a view never
+ * moves a point.
  */
 
 const VIEWS: MemoryRelationView[] = ["semantic", "temporal", "causal", "entity"];
 const ROLES: Array<MemoryItem["role"]> = ["user", "assistant", "summary"];
 const ALL_PROJECTS = "__all__";
 
-type Point = MemoryGraphNode & LayoutPoint;
-
-type MemoryNodeData = {
-  memory: MemoryGraphNode;
-  selectedId: string | null;
-  neighbours: Set<string>;
-  onSelect: (id: string) => void;
-  roleLabel: string;
-  fallbackLabel: string;
-};
-type MemoryFlowNode = Node<MemoryNodeData, "memory">;
-type MemoryFlowEdge = Edge<{ view: MemoryRelationView; weight: number }>;
-
 function roleColor(role: MemoryItem["role"]): string {
   if (role === "user") return "var(--info)";
   if (role === "assistant") return "var(--success)";
   if (role === "summary") return "var(--warning)";
   return "var(--muted-foreground)";
-}
-
-function viewColor(view: MemoryRelationView): string {
-  return `var(--chart-${VIEWS.indexOf(view) + 1})`;
 }
 
 export function MemoryGraphDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }): JSX.Element {
@@ -87,39 +57,12 @@ export function MemoryGraphDialog({ open, onOpenChange }: { open: boolean; onOpe
     return () => { alive = false; window.clearTimeout(timer); off(); };
   }, [open, project]);
 
-  const positions = useMemo(() => (graph ? layoutMemoryCards(graph.nodes.map((node) => node.id), graph.edges) : new Map<string, LayoutPoint>()), [graph]);
-  const points = useMemo<Point[]>(() => (graph?.nodes ?? []).map((node) => ({ ...node, ...(positions.get(node.id) ?? { x: 0, y: 0 }) })), [graph, positions]);
+  const layoutInput = useMemo<MemoryLayoutInput | null>(() => (graph ? {
+    nodeIds: graph.nodes.map((node) => node.id),
+    edges: graph.edges.map((edge) => ({ sourceId: edge.sourceId, targetId: edge.targetId })),
+  } : null), [graph]);
+  const positions = useMemoryLayout(layoutInput);
   const edges = useMemo(() => (graph?.edges ?? []).filter((edge) => !hidden.has(edge.view)), [graph, hidden]);
-  const flowNodes = useMemo<MemoryFlowNode[]>(() => points.map((memory) => ({
-    id: memory.id,
-    type: "memory",
-    position: { x: memory.x, y: memory.y },
-    data: {
-      memory,
-      selectedId: null,
-      neighbours: new Set<string>(),
-      onSelect: setSelectedId,
-      roleLabel: t(`memory.role.${memory.role}`),
-      fallbackLabel: t("memory.detailFallback"),
-    },
-  })), [points, t]);
-  const flowEdges = useMemo<MemoryFlowEdge[]>(() => edges.map((edge, index) => {
-    const touches = selectedId !== null && (edge.sourceId === selectedId || edge.targetId === selectedId);
-    return {
-      id: `memory-edge-${index}-${edge.sourceId}-${edge.targetId}`,
-      source: edge.sourceId,
-      target: edge.targetId,
-      type: "default",
-      data: { view: edge.view, weight: edge.weight },
-      markerEnd: { type: MarkerType.ArrowClosed, color: viewColor(edge.view) },
-      style: {
-        stroke: viewColor(edge.view),
-        strokeWidth: touches ? 1.5 + edge.weight : 1 + edge.weight,
-        opacity: selectedId === null ? 0.58 : touches ? 1 : 0.1,
-        strokeDasharray: edge.view === "temporal" ? "5 4" : edge.view === "entity" ? "2 3" : undefined,
-      },
-    };
-  }), [edges, selectedId]);
   const counts = useMemo(() => {
     const byView: Record<MemoryRelationView, number> = { semantic: 0, temporal: 0, causal: 0, entity: 0 };
     for (const edge of graph?.edges ?? []) byView[edge.view] += 1;
@@ -191,15 +134,16 @@ export function MemoryGraphDialog({ open, onOpenChange }: { open: boolean; onOpe
               <div className="absolute inset-0 grid place-items-center text-sm text-muted-foreground">{t("memory.loading")}</div>
             ) : graph.nodes.length === 0 ? (
               <div className="absolute inset-0 grid place-items-center text-sm text-muted-foreground">{t("memory.graphEmpty")}</div>
+            ) : !positions ? (
+              <div className="absolute inset-0 grid place-items-center text-sm text-muted-foreground">{t("memory.graphLayout")}</div>
             ) : (
-              <ReactFlowProvider>
-                <MemoryFlowCanvas
-                  nodes={flowNodes}
-                  edges={flowEdges}
-                  selectedId={selectedId}
-                  onSelect={setSelectedId}
-                />
-              </ReactFlowProvider>
+              <MemorySigma
+                nodes={graph.nodes}
+                edges={edges}
+                positions={positions}
+                selectedId={selectedId}
+                onSelect={setSelectedId}
+              />
             )}
           </div>
           <div className="flex min-h-56 shrink-0 flex-col overflow-hidden rounded-lg border md:w-88">
@@ -208,118 +152,6 @@ export function MemoryGraphDialog({ open, onOpenChange }: { open: boolean; onOpe
         </div>
       </DialogContent>
     </Dialog>
-  );
-}
-
-const MEMORY_NODE_TYPES = { memory: MemoryFlowNode };
-
-function MemoryFlowCanvas({
-  nodes: initialNodes,
-  edges,
-  selectedId,
-  onSelect,
-}: {
-  nodes: MemoryFlowNode[];
-  edges: MemoryFlowEdge[];
-  selectedId: string | null;
-  onSelect: (id: string | null) => void;
-}): JSX.Element {
-  const [nodes, setNodes, onNodesChange] = useNodesState<MemoryFlowNode>(initialNodes);
-  const { fitView } = useReactFlow();
-
-  useEffect(() => {
-    setNodes(initialNodes);
-    const frame = window.requestAnimationFrame(() => {
-      void fitView({ padding: 0.16, duration: 220 });
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [initialNodes, setNodes, fitView]);
-
-  // The selected neighbourhood is derived from visible edges, so it changes when
-  // a relation kind is toggled without rebuilding or moving the cards.
-  useEffect(() => {
-    const neighbours = new Set<string>();
-    if (selectedId) {
-      for (const edge of edges) {
-        if (edge.source === selectedId) neighbours.add(edge.target);
-        if (edge.target === selectedId) neighbours.add(edge.source);
-      }
-    }
-    setNodes((current) => current.map((node) => ({
-      ...node,
-      selected: node.id === selectedId,
-      data: { ...node.data, selectedId, neighbours },
-    })));
-  }, [edges, initialNodes, selectedId, setNodes]);
-
-  return (
-    <ReactFlow
-      className="memory-flow"
-      nodes={nodes}
-      edges={edges}
-      nodeTypes={MEMORY_NODE_TYPES}
-      onNodesChange={onNodesChange}
-      onNodeClick={(_, node) => onSelect(node.id)}
-      onPaneClick={() => onSelect(null)}
-      nodesConnectable={false}
-      nodesDraggable
-      elementsSelectable
-      panOnScroll
-      panOnDrag
-      zoomOnScroll
-      zoomOnDoubleClick={false}
-      minZoom={0.2}
-      maxZoom={2.5}
-      onlyRenderVisibleElements
-      fitView
-      fitViewOptions={{ padding: 0.16 }}
-    >
-      <Background gap={24} size={1} color="var(--border)" />
-      <Controls showInteractive={false} />
-    </ReactFlow>
-  );
-}
-
-function MemoryFlowNode({ data, selected }: NodeProps<MemoryFlowNode>): JSX.Element {
-  const { memory } = data;
-  const dimmed = data.selectedId !== null && !selected && !data.neighbours.has(memory.id);
-  const select = (): void => data.onSelect(memory.id);
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      select();
-    }
-  };
-
-  return (
-    <div
-      role="button"
-      tabIndex={0}
-      aria-label={`${data.roleLabel}: ${memory.preview}`}
-      aria-pressed={selected}
-      onClick={select}
-      onKeyDown={onKeyDown}
-      className={cn(
-        "relative h-28 w-56 cursor-pointer overflow-visible rounded-xl border border-border/80 bg-card p-3 text-card-foreground shadow-sm transition-all",
-        "hover:-translate-y-0.5 hover:border-foreground/30 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        selected && "border-foreground/50 shadow-md ring-2 ring-ring/30",
-        dimmed && "opacity-30",
-      )}
-      style={{ borderLeftColor: roleColor(memory.role), borderLeftWidth: "3px" }}
-    >
-      <Handle type="target" position={Position.Left} className="!size-2 !border-2 !border-background !bg-muted-foreground" />
-      <Handle type="source" position={Position.Right} className="!size-2 !border-2 !border-background !bg-muted-foreground" />
-      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        <span className="size-2 shrink-0 rounded-full" style={{ background: roleColor(memory.role) }} />
-        <span className="truncate font-medium text-foreground">{data.roleLabel}</span>
-        <span className="ml-auto shrink-0 tabular-nums">{new Date(memory.createdAt).toLocaleDateString()}</span>
-      </div>
-      <p className="mt-2 line-clamp-3 break-words text-sm leading-5">{memory.preview}</p>
-      <div className="absolute inset-x-3 bottom-2 flex items-center gap-1 text-xs text-muted-foreground">
-        <span className="truncate">{memory.project ? projectName(memory.project) : ""}</span>
-        {memory.fallback ? <span className="ml-auto rounded bg-muted px-1.5 py-0.5">{data.fallbackLabel}</span> : null}
-      </div>
-    </div>
   );
 }
 

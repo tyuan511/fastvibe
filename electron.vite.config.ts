@@ -65,6 +65,14 @@ export default defineConfig({
     },
   },
   renderer: {
+    worker: {
+      // Packaged windows load the renderer over file://. A module worker is a
+      // cross-origin fetch from that origin and is refused; the default classic
+      // (iife) worker is a same-directory script and is allowed. Kept explicit so
+      // a later change to "es" does not silently drop the memory-graph layout
+      // back onto the main thread.
+      format: "iife",
+    },
     resolve: {
       alias: {
         "@": resolve("src/renderer/src"),

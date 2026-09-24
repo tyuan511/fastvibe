@@ -80,7 +80,8 @@
     "edit": "编辑",
     "remove": "移除待发送消息",
     "draftBusy": "请先发送或清空当前草稿，再编辑队列消息。",
-    "continue": "继续发送"
+    "continue": "继续发送",
+    "sendFailed": "排队的消息发送失败"
   },
   "compact": {
     "threshold": "接近上限",
@@ -178,16 +179,21 @@
     "workingOn": "正在工作",
     "expand": "展开",
     "collapse": "收起",
+    "expandProcess": "展开之前的 {{count}} 个步骤",
     "preparing": "正在准备工作区…",
     "loadingConversation": "正在加载会话…",
     "copied": "已复制",
+    "expandCode": "展开剩余 {{count}} 个字符",
+    "collapseCode": "收起代码",
     "selection": {
       "label": "选中文本操作",
       "addToConversation": "添加到对话",
       "askInSideChat": "在侧边聊天中提问"
     },
     "earlier_one": "显示更早的 {{count}} 个回合",
-    "earlier_other": "显示更早的 {{count}} 个回合"
+    "earlier_other": "显示更早的 {{count}} 个回合",
+    "stoppedAtLength": "回复达到了模型的最大输出长度，已被截断。可以点「继续」重新生成，或在 设置 → 模型与默认 → 模型详情 中调大「最大输出」。",
+    "stoppedAborted": "已中断"
   },
   "permission": {
     "needConfirm": "需要确认",

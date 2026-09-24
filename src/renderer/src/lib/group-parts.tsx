@@ -108,6 +108,9 @@ export function mergeAssistantRun(messages: ChatMessage[]): ChatMessage {
   // todos that were already writing.
   const last = messages[messages.length - 1];
   const error = last?.error;
+  // A truncation or stop notice belongs to the round-trip that ended the row, for the
+  // same reason: an earlier attempt a 继续 resumed from must not keep its notice.
+  const stop = last?.stop;
   // The row ends when its final round-trip does. Deliberately not a search back
   // through the run: an open round-trip has no end yet, and borrowing the previous
   // one's would report a stale finish time the moment it is read mid-stream.
@@ -119,6 +122,7 @@ export function mergeAssistantRun(messages: ChatMessage[]): ChatMessage {
     tools: [...tools.values()],
     parts,
     error,
+    stop,
     completedAt,
   };
   mergedRuns.set(key, merged);
