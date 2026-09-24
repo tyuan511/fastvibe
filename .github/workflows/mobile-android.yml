@@ -50,11 +50,15 @@ jobs:
       # tools` as part of its own setup, a package the current SDK manager no longer
       # publishes ("Warning: Failed to find package 'tools'"), and so the job failed in
       # its fifth step, before anything was built. The packages this build needs are
-      # installed directly instead.
+      # installed directly instead — by full path, because only the SDK root is on the
+      # environment, not its `cmdline-tools/*/bin`.
       - name: Install Android SDK packages
         run: |
-          sdkmanager --licenses < /dev/null > /dev/null 2>&1 || true
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          set -euo pipefail
+          sdkmanager="$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager | sort -V | tail -1)"
+          echo "using $sdkmanager"
+          yes | "$sdkmanager" --licenses > /dev/null || true
+          "$sdkmanager" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
