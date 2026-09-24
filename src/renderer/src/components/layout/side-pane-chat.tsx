@@ -169,6 +169,7 @@ export function SidePaneChat({
         <MessageList
           messages={messages}
           streaming={streaming}
+          conversationId={tab.conversationId}
           loading={!tab.conversationId}
           emptyState={<SideChatEmpty />}
         />

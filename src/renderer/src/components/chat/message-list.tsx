@@ -393,6 +393,7 @@ function scrollMetrics(element: HTMLElement): { start: boolean; end: boolean } {
 export function MessageList({
   messages,
   streaming,
+  conversationId,
   loading = false,
   loadingReplaces = false,
   onRetry,
@@ -404,6 +405,8 @@ export function MessageList({
 }: {
   messages: ChatMessage[];
   streaming: boolean;
+  /** Stable owner of the transcript; required to reset scroll when its first row is reused. */
+  conversationId?: string | null;
   loading?: boolean;
   /** Replace the current transcript with the loader, instead of only covering an empty one. */
   loadingReplaces?: boolean;
@@ -436,7 +439,10 @@ export function MessageList({
   // rows, which is long after an effect keyed on a ref object would have run.
   const guardViewport = useNoOpWheelGuard();
   const viewportRef = useRef<HTMLDivElement | null>(null);
-  const threadId = rows[0]?.id ?? "";
+  // The first message is not a conversation identity: it can be reused by a restored,
+  // forked or otherwise reconciled transcript. Use the owner id when the caller has one,
+  // so switching chats always resets the virtualizer's landing state.
+  const threadId = conversationId ?? rows[0]?.id ?? "";
   const turnsRef = useRef(turns);
   turnsRef.current = turns;
   const rowIndexByMessage = useMemo(() => {
@@ -501,7 +507,13 @@ export function MessageList({
     if (!element) return false;
     followingRef.current = true;
     programmaticScrollRef.current = true;
-    element.scrollTo({ top: Math.max(0, virtualizer.getTotalSize()), behavior: options?.behavior ?? "auto" });
+    // The DOM is authoritative here. `getTotalSize()` is an estimate while the tail is
+    // being measured and can be smaller than the actual scroll range, which leaves a
+    // newly opened conversation somewhere above its last message.
+    element.scrollTo({
+      top: Math.max(0, element.scrollHeight - element.clientHeight),
+      behavior: options?.behavior ?? "auto",
+    });
     syncScrollState();
     window.requestAnimationFrame(() => {
       programmaticScrollRef.current = false;
@@ -574,8 +586,18 @@ export function MessageList({
   useLayoutEffect(() => {
     followingRef.current = true;
     virtualizer.measure();
-    const frame = window.requestAnimationFrame(() => scrollToEnd());
-    return () => window.cancelAnimationFrame(frame);
+    // Measurement is deliberately batched by the virtualizer. Land once after the
+    // first frame and once again after that batch has committed; otherwise a switch
+    // can retain the previous scroll offset or land at the old estimated height.
+    let settleFrame = 0;
+    const frame = window.requestAnimationFrame(() => {
+      scrollToEnd();
+      settleFrame = window.requestAnimationFrame(() => scrollToEnd());
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      if (settleFrame) window.cancelAnimationFrame(settleFrame);
+    };
   }, [scrollToEnd, threadId, virtualizer]);
 
   // A row can grow after Markdown, highlighting, images or a collapsible settles.

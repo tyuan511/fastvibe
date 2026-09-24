@@ -120,7 +120,7 @@ export function ChatScreen({
             </Button>
           </div>
         ) : (
-          <Thread loading={loading} />
+          <Thread loading={loading} conversationId={shownId} />
         )}
       </div>
 
@@ -130,7 +130,7 @@ export function ChatScreen({
 }
 
 /** The transcript, subscribed on its own so a streamed token re-renders only this. */
-const Thread = memo(function Thread({ loading }: { loading: boolean }): JSX.Element {
+const Thread = memo(function Thread({ loading, conversationId }: { loading: boolean; conversationId: string | null }): JSX.Element {
   const { t } = useTranslation("app");
   const messages = useSessionStore((state) => state.messages);
   const streaming = useSessionStore((state) => state.streaming);
@@ -138,6 +138,7 @@ const Thread = memo(function Thread({ loading }: { loading: boolean }): JSX.Elem
     <MessageList
       messages={messages}
       streaming={streaming}
+      conversationId={conversationId}
       loading={loading}
       loadingReplaces={loading}
       emptyState={

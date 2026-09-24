@@ -78,6 +78,7 @@ export const MessageThread = memo(function MessageThread({
     <MessageList
       messages={messages}
       streaming={streaming}
+      conversationId={activeId}
       loading={loading}
       loadingReplaces={loadingReplaces}
       onRetry={onRetry}
