@@ -110,6 +110,9 @@ export class RemoteClient {
                 protocol: "fastvibe.app",
                 protocolVersion: 1,
                 client: { kind: "mobile", version: "0.1.0" },
+                // The native client has no image attachment sender yet, but it can
+                // consume the ordered event batches used for low-bandwidth streams.
+                features: { eventBatch: true },
               },
             }),
           );
@@ -137,6 +140,14 @@ export class RemoteClient {
         }
         if (message.kind === "event" && typeof message.channel === "string") {
           this.#push?.(message.channel, message.payload);
+          return;
+        }
+        if (message.kind === "events" && Array.isArray(message.events)) {
+          for (const event of message.events) {
+            if (isRecord(event) && typeof event.channel === "string") {
+              this.#push?.(event.channel, event.payload);
+            }
+          }
         }
       };
     });
@@ -206,6 +217,10 @@ function parseFrame(data: unknown): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 function unreachable(origin: string): string {
