@@ -563,9 +563,12 @@ export function MessageList({
   useLayoutEffect(() => {
     const element = viewportRef.current;
     if (!element) return;
-    const onScroll = (): void => {
+    const update = (allowFollowChange: boolean): void => {
       const next = scrollMetrics(element);
-      if (!programmaticScrollRef.current) followingRef.current = next.end;
+      // Re-rendering while a reply streams also re-runs this effect. Its initial read
+      // can see the transient gap created by the new text before the follow effect moves
+      // the viewport, so only a real scroll event may change the reader's intent.
+      if (allowFollowChange && !programmaticScrollRef.current) followingRef.current = next.end;
       setScrollState((current) => current.start === next.start && current.end === next.end ? current : next);
       // Arrived: from here the virtualizer's own range is the right one. Not before — its
       // offset only follows the scroll event, while `scrollToEnd` moves `scrollTop` at once,
@@ -576,8 +579,9 @@ export function MessageList({
       // to agree could leave a landed list in tail-only mode forever.
       if (landing && next.end) setLandedThread(threadId);
     };
+    const onScroll = (): void => update(true);
     element.addEventListener("scroll", onScroll, { passive: true });
-    onScroll();
+    update(false);
     return () => element.removeEventListener("scroll", onScroll);
   });
 
@@ -600,11 +604,13 @@ export function MessageList({
     };
   }, [scrollToEnd, threadId, virtualizer]);
 
-  // A row can grow after Markdown, highlighting, images or a collapsible settles.
+  // A streamed message can change before the virtualizer publishes a new size. Depend
+  // on the transcript itself as well as its measurements, so a reader at the live edge
+  // is moved on every flushed update instead of waiting for a ResizeObserver round.
   // Only a reader who was following the live edge is moved; history readers keep place.
   useLayoutEffect(() => {
     if (followingRef.current && turns.length > 0) scrollToEnd();
-  }, [scrollToEnd, totalSize, turns.length, virtualRows.length]);
+  }, [messages, scrollToEnd, totalSize, turns.length, virtualRows.length]);
 
   const virtualScrollController = useMemo(() => ({
     scrollToEnd,
