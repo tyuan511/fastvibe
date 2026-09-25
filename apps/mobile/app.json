@@ -2,7 +2,7 @@
   "expo": {
     "name": "FastVibe",
     "slug": "fastvibe-mobile",
-    "version": "0.2.0",
+    "version": "0.2.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "fastvibe",
@@ -19,7 +19,6 @@
     },
     "android": {
       "package": "dev.fastvibe.mobile",
-      "usesCleartextTraffic": true,
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -56,6 +55,14 @@
           "dark": {
             "image": "./assets/splash-icon.png",
             "backgroundColor": "#000000"
+          }
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
           }
         }
       ]

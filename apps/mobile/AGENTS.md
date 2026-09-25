@@ -37,6 +37,8 @@ Expo Router. Routes live in `src/app/`. Keep non-route code outside that directo
 
 `ios/` and `android/` are generated (Continuous Native Generation). Never create or edit them by hand — configure native behavior in `app.json` and config plugins. Metro detects this monorepo automatically; do not add manual `watchFolders` or `nodeModulesPaths`.
 
+A key that prebuild does not read fails silently, and only in a release build. Two have bitten: the top-level `splash` (SDK 57 reads only the `expo-splash-screen` plugin) and `android.usesCleartextTraffic` (only `expo-build-properties` writes it). The second matters most: Android 9+ blocks `http://` in release builds, every LAN address is plain HTTP, and the debug manifest allows it — so the app works in development and cannot reach any LAN machine once released, while the phone's browser opens the same address fine. After changing native config, run `expo prebuild` and read the generated `android/app/src/main/AndroidManifest.xml`, then delete `android/`.
+
 ## Updates (Android)
 
 The app updates itself from GitHub Releases (`src/update/`): on launch it lists the `app-v*` tags, takes the newest one whose release has a `.apk` asset, and offers it in a banner on the 设备 screen; the APK is downloaded to the cache and handed to the system installer (`REQUEST_INSTALL_PACKAGES`). Releases are shared with the desktop app, so never look them up by `releases/latest` or the first page of `releases`.

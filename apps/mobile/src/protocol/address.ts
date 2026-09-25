@@ -83,7 +83,12 @@ function inferProtocol(
   kind: AddressKind,
 ): "http:" | "https:" {
   if (explicit) return parsed === "https:" ? "https:" : "http:";
-  if (kind !== "public" || isIpv4(hostname)) return "http:";
+  // An IP literal has no certificate to offer, so a bare one is FastVibe's plain LAN
+  // listener — including a global IPv6 address, which is what the LAN row shows (and
+  // copies, with no scheme) when the machine is set to IPv6. Reading that as public
+  // and trying TLS against the plain listener failed every connection. Tunnels hand
+  // out hostnames, always with https:// in front.
+  if (kind !== "public" || isIpLiteral(hostname)) return "http:";
   return "https:";
 }
 
@@ -93,7 +98,7 @@ function resolvePort(raw: string, protocol: "http:" | "https:", hostname: string
     if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
     return String(port);
   }
-  if (isIpv4(hostname) || kind !== "public") return protocol === "https:" ? "443" : String(DEFAULT_LAN_PORT);
+  if (isIpLiteral(hostname) || kind !== "public") return protocol === "https:" ? "443" : String(DEFAULT_LAN_PORT);
   return protocol === "https:" ? "443" : "80";
 }
 
@@ -128,6 +133,10 @@ function isPrivateV4(host: string): boolean {
 
 function isIpv4(host: string): boolean {
   return /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+}
+
+function isIpLiteral(host: string): boolean {
+  return isIpv4(host) || host.includes(":");
 }
 
 function isHost(hostname: string): boolean {

@@ -63,3 +63,17 @@ test("rejects a non-http scheme and an empty string", () => {
   assert.equal(parseServerAddress(""), null);
   assert.equal(parseServerAddress("ftp://192.168.1.2"), null);
 });
+
+test("a bare IPv6 address is the plain LAN listener, not a TLS endpoint", () => {
+  // What 设置 → 远程访问 copies for the LAN row when the machine is set to IPv6: no
+  // scheme, and a global address, which classifies as public. TLS against the plain
+  // listener failed every connection.
+  const parsed = parseServerAddress("[240e:370:a51b:a280:49f:eaac:3882:fb66]:7777");
+  assert.equal(parsed?.origin, "http://[240e:370:a51b:a280:49f:eaac:3882:fb66]:7777");
+  assert.equal(parsed?.wsUrl, "ws://[240e:370:a51b:a280:49f:eaac:3882:fb66]:7777/ws");
+  assert.equal(parseServerAddress("[240e:370::1]")?.origin, "http://[240e:370::1]:7777");
+});
+
+test("an explicit https IPv6 address keeps https", () => {
+  assert.equal(parseServerAddress("https://[240e:370::1]")?.origin, "https://[240e:370::1]");
+});
