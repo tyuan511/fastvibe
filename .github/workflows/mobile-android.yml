@@ -89,6 +89,30 @@ jobs:
             | base64 --decode > "$RUNNER_TEMP/fastvibe-release.keystore"
           chmod 600 "$RUNNER_TEMP/fastvibe-release.keystore"
 
+      # A PKCS12 keystore (keytool's default) keys its entry with the store password,
+      # whatever -keypass said, so a separate key password fails at packageRelease after
+      # fifteen minutes of compiling. Find out up front which secret actually unlocks the
+      # key, with the same KeyStore.getKey call the Android Gradle plugin makes. Only the
+      # choice leaves this step; the passwords stay in the secrets.
+      - name: Resolve release key password
+        id: signing
+        env:
+          FASTVIBE_ANDROID_STORE_PASSWORD: ${{ secrets.FASTVIBE_ANDROID_STORE_PASSWORD }}
+          FASTVIBE_ANDROID_KEY_ALIAS: ${{ secrets.FASTVIBE_ANDROID_KEY_ALIAS }}
+          FASTVIBE_ANDROID_KEY_PASSWORD: ${{ secrets.FASTVIBE_ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          source="$(java .github/scripts/AndroidKeyPassword.java \
+            "$RUNNER_TEMP/fastvibe-release.keystore" \
+            FASTVIBE_ANDROID_KEY_ALIAS FASTVIBE_ANDROID_STORE_PASSWORD \
+            FASTVIBE_ANDROID_KEY_PASSWORD FASTVIBE_ANDROID_STORE_PASSWORD)"
+          if [ "$source" = FASTVIBE_ANDROID_STORE_PASSWORD ]; then
+            echo "::notice::The release key is unlocked by the store password (PKCS12 keystore)."
+            echo "key-password=store" >> "$GITHUB_OUTPUT"
+          else
+            echo "key-password=key" >> "$GITHUB_OUTPUT"
+          fi
+
       # The config plugin wires these CI-only environment variables into the generated
       # release signing config. The key never enters the repository or the APK artifact.
       - name: Build signed release APK
@@ -97,7 +121,7 @@ jobs:
           FASTVIBE_ANDROID_STORE_FILE: ${{ runner.temp }}/fastvibe-release.keystore
           FASTVIBE_ANDROID_STORE_PASSWORD: ${{ secrets.FASTVIBE_ANDROID_STORE_PASSWORD }}
           FASTVIBE_ANDROID_KEY_ALIAS: ${{ secrets.FASTVIBE_ANDROID_KEY_ALIAS }}
-          FASTVIBE_ANDROID_KEY_PASSWORD: ${{ secrets.FASTVIBE_ANDROID_KEY_PASSWORD }}
+          FASTVIBE_ANDROID_KEY_PASSWORD: ${{ steps.signing.outputs.key-password == 'store' && secrets.FASTVIBE_ANDROID_STORE_PASSWORD || secrets.FASTVIBE_ANDROID_KEY_PASSWORD }}
         # arm64-v8a only. The template builds every C++ module (worklets, reanimated,
         # screens, expo-modules-core, gesture-handler) for four ABIs, and that was most of
         # a 24-minute build: x86/x86_64 exist only for emulators, and armeabi-v7a is
