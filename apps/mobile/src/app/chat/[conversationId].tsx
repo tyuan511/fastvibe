@@ -133,8 +133,13 @@ export default function ChatScreen() {
     const remote = getClient();
     if (!text || !remote) return;
     setDraft("");
-    setMessages((current) => [...current, { id: `local-${Date.now()}`, role: "user", text, tools: [] }]);
     try {
+      // Keep the catalog in step with the engine. An empty chat is hidden from the
+      // mobile list until it has a preview; the desktop writes that preview before
+      // sending the first prompt, so the native client must use the same two-step
+      // boundary rather than relying on engine:prompt to rename the conversation.
+      await remote.call("conversations:record-prompt", { id: conversationId, text });
+      setMessages((current) => [...current, { id: `local-${Date.now()}`, role: "user", text, tools: [] }]);
       await remote.call("engine:prompt", { message: text, conversationId }, 60_000);
     } catch (caught) {
       setDraft(text);
@@ -309,10 +314,12 @@ function parseCompact(value: unknown): CompactInfo | undefined {
 
 function WorkingStatus({ palette, since, now }: { palette: ReturnType<typeof usePalette>; since: number; now: number }): JSX.Element {
   return (
-    <View style={[styles.working, { backgroundColor: palette.card, borderColor: palette.border }]}>
-      <DesktopSpinner color={palette.muted} size={15} />
-      <Text style={[styles.workingText, { color: palette.muted }]}>正在工作</Text>
-      <Text style={[styles.workingTime, { color: palette.muted }]}>{formatElapsed(now - since)}</Text>
+    <View style={styles.working}>
+      <View style={[styles.workingPill, { backgroundColor: palette.card, borderColor: palette.border }]}>
+        <DesktopSpinner color={palette.muted} size={15} />
+        <Text style={[styles.workingText, { color: palette.muted }]}>正在工作</Text>
+        <Text style={[styles.workingTime, { color: palette.muted }]}>{formatElapsed(now - since)}</Text>
+      </View>
     </View>
   );
 }
@@ -414,12 +421,11 @@ const styles = StyleSheet.create({
   compactError: { paddingLeft: 23, fontSize: 13 },
   modelDivider: { alignSelf: "center", fontSize: 12, paddingVertical: 4 },
   errorText: { paddingHorizontal: 16, paddingBottom: 4, fontSize: 13 },
-  working: {
-    alignSelf: "center",
+  working: { width: "100%", alignItems: "center", paddingVertical: 2 },
+  workingPill: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    marginBottom: 2,
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: 999,
     paddingHorizontal: 11,

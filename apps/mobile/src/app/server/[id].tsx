@@ -2,7 +2,16 @@ import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useMemo, useState, type JSX } from "react";
 import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { HugeiconsIcon } from "@hugeicons/react-native";
-import { Alert02Icon, ArrowDown01Icon, Cancel01Icon, Folder01Icon, Search01Icon } from "../../ui/icons";
+import {
+  Alert02Icon,
+  ArrowDown01Icon,
+  Cancel01Icon,
+  Folder01Icon,
+  LockPasswordIcon,
+  Refresh01Icon,
+  Search01Icon,
+  WifiDisconnected02Icon,
+} from "../../ui/icons";
 import { connectSaved, currentConnection, loginSaved, useConnection, getClient, type CatalogConversation } from "../../session/connection";
 import { loadServers, type SavedServer } from "../../storage/servers";
 import { usePalette } from "../../ui/theme";
@@ -23,8 +32,10 @@ export default function ServerScreen() {
   const [password, setPassword] = useState("");
   const [query, setQuery] = useState("");
   const [project, setProject] = useState<string | null>(null);
+  const [newProject, setNewProject] = useState(ALL_PROJECTS);
   const [creating, setCreating] = useState(false);
   const [pickingProject, setPickingProject] = useState(false);
+  const [pickingNewProject, setPickingNewProject] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -75,12 +86,19 @@ export default function ServerScreen() {
   if (running.length > 0) rows.push({ kind: "header", key: "h-running", title: "运行中" }, ...running.map((c) => ({ kind: "chat" as const, key: c.id, chat: c })));
   if (recent.length > 0) rows.push({ kind: "header", key: "h-recent", title: "最近" }, ...recent.map((c) => ({ kind: "chat" as const, key: c.id, chat: c })));
 
-  async function createChat(): Promise<void> {
+  async function createChat(selectedProject: string): Promise<void> {
     const remote = getClient();
     if (!remote || creating) return;
     setCreating(true);
     try {
-      const result = (await remote.call("conversations:create", { project: project ?? undefined, activate: false })) as { conversation?: { id?: string } };
+      // The native app lets the user start several empty chats. Do not reuse the
+      // previous project's empty slot; that reuse is useful for the desktop draft,
+      // but makes a second tap on 新对话 open the first chat again.
+      const result = (await remote.call("conversations:create", {
+        project: selectedProject || undefined,
+        activate: false,
+        reuseEmpty: false,
+      })) as { conversation?: { id?: string } };
       const conversationId = result.conversation?.id;
       if (conversationId) router.push(`/chat/${conversationId}`);
     } finally {
@@ -97,7 +115,14 @@ export default function ServerScreen() {
           title: server?.alias || "设备",
           headerRight: ready
             ? () => (
-                <Pressable onPress={() => void createChat()} hitSlop={8} disabled={creating}>
+                <Pressable
+                  onPress={() => {
+                    setNewProject(project ?? ALL_PROJECTS);
+                    setPickingNewProject(true);
+                  }}
+                  hitSlop={8}
+                  disabled={creating}
+                >
                   <Text style={{ color: palette.accent, fontSize: 17 }}>{creating ? "…" : "新对话"}</Text>
                 </Pressable>
               )
@@ -121,25 +146,54 @@ export default function ServerScreen() {
       ) : null}
       {connection.server?.id === id && connection.status === "error" ? (
         <View style={styles.center}>
-          <Text style={[styles.error, { color: palette.danger }]}>{connection.error}</Text>
+          <View style={styles.failure}>
+            <View style={[styles.failureIcon, { backgroundColor: palette.card }]}>
+              <HugeiconsIcon
+                icon={connection.needsPassword ? LockPasswordIcon : WifiDisconnected02Icon}
+                size={30}
+                color={palette.muted}
+                strokeWidth={1.8}
+              />
+            </View>
+            <Text style={[styles.failureTitle, { color: palette.text }]}>
+              {connection.needsPassword ? "需要重新登录" : `无法连接 ${server?.alias ?? "设备"}`}
+            </Text>
+            <Text style={[styles.failureBody, { color: palette.muted }]}>
+              {connection.needsPassword
+                ? connection.error
+                : `${(connection.error ?? "连接失败").replace(/[。.]$/, "")}。请确认电脑上的 FastVibe 正在运行，且手机能访问 ${server?.host ?? "这台设备"}。`}
+            </Text>
+          </View>
           {connection.needsPassword ? (
-            <View style={styles.login}>
+            <View style={styles.actions}>
               <TextInput
                 value={password}
                 onChangeText={setPassword}
                 secureTextEntry
                 placeholder="远程访问密码"
                 placeholderTextColor={palette.muted}
-                style={[styles.input, { color: palette.text, borderColor: palette.border }]}
+                returnKeyType="go"
+                onSubmitEditing={() => server && password && void loginSaved(server, password)}
+                style={[styles.input, { color: palette.text, backgroundColor: palette.card }]}
               />
-              <Pressable onPress={() => server && void loginSaved(server, password)} style={[styles.button, { backgroundColor: palette.accent }]}>
-                <Text style={{ color: palette.accentText, fontSize: 16 }}>连接</Text>
+              <Pressable
+                disabled={!password}
+                onPress={() => server && void loginSaved(server, password)}
+                style={({ pressed }) => [styles.button, { backgroundColor: palette.accent, opacity: !password ? 0.4 : pressed ? 0.8 : 1 }]}
+              >
+                <Text style={[styles.buttonLabel, { color: palette.accentText }]}>连接</Text>
               </Pressable>
             </View>
           ) : (
-            <Pressable onPress={() => server && void connectSaved(server)} style={[styles.button, { backgroundColor: palette.accent }]}>
-              <Text style={{ color: palette.accentText, fontSize: 16 }}>重试</Text>
-            </Pressable>
+            <View style={styles.actions}>
+              <Pressable
+                onPress={() => server && void connectSaved(server)}
+                style={({ pressed }) => [styles.button, { backgroundColor: palette.accent, opacity: pressed ? 0.8 : 1 }]}
+              >
+                <HugeiconsIcon icon={Refresh01Icon} size={18} color={palette.accentText} strokeWidth={2} />
+                <Text style={[styles.buttonLabel, { color: palette.accentText }]}>重新连接</Text>
+              </Pressable>
+            </View>
           )}
         </View>
       ) : null}
@@ -214,6 +268,25 @@ export default function ServerScreen() {
             onSelect={(value) => setProject(value === ALL_PROJECTS ? null : value)}
             onClose={() => setPickingProject(false)}
           />
+          <OptionSheet
+            open={pickingNewProject}
+            title="新对话项目"
+            groups={[
+              {
+                label: "",
+                options: [
+                  { value: ALL_PROJECTS, label: "无项目", description: "使用临时工作区" },
+                  ...connection.projects.map((item) => ({ value: item.cwd, label: item.name })),
+                ],
+              },
+            ]}
+            value={newProject}
+            onSelect={(value) => {
+              setNewProject(value);
+              void createChat(value);
+            }}
+            onClose={() => setPickingNewProject(false)}
+          />
         </View>
       ) : null}
     </View>
@@ -283,7 +356,7 @@ function ProjectFilter({
       ]}
     >
       <HugeiconsIcon icon={Folder01Icon} size={16} color={tint} strokeWidth={2} />
-      <Text style={[styles.filterLabel, { color: active ? palette.accent : palette.text }]} numberOfLines={1}>
+      <Text style={[styles.filterLabel, { color: active ? palette.accent : palette.text }]} numberOfLines={1} ellipsizeMode="tail">
         {label}
       </Text>
       {active ? (
@@ -309,17 +382,22 @@ function relativeTime(timestamp: number): string {
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },
-  center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12, padding: 24 },
-  error: { fontSize: 15, lineHeight: 22, textAlign: "center" },
-  login: { alignSelf: "stretch", gap: 10 },
-  input: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 12, fontSize: 16 },
-  button: { borderRadius: 12, paddingVertical: 12, alignItems: "center" },
+  center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 32 },
+  failure: { alignItems: "center", gap: 8, maxWidth: 320 },
+  failureIcon: { width: 64, height: 64, borderRadius: 32, alignItems: "center", justifyContent: "center", marginBottom: 8 },
+  failureTitle: { fontSize: 18, fontWeight: "600", textAlign: "center" },
+  failureBody: { fontSize: 14, lineHeight: 21, textAlign: "center" },
+  actions: { width: "100%", maxWidth: 320, gap: 10, marginTop: 20 },
+  input: { borderRadius: 12, paddingHorizontal: 14, height: 48, fontSize: 16 },
+  button: { flexDirection: "row", gap: 8, height: 48, borderRadius: 12, alignItems: "center", justifyContent: "center" },
+  buttonLabel: { fontSize: 16, fontWeight: "600" },
   listWrap: { flex: 1 },
   toolbar: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 4 },
   search: { flex: 1, flexDirection: "row", alignItems: "center", gap: 8, height: 40, borderRadius: 12, paddingHorizontal: 12 },
   searchInput: { flex: 1, height: 40, fontSize: 16, paddingVertical: 0 },
-  filter: { flexDirection: "row", alignItems: "center", gap: 6, height: 40, maxWidth: "55%", borderRadius: 12, paddingHorizontal: 12 },
-  filterLabel: { flexShrink: 1, fontSize: 15, fontWeight: "500" },
+  // Fixed width: a long project name must not push the search field narrower.
+  filter: { flexDirection: "row", alignItems: "center", gap: 6, width: 132, flexShrink: 0, height: 40, borderRadius: 12, paddingHorizontal: 12 },
+  filterLabel: { flex: 1, fontSize: 15, fontWeight: "500" },
   list: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 16, gap: 8 },
   section: { fontSize: 13, fontWeight: "600", marginTop: 8, marginBottom: 4, marginLeft: 4 },
   row: { borderRadius: 14, padding: 14, gap: 6 },

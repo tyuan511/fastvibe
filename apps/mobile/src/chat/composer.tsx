@@ -150,8 +150,8 @@ export function Composer({
   const action = running && !hasContent ? "stop" : canContinue && !hasContent ? "continue" : "send";
 
   return (
-    <View style={[styles.outer, { paddingBottom: insets.bottom + 8 }]}>
-      <View style={[styles.card, { backgroundColor: palette.card, borderColor: palette.border }]}>
+    <View style={[styles.outer, { backgroundColor: palette.card, borderTopColor: palette.border, paddingBottom: insets.bottom }]}>
+      <View style={[styles.card, { backgroundColor: palette.card }]}>
         <TextInput
           value={draft}
           onChangeText={onDraftChange}
@@ -212,8 +212,8 @@ function Chip({ label, icon, destructive, disabled, onPress }: { label: string; 
 }
 
 const styles = StyleSheet.create({
-  outer: { paddingHorizontal: 10, paddingTop: 6 },
-  card: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 22, shadowColor: "#000", shadowOpacity: 0.08, shadowRadius: 4, shadowOffset: { width: 0, height: 1 }, elevation: 1 },
+  outer: { paddingTop: 0, borderTopWidth: StyleSheet.hairlineWidth },
+  card: {},
   input: { minHeight: 48, maxHeight: 132, paddingHorizontal: 16, paddingTop: 13, paddingBottom: 8, fontSize: 15, lineHeight: 22 },
   toolbar: { minHeight: 42, flexDirection: "row", alignItems: "center", gap: 2, paddingHorizontal: 8, paddingBottom: 7 },
   chip: { flexDirection: "row", alignItems: "center", gap: 3, maxWidth: 132, borderRadius: 16, paddingHorizontal: 6, paddingVertical: 6 },

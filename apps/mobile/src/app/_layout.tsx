@@ -1,5 +1,6 @@
 import "react-native-gesture-handler";
 
+import { StatusBar } from "expo-status-bar";
 import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from "expo-router";
 import { useColorScheme } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -9,6 +10,7 @@ export default function RootLayout() {
 
   return (
     <SafeAreaProvider>
+      <StatusBar style={colorScheme === "dark" ? "light" : "dark"} />
       <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
         <Stack>
           <Stack.Screen name="index" options={{ title: "设备" }} />
