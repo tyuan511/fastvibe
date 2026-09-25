@@ -1,7 +1,7 @@
 import { useState, type JSX } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { HugeiconsIcon } from "@hugeicons/react-native";
-import { Copy01Icon, Tick02Icon } from "@hugeicons/core-free-icons";
+import { Copy01Icon, Tick02Icon } from "../ui/icons";
 import * as Clipboard from "expo-clipboard";
 import Markdown from "react-native-markdown-display";
 import type { Palette } from "../ui/theme";

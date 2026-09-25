@@ -1,7 +1,7 @@
 import { memo, useState, type JSX } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { HugeiconsIcon } from "@hugeicons/react-native";
-import { ArrowRight01Icon, BrainIcon } from "@hugeicons/core-free-icons";
+import { ArrowRight01Icon, BrainIcon } from "../ui/icons";
 import type { Palette } from "../ui/theme";
 
 /** Same mental model as the desktop: collapsed brain icon + duration + optional full text. */

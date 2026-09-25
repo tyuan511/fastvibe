@@ -1,7 +1,7 @@
 import { useEffect, useRef, type JSX } from "react";
 import { Animated, Easing } from "react-native";
 import { HugeiconsIcon } from "@hugeicons/react-native";
-import { Loading03Icon } from "@hugeicons/core-free-icons";
+import { Loading03Icon } from "../ui/icons";
 
 /** RN version of the desktop Spinner: Hugeicons Loading03Icon, 0.7s linear spin. */
 export function DesktopSpinner({ color, size = 16 }: { color: string; size?: number }): JSX.Element {

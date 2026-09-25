@@ -17,7 +17,7 @@ import {
   SparklesIcon,
   SquareTerminalIcon,
   Wrench01Icon,
-} from "@hugeicons/core-free-icons";
+} from "../ui/icons";
 import type { Palette } from "../ui/theme";
 import { DesktopSpinner } from "./desktop-spinner";
 

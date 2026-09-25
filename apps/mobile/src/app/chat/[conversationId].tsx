@@ -2,7 +2,7 @@ import { Stack, useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useMemo, useState, type JSX } from "react";
 import { FlatList, KeyboardAvoidingView, Platform, StyleSheet, Text, View } from "react-native";
 import { HugeiconsIcon } from "@hugeicons/react-native";
-import { ScissorIcon } from "@hugeicons/core-free-icons";
+import { ScissorIcon } from "../../ui/icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { getClient, onEngineEvent, resolvePendingPermission, useConnection, watchConversation } from "../../session/connection";
 import { PermissionCard } from "../../ui/permission-card";

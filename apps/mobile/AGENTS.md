@@ -44,3 +44,12 @@ A key that prebuild does not read fails silently, and only in a release build. T
 The app updates itself from GitHub Releases (`src/update/`): on launch it lists the `app-v*` tags, takes the newest one whose release has a `.apk` asset, and offers it in a banner on the 设备 screen; the APK is downloaded to the cache and handed to the system installer (`REQUEST_INSTALL_PACKAGES`). Releases are shared with the desktop app, so never look them up by `releases/latest` or the first page of `releases`.
 
 To ship a phone release, bump `expo.version` in `app.json` and push `app-v<version>`. `android.versionCode` is derived from the version in `app.config.js` — do not set it by hand. The installer only accepts an APK signed with the same key, which is why the release key must never change.
+
+## APK size
+
+The 0.2.1 APK was 61 MB for an arm64-only build. What it was made of, and what now holds each part down:
+
+- **Icons come from `src/ui/icons.ts`, never from `@hugeicons/core-free-icons` itself.** Metro does not tree-shake, so importing even one name from the package index bundles every icon — 7.7 MB of source, over half the JS bundle (Hermes bytecode 10 MB → 4.4 MB once fixed). Add an icon by adding a line there; `hugeicons.d.ts` types the per-icon paths, which ship without declarations.
+- **Native libraries are compressed** (`useLegacyPackaging`). By default AGP stores `.so` files uncompressed so they can be mapped in place — 27 MB of the APK. For an APK downloaded over a phone connection the download matters more than the install-time extraction.
+- **R8 and resource shrinking are on** (`enableMinifyInReleaseBuilds`, `enableShrinkResourcesInReleaseBuilds`). Five dex files were 18 MB compressed. If a release build crashes where a debug one does not, suspect R8 stripping something reached by reflection and add a keep rule through a config plugin.
+- **The ML Kit barcode scanner stays** (~6 MB with its models). Dropping it means `launchScanner`, which is Google Play Services' code scanner — absent on most phones sold in mainland China.
