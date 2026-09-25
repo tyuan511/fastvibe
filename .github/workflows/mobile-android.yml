@@ -4,6 +4,14 @@ on:
   push:
     tags:
       - "app-v*"
+    # A tag run can only read the Gradle cache, never share one: GitHub scopes a cache
+    # written on a tag to that tag. Builds on main are what keep it warm for the next
+    # release, and they catch a broken native build before a tag does.
+    branches:
+      - main
+    paths:
+      - "apps/mobile/**"
+      - ".github/workflows/mobile-android.yml"
   workflow_dispatch:
 
 permissions:
@@ -39,6 +47,14 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+
+      # Caches the Gradle distribution, dependencies and the build cache (`--build-cache`
+      # below). The basic provider is a thin wrapper over actions/cache: no license, no
+      # preview terms. Only the default branch writes it.
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
 
       # ubuntu-latest already includes the Android SDK, platform 35 and build tools.
       # Do not run android-actions/setup-android here: its legacy `sdkmanager tools`
@@ -80,7 +96,11 @@ jobs:
           FASTVIBE_ANDROID_STORE_PASSWORD: ${{ secrets.FASTVIBE_ANDROID_STORE_PASSWORD }}
           FASTVIBE_ANDROID_KEY_ALIAS: ${{ secrets.FASTVIBE_ANDROID_KEY_ALIAS }}
           FASTVIBE_ANDROID_KEY_PASSWORD: ${{ secrets.FASTVIBE_ANDROID_KEY_PASSWORD }}
-        run: ./gradlew assembleRelease --no-daemon --stacktrace
+        # arm64-v8a only. The template builds every C++ module (worklets, reanimated,
+        # screens, expo-modules-core, gesture-handler) for four ABIs, and that was most of
+        # a 24-minute build: x86/x86_64 exist only for emulators, and armeabi-v7a is
+        # 32-bit Android, which current phones do not run.
+        run: ./gradlew assembleRelease --build-cache -PreactNativeArchitectures=arm64-v8a --stacktrace
 
       - name: Name and verify APK
         run: |
