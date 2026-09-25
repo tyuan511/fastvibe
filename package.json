@@ -21,7 +21,7 @@
   "scripts": {
     "sync:models": "node scripts/sync-models-dev.mjs",
     "sync": "node scripts/sync-models-dev.mjs",
-    "predev": "node scripts/sync-models-dev.mjs && node scripts/fetch-cua-driver.mjs",
+    "predev": "node scripts/ensure-electron.mjs && node scripts/sync-models-dev.mjs && node scripts/fetch-cua-driver.mjs",
     "dev": "electron-vite dev",
     "prebuild": "node scripts/sync-models-dev.mjs && node scripts/check-injected-scripts.mjs && node scripts/fetch-cua-driver.mjs",
     "build": "electron-vite build",
