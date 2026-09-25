@@ -48,14 +48,6 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      # Caches the Gradle distribution, dependencies and the build cache (`--build-cache`
-      # below). The basic provider is a thin wrapper over actions/cache: no license, no
-      # preview terms. Only the default branch writes it.
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
-        with:
-          cache-provider: basic
-
       # ubuntu-latest already includes the Android SDK, platform 35 and build tools.
       # Do not run android-actions/setup-android here: its legacy `sdkmanager tools`
       # call fails against current SDK repositories before the build can start.
@@ -76,6 +68,16 @@ jobs:
       - name: Generate Android project
         working-directory: apps/mobile
         run: pnpm exec expo prebuild --platform android --clean --no-install --non-interactive
+
+      # Caches the Gradle distribution, dependencies and the build cache (`--build-cache`
+      # below). The basic provider is a thin wrapper over actions/cache: no license, no
+      # preview terms. Only the default branch writes it. It has to come after
+      # prebuild: the cache key is hashed from the `*.gradle` files, and before prebuild
+      # there are none, which fails the step.
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
 
       - name: Decode Android release keystore
         env:
