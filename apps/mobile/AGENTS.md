@@ -45,7 +45,7 @@ The app updates itself from GitHub Releases (`src/update/`): it lists the `app-v
 
 It checks on mount **and every time the app returns to the foreground**, reusing an answer for 10 minutes. Not once per launch: backing out of the app on Android keeps the JS runtime alive, and the 设备 screen is the root and never unmounts, so a "no update" cached per process outlived the release it predated. The automatic check is silent on failure, which made a phone that cannot reach `api.github.com` look up to date — so the footer under the list shows the version and a manual 检查更新 that always answers (up to date / found / why it failed, with a 15s per-request timeout). A manual check clears an earlier 忽略 and hands its result to the banner (`announceRelease`), which owns download and install.
 
-To ship a phone release, bump `expo.version` in `app.json` and push `app-v<version>`. `android.versionCode` is derived from the version in `app.config.js` — do not set it by hand. The installer only accepts an APK signed with the same key, which is why the release key must never change.
+To ship a phone release, bump `expo.version` in `app.json` and push `app-v<version>`. `android.versionCode` is derived from the version in `app.config.js` — do not set it by hand. The tag push does not build: it dispatches `mobile-android.yml` onto main with the tag as input, because Actions caches are per ref and only main's can be shared — a build on the tag started cold every time. That run builds the tag's commit and publishes the release; a manual run with no tag just builds main (and warms the cache). The installer only accepts an APK signed with the same key, which is why the release key must never change.
 
 ## APK size
 

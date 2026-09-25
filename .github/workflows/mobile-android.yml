@@ -1,27 +1,56 @@
 name: Mobile Android APK
 
+# A release is built on main, not on its tag. Actions caches are scoped by ref: a run
+# can restore what its own ref or the default branch saved, and nothing else. A build
+# on the tag therefore started cold every time (0 restored, 0 saved — 543 of 617 Gradle
+# tasks executed) and wrote a cache no later tag could read. So pushing `app-v*` only
+# hands the tag to a workflow_dispatch run on main, which reads and writes main's
+# Gradle and pnpm caches and checks out the tag's commit to build.
 on:
   push:
     tags:
       - "app-v*"
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "app-v* tag to build and publish (empty: build main, publish nothing)"
+        required: false
+        default: ""
 
 permissions:
   contents: write
 
 concurrency:
-  group: mobile-android-${{ github.ref }}
+  group: mobile-android-${{ inputs.tag || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  dispatch:
+    name: Hand the tag to a build on main
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run mobile-android.yml --repo "$GITHUB_REPOSITORY" --ref main -f tag="$GITHUB_REF_NAME"
+
   build:
-    name: Build Android APK
+    name: Build Android APK ${{ inputs.tag }}
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      # The tag being released, or empty for a plain build of main.
+      RELEASE_TAG: ${{ inputs.tag }}
 
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
@@ -51,9 +80,9 @@ jobs:
         run: pnpm --filter @fastvibe/mobile typecheck
 
       - name: Verify app tag version
-        if: startsWith(github.ref, 'refs/tags/app-v')
+        if: startsWith(inputs.tag, 'app-v')
         run: |
-          node -e "const fs=require('fs');const v=JSON.parse(fs.readFileSync('apps/mobile/app.json','utf8')).expo.version;if(process.env.GITHUB_REF_NAME !== 'app-v'+v) process.exit(1)"
+          node -e "const fs=require('fs');const v=JSON.parse(fs.readFileSync('apps/mobile/app.json','utf8')).expo.version;if(process.env.RELEASE_TAG !== 'app-v'+v) process.exit(1)"
 
       # The native project is generated only inside CI. Keep the Expo project managed in
       # the repository and do not commit android/ or ios/ directories.
@@ -63,11 +92,10 @@ jobs:
 
       # Caches the Gradle distribution, dependencies and the build cache (`--build-cache`
       # below). The basic provider is a thin wrapper over actions/cache: no license, no
-      # preview terms. Only the default branch writes it, and a cache written on a tag is
-      # readable by that tag alone — so tag builds only benefit from a cache that a manual
-      # run on main (workflow_dispatch) left behind. It has to come after prebuild: the
-      # cache key is hashed from the `*.gradle` files, and before prebuild there are none,
-      # which fails the step.
+      # preview terms. It writes only on the default branch, which is why a release is
+      # dispatched onto main (see the top of this file). It has to come after prebuild:
+      # the cache key is hashed from the `*.gradle` files, and before prebuild there are
+      # none, which fails the step.
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
         with:
@@ -120,12 +148,24 @@ jobs:
         # screens, expo-modules-core, gesture-handler) for four ABIs, and that was most of
         # a 24-minute build: x86/x86_64 exist only for emulators, and armeabi-v7a is
         # 32-bit Android, which current phones do not run.
-        run: ./gradlew assembleRelease --build-cache -PreactNativeArchitectures=arm64-v8a --stacktrace
+        #
+        # The template's 2 GiB heap and 512 MiB metaspace ran out: the daemon expired
+        # mid-build "after running out of JVM Metaspace", and R8 needs the heap. A -D on
+        # the command line outranks the generated gradle.properties.
+        #
+        # lintVitalRelease is skipped: it analyses every module for a report nobody reads
+        # here, on every release.
+        run: >-
+          ./gradlew assembleRelease --build-cache -PreactNativeArchitectures=arm64-v8a
+          -x lintVitalRelease
+          "-Dorg.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8"
+          --stacktrace
 
       - name: Name and verify APK
         run: |
           set -euo pipefail
-          apk="FastVibe-${GITHUB_REF_NAME}.apk"
+          apk="FastVibe-${RELEASE_TAG:-main-${GITHUB_SHA::7}}.apk"
+          echo "APK=$apk" >> "$GITHUB_ENV"
           cp apps/mobile/android/app/build/outputs/apk/release/app-release.apk "$apk"
           apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)"
           test -n "$apksigner"
@@ -136,29 +176,29 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: FastVibe-${{ github.ref_name }}-android
+          name: ${{ env.APK }}
           path: |
-            FastVibe-${{ github.ref_name }}.apk
-            FastVibe-${{ github.ref_name }}.apk.sha256
+            ${{ env.APK }}
+            ${{ env.APK }}.sha256
           if-no-files-found: error
           retention-days: 30
 
       - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/app-v')
+        if: startsWith(inputs.tag, 'app-v')
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ github.ref_name }}
-          name: FastVibe Mobile ${{ github.ref_name }}
+          tag_name: ${{ inputs.tag }}
+          name: FastVibe Mobile ${{ inputs.tag }}
           body: |
             Android APK for direct download. This build is signed with FastVibe's release key.
 
-            The SHA-256 checksum is included as `FastVibe-${{ github.ref_name }}.apk.sha256`.
+            The SHA-256 checksum is included as `${{ env.APK }}.sha256`.
           draft: false
           prerelease: false
           make_latest: false
           fail_on_unmatched_files: true
           files: |
-            FastVibe-${{ github.ref_name }}.apk
-            FastVibe-${{ github.ref_name }}.apk.sha256
+            ${{ env.APK }}
+            ${{ env.APK }}.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
