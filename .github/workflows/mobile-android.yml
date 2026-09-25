@@ -90,16 +90,30 @@ jobs:
         working-directory: apps/mobile
         run: pnpm exec expo prebuild --platform android --clean --no-install --non-interactive
 
-      # Caches the Gradle distribution, dependencies and the build cache (`--build-cache`
-      # below). The basic provider is a thin wrapper over actions/cache: no license, no
-      # preview terms. It writes only on the default branch, which is why a release is
-      # dispatched onto main (see the top of this file). It has to come after prebuild:
-      # the cache key is hashed from the `*.gradle` files, and before prebuild there are
-      # none, which fails the step.
+      # setup-gradle keeps its wrapper handling, but not its cache. Its basic provider has
+      # no restore keys and hashes every `*.gradle` file for the key — including
+      # android/app/build.gradle, where prebuild writes the versionCode. So every release
+      # missed the cache the previous one saved, by construction.
+      #
+      # The key here follows the lockfile instead, and a miss falls back to the newest
+      # earlier entry: after a dependency bump most modules' outputs are still in the
+      # Gradle build cache (`--build-cache` below). A hit saves nothing, so main keeps
+      # one entry per lockfile. Only main can save one that a later run can read, which
+      # is why a release is dispatched onto main (see the top of this file).
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
         with:
-          cache-provider: basic
+          cache-disabled: true
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
 
       - name: Decode Android release keystore
         env:
@@ -160,6 +174,13 @@ jobs:
           -x lintVitalRelease
           "-Dorg.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8"
           --stacktrace
+
+      # Stop the daemon before the cache step packs ~/.gradle, so it is not archiving
+      # files the daemon still holds open.
+      - name: Stop Gradle daemon
+        if: always() && hashFiles('apps/mobile/android/gradlew') != ''
+        working-directory: apps/mobile/android
+        run: ./gradlew --stop
 
       - name: Name and verify APK
         run: |
