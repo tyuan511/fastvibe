@@ -870,7 +870,14 @@ export class RemoteServer {
     try {
       const encoded = JSON.stringify(message);
       const buffered = client.socket.bufferedAmount;
-      if (buffered + Buffer.byteLength(encoded, "utf8") > MAX_BUFFERED_BYTES) {
+      // Judge the backlog, not the message. Counting the message itself closed the
+      // socket on any single reply over the limit — a long transcript from
+      // `conversations.open` — with nothing queued at all. The client then reloaded
+      // onto the chat in its stale URL and opened it, which moved the engine's active
+      // conversation and yanked every desktop window back to it. A client that is not
+      // draining still ends here on the next send, so the buffer stays bounded by the
+      // limit plus one message.
+      if (buffered > MAX_BUFFERED_BYTES) {
         this.#deps.log.warn(`remote socket backpressure device=${client.deviceId ?? "unauthenticated"} buffered=${buffered}`);
         client.socket.close(CLOSE_BACKPRESSURE, "backpressure");
         return false;
