@@ -6,6 +6,7 @@ import { loadServers, patchServer, removeServer, type SavedServer } from "../sto
 import { TextPrompt } from "../ui/text-prompt";
 import { usePalette } from "../ui/theme";
 import { BrandLogo } from "../ui/brand";
+import { UpdateBanner } from "../update/update-banner";
 
 export default function DevicesScreen() {
   const palette = usePalette();
@@ -44,6 +45,7 @@ export default function DevicesScreen() {
           ),
         }}
       />
+      <UpdateBanner palette={palette} />
       {servers.length === 0 ? (
         <View style={styles.empty}>
           <BrandLogo size={82} />

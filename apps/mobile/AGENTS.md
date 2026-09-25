@@ -36,3 +36,9 @@ Expo Router. Routes live in `src/app/`. Keep non-route code outside that directo
 ## Native projects
 
 `ios/` and `android/` are generated (Continuous Native Generation). Never create or edit them by hand — configure native behavior in `app.json` and config plugins. Metro detects this monorepo automatically; do not add manual `watchFolders` or `nodeModulesPaths`.
+
+## Updates (Android)
+
+The app updates itself from GitHub Releases (`src/update/`): on launch it lists the `app-v*` tags, takes the newest one whose release has a `.apk` asset, and offers it in a banner on the 设备 screen; the APK is downloaded to the cache and handed to the system installer (`REQUEST_INSTALL_PACKAGES`). Releases are shared with the desktop app, so never look them up by `releases/latest` or the first page of `releases`.
+
+To ship a phone release, bump `expo.version` in `app.json` and push `app-v<version>`. `android.versionCode` is derived from the version in `app.config.js` — do not set it by hand. The installer only accepts an APK signed with the same key, which is why the release key must never change.
