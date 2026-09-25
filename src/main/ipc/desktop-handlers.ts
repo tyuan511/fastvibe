@@ -249,8 +249,11 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): void {
   });
 
   handle(Ipc.conversationsList, () => engine.listWorkspace());
-  handle(Ipc.conversationsCreate, async (payload?: { project?: string; activate?: boolean }) => {
-    return engine.createConversation(payload?.project, { activate: payload?.activate !== false });
+  handle(Ipc.conversationsCreate, async (payload?: { project?: string; activate?: boolean; reuseEmpty?: boolean }) => {
+    return engine.createConversation(payload?.project, {
+      activate: payload?.activate !== false,
+      reuseEmpty: payload?.reuseEmpty,
+    });
   });
   handle(Ipc.conversationsOpen, async (payload: { id: string }) => {
     return engine.openConversation(payload.id);

@@ -102,7 +102,10 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
   handle(Ipc.engineGetConversationMessages, (payload: { id: string }) => engine.getConversationMessages(payload.id));
 
   handle(Ipc.conversationsList, () => engine.listWorkspace());
-  handle(Ipc.conversationsCreate, (payload?: { project?: string; activate?: boolean }) => engine.createConversation(payload?.project, { activate: payload?.activate !== false }));
+  handle(Ipc.conversationsCreate, (payload?: { project?: string; activate?: boolean; reuseEmpty?: boolean }) => engine.createConversation(payload?.project, {
+    activate: payload?.activate !== false,
+    reuseEmpty: payload?.reuseEmpty,
+  }));
   handle(Ipc.conversationsOpen, (payload: { id: string }) => engine.openConversation(payload.id));
   handle(Ipc.conversationsRename, (payload: { id: string; title: string }) => engine.renameConversation(payload.id, payload.title));
   handle(Ipc.conversationsDelete, (payload: { id: string }) => engine.deleteConversation(payload.id));

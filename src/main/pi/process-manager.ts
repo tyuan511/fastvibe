@@ -1524,13 +1524,14 @@ export class PiProcessManager {
   }
   async newSession(): Promise<void> { await (await this.#active()).abort(); }
 
-  async createConversation(project?: string, options?: { activate?: boolean }): Promise<ConversationOpenResult> {
+  async createConversation(project?: string, options?: { activate?: boolean; reuseEmpty?: boolean }): Promise<ConversationOpenResult> {
       // An unfinished chat is the project's composer workspace. Keep it around when
       // the user opens another chat, and reuse it instead of creating a second empty
       // session for the same project. The old global cleanup deleted the only place
-      // where a long prompt (and its model choices) could live before Send.
+      // where a long prompt (and its model choices) could live before Send. Clients
+      // that present an explicit new-chat flow can opt out of that draft reuse.
       const activate = options?.activate !== false;
-      const existing = this.#catalog.findEmpty(project);
+      const existing = options?.reuseEmpty === false ? undefined : this.#catalog.findEmpty(project);
       if (existing && activate) return this.openConversation(existing.id);
       // Do not let catalog.create publish a foreground id before the session is ready:
       // another create/open can finish first. The activation ticket decides which one

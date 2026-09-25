@@ -350,8 +350,12 @@ export function createFastVibeApi(t: ApiTransport) {
        * one every desktop window follows. The phone page uses it so 新对话 there does not
        * pull the desktop onto an empty chat.
        */
-      create: (project?: string, options?: { activate?: boolean }): Promise<ConversationOpenResult> =>
-        t.invoke(Ipc.conversationsCreate, options?.activate === false ? { project, activate: false } : { project }),
+      create: (project?: string, options?: { activate?: boolean; reuseEmpty?: boolean }): Promise<ConversationOpenResult> =>
+        t.invoke(Ipc.conversationsCreate, {
+          project,
+          ...(options?.activate === false ? { activate: false } : {}),
+          ...(options?.reuseEmpty === false ? { reuseEmpty: false } : {}),
+        }),
       open: (id: string): Promise<ConversationOpenResult> =>
         t.invoke(Ipc.conversationsOpen, { id }),
       rename: (id: string, title: string): Promise<WorkspaceSnapshot> =>
