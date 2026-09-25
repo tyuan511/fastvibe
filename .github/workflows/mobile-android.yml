@@ -4,14 +4,6 @@ on:
   push:
     tags:
       - "app-v*"
-    # A tag run can only read the Gradle cache, never share one: GitHub scopes a cache
-    # written on a tag to that tag. Builds on main are what keep it warm for the next
-    # release, and they catch a broken native build before a tag does.
-    branches:
-      - main
-    paths:
-      - "apps/mobile/**"
-      - ".github/workflows/mobile-android.yml"
   workflow_dispatch:
 
 permissions:
@@ -71,9 +63,11 @@ jobs:
 
       # Caches the Gradle distribution, dependencies and the build cache (`--build-cache`
       # below). The basic provider is a thin wrapper over actions/cache: no license, no
-      # preview terms. Only the default branch writes it. It has to come after
-      # prebuild: the cache key is hashed from the `*.gradle` files, and before prebuild
-      # there are none, which fails the step.
+      # preview terms. Only the default branch writes it, and a cache written on a tag is
+      # readable by that tag alone — so tag builds only benefit from a cache that a manual
+      # run on main (workflow_dispatch) left behind. It has to come after prebuild: the
+      # cache key is hashed from the `*.gradle` files, and before prebuild there are none,
+      # which fails the step.
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
         with:
