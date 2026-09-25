@@ -2,6 +2,7 @@ import { CameraView, useCameraPermissions } from "expo-camera";
 import { Stack, useRouter } from "expo-router";
 import { useState } from "react";
 import { Linking, Pressable, StyleSheet, Text, View } from "react-native";
+import { ScanFrame } from "../ui/scan-frame";
 import { setScannedAddress } from "../ui/scanned";
 import { usePalette } from "../ui/theme";
 
@@ -34,12 +35,15 @@ export default function ScanScreen() {
           </Pressable>
         </View>
       ) : (
-        <CameraView
-          style={styles.camera}
-          facing="back"
-          barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
-          onBarcodeScanned={({ data }) => scanned(data)}
-        />
+        <View style={styles.camera}>
+          <CameraView
+            style={StyleSheet.absoluteFill}
+            facing="back"
+            barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
+            onBarcodeScanned={({ data }) => scanned(data)}
+          />
+          <ScanFrame accent={palette.accent} />
+        </View>
       )}
     </View>
   );
@@ -47,7 +51,7 @@ export default function ScanScreen() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },
-  camera: { flex: 1 },
+  camera: { flex: 1, backgroundColor: "#000000" },
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 16, padding: 28 },
   note: { fontSize: 15, lineHeight: 22, textAlign: "center" },
   button: { borderRadius: 12, paddingHorizontal: 16, paddingVertical: 12 },
