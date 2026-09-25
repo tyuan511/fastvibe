@@ -1,14 +1,20 @@
 import { useEffect, useRef, useState, type JSX } from "react";
-import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
+import { Alert, AppState, Pressable, StyleSheet, Text, View } from "react-native";
 import type { File } from "expo-file-system";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { DesktopSpinner } from "../chat/desktop-spinner";
 import type { Palette } from "../ui/theme";
 import type { AppRelease } from "./release";
 import {
+  announceRelease,
   checkForUpdate,
+  clearSkippedVersion,
+  currentVersion,
+  describeCheckError,
   downloadApk,
   downloadedApk,
   installApk,
+  onReleaseAnnounced,
   removeStaleApks,
   skipVersion,
   skippedVersion,
@@ -25,29 +31,48 @@ type Phase =
 const NOTES_LIMIT = 600;
 
 /**
- * A new version, offered at the top of the device list. Checked once per launch and
- * silent when it fails: an unreachable GitHub is not something to interrupt the
- * list for. 忽略 stops offering that one version, not updates.
+ * A new version, offered at the top of the device list. Checked on mount and again
+ * whenever the app comes back to the foreground — the list is the root screen and
+ * never unmounts, so mounting alone meant one look per process. Silent when it
+ * fails: an unreachable GitHub is not something to interrupt the list for. 忽略
+ * stops offering that one version, not updates.
  */
 export function UpdateBanner({ palette }: { palette: Palette }): JSX.Element | null {
   const [release, setRelease] = useState<AppRelease | null>(null);
   const [phase, setPhase] = useState<Phase>({ kind: "available" });
   const abort = useRef<AbortController | null>(null);
+  const shownVersion = useRef<string | null>(null);
+  const downloading = useRef(false);
+  downloading.current = phase.kind === "downloading";
 
   useEffect(() => {
     if (!updatesSupported) return;
     removeStaleApks();
     let live = true;
-    void Promise.all([checkForUpdate(), skippedVersion()])
-      .then(([found, skipped]) => {
-        if (!live || !found || found.version === skipped) return;
-        setRelease(found);
-        const file = downloadedApk(found);
-        if (file) setPhase({ kind: "ready", file });
-      })
-      .catch(() => {});
+    const show = (found: AppRelease): void => {
+      // Same version already on screen, or a download in progress: leave it alone.
+      if (!live || found.version === shownVersion.current || downloading.current) return;
+      shownVersion.current = found.version;
+      setRelease(found);
+      const file = downloadedApk(found);
+      setPhase(file ? { kind: "ready", file } : { kind: "available" });
+    };
+    const check = (): void => {
+      void Promise.all([checkForUpdate(), skippedVersion()])
+        .then(([found, skipped]) => {
+          if (found && found.version !== skipped) show(found);
+        })
+        .catch(() => {});
+    };
+    check();
+    const unannounce = onReleaseAnnounced(show);
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") check();
+    });
     return () => {
       live = false;
+      unannounce();
+      subscription.remove();
       abort.current?.abort();
     };
   }, []);
@@ -86,6 +111,7 @@ export function UpdateBanner({ palette }: { palette: Palette }): JSX.Element | n
 
   function dismiss(target: AppRelease): void {
     void skipVersion(target.version);
+    shownVersion.current = null;
     setRelease(null);
   }
 
@@ -134,7 +160,50 @@ export function UpdateBanner({ palette }: { palette: Palette }): JSX.Element | n
   );
 }
 
+/**
+ * The installed version and a manual 检查更新 under the device list. The automatic
+ * check is silent on failure by design, which made a phone that cannot reach GitHub
+ * look exactly like one that is up to date; asking by hand always answers.
+ */
+export function UpdateCheckFooter({ palette }: { palette: Palette }): JSX.Element | null {
+  const insets = useSafeAreaInsets();
+  const [checking, setChecking] = useState(false);
+
+  if (!updatesSupported) return null;
+
+  async function check(): Promise<void> {
+    setChecking(true);
+    try {
+      const found = await checkForUpdate({ force: true });
+      if (!found) {
+        Alert.alert("已是最新版本", `当前版本 ${currentVersion()}`);
+        return;
+      }
+      await clearSkippedVersion();
+      announceRelease(found);
+    } catch (error) {
+      Alert.alert("检查更新失败", describeCheckError(error));
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  return (
+    <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+      <Text style={[styles.footerText, { color: palette.muted }]}>FastVibe {currentVersion()}</Text>
+      <Text style={[styles.footerText, { color: palette.muted }]}>·</Text>
+      <Pressable disabled={checking} onPress={() => void check()} hitSlop={8}>
+        <Text style={[styles.footerText, { color: checking ? palette.muted : palette.accent }]}>
+          {checking ? "检查中…" : "检查更新"}
+        </Text>
+      </Pressable>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
+  footer: { flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 6, paddingTop: 12 },
+  footerText: { fontSize: 13 },
   banner: {
     marginHorizontal: 16,
     marginTop: 12,

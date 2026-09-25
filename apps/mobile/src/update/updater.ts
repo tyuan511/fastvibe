@@ -25,19 +25,79 @@ export function currentVersion(): string {
   return Constants.expoConfig?.version ?? "0.0.0";
 }
 
-/** One check per app launch, shared by every caller that asks during it. */
-let launchCheck: Promise<AppRelease | null> | null = null;
+/**
+ * How long an answer is reused. Not the process lifetime: backing out of the app on
+ * Android keeps the JS runtime alive, so a "no update" cached per launch outlived the
+ * release it predated and reopening the app never looked again.
+ */
+const CHECK_FRESH_MS = 10 * 60 * 1000;
+
+/**
+ * Per request. A network that silently drops GitHub's packets (common on mainland
+ * mobile data) otherwise leaves a check hanging for minutes, and a manual 检查更新
+ * spinning that long reads as broken rather than as "GitHub is unreachable".
+ */
+const REQUEST_TIMEOUT_MS = 15 * 1000;
+
+let inflight: Promise<AppRelease | null> | null = null;
+let settled: { at: number; release: AppRelease | null } | null = null;
+
+async function fetchWithTimeout(url: string, init?: { headers?: Record<string, string> }) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export function checkForUpdate({ force = false }: { force?: boolean } = {}): Promise<AppRelease | null> {
   if (!updatesSupported) return Promise.resolve(null);
-  if (!launchCheck || force) {
-    launchCheck = findNewerRelease(currentVersion(), fetch);
-    // A failed check must not stick for the rest of the session.
-    launchCheck.catch(() => {
-      launchCheck = null;
+  if (inflight) return inflight;
+  if (!force && settled && Date.now() - settled.at < CHECK_FRESH_MS) return Promise.resolve(settled.release);
+  const check = findNewerRelease(currentVersion(), fetchWithTimeout);
+  inflight = check;
+  check
+    .then(
+      (release) => {
+        settled = { at: Date.now(), release };
+      },
+      // A failure is not remembered, so the next ask tries again.
+      () => {},
+    )
+    .finally(() => {
+      if (inflight === check) inflight = null;
     });
-  }
-  return launchCheck;
+  return check;
+}
+
+/** A failed check as a sentence for the user; the raw error of a blocked request says nothing. */
+export function describeCheckError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const name = error instanceof Error ? error.name : "";
+  if (name === "AbortError" || /abort/i.test(message)) return "连接 GitHub 超时。检查网络，或打开代理后再试。";
+  if (/network request failed/i.test(message)) return "连不上 GitHub（api.github.com）。检查网络，或打开代理后再试。";
+  if (/GitHub 返回 403/.test(message)) return "GitHub 暂时拒绝了请求（可能是访问次数超限），稍后再试。";
+  return message;
+}
+
+/**
+ * A release a manual check found, handed to the banner — the check is started from
+ * the list's footer, but offering, downloading and installing live in the banner.
+ */
+type ReleaseListener = (release: AppRelease) => void;
+const releaseListeners = new Set<ReleaseListener>();
+
+export function onReleaseAnnounced(listener: ReleaseListener): () => void {
+  releaseListeners.add(listener);
+  return () => {
+    releaseListeners.delete(listener);
+  };
+}
+
+export function announceRelease(release: AppRelease): void {
+  for (const listener of releaseListeners) listener(release);
 }
 
 export async function skippedVersion(): Promise<string | null> {
@@ -46,6 +106,11 @@ export async function skippedVersion(): Promise<string | null> {
 
 export async function skipVersion(version: string): Promise<void> {
   await AsyncStorage.setItem(SKIPPED_KEY, version);
+}
+
+/** Asking by hand overrides an earlier 忽略: the user wants to see it now. */
+export async function clearSkippedVersion(): Promise<void> {
+  await AsyncStorage.removeItem(SKIPPED_KEY);
 }
 
 function apkDirectory(): Directory {

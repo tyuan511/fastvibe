@@ -41,7 +41,9 @@ A key that prebuild does not read fails silently, and only in a release build. T
 
 ## Updates (Android)
 
-The app updates itself from GitHub Releases (`src/update/`): on launch it lists the `app-v*` tags, takes the newest one whose release has a `.apk` asset, and offers it in a banner on the 设备 screen; the APK is downloaded to the cache and handed to the system installer (`REQUEST_INSTALL_PACKAGES`). Releases are shared with the desktop app, so never look them up by `releases/latest` or the first page of `releases`.
+The app updates itself from GitHub Releases (`src/update/`): it lists the `app-v*` tags, takes the newest one whose release has a `.apk` asset, and offers it in a banner on the 设备 screen; the APK is downloaded to the cache and handed to the system installer (`REQUEST_INSTALL_PACKAGES`). Releases are shared with the desktop app, so never look them up by `releases/latest` or the first page of `releases`.
+
+It checks on mount **and every time the app returns to the foreground**, reusing an answer for 10 minutes. Not once per launch: backing out of the app on Android keeps the JS runtime alive, and the 设备 screen is the root and never unmounts, so a "no update" cached per process outlived the release it predated. The automatic check is silent on failure, which made a phone that cannot reach `api.github.com` look up to date — so the footer under the list shows the version and a manual 检查更新 that always answers (up to date / found / why it failed, with a 15s per-request timeout). A manual check clears an earlier 忽略 and hands its result to the banner (`announceRelease`), which owns download and install.
 
 To ship a phone release, bump `expo.version` in `app.json` and push `app-v<version>`. `android.versionCode` is derived from the version in `app.config.js` — do not set it by hand. The installer only accepts an APK signed with the same key, which is why the release key must never change.
 
