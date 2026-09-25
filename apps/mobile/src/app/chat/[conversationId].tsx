@@ -1,17 +1,20 @@
 import { Stack, useLocalSearchParams } from "expo-router";
-import { useCallback, useEffect, useMemo, useState, type JSX } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { FlatList, KeyboardAvoidingView, Platform, StyleSheet, Text, View } from "react-native";
 import { HugeiconsIcon } from "@hugeicons/react-native";
 import { ScissorIcon } from "../../ui/icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { getClient, onEngineEvent, resolvePendingPermission, useConnection, watchConversation } from "../../session/connection";
+import { currentConnection, getClient, onEngineEvent, resolvePendingPermission, useConnection, watchConversation } from "../../session/connection";
 import { PermissionCard } from "../../ui/permission-card";
 import { usePalette } from "../../ui/theme";
 import { BrandLoading } from "../../ui/brand";
 import { MarkdownView } from "../../chat/markdown";
 import { ToolCard, type ToolBlock } from "../../chat/tool-card";
 import { Composer } from "../../chat/composer";
+import { QueuePanel } from "../../chat/queue-panel";
+import { emptyQueue, mergeQueue, shouldHoldSend, shouldQueueMessage, submitMessage, SubmissionUncertainError } from "../../chat/queue";
 import { DesktopSpinner } from "../../chat/desktop-spinner";
+import { completedTurnFooters, formatTurnMeta, type TurnMeta } from "../../chat/turn-meta";
 
 type ChatMessage = {
   id: string;
@@ -23,6 +26,7 @@ type ChatMessage = {
   stop?: string;
   kind?: string;
   createdAt?: number;
+  completedAt?: number;
   compact?: CompactInfo;
   parts?: MessagePart[];
 };
@@ -42,6 +46,12 @@ type CompactInfo = {
   error?: string;
 };
 
+const MESSAGE_BOTTOM_GAP = 36;
+const WORKING_PILL_HEIGHT = 28;
+const WORKING_GAP = 8;
+const WORKING_BOTTOM_INSET = 8;
+const WORKING_SCROLL_SPACE = WORKING_PILL_HEIGHT + WORKING_GAP + WORKING_BOTTOM_INSET;
+
 export default function ChatScreen() {
   const { conversationId } = useLocalSearchParams<{ conversationId: string }>();
   const palette = usePalette();
@@ -52,6 +62,15 @@ export default function ChatScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [responding, setResponding] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [queue, setQueue] = useState(() => emptyQueue(conversationId));
+  const queueRef = useRef(queue);
+  const submitting = useRef<object | null>(null);
+  const remote = getClient();
+  // A reconnect is a new scope too: re-subscribe and re-read the durable queue.
+  const scope = useMemo(() => ({ conversationId, remote }), [conversationId, remote]);
+  const liveScope = useRef(scope);
+  liveScope.current = scope;
   const [clock, setClock] = useState(() => Date.now());
   const chat = connection.conversations.find((item) => item.id === conversationId);
   const running = connection.running[conversationId] === true;
@@ -59,12 +78,20 @@ export default function ChatScreen() {
   const workingSince = messageRunStartedAt ?? connection.runningSince[conversationId];
   const prompt = connection.pending.find((item) => item.conversationId === conversationId);
 
+  const applyQueue = useCallback((value: unknown) => {
+    if (liveScope.current !== scope) return;
+    const next = mergeQueue(queueRef.current, value);
+    queueRef.current = next;
+    setQueue(next);
+  }, [scope]);
+
   const reload = useCallback(async () => {
-    const remote = getClient();
-    if (!remote || !conversationId) return;
-    const snapshot = (await remote.call("engine:get-snapshot", { conversationId })) as { messages?: unknown };
+    if (!scope.remote || !scope.conversationId) return;
+    const snapshot = (await scope.remote.call("engine:get-snapshot", { conversationId: scope.conversationId })) as { messages?: unknown; queue?: unknown };
+    if (liveScope.current !== scope) return;
     setMessages(Array.isArray(snapshot.messages) ? snapshot.messages.flatMap(parseMessage) : []);
-  }, [conversationId]);
+    applyQueue(snapshot.queue);
+  }, [scope, applyQueue]);
 
   useEffect(() => {
     if (!running) return undefined;
@@ -75,21 +102,24 @@ export default function ChatScreen() {
 
   useEffect(() => {
     let cancelled = false;
-    if (!getClient()) {
-      setError("还没有连上这台设备");
+    queueRef.current = emptyQueue(conversationId);
+    setQueue(queueRef.current);
+    submitting.current = null;
+    setSending(false);
+    if (!scope.remote) {
       setLoading(false);
       return;
     }
     const stopWatch = watchConversation(conversationId);
-    void reload()
-      .catch((caught: unknown) => {
-        if (!cancelled) setError(caught instanceof Error ? caught.message : "读不到这个会话");
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
     const stopEvents = onEngineEvent((event) => {
       if (event.conversationId !== conversationId) return;
+      if (event.type === "queue_changed") {
+        applyQueue(event.queue);
+        return;
+      }
+      if (event.type === "queue_error") {
+        setError(typeof event.message === "string" ? event.message : "排队消息发送失败");
+      }
       if (event.type === "message_start") {
         const message = isRecord(event.message) ? event.message : null;
         if (message?.role === "assistant") {
@@ -113,37 +143,69 @@ export default function ChatScreen() {
           return;
         }
       }
-      if (event.type === "agent_settled" || event.type === "message_end" || event.type === "tool_execution_end") {
+      if (event.type === "queue_delivered" || event.type === "agent_settled" || event.type === "message_end" || event.type === "tool_execution_end") {
         void reload().catch(() => undefined);
       }
     });
+    void reload()
+      .catch((caught: unknown) => {
+        if (!cancelled) setError(caught instanceof Error ? caught.message : "读不到这个会话");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
     return () => {
       cancelled = true;
       stopWatch();
       stopEvents();
     };
-  }, [conversationId, reload]);
+  }, [conversationId, scope, reload, applyQueue]);
 
   // Inverted list: index 0 is the newest message, rendered at the bottom. First paint
   // lands on it without any scroll animation — no more riding from the top.
   const inverted = useMemo(() => messages.slice().reverse(), [messages]);
+  // One finish line per settled turn, on its last row. The live turn keeps the
+  // working capsule instead — a completion time is not knowable until it settles.
+  const turnFooters = useMemo(() => completedTurnFooters(messages, running), [messages, running]);
 
   async function send(): Promise<void> {
     const text = draft.trim();
-    const remote = getClient();
-    if (!text || !remote) return;
+    const queueLoading = queueRef.current.revision < 0;
+  if (!text || !remote || shouldHoldSend(Boolean(submitting.current), queueLoading)) return;
+    const enqueue = shouldQueueMessage(currentConnection().running[conversationId] === true, queueRef.current);
+    const reservation = {};
+    submitting.current = reservation;
+    const localId = `local-${Date.now()}`;
+    setSending(true);
+    setError(null);
     setDraft("");
     try {
-      // Keep the catalog in step with the engine. An empty chat is hidden from the
-      // mobile list until it has a preview; the desktop writes that preview before
-      // sending the first prompt, so the native client must use the same two-step
-      // boundary rather than relying on engine:prompt to rename the conversation.
-      await remote.call("conversations:record-prompt", { id: conversationId, text });
-      setMessages((current) => [...current, { id: `local-${Date.now()}`, role: "user", text, tools: [] }]);
-      await remote.call("engine:prompt", { message: text, conversationId }, 60_000);
+    const next = await submitMessage(remote, { conversationId, text, enqueue, previous: chat }, () => {
+        if (liveScope.current === scope) setMessages((current) => [...current, { id: localId, role: "user", text, tools: [] }]);
+      });
+      if (next !== null) applyQueue(next);
     } catch (caught) {
-      setDraft(text);
+      if (liveScope.current !== scope) return;
+      if (!(caught instanceof SubmissionUncertainError)) {
+        setMessages((current) => current.filter((item) => item.id !== localId));
+        setDraft((current) => current || text);
+      } else {
+        void reload().catch(() => undefined);
+      }
       setError(caught instanceof Error ? caught.message : "没有发出去");
+    } finally {
+      if (submitting.current === reservation) submitting.current = null;
+      if (liveScope.current === scope) setSending(false);
+    }
+  }
+
+  async function changeQueue(method: "engine:queue-cancel" | "engine:queue-resume", id?: string): Promise<void> {
+    if (!remote) return;
+    try {
+      const next = await remote.call(method, id ? { id } : { conversationId });
+      if (next !== null) applyQueue(next);
+    } catch (caught) {
+      if (liveScope.current === scope) setError(caught instanceof Error ? caught.message : "更新队列失败");
     }
   }
 
@@ -178,22 +240,39 @@ export default function ChatScreen() {
             <BrandLoading palette={palette} message="正在加载会话" />
           </View>
         ) : (
-          <FlatList
-            data={inverted}
-            inverted
-            keyExtractor={(item) => item.id}
-            contentContainerStyle={styles.messages}
-            keyboardShouldPersistTaps="handled"
-            renderItem={({ item }) => (
-              <MessageRow
-                message={item}
-                palette={palette}
-              />
-            )}
-          />
+          <View style={styles.thread}>
+            <FlatList
+              data={inverted}
+              inverted
+              keyExtractor={(item) => item.id}
+              contentContainerStyle={styles.messages}
+              // With an inverted list, the header is at the visual bottom. Keep the
+              // last message away from the composer, and reserve the larger space for
+              // the floating status pill while a run is active.
+              ListHeaderComponent={
+                <View style={running && !prompt ? styles.workingSpacer : styles.messageBottomSpacer} />
+              }
+              keyboardShouldPersistTaps="handled"
+              renderItem={({ item }) => (
+                <MessageRow
+                  message={item}
+                  palette={palette}
+                  meta={turnFooters.get(item.id)}
+                />
+              )}
+            />
+            {running && !prompt ? <WorkingStatus palette={palette} since={workingSince ?? clock} now={clock} /> : null}
+          </View>
         )}
         {error ? <Text style={[styles.errorText, { color: palette.danger }]}>{error}</Text> : null}
-        {running && !prompt ? <WorkingStatus palette={palette} since={workingSince ?? clock} now={clock} /> : null}
+        {queue.items.length > 0 ? (
+          <QueuePanel
+            queue={queue}
+            disabled={!connected}
+            onCancel={(id) => changeQueue("engine:queue-cancel", id)}
+            onResume={() => changeQueue("engine:queue-resume")}
+          />
+        ) : null}
         {prompt ? (
           <View style={[styles.prompt, { paddingBottom: insets.bottom + 8 }]}>
             <PermissionCard prompt={prompt} busy={responding} onRespond={(payload) => void respond(payload)} />
@@ -202,7 +281,9 @@ export default function ChatScreen() {
           <Composer
             conversationId={conversationId}
             running={running}
-            disabled={!connected}
+            sending={sending}
+            queueing={running || queue.items.length > 0}
+            disabled={!connected || queue.revision < 0}
             draft={draft}
             onDraftChange={setDraft}
             onSend={() => void send()}
@@ -219,13 +300,20 @@ export default function ChatScreen() {
 function MessageRow({
   message,
   palette,
+  meta,
 }: {
   message: ChatMessage;
   palette: ReturnType<typeof usePalette>;
+  meta?: TurnMeta;
 }) {
   const mine = message.role === "user";
   if (message.kind === "compact") {
-    return <CompactNotice palette={palette} text={message.text} compact={message.compact} />;
+    return (
+      <View style={styles.assistantRow}>
+        <CompactNotice palette={palette} text={message.text} compact={message.compact} />
+        {meta ? <TurnMetaLine meta={meta} palette={palette} /> : null}
+      </View>
+    );
   }
   const tools = new Map(message.tools.map((tool) => [tool.id, tool]));
   const body = message.parts?.length ? (
@@ -257,8 +345,15 @@ function MessageRow({
     >
       {body}
       {message.error ? <Text style={{ color: palette.danger, fontSize: 14 }}>{message.error}</Text> : null}
+      {meta ? <TurnMetaLine meta={meta} palette={palette} /> : null}
     </View>
   );
+}
+
+function TurnMetaLine({ meta, palette }: { meta: TurnMeta; palette: ReturnType<typeof usePalette> }): JSX.Element | null {
+  const label = formatTurnMeta(meta);
+  if (!label) return null;
+  return <Text style={[styles.turnMeta, { color: palette.muted }]}>{label}</Text>;
 }
 
 function CompactNotice({ palette, text, compact }: { palette: ReturnType<typeof usePalette>; text: string; compact?: CompactInfo }): JSX.Element {
@@ -314,7 +409,7 @@ function parseCompact(value: unknown): CompactInfo | undefined {
 
 function WorkingStatus({ palette, since, now }: { palette: ReturnType<typeof usePalette>; since: number; now: number }): JSX.Element {
   return (
-    <View style={styles.working}>
+    <View pointerEvents="none" style={styles.working}>
       <View style={[styles.workingPill, { backgroundColor: palette.card, borderColor: palette.border }]}>
         <DesktopSpinner color={palette.muted} size={15} />
         <Text style={[styles.workingText, { color: palette.muted }]}>正在工作</Text>
@@ -368,6 +463,7 @@ function parseMessage(value: unknown): ChatMessage[] {
     role: typeof value.role === "string" ? value.role : "assistant",
     text: typeof value.text === "string" ? value.text : "",
     createdAt: typeof value.createdAt === "number" ? value.createdAt : undefined,
+    completedAt: typeof value.completedAt === "number" ? value.completedAt : undefined,
     thinking: typeof value.thinking === "string" ? value.thinking : undefined,
     compact: parseCompact(value.compact),
     tools,
@@ -410,10 +506,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 const styles = StyleSheet.create({
   screen: { flex: 1 },
   flex: { flex: 1 },
+  thread: { flex: 1, minHeight: 0, position: "relative" },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
   messages: { paddingHorizontal: 12, paddingVertical: 10, gap: 7 },
+  messageBottomSpacer: { height: MESSAGE_BOTTOM_GAP },
+  workingSpacer: { height: WORKING_SCROLL_SPACE },
   userBubble: { maxWidth: "82%", borderRadius: 12, paddingHorizontal: 12, paddingVertical: 8, gap: 4 },
   assistantRow: { width: "100%", maxWidth: 640, paddingVertical: 1, gap: 4 },
+  turnMeta: { fontSize: 12, fontVariant: ["tabular-nums"] },
   compactNotice: { alignSelf: "stretch", paddingVertical: 4, gap: 3 },
   compactHeader: { flexDirection: "row", alignItems: "center", minWidth: 0, gap: 7 },
   compactLabel: { flexShrink: 0, fontSize: 14, fontWeight: "500" },
@@ -421,15 +521,21 @@ const styles = StyleSheet.create({
   compactError: { paddingLeft: 23, fontSize: 13 },
   modelDivider: { alignSelf: "center", fontSize: 12, paddingVertical: 4 },
   errorText: { paddingHorizontal: 16, paddingBottom: 4, fontSize: 13 },
-  working: { width: "100%", alignItems: "center", paddingVertical: 2 },
+  working: {
+    position: "absolute",
+    right: 0,
+    bottom: WORKING_BOTTOM_INSET,
+    left: 0,
+    alignItems: "center",
+  },
   workingPill: {
+    height: WORKING_PILL_HEIGHT,
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: 999,
     paddingHorizontal: 11,
-    paddingVertical: 5,
     shadowColor: "#000",
     shadowOpacity: 0.08,
     shadowRadius: 4,

@@ -218,6 +218,7 @@ function MobileComposer({ draft, onDraftChange }: { draft: Draft; onDraftChange:
   const queuePause = useSessionStore((state) => state.queuePause);
   const queueBehavior = useSettingsStore((state) => state.settings.queueBehavior);
   const queued = activeId ? allQueued.filter((item) => item.conversationId === activeId) : [];
+  /** A prompt is busy only while the direct RPC is awaiting acceptance. */
   const sending = useRef(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);

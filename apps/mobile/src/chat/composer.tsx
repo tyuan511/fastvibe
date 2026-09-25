@@ -26,6 +26,8 @@ const PERMISSION_MODES = ["ask", "smart", "full"] as const;
 export function Composer({
   conversationId,
   running,
+  sending = false,
+  queueing = running,
   disabled,
   draft,
   onDraftChange,
@@ -36,6 +38,9 @@ export function Composer({
 }: {
   conversationId: string;
   running: boolean;
+  /** Waiting for direct submission or durable enqueue acknowledgement. */
+  sending?: boolean;
+  queueing?: boolean;
   disabled: boolean;
   draft: string;
   onDraftChange: (text: string) => void;
@@ -147,7 +152,7 @@ export function Composer({
   }
 
   const hasContent = draft.trim().length > 0;
-  const action = running && !hasContent ? "stop" : canContinue && !hasContent ? "continue" : "send";
+  const action = sending ? "sending" : running && !hasContent ? "stop" : canContinue && !hasContent ? "continue" : "send";
 
   return (
     <View style={[styles.outer, { backgroundColor: palette.card, borderTopColor: palette.border, paddingBottom: insets.bottom }]}>
@@ -155,7 +160,7 @@ export function Composer({
         <TextInput
           value={draft}
           onChangeText={onDraftChange}
-          placeholder={disabled ? "还没有连上这台设备" : running && !hasContent ? "正在工作，输入后将加入队列" : "发消息"}
+          placeholder={disabled ? "正在连接或加载会话" : queueing ? "输入消息，加入发送队列" : "发消息"}
           placeholderTextColor={palette.muted}
           multiline
           editable={!disabled}
@@ -180,11 +185,18 @@ export function Composer({
             <Chip label={session?.thinkingLevel ? THINKING_LABEL[session.thinkingLevel] ?? session.thinkingLevel : "思考"} disabled={disabled || busy} onPress={() => setPicker("thinking")} />
           ) : null}
           <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={action === "sending" ? "发送中" : action === "stop" ? "停止" : action === "continue" ? "继续" : queueing ? "加入队列" : "发送"}
+            accessibilityState={{ busy: sending }}
             onPress={action === "stop" ? onAbort : action === "continue" ? onContinue : onSend}
-            disabled={disabled || (action === "send" && !hasContent)}
-            style={[styles.action, { backgroundColor: action === "stop" ? palette.danger : palette.accent, opacity: disabled || (action === "send" && !hasContent) ? 0.4 : 1 }]}
+            disabled={disabled || sending || (action === "send" && !hasContent)}
+            style={[styles.action, { backgroundColor: action === "stop" ? palette.danger : palette.accent, opacity: disabled || sending || (action === "send" && !hasContent) ? 0.4 : 1 }]}
           >
-            <HugeiconsIcon icon={action === "stop" ? SquareIcon : action === "continue" ? PlayIcon : ArrowUp02Icon} size={16} color={palette.accentText} strokeWidth={2} />
+            {sending ? (
+              <ActivityIndicator size="small" color={palette.accentText} />
+            ) : (
+              <HugeiconsIcon icon={action === "stop" ? SquareIcon : action === "continue" ? PlayIcon : ArrowUp02Icon} size={16} color={palette.accentText} strokeWidth={2} />
+            )}
           </Pressable>
         </View>
       </View>
@@ -214,8 +226,8 @@ function Chip({ label, icon, destructive, disabled, onPress }: { label: string; 
 const styles = StyleSheet.create({
   outer: { paddingTop: 0, borderTopWidth: StyleSheet.hairlineWidth },
   card: {},
-  input: { minHeight: 48, maxHeight: 132, paddingHorizontal: 16, paddingTop: 13, paddingBottom: 8, fontSize: 15, lineHeight: 22 },
-  toolbar: { minHeight: 42, flexDirection: "row", alignItems: "center", gap: 2, paddingHorizontal: 8, paddingBottom: 7 },
+  input: { minHeight: 52, maxHeight: 132, paddingHorizontal: 16, paddingTop: 13, paddingBottom: 8, fontSize: 15, lineHeight: 22 },
+  toolbar: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: 2, paddingHorizontal: 8, paddingBottom: 7 },
   chip: { flexDirection: "row", alignItems: "center", gap: 3, maxWidth: 132, borderRadius: 16, paddingHorizontal: 6, paddingVertical: 6 },
   spacer: { flex: 1 },
   action: { width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center", marginLeft: 3 },

@@ -1,11 +1,10 @@
-import { useState, type JSX } from "react";
+import { useState, type JSX, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Archive04Icon,
   Delete02Icon,
-  Folder01Icon,
   MoreHorizontalIcon,
   PencilEdit02Icon,
 } from "@hugeicons/core-free-icons";
@@ -21,6 +20,14 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuGroup,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import {
   Dialog,
   DialogContent,
@@ -39,37 +46,50 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { engine } from "@/lib/engine-client";
-import { isRemoteRef } from "@/lib/remote-project";
 import { archiveConversations, restoreConversations } from "@/stores/archive";
 import { useSessionStore } from "@/stores/session";
-import { OptionSheet } from "./option-sheet";
 import { navigate } from "./route";
-
-const NO_PROJECT = "__none__";
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/**
- * What can be done to the chat on screen, behind the header's ⋯.
- *
- * The desktop offers these from the sidebar row's context menu; a phone has no hover and
- * no right click, and a long-press on a drawer row competes with the scroll. One menu on
- * the chat you are looking at is the unambiguous place.
- *
- * Leaving a chat that was archived or deleted goes to the new-chat page, never to the
- * next chat in the list: the desktop's version *opens* that next chat, which would move
- * the engine's active conversation — the thing this page exists not to do.
- */
+/** Actions for the chat on screen, behind the header's ⋯. */
 export function ConversationMenu({ conversation }: { conversation: Conversation }): JSX.Element {
+  return <ConversationActionMenu conversation={conversation} />;
+}
+
+/**
+ * The same small chat menu for a drawer row. Base UI's context menu opens on a
+ * long-press on touch devices and on a secondary click elsewhere, so the row
+ * remains a normal one-tap target for opening the chat.
+ */
+export function ConversationContextMenu({
+  conversation,
+  children,
+  onLeave,
+}: {
+  conversation: Conversation;
+  children: ReactNode;
+  onLeave?: () => void;
+}): JSX.Element {
+  return <ConversationActionMenu conversation={conversation} trigger={children} onLeave={onLeave} />;
+}
+
+function ConversationActionMenu({
+  conversation,
+  trigger,
+  onLeave,
+}: {
+  conversation: Conversation;
+  trigger?: ReactNode;
+  onLeave?: () => void;
+}): JSX.Element {
   const { t } = useTranslation("app");
-  const projects = useSessionStore((state) => state.projects);
+  const current = useSessionStore((state) => state.activeId === conversation.id);
   const [renaming, setRenaming] = useState(false);
   const [title, setTitle] = useState("");
-  const [moving, setMoving] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const remote = isRemoteRef(conversation.id);
 
   async function rename(): Promise<void> {
     const next = title.trim();
@@ -82,15 +102,9 @@ export function ConversationMenu({ conversation }: { conversation: Conversation 
     }
   }
 
-  async function move(value: string): Promise<void> {
-    const project = value === NO_PROJECT ? null : value;
-    if ((conversation.project ?? null) === project) return;
-    try {
-      useSessionStore.getState().applySnapshot(await window.fastvibe.conversations.setProject(conversation.id, project));
-      toast.success(t("mobile.moved", { project: project ? projects.find((item) => item.cwd === project)?.name ?? project : t("mobile.noProject") }));
-    } catch (error) {
-      toast.error(errorText(error));
-    }
+  function leave(): void {
+    onLeave?.();
+    navigate({ kind: "new" }, { replace: true });
   }
 
   function archive(): void {
@@ -103,7 +117,7 @@ export function ConversationMenu({ conversation }: { conversation: Conversation 
     });
     // An archived chat keeps no run going nobody can see: the desktop does the same.
     if (busy) void engine.abort(id).catch((error: unknown) => toast.error(errorText(error)));
-    navigate({ kind: "new" }, { replace: true });
+    if (current) leave();
   }
 
   async function remove(): Promise<void> {
@@ -114,55 +128,77 @@ export function ConversationMenu({ conversation }: { conversation: Conversation 
       const store = useSessionStore.getState();
       store.applySnapshot(result);
       store.forgetConversationExtensionState(id);
-      navigate({ kind: "new" }, { replace: true });
+      if (current) leave();
     } catch (error) {
       toast.error(errorText(error));
     }
   }
 
-  const localProjects = projects.filter((item) => item.kind !== "remote");
+  const menu = trigger ? (
+    <ContextMenu>
+      <ContextMenuTrigger className="w-full touch-pan-y">{trigger}</ContextMenuTrigger>
+      <ContextMenuContent side="bottom" align="start" className="min-w-44">
+        <ContextMenuGroup>
+          <ContextMenuItem
+            className="h-10"
+            onClick={() => {
+              setTitle(conversation.title);
+              setRenaming(true);
+            }}
+          >
+            <HugeiconsIcon icon={PencilEdit02Icon} strokeWidth={2} />
+            {t("mobile.rename")}
+          </ContextMenuItem>
+          <ContextMenuItem className="h-10" onClick={archive}>
+            <HugeiconsIcon icon={Archive04Icon} strokeWidth={2} />
+            {t("mobile.archive")}
+          </ContextMenuItem>
+        </ContextMenuGroup>
+        <ContextMenuSeparator />
+        <ContextMenuGroup>
+          <ContextMenuItem className="h-10" variant="destructive" onClick={() => setDeleting(true)}>
+            <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
+            {t("mobile.delete")}
+          </ContextMenuItem>
+        </ContextMenuGroup>
+      </ContextMenuContent>
+    </ContextMenu>
+  ) : (
+    <DropdownMenu>
+      <DropdownMenuTrigger render={<Button variant="ghost" size="icon-lg" aria-label={t("mobile.more")} />}>
+        <HugeiconsIcon icon={MoreHorizontalIcon} strokeWidth={2} className="size-5" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-44">
+        <DropdownMenuGroup>
+          <DropdownMenuItem
+            className="h-10"
+            onClick={() => {
+              setTitle(conversation.title);
+              setRenaming(true);
+            }}
+          >
+            <HugeiconsIcon icon={PencilEdit02Icon} strokeWidth={2} />
+            {t("mobile.rename")}
+          </DropdownMenuItem>
+          <DropdownMenuItem className="h-10" onClick={archive}>
+            <HugeiconsIcon icon={Archive04Icon} strokeWidth={2} />
+            {t("mobile.archive")}
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuGroup>
+          <DropdownMenuItem className="h-10" variant="destructive" onClick={() => setDeleting(true)}>
+            <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
+            {t("mobile.delete")}
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 
   return (
     <>
-      <DropdownMenu>
-        <DropdownMenuTrigger render={<Button variant="ghost" size="icon-lg" aria-label={t("mobile.more")} />}>
-          <HugeiconsIcon icon={MoreHorizontalIcon} strokeWidth={2} className="size-5" />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="min-w-44">
-          <DropdownMenuGroup>
-            <DropdownMenuItem
-              className="h-10"
-              onClick={() => {
-                setTitle(conversation.title);
-                setRenaming(true);
-              }}
-            >
-              <HugeiconsIcon icon={PencilEdit02Icon} strokeWidth={2} />
-              {t("mobile.rename")}
-            </DropdownMenuItem>
-            {/* A chat moves only within the server that owns it; a remote one has no
-                local project to go to, and the gateway refuses the attempt anyway. */}
-            {!remote ? (
-              <DropdownMenuItem className="h-10" onClick={() => setMoving(true)}>
-                <HugeiconsIcon icon={Folder01Icon} strokeWidth={2} />
-                {t("mobile.moveToProject")}
-              </DropdownMenuItem>
-            ) : null}
-            <DropdownMenuItem className="h-10" onClick={archive}>
-              <HugeiconsIcon icon={Archive04Icon} strokeWidth={2} />
-              {t("mobile.archive")}
-            </DropdownMenuItem>
-          </DropdownMenuGroup>
-          <DropdownMenuSeparator />
-          <DropdownMenuGroup>
-            <DropdownMenuItem className="h-10" variant="destructive" onClick={() => setDeleting(true)}>
-              <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
-              {t("mobile.delete")}
-            </DropdownMenuItem>
-          </DropdownMenuGroup>
-        </DropdownMenuContent>
-      </DropdownMenu>
-
+      {menu}
       <Dialog open={renaming} onOpenChange={setRenaming}>
         <DialogContent>
           <DialogHeader>
@@ -195,22 +231,6 @@ export function ConversationMenu({ conversation }: { conversation: Conversation 
           </form>
         </DialogContent>
       </Dialog>
-
-      <OptionSheet
-        open={moving}
-        onOpenChange={setMoving}
-        title={t("mobile.moveToProject")}
-        value={conversation.project ?? NO_PROJECT}
-        groups={[
-          {
-            options: [
-              { value: NO_PROJECT, label: t("mobile.noProject") },
-              ...localProjects.map((item) => ({ value: item.cwd, label: item.name, description: item.cwd })),
-            ],
-          },
-        ]}
-        onSelect={(value) => void move(value)}
-      />
 
       <AlertDialog open={deleting} onOpenChange={setDeleting}>
         <AlertDialogContent>

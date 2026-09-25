@@ -84,12 +84,15 @@ export class RemoteClient {
         ws.send(JSON.stringify({ type: "auth", token }));
       };
       ws.onerror = () => fail(new Error(unreachable(address.origin)));
-      ws.onclose = () => {
+      ws.onclose = (event) => {
         if (stale()) return;
         if (!settled) fail(new Error("连接被关闭"));
         else {
           this.#failPending("连接已断开");
-          this.#disconnect?.("连接已断开");
+          const detail = event.code > 0
+            ? `（code ${event.code}${event.reason ? `：${event.reason}` : ""}）`
+            : "";
+          this.#disconnect?.(`连接已断开${detail}`);
         }
       };
       ws.onmessage = (event) => {

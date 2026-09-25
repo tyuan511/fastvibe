@@ -152,6 +152,20 @@ socket that missed a whole round is `terminate()`d, which becomes the `close` th
 reconnects from. `heartbeatMs` exists only so a test can watch that happen without waiting
 out the real interval.
 
+**A large frame being compressed is not a slow client.** `ws.bufferedAmount` includes
+uncompressed bytes waiting on zlib as well as the socket's write queue. A 3 MB snapshot
+followed immediately by a tiny event used to trip the instantaneous 2 MiB cutoff and
+close with `4004`, even on loopback — seen repeatedly on the native phone app while it
+was in the foreground. `server/backpressure.ts` now distinguishes a burst from congestion:
+2 MiB is a soft watermark with 5 seconds of grace; 32 MiB of existing backlog stops further
+writes immediately. Like before, a single large reply on an empty queue is allowed, so
+the bound is the hard watermark **plus one outgoing frame**, not an absolute frame-size
+limit. Send completions sample the buffer too, so two separate bursts do not share a
+stale congestion clock; a per-client timer checks a stalled write even if no next event
+arrives and is cleared on drain/disconnect. Do not merge or discard protocol events to
+work around this: their sequence, payload and ordering remain unchanged. Real-socket
+tests cover multi-MiB bursts with/without compression and hard-limit session cleanup.
+
 The password is exchanged once for a device token (`POST /api/login`); tokens travel on
 every later connection, are stored only as hashes, and are revoked one device at a time.
 Guessing is slowed by a global exponential backoff — global rather than per address

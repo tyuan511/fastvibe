@@ -6,6 +6,7 @@ import { networkInterfaces } from "node:os";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, type WebSocket } from "ws";
 import { LoginThrottle, passwordProblem } from "./auth.ts";
+import { BackpressureGuard, BUFFER_GRACE_MS, BUFFER_SOFT_LIMIT } from "./backpressure.ts";
 import { authenticate, isConfigured, listDevices, login, touchDevice } from "./store.ts";
 import { assertPolicyCoverage, remotePolicy } from "../../shared/remote-policy.ts";
 import {
@@ -168,8 +169,6 @@ const CLOSE_UNAUTHORIZED = 4001;
 const CLOSE_TIMEOUT = 4002;
 const CLOSE_TOO_LARGE = 4003;
 const CLOSE_BACKPRESSURE = 4004;
-/** Do not let one slow tunnel grow an unbounded ws send buffer. */
-const MAX_BUFFERED_BYTES = 2 * 1024 * 1024;
 const MAX_ATTACHMENT_BYTES = 32 * 1024 * 1024;
 const ATTACHMENT_TTL_MS = 60_000;
 
@@ -213,6 +212,8 @@ type Client = {
   timer: NodeJS.Timeout | null;
   /** Answered the last ping. Cleared when one is sent, set again when the pong lands. */
   alive: boolean;
+  backpressure: BackpressureGuard;
+  backpressureTimer: NodeJS.Timeout | null;
   /** New App Protocol frames are used after the legacy auth frame. */
   protocolClient: boolean;
   appSession: ClientSession | null;
@@ -661,6 +662,8 @@ export class RemoteServer {
       // sends one would otherwise sit open indefinitely.
       timer: setTimeout(() => socket.close(CLOSE_TIMEOUT, "auth timeout"), AUTH_GRACE_MS),
       alive: true,
+      backpressure: new BackpressureGuard(),
+      backpressureTimer: null,
       protocolClient: false,
       appSession: null,
       attachments: new Map(),
@@ -869,25 +872,52 @@ export class RemoteServer {
     if (client.socket.readyState !== client.socket.OPEN) return false;
     try {
       const encoded = JSON.stringify(message);
-      const buffered = client.socket.bufferedAmount;
-      // Judge the backlog, not the message. Counting the message itself closed the
-      // socket on any single reply over the limit — a long transcript from
-      // `conversations.open` — with nothing queued at all. The client then reloaded
-      // onto the chat in its stale URL and opened it, which moved the engine's active
-      // conversation and yanked every desktop window back to it. A client that is not
-      // draining still ends here on the next send, so the buffer stays bounded by the
-      // limit plus one message.
-      if (buffered > MAX_BUFFERED_BYTES) {
-        this.#deps.log.warn(`remote socket backpressure device=${client.deviceId ?? "unauthenticated"} buffered=${buffered}`);
-        client.socket.close(CLOSE_BACKPRESSURE, "backpressure");
-        return false;
-      }
-      client.socket.send(encoded);
+      // Judge the existing backlog, not the next message: allow one large reply
+      // but stop further writes at the hard ceiling (bounded by limit + one frame).
+      if (!this.#checkBackpressure(client)) return false;
+      client.socket.send(encoded, (error) => {
+        if (!this.#clients.has(client.id)) return;
+        if (error) {
+          this.#deps.log.warn(`remote send failed device=${client.deviceId ?? "unauthenticated"}: ${String(error)}`);
+          this.#dropClient(client);
+          return;
+        }
+        // Observe the drain too: independent bursts seconds apart are not a stall.
+        this.#checkBackpressure(client);
+      });
+      // Start the grace clock even if nothing else is sent. Do not retroactively
+      // reject the large frame just accepted on an otherwise empty queue.
+      this.#checkBackpressure(client, false);
       return true;
     } catch (error) {
       this.#deps.log.warn(`remote send failed: ${String(error)}`);
       return false;
     }
+  }
+
+  #checkBackpressure(client: Client, enforce = true): boolean {
+    if (client.socket.readyState !== client.socket.OPEN) return false;
+    const buffered = client.socket.bufferedAmount;
+    const pressure = client.backpressure.observe(buffered);
+    if (buffered <= BUFFER_SOFT_LIMIT || (pressure && enforce)) {
+      if (client.backpressureTimer) clearTimeout(client.backpressureTimer);
+      client.backpressureTimer = null;
+    }
+    if (pressure && enforce) {
+      this.#deps.log.warn(`remote socket backpressure device=${client.deviceId ?? "unauthenticated"} buffered=${buffered} cause=${pressure}`);
+      client.socket.close(CLOSE_BACKPRESSURE, "backpressure");
+      return false;
+    }
+    if (buffered > BUFFER_SOFT_LIMIT && !client.backpressureTimer) {
+      // A stalled send need not finish, and may have no subsequent sends. Sample
+      // independently so the grace window cannot turn into an indefinite wait.
+      client.backpressureTimer = setTimeout(() => {
+        client.backpressureTimer = null;
+        if (this.#clients.has(client.id)) this.#checkBackpressure(client);
+      }, BUFFER_GRACE_MS);
+      client.backpressureTimer.unref();
+    }
+    return true;
   }
 
   #dropClient(client: Client): void {
@@ -897,6 +927,8 @@ export class RemoteServer {
     const wasAttached = client.deviceId !== null;
     this.#clients.delete(client.id);
     if (client.timer) clearTimeout(client.timer);
+    if (client.backpressureTimer) clearTimeout(client.backpressureTimer);
+    client.backpressureTimer = null;
     client.detach?.();
     client.detach = null;
     if (client.appSession) {

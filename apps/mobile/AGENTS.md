@@ -33,6 +33,19 @@ This package uses pnpm, not bun or npm. The root workspace must stay on pnpm's i
 
 Expo Router. Routes live in `src/app/`. Keep non-route code outside that directory.
 
+## Message queue
+
+The native chat uses Main's durable queue, not `engine:prompt`'s implicit steering.
+`chat/queue.ts` captures the send decision before the first await: a busy conversation
+or a nonempty queue calls `engine:queue-add`; a paused *empty* queue does not catch a
+fresh prompt. It respects the host's `queueBehavior` (default `followUp`). Only direct
+prompts get an optimistic transcript row; queue entries stay in `QueuePanel` until Main
+delivers them. Cancel/resume, pushes and snapshots all pass through the same
+conversation/revision gate so a late RPC cannot restore a delivered item or an old pause.
+The screen re-subscribes and snapshots when the ready client changes after reconnect.
+A missing send acknowledgement is an unknown outcome, never an automatic retry.
+`test/mobile-queue.test.ts` tests the actual send dispatch and queue merge without React.
+
 ## Native projects
 
 `ios/` and `android/` are generated (Continuous Native Generation). Never create or edit them by hand — configure native behavior in `app.json` and config plugins. Metro detects this monorepo automatically; do not add manual `watchFolders` or `nodeModulesPaths`.
