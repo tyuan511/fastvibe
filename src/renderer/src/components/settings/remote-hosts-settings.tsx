@@ -18,6 +18,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { cleanError } from "@/lib/ipc-error";
+import { randomUUID } from "../../../../shared/random.ts";
 import type { RemoteAgentStatus, RemoteHostProfile, SshErrorCode } from "@shared/remote-host";
 import { SshHostKeyNotice } from "@/components/ssh-host-key";
 import { IS_REMOTE } from "@/lib/platform";
@@ -150,7 +151,7 @@ export function RemoteHostsSettings(): JSX.Element {
         ...kept,
         // A fresh id per new profile: two entries for one machine (another user, another
         // port) must not overwrite each other.
-        id: form.id.trim() || `manual:${crypto.randomUUID()}`,
+        id: form.id.trim() || `manual:${randomUUID()}`,
         label: form.label.trim() || form.host.trim(),
         host: form.host.trim(),
         source: "manual",

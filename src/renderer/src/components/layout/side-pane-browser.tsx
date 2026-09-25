@@ -24,6 +24,7 @@ import {
   ZoomOutAreaIcon,
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
+import { randomUUID } from "../../../../shared/random.ts";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -367,7 +368,7 @@ export function SidePaneBrowser({
     ].filter(Boolean).join("\n");
     const name = (picked.selector || t("browser.pick")).slice(0, 48);
     const attachment: ChatAttachment = {
-      id: crypto.randomUUID(),
+      id: randomUUID(),
       kind: "file",
       name,
       mimeType: "text/plain",

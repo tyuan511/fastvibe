@@ -543,8 +543,11 @@ export function createFastVibeApi(t: ApiTransport) {
       clearPassword: (): Promise<import("@shared/ipc").RemoteServerState> => t.invoke(Ipc.remoteClearPassword),
       start: (port?: number): Promise<import("@shared/ipc").RemoteServerState> =>
         t.invoke(Ipc.remoteStart, { port }),
-      setLanAccess: (enabled: boolean): Promise<import("@shared/ipc").RemoteServerState> =>
-        t.invoke(Ipc.remoteSetLanAccess, { enabled }),
+      setLanAccess: (
+        enabled: boolean,
+        family?: import("@shared/ipc").RemoteLanAddressFamily,
+      ): Promise<import("@shared/ipc").RemoteServerState> =>
+        t.invoke(Ipc.remoteSetLanAccess, { enabled, family }),
       stop: (): Promise<import("@shared/ipc").RemoteServerState> => t.invoke(Ipc.remoteStop),
       listDevices: (): Promise<import("@shared/ipc").RemoteDeviceInfo[]> => t.invoke(Ipc.remoteListDevices),
       revokeDevice: (id: string): Promise<import("@shared/ipc").RemoteDeviceInfo[]> =>

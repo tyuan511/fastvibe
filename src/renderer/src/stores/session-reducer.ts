@@ -1,3 +1,4 @@
+import { randomUUID } from "../../../shared/random.ts";
 import type {
   ChatMessage,
   EngineEvent,
@@ -277,7 +278,7 @@ export function applyExtensionUi(
     const level: ExtensionNoticeLevel =
       event.notifyType === "warning" || event.notifyType === "error" ? event.notifyType : "info";
     // Drop the oldest so a chatty extension cannot grow the stack without bound.
-    const next = [...state.notices, { id: String(event.id ?? crypto.randomUUID()), message: event.message, level, createdAt: Date.now() }];
+    const next = [...state.notices, { id: String(event.id ?? randomUUID()), message: event.message, level, createdAt: Date.now() }];
     return { notices: next.slice(-4) };
   }
   if (method === "setStatus" && typeof event.statusKey === "string") {

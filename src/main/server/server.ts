@@ -15,6 +15,7 @@ import {
   type AppCapability,
   type AppServerIdentity,
 } from "../../shared/app-protocol.ts";
+import type { RemoteLanAddresses } from "../../shared/ipc.ts";
 import {
   decodeBinaryAttachment,
   materializeBinaryAttachments,
@@ -172,17 +173,34 @@ const MAX_BUFFERED_BYTES = 2 * 1024 * 1024;
 const MAX_ATTACHMENT_BYTES = 32 * 1024 * 1024;
 const ATTACHMENT_TTL_MS = 60_000;
 
-/** Pick a usable private IPv4 address for the LAN link shown in settings. */
-export function lanAddress(): string | null {
-  const addresses = Object.values(networkInterfaces())
-    .flatMap((items) => items ?? [])
-    .filter((item) => item.family === "IPv4" && !item.internal)
-    .map((item) => item.address);
-  return (
-    addresses.find((address) =>
+/** Pick usable IPv4/IPv6 addresses for the LAN link shown in settings. */
+export function lanAddresses(): RemoteLanAddresses {
+  const ipv4: string[] = [];
+  const ipv6: string[] = [];
+  for (const [name, items] of Object.entries(networkInterfaces())) {
+    for (const item of items ?? []) {
+      if (item.internal) continue;
+      if (item.family === "IPv4") {
+        ipv4.push(item.address);
+      } else if (item.family === "IPv6") {
+        // Link-local IPv6 needs the interface zone to be usable from a browser.
+        ipv6.push(item.address.toLowerCase().startsWith("fe80:") && !item.address.includes("%")
+          ? `${item.address}%${name}`
+          : item.address);
+      }
+    }
+  }
+  return {
+    ipv4: ipv4.find((address) =>
       /^(10|192\.168)\./.test(address) || /^172\.(1[6-9]|2\d|3[01])\./.test(address),
-    ) ?? addresses[0] ?? null
-  );
+    ) ?? ipv4[0] ?? null,
+    // Prefer a routable/ULA address over a link-local address when both exist.
+    ipv6: ipv6.find((address) => !address.toLowerCase().startsWith("fe80:")) ?? ipv6[0] ?? null,
+  };
+}
+
+export function lanAddress(): string | null {
+  return lanAddresses().ipv4;
 }
 
 type Client = {
@@ -246,7 +264,11 @@ export class RemoteServer {
   get status(): RemoteServerStatus {
     return {
       running: this.#http !== null,
-      host: this.#listenHost === "0.0.0.0" ? (lanAddress() ?? "0.0.0.0") : this.#host,
+      host: this.#listenHost === "0.0.0.0"
+        ? (lanAddresses().ipv4 ?? "0.0.0.0")
+        : this.#listenHost === "::"
+          ? (lanAddresses().ipv6 ?? "::")
+          : this.#host,
       port: this.#port,
       configured: isConfigured(this.#deps.accessFile),
       clients: this.#clients.size,
@@ -320,7 +342,11 @@ export class RemoteServer {
     this.#http = server;
     this.#wss = wss;
     this.#listenHost = host;
-    this.#host = host === "0.0.0.0" ? (lanAddress() ?? host) : host;
+    this.#host = host === "0.0.0.0"
+      ? (lanAddresses().ipv4 ?? host)
+      : host === "::"
+        ? (lanAddresses().ipv6 ?? host)
+        : host;
     this.#port = typeof address === "object" && address ? address.port : options.port;
     this.#heartbeat = this.#beat(this.#deps.heartbeatMs ?? HEARTBEAT_MS);
     // Never the reason the process stays up: the app owns its own lifetime, and a

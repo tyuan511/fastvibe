@@ -839,6 +839,8 @@
   "lanAccess": "Allow LAN access",
   "lanAccessDesc": "Devices on the same network can open the address below.",
   "lanAccessOnDesc": "LAN address: {{address}}; the remote-access password is still required.",
+  "lanAddressFamily": "Address family",
+  "lanAddressFamilyDesc": "Choose whether LAN devices use the IPv4 or IPv6 address.",
   "tunnelHint": "{{address}} is only this computer's local address. Pick a tunnel below to publish it.",
   "tunnel": "Tunnel",
   "tunnelProvider": "Tunnel service",

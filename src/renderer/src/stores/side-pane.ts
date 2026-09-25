@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { randomUUID } from "../../../shared/random.ts";
 import { applyEngineEvent } from "@/lib/apply-engine-event";
 import { i18n } from "@/lib/i18n";
 import { useSettingsStore } from "@/stores/settings";
@@ -169,7 +170,7 @@ function writeCollapsed(collapsed: boolean): void {
 }
 
 function uid(): string {
-  return crypto.randomUUID();
+  return randomUUID();
 }
 
 function upsert(tabs: SidePaneTab[], tab: SidePaneTab): SidePaneTab[] {

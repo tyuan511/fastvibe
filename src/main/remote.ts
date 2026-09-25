@@ -1,7 +1,11 @@
 import { app } from "electron";
 import { join } from "node:path";
 import { Ipc } from "@shared/ipc";
-import type { RemoteServerState, RemoteTunnelTools } from "@shared/ipc";
+import type {
+  RemoteLanAddressFamily,
+  RemoteServerState,
+  RemoteTunnelTools,
+} from "@shared/ipc";
 import { broadcast, subscribe } from "./ipc/broadcast";
 import { dispatch, handle, handlerChannels } from "./ipc/registry";
 import { getFastVibePaths } from "./engine/paths";
@@ -10,7 +14,7 @@ import { log } from "./engine/logger";
 import { readAppSettings, writeAppSettings } from "./engine/app-settings";
 import { passwordProblem } from "./server/auth";
 import { clearRemoteAccess, isConfigured, listDevices, revokeDevice, setPassword } from "./server/store";
-import { RemoteServer } from "./server/server";
+import { lanAddresses, RemoteServer } from "./server/server";
 import { getAppServer } from "./app-server/runtime";
 import { readFrpSettings, saveFrpSettings, writeFrpcConfig } from "./server/frp-store";
 import { checkFrpDns } from "./server/frp-dns";
@@ -87,8 +91,23 @@ function readLanAccess(): boolean {
   return readAppSettings(getFastVibePaths()).remoteLanAccess === true;
 }
 
+function readLanAddressFamily(): RemoteLanAddressFamily {
+  const value = readAppSettings(getFastVibePaths()).remoteLanAddressFamily;
+  return value === "ipv6" ? "ipv6" : "ipv4";
+}
+
+function effectiveLanAddressFamily(): RemoteLanAddressFamily {
+  const addresses = lanAddresses();
+  const requested = readLanAddressFamily();
+  if (requested === "ipv6" && addresses.ipv6) return "ipv6";
+  if (addresses.ipv4) return "ipv4";
+  if (addresses.ipv6) return "ipv6";
+  return requested;
+}
+
 function listenHost(): string {
-  return readLanAccess() ? "0.0.0.0" : "127.0.0.1";
+  if (!readLanAccess()) return "127.0.0.1";
+  return effectiveLanAddressFamily() === "ipv6" ? "::" : "0.0.0.0";
 }
 
 /**
@@ -114,6 +133,8 @@ function state(): RemoteServerState {
   return {
     ...instance().status,
     lanAccess: readLanAccess(),
+    lanAddresses: lanAddresses(),
+    lanAddressFamily: effectiveLanAddressFamily(),
     tunnel: tunnelInstance().status,
     tunnelChoice: readTunnelChoice(),
   };
@@ -146,6 +167,8 @@ function announceFromServer(): void {
   broadcast(Ipc.remoteState, {
     ...server.status,
     lanAccess: readLanAccess(),
+    lanAddresses: lanAddresses(),
+    lanAddressFamily: effectiveLanAddressFamily(),
     tunnel: tunnel?.status ?? TUNNEL_OFF,
     tunnelChoice: readTunnelChoice(),
   } satisfies RemoteServerState);
@@ -227,14 +250,19 @@ export function registerRemoteIpc(): void {
     return announce();
   });
 
-  handle(Ipc.remoteSetLanAccess, async (payload?: { enabled?: unknown }) => {
+  handle(Ipc.remoteSetLanAccess, async (payload?: { enabled?: unknown; family?: unknown }) => {
     const enabled = payload?.enabled === true;
+    const previousEnabled = readLanAccess();
+    const previousFamily = effectiveLanAddressFamily();
+    const requestedFamily: RemoteLanAddressFamily = payload?.family === "ipv6" ? "ipv6" : payload?.family === "ipv4" ? "ipv4" : readLanAddressFamily();
     const paths = getFastVibePaths();
-    writeAppSettings(paths, { ...readAppSettings(paths), remoteLanAccess: enabled });
+    writeAppSettings(paths, { ...readAppSettings(paths), remoteLanAccess: enabled, remoteLanAddressFamily: requestedFamily });
     if (!instance().status.running) return announce();
+    if (enabled === previousEnabled && effectiveLanAddressFamily() === previousFamily) return announce();
 
-    // Rebind the listener so the switch takes effect immediately. Stop the tunnel first
-    // because it must never publish a port while the server is between bindings.
+    // Rebind the listener so the switch or address-family choice takes effect immediately.
+    // Stop the tunnel first because it must never publish a port while the server is
+    // between bindings.
     const port = instance().status.port ?? readPort();
     try {
       await tunnelInstance().stop();

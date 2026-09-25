@@ -6,6 +6,8 @@
  * an attachment id. Older clients keep sending the original JSON unchanged.
  */
 
+import { randomUUID } from "./random.ts";
+
 const PREFIX = "fastvibe-attachment-v1:";
 const ID_PATTERN = /^att_[A-Za-z0-9_-]{8,80}$/;
 
@@ -98,9 +100,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function newAttachmentId(): string {
-  const uuid = globalThis.crypto?.randomUUID?.().replace(/-/g, "");
-  const suffix = uuid ?? Math.random().toString(36).slice(2).padEnd(32, "0");
-  return `att_${suffix.slice(0, 32)}`;
+  return `att_${randomUUID().replace(/-/g, "").slice(0, 32)}`;
 }
 
 function decodeBase64(value: string): Uint8Array | null {

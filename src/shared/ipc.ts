@@ -372,6 +372,11 @@ export type StartRequest = {
  */
 export type RemoteTunnelProvider = "cloudflared" | "ngrok" | "frp";
 export type RemoteTunnelPhase = "off" | "starting" | "online" | "error";
+export type RemoteLanAddressFamily = "ipv4" | "ipv6";
+export type RemoteLanAddresses = {
+  ipv4: string | null;
+  ipv6: string | null;
+};
 
 export type RemoteTunnelState = {
   provider: RemoteTunnelProvider | null;
@@ -413,6 +418,10 @@ export type RemoteServerState = {
   configured: boolean;
   /** Whether the server is listening beyond loopback for devices on the local network. */
   lanAccess: boolean;
+  /** Addresses discovered on the local network, used to offer IPv4/IPv6 selection. */
+  lanAddresses: RemoteLanAddresses;
+  /** Address family currently selected for the LAN listener. */
+  lanAddressFamily: RemoteLanAddressFamily;
   /** Clients connected right now. */
   clients: number;
   /** Failed logins since the last success; the throttle grows with this. */

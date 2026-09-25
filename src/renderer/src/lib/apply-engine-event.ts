@@ -11,6 +11,7 @@ import type {
 import { extractPromptAttachments } from "@shared/attachment-metadata";
 import { isAbortOutcome } from "@shared/abort";
 import { toolResultStatus } from "@shared/tool-result";
+import { randomUUID } from "../../../shared/random.ts";
 import { i18n } from "@/lib/i18n";
 
 export type ApplyResult = {
@@ -93,7 +94,7 @@ function userRowFromEngine(message: Record<string, unknown>): ChatMessage {
     }
   }
   return {
-    id: `local:${crypto.randomUUID()}`,
+    id: `local:${randomUUID()}`,
     role: "user",
     text,
     tools: [],
@@ -244,7 +245,7 @@ function withAssistant(messages: ChatMessage[]): { list: ChatMessage[]; assistan
     return { list, assistant };
   }
   const assistant: ChatMessage = {
-    id: crypto.randomUUID(),
+    id: randomUUID(),
     role: "assistant",
     text: "",
     tools: [],
@@ -332,7 +333,7 @@ function compactPart(compact: CompactInfo, summary = ""): Extract<MessagePart, {
 function compactMessage(compact: CompactInfo, summary = ""): ChatMessage {
   const part = compactPart(compact, summary);
   return {
-    id: crypto.randomUUID(),
+    id: randomUUID(),
     role: "system",
     text: part.text,
     tools: [],
@@ -470,7 +471,7 @@ function resolveToolId(message: ChatMessage, candidate: string | undefined): str
   if (candidate && message.tools.some((tool) => tool.id === candidate)) return candidate;
   const stale = [...message.tools].reverse().find((tool) => tool.status === "running" && !tool.name);
   if (stale) return stale.id;
-  return candidate ?? crypto.randomUUID();
+  return candidate ?? randomUUID();
 }
 
 export function applyEngineEvent(
@@ -615,7 +616,7 @@ function applyEvent(
       }
       return {
         messages: appendMessage(next, {
-          id: crypto.randomUUID(),
+          id: randomUUID(),
           role: "assistant",
           text: "",
           tools: [],
@@ -670,7 +671,7 @@ function applyEvent(
     const text = asString(event.message) ?? asString(event.title) ?? toolText(event) ?? "notice";
     return {
       messages: appendMessage(next, {
-        id: crypto.randomUUID(),
+        id: randomUUID(),
         role: "system",
         text,
         tools: [],
@@ -732,7 +733,7 @@ function applyEvent(
         : (i18n.t("common:notice.todoReminder") as string));
     return {
       messages: appendMessage(next, {
-        id: crypto.randomUUID(),
+        id: randomUUID(),
         role: "system",
         text,
         tools: [],
@@ -779,7 +780,7 @@ function applyEvent(
       const target = ensureAssistant();
       const block = toolCallFromPartial(inner);
       upsertTool(target, {
-        id: asString(block?.id) ?? asString(inner.id) ?? crypto.randomUUID(),
+        id: asString(block?.id) ?? asString(inner.id) ?? randomUUID(),
         name: asString(block?.name) ?? asString(inner.name) ?? "",
         args: block?.arguments ?? inner.arguments ?? inner.args ?? inner.input,
         status: "running",
@@ -936,7 +937,7 @@ function applyEvent(
     const text = asString(event.error) ?? "extension error";
     return {
       messages: appendMessage(next, {
-        id: crypto.randomUUID(),
+        id: randomUUID(),
         role: "system",
         text,
         tools: [],

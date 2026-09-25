@@ -10,6 +10,7 @@ import { useSessionStore } from "@/stores/session";
 import { useSettingsStore } from "@/stores/settings";
 import { useSidePaneStore, type SidePaneTab } from "@/stores/side-pane";
 import { attachmentPromptSuffix, attachmentsToImages } from "@/lib/attachments";
+import { randomUUID } from "../../../../shared/random.ts";
 import { engine, promptConversation } from "@/lib/engine-client";
 import { translate } from "@/lib/i18n";
 import { usePermissionModeSelection } from "@/components/permission-mode-provider";
@@ -134,7 +135,7 @@ export function SidePaneChat({
     // thread's: the engine echoes this prompt back as a `message_start`, and without
     // the id the pane appended that echo as a second copy of the same message.
     const user: ChatMessage = {
-      id: `local:${crypto.randomUUID()}`,
+      id: `local:${randomUUID()}`,
       role: "user",
       text: promptText,
       tools: [],

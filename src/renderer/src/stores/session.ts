@@ -27,6 +27,7 @@ import type {
   WorkspaceSnapshot,
 } from "@shared/types";
 import { applyEngineEvent, userMessageText } from "@/lib/apply-engine-event";
+import { randomUUID } from "../../../shared/random.ts";
 import { applySubagentStream, upsertSubagent } from "./session-subagents";
 import { i18n } from "@/lib/i18n";
 import { resolvePath } from "@/lib/workspace-path";
@@ -778,7 +779,7 @@ export const useSessionStore = create<SessionStore>((set, get) => {
       const messages: ChatMessage[] = [
         ...state.messages,
         {
-          id: `local:${crypto.randomUUID()}`,
+          id: `local:${randomUUID()}`,
           role: "user",
           text,
           tools: [],
@@ -794,7 +795,7 @@ export const useSessionStore = create<SessionStore>((set, get) => {
       const startsTurn = !text.trim().startsWith("/");
       if (startsTurn) {
         messages.push({
-          id: crypto.randomUUID(),
+          id: randomUUID(),
           role: "assistant",
           text: "",
           tools: [],

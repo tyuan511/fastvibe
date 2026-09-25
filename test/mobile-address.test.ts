@@ -28,6 +28,20 @@ test("an explicit http LAN URL is kept", () => {
   assert.equal(parsed?.kind, "lan");
 });
 
+test("an IPv6 LAN QR keeps brackets for HTTP and WebSocket", () => {
+  const parsed = parseServerAddress("http://[fd00::45]:7777");
+  assert.equal(parsed?.origin, "http://[fd00::45]:7777");
+  assert.equal(parsed?.wsUrl, "ws://[fd00::45]:7777/ws");
+  assert.equal(parsed?.kind, "lan");
+});
+
+test("an IPv6 link-local QR preserves its encoded interface zone", () => {
+  const parsed = parseServerAddress("http://[fe80::20%25en0]:7777");
+  assert.equal(parsed?.origin, "http://[fe80::20%25en0]:7777");
+  assert.equal(parsed?.wsUrl, "ws://[fe80::20%25en0]:7777/ws");
+  assert.equal(parsed?.kind, "lan");
+});
+
 test("a bare public hostname is https", () => {
   const parsed = parseServerAddress("foo.ngrok-free.app");
   assert.equal(parsed?.origin, "https://foo.ngrok-free.app");

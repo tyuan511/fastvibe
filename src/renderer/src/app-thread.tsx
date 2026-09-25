@@ -1,6 +1,7 @@
 import { memo, useCallback, type JSX } from "react";
 import { MessageList } from "@/components/chat/message-list";
 import { pastedTextAttachmentName } from "@/lib/attachments";
+import { randomUUID } from "../../shared/random.ts";
 import { getModels } from "@/lib/engine-client";
 import { useDraftPersistence } from "@/lib/draft-persistence";
 import { useSessionStore } from "@/stores/session";
@@ -27,7 +28,7 @@ export async function availableModels(): Promise<FastVibeModel[]> {
 /** Selected transcript text, as the pasted-text chip 添加到对话 drops into the composer. */
 function selectionAttachment(text: string): ChatAttachment {
   return {
-    id: crypto.randomUUID(),
+    id: randomUUID(),
     kind: "file",
     name: pastedTextAttachmentName(text),
     mimeType: "text/plain",
