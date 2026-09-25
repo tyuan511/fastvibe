@@ -2,6 +2,7 @@ import { useSyncExternalStore } from "react";
 import { RemoteClient } from "../protocol/client";
 import { parseServerAddress } from "../protocol/address";
 import { patchServer, readToken, writeToken, type SavedServer } from "../storage/servers";
+import { isMobileConversation, isMobileProject, isRemoteCatalogReference } from "./catalog-filter";
 
 export type CatalogProject = { cwd: string; name: string };
 export type CatalogConversation = {
@@ -181,7 +182,7 @@ async function refreshCatalog(remote: RemoteClient): Promise<void> {
   const runningSince: Record<string, number> = {};
   if (Array.isArray(runningIds)) {
     for (const id of runningIds) {
-      if (typeof id !== "string") continue;
+      if (typeof id !== "string" || isRemoteCatalogReference(id)) continue;
       running[id] = true;
       runningSince[id] = state.runningSince[id] ?? Date.now();
     }
@@ -199,7 +200,11 @@ function handlePush(channel: string, payload: unknown): void {
   }
   if (channel !== "engine:event" || !isRecord(payload)) return;
   const event = payload;
-  if (event.type === "conversation_running" && typeof event.conversationId === "string") {
+  if (
+    event.type === "conversation_running" &&
+    typeof event.conversationId === "string" &&
+    !isRemoteCatalogReference(event.conversationId)
+  ) {
     const running = { ...state.running, [event.conversationId]: event.running === true };
     const runningSince = { ...state.runningSince };
     if (event.running === true) {
@@ -237,12 +242,12 @@ function applyCatalog(payload: unknown): void {
 }
 
 function parseProject(value: unknown): CatalogProject[] {
-  if (!isRecord(value) || typeof value.cwd !== "string" || typeof value.name !== "string") return [];
+  if (!isRecord(value) || typeof value.cwd !== "string" || typeof value.name !== "string" || !isMobileProject(value)) return [];
   return [{ cwd: value.cwd, name: value.name }];
 }
 
 function parseConversation(value: unknown): CatalogConversation[] {
-  if (!isRecord(value) || typeof value.id !== "string") return [];
+  if (!isRecord(value) || typeof value.id !== "string" || !isMobileConversation(value)) return [];
   return [
     {
       id: value.id,
@@ -257,7 +262,12 @@ function parseConversation(value: unknown): CatalogConversation[] {
 }
 
 function parsePermission(value: unknown): PermissionPrompt | null {
-  if (!isRecord(value) || value.type !== "extension_ui_request" || typeof value.id !== "string") return null;
+  if (
+    !isRecord(value) ||
+    value.type !== "extension_ui_request" ||
+    typeof value.id !== "string" ||
+    (typeof value.conversationId === "string" && isRemoteCatalogReference(value.conversationId))
+  ) return null;
   const method = value.method;
   if (method !== "confirm" && method !== "select" && method !== "input" && method !== "editor" && method !== "questions" && method !== "plan_review") {
     return null;
