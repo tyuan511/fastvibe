@@ -903,7 +903,7 @@
   },
   "copyAddress": "Copy address",
   "showQr": "Show QR code",
-  "qrHint": "Scan this with a phone camera to open the address.",
+  "qrHint": "Open the FastVibe mobile app and scan to connect.",
   "clients": "Connected now",
   "clientsDesc": "Devices currently logged in and connected.",
   "devices": "Logged-in devices",

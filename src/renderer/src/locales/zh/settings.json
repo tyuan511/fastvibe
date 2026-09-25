@@ -901,7 +901,7 @@
   },
   "copyAddress": "复制地址",
   "showQr": "显示二维码",
-  "qrHint": "用手机相机扫码即可打开这个地址。",
+  "qrHint": "打开 FastVibe 手机 App 扫码即可连接。",
   "clients": "当前连接",
   "clientsDesc": "已登录并保持连接的设备数量。",
   "devices": "已登录设备",

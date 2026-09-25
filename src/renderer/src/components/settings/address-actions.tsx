@@ -31,7 +31,7 @@ export function AddressActions({
   const { t } = useTranslation("settings");
 
   return (
-    <span className={cn("inline-flex items-center gap-0.5", className)}>
+    <span className={cn("inline-flex items-center gap-1.5", className)}>
       <CopyAction value={value} />
       {/*
        * A code is only offered when another device could actually open the address.
