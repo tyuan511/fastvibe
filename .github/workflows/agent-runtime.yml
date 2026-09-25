@@ -37,10 +37,13 @@ jobs:
 
       - uses: pnpm/action-setup@v6
 
+      # No dependency cache. This workflow runs on tags (a manual run is rare), and an
+      # Actions cache saved on a tag can be restored by that tag alone — so every cache
+      # it wrote was never read again, while its gigabytes pushed the repository over its 10 GB quota and
+      # evicted the Gradle cache the phone build keeps on main.
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-          cache: pnpm
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
