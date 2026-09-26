@@ -1,4 +1,4 @@
-import { memo, useCallback, useMemo, useRef, useState, type JSX, type KeyboardEvent } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type JSX, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Add01Icon, Alert02Icon, AlertCircleIcon, Archive04Icon, ArrowLeft01Icon, ArrowRight01Icon, Delete02Icon, Folder01Icon, Folder02Icon, FolderRootIcon, Link01Icon, MessageSquarePlusIcon, MoreHorizontalIcon, PanelLeftCloseIcon, PencilEdit02Icon, PinIcon, PuzzleIcon, Search01Icon, Settings01Icon } from "@hugeicons/core-free-icons";
@@ -52,6 +52,7 @@ import { useSettingsStore } from "@/stores/settings";
 import { useShortcutLabel } from "@/lib/use-shortcuts";
 import { useSidePanel } from "@/lib/use-resizable-panel";
 import { useHistoryNav } from "@/lib/use-history-nav";
+import type { RemoteHostConnectionState } from "@shared/remote-host";
 import type { Conversation, Project } from "@shared/types";
 import {
   COLLAPSED_KEY,
@@ -133,6 +134,27 @@ export const Sidebar = memo(function Sidebar({
   const toggleSidebarShortcut = useShortcutLabel("toggleSidebar");
   const { canBack, canForward, back, forward } = useHistoryNav();
   const searchShortcut = useShortcutLabel("commandPalette");
+  const [sshStates, setSshStates] = useState<Record<string, RemoteHostConnectionState>>({});
+  useEffect(() => {
+    let mounted = true;
+    const applyStates = (states: RemoteHostConnectionState[]): void => {
+      if (!mounted) return;
+      setSshStates(Object.fromEntries(states.flatMap((state) => state.hostId ? [[state.hostId, state] as const] : [])));
+    };
+    const applyState = (state: RemoteHostConnectionState): void => {
+      if (!mounted || !state.hostId) return;
+      setSshStates((current) => ({ ...current, [state.hostId!]: state }));
+    };
+    const offState = window.fastvibe.ssh.onState(applyState);
+    const offStates = window.fastvibe.ssh.onStates(applyStates);
+    void window.fastvibe.ssh.states().then(applyStates).catch(() => undefined);
+    return () => {
+      mounted = false;
+      offState();
+      offStates();
+    };
+  }, []);
+  const sshStatesByHost = useMemo(() => new Map(Object.entries(sshStates)), [sshStates]);
   // Which projects are folded, and which show every chat rather than the first few.
   // Both live in settings.json so they survive a restart (and the dev/packaged
   // localStorage split); the legacy localStorage fold list is promoted once.
@@ -584,6 +606,7 @@ export const Sidebar = memo(function Sidebar({
                       project={group.project}
                       open={open}
                       renaming={renamingProject}
+                      connectionState={group.project.connectionId ? sshStatesByHost.get(group.project.connectionId) : undefined}
                       onOpenChange={(next) => setOpen(group.cwd, next)}
                       onNewChat={() => {
                         onNewChat(group.cwd);

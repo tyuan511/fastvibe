@@ -1,3 +1,4 @@
+import Constants from "expo-constants";
 import type { ServerAddress } from "./address";
 import { t } from "../i18n/core.ts";
 
@@ -128,7 +129,7 @@ export class RemoteClient {
               hello: {
                 protocol: "fastvibe.app",
                 protocolVersion: 1,
-                client: { kind: "mobile", version: "0.1.0" },
+                client: { kind: "mobile", version: Constants.expoConfig?.version ?? "0.0.0" },
                 // The native client has no image attachment sender yet, but it can
                 // consume the ordered event batches used for low-bandwidth streams.
                 features: { eventBatch: true },

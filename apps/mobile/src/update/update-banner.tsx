@@ -143,37 +143,51 @@ export function UpdateBanner({ palette }: { palette: Palette }): JSX.Element | n
   }
 
   return (
-    <Pressable
-      disabled={busy}
-      onPress={() => press(release)}
-      style={[styles.banner, { backgroundColor: palette.accentSoft }]}
-    >
-      <View style={[styles.icon, { backgroundColor: phase.kind === "error" ? palette.danger : palette.accent }]}>
+    <View style={[styles.banner, { backgroundColor: palette.accentSoft }]}>
+      <Pressable
+        disabled={busy}
+        onPress={() => press(release)}
+        style={({ pressed }) => [styles.main, { opacity: pressed ? 0.8 : 1 }]}
+      >
+        <View style={[styles.icon, { backgroundColor: phase.kind === "error" ? palette.danger : palette.accent }]}>
         {busy ? (
           <DesktopSpinner color="#ffffff" size={16} />
         ) : (
           <HugeiconsIcon icon={phase.kind === "error" ? Alert02Icon : ArrowUp02Icon} size={17} color="#ffffff" strokeWidth={2.4} />
         )}
       </View>
-      <View style={styles.text}>
-        <Text style={[styles.title, { color: phase.kind === "error" ? palette.danger : palette.text }]}>{title}</Text>
-        {detail ? (
-          <Text style={[styles.detail, { color: palette.muted }]} numberOfLines={2}>
-            {detail}
-          </Text>
-        ) : null}
-      </View>
-      {action ? (
-        <View style={[styles.actionPill, { backgroundColor: palette.accent }]}>
-          <Text style={[styles.action, { color: palette.accentText }]}>{action}</Text>
+        <View style={styles.text}>
+          <Text style={[styles.title, { color: phase.kind === "error" ? palette.danger : palette.text }]}>{title}</Text>
+          {detail ? (
+            <Text style={[styles.detail, { color: palette.muted }]} numberOfLines={2}>
+              {detail}
+            </Text>
+          ) : null}
         </View>
+      </Pressable>
+      {action ? (
+        <Pressable
+          disabled={busy}
+          accessibilityRole="button"
+          accessibilityLabel={action}
+          onPress={() => press(release)}
+          style={({ pressed }) => [styles.actionPill, { backgroundColor: palette.accent, opacity: pressed ? 0.8 : 1 }]}
+        >
+          <Text style={[styles.action, { color: palette.accentText }]}>{action}</Text>
+        </Pressable>
       ) : null}
       {phase.kind === "available" ? (
-        <Pressable onPress={() => dismiss(release)} hitSlop={8}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t("update.ignore")}
+          onPress={() => dismiss(release)}
+          hitSlop={8}
+          style={({ pressed }) => ({ opacity: pressed ? 0.55 : 1 })}
+        >
           <Text style={[styles.action, { color: palette.muted }]}>{t("update.ignore")}</Text>
         </Pressable>
       ) : null}
-    </Pressable>
+    </View>
   );
 }
 
@@ -206,6 +220,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 12,
   },
+  main: { flex: 1, flexDirection: "row", alignItems: "center", gap: 12 },
   icon: { width: 34, height: 34, borderRadius: 11, alignItems: "center", justifyContent: "center" },
   actionPill: { borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6 },
   text: { flex: 1, gap: 2 },

@@ -1,5 +1,5 @@
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { FlatList, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import { HugeiconsIcon } from "@hugeicons/react-native";
@@ -39,6 +39,7 @@ import { Composer } from "../../chat/composer";
 import { OptionSheet } from "../../chat/option-sheet";
 import { QueuePanel } from "../../chat/queue-panel";
 import { emptyQueue, mergeQueue, shouldHoldSend, shouldQueueMessage, submitMessage, SubmissionUncertainError } from "../../chat/queue";
+import { readDraft, writeDraft } from "../../chat/draft-storage";
 import { DesktopSpinner } from "../../chat/desktop-spinner";
 import { t, useT } from "../../i18n";
 import { completedTurnFooters, formatTurnMeta, type TurnMeta } from "../../chat/turn-meta";
@@ -99,6 +100,11 @@ export default function ChatScreen() {
   const messagesRef = useRef<ChatMessage[]>([]);
   messagesRef.current = messages;
   const [draft, setDraft] = useState("");
+  const [draftHydrated, setDraftHydrated] = useState(false);
+  const draftRef = useRef("");
+  draftRef.current = draft;
+  const draftTouched = useRef(false);
+  const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [loading, setLoading] = useState(true);
   const [responding, setResponding] = useState(false);
   const [sending, setSending] = useState(false);
@@ -106,6 +112,7 @@ export default function ChatScreen() {
   const queueRef = useRef(queue);
   const submitting = useRef<object | null>(null);
   const remote = getClient();
+  const serverId = connection.server?.id;
   // A reconnect is a new scope too: re-subscribe and re-read the durable queue.
   const scope = useMemo(() => ({ conversationId, remote }), [conversationId, remote]);
   const liveScope = useRef(scope);
@@ -121,8 +128,54 @@ export default function ChatScreen() {
   const [menu, setMenu] = useState(false);
   const [picked, setPicked] = useState<ChatMessage | null>(null);
   const [away, setAway] = useState(false);
+  const [messageViewportHeight, setMessageViewportHeight] = useState(0);
   const autoAnswered = useRef(new Set<string>());
+  const reloadVersion = useRef(0);
+  const liveMessageVersion = useRef(0);
   const projectName = chat?.project ? connection.projects.find((item) => item.cwd === chat.project)?.name : undefined;
+
+  const handleDraftChange = useCallback((value: string) => {
+    draftTouched.current = true;
+    setDraft(value);
+  }, []);
+
+  useEffect(() => {
+    if (!serverId) return undefined;
+    const currentServerId = serverId;
+    const currentConversationId = conversationId;
+    draftTouched.current = false;
+    setDraft("");
+    setDraftHydrated(false);
+    let cancelled = false;
+    void readDraft(currentServerId, currentConversationId).then((saved) => {
+      if (cancelled) return;
+      if (!draftTouched.current) setDraft(saved?.text ?? "");
+      setDraftHydrated(true);
+    });
+    return () => {
+      cancelled = true;
+      if (draftTimer.current !== null) {
+        clearTimeout(draftTimer.current);
+        draftTimer.current = null;
+      }
+      void writeDraft(currentServerId, currentConversationId, draftRef.current);
+    };
+  }, [conversationId, serverId]);
+
+  useEffect(() => {
+    if (!serverId || !draftHydrated) return undefined;
+    if (draftTimer.current !== null) clearTimeout(draftTimer.current);
+    draftTimer.current = setTimeout(() => {
+      draftTimer.current = null;
+      void writeDraft(serverId, conversationId, draftRef.current);
+    }, 350);
+    return () => {
+      if (draftTimer.current !== null) {
+        clearTimeout(draftTimer.current);
+        draftTimer.current = null;
+      }
+    };
+  }, [conversationId, draft, draftHydrated, serverId]);
 
   const applyQueue = useCallback((value: unknown) => {
     if (liveScope.current !== scope) return;
@@ -133,13 +186,15 @@ export default function ChatScreen() {
 
   const reload = useCallback(async () => {
     if (!scope.remote || !scope.conversationId) return;
+    const version = ++reloadVersion.current;
+    const liveVersion = liveMessageVersion.current;
     const current = messagesRef.current;
     const anchorEntryId = [...current].reverse().find((message) => message.role === "user")?.id;
     const snapshot = (await scope.remote.call("engine:get-snapshot", {
       conversationId: scope.conversationId,
       ...(anchorEntryId ? { fromEntryId: anchorEntryId } : {}),
     })) as SnapshotPayload;
-    if (liveScope.current !== scope) return;
+    if (liveScope.current !== scope || version !== reloadVersion.current || liveVersion !== liveMessageVersion.current) return;
     const next = Array.isArray(snapshot.messages) ? snapshot.messages.flatMap(parseMessage) : [];
     const merged = snapshot.messageMode === "tail" && snapshot.messageAnchorId
       ? mergeMessageTail(current, next, snapshot.messageAnchorId)
@@ -176,6 +231,7 @@ export default function ChatScreen() {
         toast.error(typeof event.message === "string" ? event.message : t("chat.queueFailed"));
       }
       if (event.type === "message_start") {
+        liveMessageVersion.current += 1;
         const message = isRecord(event.message) ? event.message : null;
         if (message?.role === "assistant") {
           setMessages((current) => {
@@ -196,6 +252,7 @@ export default function ChatScreen() {
         event.type === "tool_execution_update" ||
         event.type === "tool_execution_end"
       ) {
+        liveMessageVersion.current += 1;
         setMessages((current) => applyLiveEngineEvent(current, event));
       }
       if (event.type === "queue_delivered" || event.type === "agent_settled" || event.type === "message_end" || event.type === "tool_execution_end") {
@@ -233,7 +290,9 @@ export default function ChatScreen() {
     submitting.current = reservation;
     const localId = `local-${Date.now()}`;
     setSending(true);
+    draftTouched.current = true;
     setDraft("");
+    if (serverId) void writeDraft(serverId, conversationId, "");
     try {
     const next = await submitMessage(remote, { conversationId, text, enqueue, previous: chat }, () => {
         if (liveScope.current === scope) setMessages((current) => [...current, { id: localId, role: "user", text, tools: [] }]);
@@ -243,7 +302,7 @@ export default function ChatScreen() {
       if (liveScope.current !== scope) return;
       if (!(caught instanceof SubmissionUncertainError)) {
         setMessages((current) => current.filter((item) => item.id !== localId));
-        setDraft((current) => current || text);
+        handleDraftChange(text);
       } else {
         void reload().catch(() => undefined);
       }
@@ -336,9 +395,15 @@ export default function ChatScreen() {
     if (action === "copy") {
       void Clipboard.setStringAsync(message.text.trim()).then(() => toast.success(t("toast.copied")));
     } else if (action === "reuse") {
-      setDraft(message.text.trim());
+      handleDraftChange(message.text.trim());
     }
   }
+
+  const handleMessageLongPress = useCallback((message: ChatMessage) => {
+    if (!message.text.trim()) return;
+    haptic.press();
+    setPicked(message);
+  }, []);
 
   const last = messages.at(-1);
   const canContinue = !running && (Boolean(last?.error) || last?.stop === "aborted" || last?.stop === "length");
@@ -410,7 +475,7 @@ export default function ChatScreen() {
                   key={item.text}
                   onPress={() => {
                     haptic.select();
-                    setDraft(item.text);
+                    handleDraftChange(item.text);
                   }}
                   style={({ pressed }) => [styles.suggestion, { backgroundColor: palette.card, opacity: pressed ? 0.75 : 1 }]}
                 >
@@ -430,8 +495,10 @@ export default function ChatScreen() {
               inverted
               keyExtractor={(item) => item.id}
               contentContainerStyle={styles.messages}
+              onLayout={(event) => setMessageViewportHeight(event.nativeEvent.layout.height)}
               onScroll={(event) => {
-                const next = event.nativeEvent.contentOffset.y > 480;
+                const threshold = messageViewportHeight > 0 ? Math.max(160, messageViewportHeight * 0.6) : 480;
+                const next = event.nativeEvent.contentOffset.y > threshold;
                 if (next !== away) setAway(next);
               }}
               scrollEventThrottle={64}
@@ -449,11 +516,7 @@ export default function ChatScreen() {
                   meta={turnFooters.get(item.lastId ?? item.id)}
                   turnStart={item.role === "assistant" && inverted[index + 1]?.role !== "assistant"}
                   live={running && index === 0}
-                  onLongPress={() => {
-                    if (!item.text.trim()) return;
-                    haptic.press();
-                    setPicked(item);
-                  }}
+                  onLongPress={handleMessageLongPress}
                 />
               )}
             />
@@ -519,7 +582,7 @@ export default function ChatScreen() {
             queueing={running || queue.items.length > 0}
             disabled={!connected || queue.revision < 0}
             draft={draft}
-            onDraftChange={setDraft}
+            onDraftChange={handleDraftChange}
             onSend={() => void send()}
             onAbort={() => void getClient()?.call("engine:abort", { conversationId })}
             onContinue={() => void getClient()?.call("engine:continue", { conversationId })}
@@ -563,7 +626,7 @@ export default function ChatScreen() {
   );
 }
 
-function MessageRow({
+const MessageRow = memo(function MessageRow({
   message,
   palette,
   meta,
@@ -578,7 +641,7 @@ function MessageRow({
   turnStart: boolean;
   /** The newest row while a run is in flight. */
   live: boolean;
-  onLongPress: () => void;
+  onLongPress: (message: ChatMessage) => void;
 }) {
   useT();
   const mine = message.role === "user";
@@ -592,7 +655,7 @@ function MessageRow({
   }
   if (mine) {
     return (
-      <Pressable onLongPress={onLongPress} delayLongPress={300} style={styles.userWrap}>
+      <Pressable onLongPress={() => onLongPress(message)} delayLongPress={300} style={styles.userWrap}>
         <View style={[styles.userBubble, { backgroundColor: palette.accentSoft }]}>
           {message.text ? <MarkdownView text={message.text} palette={palette} /> : null}
         </View>
@@ -603,7 +666,7 @@ function MessageRow({
   const tools = new Map(message.tools.map((tool) => [tool.id, tool]));
   const blocks = buildBlocks(message, tools);
   return (
-    <Pressable onLongPress={onLongPress} delayLongPress={350} style={styles.assistantRow}>
+    <Pressable onLongPress={() => onLongPress(message)} delayLongPress={350} style={styles.assistantRow}>
       {turnStart ? (
         <View style={styles.turnHead}>
           <BrandLogo size={20} />
@@ -639,7 +702,7 @@ function MessageRow({
       {meta ? <TurnMetaLine meta={meta} palette={palette} /> : null}
     </Pressable>
   );
-}
+});
 
 type Block =
   | { kind: "text"; text: string }
@@ -897,7 +960,9 @@ function applyLiveEngineEvent(messages: ChatMessage[], event: Record<string, unk
     const block = partialToolBlock(inner);
     const { list, index } = ensureLiveAssistant(messages);
     const current = list[index];
-    const id = resolveLiveToolId(current, stringValue(block?.id) ?? stringValue(inner?.id));
+    const candidate = stringValue(block?.id) ?? stringValue(inner?.id);
+    if (type !== "toolcall_start" && type !== "tool_call_start" && !candidate && !current.tools.some((tool) => tool.status === "running" && !tool.name)) return list;
+    const id = resolveLiveToolId(current, candidate);
     return upsertLiveTool(list, index, {
       id,
       name: stringValue(block?.name) ?? stringValue(inner?.name),
@@ -911,7 +976,9 @@ function applyLiveEngineEvent(messages: ChatMessage[], event: Record<string, unk
     if (type !== "tool_execution_start" && !messages.some((message) => message.role === "assistant")) return messages;
     const { list, index } = ensureLiveAssistant(messages);
     const current = list[index];
-    const id = resolveLiveToolId(current, stringValue(event.toolCallId) ?? stringValue(event.id));
+    const candidate = stringValue(event.toolCallId) ?? stringValue(event.id);
+    if (type !== "tool_execution_start" && !candidate && !current.tools.some((tool) => tool.status === "running" && !tool.name)) return list;
+    const id = resolveLiveToolId(current, candidate);
     const name = stringValue(event.toolName) ?? stringValue(event.name);
     const details = event.details;
     const result = stringifyToolValue(event.partialResult ?? event.result ?? event.output);
@@ -980,7 +1047,7 @@ function partialToolBlock(inner: Record<string, unknown> | null): Record<string,
 
 function resolveLiveToolId(message: ChatMessage, candidate: string | undefined): string {
   if (candidate) return candidate;
-  return [...message.tools].reverse().find((tool) => tool.status === "running")?.id ?? `tool-${Date.now()}`;
+  return [...message.tools].reverse().find((tool) => tool.status === "running" && !tool.name)?.id ?? `tool-${Date.now()}`;
 }
 
 function stringifyToolValue(value: unknown): string | undefined {

@@ -8,6 +8,7 @@ import {
   isRemoteRef,
   parentRemotePath,
   projectHasCapability,
+  remoteProjectActivityKey,
 } from "../src/renderer/src/lib/remote-project.ts";
 import type { Project } from "../src/shared/types.ts";
 
@@ -66,6 +67,14 @@ test("a local project is capable of every pane; a remote one is gated", () => {
   assert.equal(projectHasCapability(remoteProject(), "terminal"), false);
   assert.equal(projectHasCapability(remoteProject({ bindingState: "offline" }), "workspace"), false);
   assert.equal(projectHasCapability(remoteProject({ capabilities: undefined }), "git"), true);
+});
+
+test("remote project activity turns SSH deployment steps into readable sidebar states", () => {
+  assert.equal(remoteProjectActivityKey({ hostId: "ssh:dev", status: "connecting", activity: "agent-download" }), "agentDownload");
+  assert.equal(remoteProjectActivityKey({ hostId: "ssh:dev", status: "connecting", progress: { phase: "agent-upload", done: 10 } }), "agentUpload");
+  assert.equal(remoteProjectActivityKey({ hostId: "ssh:dev", status: "connecting", activity: "starting-agent" }), "startingAgent");
+  assert.equal(remoteProjectActivityKey({ hostId: "ssh:dev", status: "connecting" }), "preparing");
+  assert.equal(remoteProjectActivityKey({ hostId: "ssh:dev", status: "connected" }), undefined);
 });
 
 test("bindingStateKey is the i18n suffix, not the wire spelling", () => {

@@ -130,7 +130,19 @@ export function onEngineEvent(listener: (event: Record<string, unknown>) => void
 }
 
 export async function connectSaved(server: SavedServer): Promise<void> {
-  const token = await readToken(server.id);
+  let token: string | null;
+  try {
+    token = await readToken(server.id);
+  } catch (error) {
+    abandonConnection();
+    setState({
+      ...empty,
+      server,
+      status: "error",
+      error: error instanceof Error ? error.message : t("conn.failed"),
+    });
+    return;
+  }
   if (!token) {
     abandonConnection();
     setState({ ...empty, server, status: "error", needsPassword: true, error: t("conn.needPassword") });
@@ -381,7 +393,13 @@ function handlePush(channel: string, payload: unknown): void {
     for (const item of pending) if (item.conversationId) waiting[item.conversationId] = true;
     setState({ ...state, pending, waiting });
   }
-  for (const listener of engineListeners) listener(event);
+  for (const listener of engineListeners) {
+    try {
+      listener(event);
+    } catch {
+      // One screen's reducer must not prevent other subscribers from receiving a push.
+    }
+  }
 }
 
 function archivedIdsFrom(value: unknown): string[] {

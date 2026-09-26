@@ -23,6 +23,7 @@ export const zh = {
   "common.chatCount": "{count} 个会话",
   "common.me": "我",
   "common.ok": "好",
+  "common.operationFailed": "操作失败",
   "toast.failedWith": "{title}：{message}",
   "toast.copied": "已复制",
   "toast.addressCopied": "地址已复制",
@@ -74,6 +75,8 @@ export const zh = {
   "devices.connectedAgo": "{when}连接",
   "devices.neverConnected": "尚未连接",
   "devices.connected": "已连接",
+  "devices.loadFailed": "读取设备列表失败",
+  "devices.openHint": "点击连接设备，长按打开操作菜单",
 
   // add
   "add.badAddress": "地址无法识别。可以是 192.168.x.x:7777，或 https 穿透链接。",
@@ -138,6 +141,7 @@ export const zh = {
   "server.noChatsInProject": "这个项目下还没有会话",
   "server.archivedCount": "已归档 {count} 个会话",
   "server.chatActions": "会话操作",
+  "server.chatOpenHint": "点击打开会话，长按打开操作菜单",
   "server.filterByProject": "按项目筛选",
   "server.filterLabel": "按项目筛选：{label}",
   "server.clearFilter": "清除项目筛选",
@@ -355,6 +359,7 @@ export const zh = {
   "update.githubStatus": "GitHub 返回 {status}",
   "update.paused": "下载已暂停",
   "update.incomplete": "下载不完整，请重试",
+  "update.downloadTimeout": "下载超时，请重试",
   "update.installerFailed": "无法打开安装程序",
   "update.downloadFailed": "下载失败",
   "update.confirmTitle": "更新到 {version}",

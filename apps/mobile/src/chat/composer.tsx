@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useState, type JSX } from "react";
+import { useCallback, useEffect, useRef, useState, type JSX } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { HugeiconsIcon } from "@hugeicons/react-native";
 import Svg, { Circle } from "react-native-svg";
 import { AiBrain01Icon, ArrowDown01Icon, ArrowUp02Icon, HandIcon, PlayIcon, ShieldAlertIcon, ShieldCheckIcon, SquareIcon } from "../ui/icons";
 import type { IconSvgElement } from "@hugeicons/react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { currentConnection, getClient } from "../session/connection";
+import { currentConnection, getClient, useConnection } from "../session/connection";
 import { OptionSheet } from "./option-sheet";
 import { ModelPicker, modelKey, type PickerModel } from "./model-picker";
 import { loadModelRecents, rememberModel } from "./model-recents";
@@ -62,6 +62,8 @@ export function Composer({
   const palette = usePalette();
   useT();
   const insets = useSafeAreaInsets();
+  const connection = useConnection();
+  const refreshVersion = useRef(0);
   const [picker, setPicker] = useState<Picker>(null);
   const [models, setModels] = useState<PickerModel[]>([]);
   const [session, setSession] = useState<SessionState | null>(null);
@@ -75,12 +77,15 @@ export function Composer({
   const refresh = useCallback(async () => {
     const remote = getClient();
     if (!remote) return;
+    const version = ++refreshVersion.current;
+    const requestedConversationId = conversationId;
     try {
       const [state, list, settings] = await Promise.all([
         remote.call("engine:get-state", { conversationId }) as Promise<SessionState>,
         remote.call("engine:get-models", { conversationId }) as Promise<PickerModel[]>,
         remote.call("settings:get") as Promise<Record<string, unknown>>,
       ]);
+      if (version !== refreshVersion.current || requestedConversationId !== conversationId) return;
       setSession(state);
       setModels(Array.isArray(list) ? list : []);
       if (settings.permissionMode === "ask" || settings.permissionMode === "smart" || settings.permissionMode === "full") {
@@ -93,7 +98,7 @@ export function Composer({
   }, [conversationId]);
 
   // Again when a run settles: the context window only moves while one is in flight.
-  useEffect(() => { void refresh(); }, [refresh, running, disabled]);
+  useEffect(() => { void refresh(); }, [refresh, running, disabled, connection.status, connection.reconnecting]);
 
   useEffect(() => {
     if (!serverId) return;

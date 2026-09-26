@@ -39,6 +39,7 @@ const CHECK_FRESH_MS = 10 * 60 * 1000;
  * spinning that long reads as broken rather than as "GitHub is unreachable".
  */
 const REQUEST_TIMEOUT_MS = 15 * 1000;
+const DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 
 let inflight: Promise<AppRelease | null> | null = null;
 let settled: { at: number; release: AppRelease | null } | null = null;
@@ -142,20 +143,36 @@ export async function downloadApk(
 
   const destination = apkFile(release);
   if (destination.exists) destination.delete();
-  const task = File.createDownloadTask(release.apkUrl, destination, {
-    signal,
-    onProgress: ({ bytesWritten, totalBytes }) => {
-      const total = totalBytes > 0 ? totalBytes : release.apkSize;
-      onProgress(total > 0 ? Math.min(1, bytesWritten / total) : null);
-    },
-  });
-  const file = await task.downloadAsync();
-  if (!file) throw new Error(t("update.paused"));
-  if (release.apkSize > 0 && file.size !== release.apkSize) {
-    file.delete();
-    throw new Error(t("update.incomplete"));
+  const controller = new AbortController();
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, DOWNLOAD_TIMEOUT_MS);
+  const abort = (): void => controller.abort();
+  signal?.addEventListener("abort", abort, { once: true });
+  try {
+    const task = File.createDownloadTask(release.apkUrl, destination, {
+      signal: controller.signal,
+      onProgress: ({ bytesWritten, totalBytes }) => {
+        const total = totalBytes > 0 ? totalBytes : release.apkSize;
+        onProgress(total > 0 ? Math.min(1, bytesWritten / total) : null);
+      },
+    });
+    const file = await task.downloadAsync();
+    if (!file) throw new Error(t("update.paused"));
+    if (release.apkSize > 0 && file.size !== release.apkSize) {
+      file.delete();
+      throw new Error(t("update.incomplete"));
+    }
+    return file;
+  } catch (error) {
+    if (timedOut) throw new Error(t("update.downloadTimeout"));
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener("abort", abort);
   }
-  return file;
 }
 
 /**

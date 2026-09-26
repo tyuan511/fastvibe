@@ -16,7 +16,7 @@ import { t } from "../i18n";
 import { haptic } from "./haptics";
 import { useOpenSheets } from "./overlay";
 import { elevation, radius, usePalette, type Palette } from "./theme";
-import { ToastHost } from "./toast";
+import { ToastHost, toast } from "./toast";
 
 /**
  * Every dialog the app shows — a confirmation, a notice, a text prompt — in one look.
@@ -29,7 +29,7 @@ import { ToastHost } from "./toast";
 export type DialogAction = {
   label: string;
   style?: "default" | "cancel" | "destructive";
-  onPress?: () => void;
+  onPress?: () => void | Promise<void>;
 };
 
 type PromptOptions = {
@@ -122,11 +122,15 @@ export function DialogHost(): JSX.Element | null {
 
   if (!current) return null;
 
-  function choose(action: DialogAction): void {
+  async function choose(action: DialogAction): Promise<void> {
     if (!current) return;
     haptic.tap();
     shift(current.id);
-    action.onPress?.();
+    try {
+      await action.onPress?.();
+    } catch (error) {
+      toast.failure(error, t("common.operationFailed"));
+    }
   }
 
   async function submit(): Promise<void> {
@@ -136,6 +140,8 @@ export function DialogHost(): JSX.Element | null {
     try {
       const result = await prompt.onSubmit(value);
       if (result !== false) shift(current.id);
+    } catch (error) {
+      toast.failure(error, t("common.operationFailed"));
     } finally {
       setBusy(false);
     }

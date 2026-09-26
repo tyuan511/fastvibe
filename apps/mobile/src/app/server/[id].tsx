@@ -47,6 +47,7 @@ import { relativeTime } from "../../ui/time";
 import { DesktopSpinner } from "../../chat/desktop-spinner";
 import { useT } from "../../i18n";
 import { OptionSheet } from "../../chat/option-sheet";
+import { listDrafts } from "../../chat/draft-storage";
 
 /** The sheet's value for 「no project filter」; a cwd can never be empty. */
 const ALL_PROJECTS = "";
@@ -79,16 +80,22 @@ export default function ServerScreen() {
   useEffect(() => {
     let cancelled = false;
     setLoaded(false);
-    void loadServers().then((servers) => {
-      if (cancelled) return;
-      const found = servers.find((item) => item.id === id) ?? null;
-      setServer(found);
-      setLoaded(true);
-      if (!found) return;
-      const current = currentConnection();
-      if (current.server?.id === found.id && (current.status === "ready" || current.status === "connecting")) return;
-      void connectSaved(found);
-    });
+    void loadServers()
+      .then((servers) => {
+        if (cancelled) return;
+        const found = servers.find((item) => item.id === id) ?? null;
+        setServer(found);
+        setLoaded(true);
+        if (!found) return;
+        const current = currentConnection();
+        if (current.server?.id === found.id && (current.status === "ready" || current.status === "connecting")) return;
+        void connectSaved(found);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setLoaded(true);
+        toast.failure(error, t("devices.loadFailed"));
+      });
     return () => {
       cancelled = true;
     };
@@ -178,9 +185,20 @@ export default function ServerScreen() {
     if (!remote || creating) return;
     setCreating(true);
     try {
-      // The native app lets the user start several empty chats. Do not reuse the
-      // previous project's empty slot; that reuse is useful for the desktop draft,
-      // but makes a second tap on 新对话 open the first chat again.
+      // Match the desktop draft rule: if this project already has an empty chat with
+      // text typed into it, 新对话 returns to that chat instead of losing the draft.
+      const serverId = connection.server?.id;
+      if (serverId) {
+        const drafts = await listDrafts(serverId);
+        const existing = drafts.find((draft) => {
+          const chat = connection.conversations.find((item) => item.id === draft.conversationId);
+          return chat && !chat.preview && (chat.project ?? "") === selectedProject;
+        });
+        if (existing) {
+          router.push(`/chat/${existing.conversationId}`);
+          return;
+        }
+      }
       const result = (await remote.call("conversations:create", {
         project: selectedProject || undefined,
         activate: false,
@@ -538,6 +556,9 @@ function ConversationRow({
   const { t } = useT();
   return (
     <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${conversation.title}, ${snippet || conversation.preview || t("server.noPreview")}`}
+      accessibilityHint={t("server.chatOpenHint")}
       onPress={onPress}
       onLongPress={onLongPress}
       delayLongPress={320}
@@ -600,27 +621,25 @@ function ProjectFilter({
   const { t } = useT();
   const tint = active ? palette.accent : palette.muted;
   return (
-    <Pressable
-      onPress={onPress}
-      accessibilityRole="button"
-      accessibilityLabel={t("server.filterLabel", { label })}
-      style={({ pressed }) => [
-        styles.filter,
-        { backgroundColor: active ? palette.accentSoft : palette.field, opacity: pressed ? 0.7 : 1 },
-      ]}
-    >
-      <HugeiconsIcon icon={Folder01Icon} size={16} color={tint} strokeWidth={2} />
-      <Text style={[styles.filterLabel, { color: active ? palette.accent : palette.text }]} numberOfLines={1} ellipsizeMode="tail">
-        {label}
-      </Text>
+    <View style={[styles.filter, { backgroundColor: active ? palette.accentSoft : palette.field }]}>
+      <Pressable
+        onPress={onPress}
+        accessibilityRole="button"
+        accessibilityLabel={t("server.filterLabel", { label })}
+        style={({ pressed }) => [styles.filterMain, { opacity: pressed ? 0.7 : 1 }]}
+      >
+        <HugeiconsIcon icon={Folder01Icon} size={16} color={tint} strokeWidth={2} />
+        <Text style={[styles.filterLabel, { color: active ? palette.accent : palette.text }]} numberOfLines={1} ellipsizeMode="tail">
+          {label}
+        </Text>
+        {!active ? <HugeiconsIcon icon={ArrowDown01Icon} size={14} color={tint} strokeWidth={2} /> : null}
+      </Pressable>
       {active ? (
-        <Pressable onPress={onClear} hitSlop={10} accessibilityLabel={t("server.clearFilter")}>
+        <Pressable onPress={onClear} hitSlop={10} accessibilityRole="button" accessibilityLabel={t("server.clearFilter")}>
           <HugeiconsIcon icon={Cancel01Icon} size={14} color={tint} strokeWidth={2} />
         </Pressable>
-      ) : (
-        <HugeiconsIcon icon={ArrowDown01Icon} size={14} color={tint} strokeWidth={2} />
-      )}
-    </Pressable>
+      ) : null}
+    </View>
   );
 }
 
@@ -644,6 +663,7 @@ const styles = StyleSheet.create({
   search: { flex: 1 },
   // Fixed width: a long project name must not push the search field narrower.
   filter: { flexDirection: "row", alignItems: "center", gap: 6, width: 124, flexShrink: 0, height: 40, borderRadius: radius.md, paddingHorizontal: 11 },
+  filterMain: { flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", gap: 6 },
   filterLabel: { flex: 1, fontSize: 14, fontWeight: "600" },
   list: { paddingHorizontal: 16, paddingTop: 2, gap: 8 },
   row: { borderRadius: radius.lg, padding: 12, gap: 12, flexDirection: "row", alignItems: "flex-start", borderWidth: 1 },

@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Add01Icon, Alert02Icon, AlertCircleIcon, Archive04Icon, ArrowLeft01Icon, ArrowRight01Icon, Delete02Icon, Folder01Icon, Folder02Icon, FolderRootIcon, Link01Icon, MessageSquarePlusIcon, MoreHorizontalIcon, PanelLeftCloseIcon, PencilEdit02Icon, PinIcon, PuzzleIcon, Search01Icon, Settings01Icon } from "@hugeicons/core-free-icons";
+import { Add01Icon, Alert02Icon, AlertCircleIcon, Archive04Icon, ArrowLeft01Icon, ArrowRight01Icon, Delete02Icon, Folder01Icon, Folder02Icon, FolderRootIcon, Link01Icon, Loading03Icon, MessageSquarePlusIcon, MoreHorizontalIcon, PanelLeftCloseIcon, PencilEdit02Icon, PinIcon, PuzzleIcon, Search01Icon, Settings01Icon } from "@hugeicons/core-free-icons";
 import {
   DndContext,
   DragOverlay,
@@ -41,7 +41,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { bindingStateKey, displayRemotePath, isRemoteProject } from "@/lib/remote-project";
+import { bindingStateKey, displayRemotePath, isRemoteProject, remoteProjectActivityKey } from "@/lib/remote-project";
+import type { RemoteHostConnectionState } from "@shared/remote-host";
 import type { Conversation, Project } from "@shared/types";
 
 export const COLLAPSED_KEY = "fastvibe.sidebar.collapsed";
@@ -208,6 +209,7 @@ export function DraggableProject({
   project,
   open,
   renaming,
+  connectionState,
   onOpenChange,
   onNewChat,
   onStartRename,
@@ -220,6 +222,7 @@ export function DraggableProject({
   project: Project;
   open: boolean;
   renaming: boolean;
+  connectionState?: RemoteHostConnectionState;
   onOpenChange: (open: boolean) => void;
   onNewChat: () => void;
   onStartRename: () => void;
@@ -234,6 +237,7 @@ export function DraggableProject({
   const remote = isRemoteProject(project);
   const pathHint = project.remotePath || (remote ? displayRemotePath(cwd) : cwd);
   const bindingKey = bindingStateKey(project.bindingState);
+  const activityKey = remoteProjectActivityKey(connectionState);
   const { t } = useTranslation("app");
   const { attributes, listeners, setNodeRef: setDraggableRef, setActivatorNodeRef, isDragging } = useDraggable({ id: cwd });
   const { setNodeRef: setDroppableRef } = useDroppable({ id: cwd });
@@ -302,9 +306,22 @@ export function DraggableProject({
                     <span className="truncate">{name}</span>
                   )}
                   {remote && !renaming ? (
-                    <span className="shrink-0 text-xs text-muted-foreground">
+                    <span
+                      className={cn(
+                        "inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-xs",
+                        project.bindingState === "connecting"
+                          ? "bg-primary/10 text-primary"
+                          : project.bindingState === "available"
+                            ? "text-muted-foreground"
+                            : "bg-warning/10 text-warning",
+                      )}
+                      title={activityKey ? t(`sidebar.binding.${activityKey}`) : undefined}
+                    >
+                      {project.bindingState === "connecting" ? <HugeiconsIcon strokeWidth={2} icon={Loading03Icon} className="size-3 animate-spin" /> : null}
                       {project.bindingState && project.bindingState !== "available"
-                        ? t(`sidebar.binding.${bindingKey}`)
+                        ? activityKey
+                          ? t(`sidebar.binding.${activityKey}`)
+                          : t(`sidebar.binding.${bindingKey}`)
                         : t("sidebar.remote")}
                     </span>
                   ) : null}
@@ -313,7 +330,9 @@ export function DraggableProject({
                   <TooltipContent side="right" align="center" sideOffset={pathOffset} className="max-w-96">
                     <span className="font-mono break-all">{pathHint}</span>
                     {remote && project.bindingState && project.bindingState !== "available" ? (
-                      <span className="mt-1 block text-xs text-muted-foreground">{t(`sidebar.binding.${bindingKey}`)}</span>
+                      <span className="mt-1 block text-xs text-muted-foreground">
+                        {activityKey ? t(`sidebar.binding.${activityKey}`) : t(`sidebar.binding.${bindingKey}`)}
+                      </span>
                     ) : null}
                   </TooltipContent>
                 )}

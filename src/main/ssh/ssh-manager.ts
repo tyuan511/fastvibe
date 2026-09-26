@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:net";
 import type { FastVibePaths } from "../engine/paths.ts";
-import type { RemoteHostConnectionState, RemoteHostProfile, RemoteHostTestResult, RemoteTransferProgress, SshHostKeyScan } from "../../shared/remote-host.ts";
+import type { RemoteHostConnectionActivity, RemoteHostConnectionState, RemoteHostProfile, RemoteHostTestResult, RemoteTransferProgress, SshHostKeyScan } from "../../shared/remote-host.ts";
 import { readSshHosts, redactSshHosts, removeSshHost, saveSshHost, type SecretBox, type SshHostSnapshot } from "./ssh-hosts.ts";
 import { captureHostKey, writeTrustedHostKey, type CapturedHostKey } from "./ssh-known-hosts.ts";
 import { loadAgentRuntime, agentRuntimeTarget, agentRuntimeRemoteDownloadCommand, agentRuntimeUploadCommand, sha256Helper, type AgentRuntimeSource, type AgentRuntimeTarget } from "./agent-runtime.ts";
@@ -137,9 +137,11 @@ export async function openSshAppTransport(options: {
   onOutput?: (message: string) => void;
   /** The transfer in progress, or null once the connect has moved on to its next step. */
   onProgress?: (progress: RemoteTransferProgress | null) => void;
+  /** The current coarse step, including non-transfer work that can take a while. */
+  onActivity?: (activity: RemoteHostConnectionActivity) => void;
   signal?: AbortSignal;
 }): Promise<{ port: number; close: () => Promise<void>; configSyncToken: string; home?: string }> {
-  const { profile, agentRuntime, log, onOutput, onProgress, signal } = options;
+  const { profile, agentRuntime, log, onOutput, onProgress, onActivity, signal } = options;
   throwIfAborted(signal);
   if (profile.authMethod === "password" && !profile.password) throw new Error("请填写 SSH 密码");
   if (profile.authMethod === "identity-file" && !profile.identityFile) throw new Error("请填写私钥路径");
@@ -181,6 +183,7 @@ export async function openSshAppTransport(options: {
       }
     };
   };
+  onActivity?.("connecting");
   output("正在连接 SSH…");
   let master: SshMaster | null = null;
   try {
@@ -207,6 +210,7 @@ export async function openSshAppTransport(options: {
   };
   try {
     throwIfAborted(signal);
+    onActivity?.("checking");
     output("检查远程系统与常驻 Agent…");
     // One round trip answers everything the connect needs before deciding what to do:
     // the platform, the installed runtime release and hash, the home directory, and —
@@ -226,6 +230,7 @@ export async function openSshAppTransport(options: {
     const portMatches = !profile.servicePort || profile.servicePort === preflight.port;
     if (preflight.token && preflight.port && portMatches) {
       output("常驻 Agent 可直接使用，跳过部署");
+      onActivity?.("forwarding");
       await forward(preflight.port);
       throwIfAborted(signal);
       let residentClosed = false;
@@ -260,6 +265,7 @@ export async function openSshAppTransport(options: {
       let deployed = false;
       let remoteFailure = "";
       try {
+        onActivity?.("agent-download");
         await runSshCommand({
           host: profile,
           password,
@@ -282,8 +288,10 @@ export async function openSshAppTransport(options: {
         output(`远程主机直接下载失败，改为本机下载后上传：${reason}`);
       }
       if (!deployed) {
+        onActivity?.("agent-fetch");
         const runtime = await loadAgentRuntime(agentRuntime, target, output, (done, total) => progress.report("agent-fetch", done, total));
         throwIfAborted(signal);
+        onActivity?.("agent-upload");
         output(`正在上传并部署 Agent（${formatBytes(runtime.archive.length)}）…`);
         await runSshCommand({
           host: profile,
@@ -299,6 +307,7 @@ export async function openSshAppTransport(options: {
       }
     }
     throwIfAborted(signal);
+    onActivity?.("starting-agent");
     output("正在启动远程 Agent…");
     const bootstrap = await runSshCommand({
       host: profile,
@@ -315,6 +324,7 @@ export async function openSshAppTransport(options: {
     const remotePort = parsePreflight(bootstrap).port;
     if (!remotePort) throw new Error("远程 Agent 未返回监听端口");
     throwIfAborted(signal);
+    onActivity?.("forwarding");
     await forward(remotePort);
     throwIfAborted(signal);
     let closed = false;

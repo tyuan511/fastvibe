@@ -57,7 +57,7 @@ import { createAppServer, initAppServer, getAppServer } from "./app-server/runti
 import { loadOrCreateServerIdentity } from "./server/identity";
 import { APP_CAPABILITIES, conversationScope } from "@shared/app-protocol";
 import { wireElectronAppTransport } from "./transport/electron";
-import type { RemoteHostProfile, RemoteHostConnectionState, RemoteTransferProgress, SshErrorCode } from "@shared/remote-host";
+import type { RemoteHostConnectionActivity, RemoteHostProfile, RemoteHostConnectionState, RemoteTransferProgress, SshErrorCode } from "@shared/remote-host";
 import { stopBrowserCdp } from "./engine/browser-cdp";
 import { attachBrowserRenderer, guardGuestPopups, installBrowserGlobal, respondBrowserRequest } from "./pi/browser-bridge";
 import {
@@ -158,7 +158,17 @@ function publishSshProgress(hostId: string, progress: RemoteTransferProgress | n
   const current = sshUiStates.get(hostId) ?? { hostId, status: "connecting" as const };
   if (current.status !== "connecting") return;
   const { progress: _previous, ...rest } = current;
-  const next: RemoteHostConnectionState = progress ? { ...rest, progress } : rest;
+  const next: RemoteHostConnectionState = progress ? { ...rest, activity: progress.phase, progress } : rest;
+  sshUiStates.set(hostId, next);
+  broadcast(Ipc.sshState, next);
+  broadcast(Ipc.sshStates, [...sshUiStates.values()]);
+}
+
+function publishSshActivity(hostId: string, activity: RemoteHostConnectionActivity): void {
+  const current = sshUiStates.get(hostId) ?? { hostId, status: "connecting" as const };
+  if (current.status !== "connecting") return;
+  const { progress: _previous, ...rest } = current;
+  const next: RemoteHostConnectionState = { ...rest, activity };
   sshUiStates.set(hostId, next);
   broadcast(Ipc.sshState, next);
   broadcast(Ipc.sshStates, [...sshUiStates.values()]);
@@ -212,6 +222,7 @@ const remoteConnections = new RemoteConnectionManager({
     profile,
     onOutput: (message) => publishSshOutput(profile.id, message),
     onProgress: (progress) => publishSshProgress(profile.id, progress),
+    onActivity: (activity) => publishSshActivity(profile.id, activity),
     signal,
     agentRuntime: {
       ...agentRuntime,

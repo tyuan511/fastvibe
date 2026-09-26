@@ -29,6 +29,7 @@ export const en: Record<MessageKey, string> & Partial<Record<`${MessageKey}_one`
   "common.chatCount_one": "1 chat",
   "common.me": "Me",
   "common.ok": "OK",
+  "common.operationFailed": "Action failed",
   "toast.failedWith": "{title}: {message}",
   "toast.copied": "Copied",
   "toast.addressCopied": "Address copied",
@@ -80,6 +81,8 @@ export const en: Record<MessageKey, string> & Partial<Record<`${MessageKey}_one`
   "devices.connectedAgo": "Connected {when}",
   "devices.neverConnected": "Never connected",
   "devices.connected": "Connected",
+  "devices.loadFailed": "Couldn't load devices",
+  "devices.openHint": "Tap to connect; long press for actions",
 
   // add
   "add.badAddress": "Unrecognized address. Use 192.168.x.x:7777 or an https tunnel link.",
@@ -145,6 +148,7 @@ export const en: Record<MessageKey, string> & Partial<Record<`${MessageKey}_one`
   "server.archivedCount": "{count} archived chats",
   "server.archivedCount_one": "1 archived chat",
   "server.chatActions": "Chat actions",
+  "server.chatOpenHint": "Tap to open; long press for actions",
   "server.filterByProject": "Filter by project",
   "server.filterLabel": "Filter by project: {label}",
   "server.clearFilter": "Clear project filter",
@@ -365,6 +369,7 @@ export const en: Record<MessageKey, string> & Partial<Record<`${MessageKey}_one`
   "update.githubStatus": "GitHub returned {status}",
   "update.paused": "Download paused",
   "update.incomplete": "Download incomplete, try again",
+  "update.downloadTimeout": "The download timed out. Try again.",
   "update.installerFailed": "Couldn't open the installer",
   "update.downloadFailed": "Download failed",
   "update.confirmTitle": "Update to {version}",

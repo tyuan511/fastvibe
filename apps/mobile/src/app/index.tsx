@@ -36,11 +36,11 @@ export default function DevicesScreen() {
   const [menu, setMenu] = useState<SavedServer | null>(null);
 
   const reload = useCallback(() => {
-    void loadServers().then((list) => {
-      setServers(list);
-      setLoaded(true);
-    });
-  }, []);
+    void loadServers()
+      .then((list) => setServers(list))
+      .catch((error) => toast.failure(error, t("devices.loadFailed")))
+      .finally(() => setLoaded(true));
+  }, [t]);
   useFocusEffect(reload);
 
   function remove(server: SavedServer): void {
@@ -50,10 +50,12 @@ export default function DevicesScreen() {
       confirmLabel: t("common.delete"),
       destructive: true,
       onConfirm: () => {
-        void removeServer(server.id).then((list) => {
-          setServers(list);
-          toast.success(t("toast.deviceDeleted"));
-        });
+        void removeServer(server.id)
+          .then((list) => {
+            setServers(list);
+            toast.success(t("toast.deviceDeleted"));
+          })
+          .catch((error) => toast.failure(error, t("common.operationFailed")));
       },
     });
   }
@@ -198,6 +200,9 @@ function DeviceRow({
   const seen = server.lastConnectedAt ? t("devices.connectedAgo", { when: relativeTime(server.lastConnectedAt) }) : t("devices.neverConnected");
   return (
     <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${server.alias}, ${server.host}`}
+      accessibilityHint={t("devices.openHint")}
       onPress={onPress}
       onLongPress={onMenu}
       delayLongPress={320}

@@ -80,11 +80,23 @@ export type SshHostKeyScan = {
   knownHostsFile: string;
 };
 
+export type RemoteHostConnectionActivity =
+  | "connecting"
+  | "checking"
+  | "agent-download"
+  | "node-download"
+  | "agent-fetch"
+  | "agent-upload"
+  | "starting-agent"
+  | "forwarding";
+
 export type RemoteHostConnectionState = {
   hostId: string | null;
   /** App Server identity; unlike hostId this is stable across transports. */
   serverInstanceId?: string | null;
   status: "disconnected" | "connecting" | "connected" | "error";
+  /** The concrete SSH step, so project rows can explain a long reconnect/deploy. */
+  activity?: RemoteHostConnectionActivity;
   localPort?: number;
   error?: string;
   errorCode?: SshErrorCode;
