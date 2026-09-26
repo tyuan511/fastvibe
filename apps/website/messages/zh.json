@@ -5,7 +5,7 @@
   "navigation": "主导航",
   "skip": "跳转到主要内容",
   "languageLabel": "选择语言",
-  "nav": { "badge": "桌面版", "product": "产品", "download": "下载", "github": "GitHub" },
+  "nav": { "badge": "桌面版", "product": "产品", "mobile": "移动端", "download": "下载", "github": "GitHub" },
   "hero": {
     "eyebrow": "FastVibe · 开源桌面智能体工作台",
     "title": "为 Agent，\n准备一个工作区",
@@ -51,6 +51,23 @@
     "models": { "title": "按自己的方式，组织工作", "copy": "使用信任的模型和熟悉的工具。配置供应商、连接 MCP 服务、安装技能和插件。你的工作方式，不必由某一家供应商决定。", "alt": "FastVibe 中文界面：模型与供应商配置" },
     "enlarge": "放大查看截图",
     "close": "关闭截图"
+  },
+  "mobile": {
+    "eyebrow": "移动端",
+    "title": "把 Agent 带到手机上",
+    "copy": "电脑上的 FastVibe 继续运行 Agent，手机端让你随时查看会话、发送消息和处理审批。",
+    "items": {
+      "chat": "查看会话，随时跟进任务",
+      "connect": "同一 Wi-Fi 直连，外出扫码连接",
+      "secure": "沿用 FastVibe 远程访问与设备认证"
+    },
+    "cardTitle": "FastVibe Android",
+    "latest": "最新移动版",
+    "cardCopy": "下载 APK，安装后连接电脑上的 FastVibe。移动端版本和桌面版独立发布。",
+    "downloadApk": "下载 APK",
+    "viewReleases": "查看移动端版本",
+    "checksum": "SHA-256 校验",
+    "releasePage": "发布详情"
   },
   "download": {
     "eyebrow": "开始使用",
