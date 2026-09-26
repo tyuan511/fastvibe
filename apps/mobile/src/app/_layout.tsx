@@ -10,6 +10,7 @@ import { loadPreferences } from "../ui/preferences";
 import { DialogHost } from "../ui/dialog";
 import { ToastHost } from "../ui/toast";
 import { usePalette } from "../ui/theme";
+import { UpdatePrompt } from "../update/update-banner";
 
 // Held until the stored language and theme are applied (see `ready` below).
 void SplashScreen.preventAutoHideAsync().catch(() => undefined);
@@ -69,6 +70,7 @@ export default function RootLayout() {
         </Stack>
         <DialogHost />
         <ToastHost />
+        <UpdatePrompt />
       </ThemeProvider>
     </SafeAreaProvider>
   );

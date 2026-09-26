@@ -23,7 +23,6 @@ import {
   Settings02Icon,
 } from "../ui/icons";
 import { radius, usePalette, type Palette } from "../ui/theme";
-import { UpdateBanner } from "../update/update-banner";
 import { useT } from "../i18n";
 
 export default function DevicesScreen() {
@@ -117,7 +116,6 @@ export default function DevicesScreen() {
         contentContainerStyle={styles.list}
         ListHeaderComponent={
           <View style={styles.header}>
-            <UpdateBanner palette={palette} />
             {loaded ? hero : null}
             {servers.length > 0 ? <SectionLabel title={t("devices.mine")} count={servers.length} palette={palette} /> : null}
           </View>

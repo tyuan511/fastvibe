@@ -17,7 +17,7 @@ import {
 import { setPreference, usePreferences, type ThemePreference } from "../ui/preferences";
 import { elevation, radius, usePalette, type Palette } from "../ui/theme";
 import { RELEASE_REPO } from "../update/release";
-import { UpdateBanner, checkForUpdatesManually } from "../update/update-banner";
+import { checkForUpdatesManually } from "../update/update-banner";
 import { currentVersion, updatesSupported } from "../update/updater";
 
 /** Language names are shown in their own language, whatever the interface is in. */
@@ -136,7 +136,6 @@ export default function SettingsScreen() {
             onPress={() => void Linking.openURL(`https://github.com/${RELEASE_REPO}/releases`)}
           />
         </Section>
-        {updatesSupported ? <UpdateBanner palette={palette} /> : null}
       </ScrollView>
       <OptionSheet
         open={pickingLanguage}

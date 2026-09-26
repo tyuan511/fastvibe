@@ -377,6 +377,7 @@ export const en: Record<MessageKey, string> & Partial<Record<`${MessageKey}_one`
   "update.update": "Update",
   "update.downloading": "Downloading…",
   "update.downloadingPercent": "Downloading {percent}%",
+  "update.installing": "Opening the installer…",
   "update.downloaded": "{version} downloaded",
   "update.failed": "Update failed",
   "update.available": "New version {version}",
