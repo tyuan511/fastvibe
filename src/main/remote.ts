@@ -18,6 +18,7 @@ import { lanAddresses, RemoteServer } from "./server/server";
 import { getAppServer } from "./app-server/runtime";
 import { readFrpSettings, saveFrpSettings, writeFrpcConfig } from "./server/frp-store";
 import { checkFrpDns } from "./server/frp-dns";
+import { setRemoteServing } from "./engine/keep-awake";
 import { frpProblems, frpPublicUrl, frpView, type FrpSettingsInput, type FrpSettingsView } from "@shared/frp";
 import {
   TunnelRunner,
@@ -143,6 +144,7 @@ function state(): RemoteServerState {
 /** Push the server's state to every window, so two settings panes cannot disagree. */
 function announce(): RemoteServerState {
   const next = state();
+  setRemoteServing(next.running);
   broadcast(Ipc.remoteState, next);
   return next;
 }
@@ -164,6 +166,7 @@ function announce(): RemoteServerState {
  */
 function announceFromServer(): void {
   if (!server) return;
+  setRemoteServing(server.status.running);
   broadcast(Ipc.remoteState, {
     ...server.status,
     lanAccess: readLanAccess(),
@@ -378,4 +381,5 @@ export async function stopRemoteServer(): Promise<void> {
   // behind by a quit keeps publishing a port that no longer answers.
   if (tunnel) await tunnel.stop();
   if (server) await server.stop();
+  setRemoteServing(false);
 }

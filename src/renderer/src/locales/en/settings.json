@@ -257,7 +257,7 @@
   "permission": "Default permission mode",
   "permissionDesc": "{{mode}}; can be switched temporarily above the composer",
   "keepAwake": "Keep awake while running",
-  "keepAwakeDesc": "Prevents sleep while an agent is running",
+  "keepAwakeDesc": "Prevents idle sleep while an agent runs or remote access is on. Closing the lid still sleeps",
   "notifications": "Desktop notifications",
   "notificationsDesc": "Notify when a task finishes, fails, needs an answer, or an update is ready",
   "permissionRules": "Remembered approvals",

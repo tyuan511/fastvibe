@@ -2041,7 +2041,7 @@ FastVibe 是一个窗口、一个进程：`app.requestSingleInstanceLock()` 在�
 ## 运行时保持唤醒
 
 Settings → 通用 → 运行时保持唤醒 (`settings.keepAwake`, on by default) holds the machine
-awake while an agent run is in flight.
+awake while an agent run is in flight **or the remote-access server is listening**.
 
 - `src/main/engine/keep-awake.ts` owns a single `powerSaveBlocker` and is the only place
   that starts or stops it. Two inputs decide the state: the preference, and whether
@@ -2053,6 +2053,15 @@ awake while an agent run is in flight.
   which is broadcast for background chats too, so a session the user switched away from
   still counts. `before-quit` clears the set. A compaction counts too: it is minutes of
   model work on the user's own machine, and it is the last thing to finish.
+- **A listening remote server counts too** (`setRemoteServing`, driven from `announce` /
+  `announceFromServer` in `remote.ts`). Counting runs alone let an idle Mac sleep under a
+  phone that was reading a transcript between prompts, which dropped the socket and the
+  tunnel together. Listening is the condition, not a connected client: a phone reconnects
+  whenever it likes, and sleeping between its visits is the same failure.
+- **A closed lid is out of reach, and the row says so.** `prevent-app-suspension` is IOKit's
+  `PreventUserIdleSystemSleep`, which the header documents as still sleeping «for lid close»;
+  only `sudo pmset -a disablesleep 1` or clamshell mode (power + external display) keeps a
+  closed MacBook up. Changing a machine-wide power setting is the user's call, not the app's.
 
 ## 自动更新（updater）
 
