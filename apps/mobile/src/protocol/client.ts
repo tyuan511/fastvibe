@@ -1,6 +1,22 @@
 import type { ServerAddress } from "./address";
+import { t } from "../i18n/core.ts";
 
 const CONNECT_TIMEOUT_MS = 20_000;
+
+/**
+ * A request whose outcome is unknown: it may or may not have reached Main.
+ *
+ * Callers branch on `code`, never on the message — the message is translated, and
+ * `chat/queue.ts` must treat a lost acknowledgement as "maybe sent" in every language.
+ */
+export class TransportError extends Error {
+  readonly code: "timeout" | "dropped" | "closed";
+  constructor(code: "timeout" | "dropped" | "closed", message: string) {
+    super(message);
+    this.name = "TransportError";
+    this.code = code;
+  }
+}
 
 export type PushHandler = (channel: string, payload: unknown) => void;
 export type DisconnectHandler = (reason: string) => void;
@@ -46,7 +62,7 @@ export class RemoteClient {
     }
     const body = (await response.json().catch(() => ({}))) as { token?: string; error?: string };
     if (!response.ok || typeof body.token !== "string" || body.token.length === 0) {
-      throw new Error(body.error || (response.status === 401 ? "密码错误" : "登录失败"));
+      throw new Error(body.error || (response.status === 401 ? t("conn.wrongPassword") : t("conn.loginFailed")));
     }
     return body.token;
   }
@@ -77,7 +93,7 @@ export class RemoteClient {
         }
         reject(error);
       };
-      const timer = setTimeout(() => fail(new Error("连接超时")), CONNECT_TIMEOUT_MS);
+      const timer = setTimeout(() => fail(new Error(t("conn.timeout"))), CONNECT_TIMEOUT_MS);
 
       ws.onopen = () => {
         if (stale()) return;
@@ -86,13 +102,13 @@ export class RemoteClient {
       ws.onerror = () => fail(new Error(unreachable(address.origin)));
       ws.onclose = (event) => {
         if (stale()) return;
-        if (!settled) fail(new Error("连接被关闭"));
+        if (!settled) fail(new Error(t("conn.closedEarly")));
         else {
-          this.#failPending("连接已断开");
+          this.#failPending("dropped");
           const detail = event.code > 0
             ? `（code ${event.code}${event.reason ? `：${event.reason}` : ""}）`
             : "";
-          this.#disconnect?.(`连接已断开${detail}`);
+          this.#disconnect?.(`${t("conn.dropped")}${detail}`);
         }
       };
       ws.onmessage = (event) => {
@@ -137,7 +153,7 @@ export class RemoteClient {
           if (message.ok === true) pending.resolve(message.result);
           else {
             const error = message.error as { message?: string } | undefined;
-            pending.reject(new Error(error?.message || "请求失败"));
+            pending.reject(new Error(error?.message || t("conn.requestFailed")));
           }
           return;
         }
@@ -158,15 +174,24 @@ export class RemoteClient {
 
   call(method: string, payload?: unknown, timeoutMs = 30_000): Promise<unknown> {
     const ws = this.#ws;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return Promise.reject(new Error("尚未连接"));
+    if (!ws || ws.readyState !== WebSocket.OPEN) return Promise.reject(new Error(t("conn.notConnected")));
     const requestId = this.#nextId++;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.#pending.delete(requestId);
-        reject(new Error("请求超时"));
+        reject(new TransportError("timeout", t("conn.requestTimeout")));
       }, timeoutMs);
       this.#pending.set(requestId, { resolve, reject, timer });
-      ws.send(JSON.stringify({ kind: "call", requestId, method, payload }));
+      try {
+        ws.send(JSON.stringify({ kind: "call", requestId, method, payload }));
+      } catch {
+        clearTimeout(timer);
+        this.#pending.delete(requestId);
+        // The socket can close between the readyState check and send(). The
+        // request may already have crossed the wire, so callers must treat this
+        // as an unknown outcome rather than a safe refusal.
+        reject(new TransportError("dropped", t("conn.dropped")));
+      }
     });
   }
 
@@ -185,12 +210,16 @@ export class RemoteClient {
   #send(frame: unknown): void {
     const ws = this.#ws;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    ws.send(JSON.stringify(frame));
+    try {
+      ws.send(JSON.stringify(frame));
+    } catch {
+      // A subscription is best effort; the reconnect path will subscribe again.
+    }
   }
 
   #drop(notify: boolean): void {
     this.#generation += 1;
-    this.#failPending("连接已关闭");
+    this.#failPending("closed");
     const ws = this.#ws;
     this.#ws = null;
     if (ws) {
@@ -200,13 +229,14 @@ export class RemoteClient {
       ws.onclose = null;
       if (ws.readyState < WebSocket.CLOSING) ws.close();
     }
-    if (notify) this.#disconnect?.("连接已关闭");
+    if (notify) this.#disconnect?.(t("conn.closed"));
   }
 
-  #failPending(message: string): void {
+  #failPending(code: "dropped" | "closed"): void {
+    const message = t(code === "dropped" ? "conn.dropped" : "conn.closed");
     for (const pending of this.#pending.values()) {
       clearTimeout(pending.timer);
-      pending.reject(new Error(message));
+      pending.reject(new TransportError(code, message));
     }
     this.#pending.clear();
   }
@@ -228,6 +258,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function unreachable(origin: string): string {
   return origin.startsWith("http://")
-    ? "连不上这台服务器。请确认手机和电脑在同一 Wi-Fi，并且电脑已打开「允许局域网访问」。"
-    : "连不上这台服务器，请确认链接还能打开。";
+    ? t("conn.unreachableLan")
+    : t("conn.unreachable");
 }

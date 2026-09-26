@@ -217,8 +217,8 @@ export function registerEngineIpc(engine: PiProcessManager): void {
     if (!anchor) return { mode: "full", messages: await engine.loadMessages(payload?.conversationId) };
     return engine.loadMessagesSince(anchor, payload?.conversationId);
   });
-  handle(Ipc.engineGetSnapshot, async (payload?: { conversationId?: string }) => {
-    return engine.getSnapshot(payload?.conversationId);
+  handle(Ipc.engineGetSnapshot, async (payload?: { conversationId?: string; fromEntryId?: string }) => {
+    return engine.getSnapshot(payload?.conversationId, payload?.fromEntryId);
   });
   handle(Ipc.engineGetStats, async (payload?: { conversationId?: string }) => {
     return engine.getSessionStats(payload?.conversationId);

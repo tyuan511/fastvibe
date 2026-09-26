@@ -21,6 +21,7 @@
     "expo-clipboard": "~57.0.2",
     "expo-constants": "~57.0.19",
     "expo-file-system": "~57.0.7",
+    "expo-haptics": "~57.0.3",
     "expo-intent-launcher": "~57.0.1",
     "expo-linking": "~57.0.11",
     "expo-router": "~57.0.23",
@@ -35,6 +36,7 @@
     "react-native-reanimated": "4.5.1",
     "react-native-safe-area-context": "~5.7.0",
     "react-native-screens": "~4.26.2",
+    "react-native-svg": "15.15.4",
     "react-native-worklets": "0.10.1"
   },
   "devDependencies": {

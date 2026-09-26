@@ -1,25 +1,35 @@
 import { useCallback, useEffect, useState, type JSX } from "react";
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { HugeiconsIcon } from "@hugeicons/react-native";
-import { ArrowDown01Icon, ArrowUp02Icon, HandIcon, PlayIcon, ShieldAlertIcon, ShieldCheckIcon, SquareIcon } from "../ui/icons";
+import Svg, { Circle } from "react-native-svg";
+import { AiBrain01Icon, ArrowDown01Icon, ArrowUp02Icon, HandIcon, PlayIcon, ShieldAlertIcon, ShieldCheckIcon, SquareIcon } from "../ui/icons";
 import type { IconSvgElement } from "@hugeicons/react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { getClient } from "../session/connection";
-import { OptionSheet, type OptionGroup } from "./option-sheet";
-import { usePalette } from "../ui/theme";
+import { currentConnection, getClient } from "../session/connection";
+import { OptionSheet } from "./option-sheet";
+import { ModelPicker, modelKey, type PickerModel } from "./model-picker";
+import { loadModelRecents, rememberModel } from "./model-recents";
+import { Avatar } from "../ui/kit";
+import { Gradient } from "../ui/gradient";
+import { dialog } from "../ui/dialog";
+import { toast } from "../ui/toast";
+import { haptic } from "../ui/haptics";
+import { elevation, radius, usePalette, type Palette } from "../ui/theme";
+import { t, useT, type MessageKey } from "../i18n";
 
 type EngineModel = { provider: string; id: string };
-type FastVibeModel = { provider: string; providerName: string; id: string; name: string; thinkingLevels?: string[] };
-type SessionState = { model?: EngineModel; thinkingLevel?: string };
+type ContextUsage = { tokens: number | null; contextWindow: number; percent: number | null };
+type SessionState = { model?: EngineModel; thinkingLevel?: string; contextUsage?: ContextUsage };
 type Picker = "model" | "thinking" | "permission" | null;
 
-const THINKING_LABEL: Record<string, string> = {
-  off: "关闭推理", minimal: "极低", low: "低", medium: "中", high: "高", xhigh: "极高", max: "最高", auto: "跟随模型默认",
-};
-const PERMISSION_LABEL: Record<string, string> = { ask: "请求批准", smart: "帮我批准", full: "完全访问" };
-const PERMISSION_DESCRIPTION: Record<string, string> = {
-  ask: "敏感操作都要你确认", smart: "低风险自动批准，高风险问你", full: "什么都不问（谨慎）",
-};
+const THINKING_KEYS = ["off", "minimal", "low", "medium", "high", "xhigh", "max", "auto"] as const;
+function thinkingLabel(level: string): string {
+  return (THINKING_KEYS as readonly string[]).includes(level) ? t(`thinking.${level}` as MessageKey) : level;
+}
+function thinkingHint(level: string): string | undefined {
+  return level !== "off" && level !== "auto" && (THINKING_KEYS as readonly string[]).includes(level) ? t(`thinking.${level}Hint` as MessageKey) : undefined;
+}
+const PERMISSION_ICON: Record<string, IconSvgElement> = { ask: HandIcon, smart: ShieldAlertIcon, full: ShieldCheckIcon };
 const PERMISSION_MODES = ["ask", "smart", "full"] as const;
 
 /** Mobile equivalent of the desktop composer card. */
@@ -50,13 +60,17 @@ export function Composer({
   canContinue: boolean;
 }): JSX.Element {
   const palette = usePalette();
+  useT();
   const insets = useSafeAreaInsets();
   const [picker, setPicker] = useState<Picker>(null);
-  const [models, setModels] = useState<FastVibeModel[]>([]);
+  const [models, setModels] = useState<PickerModel[]>([]);
   const [session, setSession] = useState<SessionState | null>(null);
   const [permissionMode, setPermissionMode] = useState("smart");
   const [fullAccessConfirmed, setFullAccessConfirmed] = useState(false);
+  const [recents, setRecents] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const serverId = currentConnection().server?.id;
 
   const refresh = useCallback(async () => {
     const remote = getClient();
@@ -64,7 +78,7 @@ export function Composer({
     try {
       const [state, list, settings] = await Promise.all([
         remote.call("engine:get-state", { conversationId }) as Promise<SessionState>,
-        remote.call("engine:get-models", { conversationId }) as Promise<FastVibeModel[]>,
+        remote.call("engine:get-models", { conversationId }) as Promise<PickerModel[]>,
         remote.call("settings:get") as Promise<Record<string, unknown>>,
       ]);
       setSession(state);
@@ -78,25 +92,23 @@ export function Composer({
     }
   }, [conversationId]);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  // Again when a run settles: the context window only moves while one is in flight.
+  useEffect(() => { void refresh(); }, [refresh, running, disabled]);
+
+  useEffect(() => {
+    if (!serverId) return;
+    void loadModelRecents(serverId).then(setRecents);
+  }, [serverId]);
 
   const currentModel = session?.model;
   const catalog = currentModel ? models.find((item) => item.provider === currentModel.provider && item.id === currentModel.id) : undefined;
   const levels = (catalog?.thinkingLevels ?? []).filter((level) => level !== "off");
-  const modelGroups: OptionGroup[] = (() => {
-    const groups = new Map<string, OptionGroup>();
-    for (const model of models) {
-      const group = groups.get(model.provider) ?? { label: model.providerName, options: [] };
-      group.options.push({ value: modelKey(model), label: model.name || model.id });
-      groups.set(model.provider, group);
-    }
-    return [...groups.values()];
-  })();
 
-  async function chooseModel(value: string): Promise<void> {
+  async function chooseModel(model: PickerModel): Promise<void> {
     const remote = getClient();
-    const [provider, modelId] = value.split("\u0000");
-    if (!remote || !provider || !modelId || busy) return;
+    const { provider, id: modelId } = model;
+    if (!remote || busy) return;
+    if (currentModel && currentModel.provider === provider && currentModel.id === modelId) return;
     setBusy(true);
     try {
       let next = (await remote.call("engine:set-model", { provider, modelId, conversationId })) as SessionState;
@@ -104,9 +116,11 @@ export function Composer({
       if (offered?.length && (!next.thinkingLevel || !offered.includes(next.thinkingLevel))) {
         next = (await remote.call("engine:set-thinking", { level: offered.includes("high") ? "high" : offered[0], conversationId })) as SessionState;
       }
-      setSession(next);
+      setSession((previous) => ({ ...previous, ...next }));
+      toast.success(t("toast.modelSwitched", { model: model.name || model.id }));
+      if (serverId) setRecents(await rememberModel(serverId, modelKey(model)));
     } catch (error) {
-      Alert.alert("模型未切换", error instanceof Error ? error.message : "切换失败");
+      toast.failure(error, t("composer.modelFailed"));
     } finally {
       setBusy(false);
     }
@@ -117,9 +131,10 @@ export function Composer({
     if (!remote || busy) return;
     setBusy(true);
     try {
-      setSession((await remote.call("engine:set-thinking", { level, conversationId })) as SessionState);
+      const next = (await remote.call("engine:set-thinking", { level, conversationId })) as SessionState;
+      setSession((previous) => ({ ...previous, ...next }));
     } catch (error) {
-      Alert.alert("推理强度未更改", error instanceof Error ? error.message : "保存失败");
+      toast.failure(error, t("composer.thinkingFailed"));
     } finally {
       setBusy(false);
     }
@@ -127,10 +142,13 @@ export function Composer({
 
   async function choosePermission(mode: string): Promise<void> {
     if (mode === "full" && !fullAccessConfirmed) {
-      Alert.alert("开启完全访问？", "完全访问会允许代理直接执行操作，不再逐项询问。只在你信任当前会话时开启。", [
-        { text: "取消", style: "cancel" },
-        { text: "开启", style: "destructive", onPress: () => void savePermission(mode, true) },
-      ]);
+      dialog.confirm({
+        title: t("composer.fullTitle"),
+        message: t("composer.fullBody"),
+        confirmLabel: t("composer.enable"),
+        destructive: true,
+        onConfirm: () => void savePermission(mode, true),
+      });
       return;
     }
     await savePermission(mode, false);
@@ -145,7 +163,7 @@ export function Composer({
       setPermissionMode(mode);
       if (confirmFull) setFullAccessConfirmed(true);
     } catch (error) {
-      Alert.alert("权限模式未更改", error instanceof Error ? error.message : "保存失败");
+      toast.failure(error, t("composer.permissionFailed"));
     } finally {
       setBusy(false);
     }
@@ -153,82 +171,228 @@ export function Composer({
 
   const hasContent = draft.trim().length > 0;
   const action = sending ? "sending" : running && !hasContent ? "stop" : canContinue && !hasContent ? "continue" : "send";
+  const actionDisabled = disabled || sending || (action === "send" && !hasContent);
+  const modelLabel = catalog?.name || currentModel?.id || (models.length === 0 ? t("composer.noModels") : t("composer.defaultModel"));
+  const percent = session?.contextUsage?.percent;
+
+  function press(): void {
+    if (action === "stop") {
+      haptic.press();
+      onAbort();
+    } else if (action === "continue") {
+      haptic.tap();
+      onContinue();
+    } else {
+      haptic.tap();
+      onSend();
+    }
+  }
 
   return (
-    <View style={[styles.outer, { backgroundColor: palette.card, borderTopColor: palette.border, paddingBottom: insets.bottom }]}>
-      <View style={[styles.card, { backgroundColor: palette.card }]}>
+    <View style={[styles.outer, { paddingBottom: Math.max(insets.bottom, 10) }]}>
+      <View
+        style={[
+          styles.card,
+          // A hint of lift, not a floating slab: the card sits right on the page.
+          elevation(palette, 0),
+          { backgroundColor: palette.card, borderColor: focused ? palette.accent : palette.border },
+        ]}
+      >
         <TextInput
           value={draft}
           onChangeText={onDraftChange}
-          placeholder={disabled ? "正在连接或加载会话" : queueing ? "输入消息，加入发送队列" : "发消息"}
-          placeholderTextColor={palette.muted}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
+          placeholder={disabled ? t("composer.placeholderLoading") : queueing ? t("composer.placeholderQueue") : t("composer.placeholder")}
+          placeholderTextColor={palette.subtle}
           multiline
           editable={!disabled}
           style={[styles.input, { color: palette.text }]}
         />
         <View style={styles.toolbar}>
-          <Chip
-            label={PERMISSION_LABEL[permissionMode] ?? permissionMode}
-            icon={permissionMode === "ask" ? HandIcon : permissionMode === "full" ? ShieldCheckIcon : ShieldAlertIcon}
-            destructive={permissionMode === "full"}
-            disabled={disabled || busy}
-            onPress={() => setPicker("permission")}
-          />
-          {busy ? <ActivityIndicator size="small" color={palette.muted} /> : null}
-          <View style={styles.spacer} />
-          <Chip
-            label={catalog?.name || currentModel?.id || "默认模型"}
-            disabled={disabled || busy || models.length === 0}
-            onPress={() => setPicker("model")}
-          />
-          {levels.length > 0 ? (
-            <Chip label={session?.thinkingLevel ? THINKING_LABEL[session.thinkingLevel] ?? session.thinkingLevel : "思考"} disabled={disabled || busy} onPress={() => setPicker("thinking")} />
-          ) : null}
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            style={styles.chips}
+            contentContainerStyle={styles.chipsContent}
+          >
+            <Chip
+              palette={palette}
+              label={permissionMode === "ask" || permissionMode === "smart" || permissionMode === "full" ? t(`permission.${permissionMode}`) : permissionMode}
+              icon={PERMISSION_ICON[permissionMode] ?? ShieldAlertIcon}
+              tone={permissionMode === "full" ? "danger" : "plain"}
+              disabled={disabled || busy}
+              onPress={() => setPicker("permission")}
+            />
+            <Chip
+              palette={palette}
+              label={modelLabel}
+              avatar={catalog?.providerName ?? currentModel?.provider}
+              disabled={disabled || busy || models.length === 0}
+              onPress={() => setPicker("model")}
+            />
+            {levels.length > 0 ? (
+              <Chip
+                palette={palette}
+                label={session?.thinkingLevel ? thinkingLabel(session.thinkingLevel) : t("composer.thinkingChip")}
+                icon={AiBrain01Icon}
+                disabled={disabled || busy}
+                onPress={() => setPicker("thinking")}
+              />
+            ) : null}
+          </ScrollView>
+          {busy ? <ActivityIndicator size="small" color={palette.muted} style={styles.busy} /> : null}
+          {typeof percent === "number" ? <ContextRing percent={percent} palette={palette} usage={session?.contextUsage} /> : null}
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={action === "sending" ? "发送中" : action === "stop" ? "停止" : action === "continue" ? "继续" : queueing ? "加入队列" : "发送"}
-            accessibilityState={{ busy: sending }}
-            onPress={action === "stop" ? onAbort : action === "continue" ? onContinue : onSend}
-            disabled={disabled || sending || (action === "send" && !hasContent)}
-            style={[styles.action, { backgroundColor: action === "stop" ? palette.danger : palette.accent, opacity: disabled || sending || (action === "send" && !hasContent) ? 0.4 : 1 }]}
+            accessibilityLabel={t(action === "sending" ? "composer.sending" : action === "stop" ? "composer.stop" : action === "continue" ? "composer.continue" : queueing ? "composer.enqueue" : "composer.send")}
+            accessibilityState={{ busy: sending, disabled: actionDisabled }}
+            onPress={press}
+            disabled={actionDisabled}
+            hitSlop={6}
+            style={({ pressed }) => [{ opacity: actionDisabled ? 0.35 : 1, transform: [{ scale: pressed ? 0.92 : 1 }] }]}
           >
-            {sending ? (
-              <ActivityIndicator size="small" color={palette.accentText} />
+            {action === "stop" ? (
+              <View style={[styles.action, { backgroundColor: palette.text }]}>
+                <HugeiconsIcon icon={SquareIcon} size={14} color={palette.card} strokeWidth={2.6} />
+              </View>
             ) : (
-              <HugeiconsIcon icon={action === "stop" ? SquareIcon : action === "continue" ? PlayIcon : ArrowUp02Icon} size={16} color={palette.accentText} strokeWidth={2} />
+              <Gradient colors={actionDisabled ? [palette.subtle, palette.subtle] : palette.brand} radius={18} style={styles.action}>
+                {sending ? (
+                  <ActivityIndicator size="small" color="#ffffff" />
+                ) : (
+                  <HugeiconsIcon icon={action === "continue" ? PlayIcon : ArrowUp02Icon} size={18} color="#ffffff" strokeWidth={2.4} />
+                )}
+              </Gradient>
             )}
           </Pressable>
         </View>
       </View>
 
-      <OptionSheet open={picker === "model"} title="模型" groups={modelGroups} value={currentModel ? modelKey(currentModel) : null} onSelect={(value) => void chooseModel(value)} onClose={() => setPicker(null)} />
-      <OptionSheet open={picker === "thinking"} title="推理强度" groups={[{ label: "", options: levels.map((level) => ({ value: level, label: THINKING_LABEL[level] ?? level })) }]} value={session?.thinkingLevel ?? null} onSelect={(value) => void chooseThinking(value)} onClose={() => setPicker(null)} />
-      <OptionSheet open={picker === "permission"} title="权限模式" groups={[{ label: "", options: PERMISSION_MODES.map((mode) => ({ value: mode, label: PERMISSION_LABEL[mode], description: PERMISSION_DESCRIPTION[mode] })) }]} value={permissionMode} onSelect={(value) => void choosePermission(value)} onClose={() => setPicker(null)} />
+      <ModelPicker
+        open={picker === "model"}
+        models={models}
+        current={currentModel}
+        recents={recents}
+        onSelect={(model) => void chooseModel(model)}
+        onClose={() => setPicker(null)}
+      />
+      <OptionSheet
+        open={picker === "thinking"}
+        title={t("composer.thinkingTitle")}
+        subtitle={catalog?.name}
+        groups={[{ label: "", options: levels.map((level) => ({ value: level, label: thinkingLabel(level), description: thinkingHint(level) })) }]}
+        value={session?.thinkingLevel ?? null}
+        onSelect={(value) => void chooseThinking(value)}
+        onClose={() => setPicker(null)}
+      />
+      <OptionSheet
+        open={picker === "permission"}
+        title={t("composer.permissionTitle")}
+        subtitle={t("composer.permissionScope")}
+        groups={[{ label: "", options: PERMISSION_MODES.map((mode) => ({ value: mode, label: t(`permission.${mode}`), description: t(`permission.${mode}Hint`), icon: PERMISSION_ICON[mode], destructive: mode === "full" })) }]}
+        value={permissionMode}
+        onSelect={(value) => void choosePermission(value)}
+        onClose={() => setPicker(null)}
+      />
     </View>
   );
 }
 
-function modelKey(model: { provider: string; id: string }): string {
-  return `${model.provider}\u0000${model.id}`;
+/** How full the context window is: a ring that turns amber past 70% and red past 90%. */
+function ContextRing({ percent, palette, usage }: { percent: number; palette: Palette; usage?: ContextUsage }): JSX.Element {
+  const size = 22;
+  const stroke = 2.6;
+  const r = (size - stroke) / 2;
+  const circumference = 2 * Math.PI * r;
+  const clamped = Math.max(0, Math.min(100, percent));
+  const color = clamped >= 90 ? palette.danger : clamped >= 70 ? palette.warning : palette.accent;
+  return (
+    <Pressable
+      hitSlop={8}
+      accessibilityLabel={t("composer.contextUsed", { percent: Math.round(clamped) })}
+      onPress={() => {
+        const detail = usage?.tokens != null
+          ? `${formatTokens(usage.tokens)} / ${formatTokens(usage.contextWindow)} tokens`
+          : t("composer.contextWindow", { window: formatTokens(usage?.contextWindow ?? 0) });
+        dialog.alert(t("composer.contextUsed", { percent: Math.round(clamped) }), t("composer.contextNote", { detail }));
+      }}
+      style={styles.ring}
+    >
+      <Svg width={size} height={size}>
+        <Circle cx={size / 2} cy={size / 2} r={r} stroke={palette.field} strokeWidth={stroke} fill="none" />
+        <Circle
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          stroke={color}
+          strokeWidth={stroke}
+          fill="none"
+          strokeLinecap="round"
+          strokeDasharray={`${circumference} ${circumference}`}
+          strokeDashoffset={circumference * (1 - clamped / 100)}
+          transform={`rotate(-90 ${size / 2} ${size / 2})`}
+        />
+      </Svg>
+    </Pressable>
+  );
 }
 
-function Chip({ label, icon, destructive, disabled, onPress }: { label: string; icon?: IconSvgElement; destructive?: boolean; disabled?: boolean; onPress: () => void }): JSX.Element {
-  const palette = usePalette();
+function formatTokens(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `${Math.round(value / 1_000)}K`;
+  return String(value);
+}
+
+function Chip({
+  label,
+  icon,
+  avatar,
+  tone = "plain",
+  disabled,
+  onPress,
+  palette,
+}: {
+  label: string;
+  icon?: IconSvgElement;
+  avatar?: string;
+  tone?: "plain" | "danger";
+  disabled?: boolean;
+  onPress: () => void;
+  palette: Palette;
+}): JSX.Element {
+  const color = tone === "danger" ? palette.danger : palette.text;
   return (
-    <Pressable onPress={onPress} disabled={disabled} style={[styles.chip, { opacity: disabled ? 0.45 : 1 }]}>
-      {icon ? <HugeiconsIcon icon={icon} size={14} color={destructive ? palette.danger : palette.muted} strokeWidth={2} /> : null}
-      <Text style={{ color: destructive ? palette.danger : palette.muted, fontSize: 13 }} numberOfLines={1}>{label}</Text>
-      <HugeiconsIcon icon={ArrowDown01Icon} size={12} color={palette.muted} strokeWidth={2} />
+    <Pressable
+      onPress={() => {
+        haptic.select();
+        onPress();
+      }}
+      disabled={disabled}
+      style={({ pressed }) => [
+        styles.chip,
+        { backgroundColor: tone === "danger" ? palette.dangerSoft : palette.field, opacity: disabled ? 0.45 : pressed ? 0.7 : 1 },
+      ]}
+    >
+      {avatar ? <Avatar name={avatar} palette={palette} size={18} /> : null}
+      {icon ? <HugeiconsIcon icon={icon} size={14} color={tone === "danger" ? palette.danger : palette.muted} strokeWidth={2} /> : null}
+      <Text style={[styles.chipLabel, { color }]} numberOfLines={1}>{label}</Text>
+      <HugeiconsIcon icon={ArrowDown01Icon} size={12} color={palette.subtle} strokeWidth={2.2} />
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
-  outer: { paddingTop: 0, borderTopWidth: StyleSheet.hairlineWidth },
-  card: {},
-  input: { minHeight: 52, maxHeight: 132, paddingHorizontal: 16, paddingTop: 13, paddingBottom: 8, fontSize: 15, lineHeight: 22 },
-  toolbar: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: 2, paddingHorizontal: 8, paddingBottom: 7 },
-  chip: { flexDirection: "row", alignItems: "center", gap: 3, maxWidth: 132, borderRadius: 16, paddingHorizontal: 6, paddingVertical: 6 },
-  spacer: { flex: 1 },
-  action: { width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center", marginLeft: 3 },
+  outer: { paddingHorizontal: 10, paddingTop: 6 },
+  card: { borderRadius: radius.xl, borderWidth: StyleSheet.hairlineWidth, paddingBottom: 8 },
+  input: { minHeight: 48, maxHeight: 150, paddingHorizontal: 16, paddingTop: 13, paddingBottom: 6, fontSize: 16, lineHeight: 22 },
+  toolbar: { flexDirection: "row", alignItems: "center", gap: 6, paddingLeft: 8, paddingRight: 8 },
+  chips: { flex: 1 },
+  chipsContent: { gap: 6, alignItems: "center", paddingRight: 4 },
+  chip: { flexDirection: "row", alignItems: "center", gap: 5, maxWidth: 190, height: 30, borderRadius: radius.pill, paddingHorizontal: 10 },
+  chipLabel: { fontSize: 13, fontWeight: "600", flexShrink: 1 },
+  busy: { marginHorizontal: 2 },
+  ring: { width: 28, height: 28, alignItems: "center", justifyContent: "center" },
+  action: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center" },
 });

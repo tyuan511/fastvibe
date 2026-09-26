@@ -1,8 +1,12 @@
 import { useEffect, useRef, useState, type JSX } from "react";
-import { Alert, AppState, Pressable, StyleSheet, Text, View } from "react-native";
+import { AppState, Pressable, StyleSheet, Text, View } from "react-native";
 import type { File } from "expo-file-system";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { HugeiconsIcon } from "@hugeicons/react-native";
 import { DesktopSpinner } from "../chat/desktop-spinner";
+import { t, useT } from "../i18n";
+import { Alert02Icon, ArrowUp02Icon } from "../ui/icons";
+import { dialog } from "../ui/dialog";
+import { toast } from "../ui/toast";
 import type { Palette } from "../ui/theme";
 import type { AppRelease } from "./release";
 import {
@@ -38,6 +42,7 @@ const NOTES_LIMIT = 600;
  * stops offering that one version, not updates.
  */
 export function UpdateBanner({ palette }: { palette: Palette }): JSX.Element | null {
+  useT();
   const [release, setRelease] = useState<AppRelease | null>(null);
   const [phase, setPhase] = useState<Phase>({ kind: "available" });
   const abort = useRef<AbortController | null>(null);
@@ -83,7 +88,7 @@ export function UpdateBanner({ palette }: { palette: Palette }): JSX.Element | n
     try {
       await installApk(file);
     } catch (error) {
-      setPhase({ kind: "error", message: error instanceof Error ? error.message : "无法打开安装程序" });
+      setPhase({ kind: "error", message: error instanceof Error ? error.message : t("update.installerFailed") });
     }
   }
 
@@ -97,16 +102,18 @@ export function UpdateBanner({ palette }: { palette: Palette }): JSX.Element | n
       await install(file);
     } catch (error) {
       if (controller.signal.aborted) return;
-      setPhase({ kind: "error", message: error instanceof Error ? error.message : "下载失败" });
+      setPhase({ kind: "error", message: error instanceof Error ? error.message : t("update.downloadFailed") });
     }
   }
 
   function confirm(target: AppRelease): void {
     const notes = target.notes.length > NOTES_LIMIT ? `${target.notes.slice(0, NOTES_LIMIT)}…` : target.notes;
-    Alert.alert(`更新到 ${target.version}`, notes || "下载安装包并打开系统安装程序。", [
-      { text: "取消", style: "cancel" },
-      { text: "更新", onPress: () => void download(target) },
-    ]);
+    dialog.confirm({
+      title: t("update.confirmTitle", { version: target.version }),
+      message: notes || t("update.confirmBody"),
+      confirmLabel: t("update.update"),
+      onConfirm: () => void download(target),
+    });
   }
 
   function dismiss(target: AppRelease): void {
@@ -119,15 +126,15 @@ export function UpdateBanner({ palette }: { palette: Palette }): JSX.Element | n
   const title =
     phase.kind === "downloading"
       ? phase.progress === null
-        ? "正在下载…"
-        : `正在下载 ${Math.round(phase.progress * 100)}%`
+        ? t("update.downloading")
+        : t("update.downloadingPercent", { percent: Math.round(phase.progress * 100) })
       : phase.kind === "ready"
-        ? `${release.version} 已下载`
+        ? t("update.downloaded", { version: release.version })
         : phase.kind === "error"
-          ? "更新失败"
-          : `发现新版本 ${release.version}`;
-  const detail = phase.kind === "error" ? phase.message : phase.kind === "ready" ? "点按安装" : null;
-  const action = phase.kind === "ready" ? "安装" : phase.kind === "error" ? "重试" : phase.kind === "available" ? "更新" : null;
+          ? t("update.failed")
+          : t("update.available", { version: release.version });
+  const detail = phase.kind === "error" ? phase.message : phase.kind === "ready" ? t("update.tapToInstall") : null;
+  const action = phase.kind === "ready" ? t("update.install") : phase.kind === "error" ? t("update.retry") : phase.kind === "available" ? t("update.update") : null;
 
   function press(target: AppRelease): void {
     if (phase.kind === "ready") void install(phase.file);
@@ -139,9 +146,15 @@ export function UpdateBanner({ palette }: { palette: Palette }): JSX.Element | n
     <Pressable
       disabled={busy}
       onPress={() => press(release)}
-      style={[styles.banner, { backgroundColor: palette.card, borderColor: palette.border }]}
+      style={[styles.banner, { backgroundColor: palette.accentSoft }]}
     >
-      {busy ? <DesktopSpinner color={palette.muted} size={16} /> : null}
+      <View style={[styles.icon, { backgroundColor: phase.kind === "error" ? palette.danger : palette.accent }]}>
+        {busy ? (
+          <DesktopSpinner color="#ffffff" size={16} />
+        ) : (
+          <HugeiconsIcon icon={phase.kind === "error" ? Alert02Icon : ArrowUp02Icon} size={17} color="#ffffff" strokeWidth={2.4} />
+        )}
+      </View>
       <View style={styles.text}>
         <Text style={[styles.title, { color: phase.kind === "error" ? palette.danger : palette.text }]}>{title}</Text>
         {detail ? (
@@ -150,10 +163,14 @@ export function UpdateBanner({ palette }: { palette: Palette }): JSX.Element | n
           </Text>
         ) : null}
       </View>
-      {action ? <Text style={[styles.action, { color: palette.accent }]}>{action}</Text> : null}
+      {action ? (
+        <View style={[styles.actionPill, { backgroundColor: palette.accent }]}>
+          <Text style={[styles.action, { color: palette.accentText }]}>{action}</Text>
+        </View>
+      ) : null}
       {phase.kind === "available" ? (
         <Pressable onPress={() => dismiss(release)} hitSlop={8}>
-          <Text style={[styles.action, { color: palette.muted }]}>忽略</Text>
+          <Text style={[styles.action, { color: palette.muted }]}>{t("update.ignore")}</Text>
         </Pressable>
       ) : null}
     </Pressable>
@@ -161,62 +178,38 @@ export function UpdateBanner({ palette }: { palette: Palette }): JSX.Element | n
 }
 
 /**
- * The installed version and a manual 检查更新 under the device list. The automatic
- * check is silent on failure by design, which made a phone that cannot reach GitHub
- * look exactly like one that is up to date; asking by hand always answers.
+ * 设置 → 检查更新. The automatic check is silent on failure by design, which made a
+ * phone that cannot reach GitHub look exactly like one that is up to date; asking by
+ * hand always answers. A release it finds goes to the banner (`announceRelease`),
+ * which owns download and install.
  */
-export function UpdateCheckFooter({ palette }: { palette: Palette }): JSX.Element | null {
-  const insets = useSafeAreaInsets();
-  const [checking, setChecking] = useState(false);
-
-  if (!updatesSupported) return null;
-
-  async function check(): Promise<void> {
-    setChecking(true);
-    try {
-      const found = await checkForUpdate({ force: true });
-      if (!found) {
-        Alert.alert("已是最新版本", `当前版本 ${currentVersion()}`);
-        return;
-      }
-      await clearSkippedVersion();
-      announceRelease(found);
-    } catch (error) {
-      Alert.alert("检查更新失败", describeCheckError(error));
-    } finally {
-      setChecking(false);
+export async function checkForUpdatesManually(): Promise<void> {
+  try {
+    const found = await checkForUpdate({ force: true });
+    if (!found) {
+      toast.success(t("update.upToDateVersion", { version: currentVersion() }));
+      return;
     }
+    await clearSkippedVersion();
+    announceRelease(found);
+  } catch (error) {
+    toast.error(t("toast.failedWith", { title: t("update.checkFailed"), message: describeCheckError(error) }));
   }
-
-  return (
-    <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 12) }]}>
-      <Text style={[styles.footerText, { color: palette.muted }]}>FastVibe {currentVersion()}</Text>
-      <Text style={[styles.footerText, { color: palette.muted }]}>·</Text>
-      <Pressable disabled={checking} onPress={() => void check()} hitSlop={8}>
-        <Text style={[styles.footerText, { color: checking ? palette.muted : palette.accent }]}>
-          {checking ? "检查中…" : "检查更新"}
-        </Text>
-      </Pressable>
-    </View>
-  );
 }
 
 const styles = StyleSheet.create({
-  footer: { flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 6, paddingTop: 12 },
-  footerText: { fontSize: 13 },
   banner: {
-    marginHorizontal: 16,
-    marginTop: 12,
-    borderRadius: 14,
-    borderWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: 16,
+    borderRadius: 16,
+    paddingHorizontal: 12,
     paddingVertical: 12,
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
   },
+  icon: { width: 34, height: 34, borderRadius: 11, alignItems: "center", justifyContent: "center" },
+  actionPill: { borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6 },
   text: { flex: 1, gap: 2 },
   title: { fontSize: 15, fontWeight: "600" },
   detail: { fontSize: 13 },
-  action: { fontSize: 15, fontWeight: "600" },
+  action: { fontSize: 14, fontWeight: "700" },
 });

@@ -1,3 +1,4 @@
+import { t } from "../i18n/core.ts";
 /**
  * Finding the newest Android build on GitHub Releases.
  *
@@ -113,6 +114,16 @@ const HEADERS = {
   "X-GitHub-Api-Version": "2022-11-28",
 };
 
+/** GitHub answered with an error status; `status` is what callers branch on. */
+export class GitHubStatusError extends Error {
+  readonly status: number;
+  constructor(status: number) {
+    super(t("update.githubStatus", { status }));
+    this.name = "GitHubStatusError";
+    this.status = status;
+  }
+}
+
 /**
  * The newest published phone build strictly newer than `currentVersion`, or null when
  * this install is current. Throws on a network or API failure, so a caller can tell
@@ -123,7 +134,7 @@ export async function findNewerRelease(currentVersion: string, fetchImpl: Fetch)
     `${API}/repos/${RELEASE_REPO}/git/matching-refs/tags/${RELEASE_TAG_PREFIX}`,
     { headers: HEADERS },
   );
-  if (!refsResponse.ok) throw new Error(`GitHub 返回 ${refsResponse.status}`);
+  if (!refsResponse.ok) throw new GitHubStatusError(refsResponse.status);
   const newer = versionsFromRefs(await refsResponse.json()).filter(
     (version) => compareVersions(version, currentVersion) > 0,
   );
@@ -135,7 +146,7 @@ export async function findNewerRelease(currentVersion: string, fetchImpl: Fetch)
     );
     // 404: the tag is pushed but CI has not published it yet (or the build failed).
     if (response.status === 404) continue;
-    if (!response.ok) throw new Error(`GitHub 返回 ${response.status}`);
+    if (!response.ok) throw new GitHubStatusError(response.status);
     const release = releaseFromPayload(version, await response.json());
     if (release) return release;
   }

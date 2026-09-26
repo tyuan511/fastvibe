@@ -5,6 +5,7 @@ import { Copy01Icon, Tick02Icon } from "../ui/icons";
 import * as Clipboard from "expo-clipboard";
 import Markdown from "react-native-markdown-display";
 import type { Palette } from "../ui/theme";
+import { useT } from "../i18n";
 
 /** RN MarkdownView matching desktop chat-markdown.css rather than a generic article. */
 export function MarkdownView({ text, palette }: { text: string; palette: Palette }): JSX.Element {
@@ -23,9 +24,9 @@ export function MarkdownView({ text, palette }: { text: string; palette: Palette
         strong: { color: palette.text, fontWeight: "600" },
         em: { color: palette.text, fontStyle: "italic" },
         s: { color: palette.muted, textDecorationLine: "line-through" },
-        blockquote: { ...styles.blockquote, borderLeftColor: palette.border },
+        blockquote: { ...styles.blockquote, borderLeftColor: palette.accent },
         hr: { ...styles.hr, backgroundColor: palette.border },
-        code_inline: { ...styles.inlineCode, backgroundColor: palette.card, color: palette.text },
+        code_inline: { ...styles.inlineCode, backgroundColor: palette.field, color: palette.text },
         code_block: { ...styles.codeBlockText, color: palette.text },
         fence: { ...styles.codeBlockText, color: palette.text },
         pre: { marginVertical: 0 },
@@ -42,14 +43,15 @@ export function MarkdownView({ text, palette }: { text: string; palette: Palette
         table: { ...styles.table, borderColor: palette.border },
         tbody: { borderColor: palette.border },
         thead: { ...styles.thead, borderBottomColor: palette.border },
-        th: { ...styles.td, ...styles.th, color: palette.text, borderBottomColor: palette.border, backgroundColor: palette.card },
+        th: { ...styles.td, ...styles.th, color: palette.text, borderBottomColor: palette.border, backgroundColor: palette.field },
         td: { ...styles.td, color: palette.text, borderBottomColor: palette.border },
         tr: { flexDirection: "row", borderBottomColor: palette.border },
       }}
       rules={{
         fence(node) {
-          const className = typeof node.attributes?.className === "string" ? node.attributes.className : "";
-          const language = /language-([^\s]+)/.exec(className)?.[1] ?? "code";
+          // The fence's info string (```ts) arrives as `sourceInfo`; markdown-it sets no class.
+          const info = (node as { sourceInfo?: unknown }).sourceInfo;
+          const language = (typeof info === "string" ? info.trim().split(/\s+/)[0] : "") || "code";
           return <CodeFence key={node.key} code={node.content ?? ""} language={language} palette={palette} />;
         },
         code_block(node) {
@@ -63,6 +65,7 @@ export function MarkdownView({ text, palette }: { text: string; palette: Palette
 }
 
 function CodeFence({ code, language, palette }: { code: string; language: string; palette: Palette }): JSX.Element {
+  const { t } = useT();
   const [copied, setCopied] = useState(false);
   async function copy(): Promise<void> {
     await Clipboard.setStringAsync(code);
@@ -70,12 +73,12 @@ function CodeFence({ code, language, palette }: { code: string; language: string
     setTimeout(() => setCopied(false), 1200);
   }
   return (
-    <View style={[styles.codeFrame, { backgroundColor: palette.card, borderColor: palette.border }]}>
+    <View style={[styles.codeFrame, { backgroundColor: palette.field, borderColor: palette.border }]}>
       <View style={[styles.codeHeader, { borderBottomColor: palette.border }]}>
         <Text style={[styles.codeLanguage, { color: palette.muted }]}>{language}</Text>
         <Pressable onPress={() => void copy()} style={styles.copyButton} hitSlop={6}>
           <HugeiconsIcon icon={copied ? Tick02Icon : Copy01Icon} size={13} color={palette.muted} strokeWidth={2} />
-          <Text style={[styles.copyText, { color: palette.muted }]}>{copied ? "已复制" : "复制"}</Text>
+          <Text style={[styles.copyText, { color: palette.muted }]}>{copied ? t("common.copied") : t("common.copy")}</Text>
         </Pressable>
       </View>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.codeScroll}>
@@ -90,12 +93,12 @@ const styles = StyleSheet.create({
   body: { fontSize: 15, lineHeight: 24 },
   paragraph: { marginTop: 2, marginBottom: 4, fontSize: 15, lineHeight: 24 },
   heading: { lineHeight: 22, fontWeight: "600", marginTop: 8, marginBottom: 3 },
-  blockquote: { borderLeftWidth: 2, paddingLeft: 10, marginVertical: 5 },
+  blockquote: { borderLeftWidth: 3, paddingLeft: 12, paddingVertical: 2, marginVertical: 6, borderRadius: 4 },
   hr: { height: StyleSheet.hairlineWidth, opacity: 0.7, marginVertical: 8 },
   inlineCode: { fontFamily: "monospace", paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4, fontSize: 13 },
-  codeFrame: { marginVertical: 5, borderRadius: 9, borderWidth: StyleSheet.hairlineWidth, overflow: "hidden" },
-  codeHeader: { height: 30, flexDirection: "row", alignItems: "center", justifyContent: "space-between", borderBottomWidth: StyleSheet.hairlineWidth, paddingHorizontal: 10 },
-  codeLanguage: { fontSize: 12, fontWeight: "600" },
+  codeFrame: { marginVertical: 6, borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, overflow: "hidden" },
+  codeHeader: { height: 32, flexDirection: "row", alignItems: "center", justifyContent: "space-between", borderBottomWidth: StyleSheet.hairlineWidth, paddingHorizontal: 10 },
+  codeLanguage: { fontSize: 12, fontWeight: "700", letterSpacing: 0.3 },
   copyButton: { flexDirection: "row", alignItems: "center", gap: 4, paddingVertical: 5 },
   copyText: { fontSize: 12 },
   codeScroll: { paddingHorizontal: 12, paddingVertical: 10, minWidth: "100%" },

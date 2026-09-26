@@ -5,6 +5,10 @@ import {
   formatTurnMeta,
   type TimedMessage,
 } from "../apps/mobile/src/chat/turn-meta.ts";
+import { setLanguage } from "../apps/mobile/src/i18n/core.ts";
+
+// The footer follows the app language; pin it so the machine's locale cannot decide.
+setLanguage("zh");
 
 const NOW = new Date(2026, 8, 4, 14, 32, 0).getTime();
 
@@ -58,4 +62,14 @@ test("a compaction notice after the reply anchors the line at the end of the tur
   ], false);
   assert.equal(footers.has("a1"), false);
   assert.equal(footers.get("c1")?.elapsedMs, 8_000);
+});
+
+test("the footer follows the app language", () => {
+  setLanguage("en");
+  try {
+    const meta = { endedAt: NOW - 60_000, elapsedMs: 3 * 60_000 + 41_000 };
+    assert.match(formatTurnMeta(meta, NOW), /· took 3m 41s$/);
+  } finally {
+    setLanguage("zh");
+  }
 });

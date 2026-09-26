@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { AppState, type AppStateStatus } from "react-native";
 import { RemoteClient } from "../protocol/client";
+import { t } from "../i18n";
 import { parseServerAddress } from "../protocol/address";
 import { patchServer, readToken, writeToken, type SavedServer } from "../storage/servers";
 import { isMobileConversation, isMobileProject, isRemoteCatalogReference } from "./catalog-filter";
@@ -37,6 +38,11 @@ type State = {
   server: SavedServer | null;
   projects: CatalogProject[];
   conversations: CatalogConversation[];
+  archivedIds: string[];
+  /** 始终允许 rules from the machine's settings (`method:title:message`). */
+  permissionAlways: string[];
+  /** The socket dropped and a replacement is being negotiated; the last snapshot stays on screen. */
+  reconnecting: boolean;
   running: Record<string, boolean>;
   /** Wall-clock start of each current run; shared across chat screen mounts. */
   runningSince: Record<string, number>;
@@ -51,6 +57,9 @@ const empty: State = {
   server: null,
   projects: [],
   conversations: [],
+  archivedIds: [],
+  permissionAlways: [],
+  reconnecting: false,
   running: {},
   runningSince: {},
   waiting: {},
@@ -95,6 +104,26 @@ export function getClient(): RemoteClient | null {
   return state.status === "ready" && !reconnecting ? client : null;
 }
 
+/** Keep the phone list in step with a settings write made by this very socket. */
+export function setArchivedIds(ids: string[]): void {
+  setState({ archivedIds: ids });
+}
+
+/** Same, for a 始终允许 this phone just wrote (the push skips the writer). */
+export function setPermissionAlways(keys: string[]): void {
+  setState({ permissionAlways: keys });
+}
+
+/** Re-read the catalog, run and prompt state — the list's pull-to-refresh. */
+export async function refreshConnection(): Promise<void> {
+  const remote = getClient();
+  if (!remote) {
+    if (target) scheduleReconnect(target, connectionGeneration, true);
+    return;
+  }
+  await refreshCatalog(remote);
+}
+
 export function onEngineEvent(listener: (event: Record<string, unknown>) => void): () => void {
   engineListeners.add(listener);
   return () => engineListeners.delete(listener);
@@ -104,7 +133,7 @@ export async function connectSaved(server: SavedServer): Promise<void> {
   const token = await readToken(server.id);
   if (!token) {
     abandonConnection();
-    setState({ ...empty, server, status: "error", needsPassword: true, error: "需要输入密码" });
+    setState({ ...empty, server, status: "error", needsPassword: true, error: t("conn.needPassword") });
     return;
   }
   const next = beginTarget(server, token);
@@ -126,7 +155,7 @@ export async function loginSaved(server: SavedServer, password: string): Promise
       server,
       status: "error",
       needsPassword: true,
-      error: error instanceof Error ? error.message : "登录失败",
+      error: error instanceof Error ? error.message : t("conn.loginFailed"),
     });
   }
 }
@@ -134,6 +163,13 @@ export async function loginSaved(server: SavedServer, password: string): Promise
 export function disconnect(): void {
   abandonConnection();
   setState(empty);
+}
+
+/** Ask the current saved target to reconnect immediately instead of waiting for backoff. */
+export function reconnectNow(): void {
+  if (!target || !reconnecting) return;
+  clearReconnectTimer();
+  scheduleReconnect(target, connectionGeneration, true);
 }
 
 export function watchConversation(id: string): () => void {
@@ -156,7 +192,7 @@ async function connectWithToken(next: ConnectionTarget, generation: number, sile
   const address = parseServerAddress(server.origin);
   if (!address) {
     abandonConnection();
-    setState({ ...empty, server, status: "error", error: "保存的地址无效" });
+    setState({ ...empty, server, status: "error", error: t("conn.badAddress") });
     return;
   }
   retireClient();
@@ -171,7 +207,7 @@ async function connectWithToken(next: ConnectionTarget, generation: number, sile
     // Keep the current catalog and conversation on screen while the replacement
     // socket is negotiated. A dropped mobile socket is expected during backgrounding
     // and a visible error page makes a short Wi-Fi blip feel like a logout.
-    setState({ ...state, status: "ready", error: null, needsPassword: false });
+    setState({ ...state, status: "ready", reconnecting: true, error: null, needsPassword: false });
     scheduleReconnect(next, generation, true);
   });
   try {
@@ -184,7 +220,7 @@ async function connectWithToken(next: ConnectionTarget, generation: number, sile
     if (!isCurrentTarget(next, generation) || client !== remote) return;
     reconnectAttempt = 0;
     reconnecting = false;
-    setState({ ...state, status: "ready", server: updated, error: null, needsPassword: false });
+    setState({ ...state, status: "ready", reconnecting: false, server: updated, error: null, needsPassword: false });
   } catch (error) {
     if (!isCurrentTarget(next, generation)) return;
     const unauthorized = error instanceof Error && error.message === "UNAUTHORIZED";
@@ -204,12 +240,12 @@ async function connectWithToken(next: ConnectionTarget, generation: number, sile
         server,
         status: "error",
         needsPassword: unauthorized,
-        error: unauthorized ? "登录已失效，请重新输入密码" : error instanceof Error ? error.message : "连接失败",
+        error: unauthorized ? t("conn.expired") : error instanceof Error ? error.message : t("conn.failed"),
       });
     } else {
       // Auto-reconnect failures stay invisible; retain the last usable snapshot and
       // keep trying with backoff instead of flashing the connection error screen.
-      setState({ ...state, status: "ready", server, error: null, needsPassword: false });
+      setState({ ...state, status: "ready", reconnecting: true, server, error: null, needsPassword: false });
     }
     if (!unauthorized) scheduleReconnect(next, generation);
   }
@@ -282,10 +318,11 @@ function handleAppStateChange(nextState: AppStateStatus): void {
 AppState.addEventListener("change", handleAppStateChange);
 
 async function refreshCatalog(remote: RemoteClient): Promise<void> {
-  const [catalog, runningIds, pendingEvents] = await Promise.all([
+  const [catalog, runningIds, pendingEvents, settings] = await Promise.all([
     remote.call("conversations:list"),
     remote.call("engine:get-running"),
     remote.call("engine:get-pending-ui"),
+    remote.call("settings:get"),
   ]);
   if (client !== remote) return;
   applyCatalog(catalog);
@@ -301,10 +338,14 @@ async function refreshCatalog(remote: RemoteClient): Promise<void> {
   const pending = Array.isArray(pendingEvents) ? pendingEvents.flatMap((event) => parsePermission(event) ?? []) : [];
   const waiting: Record<string, boolean> = {};
   for (const item of pending) if (item.conversationId) waiting[item.conversationId] = true;
-  setState({ ...state, projects: state.projects, conversations: state.conversations, running, runningSince, waiting, pending });
+  setState({ ...state, projects: state.projects, conversations: state.conversations, archivedIds: archivedIdsFrom(settings), permissionAlways: permissionAlwaysFrom(settings), running, runningSince, waiting, pending });
 }
 
 function handlePush(channel: string, payload: unknown): void {
+  if (channel === "settings:changed") {
+    setState({ archivedIds: archivedIdsFrom(payload), permissionAlways: permissionAlwaysFrom(payload) });
+    return;
+  }
   if (channel === "workspace:changed") {
     applyCatalog(payload);
     return;
@@ -343,6 +384,16 @@ function handlePush(channel: string, payload: unknown): void {
   for (const listener of engineListeners) listener(event);
 }
 
+function archivedIdsFrom(value: unknown): string[] {
+  if (!isRecord(value) || !Array.isArray(value.archivedConversations)) return [];
+  return value.archivedConversations.filter((id): id is string => typeof id === "string");
+}
+
+function permissionAlwaysFrom(value: unknown): string[] {
+  if (!isRecord(value) || !Array.isArray(value.permissionAlways)) return [];
+  return value.permissionAlways.filter((key): key is string => typeof key === "string");
+}
+
 function applyCatalog(payload: unknown): void {
   if (!isRecord(payload)) return;
   const projects = Array.isArray(payload.projects) ? payload.projects.flatMap(parseProject) : state.projects;
@@ -362,7 +413,7 @@ function parseConversation(value: unknown): CatalogConversation[] {
   return [
     {
       id: value.id,
-      title: typeof value.title === "string" && value.title ? value.title : "新对话",
+      title: typeof value.title === "string" && value.title ? value.title : t("conn.untitled"),
       preview: typeof value.preview === "string" ? value.preview : undefined,
       project: typeof value.project === "string" ? value.project : undefined,
       createdAt: typeof value.createdAt === "number" ? value.createdAt : 0,

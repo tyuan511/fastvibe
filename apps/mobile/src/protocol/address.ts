@@ -70,11 +70,6 @@ export function parseServerAddress(raw: string): ServerAddress | null {
   return { origin, wsUrl, host, kind };
 }
 
-export function addressKindLabel(kind: AddressKind): string {
-  if (kind === "lan") return "局域网";
-  if (kind === "loopback") return "本机";
-  return "公网";
-}
 
 function inferProtocol(
   explicit: boolean,

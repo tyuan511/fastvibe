@@ -3,7 +3,8 @@ import Constants from "expo-constants";
 import { Directory, File, Paths } from "expo-file-system";
 import * as IntentLauncher from "expo-intent-launcher";
 import { Platform } from "react-native";
-import { compareVersions, findNewerRelease, type AppRelease } from "./release";
+import { compareVersions, findNewerRelease, GitHubStatusError, type AppRelease } from "./release";
+import { t } from "../i18n";
 
 /**
  * Android self-update from GitHub Releases: the APK is downloaded into the cache
@@ -76,9 +77,9 @@ export function checkForUpdate({ force = false }: { force?: boolean } = {}): Pro
 export function describeCheckError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   const name = error instanceof Error ? error.name : "";
-  if (name === "AbortError" || /abort/i.test(message)) return "连接 GitHub 超时。检查网络，或打开代理后再试。";
-  if (/network request failed/i.test(message)) return "连不上 GitHub（api.github.com）。检查网络，或打开代理后再试。";
-  if (/GitHub 返回 403/.test(message)) return "GitHub 暂时拒绝了请求（可能是访问次数超限），稍后再试。";
+  if (name === "AbortError" || /abort/i.test(message)) return t("update.githubTimeout");
+  if (/network request failed/i.test(message)) return t("update.githubUnreachable");
+  if (error instanceof GitHubStatusError && error.status === 403) return t("update.githubRateLimited");
   return message;
 }
 
@@ -149,10 +150,10 @@ export async function downloadApk(
     },
   });
   const file = await task.downloadAsync();
-  if (!file) throw new Error("下载已暂停");
+  if (!file) throw new Error(t("update.paused"));
   if (release.apkSize > 0 && file.size !== release.apkSize) {
     file.delete();
-    throw new Error("下载不完整，请重试");
+    throw new Error(t("update.incomplete"));
   }
   return file;
 }

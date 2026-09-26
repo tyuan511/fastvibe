@@ -248,10 +248,12 @@ export function createFastVibeApi(t: ApiTransport) {
         t.invoke(Ipc.engineGetMessagesSince, { anchorEntryId, conversationId }),
       /**
        * Transcript plus the turn in flight, taken at one instant. What a client reads to
-       * rebuild a conversation exactly — including one whose run is still going.
+       * rebuild a conversation exactly — including one whose run is still going. When
+       * `fromEntryId` is supplied, the response contains only the tail from that entry
+       * when the entry is still on the current branch.
        */
-      getSnapshot: (conversationId?: string): Promise<ConversationSnapshot> =>
-        t.invoke(Ipc.engineGetSnapshot, { conversationId }),
+      getSnapshot: (conversationId?: string, fromEntryId?: string): Promise<ConversationSnapshot> =>
+        t.invoke(Ipc.engineGetSnapshot, { conversationId, fromEntryId }),
       getStats: (conversationId?: string): Promise<SessionStats> =>
         t.invoke(Ipc.engineGetStats, { conversationId }),
       setSteeringMode: (mode: "all" | "one-at-a-time", conversationId?: string): Promise<EngineSessionState> =>

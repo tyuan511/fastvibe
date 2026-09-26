@@ -112,10 +112,13 @@ test("direct submissions alone add an optimistic row and wait for prompt accepta
 });
 
 test("lost acknowledgements do not roll back an enqueue Main may have accepted", async () => {
-  for (const message of ["请求超时", "连接已断开", "连接已关闭"]) {
+  // Matched by code, never by the (translated) message: an English phone must reach
+  // the same "maybe sent" verdict as a Chinese one.
+  for (const [code, message] of [["timeout", "请求超时"], ["dropped", "Connection lost"], ["closed", "连接已关闭"]]) {
     const remote = caller();
+    const lost = Object.assign(new Error(message), { name: "TransportError", code });
     await assert.rejects(submitMessage({ call(method, payload) {
-      if (method === "engine:queue-add") return Promise.reject(new Error(message));
+      if (method === "engine:queue-add") return Promise.reject(lost);
       return remote.call(method, payload);
     } }, { conversationId: "chat", text: "next", enqueue: true, previous: { title: "Chat", preview: "old" } }, () => assert.fail()), SubmissionUncertainError);
     assert.equal(remote.calls.some((call) => call.method === "conversations:restore-prompt"), false);

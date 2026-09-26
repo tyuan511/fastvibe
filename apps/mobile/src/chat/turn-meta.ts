@@ -1,3 +1,5 @@
+import { locale, t } from "../i18n/core.ts";
+
 /**
  * The desktop reply footer, reduced to the two facts a finished turn can state:
  * when it finished, and how long the whole turn took.
@@ -54,13 +56,13 @@ export function completedTurnFooters(messages: TimedMessage[], running: boolean)
 export function formatTurnClock(timestamp: number, now: number = Date.now()): string {
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) return "";
-  const time = date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+  const time = date.toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
   const reference = new Date(now);
   const sameDay = date.getFullYear() === reference.getFullYear()
     && date.getMonth() === reference.getMonth()
     && date.getDate() === reference.getDate();
   if (date.getTime() <= now && sameDay) return time;
-  const day = date.toLocaleDateString("zh-CN", {
+  const day = date.toLocaleDateString(locale(), {
     month: "short",
     day: "numeric",
     ...(date.getFullYear() === reference.getFullYear() ? {} : { year: "numeric" }),
@@ -76,9 +78,9 @@ export function formatTurnSpent(milliseconds: number): string {
   const minutes = Math.floor((total % 3600) / 60);
   const seconds = total % 60;
   const parts: string[] = [];
-  if (hours > 0) parts.push(`${hours}小时`);
-  if (minutes > 0) parts.push(`${minutes}分钟`);
-  if (seconds > 0 || parts.length === 0) parts.push(`${seconds}秒`);
+  if (hours > 0) parts.push(t("time.hours", { n: hours }));
+  if (minutes > 0) parts.push(t("time.minutes", { n: minutes }));
+  if (seconds > 0 || parts.length === 0) parts.push(t("time.seconds", { n: seconds }));
   return parts.join(" ");
 }
 
@@ -86,5 +88,5 @@ export function formatTurnMeta(meta: TurnMeta, now: number = Date.now()): string
   const clock = formatTurnClock(meta.endedAt, now);
   if (!clock) return "";
   const spent = meta.elapsedMs !== undefined ? formatTurnSpent(meta.elapsedMs) : "";
-  return spent ? `${clock} · 用时 ${spent}` : clock;
+  return spent ? t("time.turnSpent", { clock, spent }) : clock;
 }

@@ -1795,9 +1795,10 @@ export class PiProcessManager {
    * `seq` is the last event number in existence at that instant. A caller that
    * subscribes afterwards discards anything at or below it and applies the rest.
    */
-  async getSnapshot(conversationId?: string): Promise<ConversationSnapshot> {
+  async getSnapshot(conversationId?: string, fromEntryId?: string): Promise<ConversationSnapshot> {
     const { id, session } = await this.#sessionFor(conversationId);
-    const messages = this.#messages(session, id);
+    const projected = this.#messagesFrom(session, id, fromEntryId);
+    const messages = projected.messages;
     const running = id ? this.#busy(id) : false;
     const turn = running && id ? this.#turnEvents.get(id) : undefined;
     const pendingUi: Array<Record<string, unknown>> = [];
@@ -1809,6 +1810,7 @@ export class PiProcessManager {
     return {
       conversationId: id ?? null,
       messages,
+      ...(fromEntryId ? { messageMode: projected.anchored ? "tail" : "full", messageAnchorId: fromEntryId } : {}),
       running,
       queue: id ? this.#messageQueue.state(id) : { conversationId: "", revision: 0, items: [], pause: null },
       pendingUi,

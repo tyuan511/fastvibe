@@ -1179,6 +1179,10 @@ export type ConversationSnapshot = {
   conversationId: string | null;
   /** The transcript, including the reply in flight while `running`. */
   messages: ChatMessage[];
+  /** When present, `messages` is either the requested tail or a full fallback. */
+  messageMode?: "tail" | "full";
+  /** The anchor sent by the caller, echoed for tail/full merge diagnostics. */
+  messageAnchorId?: string;
   /** Whether a run or a compaction is in flight for this conversation. */
   running: boolean;
   /** Main-owned durable message queue at the same instant as the transcript. */

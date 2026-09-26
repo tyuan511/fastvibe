@@ -1,4 +1,5 @@
 import { useEffect, useRef, type JSX } from "react";
+import { useT } from "../i18n";
 import { Animated, Easing, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 
 /** Fixed rather than themed: this sits on a camera feed, which is neither light nor dark. */
@@ -17,6 +18,7 @@ const LINE_INSET = 12;
  * can see; the square is there so they know where to aim, not to refuse what they did.
  */
 export function ScanFrame({ accent }: { accent: string }): JSX.Element {
+  const { t } = useT();
   const { width } = useWindowDimensions();
   const size = Math.min(width * 0.68, 280);
   const sweep = useRef(new Animated.Value(0)).current;
@@ -49,8 +51,8 @@ export function ScanFrame({ accent }: { accent: string }): JSX.Element {
         <View style={[styles.mask, styles.grow]} />
       </View>
       <View style={[styles.mask, styles.grow, styles.below]}>
-        <Text style={styles.hint}>将二维码放入框内</Text>
-        <Text style={styles.detail}>二维码在电脑上的 设置 → 远程访问，点地址旁的二维码图标</Text>
+        <Text style={styles.hint}>{t("scan.aim")}</Text>
+        <Text style={styles.detail}>{t("scan.where")}</Text>
       </View>
     </View>
   );

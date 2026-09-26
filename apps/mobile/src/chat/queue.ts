@@ -1,3 +1,5 @@
+import { t } from "../i18n/core.ts";
+
 /** Native client's validated projection of shared ConversationQueueState. */
 export type QueueItem = {
   id: string;
@@ -24,7 +26,7 @@ type Caller = { call(method: string, payload?: unknown, timeoutMs?: number): Pro
 /** A lost acknowledgement is not proof of refusal; never encourage a duplicate send. */
 export class SubmissionUncertainError extends Error {
   constructor() {
-    super("未收到发送确认，请在连接恢复后检查队列和聊天记录，避免重复发送");
+    super(t("queue.uncertain"));
     this.name = "SubmissionUncertainError";
   }
 }
@@ -98,7 +100,7 @@ export async function submitMessage(
     return null;
   } catch (error) {
     // RemoteClient uses these errors when it cannot know whether Main committed.
-    if (dispatched && error instanceof Error && /^(请求超时|连接已断开|连接已关闭)$/.test(error.message)) {
+    if (dispatched && isLostAcknowledgement(error)) {
       throw new SubmissionUncertainError();
     }
     if (preview) {
@@ -109,6 +111,16 @@ export async function submitMessage(
     }
     throw error;
   }
+}
+
+/**
+ * `protocol/client.ts`'s `TransportError`: the request left, the answer never came.
+ * Matched by its code, not its (translated) message, and structurally so this module
+ * stays loadable without the client.
+ */
+function isLostAcknowledgement(error: unknown): boolean {
+  const code = isRecord(error) ? error.code : undefined;
+  return error instanceof Error && error.name === "TransportError" && (code === "timeout" || code === "dropped" || code === "closed");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
