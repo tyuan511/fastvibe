@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type JSX } from "react";
 import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
-import * as Clipboard from "expo-clipboard";
 import * as ImagePicker from "expo-image-picker";
 import { HugeiconsIcon } from "@hugeicons/react-native";
 import Svg, { Circle } from "react-native-svg";
-import { AiBrain01Icon, ArrowDown01Icon, ArrowUp02Icon, Cancel01Icon, ClipboardPasteIcon, HandIcon, ImageAdd01Icon, PlayIcon, ShieldAlertIcon, ShieldCheckIcon, SquareIcon } from "../ui/icons";
+import { AiBrain01Icon, ArrowDown01Icon, ArrowUp02Icon, Cancel01Icon, HandIcon, ImageAdd01Icon, PlayIcon, ShieldAlertIcon, ShieldCheckIcon, SquareIcon } from "../ui/icons";
 import type { IconSvgElement } from "@hugeicons/react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { currentConnection, getClient, useConnection } from "../session/connection";
@@ -18,7 +17,7 @@ import { toast } from "../ui/toast";
 import { haptic } from "../ui/haptics";
 import { elevation, radius, usePalette, type Palette } from "../ui/theme";
 import { t, useT, type MessageKey } from "../i18n";
-import { fromDataUrl, MAX_COMPOSER_IMAGES, preparePickedImage, type ComposerImage } from "./images";
+import { MAX_COMPOSER_IMAGES, preparePickedImage, type ComposerImage } from "./images";
 
 type EngineModel = { provider: string; id: string };
 type ContextUsage = { tokens: number | null; contextWindow: number; percent: number | null };
@@ -203,25 +202,6 @@ export function Composer({
     }
   }
 
-  async function pasteImage(): Promise<void> {
-    if (disabled || imageBusy || images.length >= MAX_COMPOSER_IMAGES) return;
-    setImageBusy(true);
-    try {
-      if (!(await Clipboard.hasImageAsync())) {
-        toast.failure(new Error(t("composer.noImageClipboard")), t("composer.pasteImage"));
-        return;
-      }
-      const clipboardImage = await Clipboard.getImageAsync({ format: "jpeg", jpegQuality: 0.78 });
-      const image = clipboardImage ? fromDataUrl(clipboardImage.data, clipboardImage.size.width, clipboardImage.size.height) : null;
-      if (!image) throw new Error("image-too-large");
-      await addImages([image]);
-    } catch (error) {
-      toast.failure(imageError(error), t("composer.imageFailed"));
-    } finally {
-      setImageBusy(false);
-    }
-  }
-
   async function savePermission(mode: string, confirmFull: boolean): Promise<void> {
     const remote = getClient();
     if (!remote || busy) return;
@@ -297,7 +277,6 @@ export function Composer({
         ) : null}
         <View style={styles.toolbar}>
           <IconButton icon={ImageAdd01Icon} label={t("composer.chooseImage")} palette={palette} tone="field" size={30} onPress={() => void pickImages()} disabled={disabled || imageBusy || images.length >= MAX_COMPOSER_IMAGES} />
-          <IconButton icon={ClipboardPasteIcon} label={t("composer.pasteImage")} palette={palette} tone="field" size={30} onPress={() => void pasteImage()} disabled={disabled || imageBusy || images.length >= MAX_COMPOSER_IMAGES} />
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}

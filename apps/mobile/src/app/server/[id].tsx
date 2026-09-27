@@ -48,6 +48,7 @@ import { DesktopSpinner } from "../../chat/desktop-spinner";
 import { useT } from "../../i18n";
 import { OptionSheet } from "../../chat/option-sheet";
 import { listDrafts } from "../../chat/draft-storage";
+import { orderProjectsByRecentUse } from "../../session/project-order";
 
 /** The sheet's value for 「no project filter」; a cwd can never be empty. */
 const ALL_PROJECTS = "";
@@ -152,6 +153,10 @@ export default function ServerScreen() {
     [connection.conversations, connection.archivedIds],
   );
   const names = useMemo(() => new Map(connection.projects.map((item) => [item.cwd, item.name])), [connection.projects]);
+  const newChatProjects = useMemo(
+    () => orderProjectsByRecentUse(connection.projects, connection.conversations),
+    [connection.projects, connection.conversations],
+  );
   // Projects that hold a listed chat, most recently active first (`listed` is already in that order).
   const projectCounts = useMemo(() => {
     const counts = new Map<string, number>();
@@ -488,7 +493,7 @@ export default function ServerScreen() {
                 label: "",
                 options: [
                   { value: ALL_PROJECTS, label: t("common.noProject"), description: t("common.useScratchWorkspace"), icon: BubbleChatIcon },
-                  ...connection.projects.map((item) => ({ value: item.cwd, label: item.name, description: item.cwd, avatar: item.name })),
+                  ...newChatProjects.map((item) => ({ value: item.cwd, label: item.name, description: item.cwd, avatar: item.name })),
                 ],
               },
             ]}
