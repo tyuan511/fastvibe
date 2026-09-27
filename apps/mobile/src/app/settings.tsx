@@ -103,6 +103,7 @@ export default function SettingsScreen() {
                   if (value) haptic.success();
                 }}
                 trackColor={{ true: palette.accent, false: palette.field }}
+                thumbColor={preferences.haptics ? palette.accentText : palette.subtle}
               />
             }
           />

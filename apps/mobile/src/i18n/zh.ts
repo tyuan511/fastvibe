@@ -244,6 +244,14 @@ export const zh = {
   "composer.contextUsed": "上下文已用 {percent}%",
   "composer.contextWindow": "窗口 {window} tokens",
   "composer.contextNote": "{detail}\n接近上限时会自动压缩较早的对话。",
+  "composer.chooseImage": "从相册添加图片",
+  "composer.pasteImage": "粘贴图片",
+  "composer.removeImage": "移除图片",
+  "composer.imagePermission": "没有相册访问权限",
+  "composer.imageFailed": "图片添加失败",
+  "composer.imageTooLarge": "图片太大，请换一张图片",
+  "composer.noImageClipboard": "剪贴板里没有图片",
+  "composer.imageLimit": "最多添加 4 张图片",
 
   // model picker
   "models.title": "选择模型",

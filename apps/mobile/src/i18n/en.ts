@@ -251,6 +251,14 @@ export const en: Record<MessageKey, string> & Partial<Record<`${MessageKey}_one`
   "composer.contextUsed": "Context {percent}% used",
   "composer.contextWindow": "{window}-token window",
   "composer.contextNote": "{detail}\nOlder messages are compacted automatically near the limit.",
+  "composer.chooseImage": "Add from photos",
+  "composer.pasteImage": "Paste image",
+  "composer.removeImage": "Remove image",
+  "composer.imagePermission": "Photo library access was not granted",
+  "composer.imageFailed": "Could not add image",
+  "composer.imageTooLarge": "Image is too large; choose another",
+  "composer.noImageClipboard": "There is no image in the clipboard",
+  "composer.imageLimit": "Up to 4 images can be added",
 
   // model picker
   "models.title": "Choose a model",

@@ -21,6 +21,7 @@ type QueuedPromptPreview = {
   nextPreview?: string;
 };
 
+type PromptImage = { type: "image"; data: string; mimeType: string };
 type Caller = { call(method: string, payload?: unknown, timeoutMs?: number): Promise<unknown> };
 
 /** A lost acknowledgement is not proof of refusal; never encourage a duplicate send. */
@@ -67,12 +68,13 @@ export async function submitMessage(
   input: {
     conversationId: string;
     text: string;
+    images?: PromptImage[];
     enqueue: boolean;
     previous?: { title: string; preview?: string };
   },
   onPrompt: () => void,
 ): Promise<unknown> {
-  const { conversationId, text, enqueue, previous } = input;
+  const { conversationId, text, images, enqueue, previous } = input;
   const catalog = await remote.call("conversations:record-prompt", { id: conversationId, text });
   let preview: QueuedPromptPreview | undefined;
   if (previous && isRecord(catalog) && Array.isArray(catalog.conversations)) {
@@ -90,13 +92,20 @@ export async function submitMessage(
       const compact = /^\/compact(?:\s|$)/.test(text);
       const behavior = !compact && isRecord(settings) && settings.queueBehavior === "steer" ? "steer" : "followUp";
       dispatched = true;
-      return await remote.call("engine:queue-add", { conversationId, text, message: text, behavior, preview });
+      return await remote.call("engine:queue-add", {
+        conversationId,
+        text,
+        message: text,
+        behavior,
+        ...(images?.length ? { images } : {}),
+        preview,
+      });
     }
     // Only a direct submission gets an optimistic transcript row. Queued prompts
     // appear there when Main actually delivers them, not when they enter the tray.
     onPrompt();
     dispatched = true;
-    await remote.call("engine:prompt", { message: text, conversationId }, 60_000);
+    await remote.call("engine:prompt", { message: text, ...(images?.length ? { images } : {}), conversationId }, 60_000);
     return null;
   } catch (error) {
     // RemoteClient uses these errors when it cannot know whether Main committed.

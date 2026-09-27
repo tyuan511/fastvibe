@@ -130,8 +130,8 @@ export class RemoteClient {
                 protocol: "fastvibe.app",
                 protocolVersion: 1,
                 client: { kind: "mobile", version: Constants.expoConfig?.version ?? "0.0.0" },
-                // The native client has no image attachment sender yet, but it can
-                // consume the ordered event batches used for low-bandwidth streams.
+                // Images are sent inline in prompt payloads; event batching remains
+                // enabled for the ordered low-bandwidth stream.
                 features: { eventBatch: true },
               },
             }),

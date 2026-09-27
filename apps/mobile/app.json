@@ -2,7 +2,7 @@
   "expo": {
     "name": "FastVibe",
     "slug": "fastvibe-mobile",
-    "version": "0.3.2",
+    "version": "0.3.3",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "fastvibe",
@@ -39,6 +39,13 @@
       "./plugins/with-android-release-signing",
       "expo-status-bar",
       "expo-secure-store",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "用于从相册选择图片发送给 FastVibe",
+          "microphonePermission": false
+        }
+      ],
       [
         "expo-camera",
         {

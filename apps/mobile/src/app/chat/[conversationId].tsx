@@ -1,6 +1,6 @@
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
-import { FlatList, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { FlatList, Image, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import { HugeiconsIcon } from "@hugeicons/react-native";
 import {
@@ -36,6 +36,7 @@ import { haptic } from "../../ui/haptics";
 import { MarkdownView } from "../../chat/markdown";
 import { ProcessGroup, type ProcessItem, type ToolBlock } from "../../chat/tool-card";
 import { Composer } from "../../chat/composer";
+import { promptImage, type ComposerImage } from "../../chat/images";
 import { OptionSheet } from "../../chat/option-sheet";
 import { QueuePanel } from "../../chat/queue-panel";
 import { emptyQueue, mergeQueue, shouldHoldSend, shouldQueueMessage, submitMessage, SubmissionUncertainError } from "../../chat/queue";
@@ -57,8 +58,17 @@ type ChatMessage = {
   completedAt?: number;
   compact?: CompactInfo;
   parts?: MessagePart[];
+  attachments?: ChatAttachment[];
   /** On a merged reply row (`mergeReplies`): the last message folded into it. */
   lastId?: string;
+};
+
+type ChatAttachment = {
+  id: string;
+  kind: "image" | "file";
+  name: string;
+  mimeType?: string;
+  dataUrl?: string;
 };
 
 type MessagePart =
@@ -100,6 +110,7 @@ export default function ChatScreen() {
   const messagesRef = useRef<ChatMessage[]>([]);
   messagesRef.current = messages;
   const [draft, setDraft] = useState("");
+  const [images, setImages] = useState<ComposerImage[]>([]);
   const [draftHydrated, setDraftHydrated] = useState(false);
   const draftRef = useRef("");
   draftRef.current = draft;
@@ -283,8 +294,9 @@ export default function ChatScreen() {
 
   async function send(): Promise<void> {
     const text = draft.trim();
+    const selectedImages = images;
     const queueLoading = queueRef.current.revision < 0;
-  if (!text || !remote || shouldHoldSend(Boolean(submitting.current), queueLoading)) return;
+    if ((!text && selectedImages.length === 0) || !remote || shouldHoldSend(Boolean(submitting.current), queueLoading)) return;
     const enqueue = shouldQueueMessage(currentConnection().running[conversationId] === true, queueRef.current);
     const reservation = {};
     submitting.current = reservation;
@@ -292,10 +304,31 @@ export default function ChatScreen() {
     setSending(true);
     draftTouched.current = true;
     setDraft("");
+    setImages([]);
     if (serverId) void writeDraft(serverId, conversationId, "");
     try {
-    const next = await submitMessage(remote, { conversationId, text, enqueue, previous: chat }, () => {
-        if (liveScope.current === scope) setMessages((current) => [...current, { id: localId, role: "user", text, tools: [] }]);
+      const next = await submitMessage(remote, {
+        conversationId,
+        text,
+        images: selectedImages.map(promptImage),
+        enqueue,
+        previous: chat,
+      }, () => {
+        if (liveScope.current === scope) {
+          setMessages((current) => [...current, {
+            id: localId,
+            role: "user",
+            text,
+            tools: [],
+            attachments: selectedImages.map((image, index) => ({
+              id: image.id,
+              kind: "image" as const,
+              name: `image-${index + 1}`,
+              mimeType: image.mimeType,
+              dataUrl: image.uri,
+            })),
+          }]);
+        }
       });
       if (next !== null) applyQueue(next);
     } catch (caught) {
@@ -303,6 +336,7 @@ export default function ChatScreen() {
       if (!(caught instanceof SubmissionUncertainError)) {
         setMessages((current) => current.filter((item) => item.id !== localId));
         handleDraftChange(text);
+        setImages(selectedImages);
       } else {
         void reload().catch(() => undefined);
       }
@@ -582,6 +616,8 @@ export default function ChatScreen() {
             queueing={running || queue.items.length > 0}
             disabled={!connected || queue.revision < 0}
             draft={draft}
+            images={images}
+            onImagesChange={setImages}
             onDraftChange={handleDraftChange}
             onSend={() => void send()}
             onAbort={() => void getClient()?.call("engine:abort", { conversationId })}
@@ -657,6 +693,13 @@ const MessageRow = memo(function MessageRow({
     return (
       <Pressable onLongPress={() => onLongPress(message)} delayLongPress={300} style={styles.userWrap}>
         <View style={[styles.userBubble, { backgroundColor: palette.accentSoft }]}>
+          {message.attachments?.length ? (
+            <View style={styles.messageAttachments}>
+              {message.attachments.map((attachment) => attachment.dataUrl ? (
+                <Image key={attachment.id} source={{ uri: attachment.dataUrl }} style={styles.messageImage} />
+              ) : null)}
+            </View>
+          ) : null}
           {message.text ? <MarkdownView text={message.text} palette={palette} /> : null}
         </View>
         {message.error ? <Text style={[styles.messageError, { color: palette.danger }]}>{message.error}</Text> : null}
@@ -905,10 +948,27 @@ function parseMessage(value: unknown): ChatMessage[] {
     compact: parseCompact(value.compact),
     tools,
     parts: parseParts(value.parts),
+    attachments: parseAttachments(value.attachments),
     error: typeof value.error === "string" ? value.error : undefined,
     stop: typeof value.stop === "string" ? value.stop : undefined,
     kind: typeof value.kind === "string" ? value.kind : undefined,
   }];
+}
+
+function parseAttachments(value: unknown): ChatAttachment[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const attachments = value.flatMap((attachment): ChatAttachment[] => {
+    if (!isRecord(attachment) || typeof attachment.id !== "string" || typeof attachment.name !== "string") return [];
+    if (attachment.kind !== "image" || typeof attachment.dataUrl !== "string") return [];
+    return [{
+      id: attachment.id,
+      kind: "image",
+      name: attachment.name,
+      mimeType: typeof attachment.mimeType === "string" ? attachment.mimeType : undefined,
+      dataUrl: attachment.dataUrl,
+    }];
+  });
+  return attachments.length > 0 ? attachments : undefined;
 }
 
 function parseParts(value: unknown): MessagePart[] | undefined {
@@ -1093,6 +1153,8 @@ const styles = StyleSheet.create({
   reconnectButtonText: { fontSize: 13, fontWeight: "700" },
   userWrap: { alignSelf: "flex-end", maxWidth: "86%", alignItems: "flex-end", gap: 4 },
   userBubble: { borderRadius: 20, borderBottomRightRadius: 6, paddingHorizontal: 14, paddingVertical: 6 },
+  messageAttachments: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 4 },
+  messageImage: { width: 180, height: 180, borderRadius: 12, resizeMode: "cover" },
   assistantRow: { width: "100%", maxWidth: 680, gap: 6 },
   turnHead: { flexDirection: "row", alignItems: "center", gap: 7, marginBottom: 2 },
   turnName: { fontSize: 14, fontWeight: "700" },

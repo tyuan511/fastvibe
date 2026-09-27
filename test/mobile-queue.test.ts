@@ -72,6 +72,17 @@ test("queued mobile submission calls queue-add, never prompt or optimistic trans
   assert.deepEqual(mergeQueue(emptyQueue("chat"), next).items, [Object.fromEntries(Object.entries(item).filter(([key]) => key !== "conversationId"))]);
 });
 
+test("mobile image sends keep their image payload for direct and queued prompts", async () => {
+  const images = [{ type: "image" as const, data: "abc", mimeType: "image/jpeg" }];
+  const queued = caller();
+  await submitMessage(queued, { conversationId: "chat", text: "", images, enqueue: true }, () => assert.fail());
+  assert.deepEqual((queued.calls.at(-1)?.payload as { images: unknown }).images, images);
+
+  const direct = caller();
+  await submitMessage(direct, { conversationId: "chat", text: "look", images, enqueue: false }, () => undefined);
+  assert.deepEqual((direct.calls.at(-1)?.payload as { images: unknown }).images, images);
+});
+
 test("queue choice survives a Stop while record-prompt is delayed", async () => {
   const recorded = deferred<unknown>();
   const remote = caller();

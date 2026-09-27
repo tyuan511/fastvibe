@@ -1,21 +1,24 @@
 import { useCallback, useEffect, useRef, useState, type JSX } from "react";
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import * as Clipboard from "expo-clipboard";
+import * as ImagePicker from "expo-image-picker";
 import { HugeiconsIcon } from "@hugeicons/react-native";
 import Svg, { Circle } from "react-native-svg";
-import { AiBrain01Icon, ArrowDown01Icon, ArrowUp02Icon, HandIcon, PlayIcon, ShieldAlertIcon, ShieldCheckIcon, SquareIcon } from "../ui/icons";
+import { AiBrain01Icon, ArrowDown01Icon, ArrowUp02Icon, Cancel01Icon, ClipboardPasteIcon, HandIcon, ImageAdd01Icon, PlayIcon, ShieldAlertIcon, ShieldCheckIcon, SquareIcon } from "../ui/icons";
 import type { IconSvgElement } from "@hugeicons/react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { currentConnection, getClient, useConnection } from "../session/connection";
 import { OptionSheet } from "./option-sheet";
 import { ModelPicker, modelKey, type PickerModel } from "./model-picker";
 import { loadModelRecents, rememberModel } from "./model-recents";
-import { Avatar } from "../ui/kit";
+import { Avatar, IconButton } from "../ui/kit";
 import { Gradient } from "../ui/gradient";
 import { dialog } from "../ui/dialog";
 import { toast } from "../ui/toast";
 import { haptic } from "../ui/haptics";
 import { elevation, radius, usePalette, type Palette } from "../ui/theme";
 import { t, useT, type MessageKey } from "../i18n";
+import { fromDataUrl, MAX_COMPOSER_IMAGES, preparePickedImage, type ComposerImage } from "./images";
 
 type EngineModel = { provider: string; id: string };
 type ContextUsage = { tokens: number | null; contextWindow: number; percent: number | null };
@@ -40,6 +43,8 @@ export function Composer({
   queueing = running,
   disabled,
   draft,
+  images,
+  onImagesChange,
   onDraftChange,
   onSend,
   onAbort,
@@ -53,6 +58,8 @@ export function Composer({
   queueing?: boolean;
   disabled: boolean;
   draft: string;
+  images: ComposerImage[];
+  onImagesChange: (images: ComposerImage[]) => void;
   onDraftChange: (text: string) => void;
   onSend: () => void;
   onAbort: () => void;
@@ -71,6 +78,7 @@ export function Composer({
   const [fullAccessConfirmed, setFullAccessConfirmed] = useState(false);
   const [recents, setRecents] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  const [imageBusy, setImageBusy] = useState(false);
   const [focused, setFocused] = useState(false);
   const serverId = currentConnection().server?.id;
 
@@ -159,6 +167,61 @@ export function Composer({
     await savePermission(mode, false);
   }
 
+  async function addImages(next: ComposerImage[]): Promise<void> {
+    if (next.length === 0) return;
+    const combined = [...images, ...next].slice(0, MAX_COMPOSER_IMAGES);
+    onImagesChange(combined);
+    if (images.length + next.length > MAX_COMPOSER_IMAGES) toast.info(t("composer.imageLimit"));
+  }
+
+  async function pickImages(): Promise<void> {
+    if (disabled || imageBusy || images.length >= MAX_COMPOSER_IMAGES) return;
+    setImageBusy(true);
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        allowsMultipleSelection: true,
+        selectionLimit: MAX_COMPOSER_IMAGES - images.length,
+        orderedSelection: true,
+        quality: 0.8,
+        exif: false,
+      });
+      if (result.canceled) return;
+      const prepared: ComposerImage[] = [];
+      for (const asset of result.assets) {
+        try {
+          prepared.push(await preparePickedImage(asset));
+        } catch (error) {
+          toast.failure(imageError(error), t("composer.imageFailed"));
+        }
+      }
+      await addImages(prepared);
+    } catch (error) {
+      toast.failure(imageError(error), t("composer.imageFailed"));
+    } finally {
+      setImageBusy(false);
+    }
+  }
+
+  async function pasteImage(): Promise<void> {
+    if (disabled || imageBusy || images.length >= MAX_COMPOSER_IMAGES) return;
+    setImageBusy(true);
+    try {
+      if (!(await Clipboard.hasImageAsync())) {
+        toast.failure(new Error(t("composer.noImageClipboard")), t("composer.pasteImage"));
+        return;
+      }
+      const clipboardImage = await Clipboard.getImageAsync({ format: "jpeg", jpegQuality: 0.78 });
+      const image = clipboardImage ? fromDataUrl(clipboardImage.data, clipboardImage.size.width, clipboardImage.size.height) : null;
+      if (!image) throw new Error("image-too-large");
+      await addImages([image]);
+    } catch (error) {
+      toast.failure(imageError(error), t("composer.imageFailed"));
+    } finally {
+      setImageBusy(false);
+    }
+  }
+
   async function savePermission(mode: string, confirmFull: boolean): Promise<void> {
     const remote = getClient();
     if (!remote || busy) return;
@@ -174,9 +237,9 @@ export function Composer({
     }
   }
 
-  const hasContent = draft.trim().length > 0;
+  const hasContent = draft.trim().length > 0 || images.length > 0;
   const action = sending ? "sending" : running && !hasContent ? "stop" : canContinue && !hasContent ? "continue" : "send";
-  const actionDisabled = disabled || sending || (action === "send" && !hasContent);
+  const actionDisabled = disabled || sending || imageBusy || (action === "send" && !hasContent);
   const modelLabel = catalog?.name || currentModel?.id || (models.length === 0 ? t("composer.noModels") : t("composer.defaultModel"));
   const percent = session?.contextUsage?.percent;
 
@@ -214,7 +277,27 @@ export function Composer({
           editable={!disabled}
           style={[styles.input, { color: palette.text }]}
         />
+        {images.length > 0 ? (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.attachments}>
+            {images.map((image) => (
+              <View key={image.id} style={[styles.attachment, { borderColor: palette.border, backgroundColor: palette.field }]}>
+                <Image source={{ uri: image.uri }} style={styles.attachmentImage} />
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={t("composer.removeImage")}
+                  hitSlop={6}
+                  onPress={() => onImagesChange(images.filter((item) => item.id !== image.id))}
+                  style={[styles.removeAttachment, { backgroundColor: palette.text }]}
+                >
+                  <HugeiconsIcon icon={Cancel01Icon} size={12} color={palette.card} strokeWidth={2.4} />
+                </Pressable>
+              </View>
+            ))}
+          </ScrollView>
+        ) : null}
         <View style={styles.toolbar}>
+          <IconButton icon={ImageAdd01Icon} label={t("composer.chooseImage")} palette={palette} tone="field" size={30} onPress={() => void pickImages()} disabled={disabled || imageBusy || images.length >= MAX_COMPOSER_IMAGES} />
+          <IconButton icon={ClipboardPasteIcon} label={t("composer.pasteImage")} palette={palette} tone="field" size={30} onPress={() => void pasteImage()} disabled={disabled || imageBusy || images.length >= MAX_COMPOSER_IMAGES} />
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
@@ -247,7 +330,7 @@ export function Composer({
               />
             ) : null}
           </ScrollView>
-          {busy ? <ActivityIndicator size="small" color={palette.muted} style={styles.busy} /> : null}
+          {busy || imageBusy ? <ActivityIndicator size="small" color={palette.muted} style={styles.busy} /> : null}
           {typeof percent === "number" ? <ContextRing percent={percent} palette={palette} usage={session?.contextUsage} /> : null}
           <Pressable
             accessibilityRole="button"
@@ -344,6 +427,11 @@ function ContextRing({ percent, palette, usage }: { percent: number; palette: Pa
   );
 }
 
+function imageError(error: unknown): Error {
+  const code = error instanceof Error ? error.message : "";
+  return new Error(code === "image-too-large" ? t("composer.imageTooLarge") : t("composer.imageFailed"));
+}
+
 function formatTokens(value: number): string {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
   if (value >= 1_000) return `${Math.round(value / 1_000)}K`;
@@ -392,6 +480,10 @@ const styles = StyleSheet.create({
   outer: { paddingHorizontal: 10, paddingTop: 6 },
   card: { borderRadius: radius.xl, borderWidth: StyleSheet.hairlineWidth, paddingBottom: 8 },
   input: { minHeight: 48, maxHeight: 150, paddingHorizontal: 16, paddingTop: 13, paddingBottom: 6, fontSize: 16, lineHeight: 22 },
+  attachments: { gap: 8, paddingHorizontal: 12, paddingBottom: 8 },
+  attachment: { width: 64, height: 64, borderRadius: 10, borderWidth: StyleSheet.hairlineWidth, overflow: "visible" },
+  attachmentImage: { width: "100%", height: "100%", borderRadius: 9 },
+  removeAttachment: { position: "absolute", right: -6, top: -6, width: 20, height: 20, borderRadius: 10, alignItems: "center", justifyContent: "center" },
   toolbar: { flexDirection: "row", alignItems: "center", gap: 6, paddingLeft: 8, paddingRight: 8 },
   chips: { flex: 1 },
   chipsContent: { gap: 6, alignItems: "center", paddingRight: 4 },
