@@ -9,16 +9,16 @@ test("mobile catalog recognizes remote references", () => {
   assert.equal(isRemoteCatalogReference(undefined), false);
 });
 
-test("mobile catalog hides bound remote projects", () => {
+test("mobile catalog includes bound remote projects", () => {
   assert.equal(isMobileProject({ cwd: "/Users/me/project", name: "local" }), true);
-  assert.equal(isMobileProject({ cwd: "remote:server-1:workspace-1", name: "remote" }), false);
-  assert.equal(isMobileProject({ cwd: "/Users/me/project", name: "remote", kind: "remote" }), false);
+  assert.equal(isMobileProject({ cwd: "remote:server-1:workspace-1", name: "remote", kind: "remote" }), true);
+  assert.equal(isMobileProject({ cwd: "remote:server-1:workspace-1", name: "remote" }), true);
 });
 
-test("mobile catalog hides remote conversations by id or project", () => {
+test("mobile catalog includes remote conversations by id or project", () => {
   assert.equal(isMobileConversation({ id: "conversation-1" }), true);
-  assert.equal(isMobileConversation({ id: "remote:server-1:conversation-1" }), false);
-  assert.equal(isMobileConversation({ id: "conversation-1", project: "remote:server-1:workspace-1" }), false);
+  assert.equal(isMobileConversation({ id: "remote:server-1:conversation-1" }), true);
+  assert.equal(isMobileConversation({ id: "conversation-1", project: "remote:server-1:workspace-1" }), true);
 });
 
 test("new-chat projects are ordered by their most recent conversation", () => {

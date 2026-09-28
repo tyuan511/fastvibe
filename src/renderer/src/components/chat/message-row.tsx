@@ -724,7 +724,7 @@ function ChatMessageRowImpl({
         {message.retry ? <RetryStatus message={message} /> : null}
         {streaming && !message.error && !message.retry && !liveTail ? <WorkingStatus message={message} /> : null}
 
-        {message.error && !message.retry ? (
+        {message.error && !message.retry && !streaming ? (
           <Bubble variant="destructive" align="start">
             <BubbleContent className="flex items-start gap-2 text-sm leading-5">
               <HugeiconsIcon strokeWidth={2} icon={AlertCircleIcon} className="mt-0.5 size-3.5 shrink-0" />

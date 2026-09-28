@@ -121,6 +121,10 @@ export function mergeAssistantRun(messages: ChatMessage[]): ChatMessage {
   // todos that were already writing.
   const last = lastAssistant ?? messages[messages.length - 1];
   const error = last?.error;
+  // Auto-retry is also a status of the last round-trip. Keep it when the row merges
+  // several assistant messages; otherwise a retry after a tool call silently loses
+  // its banner even though the reducer put it on the trailing message.
+  const retry = last?.retry;
   // A truncation or stop notice belongs to the round-trip that ended the row, for the
   // same reason: an earlier attempt a 继续 resumed from must not keep its notice.
   const stop = last?.stop;
@@ -135,6 +139,7 @@ export function mergeAssistantRun(messages: ChatMessage[]): ChatMessage {
     tools: [...tools.values()],
     parts,
     error,
+    retry,
     stop,
     completedAt,
   };

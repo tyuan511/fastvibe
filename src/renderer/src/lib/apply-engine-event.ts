@@ -9,7 +9,6 @@ import type {
   ToolCallBlock,
 } from "@shared/types";
 import { extractPromptAttachments } from "@shared/attachment-metadata";
-import { isAbortOutcome } from "@shared/abort";
 import { toolResultStatus } from "@shared/tool-result";
 import { randomUUID } from "../../../shared/random.ts";
 import { i18n } from "@/lib/i18n";
@@ -550,33 +549,19 @@ function applyEvent(
   }
 
   if (type === "message_end") {
-    const error = errorFromAssistant(event.message);
-    if (error) {
-      const last = next.at(-1);
-      if (last?.role === "assistant") {
-        const list = next.slice();
-        list[list.length - 1] = { ...last, error };
-        return { messages: list, streaming: nextStreaming };
-      }
-    }
+    // `message_end` closes one model request, not necessarily the whole run. A
+    // transient provider error here can still be followed by `auto_retry_start`,
+    // so do not turn it into a terminal red bubble before the SDK has announced
+    // whether the run will retry or settle.
     return { messages: next, streaming: nextStreaming };
   }
 
   if (type === "turn_end") {
     // A turn ending is not a run ending. `turn_end` fires after every assistant
     // message — including each one that only requested a tool call — and the agent
-    // immediately feeds the tool results back into another turn. Clearing the
-    // working state here made the footer, caret and "working" row blink once per
-    // tool call. Only `agent_end` closes the run.
-    const error = errorFromAssistant(event.message);
-    if (error) {
-      const last = next.at(-1);
-      if (last?.role === "assistant") {
-        const list = next.slice();
-        list[list.length - 1] = { ...last, error };
-        return { messages: list, streaming: nextStreaming };
-      }
-    }
+    // immediately feeds the tool results back into another turn. The same applies
+    // to a transient error: `agent_end`/`auto_retry_end` is the first terminal
+    // verdict, so keep the red error out of the transcript until then.
     return { messages: next, streaming: nextStreaming };
   }
 
@@ -611,7 +596,11 @@ function applyEvent(
       const last = next.at(-1);
       if (last?.role === "assistant") {
         const list = next.slice();
-        list[list.length - 1] = { ...last, error: last.error ?? error };
+        list[list.length - 1] = {
+          ...last,
+          error: last.error ?? error,
+          completedAt: last.completedAt ?? Date.now(),
+        };
         return { messages: list, streaming: nextStreaming, interrupted };
       }
       return {
@@ -622,6 +611,7 @@ function applyEvent(
           tools: [],
           parts: [],
           createdAt: Date.now(),
+          completedAt: Date.now(),
           error,
         }),
         streaming: nextStreaming,
@@ -828,22 +818,12 @@ function applyEvent(
       // to preserve the error), so that path is covered below.
       if (reason !== "toolUse") ensureAssistant().completedAt = Date.now();
     }
-    if (innerType === "error") {
-      nextStreaming = false;
-      const aborted = isAbortOutcome(inner);
-      // The round-trip stopped here — a failure or a user abort is still an end, and
-      // a failed turn never gets the authoritative transcript re-stamp (the reload is
-      // skipped so the error bubble survives), so this is the only reading it gets.
-      ensureAssistant().completedAt = Date.now();
-      if (!aborted) {
-        const error =
-          errorFromAssistant(inner.error) ??
-          errorFromAssistant(inner.message) ??
-          asString(inner.errorMessage) ??
-          (i18n.t("common:errors.requestFailed") as string);
-        ensureAssistant().error = error;
-      }
-    }
+    // An inner provider error ends one request, not the agent run. The SDK may
+    // immediately schedule an automatic retry, and the next `auto_retry_start`
+    // turns the same row into the retry status. Do not clear the run flag or write
+    // a red error here: doing either briefly showed "Request timed out" while the
+    // agent was still working normally. `agent_end` / `auto_retry_end` owns the
+    // terminal error, after the SDK has decided that no recovery follows.
     // After the inner event, so a freshly opened thinking part is the one stamped.
     const trailing = next.at(-1);
     if (trailing?.role === "assistant") stampThinkingTiming(trailing, event);
@@ -883,7 +863,7 @@ function applyEvent(
     if (last?.role === "assistant" && event.success === false) {
       const error = asString(event.finalError) ?? last.retry?.error ?? last.error ?? (i18n.t("common:errors.requestFailed") as string);
       const list = next.slice();
-      list[list.length - 1] = { ...last, retry: undefined, error };
+      list[list.length - 1] = { ...last, retry: undefined, error, completedAt: last.completedAt ?? Date.now() };
       return { messages: list, streaming: false };
     }
     return { messages: next, streaming: nextStreaming };

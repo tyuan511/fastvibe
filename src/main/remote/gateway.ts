@@ -185,6 +185,8 @@ export class RemoteGateway {
     if (method === Ipc.projectsReorder) return this.#reorderProjects(payload, ctx);
     if (method === Ipc.conversationsSetProject) return this.#setConversationProject(payload, ctx);
     if (method === Ipc.conversationsList) return this.aggregate(this.#deps.localSnapshot());
+    if (method === Ipc.engineGetRunning) return this.#allRunningConversations(ctx);
+    if (method === Ipc.engineGetPendingUi) return this.#allPendingUi(ctx);
 
     const scope = resolveServerScope(payload);
     if (!scope) {
@@ -481,11 +483,59 @@ export class RemoteGateway {
     await this.#syncConnectedServers();
   }
 
+  async #allRunningConversations(ctx: unknown): Promise<string[]> {
+    const local = await this.#deps.localDispatch(Ipc.engineGetRunning, undefined, ctx);
+    const running = Array.isArray(local) ? local.filter((id): id is string => typeof id === "string") : [];
+    const remote = await Promise.all(this.#boundReadyServers().map(async (server) => {
+      try {
+        return namespaceIdList(await this.#deps.connections.call(server, Ipc.engineGetRunning, undefined), server.serverInstanceId);
+      } catch {
+        return [];
+      }
+    }));
+    return running.concat(remote.flatMap((ids) => Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : []));
+  }
+
+  async #allPendingUi(ctx: unknown): Promise<Array<Record<string, unknown>>> {
+    const local = await this.#deps.localDispatch(Ipc.engineGetPendingUi, undefined, ctx);
+    const pending = Array.isArray(local) ? local.filter(isRecord) : [];
+    const remote = await Promise.all(this.#boundReadyServers().map(async (server) => {
+      try {
+        const result = await this.#deps.connections.call(server, Ipc.engineGetPendingUi, undefined);
+        return Array.isArray(result)
+          ? result.filter(isRecord).flatMap((item) => {
+              const scoped = scopeUiItem(item, server.serverInstanceId);
+              return isRecord(scoped) ? [scoped] : [];
+            })
+          : [];
+      } catch {
+        return [];
+      }
+    }));
+    return pending.concat(remote.flat());
+  }
+
+  #readyServers(): ConnectedServerRef[] {
+    const seen = new Set<string>();
+    const servers: ConnectedServerRef[] = [];
+    for (const status of this.#deps.connections.statuses()) {
+      if (status.state !== "ready" || !status.serverInstanceId || seen.has(status.serverInstanceId)) continue;
+      const server = this.#deps.connections.serverForInstance(status.serverInstanceId);
+      if (!server) continue;
+      seen.add(status.serverInstanceId);
+      servers.push(server);
+    }
+    return servers;
+  }
+
+  #boundReadyServers(): ConnectedServerRef[] {
+    const bound = new Set(readBindings(this.#deps.bindingsFile).map((item) => item.serverInstanceId));
+    return this.#readyServers().filter((server) => bound.has(server.serverInstanceId));
+  }
+
   async #syncConnectedServers(): Promise<void> {
-    const statuses = this.#deps.connections.statuses();
-    await Promise.all(statuses.filter((status) => status.state === "ready" && status.serverInstanceId).map(async (status) => {
-      const server = this.#deps.connections.serverForInstance(status.serverInstanceId!);
-      if (server) await this.#syncConfig(server, true).catch(() => undefined);
+    await Promise.all(this.#readyServers().map(async (server) => {
+      await this.#syncConfig(server, true).catch(() => undefined);
     }));
   }
 

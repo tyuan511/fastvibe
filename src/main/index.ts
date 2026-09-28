@@ -52,7 +52,7 @@ import { TerminalSessions } from "./engine/terminal-sessions";
 import { SshManager, openSshAppTransport } from "./ssh/ssh-manager";
 import { readAgentRuntimeSource, type AgentRuntimeSource } from "./ssh/agent-runtime";
 import { RemoteConnectionManager } from "./remote/connection-manager";
-import { RemoteGateway, shouldSyncAgentConfig } from "./remote/gateway";
+import { RemoteGateway } from "./remote/gateway";
 import { createAppServer, initAppServer, getAppServer } from "./app-server/runtime";
 import { loadOrCreateServerIdentity } from "./server/identity";
 import { APP_CAPABILITIES, conversationScope } from "@shared/app-protocol";
@@ -562,14 +562,10 @@ app.whenReady().then(async () => {
         window: (context.window as BrowserWindow | null) ?? null,
         origin: context.origin,
       };
-      // A remote WebSocket is already at this App Server. It must never be routed back
-      // out through this desktop's gateway merely because its payload contains a local
-      // conversation id. The gateway is only for Electron calls selecting a binding.
-      if (context.kind === "remote") {
-        const result = dispatch(method, payload, caller);
-        if (shouldSyncAgentConfig(method)) return result.finally(() => void gateway.syncConfiguration());
-        return result;
-      }
+      // Local ids stay on this desktop; namespaced ids are routed by the gateway to the
+      // SSH-bound Agent that owns them. A phone therefore uses the same project bindings
+      // as the desktop through this App Server, and the desktop remains the required
+      // relay between the phone and its existing SSH tunnel.
       return gateway.dispatch(method, payload, caller);
     },
   });

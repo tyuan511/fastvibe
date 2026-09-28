@@ -4,7 +4,7 @@ import { RemoteClient } from "../protocol/client";
 import { t } from "../i18n";
 import { parseServerAddress } from "../protocol/address";
 import { patchServer, readToken, writeToken, type SavedServer } from "../storage/servers";
-import { isMobileConversation, isMobileProject, isRemoteCatalogReference } from "./catalog-filter";
+import { isMobileConversation, isMobileProject } from "./catalog-filter";
 
 export type CatalogProject = { cwd: string; name: string };
 export type CatalogConversation = {
@@ -342,7 +342,7 @@ async function refreshCatalog(remote: RemoteClient): Promise<void> {
   const runningSince: Record<string, number> = {};
   if (Array.isArray(runningIds)) {
     for (const id of runningIds) {
-      if (typeof id !== "string" || isRemoteCatalogReference(id)) continue;
+      if (typeof id !== "string") continue;
       running[id] = true;
       runningSince[id] = state.runningSince[id] ?? Date.now();
     }
@@ -366,8 +366,7 @@ function handlePush(channel: string, payload: unknown): void {
   const event = payload;
   if (
     event.type === "conversation_running" &&
-    typeof event.conversationId === "string" &&
-    !isRemoteCatalogReference(event.conversationId)
+    typeof event.conversationId === "string"
   ) {
     const running = { ...state.running, [event.conversationId]: event.running === true };
     const runningSince = { ...state.runningSince };
@@ -445,8 +444,7 @@ function parsePermission(value: unknown): PermissionPrompt | null {
   if (
     !isRecord(value) ||
     value.type !== "extension_ui_request" ||
-    typeof value.id !== "string" ||
-    (typeof value.conversationId === "string" && isRemoteCatalogReference(value.conversationId))
+    typeof value.id !== "string"
   ) return null;
   const method = value.method;
   if (method !== "confirm" && method !== "select" && method !== "input" && method !== "editor" && method !== "questions" && method !== "plan_review") {

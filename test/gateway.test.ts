@@ -240,6 +240,35 @@ test("remote turn refreshes never read the host's local active conversation", as
   assert.deepEqual(stats, { cost: 0.12 });
 });
 
+test("global running and pending snapshots include bound servers", async () => {
+  const file = bindingsFile();
+  saveBinding(file, binding());
+  const connections = fakeConnections({
+    servers: [{ connectionId: "host-a", serverInstanceId: "srv_alpha", capabilities: ["engine"] }],
+    results: {
+      [Ipc.engineGetRunning]: ["chat-remote"],
+      [Ipc.engineGetPendingUi]: [{ type: "extension_ui_request", id: "prompt-1", conversationId: "chat-remote" }],
+    },
+  });
+  const { instance } = gateway({
+    file,
+    connections,
+    localDispatch: async (method) => method === Ipc.engineGetRunning
+      ? ["chat-local"]
+      : method === Ipc.engineGetPendingUi
+        ? [{ type: "extension_ui_request", id: "prompt-local", conversationId: "chat-local" }]
+        : localSnap(),
+  });
+
+  assert.deepEqual(await instance.dispatch(Ipc.engineGetRunning, undefined, {}), [
+    "chat-local", "remote:srv_alpha:chat-remote",
+  ]);
+  assert.deepEqual(await instance.dispatch(Ipc.engineGetPendingUi, undefined, {}), [
+    { type: "extension_ui_request", id: "prompt-local", conversationId: "chat-local" },
+    { type: "extension_ui_request", id: "remote:srv_alpha:prompt-1", conversationId: "remote:srv_alpha:chat-remote" },
+  ]);
+});
+
 test("all session-state replies restore the remote namespace, while branch messages stay intact", async () => {
   const methods = [Ipc.engineGetState, Ipc.engineSetModel, Ipc.engineSetThinking,
     Ipc.engineSetInterrupt, Ipc.engineSetAutoCompact, Ipc.engineSetSteering,
