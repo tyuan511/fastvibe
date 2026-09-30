@@ -100,20 +100,25 @@ jobs:
           chmod 600 "$RUNNER_TEMP/private_keys/AuthKey_${APPLE_API_KEY_ID}.p8"
           echo "ASC_AUTH=-authenticationKeyPath $RUNNER_TEMP/private_keys/AuthKey_${APPLE_API_KEY_ID}.p8 -authenticationKeyID $APPLE_API_KEY_ID -authenticationKeyIssuerID $APPLE_API_ISSUER" >> "$GITHUB_ENV"
 
+      # Archived unsigned, signed at export. An automatic-signing archive asks for an
+      # "iOS App Development" profile, and Apple will not make one for a team with no
+      # registered device ("Your team has no devices from which to generate a
+      # provisioning profile") — which is every team that only ships through TestFlight.
+      # The App Store needs a distribution certificate, not a device, and that is what
+      # the export step signs with.
       - name: Archive
         working-directory: apps/mobile/ios
         run: |
           set -euo pipefail
-          # shellcheck disable=SC2086
           xcodebuild archive \
             -workspace FastVibe.xcworkspace \
             -scheme FastVibe \
             -configuration Release \
             -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/FastVibe.xcarchive" \
-            -allowProvisioningUpdates $ASC_AUTH \
             DEVELOPMENT_TEAM="$TEAM_ID" \
-            CODE_SIGN_STYLE=Automatic \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
             | xcbeautify --renderer github-actions
 
       - name: Export and sign
