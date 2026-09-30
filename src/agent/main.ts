@@ -6,6 +6,7 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node
 import { createAgentRuntime } from "./runtime";
 import { configureAgentHttpProxy } from "./http-proxy";
 import { registerAgentIpc, agentChannels } from "./handlers";
+import { agentStreamWatch } from "./stream-watch";
 import { TerminalSessions } from "../main/engine/terminal-sessions";
 import { RemoteServer } from "../main/server/server";
 import { broadcast, subscribe } from "../main/ipc/broadcast";
@@ -72,6 +73,9 @@ initAppServer({
   dispatch: (method, payload, context) =>
     dispatch(method, payload, { kind: context.kind, window: null, origin: context.origin }),
 });
+// A conversation the phone reads is never the engine's active one, so its live stream
+// only reaches the phone through this watch (see stream-watch.ts).
+runtime.engine.setStreamWatch(agentStreamWatch(appServer));
 
 const server = new RemoteServer({
   accessFile: runtime.paths.remoteAccessFile,
