@@ -4,14 +4,15 @@ import { Appearance } from "react-native";
 
 /**
  * Settings that belong to this phone, not to the machine it connects to: the theme
- * and whether taps buzz. (The language is `i18n/index.ts`.) Kept in AsyncStorage and
+ * whether taps buzz, and whether background activity raises local notifications.
+ * (The language is `i18n/index.ts`.) Kept in AsyncStorage and
  * read once before the first screen draws.
  */
 export type ThemePreference = "system" | "light" | "dark";
-export type Preferences = { theme: ThemePreference; haptics: boolean };
+export type Preferences = { theme: ThemePreference; haptics: boolean; notifications: boolean };
 
 const KEY = "fastvibe.preferences.v1";
-const DEFAULTS: Preferences = { theme: "system", haptics: true };
+const DEFAULTS: Preferences = { theme: "system", haptics: true, notifications: true };
 
 let preferences: Preferences = DEFAULTS;
 const listeners = new Set<() => void>();
@@ -23,6 +24,7 @@ export async function loadPreferences(): Promise<void> {
     apply({
       theme: parsed.theme === "light" || parsed.theme === "dark" ? parsed.theme : "system",
       haptics: parsed.haptics !== false,
+      notifications: parsed.notifications !== false,
     });
   } catch {
     apply(DEFAULTS);

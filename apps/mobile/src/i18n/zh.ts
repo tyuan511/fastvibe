@@ -397,11 +397,18 @@ export const zh = {
   "settings.light": "浅色",
   "settings.dark": "深色",
   "settings.general": "通用",
+  "settings.notifications": "后台通知",
+  "settings.notificationsHint": "任务完成、出错或需要你处理时提醒",
   "settings.haptics": "触感反馈",
   "settings.hapticsHint": "点按、发送和选择时轻微震动",
   "settings.versionValue": "版本 {version}",
   "settings.releaseNotes": "更新日志",
   "settings.about": "关于",
+  "notifications.channel": "FastVibe 任务",
+  "notifications.waitingTitle": "有一个会话等你处理",
+  "notifications.waitingBody": "切换到这个会话继续处理。",
+  "notifications.doneBody": "任务已完成，可以回来查看结果。",
+  "notifications.errorBody": "任务出错了，可以回来看看。",
 } as const;
 
 export type MessageKey = keyof typeof zh;

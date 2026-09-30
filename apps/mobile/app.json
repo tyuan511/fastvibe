@@ -47,6 +47,13 @@
       ],
       "./plugins/without-push-entitlement",
       [
+        "expo-notifications",
+        {
+          "color": "#4f46e5",
+          "defaultChannel": "fastvibe-activity"
+        }
+      ],
+      [
         "expo-image-picker",
         {
           "photosPermission": "用于从相册选择图片发送给 FastVibe",

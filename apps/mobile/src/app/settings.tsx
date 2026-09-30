@@ -4,6 +4,7 @@ import { ActivityIndicator, Linking, Pressable, ScrollView, StyleSheet, Switch, 
 import { HugeiconsIcon, type IconSvgElement } from "@hugeicons/react-native";
 import { OptionSheet } from "../chat/option-sheet";
 import { setLanguagePreference, useLanguagePreference, useT, type LanguagePreference } from "../i18n";
+import { enableLocalNotifications } from "../notifications/local";
 import { BrandLogo } from "../ui/brand";
 import { haptic } from "../ui/haptics";
 import {
@@ -11,6 +12,7 @@ import {
   ArrowUp02Icon,
   Globe02Icon,
   InformationCircleIcon,
+  Notification01Icon,
   Sun03Icon,
   TouchInteraction01Icon,
 } from "../ui/icons";
@@ -90,6 +92,27 @@ export default function SettingsScreen() {
         </Section>
 
         <Section title={t("settings.general")} palette={palette}>
+          <Row
+            icon={Notification01Icon}
+            label={t("settings.notifications")}
+            description={t("settings.notificationsHint")}
+            palette={palette}
+            right={
+              <Switch
+                value={preferences.notifications}
+                onValueChange={(value) => {
+                  if (value) {
+                    void enableLocalNotifications();
+                  } else {
+                    void setPreference("notifications", false);
+                  }
+                }}
+                trackColor={{ true: palette.accent, false: palette.field }}
+                thumbColor={preferences.notifications ? palette.accentText : palette.subtle}
+              />
+            }
+          />
+          <Divider palette={palette} />
           <Row
             icon={TouchInteraction01Icon}
             label={t("settings.haptics")}
