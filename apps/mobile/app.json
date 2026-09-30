@@ -11,6 +11,7 @@
       "supportsTablet": true,
       "bundleIdentifier": "dev.fastvibe.mobile",
       "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
         "NSLocalNetworkUsageDescription": "用于连接同一局域网中的 FastVibe",
         "NSAppTransportSecurity": {
           "NSAllowsLocalNetworking": true
@@ -38,7 +39,13 @@
       "expo-router",
       "./plugins/with-android-release-signing",
       "expo-status-bar",
-      "expo-secure-store",
+      [
+        "expo-secure-store",
+        {
+          "faceIDPermission": false
+        }
+      ],
+      "./plugins/without-push-entitlement",
       [
         "expo-image-picker",
         {

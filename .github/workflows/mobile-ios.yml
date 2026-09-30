@@ -1,0 +1,158 @@
+name: Mobile iOS TestFlight
+
+# Builds the phone app for iOS and uploads it to TestFlight.
+#
+# Run it by hand first (Actions → Mobile iOS TestFlight → Run workflow, `upload` off) to
+# check that signing works: that stops after exporting an .ipa and attaches it to the run.
+# Pushing an `app-v*` tag uploads to TestFlight too once the repository variable
+# TESTFLIGHT_AUTO is `true`; until then a tag push does nothing here, so the Android
+# release is never held up by, or reported failed because of, an iOS setup that is
+# not finished.
+on:
+  push:
+    tags:
+      - "app-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "app-v* tag to build (empty: the selected branch)"
+        required: false
+        default: ""
+      upload:
+        description: "Upload the build to TestFlight (off: export the .ipa only)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-ios-${{ inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build iOS app
+    if: github.event_name == 'workflow_dispatch' || vars.TESTFLIGHT_AUTO == 'true'
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      RELEASE_TAG: ${{ inputs.tag || (startsWith(github.ref, 'refs/tags/app-v') && github.ref_name) || '' }}
+      UPLOAD: ${{ github.event_name == 'push' || inputs.upload }}
+      # Team that owns the App ID and the App Store Connect record. Set the repository
+      # variable APPLE_TEAM_ID to build for another team.
+      TEAM_ID: ${{ vars.APPLE_TEAM_ID || 'J24Y9W38D8' }}
+      # TestFlight orders uploads of one version by build number, so it has to rise on
+      # every run — a retry of the same tag included. app.config.js reads this.
+      FASTVIBE_IOS_BUILD_NUMBER: ${{ github.run_number }}
+      APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG || github.ref }}
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.22.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck mobile app
+        run: pnpm --filter @fastvibe/mobile typecheck
+
+      - name: Verify app tag version
+        if: startsWith(env.RELEASE_TAG, 'app-v')
+        run: |
+          node -e "const fs=require('fs');const v=JSON.parse(fs.readFileSync('apps/mobile/app.json','utf8')).expo.version;if(process.env.RELEASE_TAG !== 'app-v'+v) process.exit(1)"
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          pod --version
+
+      # The native project is generated only inside CI, like the Android one.
+      - name: Generate iOS project
+        working-directory: apps/mobile
+        run: |
+          CI=1 pnpm exec expo prebuild --platform ios --clean --no-install
+          pod install --project-directory=ios
+
+      # xcodebuild takes the App Store Connect API key as a *file*. With it, automatic
+      # signing creates or reuses the distribution certificate and the App Store
+      # provisioning profile in the account, so no certificate or profile is kept here.
+      - name: Write App Store Connect key
+        run: |
+          set -euo pipefail
+          test -n "$APPLE_API_KEY_P8" -a -n "$APPLE_API_KEY_ID" -a -n "$APPLE_API_ISSUER"
+          mkdir -p "$RUNNER_TEMP/private_keys"
+          printf '%s' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/private_keys/AuthKey_${APPLE_API_KEY_ID}.p8"
+          chmod 600 "$RUNNER_TEMP/private_keys/AuthKey_${APPLE_API_KEY_ID}.p8"
+          echo "ASC_AUTH=-authenticationKeyPath $RUNNER_TEMP/private_keys/AuthKey_${APPLE_API_KEY_ID}.p8 -authenticationKeyID $APPLE_API_KEY_ID -authenticationKeyIssuerID $APPLE_API_ISSUER" >> "$GITHUB_ENV"
+
+      - name: Archive
+        working-directory: apps/mobile/ios
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2086
+          xcodebuild archive \
+            -workspace FastVibe.xcworkspace \
+            -scheme FastVibe \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/FastVibe.xcarchive" \
+            -allowProvisioningUpdates $ASC_AUTH \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            CODE_SIGN_STYLE=Automatic \
+            | xcbeautify --renderer github-actions
+
+      - name: Export and sign
+        run: |
+          set -euo pipefail
+          destination=export
+          if [ "$UPLOAD" = true ]; then destination=upload; fi
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>teamID</key><string>${TEAM_ID}</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>destination</key><string>${destination}</string>
+            <key>uploadSymbols</key><true/>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+          </dict>
+          </plist>
+          EOF
+          # shellcheck disable=SC2086
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/FastVibe.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -allowProvisioningUpdates $ASC_AUTH \
+            | xcbeautify --renderer github-actions
+          ls -lh "$RUNNER_TEMP/export" || true
+
+      - name: Upload .ipa artifact
+        if: env.UPLOAD != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: FastVibe-ios-${{ env.RELEASE_TAG || github.sha }}
+          path: ${{ runner.temp }}/export/*.ipa
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Remove App Store Connect key
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/private_keys"
