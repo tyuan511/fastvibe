@@ -1,0 +1,7 @@
+{
+  "ios": {
+    "NSCameraUsageDescription": "用于扫描 FastVibe 的连接二维码",
+    "NSPhotoLibraryUsageDescription": "用于从相册选择图片发送给 FastVibe",
+    "NSLocalNetworkUsageDescription": "用于连接同一局域网中的 FastVibe"
+  }
+}

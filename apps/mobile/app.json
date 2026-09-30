@@ -11,8 +11,9 @@
       "supportsTablet": true,
       "bundleIdentifier": "dev.fastvibe.mobile",
       "infoPlist": {
+        "CFBundleAllowMixedLocalizations": true,
         "ITSAppUsesNonExemptEncryption": false,
-        "NSLocalNetworkUsageDescription": "用于连接同一局域网中的 FastVibe",
+        "NSLocalNetworkUsageDescription": "Used to connect to FastVibe on the same local network.",
         "NSAppTransportSecurity": {
           "NSAllowsLocalNetworking": true
         }
@@ -56,14 +57,14 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "用于从相册选择图片发送给 FastVibe",
+          "photosPermission": "Used to choose photos to send to your FastVibe.",
           "microphonePermission": false
         }
       ],
       [
         "expo-camera",
         {
-          "cameraPermission": "用于扫描 FastVibe 的连接二维码"
+          "cameraPermission": "Used to scan the QR code that connects the app to your FastVibe."
         }
       ],
       [
@@ -91,6 +92,10 @@
         }
       ]
     ],
+    "locales": {
+      "en": "./locales/en.json",
+      "zh-Hans": "./locales/zh-Hans.json"
+    },
     "experiments": {
       "typedRoutes": true
     }
