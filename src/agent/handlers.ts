@@ -46,6 +46,12 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
   handle(Ipc.engineAbortSubagent, async (payload: { subagentId: string; conversationId?: string }) => engine.abortSubagent(payload.subagentId, payload.conversationId));
   handle(Ipc.engineContinue, async (payload?: { conversationId?: string }) => engine.continueTurn(payload?.conversationId));
   handle(Ipc.engineClearQueue, async (payload?: { conversationId?: string }) => engine.clearQueue(payload?.conversationId));
+  handle(Ipc.engineQueueAdd, async (payload: Parameters<typeof engine.enqueueMessage>[0]) => engine.enqueueMessage(payload));
+  handle(Ipc.engineQueueCancel, async (payload: { id: string; conversationId?: string }) => engine.cancelQueued(payload.id));
+  handle(Ipc.engineQueueRecall, async (payload: { id: string; conversationId?: string }) => engine.recallQueued(payload.id));
+  handle(Ipc.engineQueueSendNow, async (payload: { id: string; conversationId?: string }) => engine.sendQueuedNow(payload.id));
+  handle(Ipc.engineQueueReorder, async (payload: { conversationId: string; ids: string[] }) => engine.reorderQueued(payload.conversationId, payload.ids));
+  handle(Ipc.engineQueueResume, async (payload: { conversationId: string }) => engine.resumeQueue(payload.conversationId));
   handle(Ipc.engineCompact, async (payload?: { customInstructions?: string; conversationId?: string }) => engine.compact(payload?.customInstructions, payload?.conversationId));
   handle(Ipc.engineGetCommands, (payload?: { conversationId?: string }) => engine.getCommands(payload?.conversationId));
   handle(Ipc.engineReplaceSteering, (payload: { items: Array<{ text: string; images?: Array<{ type: "image"; data: string; mimeType: string }> }>; conversationId?: string }) => engine.replaceSteering(payload.items, payload.conversationId));

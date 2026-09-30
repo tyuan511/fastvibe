@@ -9,7 +9,7 @@ import type { SdkQueueClaims } from "../engine/message-queue";
  * `peek()` is a preview and must stay unwrapped. Only `drain()` delivers a message
  * into a run, and that is the claim boundary.
  */
-export const SUPPORTED_PI_AGENT_CORE_VERSION = "0.87.1";
+export const SUPPORTED_PI_AGENT_CORE_VERSION = "0.99.1";
 
 type PendingQueue = {
   messages: AgentMessage[];

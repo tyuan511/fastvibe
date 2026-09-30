@@ -195,7 +195,31 @@ function namespaceEngineEvent(payload: unknown, serverInstanceId: string): unkno
   ) {
     next.id = namespaceConversationId(next.id, serverInstanceId);
   }
+  if (next.queue && typeof next.queue === "object") {
+    next.queue = namespaceQueueState(next.queue, serverInstanceId);
+  }
   return next;
+}
+
+/** Namespace the queue snapshot nested in a queue_changed event. Queue item ids stay
+ * unchanged; they are operation ids, while conversation ids are routing ids. */
+export function namespaceQueueState(value: unknown, serverInstanceId: string): unknown {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return value;
+  const record = { ...(value as Record<string, unknown>) };
+  if (typeof record.conversationId === "string" && record.conversationId) {
+    record.conversationId = namespaceConversationId(record.conversationId, serverInstanceId);
+  }
+  if (Array.isArray(record.items)) {
+    record.items = record.items.map((item) => {
+      if (typeof item !== "object" || item === null || Array.isArray(item)) return item;
+      const queued = { ...(item as Record<string, unknown>) };
+      if (typeof queued.conversationId === "string" && queued.conversationId) {
+        queued.conversationId = namespaceConversationId(queued.conversationId, serverInstanceId);
+      }
+      return queued;
+    });
+  }
+  return record;
 }
 
 function namespaceSessionState(value: unknown, serverInstanceId: string): unknown {

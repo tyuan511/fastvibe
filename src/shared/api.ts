@@ -162,12 +162,12 @@ export function createFastVibeApi(t: ApiTransport) {
         images?: PromptImage[];
         preview?: QueuedPromptPreview;
       }): Promise<ConversationQueueState> => t.invoke(Ipc.engineQueueAdd, payload),
-      queueCancel: (id: string): Promise<ConversationQueueState | null> =>
-        t.invoke(Ipc.engineQueueCancel, { id }),
-      queueRecall: (id: string): Promise<ConversationQueueState | null> =>
-        t.invoke(Ipc.engineQueueRecall, { id }),
-      queueSendNow: (id: string): Promise<ConversationQueueState | null> =>
-        t.invoke(Ipc.engineQueueSendNow, { id }),
+      queueCancel: (id: string, conversationId?: string): Promise<ConversationQueueState | null> =>
+        t.invoke(Ipc.engineQueueCancel, { id, conversationId }),
+      queueRecall: (id: string, conversationId?: string): Promise<ConversationQueueState | null> =>
+        t.invoke(Ipc.engineQueueRecall, { id, conversationId }),
+      queueSendNow: (id: string, conversationId?: string): Promise<ConversationQueueState | null> =>
+        t.invoke(Ipc.engineQueueSendNow, { id, conversationId }),
       queueReorder: (conversationId: string, ids: string[]): Promise<ConversationQueueState> =>
         t.invoke(Ipc.engineQueueReorder, { conversationId, ids }),
       queueResume: (conversationId: string): Promise<ConversationQueueState> =>

@@ -87,9 +87,9 @@ export function registerEngineIpc(engine: PiProcessManager): void {
   handle(Ipc.engineQueueAdd, async (payload: Parameters<typeof engine.enqueueMessage>[0]) => {
     return engine.enqueueMessage(payload);
   });
-  handle(Ipc.engineQueueCancel, async (payload: { id: string }) => engine.cancelQueued(payload.id));
-  handle(Ipc.engineQueueRecall, async (payload: { id: string }) => engine.recallQueued(payload.id));
-  handle(Ipc.engineQueueSendNow, async (payload: { id: string }) => engine.sendQueuedNow(payload.id));
+  handle(Ipc.engineQueueCancel, async (payload: { id: string; conversationId?: string }) => engine.cancelQueued(payload.id));
+  handle(Ipc.engineQueueRecall, async (payload: { id: string; conversationId?: string }) => engine.recallQueued(payload.id));
+  handle(Ipc.engineQueueSendNow, async (payload: { id: string; conversationId?: string }) => engine.sendQueuedNow(payload.id));
   handle(Ipc.engineQueueReorder, async (payload: { conversationId: string; ids: string[] }) =>
     engine.reorderQueued(payload.conversationId, payload.ids));
   handle(Ipc.engineQueueResume, async (payload: { conversationId: string }) =>

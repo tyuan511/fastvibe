@@ -15,6 +15,7 @@ import {
   namespaceCatalogSnapshot,
   namespaceConversationRecord,
   namespaceIdList,
+  namespaceQueueState,
   namespaceRemotePush,
   shouldRelayRemotePush,
 } from "../../shared/remote-events.ts";
@@ -106,6 +107,14 @@ const STATE_METHODS: ReadonlySet<string> = new Set([
   Ipc.engineSetSteering,
   Ipc.engineSetFollowUp,
   Ipc.engineCompact,
+]);
+const QUEUE_RESULT_METHODS: ReadonlySet<string> = new Set([
+  Ipc.engineQueueAdd,
+  Ipc.engineQueueCancel,
+  Ipc.engineQueueRecall,
+  Ipc.engineQueueSendNow,
+  Ipc.engineQueueReorder,
+  Ipc.engineQueueResume,
 ]);
 // These writes belong to this desktop's configuration. After the local write succeeds,
 // the same snapshot is sent to every live SSH Agent so a remote conversation never
@@ -617,6 +626,7 @@ export class RemoteGateway {
     if (result == null) return result;
     if (OPEN_METHODS.has(method)) return this.#scopeOpenResult(result, serverInstanceId);
     if (method === Ipc.engineGetSnapshot) return scopeSnapshot(result, serverInstanceId);
+    if (QUEUE_RESULT_METHODS.has(method)) return scopeQueueResult(result, serverInstanceId);
     if (STATE_METHODS.has(method)) return scopeSessionState(result, serverInstanceId);
     if (method === Ipc.workspaceTerminalStart) return scopeTerminal(result, serverInstanceId);
     if (method === Ipc.workspacePreview) return scopePreview(result, serverInstanceId);
@@ -656,6 +666,7 @@ export class RemoteGateway {
       conversation,
       messages: result.messages,
       state,
+      ...(result.queue !== undefined ? { queue: namespaceQueueState(result.queue, serverInstanceId) } : {}),
     };
   }
 
@@ -774,7 +785,13 @@ function scopeSnapshot(result: unknown, serverInstanceId: string): unknown {
   if (Array.isArray(next.turnEvents)) {
     next.turnEvents = next.turnEvents.map((item) => scopeUiItem(item, serverInstanceId));
   }
+  if (next.queue !== undefined) next.queue = namespaceQueueState(next.queue, serverInstanceId);
   return next;
+}
+
+function scopeQueueResult(value: unknown, serverInstanceId: string): unknown {
+  if (value == null) return value;
+  return namespaceQueueState(value, serverInstanceId);
 }
 
 function scopeSessionState(result: unknown, serverInstanceId: string): unknown {

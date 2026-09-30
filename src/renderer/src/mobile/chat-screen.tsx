@@ -321,7 +321,7 @@ function MobileComposer({ draft, onDraftChange }: { draft: Draft; onDraftChange:
 
   function removeQueued(id: string): void {
     void window.fastvibe.engine
-      .queueCancel(id)
+      .queueCancel(id, activeId ?? undefined)
       .then((next) => {
         if (next) useSessionStore.getState().setQueueState(next);
       })
