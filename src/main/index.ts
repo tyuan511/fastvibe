@@ -344,6 +344,24 @@ function registerSshIpc(): void {
     await remoteConnections.disconnect(hostId);
     return sshManager.stopAgent(hostId);
   });
+  handle(Ipc.sshSetPhoneAccess, async (payload: { hostId?: string; enabled?: boolean; password?: string; port?: number; publicUrl?: string }) => {
+    const hostId = typeof payload?.hostId === "string" ? payload.hostId.trim() : "";
+    if (!hostId) throw new Error("SSH 主机无效");
+    // Disconnect first: the Agent is about to be restarted (or stopped), and a live tunnel to
+    // the old one would only reconnect to nothing.
+    await remoteConnections.disconnect(hostId);
+    if (payload.enabled !== true) return sshManager.disablePhoneAccess(hostId);
+    return sshManager.enablePhoneAccess(hostId, {
+      port: Number(payload.port),
+      ...(typeof payload.password === "string" && payload.password ? { password: payload.password } : {}),
+      ...(typeof payload.publicUrl === "string" ? { publicUrl: payload.publicUrl } : {}),
+    }, (text) => broadcast(Ipc.sshAgentProgress, { hostId, text }));
+  });
+  handle(Ipc.sshStartAgent, async (payload: { hostId?: string }) => {
+    const hostId = typeof payload?.hostId === "string" ? payload.hostId.trim() : "";
+    if (!hostId) throw new Error("SSH 主机无效");
+    return sshManager.startAgent(hostId, (text) => broadcast(Ipc.sshAgentProgress, { hostId, text }));
+  });
   handle(Ipc.sshPickIdentityFile, async () => {
     const result = await dialog.showOpenDialog({
       title: uiText("选择 SSH 私钥", "Choose SSH private key"),

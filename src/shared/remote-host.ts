@@ -37,7 +37,61 @@ export type RemoteHostProfile = {
   servicePort?: number;
   /** Port on the local machine used for the SSH forward. */
   localPort?: number;
+  /**
+   * Set when a phone may connect to this host's resident Agent directly, without SSH.
+   * Its presence is the switch: the Agent then listens beyond loopback on `port` and
+   * asks for a password. The password itself is never kept here — only its hash, on the
+   * host.
+   */
+  phoneAccess?: PhoneAccess;
 };
+
+export type PhoneAccess = {
+  /** The Agent's fixed port. Separate from `servicePort`, which treats 7777 as unset. */
+  port: number;
+  /**
+   * What the phone should connect to, when that is not `http://<host>:<port>` — typically
+   * an `https://` address in front of the Agent, which an iPhone needs for anything that
+   * is not on the local network.
+   */
+  publicUrl?: string;
+};
+
+/**
+ * A `publicUrl` the phone can use, or null: an `http(s)` origin and nothing else.
+ *
+ * The phone adds a machine by origin, so a path would be silently dropped and the user
+ * would be looking at a code that opens a different address than the one they typed.
+ */
+export function normalizePublicUrl(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const text = value.trim();
+  if (!/^https?:\/\//i.test(text)) return null;
+  try {
+    const url = new URL(text);
+    if (url.pathname !== "/" || url.search || url.hash || url.username || url.password) return null;
+    return url.origin;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The address a phone scans to connect to this host, or null when phone access is off.
+ *
+ * `hostName` (the resolved name or IP) is preferred over `host`, which may be a ssh_config
+ * alias that only this machine's OpenSSH understands.
+ */
+export function phoneAccessAddress(host: Pick<RemoteHostProfile, "host" | "hostName" | "phoneAccess">): string | null {
+  const access = host.phoneAccess;
+  if (!access) return null;
+  const publicUrl = normalizePublicUrl(access.publicUrl);
+  if (publicUrl) return publicUrl;
+  const name = (host.hostName ?? host.host).trim();
+  if (!name) return null;
+  const bracketed = name.includes(":") && !name.startsWith("[") ? `[${name}]` : name;
+  return `http://${bracketed}:${access.port}`;
+}
 
 export type RemoteWorkspaceTarget = {
   kind: "remote";

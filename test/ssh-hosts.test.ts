@@ -48,3 +48,32 @@ test("without a keychain a sealed password survives an unrelated write", () => {
   saveSshHost(file, { id: "other", label: "o", host: "o.example" }, locked);
   assert.equal(readSshHosts(file, box).saved.find((item) => item.id === "h")?.password, "hunter2");
 });
+
+test("phone access is stored with the host, and nothing that would leak a secret", () => {
+  const file = hostsFile();
+  saveSshHost(file, {
+    id: "h", label: "h", host: "h.example",
+    phoneAccess: { port: 7777, publicUrl: "https://agent.example.com/" },
+  }, box);
+  const stored = readSshHosts(file, box).saved[0]!;
+  // 7777 is a legitimate phone port even though `servicePort` treats it as "unset".
+  assert.deepEqual(stored.phoneAccess, { port: 7777, publicUrl: "https://agent.example.com" });
+  // The password is never part of the profile — only a hash on the host.
+  assert.equal(readFileSync(file, "utf8").toLowerCase().includes("password\":"), false);
+  assert.deepEqual(redactSshHosts(readSshHosts(file, box)).saved[0]?.phoneAccess, stored.phoneAccess);
+});
+
+test("an invalid phone port drops phone access, and a bad public URL only the URL", () => {
+  const file = hostsFile();
+  saveSshHost(file, { id: "a", label: "a", host: "a.example", phoneAccess: { port: 70_000 } as never }, box);
+  assert.equal(readSshHosts(file, box).saved.find((item) => item.id === "a")?.phoneAccess, undefined);
+  saveSshHost(file, { id: "b", label: "b", host: "b.example", phoneAccess: { port: 8123, publicUrl: "agent.example.com/app" } }, box);
+  assert.deepEqual(readSshHosts(file, box).saved.find((item) => item.id === "b")?.phoneAccess, { port: 8123 });
+});
+
+test("saving a host without phoneAccess turns it off", () => {
+  const file = hostsFile();
+  saveSshHost(file, { id: "h", label: "h", host: "h.example", phoneAccess: { port: 7777 } }, box);
+  saveSshHost(file, { id: "h", label: "h", host: "h.example" }, box);
+  assert.equal(readSshHosts(file, box).saved[0]?.phoneAccess, undefined);
+});

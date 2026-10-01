@@ -214,6 +214,15 @@ export const Ipc = {
   sshHostKeyTrust: "ssh:host-key-trust",
   /** Stop the resident Agent on a host (disconnecting it first). */
   sshStopAgent: "ssh:stop-agent",
+  /** Start the resident Agent on a host without opening a project: the same init a new project runs. */
+  sshStartAgent: "ssh:start-agent",
+  /** What a long start / phone-access setup is doing now: `{ hostId, text }`. */
+  sshAgentProgress: "ssh:agent-progress",
+  /**
+   * Let a phone connect to a host's resident Agent directly (or stop letting it): writes the
+   * password on the host and restarts the Agent once. Disconnects the host first.
+   */
+  sshSetPhoneAccess: "ssh:set-phone-access",
   /** SSH tunnel lifecycle for a selected remote FastVibe service. */
   sshConnect: "ssh:connect",
   sshDisconnect: "ssh:disconnect",

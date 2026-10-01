@@ -1,7 +1,7 @@
 import { chmodSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { mkdirSync } from "node:fs";
-import type { RemoteHostProfile } from "@shared/remote-host";
+import { normalizePublicUrl, type RemoteHostProfile } from "../../shared/remote-host.ts";
 import { readSshConfig } from "./ssh-config.ts";
 
 type StoredHosts = { version: 1; hosts: StoredProfile[] };
@@ -139,6 +139,14 @@ function normalize(value: StoredProfile): StoredProfile {
     // it would pin the Agent to the one port the random default exists to avoid.
     ...(validPort(value?.servicePort) && value.servicePort !== 7777 ? { servicePort: value.servicePort } : {}),
     ...(validPort(value?.localPort) ? { localPort: value.localPort } : {}),
+    ...(validPort(value?.phoneAccess?.port)
+      ? {
+          phoneAccess: {
+            port: value.phoneAccess.port,
+            ...(normalizePublicUrl(value.phoneAccess.publicUrl) ? { publicUrl: normalizePublicUrl(value.phoneAccess.publicUrl)! } : {}),
+          },
+        }
+      : {}),
   };
 }
 

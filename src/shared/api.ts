@@ -504,6 +504,17 @@ export function createFastVibeApi(t: ApiTransport) {
       scanHostKey: (hostId: string): Promise<SshHostKeyScan> => t.invoke(Ipc.sshHostKeyScan, { hostId }),
       trustHostKey: (hostId: string, fingerprints: string[]): Promise<void> => t.invoke(Ipc.sshHostKeyTrust, { hostId, fingerprints }),
       stopAgent: (hostId: string): Promise<string> => t.invoke(Ipc.sshStopAgent, { hostId }),
+      /** Start the Agent without a project; resolves with a one-line status. Progress arrives on `onAgentProgress`. */
+      startAgent: (hostId: string): Promise<string> => t.invoke(Ipc.sshStartAgent, { hostId }),
+      onAgentProgress: (listener: (progress: { hostId: string; text: string }) => void): (() => void) =>
+        t.subscribe(Ipc.sshAgentProgress, listener),
+      /**
+       * Turn phone access on or off for a host. Turning it on needs a `port` and, the first
+       * time, a `password`; the host's Agent restarts once. `publicUrl` is what the phone
+       * should connect to when that is not `http://<host>:<port>` (an https address).
+       */
+      setPhoneAccess: (payload: { hostId: string; enabled: boolean; password?: string; port?: number; publicUrl?: string }): Promise<{ saved: RemoteHostProfile[]; discovered: RemoteHostProfile[] }> =>
+        t.invoke(Ipc.sshSetPhoneAccess, payload),
       connect: (hostId: string): Promise<RemoteHostConnectionState> => t.invoke(Ipc.sshConnect, { hostId }),
       disconnect: (hostId?: string): Promise<RemoteHostConnectionState> =>
         t.invoke(Ipc.sshDisconnect, hostId ? { hostId } : undefined),

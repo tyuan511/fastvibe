@@ -154,6 +154,8 @@ test("the denied set is exactly what the UI explains, so a new denial cannot go 
     "ssh:host-save",
     "ssh:hosts",
     "ssh:pick-identity-file",
+    "ssh:set-phone-access",
+    "ssh:start-agent",
     "ssh:state",
     "ssh:states",
     "ssh:stop-agent",
