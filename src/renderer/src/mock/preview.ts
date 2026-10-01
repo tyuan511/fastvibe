@@ -644,22 +644,68 @@ const api = {
   stats: {
     usage: async () => USAGE,
   },
-  ssh: {
-    hosts: async () => ({ saved: [], discovered: [{ id: "ssh:preview", label: "preview", host: "preview", hostName: "192.0.2.10", source: "config" as const, user: "dev" }] }),
-    saveHost: async () => ({ saved: [], discovered: [] }),
-    removeHost: async () => ({ saved: [], discovered: [] }),
-    pickIdentityFile: async () => null,
-    test: async () => ({ ok: true, target: "dev@192.0.2.10", agent: { installed: "0.10.0", running: "0.10.0" } }),
-    scanHostKey: async (hostId: string) => ({ hostId, keys: [{ type: "ED25519", fingerprint: "SHA256:preview" }], knownHostsFile: "~/.ssh/known_hosts" }),
-    trustHostKey: async () => undefined,
-    stopAgent: async () => "远程 Agent 已停止",
-    connect: async (hostId: string) => ({ hostId, serverInstanceId: "srv_preview", status: "connected" as const, localPort: 17777 }),
-    disconnect: async (hostId?: string) => ({ hostId: hostId ?? null, serverInstanceId: null, status: "disconnected" as const }),
-    state: async () => ({ hostId: null, serverInstanceId: null, status: "disconnected" as const }),
-    states: async () => [],
-    onState: () => () => undefined,
-    onStates: () => () => undefined,
-  },
+  // `?phone=on` previews a host that already allows phone connections (the QR icon beside it).
+  // Starting an Agent and turning phone access on both play a few seconds of progress, as the
+  // real ones do over a first deploy.
+  ssh: (() => {
+    type Host = import("@shared/remote-host").RemoteHostProfile;
+    const store: Host[] = [
+      { id: "manual:hk1", label: "hk1", host: "hk1", hostName: "203.0.113.5", user: "root", source: "manual", authMethod: "default-key", ...(params.get("phone") === "on" ? { phoneAccess: { port: 7777 } } : {}) },
+    ];
+    const discovered: Host[] = [{ id: "ssh:preview", label: "preview", host: "preview", hostName: "192.0.2.10", source: "config", user: "dev" }];
+    const snapshot = () => ({ saved: store.map((host) => ({ ...host })), discovered });
+    const listeners = new Set<(progress: { hostId: string; text: string }) => void>();
+    const play = async (hostId: string, lines: string[]) => {
+      for (const text of lines) {
+        for (const listener of listeners) listener({ hostId, text });
+        await new Promise((resolve) => setTimeout(resolve, 700));
+      }
+    };
+    return {
+      hosts: async () => snapshot(),
+      saveHost: async (host: Host) => {
+        const at = store.findIndex((item) => item.id === host.id);
+        if (at >= 0) store[at] = host;
+        else store.push(host);
+        return snapshot();
+      },
+      removeHost: async (id: string) => {
+        const at = store.findIndex((item) => item.id === id);
+        if (at >= 0) store.splice(at, 1);
+        return snapshot();
+      },
+      pickIdentityFile: async () => null,
+      test: async () => ({ ok: true, target: "dev@192.0.2.10", agent: { installed: "0.10.0", running: "0.10.0" } }),
+      scanHostKey: async (hostId: string) => ({ hostId, keys: [{ type: "ED25519", fingerprint: "SHA256:preview" }], knownHostsFile: "~/.ssh/known_hosts" }),
+      trustHostKey: async () => undefined,
+      stopAgent: async () => "远程 Agent 已停止",
+      startAgent: async (hostId: string) => {
+        await play(hostId, ["检查远程系统与常驻 Agent…", "正在上传 Agent（40%）", "正在启动远程 Agent…"]);
+        return "远程 Agent 已就绪（端口 41234）";
+      },
+      onAgentProgress: (listener: (progress: { hostId: string; text: string }) => void) => {
+        listeners.add(listener);
+        return () => { listeners.delete(listener); };
+      },
+      setPhoneAccess: async (payload: { hostId: string; enabled: boolean; port?: number; publicUrl?: string }) => {
+        const host = store.find((item) => item.id === payload.hostId);
+        if (!host) throw new Error("SSH 主机不存在");
+        if (payload.enabled) {
+          await play(payload.hostId, ["已设置手机连接密码", "Restarting FastVibe Agent (pid 2333480)", "远程 Agent 已就绪（对外监听，端口 " + payload.port + "）"]);
+          host.phoneAccess = { port: payload.port ?? 7777, ...(payload.publicUrl ? { publicUrl: payload.publicUrl } : {}) };
+        } else {
+          delete host.phoneAccess;
+        }
+        return snapshot();
+      },
+      connect: async (hostId: string) => ({ hostId, serverInstanceId: "srv_preview", status: "connected" as const, localPort: 17777 }),
+      disconnect: async (hostId?: string) => ({ hostId: hostId ?? null, serverInstanceId: null, status: "disconnected" as const }),
+      state: async () => ({ hostId: null, serverInstanceId: null, status: "disconnected" as const }),
+      states: async () => [],
+      onState: () => () => undefined,
+      onStates: () => () => undefined,
+    };
+  })(),
   decision: {
     getConfig: async () => ({ kind: "off" as const, browserControl: false }),
     saveConfig: async (config: unknown) => config as { kind: "off"; browserControl: boolean },

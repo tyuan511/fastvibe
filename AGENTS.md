@@ -316,6 +316,65 @@ those states in a browser — the real thing needs a password, a port and somebo
 (`?tunnel=lan` is the branch the 允许局域网访问 row's QR icon exists for: the address in that row
 is only reachable, and so only scannable, when the server is listening on the LAN.)
 
+### SSH 主机的手机连接（`phoneAccess`）
+
+A server whose Agent was deployed over SSH is reachable from the desktop and nowhere else:
+the Agent listens on `127.0.0.1`, the desktop's forward arrives from loopback and presents a
+secret token, and there is no password. A phone cannot make that hop. 设置 → SSH 主机 → 编辑 →
+**允许手机连接** turns the same resident Agent into something a phone can reach directly —
+the same models and chats, not a second Agent — and the row then shows the usual hover-to-scan
+QR icon (`QrAction`, shared with 远程访问).
+
+- **The switch is `profile.phoneAccess = { port, publicUrl? }`, not `servicePort`.**
+  `normalize` throws `servicePort === 7777` away (it was once written into every profile by
+  mistake), and 7777 is the obvious phone port, so the two cannot share a field. `connect`
+  asks `runningAgentFits`, which prefers `phoneAccess.port`.
+- **Three things happen, in this order, in `SshManager.enablePhoneAccess`:** the password hash
+  is written to the host, the Agent is restarted so it listens beyond loopback, and *only
+  then* is the profile saved. A failure before the save leaves the profile as it was, so the
+  pane never draws a QR code for a host that is not reachable; a password file written by a
+  first-time enable that then failed is deleted again. The IPC handler disconnects the host
+  first, because a live forward to the Agent being restarted would only reconnect to nothing.
+- **The password is never stored on the desktop and never an `ssh` argument.** Only its scrypt
+  hash is made (`hashPassword`, the server's own), and it travels on stdin to
+  `~/.fastvibe/remote-access.json` (0600, written beside and renamed). `RemoteServer` re-reads
+  that file on every login, so a changed password needs no restart — and because the file is
+  rewritten whole, changing it signs every phone out. Leaving the password empty on an
+  already-enabled host keeps the one it has, so the port can change without that.
+- **The Agent knows two states, and the bootstrap/preflight compare them.** `--host=127.0.0.1`
+  (default) or `--host=0.0.0.0` — nothing else (`agent/listen.ts`). It records `public: 0|1`
+  in its state file as a *number*, because the bootstrap reads that file with `sed` and its
+  field reader only knows digits. The preflight prints `FASTVIBE_PUBLIC`, and a running Agent
+  that does not fit (wrong port, or `public` not matching the profile) is restarted instead of
+  reused. An Agent from before the field reads as loopback.
+- **The server's rule moved, but "no password, no server" did not.** `RemoteServer.start` used
+  to refuse any non-loopback host when it had a loopback token. It now refuses only when no
+  password is set. What makes listening beyond loopback safe is that the loopback token is
+  honoured only for a socket whose *peer address* is loopback (`#attach`), so a phone
+  presenting it is refused — `test/agent-listen.test.ts` connects to this machine's LAN
+  address to prove it, because a loopback connection would pass either way.
+- **An Agent too old for `--host` is reported, not restarted forever.** It ignores the flag
+  and stays on loopback; the next connect would read that as a mismatch and restart it again.
+  The bootstrap checks `public` after the start and fails with 版本过旧. Publish an
+  `agent-runtime-v*` containing `--host` *before* a desktop build that ships this.
+- **启动 Agent** (in the row's 更多 menu, with 测试 and 停止) starts the Agent without a
+  project. It is `openSshAppTransport`, the connect a new project makes, with its tunnel closed
+  again at once — one initialisation path, and the first project added later finds the Agent
+  running and skips the deploy. `ssh:agent-progress` carries the script's own lines to a toast
+  during a deploy that can take minutes. It is a push channel, so it is *not* in
+  `remote-policy.ts` (the table holds registered methods); `ssh:start-agent` and
+  `ssh:set-phone-access` are, and are denied remotely like the rest of SSH management.
+- **The QR code is `publicUrl`, else `http://<hostName>:<port>`.** `hostName` (resolved) before
+  `host`, which may be an ssh_config alias only this machine understands. A `publicUrl` must be
+  an http(s) *origin* (`normalizePublicUrl`): the phone adds a machine by origin and would
+  silently drop a path. The pane says so where it matters: an **iPhone refuses plain `http://`
+  outside the local network** (ATS allows only `NSAllowsLocalNetworking`), and without
+  `publicUrl` the password crosses the network in the clear — put https in front.
+- **The port is the user's to open.** The pane names the firewall and the cloud security group
+  and does nothing about them, the same line 内网穿透 → frp draws.
+- Preview: `mock.html?phone=on#/settings/ssh` shows a host that already allows phone connections;
+  starting an Agent and turning phone access on both play their progress.
+
 ### 网页客户端（`remote.html`）
 
 The same React tree the Electron window runs, served by the remote server and reaching

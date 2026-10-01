@@ -134,7 +134,7 @@ function CopyAction({ value }: { value: string }): JSX.Element {
  * leaves its trigger, and scanning means leaving the trigger to point a camera at the
  * code. `openOnHover` + a hoverable popup is the shape that survives that.
  */
-function QrAction({ value }: { value: string }): JSX.Element {
+export function QrAction({ value }: { value: string }): JSX.Element {
   const { t } = useTranslation("settings");
 
   return (
