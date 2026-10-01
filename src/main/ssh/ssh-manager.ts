@@ -438,16 +438,28 @@ export async function openSshAppTransport(options: {
     throwIfAborted(signal);
     onActivity?.("starting-agent");
     output("正在启动远程 Agent…");
-    const bootstrap = await runSshCommand({
-      host: profile,
-      password,
-      controlPath,
-      command: buildAgentBootstrapCommand(profile.phoneAccess?.port ?? profile.servicePort, agentRuntime, target, randomBytes(32).toString("hex"), { exposed: Boolean(profile.phoneAccess) }),
-      // Long enough for a first deploy that also has to download Node.js from a mirror.
-      timeoutMs: 900_000,
-      onOutput: remote(),
-      signal,
-    });
+    // OpenSSH reports every remote failure as a bare exit code, and what actually went wrong
+    // is the last thing the script printed (停止原因: 端口被占用, runtime 过旧, …). The pane
+    // that started this shows the thrown error, not the progress lines, which are gone by then.
+    let lastLine = "";
+    let bootstrap: string;
+    try {
+      bootstrap = await runSshCommand({
+        host: profile,
+        password,
+        controlPath,
+        command: buildAgentBootstrapCommand(profile.phoneAccess?.port ?? profile.servicePort, agentRuntime, target, randomBytes(32).toString("hex"), { exposed: Boolean(profile.phoneAccess) }),
+        // Long enough for a first deploy that also has to download Node.js from a mirror.
+        timeoutMs: 900_000,
+        onOutput: remote((line) => { lastLine = line; }),
+        signal,
+      });
+    } catch (error) {
+      throwIfAborted(signal);
+      // A refused credential or an untrusted host key keeps its own error and code.
+      if (error instanceof SshError || !lastLine) throw error;
+      throw new Error(lastLine);
+    }
     const configSyncToken = extractSyncToken(bootstrap);
     if (!configSyncToken) throw new Error("远程 Agent 未返回配置同步凭据");
     const remotePort = parsePreflight(bootstrap).port;
