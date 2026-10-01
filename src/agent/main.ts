@@ -7,6 +7,7 @@ import { createAgentRuntime } from "./runtime";
 import { configureAgentHttpProxy } from "./http-proxy";
 import { registerAgentIpc, agentChannels } from "./handlers";
 import { agentStreamWatch } from "./stream-watch";
+import { resolveListenHost } from "./listen";
 import { TerminalSessions } from "../main/engine/terminal-sessions";
 import { RemoteServer } from "../main/server/server";
 import { broadcast, subscribe } from "../main/ipc/broadcast";
@@ -39,6 +40,7 @@ const stateFile = option("--state-file") || join(userData, "agent.json");
 const resourcesPath = process.env.FASTVIBE_RESOURCES_PATH || join(here, "../../resources");
 
 if (!Number.isInteger(port) || port < 0 || port > 65_535) throw new Error("FASTVIBE_AGENT_PORT 无效");
+const listen = resolveListenHost(option("--host") ?? process.env.FASTVIBE_AGENT_HOST);
 
 // The headless service can also start outside a login shell.
 applyShellPath();
@@ -109,10 +111,10 @@ process.once("SIGTERM", () => void stop().finally(() => process.exit(0)));
 process.once("SIGINT", () => void stop().finally(() => process.exit(0)));
 
 await runtime.engine.start();
-const listening = (await server.start({ port, host: "127.0.0.1" })).port ?? port;
+const listening = (await server.start({ port, host: listen.host })).port ?? port;
 writeStateFile(listening);
 broadcast("agent:ready", { port: listening, userData });
-console.info(`[fastvibe-agent] ready on 127.0.0.1:${listening}`);
+console.info(`[fastvibe-agent] ready on ${listen.host}:${listening}`);
 
 /**
  * Written only after `listen` succeeded, so its presence means the port accepts. One
@@ -121,7 +123,9 @@ console.info(`[fastvibe-agent] ready on 127.0.0.1:${listening}`);
 function writeStateFile(listeningPort: number): void {
   mkdirSync(dirname(stateFile), { recursive: true });
   const temporary = `${stateFile}.${process.pid}.tmp`;
-  const state = { pid: process.pid, port: listeningPort, version: process.env.FASTVIBE_VERSION || null, startedAt: new Date().toISOString() };
+  // `public` is a number, not a boolean, because the bootstrap reads this file with `sed`
+  // and its field reader only knows digits. 1 means listening beyond loopback.
+  const state = { pid: process.pid, port: listeningPort, public: listen.exposed ? 1 : 0, version: process.env.FASTVIBE_VERSION || null, startedAt: new Date().toISOString() };
   writeFileSync(temporary, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
   renameSync(temporary, stateFile);
 }

@@ -293,8 +293,13 @@ export class RemoteServer {
     assertPolicyCoverage(this.#deps.channels(), { requireAll: this.#deps.policyScope !== "subset" });
 
     const host = options.host?.trim() || "127.0.0.1";
-    if (this.#deps.loopbackToken && host !== "127.0.0.1" && host !== "localhost" && host !== "::1") {
-      throw new Error("SSH loopback鉴权服务只能监听本机");
+    // The loopback token is what lets the desktop's SSH forward in without a password, and
+    // it is only ever honoured for a client that arrived from loopback (`#attach`). Listening
+    // beyond loopback is therefore safe exactly when everyone else has a password to present:
+    // without one the only door left would be a server that asks nothing of its visitors.
+    const loopbackOnly = host === "127.0.0.1" || host === "localhost" || host === "::1";
+    if (this.#deps.loopbackToken && !loopbackOnly && !isConfigured(this.#deps.accessFile)) {
+      throw new Error("监听外部地址前必须先设置密码");
     }
     // Both handlers are the outermost frame of their own call: anything thrown here
     // reaches no `catch` but the logger's global one, which records it and leaves the
