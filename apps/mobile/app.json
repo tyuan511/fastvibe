@@ -8,6 +8,7 @@
     "scheme": "fastvibe",
     "userInterfaceStyle": "automatic",
     "ios": {
+      "icon": "./assets/ios-icon.png",
       "supportsTablet": true,
       "bundleIdentifier": "dev.fastvibe.mobile",
       "infoPlist": {
