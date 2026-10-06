@@ -602,7 +602,8 @@ export const PROVIDERS: ProviderConfig[] = [
 ];
 
 export const MCP_SERVERS: McpServerStatus[] = [
-  { id: "mcp-filesystem", name: "filesystem", enabled: true, transport: "stdio", command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem", PREVIEW_CWD], connected: true, tools: ["read_file", "write_file", "list_directory", "search_files"] },
+  { id: "mcp-filesystem", name: "filesystem", enabled: true, transport: "stdio", command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem", PREVIEW_CWD], env: { LOG_LEVEL: "debug", ALLOWED_ROOT: PREVIEW_CWD }, connected: true, tools: ["read_file", "write_file", "list_directory", "search_files"] },
+  { id: "mcp-docs", name: "docs", enabled: true, transport: "http", url: "https://example.com/mcp", headers: { Authorization: "Bearer sk-demo:123", "X-Workspace": "fastvibe" }, connected: true, tools: ["search_docs"] },
   { id: "mcp-postgres", name: "postgres", enabled: false, transport: "stdio", connected: false, tools: [], error: "not started" },
 ];
 

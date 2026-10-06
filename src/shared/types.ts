@@ -387,6 +387,8 @@ export type McpServerConfig = {
   args?: string[];
   env?: Record<string, string>;
   url?: string;
+  /** Request headers of an HTTP server, e.g. `Authorization`. */
+  headers?: Record<string, string>;
 };
 
 export type McpServerStatus = McpServerConfig & { connected: boolean; tools: string[]; error?: string };

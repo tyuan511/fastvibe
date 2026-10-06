@@ -1490,6 +1490,55 @@ Deliberately deferred. Plugin authors are expected to degrade via `ctx.mode` /
 4. **`registerMarkdownTransformer`, `setEditorComponent`, `addAutocompleteProvider`,
    theme selection** — no-ops.
 
+## MCP（`src/main/pi/mcp-manager.ts`）
+
+MCP servers are configured in 设置 → MCP 工具 and stored in `mcp.json`. The wire protocol is
+**`@earendil-works/pi-mcp`** (the standalone library pi's own MCP support is built on): `McpClient`,
+`StdioTransport`, `StreamableHttpTransport`, `toLlmContent`. FastVibe's `McpManager` stays the owner
+of connections, config and the settings pane's status.
+
+- **Not pi's built-in MCP extension, on purpose.** `createMcpExtension()` keeps its state inside the
+  factory call, so every session would spawn its own copy of every stdio server (N chats × M
+  servers), where `McpManager` connects once per engine and hands the tools to every session. It
+  also exposes no connection state — the settings pane's 已连接 / 工具数 / 错误 has nothing to read —
+  and its `/mcp` manager and sign-in screens are terminal UI. SDK sessions do not load the built-in
+  extensions at all (only the CLI does), so nothing here is switched on by an upgrade. Revisit if pi
+  exports a status API and a way to share connections.
+- **Tool names stay `mcp_<id>_<tool>`** (pi's would be `mcp__<server>__<tool>`): the id is stable across
+  renames and the transcript, sandbox and renderer already know this shape.
+- **A stdio server gets a short inherited environment** (`PATH`, `HOME`, `USER`, `SHELL`, `LOGNAME`,
+  `TERM`; the Windows equivalents) plus its own `env` — `inheritEnv: false`. The transport's default is
+  all of `process.env`, which is the app's business, not the server's. A test pins this.
+- **Results keep their images** (`toLlmContent`; the old text-only join turned an image into a JSON
+  string), and an `isError` result sets the tool result's error flag — the model is told the call
+  failed instead of reading an error as an answer. The call's `signal` is passed on, so Stop cancels it.
+- **A server that exits later is shown as down.** `client.onClose` drops the connection from the map
+  and records 「连接已断开」, guarded by identity so a deliberate reconnect (`connectAll` closes first)
+  is not reported as a loss. There is no lazy reconnect: save the settings or reload to bring it back.
+- **The form edits the standard `mcpServers` JSON as well as fields.** `shared/mcp-config.ts` is the one
+  reading of that shape — Claude Desktop / Claude Code / Cursor (`mcpServers`), VS Code (`servers`), a bare
+  name → entry map, or a README fragment missing its outer braces. The settings pane (paste, edit one
+  server) and Main (reading a stored `mcp.json`) both go through `serverFromEntry`, so they cannot
+  disagree about what an entry means. Differences between the two callers are deliberate: pasting refuses
+  `type: "sse"` (this app cannot speak it) with a reason, while loading a stored file reads it as HTTP
+  (`lenient`) so the row stays in the list and the connection error explains itself.
+- **Pasting merges by name and keeps the stored id**; editing one server replaces it whatever it is now
+  called. The id is what the engine names the server's tools by.
+- **`env` is edited as `KEY=value` lines and `headers` as `Name: value` lines** (`parseMap`). The value is
+  everything after the first separator, so `Authorization: Bearer a:b` and `URL=https://x/?a=b` survive,
+  and a line that is not an entry blocks saving instead of being dropped. The textareas switch off
+  spell-check and auto-capitalisation: a phone keyboard otherwise "corrects" a token.
+- **Secrets in `mcp.json` reach the renderer.** `engine:list-mcp-servers` returns `env` and `headers`
+  values so the form can show them for editing, to the remote client as well — the same trust as asking
+  the agent to run a command, and the reason no policy change was needed. The settings pane strips the
+  status fields (`connected`, `tools`, `error`) before saving, so they are not written back to the file.
+- **Not done: OAuth sign-in** (the main reason to want pi's MCP). `pi-mcp/oauth` has the flow (PKCE,
+  discovery, dynamic registration, a loopback callback server); what is missing is a credential store,
+  a 登录 control in the pane and an IPC method — which opens a browser on the host, so
+  `server/policy.ts` has to classify it. Servers that need a bearer token work today through `headers`.
+- Not done either: tool-result truncation (a huge result goes into the context whole, as before),
+  exposure / `tool_search` / codemode, and MCP resources.
+
 ## Commands
 
 ```bash

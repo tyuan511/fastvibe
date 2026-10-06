@@ -7,6 +7,7 @@ settings:
 overrides:
   '@earendil-works/pi-ai': 1.0.4
   '@earendil-works/pi-coding-agent': 1.0.4
+  '@earendil-works/pi-mcp': 1.0.4
   '@earendil-works/pi-tui': 1.0.4
 
 importers:
@@ -22,15 +23,15 @@ importers:
       '@earendil-works/pi-coding-agent':
         specifier: 1.0.4
         version: 1.0.4(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(supports-color@7.2.0)(zod@3.25.76))(@smithy/signature-v4@5.7.3)(supports-color@8.1.1)(ws@8.21.3)(zod@3.25.76)
+      '@earendil-works/pi-mcp':
+        specifier: 1.0.4
+        version: 1.0.4
       '@earendil-works/pi-tui':
         specifier: 1.0.4
         version: 1.0.4
       '@huggingface/transformers':
         specifier: ^4.3.0
         version: 4.3.0(@types/node@24.13.4)
-      '@modelcontextprotocol/sdk':
-        specifier: ^1.30.0
-        version: 1.30.0(supports-color@7.2.0)(zod@3.25.76)
       '@tanstack/react-virtual':
         specifier: ^3.14.13
         version: 3.14.13(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -10048,6 +10049,7 @@ snapshots:
       zod-to-json-schema: 3.25.2(zod@3.25.76)
     transitivePeerDependencies:
       - supports-color
+    optional: true
 
   '@modelcontextprotocol/sdk@1.30.0(supports-color@8.1.1)(zod@3.25.76)':
     dependencies:
@@ -13296,6 +13298,7 @@ snapshots:
       ip-address: 10.7.0
     transitivePeerDependencies:
       - supports-color
+    optional: true
 
   express-rate-limit@8.7.0(express@5.2.1(supports-color@8.1.1))(supports-color@8.1.1):
     dependencies:
