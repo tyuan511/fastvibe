@@ -36,8 +36,6 @@
   "computerControlHint": "Hands multi-step work in desktop windows to the decision model.",
   "batchDecide": "Batch decisions",
   "batchDecideHint": "The main agent can hand bulk labelling, rating and yes/no judgement to the decision model. Item content is sent to Jev.",
-  "smartApproval": "Smart approvals",
- "smartApprovalHint": "The decision model judges whether a call needs approval; privilege escalation, system files and credentials always ask. Off: built-in rules.",
  "memoryControl": "Enhanced memory",
  "memoryControlHint": "Jev decides what to keep, how memories relate, and which ones to use before answering."
  },
@@ -244,9 +242,6 @@
  "agent": {
   "title": "Agent settings"
  },
- "security": {
-  "title": "Security & permissions"
- },
  "runtime": {
   "title": "Runtime"
  },
@@ -254,28 +249,17 @@
   "title": "General",
   "defaultModel": "Default model",
   "defaultModelDesc": "Model used for new conversations",
-  "permission": "Default permission mode",
-  "permissionDesc": "{{mode}}; can be switched temporarily above the composer",
   "keepAwake": "Keep awake while running",
   "keepAwakeDesc": "Prevents sleep while an agent is running",
   "notifications": "Desktop notifications",
-  "notificationsDesc": "Notify when a task finishes, fails, needs an answer, or an update is ready",
-  "permissionRules": "Remembered approvals",
-  "permissionRulesDesc": "These calls skip confirmation; {{count}} in total",
-  "permissionRulesClear": "Clear all"
+  "notificationsDesc": "Notify when a task finishes, fails, needs an answer, or an update is ready"
  },
  "chat": {
   "title": "Chat",
-  "queue": "Messages while streaming",
-  "queueDesc": "What happens if you send while a reply is generating",
-  "followUp": "Run after it finishes",
-  "steer": "Interrupt now",
-  "interrupt": "Interrupt style",
-  "interruptDesc": "Whether interrupting waits for the current turn to end",
-  "immediate": "Interrupt now",
-  "wait": "Wait for the turn",
-  "autoCompact": "Auto-compact",
-  "autoCompactDesc": "Compact the conversation when context is nearly full"
+  "codemode": "Code mode",
+  "codemodeDesc": "Let the model write one script that calls many tools and gets only its output back",
+  "toolSearch": "Tool search",
+  "toolSearchDesc": "Let the model look up and load tools that are not provided up front"
  },
  "about": {
   "more": "More",
@@ -725,7 +709,16 @@
   "jsonMissing": "\"{{name}}\" needs a command (local process) or a url (HTTP)",
   "jsonSse": "\"{{name}}\" uses the SSE transport, which is not supported. Use its Streamable HTTP URL",
   "jsonField": "The {{field}} of \"{{name}}\" is not valid",
-  "jsonMulti": "Editing takes a single server"
+  "jsonMulti": "Editing takes a single server",
+  "exposure": "How tools are provided",
+  "exposureDirect": "Directly",
+  "exposureDeferred": "On demand (tool search)",
+  "exposureCodemode": "Only from scripts (code mode)",
+  "exposureHint": {
+    "direct": "Every tool is given to the model.",
+    "deferred": "The model searches first, then uses what it finds. Stays on even if tool search is switched off.",
+    "codemode": "The model can only call these tools from a script. Stays on even if code mode is switched off."
+  }
  },
  "skills": {
   "addFailed": "Could not add. Please try again.",
@@ -788,8 +781,6 @@
   "next": "Next",
   "emptyTitle": "No extensions installed",
   "emptyDesc": "Switch to Marketplace to browse and install",
-  "builtinWithApp": "Bundled with the app",
-  "builtin": "Built-in",
   "loadFailed": "Failed to load",
   "loaded": "Loaded",
   "uninstall": "Uninstall",
@@ -1009,12 +1000,6 @@
   "backgroundDesc": "Does not steal focus, so you can carry on working; a target that cannot accept it errors instead",
   "clipboard": "Read and write the clipboard",
   "clipboardDesc": "The clipboard is shared; writing replaces what was on it",
-  "allowedTitle": "Always allowed apps",
-  "allowedDesc": "These applications are not confirmed each time; everything else still asks.",
-  "allowedEmpty": "None",
-  "allowedPick": "Pick a running app",
-  "allowedAdd": "Add",
-  "allowedRemove": "Remove",
   "grantHint": "Press Start granting, then drag the floating panel into Screen Recording and Accessibility in turn.",
   "dragNow": "Drag it in",
   "flowProgress": "Step {{step}}/{{total}} · waiting for the drop",

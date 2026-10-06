@@ -103,7 +103,7 @@ bypassing both the retrieval pipeline and the project scope. So the same extensi
   pipeline and scope as the automatic retrieval (JEV-Mem in JEV mode).
 - **`memory_recent`** — the newest memories of the scope, for "what do you remember".
 
-Both are read-only (the permission sandbox's `READ_ONLY_TOOLS`) and scoped like the
+Both are read-only and scoped like the
 automatic retrieval: the project's conversations, or the chat alone without a project.
 Memories reach the agent as `[who · when] text`, in the interface language; kinds,
 scores and paths are not shown. Delegated subagents load no extensions and get neither.

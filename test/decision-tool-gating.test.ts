@@ -93,7 +93,7 @@ for (const [file, task, steps, reading] of [
   test(`${task}: tools another extension deactivated stay deactivated`, async () => {
     let on = false;
     const s = await session(file, () => on);
-    // Plan mode narrows the set to read-only tools; neither group is active.
+    // Another extension narrowed the set to read-only tools; neither group is active.
     s.setActive(["read", "grep"]);
     on = true;
     s.turn();

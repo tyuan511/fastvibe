@@ -6,7 +6,6 @@ import { Composer } from "@/components/chat/composer";
 import { MessageList } from "@/components/chat/message-list";
 import { usagePercent } from "@/components/chat/session-controls";
 import { useSessionStore } from "@/stores/session";
-import { useSettingsStore } from "@/stores/settings";
 import { abortSubagent, getSubagentMessages, getSubagents } from "@/lib/engine-client";
 import { subagentFinished, subagentViewStatus } from "@shared/subagent-state";
 import { subagentStatusText } from "@/lib/subagent-status";
@@ -57,7 +56,6 @@ export const SidePaneSubagent = memo(function SidePaneSubagent({ tab }: { tab: S
   );
   const streamed = useSessionStore((state) => (subagentId ? state.subagentStreams[subagentId] : undefined));
   const models = useSessionStore((state) => state.models);
-  const permissionMode = useSettingsStore((state) => state.settings.permissionMode);
   const [loaded, setLoaded] = useState<ChatMessage[] | null>(null);
 
   const task = (tab.subagentBrief ?? active?.detail ?? "").trim();
@@ -140,8 +138,6 @@ export const SidePaneSubagent = memo(function SidePaneSubagent({ tab }: { tab: S
           workspaceLabel=""
           projects={[]}
           commands={[]}
-          permissionMode={permissionMode}
-          onPermissionModeChange={noop}
           queued={[]}
           queuePause={null}
           attachments={[]}

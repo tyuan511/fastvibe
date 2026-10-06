@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type JSX, type ReactNode } from "react";
+import { memo, useCallback, useMemo, useRef, useState, useSyncExternalStore, type JSX, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -11,7 +11,6 @@ import {
   Menu01Icon,
   PencilEdit02Icon,
   PlayIcon,
-  ShieldCheckIcon,
   SparklesIcon,
   SquareIcon,
 } from "@hugeicons/core-free-icons";
@@ -24,12 +23,9 @@ import { PermissionDialog } from "@/components/chat/permission-dialog";
 import { PermissionPanel, type PermissionResponse } from "@/components/chat/permission-panel";
 import { ProviderIcon } from "@/components/provider-icon";
 import { RunningMark } from "@/components/running-mark";
-import { usePermissionModeSelection } from "@/components/permission-mode-provider";
 import { attachmentPromptSuffix, attachmentsToImages } from "@/lib/attachments";
 import { shouldQueueSubmission } from "@/lib/composer-race";
 import { engine, respondPermission } from "@/lib/engine-client";
-import { permissionKey, rememberPermission, usePermissionAlways } from "@/lib/permission-rules";
-import { PERMISSION_MODES, permissionDescription, permissionLabel } from "@/lib/permission-modes";
 import { thinkingLabel } from "@/lib/thinking-levels";
 import { cn } from "@/lib/utils";
 import { activePermission, useConversationWorking, useSessionStore } from "@/stores/session";
@@ -150,35 +146,20 @@ const Thread = memo(function Thread({ loading, conversationId }: { loading: bool
 
 /**
  * The composer, or the question the agent is waiting on.
- *
- * A remembered 始终允许 (or 完全访问) is answered here without drawing anything, the
- * same rule the desktop shell applies: the phone may well be the only client looking
- * at a chat that runs in the background on the desktop.
  */
 function BottomSlot({ draft, onDraftChange }: { draft: Draft; onDraftChange: (draft: Draft) => void }): JSX.Element {
   const permission = useSessionStore((state) => activePermission(state.pendingPermissions, state.activeId));
   const resolvePermission = useSessionStore((state) => state.resolvePermission);
-  const permissionMode = useSettingsStore((state) => state.settings.permissionMode);
-  const always = usePermissionAlways();
-  const autoApproved =
-    permission?.method === "confirm" && (permissionMode === "full" || always.includes(permissionKey(permission)));
-
-  useEffect(() => {
-    if (!permission || !autoApproved) return;
-    void respondPermission({ id: permission.id, confirmed: true });
-    resolvePermission(permission.id);
-  }, [autoApproved, permission, resolvePermission]);
 
   const respond = useCallback(
     (payload: PermissionResponse) => {
-      if (payload.always && permission) rememberPermission(permissionKey(permission));
       void respondPermission(payload);
       resolvePermission(payload.id);
     },
-    [permission, resolvePermission],
+    [resolvePermission],
   );
 
-  if (permission && !autoApproved && permission.method === "editor") {
+  if (permission && permission.method === "editor") {
     return (
       <>
         <PermissionDialog request={permission} onRespond={respond} />
@@ -186,7 +167,7 @@ function BottomSlot({ draft, onDraftChange }: { draft: Draft; onDraftChange: (dr
       </>
     );
   }
-  if (permission && !autoApproved) {
+  if (permission) {
     return (
       <div className="safe-bottom shrink-0 border-t border-border/60 pt-2">
         <PermissionPanel key={permission.id} request={permission} onRespond={respond} />
@@ -216,7 +197,6 @@ function MobileComposer({ draft, onDraftChange }: { draft: Draft; onDraftChange:
   const models = useSessionStore((state) => state.models);
   const allQueued = useSessionStore((state) => state.queued);
   const queuePause = useSessionStore((state) => state.queuePause);
-  const queueBehavior = useSettingsStore((state) => state.settings.queueBehavior);
   const queued = activeId ? allQueued.filter((item) => item.conversationId === activeId) : [];
   const sending = useRef(false);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -266,7 +246,7 @@ function MobileComposer({ draft, onDraftChange }: { draft: Draft; onDraftChange:
           conversationId: id,
           text: promptText,
           message: payload,
-          behavior: queueBehavior,
+          behavior: "followUp",
           attachments: files,
           images,
         });
@@ -489,11 +469,11 @@ async function applyDraftChoices(id: string, draft: Draft, models: ReturnType<ty
   }
 }
 
-type Picker = "model" | "thinking" | "permission" | "project" | null;
+type Picker = "model" | "thinking" | "project" | null;
 
 /**
- * The row of chips above the input: model, thinking, permission — and on a new chat,
- * the project it will run in.
+ * The row of chips above the input: model and thinking — and on a new chat, the
+ * project it will run in.
  *
  * On an existing chat each choice is applied at once, to that conversation by id. On
  * the new-chat page there is no conversation yet, so they are held in `draft` and
@@ -511,8 +491,6 @@ function ComposerChips({ draft, onDraftChange }: { draft: Draft; onDraftChange: 
   const defaultThinking = projectDefault?.thinkingLevel && projectDefault.thinkingLevel !== "auto"
     ? projectDefault.thinkingLevel
     : undefined;
-  const permissionMode = settings.permissionMode;
-  const { setPermissionMode } = usePermissionModeSelection();
   const [picker, setPicker] = useState<Picker>(null);
 
   const existing = Boolean(activeId);
@@ -595,9 +573,6 @@ function ComposerChips({ draft, onDraftChange }: { draft: Draft; onDraftChange: 
             {currentThinking ? thinkingLabel(currentThinking) : t("mobile.thinking")}
           </Chip>
         ) : null}
-        <Chip icon={<HugeiconsIcon icon={ShieldCheckIcon} strokeWidth={2} className="size-3.5" />} onClick={() => setPicker("permission")}>
-          {permissionLabel(permissionMode)}
-        </Chip>
       </div>
 
       <OptionSheet
@@ -615,23 +590,6 @@ function ComposerChips({ draft, onDraftChange }: { draft: Draft; onDraftChange: 
         groups={[{ options: levels.map((level) => ({ value: level, label: thinkingLabel(level) })) }]}
         value={currentThinking ?? null}
         onSelect={(value) => void chooseThinking(value)}
-      />
-      <OptionSheet
-        open={picker === "permission"}
-        onOpenChange={(open) => setPicker(open ? "permission" : null)}
-        title={t("mobile.permission")}
-        description={t("mobile.permissionScope")}
-        groups={[
-          {
-            options: PERMISSION_MODES.map((mode) => ({
-              value: mode,
-              label: permissionLabel(mode),
-              description: permissionDescription(mode),
-            })),
-          },
-        ]}
-        value={permissionMode}
-        onSelect={(value) => setPermissionMode(value as typeof permissionMode)}
       />
       <OptionSheet
         open={picker === "project"}

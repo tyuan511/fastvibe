@@ -170,3 +170,33 @@ test("merge: a pasted server replaces the one with its name and keeps the stored
     ["fresh-new", "fresh", "https://x/mcp"],
   ]);
 });
+
+test("json: exposure is read, defaults to direct and is kept out of the result when direct", () => {
+  assert.equal(serverFromEntry("a", { command: "x", exposure: "codemode" }).server?.exposure, "codemode");
+  assert.equal(serverFromEntry("a", { url: "https://x", exposure: "deferred" }).server?.exposure, "deferred");
+  assert.equal(serverFromEntry("a", { command: "x", exposure: "direct" }).server?.exposure, undefined);
+  assert.equal(serverFromEntry("a", { command: "x" }).server?.exposure, undefined);
+});
+
+test("json: pi's codemode-deferred spelling is codemode, and hidden switches the server off", () => {
+  assert.equal(serverFromEntry("a", { command: "x", exposure: "codemode-deferred" }).server?.exposure, "codemode");
+  const hidden = serverFromEntry("a", { command: "x", exposure: "hidden" }).server;
+  assert.equal(hidden?.enabled, false);
+  assert.equal(hidden?.exposure, undefined);
+});
+
+test("json: an exposure that is not one of the known values is a field error", () => {
+  assert.deepEqual(serverFromEntry("a", { command: "x", exposure: "everywhere" }).error, { code: "field", name: "a", field: "exposure" });
+  assert.deepEqual(serverFromEntry("a", { command: "x", exposure: 3 }).error, { code: "field", name: "a", field: "exposure" });
+});
+
+test("json: exposure survives serialize and parse, and direct is not written", () => {
+  const servers: McpServerConfig[] = [
+    { id: "a", name: "a", enabled: true, transport: "stdio", command: "x", exposure: "codemode" },
+    { id: "b", name: "b", enabled: true, transport: "http", url: "https://x/mcp", exposure: "deferred" },
+    { id: "c", name: "c", enabled: true, transport: "stdio", command: "y", exposure: "direct" },
+  ];
+  const text = serializeMcpJson(servers);
+  assert.equal(JSON.parse(text).mcpServers.c.exposure, undefined);
+  assert.deepEqual(parseMcpJson(text).servers.map((item) => item.exposure), ["codemode", "deferred", undefined]);
+});

@@ -155,7 +155,7 @@ export function registerEngineIpc(engine: PiProcessManager): void {
 
   handle(
     Ipc.enginePermissionRespond,
-    (payload: { id: string; confirmed?: boolean; value?: string; cancelled?: boolean; answers?: Array<string | null>; planAction?: "approve" | "revise" | "ignore" }) => {
+    (payload: { id: string; confirmed?: boolean; value?: string; cancelled?: boolean; answers?: Array<string | null>}) => {
       engine.respondPermission(payload);
     },
   );

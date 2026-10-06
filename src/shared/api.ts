@@ -214,8 +214,6 @@ export function createFastVibeApi(t: ApiTransport) {
         cancelled?: boolean;
         /** Answers for a `questions` prompt, positionally matching its question list. */
         answers?: Array<string | null>;
-        /** Plan review action and optional revision feedback. */
-        planAction?: "approve" | "revise" | "ignore";
       }): Promise<void> => t.invoke(Ipc.enginePermissionRespond, payload),
       newSession: (): Promise<void> => t.invoke(Ipc.engineNewSession),
       getState: (conversationId?: string): Promise<EngineSessionState> =>

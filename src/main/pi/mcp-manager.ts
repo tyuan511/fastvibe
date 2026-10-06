@@ -61,6 +61,8 @@ type Connection = {
   config: McpServerConfig;
   client: McpClient;
   tools: McpTool[];
+  /** What the server says about its tools as a group; handed to `codemode` as the namespace's guide. */
+  instructions?: string;
 };
 
 /** Builds the wire to one server. `onStderr` receives a stdio child's error output. */
@@ -120,8 +122,21 @@ export class McpManager {
     for (const connection of this.#connections.values()) {
       for (const tool of connection.tools) {
         const safeName = `mcp_${connection.config.id}_${tool.name}`.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
+        // `direct` is the SDK's own default and needs no namespace. The other two are
+        // tools the model does not see declared, so `codemode` lists them under their
+        // server and `tool_search` ranks them by it.
+        const exposure = connection.config.exposure ?? "direct";
         output.push({
           name: safeName,
+          ...(exposure === "direct"
+            ? {}
+            : {
+                exposure,
+                namespace: {
+                  name: connection.config.name,
+                  ...(connection.instructions ? { instructions: connection.instructions } : {}),
+                },
+              }),
           label: `${connection.config.name}: ${tool.name}`,
           description: tool.description ?? `MCP tool ${tool.name} from ${connection.config.name}`,
           parameters: toParameters(tool.inputSchema) as any,
@@ -160,7 +175,7 @@ export class McpManager {
       });
       await withTimeout(client.connect(transport), uiText("连接超时", "Connection timed out"));
       const tools = await withTimeout(client.listTools(), uiText("读取工具列表超时", "Listing tools timed out"));
-      const connection: Connection = { config, client, tools };
+      const connection: Connection = { config, client, tools, instructions: client.instructions };
       this.#connections.set(config.id, connection);
       // A server that exits later is shown as down rather than as connected with tools
       // that can no longer be called. Closing on our own side clears the map first, so
@@ -213,6 +228,7 @@ function isConfig(value: unknown): value is McpServerConfig {
   // its shape is checked; `headers` is new and must be strings, which a request needs.
   if (item.env !== undefined && (typeof item.env !== "object" || item.env === null || Array.isArray(item.env))) return false;
   if (item.headers !== undefined && !isStringRecord(item.headers)) return false;
+  if (item.exposure !== undefined && item.exposure !== "direct" && item.exposure !== "deferred" && item.exposure !== "codemode") return false;
   if (item.transport === "stdio") {
     return typeof item.command === "string" && item.command.length > 0
       && (item.args === undefined || Array.isArray(item.args));

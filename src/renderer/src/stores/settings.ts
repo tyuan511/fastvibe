@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { THINKING_EFFORT_LEVELS, type EngineModel, type PermissionMode, type ProjectModelDefault, type QueueBehavior, type ThinkingLevel } from "@shared/types";
+import { THINKING_EFFORT_LEVELS, type EngineModel, type ProjectModelDefault, type ThinkingLevel } from "@shared/types";
 import {
   DEFAULT_DARK_THEME,
   DEFAULT_LIGHT_THEME,
@@ -10,7 +10,6 @@ import {
   type ThemeId,
   type ThemeMode,
 } from "@/lib/themes";
-import { isPermissionMode } from "@/lib/permission-modes";
 import { normalizeNotificationSettings } from "@shared/notifications";
 import { detectSystemLanguage, isUiLanguage, type UiLanguage } from "@/lib/language";
 import { sanitizeShortcutOverrides, type ShortcutOverrides } from "@/lib/shortcuts";
@@ -20,18 +19,13 @@ import { DEFAULT_PROXY_SETTINGS, proxySettingsOf, type ProxySettings } from "@sh
 const KEY = "fastvibe.settings";
 
 export type AppSettings = ProxySettings & {
-  /** The mode the sandbox enforces now. Every picker persists it as the startup mode too. */
-  permissionMode: PermissionMode;
-  /** 默认权限模式: kept in sync with `permissionMode` by every permission picker. */
-  defaultPermissionMode: PermissionMode;
-  /** Whether the machine-wide risk warning for 完全访问 has already been accepted. */
-  fullAccessConfirmed: boolean;
   thinkingLevel: ThinkingLevel | "auto";
-  queueBehavior: QueueBehavior;
-  autoCompact: boolean;
-  interruptMode: "immediate" | "wait";
   /** When true, an agent run holds the machine awake (`powerSaveBlocker`). */
   keepAwake: boolean;
+  /** Offer the model `codemode`: one script that calls many tools and returns only its output. */
+  codemode: boolean;
+  /** Offer the model `tool_search`, which finds and loads tools that are not declared up front. */
+  toolSearch: boolean;
   /**
    * browser-use drives the system browser over CDP instead of the side-pane webview.
    * Off by default: it opens a separate Chrome window with its own profile.
@@ -129,27 +123,12 @@ export type AppSettings = ProxySettings & {
    * or pin time for 置顶).
    */
   /**
-   * 始终允许 rules: prompts the user has said yes to for good, as `method:title:message`
-   * keys. Shared by every conversation and persisted, so an approval made in one chat
-   * is not asked for again in the next (see `lib/permission-rules.ts`).
-   */
-  permissionAlways?: string[];
-  /**
    * 电脑操控 (设置 → 电脑操控). Mirrors `ComputerSettings`; kept as flat keys because
    * `settings.json` is a flat bag that Main reads one preference at a time.
    */
   computerEnabled: boolean;
   computerClipboard: boolean;
   computerPreferBackground: boolean;
-  /**
-   * Apps whose windows skip the tool confirmation.
-   *
-   * `id` is the identity that is matched — a bundle id where the platform has one,
-   * otherwise the executable name. `name` rides along purely so the list can be read by
-   * a human; matching never looks at it, because a display name is not an identity and
-   * two applications can share one.
-   */
-  computerAllowedApps?: Array<{ id: string; name: string }>;
   sidebarOrder?: Record<string, string[]>;
   /** Project cwds (and section keys) folded shut in the sidebar. */
   sidebarCollapsedProjects?: string[];
@@ -164,14 +143,10 @@ export type AppSettings = ProxySettings & {
 
 const DEFAULTS: AppSettings = {
   ...DEFAULT_PROXY_SETTINGS,
-  permissionMode: "smart",
-  defaultPermissionMode: "smart",
-  fullAccessConfirmed: false,
   thinkingLevel: "auto",
-  queueBehavior: "followUp",
-  autoCompact: true,
-  interruptMode: "immediate",
   keepAwake: true,
+  codemode: true,
+  toolSearch: true,
   browserUseSystem: false,
   browserEngine: "auto",
   compactCode: false,
@@ -197,15 +172,19 @@ const DEFAULTS: AppSettings = {
   computerPreferBackground: true,
 };
 
+/**
+ * Keys an earlier build wrote that nothing reads any more (the permission modes and the
+ * rules they remembered). Dropped on load, so the next save no longer carries them.
+ */
+const REMOVED_KEYS = ["permissionMode", "defaultPermissionMode", "fullAccessConfirmed", "permissionAlways", "computerAllowedApps"] as const;
+
 /** Drop malformed persisted theme values so a stale id can never crash the app. */
 function sanitize(parsed: Partial<AppSettings>): Partial<AppSettings> {
   const next = { ...parsed };
   if (Object.keys(DEFAULT_PROXY_SETTINGS).some((key) => key in parsed)) {
     Object.assign(next, proxySettingsOf(parsed));
   }
-  if (!isPermissionMode(next.permissionMode)) delete next.permissionMode;
-  if (!isPermissionMode(next.defaultPermissionMode)) delete next.defaultPermissionMode;
-  if (typeof next.fullAccessConfirmed !== "boolean") delete next.fullAccessConfirmed;
+  for (const key of REMOVED_KEYS) delete (next as Record<string, unknown>)[key];
   if (!isUiLanguage(next.uiLanguage)) delete next.uiLanguage;
   if (!isUiLanguage(next.aiLanguage)) delete next.aiLanguage;
   if (typeof next.customSystemPrompt !== "string") delete next.customSystemPrompt;
@@ -222,11 +201,9 @@ function sanitize(parsed: Partial<AppSettings>): Partial<AppSettings> {
   if (!isNumberMap(next.sidePaneWidths)) delete next.sidePaneWidths;
   if (!isIdListMap(next.fileTreeExpanded)) delete next.fileTreeExpanded;
   if (!isIdList(next.archivedConversations)) delete next.archivedConversations;
-  if (!isIdList(next.permissionAlways)) delete next.permissionAlways;
   if (typeof next.computerEnabled !== "boolean") delete next.computerEnabled;
   if (typeof next.computerClipboard !== "boolean") delete next.computerClipboard;
   if (typeof next.computerPreferBackground !== "boolean") delete next.computerPreferBackground;
-  if (!isAllowedAppList(next.computerAllowedApps)) delete next.computerAllowedApps;
   if (!isIdListMap(next.sidebarOrder)) delete next.sidebarOrder;
   if (!isIdList(next.sidebarCollapsedProjects)) delete next.sidebarCollapsedProjects;
   if (!isIdList(next.sidebarExpandedProjects)) delete next.sidebarExpandedProjects;
@@ -238,6 +215,8 @@ function sanitize(parsed: Partial<AppSettings>): Partial<AppSettings> {
   delete (next as Record<string, unknown>).notifications;
   delete (next as Record<string, unknown>).fullDiskAccessDismissed;
   if (typeof next.keepAwake !== "boolean") delete next.keepAwake;
+  if (typeof next.codemode !== "boolean") delete next.codemode;
+  if (typeof next.toolSearch !== "boolean") delete next.toolSearch;
   if (typeof next.browserUseSystem !== "boolean") delete next.browserUseSystem;
   if (!isBrowserEngine(next.browserEngine)) delete next.browserEngine;
   // Retired transcript toggles (折叠运行过程 / 显示思考过程 / 显示消息时间). The
@@ -275,20 +254,6 @@ function isBrowserEngine(value: unknown): value is AppSettings["browserEngine"] 
 
 function isThinkingLevel(value: unknown): value is ThinkingLevel | "auto" {
   return value === "auto" || (typeof value === "string" && (THINKING_EFFORT_LEVELS as readonly string[]).includes(value));
-}
-
-/** 始终允许的应用 entries; one malformed pair drops the whole list, as elsewhere here. */
-function isAllowedAppList(value: unknown): value is Array<{ id: string; name: string }> {
-  return (
-    Array.isArray(value) &&
-    value.every(
-      (item) =>
-        typeof item === "object" &&
-        item !== null &&
-        typeof (item as { id?: unknown }).id === "string" &&
-        typeof (item as { name?: unknown }).name === "string",
-    )
-  );
 }
 
 function isIdList(value: unknown): value is string[] {
@@ -385,15 +350,6 @@ function read(): AppSettings {
   const existing = Object.keys(local).length > 0 || Object.keys(disk).length > 0;
   const defaults = existing ? DEFAULTS : { ...DEFAULTS, ...firstRunLanguages() };
   const merged = { ...defaults, ...local, ...disk };
-  // Before the one-time warning existed, selecting full access was already an explicit
-  // grant. Preserve that grant across the migration rather than asking an existing user.
-  if (
-    local.fullAccessConfirmed === undefined &&
-    disk.fullAccessConfirmed === undefined &&
-    (merged.permissionMode === "full" || merged.defaultPermissionMode === "full")
-  ) {
-    merged.fullAccessConfirmed = true;
-  }
   return merged;
 }
 

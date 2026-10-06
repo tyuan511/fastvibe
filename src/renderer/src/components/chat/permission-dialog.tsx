@@ -23,7 +23,6 @@ export function PermissionDialog({
     confirmed?: boolean;
     value?: string;
     cancelled?: boolean;
-    always?: boolean;
   }) => void;
 }): JSX.Element | null {
   const { t } = useTranslation("chat");
@@ -78,12 +77,9 @@ export function PermissionDialog({
           {request.method === "confirm" ? (
             <>
               <Button variant="outline" onClick={() => onRespond({ id: request.id, confirmed: false })}>
-                {t("permission.deny")}
+                {t("permission.no")}
               </Button>
-              <Button variant="outline" onClick={() => onRespond({ id: request.id, confirmed: true, always: true })}>
-                {t("permission.alwaysAllow")}
-              </Button>
-              <Button onClick={() => onRespond({ id: request.id, confirmed: true })}>{t("permission.allow")}</Button>
+              <Button onClick={() => onRespond({ id: request.id, confirmed: true })}>{t("permission.yes")}</Button>
             </>
           ) : request.method === "input" || request.method === "editor" ? (
             <Button onClick={() => onRespond({ id: request.id, value })}>{t("permission.submit")}</Button>

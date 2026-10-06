@@ -238,8 +238,6 @@
   "deleteDesc": "「{{title}}」的全部消息会被删除，无法恢复。",
   "defaultModel": "默认模型",
   "thinking": "思考强度",
-  "permission": "权限模式",
-  "permissionScope": "对这台电脑上的所有对话生效，和电脑端的设置是同一个。",
   "attach": "添加图片",
   "removeAttachment": "移除图片",
   "imageFailed": "{{count}} 张图片无法读取",

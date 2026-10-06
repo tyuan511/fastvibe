@@ -63,7 +63,7 @@ function parseQuestions(value: unknown): PermissionQuestion[] | undefined {
 export function parsePermission(event: EngineEvent): PermissionRequest | null {
   if (event.type !== "extension_ui_request") return null;
   const method = event.method;
-  if (method !== "confirm" && method !== "select" && method !== "input" && method !== "editor" && method !== "questions" && method !== "plan_review") {
+  if (method !== "confirm" && method !== "select" && method !== "input" && method !== "editor" && method !== "questions") {
     return null;
   }
   const id = typeof event.id === "string" ? event.id : "";
@@ -79,15 +79,6 @@ export function parsePermission(event: EngineEvent): PermissionRequest | null {
     optionDetails: parseOptionDetails(event.optionDetails),
     questions: parseQuestions(event.questions),
     timeout: typeof event.timeout === "number" ? event.timeout : undefined,
-    plan:
-      event.plan && typeof event.plan === "object"
-        ? (() => {
-            const plan = event.plan as Record<string, unknown>;
-            return typeof plan.path === "string" && typeof plan.title === "string" && typeof plan.summary === "string"
-              ? { path: plan.path, title: plan.title, summary: plan.summary }
-              : undefined;
-          })()
-        : undefined,
   };
 }
 

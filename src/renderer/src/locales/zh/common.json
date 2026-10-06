@@ -9,18 +9,6 @@
     "max": "最高",
     "auto": "跟随模型默认"
   },
-  "permission": {
-    "ask": "请求批准",
-    "smart": "帮我批准",
-    "full": "完全访问",
-    "askDesc": "编辑外部文件和使用互联网时始终询问",
-    "smartDesc": "仅对检测到的风险操作请求批准",
-    "fullDesc": "可不受限制地访问互联网和你电脑上的任何文件",
-    "fullConfirmTitle": "开启完全访问？",
-    "fullConfirmDescription": "开启后，智能体可以不经询问访问互联网，并读取、修改或删除你电脑上的任何文件。此确认只会显示一次，之后会记住你的选择。",
-    "fullConfirmCancel": "取消",
-    "fullConfirmAction": "确认开启"
-  },
   "time": {
     "justNow": "刚刚",
     "minutesAgo_one": "{{count}} 分钟前",
@@ -108,6 +96,14 @@
       "running": "正在调用",
       "done": "工具调用"
     },
+    "codemode": {
+      "running": "正在运行脚本",
+      "done": "运行脚本"
+    },
+    "codemodeCalls_one": "调用 {{count}} 个工具",
+    "codemodeCalls_other": "调用 {{count}} 个工具",
+    "codemodeCallsFailed_one": "调用 {{count}} 个工具，{{failed}} 个失败",
+    "codemodeCallsFailed_other": "调用 {{count}} 个工具，{{failed}} 个失败",
     "browser": {
       "running": "正在操作浏览器",
       "done": "浏览器"

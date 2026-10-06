@@ -55,8 +55,8 @@ function browserTaskRunner(): { run: BrowserTaskRunner; enabled: () => boolean }
  */
 function syncDecisionTools(pi: ExtensionAPI, task: string, steps: string[], on: boolean): void {
   const active = pi.getActiveTools();
-  // A group comes in only in place of the other one: with neither active (plan mode's
-  // read-only set), nothing is added.
+  // A group comes in only in place of the other one: with neither active (a
+  // read-only tool set), nothing is added.
   const next = on
     ? active.some((name) => steps.includes(name))
       ? [...active.filter((name) => !steps.includes(name)), ...(active.includes(task) ? [] : [task])]
@@ -226,7 +226,7 @@ export default function browserUse(pi: ExtensionAPI): void {
         goal: Type.String({ description: "用户的完整目标原文（或尚未完成的部分）" }),
         tabId: TAB_ID(false),
       }),
-      async execute(_id, params, signal, onUpdate, ctx) {
+      async execute(_id, params, signal, onUpdate) {
         // Switched off since this turn began: refuse rather than drive the page anyway.
         if (!runTask.enabled()) {
           return { content: [{ type: "text", text: "浏览器控制已在设置中关闭，browser_task 从下一轮起不可用；请改用 browser_click / browser_type / browser_press。" }], details: undefined };
@@ -237,8 +237,6 @@ export default function browserUse(pi: ExtensionAPI): void {
           goal: params.goal,
           tabId: params.tabId,
           signal,
-          mode: process.env.FASTVIBE_PERMISSION_MODE,
-          confirm: (message) => (ctx?.hasUI ? ctx.ui.confirm("FastVibe 浏览器任务", message) : Promise.resolve(false)),
           onStep: (line) => {
             lines.push(line);
             onUpdate?.({ content: [{ type: "text", text: lines.join("\n") }], details: undefined });

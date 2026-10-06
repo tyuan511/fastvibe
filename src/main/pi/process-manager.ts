@@ -9,6 +9,8 @@ import { InMemoryModelsStore, type AssistantMessage, type AuthPrompt } from "@ea
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
   createAgentSession,
+  createCodemodeExtension,
+  createToolSearchExtension,
   DefaultResourceLoader,
   ModelRegistry,
   ModelRuntime,
@@ -83,7 +85,8 @@ import {
   scanImportCandidates,
   scanImportSources,
 } from "../engine/import/runner";
-import { readAutoCompact, readDefaultModel, readPreferredModelSettings } from "../engine/runtime-settings";
+import { readAppSettings, readDefaultModel, readPreferredModelSettings } from "../engine/runtime-settings";
+import { applyToolModes, toolModes } from "../engine/tool-modes";
 import { currentAiLanguageDirective, currentCustomSystemPrompt } from "../engine/ai-language";
 import { uiText } from "../engine/ui-text";
 import { mapEngineMessages } from "../engine/map-messages";
@@ -167,9 +170,6 @@ type ManagedSession = { conversationId: string; cwd: string; session: AgentSessi
 /** SDK UI context plus FastVibe's single-panel multi-question prompt. */
 type FastVibeExtensionUIContext = ExtensionUIContext & {
   questions(title: string, questions: PermissionQuestion[], opts?: { timeout?: number }): Promise<Array<string | null> | undefined>;
-  planReview(
-    plan: { path: string; title: string; summary: string },
-  ): Promise<{ action: "approve" | "revise" | "ignore"; value?: string }>;
   /**
    * Run one subagent role on a throwaway in-process session. Injected here so the
    * built-in subagent extension has a runner on the embedded engine, which ships
@@ -1062,8 +1062,8 @@ export class PiProcessManager {
         this.#emitQueue(queueOwner);
       });
     }
-    // A `tool_call` hook may be parked on an extension UI prompt (permission
-    // sandbox / question tool). Resolve those before aborting: the hook cannot
+    // A `tool_call` hook may be parked on an extension UI prompt (the question
+    // tool, a plugin's dialog). Resolve those before aborting: the hook cannot
     // observe the abort signal while it awaits `ctx.ui.confirm`, so leaving the
     // promise pending would hang the tool, keep the run from ever settling and pin
     // the conversation as "running" forever.
@@ -1398,6 +1398,14 @@ export class PiProcessManager {
     });
     return this.#mcpReloadPromise;
   }
+  /**
+   * 代码模式 / 工具搜索 were switched in settings: every session re-reads them at its next
+   * reload. Same path as an MCP change — a running session is left to finish first.
+   */
+  async refreshToolModes(): Promise<void> {
+    for (const conversationId of this.#sessions.keys()) this.#pendingMcpReloads.add(conversationId);
+    await this.#scheduleMcpReload();
+  }
   async saveMcpServers(configs: McpServerConfig[]): Promise<McpServerStatus[]> {
     await this.#mcp.save(configs);
     await this.#mcp.connectAll();
@@ -1500,15 +1508,13 @@ export class PiProcessManager {
   removeAgentConfig(id: string): SubagentConfig[] {
     return this.#subagentManager.remove(id);
   }
-  respondPermission(payload: { id: string; confirmed?: boolean; value?: string; cancelled?: boolean; answers?: Array<string | null>; planAction?: "approve" | "revise" | "ignore" }): void {
+  respondPermission(payload: { id: string; confirmed?: boolean; value?: string; cancelled?: boolean; answers?: Array<string | null> }): void {
     const pending = this.#pendingUi.get(payload.id);
     if (!pending) return;
     this.#pendingUi.delete(payload.id);
     const resolved = payload.cancelled
       ? pending.fallback
-      : payload.planAction
-        ? { action: payload.planAction, ...(payload.value ? { value: payload.value } : {}) }
-        : Array.isArray(payload.answers)
+      : Array.isArray(payload.answers)
         ? payload.answers
         : typeof payload.value === "string"
           ? payload.value
@@ -2366,7 +2372,7 @@ export class PiProcessManager {
    * can seed the new session before anything binds, then creates a fresh
    * conversation, activates it, tells the renderer to follow, and only then runs
    * `withSession` against the replacement. The source session is left intact so a
-   * plan handoff does not destroy the planning conversation.
+   * handoff does not destroy the conversation it came from.
    */
   async #extensionNewSession(
     sourceId: string,
@@ -2664,7 +2670,7 @@ export class PiProcessManager {
     if (!this.#runtime || !this.#models) throw new Error("engine not ready");
     const settingsManager = SettingsManager.create(cwd, this.#paths.agentDir);
     // A loader we own lets us splice in FastVibe's built-in extensions
-    // (`plan`, `goal`, `todo`, session-title, web-search) alongside whatever the user installed. `createAgentSession`
+    // (`goal`, `todo`, session-title, web-search) alongside whatever the user installed. `createAgentSession`
     // only auto-reloads a loader it creates, so reload ours before handing it over.
     const resourceLoader = new DefaultResourceLoader({
       cwd,
@@ -2685,6 +2691,27 @@ export class PiProcessManager {
         factory: async (pi) => {
           for (const tool of await this.#mcp.tools()) pi.registerTool(tool as ToolDefinition);
         },
+      }, {
+        // `codemode` (the model writes a script that calls other tools) and `tool_search`
+        // (find and load tools that are not declared). The SDK registers both inactive and
+        // loads neither in an SDK session by itself, unlike its CLI.
+        name: "fastvibe-codemode",
+        hidden: true,
+        factory: createCodemodeExtension(),
+      }, {
+        name: "fastvibe-tool-search",
+        hidden: true,
+        factory: createToolSearchExtension(),
+      }, {
+        // Switches those two on or off from the settings as they are at `session_start`,
+        // which a reload emits again — the SDK's `defaultTools` setting can only add.
+        name: "fastvibe-tool-modes",
+        hidden: true,
+        factory: (pi) => {
+          pi.on("session_start", () => {
+            pi.setActiveTools(applyToolModes(pi.getActiveTools(), toolModes(readAppSettings(this.#paths), this.#mcp.list())));
+          });
+        },
       }],
     });
     // browser-use and computer-use both close over the conversation id at factory time,
@@ -2704,8 +2731,8 @@ export class PiProcessManager {
     });
     await result.session.bindExtensions({
       // Extensions see `rpc`, not the default `print`: FastVibe bridges dialogs,
-      // status, widgets and session replacement, so TUI-aware plugins (plan mode,
-      // goals) take their non-terminal code paths instead of refusing to run.
+      // status, widgets and session replacement, so TUI-aware plugins
+      // take their non-terminal code paths instead of refusing to run.
       mode: "rpc",
       uiContext: this.#extensionUi(conversation.id),
       commandContextActions: {
@@ -2974,13 +3001,10 @@ export class PiProcessManager {
     this.#installQueueBoundary(conversation.id, result.session);
     this.#sessions.set(conversation.id, managed);
     this.#touchSession(conversation.id);
-    // 自动压缩 is FastVibe's setting, but the engine keeps it in its own settings file
-    // and the renderer's boot-time call cannot reach a session that does not exist yet
-    // (a brand-new install has no conversation at launch) — so the preference is picked
-    // up here, where every conversation passes. Skipped when it already matches, since
-    // writing it touches the file.
-    const autoCompact = readAutoCompact(this.#paths);
-    if (result.session.autoCompactionEnabled !== autoCompact) result.session.setAutoCompactionEnabled(autoCompact);
+    // 自动压缩 is always on for a new session. The engine keeps the flag in its own
+    // settings file, which FastVibe does not own, so it is pinned here where every
+    // conversation passes. Skipped when it already matches, since writing touches the file.
+    if (!result.session.autoCompactionEnabled) result.session.setAutoCompactionEnabled(true);
     // A conversation with no history yet starts on the user's pinned 默认模型.
     if (result.session.messages.length === 0) await this.#applyPreferredModel(result.session, conversation.project);
     const payload: ConversationReadyEvent = {
@@ -3881,8 +3905,6 @@ export class PiProcessManager {
       select: (title, options, opts) => dialog<string | undefined>("select", { title, options, timeout: opts?.timeout }, undefined, opts?.timeout),
       questions: (title, questions, opts) =>
         dialog<Array<string | null> | undefined>("questions", { title, questions, timeout: opts?.timeout }, undefined, opts?.timeout),
-      planReview: (plan) =>
-        dialog<{ action: "approve" | "revise" | "ignore"; value?: string }>("plan_review", { plan }, { action: "ignore" }, 30 * 60_000),
       runSubagent: (request) => this.#runSubagent(conversationId, request),
       searchConversation: (request) => this.#searchConversationForAgent(request),
       createWorktree: (options) => this.#hostCreateWorktree(conversationId, options),

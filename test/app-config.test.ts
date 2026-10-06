@@ -8,7 +8,7 @@ import { runAppConfig } from "../src/main/app-config.ts";
 // Stand-ins for the handlers the settings panes call. The table under test dispatches
 // into the real registry, so these are what it reaches.
 const writes: Array<{ channel: string; payload: unknown }> = [];
-let settings: Record<string, unknown> = { themeMode: "dark", permissionMode: "smart" };
+let settings: Record<string, unknown> = { themeMode: "dark" };
 let mcp = [
   { id: "a", name: "A", enabled: true, transport: "stdio", command: "a", connected: true, tools: ["x"] },
   { id: "b", name: "B", enabled: true, transport: "http", url: "https://b", connected: false, tools: [] },
@@ -45,18 +45,17 @@ test("the read tool cannot reach a write action", async () => {
   assert.equal(writes.length, 0);
 });
 
-test("the agent cannot write its own permission mode", async () => {
-  for (const key of ["permissionMode", "defaultPermissionMode", "fullAccessConfirmed", "permissionAlways", "remoteEnabled", "proxyUrl"]) {
+test("the agent cannot write remote-access or proxy keys", async () => {
+  for (const key of ["remoteEnabled", "proxyUrl"]) {
     const result = await runAppConfig({ action: "settings.set", input: { patch: { [key]: "full" } }, write: true });
     assert.equal(result.ok, false, key);
   }
-  assert.equal(settings.permissionMode, "smart");
 });
 
 test("settings.set merges the patch into what is stored", async () => {
   const result = await runAppConfig({ action: "settings.set", input: { patch: { keepAwake: false } }, write: true });
   assert.equal(result.ok, true);
-  assert.deepEqual(settings, { themeMode: "dark", permissionMode: "smart", keepAwake: false });
+  assert.deepEqual(settings, { themeMode: "dark", keepAwake: false });
 });
 
 test("ssh hosts never carry a password back to the model", async () => {

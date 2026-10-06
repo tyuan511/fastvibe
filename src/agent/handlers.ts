@@ -13,7 +13,7 @@ import { readWorkspaceDir } from "../main/engine/workspace-fs";
 import { existingFiles } from "../main/engine/path-exists";
 import { TerminalSessions } from "../main/engine/terminal-sessions";
 import { applyLanguages } from "../main/engine/ai-language";
-import { applyPermissionMode, clearAppSettings, invalidateAppSettingsCache, readAppSettings, writeAppSettings } from "../main/engine/runtime-settings";
+import { clearAppSettings, invalidateAppSettingsCache, readAppSettings, writeAppSettings } from "../main/engine/runtime-settings";
 import { writeAgentConfig } from "../main/engine/runtime-config";
 import type { FastVibePaths } from "../main/engine/paths";
 import type { GitBranch, GitDiffSource, GitStatus } from "@shared/ipc";
@@ -65,7 +65,7 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
   handle(Ipc.engineGetSubagentMessages, (payload: { subagentId: string; conversationId?: string }) => engine.getSubagentMessages(payload.subagentId, payload.conversationId));
   handle(Ipc.engineGetCheckpoint, (payload: { conversationId: string }) => engine.getCheckpoint(payload.conversationId));
   handle(Ipc.engineRestoreCheckpoint, (payload: { conversationId: string }) => engine.restoreCheckpoint(payload.conversationId));
-  handle(Ipc.enginePermissionRespond, (payload: { id: string; confirmed?: boolean; value?: string; cancelled?: boolean; answers?: Array<string | null>; planAction?: "approve" | "revise" | "ignore" }) => engine.respondPermission(payload));
+  handle(Ipc.enginePermissionRespond, (payload: { id: string; confirmed?: boolean; value?: string; cancelled?: boolean; answers?: Array<string | null>}) => engine.respondPermission(payload));
   handle(Ipc.engineNewSession, () => engine.newSession());
   handle(Ipc.engineGetState, (payload?: { conversationId?: string }) => engine.getState(payload?.conversationId));
   handle(Ipc.engineGetRunning, () => engine.getRunningConversations());
@@ -79,7 +79,6 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
     writeAgentConfig(paths, snapshot);
     invalidateAppSettingsCache();
     const settings = readAppSettings(paths);
-    applyPermissionMode(settings);
     applyLanguages(settings);
     await engine.reloadProviders();
     if (payload && "mcp" in payload && payload.mcp !== previousMcp) {
@@ -143,12 +142,10 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
   handle(Ipc.settingsGet, () => readAppSettings(paths));
   handle(Ipc.settingsSet, (payload: Record<string, unknown>) => {
     writeAppSettings(paths, payload && typeof payload === "object" ? payload : {});
-    applyPermissionMode(payload ?? {});
     return undefined;
   });
   handle(Ipc.settingsClear, () => {
     clearAppSettings(paths);
-    applyPermissionMode({});
   });
   handle(Ipc.appGetInfo, () => ({ version: process.env.FASTVIBE_VERSION ?? "agent", userData: paths.userData, runtimeRoot: paths.runtimeRoot, platform: process.platform }));
   handle(Ipc.workspaceFileIcons, () => ({ files: {}, folders: {} }));

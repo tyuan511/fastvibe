@@ -38,7 +38,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatMap, mergeServers, parseMap, parseMcpJson, serializeMcpJson, type McpJsonError } from "@shared/mcp-config";
-import type { McpServerConfig, McpServerStatus } from "@shared/types";
+import type { McpExposure, McpServerConfig, McpServerStatus } from "@shared/types";
 
 /**
  * The server form's draft; also doubles as the dialog's open state. `id` is set while
@@ -59,6 +59,7 @@ type ServerDraft = {
   env: string;
   url: string;
   headers: string;
+  exposure: McpExposure;
   enabled: boolean;
 };
 
@@ -72,6 +73,7 @@ const EMPTY_DRAFT: ServerDraft = {
   env: "",
   url: "",
   headers: "",
+  exposure: "direct",
   enabled: true,
 };
 
@@ -87,6 +89,7 @@ function draftFromServer(server: McpServerConfig): ServerDraft {
     env: formatMap(server.env, "env"),
     url: server.url ?? "",
     headers: formatMap(server.headers, "headers"),
+    exposure: server.exposure ?? "direct",
     enabled: server.enabled,
   };
 }
@@ -113,6 +116,7 @@ function configFromDraft(draft: ServerDraft, id: string): McpServerConfig {
     ...(draft.transport === "stdio"
       ? { command: draft.command.trim(), args: parseArgs(draft.args), ...(hasValues ? { env: values } : {}) }
       : { url: draft.url.trim(), ...(hasValues ? { headers: values } : {}) }),
+    ...(draft.exposure !== "direct" ? { exposure: draft.exposure } : {}),
   };
 }
 
@@ -529,6 +533,20 @@ function AddServerDialog({
                   />
                 </>
               )}
+
+              <div className="space-y-1.5">
+                <Label>{t("mcp.exposure")}</Label>
+                <select
+                  value={draft.exposure}
+                  onChange={(event) => onPatch({ exposure: event.target.value as McpExposure })}
+                  className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                >
+                  <option value="direct">{t("mcp.exposureDirect")}</option>
+                  <option value="deferred">{t("mcp.exposureDeferred")}</option>
+                  <option value="codemode">{t("mcp.exposureCodemode")}</option>
+                </select>
+                <p className="text-xs text-muted-foreground">{t(`mcp.exposureHint.${draft.exposure}`)}</p>
+              </div>
 
               <div className="flex items-center gap-2 text-xs">
                 <Switch checked={draft.enabled} onCheckedChange={(checked) => onPatch({ enabled: checked })} />

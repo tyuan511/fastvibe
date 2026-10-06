@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
-import type { ChatAttachment, EngineModel, PermissionMode } from "@shared/types";
+import type { ChatAttachment, EngineModel } from "@shared/types";
 
 const DRAFT_KEY = "fastvibe.session-drafts";
 
@@ -8,7 +8,6 @@ export type PersistedDraft = {
   attachments: ChatAttachment[];
   model?: EngineModel;
   thinkingLevel?: string;
-  permissionMode?: PermissionMode;
 };
 
 function isStoredModel(value: unknown): value is EngineModel {
@@ -27,10 +26,6 @@ function isStoredAttachment(value: unknown): value is ChatAttachment {
   );
 }
 
-function isStoredPermissionMode(value: unknown): value is PermissionMode {
-  return value === "ask" || value === "smart" || value === "full";
-}
-
 export function readDrafts(): Record<string, PersistedDraft> {
   try {
     const parsed = JSON.parse(localStorage.getItem(DRAFT_KEY) ?? "{}");
@@ -45,7 +40,6 @@ export function readDrafts(): Record<string, PersistedDraft> {
         attachments: Array.isArray(item.attachments) ? item.attachments.filter(isStoredAttachment) : [],
         ...(isStoredModel(item.model) ? { model: item.model } : {}),
         ...(typeof item.thinkingLevel === "string" ? { thinkingLevel: item.thinkingLevel } : {}),
-        ...(isStoredPermissionMode(item.permissionMode) ? { permissionMode: item.permissionMode } : {}),
       };
     }
     return drafts;
@@ -62,8 +56,7 @@ function writeDraft(id: string | null, state: PersistedDraft): void {
       state.draft ||
       state.attachments.length > 0 ||
       state.model ||
-      state.thinkingLevel ||
-      state.permissionMode,
+      state.thinkingLevel,
     );
     if (hasPayload) drafts[id] = state;
     else delete drafts[id];
@@ -82,7 +75,6 @@ export function useDraftPersistence(
   attachments: ChatAttachment[],
   model: EngineModel | undefined,
   thinkingLevel: string | undefined,
-  permissionMode: PermissionMode,
   emptySession: boolean,
 ): void {
   const pending = useRef<{ id: string | null; state: PersistedDraft } | null>(null);
@@ -111,11 +103,10 @@ export function useDraftPersistence(
         attachments,
         ...(emptySession && model ? { model } : {}),
         ...(emptySession && thinkingLevel ? { thinkingLevel } : {}),
-        ...(emptySession ? { permissionMode } : {}),
       },
     };
     if (timer.current === null) timer.current = window.setTimeout(flush, DRAFT_DEBOUNCE_MS);
-  }, [activeId, attachments, draft, emptySession, flush, model, permissionMode, thinkingLevel]);
+  }, [activeId, attachments, draft, emptySession, flush, model, thinkingLevel]);
 
   useEffect(() => {
     window.addEventListener("beforeunload", flush);

@@ -23,57 +23,57 @@ function withTempFile(fn: (file: string) => void) {
 
 test("a missing file reads as off, without creating one", () => {
   withTempFile((file) => {
-    assert.deepEqual(readDecisionConfig(file), { kind: "off", browserControl: false, computerControl: false, batchDecide: false, smartApproval: false });
+    assert.deepEqual(readDecisionConfig(file), { kind: "off", browserControl: false, computerControl: false, batchDecide: false });
   });
 });
 
 test("round-trips a jev config", () => {
   withTempFile((file) => {
-    writeDecisionConfig(file, { kind: "jev", browserControl: true, computerControl: false, batchDecide: false, smartApproval: false });
-    assert.deepEqual(readDecisionConfig(file), { kind: "jev", browserControl: true, computerControl: false, batchDecide: false, smartApproval: false });
+    writeDecisionConfig(file, { kind: "jev", browserControl: true, computerControl: false, batchDecide: false });
+    assert.deepEqual(readDecisionConfig(file), { kind: "jev", browserControl: true, computerControl: false, batchDecide: false });
   });
 });
 
 test("a jev config written before browser control existed keeps the tool on", () => {
   withTempFile((file) => {
     writeFileSync(file, JSON.stringify({ version: 1, decisionModel: { kind: "jev" } }));
-    assert.deepEqual(readDecisionConfig(file), { kind: "jev", browserControl: true, computerControl: false, batchDecide: false, smartApproval: false });
+    assert.deepEqual(readDecisionConfig(file), { kind: "jev", browserControl: true, computerControl: false, batchDecide: false });
   });
 });
 
 test("an explicit browser-control opt-out is kept", () => {
   withTempFile((file) => {
-    writeDecisionConfig(file, { kind: "jev", browserControl: false, computerControl: false, batchDecide: false, smartApproval: false });
-    assert.deepEqual(readDecisionConfig(file), { kind: "jev", browserControl: false, computerControl: false, batchDecide: false, smartApproval: false });
+    writeDecisionConfig(file, { kind: "jev", browserControl: false, computerControl: false, batchDecide: false });
+    assert.deepEqual(readDecisionConfig(file), { kind: "jev", browserControl: false, computerControl: false, batchDecide: false });
   });
 });
 
 test("a laya config from an earlier build reads as off", () => {
   withTempFile((file) => {
     writeFileSync(file, JSON.stringify({ version: 1, decisionModel: { kind: "laya", baseUrl: "http://127.0.0.1:8787" } }));
-    assert.deepEqual(readDecisionConfig(file), { kind: "off", browserControl: false, computerControl: false, batchDecide: false, smartApproval: false });
+    assert.deepEqual(readDecisionConfig(file), { kind: "off", browserControl: false, computerControl: false, batchDecide: false });
   });
 });
 
 test("corrupt JSON reads as off, not thrown", () => {
   withTempFile((file) => {
     writeFileSync(file, "{not json");
-    assert.deepEqual(readDecisionConfig(file), { kind: "off", browserControl: false, computerControl: false, batchDecide: false, smartApproval: false });
+    assert.deepEqual(readDecisionConfig(file), { kind: "off", browserControl: false, computerControl: false, batchDecide: false });
   });
 });
 
 test("an unknown file version reads as off rather than being reinterpreted", () => {
   withTempFile((file) => {
     writeFileSync(file, JSON.stringify({ version: 2, decisionModel: { kind: "jev" } }));
-    assert.deepEqual(readDecisionConfig(file), { kind: "off", browserControl: false, computerControl: false, batchDecide: false, smartApproval: false });
+    assert.deepEqual(readDecisionConfig(file), { kind: "off", browserControl: false, computerControl: false, batchDecide: false });
   });
 });
 
 test("write is atomic: no partial file survives a rename", () => {
   withTempFile((file) => {
-    writeDecisionConfig(file, { kind: "jev", browserControl: true, computerControl: false, batchDecide: false, smartApproval: false });
-    writeDecisionConfig(file, { kind: "off", browserControl: false, computerControl: false, batchDecide: false, smartApproval: false });
-    assert.deepEqual(readDecisionConfig(file), { kind: "off", browserControl: false, computerControl: false, batchDecide: false, smartApproval: false });
+    writeDecisionConfig(file, { kind: "jev", browserControl: true, computerControl: false, batchDecide: false });
+    writeDecisionConfig(file, { kind: "off", browserControl: false, computerControl: false, batchDecide: false });
+    assert.deepEqual(readDecisionConfig(file), { kind: "off", browserControl: false, computerControl: false, batchDecide: false });
   });
 });
 
@@ -81,19 +81,18 @@ test("computer control is opt-in: absent reads as off, and it round-trips", () =
   withTempFile((file) => {
     writeFileSync(file, JSON.stringify({ version: 1, decisionModel: { kind: "jev", browserControl: true } }));
     assert.equal(readDecisionConfig(file).computerControl, false);
-    writeDecisionConfig(file, { kind: "jev", browserControl: false, computerControl: true, batchDecide: false, smartApproval: false });
-    assert.deepEqual(readDecisionConfig(file), { kind: "jev", browserControl: false, computerControl: true, batchDecide: false, smartApproval: false });
+    writeDecisionConfig(file, { kind: "jev", browserControl: false, computerControl: true, batchDecide: false });
+    assert.deepEqual(readDecisionConfig(file), { kind: "jev", browserControl: false, computerControl: true, batchDecide: false });
   });
 });
 
-test("the batch and approval scenarios default off and round-trip", () => {
+test("the batch scenario defaults off and round-trips", () => {
   withTempFile((file) => {
     writeFileSync(file, JSON.stringify({ version: 1, decisionModel: { kind: "jev", browserControl: true } }));
     const legacy = readDecisionConfig(file);
     assert.equal(legacy.batchDecide, false);
-    assert.equal(legacy.smartApproval, false);
-    writeDecisionConfig(file, { kind: "jev", browserControl: false, computerControl: false, batchDecide: true, smartApproval: true });
-    assert.deepEqual(readDecisionConfig(file), { kind: "jev", browserControl: false, computerControl: false, batchDecide: true, smartApproval: true });
+    writeDecisionConfig(file, { kind: "jev", browserControl: false, computerControl: false, batchDecide: true });
+    assert.deepEqual(readDecisionConfig(file), { kind: "jev", browserControl: false, computerControl: false, batchDecide: true });
   });
 });
 
@@ -101,7 +100,7 @@ test("enhanced memory is an explicit Jev scenario", () => {
   withTempFile((file) => {
     writeFileSync(file, JSON.stringify({ version: 1, decisionModel: { kind: "jev", browserControl: true } }));
     assert.equal(readDecisionConfig(file).memoryControl, undefined);
-    writeDecisionConfig(file, { kind: "jev", browserControl: false, computerControl: false, batchDecide: false, smartApproval: false, memoryControl: true });
+    writeDecisionConfig(file, { kind: "jev", browserControl: false, computerControl: false, batchDecide: false, memoryControl: true });
     assert.equal(readDecisionConfig(file).memoryControl, true);
   });
 });

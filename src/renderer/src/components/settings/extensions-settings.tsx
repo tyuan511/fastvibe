@@ -121,7 +121,8 @@ export function ExtensionsSettings(): JSX.Element {
         window.fastvibe.engine.listExtensionPackages(),
         window.fastvibe.engine.getExtensions(),
       ]);
-      setPackages(next);
+      // Built-in extensions ship with the app; they are not something the user manages here.
+      setPackages(next.filter((item) => !item.builtin));
       setLoaded(extensions);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t("extensions.listFailed"));
@@ -180,7 +181,7 @@ export function ExtensionsSettings(): JSX.Element {
   }
 
   async function remove(item: ExtensionPackage): Promise<void> {
-    if (pending || item.builtin) return;
+    if (pending) return;
     setPending(item.source);
     try {
       setPackages(await window.fastvibe.engine.removeExtensionPackage(item.source));
@@ -409,25 +410,22 @@ function InstalledList({
         const state = loaded.find((entry) => entry.path.includes(packageName(item.source)));
         return (
           <Item key={item.source} variant="outline" size="sm" className="items-start gap-3 bg-card/80 p-3 transition-colors hover:border-primary/30 hover:bg-muted/20">
-            <ItemMedia variant="icon" className={cn("mt-0.5 size-9 rounded-xl", item.builtin ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground")}>
+            <ItemMedia variant="icon" className={"mt-0.5 size-9 rounded-xl bg-muted text-muted-foreground"}>
               <HugeiconsIcon strokeWidth={1.8} icon={PackageIcon} className="size-4.5" />
             </ItemMedia>
             <ItemContent className="min-w-0 gap-1">
               <div className="flex min-w-0 items-center gap-2">
                 <ItemTitle title={packageName(item.source)} className="min-w-0 truncate text-base">{packageName(item.source)}</ItemTitle>
-                {item.builtin ? <Badge variant="secondary" className="shrink-0 text-xs font-normal">{t("extensions.builtin")}</Badge> : null}
                 {state?.error ? <Badge variant="destructive" className="shrink-0 text-xs font-normal">{t("extensions.loadFailed")}</Badge> : state ? <Badge variant="secondary" className="shrink-0 text-xs font-normal">{t("extensions.loaded")}</Badge> : null}
               </div>
-              <ItemDescription className={cn("line-clamp-1 text-xs", state?.error && "text-destructive")}>{state?.error ?? (item.builtin ? t("extensions.builtinWithApp") : item.source)}</ItemDescription>
+              <ItemDescription className={cn("line-clamp-1 text-xs", state?.error && "text-destructive")}>{state?.error ?? item.source}</ItemDescription>
             </ItemContent>
-            {item.builtin ? null : (
-              <ItemActions className="ml-auto shrink-0 self-center">
-                <Button size="xs" variant="outline" disabled={busy || pending === item.source} onClick={() => onRemove(item)}>
-                  {pending === item.source ? <HugeiconsIcon strokeWidth={2} icon={Loading03Icon} className="size-3.5 animate-spin" /> : <HugeiconsIcon strokeWidth={2} icon={Delete02Icon} />}
-                  {t("extensions.uninstall")}
-                </Button>
-              </ItemActions>
-            )}
+            <ItemActions className="ml-auto shrink-0 self-center">
+              <Button size="xs" variant="outline" disabled={busy || pending === item.source} onClick={() => onRemove(item)}>
+                {pending === item.source ? <HugeiconsIcon strokeWidth={2} icon={Loading03Icon} className="size-3.5 animate-spin" /> : <HugeiconsIcon strokeWidth={2} icon={Delete02Icon} />}
+                {t("extensions.uninstall")}
+              </Button>
+            </ItemActions>
           </Item>
         );
       })}

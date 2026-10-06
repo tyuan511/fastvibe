@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { isBlockingPrompt } from "@shared/notifications";
 import { Toaster } from "@/components/ui/sonner";
-import { PermissionModeProvider } from "@/components/permission-mode-provider";
 import { useThemeSync } from "@/lib/use-theme";
 import { useLanguageSync } from "@/lib/use-language";
 import { useSessionStore } from "@/stores/session";
@@ -57,22 +56,20 @@ export function MobileApp(): JSX.Element {
   }, [conversationId]);
 
   return (
-    <PermissionModeProvider>
-      <div className="flex h-full flex-col bg-background text-foreground">
-        {route.kind === "chat" ? (
-          <ChatScreen key={route.id} conversationId={route.id} onOpenDrawer={() => setDrawerOpen(true)} />
-        ) : (
-          <ChatScreen
-            key={`new:${route.project ?? ""}`}
-            conversationId={null}
-            initialProject={route.project}
-            onOpenDrawer={() => setDrawerOpen(true)}
-          />
-        )}
-        <ConversationDrawer open={drawerOpen} onOpenChange={setDrawerOpen} />
-        <Toaster position="top-center" />
-      </div>
-    </PermissionModeProvider>
+    <div className="flex h-full flex-col bg-background text-foreground">
+      {route.kind === "chat" ? (
+        <ChatScreen key={route.id} conversationId={route.id} onOpenDrawer={() => setDrawerOpen(true)} />
+      ) : (
+        <ChatScreen
+          key={`new:${route.project ?? ""}`}
+          conversationId={null}
+          initialProject={route.project}
+          onOpenDrawer={() => setDrawerOpen(true)}
+        />
+      )}
+      <ConversationDrawer open={drawerOpen} onOpenChange={setDrawerOpen} />
+      <Toaster position="top-center" />
+    </div>
   );
 }
 

@@ -23,7 +23,6 @@ export type PermissionPrompt = {
   placeholder?: string;
   options?: string[];
   questions?: Array<{ question: string; header?: string; options?: string[] }>;
-  plan?: { title: string; summary: string };
 };
 
 type Status = "idle" | "connecting" | "ready" | "error";
@@ -259,7 +258,7 @@ function parseConversation(value: unknown): CatalogConversation[] {
 function parsePermission(value: unknown): PermissionPrompt | null {
   if (!isRecord(value) || value.type !== "extension_ui_request" || typeof value.id !== "string") return null;
   const method = value.method;
-  if (method !== "confirm" && method !== "select" && method !== "input" && method !== "editor" && method !== "questions" && method !== "plan_review") {
+  if (method !== "confirm" && method !== "select" && method !== "input" && method !== "editor" && method !== "questions") {
     return null;
   }
   return {
@@ -271,9 +270,6 @@ function parsePermission(value: unknown): PermissionPrompt | null {
     placeholder: typeof value.placeholder === "string" ? value.placeholder : undefined,
     options: stringList(value.options),
     questions: Array.isArray(value.questions) ? value.questions.flatMap(parseQuestion) : undefined,
-    plan: isRecord(value.plan) && typeof value.plan.title === "string" && typeof value.plan.summary === "string"
-      ? { title: value.plan.title, summary: value.plan.summary }
-      : undefined,
   };
 }
 

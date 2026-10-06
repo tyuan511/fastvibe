@@ -77,7 +77,6 @@ export default function appConfigExtension(pi: ExtensionAPI): void {
       "Change FastVibe's own configuration through the same methods its settings panes call; the panes update live.",
       "Write actions come from the catalog fastvibe_config_get({ action: \"overview\" }) returns.",
       "remote.set_password takes no input: the user types the password into a prompt and it never reaches you.",
-      "Permission-related settings cannot be changed here.",
     ].join(" "),
     promptSnippet: "Change FastVibe's own settings (fill the remote access / frp / MCP forms for the user)",
     promptGuidelines: [
@@ -103,24 +102,9 @@ export default function appConfigExtension(pi: ExtensionAPI): void {
           return { content: [{ type: "text" as const, text: T("用户没有填写密码，未作修改。", "The user did not enter a password; nothing changed.") }], details: { action, ok: false }, isError: true };
         }
         payload = { password };
-      } else if (process.env.FASTVIBE_PERMISSION_MODE !== "full") {
-        const shown = Object.keys(payload).length > 0 ? `\n${JSON.stringify(redact(payload), null, 2)}` : "";
-        const approved = await ctx.ui.confirm(T("修改 FastVibe 设置", "Change FastVibe settings"), `${action}${shown}`);
-        if (!approved) {
-          return { content: [{ type: "text" as const, text: T("用户拒绝了这次设置修改。", "The user declined this settings change.") }], details: { action, ok: false }, isError: true };
-        }
       }
 
       return reply(await host.appConfig({ action, input: payload, write: true }), action);
     },
   });
-}
-
-/** The confirm panel shows what will change, but not a token the user may be screen-sharing. */
-function redact(value: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [key, item] of Object.entries(value)) {
-    out[key] = /token|secret|password|key/i.test(key) && typeof item === "string" && item ? "••••••" : item;
-  }
-  return out;
 }

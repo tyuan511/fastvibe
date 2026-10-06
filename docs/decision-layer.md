@@ -519,17 +519,7 @@ type DecisionBackend =
 
 ### 7.5 动作权限
 
-`browser_task` 在一次工具调用里执行多个动作，沙箱的 `tool_call` 钩子只看到外层那一次，所以内部每次 mutation 前由宿主自己判定：
-
-| 模式 | 外层 `browser_task` | 内部普通动作 | 内部高风险动作 |
-| --- | --- | --- | --- |
-| ask | 确认一次（显示目标与起始页 origin） | 不确认 | 逐次确认 |
-| smart | 不确认 | 不确认 | 逐次确认 |
-| full | 不确认 | 不确认 | 不确认 |
-
-- 高风险动作由代码判定：点击 `type=submit` 或位于含支付/密码字段表单内的按钮；标签命中“支付/购买/下单/删除/发送/提交/pay/buy/order/delete/send/submit/confirm”等词表；离开起始 origin 后的第一次 mutation。
-- 确认走该会话的 `#extensionUi(conversationId)`；被拒绝则返回 `blocked`。没有确认 UI 的会话遇到需要确认的动作一律 blocked。
-- ask 模式由“每次点击都确认”变为“任务确认一次 + 高风险动作确认”，**需要产品确认**。
+FastVibe 没有审批：`browser_task` 和 `computer_task` 在一次工具调用里执行的动作都直接执行，不再逐次确认，也没有高风险按钮的词表判定。任务的边界只有开关（设置 → 决策引擎、设置 → 电脑操控）、macOS 授权、预算和用户随时可按的停止。
 
 ### 7.6 原差距表（§7.1.1 旧版）的去向
 
@@ -537,11 +527,10 @@ G1、G2 已修。G3–G8（严格 ref、pageKey、视口、select、滚动、等
 
 ### 7.9 computer use：`computer_task`
 
-computer use 和 browser use 是同一类任务：每一步都从窗口里一组明确的控件中选一个。所以 `computer_task` 复用同一个循环（`runBrowserAgent`）和同一个执行器（`decision-task-runner.ts`：决策后端、文字模型、权限确认、撤销、结果格式），只换控制层：
+computer use 和 browser use 是同一类任务：每一步都从窗口里一组明确的控件中选一个。所以 `computer_task` 复用同一个循环（`runBrowserAgent`）和同一个执行器（`decision-task-runner.ts`：决策后端、文字模型、撤销、结果格式），只换控制层：
 
 - **观察**：`computer-observation.ts` 把 Cua Driver 的 `window_state` 映射成同一种观察格式。按钮、链接、复选框、菜单项，以及带 AXPress 的元素是可点击目标；文本框、搜索框是可输入目标；安全文本框（密码框）整体排除。复选框的状态取自 value 和 selected，静态文本作为“可见文字”，窗口里有滚动区域时提供滚动控制项。为此 `window_state` 的输出补上了 `actions`、`selected` 和无 token 的静态文本 `texts`。
 - **执行**：全部通过 `requestComputer`，所以“电脑操控”开关、macOS 授权和驱动自己的审批照常生效。token 只对一次读取有效，所以每个动作前都会重新读取窗口，内容确认没变后，用这次读取的 token 执行。输入的做法是先点击字段，再全选（cmd/ctrl+A），然后输入。
-- **权限**：`computer_task` 归入沙箱的电脑操作类，外层按应用确认，并遵守“始终允许的应用”列表；内部遇到高风险按钮（提交、删除、支付等）再单独确认。
 - **现状**：映射逻辑有单测，控制层和工具只经过类型检查，**还没有在真实桌面上运行过**。开发会话没有 macOS 辅助功能和录屏授权，也没有下载驱动二进制；需要在已授权的 FastVibe 里实测。
 
 ### 7.10 批量决策：`batch_decide`
@@ -552,18 +541,7 @@ computer use 和 browser use 是同一类任务：每一步都从窗口里一组
 - **每条一个请求**，`state = { item, context? }`：一条的内容不会影响另一条的答案，一条失败不拖累整批。8 路并发，整批 5 分钟截止。
 - **置信度下限**（默认 0.7，可由调用方调）：低于下限的条目以 `review` 返回，带最佳猜测；主 agent 只需复核这些。score 若没有报告置信度则直接采纳（它是期望值，没有可估的分布）。
 - **提示词约束**写在工具的 `promptGuidelines`：何时用、何时不用、`review` 必须自己复核、不得仅凭结果做不可逆操作、条目里不放凭证。
-- 权限沙箱把它归为联网工具：「请求批准」会确认（显示条目数与说明），「帮我批准」不确认。
 - 代码：`resources/extensions/batch-decide.ts`（工具面，按回合读开关）→ `__fastvibeBatchDecide` → `src/main/pi/decision-scenarios.ts`。
-
-### 7.11 帮我批准：审批判断
-
-开关：应用场景 › 帮我批准（`smartApproval`，缺省关闭）。只在「帮我批准」模式下生效；「请求批准」和「完全访问」不受影响。
-
-- **送判范围**：所有 shell 命令（规则会误报 `rm -rf dist`，也会漏掉 `find -delete`）、规则标记过的写入（工作区外、敏感路径）、自定义 / MCP 工具。规则放行的工作区内写入不送判；电脑操作有按应用的「始终允许」，也不送判。
-- **硬规则不送判**：提权、磁盘级操作、写磁盘设备、系统账号文件、关机重启、SSH / 云 / 私钥 / 包管理器凭证——规则表里标 `hard`，这些提示永远保留。
-- **不对称采纳**（`approval.ts`）：`ask` 任意置信度都采纳；`allow` 需要置信度 ≥ 0.8。没有可用答案（关闭、无 key、超时、不确定、答案非法）时返回 `null`，完全按原规则处理——这就是「关闭后回退到默认」。
-- **延迟**：单次 3 s 窗口、最多重试一次；连不上服务后 60 s 内只用规则，避免断网时每条命令都等超时。同一工作区内相同调用的结论缓存（256 条），`npm test` 只问一次。
-- 送出的 state 只有工具名、命令或路径（截断到 4000 字符）、工作区路径与规则命中项，不含文件内容；trace 只记哈希。命令会发送给 Jev，设置页的说明写明了这一点。
 
 ### 7.12 增强记忆：`memoryControl`
 
@@ -589,7 +567,7 @@ computer use 和 browser use 是同一类任务：每一步都从窗口里一组
 3. **决策 key 不从 Main 读回或广播到 renderer。** 用户录入时 renderer 暂时持有输入值，提交后清空；不进入 localStorage、日志、模型 state、trace 或设置快照。
 4. **v1 不接受任意 endpoint。** Jev adapter 固定 endpoint；未来自建 endpoint 需要 HTTPS、固定 allowlist、禁止未经确认的重定向、禁止从 renderer 传入 headers/代理/credential 名称，并由 Main 发起请求。
 5. **state 出网 = 数据出境，必须显式告知。** browser state 是用户正在看的网页正文与控件值摘要；启用远端 Jev 前必须确认，且 password/file/hidden 永远不进入 state。
-6. **决策引擎不授予权限。** v1 不开放 `permission.*` binding；权限由现有 sandbox 和用户审批控制，不能用“模型置信度高”替代。后续任何权限模型方案需单独设计。
+6. **决策引擎不授予权限。** v1 不开放 `permission.*` binding；FastVibe 本身也不做审批，决策模型不能替代开关与系统授权。
 7. **所有用户文案走 i18n。** 设置页、配置错误、交接/降级通知、远程拒绝和隐私告知分别进入 `settings` / `app` / `chat` locale；`binding`、backend id、模型 id 不是直接展示给用户的文案。
 8. **交接不扩大权限或数据范围。** 大模型审议仍走同一过滤器、动作权限和取消链；网页内容、partialAnswers、供应商错误文案都是不可信数据，不能用作修改系统规则的指令。取消不得转换成 unreachable 后继续请求另一个模型。
 
@@ -725,7 +703,6 @@ computer use 和 browser use 是同一类任务：每一步都从窗口里一组
 - **`UNVERIFIED`：置信度采纳策略。** 按中英文、模型版本、候选数量和 confidence 来源分组测准确率/误操作率/交接率，记录从未被选中的选项。不能因交接率高就直接降低阈值，也不能把 reported 信号当授权。
 - **Jev 版本策略。** v1 可以默认 `jev-latest`（2026-09-23 指向 `jev-1.13.0`，`jev-preview` 同），但 trace 必须记录响应里的 versioned model；切片 0 的评测结论绑定具体版本，别名漂移后需重跑评测，稳定用户需要后续支持 pin 版本。
 - **已核实（2026-09-23，官方文档）：** 请求上限 64k tokens（state + 最长问题 ≤ 32k）；choice ≤ 255 候选；score 2–10 级；noul 无 confidence；错误码 401 / 422 / 429 / 529；输入 $0.042 / 百万 tokens，输出免费。实现时仍需重新核对。
-- **ask 模式下 browser_task 的确认粒度**（§7.5）需要产品决定。
 - **离视口很远、又不是翻页控件的目标**：翻页控件已经在任何距离都会提供（§7.2 改动 3）；其他远处目标只能依赖“先滚动”的规则。只有这条规则时，Jev 在 HN 第 2 页没有继续向下滚，而是误点了一条新闻，可靠性仍待验证。
 - **Laya 已移除**：laya-mlx 每道题只有 512 token（问题头部 192），装不下网页的元素表和正文；instructions 以对象发送时还会被它的 `json.dumps` 转义成 `\uXXXX`。修正编码后，表单任务也只做对第一步就答 DONE，所以从产品中移除（§12.0）。
 - **Jev 的动态速率限制与错误体验。** 429、超时、额度不足、key 失效需要分别映射为用户能理解的状态，而不是统一显示“决策失败”。

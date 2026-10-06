@@ -12,8 +12,6 @@ import { startModelsDevRefresh } from "./engine/models-dev-refresh";
 import { updateModelsDevSnapshot } from "./engine/models-dev-update";
 import {
   applyNativeTheme,
-  applyPermissionMode,
-  applyStartupPermissionMode,
   clearAppSettings,
   paintWindows,
   readAppSettings,
@@ -497,8 +495,7 @@ app.whenReady().then(async () => {
   const startupSettings = readAppSettings(getFastVibePaths());
   networkProxy = await createNetworkProxy(startupSettings);
   applyNativeTheme(startupSettings);
-  applyStartupPermissionMode(getFastVibePaths());
-  // Seed the sandbox/extensions' UI language and the AI 偏好语言 prompt before any
+  // Seed the extensions' UI language and the AI 偏好语言 prompt before any
   // session starts. A first launch has no settings file yet; the renderer writes one
   // (with the OS-detected language) on boot, which re-applies these.
   applyLanguages(startupSettings);

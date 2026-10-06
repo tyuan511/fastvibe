@@ -16,8 +16,8 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
  *
  * - **检测逻辑内联在这个文件里，不 import 仓库模块。** 扩展是 jiti 独立模块，
  *   打包后住在 `resourcesPath/extensions`，旁边没有 `src/`，任何 `@shared/*`
- *   或相对仓库路径的 import 都会在打包版里炸掉。这也是 `permission-sandbox.ts`
- *   把规则写在自己文件里的同一个理由。为了让单测能覆盖，判断函数是导出的。
+ *   或相对仓库路径的 import 都会在打包版里炸掉。这也是 `folder-consent.ts`
+ *   把逻辑写在自己文件里的同一个理由。为了让单测能覆盖，判断函数是导出的。
  * - **只按名字和 MIME 判断，不读文件。** 提示词组装时文件可能还没落盘，也可能在
  *   另一台机器上（远程访问）。宁可多提醒一次，也不要因为元数据不全而漏掉。
  * - **提醒只说「用这个技能」，不复述技能内容。** 技能本身按需读取；把它的正文抄进

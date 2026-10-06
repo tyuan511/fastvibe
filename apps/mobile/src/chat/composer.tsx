@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type JSX } from "react";
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { HugeiconsIcon } from "@hugeicons/react-native";
-import { ArrowDown01Icon, ArrowUp02Icon, HandIcon, PlayIcon, ShieldAlertIcon, ShieldCheckIcon, SquareIcon } from "@hugeicons/core-free-icons";
+import { ArrowDown01Icon, ArrowUp02Icon, PlayIcon, SquareIcon } from "@hugeicons/core-free-icons";
 import type { IconSvgElement } from "@hugeicons/react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { getClient } from "../session/connection";
@@ -11,16 +11,11 @@ import { usePalette } from "../ui/theme";
 type EngineModel = { provider: string; id: string };
 type FastVibeModel = { provider: string; providerName: string; id: string; name: string; thinkingLevels?: string[] };
 type SessionState = { model?: EngineModel; thinkingLevel?: string };
-type Picker = "model" | "thinking" | "permission" | null;
+type Picker = "model" | "thinking" | null;
 
 const THINKING_LABEL: Record<string, string> = {
   off: "关闭推理", minimal: "极低", low: "低", medium: "中", high: "高", xhigh: "极高", max: "最高", auto: "跟随模型默认",
 };
-const PERMISSION_LABEL: Record<string, string> = { ask: "请求批准", smart: "帮我批准", full: "完全访问" };
-const PERMISSION_DESCRIPTION: Record<string, string> = {
-  ask: "敏感操作都要你确认", smart: "低风险自动批准，高风险问你", full: "什么都不问（谨慎）",
-};
-const PERMISSION_MODES = ["ask", "smart", "full"] as const;
 
 /** Mobile equivalent of the desktop composer card. */
 export function Composer({
@@ -49,25 +44,18 @@ export function Composer({
   const [picker, setPicker] = useState<Picker>(null);
   const [models, setModels] = useState<FastVibeModel[]>([]);
   const [session, setSession] = useState<SessionState | null>(null);
-  const [permissionMode, setPermissionMode] = useState("smart");
-  const [fullAccessConfirmed, setFullAccessConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(async () => {
     const remote = getClient();
     if (!remote) return;
     try {
-      const [state, list, settings] = await Promise.all([
+      const [state, list] = await Promise.all([
         remote.call("engine:get-state", { conversationId }) as Promise<SessionState>,
         remote.call("engine:get-models", { conversationId }) as Promise<FastVibeModel[]>,
-        remote.call("settings:get") as Promise<Record<string, unknown>>,
       ]);
       setSession(state);
       setModels(Array.isArray(list) ? list : []);
-      if (settings.permissionMode === "ask" || settings.permissionMode === "smart" || settings.permissionMode === "full") {
-        setPermissionMode(settings.permissionMode);
-      }
-      setFullAccessConfirmed(settings.fullAccessConfirmed === true);
     } catch {
       // The chat connection owns the visible connection error.
     }
@@ -120,32 +108,6 @@ export function Composer({
     }
   }
 
-  async function choosePermission(mode: string): Promise<void> {
-    if (mode === "full" && !fullAccessConfirmed) {
-      Alert.alert("开启完全访问？", "完全访问会允许代理直接执行操作，不再逐项询问。只在你信任当前会话时开启。", [
-        { text: "取消", style: "cancel" },
-        { text: "开启", style: "destructive", onPress: () => void savePermission(mode, true) },
-      ]);
-      return;
-    }
-    await savePermission(mode, false);
-  }
-
-  async function savePermission(mode: string, confirmFull: boolean): Promise<void> {
-    const remote = getClient();
-    if (!remote || busy) return;
-    setBusy(true);
-    try {
-      await remote.call("settings:set", { permissionMode: mode, ...(confirmFull ? { fullAccessConfirmed: true } : {}) });
-      setPermissionMode(mode);
-      if (confirmFull) setFullAccessConfirmed(true);
-    } catch (error) {
-      Alert.alert("权限模式未更改", error instanceof Error ? error.message : "保存失败");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   const hasContent = draft.trim().length > 0;
   const action = running && !hasContent ? "stop" : canContinue && !hasContent ? "continue" : "send";
 
@@ -162,13 +124,6 @@ export function Composer({
           style={[styles.input, { color: palette.text }]}
         />
         <View style={styles.toolbar}>
-          <Chip
-            label={PERMISSION_LABEL[permissionMode] ?? permissionMode}
-            icon={permissionMode === "ask" ? HandIcon : permissionMode === "full" ? ShieldCheckIcon : ShieldAlertIcon}
-            destructive={permissionMode === "full"}
-            disabled={disabled || busy}
-            onPress={() => setPicker("permission")}
-          />
           {busy ? <ActivityIndicator size="small" color={palette.muted} /> : null}
           <View style={styles.spacer} />
           <Chip
@@ -191,7 +146,6 @@ export function Composer({
 
       <OptionSheet open={picker === "model"} title="模型" groups={modelGroups} value={currentModel ? modelKey(currentModel) : null} onSelect={(value) => void chooseModel(value)} onClose={() => setPicker(null)} />
       <OptionSheet open={picker === "thinking"} title="推理强度" groups={[{ label: "", options: levels.map((level) => ({ value: level, label: THINKING_LABEL[level] ?? level })) }]} value={session?.thinkingLevel ?? null} onSelect={(value) => void chooseThinking(value)} onClose={() => setPicker(null)} />
-      <OptionSheet open={picker === "permission"} title="权限模式" groups={[{ label: "", options: PERMISSION_MODES.map((mode) => ({ value: mode, label: PERMISSION_LABEL[mode], description: PERMISSION_DESCRIPTION[mode] })) }]} value={permissionMode} onSelect={(value) => void choosePermission(value)} onClose={() => setPicker(null)} />
     </View>
   );
 }

@@ -123,7 +123,7 @@ export function useAppBootstrap(args: AppBootstrapArgs): void {
       void openLatest.current?.(next, "remote");
     });
     const offEvent = onEvent((event) => {
-      // An extension command replaced the session (plan-mode's fresh handoff):
+      // An extension command replaced the session (an extension's fresh handoff):
       // follow the conversation the engine created and seeded.
       if (event.type === "conversation_opened" && event.result && typeof event.result === "object") {
         const opened = event.result as ConversationOpenResult;

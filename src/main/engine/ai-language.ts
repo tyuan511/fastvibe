@@ -3,15 +3,15 @@
  * standalone built-in extensions.
  *
  * The extensions are jiti modules loaded outside the Electron bundle (see
- * `resources/extensions/permission-sandbox.ts`), so they cannot import this file.
- * The process environment is the one channel they share with Main, exactly like
- * `FASTVIBE_PERMISSION_MODE`, and it is enough because the extensions re-read it
- * per event — a settings change reaches a running session.
+ * `resources/extensions/output-language.ts`), so they cannot import this file.
+ * The process environment is the one channel they share with Main, and it is
+ * enough because the extensions re-read it per event — a settings change reaches
+ * a running session.
  *
  * Three different things travel through it:
  *
  * - `FASTVIBE_UI_LANGUAGE` is the *value* (`zh` | `en`) of 界面语言. Extensions that
- *   render their own UI text (permission prompts, status widgets) map it to their
+ *   render their own UI text (status widgets, notices) map it to their
  *   own copy.
  * - `FASTVIBE_AI_LANGUAGE` is the value of AI 偏好语言, for the few extension strings
  *   the *model* reads (a blocked tool's reason, a continuation nudge).

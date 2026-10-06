@@ -25,11 +25,11 @@ FastVibe 将 pi coding agent 嵌入 Electron 主进程，把会话、工具调�
 
 - 基于原生 pi SDK，支持会话、工具调用和 pi 扩展。
 - 多项目工作区，支持会话归档、分支、附件和隔离的 scratch 工作区。
-- 工具调用、编辑 diff、终端输出、思考过程和权限请求可视化。
-- 三档权限模式：请求批准、帮我批准、完全访问；另有计划模式和目标模式。
+- 工具调用、编辑 diff、终端输出、思考过程可视化。
+- 目标模式，用于长期任务。
 - 支持 FastVibe、OpenAI 兼容供应商、模型协议配置和 OAuth 登录。
 - 支持 MCP、技能、待办、子 Agent、Git worktree 和用量统计。
-- 可选决策引擎 Jev，用于浏览器操控、电脑操控、批量决策、帮我批准和增强记忆。
+- 可选决策引擎 Jev，用于浏览器操控、电脑操控、批量决策和增强记忆。
 - 长期记忆：默认 / 语义 / JEV 增强三种模式，本地存储，自动捕获并注入相关记忆。
 - 集成文件预览、终端、浏览器操控、电脑操控和 Git 审查侧栏。
 - 支持远程网页 / 手机客户端，以及通过 SSH 连接远程 Linux Agent。
@@ -44,10 +44,9 @@ FastVibe 将 pi coding agent 嵌入 Electron 主进程，把会话、工具调�
 | 浏览器控制 | 浏览器里的连续点击和输入交给决策模型（`browser_task`） |
 | 电脑控制 | 桌面窗口里的操作交给决策模型（`computer_task`） |
 | 批量决策 | 主 Agent 获得 `batch_decide` 工具 |
-| 帮我批准 | 权限沙箱的判定交给决策模型 |
 | 增强记忆 | 记忆的写入、关系与检索判断交给决策模型 |
 
-关闭时各场景都走默认路径：主模型直接调用 `browser_*` / `computer_*` 工具，权限沙箱用内置规则判断。Jev 只服务决策场景，不作为普通对话模型出现在模型列表里，API key 保存在本机，不会回传渲染层。
+关闭时各场景都走默认路径：主模型直接调用 `browser_*` / `computer_*` 工具。Jev 只服务决策场景，不作为普通对话模型出现在模型列表里，API key 保存在本机，不会回传渲染层。
 
 ## 长期记忆
 
@@ -67,7 +66,7 @@ FastVibe 使用 `@earendil-works/pi-coding-agent` SDK，并将运行数据保存
 
 | pi API | FastVibe 呈现 |
 | --- | --- |
-| `ctx.ui.confirm` | 内联批准面板 |
+| `ctx.ui.confirm` | 内联是 / 否面板 |
 | `ctx.ui.select` / `input` / `questions` | 选择、输入和多问题表单 |
 | `ctx.ui.editor` | 多行编辑对话框 |
 | `ctx.ui.notify` | 通知 |

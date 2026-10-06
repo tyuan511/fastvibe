@@ -18,7 +18,6 @@ import { existingFiles } from "../engine/path-exists";
 import { loadModelsDev, type ModelsDevStats } from "../engine/models-dev";
 import {
   applyNativeTheme,
-  applyPermissionMode,
   clearAppSettings,
   paintWindows,
   readAppSettings,
@@ -29,6 +28,7 @@ import { applyLanguages } from "../engine/ai-language";
 import { uiText } from "../engine/ui-text";
 import { exportLogs, writeRendererLog } from "../engine/logger";
 import { applyKeepAwake } from "../engine/keep-awake";
+import { toolModeSettingsChanged } from "../engine/tool-modes";
 import { assertProxySettings, mergeSettingsPreservingProxy, proxySettingsOf } from "../../shared/proxy";
 import { getFileIconMapping } from "../engine/file-icons";
 import { collectUsageStats } from "../engine/usage-stats";
@@ -555,9 +555,10 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): void {
     try { writeAppSettings(paths, payload); }
     catch (error) { await networkProxy?.apply(previous); throw error; }
     applyNativeTheme(payload);
-    applyPermissionMode(payload);
     applyLanguages(payload);
     applyKeepAwake(payload);
+    // 代码模式 / 工具搜索 reach a session only when it reloads.
+    if (toolModeSettingsChanged(previous, payload)) void engine.refreshToolModes().catch(() => undefined);
     paintWindows(windows);
     scheduleUpdateCheck(payload.autoCheckUpdates !== false);
     // The other windows hold their own copy, loaded once at startup.
@@ -579,9 +580,9 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): void {
     try { clearAppSettings(paths); }
     catch (error) { await networkProxy?.apply(previous); throw error; }
     applyNativeTheme({});
-    applyPermissionMode({});
     applyLanguages({});
     applyKeepAwake({});
+    if (toolModeSettingsChanged(previous, {})) void engine.refreshToolModes().catch(() => undefined);
     paintWindows(windows);
     // 恢复默认 is a write like any other: the other windows hold their own copy and
     // would otherwise keep — and later re-save — the settings that were just reset.

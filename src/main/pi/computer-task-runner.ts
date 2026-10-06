@@ -84,7 +84,6 @@ export function runComputerTask(request: ComputerTaskRequest): Promise<ComputerT
   return runDecisionTask(request, {
     kind: "computer-task",
     control: computerControl(request.pid, request.windowId),
-    where: (page) => page.title || uiText("该窗口", "this window"),
     missing: uiText(
       "读不到这个窗口，请先用 computer_list_windows 确认 pid 与 windowId",
       "Could not read this window; confirm pid and windowId with computer_list_windows first",

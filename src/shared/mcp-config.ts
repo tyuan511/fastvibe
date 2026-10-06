@@ -4,7 +4,7 @@
  * headers. Pure, so the form and the tests read the same rules.
  */
 
-import type { McpServerConfig } from "./types";
+import type { McpExposure, McpServerConfig } from "./types";
 
 export type MapFormat = "env" | "headers";
 
@@ -76,6 +76,16 @@ export type McpJsonError =
   | { code: "sse"; name: string }
   | { code: "field"; name: string; field: string };
 
+/** The values a server's `exposure` may take, as written in the JSON. */
+const EXPOSURES: Record<string, McpExposure | "hidden"> = {
+  direct: "direct",
+  deferred: "deferred",
+  codemode: "codemode",
+  // pi's older spelling of `codemode`.
+  "codemode-deferred": "codemode",
+  hidden: "hidden",
+};
+
 export type McpJsonResult = {
   /** Valid entries, each with its name as its id (a caller that stores them assigns real ids). */
   servers: McpServerConfig[];
@@ -110,7 +120,15 @@ export function serverFromEntry(
   const item = raw as Record<string, unknown>;
   const type = typeof item.type === "string" ? item.type.toLowerCase() : undefined;
   if (type === "sse" && !options.lenient) return { error: { code: "sse", name } };
-  const enabled = item.disabled !== true && item.enabled !== false;
+  let enabled = item.disabled !== true && item.enabled !== false;
+  // `hidden` is "registered but unreachable": for this app that is a server switched off.
+  let exposure: McpExposure | undefined;
+  if (item.exposure !== undefined) {
+    const parsed = typeof item.exposure === "string" ? EXPOSURES[item.exposure] : undefined;
+    if (!parsed) return { error: { code: "field", name, field: "exposure" } };
+    if (parsed === "hidden") enabled = false;
+    else if (parsed !== "direct") exposure = parsed;
+  }
 
   const isHttp = type === "http" || type === "streamable-http" || type === "streamablehttp" || type === "sse"
     ? true
@@ -121,7 +139,7 @@ export function serverFromEntry(
     if (typeof item.url !== "string" || !item.url.trim()) return { error: { code: "missing", name } };
     const headers = item.headers === undefined ? undefined : toStringRecord(item.headers);
     if (headers === "invalid") return { error: { code: "field", name, field: "headers" } };
-    return { server: { id: name, name, enabled, transport: "http", url: item.url.trim(), ...(headers && Object.keys(headers).length ? { headers } : {}) } };
+    return { server: { id: name, name, enabled, transport: "http", url: item.url.trim(), ...(headers && Object.keys(headers).length ? { headers } : {}), ...(exposure ? { exposure } : {}) } };
   }
   if (typeof item.command !== "string" || !item.command.trim()) return { error: { code: "missing", name } };
   if (item.args !== undefined && !(Array.isArray(item.args) && item.args.every((arg) => typeof arg === "string"))) {
@@ -139,6 +157,7 @@ export function serverFromEntry(
       command: item.command.trim(),
       ...(args?.length ? { args } : {}),
       ...(env && Object.keys(env).length ? { env } : {}),
+      ...(exposure ? { exposure } : {}),
     },
   };
 }
@@ -198,11 +217,13 @@ export function serializeMcpJson(servers: McpServerConfig[]): string {
             command: server.command ?? "",
             ...(server.args?.length ? { args: server.args } : {}),
             ...(server.env && Object.keys(server.env).length ? { env: server.env } : {}),
+            ...(server.exposure && server.exposure !== "direct" ? { exposure: server.exposure } : {}),
             ...(server.enabled ? {} : { disabled: true }),
           }
         : {
             url: server.url ?? "",
             ...(server.headers && Object.keys(server.headers).length ? { headers: server.headers } : {}),
+            ...(server.exposure && server.exposure !== "direct" ? { exposure: server.exposure } : {}),
             ...(server.enabled ? {} : { disabled: true }),
           };
   }

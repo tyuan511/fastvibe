@@ -313,9 +313,9 @@ async function ensureDriver(): Promise<Driver> {
         // saying so explicitly keeps a future default from widening what this grants.
         approveCapabilityManifest: false,
         approveSessionPolicy: false,
-        // The flag that turns off the driver's own runtime approvals. FastVibe's
-        // permission sandbox is not a substitute for them, and its own default mode
-        // asks nothing at all — together those would be no check anywhere.
+        // The flag that turns off the driver's own runtime approvals. Left as the
+        // driver ships it: FastVibe adds no approval layer of its own, so this is not
+        // something to widen quietly.
         dangerouslyBypassApprovals: false,
         // The worker's stderr carries its telemetry notice and its own diagnostics;
         // routing it into this process's output would interleave it with the agent's.
@@ -947,11 +947,10 @@ export async function listComputerApps(): Promise<ComputerAppInfo[]> {
 }
 
 /**
- * Which application a pid belongs to, for the confirmation dialog and the allow-list.
+ * Which application a pid belongs to.
  *
- * Cached for a few seconds: the permission sandbox asks this on every action, and a
- * process's identity does not change under a pid within one interaction. A miss simply
- * re-enumerates.
+ * Cached for a few seconds: it is asked on every action, and a process's identity does
+ * not change under a pid within one interaction. A miss simply re-enumerates.
  */
 let appCache: { at: number; byPid: Map<number, ComputerAppInfo> } | null = null;
 const APP_CACHE_MS = 5_000;
@@ -1021,9 +1020,6 @@ export async function resetComputerWorker(): Promise<void> {
  */
 export function installComputerGlobal(): void {
   (globalThis as Record<string, unknown>).__fastvibeComputerRequest = requestComputer;
-  // The permission sandbox turns a pid into an application name for its dialog, and
-  // matches 始终允许的应用 against the same identity.
-  (globalThis as Record<string, unknown>).__fastvibeComputerAppForPid = computerAppForPid;
   app.once("will-quit", () => {
     void shutdownComputer();
   });

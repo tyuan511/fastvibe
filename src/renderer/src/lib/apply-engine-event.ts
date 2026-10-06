@@ -437,8 +437,10 @@ function upsertTool(message: ChatMessage, patch: Partial<ToolCallBlock> & { id: 
       result: patch.result,
       status: patch.status ?? "running",
       details: patch.details,
+      ...(patch.parentId ? { parentId: patch.parentId } : {}),
     });
-    pushToolPart(message, patch.id);
+    // A call a tool made itself is part of that tool's card, not a row of the transcript.
+    if (!patch.parentId) pushToolPart(message, patch.id);
     return;
   }
   // Never let an absent field erase what a richer earlier event already provided.
@@ -888,13 +890,39 @@ function applyEvent(
     return { messages: next, streaming: nextStreaming };
   }
 
+  // A call a tool made through `ctx.executeTool()` — a `codemode` script's — arrives with
+  // the id of the call that made it. Its card is the parent's: the parent's updates carry
+  // the whole list in `details.calls`. The call itself is kept (without a row and without
+  // its output) so the turn's changed-file chips still see a script's `write`.
+  const nestedParent = type.startsWith("tool_execution_") ? asString(event.parentToolCallId) : undefined;
+  if (nestedParent) {
+    const existing = trailingAssistant(next);
+    const id = asString(event.toolCallId);
+    if (!existing || !id) return { messages: next, streaming: nextStreaming };
+    const target = ensureAssistant();
+    if (type === "tool_execution_start") {
+      upsertTool(target, { id, name: asString(event.toolName), args: event.args, status: "running", parentId: nestedParent });
+    } else if (type === "tool_execution_end") {
+      const name = asString(event.toolName);
+      upsertTool(target, {
+        id,
+        name,
+        status: toolResultStatus(name ?? target.tools.find((tool) => tool.id === id)?.name, event.isError === true, toolDetails(event.result)),
+        parentId: nestedParent,
+      });
+    }
+    return { messages: next, streaming: nextStreaming };
+  }
+
   if (type === "tool_execution_update") {
     const existing = trailingAssistant(next);
     if (existing) {
       const target = ensureAssistant();
       const id = resolveToolId(target, asString(event.toolCallId) ?? asString(event.id));
       const partial = toolText(event.partialResult) ?? toolText(event.result) ?? toolText(event.output);
-      if (partial) upsertTool(target, { id, result: partial });
+      // `codemode` reports its nested calls as it goes, in `details` and not in the text.
+      const details = toolDetails(event.partialResult);
+      if (partial || details !== undefined) upsertTool(target, { id, ...(partial ? { result: partial } : {}), ...(details !== undefined ? { details } : {}) });
     }
     return { messages: next, streaming: nextStreaming };
   }

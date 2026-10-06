@@ -94,11 +94,7 @@ try {
 }
 
 const initialSettings: Record<string, unknown> = {
-  permissionMode: "smart",
   thinkingLevel: "high",
-  queueBehavior: "followUp",
-  autoCompact: true,
-  interruptMode: "immediate",
   sendOnEnter: true,
   ...(website ? { uiLanguage: websiteLanguage, aiLanguage: websiteLanguage } : {}),
   themeMode: website ? "dark" : theme === "light" || theme === "dark" ? theme : "system",
@@ -194,11 +190,11 @@ function parkedPrompts(): Array<Record<string, unknown>> {
   if (params.get("waiting") !== "1") return [];
   return [{
     type: "extension_ui_request",
-    id: "approval-preview",
+    id: "prompt-preview",
     conversationId: fixtureActiveId,
     method: "confirm",
-    title: "运行命令",
-    message: "pnpm test -- --watch=false",
+    title: "继续吗？",
+    message: "还有 3 个文件需要修改。",
   }];
 }
 
@@ -229,12 +225,6 @@ const openResult = (id: string): ConversationOpenResult => {
   // the rest are spread over the previous days and a previous year, which is exactly
   // the mix a reopened old chat has.
   if (!website && isActive && params.get("older") === "1") messages = ageThread(messages);
-  const planFixture = isActive && params.get("plan") === "1";
-  const plan = {
-    path: `${PREVIEW_CWD}/.tmp/fastvibe-plan.md`,
-    title: "主题模式改造计划",
-    summary: "目标：为设置页补充跟随系统主题，并确保主题切换在多个窗口间保持一致。\n\n## 实施步骤\n\n1. 梳理现有主题状态与持久化路径。\n2. 增加跟随系统的实时监听。\n3. 补充设置页交互与回归测试。",
-  };
   return {
     ...snapshot(),
     conversation,
@@ -250,11 +240,9 @@ const openResult = (id: string): ConversationOpenResult => {
     // Only the chat that owns a goal carries one: the panel is conversation-bound, and
     // the preview is where that is checked (`?goal=1`).
     extensionStatus:
-      planFixture
-        ? { "plan-mode": "active", "plan-review": JSON.stringify(plan) }
-        : isActive && params.get("goal") === "1"
-          ? { goal: JSON.stringify({ objective: GOAL_OBJECTIVE, status: params.get("goalState") ?? "running", round: 3 }) }
-          : {},
+      isActive && params.get("goal") === "1"
+        ? { goal: JSON.stringify({ objective: GOAL_OBJECTIVE, status: params.get("goalState") ?? "running", round: 3 }) }
+        : {},
   };
 };
 
@@ -355,10 +343,9 @@ const api = {
     compact: async () => fixtureSession,
     getCommands: async () => COMMANDS,
     getExtensions: async () => [
-      { path: "resources/extensions/plan.ts", name: "plan", commands: 1, tools: 1 },
       { path: "resources/extensions/goal.ts", name: "goal", commands: 1, tools: 0 },
       { path: "resources/extensions/todo.ts", name: "todo", commands: 0, tools: 1 },
-      { path: "resources/extensions/permission-sandbox.ts", name: "permission-sandbox", commands: 0, tools: 0 },
+      { path: "resources/extensions/folder-consent.ts", name: "folder-consent", commands: 0, tools: 0 },
       { path: "resources/extensions/session-title.ts", name: "session-title", commands: 0, tools: 0 },
     ],
     listExtensionPackages: async () => INSTALLED_PACKAGES,
@@ -412,7 +399,7 @@ const api = {
     // `conversationId` is a draft, which the store refuses for an open conversation.
     getState: async (conversationId?: string) => mockSession(conversationId),
     getRunning: async (): Promise<string[]> => [...runningIds],
-    // `?waiting=1` parks a tool approval on the active chat, for the phone page's 等你.
+    // `?waiting=1` parks a question on the active chat, for the phone page's 等你.
     getPendingUi: async (): Promise<Array<Record<string, unknown>>> => parkedPrompts(),
     getSnapshot: async (conversationId?: string) => ({
       conversationId: conversationId ?? fixtureActiveId,
@@ -457,17 +444,6 @@ const api = {
             listener({ type: "conversation_running", conversationId: fixtureActiveId, running: true });
           }
         }, 0);
-      }
-      if (params.get("plan") === "1") {
-        window.setTimeout(() => {
-          if (eventListeners.has(listener)) {
-            listener({ type: "extension_ui_request", id: "plan-review-preview", conversationId: "conv-theme", method: "plan_review", plan: {
-              path: `${PREVIEW_CWD}/.tmp/fastvibe-plan.md`,
-              title: "主题模式改造计划",
-              summary: "目标：为设置页补充跟随系统主题，并确保主题切换在多个窗口间保持一致。\\n\\n## 实施步骤\\n\\n1. 梳理现有主题状态与持久化路径。\\n2. 增加跟随系统的实时监听。\\n3. 补充设置页交互与回归测试。",
-            } });
-          }
-        }, 50);
       }
       return () => eventListeners.delete(listener);
     },

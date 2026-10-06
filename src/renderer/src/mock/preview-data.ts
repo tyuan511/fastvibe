@@ -233,6 +233,36 @@ const FAILED_BUILD: ToolCallBlock = {
   result: "error during build:\nError: Could not resolve \"./missing\" from src/renderer/src/App.tsx",
 };
 
+/* A `codemode` call: the script, the tools it ran (one failed) and what it printed. */
+const CODEMODE_TOOL: ToolCallBlock = {
+  id: "tool-codemode",
+  name: "codemode",
+  args: {
+    code:
+      "// 并行统计三个目录下的 TypeScript 文件数\n" +
+      "const dirs = ['src/main', 'src/renderer/src', 'src/missing'];\n" +
+      "const results = await Promise.allSettled(dirs.map((dir) => tools.bash({ command: `find ${dir} -name '*.ts*' | wc -l` })));\n" +
+      "for (const [i, r] of results.entries()) text(`${dirs[i]}: ${r.status === 'fulfilled' ? r.value.output.trim() : 'failed'}`);",
+  },
+  status: "done",
+  result: "Script completed in 0.4s\n\nsrc/main: 212\nsrc/renderer/src: 387\nsrc/missing: failed",
+  details: {
+    calls: [
+      { id: "tool-codemode/1", name: "bash", args: '{"command":"find src/main -name \'*.ts*\' | wc -l"}', status: "ok", durationMs: 118 },
+      { id: "tool-codemode/2", name: "bash", args: '{"command":"find src/renderer/src -name \'*.ts*\' | wc -l"}', status: "ok", durationMs: 143 },
+      { id: "tool-codemode/3", name: "bash", args: '{"command":"find src/missing -name \'*.ts*\' | wc -l"}', status: "error", durationMs: 31, error: "find: src/missing: No such file or directory" },
+    ],
+  },
+};
+
+const TOOL_SEARCH_TOOL: ToolCallBlock = {
+  id: "tool-tool-search",
+  name: "tool_search",
+  args: { query: "query postgres database schema" },
+  status: "done",
+  result: "Loaded 2 tools: mcp_postgres_query, mcp_postgres_list_tables",
+};
+
 /* A failing `bash` call with a command too long for the row, so the preview
  * harness exercises the failure badge in the case that used to break it. */
 const THINKING =
@@ -292,6 +322,19 @@ export const MESSAGES: ChatMessage[] = [
     ],
     createdAt: NOW - 22 * MINUTE,
     completedAt: NOW - 21.2 * MINUTE,
+  },
+  {
+    id: "msg-a-codemode",
+    role: "assistant",
+    text: "我用一个脚本并行统计了这几个目录，其中 `src/missing` 不存在。",
+    tools: [TOOL_SEARCH_TOOL, CODEMODE_TOOL],
+    parts: [
+      { kind: "tool", toolId: "tool-tool-search" },
+      { kind: "tool", toolId: "tool-codemode" },
+      { kind: "text", text: "我用一个脚本并行统计了这几个目录，其中 `src/missing` 不存在。" },
+    ],
+    createdAt: NOW - 21.5 * MINUTE,
+    completedAt: NOW - 21.3 * MINUTE,
   },
   {
     id: "msg-a3",
@@ -437,7 +480,6 @@ export const MODELS: FastVibeModel[] = [
 ];
 
 export const COMMANDS: SlashCommand[] = [
-  { name: "plan", description: "进入计划模式，只读探索后给出方案", source: "extension" },
   { name: "goal", description: "为目标模式设定一个长期目标", source: "extension" },
   { name: "compact", description: "压缩当前会话的上下文", source: "builtin" },
   { name: "init", description: "为项目生成 AGENTS.md", source: "builtin" },
@@ -474,11 +516,9 @@ export const SKILLS: SkillInfo[] = [
 ];
 
 export const INSTALLED_PACKAGES: ExtensionPackage[] = [
-  { source: "npm:@narumitw/pi-plan-mode", scope: "user", installedPath: "/Users/dev/FastVibe/runtime/engine/agent/packages/pi-plan-mode", builtin: false, loaded: true, commands: 2, tools: 1 },
-  { source: "builtin:plan", scope: "user", builtin: true, loaded: true, commands: 1, tools: 1 },
   { source: "builtin:goal", scope: "user", builtin: true, loaded: true, commands: 1, tools: 1 },
   { source: "builtin:todo", scope: "user", builtin: true, loaded: true, commands: 0, tools: 1 },
-  { source: "builtin:permission-sandbox", scope: "user", builtin: true, loaded: true, commands: 0, tools: 0 },
+  { source: "builtin:folder-consent", scope: "user", builtin: true, loaded: true, commands: 0, tools: 0 },
   { source: "builtin:session-title", scope: "user", builtin: true, loaded: true, commands: 0, tools: 0 },
 ];
 

@@ -193,7 +193,7 @@ export default function goalMode(pi: ExtensionAPI): void {
       const command = text.toLowerCase();
       if (!text) {
         // Picked from the composer palette without an objective: arm goal mode and
-        // show a badge (like plan mode) instead of asking inline. The objective is
+        // show a badge instead of asking inline. The objective is
         // the user's next message, so nothing runs until they actually send one.
         if (!objective) {
           armed = !armed;

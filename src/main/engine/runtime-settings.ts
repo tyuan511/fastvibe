@@ -71,11 +71,6 @@ function isProjectModelDefault(value: unknown): value is ProjectModelDefault {
   return Boolean(readEngineModel(candidate.model)) && readThinkingLevel(candidate.thinkingLevel) !== undefined;
 }
 
-export function readAutoCompact(paths: FastVibePaths): boolean {
-  const value = readAppSettings(paths).autoCompact;
-  return typeof value === "boolean" ? value : true;
-}
-
 export function writeAppSettings(paths: FastVibePaths, settings: PersistedSettings): void {
   writeFileSync(paths.settingsFile, `${JSON.stringify({ version: VERSION, settings }, null, 2)}\n`);
   cache = null;
@@ -92,13 +87,6 @@ export function clearAppSettings(paths: FastVibePaths): void {
 
 export function invalidateAppSettingsCache(): void {
   cache = null;
-}
-
-export function applyPermissionMode(settings: PersistedSettings): void {
-  const mode = settings.permissionMode === "ask" || settings.permissionMode === "full" || settings.permissionMode === "smart"
-    ? settings.permissionMode
-    : "smart";
-  process.env.FASTVIBE_PERMISSION_MODE = mode;
 }
 
 /** Keep this module's import graph free of Electron for the headless runtime. */

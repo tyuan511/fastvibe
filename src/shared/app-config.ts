@@ -30,7 +30,7 @@ export const APP_CONFIG_CATALOG = {
     summary: "新增或按 id 替换一个 MCP 服务器；input: { server: { id, name, enabled?, transport: \"stdio\"|\"http\", command?, args?, env?, url? } }",
   },
   "mcp.remove": { kind: "write", summary: "按 id 删除一个 MCP 服务器；input: { id }" },
-  "settings.set": { kind: "write", summary: "合并写入 settings.json；input: { patch: {...} }。权限、远程访问、代理相关键会被拒绝" },
+  "settings.set": { kind: "write", summary: "合并写入 settings.json；input: { patch: {...} }。远程访问、代理相关键会被拒绝" },
 } as const satisfies Record<string, { kind: "read" | "write"; summary: string }>;
 
 export type AppConfigAction = keyof typeof APP_CONFIG_CATALOG;

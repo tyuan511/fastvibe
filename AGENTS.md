@@ -361,7 +361,7 @@ on both screens. One chat is on screen at a time; every other chat is in a drawe
 (`conversation-drawer.tsx`, the shadcn `sheet`) sorted by 「does this need me」 (等你处理 →
 运行中 → 最近), so going between chats never costs the one behind it. `#/` is the new-chat
 page — there is no list page to land on. The composer sends, queues, stops, continues and
-attaches photos, and its chips pick the model, thinking level, permission mode and — on a
+attaches photos, and its chips pick the model, thinking level and — on a
 new chat — the project, each from a bottom sheet (`option-sheet.tsx`). The header's ⋯
 renames, moves to another project, archives and deletes the chat on screen.
 
@@ -377,8 +377,6 @@ renames, moves to another project, archives and deletes the chat on screen.
   which `filesToAttachments` would have turned into a path-less file chip), scaled to
   2048px on the long side and sent as JPEG, so a 10 MB camera shot is not base64'd whole
   into one WebSocket frame over the tunnel.
-- **The permission chip is the machine-wide setting**, and says so; choosing 完全访问 goes
-  through the same one-time warning (`PermissionModeProvider`) as the desktop.
 - **Another chat needing you, or finishing, is a toast with the way there**
   (`useOtherChatNotices`). Finishing is read off the busy map, not `conversation_activity`,
   which is only emitted for chats the *desktop* is not showing.
@@ -407,9 +405,7 @@ renames, moves to another project, archives and deletes the chat on screen.
   screen; a journal `resync` takes the same path. Coming back into view also probes the
   socket with a 4s call (`probeOnReturn`), because iOS freezes a page with its socket and
   nothing on this side hears the server give up on it.
-- **A remembered 始终允许 is answered on the phone too.** The phone may be the only client
-  looking at a chat that runs in the background on the desktop.
-- **Preview**: `mock-mobile.html` (`?waiting=1` parks an approval, `?running=1` a run;
+- **Preview**: `mock-mobile.html` (`?waiting=1` parks a question, `?running=1` a run;
   `#/c/<id>` opens a chat) — the fixture bridge from `mock.html` with the phone page behind
   it. The mock's `getState` / `setModel` / `setThinking` answer for the conversation asked
   about, as the engine does; without a `conversationId` the store rejects a state reply as
@@ -563,16 +559,16 @@ Main 每个会话一个 `AgentSession`，但引擎自己只有一个「当前会
 
 - **按会话存，不覆盖。** 渲染层的 `pendingPermissions` 是 `Record<conversationId, PermissionRequest[]>`。
   单槽版本会丢掉同一会话的第二个请求——而并行子 agent 共用父会话的 UI 上下文，八路
-  同时要审批时只有最后一个能显示，其余七个的 promise 永远悬着。面板画队列头（`activePermission`）。
+  同时提问时只有最后一个能显示，其余七个的 promise 永远悬着。面板画队列头（`activePermission`）。
 - **应答按 id 移除，不砍队首。** 引擎自己也会撤回请求（`confirm` 有 `CONFIRM_TIMEOUT_MS`，
   `abort` 会结算），撤回发 `extension_ui_dismiss`。若用「砍队首」，那条 dismiss 之后再应答
   就会误删**下一条**刚排队的请求。
 - **取消只看得到当前会话。** `abort(conversationId)` / `#resolvePendingUi(conversationId)` 只结算
   那个会话的请求；`stop()`（退出应用）才是全部。曾经无条件清空全部，于是停 A 会用
-  `confirm` 的 `false` 回退把 B 后台挂着的审批驳回——用户从没见过那条提问。
+  `confirm` 的 `false` 回退把 B 后台挂着的提问驳回——用户从没见过那条提问。
 
 `extension_ui_request` / `extension_ui_dismiss` 在 `App.tsx` 的 `onEvent` 里**先于焦点路由**处理：
-阻塞请求不是转录内容，后台会话卡在审批上时必须能点亮侧栏的「等你」和系统通知。
+阻塞请求不是转录内容，后台会话卡在提问上时必须能点亮侧栏的「等你」和系统通知。
 只有 `set_editor_text` 是例外——它写的是当前输入框，必须按会话过滤，否则后台会话会覆盖
 用户正在打的草稿。
 
@@ -1101,7 +1097,7 @@ engine is gone because the SDK never read them.
 
 FastVibe hosts pi extensions (the SDK's plugin system) and bridges their
 terminal-only surface onto the GUI. Fourteen **built-in** extensions ship with the app
-(`resources/extensions/plan.ts`, `goal.ts`, `todo.ts`, `permission-sandbox.ts`, `session-title.ts`,
+(`resources/extensions/goal.ts`, `todo.ts`, `question.ts`, `folder-consent.ts`, `session-title.ts`,
 `browser-use.ts`, `computer-use.ts`, `web-search.ts`, `conversation-search.ts`, `worktree.ts`,
 `output-language.ts`, `batch-decide.ts`, `app-config.ts`, `subagent/index.ts`); anything else
 the user installs at runtime via 设置 → 插件, which writes to the isolated `agentDir`
@@ -1143,9 +1139,10 @@ viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`
 `skill-creator` 的「技能写到哪里」一节把这件事写成了一条硬规则：**先问用户全局还是项目，再动手写**，
 不能默认往 `.agents/` 里塞。
 
-- **Built-ins** — `plan.ts` and `goal.ts` are FastVibe's own replacements for the
-  `@narumitw/pi-plan-mode` / `pi-goal-x` packages (deliberately not bundled as
-  dependencies). Only `/plan` and `/goal` are registered. `todo.ts` is always on
+- **Built-ins** — `goal.ts` is FastVibe's own replacement for the `pi-goal-x`
+  package (deliberately not bundled as a dependency). Only `/goal` is registered.
+  There is no plan mode: the harness plans on its own.
+  `todo.ts` is always on
   (no slash command): the model replaces the whole list each call.
   `session-title.ts` is also always on: the first user prompt is summarised into
   a short title via a fire-and-forget `modelRegistry.complete` call, then
@@ -1153,20 +1150,6 @@ viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`
   overwritten. Parallel runs and side chats name the session up front and are skipped.
   `output-language.ts` is always on: each `before_agent_start` appends the host's
   AI 偏好语言 requirement (from `FASTVIBE_AI_LANGUAGE_PROMPT`) to the system prompt.
-  - **Plan** narrows the active tools to the read-only set (`read/grep/find/ls`)
-    and, on each plan turn, appends a planning instruction on `before_agent_start`.
-    Entering the mode lazily registers and enables a `question` tool (removed again
-    on exit) so the agent can clarify ambiguous requirements before planning. It
-    takes an array of questions and asks them in one panel (`questions` UI, see
-    Dialogs) with ←/→ paging and a progress stepper; on hosts without that UI it
-    degrades to one `ctx.ui.select` / `ctx.ui.input` panel per question (`问题 i/n`).
-    It returns a structured `questions` payload the transcript renders as a Q&A card
-    (`question-answers.tsx`, tool family `question`).
-    When the turn ends the extension asks `ctx.ui.confirm` — confirming restores the
-    tools and sends the plan back as the execution prompt, declining collects
-    feedback via `ctx.ui.input` and regenerates. It publishes the `plan-mode` status,
-    which the renderer shows as a badge beside the composer's permission control
-    (`ExtensionStatusBadges`); the badge's close button dispatches `/plan` to exit.
   - **Goal** runs a long-term execution loop: every turn is instructed to compare
     progress against the objective and take on that round's tasks, and `agent_end`
     sends a continuation until the model ends with a lone `GOAL_COMPLETE` line
@@ -1174,8 +1157,15 @@ viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`
     JSON `goal` status that the renderer turns into the control panel above the
     composer (`GoalPanel`: view / pause / resume / clear). A bare `/goal` (picked
     from the palette without an objective) only arms the mode: it publishes a
-    `goal-armed` status that the composer shows as a badge next to plan mode's, and
+    `goal-armed` status that the composer shows as a badge in the composer toolbar, and
     the objective is taken from the user's next message in `before_agent_start`.
+  - **Question** (`question.ts`, always on, main agent only — subagents load no
+    extension but `folder-consent`) registers the `question` tool so the agent can stop and
+    ask. It takes an array of questions and asks them in one panel (`questions` UI,
+    see Dialogs) with ←/→ paging and a progress stepper; on hosts without that UI it
+    degrades to one `ctx.ui.select` / `ctx.ui.input` panel per question (`问题 i/n`).
+    It returns a structured `questions` payload the transcript renders as a Q&A card
+    (`question-answers.tsx`, tool family `question`).
   - **Todo** is Claude Code's TodoWrite as a pi tool (`todo`). The model submits
     the complete list every time (`pending` / `in_progress` / `completed` /
     `cancelled`; at most one `in_progress`). State is stored in tool-result
@@ -1215,27 +1205,17 @@ viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`
       (`lib/todos.ts`) name *which* step the agent is on — `1/N` from the first moment,
       rather than sitting at `0/N` until that step closes. The completed count stays
       reachable as the badge's `title`. The tool card's row (`tool-presentation.tsx`)
-      uses the same helpers, so the transcript and the panel cannot drift apart. The sandbox treats `todo` as read-only, so `ask` mode
-    does not confirm it.
-- **Permission sandbox** — `permission-sandbox.ts` is the enforcement half of the
-  composer's three modes (`ask` 请求批准 / `smart` 帮我批准 / `full` 完全访问).
-  It hooks `tool_call`, classifies each call (network rules, out-of-workspace
-  writes, sensitive paths, destructive shell patterns) and asks through
-  `ctx.ui.confirm`, which the host renders as the inline `PermissionPanel` (a
-  numbered listbox that takes over the composer slot — not a modal). `full` never asks.
-  The mode reaches it through the `FASTVIBE_PERMISSION_MODE` env var, which
-  `applyPermissionMode` (`engine/app-settings.ts`) syncs from `settings.json` at
-  startup and on every settings write; the extension re-reads it per tool call, so a
-  mode change lands in a running session. It is a standalone jiti module, so it
-  reads no FastVibe internals — keep new rules in the file itself.
-  Two settings keys feed it: `defaultPermissionMode` (设置 → 通用 → 默认权限模式, default
-  `smart` 帮我批准) is what a launch starts on, while `permissionMode` is the live mode the
-  sandbox reads. Every permission picker updates both keys, so a choice made in the composer
-  survives restarts and upgrades; Main's `applyStartupPermissionMode` still re-seeds the live
-  key from the persisted default so the sandbox env and chip agree from the first frame.
-  Entering `full` is guarded by one machine-wide warning. Accepting it stores
-  `fullAccessConfirmed`, so changing away and back never asks again; 恢复默认 is the explicit
-  way to forget that acknowledgement. An absent or malformed mode means `smart`, never `full`.
+      uses the same helpers, so the transcript and the panel cannot drift apart.
+- **No approvals.** FastVibe never asks the user to approve a tool call: there is no
+  permission mode, no sandbox extension, no 始终允许 list and no 完全访问 warning, and a
+  tool runs as soon as the model calls it. What still reaches the user is a *question*
+  (`question`, `ctx.ui.select` / `input` / `confirm` from a plugin), which is the agent
+  or a plugin asking for information, not FastVibe gating an action. `folder-consent.ts`
+  is the one extension that hooks `tool_call`, and it never blocks or asks: it stats a
+  macOS-protected folder (Desktop, Documents, iCloud…) from the main thread before a
+  tool touches it, because the OS only remembers its own folder dialog when the access
+  came from there (`mac-folder-consent.ts`). Do not re-add a gate here without the
+  user asking for one.
 - **Subagent** — `subagent/index.ts` registers a `subagent` tool that delegates a
   self-contained task to a role defined by a markdown file under
   `resources/extensions/subagent/agents/*.md`: `explorer`, `planner`, `worker`,
@@ -1253,10 +1233,9 @@ viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`
     requires it — there is **no `spawn("pi")` fallback** (`runSingleAgent` fails
     fast when the bridge is absent). `#runSubagent` creates a throwaway
     `createAgentSession` (`SessionManager.inMemory`), with `noExtensions: true`
-    plus the permission sandbox as its only extension, appends the role's system
+    plus `folder-consent` as its only extension, appends the role's system
     prompt through the resource loader, restricts tools to the agent's list, and
-    binds the parent conversation's UI context so a delegated `bash`/`edit` still
-    confirms through the same composer panel.
+    binds the parent conversation's UI context.
   - **Model selection.** A delegated run uses the model its parent chat is on: it is
     a tool call inside that conversation, and a run on a different gateway than the
     one the user just proved works fails on its own — five parallel `reviewer` runs
@@ -1283,7 +1262,7 @@ viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`
     The lifecycle itself carries `conversationId` even when no parent tool-start was visible.
     Tabs, the read-only composer and parent tool cards all read this registry; a missing row
     is unknown, not completed, and cannot freeze the pane onto a cached mid-run transcript.
-    Retry, compaction and parked approval are explicit phases. Only the runner's final
+    Retry, compaction and a parked prompt are explicit phases. Only the runner's final
     lifecycle ends a run, after caching its transcript and final model/thinking/context state;
     the parent tool's aggregate `isError` never overwrites individual sibling outcomes.
     `mock.html?subagent=running|retrying|waiting|aborted|error` previews these states without
@@ -1314,7 +1293,7 @@ viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`
     reading — which model it is on, how full its context window is — so the pane
     keeps the context ring and its popover, the model and thinking chips (as plain
     `StaticChip` labels, since `Chip` is a button with nothing behind it here), and
-    drops everything that would change the run (attach, the permission menu, the
+    drops everything that would change the run (attach, the
     model / thinking menus, send). `model` / `thinkingLevel` / `contextUsage` are
     pushed as `subagent_state`: the engine holds them, the transcript does not, so
     Main publishes them on `agent_start` / `turn_end` / `agent_settled` (the same
@@ -1327,7 +1306,7 @@ viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`
     `isError` with `已被用户终止`, and that tool result is what the main agent reads as
     the reason its delegation ended. The run's own lifecycle status is `aborted`
     (已终止), distinct from `error` so a deliberate stop is not drawn as a failure.
-    A parked permission prompt is answered first *and scoped to this run* — the run
+    A parked prompt is answered first *and scoped to this run* — the run
     shares the parent conversation's UI context, so `#pendingUi` entries carry an
     `owner` and `#resolvePendingUi(conversationId?, owner?)` filters on it; the
     `tool_call` hook cannot observe the abort while it awaits a prompt, so leaving
@@ -1398,8 +1377,7 @@ viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`
   session model speaks `openai-responses`. Execute opens a *side* `{baseUrl}/responses`
   request with the hosted `{ type: "web_search" }` tool (auth from `modelRegistry`); it is
   **not** injected into the main conversation, because pi-ai cannot parse `web_search_call`.
-  Completions / Messages models drop it from the active set. The sandbox treats it as
-  network (`ask` confirms, `smart` does not). Do not vendor `pi-web-search`.
+  Completions / Messages models drop it from the active set. Do not vendor `pi-web-search`.
 - **Conversation search** — `conversation-search.ts` registers `conversation_search`, which
   treats a catalog conversation id like a file path and a focused query like `grep`. Main
   resolves the id through the catalog, searches the target's current branch without activating
@@ -1407,15 +1385,13 @@ viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`
   transcript. A session already in memory supplies its live branch pointer; an unloaded one is
   parsed into `SessionManager.inMemory`, never `SessionManager.open`, so a read cannot migrate
   or rewrite the transcript. System prompts, thinking blocks, images and hidden custom messages
-  are excluded. It is read-only in the permission sandbox and available to main sessions only;
-  throwaway subagents still load just the sandbox.
+  are excluded. It is available to main sessions only;
+  throwaway subagents still load just `folder-consent`.
 - **Batch decide** — `batch-decide.ts` registers `batch_decide`, the decision engine as a tool
   for the main agent: one closed question (choice / score / yes_no) answered per item for 5–500
   items. Offered only while 设置 → 决策引擎 › 批量决策 is on (re-read every turn); the scope
   rules live in the shape (`engine/decision/batch.ts`) and the prompt guidelines, and
-  low-confidence items come back as `review` for the agent to judge itself. The sandbox treats
-  it as network (items leave the machine). `帮我批准` on the decision model
-  (应用场景 › 帮我批准) is the sandbox's other consumer: see docs/decision-layer.md §7.10–7.11.
+  low-confidence items come back as `review` for the agent to judge itself. See docs/decision-layer.md §7.10.
 - **App config** — `app-config.ts` registers `fastvibe_config_get` / `fastvibe_config_apply`, the
   agent's hands on FastVibe's *own* settings panes; the built-in skill `resources/skills/fastvibe-setup`
   is the playbook (install frps on the user's VPS over ssh, then fill 远程访问 → frp and start it).
@@ -1426,18 +1402,15 @@ viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`
     (Main's table is typed against it); `overview` and every unknown-action error serve the catalog,
     because the extension ships as a loose file and cannot import `@shared` to list it.
   - **No action returns a secret** (SSH passwords stripped, frp serves `hasToken`), and
-    **`settings.set` refuses permission, `remote*` and `proxy*` keys** — a model that could write
-    `permissionMode` would approve itself.
+    **`settings.set` refuses `remote*` and `proxy*` keys**, which have their own actions.
   - **The remote-access password never reaches the model**: `remote.set_password` collects it with
-    `ctx.ui.input` inside the extension. Every other write confirms in the extension itself (unless
-    `full`), so the sandbox lists `fastvibe_config_apply` in `KNOWN_TOOLS` and does not ask twice;
-    `fastvibe_config_get` is read-only.
+    `ctx.ui.input` inside the extension. Writes run without a confirmation; the skill tells the
+    agent to say what it is about to change first.
 - **Worktree** — `worktree.ts` exposes list / create / bind / unbind over the host's
   worktree methods. Creating or binding **switches the conversation's workspace**, which is
   a change to the user's machine they never asked for, so the tool's prompt guidelines make
   the agent state why and stop, then wait for the user to agree — a suggestion, not a
-  decision. `worktree_list` stays read-only in the sandbox; create / bind / unbind are
-  classified by `KNOWN_TOOLS` and get no confirmation of their own.
+  decision.
 - **Loading** — `src/main/pi/extension-manager.ts` resolves the built-in entry
   points (from `resources/extensions` in dev, `resourcesPath/extensions` packaged;
   `electron-builder.yml` copies them via `extraResources`) and `#createSession`
@@ -1452,9 +1425,9 @@ viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`
   / `respondPermission`, and FastVibe adds a non-SDK `questions` method to the UI
   context (`#extensionUi` → `FastVibeExtensionUIContext`) for single-panel
   multi-question prompts; `questions` answers ride `respondPermission.answers`.
-  `confirm` (approve a tool), `select` (pick an option), `input` (free-form answer)
+  `confirm` (a yes / no question), `select` (pick an option), `input` (free-form answer)
   and `questions` (multi-question, paged) render as the inline `PermissionPanel` in the composer
-  slot — the agent's questions and the sandbox's approvals share one panel; only
+  slot — one panel for every kind of question; only
   `editor` (multi-line prefill) keeps the modal `PermissionDialog`.
 - **Fire-and-forget UI** — `notify`, `setStatus`, `setWidget` (string lines) and
   `set_editor_text` reach the renderer store and render as toasts, a status row, a
@@ -1536,8 +1509,53 @@ of connections, config and the settings pane's status.
   discovery, dynamic registration, a loopback callback server); what is missing is a credential store,
   a 登录 control in the pane and an IPC method — which opens a browser on the host, so
   `server/policy.ts` has to classify it. Servers that need a bearer token work today through `headers`.
-- Not done either: tool-result truncation (a huge result goes into the context whole, as before),
-  exposure / `tool_search` / codemode, and MCP resources.
+- Not done either: tool-result truncation (a huge result goes into the context whole, as before)
+  and MCP resources.
+
+### 代码模式 and 工具搜索（`codemode` / `tool_search`）
+
+Two SDK tools, loaded in `#createSession` as the hidden extensions `fastvibe-codemode` and
+`fastvibe-tool-search` (the SDK loads neither in an SDK session by itself; only its CLI does).
+`codemode` takes one argument, `code` — JavaScript source, not JSON — and runs it in a QuickJS
+sandbox on a worker thread; the script calls other tools as `tools.<name>(…)` (in parallel, if it
+likes) and only what it prints reaches the model. `tool_search` finds tools that are not declared
+and declares the matches for the next request.
+
+- **On by default, with a switch each** (`settings.codemode` / `settings.toolSearch`, 设置 → 偏好设置
+  → 对话 — agent behaviour, and `codemode` works with no MCP server at all). The keys are read as
+  *off only when `false`*, so an install that never wrote them has both; the renderer's default is
+  `true` and drops a non-boolean. Both tools are registered inactive, and `fastvibe-tool-modes`
+  (`engine/tool-modes.ts`) sets their place in the active set on every `session_start`, a reload
+  included — the SDK's `defaultTools` setting can only add, never take away. An enabled MCP server
+  whose `exposure` can only be reached through a tool keeps that tool on even with its switch off:
+  a `codemode` server has no declared tools without `codemode`, and a `deferred` one has none until
+  `tool_search` loads them (the rule pi's own MCP support applies when a server connects). Everything
+  else in the active set is left as it was, so a set another extension narrowed stays narrowed.
+  The cost of leaving them on is their descriptions in every request (pi measures about 3.3K tokens
+  for `codemode` with the default tools), which is what the switches are for.
+- **A settings write that changes either key reloads every session** (`refreshToolModes`, the MCP
+  reload path: an idle session at once, a running one when it settles). `toolModeSettingsChanged`
+  compares exactly those two keys, so no other setting costs a reload.
+- **`exposure` is per server** (`direct` | `deferred` | `codemode`; default `direct`, which is *not* pi's
+  default of `codemode` — an existing server must not lose its tools). It is the form's select, the
+  JSON's `exposure` key (pi's `codemode-deferred` spelling reads as `codemode`; `hidden` reads as
+  switched off) and the `exposure` / `namespace` the tool is registered with. The namespace carries
+  the server's name and its own `instructions`, which a script reads with `describeNamespace()`.
+- **Nested calls go through the same hooks as direct ones**, and arrive as `tool_execution_*` events
+  with `parentToolCallId` (ids `<call>/<n>`). The renderer keeps such a call in `message.tools` — the
+  turn's changed-file chips read it, so a script's `write` is still listed — but gives it no row
+  (`ToolCallBlock.parentId`, and `upsertTool` pushes no part for it). The `codemode` card draws the
+  calls itself from `details.calls`, which each streaming `tool_execution_update` carries, so the
+  list fills in while the script runs. After a reload the nested calls are not in the transcript
+  (the SDK does not persist them as messages), so the card still lists them but a script's `write`
+  no longer appears among the changed-file chips.
+- **The sandbox runs from inside the asar**: a script with two parallel tool calls was run from a
+  packed `app.asar` under Electron in node mode (`ELECTRON_RUN_AS_NODE`) and returned the same as from
+  a plain directory, so no `asarUnpack` entry was added. It has not been run in a packaged window.
+- **Hooks**: a script's nested calls reach `tool_call` hooks like any other call.
+- `test/codemode-session.test.ts` runs the real SDK end to end — extensions, an MCP server behind
+  `McpManager`, a scripted model (`createFauxCore`) — so what is declared, what a script can reach and
+  what the events look like are pinned together.
 
 ## Commands
 
@@ -1742,7 +1760,7 @@ means either: an agent **run** and a **compaction**.
 - A run is `agent_start` → **`agent_settled`**, not `agent_end`. The SDK emits `agent_end`
   before it does everything else it still owes the same run: retrying a failed request
   (after an exponential backoff), auto-compacting, or continuing with messages an
-  `agent_end` handler queued (`ctx.sendMessage` from a goal/plan handler). Each of those
+  `agent_end` handler queued (`ctx.sendMessage` from a goal handler). Each of those
   then starts another `agent_start` *inside that same run*, and only `agent_settled` —
   emitted once, at the end of `_runAgentPrompt`'s post-run loop — means it is over (it is
   the same condition as the SDK's `session.isIdle`). Ending the flag at `agent_end` made
@@ -2011,15 +2029,6 @@ from an event payload. So it is as fresh as the last `reloadActiveState()`.
 - **打开时修复**：`#ensureSession` 在 `SessionManager.open` 之前跑 `repairTranscriptFile`，把父记录缺失的
   条目接到文件中的前一条上（只重写那几行，坏行原样保留，不会接成环），并在日志里记一条
   `[transcript] relinked …`。对话搜索（`loadConversationTranscriptBranch`）在内存里做同样的接续，不写盘。
-
-## 始终允许（permission rules）
-
-`lib/permission-rules.ts`，存在 `settings.permissionAlways`（`method:title:message` 键）。
-它曾经是 session store 上的一个字段：不跨会话、重启即失。而「始终允许」一旦会忘，
-就比不提供更糟——用户已经不再期待被问了。同一个 bash 模式从每个会话都会到达沙箱，
-所以这是一条关于**这台机器**的偏好，不是关于某个会话。键刻意不含会话与请求 id（那正是
-要忽略的东西），也不只看方法（`运行命令：npm test` 与 `运行命令：rm -rf …` 的 message 不同）。
-设置 → 通用 里有条数与清除。
 
 ## 设置跨窗口同步
 

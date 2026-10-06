@@ -12,7 +12,6 @@ export type SidePaneTabType =
   | "browser"
   | "selection-side-chat"
   | "files"
-  | "plan"
   | "subagent"
   | "changes";
 
@@ -259,8 +258,6 @@ type SidePaneStore = {
   registerSubagent: (subagentId: string, init?: SubagentTabInit) => void;
   /** Open the file view focused on one file's preview. */
   openFilePreview: (preview: FilePreview, title?: string) => void;
-  /** Open a standalone plan document without the project file tree. */
-  openPlanPreview: (preview: FilePreview, title: string) => void;
   patchTab: (id: string, patch: Partial<SidePaneTab>) => void;
   applyConversationEvent: (conversationId: string, event: EngineEvent) => void;
   /** Path the active chat's file view is previewing, if any. */
@@ -323,7 +320,6 @@ export function sidePaneTabTitle(tab: SidePaneTab): string {
   if (tab.type === "subagent") return subagentTabLabel(tab);
   if (tab.type === "selection-side-chat") return tab.title;
   if (tab.type === "files" && tab.title !== i18n.t("sidepane:tabs.files")) return tab.title;
-  if (tab.type === "plan") return tab.title;
   return i18n.t(`sidepane:tabs.${tab.type}`) as string;
 }
 
@@ -797,19 +793,6 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
         return state;
       }
       return writeScope(state, key, { ...scope, tabs: upsert(scope.tabs, tab) });
-    }),
-  openPlanPreview: (preview, title) =>
-    set((state) => {
-      const scope = scopeOf(state);
-      const tab: SidePaneTab = {
-        id: `plan:${preview.path}`,
-        type: "plan",
-        openedAt: Date.now(),
-        title,
-        path: preview.path,
-        preview,
-      };
-      return writeScope(state, scopeKeyOf(state), { ...scope, tabs: upsert(scope.tabs, tab), activeTabId: tab.id }, { collapsed: false });
     }),
   openFilePreview: (preview, title) =>
     set((state) => {

@@ -83,17 +83,8 @@ export function runBrowserTask(request: BrowserTaskRequest): Promise<BrowserTask
   return runDecisionTask(request, {
     kind: "browser-task",
     control: webviewControl(request.conversationId, request.tabId),
-    where: (page) => safeHost(page.url),
     missing: uiText("没有可操作的页面，请先用 browser_open 打开网址", "No page to work on; open one with browser_open first"),
   });
-}
-
-function safeHost(url: string): string {
-  try {
-    return new URL(url).host;
-  } catch {
-    return url;
-  }
 }
 
 /** Expose the runner to the browser-use extension, which cannot import FastVibe internals. */

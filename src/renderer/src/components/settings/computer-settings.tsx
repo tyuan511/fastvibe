@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Alert02Icon, CheckmarkCircle02Icon, Delete02Icon, DragDropIcon, RefreshIcon } from "@hugeicons/core-free-icons";
+import { Alert02Icon, CheckmarkCircle02Icon, DragDropIcon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Spinner } from "@/components/ui/spinner";
@@ -10,7 +10,7 @@ import { SettingsGroup, SettingsRow } from "./settings-group";
 import { useSettingsStore } from "@/stores/settings";
 import { blockedRemotely } from "@/lib/remote-unavailable";
 import { Ipc } from "@shared/ipc";
-import type { ComputerAppInfo, ComputerPermissionStatus, GrantFlowState } from "@shared/types";
+import type { ComputerPermissionStatus, GrantFlowState } from "@shared/types";
 import { cn } from "@/lib/utils";
 
 /**
@@ -41,8 +41,6 @@ export function ComputerSettings(): JSX.Element {
   // and settling on the same result a moment later.
   const [status, setStatus] = useState<ComputerPermissionStatus | null>(lastStatus);
   const [checking, setChecking] = useState(lastStatus === null);
-  const [apps, setApps] = useState<ComputerAppInfo[] | null>(null);
-  const [appsLoading, setAppsLoading] = useState(false);
 
   const remote = blockedRemotely(Ipc.computerPermissions);
 
@@ -84,33 +82,6 @@ export function ComputerSettings(): JSX.Element {
   }, [refresh, remote]);
 
   const ready = status?.ready === true;
-  const allowedApps = settings.computerAllowedApps ?? [];
-
-  const loadApps = async (): Promise<void> => {
-    setAppsLoading(true);
-    try {
-      setApps(await window.fastvibe.computer.listApps());
-    } catch {
-      setApps([]);
-    } finally {
-      setAppsLoading(false);
-    }
-  };
-
-  const allowedIds = new Set(allowedApps.map((item) => item.id));
-
-  const addApp = (app: ComputerAppInfo): void => {
-    // Keyed by bundle id where there is one: a display name is not an identity, and a
-    // rename must not quietly change which application the user allowed. The name is
-    // stored beside it so the list stays readable when the app is not running.
-    const id = app.bundleId || app.name;
-    if (allowedIds.has(id)) return;
-    save({ computerAllowedApps: [...allowedApps, { id, name: app.name }] });
-  };
-
-  const removeApp = (id: string): void => {
-    save({ computerAllowedApps: allowedApps.filter((item) => item.id !== id) });
-  };
 
   if (remote) {
     return (
@@ -159,58 +130,6 @@ export function ComputerSettings(): JSX.Element {
           }
         />
       </SettingsGroup>
-
-      <section className="space-y-2">
-        <div className="flex items-center justify-between px-1">
-          <h3 className="text-sm font-medium">{t("computer.allowedTitle")}</h3>
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={appsLoading || !ready}
-            onClick={() => void loadApps()}
-          >
-            {appsLoading ? <Spinner className="size-3.5" /> : <HugeiconsIcon strokeWidth={2} icon={RefreshIcon} className="size-3.5" />}
-            {t("computer.allowedPick")}
-          </Button>
-        </div>
-        <p className="px-1 text-xs leading-4 text-muted-foreground">{t("computer.allowedDesc")}</p>
-        <div className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">
-          {allowedApps.length === 0 && apps === null ? (
-            <div className="px-4 py-6 text-center text-sm text-muted-foreground">{t("computer.allowedEmpty")}</div>
-          ) : null}
-          {allowedApps.map((item) => (
-            <div key={item.id} className="flex items-center justify-between gap-6 px-4 py-3">
-              <div className="min-w-0">
-                <span className="text-sm">{item.name}</span>
-                {item.id === item.name ? null : (
-                  <p className="mt-0.5 truncate text-xs leading-4 text-muted-foreground">{item.id}</p>
-                )}
-              </div>
-              <Button size="sm" variant="ghost" onClick={() => removeApp(item.id)}>
-                <HugeiconsIcon strokeWidth={2} icon={Delete02Icon} className="size-3.5" />
-                {t("computer.allowedRemove")}
-              </Button>
-            </div>
-          ))}
-          {apps?.map((app) => {
-            const id = app.bundleId || app.name;
-            if (allowedIds.has(id)) return null;
-            return (
-              <div key={`${app.pid}:${id}`} className="flex items-center justify-between gap-6 px-4 py-3">
-                <div className="min-w-0">
-                  <span className="text-sm">{app.name}</span>
-                  {app.bundleId ? (
-                    <p className="mt-0.5 truncate text-xs leading-4 text-muted-foreground">{app.bundleId}</p>
-                  ) : null}
-                </div>
-                <Button size="sm" variant="ghost" onClick={() => addApp(app)}>
-                  {t("computer.allowedAdd")}
-                </Button>
-              </div>
-            );
-          })}
-        </div>
-      </section>
     </div>
   );
 }

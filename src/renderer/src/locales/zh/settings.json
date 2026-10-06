@@ -36,8 +36,6 @@
   "computerControlHint": "桌面窗口里的连续操作交给决策模型。",
   "batchDecide": "批量决策",
   "batchDecideHint": "主 Agent 可以把大量同类条目的分类、打分、是非判断交给决策模型（batch_decide）。条目内容会发送给 Jev。",
-  "smartApproval": "帮我批准",
- "smartApprovalHint": "由决策模型判断命令和工具调用要不要问你；提权、系统文件和凭证类操作始终询问。关闭或不可用时按内置规则。命令内容会发送给 Jev。",
  "memoryControl": "增强记忆",
  "memoryControlHint": "由 Jev 判断记忆是否保存、记忆之间的关系，以及回答前使用哪些记忆。"
  },
@@ -244,9 +242,6 @@
  "agent": {
   "title": "Agent 设置"
  },
- "security": {
-  "title": "安全与权限"
- },
  "runtime": {
   "title": "运行时"
  },
@@ -254,28 +249,17 @@
   "title": "通用",
   "defaultModel": "默认模型",
   "defaultModelDesc": "新开会话默认使用的模型",
-  "permission": "默认权限模式",
-  "permissionDesc": "{{mode}}；输入框上方可临时切换",
   "keepAwake": "运行时保持唤醒",
   "keepAwakeDesc": "运行期间阻止系统休眠",
   "notifications": "系统通知",
-  "notificationsDesc": "完成、出错、需要确认和应用更新时提醒",
-  "permissionRules": "已记住的授权",
-  "permissionRulesDesc": "这些调用会跳过确认，共 {{count}} 条",
-  "permissionRulesClear": "全部清除"
+  "notificationsDesc": "完成、出错、需要确认和应用更新时提醒"
  },
  "chat": {
   "title": "对话",
-  "queue": "流式时新消息处理",
-  "queueDesc": "生成过程中发送消息的默认行为",
-  "followUp": "完成后执行",
-  "steer": "立即打断",
-  "interrupt": "打断方式",
-  "interruptDesc": "默认打断时是否等当前回合结束",
-  "immediate": "立即打断",
-  "wait": "等回合结束",
-  "autoCompact": "自动压缩",
-  "autoCompactDesc": "上下文接近上限时自动压缩"
+  "codemode": "代码模式",
+  "codemodeDesc": "让模型写一段脚本，一次调用多个工具，只把结果交回给它",
+  "toolSearch": "工具搜索",
+  "toolSearchDesc": "让模型按需查找并加载没有预先提供的工具"
  },
  "about": {
   "more": "更多",
@@ -723,7 +707,16 @@
   "jsonMissing": "“{{name}}”需要 command（本地进程）或 url（HTTP）",
   "jsonSse": "“{{name}}”使用 SSE 传输，暂不支持，请改用 Streamable HTTP 地址",
   "jsonField": "“{{name}}”的 {{field}} 格式不正确",
-  "jsonMulti": "编辑时只能包含一个服务器"
+  "jsonMulti": "编辑时只能包含一个服务器",
+  "exposure": "工具提供方式",
+  "exposureDirect": "直接提供",
+  "exposureDeferred": "按需加载（工具搜索）",
+  "exposureCodemode": "仅在脚本中调用（代码模式）",
+  "exposureHint": {
+    "direct": "所有工具都会交给模型。",
+    "deferred": "模型先搜索，再使用找到的工具。即使关闭了工具搜索也会启用。",
+    "codemode": "模型只能在脚本里调用这些工具。即使关闭了代码模式也会启用。"
+  }
  },
  "skills": {
   "addFailed": "添加失败，请重试",
@@ -786,8 +779,6 @@
   "next": "下一页",
   "emptyTitle": "尚未安装插件",
   "emptyDesc": "切换到「官方市场」浏览并安装",
-  "builtinWithApp": "随应用内置",
-  "builtin": "内置",
   "loadFailed": "加载失败",
   "loaded": "已加载",
   "uninstall": "卸载",
@@ -1007,12 +998,6 @@
   "backgroundDesc": "不抢占前台焦点，你可以继续做别的事；目标不支持时报错而不强抢焦点",
   "clipboard": "读写剪贴板",
   "clipboardDesc": "剪贴板为所有应用共用，写入会覆盖原有内容",
-  "allowedTitle": "始终允许的应用",
-  "allowedDesc": "这些应用不再逐次确认，其余应用仍按当前权限模式询问。",
-  "allowedEmpty": "暂无",
-  "allowedPick": "选择运行中的应用",
-  "allowedAdd": "添加",
-  "allowedRemove": "移除",
   "grantHint": "点「开始授权」后，依次把浮层拖进「屏幕录制」和「辅助功能」的列表即可。",
   "dragNow": "拖进列表",
   "flowProgress": "第 {{step}}/{{total}} 步 · 等待你把浮层拖进列表",

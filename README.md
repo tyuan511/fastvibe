@@ -25,11 +25,11 @@ Download the latest installer from [GitHub Releases](https://github.com/tyuan511
 
 - Native pi SDK support for conversations, tool calls, and pi extensions.
 - Multi-project workspaces with archived chats, branches, attachments, and isolated scratch workspaces.
-- Visual tool calls, edit diffs, terminal output, reasoning, and permission requests.
-- Three permission modes: ask, smart approval, and full access; plus plan and goal modes.
+- Visual tool calls, edit diffs, terminal output, and reasoning.
+- Goal mode for long-running objectives.
 - FastVibe and OpenAI-compatible providers, model protocol settings, and OAuth login.
 - MCP, skills, todos, subagents, Git worktrees, and usage statistics.
-- Optional Jev decision engine for browser control, computer control, batch decisions, smart approval, and enhanced memory.
+- Optional Jev decision engine for browser control, computer control, batch decisions, and enhanced memory.
 - Long-term memory in three modes — default, semantic, and JEV-enhanced — stored locally, captured automatically, and injected as context.
 - File preview, terminal, browser use, computer use, and Git review side panes.
 - Remote web / mobile clients and SSH connections to headless Linux Agents.
@@ -44,10 +44,9 @@ Settings → Decision engine can put **Jev (TypeSafe)** behind a set of “what 
 | Browser control | The decision model drives clicking and typing in the browser (`browser_task`) |
 | Computer control | The decision model drives operations in desktop windows (`computer_task`) |
 | Batch decisions | The main agent gains the `batch_decide` tool |
-| Smart approval | Permission-sandbox judgements go to the decision model |
 | Enhanced memory | Memory typing, relations, consolidation, and retrieval go to the decision model |
 
-When it is off every scenario takes its default path: the main model calls `browser_*` / `computer_*` directly, and the permission sandbox uses its built-in rules. Jev serves decision scenarios only — it is not a chat model and never appears in the model list. Its API key stays on this machine and is never handed back to the renderer.
+When it is off every scenario takes its default path: the main model calls `browser_*` / `computer_*` directly. Jev serves decision scenarios only — it is not a chat model and never appears in the model list. Its API key stays on this machine and is never handed back to the renderer.
 
 ## Long-term memory
 
@@ -67,7 +66,7 @@ Common pi UI APIs are mapped to the desktop UI:
 
 | pi API | FastVibe UI |
 | --- | --- |
-| `ctx.ui.confirm` | Inline approval panel |
+| `ctx.ui.confirm` | Inline yes / no panel |
 | `ctx.ui.select` / `input` / `questions` | Selection, input, and question forms |
 | `ctx.ui.editor` | Multiline editor dialog |
 | `ctx.ui.notify` | Notification |

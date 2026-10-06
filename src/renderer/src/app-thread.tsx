@@ -4,7 +4,6 @@ import { pastedTextAttachmentName } from "@/lib/attachments";
 import { getModels } from "@/lib/engine-client";
 import { useDraftPersistence } from "@/lib/draft-persistence";
 import { useSessionStore } from "@/stores/session";
-import { useSettingsStore } from "@/stores/settings";
 import { useSidePaneStore } from "@/stores/side-pane";
 import type { ChatAttachment, ChatMessage, FastVibeModel } from "@shared/types";
 
@@ -121,12 +120,11 @@ export function DraftKeeper(): null {
   const attachments = useSessionStore((state) => state.attachments);
   const model = useSessionStore((state) => state.session?.model);
   const thinkingLevel = useSessionStore((state) => state.session?.thinkingLevel);
-  const permissionMode = useSettingsStore((state) => state.settings.permissionMode);
   const emptySession = useSessionStore((state) => {
     const conversation = state.conversations.find((item) => item.id === state.activeId);
     return Boolean(conversation && !conversation.preview);
   });
-  useDraftPersistence(activeId, draft, attachments, model, thinkingLevel, permissionMode, emptySession);
+  useDraftPersistence(activeId, draft, attachments, model, thinkingLevel, emptySession);
   return null;
 }
 

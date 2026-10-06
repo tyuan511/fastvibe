@@ -1,19 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type JSX, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type JSX, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Add01Icon, ArrowDown01Icon, ArrowUp02Icon, AttachmentIcon, Cancel01Icon, ChartHistogramIcon, Folder01Icon, HandIcon, MagicWand02Icon, PlayIcon, ScissorIcon, Search01Icon, ShieldAlertIcon, ShieldCheckIcon, SparklesIcon, SquareIcon } from "@hugeicons/core-free-icons";
-import { Button } from "@/components/ui/button";
+import { Add01Icon, ArrowDown01Icon, ArrowUp02Icon, AttachmentIcon, Cancel01Icon, ChartHistogramIcon, Folder01Icon, MagicWand02Icon, PlayIcon, ScissorIcon, Search01Icon, SparklesIcon, SquareIcon } from "@hugeicons/core-free-icons";
 import { IconButton } from "@/components/icon-button";
 import { ModelThinkingSelect } from "@/components/model-thinking-select";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Textarea } from "@/components/ui/textarea";
 import { isTouchOnly } from "@/lib/platform";
 import { engine } from "@/lib/engine-client";
@@ -25,7 +15,6 @@ import type {
   ContextUsage,
   FastVibeModel,
   Project,
-  PermissionMode,
   QueuePauseReason,
   QueuedPrompt,
   SessionStats,
@@ -37,7 +26,6 @@ import { cn } from "@/lib/utils";
 import { formatDuration } from "@/lib/time";
 import { matchChord, resolveBinding } from "@/lib/shortcuts";
 import { useShortcutLabel } from "@/lib/use-shortcuts";
-import { permissionDescription, permissionLabel, PERMISSION_MODES } from "@/lib/permission-modes";
 import { useSettingsStore } from "@/stores/settings";
 import { GitBranchChip } from "./git-branch-chip";
 import { AttachmentChip } from "./attachment-chip";
@@ -60,24 +48,7 @@ const COMMAND_ICONS: Record<string, typeof SparklesIcon> = {
  * command in the draft for a second Enter. A bare `/goal` only arms goal mode; the
  * user's next message becomes the objective.
  */
-const INSTANT_COMMANDS = new Set(["plan", "goal"]);
-
-function Chip({
-  children,
-  className,
-  ...props
-}: { children: ReactNode; className?: string } & React.ComponentProps<typeof Button>): JSX.Element {
-  return (
-    <Button
-      variant="ghost"
-      size="sm"
-      className={cn("h-7 gap-1 rounded-full px-2 font-normal text-muted-foreground", className)}
-      {...props}
-    >
-      {children}
-    </Button>
-  );
-}
+const INSTANT_COMMANDS = new Set(["goal"]);
 
 const CONTEXT_RING_SIZE = 14;
 const CONTEXT_RING_STROKE = 2;
@@ -240,7 +211,6 @@ export function Composer({
   newSession,
   hideProjectPicker = false,
   commands,
-  permissionMode,
   queued,
   queuePause,
   attachments,
@@ -256,7 +226,6 @@ export function Composer({
   onModelChange,
   onManageModels,
   onThinkingChange,
-  onPermissionModeChange,
   onAttachmentsChange,
   onRemoveQueued,
   onEditQueued,
@@ -299,8 +268,6 @@ export function Composer({
   /** Hide the project chip entirely (auxiliary chats inherit the parent workspace). */
   hideProjectPicker?: boolean;
   commands: SlashCommand[];
-  permissionMode: PermissionMode;
-  onPermissionModeChange: (mode: PermissionMode) => void;
   queued: QueuedPrompt[];
   queuePause: QueuePauseReason | null;
   attachments: ChatAttachment[];
@@ -351,7 +318,7 @@ export function Composer({
   /**
    * The composer is being shown for a run the user cannot steer — a delegated run's
    * pane. The input is locked and every control that would change the run (attach,
-   * permission, the model / thinking menus) is dropped; what stays is what is
+   * the model / thinking menus) is dropped; what stays is what is
    * *readable*: the context ring with its popover, the model and thinking chips as
    * plain labels, and the stop button while the run is in flight.
    */
@@ -429,9 +396,9 @@ export function Composer({
   }, [value]);
 
   function applySlash(command: SlashCommand): void {
-    // Toggles like `/plan` act the moment they are chosen: clear the draft and run
+    // Toggles like `/goal` act the moment they are chosen: clear the draft and run
     // the command so the mode badge appears below the composer, instead of leaving
-    // `/plan` in the box for the user to send.
+    // `/goal` in the box for the user to send.
     if (command.source === "extension" && INSTANT_COMMANDS.has(command.name)) {
       onChange("");
       setSlashDismissed(true);
@@ -823,66 +790,6 @@ export function Composer({
             >
               <HugeiconsIcon strokeWidth={2} icon={AttachmentIcon} />
             </IconButton>
-          )}
-
-          {readOnly ? null : (
-            <DropdownMenu>
-              <DropdownMenuTrigger
-              render={
-                <Chip
-                  className={
-                    permissionMode === "full"
-                      ? "text-destructive hover:bg-destructive/10 hover:text-destructive"
-                      : undefined
-                  }
-                >
-                  <HugeiconsIcon strokeWidth={2} icon={ShieldAlertIcon} className="size-4" />
-                  <span className="hidden @min-[27.5rem]/composer:inline">{permissionLabel(permissionMode)}</span>
-                  <HugeiconsIcon strokeWidth={2} icon={ArrowDown01Icon} className="size-3" />
-                </Chip>
-              }
-            />
-            <DropdownMenuContent align="start" className="w-75 min-w-75 p-1">
-              <DropdownMenuGroup>
-                <DropdownMenuLabel className="px-1.5 py-1 text-xs text-muted-foreground">
-                  {t("composer.permissionAsk")}
-                </DropdownMenuLabel>
-              </DropdownMenuGroup>
-              <DropdownMenuRadioGroup
-                value={permissionMode}
-                onValueChange={(value) => onPermissionModeChange(value as PermissionMode)}
-              >
-                {PERMISSION_MODES.map((mode) => {
-                  const modeIcon = mode === "ask" ? HandIcon : mode === "smart" ? ShieldAlertIcon : ShieldCheckIcon;
-                  return (
-                    <DropdownMenuRadioItem
-                      key={mode}
-                      value={mode}
-                      closeOnClick
-                      className="items-start gap-1.5 rounded-lg px-1.5 py-1.5 pr-7"
-                    >
-                      <HugeiconsIcon
-                        strokeWidth={2}
-                        icon={modeIcon}
-                        className={cn(
-                          "mt-0.5 size-3.5 shrink-0",
-                          mode === "full" && "text-destructive! **:text-destructive!",
-                        )}
-                      />
-                      <span className="min-w-0">
-                        <span className={cn("block text-sm font-medium leading-4", mode === "full" && "text-destructive!")}>
-                          {permissionLabel(mode)}
-                        </span>
-                        <span className="mt-0.5 block text-xs font-normal leading-3.5 text-muted-foreground">
-                          {permissionDescription(mode)}
-                        </span>
-                      </span>
-                    </DropdownMenuRadioItem>
-                  );
-                })}
-              </DropdownMenuRadioGroup>
-            </DropdownMenuContent>
-            </DropdownMenu>
           )}
 
           {readOnly ? null : <ExtensionStatusBadges disabled={working} />}

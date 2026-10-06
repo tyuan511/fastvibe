@@ -9,6 +9,7 @@ import { useSidePaneStore } from "@/stores/side-pane";
 import { asRecord, argString, describeTool, familyOf, unwrapShellCommand } from "@/lib/tool-presentation";
 import { displayPath, resolvePath } from "@/lib/workspace-path";
 import { parseToolTodos } from "@/lib/todos";
+import { codemodeCalls, codemodeCode, codemodeFence, formatCallDuration, splitCodemodeSource, type CodemodeCall } from "@/lib/codemode";
 import { DiffView } from "./diff-view";
 import { MarkdownView } from "./markdown-view";
 import { QuestionAnswers } from "./question-answers";
@@ -137,6 +138,83 @@ function WebSearchPanel({ tool, running }: { tool: ToolCallBlock; running: boole
             ))}
           </ul>
         </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** One tool a script ran: its state, the name the script used, the arguments, how long it took. */
+function CodemodeCallRow({ call }: { call: CodemodeCall }): JSX.Element {
+  const { t } = useTranslation("chat");
+  const status =
+    call.status === "running" ? (
+      <Spinner className="size-3" />
+    ) : (
+      <span
+        aria-label={call.status === "ok" ? t("tools.completed") : call.status === "cancelled" ? t("tools.callCancelled") : t("tools.error")}
+        className={
+          call.status === "ok" ? "text-success" : call.status === "error" ? "text-destructive" : "text-muted-foreground"
+        }
+      >
+        {call.status === "ok" ? "✓" : call.status === "error" ? "✕" : "–"}
+      </span>
+    );
+  const duration = formatCallDuration(call.durationMs);
+  return (
+    <li className="flex min-w-0 flex-col gap-0.5" title={call.error ?? call.args}>
+      <div className="flex min-w-0 items-baseline gap-2">
+        <span className="flex w-3 shrink-0 justify-center text-xs">{status}</span>
+        <span className="shrink-0 font-mono text-sm text-foreground">{call.name}</span>
+        <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">{call.args}</span>
+        {duration ? <span className="shrink-0 text-xs text-muted-foreground">{duration}</span> : null}
+      </div>
+      {call.error ? <p className="ml-5 truncate text-xs text-destructive">{call.error}</p> : null}
+    </li>
+  );
+}
+
+/**
+ * A `codemode` call: the script the model wrote, the tools it ran, and what it printed.
+ * The calls arrive in `details.calls` — a streaming update carries the same list — so the
+ * card fills in while the script runs. The calls themselves are not rows of the transcript.
+ */
+function CodemodePanel({ tool, running }: { tool: ToolCallBlock; running: boolean }): JSX.Element {
+  const { t } = useTranslation("chat");
+  const { options, body } = splitCodemodeSource(codemodeCode(tool.args));
+  const calls = codemodeCalls(tool.details);
+  const output = (tool.result ?? "").trim();
+  return (
+    <div className="flex flex-col gap-3">
+      {body ? (
+        <section className="flex flex-col gap-1">
+          <p className="text-xs font-medium tracking-wide text-muted-foreground">
+            {t("tools.script")}
+            {options ? <span className="ml-2 font-mono font-normal">{options}</span> : null}
+          </p>
+          {/* The code block already is a card, with its own border and 复制 button. `chat-markdown`
+              is what gives its <pre> the padding a code block has in a reply. */}
+          <div className="chat-markdown max-h-72 overflow-y-auto text-sm">
+            <MarkdownView text={codemodeFence(body)} />
+          </div>
+        </section>
+      ) : null}
+      {calls.length > 0 ? (
+        <section className="flex flex-col gap-1">
+          <p className="text-xs font-medium tracking-wide text-muted-foreground">{t("tools.scriptCalls")}</p>
+          <ul className="flex max-h-60 flex-col gap-1.5 overflow-auto">
+            {calls.map((call) => (
+              <CodemodeCallRow key={call.id} call={call} />
+            ))}
+          </ul>
+        </section>
+      ) : !running && output ? (
+        <p className="text-xs text-muted-foreground">{t("tools.scriptNoCalls")}</p>
+      ) : null}
+      {output ? (
+        <section className="flex flex-col gap-1">
+          <p className="text-xs font-medium tracking-wide text-muted-foreground">{t("tools.scriptOutput")}</p>
+          <OutputBlock text={output} />
+        </section>
       ) : null}
     </div>
   );
@@ -286,6 +364,8 @@ function ToolDetail({ tool, running }: { tool: ToolCallBlock; running: boolean }
 
   if (view.family === "agent") return <SubagentPanel tool={tool} />;
 
+  if (view.family === "codemode") return <CodemodePanel tool={tool} running={running} />;
+
   if (view.family === "todo") {
     const todos = parseToolTodos(tool);
     if (todos.length > 0) return <TodoChecklist items={todos} />;
@@ -336,6 +416,7 @@ export const ToolCard = memo(function ToolCard({
     view.family === "question" ||
     view.family === "web" ||
     view.family === "agent" ||
+    view.family === "codemode" ||
     Boolean(tool.result?.length) ||
     Boolean(diffText(tool)) ||
     (tool.args !== undefined && !inline);

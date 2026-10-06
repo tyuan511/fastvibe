@@ -6,7 +6,6 @@ import {
   ArrowRight01Icon,
   CornerDownLeftIcon,
   MessageQuestionIcon,
-  ShieldAlertIcon,
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,19 +18,16 @@ export type PermissionResponse = {
   confirmed?: boolean;
   value?: string;
   cancelled?: boolean;
-  always?: boolean;
   /** Positional answers for a `questions` prompt; `null` marks a skipped question. */
   answers?: Array<string | null>;
-  planAction?: "approve" | "revise" | "ignore";
 };
 
 type Respond = (payload: PermissionResponse) => void;
 
-function confirmOptions(t: (key: string) => string): Array<{ label: string; description: string; response: Pick<PermissionResponse, "confirmed" | "always"> }> {
+function confirmOptions(t: (key: string) => string): Array<{ label: string; response: Pick<PermissionResponse, "confirmed"> }> {
   return [
-    { label: t("permission.approveOnce"), description: t("permission.approveOnceDesc"), response: { confirmed: true } },
-    { label: t("permission.alwaysAllow"), description: t("permission.alwaysDesc"), response: { confirmed: true, always: true } },
-    { label: t("permission.deny"), description: t("permission.denyDesc"), response: { confirmed: false } },
+    { label: t("permission.yes"), response: { confirmed: true } },
+    { label: t("permission.no"), response: { confirmed: false } },
   ];
 }
 
@@ -44,7 +40,7 @@ const INLINE_INPUT =
  * bottom of the thread instead of opening a modal. It handles the three shapes the
  * agent asks with:
  *
- * - `confirm` — approve a tool permission (allow once / always / deny)
+ * - `confirm` — a yes / no question
  * - `select`  — pick one of a list (numbered listbox)
  * - `input`   — type a free-form answer
  *
@@ -60,17 +56,14 @@ export function PermissionPanel({ request, onRespond }: { request: PermissionReq
       return <InputPanel request={request} onRespond={onRespond} />;
     case "questions":
       return <QuestionsPanel request={request} onRespond={onRespond} />;
-    case "plan_review":
-      return <PlanReviewPanel request={request} onRespond={onRespond} />;
     default:
       return null;
   }
 }
 
 
-/** Shared card: warning tone for approvals, primary tone for questions. */
+/** Shared card for every prompt the agent or a plugin raises. */
 function PanelShell({
-  tone,
   meta,
   title,
   message,
@@ -79,7 +72,6 @@ function PanelShell({
   actions,
   children,
 }: {
-  tone: "warning" | "primary";
   /** Small label above the title, e.g. a question's header. */
   meta?: string;
   title: string;
@@ -90,15 +82,14 @@ function PanelShell({
   actions?: ReactNode;
   children: ReactNode;
 }): JSX.Element {
-  const Icon = tone === "warning" ? ShieldAlertIcon : MessageQuestionIcon;
   return (
     <div className="@container/composer mx-auto w-full max-w-3xl px-6 pb-5">
       <div className="flex w-full flex-col gap-2 overflow-hidden rounded-2xl border border-border bg-popover p-2.5 shadow-sm">
         <div className="flex items-start gap-2">
           <HugeiconsIcon
             strokeWidth={2}
-            icon={Icon}
-            className={cn("mt-0.5 size-3.5 shrink-0", tone === "warning" ? "text-warning" : "text-primary")}
+            icon={MessageQuestionIcon}
+            className="mt-0.5 size-3.5 shrink-0 text-primary"
           />
           <div className="min-w-0 flex-1">
             {meta ? <p className="mb-0.5 truncate text-sm font-medium text-muted-foreground">{meta}</p> : null}
@@ -217,49 +208,6 @@ function CustomInputRow({
   );
 }
 
-function PlanReviewPanel({ request, onRespond }: { request: PermissionRequest; onRespond: Respond }): JSX.Element {
-  const { t } = useTranslation("chat");
-  const [feedback, setFeedback] = useState("");
-  const plan = request.plan;
-  const approve = useCallback(() => onRespond({ id: request.id, planAction: "approve" }), [onRespond, request.id]);
-  const revise = useCallback(() => {
-    if (feedback.trim()) onRespond({ id: request.id, planAction: "revise", value: feedback.trim() });
-  }, [feedback, onRespond, request.id]);
-  return (
-    <div className={cn(CHAT_COLUMN_CLASS, "pb-4")}>
-      <div className="overflow-hidden rounded-xl border border-border bg-card px-3 py-3 shadow-sm">
-        <div className="flex items-center gap-3 pb-2">
-          <span className="rounded-full border border-border px-2.5 py-0.5 text-xs font-semibold text-foreground">需要权限</span>
-          <span className="text-sm font-semibold text-foreground">实施计划</span>
-          <span className="ml-auto text-xs tabular-nums text-muted-foreground">‹　1 / 1　›</span>
-        </div>
-        <button type="button" onClick={approve} className="flex w-full items-center gap-3 rounded-lg bg-muted/70 px-3 py-2 text-left transition-colors hover:bg-muted">
-          <span className="text-sm text-muted-foreground">1.</span>
-          <span className="text-sm font-semibold text-foreground">批准</span>
-          <span className="text-sm text-muted-foreground">退出计划模式并开始实施。</span>
-        </button>
-        <Input
-          value={feedback}
-          onChange={(event) => setFeedback(event.target.value)}
-          placeholder={t("plan.revisionPlaceholder")}
-          className="mt-2 h-9 border-0 bg-transparent px-3 text-sm shadow-none placeholder:text-muted-foreground/60 focus-visible:ring-0"
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.nativeEvent.isComposing) {
-              event.preventDefault();
-              revise();
-            }
-          }}
-        />
-        <div className="mt-4 flex items-center gap-3 text-xs text-muted-foreground">
-          <span className="flex min-w-0 flex-1 items-center gap-1.5"><span>ⓘ</span>使用 Tab / 上下键选择，回车或空格选中</span>
-          <Button size="sm" variant="outline" onClick={() => onRespond({ id: request.id, planAction: "ignore" })}>忽略</Button>
-          <Button size="sm" disabled={!feedback.trim()} onClick={revise}>提交</Button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function ConfirmPanel({ request, onRespond }: { request: PermissionRequest; onRespond: Respond }): JSX.Element {
   const { t } = useTranslation("chat");
   const options = confirmOptions(t);
@@ -277,8 +225,7 @@ function ConfirmPanel({ request, onRespond }: { request: PermissionRequest; onRe
 
   return (
     <PanelShell
-      tone="warning"
-      title={request.title || t("permission.needApproval")}
+      title={request.title || t("permission.needConfirm")}
       message={request.message}
       hint={t("permission.hintConfirm")}
       actions={
@@ -287,13 +234,12 @@ function ConfirmPanel({ request, onRespond }: { request: PermissionRequest; onRe
         </Button>
       }
     >
-      <div role="listbox" aria-label={request.title || t("permission.needApproval")} className="flex flex-col gap-0.5">
+      <div role="listbox" aria-label={request.title || t("permission.needConfirm")} className="flex flex-col gap-0.5">
         {options.map((option, index) => (
           <OptionRow
             key={option.label}
             index={index}
             label={option.label}
-            description={option.description}
             selected={index === active}
             onSelect={() => respond(option)}
             onHover={() => setActive(index)}
@@ -325,7 +271,6 @@ function SelectPanel({ request, onRespond }: { request: PermissionRequest; onRes
 
   return (
     <PanelShell
-      tone="primary"
       title={request.title || t("permission.needChoice")}
       message={request.message}
       hint={t("permission.hintSelect")}
@@ -386,7 +331,6 @@ function InputPanel({ request, onRespond }: { request: PermissionRequest; onResp
 
   return (
     <PanelShell
-      tone="primary"
       title={request.title || t("permission.needInput")}
       message={request.message}
       hint={t("permission.hintInput")}
@@ -603,7 +547,6 @@ function QuestionsPanel({ request, onRespond }: { request: PermissionRequest; on
 
   return (
     <PanelShell
-      tone="primary"
       meta={current.header}
       title={current.question}
       aside={

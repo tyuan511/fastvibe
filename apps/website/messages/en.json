@@ -10,7 +10,7 @@
     "eyebrow": "FastVibe · Open-source desktop workspace",
     "title": "A workspace for your agents",
     "description": "Powered by <strong>pi-coding-agent</strong>, with support for the <strong>Pi plugin ecosystem</strong> and a <strong>full desktop GUI</strong> for agent work.",
-    "detail": "Chat, tool calls, approvals and file review in one place. <strong>Open source from interface to engine</strong>, with tools and workflows you can extend.",
+    "detail": "Chat, tool calls and file review in one place. <strong>Open source from interface to engine</strong>, with tools and workflows you can extend.",
     "download": "Download FastVibe",
     "source": "View on GitHub",
     "docs": "Getting started",
@@ -27,7 +27,7 @@
     "title": "Your workflow comes first.\nYour tools should follow.",
     "description": "Pi provides a minimal, extensible agent core.\nFastVibe brings that freedom to your desktop.",
     "items": {
-      "minimal": { "title": "Minimal core. Room for your workflow.", "copy": "Pi starts with a lean system prompt and essential tools, leaving workflows to extensions. FastVibe adds planning, subagents and permission controls for a ready-to-use desktop experience." },
+      "minimal": { "title": "Minimal core. Room for your workflow.", "copy": "Pi starts with a lean system prompt and essential tools, leaving workflows to extensions. FastVibe adds subagents and more for a ready-to-use desktop experience." },
       "models": { "title": "Change models, not your workspace.", "copy": "Build on Pi’s multi-model foundation. Switch configured models within the same conversation, choosing a provider and reasoning level for the task instead of tying your workflow to one model." },
       "extensible": { "title": "Extend beyond the defaults.", "copy": "Add tools and workflows through skills and TypeScript extensions. FastVibe integrates Pi’s extension system and adds an MCP bridge, bringing your existing tools into the workspace." }
     },

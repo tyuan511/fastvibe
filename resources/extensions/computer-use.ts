@@ -104,8 +104,8 @@ function computerTaskRunner(): { run: ComputerTaskRunner; enabled: () => boolean
  */
 function syncDecisionTools(pi: ExtensionAPI, task: string, steps: string[], on: boolean): void {
   const active = pi.getActiveTools();
-  // A group comes in only in place of the other one: with neither active (plan mode's
-  // read-only set), nothing is added.
+  // A group comes in only in place of the other one: with neither active (a
+  // read-only tool set), nothing is added.
   const next = on
     ? active.some((name) => steps.includes(name))
       ? [...active.filter((name) => !steps.includes(name)), ...(active.includes(task) ? [] : [task])]
@@ -172,7 +172,7 @@ export default function computerUse(pi: ExtensionAPI): void {
         windowId: WINDOW_ID,
         goal: Type.String({ description: "用户的完整目标原文（或尚未完成的部分）" }),
       }),
-      async execute(_id, params, signal, onUpdate, ctx) {
+      async execute(_id, params, signal, onUpdate) {
         // Switched off since this turn began: refuse rather than drive the window anyway.
         if (!runTask.enabled()) {
           return { content: [{ type: "text", text: "电脑控制已在设置中关闭，computer_task 从下一轮起不可用；请改用 computer_click 等逐步工具。" }], details: undefined };
@@ -184,8 +184,6 @@ export default function computerUse(pi: ExtensionAPI): void {
           pid: params.pid,
           windowId: params.windowId,
           signal,
-          mode: process.env.FASTVIBE_PERMISSION_MODE,
-          confirm: (message) => (ctx?.hasUI ? ctx.ui.confirm("FastVibe 电脑任务", message) : Promise.resolve(false)),
           onStep: (line) => {
             lines.push(line);
             onUpdate?.({ content: [{ type: "text", text: lines.join("\n") }], details: undefined });

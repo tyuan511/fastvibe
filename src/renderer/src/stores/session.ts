@@ -174,7 +174,7 @@ export type SessionStore = {
    * Extension status entries (`ctx.ui.setStatus`), bucketed by conversation.
    *
    * Status belongs to the session that published it: the goal extension's objective
-   * panel, plan mode's badge and any plugin widget are all per-conversation state,
+   * panel and any plugin widget are all per-conversation state,
    * and a single shared map put one chat's panel on another chat's screen — a chat
    * with no goal at all showed the running one's objective, and its 暂停 button
    * dispatched `/goal pause` into the conversation that had nothing to pause. Keyed
@@ -261,7 +261,7 @@ export type SessionStore = {
    * The engine replays what `session_start` published (a goal restored from its
    * transcript, brought back paused). It *replaces* that conversation's bucket rather
    * than merging: the reply is the whole state, so a key it no longer names — a goal
-   * that was cleared, a plan mode that exited while the chat was closed — has to go.
+   * that was cleared while the chat was closed — has to go.
    * An empty map therefore clears the bucket.
    */
   setExtensionStatus: (conversationId: string, status: Record<string, string>) => void;
@@ -788,7 +788,7 @@ export const useSessionStore = create<SessionStore>((set, get) => {
         },
       ];
       // A slash command can be handled by an extension without starting an agent
-      // turn (plan/goal menus, `/plan start`, …). Only a plain prompt pre-creates
+      // turn (goal menus, …). Only a plain prompt pre-creates
       // the assistant bubble; for `/…` the bubble is created by `agent_start`
       // when a turn actually runs, so the UI never hangs in a fake "streaming".
       const startsTurn = !text.trim().startsWith("/");

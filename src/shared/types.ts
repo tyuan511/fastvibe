@@ -132,6 +132,11 @@ export type ToolCallBlock = {
   status: ToolCallStatus;
   /** Engine-provided structured payload, e.g. `edit`'s diff or `bash`'s truncation. */
   details?: unknown;
+  /**
+   * The model-issued call this one was made from, when a tool (`codemode`) ran it itself.
+   * Such a call is data — the turn's changed-file chips read it — but has no card of its own.
+   */
+  parentId?: string;
 };
 
 /**
@@ -389,7 +394,15 @@ export type McpServerConfig = {
   url?: string;
   /** Request headers of an HTTP server, e.g. `Authorization`. */
   headers?: Record<string, string>;
+  /**
+   * How the model reaches this server's tools. `direct` (the default) declares every tool
+   * to the model; `deferred` leaves them out until `tool_search` loads a match; `codemode`
+   * makes them callable only from `codemode` scripts.
+   */
+  exposure?: McpExposure;
 };
+
+export type McpExposure = "direct" | "deferred" | "codemode";
 
 export type McpServerStatus = McpServerConfig & { connected: boolean; tools: string[]; error?: string };
 
@@ -588,7 +601,7 @@ export type ComputerAppInfo = {
  * 电脑操控 preferences.
  *
  * Read by the bridge on every call rather than cached, so flipping a switch applies to
- * a run that is already going — the same contract the permission modes have.
+ * a run that is already going.
  */
 export type ComputerSettings = {
   /** Master switch. Off means the `computer_*` tools refuse before touching the driver. */
@@ -597,12 +610,6 @@ export type ComputerSettings = {
   clipboard: boolean;
   /** Prefer delivery that does not take focus from whatever the user is doing. */
   preferBackground: boolean;
-  /**
-   * Applications whose windows never raise a confirmation, by bundle id (macOS) or
-   * executable name. "Always allowed" in the sense of the confirmation dialog only —
-   * it does not widen what the tools can do.
-   */
-  allowedApps: string[];
 };
 
 export type BrowserImportResult = {
@@ -666,7 +673,7 @@ export type PermissionRequest = {
   id: string;
   /** Conversation that owns the blocking extension request. */
   conversationId?: string;
-  method: "confirm" | "select" | "input" | "editor" | "questions" | "plan_review" | "custom";
+  method: "confirm" | "select" | "input" | "editor" | "questions" | "custom";
   title?: string;
   message?: string;
   /** Placeholder for `input` dialogs. */
@@ -676,8 +683,6 @@ export type PermissionRequest = {
   /** Multi-question payload for `method: "questions"`. */
   questions?: PermissionQuestion[];
   timeout?: number;
-  /** Plan document metadata shown by the plan review panel. */
-  plan?: { path: string; title: string; summary: string };
 };
 
 export type QueueBehavior = "steer" | "followUp";
@@ -1049,8 +1054,6 @@ export const DEFAULT_THINKING_LEVELS: ThinkingLevel[] = ["low", "medium", "high"
 export const INPUT_MODALITIES = ["text", "image", "video", "file"] as const;
 
 export type InputModality = (typeof INPUT_MODALITIES)[number];
-
-export type PermissionMode = "ask" | "smart" | "full";
 
 /**
  * 系统通知: the scenarios a desktop notification may be raised for.

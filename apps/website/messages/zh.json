@@ -10,7 +10,7 @@
     "eyebrow": "FastVibe · 开源桌面智能体工作台",
     "title": "为 Agent，\n准备一个工作区",
     "description": "以 <strong>pi-coding-agent</strong> 为核心，<strong>兼容 Pi 插件生态</strong>，为 Agent 工作提供<strong>完整的桌面 GUI</strong>。",
-    "detail": "对话、工具调用、权限审批与文件审阅，尽在一个界面。<strong>从界面到引擎开源可查</strong>，工具与工作流按需扩展。",
+    "detail": "对话、工具调用与文件审阅，尽在一个界面。<strong>从界面到引擎开源可查</strong>，工具与工作流按需扩展。",
     "download": "下载 FastVibe",
     "source": "查看 GitHub",
     "docs": "使用指南",
@@ -27,7 +27,7 @@
     "title": "让工具适应你，而不是反过来。",
     "description": "Pi 提供精简、可扩展的 Agent 核心。\nFastVibe 把这份自由，带到你的桌面。",
     "items": {
-      "minimal": { "title": "精简核心，不预设你的流程", "copy": "Pi 从简洁的系统提示和基础工具出发，把工作流留给扩展。FastVibe 在此之上加入计划、子 Agent 与权限审批，组成开箱即用的桌面体验。" },
+      "minimal": { "title": "精简核心，不预设你的流程", "copy": "Pi 从简洁的系统提示和基础工具出发，把工作流留给扩展。FastVibe 在此之上加入子 Agent 等能力，组成开箱即用的桌面体验。" },
       "models": { "title": "换模型，不换工作区", "copy": "沿用 Pi 的多模型能力，在同一会话中切换已配置的模型。按任务选择供应商与思考强度，不必把工作流绑定到单一模型。" },
       "extensible": { "title": "按需扩展，不止于内置", "copy": "通过技能和 TypeScript 扩展添加工具与工作流。FastVibe 接入 Pi 的扩展机制，并补上 MCP 桥接，让你熟悉的工具参与协作。" }
     },

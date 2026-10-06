@@ -52,8 +52,6 @@ import {
   onEvent,
   onStatus,
   respondPermission,
-  setAutoCompaction,
-  setInterruptMode,
   start,
 } from "@/lib/engine-client";
 import { dismissBootLoader } from "@/lib/boot-loader";
@@ -67,7 +65,7 @@ import { SETTINGS_SECTIONS, type SectionId } from "@/components/settings/setting
 import { setSidebarCollapsed, useIsNarrowViewport, useSidebarCollapsed } from "@/lib/sidebar-visibility";
 import type { DeleteConversationsResult } from "@/components/settings/archived-settings";
 import { useConversationWorking, useSessionStore, working } from "@/stores/session";
-import { permissionKey, rememberPermission, usePermissionAlways } from "@/lib/permission-rules";import { useSettingsStore } from "@/stores/settings";
+import { useSettingsStore } from "@/stores/settings";
 import { useThemeSync } from "@/lib/use-theme";
 import { useLanguageSync } from "@/lib/use-language";
 import { useTranslation } from "react-i18next";
@@ -78,7 +76,6 @@ import type {
   ConversationOpenResult,
   EngineModel,
   FastVibeModel,
-  PermissionMode,
   PermissionRequest,
   QueuedPrompt,
   QueuedPromptPreview,
@@ -95,7 +92,6 @@ import { Ipc } from "@shared/ipc";
 import { blockedRemotely } from "@/lib/remote-unavailable";
 import { useStable } from "@/lib/use-stable";
 import { isAbortOutcome } from "@shared/abort";
-import { usePermissionModeSelection } from "@/components/permission-mode-provider";
 
 
 
@@ -209,7 +205,6 @@ export function App(): JSX.Element {
   const queued = activeId
     ? allQueued.filter((item) => item.conversationId === activeId)
     : [];
-  const permissionAlways = usePermissionAlways();
   const setAttachments = useSessionStore((state) => state.setAttachments);
   const setComposer = useSessionStore((state) => state.setComposer);
   const restoreComposer = useSessionStore((state) => state.restoreComposer);
@@ -318,7 +313,6 @@ export function App(): JSX.Element {
   const paneMaximized = useSidePaneStore((state) => state.maximized);
   const togglePane = useSidePaneStore((state) => state.toggle);
   const settings = useSettingsStore((state) => state.settings);
-  const { setPermissionMode } = usePermissionModeSelection();
   const updateSettings = useSettingsStore((state) => state.update);
   const sidebarCollapsed = useSidebarCollapsed();
   // A phone has no width to give the sidebar or the right pane; the first overlays
@@ -449,8 +443,6 @@ export function App(): JSX.Element {
 
   useEffect(() => {
     if (status.state !== "ready") return;
-    void setAutoCompaction(settings.autoCompact).catch(() => undefined);
-    void setInterruptMode(settings.interruptMode).catch(() => undefined);
     if (settings.thinkingLevel !== "auto") {
       void engine
         .setThinking(settings.thinkingLevel)
@@ -459,16 +451,6 @@ export function App(): JSX.Element {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status.state]);
-
-  useEffect(() => {
-    if (status.state !== "ready") return;
-    void setAutoCompaction(settings.autoCompact).catch(() => undefined);
-  }, [settings.autoCompact, status.state]);
-
-  useEffect(() => {
-    if (status.state !== "ready") return;
-    void setInterruptMode(settings.interruptMode).catch(() => undefined);
-  }, [settings.interruptMode, status.state]);
 
   useEffect(() => {
     if (status.state !== "ready" || settings.thinkingLevel === "auto") return;
@@ -520,23 +502,14 @@ export function App(): JSX.Element {
     }
   }, [setModels, setSession, status.state]);
 
-  useEffect(() => {
-    if (!permission || permission.method !== "confirm") return;
-    const key = permissionKey(permission);
-    if (settings.permissionMode !== "full" && !permissionAlways.includes(key)) return;
-    void respondPermission({ id: permission.id, confirmed: true });
-    resolvePermission(permission.id);
-  }, [permission, permissionAlways, resolvePermission, settings.permissionMode]);
-
   // Shared by the inline panel (confirm/select/input/questions) and the modal (editor).
   const handlePermissionRespond = useCallback(
     (payload: PermissionResponse) => {
-      if (payload.always && permission) rememberPermission(permissionKey(permission));
       void respondPermission(payload);
       // The panel is gone the moment it is answered; the queue decides what is next.
       resolvePermission(payload.id);
     },
-    [permission, resolvePermission],
+    [resolvePermission],
   );
 
   // Sending is allowed while the engine is still coming up: the prompt waits
@@ -598,7 +571,7 @@ export function App(): JSX.Element {
   function applyOpen(result: ConversationOpenResult): void {
     applySnapshot(result);
     // Every path that makes a conversation active locally ends here — a click, a new
-    // chat, a side chat, plan mode's handoff — so this is where the claim is kept
+    // chat, a side chat, an extension's handoff — so this is where the claim is kept
     // honest for the ones that could not know the id before they called.
     intendedActiveId.current = result.conversation.id;
     const generation = ++openGeneration.current;
@@ -622,7 +595,7 @@ export function App(): JSX.Element {
     setSession(restoredState);
     setStatus(result.status);
     setQueueState(result.queue);
-    // The goal (or plan mode) this conversation already had, replayed by the engine:
+    // The goal this conversation already had, replayed by the engine:
     // its own `setStatus` fired during session creation, which on a cold start is
     // before this window was listening.
     useSessionStore.getState().setExtensionStatus(result.conversation.id, result.extensionStatus ?? {});
@@ -630,12 +603,6 @@ export function App(): JSX.Element {
     // includes attachments. Only hydrate from disk the first time this window opens it.
     if (!savedComposer) {
       setComposer(persisted?.draft ?? "", persisted?.attachments ?? []);
-    }
-    if (emptySession && persisted?.permissionMode && persisted.permissionMode !== settings.permissionMode) {
-      // The normal permission picker still owns the full-access confirmation. A saved
-      // full choice is therefore restored through the same guarded path, never by
-      // writing the sandbox setting directly.
-      setPermissionMode(persisted.permissionMode);
     }
     if (restorePersistedState && (persisted?.model || persisted?.thinkingLevel)) {
       // Keep the two SDK mutations ordered: changing the model re-clamps thinking,
@@ -743,7 +710,6 @@ export function App(): JSX.Element {
         ),
         stopConfirmed: Boolean(abortPromise),
       });
-      const queueBehavior = settings.queueBehavior;
       currentAttachments = submitState.attachments;
       if ((!text && currentAttachments.length === 0) || !canChat) return;
       const compact = parseCompactCommand(text);
@@ -817,7 +783,7 @@ export function App(): JSX.Element {
             message: payload,
             // Never a steer: a steer is injected into the run as a user message, and the
             // model would be handed the literal `/compact`.
-            behavior: compact ? "followUp" : queueBehavior,
+            behavior: "followUp",
             attachments: currentAttachments,
             images: attachmentsToImages(currentAttachments),
             preview: queuePreview,
@@ -1675,8 +1641,6 @@ export function App(): JSX.Element {
           project={active?.project}
           newSession={isNewSession}
           commands={paletteCommands}
-          permissionMode={settings.permissionMode}
-          onPermissionModeChange={setPermissionMode}
           queued={queued}
           queuePause={queuePause}
           attachments={attachments}
@@ -1709,14 +1673,10 @@ export function App(): JSX.Element {
   );
 
   // An extension prompt takes over the composer's slot instead of opening a modal
-  // (see PermissionPanel): `confirm` approvals, the agent's `select`/`input`
-  // questions, and the paged `questions` form render inline; only `editor`
-  // (multi-line prefill) stays a dialog. `full`/remembered approvals are answered
-  // by the effect above, so they never reach the panel.
-  const confirmAutoApproved =
-    permission?.method === "confirm" &&
-    (settings.permissionMode === "full" || permissionAlways.includes(permissionKey(permission)));
-  const pendingPanel = permission && permission.method !== "editor" && !confirmAutoApproved ? permission : null;
+  // (see PermissionPanel): `confirm`, the agent's `select`/`input` questions, and the
+  // paged `questions` form render inline; only `editor` (multi-line prefill) stays a
+  // dialog.
+  const pendingPanel = permission && permission.method !== "editor" ? permission : null;
   const pendingDialog = permission && permission.method === "editor" ? permission : null;
   const composerSlot = pendingPanel ? (
     <PermissionPanel key={pendingPanel.id} request={pendingPanel} onRespond={handlePermissionRespond} />

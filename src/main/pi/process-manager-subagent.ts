@@ -153,8 +153,7 @@ export class SubagentTurnRunner {
    * system prompt and only the tools its definition allows, and streams its
    * events back under `subagent_event` so the right pane can show the transcript.
    * A throwaway `DefaultResourceLoader` loads no FastVibe extension (no recursion,
-   * no plan/goal) except the permission sandbox, so a delegated `bash`/`edit` is
-   * still gated by the user's current mode.
+   * no goal) except `folder-consent`, which only primes macOS folder access.
    */
   async #runSubagent(conversationId: string, request: SubagentHostRequest): Promise<SubagentHostResponse> {
     const { subagentId } = request;
@@ -177,7 +176,7 @@ export class SubagentTurnRunner {
       if (!this.#runtime || !this.#models) throw new Error("engine not ready");
       const cwd = request.cwd || this.#cwd;
       const settingsManager = SettingsManager.create(cwd, this.#paths.agentDir);
-      const sandbox = builtinExtensionFile("permission-sandbox.ts");
+      const folderConsent = builtinExtensionFile("folder-consent.ts");
       // A delegated run never loads the `output-language` extension (`noExtensions`), so
       // its system prompt carries the same AI 偏好语言 requirement directly — a subagent
       // report the user cannot read is a bug, not a preference.
@@ -196,7 +195,7 @@ export class SubagentTurnRunner {
         noThemes: true,
         noPromptTemplates: true,
         noSkills: true,
-        ...(sandbox ? { additionalExtensionPaths: [sandbox] } : {}),
+        ...(folderConsent ? { additionalExtensionPaths: [folderConsent] } : {}),
         ...(appendSystemPrompt.length > 0 ? { appendSystemPrompt } : {}),
       });
       await loader.reload();
@@ -232,8 +231,8 @@ export class SubagentTurnRunner {
       session = created.session;
       control.bind(session);
       const activeSession = session;
-      // Bind the parent's UI so the sandbox's `confirm` renders in the same
-      // composer panel as a main-tool approval, and `hasUI` is true for the hook.
+      // Bind the parent's UI so a prompt raised inside the run renders in the same
+      // composer panel as the parent's own.
       await session.bindExtensions({ mode: "rpc", uiContext: this.#extensionUi(conversationId, subagentId) });
       this.#subagentSessions.set(subagentId, session);
       this.#publishSubagentState(subagentId, conversationId, activeSession);

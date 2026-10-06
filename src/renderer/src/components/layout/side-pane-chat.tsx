@@ -12,7 +12,6 @@ import { useSidePaneStore, type SidePaneTab } from "@/stores/side-pane";
 import { attachmentPromptSuffix, attachmentsToImages } from "@/lib/attachments";
 import { engine, promptConversation } from "@/lib/engine-client";
 import { translate } from "@/lib/i18n";
-import { usePermissionModeSelection } from "@/components/permission-mode-provider";
 import type { ChatAttachment, ChatMessage } from "@shared/types";
 import { parseCompactCommand } from "@shared/slash";
 import { isAbortOutcome } from "@shared/abort";
@@ -52,7 +51,6 @@ export function SidePaneChat({
   const projects = useSessionStore((state) => state.projects);
   const commands = useSessionStore((state) => state.commands);
   const settings = useSettingsStore((state) => state.settings);
-  const { setPermissionMode } = usePermissionModeSelection();
   const [attachments, setAttachments] = useState<ChatAttachment[]>(() => tab.initialAttachments ?? []);
   const [focusSignal, setFocusSignal] = useState(0);
   const initialSent = useRef(false);
@@ -191,8 +189,6 @@ export function SidePaneChat({
           project={project}
           hideProjectPicker
           commands={commands}
-          permissionMode={settings.permissionMode}
-          onPermissionModeChange={setPermissionMode}
           queued={[]}
           queuePause={null}
           attachments={attachments}

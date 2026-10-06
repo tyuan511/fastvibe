@@ -20,13 +20,6 @@ export function PermissionCard({
     <View style={[styles.card, { backgroundColor: palette.card, borderColor: palette.border }]}>
       <Text style={[styles.title, { color: palette.text }]}>{prompt.title || "需要你处理"}</Text>
       {prompt.message ? <Text style={[styles.body, { color: palette.muted }]}>{prompt.message}</Text> : null}
-      {prompt.plan ? (
-        <Text style={[styles.body, { color: palette.text }]}>
-          {prompt.plan.title}
-          {"\n"}
-          {prompt.plan.summary}
-        </Text>
-      ) : null}
 
       {prompt.method === "confirm" ? (
         <View style={styles.row}>
@@ -97,27 +90,6 @@ export function PermissionCard({
             disabled={busy || answers.some((item) => item.trim().length === 0)}
             onPress={() => onRespond({ id: prompt.id, answers })}
           />
-        </View>
-      ) : null}
-
-      {prompt.method === "plan_review" ? (
-        <View style={styles.stack}>
-          <TextInput
-            value={text}
-            onChangeText={setText}
-            placeholder="要修改的话，写在这里"
-            placeholderTextColor={palette.muted}
-            style={[styles.input, { color: palette.text, borderColor: palette.border }]}
-          />
-          <View style={styles.row}>
-            <Action label="先不执行" disabled={busy} onPress={() => onRespond({ id: prompt.id, planAction: "ignore" })} />
-            <Action
-              label="按意见修改"
-              disabled={busy || text.trim().length === 0}
-              onPress={() => onRespond({ id: prompt.id, planAction: "revise", value: text })}
-            />
-            <Action label="开始执行" primary disabled={busy} onPress={() => onRespond({ id: prompt.id, planAction: "approve" })} />
-          </View>
         </View>
       ) : null}
     </View>

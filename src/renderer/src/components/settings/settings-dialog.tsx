@@ -20,8 +20,6 @@ import { useSettingsStore } from "@/stores/settings";
 import { useIsNarrowViewport } from "@/lib/sidebar-visibility";
 import { i18n } from "@/lib/i18n";
 import { UI_LANGUAGES, UI_LANGUAGE_LABELS, type UiLanguage } from "@/lib/language";
-import { PERMISSION_MODES, permissionDescription, permissionLabel, permissionModeItems } from "@/lib/permission-modes";
-import { clearRememberedPermissions } from "@/lib/permission-rules";
 import type { ThemeMode } from "@/lib/themes";
 import { UI_FONT_SIZE_MAX, UI_FONT_SIZE_MIN, UI_FONT_SIZE_STEP } from "@/lib/themes";
 import { readSidebarWidth } from "@/lib/sidebar-width";
@@ -47,7 +45,6 @@ import { AboutSettings } from "./about-settings";
 import { PersonalizationSettings } from "./personalization-settings";
 import { SubagentsSettings } from "./subagents-settings";
 import { SettingsGroup as Group, SettingsRow as Row } from "./settings-group";
-import { usePermissionModeSelection } from "@/components/permission-mode-provider";
 import {
   SETTINGS_SECTIONS,
   settingsGroupLabel,
@@ -92,9 +89,6 @@ export function SettingsDialog({
 }): JSX.Element | null {
   const settings = useSettingsStore((state) => state.settings);
   const update = useSettingsStore((state) => state.update);
-  const { setPermissionMode } = usePermissionModeSelection();
-  // 始终允许 rules, so the revoke button can say how many there are and disable itself.
-  const remembered = settings.permissionAlways ?? [];
   const { t } = useTranslation("settings");
   const navigate = useNavigate();
   const [section, setSection] = useState<SectionId>(controlledSection ?? "general");
@@ -336,44 +330,6 @@ export function SettingsDialog({
                   }
                 />
               </Group>
-              <Group title={t("security.title")}>
-                <Row
-                  title={t("common.permission")}
-                  description={t("common.permissionDesc", { mode: permissionDescription(settings.defaultPermissionMode) })}
-                  control={
-                    <Select
-                      items={permissionModeItems()}
-                      value={settings.defaultPermissionMode}
-                      onValueChange={(value) => setPermissionMode(value as typeof settings.defaultPermissionMode)}
-                    >
-                      <SelectTrigger size="sm" className="w-44">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {PERMISSION_MODES.map((mode) => (
-                          <SelectItem key={mode} value={mode}>
-                            {permissionLabel(mode)}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  }
-                />
-                <Row
-                  title={t("common.permissionRules")}
-                  description={t("common.permissionRulesDesc", { count: remembered.length })}
-                  control={
-                    <Button
-                      size="xs"
-                      variant="outline"
-                      disabled={remembered.length === 0}
-                      onClick={() => clearRememberedPermissions()}
-                    >
-                      {t("common.permissionRulesClear")}
-                    </Button>
-                  }
-                />
-              </Group>
               <Group title={t("runtime.title")}>
                 <Row
                   title={t("common.keepAwake")}
@@ -405,50 +361,22 @@ export function SettingsDialog({
               </Group>
               <Group title={t("chat.title")}>
                 <Row
-                  title={t("chat.queue")}
-                  description={t("chat.queueDesc")}
-                  control={
-                    <Select
-                      items={{ followUp: t("chat.followUp"), steer: t("chat.steer") }}
-                      value={settings.queueBehavior}
-                      onValueChange={(value) => update({ queueBehavior: value as typeof settings.queueBehavior })}
-                    >
-                      <SelectTrigger size="sm" className="w-44">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="followUp">{t("chat.followUp")}</SelectItem>
-                        <SelectItem value="steer">{t("chat.steer")}</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  }
-                />
-                <Row
-                  title={t("chat.interrupt")}
-                  description={t("chat.interruptDesc")}
-                  control={
-                    <Select
-                      items={{ immediate: t("chat.immediate"), wait: t("chat.wait") }}
-                      value={settings.interruptMode}
-                      onValueChange={(value) => update({ interruptMode: value as typeof settings.interruptMode })}
-                    >
-                      <SelectTrigger size="sm" className="w-44">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="immediate">{t("chat.immediate")}</SelectItem>
-                        <SelectItem value="wait">{t("chat.wait")}</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  }
-                />
-                <Row
-                  title={t("chat.autoCompact")}
-                  description={t("chat.autoCompactDesc")}
+                  title={t("chat.codemode")}
+                  description={t("chat.codemodeDesc")}
                   control={
                     <Switch
-                      checked={settings.autoCompact}
-                      onCheckedChange={(checked) => update({ autoCompact: checked })}
+                      checked={settings.codemode}
+                      onCheckedChange={(checked) => update({ codemode: checked })}
+                    />
+                  }
+                />
+                <Row
+                  title={t("chat.toolSearch")}
+                  description={t("chat.toolSearchDesc")}
+                  control={
+                    <Switch
+                      checked={settings.toolSearch}
+                      onCheckedChange={(checked) => update({ toolSearch: checked })}
                     />
                   }
                 />

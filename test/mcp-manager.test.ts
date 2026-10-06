@@ -101,6 +101,53 @@ test("an empty successful result still says something", async () => {
   await manager.close();
 });
 
+test("a direct server's tools carry no exposure, a codemode or deferred one's carry it with a namespace", async () => {
+  const { manager } = await managerWith(
+    [configOf("plain"), configOf("scripted", { exposure: "codemode" }), configOf("lazy", { exposure: "deferred" })],
+    (_c, server) => fakeServer(server),
+  );
+  const byName = new Map((await manager.tools()).map((tool) => [tool.name, tool as unknown as Record<string, unknown>]));
+  assert.equal(byName.get("mcp_plain_echo")?.exposure, undefined);
+  assert.equal(byName.get("mcp_plain_echo")?.namespace, undefined);
+  assert.equal(byName.get("mcp_scripted_echo")?.exposure, "codemode");
+  assert.deepEqual(byName.get("mcp_scripted_echo")?.namespace, { name: "scripted" });
+  assert.equal(byName.get("mcp_lazy_echo")?.exposure, "deferred");
+  await manager.close();
+});
+
+test("a server's own instructions become its namespace's guide", async () => {
+  const file = join(mkdtempSync(join(tmpdir(), "mcp-")), "mcp.json");
+  const manager = new McpManager(file, {
+    createTransport: () => {
+      const { client, server } = createInMemoryTransportPair();
+      server.onMessage((message) => {
+        const { id, method } = message as Rpc;
+        if (id === undefined) return;
+        const reply = (result: unknown) => void server.send({ jsonrpc: "2.0", id, result } as never);
+        if (method === "initialize") reply({ protocolVersion: LATEST_PROTOCOL_VERSION, capabilities: { tools: {} }, serverInfo: { name: "fake", version: "1" }, instructions: "Search before you fetch." });
+        else if (method === "tools/list") reply({ tools: [{ name: "echo", inputSchema: { type: "object" } }] });
+      });
+      void server.start();
+      return client;
+    },
+  });
+  await manager.save([configOf("guided", { exposure: "codemode" })]);
+  await manager.load();
+  await manager.connectAll();
+  const [tool] = (await manager.tools()) as unknown as Array<Record<string, any>>;
+  assert.deepEqual(tool.namespace, { name: "guided", instructions: "Search before you fetch." });
+  await manager.close();
+});
+
+test("a stored exposure that is not a known one drops the server rather than guessing", async () => {
+  const { manager } = await managerWith(
+    [configOf("ok", { enabled: false }), { ...configOf("odd", { enabled: false }), exposure: "everywhere" } as never],
+    (_c, server) => fakeServer(server),
+  );
+  assert.deepEqual(manager.list().map((item) => item.id), ["ok"]);
+  await manager.close();
+});
+
 test("tool parameters are always an object schema", async () => {
   const { manager } = await managerWith([configOf("p")], (_c, server) => fakeServer(server, { tools: [{ name: "bare", inputSchema: {} }] }));
   const [tool] = await manager.tools();

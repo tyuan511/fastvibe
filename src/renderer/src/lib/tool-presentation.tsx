@@ -1,8 +1,9 @@
 import type { ReactNode } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { BotIcon, ChromeIcon, ComputerIcon, FileEditIcon, FileMinusIcon, FilePlusIcon, FileTextIcon, FolderTreeIcon, ListChecksIcon, MessageQuestionIcon, Plug01Icon, Search01Icon, SparklesIcon, SquareTerminalIcon, Wrench01Icon } from "@hugeicons/core-free-icons";
+import { BotIcon, ChromeIcon, ComputerIcon, FileEditIcon, FileMinusIcon, FilePlusIcon, FileTextIcon, FolderTreeIcon, ListChecksIcon, MessageQuestionIcon, Plug01Icon, Search01Icon, SourceCodeIcon, SparklesIcon, SquareTerminalIcon, Wrench01Icon } from "@hugeicons/core-free-icons";
 import type { ToolCallBlock } from "@shared/types";
 import { i18n } from "@/lib/i18n";
+import { codemodeCalls, codemodeCode, codemodeFailures, codemodeSummary } from "./codemode";
 import { activeTodo, parseToolTodos, todoIndexOf } from "./todos";
 import { displayPath } from "./workspace-path";
 
@@ -28,6 +29,7 @@ export type ToolFamily =
   | "todo"
   | "question"
   | "mcp"
+  | "codemode"
   | "browser"
   | "other";
 
@@ -104,6 +106,7 @@ const ICONS: Record<ToolFamily, ReactNode> = {
   todo: <HugeiconsIcon strokeWidth={2} icon={ListChecksIcon} className="size-3.5" />,
   question: <HugeiconsIcon strokeWidth={2} icon={MessageQuestionIcon} className="size-3.5" />,
   mcp: <HugeiconsIcon strokeWidth={2} icon={Plug01Icon} className="size-3.5" />,
+  codemode: <HugeiconsIcon strokeWidth={2} icon={SourceCodeIcon} className="size-3.5" />,
   browser: <HugeiconsIcon strokeWidth={2} icon={ChromeIcon} className="size-3.5" />,
   other: <HugeiconsIcon strokeWidth={2} icon={Wrench01Icon} className="size-3.5" />,
 };
@@ -116,6 +119,7 @@ const COMMAND_KEYS = ["command", "cmd", "script", "parsed_cmd"];
 export function familyOf(name: string): ToolFamily {
   const key = name.trim().toLowerCase();
   if (!key) return "other";
+  if (key === "codemode") return "codemode";
   if (key.startsWith("mcp") || key.includes("__")) return "mcp";
   if (key.startsWith("browser_")) return "browser";
   if (/^(read|read_file|readfile|view|cat)$/.test(key)) return "read";
@@ -123,7 +127,7 @@ export function familyOf(name: string): ToolFamily {
   if (/^(write|write_file|writefile|create_file|createfile|create)$/.test(key)) return "write";
   if (/^(delete|delete_file|remove|remove_file|rm)$/.test(key)) return "delete";
   if (/^(web_search|websearch)$/.test(key)) return "web";
-  if (/^(grep|search|search_files|searchfiles|ripgrep|rg|fetch|webfetch|conversation_search|memory_search|memory_recent)$/.test(key)) return "search";
+  if (/^(grep|search|search_files|searchfiles|ripgrep|rg|fetch|webfetch|conversation_search|memory_search|memory_recent|tool_search)$/.test(key)) return "search";
   if (/^(find|glob|ls|list|list_dir|listdir|tree|list_files|listfiles)$/.test(key)) return "list";
   if (/^(bash|shell|shell_exec|shellexec|exec|execute|run_command|runcommand|command|terminal|run)$/.test(key)) return "terminal";
   if (key.includes("skill")) return "skill";
@@ -209,6 +213,19 @@ export function describeTool(tool: ToolCallBlock, cwd?: string): ToolView {
       const command = argString(tool.args, COMMAND_KEYS);
       view.subject = command || tool.name;
       view.title = command || tool.name;
+      return view;
+    }
+    case "codemode": {
+      // The script is the call; the row says what it is for and how many tools it ran.
+      const code = codemodeCode(tool.args);
+      const summary = codemodeSummary(code);
+      view.subject = summary || tool.name;
+      view.title = code || tool.name;
+      const calls = codemodeCalls(tool.details);
+      if (calls.length > 0) {
+        const failed = codemodeFailures(calls);
+        view.badge = i18n.t(failed > 0 ? "common:tool.codemodeCallsFailed" : "common:tool.codemodeCalls", { count: calls.length, failed }) as string;
+      }
       return view;
     }
     case "skill": {

@@ -10,72 +10,20 @@ import {
   PauseIcon,
   PlayIcon,
   Target01Icon,
-  TaskDaily01Icon,
 } from "@hugeicons/core-free-icons";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { engine } from "@/lib/engine-client";
 import { IconButton } from "@/components/icon-button";
 import { cn } from "@/lib/utils";
 import { useSessionStore, useExtensionStatus, useExtensionWidgets } from "@/stores/session";
-import { useSidePaneStore } from "@/stores/side-pane";
 import { TuiLines } from "./tui-lines";
 
 /**
  * Status keys FastVibe renders with its own chrome instead of the generic text
- * line above the composer: `plan-mode` becomes a badge beside the permission
- * control, `goal` becomes the `GoalPanel`.
+ * line above the composer: `goal` becomes the `GoalPanel`, `goal-armed` a badge
+ * beside the permission control.
  */
-const BADGE_STATUS_KEYS = new Set(["plan-mode", "plan-review", "goal", "goal-armed"]);
-
-type PlanPayload = { path: string; title: string; summary: string };
-
-function parsePlan(raw?: string): PlanPayload | null {
-  if (!raw) return null;
-  try {
-    const value = JSON.parse(raw) as Partial<PlanPayload>;
-    return typeof value.path === "string" && typeof value.title === "string" && typeof value.summary === "string"
-      ? { path: value.path, title: value.title, summary: value.summary }
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-function PlanPreview(): JSX.Element | null {
-  const { t } = useTranslation("chat");
-  const plan = parsePlan(useExtensionStatus()["plan-review"]);
-  const openPlanPreview = useSidePaneStore((state) => state.openPlanPreview);
-  if (!plan) return null;
-  const open = () => {
-    void window.fastvibe.workspace.preview(plan.path).then((preview) => openPlanPreview(preview, plan.title)).catch(() => undefined);
-  };
-  const [intro, ...rest] = plan.summary.split(/\n\n+/);
-  return (
-    <div className="w-full pb-3">
-      <div className="relative max-h-[24rem] overflow-hidden rounded-xl border border-border bg-card px-5 py-4 shadow-sm">
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <HugeiconsIcon strokeWidth={1.8} icon={TaskDaily01Icon} className="size-4" />
-          <span>计划</span>
-          <button type="button" aria-label="复制计划" className="ml-auto text-foreground/80" onClick={() => void navigator.clipboard?.writeText(plan.summary)}>⧉</button>
-        </div>
-        <h2 className="mt-5 text-xl font-bold text-foreground">{plan.title}</h2>
-        <p className="mt-5 border-l-2 border-muted-foreground/20 pl-3 text-sm leading-6 text-muted-foreground">{intro}</p>
-        {rest.map((section, index) => {
-          const [heading, ...body] = section.split("\n");
-          return (
-            <div key={index} className="mt-5 text-sm leading-6 text-muted-foreground">
-              {heading.startsWith("## ") ? <h3 className="font-semibold text-foreground/80">{heading.slice(3)}</h3> : null}
-              <p className="whitespace-pre-wrap">{(heading.startsWith("## ") ? body : [heading, ...body]).join("\n")}</p>
-            </div>
-          );
-        })}
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-32 bg-gradient-to-t from-card via-card/90 to-transparent" />
-        <Button type="button" size="default" className="absolute bottom-4 left-1/2 z-10 -translate-x-1/2 rounded-full px-5 text-sm" onClick={open}>{t("plan.viewFull")}　→</Button>
-      </div>
-    </div>
-  );
-}
+const BADGE_STATUS_KEYS = new Set(["goal", "goal-armed"]);
 
 async function runExtensionCommand(command: string): Promise<void> {
   try {
@@ -93,7 +41,7 @@ function StatusBadge({
   disabled,
   onClear,
 }: {
-  icon: typeof TaskDaily01Icon;
+  icon: typeof Target01Icon;
   label: string;
   title: string;
   className?: string;
@@ -126,40 +74,23 @@ function StatusBadge({
 }
 
 /**
- * Mode badges, rendered in the composer next to the permission control: plan mode
- * and goal mode armed (a bare `/goal` waiting for the objective). Each close button
- * dispatches the matching command — `/plan` exits plan mode and restores the tools,
- * `/goal clear` drops the armed goal.
+ * Mode badge, rendered in the composer next to the permission control: goal mode
+ * armed (a bare `/goal` waiting for the objective). Its close button dispatches
+ * `/goal clear`, which drops the armed goal.
  */
 export function ExtensionStatusBadges({ disabled }: { disabled?: boolean }): JSX.Element | null {
   const { t } = useTranslation("chat");
   const status = useExtensionStatus();
-  const planActive = Boolean(status["plan-mode"]);
-  const goalArmed = Boolean(status["goal-armed"]);
-  if (!planActive && !goalArmed) return null;
+  if (!status["goal-armed"]) return null;
   return (
-    <>
-      {planActive ? (
-        <StatusBadge
-          icon={TaskDaily01Icon}
-          label={t("plan.label")}
-          title={t("plan.exit")}
-          className="border-info/30 bg-info/10 text-info"
-          disabled={disabled}
-          onClear={() => void runExtensionCommand("/plan")}
-        />
-      ) : null}
-      {goalArmed ? (
-        <StatusBadge
-          icon={Target01Icon}
-          label={t("goal.label")}
-          title={t("goal.cancel")}
-          className="border-primary/30 bg-primary/10 text-primary"
-          disabled={disabled}
-          onClear={() => void runExtensionCommand("/goal clear")}
-        />
-      ) : null}
-    </>
+    <StatusBadge
+      icon={Target01Icon}
+      label={t("goal.label")}
+      title={t("goal.cancel")}
+      className="border-primary/30 bg-primary/10 text-primary"
+      disabled={disabled}
+      onClear={() => void runExtensionCommand("/goal clear")}
+    />
   );
 }
 
@@ -274,18 +205,17 @@ export function GoalPanel({ className, disabled }: { className?: string; disable
  * Status entries and string-line widgets an extension published via
  * `ctx.ui.setStatus()` / `ctx.ui.setWidget()`, rendered just above the composer.
  *
- * Plan- and goal-mode statuses are excluded: FastVibe draws those as its own
- * badge / control panel.
+ * Goal-mode statuses are excluded: FastVibe draws those as its own badge /
+ * control panel.
  */
 export function ExtensionWidgets({ className }: { className?: string }): JSX.Element | null {
   const status = useExtensionStatus();
   const widgets = useExtensionWidgets();
   const statusEntries = Object.entries(status).filter(([key, text]) => text && !BADGE_STATUS_KEYS.has(key));
   const widgetEntries = Object.values(widgets);
-  if (statusEntries.length === 0 && widgetEntries.length === 0 && !status["plan-review"]) return null;
+  if (statusEntries.length === 0 && widgetEntries.length === 0) return null;
   return (
     <div className={cn("mx-auto w-full max-w-3xl space-y-1.5 px-6", className)}>
-      <PlanPreview />
       {statusEntries.map(([key, text]) => (
         <div key={key} className="flex items-center gap-2 text-xs text-muted-foreground">
           <HugeiconsIcon strokeWidth={2} icon={InformationSquareIcon} className="size-3.5 shrink-0" />

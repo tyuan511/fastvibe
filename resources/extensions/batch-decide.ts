@@ -59,7 +59,7 @@ export default function batchDecide(pi: ExtensionAPI): void {
   if (!runner) return;
 
   // Offered only while the switch is on. A tool this extension withdrew comes back when
-  // the switch does; one another extension withdrew (plan mode's read-only set) stays out.
+  // the switch does; one another extension withdrew stays out.
   let withheld = false;
   const sync = () => {
     const active = pi.getActiveTools();

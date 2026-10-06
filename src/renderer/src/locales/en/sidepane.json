@@ -69,7 +69,7 @@
       "aborted": "Stopped",
       "retrying": "Waiting to retry",
       "compacting": "Compacting context",
-      "waiting": "Waiting for approval",
+      "waiting": "Waiting for you",
       "queued": "Queued",
       "skipped": "Not run",
       "unknown": "Awaiting status"

@@ -15,15 +15,12 @@ import { APP_CONFIG_CATALOG, isAppConfigAction, type AppConfigAction, type AppCo
  * the agent cannot do anything a click could not, and a write is broadcast to every
  * window exactly like a click's. It is an **allowlist**, action by action, never a
  * pass-through of arbitrary channels: the table also holds methods that would let the
- * agent raise its own permissions or read a credential back.
+ * agent read a credential back.
  *
- * Three rules the table keeps:
+ * Two rules the table keeps:
  *
  * - **No action returns a secret.** SSH passwords are stripped, frp serves `hasToken`,
  *   the remote-access password is write-only.
- * - **The agent never chooses its own permissions.** `settings.set` refuses the
- *   permission keys — a model that could write `permissionMode: "full"` would have
- *   approved every later prompt for itself.
  * - **The remote-access password never reaches the model.** The extension asks the user
  *   for it in the composer and hands it here directly (`resources/extensions/app-config.ts`).
  */
@@ -35,8 +32,6 @@ const call = <T>(channel: string, payload?: unknown): Promise<T> => dispatch(cha
 
 /** Settings keys the agent must not write, each for a reason stated beside it. */
 const BLOCKED_SETTINGS: Array<[RegExp, string]> = [
-  // The permission sandbox reads these; the agent writing them approves itself.
-  [/^(permissionMode|defaultPermissionMode|fullAccessConfirmed|permissionAlways)$/, "权限相关设置只能由用户在界面上修改"],
   // Remote access has its own actions, which go through the server's own start/stop.
   [/^remote/, "远程访问请用 remote.* 动作配置"],
   // Proxy writes are validated by their own method; settings:set preserves them anyway.
