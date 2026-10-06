@@ -10,21 +10,19 @@ const browser = await chromium.launch({
   executablePath: process.env.CHROME_PATH ?? (process.platform === "darwin" ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" : undefined),
 });
 const errors = [];
-async function assertTheme(page, theme) {
+async function assertTheme(page, theme, checkMeta = true) {
   await page.waitForFunction((value) => getComputedStyle(document.documentElement).colorScheme === value, theme);
-  const expected = theme === "dark" ? "#101016" : "#faf9fc";
+  const expected = theme === "dark" ? "#0c0c11" : "#ffffff";
+  if (!checkMeta) return;
   const activeColors = await page.locator('meta[name="theme-color"]').evaluateAll((tags) =>
     tags.filter((tag) => matchMedia(tag.media).matches).map((tag) => tag.content));
   assert.deepEqual(activeColors, [expected]);
-  assert.equal(await page.locator(".theme-switch, .theme-select").count(), 0);
 }
 try {
   if (output) await mkdir(output, { recursive: true });
   for (const locale of ["en", "zh"]) {
     for (const colorScheme of ["light", "dark"]) {
     const context = await browser.newContext({ locale, colorScheme, reducedMotion: "reduce" });
-    // Preferences from the removed manual switch must no longer override the OS.
-    await context.addInitScript((scheme) => localStorage.setItem("fastvibe-website-theme", scheme === "light" ? "dark" : "light"), colorScheme);
     const page = await context.newPage();
     page.setDefaultTimeout(15_000);
     page.on("pageerror", (error) => errors.push(error.message));
@@ -35,28 +33,21 @@ try {
       assert.equal(response.status(), 200);
       await assertTheme(page, colorScheme);
       assert.equal(await page.locator("html").getAttribute("lang"), locale === "zh" ? "zh-CN" : "en");
-      assert.match(await page.locator("h1").innerText(), locale === "zh" ? /为 Agent/ : /workspace for your agents/);
+      assert.match(await page.locator("h1").innerText(), locale === "zh" ? /为 Agent 打造的工作区/ : /workspace for your agents/);
       assert.equal(await page.locator("link[rel=canonical]").getAttribute("href"), `https://fastvibe.dev/${locale}`);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `${locale}/${width}: horizontal overflow`);
-      assert.match(await page.locator(".hero-description").innerText(), /pi-coding-agent/);
-      assert.equal(await page.locator(".hero-description strong").count(), 4);
-      if (await page.locator(".header-github").isVisible()) {
-        const github = await page.locator(".header-github").boundingBox();
-        const language = await page.locator(".language-switch").boundingBox();
-        assert.equal(github.height, language.height, "Header controls must have the same height");
+      for (const id of ["tasks", "practices", "access"]) {
+        assert.equal(await page.locator(`main section#${id}`).count(), 1, `missing #${id}`);
       }
-      assert.equal(await page.locator(".source-chain a").count(), 4);
-      assert.equal(await page.locator('.pi-link[href="https://pi.dev"]').count(), 1);
-      assert.doesNotMatch(await page.locator("main").innerText(), /benchmark|49\.8%|Terminal-Bench/i);
-      for (const img of await page.locator(".product-screenshot:visible > img").all()) {
-        await img.scrollIntoViewIfNeeded();
-        await page.waitForFunction((image) => image.complete && image.naturalWidth > 0, await img.elementHandle(), { timeout: 15_000 });
-        assert.match(decodeURIComponent(await img.getAttribute("src")), new RegExp(`/screenshots/${locale}/`));
-      }
-      for (const link of await page.locator(".download-link").all()) {
+      assert.equal(await page.locator('.site-nav a[href="#access"]').count(), 1, "nav must link to the platforms section");
+      assert.equal(await page.locator(".download-menu-group a").count(), 5);
+      assert.equal(await page.locator('#access a[href="https://testflight.apple.com/join/esBzVH3v"]').count(), 1, "iOS must link to TestFlight");
+      assert.equal(await page.locator("#access .action-button").count(), 5);
+      assert.doesNotMatch(await page.locator("main").innerText(), /benchmark|49\.8%|Terminal-Bench|install\.sh/i);
+      assert.equal(await page.locator("img[src*='/screenshots/']").count(), 0, "below-the-fold screenshots must be illustrations");
+      assert.equal(await page.locator(".illu, .phone-shot, .mock-browser").count() >= 6, true);
+      for (const link of await page.locator(".download-menu-group a").all()) {
         assert.match(await link.getAttribute("href"), /^https:\/\/github\.com\/tyuan511\/fastvibe\/releases\//);
-        const rect = await link.boundingBox();
-        assert.ok(rect.height >= 44 && rect.height < 100, `${locale}/${width}: download button has incorrect height`);
       }
       if (output && [375, 1440].includes(width)) {
         await page.evaluate(() => scrollTo(0, 0));
@@ -65,23 +56,39 @@ try {
       console.log(`PASS ${locale}/${colorScheme} @ ${width}px: SSR, theme, locale images, downloads, layout`);
     }
 
-    await page.locator(".platform-tabs button").filter({ hasText: /^Windows$/ }).click();
-    assert.equal(await page.locator(".installer-link").count(), 1);
-    assert.match(await page.locator(".installer-link").getAttribute("href"), /\.exe$|\/releases\/latest$/);
-    await page.locator(".platform-tabs button").filter({ hasText: /^Linux$/ }).click();
-    assert.equal(await page.locator(".installer-link").count(), 2);
-
-    assert.equal(await page.locator(".showcase-section").count(), 0);
-    assert.equal(await page.locator(".product-screenshot").count(), 4);
-    const enlarge = page.locator(".feature-row .product-screenshot").first();
-    await enlarge.click();
-    assert.equal(await page.locator("dialog[open]").count(), 1);
+    // The hero menu, and the task tabs are the page's interactive parts.
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.locator(".download-more > summary").click();
+    assert.equal(await page.locator(".download-more").evaluate((el) => el.open), true);
     await page.keyboard.press("Escape");
-    assert.equal(await page.locator("dialog[open]").count(), 0);
-    assert.equal(await enlarge.evaluate((element) => document.activeElement === element), true);
-    await enlarge.click();
-    await page.locator("dialog[open] .close-screenshot").click();
-    assert.equal(await page.locator("dialog[open]").count(), 0);
+    assert.equal(await page.locator(".download-more").evaluate((el) => el.open), false);
+    await page.locator(".task-tab").nth(1).click();
+    assert.equal(await page.locator('.task-tab[aria-selected="true"]').count(), 1);
+    assert.equal(await page.locator('#tasks [role="tabpanel"]:not([hidden])').count(), 1);
+
+    // The real client UI is embedded and told which theme the site is showing.
+    const frame = page.locator(".preview-window iframe");
+    await frame.waitFor({ state: "attached" });
+    assert.match(await frame.getAttribute("src"), new RegExp(`theme=${colorScheme}&?`));
+    assert.match(await frame.getAttribute("src"), new RegExp(`lang=${locale}`));
+    await page.locator(".preview-window[data-ready]").waitFor();
+    const appTheme = () => page.frameLocator(".preview-window iframe").locator("html").evaluate((el) => el.classList.contains("dark"));
+    await page.waitForFunction(() => document.querySelector(".preview-window iframe")?.contentDocument?.querySelector("#root > *"));
+    assert.equal(await appTheme(), colorScheme === "dark", "preview must match the page theme on load");
+
+    // The switch flips the page and the embedded app together, and the choice survives a reload.
+    const flipped = colorScheme === "dark" ? "light" : "dark";
+    await page.locator(".theme-switch").click();
+    await assertTheme(page, flipped, false);
+    await page.waitForFunction((dark) => document.querySelector(".preview-window iframe").contentDocument.documentElement.classList.contains("dark") === dark, flipped === "dark");
+    await page.reload({ waitUntil: "networkidle" });
+    await assertTheme(page, flipped, false);
+    assert.match(await page.locator(".preview-window iframe").getAttribute("src"), new RegExp(`theme=${flipped}`));
+    await page.locator(".theme-switch").click();
+    await assertTheme(page, colorScheme, false);
+    await page.evaluate((key) => localStorage.removeItem(key), "fastvibe-website-theme");
+    await page.reload({ waitUntil: "networkidle" });
+    console.log(`PASS ${locale}/${colorScheme}: embedded client UI follows the theme switch`);
 
     const other = locale === "en" ? "zh" : "en";
     await page.locator(`.language-switch a[hreflang="${other}"]`).click();
@@ -91,7 +98,7 @@ try {
     assert.equal((await context.cookies()).find((cookie) => cookie.name === "FASTVIBE_LOCALE")?.value, other);
     await page.goto(origin);
     assert.equal(new URL(page.url()).pathname, `/${other}`);
-    console.log(`PASS ${locale}/${colorScheme}: platform selector, modal, language switch & persistence`);
+    console.log(`PASS ${locale}/${colorScheme}: download menu, tabs, modal, language switch & persistence`);
 
     const opposite = colorScheme === "light" ? "dark" : "light";
     await page.emulateMedia({ colorScheme: opposite });
@@ -115,7 +122,7 @@ try {
     const page = await context.newPage();
     await page.goto(origin);
     assert.equal(new URL(page.url()).pathname, `/${locale.startsWith("zh") ? "zh" : "en"}`);
-    assert.equal(await page.locator(".download-link").count(), 5);
+    assert.equal(await page.locator(".download-menu-group a").count(), 5);
     assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement).colorScheme), colorScheme);
     assert.ok((await page.locator("h1").innerText()).length > 0);
     const missing = await page.goto(`${origin}/de`);

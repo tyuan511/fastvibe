@@ -314,8 +314,8 @@ export const MESSAGES: ChatMessage[] = [
       // A switch made mid-reply: the divider sits between the reply's own blocks.
       {
         kind: "model",
-        from: { provider: "fastvibe", id: "claude-sonnet-4-5" },
-        to: { provider: "deepseek", id: "deepseek-chat" },
+        from: { provider: "fastvibe", id: "claude-fable-5-1" },
+        to: { provider: "deepseek", id: "deepseek-v4-pro" },
       },
       { kind: "tool", toolId: "tool-edit-settings" },
       { kind: "tool", toolId: "tool-typecheck" },
@@ -454,7 +454,7 @@ export const MATH_MESSAGES: ChatMessage[] = [
 
 export const SESSION: EngineSessionState = {
   // The model the divider's last switch landed on, so the chip and the transcript agree.
-  model: { provider: "deepseek", id: "deepseek-chat" },
+  model: { provider: "deepseek", id: "deepseek-v4-pro" },
   thinkingLevel: "high",
   isStreaming: false,
   messageCount: MESSAGES.length,
@@ -471,12 +471,12 @@ export const STATS: SessionStats = {
 };
 
 export const MODELS: FastVibeModel[] = [
-  { provider: "fastvibe", providerName: "FastVibe", id: "deepseek-flash", name: "DeepSeek Flash", thinkingLevels: ["low", "medium", "high"] },
-  { provider: "fastvibe", providerName: "FastVibe", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5", thinkingLevels: ["low", "medium", "high"] },
-  { provider: "fastvibe", providerName: "FastVibe", id: "claude-opus-4-1", name: "Claude Opus 4.1", thinkingLevels: ["low", "medium", "high"] },
-  { provider: "fastvibe", providerName: "FastVibe", id: "gpt-5", name: "GPT-5", thinkingLevels: ["minimal", "low", "medium", "high"] },
-  { provider: "fastvibe", providerName: "FastVibe", id: "gemini-2.5-pro", name: "Gemini 2.5 Pro", thinkingLevels: ["low", "medium", "high"] },
-  { provider: "deepseek", providerName: "DeepSeek", id: "deepseek-chat", name: "DeepSeek V3.2", thinkingLevels: ["low", "medium", "high"] },
+  { provider: "fastvibe", providerName: "FastVibe", id: "claude-fable-5-1", name: "Claude Fable 5.1", thinkingLevels: ["low", "medium", "high", "xhigh", "max"] },
+  { provider: "fastvibe", providerName: "FastVibe", id: "claude-opus-5-5", name: "Claude Opus 5.5", thinkingLevels: ["low", "medium", "high", "xhigh", "max"] },
+  { provider: "fastvibe", providerName: "FastVibe", id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5", thinkingLevels: ["low", "medium", "high", "xhigh", "max"] },
+  { provider: "fastvibe", providerName: "FastVibe", id: "gpt-6.1-sol", name: "GPT-6.1 Sol", thinkingLevels: ["low", "medium", "high", "xhigh", "max"] },
+  { provider: "fastvibe", providerName: "FastVibe", id: "gemini-3.7-flash", name: "Gemini 3.7 Flash", thinkingLevels: ["minimal", "low", "medium", "high"] },
+  { provider: "deepseek", providerName: "DeepSeek", id: "deepseek-v4-pro", name: "DeepSeek V4 Pro", thinkingLevels: ["low", "high", "max"] },
 ];
 
 export const COMMANDS: SlashCommand[] = [
@@ -567,7 +567,7 @@ export const PROVIDERS: ProviderConfig[] = [
     supportsKey: true,
     enabled: true,
     models: [
-      { id: "deepseek-chat", name: "DeepSeek V3.2", contextWindow: 128_000, maxTokens: 8_192, reasoning: false, input: ["text"], source: "models.dev" },
+      { id: "deepseek-v4-pro", name: "DeepSeek V4 Pro", contextWindow: 1_000_000, maxTokens: 384_000, reasoning: true, input: ["text"], source: "models.dev" },
     ],
   },
   // The three 余额 states, so `mock.html` renders each without a real relay: a
@@ -587,7 +587,7 @@ export const PROVIDERS: ProviderConfig[] = [
     gatewayCredential: true,
     enabled: true,
     models: [
-      { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", contextWindow: 400_000, maxTokens: 128_000, reasoning: true, input: ["text", "image"], source: "models.dev" },
+      { id: "gpt-6-astra", name: "GPT-6 Astra", contextWindow: 1_050_000, maxTokens: 128_000, reasoning: true, input: ["text", "image"], source: "models.dev" },
     ],
   },
   // The same upstream, with no panel credential yet — the state that offers 配置 instead
@@ -605,7 +605,7 @@ export const PROVIDERS: ProviderConfig[] = [
     gateway: "new-api",
     enabled: true,
     models: [
-      { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", contextWindow: 400_000, maxTokens: 128_000, reasoning: true, input: ["text"], source: "models.dev" },
+      { id: "gpt-6-luna", name: "GPT-6 Luna", contextWindow: 1_050_000, maxTokens: 128_000, reasoning: true, input: ["text"], source: "models.dev" },
     ],
   },
   {
@@ -621,7 +621,7 @@ export const PROVIDERS: ProviderConfig[] = [
     gateway: "sub2api",
     enabled: true,
     models: [
-      { id: "claude-opus-4-6", name: "Claude Opus 4.6", contextWindow: 200_000, maxTokens: 64_000, reasoning: true, input: ["text", "image"], source: "models.dev" },
+      { id: "claude-opus-5-5", name: "Claude Opus 5.5", contextWindow: 1_000_000, maxTokens: 128_000, reasoning: true, input: ["text", "image"], source: "models.dev" },
     ],
   },
   {
@@ -636,7 +636,7 @@ export const PROVIDERS: ProviderConfig[] = [
     supportsKey: true,
     enabled: true,
     models: [
-      { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", contextWindow: 400_000, maxTokens: 128_000, reasoning: true, input: ["text"], source: "models.dev" },
+      { id: "gpt-6.1-sol", name: "GPT-6.1 Sol", contextWindow: 1_050_000, maxTokens: 128_000, reasoning: true, input: ["text"], source: "models.dev" },
     ],
   },
 ];
@@ -664,9 +664,9 @@ export const USAGE: UsageStats = {
     { date: "2026-09-14", input: 176_200, output: 19_400, cacheRead: 89_600, cacheWrite: 6_800, tokens: 285_200, cost: 1.84, requests: 38, toolCalls: 141 },
   ],
   models: [
-    { provider: "fastvibe", model: "claude-sonnet-4-5", input: 1_120_400, output: 112_800, cacheRead: 612_000, cacheWrite: 38_200, tokens: 1_845_200, cost: 11.24, requests: 248, toolCalls: 802 },
-    { provider: "fastvibe", model: "gpt-5", input: 512_900, output: 51_200, cacheRead: 246_800, cacheWrite: 16_900, tokens: 810_900, cost: 5.18, requests: 112, toolCalls: 358 },
-    { provider: "deepseek", model: "deepseek-chat", input: 209_000, output: 20_200, cacheRead: 75_200, cacheWrite: 7_300, tokens: 304_800, cost: 2.0, requests: 52, toolCalls: 124 },
+    { provider: "fastvibe", model: "claude-fable-5-1", input: 1_120_400, output: 112_800, cacheRead: 612_000, cacheWrite: 38_200, tokens: 1_845_200, cost: 11.24, requests: 248, toolCalls: 802 },
+    { provider: "fastvibe", model: "gpt-6.1-sol", input: 512_900, output: 51_200, cacheRead: 246_800, cacheWrite: 16_900, tokens: 810_900, cost: 5.18, requests: 112, toolCalls: 358 },
+    { provider: "deepseek", model: "deepseek-v4-pro", input: 209_000, output: 20_200, cacheRead: 75_200, cacheWrite: 7_300, tokens: 304_800, cost: 2.0, requests: 52, toolCalls: 124 },
   ],
   sessions: 37,
   longestSessionMinutes: 19,

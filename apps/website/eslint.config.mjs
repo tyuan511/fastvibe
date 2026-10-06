@@ -9,7 +9,7 @@ const compat = new FlatCompat({
 const config = [
   ...compat.extends("next/core-web-vitals"),
   {
-    ignores: [".next/**", ".next-*/**", "out/**"],
+    ignores: [".next/**", ".next-*/**", "out/**", "public/app-preview/**"],
   },
 ];
 

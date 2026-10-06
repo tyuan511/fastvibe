@@ -97,7 +97,9 @@ const initialSettings: Record<string, unknown> = {
   thinkingLevel: "high",
   sendOnEnter: true,
   ...(website ? { uiLanguage: websiteLanguage, aiLanguage: websiteLanguage } : {}),
-  themeMode: website ? "dark" : theme === "light" || theme === "dark" ? theme : "system",
+  // The website embeds this page and hands it the theme it is showing (`?theme=`, then
+  // live through the message below); a capture run passes nothing and gets dark.
+  themeMode: theme === "light" || theme === "dark" ? theme : website ? "dark" : "system",
   lightTheme: "github-light",
   darkTheme: website ? "github-dark" : "tokyo-night",
   sidebarWidth: website ? 260 : 264,
@@ -268,7 +270,13 @@ const APP_INFO: AppInfo = {
 import fileIconAsset from "material-icon-theme/icons/file.svg?url&no-inline";
 import materialIconsRaw from "material-icon-theme/dist/material-icons.json?raw";
 
-const ICONS_BASE = fileIconAsset.slice(0, fileIconAsset.lastIndexOf("/") + 1);
+// Under the Vite dev server the package's SVGs are served in place. The pre-compiled copy
+// the marketing site embeds (`vite.website-preview.config.ts`) ships the few the fixtures
+// use in its own `icons/` directory instead; anything else falls back to `file.svg`.
+const ICONS_BASE =
+  import.meta.env.BASE_URL === "/"
+    ? fileIconAsset.slice(0, fileIconAsset.lastIndexOf("/") + 1)
+    : `${import.meta.env.BASE_URL}icons/`;
 
 type MaterialManifest = {
   fileExtensions: Record<string, string>;
@@ -314,7 +322,20 @@ function rewriteIcons(scope: ParentNode): void {
   });
 }
 
+function iconNameOf(src: string): string {
+  return src.replace("fastvibe-icon://icons/", "").replace("/file-icon/", "").replace(/\.svg$/, "");
+}
+
 function installIconRewrite(): void {
+  // React sets `src` through setAttribute, so rewriting there means the unreachable
+  // `fastvibe-icon://` URL is never requested (the observer below only fixes it afterwards).
+  const setAttribute = HTMLImageElement.prototype.setAttribute;
+  HTMLImageElement.prototype.setAttribute = function (name: string, value: string): void {
+    if (name === "src" && (value.startsWith("fastvibe-icon://") || value.startsWith("/file-icon/"))) {
+      value = `${ICONS_BASE}${iconNameOf(value)}.svg`;
+    }
+    setAttribute.call(this, name, value);
+  };
   rewriteIcons(document);
   new MutationObserver((records) => {
     for (const record of records) {
@@ -1010,6 +1031,30 @@ window.fastvibe = api as unknown as typeof window.fastvibe;
 installIconRewrite();
 
 /**
+ * The marketing site shows this page in an iframe and has a theme switch of its own.
+ * Same-origin only: the page is served from the site's own `/app-preview/`.
+ */
+if (website) {
+  // The app focuses its composer as it mounts. Inside an iframe that makes the browser
+  // scroll the *embedding page* to bring the field into view, so reloading the marketing
+  // page jumped down to the preview. Programmatic focus is a no-op until the visitor has
+  // actually touched the window; their own clicks and keys still focus normally.
+  let touched = false;
+  for (const type of ["pointerdown", "keydown", "touchstart"]) window.addEventListener(type, () => { touched = true; }, { capture: true, once: true });
+  const nativeFocus = HTMLElement.prototype.focus;
+  HTMLElement.prototype.focus = function (options?: FocusOptions): void {
+    if (touched) nativeFocus.call(this, options);
+  };
+  window.addEventListener("message", (event) => {
+    if (event.origin !== window.location.origin) return;
+    const data = event.data as { type?: string; theme?: string } | null;
+    if (data?.type !== "fastvibe-website-theme" || (data.theme !== "light" && data.theme !== "dark")) return;
+    const themeMode = data.theme;
+    void import("@/stores/settings").then(({ useSettingsStore }) => useSettingsStore.getState().update({ themeMode }));
+  });
+}
+
+/**
  * Website captures run in a browser, so Electron cannot draw macOS window controls.
  * Keep this strictly inside the dedicated website fixture and inside the 88px title
  * row clearance used by the real macOS shell.
@@ -1055,6 +1100,10 @@ if (website && platform === "darwin" && !remote) {
 if (websiteData) {
   const markReady = (): void => {
     document.body.dataset.websiteSceneReady = websiteScene;
+    // The marketing page keeps its own placeholder up until the app has really drawn.
+    if (window.parent !== window) {
+      window.setTimeout(() => window.parent.postMessage({ type: "fastvibe-website-ready" }, window.location.origin), 150);
+    }
   };
   /** React, not a fixed delay on a cold Vite build, is what the setup waits for. */
   const whenFound = <T,>(find: () => T | null | undefined, act: (value: T) => void, then?: () => boolean): void => {
@@ -1082,7 +1131,10 @@ if (websiteData) {
       pattern.test(node.textContent ?? ""),
     ) ?? null;
 
-  if (websiteScene === "workspace" || websiteScene === "review" || websiteScene === "files") {
+  // `?pane=none` is the marketing page's hero: the chat on its own, with no side pane
+  // open beside it. The capture script never passes it, so its shots are unchanged.
+  const keepPaneClosed = websiteScene === "workspace" && pane === "none";
+  if (!keepPaneClosed && (websiteScene === "workspace" || websiteScene === "review" || websiteScene === "files")) {
     window.setTimeout(() => {
       void import("@/stores/side-pane").then(({ useSidePaneStore }) => {
         const store = useSidePaneStore.getState();

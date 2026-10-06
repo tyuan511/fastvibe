@@ -277,7 +277,7 @@ export function websiteFixture(language: WebsiteLanguage): WebsiteFixture {
     conversations,
     messages,
     session: {
-      model: { provider: "fastvibe", id: "claude-sonnet-4-5" },
+      model: { provider: "fastvibe", id: "claude-fable-5-1" },
       thinkingLevel: "high",
       isStreaming: false,
       messageCount: messages.length,
