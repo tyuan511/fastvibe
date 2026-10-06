@@ -1,8 +1,8 @@
 import { useState, type JSX } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { HugeiconsIcon, type IconSvgElement } from "@hugeicons/react-native";
-import type { PermissionPrompt } from "../session/connection";
-import { MessageQuestionIcon, ShieldAlertIcon, Tick02Icon } from "./icons";
+import type { BlockingPrompt } from "../session/connection";
+import { MessageQuestionIcon, Tick02Icon } from "./icons";
 import { Gradient } from "./gradient";
 import { haptic } from "./haptics";
 import { elevation, radius, usePalette, type Palette } from "./theme";
@@ -11,12 +11,12 @@ import { t, useT } from "../i18n";
 /**
  * The agent parked on a question — drawn where the composer was, as on the desktop.
  */
-export function PermissionCard({
+export function PromptCard({
   prompt,
   busy,
   onRespond,
 }: {
-  prompt: PermissionPrompt;
+  prompt: BlockingPrompt;
   busy: boolean;
   onRespond: (payload: Record<string, unknown>) => void;
 }): JSX.Element {
@@ -24,10 +24,12 @@ export function PermissionCard({
   useT();
   const [text, setText] = useState("");
   const [answers, setAnswers] = useState<string[]>(() => (prompt.questions ?? []).map(() => ""));
-  const kind: { icon: IconSvgElement; eyebrow: string; tone: string; soft: string } =
-    prompt.method === "confirm"
-      ? { icon: ShieldAlertIcon, eyebrow: t("prompt.approve"), tone: palette.warning, soft: palette.warningSoft }
-      : { icon: MessageQuestionIcon, eyebrow: t("prompt.answer"), tone: palette.accent, soft: palette.accentSoft };
+  const kind: { icon: IconSvgElement; eyebrow: string; tone: string; soft: string } = {
+    icon: MessageQuestionIcon,
+    eyebrow: prompt.method === "confirm" ? t("prompt.confirm") : t("prompt.answer"),
+    tone: palette.accent,
+    soft: palette.accentSoft,
+  };
   const respond = (payload: Record<string, unknown>): void => {
     haptic.tap();
     onRespond(payload);
@@ -141,8 +143,8 @@ export function PermissionCard({
 
       {prompt.method === "confirm" ? (
         <View style={styles.row}>
-          <Action fill label={t("prompt.deny")} palette={palette} disabled={busy} onPress={() => respond({ id: prompt.id, confirmed: false })} />
-          <Action fill label={t("prompt.allow")} primary palette={palette} disabled={busy} onPress={() => respond({ id: prompt.id, confirmed: true })} />
+          <Action fill label={t("prompt.no")} palette={palette} disabled={busy} onPress={() => respond({ id: prompt.id, confirmed: false })} />
+          <Action fill label={t("prompt.yes")} primary palette={palette} disabled={busy} onPress={() => respond({ id: prompt.id, confirmed: true })} />
         </View>
       ) : null}
       {prompt.method === "input" || prompt.method === "editor" ? (

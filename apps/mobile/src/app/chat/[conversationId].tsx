@@ -18,13 +18,13 @@ import {
   TestTube01Icon,
 } from "../../ui/icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { currentConnection, getClient, onEngineEvent, reconnectNow, resolvePendingPermission, useConnection, watchConversation } from "../../session/connection";
+import { currentConnection, getClient, onEngineEvent, reconnectNow, resolvePendingPrompt, useConnection, watchConversation } from "../../session/connection";
 import {
   archiveConversation,
   deleteConversation,
   renameConversation,
 } from "../../session/conversation-actions";
-import { PermissionCard } from "../../ui/permission-card";
+import { PromptCard } from "../../ui/prompt-card";
 import { elevation, radius, usePalette, type Palette } from "../../ui/theme";
 import { BrandLoading, BrandLogo } from "../../ui/brand";
 import { IconButton } from "../../ui/kit";
@@ -33,6 +33,7 @@ import { toast } from "../../ui/toast";
 import { haptic } from "../../ui/haptics";
 import { MarkdownView } from "../../chat/markdown";
 import { ProcessGroup, type ProcessItem, type ToolBlock } from "../../chat/tool-card";
+import { nestedParent, toolEventDetails, toolResultText } from "../../chat/codemode";
 import { Composer } from "../../chat/composer";
 import { promptImage, type ComposerImage } from "../../chat/images";
 import { OptionSheet } from "../../chat/option-sheet";
@@ -254,16 +255,21 @@ export default function ChatScreen() {
           });
         }
       }
+      // A call a `codemode` script made itself is the script card's, not a row of its own — and
+      // each such call ends with an event of its own, which must not cost a reload apiece.
+      const nested = nestedParent(event) !== undefined;
       if (
         event.type === "message_update" ||
         event.type === "tool_execution_start" ||
         event.type === "tool_execution_update" ||
         event.type === "tool_execution_end"
       ) {
-        liveMessageVersion.current += 1;
-        setMessages((current) => applyLiveEngineEvent(current, event));
+        if (!nested) {
+          liveMessageVersion.current += 1;
+          setMessages((current) => applyLiveEngineEvent(current, event));
+        }
       }
-      if (event.type === "queue_delivered" || event.type === "agent_settled" || event.type === "message_end" || event.type === "tool_execution_end") {
+      if (event.type === "queue_delivered" || event.type === "agent_settled" || event.type === "message_end" || (event.type === "tool_execution_end" && !nested)) {
         void reload().catch(() => undefined);
       }
     });
@@ -360,7 +366,7 @@ export default function ChatScreen() {
     setResponding(true);
     try {
       await remote.call("engine:permission-respond", payload);
-      if (typeof payload.id === "string") resolvePendingPermission(payload.id);
+      if (typeof payload.id === "string") resolvePendingPrompt(payload.id);
     } catch (caught) {
       toast.failure(caught, t("chat.respondFailed"));
     } finally {
@@ -575,7 +581,7 @@ export default function ChatScreen() {
         ) : null}
         {prompt ? (
           <View style={[styles.prompt, { paddingBottom: insets.bottom + 8 }]}>
-            <PermissionCard
+            <PromptCard
               key={prompt.id}
               prompt={prompt}
               busy={responding}
@@ -1007,6 +1013,7 @@ function applyLiveEngineEvent(messages: ChatMessage[], event: Record<string, unk
   }
 
   if (type === "tool_execution_start" || type === "tool_execution_update" || type === "tool_execution_end") {
+    if (nestedParent(event)) return messages;
     if (type !== "tool_execution_start" && !messages.some((message) => message.role === "assistant")) return messages;
     const { list, index } = ensureLiveAssistant(messages);
     const current = list[index];
@@ -1014,8 +1021,9 @@ function applyLiveEngineEvent(messages: ChatMessage[], event: Record<string, unk
     if (type !== "tool_execution_start" && !candidate && !current.tools.some((tool) => tool.status === "running" && !tool.name)) return list;
     const id = resolveLiveToolId(current, candidate);
     const name = stringValue(event.toolName) ?? stringValue(event.name);
-    const details = event.details;
-    const result = stringifyToolValue(event.partialResult ?? event.result ?? event.output);
+    // A streaming update carries its structured payload (`codemode`'s call list) inside the partial result.
+    const details = toolEventDetails(event);
+    const result = toolResultText(event.partialResult ?? event.result ?? event.output);
     return upsertLiveTool(list, index, {
       id,
       name,

@@ -55,7 +55,7 @@
   "mobile": {
     "eyebrow": "移动端",
     "title": "把 Agent 带到手机上",
-    "copy": "电脑上的 FastVibe 继续运行 Agent，手机端让你随时查看会话、发送消息和处理审批。",
+    "copy": "电脑上的 FastVibe 继续运行 Agent，手机端让你随时查看会话、发送消息和回答 Agent 的提问。",
     "items": {
       "chat": "查看会话，随时跟进任务",
       "connect": "同一 Wi-Fi 直连，外出扫码连接",

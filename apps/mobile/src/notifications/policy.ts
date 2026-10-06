@@ -1,5 +1,5 @@
 export type MobileNotice = {
-  kind: "done" | "error" | "approval";
+  kind: "done" | "error" | "waiting";
   conversationId: string;
   title?: string;
   key?: string;
@@ -55,7 +55,7 @@ export function mobileNoticeForEvent(
   if (!nonEmptyString(event.id)) return null;
 
   return {
-    kind: "approval",
+    kind: "waiting",
     conversationId,
     key: JSON.stringify([context.serverId, event.id]),
   };

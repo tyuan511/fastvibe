@@ -26,10 +26,9 @@ import { currentVersion, updatesSupported } from "../update/updater";
 const LANGUAGE_NAMES: Record<Exclude<LanguagePreference, "system">, string> = { zh: "简体中文", en: "English" };
 
 /**
- * Settings that belong to this phone. What the agent is allowed to do, which model it
- * runs and the like are the machine's settings and stay in the chat's composer; this
- * page is only the app itself — how it looks, what language it speaks, and which build
- * it is.
+ * Settings that belong to this phone. Which model the agent runs and the like are the
+ * machine's settings and stay in the chat's composer; this page is only the app itself —
+ * how it looks, what language it speaks, and which build it is.
  */
 export default function SettingsScreen() {
   const palette = usePalette();

@@ -254,14 +254,14 @@ export const zh = {
   "models.current": " · 当前",
   "models.reasoning": "推理",
 
-  // permission card
-  "prompt.approve": "需要你批准",
+  // prompt card
+  "prompt.confirm": "需要你确认",
   "prompt.answer": "需要你回答",
   "prompt.fallbackTitle": "需要你处理",
   "prompt.inputPlaceholder": "输入你的回答",
   "prompt.answerPlaceholder": "回答",
-  "prompt.deny": "拒绝",
-  "prompt.allow": "允许",
+  "prompt.no": "否",
+  "prompt.yes": "是",
   "prompt.submit": "提交",
   "prompt.submitCount": "提交 {done}/{total}",
 
@@ -301,6 +301,12 @@ export const zh = {
   "tool.output": "输出",
   "tool.noOutput": "没有输出",
   "tool.args": "参数",
+  "tool.codemode": "运行脚本",
+  "tool.codemodeRunning": "正在运行脚本",
+  "tool.script": "脚本",
+  "tool.calledTools": "调用的工具",
+  "tool.calls": "{count} 次调用",
+  "tool.callsFailed": "{count} 次调用，{failed} 个失败",
   "tool.command": "命令",
   "tool.file": "文件",
   "tool.recentMemory": "最近的记忆",

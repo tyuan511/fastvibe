@@ -17,7 +17,7 @@ export type CatalogConversation = {
   kind?: string;
 };
 
-export type PermissionPrompt = {
+export type BlockingPrompt = {
   id: string;
   conversationId?: string;
   method: string;
@@ -44,7 +44,7 @@ type State = {
   /** Wall-clock start of each current run; shared across chat screen mounts. */
   runningSince: Record<string, number>;
   waiting: Record<string, boolean>;
-  pending: PermissionPrompt[];
+  pending: BlockingPrompt[];
 };
 
 const empty: State = {
@@ -181,7 +181,7 @@ export function watchConversation(id: string): () => void {
   return () => client?.unsubscribe([scope]);
 }
 
-export function resolvePendingPermission(id: string): void {
+export function resolvePendingPrompt(id: string): void {
   const pending = state.pending.filter((item) => item.id !== id);
   const waiting: Record<string, boolean> = {};
   for (const item of pending) if (item.conversationId) waiting[item.conversationId] = true;
@@ -338,7 +338,7 @@ async function refreshCatalog(remote: RemoteClient): Promise<void> {
       runningSince[id] = state.runningSince[id] ?? Date.now();
     }
   }
-  const pending = Array.isArray(pendingEvents) ? pendingEvents.flatMap((event) => parsePermission(event) ?? []) : [];
+  const pending = Array.isArray(pendingEvents) ? pendingEvents.flatMap((event) => parseBlockingPrompt(event) ?? []) : [];
   const waiting: Record<string, boolean> = {};
   for (const item of pending) if (item.conversationId) waiting[item.conversationId] = true;
   setState({ ...state, projects: state.projects, conversations: state.conversations, archivedIds: archivedIdsFrom(settings), running, runningSince, waiting, pending });
@@ -369,7 +369,7 @@ function handlePush(channel: string, payload: unknown): void {
     setState({ ...state, running, runningSince });
   }
   if (event.type === "extension_ui_request") {
-    const prompt = parsePermission(event);
+    const prompt = parseBlockingPrompt(event);
     if (prompt) {
       const pending = state.pending.filter((item) => item.id !== prompt.id).concat(prompt);
       const waiting = { ...state.waiting };
@@ -426,7 +426,7 @@ function parseConversation(value: unknown): CatalogConversation[] {
   ];
 }
 
-function parsePermission(value: unknown): PermissionPrompt | null {
+function parseBlockingPrompt(value: unknown): BlockingPrompt | null {
   if (
     !isRecord(value) ||
     value.type !== "extension_ui_request" ||

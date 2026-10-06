@@ -6,6 +6,7 @@ import {
   ArrowRight01Icon,
   BotIcon,
   ChromeIcon,
+  CodeIcon,
   FileEditIcon,
   FileMinusIcon,
   FilePlusIcon,
@@ -23,6 +24,7 @@ import type { Palette } from "../ui/theme";
 import { DesktopSpinner } from "./desktop-spinner";
 import { ThinkingRow } from "./thinking";
 import { t, useT, type MessageKey } from "../i18n";
+import { codemodeBody, codemodeCalls, codemodeCode, codemodeFailures, codemodeSummary, formatCallDuration, type CodemodeCall } from "./codemode";
 
 /**
  * Mobile keeps each tool call to one compact transcript row until it is tapped.
@@ -44,7 +46,7 @@ export type ToolBlock = {
 type ToolFamily =
   | "read" | "edit" | "write" | "delete" | "search" | "web"
   | "list" | "terminal" | "skill" | "agent" | "todo" | "question"
-  | "mcp" | "browser" | "other";
+  | "mcp" | "codemode" | "browser" | "other";
 
 type ToolSummary = {
   family: ToolFamily;
@@ -70,6 +72,7 @@ const LABELS: Record<ToolFamily, [done: MessageKey, running: MessageKey]> = {
   todo: ["tool.todo", "tool.todoRunning"],
   question: ["tool.question", "tool.questionRunning"],
   mcp: ["tool.mcp", "tool.mcpRunning"],
+  codemode: ["tool.codemode", "tool.codemodeRunning"],
   browser: ["tool.browser", "tool.browserRunning"],
   other: ["tool.other", "tool.otherRunning"],
 };
@@ -88,6 +91,7 @@ const ICONS: Record<ToolFamily, IconSvgElement> = {
   todo: ListChecksIcon,
   question: MessageQuestionIcon,
   mcp: Plug01Icon,
+  codemode: CodeIcon,
   browser: ChromeIcon,
   other: Wrench01Icon,
 };
@@ -178,6 +182,14 @@ export const ToolCard = memo(function ToolCard({ tool, palette, divider = false 
               <Text selectable style={[styles.blockText, { color: palette.text }]}>{detail.input}</Text>
             </View>
           ) : null}
+          {detail.calls && detail.calls.length > 0 ? (
+            <View style={[styles.block, { backgroundColor: palette.field }]}>
+              <Text style={[styles.blockLabel, { color: palette.muted }]}>{t("tool.calledTools")}</Text>
+              {detail.calls.map((call) => (
+                <CallRow key={call.id} call={call} palette={palette} />
+              ))}
+            </View>
+          ) : null}
           {detail.output ? (
             <View style={[styles.block, { backgroundColor: palette.field }]}>
               <Text style={[styles.blockLabel, { color: summary.error ? palette.danger : palette.muted }]}>{summary.error ? t("tool.error") : t("tool.output")}</Text>
@@ -194,14 +206,48 @@ export const ToolCard = memo(function ToolCard({ tool, palette, divider = false 
   );
 });
 
+/** One tool a script ran: whether it worked, what it was called with, how long it took. */
+function CallRow({ call, palette }: { call: CodemodeCall; palette: Palette }): JSX.Element {
+  const duration = formatCallDuration(call.durationMs);
+  const glyph = call.status === "ok" ? "✓" : call.status === "error" ? "✕" : "–";
+  const tint = call.status === "ok" ? palette.success : call.status === "error" ? palette.danger : palette.muted;
+  return (
+    <View style={styles.callRow}>
+      <View style={styles.callHead}>
+        {call.status === "running" ? (
+          <DesktopSpinner size={11} color={palette.accent} />
+        ) : (
+          <Text style={[styles.callGlyph, { color: tint }]}>{glyph}</Text>
+        )}
+        <Text style={[styles.callName, { color: palette.text }]} numberOfLines={1}>{call.name}</Text>
+        <View style={styles.spacer} />
+        {duration ? <Text style={[styles.callTime, { color: palette.muted }]}>{duration}</Text> : null}
+      </View>
+      {call.args && call.args !== "{}" ? (
+        <Text style={[styles.callArgs, { color: palette.muted }]} numberOfLines={1} ellipsizeMode="tail">{call.args}</Text>
+      ) : null}
+      {call.error ? <Text style={[styles.callArgs, { color: palette.danger }]} numberOfLines={2}>{call.error}</Text> : null}
+    </View>
+  );
+}
+
 const OUTPUT_LINES = 40;
 const OUTPUT_CHARS = 4000;
 
 /** What a tapped row shows: the call's input in its most readable form, then the output's tail. */
-function toolDetail(tool: ToolBlock): { inputLabel: string; input: string; output: string } {
+function toolDetail(tool: ToolBlock): { inputLabel: string; input: string; output: string; calls?: CodemodeCall[] } {
   const family = familyOf(tool.name);
   let inputLabel = t("tool.args");
   let input = "";
+  if (family === "codemode") {
+    // The script as written, not the `{ "code": "…\n…" }` it travels as.
+    return {
+      inputLabel: t("tool.script"),
+      input: clip(codemodeBody(codemodeCode(tool.args)), 1600, 24, "head"),
+      output: clip(tool.result ?? "", OUTPUT_CHARS, OUTPUT_LINES, "tail"),
+      calls: codemodeCalls(tool.details),
+    };
+  }
   if (family === "terminal") {
     inputLabel = t("tool.command");
     input = argString(tool.args, COMMAND_KEYS);
@@ -310,6 +356,16 @@ function summarize(tool: ToolBlock): ToolSummary {
       if (roles.length > 1) summary.context = t("tool.tasks", { count: roles.length });
       break;
     }
+    case "codemode": {
+      // The script is the call: the row says what it is for and how many tools it ran.
+      summary.subject = codemodeSummary(codemodeCode(tool.args)) || tool.name;
+      const calls = codemodeCalls(tool.details);
+      if (calls.length > 0) {
+        const failed = codemodeFailures(calls);
+        summary.context = failed > 0 ? t("tool.callsFailed", { count: calls.length, failed }) : t("tool.calls", { count: calls.length });
+      }
+      break;
+    }
     case "browser":
       summary.subject = argString(tool.args, ["url", "text", "selector", "tabId", "key"]) || friendlyName(tool.name.replace(/^browser_/, ""));
       break;
@@ -322,6 +378,7 @@ function summarize(tool: ToolBlock): ToolSummary {
 function familyOf(name: string): ToolFamily {
   const key = name.trim().toLowerCase();
   if (!key) return "other";
+  if (key === "codemode") return "codemode";
   if (key.startsWith("mcp") || key.includes("__")) return "mcp";
   if (key.startsWith("browser_")) return "browser";
   if (/^(read|read_file|readfile|view|cat)$/.test(key)) return "read";
@@ -329,7 +386,7 @@ function familyOf(name: string): ToolFamily {
   if (/^(write|write_file|writefile|create_file|createfile|create)$/.test(key)) return "write";
   if (/^(delete|delete_file|remove|remove_file|rm)$/.test(key)) return "delete";
   if (/^(web_search|websearch)$/.test(key)) return "web";
-  if (/^(grep|search|search_files|searchfiles|ripgrep|rg|fetch|webfetch|conversation_search|memory_search|memory_recent)$/.test(key)) return "search";
+  if (/^(grep|search|search_files|searchfiles|ripgrep|rg|fetch|webfetch|conversation_search|memory_search|memory_recent|tool_search)$/.test(key)) return "search";
   if (/^(find|glob|ls|list|list_dir|listdir|tree|list_files|listfiles)$/.test(key)) return "list";
   if (/^(bash|shell|shell_exec|shellexec|exec|execute|run_command|runcommand|command|terminal|run)$/.test(key)) return "terminal";
   if (key.includes("skill")) return "skill";
@@ -414,4 +471,10 @@ const styles = StyleSheet.create({
   blockLabel: { fontSize: 11, fontWeight: "700", letterSpacing: 0.3 },
   blockText: { fontFamily: "monospace", fontSize: 12, lineHeight: 18 },
   noOutput: { fontSize: 12, paddingHorizontal: 2 },
+  callRow: { gap: 1 },
+  callHead: { flexDirection: "row", alignItems: "center", gap: 6 },
+  callGlyph: { width: 11, textAlign: "center", fontSize: 12, fontWeight: "700" },
+  callName: { flexShrink: 1, fontFamily: "monospace", fontSize: 12.5 },
+  callTime: { flexShrink: 0, fontSize: 11.5 },
+  callArgs: { marginLeft: 17, fontFamily: "monospace", fontSize: 11.5 },
 });

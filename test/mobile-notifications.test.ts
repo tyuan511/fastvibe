@@ -37,12 +37,12 @@ test("activity completed and failed notifications are keyed by server, chat and 
 test("every blocking request notifies", () => {
   for (const method of ["confirm", "select", "input", "editor", "questions"]) {
     const result = notice({ type: "extension_ui_request", conversationId: "c", id: method, method });
-    assert.deepEqual(result, { kind: "approval", conversationId: "c", key: JSON.stringify(["server", method]) });
+    assert.deepEqual(result, { kind: "waiting", conversationId: "c", key: JSON.stringify(["server", method]) });
   }
   assert.equal(notice({ type: "extension_ui_request", conversationId: "c", id: "x", method: "plan_review" }), null, "plan review is gone");
   assert.equal(notice({ type: "extension_ui_request", conversationId: "c", id: "x", method: "notify" }), null);
   assert.deepEqual(notice({ type: "extension_ui_request", conversationId: "c", id: "x", method: "confirm" }), {
-    kind: "approval", conversationId: "c", key: JSON.stringify(["server", "x"]),
+    kind: "waiting", conversationId: "c", key: JSON.stringify(["server", "x"]),
   });
 });
 

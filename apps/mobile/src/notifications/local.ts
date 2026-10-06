@@ -117,10 +117,10 @@ async function presentNotice(notice: MobileNotice, serverId: string): Promise<vo
   if (!serverId) return;
   const connection = currentConnection();
   const conversation = connection.conversations.find((item) => item.id === notice.conversationId);
-  const title = notice.kind === "approval"
+  const title = notice.kind === "waiting"
     ? t("notifications.waitingTitle")
     : notice.title || conversation?.title || t("common.conversation");
-  const body = notice.kind === "approval"
+  const body = notice.kind === "waiting"
     ? t("notifications.waitingBody")
     : notice.kind === "error"
       ? t("notifications.errorBody")

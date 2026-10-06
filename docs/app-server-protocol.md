@@ -361,7 +361,7 @@ settings       stats   imports    extensions  browser  native
 }
 ```
 
-`engine:prompt` 的成功响应表示服务端已接受消息，不表示 Agent 已完成。完成、错误、审批请求和流式内容通过 `engine:event` 推送。停止当前会话：
+`engine:prompt` 的成功响应表示服务端已接受消息，不表示 Agent 已完成。完成、错误、需要你回应的请求（提问、确认）和流式内容通过 `engine:event` 推送。停止当前会话：
 
 ```json
 {
@@ -423,7 +423,7 @@ App Protocol 只规定 envelope；具体方法沿用 FastVibe 的 transport-neut
 | 方法族 | 示例 | 用途 |
 | --- | --- | --- |
 | `conversations:*` | `conversations:list`、`conversations:open` | 项目与会话目录 |
-| `engine:*` | `engine:get-snapshot`、`engine:prompt` | Agent、消息、队列、审批 |
+| `engine:*` | `engine:get-snapshot`、`engine:prompt` | Agent、消息、队列、待回应的请求 |
 | `workspace:*` | `workspace:read-dir`、`workspace:git-diff` | 项目文件与 Git |
 | `providers:*` | `providers:list`、`providers:refresh` | 已保存的供应商和模型 |
 | `settings:*` | `settings:get`、`settings:set` | 应用偏好 |

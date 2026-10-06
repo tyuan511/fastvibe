@@ -262,14 +262,14 @@ export const en: Record<MessageKey, string> & Partial<Record<`${MessageKey}_one`
   "models.current": " · current",
   "models.reasoning": "Reasoning",
 
-  // permission card
-  "prompt.approve": "Needs your approval",
+  // prompt card
+  "prompt.confirm": "Confirmation needed",
   "prompt.answer": "Needs your answer",
   "prompt.fallbackTitle": "Needs your attention",
   "prompt.inputPlaceholder": "Type your answer",
   "prompt.answerPlaceholder": "Answer",
-  "prompt.deny": "Deny",
-  "prompt.allow": "Allow",
+  "prompt.no": "No",
+  "prompt.yes": "Yes",
   "prompt.submit": "Submit",
   "prompt.submitCount": "Submit {done}/{total}",
 
@@ -309,6 +309,13 @@ export const en: Record<MessageKey, string> & Partial<Record<`${MessageKey}_one`
   "tool.output": "Output",
   "tool.noOutput": "No output",
   "tool.args": "Arguments",
+  "tool.codemode": "Script",
+  "tool.codemodeRunning": "Running script",
+  "tool.script": "Script",
+  "tool.calledTools": "Tools called",
+  "tool.calls": "{count} calls",
+  "tool.calls_one": "1 call",
+  "tool.callsFailed": "{count} calls, {failed} failed",
   "tool.command": "Command",
   "tool.file": "File",
   "tool.recentMemory": "Recent memories",
