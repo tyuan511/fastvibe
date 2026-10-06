@@ -51,7 +51,7 @@ const MARKS = {
       <path d="M13.827 3.52h3.603L24 20h-3.603l-6.57-16.48zm-7.258 0h3.767L16.906 20h-3.674l-1.343-3.461H5.017l-1.344 3.46H0L6.57 3.522zm4.132 9.959L8.453 7.687 6.205 13.48H10.7z" />
     </>
   ),
-  /** LobeHub `Azure` — azure-openai-responses. */
+  /** LobeHub `Azure` — the `azure` provider. */
   azure: (
     <>
       <path d="M18.397 15.296H7.4a.51.51 0 00-.347.882l7.066 6.595c.206.192.477.298.758.298h6.226l-2.706-7.775z" fillOpacity=".75" />
@@ -240,7 +240,7 @@ const PROVIDER_MARKS: Record<string, keyof typeof MARKS> = {
   "amazon-bedrock": "bedrock",
   "ant-ling": "antGroup",
   "anthropic": "anthropic",
-  "azure-openai-responses": "azure",
+  "azure": "azure",
   "baseten": "baseten",
   "cerebras": "cerebras",
   "cloudflare-ai-gateway": "cloudflare",
@@ -285,7 +285,7 @@ const PROVIDER_MARKS: Record<string, keyof typeof MARKS> = {
  */
 const PROVIDER_COLOR_ASSETS: Record<string, string> = {
   "ant-ling": antGroupColorIcon,
-  "azure-openai-responses": azureColorIcon,
+  "azure": azureColorIcon,
   "amazon-bedrock": bedrockColorIcon,
   "cerebras": cerebrasColorIcon,
   "cloudflare-ai-gateway": cloudflareColorIcon,
@@ -312,7 +312,7 @@ const PROVIDER_COLORS: Record<string, string> = {
   "amazon-bedrock": "#FF9900",
   "ant-ling": "#1677FF",
   "anthropic": "#D97757",
-  "azure-openai-responses": "#0078D4",
+  "azure": "#0078D4",
   "baseten": "#5B5BD6",
   "cerebras": "#4C6FFF",
   "cloudflare-ai-gateway": "#F38020",

@@ -4121,11 +4121,11 @@ export class PiProcessManager {
   /**
    * Force the SDK to write the session file.
    *
-   * The SDK defers the first write until an assistant message exists — a deliberate
-   * choice so a conversation with no reply leaves no file, and the reason a restart
-   * mid-run otherwise loses the prompt that was just sent. Writing the current
-   * entries and flipping `flushed` keeps the SDK's own persistence a pure append, so
-   * the next assistant message does not rewrite (and duplicate) the header.
+   * The SDK defers the first write until the transcript holds a user or assistant
+   * message (it creates the file exclusively at that point), so a conversation with
+   * nothing sent leaves no file. Writing the current entries and flipping `flushed`
+   * keeps the SDK's own persistence a pure append, so the next message neither
+   * rewrites the header nor hits an already-existing file.
    *
    * Once `flushed` is set there is nothing to write: the SDK appends every entry the
    * moment it is created. This used to rewrite the whole file from memory anyway, on
