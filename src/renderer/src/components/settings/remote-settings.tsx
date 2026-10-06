@@ -7,8 +7,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cleanError } from "@/lib/ipc-error";
-import type { RemoteDeviceInfo, RemoteServerState, RemoteTunnelProvider } from "@shared/ipc";
+import type { RemoteDeviceInfo, RemoteLanAddressFamily, RemoteServerState, RemoteTunnelProvider } from "@shared/ipc";
+import { formatRemoteAddress } from "@shared/remote-address";
 import { AddressActions } from "./address-actions";
 import { SettingsGroup, SettingsRow } from "./settings-group";
 import { RemoteTunnel } from "./remote-tunnel";
@@ -118,6 +120,11 @@ export function RemoteSettings(): JSX.Element {
     if (next) setState(next);
   }
 
+  async function setLanAddressFamily(family: RemoteLanAddressFamily): Promise<void> {
+    const next = await run(() => window.fastvibe.remote.setLanAccess(state?.lanAccess === true, family));
+    if (next) setState(next);
+  }
+
   async function revoke(id: string): Promise<void> {
     const next = await run(() => window.fastvibe.remote.revokeDevice(id));
     if (next) setDevices(next);
@@ -131,7 +138,8 @@ export function RemoteSettings(): JSX.Element {
     }
   }
 
-  const address = state?.port ? `${state.host}:${state.port}` : null;
+  const address = state?.port ? formatRemoteAddress(state.host, state.port) : null;
+  const addressUrl = state?.port ? formatRemoteAddress(state.host, state.port, true) : null;
 
   return (
     <div className="space-y-4">
@@ -206,7 +214,7 @@ export function RemoteSettings(): JSX.Element {
                      * 局域网访问 is on; with it off the server reports loopback instead,
                      * and `AddressActions` drops the code for it by itself.
                      */}
-                    <AddressActions value={`http://${address}`} />
+                    <AddressActions value={`http://${addressUrl}`} />
                   </span>
                 ) : (
                   t("remote.enableDesc")
@@ -225,6 +233,29 @@ export function RemoteSettings(): JSX.Element {
                 <Switch checked={state.lanAccess} disabled={busy} onCheckedChange={(v) => void toggleLanAccess(v)} />
               }
             />
+            {state.lanAccess && state.lanAddresses.ipv4 && state.lanAddresses.ipv6 ? (
+              <SettingsRow
+                title={t("remote.lanAddressFamily")}
+                description={t("remote.lanAddressFamilyDesc")}
+                control={
+                  <Select
+                    value={state.lanAddressFamily}
+                    disabled={busy}
+                    onValueChange={(value) => {
+                      if (value === "ipv4" || value === "ipv6") void setLanAddressFamily(value);
+                    }}
+                  >
+                    <SelectTrigger size="sm" className="w-28">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="ipv4">IPv4</SelectItem>
+                      <SelectItem value="ipv6">IPv6</SelectItem>
+                    </SelectContent>
+                  </Select>
+                }
+              />
+            ) : null}
             {state.running ? (
               <SettingsRow
                 title={t("remote.clients")}

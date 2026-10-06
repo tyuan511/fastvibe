@@ -6,6 +6,8 @@
  * unless an existing field changes meaning.
  */
 
+import { randomUUID } from "./random.ts";
+
 export const APP_PROTOCOL = "fastvibe.app";
 
 /** Exact protocol version. Peers that do not speak 1 are incompatible. */
@@ -45,14 +47,8 @@ export function isValidServerInstanceId(value: unknown): value is string {
   return typeof value === "string" && SERVER_INSTANCE_ID_PATTERN.test(value);
 }
 
-export function newServerInstanceId(random: () => string = defaultRandom): string {
+export function newServerInstanceId(random: () => string = randomUUID): string {
   return `srv_${random().replace(/[^A-Za-z0-9]/g, "").slice(0, 20)}`;
-}
-
-function defaultRandom(): string {
-  const crypto = globalThis.crypto;
-  if (crypto && typeof crypto.randomUUID === "function") return crypto.randomUUID().replace(/-/g, "");
-  return Math.random().toString(36).slice(2).padEnd(20, "0");
 }
 
 export type AppServerIdentity = {

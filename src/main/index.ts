@@ -50,12 +50,12 @@ import { TerminalSessions } from "./engine/terminal-sessions";
 import { SshManager, openSshAppTransport } from "./ssh/ssh-manager";
 import { readAgentRuntimeSource, type AgentRuntimeSource } from "./ssh/agent-runtime";
 import { RemoteConnectionManager } from "./remote/connection-manager";
-import { RemoteGateway, shouldSyncAgentConfig } from "./remote/gateway";
+import { RemoteGateway } from "./remote/gateway";
 import { createAppServer, initAppServer, getAppServer } from "./app-server/runtime";
 import { loadOrCreateServerIdentity } from "./server/identity";
 import { APP_CAPABILITIES, conversationScope } from "@shared/app-protocol";
 import { wireElectronAppTransport } from "./transport/electron";
-import type { RemoteHostProfile, RemoteHostConnectionState, RemoteTransferProgress, SshErrorCode } from "@shared/remote-host";
+import type { RemoteHostConnectionActivity, RemoteHostProfile, RemoteHostConnectionState, RemoteTransferProgress, SshErrorCode } from "@shared/remote-host";
 import { stopBrowserCdp } from "./engine/browser-cdp";
 import { attachBrowserRenderer, guardGuestPopups, installBrowserGlobal, respondBrowserRequest } from "./pi/browser-bridge";
 import {
@@ -156,7 +156,17 @@ function publishSshProgress(hostId: string, progress: RemoteTransferProgress | n
   const current = sshUiStates.get(hostId) ?? { hostId, status: "connecting" as const };
   if (current.status !== "connecting") return;
   const { progress: _previous, ...rest } = current;
-  const next: RemoteHostConnectionState = progress ? { ...rest, progress } : rest;
+  const next: RemoteHostConnectionState = progress ? { ...rest, activity: progress.phase, progress } : rest;
+  sshUiStates.set(hostId, next);
+  broadcast(Ipc.sshState, next);
+  broadcast(Ipc.sshStates, [...sshUiStates.values()]);
+}
+
+function publishSshActivity(hostId: string, activity: RemoteHostConnectionActivity): void {
+  const current = sshUiStates.get(hostId) ?? { hostId, status: "connecting" as const };
+  if (current.status !== "connecting") return;
+  const { progress: _previous, ...rest } = current;
+  const next: RemoteHostConnectionState = { ...rest, activity };
   sshUiStates.set(hostId, next);
   broadcast(Ipc.sshState, next);
   broadcast(Ipc.sshStates, [...sshUiStates.values()]);
@@ -210,6 +220,7 @@ const remoteConnections = new RemoteConnectionManager({
     profile,
     onOutput: (message) => publishSshOutput(profile.id, message),
     onProgress: (progress) => publishSshProgress(profile.id, progress),
+    onActivity: (activity) => publishSshActivity(profile.id, activity),
     signal,
     agentRuntime: {
       ...agentRuntime,
@@ -330,6 +341,24 @@ function registerSshIpc(): void {
     // Disconnect first: a live tunnel to an Agent being killed would only reconnect it.
     await remoteConnections.disconnect(hostId);
     return sshManager.stopAgent(hostId);
+  });
+  handle(Ipc.sshSetPhoneAccess, async (payload: { hostId?: string; enabled?: boolean; password?: string; port?: number; publicUrl?: string }) => {
+    const hostId = typeof payload?.hostId === "string" ? payload.hostId.trim() : "";
+    if (!hostId) throw new Error("SSH 主机无效");
+    // Disconnect first: the Agent is about to be restarted (or stopped), and a live tunnel to
+    // the old one would only reconnect to nothing.
+    await remoteConnections.disconnect(hostId);
+    if (payload.enabled !== true) return sshManager.disablePhoneAccess(hostId);
+    return sshManager.enablePhoneAccess(hostId, {
+      port: Number(payload.port),
+      ...(typeof payload.password === "string" && payload.password ? { password: payload.password } : {}),
+      ...(typeof payload.publicUrl === "string" ? { publicUrl: payload.publicUrl } : {}),
+    }, (text) => broadcast(Ipc.sshAgentProgress, { hostId, text }));
+  });
+  handle(Ipc.sshStartAgent, async (payload: { hostId?: string }) => {
+    const hostId = typeof payload?.hostId === "string" ? payload.hostId.trim() : "";
+    if (!hostId) throw new Error("SSH 主机无效");
+    return sshManager.startAgent(hostId, (text) => broadcast(Ipc.sshAgentProgress, { hostId, text }));
   });
   handle(Ipc.sshPickIdentityFile, async () => {
     const result = await dialog.showOpenDialog({
@@ -548,14 +577,10 @@ app.whenReady().then(async () => {
         window: (context.window as BrowserWindow | null) ?? null,
         origin: context.origin,
       };
-      // A remote WebSocket is already at this App Server. It must never be routed back
-      // out through this desktop's gateway merely because its payload contains a local
-      // conversation id. The gateway is only for Electron calls selecting a binding.
-      if (context.kind === "remote") {
-        const result = dispatch(method, payload, caller);
-        if (shouldSyncAgentConfig(method)) return result.finally(() => void gateway.syncConfiguration());
-        return result;
-      }
+      // Local ids stay on this desktop; namespaced ids are routed by the gateway to the
+      // SSH-bound Agent that owns them. A phone therefore uses the same project bindings
+      // as the desktop through this App Server, and the desktop remains the required
+      // relay between the phone and its existing SSH tunnel.
       return gateway.dispatch(method, payload, caller);
     },
   });

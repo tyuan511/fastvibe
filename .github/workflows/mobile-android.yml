@@ -1,27 +1,56 @@
 name: Mobile Android APK
 
+# A release is built on main, not on its tag. Actions caches are scoped by ref: a run
+# can restore what its own ref or the default branch saved, and nothing else. A build
+# on the tag therefore started cold every time (0 restored, 0 saved — 543 of 617 Gradle
+# tasks executed) and wrote a cache no later tag could read. So pushing `app-v*` only
+# hands the tag to a workflow_dispatch run on main, which reads and writes main's
+# Gradle and pnpm caches and checks out the tag's commit to build.
 on:
   push:
     tags:
       - "app-v*"
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "app-v* tag to build and publish (empty: build main, publish nothing)"
+        required: false
+        default: ""
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: mobile-android-${{ github.ref }}
+  group: mobile-android-${{ inputs.tag || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  dispatch:
+    name: Hand the tag to a build on main
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run mobile-android.yml --repo "$GITHUB_REPOSITORY" --ref main -f tag="$GITHUB_REF_NAME"
+
   build:
-    name: Build Android APK
+    name: Build Android APK ${{ inputs.tag }}
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      # The tag being released, or empty for a plain build of main.
+      RELEASE_TAG: ${{ inputs.tag }}
 
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
@@ -50,29 +79,147 @@ jobs:
       - name: Typecheck mobile app
         run: pnpm --filter @fastvibe/mobile typecheck
 
+      - name: Verify app tag version
+        if: startsWith(inputs.tag, 'app-v')
+        run: |
+          node -e "const fs=require('fs');const v=JSON.parse(fs.readFileSync('apps/mobile/app.json','utf8')).expo.version;if(process.env.RELEASE_TAG !== 'app-v'+v) process.exit(1)"
+
       # The native project is generated only inside CI. Keep the Expo project managed in
       # the repository and do not commit android/ or ios/ directories.
       - name: Generate Android project
         working-directory: apps/mobile
         run: pnpm exec expo prebuild --platform android --clean --no-install --non-interactive
 
-      # The Android project names its own `debug` build type for signing; release builds
-      # are signed with the debug keystore Expo generates, which is why the APK below
-      # sideloads but cannot be published to a store.
-      - name: Build release APK
-        working-directory: apps/mobile/android
-        run: ./gradlew assembleRelease --no-daemon --stacktrace
+      # setup-gradle keeps its wrapper handling, but not its cache. Its basic provider has
+      # no restore keys and hashes every `*.gradle` file for the key — including
+      # android/app/build.gradle, where prebuild writes the versionCode. So every release
+      # missed the cache the previous one saved, by construction.
+      #
+      # The key here follows the lockfile instead, and a miss falls back to the newest
+      # earlier entry: after a dependency bump most modules' outputs are still in the
+      # Gradle build cache (`--build-cache` below). A hit saves nothing, so main keeps
+      # one entry per lockfile. Only main can save one that a later run can read, which
+      # is why a release is dispatched onto main (see the top of this file).
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-disabled: true
 
-      - name: Name APK
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Decode Android release keystore
+        env:
+          FASTVIBE_ANDROID_KEYSTORE_BASE64: ${{ secrets.FASTVIBE_ANDROID_KEYSTORE_BASE64 }}
         run: |
-          cp apps/mobile/android/app/build/outputs/apk/release/app-release.apk \
-            "FastVibe-${GITHUB_REF_NAME}.apk"
-          ls -lh "FastVibe-${GITHUB_REF_NAME}.apk"
+          set -euo pipefail
+          test -n "$FASTVIBE_ANDROID_KEYSTORE_BASE64"
+          printf '%s' "$FASTVIBE_ANDROID_KEYSTORE_BASE64" \
+            | base64 --decode > "$RUNNER_TEMP/fastvibe-release.keystore"
+          chmod 600 "$RUNNER_TEMP/fastvibe-release.keystore"
+
+      # A PKCS12 keystore (keytool's default) keys its entry with the store password,
+      # whatever -keypass said, so a separate key password fails at packageRelease after
+      # fifteen minutes of compiling. Find out up front which secret actually unlocks the
+      # key, with the same KeyStore.getKey call the Android Gradle plugin makes. Only the
+      # choice leaves this step; the passwords stay in the secrets.
+      - name: Resolve release key password
+        id: signing
+        env:
+          FASTVIBE_ANDROID_STORE_PASSWORD: ${{ secrets.FASTVIBE_ANDROID_STORE_PASSWORD }}
+          FASTVIBE_ANDROID_KEY_ALIAS: ${{ secrets.FASTVIBE_ANDROID_KEY_ALIAS }}
+          FASTVIBE_ANDROID_KEY_PASSWORD: ${{ secrets.FASTVIBE_ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          source="$(java .github/scripts/AndroidKeyPassword.java \
+            "$RUNNER_TEMP/fastvibe-release.keystore" \
+            FASTVIBE_ANDROID_KEY_ALIAS FASTVIBE_ANDROID_STORE_PASSWORD \
+            FASTVIBE_ANDROID_KEY_PASSWORD FASTVIBE_ANDROID_STORE_PASSWORD)"
+          if [ "$source" = FASTVIBE_ANDROID_STORE_PASSWORD ]; then
+            echo "::notice::The release key is unlocked by the store password (PKCS12 keystore)."
+            echo "key-password=store" >> "$GITHUB_OUTPUT"
+          else
+            echo "key-password=key" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The config plugin wires these CI-only environment variables into the generated
+      # release signing config. The key never enters the repository or the APK artifact.
+      - name: Build signed release APK
+        working-directory: apps/mobile/android
+        env:
+          FASTVIBE_ANDROID_STORE_FILE: ${{ runner.temp }}/fastvibe-release.keystore
+          FASTVIBE_ANDROID_STORE_PASSWORD: ${{ secrets.FASTVIBE_ANDROID_STORE_PASSWORD }}
+          FASTVIBE_ANDROID_KEY_ALIAS: ${{ secrets.FASTVIBE_ANDROID_KEY_ALIAS }}
+          FASTVIBE_ANDROID_KEY_PASSWORD: ${{ steps.signing.outputs.key-password == 'store' && secrets.FASTVIBE_ANDROID_STORE_PASSWORD || secrets.FASTVIBE_ANDROID_KEY_PASSWORD }}
+        # arm64-v8a only. The template builds every C++ module (worklets, reanimated,
+        # screens, expo-modules-core, gesture-handler) for four ABIs, and that was most of
+        # a 24-minute build: x86/x86_64 exist only for emulators, and armeabi-v7a is
+        # 32-bit Android, which current phones do not run.
+        #
+        # The template's 2 GiB heap and 512 MiB metaspace ran out: the daemon expired
+        # mid-build "after running out of JVM Metaspace", and R8 needs the heap. A -D on
+        # the command line outranks the generated gradle.properties.
+        #
+        # lintVitalRelease is skipped: it analyses every module for a report nobody reads
+        # here, on every release.
+        run: >-
+          ./gradlew assembleRelease --build-cache -PreactNativeArchitectures=arm64-v8a
+          -x lintVitalRelease
+          "-Dorg.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8"
+          --stacktrace
+
+      # Stop the daemon before the cache step packs ~/.gradle, so it is not archiving
+      # files the daemon still holds open.
+      - name: Stop Gradle daemon
+        if: always() && hashFiles('apps/mobile/android/gradlew') != ''
+        working-directory: apps/mobile/android
+        run: ./gradlew --stop
+
+      - name: Name and verify APK
+        run: |
+          set -euo pipefail
+          apk="FastVibe-${RELEASE_TAG:-main-${GITHUB_SHA::7}}.apk"
+          echo "APK=$apk" >> "$GITHUB_ENV"
+          cp apps/mobile/android/app/build/outputs/apk/release/app-release.apk "$apk"
+          apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)"
+          test -n "$apksigner"
+          "$apksigner" verify --verbose --print-certs "$apk"
+          sha256sum "$apk" > "$apk.sha256"
+          ls -lh "$apk" "$apk.sha256"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: FastVibe-${{ github.ref_name }}-android
-          path: FastVibe-${{ github.ref_name }}.apk
+          name: ${{ env.APK }}
+          path: |
+            ${{ env.APK }}
+            ${{ env.APK }}.sha256
           if-no-files-found: error
           retention-days: 30
+
+      - name: Publish GitHub Release
+        if: startsWith(inputs.tag, 'app-v')
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ inputs.tag }}
+          name: FastVibe Mobile ${{ inputs.tag }}
+          body: |
+            Android APK for direct download. This build is signed with FastVibe's release key.
+
+            The SHA-256 checksum is included as `${{ env.APK }}.sha256`.
+          draft: false
+          prerelease: false
+          make_latest: false
+          fail_on_unmatched_files: true
+          files: |
+            ${{ env.APK }}
+            ${{ env.APK }}.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -2,21 +2,19 @@
   "expo": {
     "name": "FastVibe",
     "slug": "fastvibe-mobile",
-    "version": "0.1.0",
+    "version": "0.3.6",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "splash": {
-      "image": "./assets/splash-icon.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#F7F9FC"
-    },
     "scheme": "fastvibe",
     "userInterfaceStyle": "automatic",
     "ios": {
+      "icon": "./assets/ios-icon.png",
       "supportsTablet": true,
       "bundleIdentifier": "dev.fastvibe.mobile",
       "infoPlist": {
-        "NSLocalNetworkUsageDescription": "用于连接同一局域网中的 FastVibe",
+        "CFBundleAllowMixedLocalizations": true,
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSLocalNetworkUsageDescription": "Used to connect to FastVibe on the same local network.",
         "NSAppTransportSecurity": {
           "NSAllowsLocalNetworking": true
         }
@@ -24,14 +22,16 @@
     },
     "android": {
       "package": "dev.fastvibe.mobile",
-      "usesCleartextTraffic": true,
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.REQUEST_INSTALL_PACKAGES"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png",
@@ -39,15 +39,64 @@
     },
     "plugins": [
       "expo-router",
+      "./plugins/with-android-release-signing",
       "expo-status-bar",
-      "expo-secure-store",
+      [
+        "expo-secure-store",
+        {
+          "faceIDPermission": false
+        }
+      ],
+      "./plugins/without-push-entitlement",
+      [
+        "expo-notifications",
+        {
+          "color": "#4f46e5",
+          "defaultChannel": "fastvibe-activity"
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Used to choose photos to send to your FastVibe.",
+          "microphonePermission": false
+        }
+      ],
       [
         "expo-camera",
         {
-          "cameraPermission": "用于扫描 FastVibe 的连接二维码"
+          "cameraPermission": "Used to scan the QR code that connects the app to your FastVibe."
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 160,
+          "resizeMode": "contain",
+          "backgroundColor": "#ffffff",
+          "dark": {
+            "image": "./assets/splash-icon.png",
+            "backgroundColor": "#000000"
+          }
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true,
+            "enableMinifyInReleaseBuilds": true,
+            "enableShrinkResourcesInReleaseBuilds": true,
+            "useLegacyPackaging": true
+          }
         }
       ]
     ],
+    "locales": {
+      "en": "./locales/en.json",
+      "zh-Hans": "./locales/zh-Hans.json"
+    },
     "experiments": {
       "typedRoutes": true
     }

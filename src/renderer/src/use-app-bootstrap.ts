@@ -6,6 +6,7 @@ import { engine, getStatus, onConversationReady, onEvent, onStatus } from "@/lib
 import { createConversationRefresh } from "@/lib/conversation-refresh";
 import { conversationIdFromHash, conversationPath } from "@/lib/routes";
 import { resolvePath } from "@/lib/workspace-path";
+import { IS_REMOTE } from "@/lib/platform";
 import { isRemoteRef, shouldFollowCatalogActive } from "@/lib/remote-project";
 import { useSessionStore, working } from "@/stores/session";
 import { useSidePaneStore } from "@/stores/side-pane";
@@ -61,7 +62,14 @@ export function useAppBootstrap(args: AppBootstrapArgs): void {
       .catch(() => undefined);
     void window.fastvibe.conversations.list().then((snapshot) => {
       applyList(snapshot);
-      const pending = conversationIdFromHash() ?? snapshot.activeId;
+      // A browser client reloads on every dropped socket, and its URL still names the
+      // chat it was on — possibly one it was about to leave when the socket went. The
+      // engine's active id is shared with every desktop window, so opening that stale
+      // id here is not restoring a view, it is switching everybody back to it. Follow
+      // the engine instead; the URL is only the fallback when nothing is active.
+      const pending = IS_REMOTE
+        ? snapshot.activeId ?? conversationIdFromHash()
+        : conversationIdFromHash() ?? snapshot.activeId;
       if (
         pending &&
         useSessionStore.getState().status.state === "ready" &&

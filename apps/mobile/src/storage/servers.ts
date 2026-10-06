@@ -3,6 +3,7 @@ import * as SecureStore from "expo-secure-store";
 import type { AddressKind } from "../protocol/address";
 
 const LIST_KEY = "fastvibe.servers.v1";
+let mutationQueue: Promise<unknown> = Promise.resolve();
 
 export type SavedServer = {
   id: string;
@@ -15,15 +16,7 @@ export type SavedServer = {
 };
 
 export async function loadServers(): Promise<SavedServer[]> {
-  const raw = await AsyncStorage.getItem(LIST_KEY);
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(isServer).sort((a, b) => (b.lastConnectedAt ?? b.createdAt) - (a.lastConnectedAt ?? a.createdAt));
-  } catch {
-    return [];
-  }
+  return readServers();
 }
 
 export async function saveServers(servers: SavedServer[]): Promise<void> {
@@ -31,28 +24,34 @@ export async function saveServers(servers: SavedServer[]): Promise<void> {
 }
 
 /** Same origin updates the existing row, so a tunnel and its LAN address stay two devices. */
-export async function upsertServer(server: SavedServer): Promise<SavedServer> {
-  const servers = await loadServers();
-  const existing = servers.find((item) => item.origin === server.origin);
-  const saved: SavedServer = existing
-    ? { ...server, id: existing.id, createdAt: existing.createdAt }
-    : server;
-  const next = existing ? servers.map((item) => (item.id === existing.id ? saved : item)) : [saved, ...servers];
-  await saveServers(next);
-  return saved;
+export function upsertServer(server: SavedServer): Promise<SavedServer> {
+  return enqueueMutation(async () => {
+    const servers = await readServers();
+    const existing = servers.find((item) => item.origin === server.origin);
+    const saved: SavedServer = existing
+      ? { ...server, id: existing.id, createdAt: existing.createdAt }
+      : server;
+    const next = existing ? servers.map((item) => (item.id === existing.id ? saved : item)) : [saved, ...servers];
+    await saveServers(next);
+    return saved;
+  });
 }
 
-export async function patchServer(id: string, patch: Partial<SavedServer>): Promise<SavedServer[]> {
-  const servers = await loadServers();
-  await saveServers(servers.map((item) => (item.id === id ? { ...item, ...patch, id: item.id } : item)));
-  return loadServers();
+export function patchServer(id: string, patch: Partial<SavedServer>): Promise<SavedServer[]> {
+  return enqueueMutation(async () => {
+    const servers = await readServers();
+    await saveServers(servers.map((item) => (item.id === id ? { ...item, ...patch, id: item.id } : item)));
+    return readServers();
+  });
 }
 
-export async function removeServer(id: string): Promise<SavedServer[]> {
-  const servers = await loadServers();
-  await saveServers(servers.filter((item) => item.id !== id));
-  await deleteToken(id);
-  return loadServers();
+export function removeServer(id: string): Promise<SavedServer[]> {
+  return enqueueMutation(async () => {
+    const servers = await readServers();
+    await saveServers(servers.filter((item) => item.id !== id));
+    await deleteToken(id);
+    return readServers();
+  });
 }
 
 export function tokenKey(id: string): string {
@@ -69,6 +68,24 @@ export async function writeToken(id: string, token: string): Promise<void> {
 
 export async function deleteToken(id: string): Promise<void> {
   await SecureStore.deleteItemAsync(tokenKey(id)).catch(() => undefined);
+}
+
+async function readServers(): Promise<SavedServer[]> {
+  const raw = await AsyncStorage.getItem(LIST_KEY);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(isServer).sort((a, b) => (b.lastConnectedAt ?? b.createdAt) - (a.lastConnectedAt ?? a.createdAt));
+  } catch {
+    return [];
+  }
+}
+
+function enqueueMutation<T>(operation: () => Promise<T>): Promise<T> {
+  const next = mutationQueue.then(operation, operation);
+  mutationQueue = next.then(() => undefined, () => undefined);
+  return next;
 }
 
 function isServer(value: unknown): value is SavedServer {

@@ -219,6 +219,44 @@ test("startup retains server identity checks before fetching a catalog", async (
   assert.deepEqual(connections.calls, []);
 });
 
+test("remote queue calls route by conversation and scope queue results", async () => {
+  const connections = fakeConnections({
+    servers: [{ connectionId: "host-a", serverInstanceId: "srv_alpha", capabilities: ["engine"] }],
+    results: {
+      [Ipc.engineQueueAdd]: {
+        conversationId: "chat-1",
+        revision: 4,
+        pause: null,
+        items: [{ id: "queue-1", conversationId: "chat-1", text: "继续", behavior: "followUp" }],
+      },
+      [Ipc.engineQueueCancel]: null,
+    },
+  });
+  const { instance } = gateway({ connections });
+  const conversationId = encodeRemoteConversationId("srv_alpha", "chat-1");
+  const added = await instance.dispatch(Ipc.engineQueueAdd, {
+    conversationId,
+    text: "继续",
+    message: "继续",
+    behavior: "followUp",
+  }, {});
+  assert.deepEqual(added, {
+    conversationId,
+    revision: 4,
+    pause: null,
+    items: [{ id: "queue-1", conversationId, text: "继续", behavior: "followUp" }],
+  });
+  const cancelled = await instance.dispatch(Ipc.engineQueueCancel, { id: "queue-1", conversationId }, {});
+  assert.equal(cancelled, null);
+  assert.deepEqual(connections.calls.map((call) => ({ method: call.method, payload: call.payload })), [
+    {
+      method: Ipc.engineQueueAdd,
+      payload: { conversationId: "chat-1", text: "继续", message: "继续", behavior: "followUp" },
+    },
+    { method: Ipc.engineQueueCancel, payload: { id: "queue-1", conversationId: "chat-1" } },
+  ]);
+});
+
 test("remote turn refreshes never read the host's local active conversation", async () => {
   const connections = fakeConnections({
     servers: [{ connectionId: "host-a", serverInstanceId: "srv_alpha", capabilities: ["engine"] }],
@@ -238,6 +276,35 @@ test("remote turn refreshes never read the host's local active conversation", as
   assert.deepEqual(messages, [{ id: "remote-message", role: "assistant", text: "remote reply" }]);
   assert.deepEqual(state, { conversationId, isStreaming: false });
   assert.deepEqual(stats, { cost: 0.12 });
+});
+
+test("global running and pending snapshots include bound servers", async () => {
+  const file = bindingsFile();
+  saveBinding(file, binding());
+  const connections = fakeConnections({
+    servers: [{ connectionId: "host-a", serverInstanceId: "srv_alpha", capabilities: ["engine"] }],
+    results: {
+      [Ipc.engineGetRunning]: ["chat-remote"],
+      [Ipc.engineGetPendingUi]: [{ type: "extension_ui_request", id: "prompt-1", conversationId: "chat-remote" }],
+    },
+  });
+  const { instance } = gateway({
+    file,
+    connections,
+    localDispatch: async (method) => method === Ipc.engineGetRunning
+      ? ["chat-local"]
+      : method === Ipc.engineGetPendingUi
+        ? [{ type: "extension_ui_request", id: "prompt-local", conversationId: "chat-local" }]
+        : localSnap(),
+  });
+
+  assert.deepEqual(await instance.dispatch(Ipc.engineGetRunning, undefined, {}), [
+    "chat-local", "remote:srv_alpha:chat-remote",
+  ]);
+  assert.deepEqual(await instance.dispatch(Ipc.engineGetPendingUi, undefined, {}), [
+    { type: "extension_ui_request", id: "prompt-local", conversationId: "chat-local" },
+    { type: "extension_ui_request", id: "remote:srv_alpha:prompt-1", conversationId: "remote:srv_alpha:chat-remote" },
+  ]);
 });
 
 test("all session-state replies restore the remote namespace, while branch messages stay intact", async () => {
@@ -458,6 +525,12 @@ test("nested snapshot ids are namespaced; message ids are left alone", async () 
         conversationId: "c1",
         messages: [{ id: "msg-keep", role: "assistant", text: "hi" }],
         running: true,
+        queue: {
+          conversationId: "c1",
+          revision: 2,
+          pause: null,
+          items: [{ id: "queue-1", conversationId: "c1", text: "继续", behavior: "followUp" }],
+        },
         pendingUi: [{ type: "extension_ui_request", id: "prompt-1", conversationId: "c1", method: "confirm" }],
         turnEvents: [{ type: "notice", conversationId: "c1", text: "wait" }],
         overflowed: false,
@@ -470,6 +543,12 @@ test("nested snapshot ids are namespaced; message ids are left alone", async () 
         conversation: { id: "c1", title: "远程", cwd: "/home/dev/app", project: "/home/dev/app", createdAt: 1, updatedAt: 1 },
         messages: [{ id: "msg-keep", role: "user", text: "go" }],
         state: { conversationId: "c1", cwd: "/home/dev/app", isStreaming: false },
+        queue: {
+          conversationId: "c1",
+          revision: 3,
+          pause: "stopped",
+          items: [{ id: "queue-2", conversationId: "c1", text: "稍后继续", behavior: "steer" }],
+        },
         status: { state: "ready" },
       },
       [Ipc.engineGetState]: { conversationId: "c1", cwd: "/home/dev/app", isStreaming: false },
@@ -486,6 +565,9 @@ test("nested snapshot ids are namespaced; message ids are left alone", async () 
   const snapshot = await instance.dispatch(Ipc.engineGetSnapshot, { conversationId: id }, {}) as Record<string, unknown>;
   assert.equal(snapshot.conversationId, id);
   assert.equal((snapshot.messages as Array<{ id: string }>)[0]!.id, "msg-keep");
+  const snapshotQueue = snapshot.queue as { conversationId: string; items: Array<{ conversationId: string }> };
+  assert.equal(snapshotQueue.conversationId, id);
+  assert.equal(snapshotQueue.items[0]!.conversationId, id);
   assert.equal((snapshot.pendingUi as Array<{ conversationId: string; id: string }>)[0]!.conversationId, id);
   assert.equal((snapshot.pendingUi as Array<{ id: string }>)[0]!.id, "remote:srv_alpha:prompt-1");
   assert.equal((snapshot.turnEvents as Array<{ conversationId: string }>)[0]!.conversationId, id);
@@ -503,6 +585,8 @@ test("nested snapshot ids are namespaced; message ids are left alone", async () 
   assert.equal(opened.messages[0]!.id, "msg-keep");
   assert.equal(opened.state.conversationId, id);
   assert.equal(opened.state.cwd, "remote:srv_alpha:/home/dev/app");
+  assert.equal((opened as { queue: { conversationId: string; items: Array<{ conversationId: string }> } }).queue.conversationId, id);
+  assert.equal((opened as { queue: { conversationId: string; items: Array<{ conversationId: string }> } }).queue.items[0]!.conversationId, id);
   assert.equal(opened.projects.some((item) => item.cwd === "/Users/me/local"), true);
   assert.equal(opened.projects.some((item) => item.cwd === "/home/dev/app"), false);
   assert.equal(opened.conversations.some((item) => item.id === id), true);

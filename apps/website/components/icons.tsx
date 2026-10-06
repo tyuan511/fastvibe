@@ -15,7 +15,8 @@ type IconName =
   | "check"
   | "external"
   | "command"
-  | "menu";
+  | "menu"
+  | "smartphone";
 
 const paths: Record<IconName, ReactNode> = {
   "arrow-up-right": <><path d="M7 17 17 7" /><path d="M7 7h10v10" /></>,
@@ -33,6 +34,7 @@ const paths: Record<IconName, ReactNode> = {
   external: <><path d="M14 3h7v7" /><path d="M10 14 21 3" /><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5" /></>,
   command: <><path d="M18 4a3 3 0 1 0-3 3h3V4ZM6 20a3 3 0 1 0 3-3H6v3ZM6 4a3 3 0 1 1 3 3H6V4ZM18 20a3 3 0 1 1-3-3h3v3Z" /></>,
   menu: <><path d="M4 6h16M4 12h16M4 18h16" /></>,
+  smartphone: <><rect x="6" y="2" width="12" height="20" rx="2" /><path d="M10 18h4" /></>,
 };
 
 export function Icon({ name, size = 18, ...props }: { name: IconName; size?: number } & SVGProps<SVGSVGElement>) {

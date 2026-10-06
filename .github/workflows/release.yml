@@ -110,24 +110,13 @@ jobs:
 
       - uses: pnpm/action-setup@v6
 
+      # No dependency cache. This workflow runs only on tags, and an Actions cache saved
+      # on a tag can be restored by that tag alone — so every cache it wrote was never
+      # read again, while its gigabytes pushed the repository over its 10 GB quota and
+      # evicted the Gradle cache the phone build keeps on main.
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-          cache: pnpm
-
-      - name: Cache electron binaries
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cache/electron
-            ~/.cache/electron-builder
-            ~/Library/Caches/electron
-            ~/Library/Caches/electron-builder
-            ~/AppData/Local/electron/Cache
-            ~/AppData/Local/electron-builder/Cache
-          key: ${{ runner.os }}-${{ matrix.arch || 'default' }}-electron-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ matrix.arch || 'default' }}-electron-
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

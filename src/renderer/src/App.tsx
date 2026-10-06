@@ -896,7 +896,7 @@ export function App(): JSX.Element {
   async function handleRemoveQueued(id: string): Promise<void> {
     const owner = useSessionStore.getState().queued.find((entry) => entry.id === id)?.conversationId;
     try {
-      const queue = await window.fastvibe.engine.queueCancel(id);
+      const queue = await window.fastvibe.engine.queueCancel(id, owner);
       if (queue) setQueueState(queue);
     } catch (err) {
       queueActionError(err, owner);
@@ -914,7 +914,7 @@ export function App(): JSX.Element {
     // switches chats, this reservation follows its owner and is waiting on return.
     setComposer(item.text, item.attachments ?? []);
     const reservedVersion = useSessionStore.getState().composerDrafts[item.conversationId]?.version;
-    void window.fastvibe.engine.queueCancel(id).then((queue) => {
+    void window.fastvibe.engine.queueCancel(id, item.conversationId).then((queue) => {
       if (!queue) {
         if (reservedVersion !== undefined) {
           restoreComposer(item.conversationId, previous.draft, previous.attachments, reservedVersion);
@@ -933,7 +933,7 @@ export function App(): JSX.Element {
   async function handleRecallQueued(id: string): Promise<void> {
     const owner = useSessionStore.getState().queued.find((entry) => entry.id === id)?.conversationId;
     try {
-      const queue = await window.fastvibe.engine.queueRecall(id);
+      const queue = await window.fastvibe.engine.queueRecall(id, owner);
       if (queue) setQueueState(queue);
     } catch (err) {
       queueActionError(err, owner);
@@ -943,7 +943,7 @@ export function App(): JSX.Element {
   async function handleSendQueuedNow(id: string): Promise<void> {
     const owner = useSessionStore.getState().queued.find((entry) => entry.id === id)?.conversationId;
     try {
-      const queue = await window.fastvibe.engine.queueSendNow(id);
+      const queue = await window.fastvibe.engine.queueSendNow(id, owner);
       if (queue) setQueueState(queue);
     } catch (err) {
       queueActionError(err, owner);

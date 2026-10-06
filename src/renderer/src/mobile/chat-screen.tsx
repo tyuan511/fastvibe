@@ -198,6 +198,7 @@ function MobileComposer({ draft, onDraftChange }: { draft: Draft; onDraftChange:
   const allQueued = useSessionStore((state) => state.queued);
   const queuePause = useSessionStore((state) => state.queuePause);
   const queued = activeId ? allQueued.filter((item) => item.conversationId === activeId) : [];
+  /** A prompt is busy only while the direct RPC is awaiting acceptance. */
   const sending = useRef(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
@@ -300,7 +301,7 @@ function MobileComposer({ draft, onDraftChange }: { draft: Draft; onDraftChange:
 
   function removeQueued(id: string): void {
     void window.fastvibe.engine
-      .queueCancel(id)
+      .queueCancel(id, activeId ?? undefined)
       .then((next) => {
         if (next) useSessionStore.getState().setQueueState(next);
       })

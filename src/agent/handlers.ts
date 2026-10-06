@@ -46,6 +46,12 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
   handle(Ipc.engineAbortSubagent, async (payload: { subagentId: string; conversationId?: string }) => engine.abortSubagent(payload.subagentId, payload.conversationId));
   handle(Ipc.engineContinue, async (payload?: { conversationId?: string }) => engine.continueTurn(payload?.conversationId));
   handle(Ipc.engineClearQueue, async (payload?: { conversationId?: string }) => engine.clearQueue(payload?.conversationId));
+  handle(Ipc.engineQueueAdd, async (payload: Parameters<typeof engine.enqueueMessage>[0]) => engine.enqueueMessage(payload));
+  handle(Ipc.engineQueueCancel, async (payload: { id: string; conversationId?: string }) => engine.cancelQueued(payload.id));
+  handle(Ipc.engineQueueRecall, async (payload: { id: string; conversationId?: string }) => engine.recallQueued(payload.id));
+  handle(Ipc.engineQueueSendNow, async (payload: { id: string; conversationId?: string }) => engine.sendQueuedNow(payload.id));
+  handle(Ipc.engineQueueReorder, async (payload: { conversationId: string; ids: string[] }) => engine.reorderQueued(payload.conversationId, payload.ids));
+  handle(Ipc.engineQueueResume, async (payload: { conversationId: string }) => engine.resumeQueue(payload.conversationId));
   handle(Ipc.engineCompact, async (payload?: { customInstructions?: string; conversationId?: string }) => engine.compact(payload?.customInstructions, payload?.conversationId));
   handle(Ipc.engineGetCommands, (payload?: { conversationId?: string }) => engine.getCommands(payload?.conversationId));
   handle(Ipc.engineReplaceSteering, (payload: { items: Array<{ text: string; images?: Array<{ type: "image"; data: string; mimeType: string }> }>; conversationId?: string }) => engine.replaceSteering(payload.items, payload.conversationId));
@@ -93,7 +99,7 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
   handle(Ipc.engineBranch, (payload: { entryId: string; conversationId?: string }) => engine.branch(payload.entryId, payload.conversationId));
   handle(Ipc.engineFork, (payload?: { entryId?: string; conversationId?: string }) => engine.fork(payload?.entryId, payload?.conversationId));
   handle(Ipc.engineGetMessages, (payload?: { conversationId?: string }) => engine.loadMessages(payload?.conversationId));
-  handle(Ipc.engineGetSnapshot, (payload?: { conversationId?: string }) => engine.getSnapshot(payload?.conversationId));
+  handle(Ipc.engineGetSnapshot, (payload?: { conversationId?: string; fromEntryId?: string }) => engine.getSnapshot(payload?.conversationId, payload?.fromEntryId));
   handle(Ipc.engineGetStats, (payload?: { conversationId?: string }) => engine.getSessionStats(payload?.conversationId));
   handle(Ipc.engineSetSteering, (payload: { mode: "all" | "one-at-a-time"; conversationId?: string }) => engine.setSteeringMode(payload.mode, payload.conversationId));
   handle(Ipc.engineSetFollowUp, (payload: { mode: "all" | "one-at-a-time"; conversationId?: string }) => engine.setFollowUpMode(payload.mode, payload.conversationId));
@@ -101,7 +107,10 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
   handle(Ipc.engineGetConversationMessages, (payload: { id: string }) => engine.getConversationMessages(payload.id));
 
   handle(Ipc.conversationsList, () => engine.listWorkspace());
-  handle(Ipc.conversationsCreate, (payload?: { project?: string; activate?: boolean }) => engine.createConversation(payload?.project, { activate: payload?.activate !== false }));
+  handle(Ipc.conversationsCreate, (payload?: { project?: string; activate?: boolean; reuseEmpty?: boolean }) => engine.createConversation(payload?.project, {
+    activate: payload?.activate !== false,
+    reuseEmpty: payload?.reuseEmpty,
+  }));
   handle(Ipc.conversationsOpen, (payload: { id: string }) => engine.openConversation(payload.id));
   handle(Ipc.conversationsRename, (payload: { id: string; title: string }) => engine.renameConversation(payload.id, payload.title));
   handle(Ipc.conversationsDelete, (payload: { id: string }) => engine.deleteConversation(payload.id));

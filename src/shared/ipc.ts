@@ -214,6 +214,15 @@ export const Ipc = {
   sshHostKeyTrust: "ssh:host-key-trust",
   /** Stop the resident Agent on a host (disconnecting it first). */
   sshStopAgent: "ssh:stop-agent",
+  /** Start the resident Agent on a host without opening a project: the same init a new project runs. */
+  sshStartAgent: "ssh:start-agent",
+  /** What a long start / phone-access setup is doing now: `{ hostId, text }`. */
+  sshAgentProgress: "ssh:agent-progress",
+  /**
+   * Let a phone connect to a host's resident Agent directly (or stop letting it): writes the
+   * password on the host and restarts the Agent once. Disconnects the host first.
+   */
+  sshSetPhoneAccess: "ssh:set-phone-access",
   /** SSH tunnel lifecycle for a selected remote FastVibe service. */
   sshConnect: "ssh:connect",
   sshDisconnect: "ssh:disconnect",
@@ -372,6 +381,11 @@ export type StartRequest = {
  */
 export type RemoteTunnelProvider = "cloudflared" | "ngrok" | "frp";
 export type RemoteTunnelPhase = "off" | "starting" | "online" | "error";
+export type RemoteLanAddressFamily = "ipv4" | "ipv6";
+export type RemoteLanAddresses = {
+  ipv4: string | null;
+  ipv6: string | null;
+};
 
 export type RemoteTunnelState = {
   provider: RemoteTunnelProvider | null;
@@ -413,6 +427,10 @@ export type RemoteServerState = {
   configured: boolean;
   /** Whether the server is listening beyond loopback for devices on the local network. */
   lanAccess: boolean;
+  /** Addresses discovered on the local network, used to offer IPv4/IPv6 selection. */
+  lanAddresses: RemoteLanAddresses;
+  /** Address family currently selected for the LAN listener. */
+  lanAddressFamily: RemoteLanAddressFamily;
   /** Clients connected right now. */
   clients: number;
   /** Failed logins since the last success; the throttle grows with this. */

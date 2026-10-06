@@ -15,6 +15,7 @@ import {
   namespaceCatalogSnapshot,
   namespaceConversationRecord,
   namespaceIdList,
+  namespaceQueueState,
   namespaceRemotePush,
   shouldRelayRemotePush,
 } from "../../shared/remote-events.ts";
@@ -107,6 +108,14 @@ const STATE_METHODS: ReadonlySet<string> = new Set([
   Ipc.engineSetFollowUp,
   Ipc.engineCompact,
 ]);
+const QUEUE_RESULT_METHODS: ReadonlySet<string> = new Set([
+  Ipc.engineQueueAdd,
+  Ipc.engineQueueCancel,
+  Ipc.engineQueueRecall,
+  Ipc.engineQueueSendNow,
+  Ipc.engineQueueReorder,
+  Ipc.engineQueueResume,
+]);
 // These writes belong to this desktop's configuration. After the local write succeeds,
 // the same snapshot is sent to every live SSH Agent so a remote conversation never
 // silently falls back to that host's empty providers.json. The payload contains secrets
@@ -185,6 +194,8 @@ export class RemoteGateway {
     if (method === Ipc.projectsReorder) return this.#reorderProjects(payload, ctx);
     if (method === Ipc.conversationsSetProject) return this.#setConversationProject(payload, ctx);
     if (method === Ipc.conversationsList) return this.aggregate(this.#deps.localSnapshot());
+    if (method === Ipc.engineGetRunning) return this.#allRunningConversations(ctx);
+    if (method === Ipc.engineGetPendingUi) return this.#allPendingUi(ctx);
 
     const scope = resolveServerScope(payload);
     if (!scope) {
@@ -481,11 +492,59 @@ export class RemoteGateway {
     await this.#syncConnectedServers();
   }
 
+  async #allRunningConversations(ctx: unknown): Promise<string[]> {
+    const local = await this.#deps.localDispatch(Ipc.engineGetRunning, undefined, ctx);
+    const running = Array.isArray(local) ? local.filter((id): id is string => typeof id === "string") : [];
+    const remote = await Promise.all(this.#boundReadyServers().map(async (server) => {
+      try {
+        return namespaceIdList(await this.#deps.connections.call(server, Ipc.engineGetRunning, undefined), server.serverInstanceId);
+      } catch {
+        return [];
+      }
+    }));
+    return running.concat(remote.flatMap((ids) => Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : []));
+  }
+
+  async #allPendingUi(ctx: unknown): Promise<Array<Record<string, unknown>>> {
+    const local = await this.#deps.localDispatch(Ipc.engineGetPendingUi, undefined, ctx);
+    const pending = Array.isArray(local) ? local.filter(isRecord) : [];
+    const remote = await Promise.all(this.#boundReadyServers().map(async (server) => {
+      try {
+        const result = await this.#deps.connections.call(server, Ipc.engineGetPendingUi, undefined);
+        return Array.isArray(result)
+          ? result.filter(isRecord).flatMap((item) => {
+              const scoped = scopeUiItem(item, server.serverInstanceId);
+              return isRecord(scoped) ? [scoped] : [];
+            })
+          : [];
+      } catch {
+        return [];
+      }
+    }));
+    return pending.concat(remote.flat());
+  }
+
+  #readyServers(): ConnectedServerRef[] {
+    const seen = new Set<string>();
+    const servers: ConnectedServerRef[] = [];
+    for (const status of this.#deps.connections.statuses()) {
+      if (status.state !== "ready" || !status.serverInstanceId || seen.has(status.serverInstanceId)) continue;
+      const server = this.#deps.connections.serverForInstance(status.serverInstanceId);
+      if (!server) continue;
+      seen.add(status.serverInstanceId);
+      servers.push(server);
+    }
+    return servers;
+  }
+
+  #boundReadyServers(): ConnectedServerRef[] {
+    const bound = new Set(readBindings(this.#deps.bindingsFile).map((item) => item.serverInstanceId));
+    return this.#readyServers().filter((server) => bound.has(server.serverInstanceId));
+  }
+
   async #syncConnectedServers(): Promise<void> {
-    const statuses = this.#deps.connections.statuses();
-    await Promise.all(statuses.filter((status) => status.state === "ready" && status.serverInstanceId).map(async (status) => {
-      const server = this.#deps.connections.serverForInstance(status.serverInstanceId!);
-      if (server) await this.#syncConfig(server, true).catch(() => undefined);
+    await Promise.all(this.#readyServers().map(async (server) => {
+      await this.#syncConfig(server, true).catch(() => undefined);
     }));
   }
 
@@ -567,6 +626,7 @@ export class RemoteGateway {
     if (result == null) return result;
     if (OPEN_METHODS.has(method)) return this.#scopeOpenResult(result, serverInstanceId);
     if (method === Ipc.engineGetSnapshot) return scopeSnapshot(result, serverInstanceId);
+    if (QUEUE_RESULT_METHODS.has(method)) return scopeQueueResult(result, serverInstanceId);
     if (STATE_METHODS.has(method)) return scopeSessionState(result, serverInstanceId);
     if (method === Ipc.workspaceTerminalStart) return scopeTerminal(result, serverInstanceId);
     if (method === Ipc.workspacePreview) return scopePreview(result, serverInstanceId);
@@ -606,6 +666,7 @@ export class RemoteGateway {
       conversation,
       messages: result.messages,
       state,
+      ...(result.queue !== undefined ? { queue: namespaceQueueState(result.queue, serverInstanceId) } : {}),
     };
   }
 
@@ -724,7 +785,13 @@ function scopeSnapshot(result: unknown, serverInstanceId: string): unknown {
   if (Array.isArray(next.turnEvents)) {
     next.turnEvents = next.turnEvents.map((item) => scopeUiItem(item, serverInstanceId));
   }
+  if (next.queue !== undefined) next.queue = namespaceQueueState(next.queue, serverInstanceId);
   return next;
+}
+
+function scopeQueueResult(value: unknown, serverInstanceId: string): unknown {
+  if (value == null) return value;
+  return namespaceQueueState(value, serverInstanceId);
 }
 
 function scopeSessionState(result: unknown, serverInstanceId: string): unknown {

@@ -12,6 +12,7 @@ import { formatRelativeTime } from "@/lib/time";
 import { cn } from "@/lib/utils";
 import { useArchivedIds } from "@/stores/archive";
 import { useSessionStore } from "@/stores/session";
+import { ConversationContextMenu } from "./conversation-menu";
 import { navigate } from "./route";
 
 /**
@@ -141,13 +142,14 @@ export function ConversationDrawer({
             </Empty>
           ) : (
             <>
-              <Section title={t("mobile.sectionWaiting")} rows={waitingRows} names={projectNames} onPick={pick} tone="warning" />
-              <Section title={t("mobile.sectionRunning")} rows={runningRows} names={projectNames} onPick={pick} />
+              <Section title={t("mobile.sectionWaiting")} rows={waitingRows} names={projectNames} onPick={pick} onLeave={() => onOpenChange(false)} tone="warning" />
+              <Section title={t("mobile.sectionRunning")} rows={runningRows} names={projectNames} onPick={pick} onLeave={() => onOpenChange(false)} />
               <Section
                 title={waitingRows.length + runningRows.length > 0 ? t("mobile.sectionRecent") : null}
                 rows={restRows}
                 names={projectNames}
                 onPick={pick}
+                onLeave={() => onOpenChange(false)}
               />
             </>
           )}
@@ -176,12 +178,14 @@ function Section({
   rows,
   names,
   onPick,
+  onLeave,
   tone,
 }: {
   title: string | null;
   rows: Conversation[];
   names: Map<string, string>;
   onPick: (id: string) => void;
+  onLeave: () => void;
   tone?: "warning";
 }): JSX.Element | null {
   if (rows.length === 0) return null;
@@ -199,6 +203,7 @@ function Section({
               conversation={item}
               projectName={item.project ? names.get(item.project) : undefined}
               onPick={onPick}
+              onLeave={onLeave}
             />
           </li>
         ))}
@@ -211,10 +216,12 @@ function ConversationRow({
   conversation,
   projectName,
   onPick,
+  onLeave,
 }: {
   conversation: Conversation;
   projectName?: string;
   onPick: (id: string) => void;
+  onLeave: () => void;
 }): JSX.Element {
   const { t } = useTranslation("app");
   const running = useSessionStore((state) => state.running[conversation.id] === true);
@@ -222,30 +229,32 @@ function ConversationRow({
   const current = useSessionStore((state) => state.activeId === conversation.id);
   const detail = [projectName, conversation.preview].filter(Boolean).join(" · ");
   return (
-    <button
-      type="button"
-      aria-current={current ? "page" : undefined}
-      className={cn(
-        "flex w-full items-center gap-3 px-4 py-3 text-left active:bg-muted/60",
-        current && "bg-muted/70",
-      )}
-      onClick={() => onPick(conversation.id)}
-    >
-      <div className="min-w-0 flex-1">
-        <div className="flex items-baseline gap-2">
-          <span className="min-w-0 flex-1 truncate text-sm font-medium">{conversation.title || t("mobile.untitled")}</span>
-          <span className="shrink-0 text-xs text-muted-foreground">{formatRelativeTime(conversation.updatedAt)}</span>
+    <ConversationContextMenu conversation={conversation} onLeave={onLeave}>
+      <button
+        type="button"
+        aria-current={current ? "page" : undefined}
+        className={cn(
+          "flex w-full items-center gap-3 px-4 py-3 text-left active:bg-muted/60",
+          current && "bg-muted/70",
+        )}
+        onClick={() => onPick(conversation.id)}
+      >
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline gap-2">
+            <span className="min-w-0 flex-1 truncate text-sm font-medium">{conversation.title || t("mobile.untitled")}</span>
+            <span className="shrink-0 text-xs text-muted-foreground">{formatRelativeTime(conversation.updatedAt)}</span>
+          </div>
+          {detail ? <p className="mt-0.5 truncate text-xs text-muted-foreground">{detail}</p> : null}
         </div>
-        {detail ? <p className="mt-0.5 truncate text-xs text-muted-foreground">{detail}</p> : null}
-      </div>
-      {waiting ? (
-        <span className="flex shrink-0 items-center gap-1 text-xs font-medium text-warning">
-          <HugeiconsIcon icon={Alert02Icon} strokeWidth={2} className="size-4" />
-          {t("mobile.waiting")}
-        </span>
-      ) : running ? (
-        <RunningMark className="size-4" />
-      ) : null}
-    </button>
+        {waiting ? (
+          <span className="flex shrink-0 items-center gap-1 text-xs font-medium text-warning">
+            <HugeiconsIcon icon={Alert02Icon} strokeWidth={2} className="size-4" />
+            {t("mobile.waiting")}
+          </span>
+        ) : running ? (
+          <RunningMark className="size-4" />
+        ) : null}
+      </button>
+    </ConversationContextMenu>
   );
 }

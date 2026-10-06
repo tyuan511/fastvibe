@@ -1,6 +1,7 @@
 import type { AppCapability } from "../../../shared/app-protocol.ts";
 import { canUseBinding, decodeRemoteProjectKey, remoteProjectKey, type ProjectBindingState } from "../../../shared/project-binding.ts";
 import { decodeScopedId } from "../../../shared/server-scope.ts";
+import type { RemoteHostConnectionState } from "../../../shared/remote-host.ts";
 import type { Project } from "../../../shared/types.ts";
 
 /** A namespaced conversation id, project key, or remote file path. */
@@ -57,6 +58,30 @@ export function projectHasCapability(project: Project | undefined, capability: A
   if (project?.bindingState && project.bindingState !== "available") return false;
   if (!project?.capabilities) return true;
   return canUseBinding(project.capabilities, capability);
+}
+
+/** The sidebar label for a long-running SSH connect/deploy, if one is active. */
+export function remoteProjectActivityKey(state: RemoteHostConnectionState | undefined): string | undefined {
+  if (!state || state.status !== "connecting") return undefined;
+  switch (state.activity ?? state.progress?.phase) {
+    case "checking":
+      return "checking";
+    case "agent-download":
+      return "agentDownload";
+    case "node-download":
+      return "nodeDownload";
+    case "agent-fetch":
+      return "agentFetch";
+    case "agent-upload":
+      return "agentUpload";
+    case "starting-agent":
+      return "startingAgent";
+    case "forwarding":
+      return "forwarding";
+    case "connecting":
+    default:
+      return "preparing";
+  }
 }
 
 export function bindingStateKey(state: ProjectBindingState | undefined): string {

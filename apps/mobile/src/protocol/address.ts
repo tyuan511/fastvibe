@@ -33,32 +33,43 @@ export function parseServerAddress(raw: string): ServerAddress | null {
     withScheme = `http://${input}`;
   }
 
-  let url: URL;
+  let protocol: string;
+  let rawHostname: string;
+  let rawPort: string;
+  let username = "";
+  let password = "";
   try {
-    url = new URL(withScheme);
+    const url = new URL(withScheme);
+    protocol = url.protocol;
+    rawHostname = url.hostname;
+    rawPort = url.port;
+    username = url.username;
+    password = url.password;
   } catch {
-    return null;
+    // WHATWG URL parsing rejects RFC 6874 link-local zones in some runtimes. The
+    // scanner still needs to carry the encoded `%25interface` through to the native
+    // WebSocket client, so accept that one bracketed IPv6 form explicitly.
+    const zone = /^(https?):\/\/\[([0-9a-f:.]+%25[a-z0-9_.-]+)\](?::(\d+))?(?:[/?#].*)?$/i.exec(withScheme);
+    if (!zone) return null;
+    protocol = `${zone[1]!.toLowerCase()}:`;
+    rawHostname = zone[2]!;
+    rawPort = zone[3] ?? "";
   }
-  if (url.username || url.password) return null;
-  const hostname = url.hostname;
+  if (username || password) return null;
+  const hostname = rawHostname.replace(/^\[|\]$/g, "");
   if (!hostname || !isHost(hostname)) return null;
 
   const kind = classify(hostname);
-  const protocol = inferProtocol(explicit, url.protocol, hostname, kind);
-  const port = resolvePort(url.port, protocol, hostname, kind);
+  const protocolForAddress = inferProtocol(explicit, protocol, hostname, kind);
+  const port = resolvePort(rawPort, protocolForAddress, hostname, kind);
   if (port === null) return null;
 
-  const host = formatHost(hostname, port, protocol);
-  const origin = `${protocol}//${host}`;
-  const wsUrl = `${protocol === "https:" ? "wss:" : "ws:"}//${host}/ws`;
+  const host = formatHost(hostname, port, protocolForAddress);
+  const origin = `${protocolForAddress}//${host}`;
+  const wsUrl = `${protocolForAddress === "https:" ? "wss:" : "ws:"}//${host}/ws`;
   return { origin, wsUrl, host, kind };
 }
 
-export function addressKindLabel(kind: AddressKind): string {
-  if (kind === "lan") return "局域网";
-  if (kind === "loopback") return "本机";
-  return "公网";
-}
 
 function inferProtocol(
   explicit: boolean,
@@ -67,7 +78,12 @@ function inferProtocol(
   kind: AddressKind,
 ): "http:" | "https:" {
   if (explicit) return parsed === "https:" ? "https:" : "http:";
-  if (kind !== "public" || isIpv4(hostname)) return "http:";
+  // An IP literal has no certificate to offer, so a bare one is FastVibe's plain LAN
+  // listener — including a global IPv6 address, which is what the LAN row shows (and
+  // copies, with no scheme) when the machine is set to IPv6. Reading that as public
+  // and trying TLS against the plain listener failed every connection. Tunnels hand
+  // out hostnames, always with https:// in front.
+  if (kind !== "public" || isIpLiteral(hostname)) return "http:";
   return "https:";
 }
 
@@ -77,7 +93,7 @@ function resolvePort(raw: string, protocol: "http:" | "https:", hostname: string
     if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
     return String(port);
   }
-  if (isIpv4(hostname) || kind !== "public") return protocol === "https:" ? "443" : String(DEFAULT_LAN_PORT);
+  if (isIpLiteral(hostname) || kind !== "public") return protocol === "https:" ? "443" : String(DEFAULT_LAN_PORT);
   return protocol === "https:" ? "443" : "80";
 }
 
@@ -89,9 +105,14 @@ function formatHost(hostname: string, port: string, protocol: "http:" | "https:"
 }
 
 function classify(hostname: string): AddressKind {
-  const host = hostname.toLowerCase();
+  const host = hostname.toLowerCase().replace(/%25[a-z0-9_.-]+$/, "");
   if (host === "localhost" || host === "::1" || host.startsWith("127.")) return "loopback";
-  if (host.endsWith(".local") || host.endsWith(".lan") || isPrivateV4(host)) return "lan";
+  if (
+    host.endsWith(".local") ||
+    host.endsWith(".lan") ||
+    isPrivateV4(host) ||
+    isPrivateV6(host)
+  ) return "lan";
   return "public";
 }
 
@@ -109,8 +130,16 @@ function isIpv4(host: string): boolean {
   return /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
 }
 
+function isIpLiteral(host: string): boolean {
+  return isIpv4(host) || host.includes(":");
+}
+
 function isHost(hostname: string): boolean {
   if (hostname.length > 253) return false;
-  if (hostname.includes("%")) return false;
-  return /^[a-z0-9.:_-]+$/i.test(hostname) || hostname.includes(":");
+  if (hostname.includes("%") && !/%25[a-z0-9_.-]+$/i.test(hostname)) return false;
+  return /^[a-z0-9.:_%_-]+$/i.test(hostname) || hostname.includes(":");
+}
+
+function isPrivateV6(host: string): boolean {
+  return host.startsWith("fc") || host.startsWith("fd") || host.startsWith("fe80:");
 }

@@ -1,3 +1,4 @@
+import { randomUUID } from "../../../shared/random.ts";
 import type { ChatAttachment, PromptImage } from "@shared/types";
 
 type NativeFile = File & { path?: string };
@@ -70,7 +71,7 @@ export async function filesToAttachments(files: File[]): Promise<ChatAttachment[
     if (IMAGE_TYPES.has(mime) && file.size <= MAX_IMAGE_BYTES) {
       const dataUrl = await readDataUrl(file);
       result.push({
-        id: crypto.randomUUID(),
+        id: randomUUID(),
         kind: "image",
         name: file.name,
         mimeType: mime,
@@ -80,7 +81,7 @@ export async function filesToAttachments(files: File[]): Promise<ChatAttachment[
       continue;
     }
     result.push({
-      id: crypto.randomUUID(),
+      id: randomUUID(),
       kind: "file",
       name: file.name,
       mimeType: mime || undefined,

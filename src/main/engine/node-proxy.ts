@@ -26,7 +26,9 @@ class RoutedDispatcher extends Dispatcher {
         this.#agents.set(proxy, agent);
       }
       agent.dispatch(options, handler);
-    }).catch((error: Error) => handler.onError?.(error));
+    // undici 8 has no `onError`; a failure before the request started has no controller,
+    // and its own dispatcher reports exactly that as `onResponseError(null, error)`.
+    }).catch((error: Error) => handler.onResponseError?.(null as never, error));
     return true;
   }
 

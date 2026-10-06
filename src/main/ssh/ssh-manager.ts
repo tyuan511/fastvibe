@@ -1,7 +1,8 @@
 import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:net";
 import type { FastVibePaths } from "../engine/paths.ts";
-import type { RemoteHostConnectionState, RemoteHostProfile, RemoteHostTestResult, RemoteTransferProgress, SshHostKeyScan } from "../../shared/remote-host.ts";
+import { normalizePublicUrl, type PhoneAccess, type RemoteHostConnectionActivity, type RemoteHostConnectionState, type RemoteHostProfile, type RemoteHostTestResult, type RemoteTransferProgress, type SshHostKeyScan } from "../../shared/remote-host.ts";
+import { hashPassword, passwordProblem } from "../server/auth.ts";
 import { readSshHosts, redactSshHosts, removeSshHost, saveSshHost, type SecretBox, type SshHostSnapshot } from "./ssh-hosts.ts";
 import { captureHostKey, writeTrustedHostKey, type CapturedHostKey } from "./ssh-known-hosts.ts";
 import { loadAgentRuntime, agentRuntimeTarget, agentRuntimeRemoteDownloadCommand, agentRuntimeUploadCommand, sha256Helper, type AgentRuntimeSource, type AgentRuntimeTarget } from "./agent-runtime.ts";
@@ -119,9 +120,136 @@ export class SshManager {
     });
     return output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).at(-1) ?? "";
   }
+
+  /**
+   * Start the host's resident Agent without opening a project on it.
+   *
+   * It is the connect a new project makes — preflight, deploy, bootstrap — through the same
+   * function, so there is exactly one way an Agent gets initialised. The tunnel that call
+   * opens is closed again at once: the Agent is resident (`nohup`), so it keeps running, and
+   * the first project added later finds it and skips the deploy. Phone access, when the
+   * profile has it, applies here too, since it is part of how the Agent is started.
+   */
+  async startAgent(id: string, onProgress?: (text: string) => void): Promise<string> {
+    const profile = this.profile(id);
+    if (!profile) throw new Error("SSH 主机不存在");
+    const transport = await openSshAppTransport({
+      profile,
+      agentRuntime: this.#deps.agentRuntime,
+      log: this.#deps.log,
+      ...progressHooks(onProgress),
+    });
+    await transport.close();
+    return `远程 Agent 已就绪（端口 ${transport.remotePort}）`;
+  }
+
+  /**
+   * Let a phone connect to this host's resident Agent directly, without SSH.
+   *
+   * Three things change on the host, in this order: the password file is written (hash
+   * only, over the encrypted channel's stdin — never an argument another user's `ps` could
+   * read), the Agent is restarted so that it listens beyond loopback on the fixed port, and
+   * only then is the profile saved. A failure before the save leaves the profile as it was,
+   * so the pane never shows a QR code for a host that is not actually reachable.
+   *
+   * The restart is the connect flow itself: with `phoneAccess` on the profile the preflight
+   * sees an Agent that does not fit and bootstraps a new one. The tunnel it opens is closed
+   * again at once; the caller disconnects the host first, because a live forward to the old
+   * Agent would only reconnect to nothing.
+   *
+   * `password` may be omitted only when phone access is already on: the host keeps the one it
+   * has, and the port or public address can change without logging every phone out.
+   */
+  async enablePhoneAccess(id: string, input: { password?: string; port: number; publicUrl?: string }, onProgress?: (text: string) => void): Promise<SshHostSnapshot> {
+    const profile = this.profile(id);
+    if (!profile) throw new Error("SSH 主机不存在");
+    if (profile.authMethod === "password" && !profile.password) throw new Error("请填写 SSH 密码");
+    const port = input.port;
+    if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new Error("请填写 1–65535 之间的端口");
+    const publicUrl = input.publicUrl?.trim() ? normalizePublicUrl(input.publicUrl) : undefined;
+    if (input.publicUrl?.trim() && !publicUrl) throw new Error("对外地址要以 http:// 或 https:// 开头，且不能带路径");
+    const password = input.password ?? "";
+    if (!password && !profile.phoneAccess) throw new Error("请设置手机连接密码");
+    if (password) {
+      const problem = passwordProblem(password);
+      if (problem) throw new Error(problem);
+    }
+    const access: PhoneAccess = { port, ...(publicUrl ? { publicUrl } : {}) };
+    const sshPassword = profile.authMethod === "password" ? profile.password : undefined;
+    if (password) {
+      // A fresh file, so changing the password also signs every phone out of the old one.
+      const file = `${JSON.stringify({ version: 1, password: hashPassword(password), devices: [] }, null, 2)}\n`;
+      await runSshCommand({ host: profile, password: sshPassword, command: phoneAccessWriteCommand(), input: Buffer.from(file, "utf8"), timeoutMs: 20_000 });
+    }
+    try {
+      const transport = await openSshAppTransport({
+        profile: { ...profile, phoneAccess: access },
+        agentRuntime: this.#deps.agentRuntime,
+        log: this.#deps.log,
+        ...progressHooks(onProgress),
+      });
+      await transport.close();
+    } catch (error) {
+      // Not left half done: a password file nobody asked for, beside an Agent that never
+      // listened beyond loopback. Best effort — the failure worth reporting is the first.
+      if (password && !profile.phoneAccess) {
+        await runSshCommand({ host: profile, password: sshPassword, command: phoneAccessClearCommand(), timeoutMs: 20_000 }).catch(() => undefined);
+      }
+      throw error;
+    }
+    this.#deps.log.info(`[ssh:${id}] phone access on, port ${port}`);
+    return this.saveHost({ ...profile, phoneAccess: access });
+  }
+
+  /**
+   * Turn phone access off: forget the password, and stop the Agent if it is the one listening
+   * beyond loopback. A stopped Agent is not a loss — the next connect from this app starts it
+   * again on loopback — whereas leaving it exposed with no password file would be the one
+   * state this feature must never produce. The caller disconnects the host first.
+   */
+  async disablePhoneAccess(id: string): Promise<SshHostSnapshot> {
+    const profile = this.profile(id);
+    if (!profile) throw new Error("SSH 主机不存在");
+    if (profile.authMethod === "password" && !profile.password) throw new Error("请填写 SSH 密码");
+    await runSshCommand({
+      host: profile,
+      ...(profile.authMethod === "password" && profile.password ? { password: profile.password } : {}),
+      command: phoneAccessClearCommand(),
+      timeoutMs: 20_000,
+    });
+    const { phoneAccess: _off, ...rest } = profile;
+    this.#deps.log.info(`[ssh:${id}] phone access off`);
+    return this.saveHost(rest);
+  }
 }
 
 const CANCELLED = "远程连接已取消";
+
+const TRANSFER_LABELS: Record<RemoteTransferProgress["phase"], string> = {
+  "agent-download": "远程主机正在下载 Agent",
+  "node-download": "远程主机正在下载 Node.js",
+  "agent-fetch": "正在本机下载 Agent",
+  "agent-upload": "正在上传 Agent",
+};
+
+/**
+ * Turn a connect's output and transfers into the one line a pane can show while it waits.
+ *
+ * A first deploy downloads a hundred megabytes and can take minutes; a spinner alone reads
+ * as a hang. The lines are the ones the connect already logs — the script's own words — and a
+ * transfer becomes `正在上传 Agent（42%）`.
+ */
+function progressHooks(onProgress?: (text: string) => void): Pick<Parameters<typeof openSshAppTransport>[0], "onOutput" | "onProgress"> {
+  if (!onProgress) return {};
+  return {
+    onOutput: (line) => onProgress(line),
+    onProgress: (progress) => {
+      if (!progress) return;
+      const percent = progress.total ? Math.min(100, Math.round((progress.done / progress.total) * 100)) : undefined;
+      onProgress(percent === undefined ? TRANSFER_LABELS[progress.phase] : `${TRANSFER_LABELS[progress.phase]}（${percent}%）`);
+    },
+  };
+}
 
 /**
  * Open only the SSH transport for the App Server gateway.
@@ -137,9 +265,11 @@ export async function openSshAppTransport(options: {
   onOutput?: (message: string) => void;
   /** The transfer in progress, or null once the connect has moved on to its next step. */
   onProgress?: (progress: RemoteTransferProgress | null) => void;
+  /** The current coarse step, including non-transfer work that can take a while. */
+  onActivity?: (activity: RemoteHostConnectionActivity) => void;
   signal?: AbortSignal;
-}): Promise<{ port: number; close: () => Promise<void>; configSyncToken: string; home?: string }> {
-  const { profile, agentRuntime, log, onOutput, onProgress, signal } = options;
+}): Promise<{ port: number; close: () => Promise<void>; configSyncToken: string; home?: string; /** The port the Agent listens on, on the remote host. */ remotePort: number }> {
+  const { profile, agentRuntime, log, onOutput, onProgress, onActivity, signal } = options;
   throwIfAborted(signal);
   if (profile.authMethod === "password" && !profile.password) throw new Error("请填写 SSH 密码");
   if (profile.authMethod === "identity-file" && !profile.identityFile) throw new Error("请填写私钥路径");
@@ -181,6 +311,7 @@ export async function openSshAppTransport(options: {
       }
     };
   };
+  onActivity?.("connecting");
   output("正在连接 SSH…");
   let master: SshMaster | null = null;
   try {
@@ -207,6 +338,7 @@ export async function openSshAppTransport(options: {
   };
   try {
     throwIfAborted(signal);
+    onActivity?.("checking");
     output("检查远程系统与常驻 Agent…");
     // One round trip answers everything the connect needs before deciding what to do:
     // the platform, the installed runtime release and hash, the home directory, and —
@@ -222,15 +354,17 @@ export async function openSshAppTransport(options: {
     }));
     throwIfAborted(signal);
     const home = preflight.home;
-    // A pinned `servicePort` the resident Agent is not on means a restart, not a reuse.
-    const portMatches = !profile.servicePort || profile.servicePort === preflight.port;
-    if (preflight.token && preflight.port && portMatches) {
+    // A pinned port the resident Agent is not on, or phone access switched on or off since
+    // it started, means a restart, not a reuse.
+    if (preflight.token && preflight.port && runningAgentFits(preflight, profile)) {
       output("常驻 Agent 可直接使用，跳过部署");
+      onActivity?.("forwarding");
       await forward(preflight.port);
       throwIfAborted(signal);
       let residentClosed = false;
       return {
         port: localPort,
+        remotePort: preflight.port,
         configSyncToken: preflight.token,
         ...(home ? { home } : {}),
         close: async () => {
@@ -260,6 +394,7 @@ export async function openSshAppTransport(options: {
       let deployed = false;
       let remoteFailure = "";
       try {
+        onActivity?.("agent-download");
         await runSshCommand({
           host: profile,
           password,
@@ -282,8 +417,10 @@ export async function openSshAppTransport(options: {
         output(`远程主机直接下载失败，改为本机下载后上传：${reason}`);
       }
       if (!deployed) {
+        onActivity?.("agent-fetch");
         const runtime = await loadAgentRuntime(agentRuntime, target, output, (done, total) => progress.report("agent-fetch", done, total));
         throwIfAborted(signal);
+        onActivity?.("agent-upload");
         output(`正在上传并部署 Agent（${formatBytes(runtime.archive.length)}）…`);
         await runSshCommand({
           host: profile,
@@ -299,27 +436,42 @@ export async function openSshAppTransport(options: {
       }
     }
     throwIfAborted(signal);
+    onActivity?.("starting-agent");
     output("正在启动远程 Agent…");
-    const bootstrap = await runSshCommand({
-      host: profile,
-      password,
-      controlPath,
-      command: buildAgentBootstrapCommand(profile.servicePort, agentRuntime, target, randomBytes(32).toString("hex")),
-      // Long enough for a first deploy that also has to download Node.js from a mirror.
-      timeoutMs: 900_000,
-      onOutput: remote(),
-      signal,
-    });
+    // OpenSSH reports every remote failure as a bare exit code, and what actually went wrong
+    // is the last thing the script printed (停止原因: 端口被占用, runtime 过旧, …). The pane
+    // that started this shows the thrown error, not the progress lines, which are gone by then.
+    let lastLine = "";
+    let bootstrap: string;
+    try {
+      bootstrap = await runSshCommand({
+        host: profile,
+        password,
+        controlPath,
+        command: buildAgentBootstrapCommand(profile.phoneAccess?.port ?? profile.servicePort, agentRuntime, target, randomBytes(32).toString("hex"), { exposed: Boolean(profile.phoneAccess) }),
+        // Long enough for a first deploy that also has to download Node.js from a mirror.
+        timeoutMs: 900_000,
+        onOutput: remote((line) => { lastLine = line; }),
+        signal,
+      });
+    } catch (error) {
+      throwIfAborted(signal);
+      // A refused credential or an untrusted host key keeps its own error and code.
+      if (error instanceof SshError || !lastLine) throw error;
+      throw new Error(lastLine);
+    }
     const configSyncToken = extractSyncToken(bootstrap);
     if (!configSyncToken) throw new Error("远程 Agent 未返回配置同步凭据");
     const remotePort = parsePreflight(bootstrap).port;
     if (!remotePort) throw new Error("远程 Agent 未返回监听端口");
     throwIfAborted(signal);
+    onActivity?.("forwarding");
     await forward(remotePort);
     throwIfAborted(signal);
     let closed = false;
     return {
       port: localPort,
+      remotePort,
       configSyncToken,
       ...(home ? { home } : {}),
       close: async () => {
@@ -394,9 +546,13 @@ function agentStatusLines(): string[] {
     ...agentProcessHelpers(),
     'RUNNING=""',
     'find_agent',
-    'if [ -n "$pid" ] && agent_ready "$pid"; then RUNNING=$(tr \'\\000\' "\\n" < "/proc/$pid/cmdline" 2>/dev/null | sed -n \'s|.*/\\.fastvibe-agent/releases/\\([^/]*\\)/.*|\\1|p\' | head -n 1); else pid=""; PORT=""; fi',
+    'PUBLIC=""',
+    'if [ -n "$pid" ] && agent_ready "$pid"; then RUNNING=$(tr \'\\000\' "\\n" < "/proc/$pid/cmdline" 2>/dev/null | sed -n \'s|.*/\\.fastvibe-agent/releases/\\([^/]*\\)/.*|\\1|p\' | head -n 1); PUBLIC=$(state_field public); [ -n "$PUBLIC" ] || PUBLIC=0; else pid=""; PORT=""; fi',
     'printf "FASTVIBE_RUNNING=%s\\n" "$RUNNING"',
     'printf "FASTVIBE_PORT=%s\\n" "$PORT"',
+    // 1 when the running Agent listens beyond loopback (phone access). An Agent from before
+    // the field existed has none, which is loopback.
+    'printf "FASTVIBE_PUBLIC=%s\\n" "$PUBLIC"',
   ];
 }
 
@@ -417,13 +573,14 @@ function agentPaths(): string[] {
 }
 
 /** What the connect, and the settings pane, read out of `agentPreflightCommand`. */
-export function parsePreflight(output: string): { os: string; arch: string; home?: string; installed?: string; installedHash?: string; running?: string; port?: number; token?: string } {
+export function parsePreflight(output: string): { os: string; arch: string; home?: string; installed?: string; installedHash?: string; running?: string; port?: number; public?: boolean; token?: string } {
   const field = (name: string): string => new RegExp(`^FASTVIBE_${name}=(.*)$`, "m").exec(output)?.[1]?.trim() ?? "";
   const home = field("HOME");
   const installed = field("INSTALLED");
   const installedHash = field("INSTALLED_HASH");
   const running = field("RUNNING");
   const port = Number(field("PORT"));
+  const exposed = field("PUBLIC");
   const token = extractSyncToken(output);
   return {
     os: field("OS"),
@@ -433,8 +590,26 @@ export function parsePreflight(output: string): { os: string; arch: string; home
     ...(installedHash ? { installedHash } : {}),
     ...(running ? { running } : {}),
     ...(Number.isInteger(port) && port >= 1 && port <= 65_535 ? { port } : {}),
+    ...(exposed === "1" ? { public: true } : exposed === "0" ? { public: false } : {}),
     ...(token ? { token } : {}),
   };
+}
+
+/**
+ * Whether the Agent already running is the one this profile asks for.
+ *
+ * It must be on the pinned port, when there is one, and listening the way the profile
+ * says: beyond loopback exactly when phone access is on. Anything else is a restart, not
+ * a reuse — turning phone access on or off has to move a running Agent, and an Agent
+ * that predates the `public` field reads as loopback.
+ */
+export function runningAgentFits(
+  running: { port?: number; public?: boolean },
+  profile: Pick<RemoteHostProfile, "servicePort" | "phoneAccess">,
+): boolean {
+  const wantedPort = profile.phoneAccess?.port ?? profile.servicePort;
+  if (wantedPort && wantedPort !== running.port) return false;
+  return (running.public ?? false) === Boolean(profile.phoneAccess);
 }
 
 /**
@@ -454,6 +629,42 @@ export function agentStopCommand(): string {
     'stop_pid "$pid"',
     'rm -f "$STATE"',
     'echo "远程 Agent 已停止"',
+  ].join("\n");
+  return remoteShellCommand(script);
+}
+
+/**
+ * Write the Agent's password file from stdin.
+ *
+ * `<data>/remote-access.json` is what `RemoteServer` reads on every login — the Agent does
+ * not need a restart to see a new one. Written beside the final name and moved into place,
+ * 0600, so a reader never sees half a file.
+ */
+export function phoneAccessWriteCommand(): string {
+  const script = [
+    'umask 077',
+    'DIR="$HOME/.fastvibe"',
+    'mkdir -p "$DIR"',
+    'cat > "$DIR/remote-access.json.tmp" || { echo "手机连接密码写入失败" >&2; exit 1; }',
+    'chmod 600 "$DIR/remote-access.json.tmp"',
+    'mv "$DIR/remote-access.json.tmp" "$DIR/remote-access.json"',
+    'echo "已设置手机连接密码"',
+  ].join("\n");
+  return remoteShellCommand(script);
+}
+
+/**
+ * Take phone access away on the host: delete the password file, and stop the Agent only if
+ * it is the one listening beyond loopback (`public` in its state file).
+ */
+export function phoneAccessClearCommand(): string {
+  const script = [
+    ...agentPaths(),
+    ...agentProcessHelpers(),
+    ...stopPidHelper(),
+    'rm -f "$HOME/.fastvibe/remote-access.json" "$HOME/.fastvibe/remote-access.json.tmp"',
+    'find_agent',
+    'if [ -n "$pid" ] && [ "$(state_field public)" = 1 ]; then stop_pid "$pid"; rm -f "$STATE"; echo "已关闭对外监听的远程 Agent"; else echo "已关闭手机连接"; fi',
   ].join("\n");
   return remoteShellCommand(script);
 }
@@ -495,7 +706,13 @@ function agentProcessHelpers(): string[] {
  * and this prints it back as `FASTVIBE_PORT=`. A running Agent of this runtime release
  * with the right token is reused; any other FastVibe Agent is stopped first.
  */
-export function buildAgentBootstrapCommand(port: number | undefined, source: AgentRuntimeSource, target: AgentRuntimeTarget = "linux-x64", syncToken = ""): string {
+export function buildAgentBootstrapCommand(
+  port: number | undefined,
+  source: AgentRuntimeSource,
+  target: AgentRuntimeTarget = "linux-x64",
+  syncToken = "",
+  listen: { exposed: boolean } = { exposed: false },
+): string {
   const requested = port && Number.isInteger(port) && port >= 1 && port <= 65_535 ? port : 0;
   const safeVersion = source.release.replace(/[^0-9A-Za-z._-]/g, "_");
   const safeTarget = target === "linux-arm64" ? "linux-arm64" : "linux-x64";
@@ -505,6 +722,9 @@ export function buildAgentBootstrapCommand(port: number | undefined, source: Age
   const safeSyncToken = /^[a-f0-9]{64}$/.test(syncToken) ? syncToken : "";
   const script = [
     `REQUESTED_PORT=${requested}`,
+    // 1 listens beyond loopback (phone access); the Agent itself refuses that without a password.
+    `WANT_PUBLIC=${listen.exposed ? 1 : 0}`,
+    `LISTEN_HOST=${listen.exposed ? "0.0.0.0" : "127.0.0.1"}`,
     `VERSION='${safeVersion}'`,
     `TARGET='${safeTarget}'`,
     `EXPECTED_RUNTIME_HASH='${safeRuntimeHash}'`,
@@ -608,7 +828,8 @@ export function buildAgentBootstrapCommand(port: number | undefined, source: Age
     '  case "$(paths_for "$pid" || true)" in',
     '    *"/.fastvibe-agent/releases/$VERSION/"*)',
     '      RUNNING_TOKEN=$(agent_token "$pid")',
-    '      if [ "$TOKEN_CREATED" = "0" ] && [ -n "$SYNC_TOKEN" ] && [ "$RUNNING_TOKEN" = "$SYNC_TOKEN" ] && { [ "$REQUESTED_PORT" = 0 ] || [ "$REQUESTED_PORT" = "$PORT" ]; } && wait_for_agent "$pid"; then',
+    '      RUNNING_PUBLIC=$(state_field public); [ -n "$RUNNING_PUBLIC" ] || RUNNING_PUBLIC=0',
+    '      if [ "$TOKEN_CREATED" = "0" ] && [ -n "$SYNC_TOKEN" ] && [ "$RUNNING_TOKEN" = "$SYNC_TOKEN" ] && { [ "$REQUESTED_PORT" = 0 ] || [ "$REQUESTED_PORT" = "$PORT" ]; } && [ "$RUNNING_PUBLIC" = "$WANT_PUBLIC" ] && wait_for_agent "$pid"; then',
     '        echo "FastVibe Agent $VERSION is already running"',
     '        printf "FASTVIBE_PORT=%s\\n" "$PORT"',
     '        printf "FASTVIBE_AGENT_SYNC_TOKEN=%s\\n" "$SYNC_TOKEN"',
@@ -622,12 +843,15 @@ export function buildAgentBootstrapCommand(port: number | undefined, source: Age
     'fi',
     'if [ "$REQUESTED_PORT" != 0 ] && port_busy "$REQUESTED_PORT"; then echo "Port $REQUESTED_PORT is already in use" >&2; exit 1; fi',
     'rm -f "$STATE"',
-    'FASTVIBE_VERSION="$VERSION" FASTVIBE_AGENT_SYNC_TOKEN="$SYNC_TOKEN" nohup "$NODE" "$MAIN" --headless --port=$REQUESTED_PORT --state-file="$STATE" >"$LOG" 2>&1 </dev/null &',
+    'FASTVIBE_VERSION="$VERSION" FASTVIBE_AGENT_SYNC_TOKEN="$SYNC_TOKEN" nohup "$NODE" "$MAIN" --headless --port=$REQUESTED_PORT --host=$LISTEN_HOST --state-file="$STATE" >"$LOG" 2>&1 </dev/null &',
     'AGENT_PID=$!',
     'echo "FastVibe Agent started in the background"',
     'echo "正在等待远程 Agent 就绪…"',
     'if ! wait_for_agent "$AGENT_PID"; then echo "远程 Agent 启动失败" >&2; tail -n 20 "$LOG" >&2 || true; exit 1; fi',
-    'echo "远程 Agent 已就绪（端口 $PORT）"',
+    // An Agent from before `--host` ignores it and listens on loopback, which the next connect
+    // would read as "not what the profile asks for" and restart again, forever. Say so once.
+    'if [ "$WANT_PUBLIC" = 1 ] && [ "$(state_field public)" != 1 ]; then echo "远程 Agent 版本过旧，不支持对外监听" >&2; stop_pid "$AGENT_PID"; rm -f "$STATE"; exit 1; fi',
+    'if [ "$WANT_PUBLIC" = 1 ]; then echo "远程 Agent 已就绪（对外监听，端口 $PORT）"; else echo "远程 Agent 已就绪（端口 $PORT）"; fi',
     'printf "FASTVIBE_PORT=%s\\n" "$PORT"',
     'prune',
     'if [ -n "$SYNC_TOKEN" ]; then printf "FASTVIBE_AGENT_SYNC_TOKEN=%s\\n" "$SYNC_TOKEN"; fi',

@@ -31,7 +31,7 @@ export function AddressActions({
   const { t } = useTranslation("settings");
 
   return (
-    <span className={cn("inline-flex items-center gap-0.5", className)}>
+    <span className={cn("inline-flex items-center gap-1.5", className)}>
       <CopyAction value={value} />
       {/*
        * A code is only offered when another device could actually open the address.
@@ -134,7 +134,7 @@ function CopyAction({ value }: { value: string }): JSX.Element {
  * leaves its trigger, and scanning means leaving the trigger to point a camera at the
  * code. `openOnHover` + a hoverable popup is the shape that survives that.
  */
-function QrAction({ value }: { value: string }): JSX.Element {
+export function QrAction({ value }: { value: string }): JSX.Element {
   const { t } = useTranslation("settings");
 
   return (

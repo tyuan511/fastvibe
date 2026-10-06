@@ -5,7 +5,7 @@
   "navigation": "Main navigation",
   "skip": "Skip to main content",
   "languageLabel": "Choose language",
-  "nav": { "badge": "Desktop", "product": "Product", "download": "Download", "github": "GitHub" },
+  "nav": { "badge": "Desktop", "product": "Product", "mobile": "Mobile", "download": "Download", "github": "GitHub" },
   "hero": {
     "eyebrow": "FastVibe · Open-source desktop workspace",
     "title": "A workspace for your agents",
@@ -51,6 +51,23 @@
     "models": { "title": "Make the workspace your own", "copy": "Use the models you trust and the tools you already know. Configure providers, connect MCP servers and install skills and extensions. Your workflow doesn't have to fit a single provider.", "alt": "FastVibe in English: model and provider configuration" },
     "enlarge": "Enlarge screenshot",
     "close": "Close screenshot"
+  },
+  "mobile": {
+    "eyebrow": "MOBILE",
+    "title": "Take your agent with you",
+    "copy": "FastVibe on your computer keeps the agent running. The mobile app lets you follow chats, send messages and handle approvals from anywhere.",
+    "items": {
+      "chat": "Follow conversations and tasks on the go",
+      "connect": "Connect over Wi-Fi or scan a tunnel QR code",
+      "secure": "Use FastVibe remote access and device authentication"
+    },
+    "cardTitle": "FastVibe for Android",
+    "latest": "Latest mobile build",
+    "cardCopy": "Download the APK and connect it to FastVibe on your computer. Mobile releases are versioned independently from desktop builds.",
+    "downloadApk": "Download APK",
+    "viewReleases": "View mobile releases",
+    "checksum": "SHA-256 checksum",
+    "releasePage": "Release details"
   },
   "download": {
     "eyebrow": "GET STARTED",

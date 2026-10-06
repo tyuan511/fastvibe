@@ -1,6 +1,6 @@
 {
   "name": "fastvibe",
-  "version": "0.13.0",
+  "version": "0.15.0",
   "private": true,
   "license": "MIT",
   "description": "Desktop client for agent work, code, and cowork",
@@ -21,7 +21,7 @@
   "scripts": {
     "sync:models": "node scripts/sync-models-dev.mjs",
     "sync": "node scripts/sync-models-dev.mjs",
-    "predev": "node scripts/sync-models-dev.mjs && node scripts/fetch-cua-driver.mjs",
+    "predev": "node scripts/ensure-electron.mjs && node scripts/sync-models-dev.mjs && node scripts/fetch-cua-driver.mjs",
     "dev": "electron-vite dev",
     "prebuild": "node scripts/sync-models-dev.mjs && node scripts/check-injected-scripts.mjs && node scripts/fetch-cua-driver.mjs",
     "build": "electron-vite build",
@@ -67,7 +67,7 @@
     "proxy-agent": "^8.0.2",
     "sonner": "^2.0.8",
     "typebox": "1.3.7",
-    "undici": "^7.29.1",
+    "undici": "8.10.2",
     "ws": "^8.21.3"
   },
   "devDependencies": {

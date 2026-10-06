@@ -165,6 +165,7 @@ import { builtinExtensionFile, builtinExtensionPaths, builtinSkillPaths, Extensi
 import { branchExists, createGitWorktree, gitBranch, gitCommonRoot, gitToplevel, listGitWorktrees, removeGitWorktree } from "./git-worktree";
 import { bindBrowserConversation, bindComputerConversation } from "./conversation-binding";
 import { createTuiWidget, renderTuiComponent, type TuiComponent } from "./tui-bridge";
+import { ActivationTicket } from "./activation-ticket";
 
 type ManagedSession = { conversationId: string; cwd: string; session: AgentSession; extensions: LoadExtensionsResult; unsubscribe: () => void };
 /** SDK UI context plus FastVibe's single-panel multi-question prompt. */
@@ -304,6 +305,8 @@ export class PiProcessManager {
   #sessionTouched = new Map<string, number>();
   #sessionSweep: NodeJS.Timeout | null = null;
   #activeId: string | null = null;
+  /** Monotonic generation for foreground conversation activation. A slow open must not win over a newer one. */
+  #activationTicket = new ActivationTicket();
   #status: EngineStatus = { state: "idle" };
   #cwd: string;
   #statusListeners = new Set<(status: EngineStatus) => void>();
@@ -820,6 +823,7 @@ export class PiProcessManager {
   async createSideConversation(project?: string, parentId?: string, title?: string): Promise<ConversationOpenResult> {
     await this.#ensureReady();
     if (!parentId) throw new Error(uiText("辅助对话必须绑定主会话", "A side chat must be bound to a main session"));
+    const activation = this.#activationTicket.current();
     const parent = this.#catalog.get(parentId);
     if (!parent || parent.kind === "side-chat") throw new Error(uiText("主会话不存在", "Main session not found"));
     const previous = this.#activeId;
@@ -831,7 +835,7 @@ export class PiProcessManager {
     });
     const managed = await this.#ensureSession(conversation);
     managed.session.setSessionName(conversation.title);
-    if (previous) {
+    if (previous && this.#activationTicket.isCurrent(activation) && this.#activeId === previous) {
       const prior = this.#sessions.get(previous);
       if (prior) this.#activate(prior);
       else this.#catalog.setActive(previous);
@@ -1215,6 +1219,9 @@ export class PiProcessManager {
    * gets a new session id. The workspace is deliberately untouched.
    */
   async fork(entryId?: string, conversationId?: string): Promise<ConversationOpenResult> {
+    // Forking opens the new chat when it finishes. Claim that foreground slot now so
+    // a slow fork cannot jump over a conversation the user opens meanwhile.
+    const activation = this.#activationTicket.begin();
     const resolved = await this.#sessionFor(conversationId);
     const sourceId = resolved.id;
     const source = sourceId ? this.#catalog.get(sourceId) : undefined;
@@ -1277,7 +1284,7 @@ export class PiProcessManager {
         titleManual: true,
         preview,
       }) ?? conversation;
-      this.#activate(managed);
+      if (this.#activationTicket.isCurrent(activation)) this.#activate(managed);
       return this.#opened(updated, this.#messages(managed.session, conversation.id), state);
     } catch (error) {
       if (conversation) {
@@ -1523,16 +1530,21 @@ export class PiProcessManager {
   }
   async newSession(): Promise<void> { await (await this.#active()).abort(); }
 
-  async createConversation(project?: string, options?: { activate?: boolean }): Promise<ConversationOpenResult> {
+  async createConversation(project?: string, options?: { activate?: boolean; reuseEmpty?: boolean }): Promise<ConversationOpenResult> {
       // An unfinished chat is the project's composer workspace. Keep it around when
       // the user opens another chat, and reuse it instead of creating a second empty
       // session for the same project. The old global cleanup deleted the only place
-      // where a long prompt (and its model choices) could live before Send.
+      // where a long prompt (and its model choices) could live before Send. Clients
+      // that present an explicit new-chat flow can opt out of that draft reuse.
       const activate = options?.activate !== false;
-      const existing = this.#catalog.findEmpty(project);
+      const existing = options?.reuseEmpty === false ? undefined : this.#catalog.findEmpty(project);
       if (existing && activate) return this.openConversation(existing.id);
-      const conversation = existing ?? this.#catalog.create(project, undefined, { activate });
-      if (activate) return this.#openFresh(conversation);
+      // Do not let catalog.create publish a foreground id before the session is ready:
+      // another create/open can finish first. The activation ticket decides which one
+      // is allowed to become the engine's current conversation.
+      const activation = activate ? this.#activationTicket.begin() : undefined;
+      const conversation = existing ?? this.#catalog.create(project, undefined, { activate: false });
+      if (activate) return this.#openFresh(conversation, activation!);
       // The phone page's 新对话. The engine's active id is one value every desktop window
       // follows, so a chat started on the phone must not move it: the desktop would jump
       // to an empty chat it never asked for. Every call on it carries its own id instead.
@@ -1546,10 +1558,13 @@ export class PiProcessManager {
   async openConversation(id: string): Promise<ConversationOpenResult> {
       const conversation = this.#catalog.get(id);
       if (!conversation) throw new Error("conversation not found");
+      const activation = this.#activationTicket.begin();
       await this.#ensureReady();
-      this.#catalog.setActive(id);
+      // Loading a session is asynchronous. Only the newest foreground request may
+      // publish the active id after that load completes; otherwise an older click can
+      // finish late and yank the renderer back to its conversation.
       const managed = await this.#ensureSession(conversation);
-      this.#activate(managed);
+      if (this.#activationTicket.isCurrent(activation)) this.#activate(managed);
       const state = this.#state(managed.session, id);
       const messages = this.#messages(managed.session, id);
       const updated = this.#catalog.update(id, { sessionFile: state.sessionFile, sessionId: state.sessionId }) ?? conversation;
@@ -1633,6 +1648,7 @@ export class PiProcessManager {
     // into the disposed agent, and do not replay an object the old agent already claimed.
     this.#queueRebuilds.add(id);
     this.#bumpQueueEpoch(id);
+    const activation = this.#activationTicket.current();
     try {
       await this.#drainPromises.get(id)?.catch(() => undefined);
       const oldAdapter = this.#sdkQueueAdapters.get(id);
@@ -1661,10 +1677,10 @@ export class PiProcessManager {
       this.#pendingCwdRebind.delete(id);
       // The replacement session republishes whatever it holds on `session_start`.
       this.#extensionStatuses.delete(id);
-      if (this.#activeId === id) {
+      if (this.#activeId === id && this.#activationTicket.isCurrent(activation)) {
         await this.#ensureReady();
         const reopened = await this.#ensureSession(updated);
-        this.#activate(reopened);
+        if (this.#activationTicket.isCurrent(activation) && this.#activeId === id) this.#activate(reopened);
       }
     } finally {
       this.#queueRebuilds.delete(id);
@@ -1785,9 +1801,10 @@ export class PiProcessManager {
    * `seq` is the last event number in existence at that instant. A caller that
    * subscribes afterwards discards anything at or below it and applies the rest.
    */
-  async getSnapshot(conversationId?: string): Promise<ConversationSnapshot> {
+  async getSnapshot(conversationId?: string, fromEntryId?: string): Promise<ConversationSnapshot> {
     const { id, session } = await this.#sessionFor(conversationId);
-    const messages = this.#messages(session, id);
+    const projected = this.#messagesFrom(session, id, fromEntryId);
+    const messages = projected.messages;
     const running = id ? this.#busy(id) : false;
     const turn = running && id ? this.#turnEvents.get(id) : undefined;
     const pendingUi: Array<Record<string, unknown>> = [];
@@ -1799,6 +1816,7 @@ export class PiProcessManager {
     return {
       conversationId: id ?? null,
       messages,
+      ...(fromEntryId ? { messageMode: projected.anchored ? "tail" : "full", messageAnchorId: fromEntryId } : {}),
       running,
       queue: id ? this.#messageQueue.state(id) : { conversationId: "", revision: 0, items: [], pause: null },
       pendingUi,
@@ -2382,6 +2400,7 @@ export class PiProcessManager {
       withSession?: (ctx: ReplacementContext) => Promise<void>;
     },
   ): Promise<{ cancelled: boolean }> {
+    const activation = this.#activationTicket.begin();
     const source = this.#catalog.get(sourceId);
     const inherited = this.#sessions.get(sourceId)?.cwd ?? source?.cwd ?? source?.project;
     const minted = inherited ? undefined : randomUUID();
@@ -2389,16 +2408,16 @@ export class PiProcessManager {
     const sessionDir = join(this.#paths.sessionsDir, `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`);
     const sessionManager = SessionManager.create(cwd, sessionDir);
     if (options?.setup) await options.setup(sessionManager);
-    const conversation = this.#catalog.create(source?.project, minted ? { cwd, sessionId: minted } : { cwd });
+    const conversation = this.#catalog.create(source?.project, minted ? { cwd, sessionId: minted } : { cwd }, { activate: false });
     const managed = await this.#createSession(conversation, cwd, sessionManager, {
       type: "session_start",
       reason: "new",
       ...(options?.parentSession ? { previousSessionFile: options.parentSession } : {}),
     });
-    this.#catalog.setActive(conversation.id);
-    this.#activate(managed);
     const state = this.#state(managed.session, conversation.id);
     const updated = this.#catalog.update(conversation.id, { sessionFile: state.sessionFile, sessionId: state.sessionId }) ?? conversation;
+    if (!this.#activationTicket.isCurrent(activation)) return { cancelled: false };
+    this.#activate(managed);
     this.#emit({ type: "conversation_opened", result: this.#opened(updated, [], state) });
     if (options?.withSession) await options.withSession(managed.session.createReplacedSessionContext());
     return { cancelled: false };
@@ -2409,15 +2428,16 @@ export class PiProcessManager {
     sessionPath: string,
     options?: { withSession?: (ctx: ReplacementContext) => Promise<void> },
   ): Promise<{ cancelled: boolean }> {
+    const activation = this.#activationTicket.begin();
     await this.#ensureReady();
     let conversation = this.#catalog.listAll().find((item) => item.sessionFile === sessionPath);
-    if (!conversation) conversation = this.#catalog.create(undefined, { sessionFile: sessionPath });
-    this.#catalog.setActive(conversation.id);
+    if (!conversation) conversation = this.#catalog.create(undefined, { sessionFile: sessionPath }, { activate: false });
     const managed = await this.#ensureSession(conversation);
-    this.#activate(managed);
     const state = this.#state(managed.session, conversation.id);
     const messages = this.#messages(managed.session, conversation.id);
     const updated = this.#catalog.update(conversation.id, { sessionFile: state.sessionFile, sessionId: state.sessionId }) ?? conversation;
+    if (!this.#activationTicket.isCurrent(activation)) return { cancelled: false };
+    this.#activate(managed);
     this.#emit({ type: "conversation_opened", result: this.#opened(updated, messages, state) });
     if (options?.withSession) await options.withSession(managed.session.createReplacedSessionContext());
     return { cancelled: false };
@@ -2475,6 +2495,7 @@ export class PiProcessManager {
       this.#pendingCwdRebind.add(id);
       return false;
     }
+    const activation = this.#activationTicket.current();
     this.#queueRebuilds.add(id);
     this.#bumpQueueEpoch(id);
     try {
@@ -2496,10 +2517,10 @@ export class PiProcessManager {
       this.#preferredQueueIds.delete(id);
       this.#interruptedRuns.delete(id);
       this.#pendingCwdRebind.delete(id);
-      if (this.#activeId === id) {
+      if (this.#activeId === id && this.#activationTicket.isCurrent(activation)) {
         await this.#ensureReady();
         const reopened = await this.#ensureSession(conversation);
-        this.#activate(reopened);
+        if (this.#activationTicket.isCurrent(activation) && this.#activeId === id) this.#activate(reopened);
       }
     } finally {
       this.#queueRebuilds.delete(id);
@@ -2570,13 +2591,13 @@ export class PiProcessManager {
     );
   }
   async #ensureReady(): Promise<void> { if (this.#status.state !== "ready" || !this.#models) await this.start(this.#cwd); if (this.#status.state !== "ready" || !this.#models) throw new Error("engine not ready"); }
-  async #openFresh(conversation: Conversation): Promise<ConversationOpenResult> {
+  async #openFresh(conversation: Conversation, activation: number): Promise<ConversationOpenResult> {
     // A session can be created with no model at all (the SDK keeps it model-less and
     // reports the fallback), which is what lets a conversation exist before the user has
     // connected a provider. Nothing can be sent on it — the composer refuses to type
     // without a model — and the pick made meanwhile is applied as soon as one exists.
     const managed = await this.#ensureSession(conversation);
-    this.#activate(managed);
+    if (this.#activationTicket.isCurrent(activation)) this.#activate(managed);
     const state = this.#state(managed.session, conversation.id);
     const updated = this.#catalog.update(conversation.id, { sessionFile: state.sessionFile, sessionId: state.sessionId }) ?? conversation;
     return this.#opened(updated, [], state);
@@ -2591,13 +2612,14 @@ export class PiProcessManager {
    * answers with a draft state. Callers decide what a missing conversation means for them.
    */
   async #activeSession(): Promise<AgentSession | null> {
+    const activation = this.#activationTicket.current();
     await this.#ensureReady();
     const active = this.#activeId ? this.#sessions.get(this.#activeId) : undefined;
     if (active) return active.session;
     const conversation = this.#catalog.activeId ? this.#catalog.get(this.#catalog.activeId) : undefined;
     if (!conversation) return null;
     const managed = await this.#ensureSession(conversation);
-    this.#activate(managed);
+    if (this.#activationTicket.isCurrent(activation)) this.#activate(managed);
     return managed.session;
   }
   async #active(): Promise<AgentSession> {

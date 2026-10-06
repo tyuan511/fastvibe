@@ -91,6 +91,8 @@ const DENIED = new Map<string, string>([
   [Ipc.sshHostKeyScan, "SSH 主机只能在本机管理"],
   [Ipc.sshHostKeyTrust, "SSH 主机只能在本机管理"],
   [Ipc.sshStopAgent, "SSH 主机只能在本机管理"],
+  [Ipc.sshSetPhoneAccess, "SSH 主机只能在本机管理"],
+  [Ipc.sshStartAgent, "SSH 主机只能在本机管理"],
   [Ipc.sshConnect, "SSH 主机只能在本机管理"],
   [Ipc.sshDisconnect, "SSH 主机只能在本机管理"],
   [Ipc.sshState, "SSH 主机只能在本机管理"],

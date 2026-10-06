@@ -8,6 +8,7 @@ import {
   namespaceConversationSnapshot,
   namespaceIdList,
   namespaceIdMap,
+  namespaceQueueState,
   namespaceRemotePush,
   shouldRelayRemotePush,
 } from "../src/shared/remote-events.ts";
@@ -116,6 +117,34 @@ test("conversation_opened is dropped so a remote create cannot navigate this win
     ),
     undefined,
   );
+});
+
+test("queue events namespace the queue owner and each queued item", () => {
+  const next = namespaceRemotePush(
+    Ipc.event,
+    {
+      type: "queue_changed",
+      conversationId: "conv-1",
+      queue: {
+        conversationId: "conv-1",
+        revision: 3,
+        pause: null,
+        items: [{ id: "queue-1", conversationId: "conv-1", text: "继续", behavior: "followUp" }],
+      },
+    },
+    SERVER,
+  ) as Record<string, unknown>;
+  assert.equal(next.conversationId, "remote:srv_alpha:conv-1");
+  assert.deepEqual(next.queue, {
+    conversationId: "remote:srv_alpha:conv-1",
+    revision: 3,
+    pause: null,
+    items: [{ id: "queue-1", conversationId: "remote:srv_alpha:conv-1", text: "继续", behavior: "followUp" }],
+  });
+  assert.deepEqual(namespaceQueueState({ conversationId: "conv-2", items: [] }, SERVER), {
+    conversationId: "remote:srv_alpha:conv-2",
+    items: [],
+  });
 });
 
 test("conversation_running keeps its boolean and namespaces the id", () => {

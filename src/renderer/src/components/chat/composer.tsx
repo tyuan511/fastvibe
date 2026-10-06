@@ -21,6 +21,7 @@ import type {
   SlashCommand,
 } from "@shared/types";
 import { filesToAttachments, pastedTextAttachmentName, shouldAttachPastedText } from "@/lib/attachments";
+import { randomUUID } from "../../../../shared/random.ts";
 import { useGitStatus } from "@/lib/use-git-status";
 import { cn } from "@/lib/utils";
 import { formatDuration } from "@/lib/time";
@@ -558,7 +559,7 @@ export function Composer({
     onAttachmentsChange([
       ...attachments,
       {
-        id: crypto.randomUUID(),
+        id: randomUUID(),
         kind: "file",
         name: pastedTextAttachmentName(text) || t("composer.pastedTextFile"),
         mimeType: "text/plain",

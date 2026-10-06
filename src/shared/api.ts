@@ -162,12 +162,12 @@ export function createFastVibeApi(t: ApiTransport) {
         images?: PromptImage[];
         preview?: QueuedPromptPreview;
       }): Promise<ConversationQueueState> => t.invoke(Ipc.engineQueueAdd, payload),
-      queueCancel: (id: string): Promise<ConversationQueueState | null> =>
-        t.invoke(Ipc.engineQueueCancel, { id }),
-      queueRecall: (id: string): Promise<ConversationQueueState | null> =>
-        t.invoke(Ipc.engineQueueRecall, { id }),
-      queueSendNow: (id: string): Promise<ConversationQueueState | null> =>
-        t.invoke(Ipc.engineQueueSendNow, { id }),
+      queueCancel: (id: string, conversationId?: string): Promise<ConversationQueueState | null> =>
+        t.invoke(Ipc.engineQueueCancel, { id, conversationId }),
+      queueRecall: (id: string, conversationId?: string): Promise<ConversationQueueState | null> =>
+        t.invoke(Ipc.engineQueueRecall, { id, conversationId }),
+      queueSendNow: (id: string, conversationId?: string): Promise<ConversationQueueState | null> =>
+        t.invoke(Ipc.engineQueueSendNow, { id, conversationId }),
       queueReorder: (conversationId: string, ids: string[]): Promise<ConversationQueueState> =>
         t.invoke(Ipc.engineQueueReorder, { conversationId, ids }),
       queueResume: (conversationId: string): Promise<ConversationQueueState> =>
@@ -246,10 +246,12 @@ export function createFastVibeApi(t: ApiTransport) {
         t.invoke(Ipc.engineGetMessagesSince, { anchorEntryId, conversationId }),
       /**
        * Transcript plus the turn in flight, taken at one instant. What a client reads to
-       * rebuild a conversation exactly — including one whose run is still going.
+       * rebuild a conversation exactly — including one whose run is still going. When
+       * `fromEntryId` is supplied, the response contains only the tail from that entry
+       * when the entry is still on the current branch.
        */
-      getSnapshot: (conversationId?: string): Promise<ConversationSnapshot> =>
-        t.invoke(Ipc.engineGetSnapshot, { conversationId }),
+      getSnapshot: (conversationId?: string, fromEntryId?: string): Promise<ConversationSnapshot> =>
+        t.invoke(Ipc.engineGetSnapshot, { conversationId, fromEntryId }),
       getStats: (conversationId?: string): Promise<SessionStats> =>
         t.invoke(Ipc.engineGetStats, { conversationId }),
       setSteeringMode: (mode: "all" | "one-at-a-time", conversationId?: string): Promise<EngineSessionState> =>
@@ -348,8 +350,12 @@ export function createFastVibeApi(t: ApiTransport) {
        * one every desktop window follows. The phone page uses it so 新对话 there does not
        * pull the desktop onto an empty chat.
        */
-      create: (project?: string, options?: { activate?: boolean }): Promise<ConversationOpenResult> =>
-        t.invoke(Ipc.conversationsCreate, options?.activate === false ? { project, activate: false } : { project }),
+      create: (project?: string, options?: { activate?: boolean; reuseEmpty?: boolean }): Promise<ConversationOpenResult> =>
+        t.invoke(Ipc.conversationsCreate, {
+          project,
+          ...(options?.activate === false ? { activate: false } : {}),
+          ...(options?.reuseEmpty === false ? { reuseEmpty: false } : {}),
+        }),
       open: (id: string): Promise<ConversationOpenResult> =>
         t.invoke(Ipc.conversationsOpen, { id }),
       rename: (id: string, title: string): Promise<WorkspaceSnapshot> =>
@@ -496,6 +502,17 @@ export function createFastVibeApi(t: ApiTransport) {
       scanHostKey: (hostId: string): Promise<SshHostKeyScan> => t.invoke(Ipc.sshHostKeyScan, { hostId }),
       trustHostKey: (hostId: string, fingerprints: string[]): Promise<void> => t.invoke(Ipc.sshHostKeyTrust, { hostId, fingerprints }),
       stopAgent: (hostId: string): Promise<string> => t.invoke(Ipc.sshStopAgent, { hostId }),
+      /** Start the Agent without a project; resolves with a one-line status. Progress arrives on `onAgentProgress`. */
+      startAgent: (hostId: string): Promise<string> => t.invoke(Ipc.sshStartAgent, { hostId }),
+      onAgentProgress: (listener: (progress: { hostId: string; text: string }) => void): (() => void) =>
+        t.subscribe(Ipc.sshAgentProgress, listener),
+      /**
+       * Turn phone access on or off for a host. Turning it on needs a `port` and, the first
+       * time, a `password`; the host's Agent restarts once. `publicUrl` is what the phone
+       * should connect to when that is not `http://<host>:<port>` (an https address).
+       */
+      setPhoneAccess: (payload: { hostId: string; enabled: boolean; password?: string; port?: number; publicUrl?: string }): Promise<{ saved: RemoteHostProfile[]; discovered: RemoteHostProfile[] }> =>
+        t.invoke(Ipc.sshSetPhoneAccess, payload),
       connect: (hostId: string): Promise<RemoteHostConnectionState> => t.invoke(Ipc.sshConnect, { hostId }),
       disconnect: (hostId?: string): Promise<RemoteHostConnectionState> =>
         t.invoke(Ipc.sshDisconnect, hostId ? { hostId } : undefined),
@@ -541,8 +558,11 @@ export function createFastVibeApi(t: ApiTransport) {
       clearPassword: (): Promise<import("@shared/ipc").RemoteServerState> => t.invoke(Ipc.remoteClearPassword),
       start: (port?: number): Promise<import("@shared/ipc").RemoteServerState> =>
         t.invoke(Ipc.remoteStart, { port }),
-      setLanAccess: (enabled: boolean): Promise<import("@shared/ipc").RemoteServerState> =>
-        t.invoke(Ipc.remoteSetLanAccess, { enabled }),
+      setLanAccess: (
+        enabled: boolean,
+        family?: import("@shared/ipc").RemoteLanAddressFamily,
+      ): Promise<import("@shared/ipc").RemoteServerState> =>
+        t.invoke(Ipc.remoteSetLanAccess, { enabled, family }),
       stop: (): Promise<import("@shared/ipc").RemoteServerState> => t.invoke(Ipc.remoteStop),
       listDevices: (): Promise<import("@shared/ipc").RemoteDeviceInfo[]> => t.invoke(Ipc.remoteListDevices),
       revokeDevice: (id: string): Promise<import("@shared/ipc").RemoteDeviceInfo[]> =>

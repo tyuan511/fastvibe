@@ -195,6 +195,21 @@ h3 { font-size: 1.375rem; font-weight: 550; letter-spacing: -.02em; line-height:
 .close-screenshot { position: sticky; top: .75rem; margin: .75rem .75rem -3.5rem auto; z-index: 1; display: grid; place-items: center; width: 2.75rem; height: 2.75rem; border-radius: .5rem; border: 1px solid var(--border-strong); background: var(--surface); color: var(--foreground); }
 body:has(.screenshot-dialog[open]) { overflow: hidden; }
 
+.mobile-section { display: grid; grid-template-columns: minmax(0, 1fr) minmax(22rem, .9fr); align-items: center; gap: 4rem; padding-top: 4.5rem; padding-bottom: 4.5rem; border-top: 1px solid var(--border); }
+.mobile-copy { max-width: 36rem; }
+.mobile-copy h2 { margin-top: 1.25rem; }
+.mobile-features { list-style: none; display: grid; gap: .75rem; padding: 0; margin: 1.75rem 0 0; color: var(--muted); font-size: .875rem; }
+.mobile-features li { display: flex; align-items: center; gap: .625rem; }
+.mobile-features svg { color: var(--accent); }
+.mobile-download-card { padding: 1.75rem; border: 1px solid var(--border); border-radius: .875rem; background: var(--surface); box-shadow: var(--shadow); }
+.mobile-card-heading { display: flex; align-items: center; gap: .875rem; }
+.mobile-icon { display: grid; place-items: center; width: 3rem; height: 3rem; border-radius: .75rem; background: var(--accent-soft); color: var(--accent); }
+.mobile-card-heading p { font-size: 1.125rem; font-weight: 550; line-height: 1.5; }
+.mobile-card-heading span:not(.mobile-icon) { display: block; color: var(--muted); font-size: .75rem; }
+.mobile-card-copy { color: var(--muted); font-size: .875rem; line-height: 1.8; margin-top: 1.25rem; }
+.mobile-actions { display: flex; align-items: center; flex-wrap: wrap; gap: .75rem 1rem; margin-top: 1.5rem; }
+.mobile-actions .text-link { min-height: 2.75rem; color: var(--muted); font-size: .75rem; }
+.mobile-actions .text-link:hover { color: var(--accent); }
 .download-section { padding-top: 3rem; padding-bottom: 5rem; }
 .download-heading { display: flex; justify-content: space-between; align-items: flex-end; gap: 2rem; margin-bottom: 2.5rem; }
 .download-heading h2 { margin-top: 1.25rem; font-size: 2rem; }
@@ -265,6 +280,8 @@ body:has(.screenshot-dialog[open]) { overflow: hidden; }
   .feature-index { margin-bottom: .75rem; }
   .features-section { padding-bottom: 2rem; }
   .community-section h2, .download-heading h2 { font-size: 1.75rem; }
+  .mobile-section { grid-template-columns: 1fr; gap: 2rem; padding-top: 3rem; padding-bottom: 3.5rem; }
+  .mobile-copy { max-width: 38rem; }
   .download-heading { display: block; }
   .release-link { margin-top: 1rem; }
   .download-grid { grid-template-columns: 1fr; }
@@ -296,6 +313,7 @@ body:has(.screenshot-dialog[open]) { overflow: hidden; }
   .hero-product-frame { padding: .375rem; border-radius: .875rem; }
   .feature-copy h3 { font-size: 1.25rem; }
   .product-screenshot { border-radius: .5rem; }
+  .mobile-download-card { padding: 1.25rem; }
   .download-card { padding: 1.25rem; }
   .site-footer > p { order: 3; width: 100%; }
   .footer-links { margin-left: auto; }

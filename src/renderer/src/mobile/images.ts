@@ -1,3 +1,4 @@
+import { randomUUID } from "../../../shared/random.ts";
 import type { ChatAttachment } from "@shared/types";
 
 /**
@@ -35,7 +36,7 @@ export async function photoToAttachment(file: File): Promise<ChatAttachment | nu
     const dataUrl = canvas.toDataURL("image/jpeg", QUALITY);
     const base = file.name.replace(/\.[^.]+$/, "") || "photo";
     return {
-      id: crypto.randomUUID(),
+      id: randomUUID(),
       kind: "image",
       name: `${base}.jpg`,
       mimeType: "image/jpeg",

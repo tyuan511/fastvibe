@@ -5,7 +5,7 @@ import { DownloadCards } from "./download-cards";
 import { DownloadPicker } from "./download-picker";
 import { Icon } from "./icons";
 import { ProductScreenshot } from "./product-screenshot";
-import type { LatestRelease } from "@/lib/github-release";
+import type { LatestMobileRelease, LatestRelease } from "@/lib/github-release";
 
 const GITHUB_URL = "https://github.com/tyuan511/fastvibe";
 const benefits = [
@@ -29,7 +29,7 @@ function TitleLines({ text }: { text: string }) {
   return <>{text.split("\n").map((line) => <span className="title-line" key={line}>{line}</span>)}</>;
 }
 
-export function SitePage({ release }: { release: LatestRelease }) {
+export function SitePage({ release, mobileRelease }: { release: LatestRelease; mobileRelease: LatestMobileRelease }) {
   const t = useTranslations();
   const locale = useLocale();
   const guide = `${GITHUB_URL}/blob/main/${locale === "zh" ? "README.zh-CN.md" : "README.md"}`;
@@ -41,7 +41,7 @@ export function SitePage({ release }: { release: LatestRelease }) {
         <div className="header-inner container">
           <a className="brand" href="#top" aria-label={t("home")}><Image src="/brand/f-mark.png" alt="" width={32} height={32} priority /><span>FastVibe</span></a>
           <span className="brand-badge">{t("nav.badge")}</span>
-          <nav className="site-nav" aria-label={t("navigation")}><a href="#features">{t("nav.product")}</a><a href="#download">{t("nav.download")}</a></nav>
+          <nav className="site-nav" aria-label={t("navigation")}><a href="#features">{t("nav.product")}</a><a href="#mobile">{t("nav.mobile")}</a><a href="#download">{t("nav.download")}</a></nav>
           <LanguageSwitch />
           <a className="header-github pill-button" href={GITHUB_URL} target="_blank" rel="noreferrer"><Icon name="github" size={15} />GitHub</a>
         </div>
@@ -112,6 +112,28 @@ export function SitePage({ release }: { release: LatestRelease }) {
                 <ProductScreenshot scene={id} />
               </article>
             ))}
+          </div>
+        </section>
+
+        <section className="mobile-section container" id="mobile" aria-labelledby="mobile-heading">
+          <div className="mobile-copy">
+            <p className="section-label">{t("mobile.eyebrow")}</p>
+            <h2 id="mobile-heading">{t("mobile.title")}</h2>
+            <p className="section-description">{t("mobile.copy")}</p>
+            <ul className="mobile-features">
+              <li><Icon name="smartphone" size={17} />{t("mobile.items.chat")}</li>
+              <li><Icon name="globe" size={17} />{t("mobile.items.connect")}</li>
+              <li><Icon name="shield" size={17} />{t("mobile.items.secure")}</li>
+            </ul>
+          </div>
+          <div className="mobile-download-card">
+            <div className="mobile-card-heading"><span className="mobile-icon"><Icon name="smartphone" size={25} /></span><div><p>{t("mobile.cardTitle")}</p><span>{mobileRelease.isFallback ? t("mobile.latest") : `${t("mobile.latest")} · ${mobileRelease.version}`}</span></div></div>
+            <p className="mobile-card-copy">{t("mobile.cardCopy")}</p>
+            <div className="mobile-actions">
+              <a className="pill-button primary" href={mobileRelease.apkUrl} target="_blank" rel="noreferrer"><Icon name="download" size={15} />{mobileRelease.isFallback ? t("mobile.viewReleases") : t("mobile.downloadApk")}</a>
+              {mobileRelease.checksumUrl && <a className="text-link" href={mobileRelease.checksumUrl} target="_blank" rel="noreferrer">{t("mobile.checksum")}<Icon name="arrow-up-right" size={14} /></a>}
+              <a className="text-link" href={mobileRelease.url} target="_blank" rel="noreferrer">{t("mobile.releasePage")}<Icon name="arrow-up-right" size={14} /></a>
+            </div>
           </div>
         </section>
 
