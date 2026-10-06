@@ -51,22 +51,60 @@ function useSystemBrowser(): boolean {
   }
 }
 
-/** Called by the browser-use extension running in the main process. */
-export function requestBrowser(request: BrowserRequest): Promise<unknown> {
+/**
+ * Called by the browser-use extension running in the main process.
+ *
+ * `signal` is the tool call's own: a Stop must end the wait at once. The page may be
+ * what is stuck (a guest that died mid-call never answers), and without this the call
+ * ran out its whole budget — up to 45s — while the engine's stop gave up after 15s and
+ * reported 「停止运行超时」 for a run that was in fact just waiting on a dead tab.
+ */
+export function requestBrowser(request: BrowserRequest, signal?: AbortSignal): Promise<unknown> {
+  if (signal?.aborted) return Promise.reject(abortError());
   if (useSystemBrowser()) {
     const profileDir = join(getFastVibePaths().runtimeRoot, "browser-profile");
-    return runBrowserCdp(request, profileDir);
+    return untilAborted(runBrowserCdp(request, profileDir), signal);
   }
   if (!target || target.isDestroyed()) return Promise.reject(new Error(uiText("内置浏览器尚未打开", "Built-in browser is not open")));
   const id = randomUUID();
   const timeout = Math.max(1_000, Math.min(request.timeoutMs ?? 30_000, 120_000));
   return new Promise((resolve, reject) => {
+    const settle = () => {
+      signal?.removeEventListener("abort", onAbort);
+    };
+    const onAbort = () => {
+      const entry = pending.get(id);
+      if (!entry) return;
+      pending.delete(id);
+      clearTimeout(entry.timer);
+      reject(abortError());
+    };
     const timer = setTimeout(() => {
       pending.delete(id);
+      settle();
       reject(new Error(uiText(`浏览器操作超时（${timeout}ms）`, `Browser action timed out (${timeout}ms)`)));
     }, timeout);
-    pending.set(id, { resolve, reject, timer });
+    pending.set(id, {
+      resolve: (value) => { settle(); resolve(value); },
+      reject: (error) => { settle(); reject(error); },
+      timer,
+    });
+    signal?.addEventListener("abort", onAbort, { once: true });
     target?.send(Ipc.browserRequest, { id, request });
+  });
+}
+
+function abortError(): Error {
+  return new Error(uiText("已中止", "Aborted"));
+}
+
+/** Stop waiting on `work` the moment `signal` fires; the work itself is left to finish alone. */
+function untilAborted<T>(work: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return work;
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(abortError());
+    signal.addEventListener("abort", onAbort, { once: true });
+    work.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
   });
 }
 
