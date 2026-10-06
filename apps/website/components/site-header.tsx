@@ -15,24 +15,30 @@ const links = [
 ] as const;
 
 /**
- * Transparent over the blue hero, solid once the page scrolls — like the reference.
- * Without JavaScript `data-top` never appears, so the bar stays solid and legible
- * over white content instead of leaving white text on a white page.
+ * Open on the hero, the bar is transparent with white type. After the first scroll it shrinks
+ * into a floating, frosted pill. The state lives on `<html data-scrolled>` and the styles key
+ * off it, so the markup the server sends is already the at-the-top look: nothing flips after
+ * hydration, which is what made the old bar flash from solid to clear on every refresh.
+ * Without JavaScript the CSS shows the pill instead (`@media (scripting: none)`), because
+ * white type over a white page would be unreadable.
  */
 export function SiteHeader() {
   const t = useTranslations();
-  const [top, setTop] = useState<boolean | null>(null);
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
-    const update = () => setTop(window.scrollY < 24);
+    const root = document.documentElement;
+    const update = () => root.toggleAttribute("data-scrolled", window.scrollY > 24);
     update();
     window.addEventListener("scroll", update, { passive: true });
-    return () => window.removeEventListener("scroll", update);
+    return () => {
+      window.removeEventListener("scroll", update);
+      root.removeAttribute("data-scrolled");
+    };
   }, []);
 
   return (
-    <header className="site-header" data-top={top === true && !open ? "true" : undefined} data-open={open || undefined}>
+    <header className="site-header" data-open={open || undefined}>
       <div className="header-inner">
         <a className="brand" href="#top" aria-label={t("home")} onClick={() => setOpen(false)}>
           <Image src="/brand/f-mark.png" alt="" width={28} height={28} priority />

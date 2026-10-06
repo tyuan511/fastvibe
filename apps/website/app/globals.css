@@ -134,14 +134,34 @@ h1, h2, h3, p { margin: 0; }
 .skip-link { position: fixed; top: 1rem; left: 1rem; z-index: 60; padding: .75rem 1rem; border-radius: .5rem; background: var(--ink); color: var(--on-ink); }
 .skip-link:not(:focus) { clip-path: inset(50%); width: 1px; height: 1px; overflow: hidden; padding: 0; }
 
-/* ── Header: transparent over the hero, solid after the first scroll ───────────── */
+/* ── Header: clear over the hero, a floating frosted pill once scrolled ────────── */
+/* The bar itself is only a positioning layer; .header-inner is what changes shape. The look is
+   a handful of variables so the at-the-top, scrolled, menu-open and no-JS states share one rule. */
 .site-header {
-  position: fixed; inset: 0 0 auto; z-index: 50; height: var(--header-h);
-  background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: saturate(180%) blur(16px);
-  border-bottom: 1px solid var(--border); color: var(--fg);
+  position: fixed; inset: 0 0 auto; z-index: 50; pointer-events: none;
+  --h-width: 100%; --h-height: var(--header-h); --h-top: 0px; --h-radius: 0px; --h-pad: 1.5rem;
+  --h-bg: transparent; --h-border: transparent; --h-shadow: 0 0 0 0 transparent; --h-blur: blur(0px) saturate(100%); --h-fg: #fff;
 }
-.site-header[data-top="true"] { background: transparent; backdrop-filter: none; border-bottom-color: transparent; color: #fff; }
-.header-inner { height: 100%; width: 100%; padding-inline: 1.5rem; display: flex; align-items: center; justify-content: space-between; position: relative; }
+:root[data-scrolled] .site-header, .site-header[data-open] {
+  --h-width: min(72rem, calc(100% - 2rem)); --h-height: 3.5rem; --h-top: .75rem; --h-radius: 9999px; --h-pad: 1rem;
+  --h-bg: color-mix(in srgb, var(--bg) 72%, transparent); --h-border: var(--border);
+  --h-shadow: 0 12px 32px -14px rgb(10 20 60 / .35); --h-blur: blur(18px) saturate(180%); --h-fg: var(--fg);
+}
+@media (scripting: none) {
+  .site-header {
+    --h-width: min(72rem, calc(100% - 2rem)); --h-height: 3.5rem; --h-top: .75rem; --h-radius: 9999px; --h-pad: 1rem;
+    --h-bg: color-mix(in srgb, var(--bg) 72%, transparent); --h-border: var(--border);
+    --h-shadow: 0 12px 32px -14px rgb(10 20 60 / .35); --h-blur: blur(18px) saturate(180%); --h-fg: var(--fg);
+  }
+}
+.header-inner {
+  pointer-events: auto; position: relative; display: flex; align-items: center; justify-content: space-between;
+  width: var(--h-width); height: var(--h-height); margin: var(--h-top) auto 0; padding-inline: var(--h-pad);
+  border-radius: var(--h-radius); border: 1px solid var(--h-border); background: var(--h-bg); color: var(--h-fg);
+  box-shadow: var(--h-shadow); -webkit-backdrop-filter: var(--h-blur); backdrop-filter: var(--h-blur);
+  transition: width .5s cubic-bezier(.2, .7, .2, 1), height .5s cubic-bezier(.2, .7, .2, 1), margin .5s cubic-bezier(.2, .7, .2, 1), padding .5s cubic-bezier(.2, .7, .2, 1),
+    border-radius .5s ease, background-color .4s ease, border-color .4s ease, box-shadow .4s ease, backdrop-filter .4s ease, color .3s ease;
+}
 .brand { display: inline-flex; align-items: center; gap: .5rem; font-weight: 650; font-size: 1.25rem; letter-spacing: -.02em; line-height: 1; }
 .brand img { width: 1.75rem; height: 1.75rem; border-radius: .375rem; }
 .site-nav { position: absolute; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: .25rem; }
@@ -152,7 +172,7 @@ h1, h2, h3, p { margin: 0; }
 .language-switch a { min-width: 2.5rem; height: 1.75rem; padding-inline: .625rem; display: inline-flex; align-items: center; justify-content: center; border-radius: 9999px; font-size: .75rem; font-weight: 500; opacity: .72; }
 .language-switch a:hover { opacity: 1; }
 .language-switch a[aria-current="page"] { opacity: 1; background: var(--bg); color: var(--fg); box-shadow: 0 1px 3px rgb(0 0 0 / .12); }
-.site-header[data-top="true"] .language-switch a[aria-current="page"] { background: rgb(255 255 255 / .94); color: #17171d; }
+:root:not([data-scrolled]) .site-header:not([data-open]) .language-switch a[aria-current="page"] { background: rgb(255 255 255 / .94); color: #17171d; }
 .theme-switch { display: grid; place-items: center; width: 2.125rem; height: 2.125rem; border-radius: 9999px; background: color-mix(in srgb, currentColor 9%, transparent); }
 .theme-switch:hover { background: color-mix(in srgb, currentColor 18%, transparent); }
 .theme-switch .icon-sun { display: none; }
@@ -171,14 +191,15 @@ h1, h2, h3, p { margin: 0; }
   position: relative; overflow: hidden; padding: calc(var(--header-h) + 4.25rem) 1.5rem 3rem; color: #fff;
   background: linear-gradient(var(--hero-top) 0, var(--hero-top) calc(100% - 46rem), var(--bg) calc(100% - 3rem));
 }
-.hero-glow {
-  position: absolute; inset: 0; pointer-events: none;
-  background:
-    radial-gradient(48rem 24rem at 50% 62%, color-mix(in srgb, var(--hero-glow) 78%, transparent), transparent 70%),
-    radial-gradient(30rem 18rem at 18% 48%, rgb(120 210 255 / .5), transparent 70%),
-    radial-gradient(30rem 18rem at 84% 52%, color-mix(in srgb, var(--hero-glow) 45%, transparent), transparent 70%);
-  filter: blur(18px);
-}
+/* The WebGL field (hero-backdrop.tsx) fades in over this still gradient, which is also all that
+   remains without WebGL. The mask lets it melt into the page at the bottom of the hero. */
+.hero-glow { position: absolute; inset: 0; overflow: hidden; pointer-events: none; -webkit-mask-image: linear-gradient(#000 0, #000 50%, transparent 94%); mask-image: linear-gradient(#000 0, #000 50%, transparent 94%); }
+.hero-glow::before { content: ""; position: absolute; inset: 0; background:
+    radial-gradient(48rem 24rem at 50% 62%, color-mix(in srgb, var(--hero-glow) 62%, transparent), transparent 70%),
+    radial-gradient(30rem 18rem at 18% 48%, rgb(120 210 255 / .4), transparent 70%),
+    radial-gradient(30rem 18rem at 84% 52%, color-mix(in srgb, var(--hero-glow) 40%, transparent), transparent 70%); filter: blur(18px); }
+.hero-glow canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; opacity: 0; transition: opacity 1.4s ease; }
+.hero-glow[data-ready] canvas { opacity: 1; }
 .hero-inner { position: relative; display: flex; flex-direction: column; align-items: center; text-align: center; }
 .hero h1 { font-size: clamp(2rem, 4.2vw + .5rem, 3.75rem); font-weight: 650; line-height: 1.18; letter-spacing: -.03em; text-wrap: balance; }
 .title-line { display: block; }
@@ -406,6 +427,19 @@ h1, h2, h3, p { margin: 0; }
 .footer-bottom a { display: inline-grid; place-items: center; width: 2rem; height: 2rem; }
 .footer-bottom p { font-size: .75rem; color: var(--faint); }
 
+/* ── Motion: hero entrance and scroll reveal ───────────────────────────────────── */
+@keyframes rise-in { from { opacity: 0; transform: translateY(1.25rem); } }
+@media (prefers-reduced-motion: no-preference) {
+  .hero h1, .hero-lead, .download-picker, .hero-preview { animation: rise-in .9s cubic-bezier(.2, .7, .2, 1) both; }
+  .hero-lead { animation-delay: .08s; } .download-picker { animation-delay: .16s; } .hero-preview { animation-delay: .3s; }
+}
+.reveal :is(.module-heading, .task-content, .practice-copy, .practice-media, .access-card, .footer-inner) {
+  opacity: 0; transform: translateY(1.75rem);
+  transition: opacity .7s cubic-bezier(.2, .7, .2, 1), transform .7s cubic-bezier(.2, .7, .2, 1); transition-delay: var(--reveal-delay, 0s);
+}
+.reveal :is(.module-heading, .task-content, .practice-copy, .practice-media, .access-card, .footer-inner)[data-in] { opacity: 1; transform: none; }
+.practice-media, .access-card:nth-child(2) { --reveal-delay: .12s; }
+
 /* ── Narrower viewports ────────────────────────────────────────────────────────── */
 @media (max-width: 64rem) {
   .module { padding-top: 6rem; }
@@ -421,7 +455,7 @@ h1, h2, h3, p { margin: 0; }
   .practice-copy { padding-inline: 0; }
   .practice-copy h3 { font-size: 1.75rem; }
   .access-grid { grid-template-columns: 1fr; max-width: 30rem; margin-inline: auto; }
-  .site-nav { display: none; position: absolute; inset: calc(var(--header-h) - 1px) 0 auto; left: 0; transform: none; flex-direction: column; align-items: stretch; padding: .5rem 1rem 1rem; background: var(--bg); border-bottom: 1px solid var(--border); }
+  .site-nav { display: none; position: absolute; top: calc(100% + .5rem); left: 0; right: 0; transform: none; flex-direction: column; align-items: stretch; gap: 0; padding: .5rem; border-radius: 1.25rem; background: color-mix(in srgb, var(--bg) 92%, transparent); -webkit-backdrop-filter: blur(18px) saturate(180%); backdrop-filter: blur(18px) saturate(180%); border: 1px solid var(--border); box-shadow: 0 16px 40px -16px rgb(10 20 60 / .4); }
   .site-header[data-open] .site-nav { display: flex; }
   .site-nav a { height: 2.75rem; font-size: 1rem; opacity: 1; }
   .menu-toggle { display: grid; }
@@ -440,7 +474,7 @@ h1, h2, h3, p { margin: 0; }
   .practice-list { gap: 4rem; margin-top: 3rem; }
   .practice-media { aspect-ratio: auto; min-height: 15rem; }
   .phone-shot { width: min(14rem, 70%); }
-  .header-inner { padding-inline: 1rem; }
+  .site-header { --h-pad: .875rem; }
   .brand span { font-size: 1.125rem; }
   .language-switch a { min-width: 2.125rem; padding-inline: .5rem; }
   .footer-wrap { padding-inline: 1rem; }

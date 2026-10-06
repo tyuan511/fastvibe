@@ -4,7 +4,9 @@ import { AccessModule } from "./access-module";
 import { BestPracticesModule } from "./best-practices-module";
 import { DownloadPicker } from "./download-picker";
 import { AppPreview } from "./app-preview";
+import { HeroBackdrop } from "./hero-backdrop";
 import { Icon } from "./icons";
+import { ScrollReveal } from "./scroll-reveal";
 import { SiteHeader } from "./site-header";
 import { TaskModule } from "./task-module";
 import type { LatestMobileRelease, LatestRelease } from "@/lib/github-release";
@@ -20,10 +22,11 @@ export function SitePage({ release, mobileRelease }: { release: LatestRelease; m
     <div className="site-shell">
       <a className="skip-link" href="#main-content">{t("skip")}</a>
       <SiteHeader />
+      <ScrollReveal />
 
       <main id="main-content">
         <section className="hero" id="top">
-          <div className="hero-glow" aria-hidden="true" />
+          <HeroBackdrop />
           <div className="hero-inner">
             <h1>{t("hero.title").split("\n").map((line) => <span className="title-line" key={line}>{line}</span>)}</h1>
             <p className="hero-lead">{t("hero.lead")}</p>

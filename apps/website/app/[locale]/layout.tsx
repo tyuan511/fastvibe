@@ -4,6 +4,7 @@ import { hasLocale, NextIntlClientProvider } from "next-intl";
 import { getMessages, getTranslations, setRequestLocale } from "next-intl/server";
 import { notFound } from "next/navigation";
 import { routing } from "@/i18n/routing";
+import { revealInitScript } from "@/lib/reveal";
 import { themeInitScript } from "@/lib/theme";
 import "../globals.css";
 
@@ -51,7 +52,7 @@ export default async function LocaleLayout({ children, params }: Props & { child
   const messages = await getMessages();
   return (
     <html lang={locale === "zh" ? "zh-CN" : "en"} suppressHydrationWarning>
-      <head><script dangerouslySetInnerHTML={{ __html: themeInitScript }} /></head>
+      <head><script dangerouslySetInnerHTML={{ __html: themeInitScript + revealInitScript }} /></head>
       <body>
         <NextIntlClientProvider locale={locale} messages={messages}>{children}</NextIntlClientProvider>
       </body>

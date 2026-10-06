@@ -50,11 +50,15 @@ try {
         assert.match(await link.getAttribute("href"), /^https:\/\/github\.com\/tyuan511\/fastvibe\/releases\//);
       }
       if (output && [375, 1440].includes(width)) {
-        await page.evaluate(() => scrollTo(0, 0));
+        await page.evaluate(async () => { for (let y = 0; y < document.body.scrollHeight; y += 400) { scrollTo(0, y); await new Promise((r) => setTimeout(r, 60)); } scrollTo(0, 0); });
         await page.screenshot({ path: path.join(output, `${locale}-${colorScheme}-${width}.png`), fullPage: true });
       }
       console.log(`PASS ${locale}/${colorScheme} @ ${width}px: SSR, theme, locale images, downloads, layout`);
     }
+
+    // These contexts ask for reduced motion, so nothing may wait on a scroll animation.
+    assert.equal(await page.evaluate(() => document.documentElement.classList.contains("reveal")), false);
+    assert.equal(await page.evaluate(() => [...document.querySelectorAll(".module-heading, .practice-copy, .access-card, .footer-inner")].every((el) => getComputedStyle(el).opacity === "1")), true, "reduced motion must not hide content");
 
     // The hero menu, and the task tabs are the page's interactive parts.
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -113,6 +117,21 @@ try {
     console.log(`PASS ${locale}/${colorScheme}: live system theme, reload, language switch, ignoring legacy preference`);
     await context.close();
     }
+  }
+
+  // Scroll reveal, with motion allowed: pieces start hidden and appear as the page is scrolled through.
+  {
+    const context = await browser.newContext({ locale: "en-US", viewport: { width: 1440, height: 900 } });
+    const page = await context.newPage();
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.goto(`${origin}/en`, { waitUntil: "networkidle" });
+    assert.equal(await page.evaluate(() => document.documentElement.classList.contains("reveal")), true);
+    assert.equal(await page.locator(".access-card").first().evaluate((el) => getComputedStyle(el).opacity), "0", "below-the-fold content should wait for its scroll");
+    await page.evaluate(async () => { for (let y = 0; y < document.body.scrollHeight; y += 300) { scrollTo(0, y); await new Promise((r) => setTimeout(r, 50)); } });
+    await page.waitForFunction(() => [...document.querySelectorAll(".module-heading, .task-content, .practice-copy, .practice-media, .access-card, .footer-inner")].every((el) => el.hasAttribute("data-in")));
+    await page.waitForFunction(() => [...document.querySelectorAll(".access-card")].every((el) => getComputedStyle(el).opacity === "1"));
+    await context.close();
+    console.log("PASS scroll reveal: hidden until scrolled to, then shown");
   }
 
   // The language and download content must work before client JavaScript runs.
