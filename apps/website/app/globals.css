@@ -378,9 +378,8 @@ h1, h2, h3, p { margin: 0; }
 @media (prefers-reduced-motion: reduce) { .hub-lines path, .hub-ring, .float-chip, .mock-cursor { animation: none; } }
 
 /* ── Access: a device on a blue tile, as on the reference ──────────────────────── */
-.access-module { max-width: 58rem; }
 .access-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2rem; margin-top: 4rem; }
-.access-media { position: relative; aspect-ratio: 1; border-radius: 1.5rem; overflow: hidden; background: radial-gradient(60% 40% at 30% 12%, rgb(255 255 255 / .55), transparent 70%), radial-gradient(70% 50% at 85% 90%, var(--tile-glow), transparent 70%), linear-gradient(170deg, var(--tile-from), var(--tile-to)); }
+.access-media { position: relative; aspect-ratio: 1.12; border-radius: 1.5rem; overflow: hidden; background: radial-gradient(60% 40% at 30% 12%, rgb(255 255 255 / .55), transparent 70%), radial-gradient(70% 50% at 85% 90%, var(--tile-glow), transparent 70%), linear-gradient(170deg, var(--tile-from), var(--tile-to)); }
 .laptop { position: absolute; left: 9%; top: 25%; width: 130%; padding: .5rem .5rem 0; border-radius: 1.125rem 1.125rem 0 0; background: var(--device); box-shadow: 0 30px 60px -25px rgb(10 30 90 / .55); }
 .laptop img { display: block; width: 100%; height: auto; border-radius: .625rem .625rem 0 0; }
 .access-media .phone-shot { position: absolute; left: 50%; top: 11%; translate: -50% 0; width: 58%; }
