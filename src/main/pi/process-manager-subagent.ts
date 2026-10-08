@@ -19,8 +19,8 @@ import { uiText } from "../engine/ui-text";
 import { mapEngineMessages } from "../engine/map-messages";
 import type { FastVibePaths } from "../engine/paths";
 import { SubagentManager } from "../engine/subagents";
-import { DAG_WORKER_TOOLS, DAG_COORDINATOR_TOOLS, dagReportExtension, dagBudgetError, dagInputAllowance, estimateDagTokens } from "./dag-node-runtime";
-import type { DagBudget, DagReport } from "../../shared/dag";
+import { DAG_WORKER_TOOLS, DAG_COORDINATOR_TOOLS, dagReportExtension, dagInputAllowance, estimateDagTokens } from "./dag-node-runtime";
+import type { DagReport } from "../../shared/dag";
 import { resolveSubagentModel } from "./subagent-model";
 import { SubagentControl } from "./subagent-control";
 import {
@@ -50,7 +50,6 @@ export type SubagentHostRequest = {
     coordinator?: boolean;
     skills?: boolean;
     acceptance?: string;
-    budget?: DagBudget;
     tools?: ToolDefinition[];
     prepareTask: (handoffChars: number) => string;
     childrenReady: () => boolean;
@@ -187,7 +186,6 @@ export class SubagentTurnRunner {
     let summary = summarizeSubagentMessages([]);
     let usedModel: string | undefined;
     let report: DagReport | undefined;
-    let budgetError: string | undefined;
     const metered = new WeakSet<object>();
     const spent = { turns: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
     try {
@@ -278,8 +276,6 @@ export class SubagentTurnRunner {
           const usage = summarizeSubagentMessages([event.message]).usage;
           for (const field of Object.keys(spent) as Array<keyof typeof spent>) spent[field] += usage[field];
           request.dag.onUsage?.({ turns: spent.turns, tokens: spent.input + spent.output + spent.cacheRead + spent.cacheWrite });
-          const error = dagBudgetError(request.dag.budget, spent);
-          if (error && !report) { budgetError = error; void control.abort().catch(() => undefined); }
         }
         const now = Date.now();
         this.#timeReasoning(subagentId, event, activeSession, now, (entryId, blocks) =>
@@ -345,7 +341,6 @@ export class SubagentTurnRunner {
     this.#reasoningRun.delete(subagentId);
     stopReason = control.aborted ? "aborted" : thrown ? (isAbortOutcome(thrown) ? "aborted" : "error") : summary.stopReason;
     errorMessage = thrown ? (thrown instanceof Error ? thrown.message : String(thrown)) : summary.errorMessage;
-    if (budgetError) { stopReason = "error"; errorMessage = budgetError; }
     if (report && report.outcome !== "completed" && !control.aborted && !thrown) { stopReason = "error"; errorMessage = report.summary; }
     // A user stop and a parent abort both arrive as `aborted`, but only the first has a
     // waiting parent to tell, and it is the message the main agent reads back as the

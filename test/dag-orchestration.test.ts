@@ -7,7 +7,7 @@ import { DagStore } from "../src/main/engine/dag-store.ts";
 import { DagScheduler, buildPrompt, type DagNodeRun } from "../src/main/pi/dag-scheduler.ts";
 import { runDagTool } from "../src/main/dag-tools.ts";
 import { resolveDrafts, dagGraphState, normalizeDagWritePath, type DagNodeDraft } from "../src/shared/dag.ts";
-import { dagBudgetError, dagInputAllowance, estimateDagTokens, validateDagReport, dagReportExtension } from "../src/main/pi/dag-node-runtime.ts";
+import { dagInputAllowance, estimateDagTokens, validateDagReport, dagReportExtension } from "../src/main/pi/dag-node-runtime.ts";
 
 const draft = (title: string, extra: Partial<DagNodeDraft> = {}): DagNodeDraft => ({ title, instruction: title, profile: { name: "worker", instructions: "work" }, ...extra });
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
@@ -141,13 +141,11 @@ test("coordinator cancellation cascades and a new attempt does not inherit its r
   assert.equal(fresh.parentRunId, `${parent.id}.2`);
 });
 
-test("reports, context estimates and budgets enforce the task contract", () => {
+test("reports and context estimates enforce the task contract", () => {
   assert.throws(() => validateDagReport({ outcome: "completed", summary: "done" }, "tests pass"), /证据/);
   assert.equal(validateDagReport({ outcome: "blocked", summary: "need input" }).outcome, "blocked");
   assert.ok(estimateDagTokens("中".repeat(100)) >= 100);
   assert.equal(dagInputAllowance("x".repeat(100000), "", 8192), 0);
-  assert.match(dagBudgetError({ maxTurns: 2 }, { turns: 2, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })!, /轮数/);
-  assert.match(dagBudgetError({ maxTokens: 10 }, { turns: 1, input: 3, output: 2, cacheRead: 5, cacheWrite: 0 })!, /token/);
 });
 
 test("a report cannot claim completion with unfinished children and is invalidated by later work", async () => {
@@ -158,12 +156,14 @@ test("a report cannot claim completion with unfinished children and is invalidat
   assert.ok(report); before({ toolName: "edit" }); assert.equal(report, undefined);
 });
 
-test("one coordinator budget includes all descendant usage, across attempts", async (t) => {
+test("token usage is recorded on ancestors but never stops a task", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "dag-budget-"));
   const store = new DagStore(join(dir, "dag.json"));
   const charge = new Map<string, (usage: { tokens: number; turns: number }) => void>();
+  const done = new Map<string, (result: DagNodeRun) => void>();
   const scheduler = new DagScheduler(store, ({ node, signal, onUsage }) => new Promise((resolve) => {
     charge.set(node.id, onUsage);
+    done.set(node.id, resolve);
     signal.addEventListener("abort", () => resolve({ status: "aborted", output: "checkpoint" }));
   }));
   t.after(async () => { scheduler.stop(); await tick(); store.flush(); rmSync(dir, { recursive: true, force: true }); });
@@ -171,13 +171,14 @@ test("one coordinator budget includes all descendant usage, across attempts", as
   const [a, b] = scheduler.add("c", [draft("a"), draft("b")], [], parent.id);
   charge.get(a.id)!({ tokens: 10, turns: 1 });
   charge.get(a.id)!({ tokens: 10, turns: 1 }); // Duplicate snapshots must not double-charge.
-  charge.get(b.id)!({ tokens: 15, turns: 1 }); await tick();
-  assert.equal(store.node("c", parent.id)?.usage?.tokens, 25);
-  assert.equal(store.node("c", parent.id)?.status, "failed");
-  assert.equal(store.node("c", a.id)?.status, "cancelled");
-  assert.equal(store.node("c", b.id)?.status, "cancelled");
-  scheduler.retry("c", parent.id);
-  assert.equal(store.node("c", parent.id)?.status, "blocked", "a retry cannot reset the shared budget");
+  charge.get(b.id)!({ tokens: 400_000, turns: 90 }); await tick();
+  assert.equal(store.node("c", parent.id)?.usage?.tokens, 400_010);
+  assert.equal(store.node("c", parent.id)?.status, "running");
+  assert.equal(store.node("c", a.id)?.status, "running");
+  assert.equal(store.node("c", b.id)?.status, "running");
+  done.get(a.id)!({ status: "failed", output: "partial" }); await tick();
+  scheduler.retry("c", a.id); await tick();
+  assert.equal(store.node("c", a.id)?.status, "running", "spent tokens must not block the next attempt");
 });
 
 test("retry limits require deliberate revision, and pending task edits do not affect live work", async (t) => {
@@ -185,7 +186,7 @@ test("retry limits require deliberate revision, and pending task edits do not af
   const [node] = f.scheduler.add("c", [draft("limited", { budget: { maxAttempts: 1 } })]);
   assert.throws(() => f.scheduler.update("c", node.id, { instruction: "changed" }), /只能修改/);
   f.finish(node.id, { status: "failed" }); await tick();
-  assert.throws(() => f.scheduler.retry("c", node.id), /重试上限/);
+  assert.throws(() => f.scheduler.retry("c", node.id), (error: Error) => /重试上限/.test(error.message) && !/预算/.test(error.message));
   f.scheduler.update("c", node.id, { budget: { maxAttempts: 2 }, instruction: "revised" });
   f.scheduler.retry("c", node.id);
   assert.equal(f.store.node("c", node.id)?.attempt, 2);

@@ -48,11 +48,9 @@ const NODE = Type.Object({
   context_from: Type.Optional(Type.Array(Type.String(), { description: "Subset of depends_on whose result summaries are needed. [] means ordering only. Omit for all dependencies. Full outputs are read on demand with dag_result." })),
   write_paths: Type.Optional(Type.Array(Type.String(), { description: "Relative files/directories this writer owns. Overlapping writers are serialized across graphs sharing a workspace. Omitted writers claim the whole workspace. This is a scheduling contract, not a filesystem sandbox." })),
   budget: Type.Optional(Type.Object({
-    maxTurns: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
-    maxTokens: Type.Optional(Type.Integer({ minimum: 1, maximum: 2000000 })),
     timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 14400 })),
     maxAttempts: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
-  }, { description: "Execution limits. Defaults: 80 turns, 300000 cumulative tokens, 3600 seconds, 5 attempts. Cancellation never undoes effects already performed." })),
+  }, { description: "Optional deadline and retry limit. Defaults: 3600 seconds, 5 attempts. Token and turn counts do not stop a task. Cancellation never undoes effects already performed." })),
   ref: Type.Optional(
     Type.String({ description: "A short local name for this task, so other tasks in the same call can list it in depends_on." }),
   ),
@@ -204,7 +202,10 @@ export default function dagExtension(pi: ExtensionAPI): void {
     description: "Revise a pending, blocked, failed or cancelled task before it starts/retries. Live or completed tasks are immutable. This does not start it: use dag_retry for a failed/blocked task.",
     parameters: Type.Object({
       id: Type.String(), instruction: Type.Optional(Type.String()), acceptance: Type.Optional(Type.String()),
-      budget: Type.Optional(Type.Object({ maxTurns: Type.Optional(Type.Integer()), maxTokens: Type.Optional(Type.Integer()), timeoutSeconds: Type.Optional(Type.Integer()), maxAttempts: Type.Optional(Type.Integer()) })),
+      budget: Type.Optional(Type.Object({
+        timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 14400 })),
+        maxAttempts: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
+      }, { description: "Optional deadline and retry limit. Defaults: 3600 seconds, 5 attempts. Token and turn counts do not stop a task." })),
     }),
     async execute(_id, input, signal, _onUpdate, ctx) { return call(ctx, "update", input, signal); },
   });

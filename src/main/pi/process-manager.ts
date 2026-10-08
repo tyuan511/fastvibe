@@ -732,7 +732,6 @@ export class PiProcessManager {
         coordinator: node.coordinator,
         skills: node.profile.skills,
         acceptance: node.acceptance ?? (node.coordinator ? "核对所有必要子任务的产物；说明失败或取消的分支如何解决，提供最终验收证据。" : undefined),
-        budget: node.budget,
         onUsage,
         onCheckpoint: () => {
           const session = this.#subagentSessions.get(node.runId ?? node.id);

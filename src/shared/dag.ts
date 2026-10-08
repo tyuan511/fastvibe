@@ -30,6 +30,7 @@ export type DagProfile = {
   skills?: boolean;
 };
 
+/** Deadline and retry cap. `maxTurns` / `maxTokens` are accepted from older graphs and ignored — they must not stop a task. */
 export type DagBudget = { maxTurns?: number; maxTokens?: number; timeoutSeconds?: number; maxAttempts?: number };
 export type DagReport = {
   outcome: "completed" | "blocked" | "failed";
@@ -38,7 +39,7 @@ export type DagReport = {
   artifacts?: string[];
 };
 
-export const DAG_BUDGET = { maxTurns: 80, maxTokens: 300000, timeoutSeconds: 3600, maxAttempts: 5 } as const;
+export const DAG_BUDGET = { timeoutSeconds: 3600, maxAttempts: 5 } as const;
 export const DAG_MAX_DEPTH = 3;
 export const DAG_PREVIEW_CHARS = 4000;
 

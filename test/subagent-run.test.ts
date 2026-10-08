@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import test from "node:test";
 import { SubagentControl } from "../src/main/pi/subagent-control.ts";
-import { DAG_WORKER_TOOLS, DAG_COORDINATOR_TOOLS, dagReportExtension, dagBudgetError, dagInputAllowance, estimateDagTokens } from "../src/main/pi/dag-node-runtime.ts";
+import { DAG_WORKER_TOOLS, DAG_COORDINATOR_TOOLS, dagReportExtension, dagInputAllowance, estimateDagTokens } from "../src/main/pi/dag-node-runtime.ts";
 import { reduceSubagent } from "../src/shared/subagent-state.ts";
 
 const ts = createRequire(import.meta.url)("typescript") as typeof import("typescript");
@@ -50,7 +50,7 @@ function fixture(options: { setup?: () => Promise<void>; create?: () => Promise<
     dispose: () => { disposed++; },
   };
   const deps = {
-    SubagentControl, DAG_WORKER_TOOLS, DAG_COORDINATOR_TOOLS, dagReportExtension, dagBudgetError, dagInputAllowance, estimateDagTokens,
+    SubagentControl, DAG_WORKER_TOOLS, DAG_COORDINATOR_TOOLS, dagReportExtension, dagInputAllowance, estimateDagTokens,
     SettingsManager: { create: () => ({}) },
     builtinExtensionFile: () => undefined,
     currentAiLanguageDirective: () => "", currentCustomSystemPrompt: () => "",

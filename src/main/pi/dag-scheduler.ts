@@ -269,7 +269,7 @@ export class DagScheduler {
       const parent = this.#store.node(conversationId, target.parentId);
       if (parent?.status !== "running" || (target.parentRunId && target.parentRunId !== parent.runId)) throw new Error("所属协调者已结束；请重试协调任务");
     }
-    if ((target.attempt ?? 0) >= (target.budget?.maxAttempts ?? DAG_BUDGET.maxAttempts)) throw new Error("已达到任务重试上限；先调整任务说明或预算，再重试");
+    if ((target.attempt ?? 0) >= (target.budget?.maxAttempts ?? DAG_BUDGET.maxAttempts)) throw new Error("已达到任务重试上限；先调整任务说明或重试次数，再重试");
     this.#store.pause(conversationId, false);
     const reset = new Set<string>([target.id]);
     // 沿依赖往下找：因为它（直接或间接）被跳过的节点，一起回到等待。
@@ -454,9 +454,8 @@ export class DagScheduler {
         }
         if (!parent || parent.status !== "running" || this.#running.get(keyOf(conversationId, parent.id))?.signal.aborted) continue;
       }
-      const limits = { ...DAG_BUDGET, ...node.budget };
-      if ((node.usage?.tokens ?? 0) >= limits.maxTokens || (node.usage?.turns ?? 0) >= limits.maxTurns || (node.attempt ?? 0) >= limits.maxAttempts) {
-        this.#store.patch(conversationId, node.id, { status: "blocked", error: "任务预算已用尽；调整说明和预算后重试", endedAt: Date.now() });
+      if ((node.attempt ?? 0) >= (node.budget?.maxAttempts ?? DAG_BUDGET.maxAttempts)) {
+        this.#store.patch(conversationId, node.id, { status: "blocked", error: "已达到任务重试上限；先调整任务说明或重试次数，再重试", endedAt: Date.now() });
         this.#pumpAgain = true;
         continue;
       }
@@ -585,9 +584,9 @@ export class DagScheduler {
     if (!tokens && !turns) return;
     for (let node = this.#store.node(conversationId, id); node; node = node.parentId ? this.#store.node(conversationId, node.parentId) : undefined) {
       const spent = { tokens: (node.usage?.tokens ?? 0) + tokens, turns: (node.usage?.turns ?? 0) + turns };
+      // Recorded for the status view only. Cache reads and large file results used to
+      // exhaust the old token cap and abort the task before it could report.
       this.#store.patch(conversationId, node.id, { usage: spent });
-      const limits = { ...DAG_BUDGET, ...node.budget };
-      if (spent.tokens >= limits.maxTokens || spent.turns >= limits.maxTurns) this.#failRun(conversationId, node.id, "任务及其子任务已达到累计预算；检查已有产物后调整预算或缩小任务");
     }
   }
 

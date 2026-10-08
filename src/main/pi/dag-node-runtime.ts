@@ -1,6 +1,6 @@
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { DAG_BUDGET, type DagBudget, type DagReport } from "../../shared/dag.ts";
+import type { DagReport } from "../../shared/dag.ts";
 
 export const DAG_WORKER_TOOLS = ["dag_result", "dag_report"];
 export const DAG_COORDINATOR_TOOLS = [...DAG_WORKER_TOOLS, "dag_add_tasks", "dag_status", "dag_wait", "dag_cancel", "dag_retry", "dag_update", "dag_send"];
@@ -13,12 +13,6 @@ export function estimateDagTokens(text: string): number {
 
 export function dagInputAllowance(system: string, tools: string, contextWindow = 128000): number {
   return Math.max(0, Math.floor(contextWindow * 0.65) - estimateDagTokens(system) - estimateDagTokens(tools) - 2048);
-}
-
-export function dagBudgetError(budget: DagBudget | undefined, usage: { turns: number; input: number; output: number; cacheRead: number; cacheWrite: number }): string | undefined {
-  if (usage.turns >= (budget?.maxTurns ?? DAG_BUDGET.maxTurns)) return "已达到任务轮数上限；请缩小任务或调整预算后重试";
-  if (usage.input + usage.output + usage.cacheRead + usage.cacheWrite >= (budget?.maxTokens ?? DAG_BUDGET.maxTokens)) return "已达到任务 token 预算；请缩小任务或调整预算后重试";
-  return undefined;
 }
 
 export function validateDagReport(value: DagReport, acceptance?: string): DagReport {
