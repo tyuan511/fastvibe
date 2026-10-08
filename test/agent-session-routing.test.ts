@@ -33,6 +33,16 @@ type Route = {
 
 const ROUTES: Route[] = [
   {
+    label: "paged initial snapshot",
+    ipc: "engineGetSnapshot", method: "getSnapshot",
+    payload: { conversationId: "conv-1", historyLimit: 12 }, args: ["conv-1", undefined, 12],
+  },
+  {
+    label: "older transcript page",
+    ipc: "engineGetMessagesPage", method: "getMessagesPage",
+    payload: { conversationId: "conv-1", beforeEntryId: "u-20", turnLimit: 12 }, args: ["conv-1", "u-20", 12],
+  },
+  {
     label: "commands",
     ipc: "engineGetCommands",
     method: "getCommands",

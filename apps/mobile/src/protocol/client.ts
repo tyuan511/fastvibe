@@ -1,5 +1,6 @@
 import type { ServerAddress } from "./address";
 import { t } from "../i18n/core.ts";
+import { recordConnectionDiagnostic } from "./diagnostics.ts";
 
 const CONNECT_TIMEOUT_MS = 20_000;
 export const HEALTH_INTERVAL_MS = 15_000;
@@ -31,7 +32,10 @@ export class ConnectionError extends Error {
   }
 }
 
-export type PushHandler = (channel: string, payload: unknown) => void;
+export type EventCursor = { epoch: string; seq: number };
+export type EventMeta = EventCursor & { scope: string };
+export type SubscriptionResult = { resumed: boolean; cursor?: EventCursor };
+export type PushHandler = (channel: string, payload: unknown, meta?: EventMeta) => void;
 export type DisconnectDetail = {
   kind: "socket-close" | "socket-error" | "heartbeat-timeout" | "send-failed" | "client-close" | "resync";
   code?: number;
@@ -43,6 +47,8 @@ type Pending = {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
+  started: number;
+  metric: "snapshot" | "history" | "submission" | "rpc";
 };
 
 /**
@@ -65,6 +71,18 @@ export class RemoteClient {
   #healthTimer: ReturnType<typeof setTimeout> | null = null;
   #probeTimer: ReturnType<typeof setTimeout> | null = null;
   #cancelConnect: (() => void) | null = null;
+  #features: { conversationResume?: boolean; promptSubmit?: boolean; historyPaging?: boolean } = {};
+  #epoch = "";
+  #rtt: number | null = null;
+  #probeStarted = 0;
+  #subscriptions = new Map<string, { requestId: number; resolve: (result: SubscriptionResult) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout>; resumed: boolean }>();
+  #probeExpire: (() => void) | null = null;
+  #probeFast = false;
+
+  get supportsPromptSubmit(): boolean { return this.#features.promptSubmit === true; }
+  get supportsConversationResume(): boolean { return this.#features.conversationResume === true; }
+  get supportsHistoryPaging(): boolean { return this.#features.historyPaging === true; }
+  get epoch(): string { return this.#epoch; }
 
   constructor(version = "0.0.0") {
     this.#version = version;
@@ -74,16 +92,27 @@ export class RemoteClient {
   setActive(active: boolean): void {
     this.#active = active;
     this.#clearHealthTimers();
-    if (active && this.#ready) this.checkHealth();
+    if (active && this.#ready) this.checkHealth(true);
   }
 
   /** Single-flight, read-only protocol ping. Also used after a request timeout or network change. */
-  checkHealth(): void {
-    if (!this.#active || !this.#ready || this.#probeTimer) return;
+  checkHealth(fast = false): void {
+    if (!this.#active || !this.#ready) return;
+    const deadline = fast ? Math.min(HEALTH_TIMEOUT_MS, Math.max(4_000, (this.#rtt ?? 500) * 6 + 1_000)) : HEALTH_TIMEOUT_MS;
+    if (this.#probeTimer) {
+      if (fast && !this.#probeFast && this.#probeExpire) {
+        clearTimeout(this.#probeTimer);
+        this.#probeFast = true;
+        this.#probeTimer = setTimeout(this.#probeExpire, Math.max(1, deadline - (Date.now() - this.#probeStarted)));
+      }
+      return;
+    }
     if (this.#healthTimer) clearTimeout(this.#healthTimer);
     this.#healthTimer = null;
     const generation = this.#generation;
     const started = Date.now();
+    this.#probeStarted = started;
+    this.#probeFast = fast;
     let received = this.#lastReceived;
     const expire = (): void => {
       this.#probeTimer = null;
@@ -98,7 +127,8 @@ export class RemoteClient {
         this.#drop(true, { kind: "heartbeat-timeout" });
       }
     };
-    this.#probeTimer = setTimeout(expire, HEALTH_TIMEOUT_MS);
+    this.#probeExpire = expire;
+    this.#probeTimer = setTimeout(expire, deadline);
     this.#send({ kind: "ping" });
   }
 
@@ -115,6 +145,7 @@ export class RemoteClient {
     if (this.#healthTimer) clearTimeout(this.#healthTimer);
     if (this.#probeTimer) clearTimeout(this.#probeTimer);
     this.#healthTimer = this.#probeTimer = null;
+    this.#probeExpire = null;
   }
 
   onPush(handler: PushHandler | null): void {
@@ -126,25 +157,36 @@ export class RemoteClient {
   }
 
   async login(origin: string, password: string, label: string): Promise<string> {
-    let response: Response;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), CONNECT_TIMEOUT_MS);
+    let response: Response | undefined;
     try {
       response = await fetch(`${origin}/api/login`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ password, label }),
+        signal: controller.signal,
       });
-    } catch {
-      throw new Error(unreachable(origin));
+      const body = (await response.json().catch(() => ({}))) as { token?: string; error?: string };
+      if (!response.ok || typeof body.token !== "string" || body.token.length === 0) {
+        throw new Error(body.error || (response.status === 401 ? t("conn.wrongPassword") : t("conn.loginFailed")));
+      }
+      return body.token;
+    } catch (error) {
+      if (controller.signal.aborted) throw new ConnectionError("timeout", t("conn.timeout"));
+      if (!response) throw new Error(unreachable(origin));
+      throw error instanceof Error ? error : new Error(unreachable(origin));
+    } finally {
+      clearTimeout(timer);
     }
-    const body = (await response.json().catch(() => ({}))) as { token?: string; error?: string };
-    if (!response.ok || typeof body.token !== "string" || body.token.length === 0) {
-      throw new Error(body.error || (response.status === 401 ? t("conn.wrongPassword") : t("conn.loginFailed")));
-    }
-    return body.token;
   }
 
   connect(address: ServerAddress, token: string): Promise<void> {
     this.#drop(false);
+    this.#features = {};
+    this.#epoch = "";
+    const started = Date.now();
+    let phaseStarted = started;
     const generation = this.#generation;
     return new Promise((resolve, reject) => {
       let ws: WebSocket;
@@ -176,7 +218,19 @@ export class RemoteClient {
       ws.onopen = () => {
         if (stale()) return;
         try {
+          recordConnectionDiagnostic({ event: "metric", metric: "socket", elapsedMs: Date.now() - started });
+          phaseStarted = Date.now();
           ws.send(JSON.stringify({ type: "auth", token }));
+          // Frames on this socket are ordered. The host authenticates before it
+          // handles hello; pipeline both without an extra WAN round trip.
+          ws.send(JSON.stringify({
+            kind: "hello",
+            hello: {
+              protocol: "fastvibe.app", protocolVersion: 1,
+              client: { kind: "mobile", version: this.#version },
+              features: { eventBatch: true, conversationResume: true },
+            },
+          }));
         } catch {
           fail(new ConnectionError("unreachable", unreachable(address.origin)));
         }
@@ -205,25 +259,14 @@ export class RemoteClient {
             return;
           }
           authed = true;
-          try {
-            ws.send(JSON.stringify({
-              kind: "hello",
-              hello: {
-                protocol: "fastvibe.app",
-                protocolVersion: 1,
-                client: { kind: "mobile", version: this.#version },
-                // Images are sent inline in prompt payloads; event batching remains
-                // enabled for the ordered low-bandwidth stream.
-                features: { eventBatch: true },
-              },
-            }));
-          } catch {
-            fail(new ConnectionError("unreachable", unreachable(address.origin)));
-          }
+          recordConnectionDiagnostic({ event: "metric", metric: "auth", elapsedMs: Date.now() - phaseStarted });
           return;
         }
         if (!settled) {
           if (message.kind === "welcome") {
+            this.#features = isRecord(message.features) ? message.features : {};
+            this.#epoch = typeof message.epoch === "string" ? message.epoch : "";
+            recordConnectionDiagnostic({ event: "metric", metric: "welcome", elapsedMs: Date.now() - phaseStarted });
             settled = true;
             clearTimeout(timer);
             this.#cancelConnect = null;
@@ -234,13 +277,30 @@ export class RemoteClient {
           return;
         }
         if (message.kind === "pong") {
+          if (this.#probeTimer) {
+            const elapsedMs = Date.now() - this.#probeStarted;
+            this.#rtt = this.#rtt === null ? elapsedMs : this.#rtt * 0.75 + elapsedMs * 0.25;
+            recordConnectionDiagnostic({ event: "metric", metric: "rtt", elapsedMs });
+          }
           if (this.#probeTimer) clearTimeout(this.#probeTimer);
           this.#probeTimer = null;
           this.#scheduleHealth();
           return;
         }
         if (message.kind === "resync") {
+          const pending = typeof message.scope === "string" ? this.#subscriptions.get(message.scope) : undefined;
+          if (pending) { pending.resumed = false; return; }
           this.#drop(true, { kind: "resync" });
+          return;
+        }
+        if (message.kind === "subscribed" && isRecord(message.cursors)) {
+          for (const [scope, cursor] of Object.entries(message.cursors)) {
+            const pending = this.#subscriptions.get(scope);
+            if (!pending || pending.requestId !== message.requestId || !isCursor(cursor)) continue;
+            clearTimeout(pending.timer);
+            this.#subscriptions.delete(scope);
+            pending.resolve({ resumed: pending.resumed, cursor });
+          }
           return;
         }
         if (message.kind === "result" && typeof message.requestId === "number") {
@@ -248,6 +308,8 @@ export class RemoteClient {
           if (!pending) return;
           clearTimeout(pending.timer);
           this.#pending.delete(message.requestId);
+          recordConnectionDiagnostic({ event: "metric", metric: pending.metric, elapsedMs: Date.now() - pending.started,
+            frameChars: typeof event.data === "string" ? event.data.length : undefined, outcome: message.ok === true ? "ok" : "error" });
           if (message.ok === true) pending.resolve(message.result);
           else {
             const error = message.error as { message?: string } | undefined;
@@ -256,13 +318,13 @@ export class RemoteClient {
           return;
         }
         if (message.kind === "event" && typeof message.channel === "string") {
-          this.#push?.(message.channel, message.payload);
+          this.#push?.(message.channel, message.payload, eventMeta(message));
           return;
         }
         if (message.kind === "events" && Array.isArray(message.events)) {
           for (const event of message.events) {
             if (isRecord(event) && typeof event.channel === "string") {
-              this.#push?.(event.channel, event.payload);
+              this.#push?.(event.channel, event.payload, eventMeta(event));
             }
           }
         }
@@ -274,14 +336,18 @@ export class RemoteClient {
     const ws = this.#ws;
     if (!ws || ws.readyState !== WebSocket.OPEN) return Promise.reject(new Error(t("conn.notConnected")));
     const requestId = this.#nextId++;
+    const started = Date.now();
+    const metric = method === "engine:get-snapshot" ? "snapshot" : method === "engine:get-messages-page" ? "history" : ["engine:submit-prompt", "engine:prompt", "engine:queue-add"].includes(method) ? "submission" : "rpc";
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.#pending.delete(requestId);
+        recordConnectionDiagnostic({ event: "metric", metric, elapsedMs: Date.now() - started, outcome: "timeout" });
+        this.#send({ kind: "cancel", targetRequestId: requestId });
         reject(new TransportError("timeout", t("conn.requestTimeout")));
         // Do not replay a call Main may have accepted. Probe the connection instead.
         this.checkHealth();
       }, timeoutMs);
-      this.#pending.set(requestId, { resolve, reject, timer });
+      this.#pending.set(requestId, { resolve, reject, timer, started, metric });
       try {
         ws.send(JSON.stringify({ kind: "call", requestId, method, payload }));
       } catch {
@@ -300,7 +366,34 @@ export class RemoteClient {
     this.#send({ kind: "subscribe", scopes });
   }
 
+  /** A subscription acknowledgement is an ordering fence after all replay frames. */
+  subscribeConversation(scope: string, cursor?: EventCursor): Promise<SubscriptionResult> {
+    if (!this.#ready || this.#ws?.readyState !== WebSocket.OPEN) return Promise.reject(new TransportError("closed", t("conn.closed")));
+    if (!this.supportsConversationResume) {
+      this.subscribe([scope]);
+      return Promise.resolve({ resumed: false });
+    }
+    if (this.#subscriptions.has(scope)) return Promise.reject(new Error(t("conn.requestFailed")));
+    const requestId = this.#nextId++;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.#subscriptions.delete(scope);
+        reject(new TransportError("timeout", t("conn.requestTimeout")));
+        this.checkHealth(true);
+      }, 30_000);
+      this.#subscriptions.set(scope, { requestId, resolve, reject, timer, resumed: !!cursor && cursor.epoch === this.#epoch });
+      this.#send({ kind: "subscribe", requestId, scopes: [scope], ...(cursor ? { since: { [scope]: cursor } } : {}) });
+    });
+  }
+
   unsubscribe(scopes: string[]): void {
+    for (const scope of scopes) {
+      const pending = this.#subscriptions.get(scope);
+      if (!pending) continue;
+      this.#subscriptions.delete(scope);
+      clearTimeout(pending.timer);
+      pending.reject(new TransportError("closed", t("conn.closed")));
+    }
     this.#send({ kind: "unsubscribe", scopes });
   }
 
@@ -346,7 +439,22 @@ export class RemoteClient {
       pending.reject(new TransportError(code, message));
     }
     this.#pending.clear();
+    for (const pending of this.#subscriptions.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(new TransportError(code, message));
+    }
+    this.#subscriptions.clear();
   }
+}
+
+function isCursor(value: unknown): value is EventCursor {
+  return isRecord(value) && typeof value.epoch === "string" && value.epoch.length > 0 &&
+    typeof value.seq === "number" && Number.isSafeInteger(value.seq) && value.seq >= 0;
+}
+
+function eventMeta(value: Record<string, unknown>): EventMeta | undefined {
+  const scope = value.scope;
+  return typeof scope === "string" && isCursor(value) ? { scope, epoch: value.epoch, seq: value.seq } : undefined;
 }
 
 function parseFrame(data: unknown): Record<string, unknown> | null {

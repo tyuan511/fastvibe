@@ -110,6 +110,7 @@ const STATE_METHODS: ReadonlySet<string> = new Set([
   Ipc.engineCompact,
 ]);
 const QUEUE_RESULT_METHODS: ReadonlySet<string> = new Set([
+  Ipc.engineSubmitPrompt,
   Ipc.engineQueueAdd,
   Ipc.engineQueueCancel,
   Ipc.engineQueueRecall,
@@ -649,7 +650,7 @@ export class RemoteGateway {
   #scopeResult(method: string, result: unknown, serverInstanceId: string): unknown {
     if (result == null) return result;
     if (OPEN_METHODS.has(method)) return this.#scopeOpenResult(result, serverInstanceId);
-    if (method === Ipc.engineGetSnapshot) return scopeSnapshot(result, serverInstanceId);
+    if (method === Ipc.engineGetSnapshot || method === Ipc.engineGetMessagesPage) return scopeSnapshot(result, serverInstanceId);
     if (QUEUE_RESULT_METHODS.has(method)) return scopeQueueResult(result, serverInstanceId);
     if (STATE_METHODS.has(method)) return scopeSessionState(result, serverInstanceId);
     if (method === Ipc.workspaceTerminalStart) return scopeTerminal(result, serverInstanceId);

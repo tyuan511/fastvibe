@@ -158,30 +158,31 @@ export function PreviewBody({ preview, onQuote }: { preview: FilePreview; onQuot
 
 /**
  * One code block, highlighted with Shiki once it resolves (plain until then).
- * A non-selectable gutter of line numbers is sticky at the left edge, so the
- * numbers stay put while wide lines scroll under them.
+ * A non-selectable gutter of line numbers stays put while wide lines scroll: only the
+ * code column scrolls sideways, so nothing ever passes *under* the gutter and it needs
+ * no fill of its own — it is the code area's own ground in every theme. (It used to be
+ * a sticky column over the scrolling lines, painted opaque to hide them; under 玻璃效果
+ * that fill could only be a different colour from the code beside it.)
  */
 function CodePreview({ text, language }: { text: string; language?: string }): JSX.Element {
   const html = useHighlightedCode(text, language);
   const lineCount = text.split("\n").length;
   return (
-    <div className="code-shiki overflow-x-auto bg-muted/50 text-xs leading-5">
-      <div className="flex min-w-full">
-        <div
-          aria-hidden
-          className="sticky left-0 z-10 shrink-0 select-none border-r border-border bg-[color-mix(in_oklab,var(--muted)_50%,var(--background))] py-3 pl-3 pr-2 text-right font-mono tabular-nums text-muted-foreground"
-        >
-          {Array.from({ length: lineCount }, (_, index) => (
-            <div key={index}>{index + 1}</div>
-          ))}
-        </div>
-        <div className="min-w-0 flex-1 px-3 py-3">
-          {html ? (
-            <div dangerouslySetInnerHTML={{ __html: html }} />
-          ) : (
-            <pre className="font-mono">{text}</pre>
-          )}
-        </div>
+    <div className="code-shiki flex bg-muted/50 text-xs leading-5">
+      <div
+        aria-hidden
+        className="shrink-0 select-none border-r border-border py-3 pl-3 pr-2 text-right font-mono tabular-nums text-muted-foreground"
+      >
+        {Array.from({ length: lineCount }, (_, index) => (
+          <div key={index}>{index + 1}</div>
+        ))}
+      </div>
+      <div className="min-w-0 flex-1 overflow-x-auto px-3 py-3">
+        {html ? (
+          <div dangerouslySetInnerHTML={{ __html: html }} />
+        ) : (
+          <pre className="font-mono">{text}</pre>
+        )}
       </div>
     </div>
   );

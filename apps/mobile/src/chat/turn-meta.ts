@@ -25,30 +25,39 @@ export type TurnMeta = {
   elapsedMs?: number;
 };
 
-export function completedTurnFooters(messages: TimedMessage[], running: boolean): Map<string, TurnMeta> {
+export function completedTurnFooters(messages: TimedMessage[], running: boolean, previous?: Map<string, TurnMeta>): Map<string, TurnMeta> {
   const footers = new Map<string, TurnMeta>();
+  let unchanged = previous !== undefined;
   let index = 0;
   while (index < messages.length) {
-    const start = index;
-    if (messages[index]?.role === "user") index += 1;
-    while (index < messages.length && messages[index].role !== "user") index += 1;
+    let first: TimedMessage | undefined;
+    let last: TimedMessage | undefined;
+    do {
+      const message = messages[index++];
+      if (message.role === "assistant") {
+        first ??= message;
+        last = message;
+      }
+    } while (index < messages.length && messages[index].role !== "user");
     const isTail = index >= messages.length;
     if (running && isTail) continue;
-    const group = messages.slice(start, index);
-    const assistants = group.filter((message) => message.role === "assistant");
-    if (assistants.length === 0) continue;
-    const first = assistants[0];
-    const last = assistants[assistants.length - 1];
+    if (!first || !last) continue;
     const endedAt = last.completedAt ?? last.createdAt ?? first.createdAt;
     if (endedAt === undefined) continue;
     const elapsedMs = last.completedAt !== undefined && first.createdAt !== undefined
       ? Math.max(0, last.completedAt - first.createdAt)
       : undefined;
-    footers.set(group[group.length - 1].id, {
+    const id = messages[index - 1].id;
+    const value = {
       endedAt,
       elapsedMs: elapsedMs !== undefined && elapsedMs > 0 ? elapsedMs : undefined,
-    });
+    };
+    const cached = previous?.get(id);
+    const entry = cached?.endedAt === value.endedAt && cached.elapsedMs === value.elapsedMs ? cached : value;
+    if (entry !== cached) unchanged = false;
+    footers.set(id, entry);
   }
+  if (unchanged && previous?.size === footers.size) return previous;
   return footers;
 }
 

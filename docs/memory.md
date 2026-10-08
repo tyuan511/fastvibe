@@ -60,6 +60,7 @@ port against it, so drifting from the reference fails a test rather than a bench
   link/redundant/contradiction reaches 0.85; obsolescence is recorded, not linked.
   System Two writes a new memory for a pair only when merge/promote is selected at
   ≥ 0.85 and contradiction is below 0.85; that memory goes through the full write path.
+  FastVibe's optional retention policy then applies stricter archive rules described below.
 - **Adaptive read** (based on `RetrievalController.query`): route (six Nouls) alongside
   local embedding, vector + keyword anchors fused by RRF and scored by cosine, then
   rounds of local expansion and a combined assessment/scoring request. A stopping
@@ -114,6 +115,51 @@ turn: Stop cancels that chat's memory read and checks cancellation again at the 
 preflight boundary, before a prompt can start a provider request. Capture happens at
 the SDK `message_end` boundary, after a user or final assistant message is complete. Thinking blocks, tool results,
 passwords and hidden fields are not captured.
+
+## Retention and idle maintenance
+
+All three modes enable automatic maintenance by default. Settings → Long-term memory
+offers the switch, retention periods, active-memory target, last-run counts and a
+“Maintain now” action. The graph can show active memories or those awaiting deletion;
+an archived memory can be restored, and any memory can be retained manually.
+
+- The manager checks every minute, runs once a day while idle, and catches up after
+  a restart using a durable checkpoint. Chat runs, compactions, memory reads, captures
+  and JEV consolidation defer it. Manual maintenance queues behind the same work.
+  Each category processes at most 500 rows per transaction and resumes at a later idle
+  poll when there is more work. App shutdown clears the timer.
+- Temporary `task`/`episode` memories archive after **90 unused days** by default.
+  Only evidence returned to the agent refreshes last-use time, not candidates merely
+  examined by a search. Facts and semantic memories do not expire just because they
+  are old. Preferences, procedures, summaries, explicit standing-rule wording and
+  manually retained memories are exempt from age and capacity eviction. The wording
+  detector is conservative and only preserves content; it cannot declare a fact obsolete.
+- Exact duplicate content from the same speaker in the same project is consolidated
+  locally, keeping the newest copy (a manually retained copy takes precedence). Chats
+  without a project are separate scopes. Code whitespace is significant. JEV adds
+  semantic replacement: obsolescence or redundancy ≥ 0.95 with contradiction < 0.15
+  can archive an older candidate in the same scope. An assistant statement cannot
+  replace a user statement. A successful merge at ≥ 0.95 can archive its original
+  pair only after the summary has been stored. Uncertain/conflicting pairs stay.
+- The default **10,000 active-memory target** first archives temporary, low-importance,
+  least-recently-used evidence. Protected memories can exceed this target; the settings
+  report that overflow rather than delete protected facts. This is an active-item
+  budget, not a hard database-byte limit; archived rows remain during their grace period.
+- Archived rows immediately leave keyword/CJK fallback, vector, entity, recent and
+  graph-based retrieval. Management detail/graph calls still expose them. Asynchronous
+  reads re-check their final results, so a concurrent archive cannot inject stale data.
+- The **30-day archive grace period** starts at archival, including on upgraded
+  installations. After it expires, the row, FTS entry, vector and graph edges are
+  deleted atomically. SQLite reuses freed pages; maintenance does not run a blocking
+  full `VACUUM`, so the file need not shrink immediately. Transcripts are unaffected.
+- Restore also pins the memory, preventing immediate re-archival. Disabling automatic
+  maintenance stops archival and automatic deletion; existing archives stay excluded
+  until restored. Clearing the store invalidates in-flight writes and summaries.
+
+Lifecycle columns and protection flags migrate existing databases without archiving
+on open. No additional model/API call is needed for the daily local sweep. JEV's
+existing every-20-writes consolidation remains the source of semantic judgments;
+the local daily sweep does not infer new facts or perform a full model review.
 
 ## What the agent is told, and what it can call
 

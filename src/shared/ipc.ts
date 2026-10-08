@@ -3,6 +3,7 @@ export const Ipc = {
   engineStart: "engine:start",
   engineStop: "engine:stop",
   enginePrompt: "engine:prompt",
+  engineSubmitPrompt: "engine:submit-prompt",
   engineSteer: "engine:steer",
   engineFollowUp: "engine:follow-up",
   engineAbort: "engine:abort",
@@ -59,6 +60,7 @@ export const Ipc = {
   engineGetMessagesSince: "engine:get-messages-since",
   /** Transcript + the turn in flight, read at one instant (`ConversationSnapshot`). */
   engineGetSnapshot: "engine:get-snapshot",
+  engineGetMessagesPage: "engine:get-messages-page",
   /** Every parked extension prompt, across conversations (`getPendingUi`). */
   engineGetPendingUi: "engine:get-pending-ui",
   engineGetStats: "engine:get-stats",
@@ -251,6 +253,9 @@ export const Ipc = {
   /** 设置 → 长期记忆 → 关系图: nodes and edges to draw, and one memory in full. */
   memoryGraph: "memory:graph",
   memoryDetail: "memory:detail",
+  memoryMaintain: "memory:maintain",
+  memoryRestore: "memory:restore",
+  memorySetPinned: "memory:set-pinned",
   memoryDelete: "memory:delete",
   memoryClear: "memory:clear",
   memoryChanged: "memory:changed",

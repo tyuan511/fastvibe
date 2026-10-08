@@ -57,7 +57,9 @@ export function AppPreview() {
     window.addEventListener("message", onReady);
     // If the app never reports (a blocked script, a slow network) do not hide it forever.
     const fallback = window.setTimeout(() => setReady(true), 12_000);
-    setSrc(`/app-preview/mock.html?website=1&lang=${locale}&scene=workspace&pane=none&platform=darwin&theme=${readScheme()}`);
+    // `desktop=1`: the app floats as a glass window over a wallpaper of its own, drawn
+    // inside the frame — a blur cannot reach across an iframe to the page around it.
+    setSrc(`/app-preview/mock.html?website=1&lang=${locale}&scene=workspace&pane=none&platform=darwin&desktop=1&theme=${readScheme()}`);
 
     const observer = new MutationObserver(post);
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
@@ -71,19 +73,27 @@ export function AppPreview() {
     };
   }, [locale]);
 
+  // The preview is a desktop (wallpaper + window), so it sits on a Mac's screen: a black
+  // bezel with the camera, and the base below it (`.mac-*` in globals.css).
   return (
-    <div className="preview-window" data-ready={ready || undefined}>
-      <Skeleton />
-      {src && (
-        <iframe
-          ref={frame}
-          src={src}
-          title={t("aria")}
-          onLoad={() => {
-            frame.current?.contentWindow?.postMessage({ type: "fastvibe-website-theme", theme: readScheme() }, window.location.origin);
-          }}
-        />
-      )}
+    <div className="mac-device">
+      <div className="mac-screen">
+        <span className="mac-camera" aria-hidden="true" />
+        <div className="preview-window" data-ready={ready || undefined}>
+          <Skeleton />
+          {src && (
+            <iframe
+              ref={frame}
+              src={src}
+              title={t("aria")}
+              onLoad={() => {
+                frame.current?.contentWindow?.postMessage({ type: "fastvibe-website-theme", theme: readScheme() }, window.location.origin);
+              }}
+            />
+          )}
+        </div>
+      </div>
+      <div className="mac-base" aria-hidden="true" />
     </div>
   );
 }

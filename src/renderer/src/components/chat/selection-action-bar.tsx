@@ -97,7 +97,9 @@ export function SelectionActionBar({
       role="toolbar"
       aria-label={t("message.selection.label")}
       className={cn(
-        "fixed z-50 flex items-center overflow-hidden rounded-xl border border-border/70 bg-popover p-0.5 text-popover-foreground shadow-lg",
+        // `overlay-surface`: the same edge, depth and (under 玻璃效果) glass as every
+        // other floating layer, which a hand-rolled bar would silently miss.
+        "overlay-surface fixed z-50 flex items-center overflow-hidden rounded-xl border border-border/70 bg-popover p-0.5 text-popover-foreground shadow-lg",
         "animate-in fade-in-0 zoom-in-95 duration-100",
       )}
       style={{ left, top: above ? selection.rect.top - 8 : selection.rect.bottom + 8, transform: above ? "translateY(-100%)" : undefined }}

@@ -18,7 +18,11 @@ import {
   TestTube01Icon,
 } from "../../ui/icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { currentConnection, getClient, onEngineEvent, reconnectNow, resolvePendingPrompt, useConnection, watchConversation } from "../../session/connection";
+import { applyChatEvent, applyChatSnapshot, currentConnection, getClient, onEngineEvent, reconnectNow, resolvePendingPrompt, useConnection } from "../../session/connection";
+import { HistoryPager, prependHistory, type HistoryPage } from "../../chat/history-pager";
+import { SnapshotSync, type Snapshot, type SyncCheckpoint } from "../../chat/snapshot-sync";
+import { createReplyCache } from "../../chat/reply-cache";
+import { recordConnectionDiagnostic } from "../../protocol/diagnostics";
 import {
   archiveConversation,
   deleteConversation,
@@ -95,22 +99,26 @@ const WORKING_GAP = 8;
 const WORKING_BOTTOM_INSET = 8;
 const WORKING_SCROLL_SPACE = WORKING_PILL_HEIGHT + WORKING_GAP + WORKING_BOTTOM_INSET;
 
-type SnapshotPayload = {
-  messages?: unknown;
-  queue?: unknown;
-  messageMode?: "tail" | "full";
-  messageAnchorId?: string;
-};
-
 export default function ChatScreen() {
   const { conversationId } = useLocalSearchParams<{ conversationId: string }>();
   const palette = usePalette();
   useT();
   const insets = useSafeAreaInsets();
   const connection = useConnection();
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, commitMessages] = useState<ChatMessage[]>([]);
   const messagesRef = useRef<ChatMessage[]>([]);
-  messagesRef.current = messages;
+  const paintTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const setMessages = useCallback((value: ChatMessage[] | ((current: ChatMessage[]) => ChatMessage[])) => {
+    const next = typeof value === "function" ? value(messagesRef.current) : value;
+    if (next === messagesRef.current) return;
+    messagesRef.current = next;
+    // Reduce every event in order, but paint at most once per frame-sized interval.
+    if (paintTimer.current === null) paintTimer.current = setTimeout(() => {
+      paintTimer.current = null;
+      commitMessages(messagesRef.current);
+    }, 16);
+  }, []);
+  useEffect(() => () => { if (paintTimer.current !== null) clearTimeout(paintTimer.current); }, []);
   const [draft, setDraft] = useState("");
   const [images, setImages] = useState<ComposerImage[]>([]);
   const [draftHydrated, setDraftHydrated] = useState(false);
@@ -127,23 +135,25 @@ export default function ChatScreen() {
   const remote = getClient();
   const serverId = connection.server?.id;
   // A reconnect is a new scope too: re-subscribe and re-read the durable queue.
-  const scope = useMemo(() => ({ conversationId, remote }), [conversationId, remote]);
+  const scope = useMemo(() => ({ conversationId, remote, serverId }), [conversationId, remote, serverId]);
   const liveScope = useRef(scope);
   liveScope.current = scope;
-  const [clock, setClock] = useState(() => Date.now());
+  const [restoredScope, setRestoredScope] = useState<typeof scope | null>(null);
+  const lastEpoch = useRef<string | null>(null);
   const chat = connection.conversations.find((item) => item.id === conversationId);
   const running = connection.running[conversationId] === true;
   const messageRunStartedAt = useMemo(() => currentRunStartedAt(messages), [messages]);
   const workingSince = messageRunStartedAt ?? connection.runningSince[conversationId];
   const prompt = connection.pending.find((item) => item.conversationId === conversationId);
   const router = useRouter();
-  const listRef = useRef<FlatList<ChatMessage>>(null);
   const [menu, setMenu] = useState(false);
   const [picked, setPicked] = useState<ChatMessage | null>(null);
-  const [away, setAway] = useState(false);
-  const [messageViewportHeight, setMessageViewportHeight] = useState(0);
-  const reloadVersion = useRef(0);
-  const liveMessageVersion = useRef(0);
+  const synchronizer = useRef<{ scope: typeof scope; sync: SnapshotSync } | null>(null);
+  const historyCursor = useRef<string | null>(null);
+  const historyPager = useRef<{ scope: typeof scope; pager: HistoryPager<ChatMessage> } | null>(null);
+  const prefetchOlder = useCallback(() => { historyPager.current?.pager.prefetch(); }, []);
+  const checkpoint = useRef<{ conversationId: string; serverId?: string; value?: SyncCheckpoint } | null>(null);
+  const displayed = useRef({ conversationId, serverId });
   const projectName = chat?.project ? connection.projects.find((item) => item.cwd === chat.project)?.name : undefined;
 
   const handleDraftChange = useCallback((value: string) => {
@@ -196,45 +206,40 @@ export default function ChatScreen() {
     setQueue(next);
   }, [scope]);
 
-  const reload = useCallback(async () => {
-    if (!scope.remote || !scope.conversationId) return;
-    const version = ++reloadVersion.current;
-    const liveVersion = liveMessageVersion.current;
-    const current = messagesRef.current;
-    const anchorEntryId = [...current].reverse().find((message) => message.role === "user")?.id;
-    const snapshot = (await scope.remote.call("engine:get-snapshot", {
-      conversationId: scope.conversationId,
-      ...(anchorEntryId ? { fromEntryId: anchorEntryId } : {}),
-    })) as SnapshotPayload;
-    if (liveScope.current !== scope || version !== reloadVersion.current || liveVersion !== liveMessageVersion.current) return;
-    const next = Array.isArray(snapshot.messages) ? snapshot.messages.flatMap(parseMessage) : [];
-    const merged = snapshot.messageMode === "tail" && snapshot.messageAnchorId
-      ? mergeMessageTail(current, next, snapshot.messageAnchorId)
-      : null;
-    setMessages(merged ?? next);
-    applyQueue(snapshot.queue);
-  }, [scope, applyQueue]);
-
-  useEffect(() => {
-    if (!running) return undefined;
-    setClock(Date.now());
-    const timer = setInterval(() => setClock(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [running]);
+  const reload = useCallback((afterSeq?: number) => synchronizer.current?.scope === scope
+    ? synchronizer.current.sync.refresh(afterSeq) : Promise.resolve(), [scope]);
 
   useEffect(() => {
     let cancelled = false;
-    queueRef.current = emptyQueue(conversationId);
-    setQueue(queueRef.current);
+    if (displayed.current.conversationId !== conversationId || displayed.current.serverId !== serverId) {
+      displayed.current = { conversationId, serverId };
+      queueRef.current = emptyQueue(conversationId);
+      setQueue(queueRef.current);
+      setMessages([]);
+      checkpoint.current = null;
+      historyCursor.current = null;
+      lastEpoch.current = null;
+      setLoading(true);
+    }
     submitting.current = null;
     setSending(false);
     if (!scope.remote) {
       setLoading(false);
       return;
     }
-    const stopWatch = watchConversation(conversationId);
-    const stopEvents = onEngineEvent((event) => {
+    if (!scope.remote.supportsConversationResume || lastEpoch.current !== scope.remote.epoch) {
+      queueRef.current = emptyQueue(conversationId);
+      setQueue(queueRef.current);
+      checkpoint.current = null;
+    }
+    lastEpoch.current = scope.remote.epoch;
+    const started = Date.now();
+    let fullRead = false;
+    let prefetchTimer: ReturnType<typeof setTimeout> | null = null;
+    let pager: HistoryPager<ChatMessage>;
+    const applyEvent = (event: Record<string, unknown>) => {
       if (event.conversationId !== conversationId) return;
+      applyChatEvent(scope.remote!, event);
       if (event.type === "queue_changed") {
         applyQueue(event.queue);
         return;
@@ -243,7 +248,6 @@ export default function ChatScreen() {
         toast.error(typeof event.message === "string" ? event.message : t("chat.queueFailed"));
       }
       if (event.type === "message_start") {
-        liveMessageVersion.current += 1;
         const message = isRecord(event.message) ? event.message : null;
         if (message?.role === "assistant") {
           setMessages((current) => {
@@ -268,40 +272,110 @@ export default function ChatScreen() {
         event.type === "tool_execution_end"
       ) {
         if (!nested) {
-          liveMessageVersion.current += 1;
           setMessages((current) => applyLiveEngineEvent(current, event));
         }
       }
       if (event.type === "queue_delivered" || event.type === "agent_settled" || event.type === "message_end" || (event.type === "tool_execution_end" && !nested)) {
-        void reload().catch(() => undefined);
+        void reload(typeof event.seq === "number" ? event.seq : undefined).catch(() => undefined);
       }
+    };
+    const sync = new SnapshotSync({
+      isCurrent: () => liveScope.current === scope,
+      subscribe: (cursor) => scope.remote!.subscribeConversation(`conversation:${conversationId}`, cursor),
+      load: async () => {
+        const current = messagesRef.current;
+        const anchorEntryId = !fullRead ? current.findLast((message) => message.role === "user" && !message.id.startsWith("local-"))?.id : undefined;
+        return await scope.remote!.call("engine:get-snapshot", { conversationId,
+          ...(anchorEntryId ? { fromEntryId: anchorEntryId } : {}),
+          ...(!fullRead && current.length === 0 && scope.remote!.supportsHistoryPaging ? { historyLimit: 12 } : {}),
+        }) as Snapshot;
+      },
+      snapshot: (snapshot) => {
+        applyChatSnapshot(scope.remote!, conversationId, snapshot);
+        const next = Array.isArray(snapshot.messages) ? snapshot.messages.flatMap(parseMessage) : [];
+        setMessages((current) => snapshot.messageMode === "tail" && snapshot.messageAnchorId
+          ? mergeMessageTail(current, next, snapshot.messageAnchorId) ?? next : next);
+        if (snapshot.messageMode !== "tail") {
+          pager.replace(snapshot.history?.beforeEntryId ?? null);
+          fullRead = false;
+          if (prefetchTimer) clearTimeout(prefetchTimer);
+          // Warm the adjacent page after first paint; further pages are fetched
+          // before they enter view, with no extra controls or rows in the transcript.
+          if (pager.cursor) prefetchTimer = setTimeout(() => pager.prefetch(), 300);
+        }
+        applyQueue(snapshot.queue);
+        setRestoredScope(scope);
+      },
+      event: applyEvent,
+      error: (error) => { if (!cancelled && liveScope.current === scope) toast.failure(error, t("chat.loadFailed")); },
+      restored: (replayed) => {
+        setRestoredScope(scope);
+        recordConnectionDiagnostic({ event: "metric", metric: "resume", elapsedMs: Date.now() - started, outcome: replayed ? "replay" : "snapshot" });
+      },
     });
-    void reload()
+    pager = new HistoryPager<ChatMessage>({
+      cursor: historyCursor.current,
+      load: async (beforeEntryId) => {
+        const page = await scope.remote!.call("engine:get-messages-page", { conversationId, beforeEntryId, turnLimit: 12 }) as Record<string, unknown>;
+        if (!page || page.conversationId !== conversationId || !Array.isArray(page.messages) || typeof page.reset !== "boolean") throw new Error(t("chat.loadFailed"));
+        return { ...page, messages: page.messages.flatMap(parseMessage) } as HistoryPage<ChatMessage>;
+      },
+      prepend: (older, beforeEntryId) => {
+        if (liveScope.current !== scope) return false;
+        const merged = prependHistory(messagesRef.current, older, beforeEntryId);
+        if (!merged) return false;
+        setMessages(merged);
+        return true;
+      },
+      cursorChanged: (cursor) => { if (liveScope.current === scope) historyCursor.current = cursor; },
+      reset: () => { if (liveScope.current !== scope) return Promise.resolve(); fullRead = true; return sync.refresh(); },
+    });
+    historyPager.current = { scope, pager };
+    synchronizer.current = { scope, sync };
+    const stopEvents = onEngineEvent((event, meta) => {
+      if (event.conversationId === conversationId) sync.receive(event, meta);
+    });
+    const seed = checkpoint.current?.conversationId === conversationId && checkpoint.current.serverId === serverId
+      ? checkpoint.current.value : undefined;
+    void sync.restore(!conversationId.startsWith("remote:") && scope.remote.supportsConversationResume && seed?.cursor.epoch === scope.remote.epoch ? seed : undefined)
       .catch((caught: unknown) => {
-        if (!cancelled) toast.failure(caught, t("chat.loadFailed"));
+        if (!cancelled && liveScope.current === scope) toast.failure(caught, t("chat.loadFailed"));
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && liveScope.current === scope) setLoading(false);
       });
     return () => {
       cancelled = true;
-      stopWatch();
+      checkpoint.current = { conversationId, serverId, value: sync.checkpoint() };
+      sync.dispose();
+      pager.dispose();
+      if (prefetchTimer) clearTimeout(prefetchTimer);
+      if (historyPager.current?.pager === pager) historyPager.current = null;
+      if (synchronizer.current?.sync === sync) synchronizer.current = null;
+      scope.remote?.unsubscribe([`conversation:${conversationId}`]);
       stopEvents();
     };
-  }, [conversationId, scope, reload, applyQueue]);
+  }, [conversationId, serverId, scope, reload, applyQueue, setMessages]);
 
   // Inverted list: index 0 is the newest message, rendered at the bottom. First paint
   // lands on it without any scroll animation — no more riding from the top.
   // One row per reply: the model's consecutive round trips read as one answer.
-  const inverted = useMemo(() => mergeReplies(messages).reverse(), [messages]);
+  const mergeReplies = useMemo(() => createReplyCache<ChatMessage>(
+    (message) => message.role === "assistant" && message.kind !== "compact", combineReplies,
+  ), []);
+  const inverted = useMemo(() => mergeReplies(messages).reverse(), [messages, mergeReplies]);
   // One finish line per settled turn, on its last row. The live turn keeps the
   // working capsule instead — a completion time is not knowable until it settles.
-  const turnFooters = useMemo(() => completedTurnFooters(messages, running), [messages, running]);
+  const footerCache = useRef(new Map<string, TurnMeta>());
+  const turnFooters = useMemo(() => {
+    footerCache.current = completedTurnFooters(messages, running, footerCache.current);
+    return footerCache.current;
+  }, [messages, running]);
 
   async function send(): Promise<void> {
     const text = draft.trim();
     const selectedImages = images;
-    const queueLoading = queueRef.current.revision < 0;
+    const queueLoading = queueRef.current.revision < 0 || restoredScope !== scope;
     if ((!text && selectedImages.length === 0) || !remote || shouldHoldSend(Boolean(submitting.current), queueLoading)) return;
     const enqueue = shouldQueueMessage(currentConnection().running[conversationId] === true, queueRef.current);
     const reservation = {};
@@ -365,7 +439,7 @@ export default function ChatScreen() {
 
   async function respond(payload: Record<string, unknown>): Promise<void> {
     const remote = getClient();
-    if (!remote) return;
+    if (!remote || restoredScope !== scope) return;
     setResponding(true);
     try {
       await remote.call("engine:permission-respond", payload);
@@ -389,11 +463,26 @@ export default function ChatScreen() {
         },
       });
     } else if (action === "copy") {
-      const transcript = messages
-        .filter((message) => message.kind !== "compact" && message.text.trim())
-        .map((message) => `${message.role === "user" ? t("common.me") : "FastVibe"}:\n${message.text.trim()}`)
-        .join("\n\n");
-      void Clipboard.setStringAsync(transcript).then(() => toast.success(t("toast.chatCopied")));
+      void (async () => {
+        try {
+          if (loading && messagesRef.current.length === 0) {
+            if (synchronizer.current?.scope !== scope) throw new Error(t("conn.notConnected"));
+            await reload();
+          }
+          if (historyCursor.current) {
+            const active = historyPager.current;
+            if (!active || active.scope !== scope) throw new Error(t("conn.notConnected"));
+            await active.pager.loadAll();
+          }
+          if (liveScope.current !== scope) return;
+          const transcript = messagesRef.current
+            .filter((message) => message.kind !== "compact" && message.text.trim())
+            .map((message) => `${message.role === "user" ? t("common.me") : "FastVibe"}:\n${message.text.trim()}`)
+            .join("\n\n");
+          await Clipboard.setStringAsync(transcript);
+          toast.success(t("toast.chatCopied"));
+        } catch (error) { if (liveScope.current === scope) toast.failure(error, t("chat.loadFailed")); }
+      })();
     } else if (action === "archive") {
       void archiveConversation(chat.id, running).then((done) => done && router.back());
     } else if (action === "delete") {
@@ -422,10 +511,15 @@ export default function ChatScreen() {
     haptic.press();
     setPicked(message);
   }, []);
+  const sendRef = useRef(send);
+  sendRef.current = send;
+  const handleSend = useCallback(() => { void sendRef.current(); }, []);
+  const handleAbort = useCallback(() => { void getClient()?.call("engine:abort", { conversationId }); }, [conversationId]);
+  const handleContinue = useCallback(() => { void getClient()?.call("engine:continue", { conversationId }); }, [conversationId]);
 
   const last = messages.at(-1);
   const canContinue = !running && (Boolean(last?.error) || last?.stop === "aborted" || last?.stop === "length");
-  const connected = Boolean(getClient());
+  const connected = Boolean(getClient()) && restoredScope === scope;
 
   const suggestions = [
     { icon: Idea01Icon, text: t("chat.suggest1") },
@@ -508,58 +602,11 @@ export default function ChatScreen() {
             </View>
           </View>
         ) : (
-          <View style={styles.thread}>
-            <FlatList
-              ref={listRef}
-              data={inverted}
-              inverted
-              keyExtractor={(item) => item.id}
-              contentContainerStyle={styles.messages}
-              onLayout={(event) => setMessageViewportHeight(event.nativeEvent.layout.height)}
-              onScroll={(event) => {
-                const threshold = messageViewportHeight > 0 ? Math.max(160, messageViewportHeight * 0.6) : 480;
-                const next = event.nativeEvent.contentOffset.y > threshold;
-                if (next !== away) setAway(next);
-              }}
-              scrollEventThrottle={64}
-              // With an inverted list, the header is at the visual bottom. Keep the
-              // last message away from the composer, and reserve the larger space for
-              // the floating status pill while a run is active.
-              ListHeaderComponent={
-                <View style={running && !prompt ? styles.workingSpacer : styles.messageBottomSpacer} />
-              }
-              keyboardShouldPersistTaps="handled"
-              renderItem={({ item, index }) => (
-                <MessageRow
-                  message={item}
-                  palette={palette}
-                  meta={turnFooters.get(item.lastId ?? item.id)}
-                  turnStart={item.role === "assistant" && inverted[index + 1]?.role !== "assistant"}
-                  live={running && index === 0}
-                  onLongPress={handleMessageLongPress}
-                />
-              )}
-            />
-            {running && !prompt ? <WorkingStatus palette={palette} since={workingSince ?? clock} now={clock} /> : null}
-            {away ? (
-              <Pressable
-                accessibilityLabel={t("chat.jumpToLatest")}
-                onPress={() => {
-                  haptic.tap();
-                  listRef.current?.scrollToOffset({ offset: 0, animated: true });
-                }}
-                style={({ pressed }) => [
-                  styles.jump,
-                  elevation(palette, 2),
-                  { backgroundColor: palette.card, borderColor: palette.border, bottom: running && !prompt ? WORKING_SCROLL_SPACE + 4 : 12, opacity: pressed ? 0.7 : 1 },
-                ]}
-              >
-                <HugeiconsIcon icon={ArrowDown02Icon} size={18} color={palette.text} strokeWidth={2} />
-              </Pressable>
-            ) : null}
-          </View>
+          <ChatTranscript key={conversationId} inverted={inverted} turnFooters={turnFooters}
+            palette={palette} running={running} waiting={Boolean(prompt)} workingSince={workingSince}
+            onLongPress={handleMessageLongPress} onOlder={prefetchOlder} />
         )}
-        {connection.reconnecting ? (
+        {connection.reconnecting || (!loading && !connected) ? (
           <View style={[styles.reconnectBanner, { backgroundColor: palette.warningSoft, borderColor: palette.warning }]}>
             <DesktopSpinner size={14} color={palette.warning} />
             <Text style={[styles.reconnectText, { color: palette.text }]}>{t("chat.reconnecting")}</Text>
@@ -568,7 +615,8 @@ export default function ChatScreen() {
               accessibilityLabel={t("chat.reconnect")}
               onPress={() => {
                 haptic.tap();
-                reconnectNow();
+                if (getClient()) void reload().catch(() => undefined);
+                else reconnectNow();
               }}
               style={({ pressed }) => [styles.reconnectButton, { opacity: pressed ? 0.65 : 1 }]}
             >
@@ -604,9 +652,9 @@ export default function ChatScreen() {
             images={images}
             onImagesChange={setImages}
             onDraftChange={handleDraftChange}
-            onSend={() => void send()}
-            onAbort={() => void getClient()?.call("engine:abort", { conversationId })}
-            onContinue={() => void getClient()?.call("engine:continue", { conversationId })}
+            onSend={handleSend}
+            onAbort={handleAbort}
+            onContinue={handleContinue}
             canContinue={canContinue}
           />
         )}
@@ -647,6 +695,68 @@ export default function ChatScreen() {
     </MobileDagProvider>
   );
 }
+
+/** Draft edits and the run clock must not re-render the transcript list. */
+const ChatTranscript = memo(function ChatTranscript({ inverted, turnFooters, palette, running, waiting, workingSince, onLongPress, onOlder }: {
+  inverted: ChatMessage[]; turnFooters: Map<string, TurnMeta>; palette: Palette;
+  running: boolean; waiting: boolean; workingSince?: number; onLongPress: (message: ChatMessage) => void;
+  onOlder: () => void;
+}) {
+  useT();
+  const listRef = useRef<FlatList<ChatMessage>>(null);
+  const [away, setAway] = useState(false);
+  const [messageViewportHeight, setMessageViewportHeight] = useState(0);
+  const renderMessage = useCallback(({ item, index }: { item: ChatMessage; index: number }) => (
+    <MessageRow message={item} palette={palette} meta={turnFooters.get(item.lastId ?? item.id)}
+      turnStart={item.role === "assistant" && inverted[index + 1]?.role !== "assistant"}
+      live={running && index === 0} onLongPress={onLongPress} />
+  ), [palette, turnFooters, inverted, running, onLongPress]);
+  return (
+    <View style={styles.thread}>
+      <FlatList
+        ref={listRef}
+        data={inverted}
+        inverted
+        onEndReached={onOlder}
+        onEndReachedThreshold={2}
+        keyExtractor={(item) => item.id}
+        contentContainerStyle={styles.messages}
+        onLayout={(event) => setMessageViewportHeight(event.nativeEvent.layout.height)}
+        onScroll={(event) => {
+          const threshold = messageViewportHeight > 0 ? Math.max(160, messageViewportHeight * 0.6) : 480;
+          const next = event.nativeEvent.contentOffset.y > threshold;
+          if (next !== away) setAway(next);
+        }}
+        scrollEventThrottle={64}
+        // With an inverted list, the header is at the visual bottom. Keep the
+        // last message away from the composer, and reserve the larger space for
+        // the floating status pill while a run is active.
+        ListHeaderComponent={
+          <View style={running && !waiting ? styles.workingSpacer : styles.messageBottomSpacer} />
+        }
+        keyboardShouldPersistTaps="handled"
+        renderItem={renderMessage}
+      />
+      {running && !waiting ? <WorkingStatus palette={palette} since={workingSince} /> : null}
+      {away ? (
+        <Pressable
+          accessibilityLabel={t("chat.jumpToLatest")}
+          onPress={() => {
+            haptic.tap();
+            listRef.current?.scrollToOffset({ offset: 0, animated: true });
+          }}
+          style={({ pressed }) => [
+            styles.jump,
+            elevation(palette, 2),
+            { backgroundColor: palette.card, borderColor: palette.border, bottom: running && !waiting ? WORKING_SCROLL_SPACE + 4 : 12, opacity: pressed ? 0.7 : 1 },
+          ]}
+        >
+          <HugeiconsIcon icon={ArrowDown02Icon} size={18} color={palette.text} strokeWidth={2} />
+        </Pressable>
+      ) : null}
+    </View>
+  );
+});
 
 const MessageRow = memo(function MessageRow({
   message,
@@ -799,29 +909,19 @@ function partsOf(message: ChatMessage): MessagePart[] {
  * opened. `lastId` is what the turn footer is looked up by. An error from a round trip
  * that was not the last (a retried request) stays in place as its own part.
  */
-function mergeReplies(messages: ChatMessage[]): ChatMessage[] {
-  const out: ChatMessage[] = [];
-  for (const message of messages) {
-    const previous = out.at(-1);
-    const joinable = (item?: ChatMessage) => item?.role === "assistant" && item.kind !== "compact";
-    if (!joinable(message) || !joinable(previous) || !previous) {
-      out.push(message);
-      continue;
-    }
-    const earlier = partsOf(previous);
-    const parts: MessagePart[] = [...earlier, ...(previous.error ? [{ kind: "error" as const, text: previous.error }] : []), ...partsOf(message)];
-    out[out.length - 1] = {
-      ...message,
-      id: previous.id,
-      lastId: message.lastId ?? message.id,
-      text: [previous.text, message.text].filter((text) => text.trim()).join("\n\n"),
-      thinking: undefined,
-      tools: [...previous.tools, ...message.tools],
-      parts,
-      createdAt: previous.createdAt ?? message.createdAt,
-    };
-  }
-  return out;
+function combineReplies(previous: ChatMessage, message: ChatMessage): ChatMessage {
+  const earlier = partsOf(previous);
+  const parts: MessagePart[] = [...earlier, ...(previous.error ? [{ kind: "error" as const, text: previous.error }] : []), ...partsOf(message)];
+  return {
+    ...message,
+    id: previous.id,
+    lastId: message.lastId ?? message.id,
+    text: [previous.text, message.text].filter((text) => text.trim()).join("\n\n"),
+    thinking: undefined,
+    tools: [...previous.tools, ...message.tools],
+    parts,
+    createdAt: previous.createdAt ?? message.createdAt,
+  };
 }
 
 function TurnMetaLine({ meta, palette }: { meta: TurnMeta; palette: Palette }): JSX.Element | null {
@@ -881,13 +981,20 @@ function parseCompact(value: unknown): CompactInfo | undefined {
   };
 }
 
-function WorkingStatus({ palette, since, now }: { palette: Palette; since: number; now: number }): JSX.Element {
+function WorkingStatus({ palette, since }: { palette: Palette; since?: number }): JSX.Element {
+  useT();
+  const [now, setNow] = useState(() => Date.now());
+  const fallback = useRef(now);
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
   return (
     <View pointerEvents="none" style={styles.working}>
       <View style={[styles.workingPill, elevation(palette, 0), { backgroundColor: palette.card, borderColor: palette.border }]}>
         <DesktopSpinner color={palette.accent} size={15} />
         <Text style={[styles.workingText, { color: palette.text }]}>{t("chat.working")}</Text>
-        <Text style={[styles.workingTime, { color: palette.muted }]}>{formatElapsed(now - since)}</Text>
+        <Text style={[styles.workingTime, { color: palette.muted }]}>{formatElapsed(now - (since ?? fallback.current))}</Text>
       </View>
     </View>
   );

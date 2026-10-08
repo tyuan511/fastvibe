@@ -60,6 +60,19 @@ export const IS_MAC = KEYBOARD_PLATFORM === "darwin";
 export const HAS_TRAFFIC_LIGHTS = !IS_REMOTE && APP_PLATFORM === "darwin";
 
 /**
+ * Whether the window can be drawn over the OS blur: the packaged macOS shell, whose Main
+ * turns vibrancy on while 玻璃效果 is on. The browser preview harness reports `darwin` too
+ * but is a plain page with nothing behind it, so a translucent theme there would just wash
+ * out — it is told apart by not being Electron. The one exception is the harness's
+ * desktop scene (`?desktop=1`), which paints a wallpaper and a stand-in for the material
+ * itself, and says so on the bridge.
+ */
+export const HAS_VIBRANCY =
+  HAS_TRAFFIC_LIGHTS &&
+  (/Electron\//.test(navigator.userAgent) ||
+    (window.fastvibe?.app as { simulatedVibrancy?: boolean } | undefined)?.simulatedVibrancy === true);
+
+/**
  * Windows and Linux have no traffic lights to inset, and a native title bar above
  * an app that already has its own top row reads as two bars. So there the window is
  * frameless and `components/layout/title-bar.tsx` draws the whole bar: the brand,

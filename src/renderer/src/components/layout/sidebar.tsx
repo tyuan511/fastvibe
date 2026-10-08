@@ -31,6 +31,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { IconButton } from "@/components/icon-button";
+import { Empty, EmptyDescription } from "@/components/ui/empty";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -664,7 +665,13 @@ export const Sidebar = memo(function Sidebar({
             >
               {t("sidebar.chats")}
             </SectionLabel>
-            {recent.length > 0 ? renderSessionList(recent, false) : null}
+            {recent.length > 0 ? (
+              renderSessionList(recent, false)
+            ) : (
+              <Empty className="items-start rounded-none px-2 py-2 text-left">
+                <EmptyDescription className="text-xs">{t("sidebar.emptyChats")}</EmptyDescription>
+              </Empty>
+            )}
           </div>
         </ScrollArea>
         {drop ? <DropLine rect={drop.rect} edge={drop.edge} /> : null}

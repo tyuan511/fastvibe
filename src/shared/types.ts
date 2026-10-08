@@ -1202,7 +1202,9 @@ export type ConversationSnapshot = {
   /** The transcript, including the reply in flight while `running`. */
   messages: ChatMessage[];
   /** When present, `messages` is either the requested tail or a full fallback. */
-  messageMode?: "tail" | "full";
+  messageMode?: "tail" | "full" | "window";
+  /** Present only for a bounded initial transcript; older history is read separately. */
+  history?: import("./transcript-page").TranscriptPageInfo;
   /** The anchor sent by the caller, echoed for tail/full merge diagnostics. */
   messageAnchorId?: string;
   /** Whether a run or a compaction is in flight for this conversation. */
@@ -1230,6 +1232,15 @@ export type ConversationSnapshot = {
    * afterwards drops events at or below it and applies the rest.
    */
   seq: number;
+};
+
+export type ConversationHistoryPage = {
+  conversationId: string | null;
+  messages: ChatMessage[];
+  beforeEntryId: string;
+  nextBeforeEntryId: string | null;
+  /** The requested boundary was removed or changed by a branch edit. */
+  reset: boolean;
 };
 
 export type ConversationOpenResult = WorkspaceSnapshot & {

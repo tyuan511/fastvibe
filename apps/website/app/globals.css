@@ -24,6 +24,16 @@
   --hero-top: #3daeff;
   --hero-glow: #5b3df5;
   --device: #17171d;
+  /* The Mac around the hero preview: silver aluminium in light, space grey in dark. */
+  --mac-edge: #c4c7cf;
+  /* Liquid glass (the scrolled header): the app's own glass-pane values, light and dark
+     (`glassTokens` in src/renderer/src/lib/themes.ts) — keep the two in step. */
+  --glass-rim-strong: rgb(255 255 255 / .95);
+  --glass-rim-weak: rgb(255 255 255 / .45);
+  --glass-sheen: rgb(255 255 255 / .55);
+  --glass-edge: rgb(0 0 0 / .1);
+  --mac-base-top: #e7e9ee;
+  --mac-base-bottom: #b6b9c2;
   --tile-from: #7ac6ff;
   --tile-to: #4b9bff;
   --tile-glow: #8fa0ff;
@@ -62,6 +72,13 @@
     --hero-top: #123a82;
     --hero-glow: #4a2fd0;
     --device: #2a2a36;
+    --mac-edge: #4a4b53;
+    --glass-rim-strong: rgb(255 255 255 / .5);
+    --glass-rim-weak: rgb(255 255 255 / .1);
+    --glass-sheen: rgb(255 255 255 / .1);
+    --glass-edge: rgb(0 0 0 / .45);
+    --mac-base-top: #4b4c55;
+    --mac-base-bottom: #26272d;
     --tile-from: #17457f;
     --tile-to: #1c2c6b;
     --tile-glow: #3a2f9e;
@@ -95,6 +112,13 @@
   --hero-top: #123a82;
   --hero-glow: #4a2fd0;
   --device: #2a2a36;
+  --mac-edge: #4a4b53;
+  --glass-rim-strong: rgb(255 255 255 / .5);
+  --glass-rim-weak: rgb(255 255 255 / .1);
+  --glass-sheen: rgb(255 255 255 / .1);
+  --glass-edge: rgb(0 0 0 / .45);
+  --mac-base-top: #4b4c55;
+  --mac-base-bottom: #26272d;
   --tile-from: #17457f;
   --tile-to: #1c2c6b;
   --tile-glow: #3a2f9e;
@@ -134,24 +158,27 @@ h1, h2, h3, p { margin: 0; }
 .skip-link { position: fixed; top: 1rem; left: 1rem; z-index: 60; padding: .75rem 1rem; border-radius: .5rem; background: var(--ink); color: var(--on-ink); }
 .skip-link:not(:focus) { clip-path: inset(50%); width: 1px; height: 1px; overflow: hidden; padding: 0; }
 
-/* ── Header: clear over the hero, a floating frosted pill once scrolled ────────── */
+/* ── Header: clear over the hero, a floating liquid-glass pill once scrolled ────── */
 /* The bar itself is only a positioning layer; .header-inner is what changes shape. The look is
    a handful of variables so the at-the-top, scrolled, menu-open and no-JS states share one rule. */
 .site-header {
   position: fixed; inset: 0 0 auto; z-index: 50; pointer-events: none;
   --h-width: 100%; --h-height: var(--header-h); --h-top: 0px; --h-radius: 0px; --h-pad: 1.5rem;
   --h-bg: transparent; --h-border: transparent; --h-shadow: 0 0 0 0 transparent; --h-blur: blur(0px) saturate(100%); --h-fg: #fff;
+  --h-rim: 0;
 }
 :root[data-scrolled] .site-header, .site-header[data-open] {
   --h-width: min(72rem, calc(100% - 2rem)); --h-height: 3.5rem; --h-top: .75rem; --h-radius: 9999px; --h-pad: 1rem;
-  --h-bg: color-mix(in srgb, var(--bg) 72%, transparent); --h-border: var(--border);
-  --h-shadow: 0 12px 32px -14px rgb(10 20 60 / .35); --h-blur: blur(18px) saturate(180%); --h-fg: var(--fg);
+  --h-bg: color-mix(in srgb, var(--bg) 40%, transparent); --h-border: transparent; --h-rim: 1;
+  --h-shadow: inset 0 0 0 .5px var(--glass-edge), inset 0 18px 32px -28px var(--glass-sheen);
+  --h-blur: blur(24px) saturate(190%); --h-fg: var(--fg);
 }
 @media (scripting: none) {
   .site-header {
     --h-width: min(72rem, calc(100% - 2rem)); --h-height: 3.5rem; --h-top: .75rem; --h-radius: 9999px; --h-pad: 1rem;
-    --h-bg: color-mix(in srgb, var(--bg) 72%, transparent); --h-border: var(--border);
-    --h-shadow: 0 12px 32px -14px rgb(10 20 60 / .35); --h-blur: blur(18px) saturate(180%); --h-fg: var(--fg);
+    --h-bg: color-mix(in srgb, var(--bg) 40%, transparent); --h-border: transparent; --h-rim: 1;
+    --h-shadow: inset 0 0 0 .5px var(--glass-edge), inset 0 18px 32px -28px var(--glass-sheen);
+    --h-blur: blur(24px) saturate(190%); --h-fg: var(--fg);
   }
 }
 .header-inner {
@@ -161,6 +188,16 @@ h1, h2, h3, p { margin: 0; }
   box-shadow: var(--h-shadow); -webkit-backdrop-filter: var(--h-blur); backdrop-filter: var(--h-blur);
   transition: width .5s cubic-bezier(.2, .7, .2, 1), height .5s cubic-bezier(.2, .7, .2, 1), margin .5s cubic-bezier(.2, .7, .2, 1), padding .5s cubic-bezier(.2, .7, .2, 1),
     border-radius .5s ease, background-color .4s ease, border-color .4s ease, box-shadow .4s ease, backdrop-filter .4s ease, color .3s ease;
+}
+/* The pill's specular rim, as on the app's glass (a 1px gradient ring cut out with a mask):
+   bright where light would catch the edge, top-left, fading round to the far side. It
+   replaces the hairline border, and fades in with the pill rather than snapping. */
+.header-inner::after {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1px; pointer-events: none;
+  background: linear-gradient(155deg, var(--glass-rim-strong) 0%, var(--glass-rim-weak) 22%, transparent 48%, transparent 62%, var(--glass-rim-weak) 100%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor; mask-composite: exclude;
+  opacity: var(--h-rim); transition: opacity .4s ease;
 }
 .brand { display: inline-flex; align-items: center; gap: .5rem; font-weight: 650; font-size: 1.25rem; letter-spacing: -.02em; line-height: 1; }
 .brand img { width: 1.75rem; height: 1.75rem; border-radius: .375rem; }
@@ -222,10 +259,60 @@ h1, h2, h3, p { margin: 0; }
 
 /* ── The real client UI, in an iframe ─────────────────────────────────────────── */
 .preview-window { position: relative; height: 43.75rem; border-radius: 1.25rem; background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow); overflow: hidden; }
+/* A MacBook around the preview. The preview is a desktop — a wallpaper with the app floating
+   on it — and a desktop with no screen around it reads as a loose picture. The bezel is
+   always black, as on the real machine; the edge and the base follow the site's theme. */
+.mac-device { position: relative; }
+.mac-screen {
+  position: relative;
+  padding: 1.125rem .875rem .875rem;
+  border-radius: 1.625rem 1.625rem .75rem .75rem;
+  background: #0b0b0e;
+  box-shadow: 0 0 0 2px var(--mac-edge), inset 0 0 0 1px rgb(255 255 255 / .06), var(--shadow);
+}
+.mac-camera {
+  position: absolute; top: .375rem; left: 50%; width: .375rem; height: .375rem;
+  border-radius: 50%; transform: translateX(-50%);
+  background: radial-gradient(circle at 40% 35%, #3c4a66 0 25%, #121318 60%);
+}
+.mac-screen .preview-window { height: 41.5rem; border: 0; border-radius: .5rem; box-shadow: none; }
+.mac-base {
+  position: relative; height: .875rem; margin-inline: -4.5%;
+  border-radius: .125rem .125rem 1.125rem 1.125rem / .125rem .125rem .875rem .875rem;
+  background: linear-gradient(var(--mac-base-top), var(--mac-base-bottom));
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / .35), 0 18px 30px -18px rgb(0 0 0 / .55);
+}
+/* The thumb groove that opens the lid. */
+.mac-base::before {
+  content: ""; position: absolute; top: 0; left: 50%; width: 15%; height: .375rem;
+  transform: translateX(-50%); border-radius: 0 0 .5rem .5rem;
+  background: linear-gradient(var(--mac-base-bottom), var(--mac-base-top));
+  opacity: .7;
+}
 .preview-window iframe { display: block; width: 100%; height: 100%; border: 0; opacity: 0; transition: opacity .35s ease; color-scheme: normal; }
 .preview-window[data-ready] iframe { opacity: 1; }
 .preview-skeleton { position: absolute; inset: 0; display: flex; background: var(--surface); transition: opacity .35s ease; }
 .preview-window[data-ready] .preview-skeleton { opacity: 0; pointer-events: none; }
+/* On the Mac's screen the preview is a desktop: the page inside the frame paints this same
+   wallpaper and floats the app 16px / 20px in from its edges (`?desktop=1`, DESKTOP_INSET in
+   src/renderer/src/mock/preview.ts — keep the gradient and the inset in step). Drawing both
+   here means only the window is "loading": the wallpaper is already up, the skeleton sits
+   exactly where the app will, and the real page fades in without anything moving. */
+.mac-screen .preview-window {
+  background:
+    radial-gradient(42% 58% at 8% 12%, #ff7a45 0%, rgb(255 122 69 / 0) 70%),
+    radial-gradient(38% 52% at 30% 92%, #ff3d8b 0%, rgb(255 61 139 / 0) 70%),
+    radial-gradient(46% 60% at 92% 8%, #7c5cff 0%, rgb(124 92 255 / 0) 70%),
+    radial-gradient(44% 56% at 78% 96%, #00c2d1 0%, rgb(0 194 209 / 0) 70%),
+    radial-gradient(30% 40% at 58% 46%, #ffd166 0%, rgb(255 209 102 / 0) 70%),
+    linear-gradient(135deg, #2b1b6b 0%, #0d2a4a 55%, #102c3a 100%);
+}
+.mac-screen .preview-skeleton {
+  inset: 16px 20px;
+  border-radius: 24px;
+  overflow: hidden;
+  box-shadow: 0 0 0 .5px rgb(0 0 0 / .45), 0 36px 90px -24px rgb(0 0 0 / .6), 0 14px 34px -12px rgb(0 0 0 / .4);
+}
 .skeleton-side { width: 16.25rem; flex-shrink: 0; padding: 1.125rem 1.25rem; display: grid; gap: .875rem; align-content: start; background: color-mix(in srgb, var(--fg) 3%, transparent); border-right: 1px solid var(--border); }
 .skeleton-side b { height: .5rem; }
 .skeleton-lights { display: flex; gap: .5rem; margin-bottom: 1.25rem; }
@@ -462,6 +549,7 @@ h1, h2, h3, p { margin: 0; }
   .header-github span { display: none; }
   .header-github { width: 2.125rem; padding: 0; justify-content: center; }
   .preview-window { height: 34rem; }
+  .mac-screen .preview-window { height: 32rem; }
 }
 @media (max-width: 40rem) {
   .skeleton-side { display: none; }
@@ -469,6 +557,10 @@ h1, h2, h3, p { margin: 0; }
   .hero { padding-top: calc(var(--header-h) + 2.5rem); padding-inline: 1rem; }
   .hero-preview { margin-top: 2.5rem; }
   .preview-window { height: 32rem; border-radius: 1rem; }
+  .mac-screen { padding: .75rem .5rem .5rem; border-radius: 1.125rem 1.125rem .5rem .5rem; }
+  .mac-screen .preview-window { height: 30rem; border-radius: .375rem; }
+  .mac-camera { top: .25rem; width: .25rem; height: .25rem; }
+  .mac-base { height: .625rem; margin-inline: -3%; }
   .module { padding-inline: 1rem; padding-top: 5rem; }
   .module-heading { font-size: 1.875rem; }
   .practice-list { gap: 4rem; margin-top: 3rem; }

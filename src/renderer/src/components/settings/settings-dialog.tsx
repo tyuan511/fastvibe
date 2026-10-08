@@ -23,7 +23,7 @@ import { UI_LANGUAGES, UI_LANGUAGE_LABELS, type UiLanguage } from "@/lib/languag
 import type { ThemeMode } from "@/lib/themes";
 import { UI_FONT_SIZE_MAX, UI_FONT_SIZE_MIN, UI_FONT_SIZE_STEP } from "@/lib/themes";
 import { readSidebarWidth } from "@/lib/sidebar-width";
-import { HAS_CUSTOM_TITLE_BAR, HAS_TRAFFIC_LIGHTS } from "@/lib/platform";
+import { HAS_CUSTOM_TITLE_BAR, HAS_TRAFFIC_LIGHTS, HAS_VIBRANCY } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import { ProvidersSettings } from "./providers-settings";
 import { ArchivedSettings, type DeleteConversationsResult } from "./archived-settings";
@@ -143,10 +143,10 @@ export function SettingsDialog({
   if (!open) return null;
 
   return (
-    <div className={cn("fixed inset-x-0 bottom-0 z-50 flex bg-background", HAS_CUSTOM_TITLE_BAR ? "top-11" : "top-0")}>
+    <div data-settings-overlay className={cn("fixed inset-x-0 bottom-0 z-50 flex bg-background", HAS_CUSTOM_TITLE_BAR ? "top-11" : "top-0")}>
       <aside
         className={cn(
-          "flex shrink-0 flex-col border-r border-border bg-sidebar",
+          "floating-pane relative flex shrink-0 flex-col border-r border-border bg-sidebar",
           narrow && (listOpen ? "w-full border-r-0" : "hidden"),
         )}
         style={narrow ? undefined : { width: sidebarWidth }}
@@ -308,6 +308,19 @@ export function SettingsDialog({
                     />
                   }
                 />
+                {/* Only where there is a blur to show: a macOS desktop window. */}
+                {HAS_VIBRANCY ? (
+                  <Row
+                    title={t("appearance.glass")}
+                    description={t("appearance.glassDesc")}
+                    control={
+                      <Switch
+                        checked={settings.glass}
+                        onCheckedChange={(checked) => update({ glass: checked })}
+                      />
+                    }
+                  />
+                ) : null}
                 <Row
                   title={t("appearance.uiFontSize")}
                   control={

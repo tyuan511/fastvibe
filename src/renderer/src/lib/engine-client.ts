@@ -27,6 +27,15 @@ function activeId(): string | undefined {
 }
 
 export const engine = {
+  getMessagesPage: (beforeEntryId: string, conversationId = activeId(), turnLimit?: number) => {
+    if (!conversationId) return Promise.reject(new Error("No conversation selected"));
+    return window.fastvibe.engine.getMessagesPage({ conversationId, beforeEntryId, turnLimit });
+  },
+  submitPrompt: (payload: Omit<Parameters<FastVibeEngine["submitPrompt"]>[0], "conversationId"> & { conversationId?: string }) => {
+    const conversationId = payload.conversationId ?? activeId();
+    if (!conversationId) return Promise.reject(new Error("No conversation selected"));
+    return window.fastvibe.engine.submitPrompt({ ...payload, conversationId });
+  },
   prompt: (
     message: string,
     options?: { streamingBehavior?: "steer" | "followUp"; images?: PromptImage[]; conversationId?: string },

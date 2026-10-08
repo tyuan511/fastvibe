@@ -49,7 +49,21 @@ const copy = {
     user: "为 Fieldnotes 加一个快速搜索：支持标题和正文的模糊匹配，用 ⌘K 打开，方向键选择，回车跳转。请保持现有视觉风格，并补测试。",
     intro: "我先检查现有命令菜单、笔记索引和键盘事件的处理方式。",
     finding: "结构很清晰：搜索索引已经在内存中，命令菜单也有可复用的焦点管理。我会把匹配逻辑做成独立 hook，再接入快捷键。",
-    finish: "已完成快速搜索：\n\n- `⌘K` 打开搜索，标题与正文支持容错匹配\n- 结果按「最近编辑 / 其他笔记」分组，方向键与回车完整可用\n- 新增 8 个测试，覆盖空查询、排序和键盘边界\n\n`pnpm test` 与类型检查均已通过。",
+    thinking: "需求有三块：匹配、排序、键盘。命令菜单已有焦点管理，可以复用；排序规则会影响体验，值得先问一句。",
+    delegate: [
+      ["explorer", "梳理 CommandMenu 的焦点管理与快捷键注册"],
+      ["explorer", "找出笔记索引的数据结构和更新时机"],
+    ],
+    webQuery: "fuzzy search ranking typo tolerance command palette",
+    sources: [
+      ["Ranking in command palettes", "https://example.dev/command-palette-ranking"],
+      ["Typo-tolerant matching explained", "https://example.dev/typo-tolerance"],
+      ["Keyboard navigation patterns", "https://example.dev/listbox-keyboard"],
+    ],
+    question: "多个结果分数接近时，优先展示哪类笔记？",
+    answer: "最近编辑的笔记",
+    research: "两条线索都回来了：索引是内存中的数组，编辑时增量更新。参考常见的命令面板做法后，我需要确认一个排序取舍。",
+    finish: "已完成快速搜索：\n\n| 能力 | 实现 |\n| --- | --- |\n| 打开 | `⌘K`，任意页面可用 |\n| 匹配 | 标题与正文，容错 1 个字符 |\n| 排序 | 分数优先，同分按最近编辑 |\n| 键盘 | `↑` `↓` 选择，`Enter` 跳转，`Esc` 关闭 |\n\n核心是一个独立的 hook，组件只管展示：\n\n```ts\nconst results = useQuickSearch(notes, query);\nconst active = useKeyboardSelection(results.length);\n```\n\n新增 8 个测试覆盖空查询、排序与键盘边界，`pnpm test` 与类型检查均已通过。",
     todos: ["梳理搜索与命令菜单", "实现模糊匹配和结果排序", "接入键盘导航", "补充测试并验证"],
     readme: "# Fieldnotes\n\n一个安静、离线优先的笔记应用。\n\n- 快速搜索\n- Markdown 编辑\n- 本地优先同步\n",
     testResult: "✓ 8 tests passed\n✓ TypeScript check passed",
@@ -65,7 +79,21 @@ const copy = {
     user: "Add Fieldnotes quick search: fuzzy-match titles and note text, open with ⌘K, use arrow keys, and jump with Enter. Keep the style and add tests.",
     intro: "I’ll trace the existing command menu, note index, and keyboard handling first.",
     finding: "The structure is clean: the note index is already in memory, and the command menu has reusable focus management. I’ll keep matching in a small hook, then wire in the shortcut.",
-    finish: "Quick search is ready:\n\n- `⌘K` opens search with typo-tolerant title and content matching\n- Results are grouped into “Recently edited” and “Other notes”\n- Arrow keys and Enter work end to end\n- 8 tests cover empty queries, ranking, and keyboard boundaries\n\n`pnpm test` and the TypeScript check both pass.",
+    thinking: "Three parts: matching, ranking, keyboard. The command menu already manages focus, so I can reuse it; ranking shapes the feel, so it is worth one question.",
+    delegate: [
+      ["explorer", "Trace focus management and shortcut registration in CommandMenu"],
+      ["explorer", "Find the note index structure and when it updates"],
+    ],
+    webQuery: "fuzzy search ranking typo tolerance command palette",
+    sources: [
+      ["Ranking in command palettes", "https://example.dev/command-palette-ranking"],
+      ["Typo-tolerant matching explained", "https://example.dev/typo-tolerance"],
+      ["Keyboard navigation patterns", "https://example.dev/listbox-keyboard"],
+    ],
+    question: "When scores are close, which notes should rank first?",
+    answer: "Recently edited notes",
+    research: "Both leads are back: the index is an in-memory array, updated incrementally on edit. After checking how command palettes usually rank, one trade-off needs your call.",
+    finish: "Quick search is ready:\n\n| Area | Behaviour |\n| --- | --- |\n| Open | `⌘K`, from any page |\n| Match | Titles and note text, one typo tolerated |\n| Rank | Score first, ties go to the most recently edited |\n| Keys | `↑` `↓` to move, `Enter` to open, `Esc` to close |\n\nThe logic lives in one hook; the component only renders:\n\n```ts\nconst results = useQuickSearch(notes, query);\nconst active = useKeyboardSelection(results.length);\n```\n\n8 new tests cover empty queries, ranking, and keyboard boundaries; `pnpm test` and the TypeScript check both pass.",
     todos: ["Trace search and command menu", "Build fuzzy matching and ranking", "Wire keyboard navigation", "Add tests and verify"],
     readme: "# Fieldnotes\n\nA calm, offline-first place for notes.\n\n- Quick search\n- Markdown editing\n- Local-first sync\n",
     testResult: "✓ 8 tests passed\n✓ TypeScript check passed",
@@ -135,11 +163,32 @@ export function websiteFixture(language: WebsiteLanguage): WebsiteFixture {
   const text = copy[language];
   const todoItems = text.todos.map((content, index) => ({ id: `task-${index + 1}`, content, status: "completed" }));
   const todo = makeTool("website-todo", "todo", { todos: todoItems }, { details: { todos: todoItems } });
+  const delegate = makeTool(
+    "website-subagent",
+    "subagent",
+    { tasks: text.delegate.map(([agent, task]) => ({ agent, task })) },
+    { details: { results: text.delegate.map(() => ({ exitCode: 0, stopReason: "stop" })) } },
+  );
   const read = makeTool("website-read", "read", { path: COMMAND_PATH });
   const search = makeTool("website-grep", "grep", { pattern: "CommandDialog|useShortcut", path: `${CWD}/src` });
+  const web = makeTool(
+    "website-web",
+    "web_search",
+    { query: text.webQuery },
+    { details: { sources: text.sources.map(([title, url]) => ({ title, url })) } },
+  );
+  const ask = makeTool(
+    "website-question",
+    "question",
+    { questions: [{ question: text.question }] },
+    { details: { questions: [{ question: text.question, answer: text.answer }] } },
+  );
+  const write = makeTool("website-write", "write", { path: SEARCH_PATH, content: searchCode(language) });
   const edit = makeTool("website-edit", "edit", { path: COMMAND_PATH }, { details: { diff: diffFor(language), patch: diffFor(language) } });
   const test = makeTool("website-test", "bash", { command: "pnpm test && pnpm typecheck" }, { result: text.testResult });
 
+  // One turn that shows the run end to end: it thinks, plans, delegates, researches,
+  // asks, writes and verifies, then answers with a table and a code block.
   const messages: ChatMessage[] = [
     {
       id: "website-user",
@@ -153,27 +202,43 @@ export function websiteFixture(language: WebsiteLanguage): WebsiteFixture {
       id: "website-assistant-explore",
       role: "assistant",
       text: text.intro,
-      tools: [todo, read, search],
+      tools: [todo, delegate, read, search],
       parts: [
+        { kind: "thinking", text: text.thinking, startedAt: NOW - 11.9 * MINUTE, endedAt: NOW - 11.85 * MINUTE },
         { kind: "text", text: text.intro },
         { kind: "tool", toolId: todo.id },
+        { kind: "tool", toolId: delegate.id },
         { kind: "tool", toolId: read.id },
         { kind: "tool", toolId: search.id },
       ],
-      createdAt: NOW - 11.5 * MINUTE,
-      completedAt: NOW - 10.8 * MINUTE,
+      createdAt: NOW - 11.9 * MINUTE,
+      completedAt: NOW - 11 * MINUTE,
+    },
+    {
+      id: "website-assistant-research",
+      role: "assistant",
+      text: text.research,
+      tools: [web, ask],
+      parts: [
+        { kind: "text", text: text.research },
+        { kind: "tool", toolId: web.id },
+        { kind: "tool", toolId: ask.id },
+      ],
+      createdAt: NOW - 10.9 * MINUTE,
+      completedAt: NOW - 10.4 * MINUTE,
     },
     {
       id: "website-assistant-build",
       role: "assistant",
       text: text.finding,
-      tools: [edit, test],
+      tools: [write, edit, test],
       parts: [
         { kind: "text", text: text.finding },
+        { kind: "tool", toolId: write.id },
         { kind: "tool", toolId: edit.id },
         { kind: "tool", toolId: test.id },
       ],
-      createdAt: NOW - 10.7 * MINUTE,
+      createdAt: NOW - 10.3 * MINUTE,
       completedAt: NOW - 9.5 * MINUTE,
     },
     {
@@ -287,8 +352,8 @@ export function websiteFixture(language: WebsiteLanguage): WebsiteFixture {
     stats: {
       tokens: { input: 14_820, output: 1_940, cacheRead: 6_200, cacheWrite: 0, total: 22_960 },
       cost: 0.12,
-      toolCalls: 5,
-      steps: 2,
+      toolCalls: 9,
+      steps: 4,
       timing: { totalMs: 42_000, modelMs: 25_000, toolMs: 12_000 },
     },
     tree,

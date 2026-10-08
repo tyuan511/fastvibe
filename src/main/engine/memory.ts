@@ -46,6 +46,7 @@ import {
 import { embeddingDownloadBytes } from "./memory-download";
 import { MEMORY_MODEL_ID as MODEL_ID, MEMORY_MODEL_FILE as MODEL_FILE_NAME, memoryModelSource } from "./memory-model-source";
 import { MEMORY_PREPARATION_TIMEOUT_MS, MemoryReadBudget } from "./memory-read-budget";
+import { MEMORY_DAY_MS } from "./memory-retention";
 import { uiText } from "./ui-text";
 import {
   JEV_MEM_PROFILE,
@@ -105,6 +106,7 @@ type WriteInput = {
   sourceEntryId?: string;
   metadata?: Record<string, unknown>;
   consolidating?: boolean;
+  generation?: number;
 };
 type SystemTwoGenerator = (conversationId: string, model: EngineModel, system: string, user: string, signal?: AbortSignal) => Promise<string>;
 type MemoryReadOptions = { timeoutMs?: number; signal?: AbortSignal; strategy?: "context" | "adaptive" };
@@ -198,6 +200,13 @@ export class MemoryManager {
   #listeners = new Set<(state: MemoryState) => void>();
   #systemTwoGenerator: SystemTwoGenerator | null = null;
   #closed = false;
+  #generation = 0;
+  #writes = 0;
+  #consolidations = 0;
+  #runningConversations = new Set<string>();
+  #maintenanceRequested = false;
+  #maintenanceError: string | undefined;
+  readonly #maintenanceTimer: ReturnType<typeof setInterval>;
   readonly #reads = new Set<MemoryReadBudget>();
   /** The reference client's LRU of identical Jev requests (`cache_size`). */
   readonly #jevCache = new Map<string, Record<string, Answer>>();
@@ -207,12 +216,23 @@ export class MemoryManager {
     this.#config = readMemoryConfig(paths.memoryFile);
     this.#store = new MemoryStore(paths.memoryDatabaseFile);
     void this.#refreshModelState();
+    // Startup catch-up and daily sweeps share the same persisted checkpoint. A short
+    // idle poll also drains large migrations in bounded batches without blocking chat.
+    this.#maintenanceTimer = setInterval(() => this.#runMaintenance(), 60_000);
+    this.#maintenanceTimer.unref();
   }
 
   get config(): MemoryConfig { return this.#config; }
 
   state(): MemoryState {
-    return { config: this.#config, model: this.#model, ...this.#store.count() };
+    return {
+      config: this.#config, model: this.#model, ...this.#store.count(),
+      maintenance: {
+        ...this.#store.maintenanceState(this.#config.maxActiveItems),
+        ...(this.#maintenanceRequested ? { pending: true } : {}),
+        ...(this.#maintenanceError ? { error: this.#maintenanceError } : {}),
+      },
+    };
   }
 
   onChange(listener: (state: MemoryState) => void): () => void {
@@ -290,7 +310,8 @@ export class MemoryManager {
     const filters = { conversationId: request.conversationId, project: request.project };
     let local = this.#store.keyword(query, Math.max(64, limit * 8), filters);
     let embedding: number[] | undefined;
-    const fallback = (): MemorySearchResult => ({ items: local.slice(0, limit).map(stripEmbedding), mode, usedEmbedding: Boolean(embedding), usedJev: false });
+    const finish = (items: MemoryItem[]): MemoryItem[] => this.#readItems(items);
+    const fallback = (): MemorySearchResult => ({ items: finish(local.slice(0, limit).map(stripEmbedding)), mode, usedEmbedding: Boolean(embedding), usedJev: false });
     if (mode === "default" || !this.#store.hasItems(filters)) return fallback();
     const read = new MemoryReadBudget(Math.max(0, (options.timeoutMs ?? JEV_MEM_PROFILE.maxLatencyMs) - (Date.now() - startedAt)), options.signal);
     this.#reads.add(read);
@@ -327,14 +348,14 @@ export class MemoryManager {
         const ranked = rankContextResults(nodes, answers);
         if (!ranked) return fallback();
         const byId = new Map(candidates.map((item) => [item.id, item]));
-        return { items: ranked.slice(0, limit).map(({ id, score }) => ({ ...stripEmbedding(byId.get(id)!), score })), mode, usedEmbedding: Boolean(embedding), usedJev: true };
+        return { items: finish(ranked.slice(0, limit).map(({ id, score }) => ({ ...stripEmbedding(byId.get(id)!), score }))), mode, usedEmbedding: Boolean(embedding), usedJev: true };
       }
       const anchors = fused.slice(0, Math.min(profile.anchorCount, profile.maximumNodes, limit));
       if (anchors.length === 0) return fallback();
       const answers = await routing;
       if (!answers || !decision || read.remainingMs <= 0) return fallback();
       const jev = await read.wait(() => this.#jevRetrieve(query, filters, embedding, limit, anchors, decision!, answers));
-      return { items: jev.items.slice(0, limit).map(stripEmbedding), mode, usedEmbedding: Boolean(embedding), usedJev: jev.used };
+      return { items: finish(jev.items.slice(0, limit).map(stripEmbedding)), mode, usedEmbedding: Boolean(embedding), usedJev: jev.used };
     } catch {
       return fallback();
     } finally {
@@ -352,9 +373,12 @@ export class MemoryManager {
     sourceEntryId?: string;
   }): Promise<MemoryItem | undefined> {
     if (!this.#config.enabled || !this.#config.autoCapture) return undefined;
-    const item = await this.#write(input);
-    if (item) this.#emit();
-    return item;
+    this.#writes++;
+    try {
+      const item = await this.#write(input);
+      if (item) this.#emit();
+      return item;
+    } finally { this.#writes--; }
   }
 
   async contextPrompt(input: { query: string; conversationId?: string; project?: string }, options: MemoryReadOptions = {}): Promise<string> {
@@ -369,7 +393,8 @@ export class MemoryManager {
     const limit = typeof request.limit === "number" && Number.isFinite(request.limit)
       ? Math.min(MEMORY_GRAPH_LIMIT, Math.max(1, Math.round(request.limit)))
       : MEMORY_GRAPH_LIMIT;
-    return this.#store.graph(limit, project);
+    const offset = typeof request.offset === "number" && Number.isSafeInteger(request.offset) ? Math.max(0, request.offset) : 0;
+    return this.#store.graph(limit, project, request.status === "archived" ? "archived" : "active", offset);
   }
 
   /** One memory in full, with every edge that touches it and the memory at its other end. */
@@ -377,7 +402,7 @@ export class MemoryManager {
     const stored = this.#store.item(id);
     if (!stored) return undefined;
     const { embedding: _embedding, edgeWeight: _edgeWeight, edgeView: _edgeView, ...item } = stored;
-    const relations = this.#store.neighboursOf(id).map(({ item: other, edge }) => ({
+    const relations = this.#store.neighboursOf(id, { includeArchived: true }).map(({ item: other, edge }) => ({
       edge: { sourceId: edge.sourceId, targetId: edge.targetId, view: edge.view, relation: edge.relation, origin: edge.origin ?? "jev", weight: edge.weight },
       direction: edge.sourceId === id ? "out" as const : "in" as const,
       neighbor: graphNode(other),
@@ -387,7 +412,54 @@ export class MemoryManager {
 
   /** The newest memories in a scope, newest first (the `memory_recent` tool). */
   recent(input: { conversationId?: string; project?: string; limit: number }): MemoryItem[] {
-    return this.#store.recent(input.limit, { conversationId: input.conversationId, project: input.project }).map(stripEmbedding);
+    return this.#readItems(this.#store.recent(input.limit, { conversationId: input.conversationId, project: input.project }).map(stripEmbedding));
+  }
+
+  #readItems(items: MemoryItem[]): MemoryItem[] {
+    if (this.#closed) return [];
+    // An asynchronous JEV read can overlap a consolidation or a user deletion.
+    const active = items.filter((item) => this.#store.isActive(item.id));
+    this.#store.touch(active.map((item) => item.id));
+    return active;
+  }
+
+  setConversationRunning(id: string, running: boolean): void {
+    if (running) this.#runningConversations.add(id);
+    else this.#runningConversations.delete(id);
+  }
+
+  maintain(): MemoryState {
+    if (this.#config.autoMaintain) this.#maintenanceRequested = true;
+    this.#runMaintenance();
+    return this.state();
+  }
+
+  #runMaintenance(): void {
+    if (this.#closed || !this.#config.autoMaintain || this.#writes || this.#consolidations
+      || this.#reads.size || this.#runningConversations.size) return;
+    const previous = this.#store.maintenanceState(this.#config.maxActiveItems);
+    if (!this.#maintenanceRequested && !previous.pending && previous.lastRunAt != null
+      && Date.now() - previous.lastRunAt < MEMORY_DAY_MS) return;
+    try {
+      this.#store.maintain(this.#config);
+      this.#maintenanceRequested = false;
+      this.#maintenanceError = undefined;
+    } catch (error) {
+      this.#maintenanceError = error instanceof Error ? error.message : String(error);
+    }
+    this.#emit();
+  }
+
+  restore(id: string): MemoryState {
+    this.#store.restore(id);
+    this.#emit();
+    return this.state();
+  }
+
+  setPinned(id: string, pinned: boolean): MemoryState {
+    this.#store.setPinned(id, pinned);
+    this.#emit();
+    return this.state();
   }
 
   delete(id: string): MemoryState {
@@ -397,13 +469,19 @@ export class MemoryManager {
   }
 
   clear(): MemoryState {
+    this.#generation++;
+    this.#maintenanceRequested = false;
+    this.#maintenanceError = undefined;
     this.#store.clear();
     this.#emit();
     return this.state();
   }
 
   close(): void {
+    if (this.#closed) return;
     this.#closed = true;
+    this.#generation++;
+    clearInterval(this.#maintenanceTimer);
     for (const read of this.#reads) read.close();
     this.#store.close();
   }
@@ -543,28 +621,34 @@ export class MemoryManager {
    * does not count as a Jev write.
    */
   async #write(input: WriteInput): Promise<MemoryItem | undefined> {
+    input = { ...input, generation: input.generation ?? this.#generation };
+    if (!this.#writeCurrent(input)) return undefined;
     const content = input.content.trim().slice(0, MAX_CAPTURE_CHARS);
     if (!content) return undefined;
     const text = narrative(input.role, content);
     if (this.#config.mode !== "jev") {
       const embedding = this.#config.mode === "semantic" ? await this.#tryEmbed(content) : undefined;
       const item = this.#item(input, content, defaultTypeScores(input.role), extractEntities(text), input.metadata);
+      if (!this.#writeCurrent(input)) return undefined;
       this.#store.upsert(item, embedding, extractKeywords(text));
       return item;
     }
 
     const typed = noulValues(await this.#jevEvaluate("memory-write", typingRequest(text)), [...TYPE_KEYS]);
+    if (!this.#writeCurrent(input)) return undefined;
     if (!typed) return this.#writeMagma(input, content, text);
     const keywords = extractKeywords(text);
     const embedding = await this.#tryEmbed(content);
+    if (!this.#writeCurrent(input)) return undefined;
     const item = this.#item(input, content, typed as MemoryTypeScores, [...new Set(extractEntities(text))].sort(), input.metadata);
     const node = jevNode(item);
     const candidates = this.#candidates(item, embedding);
     const edges = relationEdges(node, candidates, await this.#jevEvaluate("memory-relation", relationRequest(node, candidates)));
+    if (!this.#writeCurrent(input)) return undefined;
     if (!edges) return this.#writeMagma(input, content, text);
 
     this.#store.upsert(item, embedding, keywords);
-    for (const edge of edges) this.#store.addEdge(edge);
+    for (const edge of edges) if (this.#store.isActive(edge.sourceId) && this.#store.isActive(edge.targetId)) this.#store.addEdge(edge);
     const peers = this.#store.recent(10, timelineOf(item)).reverse();
     if (peers.at(-1)?.id === item.id) {
       for (const edge of temporalEdges(peers.map(jevNode))) this.#store.addEdge(edge, { ifAbsent: true });
@@ -572,7 +656,8 @@ export class MemoryManager {
     const writes = Number(this.#store.meta(JEV_WRITES_KEY) ?? 0) + 1;
     this.#store.setMeta(JEV_WRITES_KEY, String(writes));
     if (!input.consolidating && writes % JEV_MEM_PROFILE.consolidationInterval === 0) {
-      void this.#consolidate(item, embedding).catch(() => undefined);
+      this.#consolidations++;
+      void this.#consolidate(item, embedding, input.generation!).catch(() => undefined).finally(() => { this.#consolidations--; });
     }
     return item;
   }
@@ -583,8 +668,9 @@ export class MemoryManager {
    * linked to its predecessor in time and both ways to its three nearest neighbours.
    * The displayed memory stays the original text; the narrative is what Jev reads.
    */
-  async #writeMagma(input: WriteInput, content: string, text: string): Promise<MemoryItem> {
+  async #writeMagma(input: WriteInput, content: string, text: string): Promise<MemoryItem | undefined> {
     const extraction = await this.#extractEvent(text, input.conversationId);
+    if (!this.#writeCurrent(input)) return undefined;
     const embedding = await this.#tryEmbed(extraction.narrative);
     const item = this.#item(input, content, defaultTypeScores(input.role), [...new Set(extraction.entities)], {
       ...(input.metadata ?? {}),
@@ -592,6 +678,7 @@ export class MemoryManager {
       emotion: extraction.emotion,
       jevMem: { controller: "magma_fallback" },
     });
+    if (!this.#writeCurrent(input)) return undefined;
     this.#store.upsert(item, embedding, extraction.keywords);
     const node = jevNode(item);
     const [latest, previous] = this.#store.recent(2, timelineOf(item));
@@ -631,6 +718,12 @@ export class MemoryManager {
     }
   }
 
+  #writeCurrent(input: Pick<WriteInput, "generation" | "metadata">): boolean {
+    if (this.#closed || input.generation !== this.#generation) return false;
+    const sources = input.metadata?.sourceMemoryIds;
+    return !Array.isArray(sources) || sources.every((id) => typeof id === "string" && this.#store.isActive(id));
+  }
+
   #item(input: WriteInput, content: string, typeScores: MemoryTypeScores, entities: string[], metadata: Record<string, unknown> | undefined): MemoryItem {
     return {
       id: stableMemoryId(input.conversationId, input.role, input.sourceEntryId, content),
@@ -661,24 +754,28 @@ export class MemoryManager {
   }
 
   /**
-   * `MemoryBuilder.consolidate`: non-destructive, over the node's own candidates. It
+   * `MemoryBuilder.consolidate`, over the node's own candidates. It
    * records every decision on the node, adds at most one semantic link per pair, and
    * lets System Two write a new memory for an approved pair — which then goes through
-   * the full write path, with periodic consolidation suppressed.
+   * the full write path, with periodic consolidation suppressed. FastVibe's retention
+   * policy additionally archives confident replacements/merges when enabled.
    */
-  async #consolidate(item: MemoryItem, embedding: number[] | undefined): Promise<void> {
+  async #consolidate(item: MemoryItem, embedding: number[] | undefined, generation: number): Promise<void> {
     const node = jevNode(item);
     const candidates = this.#candidates(item, embedding);
     if (candidates.length === 0) return;
     const plan = consolidationPlan(node, candidates, await this.#jevEvaluate("memory-maintenance", consolidationRequest(node, candidates)));
-    if (!plan) return;
-    for (const edge of plan.edges) this.#store.addEdge(edge, { ifAbsent: true });
+    if (!plan || !this.#writeCurrent({ generation }) || !this.#store.isActive(item.id)) return;
+    for (const edge of plan.edges) if (this.#store.isActive(edge.targetId)) this.#store.addEdge(edge, { ifAbsent: true });
+    if (this.#config.autoMaintain) this.#store.applyConsolidation(item.id, plan.decisions);
     for (const { candidate, action } of plan.summaries) {
+      if (!this.#store.isActive(item.id) || !this.#store.isActive(candidate.id)) continue;
       const key = createHash("sha256").update(node.id + candidate.id).digest("hex");
       if (this.#store.hasMetadata("consolidationKey", key)) continue;
       const text = await this.#summarize([node.content, candidate.content], item.conversationId);
-      if (!text) continue;
-      await this.#write({
+      if (!this.#writeCurrent({ generation })) return;
+      if (!text || !this.#store.isActive(item.id) || !this.#store.isActive(candidate.id)) continue;
+      const summary = await this.#write({
         conversationId: item.conversationId,
         project: item.project,
         role: "summary",
@@ -686,7 +783,15 @@ export class MemoryManager {
         sourceEntryId: `jev-mem-consolidation:${key}`,
         metadata: { source: "jev_mem_consolidation", parentInteractionId: item.id, consolidationKey: key, sourceMemoryIds: [item.id, candidate.id], consolidationAction: action },
         consolidating: true,
+        generation,
       });
+      if (!this.#writeCurrent({ generation })) return;
+      const decision = plan.decisions.find((value) => value.candidateId === candidate.id);
+      if (summary && this.#config.autoMaintain && action === "merge" && decision
+        && decision.representation.probabilities.merge >= 0.95 && decision.contradiction < 0.15) {
+        this.#store.archive(item.id, "merged", Date.now(), summary.id);
+        this.#store.archive(candidate.id, "merged", Date.now(), summary.id);
+      }
     }
     this.#store.setMetadata(item.id, { ...(item.metadata ?? {}), jevMem: { consolidation: plan.decisions } });
     this.#emit();

@@ -22,6 +22,45 @@ const hello = {
   },
 };
 
+test("a detached named stream stays journaled, replays in order, then acknowledges its cursor", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1000 });
+  const { server, session, cap } = createHarness();
+  const resumeHello = { ...hello, hello: { ...hello.hello, features: { conversationResume: true } } };
+  await server.receive(session, resumeHello);
+  await server.receive(session, { kind: "subscribe", scopes: ["conversation:chat"] });
+  server.publish("engine:event", { conversationId: "chat", seq: 1 });
+  const cursor = { epoch: server.bus.epoch, seq: 1 };
+  server.detach(session);
+  assert.equal(server.hasNamedSubscriber("conversation:chat"), false);
+  assert.equal(server.shouldRetainStream("conversation:chat"), true);
+  server.publish("engine:event", { conversationId: "chat", seq: 2 }, { namedOnly: true });
+  const frames: AppServerMessage[] = [];
+  const next = server.attach({ identity: session.identity, send: (message) => { frames.push(message); return true; } });
+  await server.receive(next, resumeHello);
+  await server.receive(next, { kind: "subscribe", scopes: ["conversation:chat"], since: { "conversation:chat": cursor } });
+  assert.deepEqual(frames.map((frame) => frame.kind), ["welcome", "event", "subscribed"]);
+  assert.equal(frames[1].kind === "event" && frames[1].seq, 2);
+  assert.equal(cap.messages.filter((frame) => frame.kind === "event").length, 1);
+  server.detach(next);
+  t.mock.timers.tick(5 * 60_000 + 1);
+  assert.equal(server.shouldRetainStream("conversation:chat"), false);
+  const last = server.attach({ identity: session.identity, send: (message) => { frames.push(message); return true; } });
+  await server.receive(last, resumeHello);
+  await server.receive(last, { kind: "subscribe", scopes: ["conversation:chat"], since: { "conversation:chat": { ...cursor, seq: 2 } } });
+  assert.deepEqual(frames.slice(-2).map((frame) => frame.kind), ["resync", "subscribed"], "expired retention must not certify a complete stream even when its cursor appears current");
+  server.closeAll();
+});
+
+test("a routed conversation uses a snapshot because the gateway cannot certify upstream continuity", async () => {
+  const { server, session, cap } = createHarness();
+  await server.receive(session, { ...hello, hello: { ...hello.hello, features: { conversationResume: true } } });
+  const scope = "conversation:remote:srv:chat";
+  await server.receive(session, { kind: "subscribe", scopes: [scope] });
+  await server.receive(session, { kind: "subscribe", scopes: [scope], since: { [scope]: { epoch: server.bus.epoch, seq: 0 } } });
+  assert.deepEqual(cap.messages.slice(-2).map((frame) => frame.kind), ["resync", "subscribed"]);
+  server.closeAll();
+});
+
 type Capture = { messages: AppServerMessage[]; ctx: AppCallContext[]; methods: string[] };
 
 function createHarness(options?: {

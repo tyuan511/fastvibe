@@ -1,68 +1,66 @@
-import { useState, type JSX } from "react";
+import { memo, useMemo, useState, type JSX } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { HugeiconsIcon } from "@hugeicons/react-native";
 import { Copy01Icon, Tick02Icon } from "../ui/icons";
 import * as Clipboard from "expo-clipboard";
-import Markdown from "react-native-markdown-display";
+import Markdown, { MarkdownIt, type MarkdownProps, type RenderRules } from "react-native-markdown-display";
 import type { Palette } from "../ui/theme";
 import { useT } from "../i18n";
 
+// The library's default constructs and configures a parser on every streamed render.
+const markdownParser = new MarkdownIt({ typographer: true });
+
 /** RN MarkdownView matching desktop chat-markdown.css rather than a generic article. */
-export function MarkdownView({ text, palette }: { text: string; palette: Palette }): JSX.Element {
-  return (
-    <Markdown
-      style={{
-        body: { ...styles.body, color: palette.text },
-        text: { color: palette.text },
-        paragraph: { ...styles.paragraph, color: palette.text },
-        heading1: { ...styles.heading, color: palette.text, fontSize: 18 },
-        heading2: { ...styles.heading, color: palette.text, fontSize: 17 },
-        heading3: { ...styles.heading, color: palette.text, fontSize: 16 },
-        heading4: { ...styles.heading, color: palette.text, fontSize: 15 },
-        heading5: { ...styles.heading, color: palette.text, fontSize: 15 },
-        heading6: { ...styles.heading, color: palette.text, fontSize: 14 },
-        strong: { color: palette.text, fontWeight: "600" },
-        em: { color: palette.text, fontStyle: "italic" },
-        s: { color: palette.muted, textDecorationLine: "line-through" },
-        blockquote: { ...styles.blockquote, borderLeftColor: palette.accent },
-        hr: { ...styles.hr, backgroundColor: palette.border },
-        code_inline: { ...styles.inlineCode, backgroundColor: palette.field, color: palette.text },
-        code_block: { ...styles.codeBlockText, color: palette.text },
-        fence: { ...styles.codeBlockText, color: palette.text },
-        pre: { marginVertical: 0 },
-        bullet_list: styles.list,
-        ordered_list: styles.list,
-        list_item: { ...styles.listItem, color: palette.text },
-        bullet_list_icon: { color: palette.muted, marginRight: 8 },
-        ordered_list_icon: { color: palette.muted, marginRight: 8 },
-        bullet_list_content: { flex: 1 },
-        ordered_list_content: { flex: 1 },
-        link: { color: palette.accent, textDecorationLine: "underline", textDecorationColor: palette.accent },
-        blocklink: { color: palette.accent },
-        image: styles.image,
-        table: { ...styles.table, borderColor: palette.border },
-        tbody: { borderColor: palette.border },
-        thead: { ...styles.thead, borderBottomColor: palette.border },
-        th: { ...styles.td, ...styles.th, color: palette.text, borderBottomColor: palette.border, backgroundColor: palette.field },
-        td: { ...styles.td, color: palette.text, borderBottomColor: palette.border },
-        tr: { flexDirection: "row", borderBottomColor: palette.border },
-      }}
-      rules={{
-        fence(node) {
-          // The fence's info string (```ts) arrives as `sourceInfo`; markdown-it sets no class.
-          const info = (node as { sourceInfo?: unknown }).sourceInfo;
-          const language = (typeof info === "string" ? info.trim().split(/\s+/)[0] : "") || "code";
-          return <CodeFence key={node.key} code={node.content ?? ""} language={language} palette={palette} />;
-        },
-        code_block(node) {
-          return <CodeFence key={node.key} code={node.content ?? ""} language="code" palette={palette} />;
-        },
-      }}
-    >
-      {text}
-    </Markdown>
-  );
-}
+export const MarkdownView = memo(function MarkdownView({ text, palette }: { text: string; palette: Palette }): JSX.Element {
+  const markdownStyle = useMemo<NonNullable<MarkdownProps["style"]>>(() => ({
+    body: { ...styles.body, color: palette.text },
+    text: { color: palette.text },
+    paragraph: { ...styles.paragraph, color: palette.text },
+    heading1: { ...styles.heading, color: palette.text, fontSize: 18 },
+    heading2: { ...styles.heading, color: palette.text, fontSize: 17 },
+    heading3: { ...styles.heading, color: palette.text, fontSize: 16 },
+    heading4: { ...styles.heading, color: palette.text, fontSize: 15 },
+    heading5: { ...styles.heading, color: palette.text, fontSize: 15 },
+    heading6: { ...styles.heading, color: palette.text, fontSize: 14 },
+    strong: { color: palette.text, fontWeight: "600" },
+    em: { color: palette.text, fontStyle: "italic" },
+    s: { color: palette.muted, textDecorationLine: "line-through" },
+    blockquote: { ...styles.blockquote, borderLeftColor: palette.accent },
+    hr: { ...styles.hr, backgroundColor: palette.border },
+    code_inline: { ...styles.inlineCode, backgroundColor: palette.field, color: palette.text },
+    code_block: { ...styles.codeBlockText, color: palette.text },
+    fence: { ...styles.codeBlockText, color: palette.text },
+    pre: { marginVertical: 0 },
+    bullet_list: styles.list,
+    ordered_list: styles.list,
+    list_item: { ...styles.listItem, color: palette.text },
+    bullet_list_icon: { color: palette.muted, marginRight: 8 },
+    ordered_list_icon: { color: palette.muted, marginRight: 8 },
+    bullet_list_content: { flex: 1 },
+    ordered_list_content: { flex: 1 },
+    link: { color: palette.accent, textDecorationLine: "underline", textDecorationColor: palette.accent },
+    blocklink: { color: palette.accent },
+    image: styles.image,
+    table: { ...styles.table, borderColor: palette.border },
+    tbody: { borderColor: palette.border },
+    thead: { ...styles.thead, borderBottomColor: palette.border },
+    th: { ...styles.td, ...styles.th, color: palette.text, borderBottomColor: palette.border, backgroundColor: palette.field },
+    td: { ...styles.td, color: palette.text, borderBottomColor: palette.border },
+    tr: { flexDirection: "row", borderBottomColor: palette.border },
+  }), [palette]);
+  const rules = useMemo<RenderRules>(() => ({
+    fence(node) {
+      // The fence's info string (```ts) arrives as `sourceInfo`; markdown-it sets no class.
+      const info = (node as { sourceInfo?: unknown }).sourceInfo;
+      const language = (typeof info === "string" ? info.trim().split(/\s+/)[0] : "") || "code";
+      return <CodeFence key={node.key} code={node.content ?? ""} language={language} palette={palette} />;
+    },
+    code_block(node) {
+      return <CodeFence key={node.key} code={node.content ?? ""} language="code" palette={palette} />;
+    },
+  }), [palette]);
+  return <Markdown style={markdownStyle} rules={rules} markdownit={markdownParser}>{text}</Markdown>;
+});
 
 function CodeFence({ code, language, palette }: { code: string; language: string; palette: Palette }): JSX.Element {
   const { t } = useT();

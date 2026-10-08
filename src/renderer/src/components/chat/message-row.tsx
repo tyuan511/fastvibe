@@ -28,7 +28,7 @@ import { ToolGroupRow } from "./tool-group";
 import { CompactNotice } from "./compact-notice";
 import { DagSettledNotice } from "./dag-settled-notice";
 import { ModelChangeNotice } from "./model-change-notice";
-import { RunCollapse } from "./run-collapse";
+import { RunCollapse, RunProgress } from "./run-collapse";
 import { TuiLines } from "./tui-lines";
 import { isRemoteRef } from "@/lib/remote-project";
 import { blockedRemotely } from "@/lib/remote-unavailable";
@@ -496,9 +496,8 @@ function ChatMessageRowImpl({
   //
   // Decided only once the run is over, and only when it produced both halves: something to
   // hide and an answer to leave on screen. A run still in flight, one that stopped on a tool
-  // call, and a failed one all draw the plain transcript instead — a 「用时」 row that cannot
-  // be collapsed, sitting over content the reader is watching, reads as broken (zcode gates
-  // its fold the same way, off the turn's terminal state).
+  // call, and a failed one all draw the plain transcript instead. While in flight, a separate
+  // non-interactive header reports the elapsed time without folding any content.
   //
   // The split is anchored on where the last process part ended, not on 「the last text」:
   // which prose will turn out to be the answer cannot be known while it streams, but where
@@ -740,6 +739,8 @@ function ChatMessageRowImpl({
     <Message align={isUser ? "end" : "start"} className="group/row">
       <MessageContent className={isUser ? "items-end" : "items-start"}>
         {message.attachments?.length ? <AttachmentStrip items={message.attachments} /> : null}
+
+        {streaming && !isUser ? <RunProgress startedAt={message.createdAt} /> : null}
 
         {foldHead > 0 ? parts.slice(0, foldHead).map((part, index) => renderPart(part, index)) : null}
 

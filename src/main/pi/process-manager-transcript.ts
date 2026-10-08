@@ -5,12 +5,15 @@ import {
 import type { ChatMessage, CompactReason, EngineModel, ThinkingTiming, TuiRun } from "@shared/types";
 import { mapEngineMessages } from "../engine/map-messages";
 import { renderExtensionMessage } from "./tui-bridge";
-import { isRecord, sessionCompletionTimes } from "./process-manager-events";
+import { isRecord } from "./process-manager-events";
+import { transcriptWindow } from "../engine/transcript-window";
+import type { TranscriptPageInfo } from "../../shared/transcript-page";
 
 export type TranscriptProjectionDeps = {
   session: AgentSession;
   conversationId?: string;
   fromEntryId?: string;
+  page?: { turnLimit: number; beforeEntryId?: string };
   reasoning: { get(entryId: string): ThinkingTiming[] | undefined };
   widgetWidth: number;
   running: ReadonlyMap<string, boolean>;
@@ -26,15 +29,18 @@ export type TranscriptProjectionDeps = {
  */
 export function projectSessionMessages(
   deps: TranscriptProjectionDeps,
-): { messages: ChatMessage[]; anchored: boolean } {
+): { messages: ChatMessage[]; anchored: boolean; history?: TranscriptPageInfo; pageAnchorFound?: boolean } {
   const { session, conversationId, fromEntryId } = deps;
   const branch = [...session.sessionManager.getBranch()];
-  const start = fromEntryId ? branch.findIndex((entry) => entry.id === fromEntryId) : 0;
+  const window = deps.page ? transcriptWindow(branch, deps.page.turnLimit, deps.page.beforeEntryId) : undefined;
+  const start = window ? window.start : fromEntryId ? branch.findIndex((entry) => entry.id === fromEntryId) : 0;
   const anchored = start >= 0;
-  const entries = anchored ? branch.slice(start) : branch;
+  const end = window?.end ?? branch.length;
+  const entries = branch.slice(anchored ? start : 0, end);
   const entryIds = new Map<unknown, string>();
   const timings = new Map<string, ThinkingTiming[]>();
   const transcript: unknown[] = [];
+  const completionTimes = new Map<string, number>();
   for (const entry of entries) {
     for (const message of sessionEntryToContextMessages(entry)) {
       // The SDK keeps the active system prompt on a compaction entry so the model can
@@ -46,6 +52,8 @@ export function projectSessionMessages(
       transcript.push(message);
     }
     if (entry.type !== "message") continue;
+    const completedAt = Date.parse(entry.timestamp);
+    if (Number.isFinite(completedAt)) completionTimes.set(entry.id, completedAt);
     const blocks = deps.reasoning.get(entry.id);
     if (blocks) timings.set(entry.id, blocks);
   }
@@ -63,11 +71,11 @@ export function projectSessionMessages(
     (message) => entryIds.get(message),
     timings,
     renderCustom,
-    sessionCompletionTimes(session),
+    completionTimes,
   );
-  insertModelSwitches(messages, branch, anchored ? start : 0);
+  insertModelSwitches(messages, branch, anchored ? start : 0, end);
 
-  if (conversationId && deps.running.get(conversationId) === true && !deps.compacting.has(conversationId)) {
+  if (!deps.page?.beforeEntryId && conversationId && deps.running.get(conversationId) === true && !deps.compacting.has(conversationId)) {
     const [inFlight] = mapEngineMessages(session.state.streamingMessage ? [session.state.streamingMessage] : []);
     if (inFlight?.role === "assistant") {
       messages.push({
@@ -79,7 +87,7 @@ export function projectSessionMessages(
       messages.push({ id: `running:${conversationId}`, role: "assistant", text: "", tools: [], parts: [], createdAt: Date.now() });
     }
   }
-  if (conversationId && deps.compacting.has(conversationId)) {
+  if (!deps.page?.beforeEntryId && conversationId && deps.compacting.has(conversationId)) {
     const compact = { status: "running" as const, reason: deps.compacting.get(conversationId) };
     const last = messages.at(-1);
     if (last?.role === "assistant") {
@@ -100,26 +108,28 @@ export function projectSessionMessages(
       });
     }
   }
-  return { messages, anchored };
+  return { messages, anchored, ...(window ? { history: { beforeEntryId: window.beforeEntryId }, pageAnchorFound: window.found } : {}) };
 }
 
 function insertModelSwitches(
   messages: ChatMessage[],
   branch: ReturnType<AgentSession["sessionManager"]["getBranch"]>,
   fromIndex: number,
+  toIndex: number,
 ): void {
   if (messages.length === 0) return;
   const indexById = new Map(messages.map((message, index) => [message.id, index]));
   let previous: EngineModel | undefined;
-  for (let index = 0; index < fromIndex; index += 1) {
+  for (let index = fromIndex - 1; index >= 0; index -= 1) {
     const entry = branch[index];
     if (entry.type !== "message") continue;
     const raw: unknown = entry.message;
     if (!isRecord(raw) || raw.role !== "assistant") continue;
     if (typeof raw.provider !== "string" || typeof raw.model !== "string") continue;
     previous = { provider: raw.provider, id: raw.model };
+    break;
   }
-  for (const entry of branch.slice(fromIndex)) {
+  for (const entry of branch.slice(fromIndex, toIndex)) {
     if (entry.type !== "message") continue;
     const raw: unknown = entry.message;
     if (!isRecord(raw) || raw.role !== "assistant") continue;

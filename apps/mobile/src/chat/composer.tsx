@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState, type JSX } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
+import { invalidateModelCatalog, readModelCatalog } from "../protocol/model-cache";
 import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import { HugeiconsIcon } from "@hugeicons/react-native";
@@ -6,7 +7,7 @@ import Svg, { Circle } from "react-native-svg";
 import { AiBrain01Icon, ArrowDown01Icon, ArrowUp02Icon, Cancel01Icon, ImageAdd01Icon, PlayIcon, SquareIcon } from "../ui/icons";
 import type { IconSvgElement } from "@hugeicons/react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { currentConnection, getClient, useConnection } from "../session/connection";
+import { getClient, useConnection } from "../session/connection";
 import { OptionSheet } from "./option-sheet";
 import { ModelPicker, modelKey, type PickerModel } from "./model-picker";
 import { loadModelRecents, rememberModel } from "./model-recents";
@@ -33,7 +34,7 @@ function thinkingHint(level: string): string | undefined {
 }
 
 /** Mobile equivalent of the desktop composer card. */
-export function Composer({
+export const Composer = memo(function Composer({
   conversationId,
   running,
   sending = false,
@@ -75,32 +76,46 @@ export function Composer({
   const [busy, setBusy] = useState(false);
   const [imageBusy, setImageBusy] = useState(false);
   const [focused, setFocused] = useState(false);
-  const serverId = currentConnection().server?.id;
+  const serverId = connection.server?.id;
+  const remote = getClient();
+  const scope = useMemo(() => ({ remote, conversationId }), [remote, conversationId]);
+  const liveScope = useRef(scope);
+  liveScope.current = scope;
+
+  useEffect(() => { setSession(null); setBusy(false); }, [scope]);
+  useEffect(() => { setModels([]); }, [remote]);
 
   const refresh = useCallback(async () => {
-    const remote = getClient();
     if (!remote) return;
     const version = ++refreshVersion.current;
-    const requestedConversationId = conversationId;
+    const current = () => liveScope.current === scope && getClient() === remote && version === refreshVersion.current;
     try {
-      const [state, list] = await Promise.all([
-        remote.call("engine:get-state", { conversationId }) as Promise<SessionState>,
-        remote.call("engine:get-models", { conversationId }) as Promise<PickerModel[]>,
+      await Promise.all([
+        remote.call("engine:get-state", { conversationId }).then((value) => { if (current()) setSession(value as SessionState); }),
+        readModelCatalog(remote).then((list) => { if (current()) setModels(list as PickerModel[]); }),
       ]);
-      if (version !== refreshVersion.current || requestedConversationId !== conversationId) return;
-      setSession(state);
-      setModels(Array.isArray(list) ? list : []);
     } catch {
       // The chat connection owns the visible connection error.
     }
-  }, [conversationId]);
+  }, [conversationId, remote, scope]);
 
   // Again when a run settles: the context window only moves while one is in flight.
-  useEffect(() => { void refresh(); }, [refresh, running, disabled, connection.status, connection.reconnecting]);
+  useEffect(() => {
+    void refresh();
+    return () => { refreshVersion.current += 1; };
+  }, [refresh, running]);
+
+  useEffect(() => {
+    if (picker !== "model" || !remote) return;
+    invalidateModelCatalog(remote);
+    void refresh();
+  }, [picker, remote, refresh]);
 
   useEffect(() => {
     if (!serverId) return;
-    void loadModelRecents(serverId).then(setRecents);
+    let active = true;
+    void loadModelRecents(serverId).then((value) => { if (active) setRecents(value); });
+    return () => { active = false; };
   }, [serverId]);
 
   const currentModel = session?.model;
@@ -112,34 +127,44 @@ export function Composer({
     const { provider, id: modelId } = model;
     if (!remote || busy) return;
     if (currentModel && currentModel.provider === provider && currentModel.id === modelId) return;
+    refreshVersion.current += 1;
     setBusy(true);
     try {
       let next = (await remote.call("engine:set-model", { provider, modelId, conversationId })) as SessionState;
+      if (liveScope.current !== scope || getClient() !== remote) return;
       const offered = models.find((item) => item.provider === provider && item.id === modelId)?.thinkingLevels?.filter((level) => level !== "off");
       if (offered?.length && (!next.thinkingLevel || !offered.includes(next.thinkingLevel))) {
         next = (await remote.call("engine:set-thinking", { level: offered.includes("high") ? "high" : offered[0], conversationId })) as SessionState;
       }
+      if (liveScope.current !== scope || getClient() !== remote) return;
+      refreshVersion.current += 1;
       setSession((previous) => ({ ...previous, ...next }));
       toast.success(t("toast.modelSwitched", { model: model.name || model.id }));
-      if (serverId) setRecents(await rememberModel(serverId, modelKey(model)));
+      if (serverId) {
+        const recent = await rememberModel(serverId, modelKey(model));
+        if (liveScope.current === scope) setRecents(recent);
+      }
     } catch (error) {
-      toast.failure(error, t("composer.modelFailed"));
+      if (liveScope.current === scope) toast.failure(error, t("composer.modelFailed"));
     } finally {
-      setBusy(false);
+      if (liveScope.current === scope) setBusy(false);
     }
   }
 
   async function chooseThinking(level: string): Promise<void> {
     const remote = getClient();
     if (!remote || busy) return;
+    refreshVersion.current += 1;
     setBusy(true);
     try {
       const next = (await remote.call("engine:set-thinking", { level, conversationId })) as SessionState;
+      if (liveScope.current !== scope || getClient() !== remote) return;
+      refreshVersion.current += 1;
       setSession((previous) => ({ ...previous, ...next }));
     } catch (error) {
-      toast.failure(error, t("composer.thinkingFailed"));
+      if (liveScope.current === scope) toast.failure(error, t("composer.thinkingFailed"));
     } finally {
-      setBusy(false);
+      if (liveScope.current === scope) setBusy(false);
     }
   }
 
@@ -310,7 +335,7 @@ export function Composer({
       />
     </View>
   );
-}
+});
 
 /** How full the context window is: a ring that turns amber past 70% and red past 90%. */
 function ContextRing({ percent, palette, usage }: { percent: number; palette: Palette; usage?: ContextUsage }): JSX.Element {

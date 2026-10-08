@@ -87,6 +87,8 @@ import {
   scanImportSources,
 } from "../engine/import/runner";
 import { readAppSettings, readDefaultModel, readPreferredModelSettings } from "../engine/runtime-settings";
+import { submitPrompt } from "../engine/prompt-submission";
+import type { SubmitPromptRequest } from "../../shared/prompt-submission";
 import { applyToolModes, toolModes } from "../engine/tool-modes";
 import { currentAiLanguageDirective, currentCustomSystemPrompt } from "../engine/ai-language";
 import { uiText } from "../engine/ui-text";
@@ -1012,6 +1014,18 @@ export class PiProcessManager {
       await this.#mcp.close();
       if (this.#status.state === "ready" || this.#status.state === "starting") this.#setStatus({ state: "idle" });
     });
+  }
+
+  submitPrompt(input: SubmitPromptRequest): Promise<ConversationQueueState | null> {
+    return submitPrompt({
+      preview: (id) => this.#catalog.get(id),
+      record: (id, text) => this.#writePromptPreview(id, text),
+      restore: (id, before, expected) => this.#catalog.restorePromptPreview(id, expected, before),
+      behavior: () => readAppSettings(this.#paths).queueBehavior,
+      prompt: ({ conversationId, text, images }) => this.prompt(text, { conversationId, images }),
+      enqueue: ({ conversationId, text, images }, behavior, preview) =>
+        this.enqueueMessage({ conversationId, text, message: text, images, behavior, preview }),
+    }, input);
   }
 
   async prompt(
@@ -2145,9 +2159,10 @@ export class PiProcessManager {
    * `seq` is the last event number in existence at that instant. A caller that
    * subscribes afterwards discards anything at or below it and applies the rest.
    */
-  async getSnapshot(conversationId?: string, fromEntryId?: string): Promise<ConversationSnapshot> {
+  async getSnapshot(conversationId?: string, fromEntryId?: string, historyLimit?: number): Promise<ConversationSnapshot> {
     const { id, session } = await this.#sessionFor(conversationId);
-    const projected = this.#messagesFrom(session, id, fromEntryId);
+    const page = !fromEntryId && typeof historyLimit === "number" ? { turnLimit: historyLimit } : undefined;
+    const projected = this.#messagesFrom(session, id, fromEntryId, page);
     const messages = projected.messages;
     const running = id ? this.#busy(id) : false;
     const turn = running && id ? this.#turnEvents.get(id) : undefined;
@@ -2161,6 +2176,7 @@ export class PiProcessManager {
       conversationId: id ?? null,
       messages,
       ...(fromEntryId ? { messageMode: projected.anchored ? "tail" : "full", messageAnchorId: fromEntryId } : {}),
+      ...(projected.history ? { messageMode: "window", history: projected.history } : {}),
       running,
       queue: id ? this.#messageQueue.state(id) : { conversationId: "", revision: 0, items: [], pause: null },
       pendingUi,
@@ -2176,6 +2192,13 @@ export class PiProcessManager {
       overflowed: turn?.overflowed ?? false,
       seq: this.#eventSeq,
     };
+  }
+  async getMessagesPage(conversationId: string, beforeEntryId: string, turnLimit = 12) {
+    if (!conversationId || typeof beforeEntryId !== "string" || !beforeEntryId) throw new Error(uiText("历史消息游标无效", "Invalid history cursor"));
+    const { id, session } = await this.#sessionFor(conversationId);
+    const page = this.#messagesFrom(session, id, undefined, { turnLimit, beforeEntryId });
+    return { conversationId: id ?? null, messages: page.messages, beforeEntryId,
+      nextBeforeEntryId: page.history?.beforeEntryId ?? null, reset: page.pageAnchorFound === false };
   }
   /**
    * The models this install can chat with. An unconfigured engine has none, which is an
@@ -4637,18 +4660,20 @@ export class PiProcessManager {
     session: AgentSession,
     conversationId: string | undefined,
     fromEntryId?: string,
-  ): { messages: ChatMessage[]; anchored: boolean } {
+    page?: { turnLimit: number; beforeEntryId?: string },
+  ): ReturnType<typeof projectSessionMessages> {
     const projected = projectSessionMessages({
       session,
       conversationId,
       fromEntryId,
+      page,
       reasoning: this.#reasoning,
       widgetWidth: this.#widgetWidth,
       running: this.#running,
       compacting: this.#compacting,
     });
     const opening = conversationId ? this.#openingPrompts.get(conversationId) : undefined;
-    if (opening && !session.messages.some((message) => message.role === "user")) projected.messages.push(opening);
+    if (!page?.beforeEntryId && opening && !session.messages.some((message) => message.role === "user")) projected.messages.push(opening);
     return projected;
   }
   /**

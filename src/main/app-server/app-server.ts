@@ -67,6 +67,8 @@ export class AppServer {
   #idempotency = new Map<string, IdempotencyEntry>();
   #idempotencyOrder: string[] = [];
   #pendingIdempotency = new Map<string, { method: string; fingerprint: string; promise: Promise<CachedResult> }>();
+  /** Recently detached named streams stay journaled through short network outages. */
+  #retainedStreams = new Map<string, number>();
 
   constructor(deps: AppServerDeps) {
     this.#deps = deps;
@@ -115,6 +117,7 @@ export class AppServer {
 
   detach(session: ClientSession): void {
     if (!this.#sessions.has(session.id)) return;
+    this.#retainStreams(Object.keys(session.cursors()));
     session.close();
     this.#sessions.delete(session.id);
     this.#deps.onSessionsChanged?.(this.#sessions.size);
@@ -147,6 +150,9 @@ export class AppServer {
           features: {
             ...(session.supportsEventBatch ? { eventBatch: true } : {}),
             ...(session.supportsBinaryAttachments ? { binaryAttachments: true } : {}),
+            ...(session.supportsConversationResume ? { conversationResume: true } : {}),
+            ...(this.#deps.channels().includes("engine:submit-prompt") ? { promptSubmit: true } : {}),
+            ...(this.#deps.channels().includes("engine:get-messages-page") ? { historyPaging: true } : {}),
           },
         });
         return true;
@@ -156,13 +162,31 @@ export class AppServer {
         session.write({ kind: "pong" });
         return true;
 
-      case "subscribe":
+      case "subscribe": {
         if (!session.handshaken) return this.#notReady(session, null);
-        session.subscribe(message.scopes, message.since);
+        const since = message.since ? { ...message.since } : undefined;
+        if (session.supportsConversationResume && since) {
+          for (const scope of message.scopes) {
+            // An upstream SSH connection has its own gaps/epoch. Its transcript is
+            // authoritative; a local gateway journal cannot prove full coverage.
+            if (since[scope] && scope.startsWith("conversation:") &&
+                (scope.startsWith("conversation:remote:") || !this.shouldRetainStream(scope))) {
+              delete since[scope];
+              session.write({ kind: "resync", scope, epoch: this.bus.epoch, seq: this.bus.sequence(scope), reason: "Stream retention expired; read a snapshot" });
+            }
+          }
+        }
+        session.subscribe(message.scopes, since);
+        if (session.supportsConversationResume) {
+          const cursors = session.cursors();
+          session.write({ kind: "subscribed", ...(message.requestId !== undefined ? { requestId: message.requestId } : {}), cursors: Object.fromEntries(message.scopes.filter((scope) => scope !== "*").map((scope) => [scope, cursors[scope]!])) });
+        }
         return true;
+      }
 
       case "unsubscribe":
         if (!session.handshaken) return this.#notReady(session, null);
+        this.#retainStreams(message.scopes.filter((scope) => session.isSubscribedByName(scope)));
         session.unsubscribe(message.scopes);
         return true;
 
@@ -305,12 +329,34 @@ export class AppServer {
     return false;
   }
 
+  shouldRetainStream(scope: AppScope): boolean {
+    if (this.hasNamedSubscriber(scope)) return true;
+    if ((this.#retainedStreams.get(scope) ?? 0) > Date.now()) return true;
+    if (this.#retainedStreams.has(scope)) this.bus.invalidate(scope);
+    this.#retainedStreams.delete(scope);
+    return false;
+  }
+
+  #retainStreams(scopes: string[]): void {
+    for (const scope of scopes) {
+      if (!scope.startsWith("conversation:")) continue;
+      this.#retainedStreams.delete(scope);
+      this.#retainedStreams.set(scope, Date.now() + 5 * 60_000);
+    }
+    while (this.#retainedStreams.size > 256) {
+      const evicted = this.#retainedStreams.keys().next().value!;
+      this.bus.invalidate(evicted);
+      this.#retainedStreams.delete(evicted);
+    }
+  }
+
   sessionsForSubject(subject: string): ClientSession[] {
     return [...this.#sessions.values()].filter((session) => session.identity.subject === subject);
   }
 
   closeAll(): void {
     for (const session of [...this.#sessions.values()]) this.detach(session);
+    this.#retainedStreams.clear();
   }
 
   #notReady(session: ClientSession, requestId: number | null): true {

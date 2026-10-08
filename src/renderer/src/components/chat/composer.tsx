@@ -754,7 +754,7 @@ export function Composer({
 
       <div
         className={cn(
-          "relative z-10 rounded-[22px] border border-border bg-card shadow-sm transition-colors focus-within:border-ring",
+          "glass-rim relative z-10 rounded-[22px] border border-border bg-card shadow-sm transition-colors focus-within:border-ring",
           dragging && "ring-2 ring-ring",
         )}
       >
@@ -788,7 +788,7 @@ export function Composer({
           disabled={locked || readOnly}
           placeholder={notice ?? (!readOnly && streaming ? t("composer.placeholderQueued") : placeholder ?? t("composer.placeholder"))}
           className={cn(
-            "field-sizing-content max-h-56 min-h-13 resize-none border-0 bg-transparent px-4 text-sm leading-6 shadow-none focus-visible:ring-0 disabled:bg-transparent disabled:opacity-100 dark:bg-transparent",
+            "field-sizing-content max-h-56 min-h-13 resize-none border-0 bg-transparent px-4 text-sm leading-6 shadow-none focus-visible:ring-0 disabled:bg-transparent disabled:opacity-100 dark:bg-transparent dark:disabled:bg-transparent",
             attachments.length > 0 ? "pt-2" : "pt-3.5",
           )}
           onChange={(event) => handleChange(event.target.value)}

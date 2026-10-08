@@ -17,6 +17,10 @@ test("memory config sanitizes mode, limits and auto capture", () => {
     embeddingProvider: "local-minilm-multilingual-q8",
     maxResults: 32,
     maxContextChars: 1_000,
+    autoMaintain: true,
+    temporaryRetentionDays: 90,
+    archiveRetentionDays: 30,
+    maxActiveItems: 10_000,
   });
   assert.equal(memoryConfigOf({ mode: "invalid" }).mode, "default");
   assert.equal(memoryConfigOf({ enabled: false, mode: "semantic" }).mode, "default");

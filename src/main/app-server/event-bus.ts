@@ -56,6 +56,8 @@ export class EventBus {
   #maxScopes: number;
   #maxBytes: number;
   #now: () => number;
+  #bytes = 0;
+  #sizes = new WeakMap<EventRecord, number>();
 
   constructor(options: EventBusOptions = {}) {
     this.epoch = options.epoch ?? randomUUID();
@@ -68,7 +70,7 @@ export class EventBus {
 
   sequence(scope: AppScope): number {
     this.#enforceBounds();
-    return this.#scopes.get(scope)?.seq ?? 0;
+    return this.#scopes.get(scope)?.seq ?? this.#tombstones.get(scope) ?? 0;
   }
 
   /**
@@ -88,6 +90,11 @@ export class EventBus {
       at: this.#now(),
       ...(options?.except ? { except: options.except } : {}),
     };
+    let bytes: number;
+    try { bytes = Buffer.byteLength(JSON.stringify(record.payload) ?? "", "utf8"); }
+    catch { bytes = this.#maxBytes + 1; }
+    this.#sizes.set(record, bytes);
+    this.#bytes += bytes;
     state.records.push(record);
     this.#trim(state);
     this.#enforceBounds();
@@ -95,7 +102,7 @@ export class EventBus {
       kind: "event",
       scope,
       seq: record.seq,
-      epoch: this.epoch,
+      epoch: record.epoch,
       eventId,
       channel,
       payload: clonePayload(payload),
@@ -121,9 +128,9 @@ export class EventBus {
     }
     const state = this.#scopes.get(scope);
     if (state) this.#trim(state);
-    const seq = state?.seq ?? 0;
+    const seq = state?.seq ?? this.#tombstones.get(scope) ?? 0;
     if (!state || seq === 0) {
-      return cursor.seq === 0 ? { kind: "current" } : { kind: "resync", reason: "该范围没有可回放的事件" };
+      return seq === 0 && cursor.seq === 0 ? { kind: "current" } : { kind: "resync", reason: "该范围没有可回放的事件" };
     }
     if (cursor.seq === seq) return { kind: "current" };
     if (cursor.seq > seq) return { kind: "resync", reason: "游标超前于服务端序号" };
@@ -146,7 +153,10 @@ export class EventBus {
   forget(scope: AppScope): void {
     const old = this.#scopes.get(scope);
     // Retain the watermark so a recreated scope cannot reuse sequence numbers.
-    if (old) this.#tombstones.set(scope, old.seq);
+    if (old) {
+      this.#tombstones.set(scope, old.seq);
+      for (const record of old.records) this.#bytes -= this.#sizes.get(record) ?? 0;
+    }
     this.#scopes.delete(scope);
     while (this.#tombstones.size > this.#maxScopes) {
       const oldest = this.#tombstones.keys().next().value as AppScope | undefined;
@@ -158,6 +168,16 @@ export class EventBus {
     this.#enforceBounds();
   }
 
+  /** A producer stopped journaling. Leave a sequence hole so an old cursor can
+   * never claim continuity when somebody starts watching this scope again. */
+  invalidate(scope: AppScope): void {
+    const state = this.#state(scope);
+    for (const record of state.records) this.#bytes -= this.#sizes.get(record) ?? 0;
+    state.records = [];
+    state.seq += 1;
+    this.#enforceBounds();
+  }
+
   forgetMany(predicate: (scope: AppScope) => boolean): void {
     for (const scope of [...this.#scopes.keys()]) {
       if (predicate(scope)) this.forget(scope);
@@ -166,19 +186,16 @@ export class EventBus {
 
   #enforceBounds(): void {
     for (const state of this.#scopes.values()) this.#trim(state);
-    let bytes = 0;
-    for (const state of this.#scopes.values()) for (const record of state.records) bytes += this.#size(record);
     // Drop oldest records globally until the byte budget is real, not merely
     // checked when a scope happens to receive another event.
-    while (bytes > this.#maxBytes) {
+    while (this.#bytes > this.#maxBytes) {
       let oldest: { state: ScopeState; record: EventRecord } | undefined;
       for (const state of this.#scopes.values()) {
         const record = state.records[0];
         if (record && (!oldest || record.at < oldest.record.at)) oldest = { state, record };
       }
       if (!oldest) break;
-      oldest.state.records.shift();
-      bytes -= this.#size(oldest.record);
+      this.#shift(oldest.state);
     }
     while (this.#scopes.size > this.#maxScopes) {
       const first = this.#scopes.keys().next().value as AppScope | undefined;
@@ -187,12 +204,18 @@ export class EventBus {
       // while the tombstone remains within the bounded scope table.
       const state = this.#scopes.get(first)!;
       this.#tombstones.set(first, state.seq);
+      for (const record of state.records) this.#bytes -= this.#sizes.get(record) ?? 0;
       this.#scopes.delete(first);
+    }
+    while (this.#tombstones.size > this.#maxScopes) {
+      this.#tombstones.delete(this.#tombstones.keys().next().value!);
+      this.epoch = randomUUID();
     }
   }
 
-  #size(record: EventRecord): number {
-    try { return JSON.stringify(record.payload)?.length ?? 0; } catch { return 0; }
+  #shift(state: ScopeState): void {
+    const record = state.records.shift();
+    if (record) this.#bytes -= this.#sizes.get(record) ?? 0;
   }
 
   #state(scope: AppScope): ScopeState {
@@ -207,8 +230,8 @@ export class EventBus {
 
   #trim(state: ScopeState): void {
     const cutoff = this.#now() - this.#maxAgeMs;
-    while (state.records.length > 0 && (state.records[0]?.at ?? 0) < cutoff) state.records.shift();
-    while (state.records.length > this.#maxPerScope) state.records.shift();
+    while (state.records.length > 0 && (state.records[0]?.at ?? 0) < cutoff) this.#shift(state);
+    while (state.records.length > this.#maxPerScope) this.#shift(state);
   }
 }
 

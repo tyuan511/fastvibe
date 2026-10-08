@@ -47,6 +47,8 @@ type StoredProvider = {
 type ProvidersFile = {
   version: number;
   providers: StoredProvider[];
+  /** Migration is one-shot: deleting its provider must not recreate it from the old key. */
+  legacyJevMigrated?: boolean;
 };
 
 /**
@@ -84,10 +86,19 @@ export function providersFilePath(paths: FastVibePaths): string {
   return paths.providersFile;
 }
 
-export function readProviders(paths: FastVibePaths): StoredProvider[] {
+function readProvidersFile(paths: FastVibePaths): ProvidersFile | undefined {
   try {
     const parsed = JSON.parse(readFileSync(paths.providersFile, "utf8")) as ProvidersFile;
-    if (!parsed || !Array.isArray(parsed.providers)) return [normalizeFastVibe(null)];
+    return parsed && Array.isArray(parsed.providers) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function readProviders(paths: FastVibePaths): StoredProvider[] {
+  try {
+    const parsed = readProvidersFile(paths);
+    if (!parsed) return [normalizeFastVibe(null)];
     const legacy = !(typeof parsed.version === "number" && parsed.version >= PROVIDERS_VERSION);
     return ensureFastVibe(
       parsed.providers.filter(isStoredProvider).map(hydrateProvider).filter(isLiveProvider),
@@ -108,10 +119,15 @@ function isLiveProvider(provider: StoredProvider): boolean {
   return provider.kind !== "native" || findNativeProvider(provider.id) !== undefined;
 }
 
-function writeProviders(paths: FastVibePaths, providers: StoredProvider[]): void {
+function writeProviders(
+  paths: FastVibePaths,
+  providers: StoredProvider[],
+  legacyJevMigrated = readProvidersFile(paths)?.legacyJevMigrated === true,
+): void {
   const payload: ProvidersFile = {
     version: PROVIDERS_VERSION,
     providers: providers.map((provider) => ({ ...provider, models: hydrateModels(provider.models) })),
+    ...(legacyJevMigrated ? { legacyJevMigrated: true } : {}),
   };
   writeFileSync(paths.providersFile, `${JSON.stringify(payload, null, 2)}\n`);
 }
@@ -507,6 +523,7 @@ export async function addProvider(
 }
 
 const JEV_OFFICIAL_BASE = "https://api.typesafe.ai/v1";
+const legacyJevMigrations = new Map<string, Promise<void>>();
 
 /** The one model the old decision engine called when the user never picked one. */
 function fallbackJevModel(): ProviderModel {
@@ -528,33 +545,81 @@ function officialSystemOneProvider(providers: StoredProvider[]): StoredProvider 
 /**
  * A Jev key saved by 决策引擎 before System One was a provider protocol.
  *
- * Adds the official Jev endpoint as its own provider, copies that key onto it, and
+ * Adds the official Jev endpoint as its own provider, moves that key onto it, and
  * fills the model list from the endpoint when it answers. If 决策引擎 was already on,
  * its selection moves to this provider (`jev-latest` when the list has it). A provider
  * the user already set to System One is left as it is. One System One model pinned on
  * a chat provider does not count — that is not the official endpoint.
+ * Concurrent engine/settings callers share one run per file. Completion is persisted
+ * so the old key cannot resurrect a provider the user subsequently deletes.
  */
-export async function adoptLegacyJevProvider(paths: FastVibePaths): Promise<void> {
+export function adoptLegacyJevProvider(paths: FastVibePaths): Promise<void> {
+  const pending = legacyJevMigrations.get(paths.providersFile);
+  if (pending) return pending;
+  const migration = migrateLegacyJevProvider(paths).finally(() => {
+    legacyJevMigrations.delete(paths.providersFile);
+  });
+  legacyJevMigrations.set(paths.providersFile, migration);
+  return migration;
+}
+
+async function migrateLegacyJevProvider(paths: FastVibePaths): Promise<void> {
+  if (readProvidersFile(paths)?.legacyJevMigrated) {
+    await retireLegacyJevKey(paths);
+    return;
+  }
   const existing = officialSystemOneProvider(readProviders(paths));
   if (existing) {
     retargetDecisionModel(paths, existing, false);
+    await retireLegacyJevKey(paths, existing);
+    writeProviders(paths, readProviders(paths), true);
     return;
   }
   const key = (await loadProviderKeys(paths))[JEV_KEY_ENV];
   if (!key) return;
   let models: ProviderModel[];
+  let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     models = await Promise.race([
       fetchProviderModels(JEV_OFFICIAL_BASE, key, "systemone"),
-      new Promise<ProviderModel[]>((_, reject) => setTimeout(() => reject(new Error("timeout")), 8000)),
+      new Promise<ProviderModel[]>((_, reject) => { timeout = setTimeout(() => reject(new Error("timeout")), 8000); }),
     ]);
   } catch {
     models = [];
+  } finally {
+    clearTimeout(timeout);
+  }
+  // Settings may have added or removed a provider while the catalog was in flight.
+  if (readProvidersFile(paths)?.legacyJevMigrated) return;
+  const added = officialSystemOneProvider(readProviders(paths));
+  if (added) {
+    retargetDecisionModel(paths, added, false);
+    await retireLegacyJevKey(paths, added);
+    writeProviders(paths, readProviders(paths), true);
+    return;
   }
   if (models.length === 0) models = [fallbackJevModel()];
   const id = await addProvider(paths, { name: "Jev", baseUrl: JEV_OFFICIAL_BASE, apiKey: key, api: "systemone" }, models);
   const created = readProviders(paths).find((provider) => provider.id === id);
-  if (created) retargetDecisionModel(paths, created, true);
+  if (created) {
+    retargetDecisionModel(paths, created, true);
+    await retireLegacyJevKey(paths, created);
+    writeProviders(paths, readProviders(paths), true);
+  }
+}
+
+/** Retire the old credential only together with a durable key for the official provider. */
+async function retireLegacyJevKey(paths: FastVibePaths, provider?: StoredProvider): Promise<void> {
+  const keys = await loadProviderKeys(paths);
+  const legacyKey = keys[JEV_KEY_ENV];
+  if (!legacyKey) return;
+  if (provider && trimBaseUrl(provider.baseUrl) === JEV_OFFICIAL_BASE && !keys[provider.apiKeyEnv]) {
+    // Recover a migration interrupted between writing providers.json and saving its key.
+    // A user-configured relay keeps its own credentials; never copy an official key there.
+    keys[provider.apiKeyEnv] = legacyKey;
+  }
+  delete keys[JEV_KEY_ENV];
+  await writeProviderKeys(paths, keys);
 }
 
 /**
@@ -678,10 +743,13 @@ export async function removeProvider(paths: FastVibePaths, id: string): Promise<
   const providers = readProviders(paths);
   const removed = providers.find((provider) => provider.id === id);
   if (!removed) return;
-  writeProviders(paths, providers.filter((provider) => provider.id !== id));
+  const removedOfficialJev = removed.api === "systemone" && trimBaseUrl(removed.baseUrl) === JEV_OFFICIAL_BASE;
+  writeProviders(paths, providers.filter((provider) => provider.id !== id),
+    removedOfficialJev || readProvidersFile(paths)?.legacyJevMigrated === true);
   // Both credentials live outside `providers.json`, so dropping the entry would
   // otherwise strand a `FASTVIBE_KEY_…` line and a live refresh token behind it.
   await setProviderKey(paths, removed.apiKeyEnv, "");
+  if (removedOfficialJev) await retireLegacyJevKey(paths);
   deleteOAuthCredential(paths.oauthFile, id);
 }
 

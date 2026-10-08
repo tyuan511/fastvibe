@@ -119,6 +119,7 @@
     "aborted": "Stopped"
   },
   "run": {
+    "processing": "Working for {{duration}}",
     "duration": "{{duration}}"
   },
   "todo": {

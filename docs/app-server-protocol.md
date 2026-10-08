@@ -13,6 +13,10 @@
 5. 服务端返回鉴权结果；成功后客户端发送 App Protocol `hello`。
 6. 服务端返回 `welcome`，之后才能调用 RPC 或订阅事件。
 
+原生客户端可在同一条有序 WebSocket 上连续发送 `auth`、`hello`，省去一次网络往返。
+服务端仍先同步校验 token，鉴权失败的连接不能创建协议会话；客户端也必须先收到鉴权成功，
+再接受 `welcome`。这不会允许未鉴权调用，原有串行握手客户端继续兼容。
+
 服务默认绑定 `127.0.0.1`；开启局域网访问或使用隧道后，地址可能不同。服务端不会把密码或 token 放进 `settings.json`，token 只在登录响应中明文返回，服务端磁盘只保存其哈希。
 
 ## 2. HTTP API
@@ -152,6 +156,11 @@ wss://example.com/ws
 ```
 
 只有 `welcome` 返回后，连接才算 ready。协议名或版本不完全匹配时，客户端应停止重试并提示升级；不要把 v2 当作 v1 解析。
+
+新增能力保持 v1 向后兼容：客户端在 `hello.features` 中声明 `conversationResume: true`，
+服务端接受后会在 `welcome.features` 中返回同名字段。服务端另可返回 `promptSubmit: true`，
+表示当前主机注册了 `engine:submit-prompt`。未声明或未返回这些字段时，使用原有订阅和提交方式。
+`historyPaging: true` 表示支持下面的有界首屏快照和历史页读取；旧版主机继续使用全量快照。
 
 当前能力名：
 
@@ -331,6 +340,25 @@ settings       stats   imports    extensions  browser  native
 
 `*` 订阅永远不提供可靠回放，带 `since` 只会得到 `resync`。需要断线恢复时，优先订阅具体的 conversation/workspace scope。
 
+协商了 `conversationResume` 的连接在订阅后还会收到确认。可在 `subscribe` 带上非负安全整数
+`requestId`，服务端将原样回传，防止离开聊天后到达的旧确认被误用于新订阅：
+
+```json
+{
+  "kind": "subscribed",
+  "requestId": 12,
+  "cursors": { "conversation:conv_123": { "epoch": "当前纪元", "seq": 48 } }
+}
+```
+
+确认发送前，该次订阅的回放帧已按序写出；没有缺失事件也会确认。若此前收到该 scope 的
+`resync`，确认只说明订阅已建立，客户端仍须读取快照。快照里的 `seq` 是引擎事件序号，
+不能用作 App Protocol scope 游标。首次打开可连续发送订阅和快照请求，无须等待确认后再读快照。
+
+最近有具名订阅的后台会话在断线后继续记录最多 5 分钟，最多保留 256 个范围，事件仍受
+512 条/范围和全局 8 MiB 的限制。停止记录时会使旧游标失效，不能把记录缺口当作「没有新事件」。
+经桌面转发的 SSH 会话仍须读快照：本机日志无法证明上游连接没有丢失事件。
+
 ## 5. 推荐的会话客户端实现
 
 ### 5.1 首次打开会话
@@ -344,6 +372,34 @@ settings       stats   imports    extensions  browser  native
 5. 对 `engine:event`，使用事件 payload 中的 `seq` 丢弃不晚于 `snapshot.seq` 的旧事件。
 
 `ConversationSnapshot.messages` 已经包含进行中的回复和工具调用，不要把 `message_update` 的 delta 再次追加到 transcript，否则会重复显示。`turnEvents` 只包含 transcript 没有位置存放的 UI 状态，不是可重新播放的消息流。
+
+支持 `historyPaging` 的主机可在首次快照请求中接收 `historyLimit`（原生端为 12）：
+
+```json
+{ "kind": "call", "requestId": 20, "method": "engine:get-snapshot", "payload": { "conversationId": "conv_123", "historyLimit": 12 } }
+```
+
+这仍是同一时刻的完整运行状态，只有历史消息范围缩小；返回 `messageMode: "window"` 和
+`history: { "beforeEntryId": "最早已载入轮次的条目 ID" }`。`beforeEntryId: null` 表示已经包含全部历史。
+省略 `historyLimit` 时保持原来的全量行为；`fromEntryId` 指定的尾部更新也保持原语义。
+
+更早的消息独立读取，不影响流式订阅：
+
+```json
+{ "kind": "call", "requestId": 21, "method": "engine:get-messages-page", "payload": { "conversationId": "conv_123", "beforeEntryId": "user_entry_20", "turnLimit": 12 } }
+```
+
+结果为 `{ conversationId, messages, beforeEntryId, nextBeforeEntryId, reset }`，消息按时间顺序排列，
+不包含 `beforeEntryId` 对应的轮次；`nextBeforeEntryId: null` 表示到头。条目 ID 是不透明游标，
+不要和对话 ID 一起添加 SSH 主机前缀。`reset: true` 表示原边界已被分支编辑移除或不再安全，
+应重新读取全量快照，不能把旧页接入当前分支。
+
+轮次数限制在 1–50 之间，并以完整内容为先：工具调用与结果跨过用户插入消息时，分页范围会
+扩展到安全边界。历史页不附加当前流式回复、运行中的压缩卡或待审批状态。手机端自动预取、
+向旧消息方向滚动时自动补齐，不新增按钮；复制完整会话必须先补齐历史，不能复制局部窗口。
+
+重连时，客户端可以在握手后同时恢复当前聊天和全局列表，但聊天的操作须等待它自己的快照/
+回放完成。全局读取若晚于聊天快照返回，不得用更早的运行或待审批状态覆盖当前聊天。
 
 ### 5.2 发送消息
 
@@ -373,6 +429,23 @@ settings       stats   imports    extensions  browser  native
 ```
 
 会话级方法应尽量显式传 `conversationId`，不要依赖服务端的 active conversation。这样多个第三方客户端可以同时查看不同会话，不会互相切换。
+
+若 `welcome.features.promptSubmit` 为 `true`，可把预览更新和提交合并为一次调用：
+
+```json
+{
+  "kind": "call",
+  "requestId": 13,
+  "method": "engine:submit-prompt",
+  "payload": { "conversationId": "conv_123", "text": "请检查测试", "enqueue": false }
+}
+```
+
+`enqueue` 是客户端发送前捕获的选择：运行中或队列非空时为 `true`；暂停但为空的队列不拦截新提问。
+`images` 格式与 `engine:prompt` 相同。主机更新会话预览，按当前设置选择队列行为（`/compact` 固定 follow-up），
+然后提交。直接发送成功返回 `null`，入队返回队列状态；明确拒绝时仅回滚仍属于本次提交的预览。
+断线或超时仍是未知结果，不自动重发。经桌面网关访问的旧 SSH Agent 可能没有此方法，网关的
+`welcome` 不能证明上游支持；原生 App 对这类会话继续使用旧调用序列。
 
 ### 5.3 权限请求
 

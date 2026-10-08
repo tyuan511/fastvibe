@@ -73,3 +73,20 @@ test("the footer follows the app language", () => {
     setLanguage("zh");
   }
 });
+
+test("streamed tail updates reuse completed footer identities without retaining rewound turns", () => {
+  const history: TimedMessage[] = [
+    { id: "u1", role: "user" },
+    { id: "a1", role: "assistant", createdAt: 10, completedAt: 20 },
+    { id: "u2", role: "user" },
+    { id: "a2", role: "assistant", createdAt: 30 },
+  ];
+  const initial = completedTurnFooters(history, true);
+  const streamed = completedTurnFooters([...history.slice(0, -1), { ...history.at(-1)!, completedAt: 40 }], true, initial);
+  assert.equal(streamed, initial);
+  const completed = completedTurnFooters([...history.slice(0, -1), { ...history.at(-1)!, completedAt: 40 }], false, initial);
+  assert.equal(completed.get("a1"), initial.get("a1"));
+  assert.equal(completed.get("a2")?.elapsedMs, 10);
+  const rewound = completedTurnFooters(history.slice(0, 2), false, completed);
+  assert.equal(rewound.has("a2"), false);
+});

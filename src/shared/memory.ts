@@ -24,6 +24,12 @@ export type MemoryConfig = {
   embeddingProvider: MemoryEmbeddingProvider;
   maxResults: number;
   maxContextChars: number;
+  /** Daily idle maintenance, shared by all three memory modes. */
+  autoMaintain: boolean;
+  temporaryRetentionDays: number;
+  archiveRetentionDays: number;
+  /** Active-memory target; explicitly retained memories may exceed it. */
+  maxActiveItems: number;
   /** Explicit System-Two model used for JEV memory consolidation. */
   systemTwoModel?: EngineModel;
 };
@@ -45,7 +51,21 @@ export type MemoryState = {
   model: MemoryModelState;
   items: number;
   edges: number;
+  maintenance?: MemoryMaintenanceState;
 };
+
+export type MemoryMaintenanceState = {
+  active: number;
+  archived: number;
+  overBudget: number;
+  lastRunAt?: number;
+  archivedLastRun?: number;
+  deletedLastRun?: number;
+  pending?: boolean;
+  error?: string;
+};
+
+export type MemoryArchiveReason = "expired" | "duplicate" | "superseded" | "merged" | "capacity";
 
 export type MemorySearchRequest = {
   query: string;
@@ -71,6 +91,11 @@ export type MemoryItem = {
   sourceEntryId?: string;
   metadata?: Record<string, unknown>;
   score?: number;
+  pinned?: boolean;
+  lastAccessedAt?: number;
+  archivedAt?: number;
+  archiveReason?: MemoryArchiveReason;
+  replacementId?: string;
 };
 
 /**
@@ -96,6 +121,8 @@ export type MemoryGraphRequest = {
   /** One project's memories; omitted for every project. */
   project?: string;
   limit?: number;
+  status?: "active" | "archived";
+  offset?: number;
 };
 
 /** The newest memories the graph draws at most; older ones are counted, not drawn. */
@@ -154,6 +181,10 @@ export const DEFAULT_MEMORY_CONFIG: MemoryConfig = {
   embeddingProvider: "local-minilm-multilingual-q8",
   maxResults: 8,
   maxContextChars: 6_000,
+  autoMaintain: true,
+  temporaryRetentionDays: 90,
+  archiveRetentionDays: 30,
+  maxActiveItems: 10_000,
   systemTwoModel: undefined,
 };
 
@@ -173,6 +204,10 @@ export function memoryConfigOf(value: unknown): MemoryConfig {
     embeddingProvider: "local-minilm-multilingual-q8",
     maxResults: clampInt(input.maxResults, 1, 32, DEFAULT_MEMORY_CONFIG.maxResults),
     maxContextChars: clampInt(input.maxContextChars, 1_000, 20_000, DEFAULT_MEMORY_CONFIG.maxContextChars),
+    autoMaintain: input.autoMaintain !== false,
+    temporaryRetentionDays: clampInt(input.temporaryRetentionDays, 7, 3650, DEFAULT_MEMORY_CONFIG.temporaryRetentionDays),
+    archiveRetentionDays: clampInt(input.archiveRetentionDays, 7, 365, DEFAULT_MEMORY_CONFIG.archiveRetentionDays),
+    maxActiveItems: clampInt(input.maxActiveItems, 100, 100_000, DEFAULT_MEMORY_CONFIG.maxActiveItems),
     ...(isEngineModel(input.systemTwoModel) ? { systemTwoModel: input.systemTwoModel } : {}),
   };
 }

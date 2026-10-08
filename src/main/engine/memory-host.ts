@@ -23,6 +23,9 @@ export interface MemoryHost {
   search(request: MemorySearchRequest): Promise<MemorySearchResult>;
   graph(request?: MemoryGraphRequest): MemoryGraph;
   detail(id: string): MemoryDetail | undefined;
+  maintain(): MemoryState;
+  restore(id: string): MemoryState;
+  setPinned(id: string, pinned: boolean): MemoryState;
   delete(id: string): MemoryState;
   clear(): MemoryState;
   extension(conversationId: string, project?: string, preparationSignal?: () => AbortSignal | undefined): ExtensionFactory;
@@ -44,6 +47,10 @@ export class DisabledMemoryHost implements MemoryHost {
     embeddingProvider: "local-minilm-multilingual-q8",
     maxResults: 0,
     maxContextChars: 0,
+    autoMaintain: false,
+    temporaryRetentionDays: 90,
+    archiveRetentionDays: 30,
+    maxActiveItems: 10_000,
   } satisfies MemoryConfig;
 
   state(): MemoryState {
@@ -66,6 +73,9 @@ export class DisabledMemoryHost implements MemoryHost {
     return { nodes: [], edges: [], projects: [], total: 0 };
   }
   detail(_id: string): MemoryDetail | undefined { return undefined; }
+  maintain(): MemoryState { return this.state(); }
+  restore(_id: string): MemoryState { return this.state(); }
+  setPinned(_id: string, _pinned: boolean): MemoryState { return this.state(); }
   delete(_id: string): MemoryState { return this.state(); }
   clear(): MemoryState { return this.state(); }
   extension(_conversationId: string, _project?: string): ExtensionFactory {

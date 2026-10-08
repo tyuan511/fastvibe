@@ -9,7 +9,7 @@ function fakeServer(named: string[] = []) {
   return {
     published,
     server: {
-      hasNamedSubscriber: (scope: string) => named.includes(scope),
+      shouldRetainStream: (scope: string) => named.includes(scope),
       publish: (channel: string, payload: unknown, options?: { namedOnly?: boolean }) => {
         published.push({ channel, payload, options });
       },

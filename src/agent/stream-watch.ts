@@ -4,7 +4,7 @@ import type { StreamWatch } from "../main/pi/process-manager";
 
 /** The part of the App Server the stream watch needs; a fake stands in for it in tests. */
 export type StreamWatchServer = {
-  hasNamedSubscriber(scope: string): boolean;
+  shouldRetainStream(scope: string): boolean;
   publish(channel: string, payload: unknown, options?: { namedOnly?: boolean }): unknown;
 };
 
@@ -26,7 +26,7 @@ export type StreamWatchServer = {
  */
 export function agentStreamWatch(server: StreamWatchServer): StreamWatch {
   return {
-    isWatched: (conversationId) => server.hasNamedSubscriber(conversationScope(conversationId)),
+    isWatched: (conversationId) => server.shouldRetainStream(conversationScope(conversationId)),
     publish: (event) => {
       server.publish(Ipc.event, event, { namedOnly: true });
     },

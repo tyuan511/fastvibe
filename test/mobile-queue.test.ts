@@ -3,6 +3,29 @@ import test from "node:test";
 import { emptyQueue, mergeQueue, shouldQueueMessage, submitMessage, SubmissionUncertainError } from "../apps/mobile/src/chat/queue.ts";
 
 const item = { id: "q-1", conversationId: "chat", text: "next", behavior: "followUp", sending: false, claimed: false };
+
+test("a capable host receives one submission immediately, without catalog/settings round trips", async () => {
+  for (const enqueue of [false, true]) {
+    const calls: unknown[] = [];
+    let optimistic = 0;
+    const remote = { supportsPromptSubmit: true, call: async (method: string, payload: unknown) => {
+      calls.push([method, payload]); return enqueue ? snapshot(1) : null;
+    } };
+    await submitMessage(remote, { conversationId: "chat", text: "next", enqueue }, () => { optimistic++; });
+    assert.deepEqual(calls, [["engine:submit-prompt", { conversationId: "chat", text: "next", enqueue }]]);
+    assert.equal(optimistic, enqueue ? 0 : 1);
+  }
+});
+
+test("a lost combined submission acknowledgement is uncertain and is never retried", async () => {
+  let calls = 0;
+  const remote = { supportsPromptSubmit: true, call: async () => {
+    calls++;
+    throw Object.assign(new Error("lost"), { name: "TransportError", code: "dropped" });
+  } };
+  await assert.rejects(submitMessage(remote, { conversationId: "chat", text: "next", enqueue: false }, () => {}), SubmissionUncertainError);
+  assert.equal(calls, 1);
+});
 function snapshot(revision: number, pause: "stopped" | "error" | null = null, items: unknown[] = [item]) {
   return { conversationId: "chat", revision, pause, items };
 }

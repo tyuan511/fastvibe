@@ -61,7 +61,11 @@ fresh prompt. It respects the host's `queueBehavior` (default `followUp`). Only 
 prompts get an optimistic transcript row; queue entries stay in `QueuePanel` until Main
 delivers them. Cancel/resume, pushes and snapshots all pass through the same
 conversation/revision gate so a late RPC cannot restore a delivered item or an old pause.
-The screen re-subscribes and snapshots when the ready client changes after reconnect.
+When `welcome.features.promptSubmit` is available, `engine:submit-prompt` performs the
+preview update, host queue preference read and admission on the host in one call. Keep
+the captured `enqueue` choice, preview rollback and unknown-acknowledgement semantics.
+Older hosts and conversations routed through a desktop's SSH gateway retain the legacy
+sequence (the gateway's welcome cannot certify the upstream Agent's methods).
 A missing send acknowledgement is an unknown outcome, never an automatic retry.
 `test/mobile-queue.test.ts` tests the actual send dispatch and queue merge without React.
 
@@ -71,12 +75,86 @@ A missing send acknowledgement is an unknown outcome, never an automatic retry.
 frames, with a 15-second reply deadline (up to 45 seconds while other frames are still
 arriving ahead of the pong). A timed-out RPC probes without replaying the RPC.
 Backgrounding cancels health timers; foregrounding and network changes probe immediately.
+These recovery probes use a 4–15 second deadline derived from observed RTT (4 seconds
+before any samples), retaining the normal transfer grace while frames keep arriving.
+An existing idle probe can be accelerated without sending a second ping. A changed
+network path retires a connection attempt made on the old path; reconnect backoff has jitter.
 `expo-network` wakes pending reconnects when connectivity returns, without treating a failed
 Internet reachability check as proof that a LAN host is unreachable. Connection attempts
 include catalog restoration and cannot overlap; stale callbacks cannot affect a replacement.
 Close codes and reasons are retained in a bounded, current-run diagnostic history, copied
 from 设置 → 关于 → 复制连接诊断. Never include credentials or RPC content in that history.
-The host still owns running work; reconnect re-subscribes and restores snapshots.
+The host still owns running work. `chat/snapshot-sync.ts` holds events during initial
+recovery, applies the atomic snapshot, then applies only engine events above its `seq`.
+Routine refreshes keep live text moving, coalesce boundaries for 50ms, and allow one
+in-flight read plus one follow-up. A boundary passes its engine `seq` to `refresh`: if the
+in-flight snapshot already covers it, its follow-up is satisfied without another request.
+Unversioned manual refreshes and newer boundaries still read again. Never discard a whole snapshot just because a delta
+arrived; that also discarded the queue and left Send disabled.
+
+`conversationResume` negotiates named-scope replay and a `subscribed` acknowledgement
+correlated by request id. Engine `seq` and the protocol `{epoch, seq}` cursor are different
+counters. Only a synchronized chat can save a resume checkpoint; epoch changes, journal
+gaps and routed SSH conversations fall back to snapshots. Wildcard live events can arrive
+before older replay events: merge that held window by server sequence and deduplicate.
+Do not replay `*`. The catalog is still refreshed to discover chats that changed while away.
+After `welcome`, the handshaken transport is available to the mounted chat immediately;
+its snapshot/replay runs alongside catalog restoration. The device list keeps its existing
+initial loading state. Chat actions and prompt answers wait for that chat's own restored
+scope. Its running/prompt snapshot is part of the catalog overlay, so a late global read
+cannot overwrite it. Live status deduplication uses the protocol cursor; the engine seq
+only reconciles snapshots, because an SSH gateway can keep its socket across an upstream restart.
+The host retains recently watched background streams for 5 minutes (at most 256 leases),
+within the existing bounded journal. Expiring/evicting a lease invalidates its cursor
+history, so a later watcher cannot conceal the period when recording had stopped.
+
+Every engine event is reduced in order; React paints are coalesced over 16ms. Completed
+merged replies and turn-footer objects keep their identities across active-turn updates.
+Turn-footer calculation scans each message once without making per-turn array copies;
+the entire footer map is reused when a running tail leaves completed turns unchanged.
+Diagnostics include socket/auth/welcome/catalog timings, ping RTT, snapshot/submission RPC
+durations, response character counts and replay-vs-snapshot outcomes, never RPC bodies.
+
+The native client pipelines `auth` and `hello` on the ordered socket, saving one network
+round trip; it still requires the auth success response before accepting `welcome`.
+The `welcome` timing measures from socket-open (it overlaps the auth timing).
+Choosing a device invalidates outstanding credential/login work immediately, before
+the first storage await, so a late token cannot reconnect the previous selection.
+
+Catalog refreshes share one in-flight read. The latest catalog/settings/run/prompt pushes
+received during that read are overlaid before a single store notification; a late initial
+snapshot must not resurrect an answered prompt or mark a finished task running. This
+overlay updates catalog state only, never re-delivers events to transcript listeners.
+
+The model catalog is cached per client for 60 seconds, with concurrent reads sharing one
+promise. Settings/model-data pushes invalidate it, and opening the model picker explicitly
+refreshes it. A failed read is not cached. Session state updates independently of the model
+list and is guarded by both client/conversation identity and request version.
+`ChatTranscript` and `Composer` are memoized separately with stable callbacks: draft edits
+don't redraw history, streamed text doesn't redraw the composer, and `WorkingStatus` owns
+its own clock. `MarkdownView` memoizes completed blocks and shares a configured parser.
+
+## Transparent history paging
+
+With `welcome.features.historyPaging`, the first `engine:get-snapshot` asks for
+`historyLimit: 12`. It returns `messageMode: "window"` and `history.beforeEntryId`.
+The host cuts only at visible user turns that do not separate a tool call from its result;
+the limit is soft so steering, compaction parts and model dividers keep their original meaning.
+Normal tail refreshes are unchanged. An invalid tail anchor still returns the full branch.
+
+`chat/history-pager.ts` owns older reads independently from live snapshots. The adjacent
+page is prefetched after first paint; the inverted list requests more within two viewports
+of its older edge. There is no pagination button or new transcript row. Prepending older
+chronological rows leaves existing inverted indices and row identities unchanged. A full
+replacement invalidates in-flight pages; a removed cursor triggers a full snapshot.
+Failures retry while that view is attached, and a retired view cannot update its replacement.
+
+Copy All awaits complete history before formatting the same text it always copied; it must
+never silently copy only the loaded window. The old host path still loads the full transcript.
+`engine:get-messages-page` exists on desktop and headless hosts; gateways scope conversation
+ids but leave entry cursors and message ids untouched. `history` diagnostic samples record
+page response size/timing separately. Tests compare paged reconstruction with the original
+full projection, including running replies, images, tools, compactions and model changes.
 
 
 ## Dynamic sub-agent tasks

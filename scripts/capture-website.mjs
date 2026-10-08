@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * Capture the six website product screenshots from the real renderer mock.
+ * Capture the six website product screenshots from the real renderer mock, plus the
+ * laptop image beside 桌面端下载 (light and dark).
  *
  * Run `pnpm --filter @fastvibe/website screenshots` after `pnpm install`.
  * Uses Google Chrome on macOS, or Playwright Chromium elsewhere; CHROME_PATH
@@ -84,43 +85,83 @@ try {
   const { chromium } = await loadPlaywright();
   browser = await chromium.launch({ headless: true, executablePath: chrome });
 
+  /**
+   * One capture: load the scene, wait until the harness says it is drawn, check it is the
+   * finished frame (traffic lights, no error or loading copy), then shoot.
+   */
+  async function capture({ language, scene, query = "", viewport, scale, output, type, quality, label }) {
+    const pageErrors = [];
+    const page = await browser.newPage({ viewport, deviceScaleFactor: scale });
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+
+    // `desktop=1`: the window floats over a colourful wallpaper with 玻璃效果 on, the way
+    // it looks on a Mac — the material is simulated, since a browser has no system blur.
+    const url = `${origin}/mock.html?website=1&lang=${language}&scene=${scene}&platform=darwin&desktop=1${query}`;
+    await page.goto(url, { waitUntil: "networkidle" });
+    await page.evaluate(() => document.fonts.ready);
+    await page.waitForFunction((lang) => document.documentElement.lang.startsWith(lang), language);
+    await page.waitForFunction((expected) => document.body.dataset.websiteSceneReady === expected, scene);
+    // Let the real pane's spring animation and syntax highlighting finish.
+    await page.waitForTimeout(1000);
+
+    const trafficLights = await page.locator('[data-website-traffic-lights="true"] > span').evaluateAll((lights) =>
+      lights.map((light) => {
+        const rect = light.getBoundingClientRect();
+        return { width: rect.width, height: rect.height };
+      }),
+    );
+    if (trafficLights.length !== 3 || trafficLights.some((light) => light.width !== 12 || light.height !== 12)) {
+      throw new Error(`${label}: macOS traffic lights are missing or incorrectly sized`);
+    }
+    if (pageErrors.length) throw new Error(`${label}: ${pageErrors.join("; ")}`);
+
+    const bodyText = await page.locator("body").innerText();
+    if (/界面出错|The interface hit an error|Getting ready…|正在准备/.test(bodyText)) {
+      throw new Error(`${label}: an error or loading state is still visible`);
+    }
+
+    // 回到底部 is a control for a reader mid-thread; in a still it is a button sitting on
+    // top of the sentence it covers. The live hero keeps it.
+    await page.addStyleTag({ content: '[data-slot="message-scroller-button"] { visibility: hidden !important; }' });
+
+    await page.screenshot({ path: output, type, quality, animations: "disabled" });
+    console.log(`${label}: ${output}`);
+    await page.close();
+  }
+
   for (const language of languages) {
     const outputDir = path.join(root, "apps/website/public/screenshots", language);
     await mkdir(outputDir, { recursive: true });
-
     for (const scene of scenes) {
-      const pageErrors = [];
-      const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 });
-      page.on("pageerror", (error) => pageErrors.push(error.message));
+      await capture({
+        language,
+        scene,
+        viewport: { width: 1440, height: 900 },
+        scale: 2,
+        output: path.join(outputDir, `${scene}.webp`),
+        type: "webp",
+        quality: 88,
+        label: `${language}/${scene}`,
+      });
+    }
 
-      const url = `${origin}/mock.html?website=1&lang=${language}&scene=${scene}&platform=darwin`;
-      await page.goto(url, { waitUntil: "networkidle" });
-      await page.evaluate(() => document.fonts.ready);
-      await page.waitForFunction((lang) => document.documentElement.lang.startsWith(lang), language);
-      await page.waitForFunction((expected) => document.body.dataset.websiteSceneReady === expected, scene);
-      // Let the real pane's spring animation and syntax highlighting finish.
-      await page.waitForTimeout(1000);
-
-      const trafficLights = await page.locator('[data-website-traffic-lights="true"] > span').evaluateAll((lights) =>
-        lights.map((light) => {
-          const rect = light.getBoundingClientRect();
-          return { width: rect.width, height: rect.height };
-        }),
-      );
-      if (trafficLights.length !== 3 || trafficLights.some((light) => light.width !== 12 || light.height !== 12)) {
-        throw new Error(`${language}/${scene}: macOS traffic lights are missing or incorrectly sized`);
-      }
-      if (pageErrors.length) throw new Error(`${language}/${scene}: ${pageErrors.join("; ")}`);
-
-      const bodyText = await page.locator("body").innerText();
-      if (/界面出错|The interface hit an error|Getting ready…|正在准备/.test(bodyText)) {
-        throw new Error(`${language}/${scene}: an error or loading state is still visible`);
-      }
-
-      const output = path.join(outputDir, `${scene}.webp`);
-      await page.screenshot({ path: output, type: "webp", quality: 88, animations: "disabled" });
-      console.log(`${language}/${scene}: ${output}`);
-      await page.close();
+    // The laptop beside 桌面端下载 (`access-module.tsx`): the chat on its own, once per
+    // theme, since the site shows whichever one the visitor is in. 1600×1000 is the size
+    // the page lays out, rendered from the same 1440×900 frame as the other shots.
+    const desktopDir = path.join(root, "apps/website/public/desktop", language);
+    await mkdir(desktopDir, { recursive: true });
+    for (const theme of ["light", "dark"]) {
+      await capture({
+        language,
+        scene: "workspace",
+        query: `&pane=none&theme=${theme}`,
+        viewport: { width: 1440, height: 900 },
+        scale: 1600 / 1440,
+        output: path.join(desktopDir, `workspace-${theme}.jpg`),
+        type: "jpeg",
+        quality: 86,
+        label: `${language}/desktop-${theme}`,
+      });
     }
   }
 } finally {

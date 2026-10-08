@@ -260,6 +260,22 @@ test("remote queue calls route by conversation and scope queue results", async (
   ]);
 });
 
+test("history pages route by conversation while transcript cursors and message ids stay opaque", async () => {
+  const connections = fakeConnections({
+    servers: [{ connectionId: "host-a", serverInstanceId: "srv_alpha", capabilities: ["engine"] }],
+    results: { [Ipc.engineGetMessagesPage]: { conversationId: "chat-1", messages: [{ id: "raw-message" }],
+      beforeEntryId: "user:20", nextBeforeEntryId: "user:8", reset: false } },
+  });
+  const { instance } = gateway({ connections });
+  const conversationId = encodeRemoteConversationId("srv_alpha", "chat-1");
+  const page = await instance.dispatch(Ipc.engineGetMessagesPage, { conversationId, beforeEntryId: "user:20", turnLimit: 12 }, {}) as Record<string, unknown>;
+  assert.equal(page.conversationId, conversationId);
+  assert.equal(page.beforeEntryId, "user:20");
+  assert.equal(page.nextBeforeEntryId, "user:8");
+  assert.equal((page.messages as Array<{ id: string }>)[0].id, "raw-message");
+  assert.deepEqual(connections.calls.at(-1)?.payload, { conversationId: "chat-1", beforeEntryId: "user:20", turnLimit: 12 });
+});
+
 test("remote turn refreshes never read the host's local active conversation", async () => {
   const connections = fakeConnections({
     servers: [{ connectionId: "host-a", serverInstanceId: "srv_alpha", capabilities: ["engine"] }],

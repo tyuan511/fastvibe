@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { nativeTheme, type BrowserWindow } from "electron";
 import { THINKING_EFFORT_LEVELS, type ComputerSettings, type EngineModel, type ProjectModelDefault, type ThinkingLevel } from "@shared/types";
+import { isGlassEnabled } from "@shared/glass";
 import type { FastVibePaths } from "./paths";
 
 const VERSION = 1;
@@ -127,11 +128,52 @@ export function applyNativeTheme(settings: PersistedSettings): void {
   nativeTheme.themeSource = mode === "light" || mode === "dark" || mode === "system" ? mode : "system";
 }
 
-export function windowBackgroundColor(): string {
+/**
+ * Whether this window is drawn over the OS blur: macOS only, and only while 玻璃效果 is
+ * on (`shared/glass.ts`). Windows and Linux have no vibrancy, so the setting is not
+ * offered there and every theme keeps its solid surfaces.
+ *
+ * Read from the saved settings rather than told by the renderer, so a window is already
+ * the right kind when it is created and there is no call a remote client could forge.
+ */
+export function windowIsGlass(settings: Record<string, unknown>): boolean {
+  return process.platform === "darwin" && isGlassEnabled(settings);
+}
+
+export function windowBackgroundColor(glass = false): string {
+  // Fully transparent, not merely `transparent`: the window's own fill is what would
+  // otherwise sit between the blur and the page.
+  if (glass) return "#00000000";
+  // Pre-paint only: the colour the window shows before the renderer applies a theme
+  // (the default GitHub Light / Dark background).
   return nativeTheme.shouldUseDarkColors ? "#0d1117" : "#ffffff";
 }
 
-export function paintWindows(windows: Iterable<BrowserWindow>): void {
-  const color = windowBackgroundColor();
-  for (const window of windows) window.setBackgroundColor(color);
+/** The macOS material behind a Glass window. */
+const GLASS_MATERIAL = "under-window" as const;
+
+/** The `BrowserWindow` option that turns the blur on at creation. */
+export function windowVibrancy(glass: boolean): typeof GLASS_MATERIAL | undefined {
+  return glass ? GLASS_MATERIAL : undefined;
+}
+
+/**
+ * Where macOS draws the traffic lights. The side panels float as panes inset 8px from
+ * the window edge (index.css, floating panes), so the lights sit 8px further in to stay
+ * inside the sidebar pane's first row instead of on its corner.
+ */
+export const WINDOW_BUTTON_POSITION = { x: 24, y: 24 } as const;
+
+export function paintWindows(windows: Iterable<BrowserWindow>, settings: Record<string, unknown>): void {
+  const glass = windowIsGlass(settings);
+  const color = windowBackgroundColor(glass);
+  for (const window of windows) {
+    if (window.isDestroyed()) continue;
+    // Order matters: dropping the vibrancy first leaves a frame of the old transparent
+    // fill, which on a solid theme reads as a flash of the desktop.
+    window.setBackgroundColor(color);
+    if (process.platform === "darwin") {
+      window.setVibrancy(glass ? GLASS_MATERIAL : null);
+    }
+  }
 }

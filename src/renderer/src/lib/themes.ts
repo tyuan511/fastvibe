@@ -13,9 +13,17 @@
  * toggle the `dark` class at the same time so Tailwind's `dark:` variants keep
  * working for the shadcn primitives.
  *
+ * 玻璃效果 is not a theme but a treatment of whichever one is active: with it on, in
+ * a desktop window on macOS, `glassTokens` swaps the fills that cover the window for
+ * translucent ones and Main turns the window's vibrancy on (`shared/glass.ts` is what
+ * both read). Anywhere without that blur every theme keeps its solid palette.
+ *
  * Light and dark are chosen independently (`lightTheme` / `darkTheme`); the
  * active one is picked by `themeMode` (explicit light, explicit dark, or system).
  */
+
+import { isGlassEnabled } from "@shared/glass";
+import { HAS_VIBRANCY } from "@/lib/platform";
 
 export type ThemeKind = "light" | "dark";
 export type ThemeMode = "light" | "dark" | "system";
@@ -92,6 +100,65 @@ export type ThemeDefinition = ThemeSeed & {
   id: ThemeId;
   tokens: ThemeTokens;
 };
+
+/**
+ * The tokens a theme's own replace while 玻璃效果 puts it on top of the OS blur.
+ *
+ * Derived from the seed like everything else, so every theme has a glass form with no
+ * per-theme tuning: the surfaces keep their own hue and only lose opacity.
+ *
+ * Fills stack: the app root paints `--background` once over the whole window, and the
+ * sidebar, cards and side pane lie on top of it, so their values here are tints over that
+ * layer, not alphas against the desktop.
+ *
+ * Only what *covers the window* goes translucent — the page, the sidebar, cards, and the
+ * hairlines and hover fills that sit on them (those become tints of the text colour, so
+ * they read on whatever the wallpaper happens to be). Anything that floats over text stays
+ * solid: popovers, menus and dialogs would otherwise show the transcript through them, and
+ * the code surface and terminal keep a quiet opaque ground so syntax stays legible.
+ */
+function glassTokens(seed: ThemeSeed): ThemeTokens {
+  const dark = seed.kind === "dark";
+  const tint = (percent: number) => `color-mix(in oklab, ${seed.fg} ${percent}%, transparent)`;
+  const fill = (color: string, percent: number) => `color-mix(in oklab, ${color} ${percent}%, transparent)`;
+  const hover = tint(dark ? 9 : 7);
+  const hairline = tint(dark ? 11 : 10);
+  const sidebar = seed.sidebar ?? seed.surface;
+  return {
+    background: fill(seed.bg, dark ? 42 : 46),
+    card: fill(seed.surface, dark ? 52 : 56),
+    secondary: hover,
+    muted: hover,
+    accent: hover,
+    border: hairline,
+    input: hairline,
+    // The sidebar sits on the root's `--background`, so this is a tint over it rather
+    // than a surface of its own; the two together are what darkens it slightly.
+    sidebar: fill(sidebar, dark ? 14 : 14),
+    "sidebar-border": hairline,
+    "sidebar-accent": tint(dark ? 12 : 9),
+    // Liquid Glass (index.css): a floating pane is a little *lighter* than the window
+    // behind it, the way a sheet of glass catches light, rather than a darker well.
+    "glass-pane": dark ? "rgb(255 255 255 / 0.055)" : "rgb(255 255 255 / 0.42)",
+    "glass-overlay": fill(seed.surface, dark ? 62 : 70),
+    "glass-rim-strong": dark ? "rgb(255 255 255 / 0.5)" : "rgb(255 255 255 / 0.95)",
+    "glass-rim-weak": dark ? "rgb(255 255 255 / 0.1)" : "rgb(255 255 255 / 0.45)",
+    "glass-sheen": dark ? "rgb(255 255 255 / 0.10)" : "rgb(255 255 255 / 0.55)",
+    "glass-edge": dark ? "rgb(0 0 0 / 0.45)" : "rgb(0 0 0 / 0.10)",
+    "glass-shade": dark ? "rgb(0 0 0 / 0.45)" : "rgb(0 0 0 / 0.16)",
+  };
+}
+
+/** Tokens only glass writes; cleared when it is switched off. */
+const GLASS_ONLY_TOKENS = [
+  "glass-pane",
+  "glass-overlay",
+  "glass-rim-strong",
+  "glass-rim-weak",
+  "glass-sheen",
+  "glass-edge",
+  "glass-shade",
+];
 
 function buildTokens(seed: ThemeSeed): ThemeTokens {
   const sidebar = seed.sidebar ?? seed.surface;
@@ -745,6 +812,8 @@ export type ThemePreferences = {
   themeMode: ThemeMode;
   lightTheme: ThemeId;
   darkTheme: ThemeId;
+  /** 玻璃效果; absent reads as on (`isGlassEnabled`). Only takes effect where `HAS_VIBRANCY`. */
+  glass?: boolean;
 };
 
 export function systemPrefersDark(): boolean {
@@ -759,12 +828,25 @@ export function resolveTheme(preferences: ThemePreferences, prefersDark = system
   return THEMES[id] ?? THEMES[kind === "dark" ? DEFAULT_DARK_THEME : DEFAULT_LIGHT_THEME];
 }
 
-/** Write a theme's tokens onto <html> and toggle the Tailwind `dark` class. */
-export function applyTheme(theme: ThemeDefinition): void {
+/**
+ * Write a theme's tokens onto <html> and toggle the Tailwind `dark` class.
+ *
+ * `glass` is 玻璃效果, and only counts where the window has a blur to show
+ * (`HAS_VIBRANCY`) — elsewhere a translucent page would just wash out.
+ */
+export function applyTheme(theme: ThemeDefinition, glass = false): void {
   const root = document.documentElement;
-  for (const [name, value] of Object.entries(theme.tokens)) {
+  const onBlur = glass && HAS_VIBRANCY;
+  // Every token is written each time, so turning glass off overwrites the translucent
+  // values with the theme's solid ones; only the glass-only tokens need removing.
+  const tokens = onBlur ? { ...theme.tokens, ...glassTokens(theme) } : theme.tokens;
+  for (const [name, value] of Object.entries(tokens)) {
     root.style.setProperty(`--${name}`, value);
   }
+  if (!onBlur) {
+    for (const name of GLASS_ONLY_TOKENS) root.style.removeProperty(`--${name}`);
+  }
+  root.dataset.glass = onBlur ? "true" : "false";
   root.classList.toggle("dark", theme.kind === "dark");
   root.dataset.theme = theme.id;
   root.dataset.themeKind = theme.kind;
@@ -773,6 +855,6 @@ export function applyTheme(theme: ThemeDefinition): void {
 
 export function applyThemePreferences(preferences: ThemePreferences): ThemeDefinition {
   const theme = resolveTheme(preferences);
-  applyTheme(theme);
+  applyTheme(theme, isGlassEnabled(preferences));
   return theme;
 }

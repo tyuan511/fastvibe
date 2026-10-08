@@ -75,6 +75,7 @@ export type AppClientHello = {
   features?: {
     eventBatch?: boolean;
     binaryAttachments?: boolean;
+    conversationResume?: boolean;
   };
 };
 
@@ -188,6 +189,7 @@ export type AppQueryMessage = {
 
 export type AppSubscribeMessage = {
   kind: "subscribe";
+  requestId?: number;
   scopes: AppScope[];
   since?: Record<AppScope, AppEventCursor>;
 };
@@ -219,6 +221,9 @@ export type AppWelcomeMessage = {
   features?: {
     eventBatch?: boolean;
     binaryAttachments?: boolean;
+    conversationResume?: boolean;
+    promptSubmit?: boolean;
+    historyPaging?: boolean;
   };
 };
 
@@ -260,6 +265,7 @@ export type AppServerMessage =
   | AppEventMessage
   | AppEventBatchMessage
   | AppResyncMessage
+  | { kind: "subscribed"; requestId?: number; cursors: Record<AppScope, AppEventCursor> }
   | AppPongMessage;
 
 function readHello(value: unknown): AppClientHello | null {
@@ -287,9 +293,11 @@ function readHello(value: unknown): AppClientHello | null {
     const declared = record.features as Record<string, unknown>;
     if (declared.eventBatch !== undefined && typeof declared.eventBatch !== "boolean") return null;
     if (declared.binaryAttachments !== undefined && typeof declared.binaryAttachments !== "boolean") return null;
+    if (declared.conversationResume !== undefined && typeof declared.conversationResume !== "boolean") return null;
     features = {
       ...(declared.eventBatch !== undefined ? { eventBatch: declared.eventBatch } : {}),
       ...(declared.binaryAttachments !== undefined ? { binaryAttachments: declared.binaryAttachments } : {}),
+      ...(declared.conversationResume !== undefined ? { conversationResume: declared.conversationResume } : {}),
     };
   }
   return {
@@ -363,14 +371,16 @@ export function readClientMessage(raw: unknown): AppClientMessage | null {
       return { kind: "query", requestId: record.requestId, method, payload: record.payload };
     }
     case "subscribe": {
+      if (record.requestId !== undefined && !isValidRequestId(record.requestId)) return null;
+      const request = record.requestId === undefined ? {} : { requestId: record.requestId as number };
       const scopes = readScopes(record.scopes);
       if (!scopes) return null;
-      if (record.since === undefined) return { kind: "subscribe", scopes };
+      if (record.since === undefined) return { kind: "subscribe", scopes, ...request };
       const since = readSince(record.since);
       if (!since) return null;
       const requested = new Set(scopes);
       if (Object.keys(since).some((scope) => !requested.has(scope))) return null;
-      return { kind: "subscribe", scopes, since };
+      return { kind: "subscribe", scopes, since, ...request };
     }
     case "unsubscribe": {
       const scopes = readScopes(record.scopes);

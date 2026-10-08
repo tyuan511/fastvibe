@@ -148,6 +148,189 @@ body {
   user-select: none;
 }
 
+/* 玻璃效果 (glass) ---------------------------------------------------------------
+   The window is drawn over the macOS blur (`data-glass`, set by `applyTheme`), and
+   every translucent fill stacks: the app's root already paints `--background`, so a
+   body painting it too would double the alpha and hide the blur it exists to show.
+   The settings overlay is translucent for the same reason it is everywhere else,
+   which means the shell under it would show through — so while it is open the shell
+   (and the browser pane's guest layer, which lives on <body>) is hidden rather than
+   unmounted, keeping its state exactly as a solid overlay would. */
+html[data-glass="true"] body {
+  background: transparent;
+}
+html[data-glass="true"] body:has([data-settings-overlay]) :is([data-shell-split], [data-side-pane-browser-layer]) {
+  visibility: hidden;
+}
+
+/* Floating panes ---------------------------------------------------------------
+   The side panels — the sidebar, the right pane, the settings list — float as rounded
+   panes inset 8px from the window edge, in every theme. A pane is filled with the
+   theme's sidebar colour and outlined by its hairline; 玻璃效果 swaps both for
+   glass below.
+
+   The inset is a transparent border, not a margin: the resizable panels size their
+   frame by `width` (and animate it through `--panel-width`), and a border sits
+   inside that width where a margin would push the pane past its column. Absolute
+   children are laid out against the padding box — the visible pane — which is why
+   the Glass rim is a pseudo-element at `inset: 0`.
+
+   Only above the narrow breakpoint (sidebar-visibility.ts's NARROW_QUERY): below it the
+   sidebar is a full-viewport drawer, and an inset card on a phone is just a smaller
+   screen. The traffic lights sit 8px further in to match (WINDOW_BUTTON_POSITION). */
+@media (min-width: 768px) {
+  :is([data-slot="panel-frame"], .floating-pane) {
+    border: 8px solid transparent;
+    border-radius: 24px;
+    background-clip: padding-box;
+    background-color: var(--sidebar);
+    /* Drawn inside the pane, where the clip below keeps it. */
+    box-shadow: inset 0 0 0 1px var(--sidebar-border);
+    /* What a pane holds paints its own backgrounds — a terminal, a file tree — and
+       square ones would stand out past the rounded corners. The clip is the padding
+       box, i.e. the visible pane with its 16px inner radius. */
+    overflow: hidden;
+  }
+  /* The right pane's empty state paints `bg-background`: a second fill inside a pane
+     that already has one, so its body read differently from the header strip above. */
+  [data-slot="panel-frame"] .side-pane-open-tab-shell {
+    background-color: transparent;
+  }
+  /* The conversation column starts where the panes do, so its first row and the
+     sidebar's sit on one line beside the traffic lights. */
+  [data-shell-split] main {
+    padding-top: 8px;
+  }
+  /* A splitter sits on the column boundary, which is now 8px outside the pane it
+     resizes — out in the gap, reading as a line belonging to nothing. Move each onto
+     its pane's edge (`translate`: the grab target goes with it, layout does not), and
+     keep it off the rounded corners: 8px of inset plus the 16px inner radius. */
+  [data-slot="resizable-handle"][data-pane-edge] {
+    margin-block: 24px;
+  }
+  [data-slot="resizable-handle"][data-pane-edge="sidebar"] {
+    translate: -8px 0;
+  }
+  [data-slot="resizable-handle"][data-pane-edge="side-pane"] {
+    translate: 8px 0;
+  }
+}
+
+/* Liquid Glass -----------------------------------------------------------------
+   macOS 26's look, approximated on top of the window's own blur: the floating panes
+   are glass, every glass edge carries a specular rim (bright where light would catch
+   it, top-left, fading round to the far corner), and floating layers are translucent
+   glass rather than solid cards. The colours are `--glass-*` tokens, written only by
+   glass, on top of any theme (`glassTokens` in themes.ts). */
+@media (min-width: 768px) {
+  html[data-glass="true"] :is([data-slot="panel-frame"], .floating-pane) {
+    background-color: var(--glass-pane);
+    box-shadow:
+      inset 0 0 0 0.5px var(--glass-edge),
+      inset 0 18px 32px -28px var(--glass-sheen);
+  }
+  html[data-glass="true"] :is([data-slot="panel-frame"], .floating-pane)::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 16px;
+    padding: 1px;
+    background: var(--glass-rim);
+    -webkit-mask: var(--glass-ring-mask);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+}
+/* The specular rim: a 1px gradient ring, cut out of a filled box with a mask. */
+html[data-glass="true"] {
+  --glass-rim: linear-gradient(
+    155deg,
+    var(--glass-rim-strong) 0%,
+    var(--glass-rim-weak) 22%,
+    transparent 48%,
+    transparent 62%,
+    var(--glass-rim-weak) 100%
+  );
+  --glass-ring-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+}
+html[data-glass="true"] :is(.glass-rim, .overlay-surface)::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: var(--glass-rim);
+  -webkit-mask: var(--glass-ring-mask);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+/* The rim is laid out against the nearest positioned box; a dialog is already
+   `fixed`, and the rest must not fall through to some larger ancestor. */
+html[data-glass="true"] .overlay-surface:not(.fixed, .absolute) {
+  position: relative;
+}
+/* A surface that exists to hide what scrolls under it — a sticky gutter, a "show more"
+   bar, a floating button over the transcript. Its fill is a token that glass turns into a
+   tint, so on its own it would let the content through; `.glass-cover` makes it the
+   floating-layer glass instead, blurring what is behind it. A no-op in solid themes. */
+html[data-glass="true"] .glass-cover {
+  background-color: var(--glass-overlay);
+  -webkit-backdrop-filter: blur(16px) saturate(1.6);
+  backdrop-filter: blur(16px) saturate(1.6);
+}
+/* Its own hover fill would be a tint too — layer it over the cover instead. */
+html[data-glass="true"] .glass-cover:hover {
+  background-image: linear-gradient(var(--muted), var(--muted));
+}
+/* The command palette's list is a second popover fill inside the (glass) dialog. */
+html[data-glass="true"] .overlay-surface [data-slot="command"] {
+  background-color: transparent;
+}
+/* A bordered card (the composer): the ring covers its own hairline. */
+html[data-glass="true"] .glass-rim::after {
+  inset: -1px;
+  transition: opacity 150ms ease;
+}
+/* A card that clips its content would clip a ring drawn over its border, so there the
+   ring sits just inside it (the inline question panel). */
+html[data-glass="true"] .glass-rim.overflow-hidden::after {
+  inset: 0;
+}
+/* …which is also where its focus ring is drawn (`focus-within:border-ring`). The rim
+   sits on top of the border, so while it shows, the ring is only visible where the
+   gradient happens to be clear. Focus is the louder of the two states: the rim yields. */
+html[data-glass="true"] .glass-rim:focus-within::after {
+  opacity: 0;
+}
+/* The sticky prompt (message-list.tsx). Its solid `bg-background` is what hides the
+   reply under a pinned prompt in every other theme, but here that token is a 24% tint:
+   at rest it stacked on the root's own into a darker band around the bubble, and
+   pinned it let the reply through. So the row paints nothing; what scrolls under a
+   pinned prompt is masked off in message-list.tsx (`GLASS_CUT_FEATHER`), and the
+   gradient scrim that feathers that edge elsewhere has nothing to do. */
+html[data-glass="true"] .thread-prompt {
+  background-color: transparent;
+}
+html[data-glass="true"] .thread-prompt [data-prompt-scrim] {
+  display: none;
+}
+/* Floating layers are glass too. Their content is always over the page, so the
+   blur has something to work on, which is what keeps the text legible. */
+html[data-glass="true"] .overlay-surface {
+  /* Glass layers are rounder than cards; a 6px menu reads as a web dropdown. */
+  border-radius: 14px;
+  border-color: transparent;
+  background-color: var(--glass-overlay);
+  box-shadow:
+    0 0 0 0.5px var(--glass-edge),
+    0 18px 40px -14px var(--glass-shade),
+    0 2px 8px -2px var(--glass-shade);
+  -webkit-backdrop-filter: blur(28px) saturate(1.8);
+  backdrop-filter: blur(28px) saturate(1.8);
+}
+
 /* Overlay surfaces ----------------------------------------------------------
    Menus and popovers should feel attached to the desktop window, rather than
    like cards floating over a web page. Keep the treatment in one place so a

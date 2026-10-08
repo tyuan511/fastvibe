@@ -350,7 +350,7 @@ export function MemorySigma({
   return (
     <>
       <div ref={containerRef} className="memory-sigma absolute inset-0" role="application" aria-label={t("memory.graphTitle")} />
-      <div className="absolute bottom-3 left-3 z-10 flex flex-col overflow-hidden rounded-lg border bg-card shadow-sm">
+      <div className="glass-cover absolute bottom-3 left-3 z-10 flex flex-col overflow-hidden rounded-lg border bg-card shadow-sm">
         <button type="button" className="grid size-8 place-items-center border-b text-foreground hover:bg-muted" aria-label={t("memory.graphZoomIn")} onClick={() => zoom("in")}>
           <HugeiconsIcon icon={ZoomInAreaIcon} strokeWidth={2} className="size-4" />
         </button>

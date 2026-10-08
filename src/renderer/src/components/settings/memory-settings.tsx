@@ -175,6 +175,33 @@ export function MemorySettings({ models }: { models: FastVibeModel[] }): JSX.Ele
           <Row title={t("memory.jevNeedsDecision")} control={<Button variant="outline" size="sm" onClick={() => navigate("/settings/decision", { replace: true })}>{t("memory.goToDecision")}</Button>} />
         </Group>
       ) : null}
+      <Group title={t("memory.maintenanceTitle")}>
+        <Row title={t("memory.autoMaintain")} description={t("memory.autoMaintainDesc")} control={
+          <Switch checked={state.config.autoMaintain} disabled={saving} onCheckedChange={(checked) => void update({ autoMaintain: checked }).catch((cause) => toast.error(cleanError(cause)))} />
+        } />
+        <Row title={t("memory.temporaryRetention")} description={t("memory.temporaryRetentionDesc")} control={
+          <RetentionSelect value={state.config.temporaryRetentionDays} options={[30, 90, 180, 365]} disabled={saving || !state.config.autoMaintain} label={t("memory.temporaryRetention")} format={(value) => t("memory.days", { count: value })} onChange={(value) => void update({ temporaryRetentionDays: value }).catch((cause) => toast.error(cleanError(cause)))} />
+        } />
+        <Row title={t("memory.archiveRetention")} description={t("memory.archiveRetentionDesc")} control={
+          <RetentionSelect value={state.config.archiveRetentionDays} options={[7, 30, 90]} disabled={saving || !state.config.autoMaintain} label={t("memory.archiveRetention")} format={(value) => t("memory.days", { count: value })} onChange={(value) => void update({ archiveRetentionDays: value }).catch((cause) => toast.error(cleanError(cause)))} />
+        } />
+        <Row title={t("memory.maxActive")} description={t("memory.maxActiveDesc")} control={
+          <RetentionSelect value={state.config.maxActiveItems} options={[1000, 5000, 10000, 50000]} disabled={saving || !state.config.autoMaintain} label={t("memory.maxActive")} format={(value) => t("memory.itemCount", { count: value })} onChange={(value) => void update({ maxActiveItems: value }).catch((cause) => toast.error(cleanError(cause)))} />
+        } />
+        <Row title={t("memory.maintenanceStatus")} description={
+          <>
+            {t("memory.maintenanceCounts", { active: state.maintenance?.active ?? state.items, archived: state.maintenance?.archived ?? 0 })}
+            <span className="mt-0.5 block">{!state.config.autoMaintain ? t("memory.maintenancePaused") : state.maintenance?.pending ? t("memory.maintenancePending") : state.maintenance?.lastRunAt ? t("memory.maintenanceLastRun", { time: new Date(state.maintenance.lastRunAt).toLocaleString(), archived: state.maintenance.archivedLastRun ?? 0, deleted: state.maintenance.deletedLastRun ?? 0 }) : t("memory.maintenanceNotRun")}</span>
+            {state.maintenance?.overBudget ? <span className="mt-0.5 block text-warning">{t("memory.maintenanceOverBudget", { count: state.maintenance.overBudget })}</span> : null}
+            {state.maintenance?.error ? <span className="mt-0.5 block text-destructive">{state.maintenance.error}</span> : null}
+          </>
+        } control={
+          <Button variant="outline" size="sm" disabled={saving || !state.config.autoMaintain || state.maintenance?.pending} onClick={() => {
+            setSaving(true);
+            void window.fastvibe.memory.maintain().then(setState).catch((cause) => toast.error(cleanError(cause))).finally(() => setSaving(false));
+          }}>{t("memory.maintainNow")}</Button>
+        } />
+      </Group>
       <Group title={t("memory.dataTitle")}>
         <Row title={t("memory.indexed")} description={t("memory.indexedDesc", { items: state.items, edges: state.edges })} control={
           <div className="flex items-center gap-2">
@@ -243,4 +270,13 @@ function formatBytes(bytes: number): string {
   if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
   if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${bytes} B`;
+}
+
+function RetentionSelect({ value, options, disabled, label, format, onChange }: { value: number; options: number[]; disabled: boolean; label: string; format: (value: number) => string; onChange: (value: number) => void }): JSX.Element {
+  const values = [...new Set([...options, value])].sort((a, b) => a - b);
+  const items = Object.fromEntries(values.map((option) => [String(option), format(option)]));
+  return <Select value={String(value)} items={items} disabled={disabled} onValueChange={(next) => { if (next) onChange(Number(next)); }}>
+    <SelectTrigger className="w-36" aria-label={label}><SelectValue /></SelectTrigger>
+    <SelectContent>{values.map((option) => <SelectItem key={option} value={String(option)}>{items[String(option)]}</SelectItem>)}</SelectContent>
+  </Select>;
 }

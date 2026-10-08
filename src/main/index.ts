@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, protocol, safeStorage, screen, session, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, nativeTheme, protocol, safeStorage, screen, session, shell } from "electron";
 import type { WebContents } from "electron";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
@@ -15,7 +15,6 @@ import {
   clearAppSettings,
   paintWindows,
   readAppSettings,
-  windowBackgroundColor,
   writeAppSettings,
 } from "./engine/app-settings";
 import { configureFastVibeUserData, getFastVibePaths, type FastVibePaths } from "./engine/paths";
@@ -535,6 +534,9 @@ app.whenReady().then(async () => {
   const startupSettings = readAppSettings(getFastVibePaths());
   networkProxy = await createNetworkProxy(startupSettings);
   applyNativeTheme(startupSettings);
+  // 跟随系统 flips the OS between light and dark behind the app's back: the window's
+  // pre-paint fill follows it (and so does the blur's own appearance, which macOS does).
+  nativeTheme.on("updated", () => paintWindows(windows, readAppSettings(getFastVibePaths())));
   // Seed the extensions' UI language and the AI 偏好语言 prompt before any
   // session starts. A first launch has no settings file yet; the renderer writes one
   // (with the OS-detected language) on boot, which re-applies these.
@@ -645,6 +647,7 @@ app.whenReady().then(async () => {
     // active or not, so a background chat keeps the machine up too.
     if (event.type === "conversation_running") {
       setConversationRunning(String(event.conversationId ?? ""), event.running === true);
+      memory.setConversationRunning(String(event.conversationId ?? ""), event.running === true);
     }
     gateway.publishLocalEvent(event);
   });
@@ -655,7 +658,7 @@ app.whenReady().then(async () => {
   // The `fastvibe_config_*` tools: the agent filling in FastVibe's own settings panes.
   engine.setAppConfigHost(runAppConfig);
   engine.setStreamWatch({
-    isWatched: (conversationId) => getAppServer().hasNamedSubscriber(conversationScope(conversationId)),
+    isWatched: (conversationId) => getAppServer().shouldRetainStream(conversationScope(conversationId)),
     publish: (event) => {
       getAppServer().publish(Ipc.event, event, { namedOnly: true });
     },
@@ -747,6 +750,7 @@ function requestShutdown(reason: string): void {
   }
 
   void Promise.allSettled([engine.stop(), stopRemoteServer(), remoteConnections.closeAll(), networkProxy?.close()]).then((results) => {
+    memory.close();
     for (const result of results) {
       if (result.status === "rejected") log.warn(`shutdown cleanup failed: ${String(result.reason)}`);
     }
@@ -895,4 +899,3 @@ function raiseNotification(event: Record<string, unknown>): void {
 function broadcastSettings(origin: string | undefined, settings: Record<string, unknown>): void {
   broadcast(Ipc.settingsChanged, settings, { except: origin });
 }
-

@@ -1,7 +1,7 @@
 import { app, BrowserWindow, nativeImage, screen, shell } from "electron";
 import { join } from "node:path";
 import { Ipc } from "@shared/ipc";
-import { windowBackgroundColor } from "./engine/app-settings";
+import { readAppSettings, WINDOW_BUTTON_POSITION, windowBackgroundColor, windowIsGlass, windowVibrancy } from "./engine/app-settings";
 import { getFastVibePaths } from "./engine/paths";
 import { log } from "./engine/logger";
 import { readWindowState, writeWindowState } from "./engine/window-state";
@@ -41,6 +41,7 @@ export function createDesktopWindow(windows: Set<BrowserWindow>): void {
   const workArea = screen.getPrimaryDisplay().workAreaSize;
   const width = clampWindowDimension(restored?.width ?? DEFAULT_WINDOW_SIZE.width, MIN_WINDOW_SIZE.width, workArea.width);
   const height = clampWindowDimension(restored?.height ?? DEFAULT_WINDOW_SIZE.height, MIN_WINDOW_SIZE.height, workArea.height);
+  const glass = windowIsGlass(readAppSettings(paths));
   const window = new BrowserWindow({
     width,
     height,
@@ -48,13 +49,19 @@ export function createDesktopWindow(windows: Set<BrowserWindow>): void {
     minHeight: MIN_WINDOW_SIZE.height,
     title: "FastVibe",
     icon: resolveAppIcon(),
-    backgroundColor: windowBackgroundColor(),
+    backgroundColor: windowBackgroundColor(glass),
+    vibrancy: windowVibrancy(glass),
+    // macOS flattens a vibrant window to plain grey the moment it loses focus, which is most
+    // of the time a Glass window is being looked at (beside an editor, a browser). Keep the
+    // blur live. Creation-only, so it is set on every window whether or not it starts glass —
+    // it does nothing until 玻璃效果 turns the vibrancy on.
+    visualEffectState: IS_MAC ? "active" : undefined,
     // A frameless Linux window is the predictable spelling of the same thing
     // across window managers; on Windows `hidden` keeps the native thick frame,
     // so the window still resizes, snaps and casts a shadow.
     frame: process.platform === "linux" ? false : undefined,
     titleBarStyle: IS_MAC ? "hiddenInset" : "hidden",
-    trafficLightPosition: IS_MAC ? { x: 16, y: 16 } : undefined,
+    trafficLightPosition: IS_MAC ? { ...WINDOW_BUTTON_POSITION } : undefined,
     show: false,
       webPreferences: {
         preload: join(__dirname, "../preload/index.mjs"),

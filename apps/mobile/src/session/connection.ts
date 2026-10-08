@@ -3,7 +3,9 @@ import { AppState, type AppStateStatus } from "react-native";
 import Constants from "expo-constants";
 import * as Network from "expo-network";
 import { ConnectionError, RemoteClient } from "../protocol/client";
+import type { EventMeta } from "../protocol/client";
 import { recordConnectionDiagnostic } from "../protocol/diagnostics";
+import { invalidateModelCatalog } from "../protocol/model-cache";
 import { t } from "../i18n";
 import { parseServerAddress } from "../protocol/address";
 import { patchServer, readToken, writeToken, type SavedServer } from "../storage/servers";
@@ -67,7 +69,13 @@ const empty: State = {
 
 let state: State = empty;
 let client: RemoteClient | null = null;
+/** A handshaken transport can restore the open chat while the catalog is loading. */
+let transportReady: RemoteClient | null = null;
+const conversationFloors = new Map<string, number>();
+const statusCursors = new Map<string, EventMeta>();
 let reconnecting = false;
+/** Invalidate credential/login work as soon as the user chooses another target. */
+let selectionGeneration = 0;
 
 type ConnectionTarget = { server: SavedServer; token: string };
 
@@ -79,14 +87,27 @@ let reconnectAttempt = 0;
 /** Includes catalog restore, so foreground/network events cannot open overlapping sockets. */
 let opening: RemoteClient | null = null;
 let network: Network.NetworkState | null = null;
+type CatalogPush = { channel: string; payload: unknown };
+let catalogFlight: { remote: RemoteClient; promise: Promise<void>; pushes: Map<string, CatalogPush> } | null = null;
 const RECONNECT_BASE_MS = 300;
 const RECONNECT_MAX_MS = 10_000;
 
 const listeners = new Set<() => void>();
-const engineListeners = new Set<(event: Record<string, unknown>) => void>();
+const engineListeners = new Set<(event: Record<string, unknown>, meta?: EventMeta) => void>();
+let batching = 0;
+let changedInBatch = false;
 
 function emit(): void {
+  if (batching) { changedInBatch = true; return; }
   for (const listener of listeners) listener();
+}
+
+function batchState(update: () => void): void {
+  batching++;
+  try { update(); } finally {
+    batching--;
+    if (!batching && changedInBatch) { changedInBatch = false; emit(); }
+  }
 }
 
 function setState(patch: Partial<State>): void {
@@ -103,11 +124,26 @@ export function currentConnection(): State {
 }
 
 export function getClient(): RemoteClient | null {
-  return state.status === "ready" && !reconnecting ? client : null;
+  return client === transportReady ? client : null;
+}
+
+type ChatStateSnapshot = { seq: number; running?: boolean; pendingUi?: unknown[] };
+
+/** The open chat's authoritative state participates in the catalog's live overlay. */
+export function applyChatSnapshot(remote: RemoteClient, conversationId: string, snapshot: ChatStateSnapshot): void {
+  if (getClient() !== remote) return;
+  handlePush("$chat-snapshot", { conversationId, seq: snapshot.seq, running: snapshot.running, pendingUi: snapshot.pendingUi });
+}
+
+/** Reconcile status events held alongside a chat snapshot, without delivering them twice. */
+export function applyChatEvent(remote: RemoteClient, event: Record<string, unknown>): void {
+  if (getClient() !== remote) return;
+  handlePush("engine:event", event, undefined, true, true);
 }
 
 /** Keep the phone list in step with a settings write made by this very socket. */
 export function setArchivedIds(ids: string[]): void {
+  captureCatalogPush("settings:changed", { archivedConversations: ids });
   setState({ archivedIds: ids });
 }
 
@@ -121,16 +157,20 @@ export async function refreshConnection(): Promise<void> {
   await refreshCatalog(remote);
 }
 
-export function onEngineEvent(listener: (event: Record<string, unknown>) => void): () => void {
+export function onEngineEvent(listener: (event: Record<string, unknown>, meta?: EventMeta) => void): () => void {
   engineListeners.add(listener);
   return () => engineListeners.delete(listener);
 }
 
 export async function connectSaved(server: SavedServer): Promise<void> {
+  const selection = ++selectionGeneration;
+  abandonConnection();
+  setState({ ...empty, server, status: "connecting" });
   let token: string | null;
   try {
     token = await readToken(server.id);
   } catch (error) {
+    if (selection !== selectionGeneration) return;
     abandonConnection();
     setState({
       ...empty,
@@ -140,6 +180,7 @@ export async function connectSaved(server: SavedServer): Promise<void> {
     });
     return;
   }
+  if (selection !== selectionGeneration) return;
   if (!token) {
     abandonConnection();
     setState({ ...empty, server, status: "error", needsPassword: true, error: t("conn.needPassword") });
@@ -150,15 +191,19 @@ export async function connectSaved(server: SavedServer): Promise<void> {
 }
 
 export async function loginSaved(server: SavedServer, password: string): Promise<void> {
+  const selection = ++selectionGeneration;
   abandonConnection();
   setState({ ...empty, server, status: "connecting", error: null, needsPassword: false });
   const remote = new RemoteClient();
   try {
     const token = await remote.login(server.origin, password, `FastVibe ${server.alias}`);
+    if (selection !== selectionGeneration) return;
     await writeToken(server.id, token);
+    if (selection !== selectionGeneration) return;
     const next = beginTarget(server, token);
     await connectWithToken(next, ++connectionGeneration, false);
   } catch (error) {
+    if (selection !== selectionGeneration) return;
     setState({
       ...empty,
       server,
@@ -170,6 +215,7 @@ export async function loginSaved(server: SavedServer, password: string): Promise
 }
 
 export function disconnect(): void {
+  selectionGeneration += 1;
   abandonConnection();
   setState(empty);
 }
@@ -183,8 +229,9 @@ export function reconnectNow(): void {
 
 export function watchConversation(id: string): () => void {
   const scope = `conversation:${id}`;
-  client?.subscribe([scope]);
-  return () => client?.unsubscribe([scope]);
+  const remote = client;
+  remote?.subscribe([scope]);
+  return () => remote?.unsubscribe([scope]);
 }
 
 export function resolvePendingPrompt(id: string): void {
@@ -217,7 +264,8 @@ async function connectWithToken(next: ConnectionTarget, generation: number, sile
   remote.onDisconnect((detail) => {
     if (client !== remote || !isCurrentTarget(next, generation)) return;
     recordConnectionDiagnostic({ event: "disconnected", serverId: server.id, detail, elapsedMs: Date.now() - started });
-    const restoring = opening === remote;
+    const restoring = opening === remote && transportReady !== remote;
+    if (transportReady === remote) transportReady = null;
     client = null;
     if (opening === remote) opening = null;
     remote.onPush(null);
@@ -238,15 +286,22 @@ async function connectWithToken(next: ConnectionTarget, generation: number, sile
     await remote.connect(address, token);
     if (!isCurrentTarget(next, generation) || client !== remote) return;
     remote.subscribe(["*"]);
-    await refreshCatalog(remote);
+    const catalog = refreshCatalog(remote);
+    conversationFloors.clear();
+    statusCursors.clear();
+    transportReady = remote;
+    reconnecting = false;
+    // Notify the mounted chat immediately. It gates its controls on its own
+    // snapshot/replay, independently of the still-loading global catalog.
+    setState({ reconnecting: false });
+    await catalog;
     if (!isCurrentTarget(next, generation) || client !== remote) return;
-    const servers = await patchServer(server.id, { lastConnectedAt: Date.now() });
-    const updated = servers.find((item) => item.id === server.id) ?? server;
-    if (!isCurrentTarget(next, generation) || client !== remote) return;
+    // Local persistence need not hold the ready socket or the chat's restoration.
+    void patchServer(server.id, { lastConnectedAt: Date.now() }).catch(() => undefined);
     reconnectAttempt = 0;
     reconnecting = false;
     recordConnectionDiagnostic({ event: "connected", serverId: server.id, elapsedMs: Date.now() - started });
-    setState({ ...state, status: "ready", reconnecting: false, server: updated, error: null, needsPassword: false });
+    setState({ ...state, status: "ready", reconnecting: false, server, error: null, needsPassword: false });
   } catch (error) {
     if (!isCurrentTarget(next, generation) || client !== remote) return;
     recordConnectionDiagnostic({ event: "connect-failed", serverId: server.id, elapsedMs: Date.now() - started,
@@ -272,6 +327,7 @@ async function connectWithToken(next: ConnectionTarget, generation: number, sile
         error: unauthorized ? t("conn.expired") : error instanceof Error ? error.message : t("conn.failed"),
       });
     } else {
+      reconnecting = true;
       // Auto-reconnect failures stay invisible; retain the last usable snapshot and
       // keep trying with backoff instead of flashing the connection error screen.
       setState({ ...state, status: "ready", reconnecting: true, server, error: null, needsPassword: false });
@@ -309,6 +365,7 @@ function retireClient(value = client): void {
   value.onDisconnect(null);
   value.onPush(null);
   value.close();
+  if (transportReady === value) transportReady = null;
   if (opening === value) opening = null;
   if (client === value) client = null;
 }
@@ -329,7 +386,7 @@ function scheduleReconnect(next: ConnectionTarget, generation: number, immediate
   if (network?.type === Network.NetworkStateType.NONE && network.isConnected === false) return;
   if (immediate) clearReconnectTimer();
   if (reconnectTimer) return;
-  const delay = immediate ? 0 : Math.min(RECONNECT_BASE_MS * 2 ** reconnectAttempt, RECONNECT_MAX_MS);
+  const delay = immediate ? 0 : Math.min(RECONNECT_BASE_MS * 2 ** Math.min(reconnectAttempt, 10), RECONNECT_MAX_MS) * (0.8 + Math.random() * 0.2);
   reconnectAttempt += 1;
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
@@ -345,13 +402,14 @@ function handleAppStateChange(nextState: AppStateStatus): void {
     clearReconnectTimer();
     return;
   }
-  wakeConnection();
+  wakeConnection(true);
   refreshNetworkState();
 }
 
-function wakeConnection(): void {
+function wakeConnection(fast = false, replaceOpening = false): void {
   if (!target || !appIsActive()) return;
-  if (getClient()) client?.checkHealth();
+  if (opening && replaceOpening) retireClient(opening);
+  if (getClient()) client?.checkHealth(fast);
   else if (!opening) scheduleReconnect(target, connectionGeneration, true);
 }
 
@@ -366,7 +424,8 @@ function handleNetworkChange(next: Network.NetworkState): void {
     return;
   }
   reconnectAttempt = 0;
-  wakeConnection();
+  const changedPath = previous !== null && (previous.type !== next.type || previous.isConnected === false);
+  wakeConnection(changedPath, changedPath);
 }
 
 function refreshNetworkState(): void {
@@ -381,7 +440,18 @@ AppState.addEventListener("change", handleAppStateChange);
 Network.addNetworkStateListener(handleNetworkChange);
 refreshNetworkState();
 
-async function refreshCatalog(remote: RemoteClient): Promise<void> {
+function refreshCatalog(remote: RemoteClient): Promise<void> {
+  if (catalogFlight?.remote === remote) return catalogFlight.promise;
+  const flight = { remote, promise: Promise.resolve(), pushes: new Map<string, CatalogPush>() };
+  catalogFlight = flight;
+  flight.promise = readCatalog(remote, flight.pushes).finally(() => {
+    if (catalogFlight === flight) catalogFlight = null;
+  });
+  return flight.promise;
+}
+
+async function readCatalog(remote: RemoteClient, pushes: Map<string, CatalogPush>): Promise<void> {
+  const started = Date.now();
   const [catalog, runningIds, pendingEvents, settings] = await Promise.all([
     remote.call("conversations:list"),
     remote.call("engine:get-running"),
@@ -389,7 +459,7 @@ async function refreshCatalog(remote: RemoteClient): Promise<void> {
     remote.call("settings:get"),
   ]);
   if (client !== remote) return;
-  applyCatalog(catalog);
+  recordConnectionDiagnostic({ event: "metric", metric: "catalog", elapsedMs: Date.now() - started });
   const running: Record<string, boolean> = {};
   const runningSince: Record<string, number> = {};
   if (Array.isArray(runningIds)) {
@@ -402,10 +472,33 @@ async function refreshCatalog(remote: RemoteClient): Promise<void> {
   const pending = Array.isArray(pendingEvents) ? pendingEvents.flatMap((event) => parseBlockingPrompt(event) ?? []) : [];
   const waiting: Record<string, boolean> = {};
   for (const item of pending) if (item.conversationId) waiting[item.conversationId] = true;
-  setState({ ...state, projects: state.projects, conversations: state.conversations, archivedIds: archivedIdsFrom(settings), running, runningSince, waiting, pending });
+  batchState(() => {
+    applyCatalog(catalog);
+    setState({ archivedIds: archivedIdsFrom(settings), running, runningSince, waiting, pending });
+    // Pushes can outrun one of the four reads. Reapply the latest value per key,
+    // without delivering engine events twice or painting a stale intermediate state.
+    for (const { channel, payload } of pushes.values()) handlePush(channel, payload, undefined, true);
+  });
 }
 
-function handlePush(channel: string, payload: unknown): void {
+function captureCatalogPush(channel: string, payload: unknown): void {
+  if (!catalogFlight || catalogFlight.remote !== client) return;
+  let key: string | undefined;
+  if (channel === "settings:changed" || channel === "workspace:changed") key = channel;
+  if (channel === "$chat-snapshot" && isRecord(payload) && typeof payload.conversationId === "string") key = `chat:${payload.conversationId}`;
+  if (channel === "engine:event" && isRecord(payload)) {
+    if (payload.type === "conversation_running" && typeof payload.conversationId === "string") key = `run:${payload.conversationId}`;
+    if ((parseBlockingPrompt(payload) || payload.type === "extension_ui_dismiss") && typeof payload.id === "string") key = `prompt:${payload.id}`;
+  }
+  if (key) {
+    catalogFlight.pushes.delete(key);
+    catalogFlight.pushes.set(key, { channel, payload });
+  }
+}
+
+function handlePush(channel: string, payload: unknown, meta?: EventMeta, restoring = false, fromChat = false): void {
+  if (!restoring && channel !== "engine:event") captureCatalogPush(channel, payload);
+  if (client && (channel === "models-dev:changed" || channel === "settings:changed")) invalidateModelCatalog(client);
   if (channel === "settings:changed") {
     setState({ archivedIds: archivedIdsFrom(payload) });
     return;
@@ -414,9 +507,36 @@ function handlePush(channel: string, payload: unknown): void {
     applyCatalog(payload);
     return;
   }
+  if (channel === "$chat-snapshot" && isRecord(payload) && typeof payload.conversationId === "string") {
+    const id = payload.conversationId;
+    if (typeof payload.seq === "number") conversationFloors.set(id, payload.seq);
+    batchState(() => {
+      if (typeof payload.running === "boolean") handlePush("engine:event", { type: "conversation_running", conversationId: id, running: payload.running }, undefined, true);
+      if (Array.isArray(payload.pendingUi)) {
+        const pending = state.pending.filter((item) => item.conversationId !== id).concat(payload.pendingUi.flatMap((value) => parseBlockingPrompt(value) ?? []));
+        const waiting: Record<string, boolean> = {};
+        for (const item of pending) if (item.conversationId) waiting[item.conversationId] = true;
+        setState({ pending, waiting });
+      }
+    });
+    return;
+  }
   if (channel !== "engine:event" || !isRecord(payload)) return;
   const event = payload;
+  const statusEvent = event.type === "conversation_running" || event.type === "extension_ui_request" || event.type === "extension_ui_dismiss";
+  const id = typeof event.conversationId === "string" ? event.conversationId : undefined;
+  const floor = id ? conversationFloors.get(id) : undefined;
+  const wire = id ? statusCursors.get(id) : undefined;
+  // Catalog overlay values have already passed the live sequence gate. They must
+  // be applied again after its older baseline, even when their seq equals the floor.
+  const staleStatus = (!restoring || fromChat) && statusEvent && (meta
+    ? wire?.epoch === meta.epoch && meta.seq <= wire.seq
+    : typeof event.seq === "number" && floor !== undefined && event.seq <= floor);
+  if ((!restoring || fromChat) && !staleStatus) captureCatalogPush(channel, payload);
+  if (statusEvent && !staleStatus && id && meta) statusCursors.set(id, meta);
+  if (statusEvent && !staleStatus && id && floor !== undefined && typeof event.seq === "number") conversationFloors.set(id, event.seq);
   if (
+    !staleStatus &&
     event.type === "conversation_running" &&
     typeof event.conversationId === "string"
   ) {
@@ -429,7 +549,7 @@ function handlePush(channel: string, payload: unknown): void {
     }
     setState({ ...state, running, runningSince });
   }
-  if (event.type === "extension_ui_request") {
+  if (!staleStatus && event.type === "extension_ui_request") {
     const prompt = parseBlockingPrompt(event);
     if (prompt) {
       const pending = state.pending.filter((item) => item.id !== prompt.id).concat(prompt);
@@ -438,15 +558,16 @@ function handlePush(channel: string, payload: unknown): void {
       setState({ ...state, pending, waiting });
     }
   }
-  if (event.type === "extension_ui_dismiss" && typeof event.id === "string") {
+  if (!staleStatus && event.type === "extension_ui_dismiss" && typeof event.id === "string") {
     const pending = state.pending.filter((item) => item.id !== event.id);
     const waiting: Record<string, boolean> = {};
     for (const item of pending) if (item.conversationId) waiting[item.conversationId] = true;
     setState({ ...state, pending, waiting });
   }
+  if (restoring) return;
   for (const listener of engineListeners) {
     try {
-      listener(event);
+      listener(event, meta);
     } catch {
       // One screen's reducer must not prevent other subscribers from receiving a push.
     }

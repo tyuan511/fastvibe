@@ -102,6 +102,15 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): void {
   handle(Ipc.memoryGraph, (payload: import("@shared/memory").MemoryGraphRequest | undefined) => engine.memory.graph(payload ?? {}));
   // `null`, not `undefined`, for a memory that is gone: an undefined reply does not survive the remote client's JSON.
   handle(Ipc.memoryDetail, (payload: { id?: unknown }) => (typeof payload?.id === "string" ? engine.memory.detail(payload.id) ?? null : null));
+  handle(Ipc.memoryMaintain, () => engine.memory.maintain());
+  handle(Ipc.memoryRestore, (payload: { id?: unknown }) => {
+    if (typeof payload?.id !== "string" || !payload.id.trim()) throw new Error(uiText("记忆 ID 不能为空", "Memory ID is required"));
+    return engine.memory.restore(payload.id.trim());
+  });
+  handle(Ipc.memorySetPinned, (payload: { id?: unknown; pinned?: unknown }) => {
+    if (typeof payload?.id !== "string" || !payload.id.trim() || typeof payload.pinned !== "boolean") throw new Error(uiText("记忆参数无效", "Invalid memory parameters"));
+    return engine.memory.setPinned(payload.id.trim(), payload.pinned);
+  });
   handle(Ipc.memoryDelete, (payload: { id?: unknown }, ctx) => {
     const id = typeof payload?.id === "string" ? payload.id.trim() : "";
     if (!id) throw new Error("记忆 ID 不能为空");
@@ -564,7 +573,7 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): void {
     applyKeepAwake(payload);
     // 代码模式 / 工具搜索 reach a session only when it reloads.
     if (toolModeSettingsChanged(previous, payload)) void engine.refreshToolModes().catch(() => undefined);
-    paintWindows(windows);
+    paintWindows(windows, payload);
     scheduleUpdateCheck(payload.autoCheckUpdates !== false);
     // The other windows hold their own copy, loaded once at startup.
     broadcastSettings(ctx.origin, payload);
@@ -588,7 +597,7 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): void {
     applyLanguages({});
     applyKeepAwake({});
     if (toolModeSettingsChanged(previous, {})) void engine.refreshToolModes().catch(() => undefined);
-    paintWindows(windows);
+    paintWindows(windows, {});
     // 恢复默认 is a write like any other: the other windows hold their own copy and
     // would otherwise keep — and later re-save — the settings that were just reset.
     broadcastSettings(ctx.origin, {});

@@ -84,7 +84,7 @@ function PanelShell({
 }): JSX.Element {
   return (
     <div className="@container/composer mx-auto w-full max-w-3xl px-6 pb-5">
-      <div className="flex w-full flex-col gap-2 overflow-hidden rounded-2xl border border-border bg-popover p-2.5 shadow-sm">
+      <div className="glass-rim relative flex w-full flex-col gap-2 overflow-hidden rounded-2xl border border-border bg-card p-2.5 shadow-sm">
         <div className="flex items-start gap-2">
           <HugeiconsIcon
             strokeWidth={2}

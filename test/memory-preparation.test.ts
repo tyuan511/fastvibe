@@ -18,6 +18,7 @@ import * as store from "../src/main/engine/memory-store.ts";
 import * as tools from "../src/main/engine/memory-tools.ts";
 import * as download from "../src/main/engine/memory-download.ts";
 import * as modelSource from "../src/main/engine/memory-model-source.ts";
+import * as retention from "../src/main/engine/memory-retention.ts";
 import * as budget from "../src/main/engine/memory-read-budget.ts";
 import * as jev from "../src/main/engine/memory-jev.ts";
 
@@ -41,6 +42,7 @@ function responseFor(questions: Record<string, unknown>, value: (key: string) =>
 
 function fixture(t: Parameters<Parameters<typeof test>[1]>[0], options: {
   cached?: boolean;
+  memoryConfig?: Partial<config.MemoryConfig>;
   modelWait?: Promise<unknown>;
   embedWait?: Promise<unknown>;
   resolveWait?: Promise<unknown>;
@@ -54,7 +56,7 @@ function fixture(t: Parameters<Parameters<typeof test>[1]>[0], options: {
     memoryModelsDir: join(dir, "models"), decisionFile: join(dir, "decision.json"), decisionTraceFile: join(dir, "trace.jsonl"),
   } as FastVibePaths;
   mkdirSync(paths.memoryModelsDir);
-  writeFileSync(paths.memoryFile, JSON.stringify({ enabled: true, mode: "jev", autoCapture: false, maxResults: 1, systemTwoModel: { provider: "fake", id: "fake" } }));
+  writeFileSync(paths.memoryFile, JSON.stringify({ enabled: true, mode: "jev", autoCapture: false, maxResults: 1, systemTwoModel: { provider: "fake", id: "fake" }, ...options.memoryConfig }));
   writeFileSync(paths.decisionFile, JSON.stringify({ version: 1, decisionModel: { kind: "jev", memoryControl: true, model: { provider: "fake", id: "fake" } } }));
   if (options.cached !== false) {
     for (const file of ["config.json", "tokenizer.json", "tokenizer_config.json", `onnx/${modelSource.MEMORY_MODEL_FILE}.onnx`]) {
@@ -73,6 +75,7 @@ function fixture(t: Parameters<Parameters<typeof test>[1]>[0], options: {
     "./decision/runtime": runtime, "./decision/trace": trace, "./decision/store": decisionStore,
     "./memory-store": store, "./memory-tools": tools, "./memory-download": download,
     "./memory-model-source": modelSource, "./memory-read-budget": budget,
+    "./memory-retention": retention,
     "./memory-jev": { ...jev, JEV_MEM_PROFILE: { ...jev.JEV_MEM_PROFILE, maximumEdges: options.maxEdges ?? jev.JEV_MEM_PROFILE.maximumEdges } },
     "./ui-text": { uiText: (_zh: string, en: string) => en },
     "./decision/systemone": { resolveSystemOne: async () => { await options.resolveWait; return { apiKey: "fake", endpoint: "https://memory.test/v1/systemone", model: "fake" }; } },
@@ -108,6 +111,100 @@ function fixture(t: Parameters<Parameters<typeof test>[1]>[0], options: {
   }, embedding ?? undefined);
   return { manager, db, seed, paths, calls, requests, signals, modelCalls, get embeds() { return embeds; } };
 }
+
+test("idle maintenance catches up, defers running chats, persists its daily checkpoint and stops on close", (t) => {
+  t.mock.timers.enable({ apis: ["setInterval", "Date"], now: 200 * retention.MEMORY_DAY_MS });
+  const f = fixture(t, { memoryConfig: { mode: "default" } });
+  f.db.upsert({ id: "old", role: "assistant", kind: "episode", content: "A temporary completed task", createdAt: 1, importance: 0.5, confidence: 1 });
+  f.manager.setConversationRunning("background", true);
+  t.mock.timers.tick(60_000);
+  assert.equal(f.manager.state().maintenance?.lastRunAt, undefined);
+  assert.equal(f.manager.maintain().maintenance?.pending, true);
+  f.manager.setConversationRunning("background", false);
+  t.mock.timers.tick(60_000);
+  const completed = f.manager.state().maintenance!;
+  assert.equal(completed.archived, 1);
+  assert.equal(completed.pending, false);
+  t.mock.timers.tick(60_000);
+  assert.equal(f.manager.state().maintenance?.lastRunAt, completed.lastRunAt);
+  // The next day purges an archive that has reached its configured grace period.
+  t.mock.timers.tick(30 * retention.MEMORY_DAY_MS);
+  assert.equal(f.db.item("old"), undefined);
+  f.manager.close();
+  t.mock.timers.tick(retention.MEMORY_DAY_MS);
+});
+
+test("only returned memories are touched; expired candidates are not kept alive by scoring", async (t) => {
+  const f = fixture(t, { memoryConfig: { mode: "default", maxResults: 1 } });
+  f.seed("a"); f.seed("b");
+  const result = await f.manager.search({ query: "FastVibe", project: "project" });
+  assert.equal(result.items.length, 1);
+  const returned = result.items[0].id;
+  assert.ok(f.db.item(returned)?.lastAccessedAt);
+  assert.equal(f.db.item(returned === "a" ? "b" : "a")?.lastAccessedAt, undefined);
+});
+
+test("a pending capture cannot resurrect data after clear or close, and maintenance waits for writes", async (t) => {
+  for (const action of ["clear", "close"] as const) {
+    const model = deferred<void>();
+    const f = fixture(t, { modelWait: model.promise, memoryConfig: { mode: "semantic", autoCapture: true } });
+    const capturing = f.manager.capture({ role: "user", content: "Keep this useful fact", conversationId: "chat" });
+    assert.equal(f.manager.maintain().maintenance?.pending, true);
+    f.manager[action]();
+    model.resolve();
+    assert.equal(await capturing, undefined);
+    assert.equal(f.db.count().items, 0);
+  }
+});
+
+test("an asynchronous search cannot return a memory archived while the model was loading", async (t) => {
+  const model = deferred<void>();
+  const f = fixture(t, { modelWait: model.promise }); f.seed();
+  const searching = f.manager.search({ query: "FastVibe", project: "project" });
+  f.db.archive("anchor", "expired", Date.now());
+  model.resolve();
+  assert.deepEqual((await searching).items, []);
+});
+
+test("JEV merge archives its sources only after a successful summary write, and clear cancels a late summary", async (t) => {
+  for (const outcome of ["success", "failure", "clear"] as const) {
+    const started = deferred<void>();
+    const summary = deferred<string>();
+    const f = fixture(t, {
+      memoryConfig: { autoCapture: true },
+      reply: async ({ questions }) => new Response(JSON.stringify({
+        model: "fake",
+        answers: Object.fromEntries(Object.entries(questions).map(([key, q]) => [key, (q as { type: string }).type === "choice"
+          ? { type: "choice", choice: "merge", probabilities: { merge: 0.99, promote: 0.005, keep_separate: 0.004, uncertain: 0.001 } }
+          : { type: "noul", noul: /contradiction|redundant|obsolete|preference|procedural/.test(key) ? 0 : 0.99 }])),
+      })),
+    });
+    f.seed(); f.db.setMeta("jev_writes", "19");
+    f.manager.setSystemTwoGenerator(async () => { started.resolve(); if (outcome === "failure") throw new Error("offline"); return summary.promise; });
+    const captured = await f.manager.capture({ conversationId: "chat", project: "project", role: "user", content: "FastVibe memory latency has improved", sourceEntryId: "update" });
+    assert.ok(captured);
+    await started.promise;
+    assert.equal(f.db.item("anchor")?.archivedAt, undefined);
+    if (outcome === "clear") f.manager.clear();
+    summary.resolve("FastVibe memory latency improved after adding the local cache.");
+    // The final consolidation event is emitted only after the full summary write.
+    for (let i = 0; i < 100; i++) {
+      await new Promise((resolve) => setImmediate(resolve));
+      if (outcome === "clear" || f.db.item(captured.id)?.metadata?.jevMem) break;
+    }
+    if (outcome === "clear") assert.equal(f.db.count().items, 0);
+    else if (outcome === "failure") {
+      assert.equal(f.db.item("anchor")?.archivedAt, undefined);
+      assert.equal(f.db.count().items, 2);
+    } else {
+      const result = f.db.recent().find((item) => item.role === "summary");
+      assert.ok(result);
+      assert.equal(f.db.item("anchor")?.replacementId, result.id);
+      assert.equal(f.db.item(captured.id)?.archiveReason, "merged");
+      assert.equal(f.db.recent().length, 1);
+    }
+  }
+});
 
 test("cached models load from a local directory without metadata probes or download progress", async (t) => {
   const f = fixture(t); f.seed();

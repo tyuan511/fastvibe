@@ -11,17 +11,18 @@ export function useThemeSync(): void {
   const themeMode = useSettingsStore((state) => state.settings.themeMode);
   const lightTheme = useSettingsStore((state) => state.settings.lightTheme);
   const darkTheme = useSettingsStore((state) => state.settings.darkTheme);
+  const glass = useSettingsStore((state) => state.settings.glass);
   const uiFontSize = useSettingsStore((state) => state.settings.uiFontSize);
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: dark)");
     const apply = (): void => {
-      applyThemePreferences({ themeMode, lightTheme, darkTheme });
+      applyThemePreferences({ themeMode, lightTheme, darkTheme, glass });
     };
     apply();
     media.addEventListener("change", apply);
     return () => media.removeEventListener("change", apply);
-  }, [themeMode, lightTheme, darkTheme]);
+  }, [themeMode, lightTheme, darkTheme, glass]);
 
   useEffect(() => {
     applyUiFontSize(uiFontSize);

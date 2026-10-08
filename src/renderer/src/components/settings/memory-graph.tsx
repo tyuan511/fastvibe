@@ -3,6 +3,9 @@ import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { ArrowLeft01Icon, ArrowRight01Icon } from "@hugeicons/core-free-icons";
 import { MemorySigma } from "@/components/settings/memory-sigma";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { cleanError } from "@/lib/ipc-error";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
@@ -10,6 +13,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useMemoryLayout, type MemoryLayoutInput } from "@/lib/use-memory-layout";
 import { cn } from "@/lib/utils";
+import { MEMORY_GRAPH_LIMIT } from "@shared/memory";
 import type { MemoryDetail, MemoryGraph, MemoryItem, MemoryRelationView } from "@shared/memory";
 
 /**
@@ -34,6 +38,8 @@ function roleColor(role: MemoryItem["role"]): string {
 export function MemoryGraphDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }): JSX.Element {
   const { t } = useTranslation("settings");
   const [project, setProject] = useState(ALL_PROJECTS);
+  const [offset, setOffset] = useState(0);
+  const [status, setStatus] = useState<"active" | "archived">("active");
   const [graph, setGraph] = useState<MemoryGraph | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [hidden, setHidden] = useState<Set<MemoryRelationView>>(() => new Set());
@@ -43,8 +49,12 @@ export function MemoryGraphDialog({ open, onOpenChange }: { open: boolean; onOpe
     if (!open) return;
     let alive = true;
     const load = (): void => {
-      void window.fastvibe.memory.graph(project === ALL_PROJECTS ? {} : { project })
-        .then((value) => { if (alive) { setGraph(value); setError(null); } })
+      void window.fastvibe.memory.graph({ ...(project === ALL_PROJECTS ? {} : { project }), status, offset })
+        .then((value) => {
+          if (!alive) return;
+          if (offset > 0 && offset >= value.total) { setOffset(Math.max(0, Math.floor((value.total - 1) / MEMORY_GRAPH_LIMIT) * MEMORY_GRAPH_LIMIT)); return; }
+          setGraph(value); setError(null);
+        })
         .catch((cause: unknown) => { if (alive) setError(cause instanceof Error ? cause.message : String(cause)); });
     };
     load();
@@ -55,7 +65,7 @@ export function MemoryGraphDialog({ open, onOpenChange }: { open: boolean; onOpe
       timer = window.setTimeout(load, 400);
     });
     return () => { alive = false; window.clearTimeout(timer); off(); };
-  }, [open, project]);
+  }, [open, project, status, offset]);
 
   const layoutInput = useMemo<MemoryLayoutInput | null>(() => (graph ? {
     nodeIds: graph.nodes.map((node) => node.id),
@@ -90,11 +100,18 @@ export function MemoryGraphDialog({ open, onOpenChange }: { open: boolean; onOpe
         </DialogHeader>
 
         <div className="flex flex-wrap items-center gap-2">
-          <Select value={project} items={projectLabels} onValueChange={(value) => { setProject(value ?? ALL_PROJECTS); setSelectedId(null); }}>
+          <Select value={project} items={projectLabels} onValueChange={(value) => { setProject(value ?? ALL_PROJECTS); setOffset(0); setSelectedId(null); }}>
             <SelectTrigger className="w-56" aria-label={t("memory.graphProject")}><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value={ALL_PROJECTS}>{projectLabels[ALL_PROJECTS]}</SelectItem>
               {(graph?.projects ?? []).map((path) => <SelectItem key={path} value={path} title={path}>{projectLabels[path]}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Select value={status} items={{ active: t("memory.activeMemories"), archived: t("memory.archivedMemories") }} onValueChange={(value) => { setStatus(value === "archived" ? "archived" : "active"); setOffset(0); setSelectedId(null); }}>
+            <SelectTrigger className="w-36" aria-label={t("memory.memoryStatus")}><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="active">{t("memory.activeMemories")}</SelectItem>
+              <SelectItem value="archived">{t("memory.archivedMemories")}</SelectItem>
             </SelectContent>
           </Select>
           <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={t("memory.graphViews")}>
@@ -122,7 +139,11 @@ export function MemoryGraphDialog({ open, onOpenChange }: { open: boolean; onOpe
                 {t(`memory.role.${role}`)}
               </span>
             ))}
-            {graph ? <span className="tabular-nums">{t("memory.graphCount", { shown: graph.nodes.length, total: graph.total })}</span> : null}
+            {graph ? <span className="tabular-nums">{t("memory.graphRange", { start: graph.total ? offset + 1 : 0, end: offset + graph.nodes.length, total: graph.total })}</span> : null}
+            {graph && graph.total > MEMORY_GRAPH_LIMIT ? <>
+              <Button variant="ghost" size="icon-sm" aria-label={t("memory.previousPage")} disabled={offset === 0} onClick={() => { setOffset(Math.max(0, offset - MEMORY_GRAPH_LIMIT)); setSelectedId(null); }}><HugeiconsIcon icon={ArrowLeft01Icon} strokeWidth={2} /></Button>
+              <Button variant="ghost" size="icon-sm" aria-label={t("memory.nextPage")} disabled={offset + MEMORY_GRAPH_LIMIT >= graph.total} onClick={() => { setOffset(offset + MEMORY_GRAPH_LIMIT); setSelectedId(null); }}><HugeiconsIcon icon={ArrowRight01Icon} strokeWidth={2} /></Button>
+            </> : null}
           </div>
         </div>
 
@@ -165,13 +186,16 @@ function projectName(path: string): string {
 function MemoryDetailPanel({ id, onSelect }: { id: string | null; onSelect: (id: string) => void }): JSX.Element {
   const { t } = useTranslation("settings");
   const [detail, setDetail] = useState<MemoryDetail | null | undefined>(undefined);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!id) return;
     let alive = true;
     setDetail(undefined);
-    void window.fastvibe.memory.detail(id).then((value) => { if (alive) setDetail(value); }).catch(() => { if (alive) setDetail(null); });
-    return () => { alive = false; };
+    const load = (): void => { void window.fastvibe.memory.detail(id).then((value) => { if (alive) setDetail(value); }).catch(() => { if (alive) setDetail(null); }); };
+    load();
+    const off = window.fastvibe.memory.onChanged(load);
+    return () => { alive = false; off(); };
   }, [id]);
 
   if (!id) return <div className="grid flex-1 place-items-center p-4 text-center text-sm text-muted-foreground">{t("memory.detailEmpty")}</div>;
@@ -196,6 +220,15 @@ function MemoryDetailPanel({ id, onSelect }: { id: string | null; onSelect: (id:
             </Badge>
             {fallback ? <Badge variant="secondary">{t("memory.detailFallback")}</Badge> : null}
             <span className="text-xs text-muted-foreground">{new Date(item.createdAt).toLocaleString()}</span>
+          </div>
+          {item.archivedAt != null ? <p className="text-xs text-warning">{t("memory.archivedReason", { reason: t(`memory.archiveReason.${item.archiveReason ?? "expired"}`), time: new Date(item.archivedAt).toLocaleString() })}</p> : null}
+          <div className="flex flex-wrap items-center gap-2 py-1">
+            <Button variant="outline" size="sm" disabled={saving} onClick={() => {
+              setSaving(true);
+              const action = item.archivedAt != null ? window.fastvibe.memory.restore(item.id) : window.fastvibe.memory.setPinned(item.id, !item.pinned);
+              void action.then(() => window.fastvibe.memory.detail(item.id)).then(setDetail).catch((cause) => toast.error(cleanError(cause))).finally(() => setSaving(false));
+            }}>{item.archivedAt != null ? t("memory.restore") : item.pinned ? t("memory.unpin") : t("memory.pin")}</Button>
+            {item.replacementId ? <Button variant="ghost" size="sm" onClick={() => onSelect(item.replacementId!)}>{t("memory.viewReplacement")}</Button> : null}
           </div>
           {item.project ? <div className="truncate text-xs text-muted-foreground" title={item.project}>{t("memory.detailProject")}: {item.project}</div> : null}
           {item.conversationId ? <div className="truncate font-mono text-xs text-muted-foreground" title={item.conversationId}>{t("memory.detailConversation")}: {item.conversationId}</div> : null}

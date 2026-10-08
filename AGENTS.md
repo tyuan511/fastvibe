@@ -824,6 +824,69 @@ The app ships light **and** dark themes; never assume light.
 - To add a theme, append a `ThemeSeed` to `SEEDS` in `themes.ts` and list its id in
   `LIGHT_THEME_IDS` / `DARK_THEME_IDS`. No CSS changes required.
 
+### 浮动侧栏（所有主题）
+
+Above the narrow breakpoint the sidebar, the right pane and the settings list float as
+rounded panes inset 8px from the window edge, in every theme (`index.css`, Floating panes;
+`[data-slot="panel-frame"]` / `.floating-pane`). A pane is the theme's `--sidebar` with its
+`--sidebar-border` hairline, clipped (`overflow: hidden`) so a terminal or file tree inside
+cannot square its corners. The inset is a **transparent border, never a margin** — the
+panels size and animate their frame by `width`, which a margin would overflow. The traffic
+lights sit at `WINDOW_BUTTON_POSITION` (`{24,24}`) to stay inside the sidebar pane's first
+row, and the conversation column takes the same 8px at the top. Below the breakpoint the
+sidebar is the full-viewport drawer and none of this applies.
+
+### 玻璃效果（Glass）
+
+设置 → 通用 → 外观 → **玻璃效果** (`settings.glass`, on unless `false`) draws the window over
+the macOS blur, in whichever theme is active — it is a treatment of a theme, not a theme. It
+is only offered where there is a blur to show (`HAS_VIBRANCY`). `src/shared/glass.ts`
+(`isGlassEnabled`) is the one reading of the key both halves use, so a missing key means
+"on" to Main and to the renderer alike.
+
+- **Main derives it from settings, the renderer is not asked.** `windowIsGlass` reads the
+  key, so a new window is created with `vibrancy: "under-window"` and a fully transparent
+  fill, and `paintWindows` (every settings write) turns it on or off. No IPC method exists
+  for it, so there is nothing for a remote client to forge.
+- **`visualEffectState: "active"` is on every macOS window, and it is most of the effect.**
+  macOS flattens a vibrant window to plain grey the moment it loses focus — which is how a
+  glass window is usually seen, beside whatever has focus — and the option is creation-only,
+  so it cannot wait for the setting. `transparent: true` is *not* needed (measured: the blur is
+  identical without it) and is avoided because it costs the native window shadow.
+- **The page's alpha is a balance** (`--background` 42% dark / 46% light). Lower and the
+  text of whatever window is behind starts competing with the app's own; at 50–70% the page
+  hides the material. Judge it over something colourful — over a white or dark window every
+  setting looks like flat grey. `glassTokens` derives it from each theme's own seed, so every
+  theme has a glass form with no per-theme tuning.
+- **The renderer only goes translucent where there is a blur to show** (`HAS_VIBRANCY`: a
+  desktop window on macOS that is actually Electron — the preview harness reports `darwin`
+  too). Elsewhere every theme keeps its solid palette.
+- **Fills stack, so only the bottom layer is a real alpha.** `body` is transparent under
+  `data-glass`, the app root paints `--background` once, and `glassTokens` makes the sidebar
+  and cards tints *over* that layer. `--code-bg` stays solid, since the terminal reads it.
+- **Liquid Glass is CSS on top of that blur** (`index.css`, the Liquid Glass block). Electron
+  has no `NSGlassEffectView`, so the macOS 26 look is approximated: the floating panes turn
+  to glass (`--glass-pane`, an inner sheen), glass edges carry a specular rim (`::after`, a
+  mask-cut gradient ring; add `.glass-rim` to a bordered card for the same — it fades out
+  under `:focus-within` so the focus ring drawn on that border stays whole), and
+  `.overlay-surface` layers become translucent, rounder glass — so a floating layer drawn by
+  hand (the selection toolbar was one) has to carry that class or it stays a solid card.
+- **A pinned prompt cuts the reply, it does not cover it.** Elsewhere the sticky prompt's
+  solid `bg-background` hides what scrolls under it while matching the page; a see-through
+  page has no colour that does both (a tinted band was tried and is an ugly block). Under
+  glass the row paints nothing, and `pinRegistryFor` masks the reply rows of the pinned turn
+  off at the prompt's lower edge (`GLASS_CUT_FEATHER`), in the same read-then-write pass that
+  decides which prompt is pinned.
+- **Settings hides the shell instead of covering it.** The overlay is translucent like
+  everything else, so while it is open `[data-shell-split]` and the browser guest layer are
+  `visibility: hidden` (not unmounted). A new full-window overlay needs the same treatment.
+- **The website and README show it from the browser harness.** `mock.html?desktop=1` paints a
+  wallpaper, makes `#root` a floating window whose own `backdrop-filter` stands in for the
+  material, and reports `simulatedVibrancy` on the bridge so `HAS_VIBRANCY` lets glass on —
+  the only way a browser (or a capture) can show it. The hero iframe and
+  `scripts/capture-website.mjs` both pass it; the window is concentric with the panes (24px
+  radius = 8px inset + 16px pane radius), so keep the two in step.
+
 ### Type scale & interface size
 
 - **Use Tailwind's own `text-*` utilities** (`text-xs` / `text-sm` / `text-base` /

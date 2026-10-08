@@ -1760,7 +1760,7 @@ export function App(): JSX.Element {
        * has no edge to drag, and on a narrow layout the sidebar is a full-screen
        * drawer with nothing to give back.
        */}
-      <div className="relative flex min-h-0 flex-1">
+      <div data-shell-split className="relative flex min-h-0 flex-1">
         <ResizablePanelGroup>
           {/* No backdrop: the drawer covers the whole viewport, so there is no dimmed
               conversation behind it to tap. The button that was here sat under a
@@ -1789,7 +1789,7 @@ export function App(): JSX.Element {
             onOpenSubTask={onSidebarOpenSubTask}
             onSearch={onSidebarSearch}
           />
-          {narrow || sidebarCollapsed ? null : <ResizableHandle />}
+          {narrow || sidebarCollapsed ? null : <ResizableHandle data-pane-edge="sidebar" />}
           <ResizablePanel
             id="conversation"
             minSize={0}
@@ -1922,7 +1922,7 @@ export function App(): JSX.Element {
               at all. The conversation is what a narrow screen is for. A maximised pane
               has swallowed the conversation column, so its splitter has nothing to
               resize against either. */}
-          {narrow || paneCollapsed || paneMaximized ? null : <ResizableHandle />}
+          {narrow || paneCollapsed || paneMaximized ? null : <ResizableHandle data-pane-edge="side-pane" />}
           {narrow ? null : (
             <SidePane
               cwd={active?.project ? active.cwd : activeProject?.cwd}

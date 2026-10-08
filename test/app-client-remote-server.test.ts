@@ -20,6 +20,7 @@ import { registeredChannels } from "./registered-channels.ts";
 import { BUFFER_GRACE_MS } from "../src/main/server/backpressure.ts";
 import { RemoteClient } from "../apps/mobile/src/protocol/client.ts";
 import { parseServerAddress } from "../apps/mobile/src/protocol/address.ts";
+import { SnapshotSync, type Snapshot, type SyncCheckpoint } from "../apps/mobile/src/chat/snapshot-sync.ts";
 
 const silent = { info: () => undefined, warn: () => undefined, error: () => undefined };
 const PASSWORD = "a-good-enough-password";
@@ -217,6 +218,68 @@ test("the native mobile protocol probes and restores subscriptions over a replac
       mobile.close();
     }
   });
+});
+
+test("native recovery over real sockets replays offline deltas and falls back after a recording gap", async () => {
+  let engineSeq = 1, snapshotReads = 0, hostText = "a", displayed = "";
+  const scope = "conversation:native-recovery";
+  const appServer = new AppServer({
+    identity: { serverInstanceId: "srv_native_resume", version: "test", platform: "test" },
+    channels: registeredChannels, capabilities: APP_CAPABILITIES,
+    dispatch: async (method) => {
+      assert.equal(method, Ipc.engineGetSnapshot);
+      snapshotReads++;
+      return { seq: engineSeq, messages: hostText };
+    },
+  });
+  await withServer(async ({ port }) => {
+    const token = await loginToken(port);
+    const address = parseServerAddress(`http://127.0.0.1:${port}`)!;
+    let mobile: RemoteClient | undefined, sync: SnapshotSync | undefined;
+    const connect = async (seed?: SyncCheckpoint) => {
+      mobile = new RemoteClient("native-recovery");
+      await mobile.connect(address, token);
+      assert.equal(mobile.supportsConversationResume, true);
+      const client = mobile;
+      sync = new SnapshotSync({
+        subscribe: (cursor) => client.subscribeConversation(scope, cursor),
+        load: async () => await client.call(Ipc.engineGetSnapshot, { conversationId: "native-recovery" }) as Snapshot,
+        snapshot: (snapshot) => { displayed = String(snapshot.messages); },
+        event: (event) => { displayed += event.delta; }, error: assert.fail,
+      });
+      const state = sync;
+      client.onPush((_channel, payload, meta) => state.receive(payload as Record<string, unknown>, meta));
+      await sync.restore(seed);
+    };
+    const publish = (delta: string) => {
+      hostText += delta;
+      appServer.publish(Ipc.event, { conversationId: "native-recovery", seq: ++engineSeq, delta }, { namedOnly: true });
+    };
+    const disconnect = async () => {
+      const seed = sync!.checkpoint(); assert.ok(seed);
+      sync!.dispose(); mobile!.close();
+      await waitUntil(() => appServer.sessionCount === 0, "native client did not detach");
+      return seed;
+    };
+    try {
+      await connect(); assert.equal(displayed, "a");
+      publish("b"); await waitUntil(() => displayed === "ab", "live event missing");
+      const seed = await disconnect();
+      assert.equal(appServer.shouldRetainStream(scope), true);
+      publish("c"); publish("d");
+      await connect(seed);
+      assert.equal(displayed, "abcd");
+      assert.equal(snapshotReads, 1, "short outages should not retransmit the transcript");
+      const gapSeed = await disconnect();
+      appServer.bus.invalidate(scope);
+      publish("e");
+      await connect(gapSeed);
+      assert.equal(displayed, "abcde");
+      assert.equal(snapshotReads, 2);
+    } finally {
+      sync?.dispose(); mobile?.close();
+    }
+  }, { appServer });
 });
 
 for (const compressed of [true, false]) {

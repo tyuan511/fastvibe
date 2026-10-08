@@ -85,7 +85,7 @@ export const DiffView = memo(function DiffView({
       {hidden > 0 ? (
         <button
           type="button"
-          className="sticky bottom-0 block w-full border-t border-border bg-muted/60 px-2 py-1 text-left text-xs text-muted-foreground hover:text-foreground"
+          className="glass-cover sticky bottom-0 block w-full border-t border-border bg-muted/60 px-2 py-1 text-left text-xs text-muted-foreground hover:text-foreground"
           onClick={() => setExpanded(true)}
         >
           {t("diff.more", { count: hidden })}

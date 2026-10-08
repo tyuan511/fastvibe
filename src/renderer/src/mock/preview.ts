@@ -68,6 +68,14 @@ const platform = params.get("platform") ?? "darwin";
  * be, on a page that has none.
  */
 const remote = params.get("remote") === "1";
+/**
+ * `?desktop=1` sets the window on a desktop: a colourful wallpaper fills the page and the
+ * app is a floating macOS window over it, drawn with 玻璃效果 on. A browser has no system
+ * blur, so the window's own `backdrop-filter` stands in for the material Electron's
+ * vibrancy provides (`HAS_VIBRANCY` reads `simulatedVibrancy` off the bridge). This is
+ * what the README shot and the website's hero show.
+ */
+const desktop = params.get("desktop") === "1" && platform === "darwin" && !remote;
 
 // Transcript presentation is no longer a preference. The website shots still hide
 // timestamps and leave the demo run unfolded; `?collapse=off` does the latter for
@@ -665,6 +673,8 @@ const api = {
     platform,
     /** `?remote=1`: the window chrome the browser client has, which is none. */
     remote,
+    /** `?desktop=1`: the page paints a stand-in for the blur, so glass can be shown. */
+    simulatedVibrancy: desktop,
     getInfo: async () => APP_INFO,
     log: () => undefined,
     exportLogs: async () => "/Users/dev/Downloads/fastvibe-logs-preview.zip",
@@ -773,6 +783,9 @@ const api = {
     const modelParam = params.get("memoryModel");
     const TOTAL = 118 * 1024 ** 2;
     const listeners = new Set<(state: MemoryState) => void>();
+    const archived = new Set<string>();
+    const pinned = new Set<string>();
+    const archiveTime = Date.now();
     let state: MemoryState = {
       config: {
         enabled: true,
@@ -781,6 +794,10 @@ const api = {
         embeddingProvider: "local-minilm-multilingual-q8",
         maxResults: 8,
         maxContextChars: 4000,
+        autoMaintain: true,
+        temporaryRetentionDays: 90,
+        archiveRetentionDays: 30,
+        maxActiveItems: 10_000,
         ...(mode === "jev" ? { systemTwoModel: { provider: MODELS[0].provider, id: MODELS[0].id } } : {}),
       },
       model: {
@@ -792,7 +809,7 @@ const api = {
       ...(mode === "jev" ? MEMORY_FIXTURE_COUNTS : { items: 0, edges: 0 }),
     };
     const emit = (next: MemoryState): MemoryState => {
-      state = next;
+      state = { ...next, maintenance: { active: next.items - archived.size, archived: archived.size, overBudget: 0, ...next.maintenance } };
       for (const listener of listeners) listener(state);
       return state;
     };
@@ -814,10 +831,28 @@ const api = {
         return config.mode !== "default" && next.model.status !== "ready" ? download() : next;
       },
       search: async () => ({ items: [], mode: state.config.mode, usedEmbedding: false, usedJev: false }),
-      graph: async (request: { project?: string } = {}) => (state.items === 0 ? { nodes: [], edges: [], projects: [], total: 0 } : memoryGraphFixture(request.project)),
-      detail: async (id: string) => (state.items === 0 ? null : memoryDetailFixture(id)),
+      graph: async (request: { project?: string; status?: "active" | "archived"; offset?: number } = {}) => {
+        if (state.items === 0) return { nodes: [], edges: [], projects: [], total: 0 };
+        const graph = memoryGraphFixture(request.project);
+        const nodes = graph.nodes.filter((node) => archived.has(node.id) === (request.status === "archived"));
+        const ids = new Set(nodes.map((node) => node.id));
+        return { ...graph, nodes: nodes.slice(request.offset ?? 0, (request.offset ?? 0) + 300), edges: graph.edges.filter((edge) => ids.has(edge.sourceId) && ids.has(edge.targetId)), total: nodes.length };
+      },
+      detail: async (id: string) => {
+        const detail = state.items === 0 ? null : memoryDetailFixture(id);
+        return detail ? { ...detail, item: { ...detail.item, pinned: pinned.has(id), ...(archived.has(id) ? { archivedAt: archiveTime, archiveReason: "expired" as const } : {}) } } : null;
+      },
+      maintain: async () => {
+        if (state.items > 0) for (const id of ["m03", "m09"]) if (!pinned.has(id)) archived.add(id);
+        return emit({ ...state, maintenance: { active: state.items - archived.size, archived: archived.size, overBudget: 0, lastRunAt: Date.now(), archivedLastRun: archived.size, deletedLastRun: 0 } });
+      },
+      restore: async (id: string) => {
+        archived.delete(id); pinned.add(id);
+        return emit({ ...state, maintenance: { ...state.maintenance!, active: state.items - archived.size, archived: archived.size } });
+      },
+      setPinned: async (id: string, value: boolean) => { if (value) pinned.add(id); else pinned.delete(id); return emit(state); },
       delete: async () => state,
-      clear: async () => emit({ ...state, items: 0, edges: 0 }),
+      clear: async () => { archived.clear(); pinned.clear(); return emit({ ...state, items: 0, edges: 0, maintenance: { active: 0, archived: 0, overBudget: 0 } }); },
       onChanged: (listener: (state: MemoryState) => void) => {
         listeners.add(listener);
         return () => listeners.delete(listener);
@@ -1114,14 +1149,63 @@ if (website) {
  * Keep this strictly inside the dedicated website fixture and inside the 88px title
  * row clearance used by the real macOS shell.
  */
+/**
+ * The desktop scene (`?desktop=1`). The window is `#root` itself, inset from the viewport:
+ * its corner radius is the side panes' (16px inner + their 8px inset), so the panes sit
+ * concentric in it, and its `backdrop-filter` is the material — the wallpaper blurred and
+ * tinted toward the appearance, as macOS draws under a vibrant window. That filter also
+ * makes `#root` the containing block for the app's `fixed` layers (the settings overlay),
+ * so they stay inside the window rather than covering the wallpaper.
+ */
+// The website draws the same wallpaper and a skeleton window at this inset while the frame
+// loads (`.preview-window` / `.preview-skeleton` in apps/website/app/globals.css), so the
+// swap to the real page does not move anything — keep the inset and the gradient in step.
+const DESKTOP_INSET = { x: 20, y: 16 };
+if (desktop) {
+  document.documentElement.dataset.desktop = "";
+  const style = document.createElement("style");
+  style.textContent = `
+    html[data-desktop] {
+      background:
+        radial-gradient(42% 58% at 8% 12%, #ff7a45 0%, rgb(255 122 69 / 0) 70%),
+        radial-gradient(38% 52% at 30% 92%, #ff3d8b 0%, rgb(255 61 139 / 0) 70%),
+        radial-gradient(46% 60% at 92% 8%, #7c5cff 0%, rgb(124 92 255 / 0) 70%),
+        radial-gradient(44% 56% at 78% 96%, #00c2d1 0%, rgb(0 194 209 / 0) 70%),
+        radial-gradient(30% 40% at 58% 46%, #ffd166 0%, rgb(255 209 102 / 0) 70%),
+        linear-gradient(135deg, #2b1b6b 0%, #0d2a4a 55%, #102c3a 100%);
+    }
+    html[data-desktop] body { background: transparent; }
+    html[data-desktop] #root {
+      position: fixed;
+      inset: ${DESKTOP_INSET.y}px ${DESKTOP_INSET.x}px;
+      height: auto;
+      border-radius: 24px;
+      overflow: hidden;
+      background: var(--desktop-material);
+      -webkit-backdrop-filter: blur(56px) saturate(1.9);
+      backdrop-filter: blur(56px) saturate(1.9);
+      box-shadow:
+        0 0 0 0.5px rgb(0 0 0 / 0.45),
+        inset 0 0 0 0.5px rgb(255 255 255 / 0.22),
+        0 36px 90px -24px rgb(0 0 0 / 0.6),
+        0 14px 34px -12px rgb(0 0 0 / 0.4);
+    }
+    html[data-desktop].dark { --desktop-material: rgb(30 30 36 / 0.34); }
+    html[data-desktop]:not(.dark) { --desktop-material: rgb(248 248 250 / 0.42); }
+  `;
+  document.head.append(style);
+}
+
 if (website && platform === "darwin" && !remote) {
   const controls = document.createElement("div");
   controls.setAttribute("aria-hidden", "true");
   controls.dataset.websiteTrafficLights = "true";
+  // Where WINDOW_BUTTON_POSITION puts the real ones: inside the sidebar pane's first row.
+  const origin = desktop ? DESKTOP_INSET : { x: 0, y: 0 };
   Object.assign(controls.style, {
     position: "fixed",
-    left: "20px",
-    top: "16px",
+    left: `${origin.x + 28}px`,
+    top: `${origin.y + 24}px`,
     display: "flex",
     gap: "8px",
     zIndex: "1000",
@@ -1204,10 +1288,23 @@ if (websiteData) {
   }
 
   if (websiteScene === "workspace") {
-    // 待办 opens so the checklist the fixture finished is legible in the frame.
+    // 待办 opens so the checklist the fixture finished is legible in the frame — and the
+    // thread is taken back to its top, since a run longer than the window would otherwise
+    // be shown from its last paragraph (the scroller follows the bottom). The wheel is what
+    // tells the scroller a reader took over; a bare `scrollTop` would be followed away from.
+    const toTop = (): void => {
+      const viewport = document.querySelector<HTMLElement>('[data-slot="message-scroller-viewport"]');
+      if (!viewport) return;
+      viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -120, bubbles: true }));
+      viewport.scrollTop = 0;
+    };
     whenFound(
       () => document.querySelector<HTMLElement>('[data-tool-id="website-todo"]')?.closest("button") as HTMLButtonElement | null,
-      (button) => button.click(),
+      (button) => {
+        button.click();
+        toTop();
+        for (const delay of [150, 450]) window.setTimeout(toTop, delay);
+      },
     );
   } else if (websiteScene === "review") {
     whenFound(

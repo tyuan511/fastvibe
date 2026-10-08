@@ -1,4 +1,5 @@
 import { Ipc } from "@shared/ipc";
+import type { SubmitPromptRequest } from "./prompt-submission";
 import type { DagGraph, DagOutputPage } from "@shared/dag";
 import type {
   ChatMessage,
@@ -7,6 +8,7 @@ import type {
   ConversationOpenResult,
   ConversationSearchHit,
   ConversationSnapshot,
+  ConversationHistoryPage,
   ConversationReadyEvent,
   DirEntry,
   FastVibeModel,
@@ -125,6 +127,8 @@ export type ApiTransport = {
 export function createFastVibeApi(t: ApiTransport) {
   const api = {
     engine: {
+      submitPrompt: (payload: SubmitPromptRequest): Promise<ConversationQueueState | null> =>
+        t.invoke(Ipc.engineSubmitPrompt, payload),
       getStatus: (): Promise<EngineStatus> => t.invoke(Ipc.engineGetStatus),
       start: (cwd?: string): Promise<EngineStatus> => t.invoke(Ipc.engineStart, { cwd }),
       stop: (): Promise<EngineStatus> => t.invoke(Ipc.engineStop),
@@ -252,8 +256,10 @@ export function createFastVibeApi(t: ApiTransport) {
        * `fromEntryId` is supplied, the response contains only the tail from that entry
        * when the entry is still on the current branch.
        */
-      getSnapshot: (conversationId?: string, fromEntryId?: string): Promise<ConversationSnapshot> =>
-        t.invoke(Ipc.engineGetSnapshot, { conversationId, fromEntryId }),
+      getSnapshot: (conversationId?: string, fromEntryId?: string, historyLimit?: number): Promise<ConversationSnapshot> =>
+        t.invoke(Ipc.engineGetSnapshot, { conversationId, fromEntryId, ...(historyLimit !== undefined ? { historyLimit } : {}) }),
+      getMessagesPage: (payload: import("./transcript-page").TranscriptPageRequest): Promise<ConversationHistoryPage> =>
+        t.invoke(Ipc.engineGetMessagesPage, payload),
       getStats: (conversationId?: string): Promise<SessionStats> =>
         t.invoke(Ipc.engineGetStats, { conversationId }),
       setSteeringMode: (mode: "all" | "one-at-a-time", conversationId?: string): Promise<EngineSessionState> =>
@@ -568,6 +574,9 @@ export function createFastVibeApi(t: ApiTransport) {
       graph: (request: import("./memory").MemoryGraphRequest = {}): Promise<import("./memory").MemoryGraph> =>
         t.invoke(Ipc.memoryGraph, request),
       detail: (id: string): Promise<import("./memory").MemoryDetail | null> => t.invoke(Ipc.memoryDetail, { id }),
+      maintain: (): Promise<import("./memory").MemoryState> => t.invoke(Ipc.memoryMaintain),
+      restore: (id: string): Promise<import("./memory").MemoryState> => t.invoke(Ipc.memoryRestore, { id }),
+      setPinned: (id: string, pinned: boolean): Promise<import("./memory").MemoryState> => t.invoke(Ipc.memorySetPinned, { id, pinned }),
       delete: (id: string): Promise<import("./memory").MemoryState> => t.invoke(Ipc.memoryDelete, { id }),
       clear: (): Promise<import("./memory").MemoryState> => t.invoke(Ipc.memoryClear),
       onChanged: (listener: (state: import("./memory").MemoryState) => void): (() => void) =>

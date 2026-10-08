@@ -174,6 +174,33 @@ function useNoOpWheelGuard(): (node: HTMLDivElement | null) => void {
 /** Sticky rows land on the pixel; anything smaller is sub-pixel jitter. */
 const PIN_SLACK = 1;
 
+/**
+ * How far below a pinned prompt the reply fades back in, under 玻璃效果 (px).
+ *
+ * Every other theme hides what scrolls under a pinned prompt with the row's solid
+ * `bg-background`: a band the colour of the page, so it hides the reply and is itself
+ * invisible. A Glass page is see-through, so no band can do both — a translucent one
+ * lets the reply through, and a tinted one is a visible block. There, the reply rows
+ * are masked off at the prompt's lower edge instead: what is above the line is not
+ * drawn at all, and the window's own blur shows there exactly as it does around it.
+ */
+const GLASS_CUT_FEATHER = 16;
+
+function isGlass(): boolean {
+  return document.documentElement.dataset.glass === "true";
+}
+
+function maskRow(row: HTMLElement, offset: number): void {
+  const mask = `linear-gradient(to bottom, transparent ${offset}px, #000 ${offset + GLASS_CUT_FEATHER}px)`;
+  row.style.setProperty("mask-image", mask);
+  row.style.setProperty("-webkit-mask-image", mask);
+}
+
+function unmaskRow(row: HTMLElement): void {
+  row.style.removeProperty("mask-image");
+  row.style.removeProperty("-webkit-mask-image");
+}
+
 /** Nearest scrollable ancestor — the thread viewport a prompt pins inside. */
 function scrollParent(node: HTMLElement): HTMLElement | null {
   for (let parent = node.parentElement; parent; parent = parent.parentElement) {
@@ -211,17 +238,34 @@ function pinRegistryFor(scroller: HTMLElement): PinRegistry {
 
   const watchers = new Map<HTMLElement, PinWatcher>();
   let frame = 0;
+  // Reply rows currently masked under a pinned prompt (玻璃效果 only).
+  let masked = new Map<HTMLElement, number>();
 
   const measure = (): void => {
     frame = 0;
     const edge = scroller.getBoundingClientRect().top;
+    const glass = isGlass();
+    const cuts = new Map<HTMLElement, number>();
     for (const [node, watcher] of watchers) {
-      const top = node.getBoundingClientRect().top;
+      const rect = node.getBoundingClientRect();
       const pinned =
-        Math.abs(top - edge) <= PIN_SLACK &&
-        top > watcher.turn.getBoundingClientRect().top + PIN_SLACK;
+        Math.abs(rect.top - edge) <= PIN_SLACK &&
+        rect.top > watcher.turn.getBoundingClientRect().top + PIN_SLACK;
       watcher.notify(pinned);
+      if (!glass || !pinned) continue;
+      // Only this turn's reply can be under its prompt: the next turn's prompt is
+      // what pushes this one away. Rows below the fade are left alone, and so is
+      // everything after the first of them.
+      for (let row = node.nextElementSibling; row instanceof HTMLElement; row = row.nextElementSibling) {
+        const offset = rect.bottom - row.getBoundingClientRect().top;
+        if (offset <= -GLASS_CUT_FEATHER) break;
+        cuts.set(row, Math.round(offset));
+      }
     }
+    // Reads above, writes below: one layout flush for the whole thread, as before.
+    for (const row of masked.keys()) if (!cuts.has(row)) unmaskRow(row);
+    for (const [row, offset] of cuts) if (masked.get(row) !== offset) maskRow(row, offset);
+    masked = cuts;
   };
   const schedule = (): void => {
     if (!frame) frame = requestAnimationFrame(measure);
@@ -247,6 +291,8 @@ function pinRegistryFor(scroller: HTMLElement): PinRegistry {
         scroller.removeEventListener("scroll", schedule);
         observer.disconnect();
         if (frame) cancelAnimationFrame(frame);
+        for (const row of masked.keys()) unmaskRow(row);
+        masked = new Map();
         pinRegistries.delete(scroller);
       };
     },
@@ -326,9 +372,10 @@ function ThreadRow({
       ref={isUser ? ref : undefined}
       id={row.id}
       messageId={row.id}
+      data-pinned={isUser && pinned ? "" : undefined}
       className={cn(
         "[content-visibility:visible]",
-        isUser && "relative sticky top-0 z-10 bg-background pt-2",
+        isUser && "thread-prompt relative sticky top-0 z-10 bg-background pt-2",
       )}
     >
       <ChatMessageRow
@@ -344,6 +391,7 @@ function ThreadRow({
       {isUser && pinned ? (
         <div
           aria-hidden
+          data-prompt-scrim
           className="pointer-events-none absolute inset-x-0 top-full h-6 bg-gradient-to-b from-background to-background/0"
         />
       ) : null}

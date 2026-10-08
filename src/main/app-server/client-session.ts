@@ -50,6 +50,7 @@ export class ClientSession {
   #subscriptions = new Map<AppScope, Subscription>();
   #eventBatch = false;
   #binaryAttachments = false;
+  #conversationResume = false;
   #pendingEvents: AppEventMessage[] = [];
   #pendingEventBytes = 0;
   #eventBatchTimer: ReturnType<typeof setTimeout> | null = null;
@@ -91,12 +92,13 @@ export class ClientSession {
    */
   markHandshaken(
     capabilities?: readonly AppCapability[] | null,
-    features?: { eventBatch?: boolean; binaryAttachments?: boolean } | null,
+    features?: { eventBatch?: boolean; binaryAttachments?: boolean; conversationResume?: boolean } | null,
   ): void {
     if (this.#handshaken) return;
     this.#capabilities = intersectCapabilities(this.#serverCapabilities, capabilities);
     this.#eventBatch = features?.eventBatch === true;
     this.#binaryAttachments = features?.binaryAttachments === true;
+    this.#conversationResume = features?.conversationResume === true;
     this.#handshaken = true;
   }
 
@@ -107,6 +109,8 @@ export class ClientSession {
   get supportsBinaryAttachments(): boolean {
     return this.#binaryAttachments;
   }
+
+  get supportsConversationResume(): boolean { return this.#conversationResume; }
 
   write(message: AppServerMessage): boolean {
     if (this.#closed) return false;

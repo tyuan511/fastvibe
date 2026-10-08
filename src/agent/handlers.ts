@@ -38,6 +38,7 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
   const terminals = deps.terminals;
 
   handle(Ipc.engineGetStatus, () => engine.status);
+  handle(Ipc.engineSubmitPrompt, (payload: Parameters<typeof engine.submitPrompt>[0]) => engine.submitPrompt(payload));
   handle(Ipc.engineStart, async (payload?: { cwd?: string }) => engine.start(payload?.cwd ?? engine.cwd));
   handle(Ipc.engineStop, async () => { await engine.stop(); return engine.status; });
   handle(Ipc.enginePrompt, async (payload: { message: string; streamingBehavior?: "steer" | "followUp"; images?: Array<{ type: "image"; data: string; mimeType: string }>; conversationId?: string }) => {
@@ -107,7 +108,8 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
   handle(Ipc.engineBranch, (payload: { entryId: string; conversationId?: string }) => engine.branch(payload.entryId, payload.conversationId));
   handle(Ipc.engineFork, (payload?: { entryId?: string; conversationId?: string }) => engine.fork(payload?.entryId, payload?.conversationId));
   handle(Ipc.engineGetMessages, (payload?: { conversationId?: string }) => engine.loadMessages(payload?.conversationId));
-  handle(Ipc.engineGetSnapshot, (payload?: { conversationId?: string; fromEntryId?: string }) => engine.getSnapshot(payload?.conversationId, payload?.fromEntryId));
+  handle(Ipc.engineGetSnapshot, (payload?: { conversationId?: string; fromEntryId?: string; historyLimit?: number }) => engine.getSnapshot(payload?.conversationId, payload?.fromEntryId, payload?.historyLimit));
+  handle(Ipc.engineGetMessagesPage, (payload: import("../shared/transcript-page").TranscriptPageRequest) => engine.getMessagesPage(payload.conversationId, payload.beforeEntryId, payload.turnLimit));
   handle(Ipc.engineGetStats, (payload?: { conversationId?: string }) => engine.getSessionStats(payload?.conversationId));
   handle(Ipc.engineSetSteering, (payload: { mode: "all" | "one-at-a-time"; conversationId?: string }) => engine.setSteeringMode(payload.mode, payload.conversationId));
   handle(Ipc.engineSetFollowUp, (payload: { mode: "all" | "one-at-a-time"; conversationId?: string }) => engine.setFollowUpMode(payload.mode, payload.conversationId));

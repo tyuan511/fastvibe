@@ -68,3 +68,56 @@ test("replay rejects excluded history instead of creating a cursor hole", () => 
   bus.publish("installation", "x", 1, { except: "a" });
   assert.equal(bus.resume("installation", { epoch: "e0", seq: 0 }, "a").kind, "resync");
 });
+
+test("journal byte accounting is incremental and uses UTF-8 bytes", () => {
+  let serializations = 0;
+  const bus = new EventBus({ epoch: "e", maxBytes: 100 });
+  bus.publish("installation", "x", { toJSON() { serializations++; return "hello"; } });
+  for (let i = 0; i < 20; i++) {
+    bus.sequence("installation");
+    bus.publish("conversation:c", "x", i);
+  }
+  assert.equal(serializations, 1, "old payloads must not be reserialized on each event");
+  const unicode = new EventBus({ epoch: "e", maxBytes: 12 });
+  unicode.publish("installation", "x", "界界界界");
+  assert.equal(unicode.resume("installation", { epoch: "e", seq: 0 }).kind, "resync");
+});
+
+test("forget, per-scope trimming and expiry release their byte accounting", () => {
+  let now = 0;
+  const bus = new EventBus({ epoch: "e", maxBytes: 12, maxPerScope: 1, maxAgeMs: 10, now: () => now });
+  bus.publish("conversation:a", "x", "123456");
+  bus.forget("conversation:a");
+  bus.publish("conversation:b", "x", "123456");
+  bus.publish("conversation:b", "x", "123456");
+  assert.equal(bus.resume("conversation:b", { epoch: "e", seq: 1 }).kind, "events");
+  now = 20;
+  bus.publish("conversation:c", "x", "123456");
+  assert.equal(bus.resume("conversation:c", { epoch: "e", seq: 0 }).kind, "events");
+});
+
+test("a recording gap remains non-resumable after a new watcher begins journaling", () => {
+  const bus = new EventBus({ epoch: "e" });
+  bus.publish("conversation:a", "x", 1);
+  bus.invalidate("conversation:a");
+  const baseline = bus.sequence("conversation:a");
+  bus.publish("conversation:a", "x", 2);
+  assert.equal(bus.resume("conversation:a", { epoch: "e", seq: 1 }).kind, "resync");
+  assert.equal(bus.resume("conversation:a", { epoch: "e", seq: baseline }).kind, "events");
+});
+
+test("scope eviction cannot treat a zero cursor as current after discarding unseen events", () => {
+  const bus = new EventBus({ epoch: "e", maxScopes: 1 });
+  bus.publish("conversation:a", "x", "missed");
+  bus.publish("conversation:b", "x", "other");
+  assert.equal(bus.resume("conversation:a", { epoch: "e", seq: 0 }).kind, "resync");
+});
+
+test("epoch rotation during bounded eviction keeps each event id consistent with its envelope", () => {
+  const bus = new EventBus({ epoch: "e", maxScopes: 1 });
+  for (const scope of ["conversation:a", "conversation:b", "conversation:c"]) {
+    const event = bus.publish(scope, "x", 1);
+    assert.equal(event.eventId, stableEventId(event.epoch, scope, event.seq));
+  }
+  assert.notEqual(bus.epoch, "e");
+});

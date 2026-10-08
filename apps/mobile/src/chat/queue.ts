@@ -22,7 +22,7 @@ type QueuedPromptPreview = {
 };
 
 type PromptImage = { type: "image"; data: string; mimeType: string };
-type Caller = { call(method: string, payload?: unknown, timeoutMs?: number): Promise<unknown> };
+type Caller = { supportsPromptSubmit?: boolean; call(method: string, payload?: unknown, timeoutMs?: number): Promise<unknown> };
 
 /** A lost acknowledgement is not proof of refusal; never encourage a duplicate send. */
 export class SubmissionUncertainError extends Error {
@@ -75,6 +75,17 @@ export async function submitMessage(
   onPrompt: () => void,
 ): Promise<unknown> {
   const { conversationId, text, images, enqueue, previous } = input;
+  // A desktop gateway may route to an older SSH Agent whose methods weren't
+  // advertised by this welcome. Keep that route on the compatible call sequence.
+  if (remote.supportsPromptSubmit && !conversationId.startsWith("remote:")) {
+    if (!enqueue) onPrompt();
+    try {
+      return await remote.call("engine:submit-prompt", { conversationId, text, enqueue, ...(images?.length ? { images } : {}) }, 60_000);
+    } catch (error) {
+      if (isLostAcknowledgement(error)) throw new SubmissionUncertainError();
+      throw error;
+    }
+  }
   const catalog = await remote.call("conversations:record-prompt", { id: conversationId, text });
   let preview: QueuedPromptPreview | undefined;
   if (previous && isRecord(catalog) && Array.isArray(catalog.conversations)) {

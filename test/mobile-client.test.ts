@@ -60,6 +60,32 @@ test("an idle foreground socket probes and reconnects even if no native close ar
   assert.equal(socket.readyState, 3);
 });
 
+test("auth and hello are sent together, while readiness still waits for both responses", async (t) => {
+  const { client } = harness(t);
+  let connected = false;
+  const ready = client.connect(parseServerAddress("https://example.test")!, "test-token").then(() => { connected = true; });
+  const socket = Socket.latest;
+  socket.open();
+  assert.deepEqual(socket.sent.map((frame) => frame.type ?? frame.kind), ["auth", "hello"]);
+  socket.receive({ type: "auth", ok: true });
+  await Promise.resolve(); assert.equal(connected, false);
+  assert.equal(socket.sent.length, 2, "auth acknowledgement must not send a second hello");
+  socket.receive({ kind: "welcome" }); await ready;
+  assert.equal(connected, true);
+});
+
+test("a rejected pipelined authentication cannot become ready on a late welcome", async (t) => {
+  const { client } = harness(t);
+  const ready = client.connect(parseServerAddress("https://example.test")!, "bad-token");
+  const rejected = assert.rejects(ready, (error: unknown) => error instanceof ConnectionError && error.code === "unauthorized");
+  const socket = Socket.latest; socket.open();
+  const late = socket.onmessage;
+  socket.receive({ type: "auth", ok: false });
+  late?.({ data: JSON.stringify({ kind: "welcome" }) });
+  await rejected;
+  assert.equal(socket.readyState, 3);
+});
+
 test("backgrounding cancels frozen probe deadlines; returning probes again", async (t) => {
   const { client, disconnects, start } = harness(t);
   const { socket, ready } = start();
@@ -187,4 +213,76 @@ test("diagnostics retain the recent bounded history and structured close reason"
   assert.equal(report.entries.length, 100);
   assert.equal(report.entries[0].attempt, 21);
   assert.equal(report.entries.at(-1).detail.code, 4004);
+});
+
+test("a network-change probe closes a silent socket faster but tolerates a draining transfer", async (t) => {
+  const { client, disconnects, start } = harness(t);
+  const { socket, ready } = start(); socket.receive({ kind: "welcome" }); await ready;
+  client.checkHealth(true);
+  t.mock.timers.tick(3999);
+  assert.equal(disconnects.length, 0);
+  socket.receive({ kind: "event", channel: "engine:event", payload: {} });
+  t.mock.timers.tick(1);
+  assert.equal(disconnects.length, 0, "active progress must retain its normal grace period");
+  t.mock.timers.tick(HEALTH_TIMEOUT_MS);
+  assert.equal(disconnects[0]?.kind, "heartbeat-timeout");
+});
+
+test("subscription recovery keeps the socket on a journal gap and exposes metadata to the reducer", async (t) => {
+  const { client, disconnects, start } = harness(t);
+  const { socket, ready } = start();
+  socket.receive({ kind: "welcome", epoch: "e", features: { conversationResume: true, promptSubmit: true } }); await ready;
+  assert.equal(client.supportsPromptSubmit, true);
+  const subscription = client.subscribeConversation("conversation:chat", { epoch: "e", seq: 1 });
+  socket.receive({ kind: "resync", scope: "conversation:chat" });
+  socket.receive({ kind: "subscribed", requestId: socket.sent.at(-1)?.requestId, cursors: { "conversation:chat": { epoch: "e", seq: 8 } } });
+  assert.deepEqual(await subscription, { resumed: false, cursor: { epoch: "e", seq: 8 } });
+  assert.equal(disconnects.length, 0);
+  const events: unknown[] = [];
+  client.onPush((_channel, _payload, meta) => events.push(meta));
+  socket.receive({ kind: "events", events: [{ kind: "event", channel: "engine:event", scope: "conversation:chat", epoch: "e", seq: 9 }] });
+  assert.deepEqual(events, [{ scope: "conversation:chat", epoch: "e", seq: 9 }]);
+});
+
+test("retiring a connection settles pending subscription acknowledgements", async (t) => {
+  const { client, start } = harness(t);
+  const { socket, ready } = start(); socket.receive({ kind: "welcome", features: { conversationResume: true } }); await ready;
+  const subscription = client.subscribeConversation("conversation:chat");
+  const rejected = assert.rejects(subscription, TransportError);
+  client.close(); await rejected;
+});
+
+test("late subscription acknowledgements cannot complete a replacement watch", async (t) => {
+  const { client, start } = harness(t);
+  const { socket, ready } = start(); socket.receive({ kind: "welcome", epoch: "e", features: { conversationResume: true } }); await ready;
+  const old = client.subscribeConversation("conversation:chat");
+  const rejected = assert.rejects(old, TransportError);
+  const oldId = socket.sent.at(-1)?.requestId;
+  client.unsubscribe(["conversation:chat"]); await rejected;
+  let settled = false;
+  const current = client.subscribeConversation("conversation:chat").then((value) => { settled = true; return value; });
+  const requestId = socket.sent.at(-1)?.requestId;
+  socket.receive({ kind: "subscribed", requestId: oldId, cursors: { "conversation:chat": { epoch: "e", seq: 1 } } });
+  await Promise.resolve(); assert.equal(settled, false);
+  socket.receive({ kind: "subscribed", requestId, cursors: { "conversation:chat": { epoch: "e", seq: 2 } } });
+  assert.equal((await current).cursor?.seq, 2);
+});
+
+test("a network change accelerates an existing idle probe without sending another ping", async (t) => {
+  const { client, disconnects, start } = harness(t);
+  const { socket, ready } = start(); socket.receive({ kind: "welcome" }); await ready;
+  client.checkHealth(); t.mock.timers.tick(1000); client.checkHealth(true);
+  assert.equal(socket.sent.filter((frame) => frame.kind === "ping").length, 1);
+  t.mock.timers.tick(3000);
+  assert.equal(disconnects[0]?.kind, "heartbeat-timeout");
+});
+
+test("RPC metrics are bounded separately and cannot evict connection-failure diagnostics", () => {
+  recordConnectionDiagnostic({ event: "disconnected", detail: { kind: "heartbeat-timeout" } });
+  for (let elapsedMs = 1; elapsedMs <= 1000; elapsedMs++) recordConnectionDiagnostic({ event: "metric", metric: "snapshot", elapsedMs, frameChars: 100 });
+  const report = JSON.parse(connectionDiagnostics("test"));
+  assert.equal(report.entries.at(-1).detail.kind, "heartbeat-timeout");
+  assert.equal(report.timings.snapshot.samples.length, 32);
+  assert.equal(report.timings.snapshot.p95Ms, 999);
+  assert.equal(report.timings.snapshot.samples[0].elapsedMs, 969);
 });

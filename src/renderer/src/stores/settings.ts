@@ -86,6 +86,11 @@ export type AppSettings = ProxySettings & {
   /** Theme used while in dark mode. */
   darkTheme: ThemeId;
   /**
+   * 玻璃效果: the window drawn over the macOS blur, whatever the theme. Main reads the
+   * same key to turn vibrancy on (`shared/glass.ts`); only offered where `HAS_VIBRANCY`.
+   */
+  glass: boolean;
+  /**
    * 界面字号: the root font size in px (default 16). Body text (`text-sm`) renders
    * at 14px there; every other rem-based size scales with it — see `applyUiFontSize`.
    */
@@ -163,6 +168,7 @@ const DEFAULTS: AppSettings = {
   themeMode: DEFAULT_THEME_MODE,
   lightTheme: DEFAULT_LIGHT_THEME,
   darkTheme: DEFAULT_DARK_THEME,
+  glass: true,
   uiFontSize: DEFAULT_UI_FONT_SIZE,
   autoCheckUpdates: true,
   // 系统通知 (设置 → 通用): every scenario on, so a fresh install is not a silent one.
@@ -221,6 +227,7 @@ function sanitize(parsed: Partial<AppSettings>): Partial<AppSettings> {
   delete (next as Record<string, unknown>).notifications;
   delete (next as Record<string, unknown>).fullDiskAccessDismissed;
   if (typeof next.keepAwake !== "boolean") delete next.keepAwake;
+  if (typeof next.glass !== "boolean") delete next.glass;
   if (typeof next.codemode !== "boolean") delete next.codemode;
   if (typeof next.toolSearch !== "boolean") delete next.toolSearch;
   if (typeof next.dynamicDag !== "boolean") delete next.dynamicDag;
