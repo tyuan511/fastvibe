@@ -19,6 +19,7 @@ import { parseHandoffCommand } from "@shared/slash";
 import { THINKING_EFFORT_LEVELS, type ChatAttachment, type EngineModel, type ThinkingLevel } from "@shared/types";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { DagMobileSummary } from "@/components/dag/dag-task-list";
 import { MessageList } from "@/components/chat/message-list";
 import { PermissionDialog } from "@/components/chat/permission-dialog";
 import { PermissionPanel, type PermissionResponse } from "@/components/chat/permission-panel";
@@ -108,6 +109,7 @@ export function ChatScreen({
           </Button>
         ) : null}
       </header>
+      <DagMobileSummary conversationId={shownId} />
 
       <div className="relative min-h-0 flex-1">
         {failed ? (

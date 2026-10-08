@@ -1,5 +1,5 @@
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
+import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { FlatList, Image, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import { HugeiconsIcon } from "@hugeicons/react-native";
@@ -32,6 +32,8 @@ import { dialog } from "../../ui/dialog";
 import { toast } from "../../ui/toast";
 import { haptic } from "../../ui/haptics";
 import { MarkdownView } from "../../chat/markdown";
+import { MobileDagProvider, MobileDagSummary } from "../../chat/dag-panel";
+import { DagContext } from "../../chat/dag-context";
 import { ProcessGroup, type ProcessItem, type ToolBlock } from "../../chat/tool-card";
 import { nestedParent, toolEventDetails, toolResultText } from "../../chat/codemode";
 import { Composer } from "../../chat/composer";
@@ -53,6 +55,7 @@ type ChatMessage = {
   error?: string;
   stop?: string;
   kind?: string;
+  dag?: { settled?: boolean; completed?: number; failed?: number; blocked?: number };
   createdAt?: number;
   completedAt?: number;
   compact?: CompactInfo;
@@ -433,6 +436,7 @@ export default function ChatScreen() {
   const empty = !loading && messages.length === 0 && !running;
 
   return (
+    <MobileDagProvider key={`${serverId}:${conversationId}`} conversationId={conversationId}>
     <View style={[styles.screen, { backgroundColor: palette.background }]}>
       <Stack.Screen
         options={{
@@ -468,6 +472,7 @@ export default function ChatScreen() {
             : undefined,
         }}
       />
+      <MobileDagSummary />
       <KeyboardAvoidingView
         style={styles.flex}
         behavior={Platform.OS === "ios" ? "padding" : "height"}
@@ -639,6 +644,7 @@ export default function ChatScreen() {
         onClose={() => setPicked(null)}
       />
     </View>
+    </MobileDagProvider>
   );
 }
 
@@ -660,7 +666,15 @@ const MessageRow = memo(function MessageRow({
   onLongPress: (message: ChatMessage) => void;
 }) {
   useT();
+  const dag = useContext(DagContext);
   const mine = message.role === "user";
+  if (message.kind === "dag") return (
+    <Pressable accessibilityRole="button" onPress={() => dag?.open()} style={styles.modelDivider}>
+      <View style={[styles.modelLine, { backgroundColor: palette.border }]} />
+      <Text style={[styles.modelText, { color: palette.muted }]}>{t(message.dag?.settled === false ? "dag.updated" : "dag.settled")}</Text>
+      <View style={[styles.modelLine, { backgroundColor: palette.border }]} />
+    </Pressable>
+  );
   if (message.kind === "compact") {
     return (
       <View style={styles.assistantRow}>
@@ -932,6 +946,7 @@ function parseMessage(value: unknown): ChatMessage[] {
     error: typeof value.error === "string" ? value.error : undefined,
     stop: typeof value.stop === "string" ? value.stop : undefined,
     kind: typeof value.kind === "string" ? value.kind : undefined,
+    dag: isRecord(value.dag) ? value.dag : undefined,
   }];
 }
 

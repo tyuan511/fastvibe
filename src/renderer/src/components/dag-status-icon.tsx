@@ -11,6 +11,8 @@ export function DagStatusIcon({ status, label }: { status: DagNodeStatus; label:
       return <RunningMark className="text-warning" label={label} />;
     case "completed":
       return <HugeiconsIcon strokeWidth={2} icon={CheckmarkCircle02Icon} className="size-3.5 shrink-0 text-success" aria-label={label} />;
+    case "blocked":
+      return <HugeiconsIcon strokeWidth={2} icon={AlertCircleIcon} className="size-3.5 shrink-0 text-warning" aria-label={label} />;
     case "failed":
       return <HugeiconsIcon strokeWidth={2} icon={AlertCircleIcon} className="size-3.5 shrink-0 text-destructive" aria-label={label} />;
     case "skipped":

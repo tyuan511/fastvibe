@@ -7,6 +7,8 @@ import { Type } from "typebox";
  * `folder-consent`), so a clarifying question never has to be a guess.
  */
 const QUESTION_TOOL = "question";
+/** One deadline for the whole call, including sequential select/input fallbacks. */
+const QUESTION_TIMEOUT_MS = 5 * 60_000;
 const T = (zh: string, en: string): string => (process.env.FASTVIBE_UI_LANGUAGE === "en" ? en : zh);
 const otherAnswer = (): string => T("其他（自行输入）", "Other (type your own)");
 
@@ -43,18 +45,16 @@ type QuestionBridge = {
 };
 
 /**
- * The `question` tool turns the agent's clarifying questions into the inline
- * panel: `ctx.ui.select` renders numbered options, `ctx.ui.input` a text field.
- * Questions are asked one at a time (one panel each) with a `问题 i/n` prefix, so
- * a single call can collect several answers even though the host has no
- * multi-question screen yet. 
+ * The `question` tool uses one inline multi-question panel in FastVibe, or
+ * sequential select/input dialogs on other hosts. The host owns each timeout
+ * so it dismisses the panel as well as releasing the awaited tool call.
  */
 function registerQuestionTool(pi: ExtensionAPI): void {
   pi.registerTool({
     name: QUESTION_TOOL,
     label: "Ask the user",
     description:
-      "Ask the user one or more clarifying questions. Each question may offer options; allowOther (default true) also lets them type their own answer. Use when requirements are ambiguous.",
+      "Ask the user one or more clarifying questions. Each question may offer options; allowOther (default true) also lets them type their own answer. Use when requirements are ambiguous. Waits up to five minutes, then returns unanswered questions so you can continue work that does not depend on those answers.",
     promptSnippet: "Ask the user to clarify (multiple questions, options or free-form)",
     promptGuidelines: [
       "Use question when requirements are ambiguous and the user's decision changes what you build; put every clarifying question you need into one call instead of asking across turns. Do not ask what you can find out by reading the code.",
@@ -81,7 +81,12 @@ function registerQuestionTool(pi: ExtensionAPI): void {
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const items = params.questions ?? [];
       const collect = (text: string, answers: QuestionAnswer[]): { content: { type: "text"; text: string }[]; details: QuestionDetails } => ({
-        content: [{ type: "text", text }],
+        content: [{ type: "text", text: answers.some((answer) => answer.answer === null)
+          ? `${text}\n\n${T(
+              "有问题未获回答。请继续处理不依赖这些答案的工作；需要用户决定或批准的部分保持待定。不要将未回答视为同意，也不要立即重复提问。",
+              "Some questions were not answered. Continue work that does not depend on those answers; leave work requiring the user's decision or approval pending. Do not treat silence as consent or immediately ask the same questions again.",
+            )}`
+          : text }],
         details: { questions: answers },
       });
       const unanswered = (): QuestionAnswer[] =>
@@ -98,6 +103,12 @@ function registerQuestionTool(pi: ExtensionAPI): void {
       }
       if (!ctx.hasUI) return collect(T("无法提问：当前会话没有可用的交互界面。", "Cannot ask: this session has no interactive UI."), unanswered());
 
+      const deadlineAt = Date.now() + QUESTION_TIMEOUT_MS;
+      const ask = <T>(open: (timeout: number) => Promise<T>): Promise<T | undefined> => {
+        const remaining = deadlineAt - Date.now();
+        return remaining > 0 ? open(remaining) : Promise.resolve(undefined);
+      };
+
       // Single-panel multi-question UI when the host offers it (FastVibe).
       const bridge = (ctx.ui as unknown as QuestionBridge).questions;
       if (typeof bridge === "function") {
@@ -108,7 +119,7 @@ function registerQuestionTool(pi: ExtensionAPI): void {
           optionDetails: (item.options ?? []).map((option) => ({ description: option.description })),
           allowOther: item.allowOther ?? true,
         }));
-        const result = await bridge(T("需要你的回答", "Your answer is needed"), specs);
+        const result = await ask((timeout) => bridge(T("需要你的回答", "Your answer is needed"), specs, { timeout }));
         if (!result) return collect(formatAnswers(unanswered()), unanswered());
         const answers = items.map((item, i): QuestionAnswer => {
           const labels = (item.options ?? []).map((option) => option.label);
@@ -138,7 +149,7 @@ function registerQuestionTool(pi: ExtensionAPI): void {
         let source: QuestionAnswer["source"] = "cancelled";
 
         if (labels.length === 0) {
-          const text = await ctx.ui.input(title);
+          const text = await ask((timeout) => ctx.ui.input(title, undefined, { timeout }));
           if (text !== undefined && text.trim()) {
             answer = text.trim();
             source = "custom";
@@ -147,11 +158,11 @@ function registerQuestionTool(pi: ExtensionAPI): void {
           }
         } else {
           const allowOther = item.allowOther ?? true;
-          const choice = await ctx.ui.select(title, allowOther ? [...labels, otherAnswer()] : labels);
+          const choice = await ask((timeout) => ctx.ui.select(title, allowOther ? [...labels, otherAnswer()] : labels, { timeout }));
           if (choice === undefined) {
             stopped = true;
           } else if (choice === otherAnswer()) {
-            const text = await ctx.ui.input(title);
+            const text = await ask((timeout) => ctx.ui.input(title, undefined, { timeout }));
             if (text !== undefined && text.trim()) {
               answer = text.trim();
               source = "custom";

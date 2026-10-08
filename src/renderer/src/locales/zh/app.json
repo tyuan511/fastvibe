@@ -11,6 +11,7 @@
  },
  "update": {
   "sidebarUpdate": "更新",
+  "sidebarChecking": "检查中",
   "sidebarDownloading": "下载中",
   "sidebarRestart": "重启",
   "sidebarUpdateTitle": "更新到 FastVibe {{version}}",

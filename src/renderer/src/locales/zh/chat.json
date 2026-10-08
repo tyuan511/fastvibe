@@ -245,6 +245,8 @@
     "completed": "{{count}} 完成",
     "failed": "{{count}} 失败",
     "skipped": "{{count}} 跳过",
-    "cancelled": "{{count}} 取消"
+    "cancelled": "{{count}} 取消",
+    "updated": "子任务有新结果",
+    "blocked": "{{count}} 阻塞"
   }
 }

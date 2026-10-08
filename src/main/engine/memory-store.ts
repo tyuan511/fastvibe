@@ -198,6 +198,14 @@ export class MemoryStore {
     return row ? toItem(row, true) : undefined;
   }
 
+  hasItems(filters: { conversationId?: string; project?: string } = {}): boolean {
+    const where: string[] = [];
+    const args: string[] = [];
+    if (filters.conversationId) { where.push("conversation_id = ?"); args.push(filters.conversationId); }
+    if (filters.project) { where.push("project = ?"); args.push(filters.project); }
+    return Boolean(this.#db.prepare(`SELECT 1 FROM memory_items${where.length ? ` WHERE ${where.join(" AND ")}` : ""} LIMIT 1`).get(...args));
+  }
+
   /** Lexical anchors. FTS query is deliberately tokenised before it reaches SQLite. */
   keyword(query: string, limit: number, filters: { conversationId?: string; project?: string } = {}): MemoryCandidate[] {
     const rawTerms = query

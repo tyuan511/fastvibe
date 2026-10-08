@@ -23,6 +23,7 @@ export const STATUS_FILL: Record<DagNodeStatus, string> = {
   running: "bg-warning",
   completed: "bg-success",
   failed: "bg-destructive",
+  blocked: "bg-warning",
   skipped: "bg-muted-foreground/40",
   cancelled: "bg-muted-foreground/40",
 };
@@ -177,7 +178,7 @@ export function DagSummary({
   const { t } = useTranslation("sidepane");
   const counts = new Map<DagNodeStatus, number>();
   for (const node of nodes) counts.set(node.status, (counts.get(node.status) ?? 0) + 1);
-  const order: DagNodeStatus[] = ["completed", "running", "failed", "cancelled", "skipped", "pending"];
+  const order: DagNodeStatus[] = ["completed", "running", "blocked", "failed", "cancelled", "skipped", "pending"];
   const completed = counts.get("completed") ?? 0;
   const failure = (error: unknown): void => void toast.error(error instanceof Error ? error.message : String(error));
 

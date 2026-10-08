@@ -9,6 +9,9 @@ import {
   baselineNeeds,
   consolidationPlan,
   consolidationRequest,
+  contextRankingRequest,
+  rankContextResults,
+  retrievalRoundRequest,
   contentCap,
   describeReferences,
   extractEntities,
@@ -39,6 +42,7 @@ import {
   type JevNode,
   type Proposal,
 } from "../src/main/engine/memory-jev.ts";
+import { screenRequest, JEV_SIZE_LIMITS } from "../src/main/engine/decision/dispatch.ts";
 
 /**
  * Jev-Mem as FastVibe runs it, pinned to the reference implementation
@@ -55,6 +59,40 @@ const node = (id: string, entities: string[] = [], createdAt = 0, content = "x")
 const noul = (value: number): Answer => ({ type: "noul", noul: value });
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
+
+test("context ranking filters irrelevant results, preserves ties and distinguishes failure from no matches", () => {
+  const nodes = [node("a"), node("b"), node("irrelevant")];
+  const answers = { recency_importance: noul(0), candidate_0_relevance: noul(0.8), candidate_1_relevance: noul(0.8), candidate_2_relevance: noul(0.1) };
+  assert.deepEqual(rankContextResults(nodes, answers)?.map((item) => item.id), ["a", "b"]);
+  assert.deepEqual(rankContextResults([node("a")], { recency_importance: noul(0), candidate_0_relevance: noul(0.1) }), []);
+  assert.equal(rankContextResults(nodes, { recency_importance: noul(0) }), undefined);
+  assert.equal(rankContextResults(nodes, undefined), undefined);
+});
+
+test("context recency only favors newer observations when the query needs recent information", () => {
+  const nodes = [node("old", [], 0), node("new", [], DAY * 30)];
+  const scores = { candidate_0_relevance: noul(0.8), candidate_1_relevance: noul(0.8) };
+  assert.deepEqual(rankContextResults(nodes, { ...scores, recency_importance: noul(0) })?.map((item) => item.id), ["old", "new"]);
+  assert.deepEqual(rankContextResults(nodes, { ...scores, recency_importance: noul(1) })?.map((item) => item.id), ["new", "old"]);
+});
+
+test("forty long Chinese context candidates fit in a single bounded request", () => {
+  const nodes = Array.from({ length: 40 }, (_, i) => node(`m${i}`, [], 0, "长期记忆".repeat(3000)));
+  const request = contextRankingRequest("用户之前决定采用什么部署方案？", nodes)!;
+  assert.equal(Object.keys(request.questions).length, 41);
+  assert.equal(request.binding, "memory.read.context");
+  assert.equal(screenRequest(request, JEV_SIZE_LIMITS), null);
+});
+
+test("one retrieval round combines stopping and scoring without treating new candidates as existing evidence", () => {
+  const evidence = [node("a")];
+  const proposals: Proposal[] = [{ node: node("b"), graph: "semantic", parentId: "a", parentCreatedAt: 0, structural: 1, edge: { sourceId: "a", targetId: "b", view: "semantic", relation: "related", weight: 1 } }];
+  const request = retrievalRoundRequest("query", evidence, proposals, 1, false)!;
+  assert.equal(request.binding, "memory.read.round");
+  assert.equal(Object.keys(request.questions).length, 8);
+  assert.match(String(request.questions.evidence_sufficient.instructions), /not `candidates`/);
+  assert.equal(retrievalRoundRequest("query", evidence, [], 1, false), undefined);
+});
 
 function wire(questions: Record<string, Question>, prefix = ""): Record<string, unknown> {
   return Object.fromEntries(Object.entries(questions)

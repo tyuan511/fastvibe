@@ -1,5 +1,5 @@
 import { Ipc } from "@shared/ipc";
-import type { DagGraph } from "@shared/dag";
+import type { DagGraph, DagOutputPage } from "@shared/dag";
 import type {
   ChatMessage,
   TranscriptTail,
@@ -397,6 +397,7 @@ export function createFastVibeApi(t: ApiTransport) {
     },
     dag: {
       list: (): Promise<DagGraph[]> => t.invoke(Ipc.dagList),
+      output: (conversationId: string, id: string, offset = 0): Promise<DagOutputPage> => t.invoke(Ipc.dagOutput, { conversationId, id, offset }),
       cancel: (conversationId: string, ids?: string[]): Promise<string[]> => t.invoke(Ipc.dagCancel, { conversationId, ids }),
       retry: (conversationId: string, id: string): Promise<string[]> => t.invoke(Ipc.dagRetry, { conversationId, id }),
       resume: (conversationId: string): Promise<string[]> => t.invoke(Ipc.dagResume, { conversationId }),

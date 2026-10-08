@@ -11,6 +11,7 @@ export function DagSettledNotice({ dag }: { dag?: DagSettledInfo }): JSX.Element
   const { t } = useTranslation("chat");
   const detail = [
     dag?.completed ? t("dag.completed", { count: dag.completed }) : "",
+    dag?.blocked ? t("dag.blocked", { count: dag.blocked }) : "",
     dag?.failed ? t("dag.failed", { count: dag.failed }) : "",
     dag?.skipped ? t("dag.skipped", { count: dag.skipped }) : "",
     dag?.cancelled ? t("dag.cancelled", { count: dag.cancelled }) : "",
@@ -22,7 +23,7 @@ export function DagSettledNotice({ dag }: { dag?: DagSettledInfo }): JSX.Element
     <div className="flex w-full items-center gap-3 py-1 text-xs text-muted-foreground/60">
       <span aria-hidden className="h-px min-w-4 flex-1 bg-border" />
       <span className="flex min-w-0 items-center gap-1.5">
-        <span className="shrink-0">{t("dag.settled")}</span>
+        <span className="shrink-0">{t(dag?.settled === false ? "dag.updated" : "dag.settled")}</span>
         {detail ? (
           <>
             <span className="shrink-0 text-muted-foreground/40">·</span>

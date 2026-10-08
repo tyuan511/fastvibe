@@ -1,4 +1,4 @@
-import { useState, type JSX, type ReactNode } from "react";
+import { useEffect, useRef, useState, type JSX, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { abortSubagent } from "@/lib/engine-client";
 import { formatDuration } from "@/lib/time";
 import { cn } from "@/lib/utils";
-import { DAG_READONLY_TOOLS, dagNodeFinished, type DagNode } from "@shared/dag";
+import { DAG_PREVIEW_CHARS, DAG_READONLY_TOOLS, dagNodeFinished, type DagNode } from "@shared/dag";
 import { useNow } from "./dag-canvas";
 
 /**
@@ -33,6 +33,11 @@ export function DagNodeDetail({
   onOpenRun: () => void;
 }): JSX.Element {
   const { t } = useTranslation("sidepane");
+  const requestGeneration = useRef(0);
+  const [output, setOutput] = useState<string | null>(null);
+  const [nextOffset, setNextOffset] = useState<number | undefined>();
+  const [loading, setLoading] = useState(false);
+  useEffect(() => { requestGeneration.current++; setOutput(null); setNextOffset(undefined); setLoading(false); return () => { requestGeneration.current++; }; }, [conversationId, node.id, node.runId]);
   const now = useNow(!dagNodeFinished(node.status));
   const onSelect = onSelectNode;
   const elapsed = node.startedAt ? (node.endedAt ?? now) - node.startedAt : undefined;
@@ -71,7 +76,7 @@ export function DagNodeDetail({
             {t("dag.stop")}
           </Button>
         ) : null}
-        {node.status === "failed" || node.status === "cancelled" ? (
+        {node.status === "failed" || node.status === "blocked" || node.status === "cancelled" ? (
           <Button type="button" size="xs" variant="outline" onClick={() => void window.fastvibe.dag.retry(conversationId, node.id).catch(failure)}>
             <HugeiconsIcon strokeWidth={2} icon={RefreshIcon} data-icon="inline-start" />
             {t("dag.retry")}
@@ -111,6 +116,9 @@ export function DagNodeDetail({
             <span className="font-mono text-xs leading-5 break-all text-muted-foreground">{node.model}</span>
           </Meta>
         ) : null}
+        {node.parentId ? <Meta label={t("dag.parent")}><Links ids={[node.parentId]} nodes={nodes} onSelect={onSelect} empty="" /></Meta> : null}
+        {nodes.some((child) => child.parentId === node.id) ? <Meta label={t("dag.children")}><Links ids={nodes.filter((child) => child.parentId === node.id).map((child) => child.id)} nodes={nodes} onSelect={onSelect} empty="" /></Meta> : null}
+        {node.coordinator ? <Meta label={t("dag.role")}>{t("dag.coordinator")}</Meta> : null}
         <Meta label={t("dag.dependsOn")}>
           <Links ids={node.dependsOn} nodes={nodes} onSelect={onSelect} empty={t("dag.none")} />
         </Meta>
@@ -125,10 +133,23 @@ export function DagNodeDetail({
         <p className="leading-5 wrap-break-word whitespace-pre-wrap text-muted-foreground">{node.instruction}</p>
       </Block>
 
+      {node.acceptance ? <Block label={t("dag.acceptance")}><p className="whitespace-pre-wrap text-muted-foreground">{node.acceptance}</p></Block> : null}
+      {node.report?.summary ? <Block label={t("dag.conclusion")}><p className="whitespace-pre-wrap">{node.report.summary}</p></Block> : null}
+      {node.report?.evidence?.length ? <Block label={t("dag.evidence")}><ul className="list-disc pl-4">{node.report.evidence.map((item, i) => <li key={i}>{item}</li>)}</ul></Block> : null}
       {node.output ? (
         <Block label={t("dag.output")}>
           <div className="chat-markdown max-h-80 overflow-y-auto rounded-lg border border-border bg-background px-3 py-2 text-sm leading-6">
-            <MarkdownView text={node.output} />
+            <MarkdownView text={output ?? node.output} />
+            {(output === null ? (node.outputLength ?? 0) > DAG_PREVIEW_CHARS : nextOffset !== undefined) ? (
+              <Button size="xs" variant="outline" disabled={loading} onClick={() => {
+                const generation = requestGeneration.current;
+                setLoading(true);
+                void window.fastvibe.dag.output(conversationId, node.id, output === null ? 0 : nextOffset).then((page) => {
+                  if (generation !== requestGeneration.current) return;
+                  setOutput((previous) => (previous ?? "") + page.output); setNextOffset(page.nextOffset);
+                }).catch((error) => { if (generation === requestGeneration.current) failure(error); }).finally(() => { if (generation === requestGeneration.current) setLoading(false); });
+              }}>{loading ? t("dag.loading") : output === null ? t("dag.readFull") : t("dag.readMore")}</Button>
+            ) : null}
           </div>
         </Block>
       ) : null}

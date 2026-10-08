@@ -44,15 +44,19 @@ import {
   retrievedBlock,
 } from "./memory-tools";
 import { embeddingDownloadBytes } from "./memory-download";
+import { MEMORY_MODEL_ID as MODEL_ID, MEMORY_MODEL_FILE as MODEL_FILE_NAME, memoryModelSource } from "./memory-model-source";
+import { MEMORY_PREPARATION_TIMEOUT_MS, MemoryReadBudget } from "./memory-read-budget";
 import { uiText } from "./ui-text";
 import {
   JEV_MEM_PROFILE,
+  MEMORY_CONTEXT_PROFILE,
   MEMORY_VIEWS,
   TYPE_KEYS,
   allocateBudget,
   clippedCosine,
   consolidationPlan,
   consolidationRequest,
+  contextRankingRequest,
   EVENT_EXTRACTION_SYSTEM,
   eventExtractionPrompt,
   magmaSemanticEdges,
@@ -65,18 +69,18 @@ import {
   narrative,
   noulValues,
   rankCandidates,
+  rankContextResults,
   reciprocalRankFusion,
   recencyAdjusted,
   relationEdges,
   relationRequest,
   routeFrom,
   routingRequest,
+  retrievalRoundRequest,
   stopDecision,
-  stoppingRequest,
   temporalEdges,
   transitionScore,
   traversalDepth,
-  traversalRequest,
   traversalValues,
   typingRequest,
   type CandidatePoolItem,
@@ -85,16 +89,10 @@ import {
   type Proposal,
 } from "./memory-jev";
 
-const MODEL_ID = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2";
-// The upstream repo names its architecture-specific INT8 files model_qint8_*.onnx,
-// while Transformers.js calls q8 "model_quantized.onnx". Supplying the base filename
-// explicitly keeps the download on the 118 MB INT8 artifact instead of the 471 MB FP32
-// safetensors/ONNX file.
-const MODEL_FILE_NAME = process.arch === "arm64" ? "model_qint8_arm64" : "model_qint8_avx2";
 const MODEL_MARKER = "model-ready.json";
 const MAX_CAPTURE_CHARS = 12_000;
 /** Adoption policy recorded in the decision trace for every Jev-Mem request. */
-const JEV_MEM_POLICY = "memory/jev-mem-v3";
+const JEV_MEM_POLICY = "memory/jev-mem-v4";
 /** `memory_meta` key counting successful Jev writes, for periodic consolidation. */
 const JEV_WRITES_KEY = "jev_writes";
 
@@ -109,6 +107,7 @@ type WriteInput = {
   consolidating?: boolean;
 };
 type SystemTwoGenerator = (conversationId: string, model: EngineModel, system: string, user: string, signal?: AbortSignal) => Promise<string>;
+type MemoryReadOptions = { timeoutMs?: number; signal?: AbortSignal; strategy?: "context" | "adaptive" };
 /**
  * FastVibe: memories scanned for write candidates. The reference scans every node of
  * one LoCoMo conversation; a project's memory has no such bound.
@@ -125,17 +124,19 @@ class JevBudget {
   readonly #run: ReturnType<DecisionRuntime["startRun"]> | undefined;
   readonly #cache: Map<string, Record<string, Answer>>;
   readonly #deadline: number;
+  readonly #signal: AbortSignal | undefined;
   answered = 0;
 
-  constructor(runtime: DecisionRuntime | undefined, cache: Map<string, Record<string, Answer>>, budgetKey: string, maxCalls: number, timeMs: number) {
-    this.#deadline = Date.now() + timeMs;
-    this.#run = runtime?.startRun({ budgetKey, deadlineAt: this.#deadline, maxRequests: maxCalls });
+  constructor(runtime: DecisionRuntime | undefined, cache: Map<string, Record<string, Answer>>, budgetKey: string, maxCalls: number, timeMs: number, read?: MemoryReadBudget) {
+    this.#deadline = read?.deadlineAt ?? Date.now() + timeMs;
+    this.#signal = read?.signal;
+    this.#run = runtime?.startRun({ budgetKey, deadlineAt: this.#deadline, maxRequests: maxCalls, signal: this.#signal });
     this.#cache = cache;
   }
 
   get calls(): number { return this.#run?.requestsUsed ?? 0; }
 
-  remainingMs(): number { return Math.max(0, this.#deadline - Date.now()); }
+  remainingMs(): number { return this.#signal?.aborted ? 0 : Math.max(0, this.#deadline - Date.now()); }
 
   async evaluate(request: DecideRequest | undefined): Promise<Record<string, Answer> | undefined> {
     if (!request || !this.#run || this.remainingMs() <= 0) return undefined;
@@ -196,6 +197,8 @@ export class MemoryManager {
   #extractorPromise: Promise<FeatureExtractor> | null = null;
   #listeners = new Set<(state: MemoryState) => void>();
   #systemTwoGenerator: SystemTwoGenerator | null = null;
+  #closed = false;
+  readonly #reads = new Set<MemoryReadBudget>();
   /** The reference client's LRU of identical Jev requests (`cache_size`). */
   readonly #jevCache = new Map<string, Record<string, Answer>>();
 
@@ -238,7 +241,7 @@ export class MemoryManager {
     // memory. Default memory is the only mode that never downloads a model.
     if (this.#config.mode === "semantic" || this.#config.mode === "jev") {
       try {
-        await this.ensureModel();
+        await this.ensureModel(true);
       } catch (error) {
         // A rejected/failed download must never leave the app in a mode it cannot
         // serve. Preserve an already-working semantic selection; otherwise return
@@ -253,16 +256,16 @@ export class MemoryManager {
   }
 
   async prepareModel(): Promise<MemoryState> {
-    await this.ensureModel();
+    await this.ensureModel(true);
     return this.state();
   }
 
-  async ensureModel(): Promise<void> {
+  async ensureModel(allowDownload = false): Promise<void> {
     if (this.#model.status === "ready" && this.#extractorPromise) return;
     if (this.#extractorPromise) return this.#extractorPromise.then(() => undefined);
     this.#model = { ...this.#model, status: "downloading", progress: 0, loadedBytes: undefined, totalBytes: undefined, error: undefined };
     this.#emit();
-    this.#extractorPromise = this.#loadExtractor()
+    this.#extractorPromise = this.#loadExtractor(allowDownload)
       .then(async (extractor) => {
         this.#model = { ...this.#model, status: "ready", progress: 1, loadedBytes: undefined, totalBytes: undefined, sizeBytes: await directorySize(this.#paths.memoryModelsDir) };
         await writeMarker(this.#paths.memoryModelsDir, { model: MODEL_ID, readyAt: Date.now() });
@@ -278,36 +281,67 @@ export class MemoryManager {
     return this.#extractorPromise.then(() => undefined);
   }
 
-  async search(request: MemorySearchRequest): Promise<MemorySearchResult> {
+  async search(request: MemorySearchRequest, options: MemoryReadOptions = {}): Promise<MemorySearchResult> {
+    const startedAt = Date.now();
     const query = typeof request.query === "string" ? request.query.trim() : "";
-    if (!query || !this.#config.enabled) return { items: [], mode: this.#config.mode, usedEmbedding: false, usedJev: false };
+    const mode = this.#config.mode;
+    if (!query || !this.#config.enabled) return { items: [], mode, usedEmbedding: false, usedJev: false };
     const limit = Math.min(32, Math.max(1, request.limit ?? this.#config.maxResults));
-    let embedding: number[] | undefined;
-    if (this.#config.mode === "semantic" || this.#config.mode === "jev") {
-      try {
-        await this.ensureModel();
-        embedding = await this.#embedOne(query);
-      } catch {
-        // FTS remains useful when a model download is offline or fails.
-      }
-    }
     const filters = { conversationId: request.conversationId, project: request.project };
-    const lexical = this.#store.keyword(query, Math.max(64, limit * 8), filters);
-    const semantic = embedding ? rankVector(this.#store.embeddings(2_000, filters), embedding, limit * 8) : [];
-    const merged = mergeCandidates(lexical, semantic, limit * 4);
-    if (this.#config.mode === "default") {
-      return { items: lexical.slice(0, limit).map(stripEmbedding), mode: "default", usedEmbedding: false, usedJev: false };
+    let local = this.#store.keyword(query, Math.max(64, limit * 8), filters);
+    let embedding: number[] | undefined;
+    const fallback = (): MemorySearchResult => ({ items: local.slice(0, limit).map(stripEmbedding), mode, usedEmbedding: Boolean(embedding), usedJev: false });
+    if (mode === "default" || !this.#store.hasItems(filters)) return fallback();
+    const read = new MemoryReadBudget(Math.max(0, (options.timeoutMs ?? JEV_MEM_PROFILE.maxLatencyMs) - (Date.now() - startedAt)), options.signal);
+    this.#reads.add(read);
+    let decision: JevBudget | undefined;
+    // Routing needs only the query. Explicit searches overlap it with local model
+    // loading/inference; automatic context selection makes just one later call.
+    const routing = mode === "jev" && options.strategy !== "context"
+      ? read.wait(async () => {
+          decision = await this.#jevBudget("memory-read", JEV_MEM_PROFILE.maximumJevCalls, JEV_MEM_PROFILE.maxLatencyMs, read);
+          return decision.evaluate(routingRequest(query));
+        }).catch(() => undefined)
+      : undefined;
+    try {
+      try {
+        await read.wait(() => this.ensureModel());
+        embedding = await read.wait(() => this.#embedOne(query));
+      } catch {
+        if (read.remainingMs <= 0) return fallback();
+        // An unavailable local model must not download on the prompt path.
+      }
+      const pool = embedding ? this.#store.embeddings(CANDIDATE_POOL, filters) : [];
+      const lexical = local;
+      local = mergeCandidates(lexical, embedding ? rankVector(pool, embedding, limit * 8) : [], limit * 4);
+      if (mode !== "jev" || read.remainingMs <= 0) return fallback();
+      const profile = JEV_MEM_PROFILE;
+      const vector = embedding ? rankByCosine(pool, embedding, Math.min(profile.maximumNodes, Math.max(limit, profile.anchorCount))) : [];
+      const fused = reciprocalRankFusion([vector, lexical.slice(0, profile.maximumNodes)]);
+      if (options.strategy === "context") {
+        const candidates = this.#contextCandidates(fused, filters, embedding, limit, read);
+        if (candidates.length === 0 || read.remainingMs <= 0) return fallback();
+        decision = await read.wait(() => this.#jevBudget("memory-context", 1, MEMORY_PREPARATION_TIMEOUT_MS, read));
+        const nodes = candidates.map(jevNode);
+        const answers = await read.wait(() => decision!.evaluate(contextRankingRequest(query, nodes)));
+        const ranked = rankContextResults(nodes, answers);
+        if (!ranked) return fallback();
+        const byId = new Map(candidates.map((item) => [item.id, item]));
+        return { items: ranked.slice(0, limit).map(({ id, score }) => ({ ...stripEmbedding(byId.get(id)!), score })), mode, usedEmbedding: Boolean(embedding), usedJev: true };
+      }
+      const anchors = fused.slice(0, Math.min(profile.anchorCount, profile.maximumNodes, limit));
+      if (anchors.length === 0) return fallback();
+      const answers = await routing;
+      if (!answers || !decision || read.remainingMs <= 0) return fallback();
+      const jev = await read.wait(() => this.#jevRetrieve(query, filters, embedding, limit, anchors, decision!, answers));
+      return { items: jev.items.slice(0, limit).map(stripEmbedding), mode, usedEmbedding: Boolean(embedding), usedJev: jev.used };
+    } catch {
+      return fallback();
+    } finally {
+      read.close();
+      decision?.finish();
+      this.#reads.delete(read);
     }
-    if (this.#config.mode !== "jev") {
-      return { items: merged.slice(0, limit).map(stripEmbedding), mode: "semantic", usedEmbedding: Boolean(embedding), usedJev: false };
-    }
-    const jev = await this.#jevRetrieve(query, filters, embedding, limit);
-    return {
-      items: jev.items.slice(0, limit).map(stripEmbedding),
-      mode: "jev",
-      usedEmbedding: Boolean(embedding),
-      usedJev: jev.used,
-    };
   }
 
   async capture(input: {
@@ -323,9 +357,9 @@ export class MemoryManager {
     return item;
   }
 
-  async contextPrompt(input: { query: string; conversationId?: string; project?: string }): Promise<string> {
+  async contextPrompt(input: { query: string; conversationId?: string; project?: string }, options: MemoryReadOptions = {}): Promise<string> {
     if (!this.#config.enabled) return "";
-    const result = await this.search({ ...input, limit: this.#config.maxResults });
+    const result = await this.search({ ...input, limit: this.#config.maxResults }, { timeoutMs: MEMORY_PREPARATION_TIMEOUT_MS, ...options, strategy: "context" });
     return retrievedBlock(result.items, this.#config.maxContextChars);
   }
 
@@ -369,6 +403,8 @@ export class MemoryManager {
   }
 
   close(): void {
+    this.#closed = true;
+    for (const read of this.#reads) read.close();
     this.#store.close();
   }
 
@@ -378,7 +414,7 @@ export class MemoryManager {
    * only; `memory_search` / `memory_recent` let the agent look further on its own.
    * All three read the same scope: the project's conversations, or this chat alone.
    */
-  extension(conversationId: string, project?: string): ExtensionFactory {
+  extension(conversationId: string, project?: string, preparationSignal?: () => AbortSignal | undefined): ExtensionFactory {
     const scope = project ? { project } : { conversationId };
     return (pi) => {
       pi.registerTool({
@@ -394,14 +430,14 @@ export class MemoryManager {
           query: Type.String({ maxLength: MAX_MEMORY_QUERY_CHARS, description: "Topic or question to look for in long-term memory" }),
           limit: Type.Optional(Type.Number({ description: `Maximum memories to return (default ${this.#config.maxResults}, hard limit ${MEMORY_SEARCH_MAX})` })),
         }),
-        execute: async (_id, params) => {
+        execute: async (_id, params, signal) => {
           const query = typeof params.query === "string" ? params.query.trim().slice(0, MAX_MEMORY_QUERY_CHARS) : "";
           if (!query) {
             return { content: [{ type: "text", text: uiText("检索词不能为空。", "The query is required.") }], details: { query, count: 0, error: true }, isError: true };
           }
           const limit = clampLimit(params.limit, this.#config.maxResults, MEMORY_SEARCH_MAX);
           try {
-            const result = await this.search({ query, ...scope, limit });
+            const result = await this.search({ query, ...scope, limit }, { signal });
             return { content: [{ type: "text", text: formatSearchResult(query, result.items) }], details: { query, count: result.items.length, error: false } };
           } catch (error) {
             return { content: [{ type: "text", text: error instanceof Error && error.message ? error.message : uiText("检索记忆失败", "Memory search failed") }], details: { query, count: 0, error: true }, isError: true };
@@ -424,25 +460,27 @@ export class MemoryManager {
           return { content: [{ type: "text", text: formatRecentResult(items) }], details: { count: items.length } };
         },
       });
-      pi.on("before_agent_start", async (event) => {
+      pi.on("before_agent_start", async (event, ctx) => {
         if (!this.#config.enabled) return undefined;
-        const memory = await this.contextPrompt({ query: event.prompt, ...scope }).catch(() => "");
+        const memory = await this.contextPrompt({ query: event.prompt, ...scope }, { signal: preparationSignal?.() ?? ctx.signal }).catch(() => "");
         return { systemPrompt: event.systemPrompt + memoryGuidance() + memory };
       });
     };
   }
 
-  async #loadExtractor(): Promise<FeatureExtractor> {
+  async #loadExtractor(allowDownload: boolean): Promise<FeatureExtractor> {
+    const source = await memoryModelSource(this.#paths.memoryModelsDir, allowDownload);
     const { pipeline } = await import("@huggingface/transformers");
-    const extractor = await pipeline("feature-extraction", MODEL_ID, {
+    const extractor = await pipeline("feature-extraction", source.model, {
       device: "cpu",
       dtype: "fp32",
       model_file_name: MODEL_FILE_NAME,
       cache_dir: this.#paths.memoryModelsDir,
+      local_files_only: source.localOnly,
       // `progress_total` sums every prefetched file, including the fp32 `onnx/model.onnx`
       // this call never downloads. Recount from the files that are actually fetched, and
       // only on whole percents — each emit is a push to every client.
-      progress_callback: (progress: any) => {
+      progress_callback: source.localOnly ? undefined : (progress: any) => {
         if (progress?.status !== "progress_total") return;
         const bytes = embeddingDownloadBytes(progress.files, MODEL_FILE_NAME);
         if (!bytes) return;
@@ -471,7 +509,7 @@ export class MemoryManager {
   }
 
   /** A Jev budget for one operation; without a key every call falls back. */
-  async #jevBudget(budgetKey: string, maxCalls: number, timeMs: number): Promise<JevBudget> {
+  async #jevBudget(budgetKey: string, maxCalls: number, timeMs: number, read?: MemoryReadBudget): Promise<JevBudget> {
     const resolved = await this.#jevResolved().catch(() => undefined);
     const runtime = resolved
       ? new DecisionRuntime({
@@ -479,11 +517,11 @@ export class MemoryManager {
           trace: new DecisionTraceFile(this.#paths.decisionTraceFile),
           requestTimeoutMs: JEV_MEM_PROFILE.timeoutMs * (JEV_MEM_PROFILE.maxRetries + 1),
           attemptTimeoutMs: JEV_MEM_PROFILE.timeoutMs,
-          maxRetries: JEV_MEM_PROFILE.maxRetries,
+          maxRetries: Math.min(JEV_MEM_PROFILE.maxRetries, maxCalls - 1),
           backoffMs: [500, 1_000],
         })
       : undefined;
-    return new JevBudget(runtime, this.#jevCache, budgetKey, maxCalls, timeMs);
+    return new JevBudget(runtime, this.#jevCache, budgetKey, maxCalls, timeMs, read);
   }
 
   /** One call outside retrieval, on the reference's default per-call budget. */
@@ -675,21 +713,57 @@ export class MemoryManager {
   }
 
   /**
-   * `RetrievalController.query`: route, hybrid anchors scored by cosine, then assess →
-   * expand → score in rounds under one call/latency budget, with the reference's hard
-   * limits. A call that falls back uses the reference's defaults and the loop goes on.
+   * A bounded local pool for automatic context: keyword/vector hits followed by
+   * their best one-hop neighbours. JEV judges all of them in one request.
+   */
+  #contextCandidates(
+    fused: MemoryCandidate[],
+    filters: { conversationId?: string; project?: string },
+    embedding: number[] | undefined,
+    topK: number,
+    read: MemoryReadBudget,
+  ): MemoryCandidate[] {
+    const profile = MEMORY_CONTEXT_PROFILE;
+    const local = fused.slice(0, Math.min(profile.maximumCandidates, Math.max(profile.localCandidates, topK)));
+    const seen = new Set(local.map((item) => item.id));
+    const neighbours = new Map<string, { item: MemoryCandidate; score: number }>();
+    let examined = 0;
+    for (const parent of local) {
+      if (examined >= profile.maximumEdges || read.remainingMs <= 0) break;
+      for (const { item, edge } of this.#store.neighboursOf(parent.id, filters)) {
+        if (examined >= profile.maximumEdges || read.remainingMs <= 0) break;
+        examined++;
+        if (seen.has(item.id)) continue;
+        const score = 0.8 * clippedCosine(embedding, item.embedding) + 0.2 * clamp01(edge.weight);
+        const previous = neighbours.get(item.id);
+        if (!previous || score > previous.score) neighbours.set(item.id, { item, score });
+      }
+    }
+    const expanded = [...neighbours.values()]
+      .sort((a, b) => b.score - a.score || byName(a.item.id, b.item.id))
+      .slice(0, profile.maximumCandidates - local.length)
+      .map(({ item }) => item);
+    return [...local, ...expanded];
+  }
+
+  /**
+   * Explicit search retains adaptive graph traversal. The query-only routing call
+   * has already run alongside local recall. Each round pre-expands its frontier and
+   * batches stopping + scoring against the same evidence; stopping discards scores.
    */
   async #jevRetrieve(
     query: string,
     filters: { conversationId?: string; project?: string },
     queryEmbedding: number[] | undefined,
     topK: number,
+    anchors: MemoryCandidate[],
+    budget: JevBudget,
+    routeAnswers: Record<string, Answer>,
   ): Promise<{ items: MemoryCandidate[]; used: boolean }> {
     const profile = JEV_MEM_PROFILE;
-    const budget = await this.#jevBudget("memory-read", profile.maximumJevCalls, profile.maxLatencyMs);
     try {
       const temporal = isTemporalQuestion(query);
-      const route = routeFrom(await budget.evaluate(routingRequest(query)), query);
+      const route = routeFrom(routeAnswers, query);
       const depthLimit = traversalDepth(route.multiHop);
       const allocations = allocateBudget(route.needs);
       const used: Record<MemoryRelationView, number> = { semantic: 0, temporal: 0, causal: 0, entity: 0 };
@@ -698,16 +772,9 @@ export class MemoryManager {
       let edgesExamined = 0;
       let depth = 0;
 
-      if (budget.remainingMs() > 0) {
-        const vector = queryEmbedding
-          ? rankByCosine(this.#store.embeddings(CANDIDATE_POOL, filters), queryEmbedding, Math.min(profile.maximumNodes, Math.max(topK, profile.anchorCount)))
-          : [];
-        const keyword = this.#store.keyword(query, profile.maximumNodes, filters);
-        for (const anchor of reciprocalRankFusion([vector, keyword])) {
-          nodes.set(anchor.id, anchor);
-          scores.set(anchor.id, clippedCosine(queryEmbedding, anchor.embedding));
-          if (nodes.size >= Math.min(profile.anchorCount, profile.maximumNodes, topK)) break;
-        }
+      for (const anchor of anchors) {
+        nodes.set(anchor.id, anchor);
+        scores.set(anchor.id, clippedCosine(queryEmbedding, anchor.embedding));
       }
       const selected = (): MemoryCandidate[] => [...nodes.keys()]
         .sort((a, b) => scores.get(b)! - scores.get(a)! || byName(a, b))
@@ -718,12 +785,11 @@ export class MemoryManager {
       while (nodes.size > 0) {
         const evidence = selected();
         if (budget.remainingMs() <= 0) break;
-        if (stopDecision(await budget.evaluate(stoppingRequest(query, evidence.map(jevNode), depth, temporal)))) break;
         if (budget.calls >= profile.maximumJevCalls) break;
         if (nodes.size >= profile.maximumNodes) break;
+        if (edgesExamined >= profile.maximumEdges) break;
         if (depth >= depthLimit) break;
         if (!MEMORY_VIEWS.some((graph) => used[graph] < allocations[graph])) break;
-
         const proposals = new Map<string, Proposal & { item: MemoryCandidate }>();
         for (const parent of frontier) {
           for (const { item, edge } of this.#store.neighboursOf(parent.id, filters)) {
@@ -744,8 +810,9 @@ export class MemoryManager {
         if (budget.remainingMs() <= 0 || proposals.size === 0) break;
 
         const items = [...proposals.values()];
-        const answers = await budget.evaluate(traversalRequest(query, evidence.map(jevNode), items, temporal));
+        const answers = await budget.evaluate(retrievalRoundRequest(query, evidence.map(jevNode), items, depth, temporal));
         if (budget.remainingMs() <= 0) break;
+        if (stopDecision(answers)) break;
         const similarities = items.map((proposal) => clippedCosine(queryEmbedding, proposal.item.embedding));
         const values = traversalValues(answers, similarities);
         const newest = Math.max(...[...nodes.values()].map((node) => node.createdAt));
@@ -790,6 +857,7 @@ export class MemoryManager {
   }
 
   #emit(): void {
+    if (this.#closed) return;
     const state = this.state();
     for (const listener of this.#listeners) listener(state);
   }

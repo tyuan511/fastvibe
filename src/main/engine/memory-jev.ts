@@ -67,6 +67,14 @@ export const JEV_MEM_PROFILE = {
 
 export type JevMemProfile = typeof JEV_MEM_PROFILE;
 
+/** FastVibe: bounded, one-request context selection before a normal reply. */
+export const MEMORY_CONTEXT_PROFILE = {
+  localCandidates: 24,
+  maximumCandidates: 40,
+  maximumEdges: 240,
+  relevanceThreshold: 0.5,
+} as const;
+
 export const MEMORY_VIEWS: readonly MemoryRelationView[] = ["semantic", "temporal", "causal", "entity"];
 export const TYPE_KEYS = ["episodic", "semantic", "procedural", "preference"] as const;
 
@@ -669,6 +677,58 @@ export function traversalRequest(query: string, evidence: JevNode[], proposals: 
     },
     questions,
   };
+}
+
+/**
+ * FastVibe: the current evidence and its next-hop candidates are already known.
+ * Judge whether to continue and score that hop in one request; discard candidate
+ * scores when the stopping answers say the existing evidence is enough.
+ */
+export function retrievalRoundRequest(query: string, evidence: JevNode[], proposals: Proposal[], depth: number, temporal: boolean): DecideRequest | undefined {
+  const traversal = traversalRequest(query, evidence, proposals, temporal);
+  if (!traversal) return undefined;
+  const stopping = Object.fromEntries(Object.entries(STOPPING_QUESTIONS).map(([id, question]) => [id, {
+    ...question,
+    instructions: `${question.instructions} Consider only \`evidence\`, not \`candidates\`, for this question.`,
+  }]));
+  return {
+    ...traversal,
+    binding: "memory.read.round",
+    state: { ...(traversal.state as Record<string, JsonValue>), depth },
+    questions: { ...stopping, ...traversal.questions },
+  };
+}
+
+/** FastVibe: rank a locally recalled pool without remote routing or further hops. */
+export function contextRankingRequest(query: string, candidates: JevNode[]): DecideRequest | undefined {
+  if (candidates.length === 0) return undefined;
+  const questions: Record<string, Question> = { recency_importance: ROUTING_QUESTIONS.recency_importance };
+  candidates.forEach((_candidate, index) => {
+    questions[`candidate_${index}_relevance`] = noul(
+      `Does \`candidates[${index}].content\` contain useful prior context for addressing \`query\`, such as a relevant fact, constraint, preference, decision or necessary intermediate fact?`,
+      "The memory would help the assistant address this request, even if it cannot answer the entire request on its own.",
+      "Only generic topic overlap, an unrelated observation, or no useful prior context.",
+    );
+  });
+  return {
+    version: 1,
+    binding: "memory.read.context",
+    state: { query, candidates: candidates.map((node) => nodeState(node, { temporal: isTemporalQuestion(query), cap: contentCap(candidates.length) })) },
+    questions,
+  };
+}
+
+/** Undefined is a failed batch; an empty array is a successful "nothing relevant". */
+export function rankContextResults(candidates: JevNode[], answers: Record<string, Answer> | undefined): Array<{ id: string; score: number }> | undefined {
+  const values = noulValues(answers, ["recency_importance", ...candidates.map((_node, index) => `candidate_${index}_relevance`)]);
+  if (!values) return undefined;
+  const newest = Math.max(...candidates.map((node) => node.createdAt));
+  return candidates
+    .map((node, index) => ({ node, index, relevance: values[`candidate_${index}_relevance`] }))
+    .filter(({ relevance }) => relevance >= MEMORY_CONTEXT_PROFILE.relevanceThreshold)
+    .map(({ node, index, relevance }) => ({ id: node.id, index, score: recencyAdjusted(relevance, values.recency_importance, node.createdAt, newest) }))
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .map(({ id, score }) => ({ id, score }));
 }
 
 export type TraversalValues = Record<(typeof TRAVERSAL_FIELDS)[number], number>;

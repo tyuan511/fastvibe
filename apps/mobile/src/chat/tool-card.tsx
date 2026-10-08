@@ -1,4 +1,4 @@
-import { memo, useState, type JSX } from "react";
+import { memo, useContext, useState, type JSX } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { HugeiconsIcon } from "@hugeicons/react-native";
 import type { IconSvgElement } from "@hugeicons/react-native";
@@ -21,6 +21,8 @@ import {
   Wrench01Icon,
 } from "../ui/icons";
 import type { Palette } from "../ui/theme";
+import { DagContext } from "./dag-context";
+import { dagToolNodeId } from "./dag-data";
 import { DesktopSpinner } from "./desktop-spinner";
 import { ThinkingRow } from "./thinking";
 import { t, useT, type MessageKey } from "../i18n";
@@ -139,7 +141,9 @@ export const ProcessGroup = memo(function ProcessGroup({
 
 export const ToolCard = memo(function ToolCard({ tool, palette, divider = false }: { tool: ToolBlock; palette: Palette; divider?: boolean }): JSX.Element {
   useT();
+  const dag = useContext(DagContext);
   const summary = summarize(tool);
+  const opensDag = tool.name.startsWith("dag_") && tool.name !== "dag_report" && !summary.error && Boolean(dag);
   const [open, setOpen] = useState(false);
   const detail = open ? toolDetail(tool) : null;
   const tint = summary.error ? palette.danger : summary.running ? palette.accent : palette.muted;
@@ -149,7 +153,7 @@ export const ToolCard = memo(function ToolCard({ tool, palette, divider = false 
         accessibilityRole="button"
         accessibilityLabel={`${summary.label} ${summary.subject}`.trim()}
         accessibilityState={{ expanded: open }}
-        onPress={() => setOpen(!open)}
+        onPress={() => opensDag ? dag?.open(dagToolNodeId(tool.args)) : setOpen(!open)}
         style={({ pressed }) => [styles.row, pressed ? { backgroundColor: palette.field } : null]}
       >
         <View style={[styles.icon, { backgroundColor: summary.error ? palette.dangerSoft : summary.running ? palette.accentSoft : palette.field }]}>
@@ -287,6 +291,17 @@ function summarize(tool: ToolBlock): ToolSummary {
     error: tool.status === "error",
   };
 
+  if (tool.name.startsWith("dag_")) {
+    const labels: Record<string, MessageKey> = {
+      dag_add_tasks: "dag.tool.add", dag_status: "dag.tool.status", dag_result: "dag.tool.result", dag_wait: "dag.tool.wait",
+      dag_cancel: "dag.tool.cancel", dag_resume: "dag.tool.resume", dag_retry: "dag.tool.retry", dag_update: "dag.tool.update", dag_send: "dag.tool.send", dag_report: "dag.tool.report",
+    };
+    summary.label = t(labels[tool.name] ?? "dag.title");
+    summary.subject = argString(tool.args, ["id"]) || "";
+    const tasks = asRecord(tool.args)?.tasks;
+    if (Array.isArray(tasks)) summary.subject = tasks.map((item) => asRecord(item)?.title).filter((title): title is string => typeof title === "string").slice(0, 2).join(" · ");
+    return summary;
+  }
   switch (family) {
     case "read":
     case "edit":
@@ -378,6 +393,7 @@ function summarize(tool: ToolBlock): ToolSummary {
 function familyOf(name: string): ToolFamily {
   const key = name.trim().toLowerCase();
   if (!key) return "other";
+  if (key.startsWith("dag_")) return "agent";
   if (key === "codemode") return "codemode";
   if (key.startsWith("mcp") || key.includes("__")) return "mcp";
   if (key.startsWith("browser_")) return "browser";

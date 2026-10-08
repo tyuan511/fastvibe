@@ -11,6 +11,7 @@
  },
  "update": {
   "sidebarUpdate": "Update",
+  "sidebarChecking": "Checking",
   "sidebarDownloading": "Downloading",
   "sidebarRestart": "Restart",
   "sidebarUpdateTitle": "Update to FastVibe {{version}}",

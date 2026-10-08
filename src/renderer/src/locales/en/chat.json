@@ -245,6 +245,8 @@
     "completed": "{{count}} completed",
     "failed": "{{count}} failed",
     "skipped": "{{count}} skipped",
-    "cancelled": "{{count}} cancelled"
+    "cancelled": "{{count}} cancelled",
+    "updated": "Sub-task update",
+    "blocked": "{{count}} blocked"
   }
 }

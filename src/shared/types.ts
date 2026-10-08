@@ -238,6 +238,8 @@ export type ChatMessage = {
 
 /** Outcome counts for a finished sub-task graph. Zeros are omitted on screen. */
 export type DagSettledInfo = {
+  settled?: boolean;
+  blocked?: number;
   completed: number;
   failed: number;
   skipped: number;

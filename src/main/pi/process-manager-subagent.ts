@@ -9,6 +9,7 @@ import {
   type AgentSession,
   type AgentSessionEvent,
   type ExtensionUIContext,
+  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { ChatMessage, ThinkingTiming } from "@shared/types";
 import { isAbortOutcome } from "@shared/abort";
@@ -18,6 +19,9 @@ import { uiText } from "../engine/ui-text";
 import { mapEngineMessages } from "../engine/map-messages";
 import type { FastVibePaths } from "../engine/paths";
 import { SubagentManager } from "../engine/subagents";
+import { DAG_WORKER_TOOLS, DAG_COORDINATOR_TOOLS, dagReportExtension, dagBudgetError, dagInputAllowance, estimateDagTokens } from "./dag-node-runtime";
+import type { DagBudget, DagReport } from "../../shared/dag";
+import { resolveSubagentModel } from "./subagent-model";
 import { SubagentControl } from "./subagent-control";
 import {
   guardSessionListener,
@@ -42,9 +46,21 @@ export type SubagentHostRequest = {
   thinkingLevel?: ThinkingLevel;
   cwd: string;
   signal?: AbortSignal;
+  dag?: {
+    coordinator?: boolean;
+    skills?: boolean;
+    acceptance?: string;
+    budget?: DagBudget;
+    tools?: ToolDefinition[];
+    prepareTask: (handoffChars: number) => string;
+    childrenReady: () => boolean;
+    onCheckpoint?: () => void;
+    onUsage?: (usage: { tokens: number; turns: number }) => void;
+  };
 };
 
 export type SubagentHostResponse = {
+  report?: DagReport;
   messages: unknown[];
   exitCode: number;
   usage: SubagentHostUsage;
@@ -170,6 +186,10 @@ export class SubagentTurnRunner {
     let messages: unknown[] = [];
     let summary = summarizeSubagentMessages([]);
     let usedModel: string | undefined;
+    let report: DagReport | undefined;
+    let budgetError: string | undefined;
+    const metered = new WeakSet<object>();
+    const spent = { turns: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
     try {
       lifecycle("running");
       control.check();
@@ -194,8 +214,15 @@ export class SubagentTurnRunner {
         noExtensions: true,
         noThemes: true,
         noPromptTemplates: true,
-        noSkills: true,
-        ...(folderConsent ? { additionalExtensionPaths: [folderConsent] } : {}),
+        noSkills: !request.dag?.skills,
+        additionalExtensionPaths: [folderConsent, ...(request.dag ? [builtinExtensionFile("dag.ts")] : [])].filter((path): path is string => Boolean(path)),
+        ...(request.dag ? { extensionFactories: [{ name: "dag-report", factory: dagReportExtension({
+          acceptance: request.dag.acceptance,
+          report: (value) => { report = value; },
+          childrenReady: request.dag.childrenReady,
+        }) }, { name: "dag-granted-tools", factory: (pi) => {
+          for (const tool of request.dag?.tools ?? []) pi.registerTool({ ...tool, exposure: "direct" });
+        } }] } : {}),
         ...(appendSystemPrompt.length > 0 ? { appendSystemPrompt } : {}),
       });
       await loader.reload();
@@ -224,7 +251,7 @@ export class SubagentTurnRunner {
         sessionManager: SessionManager.inMemory(cwd),
         settingsManager,
         resourceLoader: loader,
-        tools,
+        tools: request.dag ? [...tools, ...(request.dag.coordinator ? DAG_COORDINATOR_TOOLS : DAG_WORKER_TOOLS)] : tools,
         ...(model ? { model } : {}),
         ...(thinkingLevel ? { thinkingLevel } : {}),
       });
@@ -234,6 +261,7 @@ export class SubagentTurnRunner {
       // Bind the parent's UI so a prompt raised inside the run renders in the same
       // composer panel as the parent's own.
       await session.bindExtensions({ mode: "rpc", uiContext: this.#extensionUi(conversationId, subagentId) });
+      if (request.dag) session.setActiveToolsByName([...tools, ...(request.dag.coordinator ? DAG_COORDINATOR_TOOLS : DAG_WORKER_TOOLS)]);
       this.#subagentSessions.set(subagentId, session);
       this.#publishSubagentState(subagentId, conversationId, activeSession);
       unsubscribe = activeSession.subscribe(guardSessionListener(`subagent ${subagentId}`, (event) => {
@@ -241,6 +269,18 @@ export class SubagentTurnRunner {
         // measured bounds of its own, so without this its thinking row could only ever
         // fall back to the span of the whole round-trip — and while that round-trip was
         // still running there was nothing to fall back to at all.
+        if (request.dag && event.type === "message_start" && event.message.role === "user") report = undefined;
+        if (request.dag && event.type === "turn_end") {
+          try { request.dag.onCheckpoint?.(); } catch (error) { console.warn("[dag] checkpoint failed", error); }
+        }
+        if (request.dag && event.type === "message_end" && event.message.role === "assistant" && !metered.has(event.message)) {
+          metered.add(event.message);
+          const usage = summarizeSubagentMessages([event.message]).usage;
+          for (const field of Object.keys(spent) as Array<keyof typeof spent>) spent[field] += usage[field];
+          request.dag.onUsage?.({ turns: spent.turns, tokens: spent.input + spent.output + spent.cacheRead + spent.cacheWrite });
+          const error = dagBudgetError(request.dag.budget, spent);
+          if (error && !report) { budgetError = error; void control.abort().catch(() => undefined); }
+        }
         const now = Date.now();
         this.#timeReasoning(subagentId, event, activeSession, now, (entryId, blocks) =>
           this.#fileSubagentReasoning(subagentId, entryId, blocks),
@@ -259,7 +299,15 @@ export class SubagentTurnRunner {
         }
       }));
       control.check();
-      await session.prompt(request.task);
+      let task = request.task;
+      if (request.dag) {
+        const toolSchemas = session.getAllTools().filter((tool) => session!.getActiveToolNames().includes(tool.name));
+        const allowance = dagInputAllowance(session.systemPrompt, JSON.stringify(toolSchemas), model?.contextWindow);
+        task = request.dag.prepareTask(Math.min(16000, Math.max(0, Math.floor((allowance - estimateDagTokens(request.dag.prepareTask(0))) / 2))));
+        if (estimateDagTokens(task) > allowance) throw new Error("任务输入超过上下文预算；请缩短任务或项目说明。项目规则没有被自动删减。");
+      }
+      await session.prompt(task);
+      if (request.dag && !control.aborted && !report) throw new Error("子任务未提交 dag_report，不能确认已完成；检查执行记录后重试");
     } catch (error) {
       thrown = error;
     }
@@ -297,6 +345,8 @@ export class SubagentTurnRunner {
     this.#reasoningRun.delete(subagentId);
     stopReason = control.aborted ? "aborted" : thrown ? (isAbortOutcome(thrown) ? "aborted" : "error") : summary.stopReason;
     errorMessage = thrown ? (thrown instanceof Error ? thrown.message : String(thrown)) : summary.errorMessage;
+    if (budgetError) { stopReason = "error"; errorMessage = budgetError; }
+    if (report && report.outcome !== "completed" && !control.aborted && !thrown) { stopReason = "error"; errorMessage = report.summary; }
     // A user stop and a parent abort both arrive as `aborted`, but only the first has a
     // waiting parent to tell, and it is the message the main agent reads back as the
     // tool result. Forced, not merely relabelled: the abort can surface here as a
@@ -321,6 +371,7 @@ export class SubagentTurnRunner {
 
     return {
       messages,
+      ...(report ? { report } : {}),
       exitCode: failed ? 1 : 0,
       usage: summary.usage,
       model: usedModel,
@@ -339,24 +390,7 @@ export class SubagentTurnRunner {
    * falls back instead of failing.
    */
   #resolveSubagentModel(spec?: string, fallback?: string): ReturnType<ModelRegistry["find"]> {
-    const registry = this.#models;
-    if (!registry) return undefined;
-    const usable = (model: ReturnType<ModelRegistry["find"]>) =>
-      Boolean(model) && registry.hasConfiguredAuth(model!);
-    const bySpec = (value?: string): ReturnType<ModelRegistry["find"]> => {
-      if (!value) return undefined;
-      const slash = value.indexOf("/");
-      const direct = slash > 0 ? registry.find(value.slice(0, slash), value.slice(slash + 1)) : undefined;
-      if (usable(direct)) return direct;
-      // A bare id (`claude-haiku-4-5`) resolves against the authenticated models only,
-      // so a role's vendor default can never outrank the user's working model. The id
-      // is re-checked for auth: `find`/`getAvailable` can surface a vendor entry whose
-      // provider has no key in *this* install, which is exactly the "No API key found
-      // for anthropic" failure a role's `model:` line used to cause.
-      const bare = registry.getAvailable().find((item) => item.id === value);
-      return usable(bare) ? bare : undefined;
-    };
-    return bySpec(spec) ?? bySpec(fallback);
+    return resolveSubagentModel(this.#models, spec, fallback);
   }
 
   run(conversationId: string, request: SubagentHostRequest): Promise<SubagentHostResponse> {

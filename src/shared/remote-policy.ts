@@ -165,6 +165,7 @@ const ALLOWED = new Set<string>([
   Ipc.memoryClear,
   // 图和它的操作都在同一台机器上，手机能看、能取消、能重试，和桌面一样。
   Ipc.dagList,
+  Ipc.dagOutput,
   Ipc.dagCancel,
   Ipc.dagRetry,
   Ipc.dagResume,

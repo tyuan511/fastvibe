@@ -99,6 +99,8 @@ export default defineConfig({
         "index.html",
         "remote.html",
         "mobile.html",
+        "mock.html",
+        "src/components/dag/dag-dialog.tsx",
         "src/components/settings/settings-dialog.tsx",
         "src/components/layout/side-pane-terminal.tsx",
       ],

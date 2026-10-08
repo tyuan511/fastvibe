@@ -65,6 +65,31 @@ The screen re-subscribes and snapshots when the ready client changes after recon
 A missing send acknowledgement is an unknown outcome, never an automatic retry.
 `test/mobile-queue.test.ts` tests the actual send dispatch and queue merge without React.
 
+## Connection recovery
+
+`RemoteClient` uses the existing App Protocol ping/pong after 15 seconds without incoming
+frames, with a 15-second reply deadline (up to 45 seconds while other frames are still
+arriving ahead of the pong). A timed-out RPC probes without replaying the RPC.
+Backgrounding cancels health timers; foregrounding and network changes probe immediately.
+`expo-network` wakes pending reconnects when connectivity returns, without treating a failed
+Internet reachability check as proof that a LAN host is unreachable. Connection attempts
+include catalog restoration and cannot overlap; stale callbacks cannot affect a replacement.
+Close codes and reasons are retained in a bounded, current-run diagnostic history, copied
+from 设置 → 关于 → 复制连接诊断. Never include credentials or RPC content in that history.
+The host still owns running work; reconnect re-subscribes and restores snapshots.
+
+
+## Dynamic sub-agent tasks
+
+The native chat wraps its transcript in `MobileDagProvider` (`chat/dag-panel.tsx`). A compact progress row opens the existing `Sheet` with an ownership tree, then node detail or execution history. `dag_*` tool rows navigate there; `kind: "dag"` messages render as quiet system notices.
+
+- `watchMobileDag` subscribes before `dag:list`, retains deletion tombstones during a pending list, and rejects older graph revisions. It is scoped to the chat and client; reconnect replaces the subscription, while cached task state remains visible with a reconnect label. It never calls `conversations.open`.
+- `shared/dag-view.ts` orders siblings by attention while preserving ownership. Dependencies remain links in detail; prior coordinator attempts are labelled. A child whose coordinator has ended does not offer a retry the host would refuse.
+- Stop/retry/resume use the same `dag:*` calls as the desktop, with explicit `conversationId`. Never optimistically mark the work stopped or completed. Controls are disabled while disconnected or awaiting acknowledgement.
+- Results use `dag:output` pages after completion. Execution history uses `engine:get-subagent-messages`, scoped to `runId`, refreshed at turn boundaries and lifecycle changes, not for every token. A new attempt or client cannot receive the old request's response. Only a bounded window of messages is rendered at once.
+- Keep the native wire-message shape local; pulling in the renderer's full type graph introduces unrelated browser/Node types. DAG contracts themselves are pure shared modules.
+- The phone web page uses `useDagSync` and the responsive `DagDialog`: task list and detail replace one another on narrow screens. `mock.html?mobile=1` previews it; `lang=en` and `theme=dark` cover language and appearance. Neither the preview bridge nor its mutations reach an engine.
+
 ## Native projects
 
 `ios/` and `android/` are generated (Continuous Native Generation). Never create or edit them by hand — configure native behavior in `app.json` and config plugins. Metro detects this monorepo automatically; do not add manual `watchFolders` or `nodeModulesPaths`.

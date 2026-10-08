@@ -7,6 +7,7 @@ import { useDagStore } from "@/stores/dag";
 import { addedDagIds, dagBatch } from "@/lib/dag-batch";
 import type { DagNode } from "@shared/dag";
 import type { ToolCallBlock } from "@shared/types";
+import { DagTaskList } from "./dag-task-list";
 import { DagCanvas, DagSummary } from "./dag-canvas";
 
 /**
@@ -33,7 +34,7 @@ export function DagInline({ conversationId, nodes }: { conversationId: string; n
     <div data-slot="dag-inline" className="flex w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-border bg-card">
       <div className="flex min-w-0 items-center gap-2 px-3 py-2">
         <HugeiconsIcon strokeWidth={2} icon={WorkflowSquare01Icon} className="size-3.5 shrink-0 text-muted-foreground" />
-        <span className="shrink-0 text-sm font-medium">{t("dag.title")}</span>
+        <span className="hidden shrink-0 text-sm font-medium sm:inline">{t("dag.title")}</span>
         <div className="min-w-0 flex-1">
           <DagSummary
             nodes={nodes}
@@ -53,11 +54,12 @@ export function DagInline({ conversationId, nodes }: { conversationId: string; n
           />
         </div>
       </div>
+      <div className="border-t border-border md:hidden"><DagTaskList nodes={nodes} limit={4} onSelect={(node) => openViewer(conversationId, node.id, "detail")} />{nodes.length > 4 ? <button type="button" className="min-h-11 w-full px-3 text-xs text-muted-foreground" onClick={() => openViewer(conversationId)}>{t("dag.viewAll", { count: nodes.length })}</button> : null}</div>
       <DagCanvas
         nodes={nodes}
         minScale={0.5}
         onSelect={(node) => openViewer(conversationId, node.id, node.runId ? "run" : "detail")}
-        className="max-h-[28rem] border-t border-border px-3 py-4"
+        className="hidden max-h-[28rem] border-t border-border px-3 py-4 md:block"
       />
     </div>
   );

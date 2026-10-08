@@ -642,6 +642,7 @@ export class RemoteServer {
         if (!client.alive) {
           // `terminate`, not `close`: the point is that this socket is not answering, so
           // waiting for a close handshake it will never send is waiting forever.
+          this.#deps.log.warn(`remote heartbeat timeout device=${client.deviceId ?? "unauthenticated"} buffered=${client.socket.bufferedAmount}`);
           client.socket.terminate();
           continue;
         }
@@ -684,7 +685,10 @@ export class RemoteServer {
     socket.on("pong", () => {
       client.alive = true;
     });
-    socket.on("close", () => this.#dropClient(client));
+    socket.on("close", (code, reason) => {
+      this.#deps.log.info(`remote socket closed device=${client.deviceId ?? "unauthenticated"} code=${code} reason=${JSON.stringify(reason.toString().slice(0, 123))}`);
+      this.#dropClient(client);
+    });
     socket.on("error", (error) => {
       this.#deps.log.warn(`remote socket error: ${String(error)}`);
       this.#dropClient(client);
@@ -880,6 +884,7 @@ export class RemoteServer {
       // Judge the existing backlog, not the next message: allow one large reply
       // but stop further writes at the hard ceiling (bounded by limit + one frame).
       if (!this.#checkBackpressure(client)) return false;
+      const completeSend = client.backpressure.trackSend();
       client.socket.send(encoded, (error) => {
         if (!this.#clients.has(client.id)) return;
         if (error) {
@@ -887,7 +892,8 @@ export class RemoteServer {
           this.#dropClient(client);
           return;
         }
-        // Observe the drain too: independent bursts seconds apart are not a stall.
+        // A completed write is progress even if new model output refilled the queue.
+        completeSend();
         this.#checkBackpressure(client);
       });
       // Start the grace clock even if nothing else is sent. Do not retroactively
@@ -896,6 +902,7 @@ export class RemoteServer {
       return true;
     } catch (error) {
       this.#deps.log.warn(`remote send failed: ${String(error)}`);
+      this.#dropClient(client);
       return false;
     }
   }
@@ -919,7 +926,7 @@ export class RemoteServer {
       client.backpressureTimer = setTimeout(() => {
         client.backpressureTimer = null;
         if (this.#clients.has(client.id)) this.#checkBackpressure(client);
-      }, BUFFER_GRACE_MS);
+      }, Math.min(1_000, BUFFER_GRACE_MS));
       client.backpressureTimer.unref();
     }
     return true;
@@ -934,6 +941,7 @@ export class RemoteServer {
     if (client.timer) clearTimeout(client.timer);
     if (client.backpressureTimer) clearTimeout(client.backpressureTimer);
     client.backpressureTimer = null;
+    client.backpressure.clear();
     client.detach?.();
     client.detach = null;
     if (client.appSession) {

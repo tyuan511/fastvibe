@@ -11,6 +11,8 @@ import type { SidePaneTab } from "@/stores/side-pane";
 import { dagRunStatus, type DagNode } from "@shared/dag";
 import { subagentKey } from "@shared/subagent-state";
 import { DagCanvas, DagSummary } from "./dag-canvas";
+import { DagTaskList } from "./dag-task-list";
+import { Button } from "@/components/ui/button";
 import { DagNodeDetail } from "./dag-node-detail";
 
 /**
@@ -32,26 +34,28 @@ export function DagDialog(): JSX.Element {
 
   return (
     <Dialog open={open} onOpenChange={(next) => (next ? undefined : closeViewer())}>
-      <DialogContent className="flex h-[min(54rem,92vh)] w-[min(80rem,95vw)] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none">
+      <DialogContent className="flex h-[min(54rem,92dvh)] w-[min(80rem,95vw)] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none">
         <DialogHeader className="shrink-0 border-b border-border px-4 py-3">
           <DialogTitle className="flex items-center gap-2 pr-8">
             <HugeiconsIcon strokeWidth={2} icon={WorkflowSquare01Icon} className="size-4 text-muted-foreground" />
+            {node ? <Button variant="ghost" size="xs" className="md:hidden" onClick={() => useDagStore.getState().openViewer(viewer!.conversationId)}>{t("dag.backToList")}</Button> : null}
             {t("dag.title")}
           </DialogTitle>
         </DialogHeader>
         {viewer && graph ? (
           <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <div className={`${node ? "hidden md:flex" : "flex"} min-h-0 min-w-0 flex-1 flex-col`}>
               <DagSummary nodes={nodes} conversationId={viewer.conversationId} />
+              <div className="min-h-0 flex-1 overflow-y-auto md:hidden"><DagTaskList nodes={nodes} onSelect={(picked) => selectNode(picked.id, "detail")} /></div>
               <DagCanvas
                 nodes={nodes}
                 selectedId={viewer.nodeId}
                 onSelect={(picked) => selectNode(picked.id, picked.runId ? viewer.view : "detail")}
                 minScale={0.6}
-                className="min-h-0 flex-1 border-t border-border px-6 py-6"
+                className="hidden min-h-0 flex-1 border-t border-border px-6 py-6 md:block"
               />
             </div>
-            <aside className="flex min-h-0 flex-col border-t border-border md:w-[28rem] md:shrink-0 md:border-t-0 md:border-l">
+            <aside className={`${node ? "flex flex-1 md:flex-none" : "hidden md:flex"} min-h-0 flex-col border-t border-border md:w-[28rem] md:shrink-0 md:border-t-0 md:border-l`}>
               {node ? (
                 <NodePane node={node} nodes={nodes} conversationId={viewer.conversationId} view={viewer.view} onView={setView} onSelect={(id) => selectNode(id, "detail")} />
               ) : (

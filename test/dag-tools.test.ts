@@ -77,7 +77,7 @@ test("add: naming a configured agent reuses it, and a name that matches none is 
 test("wait returns when everything is done and previews outputs; failure is a result, not an error", async () => {
   const { call, finish } = setup();
   await call("add", { tasks: [task("a"), task("b")] });
-  const waiting = call("wait", { timeoutSeconds: 5 });
+  const waiting = call("wait", { timeoutSeconds: 5, include_outputs: true });
   finish("T-0001", { output: "x".repeat(2000) });
   finish("T-0002", { status: "failed", error: "boom" });
   const result = await waiting;

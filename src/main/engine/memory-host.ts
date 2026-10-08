@@ -25,7 +25,7 @@ export interface MemoryHost {
   detail(id: string): MemoryDetail | undefined;
   delete(id: string): MemoryState;
   clear(): MemoryState;
-  extension(conversationId: string, project?: string): ExtensionFactory;
+  extension(conversationId: string, project?: string, preparationSignal?: () => AbortSignal | undefined): ExtensionFactory;
   capture(input: {
     conversationId?: string;
     project?: string;

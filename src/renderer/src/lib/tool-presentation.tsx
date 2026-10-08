@@ -338,8 +338,8 @@ function describeDecisionTask(tool: ToolCallBlock, view: ToolView): ToolView {
   return view;
 }
 
-const DAG_ACTIONS = new Set(["dag_add_tasks", "dag_status", "dag_result", "dag_wait", "dag_cancel", "dag_resume", "dag_retry"]);
-const DAG_SUMMARY_ORDER = ["completed", "running", "failed", "cancelled", "skipped", "pending"];
+const DAG_ACTIONS = new Set(["dag_add_tasks", "dag_status", "dag_result", "dag_wait", "dag_cancel", "dag_resume", "dag_retry", "dag_update", "dag_send", "dag_report"]);
+const DAG_SUMMARY_ORDER = ["completed", "running", "blocked", "failed", "cancelled", "skipped", "pending"];
 
 /**
  * The `dag_*` tools: what the agent did to its graph of sub-agent tasks, in words — 「创建子任务

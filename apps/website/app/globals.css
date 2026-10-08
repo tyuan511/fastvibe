@@ -167,9 +167,9 @@ h1, h2, h3, p { margin: 0; }
 .site-nav { position: absolute; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: .25rem; }
 .site-nav a { display: inline-flex; align-items: center; height: 2rem; padding-inline: .75rem; border-radius: 9999px; font-size: 1rem; opacity: .86; }
 .site-nav a:hover { opacity: 1; background: color-mix(in srgb, currentColor 10%, transparent); }
-.header-actions { display: flex; align-items: center; gap: .625rem; }
+.header-actions { display: flex; flex-shrink: 0; align-items: center; gap: .625rem; }
 .language-switch { display: inline-flex; padding: .1875rem; border-radius: 9999px; background: color-mix(in srgb, currentColor 9%, transparent); }
-.language-switch a { min-width: 2.5rem; height: 1.75rem; padding-inline: .625rem; display: inline-flex; align-items: center; justify-content: center; border-radius: 9999px; font-size: .75rem; font-weight: 500; opacity: .72; }
+.language-switch a { flex-shrink: 0; min-width: 2.5rem; height: 1.75rem; padding-inline: .625rem; display: inline-flex; align-items: center; justify-content: center; white-space: nowrap; border-radius: 9999px; font-size: .75rem; font-weight: 500; opacity: .72; }
 .language-switch a:hover { opacity: 1; }
 .language-switch a[aria-current="page"] { opacity: 1; background: var(--bg); color: var(--fg); box-shadow: 0 1px 3px rgb(0 0 0 / .12); }
 :root:not([data-scrolled]) .site-header:not([data-open]) .language-switch a[aria-current="page"] { background: rgb(255 255 255 / .94); color: #17171d; }
@@ -476,9 +476,15 @@ h1, h2, h3, p { margin: 0; }
   .phone-shot { width: min(14rem, 70%); }
   .site-header { --h-pad: .875rem; }
   .brand span { font-size: 1.125rem; }
-  .language-switch a { min-width: 2.125rem; padding-inline: .5rem; }
+  .header-actions { gap: .25rem; }
+  .language-switch a { min-width: 2.125rem; padding-inline: .375rem; }
   .footer-wrap { padding-inline: 1rem; }
   .footer-bottom { margin-top: 3rem; }
+}
+
+/* Keep the controls inside the scrolled pill on the narrowest phones. */
+@media (max-width: 23rem) {
+  .site-header .brand span { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {

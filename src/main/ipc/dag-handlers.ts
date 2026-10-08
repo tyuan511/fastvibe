@@ -8,6 +8,7 @@ import { handle } from "./registry";
  */
 export function registerDagIpc(engine: PiProcessManager): void {
   handle(Ipc.dagList, () => engine.listDagGraphs());
+  handle(Ipc.dagOutput, (payload: { conversationId: string; id: string; offset?: number }) => engine.getDagOutput(payload.conversationId, payload.id, payload.offset));
   handle(Ipc.dagCancel, (payload: { conversationId: string; ids?: string[] }) => engine.cancelDag(payload.conversationId, payload.ids));
   handle(Ipc.dagRetry, (payload: { conversationId: string; id: string }) => engine.retryDagNode(payload.conversationId, payload.id));
   handle(Ipc.dagResume, (payload: { conversationId: string }) => engine.resumeDag(payload.conversationId));

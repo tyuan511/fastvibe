@@ -316,10 +316,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /** Counts from the notice's `details.nodes`. Anything still running is not an outcome. */
 function dagSettledInfo(details: unknown): DagSettledInfo {
   const info: DagSettledInfo = { completed: 0, failed: 0, skipped: 0, cancelled: 0 };
+  if (isRecord(details) && typeof details.settled === "boolean") info.settled = details.settled;
   const nodes = isRecord(details) && Array.isArray(details.nodes) ? details.nodes : [];
   for (const node of nodes) {
     if (!isRecord(node)) continue;
     const status = node.status;
+    if (status === "blocked") info.blocked = (info.blocked ?? 0) + 1;
     if (status === "completed" || status === "failed" || status === "skipped" || status === "cancelled") {
       info[status] += 1;
     }

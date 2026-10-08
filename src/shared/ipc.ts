@@ -256,6 +256,7 @@ export const Ipc = {
   memoryChanged: "memory:changed",
   /** 子 agent 任务编排：每个会话的 DAG 图。 */
   dagList: "dag:list",
+  dagOutput: "dag:output",
   dagCancel: "dag:cancel",
   dagRetry: "dag:retry",
   dagResume: "dag:resume",

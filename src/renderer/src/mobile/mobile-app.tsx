@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore, type JSX } from "react";
+import { lazy, Suspense, useEffect, useState, useSyncExternalStore, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { isBlockingPrompt } from "@shared/notifications";
@@ -7,6 +7,8 @@ import { useThemeSync } from "@/lib/use-theme";
 import { useLanguageSync } from "@/lib/use-language";
 import { useSessionStore } from "@/stores/session";
 import { useSettingsStore } from "@/stores/settings";
+import { useDagStore, useDagSync } from "@/stores/dag";
+const DagDialog = lazy(() => import("@/components/dag/dag-dialog").then((module) => ({ default: module.DagDialog })));
 import { ChatScreen } from "./chat-screen";
 import { ConversationDrawer } from "./conversation-drawer";
 import { refreshCatalog, showConversation, startLive } from "./live";
@@ -27,6 +29,8 @@ import { navigate, readRoute, subscribeRoute } from "./route";
  */
 export function MobileApp(): JSX.Element {
   useThemeSync();
+  useDagSync();
+  const dagOpen = useDagStore((state) => Boolean(state.viewer));
   useLanguageSync();
   // A preference written on the desktop (theme, language) reaches this page too.
   useEffect(() => window.fastvibe.settings.onChanged((next) => useSettingsStore.getState().applyRemote(next)), []);
@@ -47,6 +51,7 @@ export function MobileApp(): JSX.Element {
   useOtherChatNotices();
 
   const conversationId = route.kind === "chat" ? route.id : null;
+  useEffect(() => useDagStore.getState().closeViewer(), [conversationId]);
   useEffect(() => {
     // The send on the new-chat page shows its conversation itself, before its first
     // prompt goes out; the route catching up afterwards must not reload it from under
@@ -68,6 +73,7 @@ export function MobileApp(): JSX.Element {
         />
       )}
       <ConversationDrawer open={drawerOpen} onOpenChange={setDrawerOpen} />
+      {dagOpen ? <Suspense fallback={null}><DagDialog /></Suspense> : null}
       <Toaster position="top-center" />
     </div>
   );

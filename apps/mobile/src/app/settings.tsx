@@ -1,4 +1,5 @@
 import { Stack } from "expo-router";
+import * as Clipboard from "expo-clipboard";
 import { useState, type JSX, type ReactNode } from "react";
 import { ActivityIndicator, Linking, Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import { HugeiconsIcon, type IconSvgElement } from "@hugeicons/react-native";
@@ -6,10 +7,13 @@ import { OptionSheet } from "../chat/option-sheet";
 import { setLanguagePreference, useLanguagePreference, useT, type LanguagePreference } from "../i18n";
 import { enableLocalNotifications } from "../notifications/local";
 import { BrandLogo } from "../ui/brand";
+import { connectionDiagnostics } from "../protocol/diagnostics";
+import { toast } from "../ui/toast";
 import { haptic } from "../ui/haptics";
 import {
   ArrowRight01Icon,
   ArrowUp02Icon,
+  Copy01Icon,
   Globe02Icon,
   InformationCircleIcon,
   Notification01Icon,
@@ -50,6 +54,15 @@ export default function SettingsScreen() {
       await checkForUpdatesManually();
     } finally {
       setChecking(false);
+    }
+  }
+
+  async function copyDiagnostics(): Promise<void> {
+    try {
+      await Clipboard.setStringAsync(connectionDiagnostics(currentVersion()));
+      toast.success(t("common.copied"));
+    } catch {
+      toast.error(t("settings.diagnosticsCopyFailed"));
     }
   }
 
@@ -157,6 +170,14 @@ export default function SettingsScreen() {
             label={t("settings.releaseNotes")}
             palette={palette}
             onPress={() => void Linking.openURL(`https://github.com/${RELEASE_REPO}/releases`)}
+          />
+          <Divider palette={palette} />
+          <Row
+            icon={Copy01Icon}
+            label={t("settings.connectionDiagnostics")}
+            description={t("settings.connectionDiagnosticsHint")}
+            palette={palette}
+            onPress={() => void copyDiagnostics()}
           />
         </Section>
       </ScrollView>

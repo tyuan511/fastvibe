@@ -1,3 +1,4 @@
+import type { DagNode, DagNodeStatus } from "@shared/dag";
 import { decodeRemoteProjectKey, remoteProjectKey } from "@shared/project-binding";
 import type { ChatMessage, ConversationOpenResult, DirEntry, EngineSessionState, EngineStatus, ImportSourceId, WorkspaceSnapshot } from "@shared/types";
 import type { AppInfo, GitStatus } from "@shared/ipc";
@@ -96,7 +97,7 @@ try {
 const initialSettings: Record<string, unknown> = {
   thinkingLevel: "high",
   sendOnEnter: true,
-  ...(website ? { uiLanguage: websiteLanguage, aiLanguage: websiteLanguage } : {}),
+  ...(website || params.get("mobile") === "1" ? { uiLanguage: websiteLanguage, aiLanguage: websiteLanguage } : {}),
   // The website embeds this page and hands it the theme it is showing (`?theme=`, then
   // live through the message below); a capture run passes nothing and gets dark.
   themeMode: theme === "light" || theme === "dark" ? theme : website ? "dark" : "system",
@@ -354,7 +355,7 @@ function installIconRewrite(): void {
 // `mock.html` — the first fixture chat has a graph in every state, so the 任务图 tab and the
 // sidebar's sub-task arrow have something to draw.
 const dagProfile = (name: string) => ({ name, instructions: "…", tools: ["read", "grep"] });
-const dagNode = (id: string, title: string, status: string, dependsOn: string[], extra: Record<string, unknown> = {}) => ({
+const dagNode = (id: string, title: string, status: DagNodeStatus, dependsOn: string[], extra: Partial<DagNode> = {}): DagNode => ({
   id,
   ...(status === "pending" || status === "skipped" ? {} : { runId: id, attempt: 1 }),
   title,
@@ -372,13 +373,17 @@ const dagFixture = {
   nodes: [
     dagNode("T-0001", "梳理主题加载", "completed", [], { startedAt: Date.now() - 500000, endedAt: Date.now() - 400000, output: "主题在 `useThemeSync` 中应用。" }),
     dagNode("T-0002", "梳理设置页入口", "completed", [], { startedAt: Date.now() - 500000, endedAt: Date.now() - 380000, output: "设置页入口在 `theme-select.tsx`。" }),
-    dagNode("T-0003", "检查快捷键冲突", "running", ["T-0001"], { startedAt: Date.now() - 60000 }),
+    dagNode("T-0003", "检查快捷键冲突", "running", ["T-0001"], { startedAt: Date.now() - 60000, coordinator: true }),
+    dagNode("T-0007", "核对 macOS 快捷键", "completed", [], { parentId: "T-0003", parentRunId: "T-0003", output: "macOS 快捷键已核对，没有冲突。" }),
+    dagNode("T-0008", "核对 Linux 快捷键", "pending", [], { parentId: "T-0003", parentRunId: "T-0003" }),
     dagNode("T-0004", "核对暗色样式", "failed", ["T-0002"], { startedAt: Date.now() - 300000, endedAt: Date.now() - 200000, error: "读取 index.css 超时" }),
+    dagNode("T-0006", "确认平台约束", "blocked", [], { error: "需要补充目标平台", report: { outcome: "blocked", summary: "当前材料未说明要支持哪些平台" } }),
     dagNode("T-0005", "汇总结论", "skipped", ["T-0003", "T-0004"], { blockedBy: "T-0004", error: "上游 T-0004 没有成功（failed）" }),
   ],
 };
 const dagApi = {
   list: async () => [dagFixture],
+  output: async (_conversationId: string, id: string) => { const output = dagFixture.nodes.find((node) => node.id === id)?.output ?? ""; return { output, offset: 0, totalChars: output.length }; },
   cancel: async () => [] as string[],
   retry: async () => [] as string[],
   resume: async () => [] as string[],

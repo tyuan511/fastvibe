@@ -32,7 +32,9 @@ test("engine stop suspends DAG work before waiting on its operation queue or tea
   for (const name of ["sessions", "sessionTouched", "sessionPromises", "pendingMcpReloads", "subagentControls", "oauthLogins", "widgetTimers", "busyBroadcast", "running", "compacting", "sdkQueueAdapters", "drainingQueues", "drainPromises", "preferredQueueIds", "queueRebuilds", "queueDrainFaults", "interruptedRuns", "timing", "runTouchedFiles", "extensionStatuses", "subagentSessions", "stoppedSubagents", "subagentReasoning", "reasoningRun"]) host[name] = new Map();
   let unlock!: () => void;
   const queue = new Promise<void>((resolve) => { unlock = resolve; });
+  let preparationStopped = false;
   Object.assign(host, {
+    promptPreparations: { cancel: () => { preparationStopped = true; } },
     runtime: {}, models: {}, status: { state: "ready" },
     queue: async (work: () => Promise<void>) => { await queue; await work(); },
     stopSessionSweep() {}, resolvePendingUi() {},
@@ -51,6 +53,7 @@ test("engine stop suspends DAG work before waiting on its operation queue or tea
   }, { concurrency: 1 });
   host.dagScheduler.add("c1", ["a", "b"].map((title) => ({ title, instruction: title, profile: { name: "worker", instructions: "work" } })));
   const stopped = host.stop();
+  assert.equal(preparationStopped, true, "memory preparation must stop before waiting on the operation queue");
   assert.equal(cancelled, true, "the operation queue must not delay cancellation");
   assert.equal(store.node("c1", "T-0002")?.status, "cancelled");
   unlock();

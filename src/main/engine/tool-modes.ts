@@ -33,6 +33,8 @@ export const DAG_AGENT_TOOLS = [
   "dag_cancel",
   "dag_resume",
   "dag_retry",
+  "dag_update",
+  "dag_send",
 ] as const;
 
 export type ToolModes = { codemode: boolean; toolSearch: boolean; dynamicDag: boolean };

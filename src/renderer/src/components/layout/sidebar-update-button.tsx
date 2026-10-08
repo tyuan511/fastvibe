@@ -18,6 +18,17 @@ export function SidebarUpdateButton(): JSX.Element | null {
   const update = useAppUpdate();
   const status = update?.status;
 
+  if (status === "checking" && update?.availableVersion) {
+    // A stale update notice is re-checked before downloading. Keep the control visible
+    // while that request runs, including when a background check refreshes the notice.
+    return (
+      <Button size="xs" className="shrink-0" disabled>
+        <Spinner className="size-3" />
+        {t("update.sidebarChecking")}
+      </Button>
+    );
+  }
+
   if (status === "downloading") {
     // Before the first progress tick there is no percentage to show, but the click still
     // has to register — a spinner and 「下载中」 are what say the download started.

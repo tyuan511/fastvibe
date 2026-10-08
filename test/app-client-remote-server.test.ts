@@ -17,6 +17,9 @@ import {
 import { encodeBinaryAttachment } from "../src/shared/binary-attachment.ts";
 import { Ipc } from "../src/shared/ipc.ts";
 import { registeredChannels } from "./registered-channels.ts";
+import { BUFFER_GRACE_MS } from "../src/main/server/backpressure.ts";
+import { RemoteClient } from "../apps/mobile/src/protocol/client.ts";
+import { parseServerAddress } from "../apps/mobile/src/protocol/address.ts";
 
 const silent = { info: () => undefined, warn: () => undefined, error: () => undefined };
 const PASSWORD = "a-good-enough-password";
@@ -190,6 +193,32 @@ test("AppClient handshake over a real socket", async () => {
   });
 });
 
+test("the native mobile protocol probes and restores subscriptions over a replacement socket", async () => {
+  await withServer(async ({ server, port }) => {
+    const token = await loginToken(port);
+    const address = parseServerAddress(`http://127.0.0.1:${port}`)!;
+    const mobile = new RemoteClient("mobile-test");
+    const received: unknown[] = [];
+    mobile.onPush((_channel, payload) => received.push(payload));
+    mobile.setActive(true);
+    try {
+      for (let connection = 0; connection < 2; connection++) {
+        await mobile.connect(address, token);
+        mobile.subscribe(["installation"]);
+        mobile.checkHealth();
+        // The RPC round trip settles the preceding ordered subscription and ping.
+        assert.deepEqual(await mobile.call(Ipc.engineGetStatus), { echoed: Ipc.engineGetStatus });
+        server.appServer.publish("workspace:changed", { connection });
+        await waitUntil(() => received.length === connection + 1, "mobile subscription was lost");
+        mobile.close();
+      }
+      assert.deepEqual(received, [{ connection: 0 }, { connection: 1 }]);
+    } finally {
+      mobile.close();
+    }
+  });
+});
+
 for (const compressed of [true, false]) {
   test(`a healthy loopback socket survives consecutive multi-MiB bursts (compression=${compressed})`, async () => {
     await withServer(async ({ server, port }) => {
@@ -256,12 +285,66 @@ test("sustained congestion expires without another send and releases the session
   await withServer(async ({ server, port }) => {
     const { client, socket } = await connectedClient(port);
     try {
-      const closure = closed(socket, 8_000);
+      const closure = closed(socket, BUFFER_GRACE_MS + 3_000);
       assert.equal(await client.call(Ipc.engineGetStatus), "accepted");
       // No more calls/events. The independent congestion timer must enforce grace.
       assert.equal(await closure, 4004);
       await waitUntil(() => server.status.clients === 0, "stalled client leaked");
       assert.equal(appServer.sessionCount, 0);
+    } finally {
+      client.close();
+    }
+  }, { appServer });
+});
+
+test("continuous fast model output survives a refilled queue without losing or reordering deltas", async (t) => {
+  const appServer = new AppServer({
+    identity: { serverInstanceId: "srv_fast_output", version: "test", platform: "test" },
+    channels: registeredChannels,
+    capabilities: APP_CAPABILITIES,
+    dispatch: async (_method, _payload, context) => {
+      // Model a producer keeping the queue above the soft watermark. The real
+      // socket still completes its writes: queue size cannot prove it is stuck.
+      Object.defineProperty(context.transport, "bufferedAmount", { configurable: true, get: () => 3 * 1024 * 1024 });
+      return "ready";
+    },
+  });
+  await withServer(async ({ server, port }) => {
+    const socket = await authedSocket(port);
+    const client = new AppClient(new WsTransport(socket), { client: { kind: "test", version: "test" }, eventBatch: true });
+    let received = 0;
+    let ordered = true;
+    let batches = 0;
+    socket.on("message", (raw) => { if (JSON.parse(String(raw)).kind === "events") batches++; });
+    client.onPush((channel, payload) => {
+      if (channel !== Ipc.event) return;
+      if ((payload as { seq: number }).seq !== received + 1) ordered = false;
+      received++;
+    });
+    try {
+      await client.connect();
+      client.subscribe(["conversation:fast-output"]);
+      await client.call(Ipc.engineGetStatus);
+      let sent = 0;
+      const until = performance.now() + BUFFER_GRACE_MS + 1_000;
+      while (performance.now() < until) {
+        for (let delta = 0; delta < 20; delta++) {
+          appServer.publish(Ipc.event, {
+            conversationId: "fast-output", type: "message_update", seq: ++sent,
+            assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "模型持续输出文本 " },
+          });
+        }
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      // A result flushes the last batch without overtaking its events.
+      assert.equal(await client.call(Ipc.engineGetStatus), "ready");
+      assert.ok(sent > 1_000);
+      assert.equal(received, sent);
+      assert.equal(ordered, true);
+      assert.ok(batches > 0 && batches < sent);
+      assert.equal(socket.readyState, WebSocket.OPEN);
+      assert.equal(server.appServer.sessionCount, 1);
+      t.diagnostic(`${sent} ordered model deltas delivered in ${batches} batches with a sustained 3 MiB backlog`);
     } finally {
       client.close();
     }

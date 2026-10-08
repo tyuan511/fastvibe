@@ -398,11 +398,13 @@ test("DAG lists, pushes and node actions remain scoped with matching ids on thre
     const event = namespaceRemotePush(Ipc.event, { type: "dag_changed", conversationId: "c1", graph }, server) as { conversationId: string; graph: DagGraph };
     assert.deepEqual(event.graph, list.find((item) => item.conversationId === event.conversationId));
     const batch = dagBatch(event.graph, event.conversationId, ["T-0001"])!;
+    await instance.dispatch(Ipc.dagOutput, { conversationId: batch.conversationId, id: "T-0001", offset: 12000 }, {});
     await instance.dispatch(Ipc.dagCancel, { conversationId: batch.conversationId, ids: batch.nodes.map((node) => node.id) }, {});
     await instance.dispatch(Ipc.dagRetry, { conversationId: batch.conversationId, id: "T-0001" }, {});
     await instance.dispatch(Ipc.engineAbortSubagent, { conversationId: batch.conversationId, subagentId: "T-0001.2" }, {});
     await instance.dispatch(Ipc.engineGetSubagentMessages, { conversationId: batch.conversationId, subagentId: "T-0001.2" }, {});
-    assert.deepEqual(connections.calls.slice(-4), [
+    assert.deepEqual(connections.calls.slice(-5), [
+      { server, method: Ipc.dagOutput, payload: { conversationId: "c1", id: "T-0001", offset: 12000 } },
       { server, method: Ipc.dagCancel, payload: { conversationId: "c1", ids: ["T-0001"] } },
       { server, method: Ipc.dagRetry, payload: { conversationId: "c1", id: "T-0001" } },
       { server, method: Ipc.engineAbortSubagent, payload: { conversationId: "c1", subagentId: "T-0001.2" } },

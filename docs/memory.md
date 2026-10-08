@@ -16,6 +16,10 @@ FastVibe has three memory modes backed by one local store:
   Jev, have a saved API key, have the `Enhanced memory` application scenario checked, and
   have the local embedding model available.
 
+In JEV mode, automatic context preparation uses one batched relevance request over
+locally recalled candidates. Explicit `memory_search` keeps adaptive multi-hop
+retrieval for questions that need deeper recall. Both use the same project/chat scope.
+
 ### How JEV-enhanced memory follows the paper
 
 JEV-enhanced memory is a port of the paper's reference implementation
@@ -56,15 +60,16 @@ port against it, so drifting from the reference fails a test rather than a bench
   link/redundant/contradiction reaches 0.85; obsolescence is recorded, not linked.
   System Two writes a new memory for a pair only when merge/promote is selected at
   ≥ 0.85 and contradiction is below 0.85; that memory goes through the full write path.
-- **Read** (`RetrievalController.query`): route (six Nouls; the reference's intent
-  baseline if the call falls back), vector + keyword anchors fused by RRF and scored by
-  cosine, then rounds of assess → expand → score. Budgets follow Eqs. 13–14 (B = 80,
+- **Adaptive read** (based on `RetrievalController.query`): route (six Nouls) alongside
+  local embedding, vector + keyword anchors fused by RRF and scored by cosine, then
+  rounds of local expansion and a combined assessment/scoring request. A stopping
+  decision discards the speculative candidate scores. Budgets follow Eqs. 13–14 (B = 80,
   θ_act = 0.10, largest remainder, ties by name), depth Eq. 15 (D_max = 8), transition
   score Eq. 23 with λ = (0.25, 0.35, 0.15, 0.15, 0.10), recency Eq. 25 against the newest
   evidence. Stop at sufficiency ≥ 0.95 with missing/contradiction < 0.15, or
   continue < 0.15, and within 60 nodes, 2,400 edges, 16 Jev calls and 15 s.
-- **Calls** behave like the reference client: whole-batch validation, 3 s per attempt,
-  up to three attempts, and an LRU of 1,024 identical requests that costs no budget.
+- **Write/adaptive calls** retain whole-batch validation, 3 s per attempt, up to three
+  attempts, and an LRU of 1,024 identical requests that costs no budget.
 
 FastVibe differences, each marked `FastVibe:` in the code:
 
@@ -78,13 +83,36 @@ FastVibe differences, each marked `FastVibe:` in the code:
   links follow each conversation's own sequence.
 - System Two is the model chosen in Memory settings, and the retrieved memories are
   injected into the main agent's system prompt instead of answered by System Two.
+- Automatic context preparation has a 2 s total budget, including model loading,
+  embedding, credential resolution and Jev calls. Explicit searches retain a 15 s
+  total budget. Timeout or cancellation returns the local keyword/vector results
+  already found; a failed routing call also returns those results directly.
+- Automatic context uses 24 local keyword/vector candidates (up to the requested
+  result count when that is larger), plus their best one-hop neighbours, bounded at
+  40 candidates and 240 examined edges. One `memory.read.context` request asks for
+  each candidate's usefulness and whether recency matters. Relevance below 0.5 is
+  excluded; remaining memories are ranked by relevance with the usual recency
+  adjustment. A valid batch may select nothing; a failed batch returns local hits.
+  This path makes at most one HTTP request, with no retry or remote routing.
+- Explicit searches overlap query-only routing with local loading/inference, then
+  use `memory.read.round` to assess the current evidence and score the next hop in
+  one batch. Each later hop still depends on the previous results. Stopping questions
+  explicitly consider only existing evidence, not the speculative candidates.
+- Complete embedding caches load from their absolute local directory without remote
+  metadata probes. Retrieval never downloads a missing model; only explicit mode
+  setup or model preparation may download it. Empty scopes skip model and Jev work.
+- Hard retrieval limits are checked before asking whether to continue, avoiding an
+  assessment request after the last permitted expansion. Keyword/vector candidates
+  are read once per search and reused for both local fallback and Jev anchors.
 - The reference also enriches text with keywords before embedding; FastVibe embeds the
   raw text with its local MiniLM model.
 
 Memory is injected through a hidden per-session extension's `before_agent_start`
 handler. The retrieved text is an ephemeral system-prompt section; it is not appended
-to the conversation transcript. Capture happens at the SDK `message_end` boundary,
-after a user or final assistant message is complete. Thinking blocks, tool results,
+to the conversation transcript. Main tracks preparation separately from a running
+turn: Stop cancels that chat's memory read and checks cancellation again at the SDK
+preflight boundary, before a prompt can start a provider request. Capture happens at
+the SDK `message_end` boundary, after a user or final assistant message is complete. Thinking blocks, tool results,
 passwords and hidden fields are not captured.
 
 ## What the agent is told, and what it can call
@@ -99,8 +127,8 @@ bypassing both the retrieval pipeline and the project scope. So the same extensi
   memories appear under "Relevant long-term memory" when there are any, the two tools
   below reach further, memories are evidence rather than instructions, storage details
   are not the answer, and FastVibe's own data files are never to be read for it.
-- **`memory_search`** — retrieval by a topic the agent chooses, through the same
-  pipeline and scope as the automatic retrieval (JEV-Mem in JEV mode).
+- **`memory_search`** — retrieval by a topic the agent chooses, in the same scope as
+  automatic retrieval, with adaptive multi-hop JEV search when JEV mode is enabled.
 - **`memory_recent`** — the newest memories of the scope, for "what do you remember".
 
 Both are read-only and scoped like the

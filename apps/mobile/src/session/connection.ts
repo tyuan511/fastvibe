@@ -1,6 +1,9 @@
 import { useSyncExternalStore } from "react";
 import { AppState, type AppStateStatus } from "react-native";
-import { RemoteClient } from "../protocol/client";
+import Constants from "expo-constants";
+import * as Network from "expo-network";
+import { ConnectionError, RemoteClient } from "../protocol/client";
+import { recordConnectionDiagnostic } from "../protocol/diagnostics";
 import { t } from "../i18n";
 import { parseServerAddress } from "../protocol/address";
 import { patchServer, readToken, writeToken, type SavedServer } from "../storage/servers";
@@ -73,6 +76,9 @@ let target: ConnectionTarget | null = null;
 let connectionGeneration = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectAttempt = 0;
+/** Includes catalog restore, so foreground/network events cannot open overlapping sockets. */
+let opening: RemoteClient | null = null;
+let network: Network.NetworkState | null = null;
 const RECONNECT_BASE_MS = 300;
 const RECONNECT_MAX_MS = 10_000;
 
@@ -190,7 +196,8 @@ export function resolvePendingPrompt(id: string): void {
 
 async function connectWithToken(next: ConnectionTarget, generation: number, silent: boolean): Promise<void> {
   const { server, token } = next;
-  if (!isCurrentTarget(next, generation)) return;
+  if (!isCurrentTarget(next, generation) || opening) return;
+  clearReconnectTimer();
   reconnecting = silent;
   const address = parseServerAddress(server.origin);
   if (!address) {
@@ -199,34 +206,53 @@ async function connectWithToken(next: ConnectionTarget, generation: number, sile
     return;
   }
   retireClient();
-  const remote = new RemoteClient();
+  const remote = new RemoteClient(Constants.expoConfig?.version ?? "0.0.0");
+  opening = remote;
   client = remote;
+  remote.setActive(appIsActive());
+  const started = Date.now();
+  recordConnectionDiagnostic({ event: "connecting", serverId: server.id, attempt: reconnectAttempt });
   if (!silent) setState({ ...empty, server, status: "connecting", error: null });
   remote.onPush(handlePush);
-  remote.onDisconnect((reason) => {
+  remote.onDisconnect((detail) => {
     if (client !== remote || !isCurrentTarget(next, generation)) return;
+    recordConnectionDiagnostic({ event: "disconnected", serverId: server.id, detail, elapsedMs: Date.now() - started });
+    const restoring = opening === remote;
     client = null;
+    if (opening === remote) opening = null;
+    remote.onPush(null);
+    remote.onDisconnect(null);
+    if (detail.code === 4001) {
+      abandonConnection();
+      setState({ ...empty, server, status: "error", error: t("conn.expired"), needsPassword: true });
+      return;
+    }
     reconnecting = true;
     // Keep the current catalog and conversation on screen while the replacement
     // socket is negotiated. A dropped mobile socket is expected during backgrounding
     // and a visible error page makes a short Wi-Fi blip feel like a logout.
     setState({ ...state, status: "ready", reconnecting: true, error: null, needsPassword: false });
-    scheduleReconnect(next, generation, true);
+    scheduleReconnect(next, generation, !restoring);
   });
   try {
     await remote.connect(address, token);
     if (!isCurrentTarget(next, generation) || client !== remote) return;
     remote.subscribe(["*"]);
     await refreshCatalog(remote);
+    if (!isCurrentTarget(next, generation) || client !== remote) return;
     const servers = await patchServer(server.id, { lastConnectedAt: Date.now() });
     const updated = servers.find((item) => item.id === server.id) ?? server;
     if (!isCurrentTarget(next, generation) || client !== remote) return;
     reconnectAttempt = 0;
     reconnecting = false;
+    recordConnectionDiagnostic({ event: "connected", serverId: server.id, elapsedMs: Date.now() - started });
     setState({ ...state, status: "ready", reconnecting: false, server: updated, error: null, needsPassword: false });
   } catch (error) {
-    if (!isCurrentTarget(next, generation)) return;
-    const unauthorized = error instanceof Error && error.message === "UNAUTHORIZED";
+    if (!isCurrentTarget(next, generation) || client !== remote) return;
+    recordConnectionDiagnostic({ event: "connect-failed", serverId: server.id, elapsedMs: Date.now() - started,
+      failure: error instanceof ConnectionError ? error.code : "restore-failed",
+      detail: error instanceof ConnectionError ? error.detail : undefined });
+    const unauthorized = error instanceof ConnectionError && (error.code === "unauthorized" || error.detail?.code === 4001);
     if (client === remote) {
       client = null;
       retireClient(remote);
@@ -251,10 +277,13 @@ async function connectWithToken(next: ConnectionTarget, generation: number, sile
       setState({ ...state, status: "ready", reconnecting: true, server, error: null, needsPassword: false });
     }
     if (!unauthorized) scheduleReconnect(next, generation);
+  } finally {
+    if (opening === remote) opening = null;
   }
 }
 
 function beginTarget(server: SavedServer, token: string): ConnectionTarget {
+  retireClient();
   clearReconnectTimer();
   reconnectAttempt = 0;
   const next = { server, token };
@@ -280,6 +309,7 @@ function retireClient(value = client): void {
   value.onDisconnect(null);
   value.onPush(null);
   value.close();
+  if (opening === value) opening = null;
   if (client === value) client = null;
 }
 
@@ -293,32 +323,63 @@ function appIsActive(): boolean {
 }
 
 function scheduleReconnect(next: ConnectionTarget, generation: number, immediate = false): void {
-  if (!isCurrentTarget(next, generation) || !appIsActive() || reconnectTimer) return;
+  if (!isCurrentTarget(next, generation) || !appIsActive()) return;
+  // Only a definite absence of a network pauses retries. Internet reachability says
+  // nothing about a saved LAN server, and UNKNOWN must never lock that server out.
+  if (network?.type === Network.NetworkStateType.NONE && network.isConnected === false) return;
+  if (immediate) clearReconnectTimer();
+  if (reconnectTimer) return;
   const delay = immediate ? 0 : Math.min(RECONNECT_BASE_MS * 2 ** reconnectAttempt, RECONNECT_MAX_MS);
   reconnectAttempt += 1;
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
+    if (!appIsActive() || !isCurrentTarget(next, generation)) return;
     void connectWithToken(next, generation, true);
   }, delay);
 }
 
 function handleAppStateChange(nextState: AppStateStatus): void {
-  if (nextState !== "active" || !target) return;
-  const current = target;
-  const generation = connectionGeneration;
-  const remote = client;
-  if (state.status !== "ready" || !remote) {
-    scheduleReconnect(current, generation, true);
+  recordConnectionDiagnostic({ event: "app-state", appState: nextState });
+  client?.setActive(nextState === "active");
+  if (nextState !== "active") {
+    clearReconnectTimer();
     return;
   }
-  // Android/iOS may freeze the JS runtime without delivering a WebSocket close event.
-  // A short foreground probe turns that stale OPEN socket into the normal reconnect path.
-  void remote.call("engine:get-running", undefined, 4_000).catch(() => {
-    if (client === remote && isCurrentTarget(current, generation)) remote.close();
-  });
+  wakeConnection();
+  refreshNetworkState();
+}
+
+function wakeConnection(): void {
+  if (!target || !appIsActive()) return;
+  if (getClient()) client?.checkHealth();
+  else if (!opening) scheduleReconnect(target, connectionGeneration, true);
+}
+
+function handleNetworkChange(next: Network.NetworkState): void {
+  const previous = network;
+  network = next;
+  if (previous?.type === next.type && previous?.isConnected === next.isConnected &&
+      previous?.isInternetReachable === next.isInternetReachable) return;
+  recordConnectionDiagnostic({ event: "network", networkType: next.type, connected: next.isConnected });
+  if (next.type === Network.NetworkStateType.NONE && next.isConnected === false) {
+    clearReconnectTimer();
+    return;
+  }
+  reconnectAttempt = 0;
+  wakeConnection();
+}
+
+function refreshNetworkState(): void {
+  const previous = network;
+  void Network.getNetworkStateAsync().then((next) => {
+    // An event arriving during this read is newer than its result.
+    if (network === previous) handleNetworkChange(next);
+  }).catch(() => { /* Probing the actual server remains available if OS state is unknown. */ });
 }
 
 AppState.addEventListener("change", handleAppStateChange);
+Network.addNetworkStateListener(handleNetworkChange);
+refreshNetworkState();
 
 async function refreshCatalog(remote: RemoteClient): Promise<void> {
   const [catalog, runningIds, pendingEvents, settings] = await Promise.all([

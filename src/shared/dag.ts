@@ -6,12 +6,12 @@
  * 指令、可用工具）、自己的任务说明、依赖的节点；模型跟随主 agent。
  */
 
-export const DAG_NODE_STATUSES = ["pending", "running", "completed", "failed", "skipped", "cancelled"] as const;
+export const DAG_NODE_STATUSES = ["pending", "running", "completed", "blocked", "failed", "skipped", "cancelled"] as const;
 export type DagNodeStatus = (typeof DAG_NODE_STATUSES)[number];
 
 /** 终态：不会再变（除非被显式重试）。 */
 export function dagNodeFinished(status: DagNodeStatus): boolean {
-  return status === "completed" || status === "failed" || status === "skipped" || status === "cancelled";
+  return status === "completed" || status === "blocked" || status === "failed" || status === "skipped" || status === "cancelled";
 }
 
 /** 子 agent 能被授予的工具。写文件 / 执行命令的要由主 agent 明确给出，默认只读。 */
@@ -26,7 +26,21 @@ export type DagProfile = {
   instructions: string;
   /** 缺省为只读工具。 */
   tools?: string[];
+  /** Only explicitly requested skills are loaded into this run. */
+  skills?: boolean;
 };
+
+export type DagBudget = { maxTurns?: number; maxTokens?: number; timeoutSeconds?: number; maxAttempts?: number };
+export type DagReport = {
+  outcome: "completed" | "blocked" | "failed";
+  summary: string;
+  evidence?: string[];
+  artifacts?: string[];
+};
+
+export const DAG_BUDGET = { maxTurns: 80, maxTokens: 300000, timeoutSeconds: 3600, maxAttempts: 5 } as const;
+export const DAG_MAX_DEPTH = 3;
+export const DAG_PREVIEW_CHARS = 4000;
 
 /**
  * 一个已经配置好的子 Agent（设置 → 子 Agent），动态编排可以按名字复用它。
@@ -53,6 +67,22 @@ export type DagNode = {
   instruction: string;
   profile: DagProfile;
   dependsOn: string[];
+  /** Ownership is separate from dependencies: children never depend on their waiting parent. */
+  parentId?: string;
+  parentRunId?: string;
+  coordinator?: boolean;
+  /** Omitted: all dependencies. Empty: ordering only, no upstream text. */
+  contextFrom?: string[];
+  acceptance?: string;
+  /** Relative files/directories owned by a writer. Omitted writers claim the whole workspace. */
+  writePaths?: string[];
+  budget?: DagBudget;
+  report?: DagReport;
+  outputLength?: number;
+  usage?: { tokens: number; turns: number };
+  /** Durable receipt for this outcome; retry gets a new run id. */
+  observedOutcome?: string;
+  revision?: number;
   status: DagNodeStatus;
   createdAt: number;
   startedAt?: number;
@@ -69,6 +99,8 @@ export type DagNode = {
   agent?: string;
   /** 复用的角色指定的模型 `provider/id`。缺省跟随主 agent。运行结束后这里是实际用的模型。 */
   model?: string;
+  /** Parent model captured when the task is created; survives engine restarts. */
+  fallbackModel?: string;
   /** 复用的角色指定的推理强度；缺省跟随运行时默认。 */
   thinkingLevel?: string;
   /** 第几次运行（重试 / 恢复会再跑）。 */
@@ -86,6 +118,8 @@ export type DagGraph = {
   nodes: DagNode[];
   createdAt: number;
   updatedAt: number;
+  revision?: number;
+  paused?: boolean;
 };
 
 /**
@@ -144,6 +178,11 @@ export type DagNodeDraft = {
   profile?: DagProfile;
   /** 这一批里的 `ref`，或已有节点的编号。 */
   dependsOn?: string[];
+  contextFrom?: string[];
+  coordinator?: boolean;
+  acceptance?: string;
+  writePaths?: string[];
+  budget?: DagBudget;
 };
 
 export type ResolvedDraft = {
@@ -158,6 +197,11 @@ export type ResolvedDraft = {
   /** 已经全部换成编号的依赖：批内的 `ref` 在这里是 `batchIndex`。 */
   existingDeps: string[];
   batchDeps: number[];
+  contextRefs?: string[];
+  coordinator?: boolean;
+  acceptance?: string;
+  writePaths?: string[];
+  budget?: DagBudget;
 };
 
 /**
@@ -170,6 +214,7 @@ export function resolveDrafts(
   existing: ReadonlySet<string>,
   drafts: readonly DagNodeDraft[],
   agents: readonly DagConfiguredAgent[] = [],
+  availableTools: readonly string[] = DAG_TOOLS,
 ): ResolvedDraft[] {
   if (drafts.length === 0) throw new Error("tasks 不能为空");
   if (drafts.length > DAG_LIMITS.batch) throw new Error(`一次最多追加 ${DAG_LIMITS.batch} 个节点，收到 ${drafts.length} 个`);
@@ -210,11 +255,16 @@ export function resolveDrafts(
     const requested = profile?.tools?.map((tool) => String(tool).trim()).filter(Boolean);
     // 现写的 profile 写了不存在的工具是主 agent 的笔误，整批退回让它改。复用的角色是用户配的，
     // 它的工具表可以比一个节点能用的更宽（比如 subagent 自己），这种只是这个节点用不上，去掉即可。
-    const unknown = requested?.filter((tool) => !(DAG_TOOLS as readonly string[]).includes(tool));
+    const unknown = requested?.filter((tool) => !availableTools.includes(tool));
     if (!configured && unknown && unknown.length > 0) {
       throw new Error(`${label}：未知工具 ${unknown.join(", ")}；可用：${DAG_TOOLS.join(", ")}`);
     }
-    const tools = configured ? requested?.filter((tool) => (DAG_TOOLS as readonly string[]).includes(tool)) : requested;
+    const tools = configured ? requested?.filter((tool) => availableTools.includes(tool)) : requested;
+    if (draft.coordinator && tools?.some((tool) => !DAG_READONLY_TOOLS.includes(tool))) {
+      throw new Error(`${label}：协调者只能使用只读工具；写入工作请交给它创建的执行节点`);
+    }
+    const budget = normalizeDagBudget(draft.budget);
+    const writePaths = draft.writePaths?.map(normalizeDagWritePath);
     return {
       ref,
       title,
@@ -223,13 +273,20 @@ export function resolveDrafts(
         name,
         ...(profile?.description?.trim() ? { description: profile.description.trim() } : {}),
         instructions,
+        ...(!configured && draft.profile?.skills ? { skills: true } : {}),
         ...(tools && tools.length > 0 ? { tools: [...new Set(tools)] } : {}),
       },
       ...(configured ? { agent: configured.name, model: configured.model, thinkingLevel: configured.thinkingLevel } : {}),
       existingDeps: [],
       batchDeps: [],
+      ...(draft.contextFrom ? { contextRefs: [...new Set(draft.contextFrom.map((ref) => ref.trim()))] } : {}),
+      ...(draft.coordinator ? { coordinator: true } : {}),
+      ...(draft.acceptance?.trim() ? { acceptance: draft.acceptance.trim().slice(0, 8000) } : {}),
+      ...(writePaths ? { writePaths: [...new Set(writePaths)] } : {}),
+      ...(budget ? { budget } : {}),
     };
   });
+
 
   drafts.forEach((draft, index) => {
     const target = resolved[index];
@@ -247,6 +304,15 @@ export function resolveDrafts(
         throw new Error(`「${target.ref}」依赖的「${dep}」不存在：既不是这一批里的 ref，也不是已有的节点编号`);
       }
       if (!target.existingDeps.includes(id)) target.existingDeps.push(id);
+    }
+  });
+
+  resolved.forEach((node, index) => {
+    for (const ref of node.contextRefs ?? []) {
+      const dep = refs.get(ref);
+      if (dep !== undefined ? !node.batchDeps.includes(dep) : !node.existingDeps.includes(canonicalDagId(ref))) {
+        throw new Error(`第 ${index + 1} 个任务：context_from 的 ${ref} 必须同时在 depends_on 中`);
+      }
     }
   });
 
@@ -278,10 +344,14 @@ export function resolveDrafts(
  */
 export type DagGraphState = "running" | "stopped" | "failed" | "completed";
 
-export function dagGraphState(nodes: readonly { status: DagNodeStatus }[]): DagGraphState {
+export function dagGraphState(nodes: readonly { status: DagNodeStatus; parentId?: string; id?: string }[]): DagGraphState {
+  if (nodes.some((node) => node.status === "running")) return "running";
+  // A coordinator owns the final judgement for its branch, including repaired/abandoned attempts.
+  const visibleIds = new Set(nodes.map((node) => node.id));
+  nodes = nodes.filter((node) => !node.parentId || !visibleIds.has(node.parentId));
   if (nodes.some((node) => node.status === "running")) return "running";
   if (nodes.some((node) => node.status === "cancelled")) return "stopped";
-  if (nodes.some((node) => node.status === "failed")) return "failed";
+  if (nodes.some((node) => node.status === "failed" || node.status === "blocked")) return "failed";
   if (nodes.some((node) => node.status === "pending")) return "running";
   return "completed";
 }
@@ -299,8 +369,39 @@ export function dagRunStatus(status: DagNodeStatus): string {
     case "completed":
       return "completed";
     case "failed":
+    case "blocked":
       return "error";
     default:
       return "aborted";
   }
 }
+
+export function normalizeDagBudget(value?: DagBudget): DagBudget | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("budget 必须是预算对象");
+  const limits = { maxTurns: 500, maxTokens: 2000000, timeoutSeconds: 14400, maxAttempts: 20 };
+  const result: DagBudget = {};
+  for (const key of Object.keys(limits) as Array<keyof DagBudget>) {
+    const n = value[key];
+    if (n === undefined) continue;
+    if (!Number.isSafeInteger(n) || n <= 0 || n > limits[key]) throw new Error(`${key} 必须是 1–${limits[key]} 的整数`);
+    result[key] = n;
+  }
+  return result;
+}
+
+export function normalizeDagWritePath(value: string): string {
+  const path = value.trim().replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/+$/, "");
+  if (path === "." || path === "*") return ".";
+  if (!path || path.startsWith("/") || /^[a-z]:/i.test(path) || path.split("/").some((part) => part === ".." || !part)) {
+    throw new Error(`write_paths 必须是工作目录内的相对路径：${value}`);
+  }
+  if (/[*?\[\]{}]/.test(path)) throw new Error("write_paths 使用具体文件或目录，不支持通配符");
+  return path.split("/").filter((part) => part !== ".").join("/") || ".";
+}
+
+export function dagOutcomeKey(node: DagNode): string {
+  return `${node.runId ?? node.id}:${node.status}:${node.endedAt ?? 0}`;
+}
+
+export type DagOutputPage = { output: string; offset: number; totalChars: number; nextOffset?: number };

@@ -261,7 +261,8 @@
       "completed": "Completed",
       "failed": "Failed",
       "skipped": "Skipped",
-      "cancelled": "Cancelled"
+      "cancelled": "Cancelled",
+      "blocked": "Blocked"
     },
     "state": {
       "running": "Running",
@@ -279,6 +280,21 @@
     "pickNode": "Pick a task on the left to see its details and execution",
     "gone": "This sub-task is gone",
     "tabDetail": "Details",
-    "tabRun": "Execution"
+    "tabRun": "Execution",
+    "parent": "Parent task",
+    "role": "Role",
+    "coordinator": "Coordinator",
+    "acceptance": "Acceptance criteria",
+    "conclusion": "Conclusion",
+    "evidence": "Evidence",
+    "readFull": "Read full result",
+    "readMore": "Read more",
+    "loading": "Loading…",
+    "children": "Child tasks",
+    "backToList": "Back to tasks",
+    "previousAttempt": "Earlier attempt",
+    "openTasks": "View sub-tasks",
+    "attention": "{{count}} need attention",
+    "viewAll": "View all {{count}} tasks"
   }
 }

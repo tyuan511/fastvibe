@@ -177,7 +177,19 @@
         "done": "Retried sub-task"
       },
       "all": "all",
-      "more": "{{shown}} and {{count}} in all"
+      "more": "{{shown}} and {{count}} in all",
+      "update": {
+        "running": "Revising task",
+        "done": "Task revised"
+      },
+      "send": {
+        "running": "Sending guidance",
+        "done": "Guidance sent"
+      },
+      "report": {
+        "running": "Reporting outcome",
+        "done": "Outcome reported"
+      }
     }
   },
   "group": {

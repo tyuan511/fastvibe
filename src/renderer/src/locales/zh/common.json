@@ -177,7 +177,19 @@
         "done": "重试子任务"
       },
       "all": "全部",
-      "more": "{{shown}} 等 {{count}} 个"
+      "more": "{{shown}} 等 {{count}} 个",
+      "update": {
+        "running": "正在调整子任务",
+        "done": "已调整子任务"
+      },
+      "send": {
+        "running": "正在补充信息",
+        "done": "已补充信息"
+      },
+      "report": {
+        "running": "正在汇报结果",
+        "done": "已汇报结果"
+      }
     }
   },
   "group": {

@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { create } from "zustand";
 import type { DagGraph } from "@shared/dag";
+import { onLiveReconnected } from "@/lib/live-scopes";
 import { watchDagGraphs } from "@/lib/dag-sync";
 
 /** What the maximised graph dialog shows: whose graph, which node, and which side of it. */
@@ -42,7 +43,10 @@ export const useDagStore = create<DagState>((set) => ({
       const viewer = !graph && state.viewer?.conversationId === conversationId ? null : state.viewer;
       return { graphs, viewer };
     }),
-  replaceAll: (list) => set({ graphs: Object.fromEntries(list.map((graph) => [graph.conversationId, graph])) }),
+  replaceAll: (list) => set((state) => {
+    const graphs = Object.fromEntries(list.map((graph) => [graph.conversationId, graph]));
+    return { graphs, viewer: state.viewer && graphs[state.viewer.conversationId] ? state.viewer : null };
+  }),
   openViewer: (conversationId, nodeId, view = "detail") => set({ viewer: { conversationId, nodeId, view } }),
   selectNode: (nodeId, view) =>
     set((state) => (state.viewer ? { viewer: { ...state.viewer, nodeId, view: view ?? state.viewer.view } } : state)),
@@ -52,5 +56,9 @@ export const useDagStore = create<DagState>((set) => ({
 
 /** Keeps the store in step with Main: one read at mount, then every `dag_changed`. */
 export function useDagSync(): void {
-  useEffect(() => watchDagGraphs(window.fastvibe.dag, useDagStore.getState()), []);
+  useEffect(() => {
+    let stop = watchDagGraphs(window.fastvibe.dag, useDagStore.getState());
+    const offReconnect = onLiveReconnected(() => { stop(); stop = watchDagGraphs(window.fastvibe.dag, useDagStore.getState()); });
+    return () => { offReconnect(); stop(); };
+  }, []);
 }

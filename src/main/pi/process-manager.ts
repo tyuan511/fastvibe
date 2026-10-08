@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { mkdir, rm, unlink } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -138,6 +138,7 @@ import { DisabledMemoryHost, type MemoryHost } from "../engine/memory-host";
 import { SubagentManager } from "../engine/subagents";
 import { reduceSubagent } from "@shared/subagent-state";
 import { SubagentControl } from "./subagent-control";
+import { resolveSubagentModel } from "./subagent-model";
 import { SubagentTurnRunner, type SubagentHostRequest, type SubagentHostResponse } from "./process-manager-subagent";
 import { THINKING_EFFORT_LEVELS, type SubagentConfig, type SubagentDraft, type GatewayBalanceResult, type GatewayKind } from "@shared/types";
 import { isAbortOutcome } from "@shared/abort";
@@ -162,11 +163,12 @@ import {
 import { projectSessionMessages } from "./process-manager-transcript";
 import { SkillManager } from "./skill-manager";
 import { promptAccepted } from "./prompt-acceptance";
+import { PromptPreparations } from "./prompt-preparation";
 import { sendOpeningPrompt } from "./opening-prompt";
 import type { AppConfigHostRequest, AppConfigHostResult } from "@shared/app-config";
 import type { DagHostRequest, DagHostResult } from "@shared/dag-tools";
-import { dagNodeFinished, isDagNodeId, type DagGraph, type DagNode } from "@shared/dag";
-import { DagScheduler, type DagNodeRun, type DagRunner } from "./dag-scheduler";
+import { DAG_TOOLS, canonicalDagId, dagNodeFinished, isDagNodeId, type DagGraph, type DagNode, type DagOutputPage } from "@shared/dag";
+import { buildPrompt, DagScheduler, type DagNodeRun, type DagRunner } from "./dag-scheduler";
 import { DagStore } from "../engine/dag-store";
 import { runDagTool } from "../dag-tools";
 import { builtinExtensionFile, builtinExtensionPaths, builtinSkillPaths, ExtensionManager } from "./extension-manager";
@@ -508,6 +510,7 @@ export class PiProcessManager {
   /** pi package installs (extensions), kept in the isolated agentDir. */
   #extensions: ExtensionManager;
   #memory: MemoryHost;
+  readonly #promptPreparations = new PromptPreparations();
   #subagentManager: SubagentManager;
   /** Live subagent registry and bounded transcript cache. */
   #subagents = new Map<string, SubagentInfo>();
@@ -565,7 +568,18 @@ export class PiProcessManager {
     this.#dagStore = new DagStore(this.#paths.dagFile);
     this.#dagStore.onChange = (conversationId, graph) => this.#emit({ type: "dag_changed", conversationId, graph });
     this.#dagScheduler = new DagScheduler(this.#dagStore, (args) => this.runDagNode(args), {
-      onSettled: (conversationId, nodes) => void this.#announceDagSettled(conversationId, nodes),
+      onSettled: (conversationId, nodes) => this.#announceDagSettled(conversationId, nodes),
+      notifyFailures: true,
+      parentModel: (conversationId) => this.#dagParentModel.get(conversationId),
+      providerConcurrency: 3,
+      resource: (conversationId, node) => {
+        let fallback = node.fallbackModel ?? this.#dagParentModel.get(conversationId);
+        if (!fallback) { const preferred = readDefaultModel(this.#paths); if (preferred) fallback = `${preferred.provider}/${preferred.id}`; }
+        const model = resolveSubagentModel(this.#models, node.model, fallback);
+        let workspace = this.#catalog.get(conversationId)?.cwd ?? conversationId;
+        try { workspace = realpathSync(workspace); } catch { /* A not-yet-created workspace keeps its catalog identity. */ }
+        return { workspace, provider: model?.provider };
+      },
     });
     // The extension API's getAgentDir() is environment-based, while FastVibe passes
     // the isolated directory programmatically to createAgentSession. Keep the role
@@ -664,6 +678,14 @@ export class PiProcessManager {
   listDagGraphs(): DagGraph[] {
     return this.#dagStore.list();
   }
+  getDagOutput(conversationId: string, id: string, offset = 0): DagOutputPage {
+    const node = this.#dagStore.node(conversationId, canonicalDagId(id));
+    if (!node) throw new Error("没有这个任务");
+    const output = this.#dagStore.output(conversationId, node);
+    const start = Math.max(0, Math.min(output.length, Number.isFinite(offset) ? Math.trunc(offset) : 0));
+    const end = Math.min(output.length, start + 12000);
+    return { output: output.slice(start, end), offset: start, totalChars: output.length, ...(end < output.length ? { nextOffset: end } : {}) };
+  }
   cancelDag(conversationId: string, ids?: string[]): string[] {
     return this.#dagScheduler.cancel(conversationId, ids);
   }
@@ -680,10 +702,12 @@ export class PiProcessManager {
    * `T-0001`, then `T-0001.2` …), so `abortSubagent` and the pane's transcript tab address it like
    * any other delegated run, and a rerun never inherits the previous run's status or transcript.
    */
-  runDagNode: DagRunner = async ({ conversationId, node, prompt, signal }): Promise<DagNodeRun> => {
+  runDagNode: DagRunner = async ({ conversationId, node, prompt, signal, onUsage }): Promise<DagNodeRun> => {
     const conversation = this.#catalog.get(conversationId);
     const live = this.#sessions.get(conversationId)?.session.model;
-    const parent = live ? `${live.provider}/${live.id}` : this.#dagParentModel.get(conversationId);
+    const parent = node.fallbackModel ?? (live ? `${live.provider}/${live.id}` : this.#dagParentModel.get(conversationId));
+    const granted = (await this.#mcp.tools()).filter((tool) => node.profile.tools?.includes(tool.name));
+    const upstream = (node.contextFrom ?? node.dependsOn).map((id) => this.#dagStore.node(conversationId, id)).filter((value): value is DagNode => Boolean(value));
     const response = await this.#runSubagent(conversationId, {
       subagentId: node.runId ?? node.id,
       agent: node.profile.name,
@@ -702,15 +726,36 @@ export class PiProcessManager {
       ...(parent ? { fallbackModel: parent } : {}),
       cwd: conversation?.cwd ?? this.#cwd,
       signal,
+      dag: {
+        coordinator: node.coordinator,
+        skills: node.profile.skills,
+        acceptance: node.acceptance ?? (node.coordinator ? "核对所有必要子任务的产物；说明失败或取消的分支如何解决，提供最终验收证据。" : undefined),
+        budget: node.budget,
+        onUsage,
+        onCheckpoint: () => {
+          const session = this.#subagentSessions.get(node.runId ?? node.id);
+          const current = this.#dagStore.node(conversationId, node.id);
+          if (!session || current?.runId !== node.runId) return;
+          const entryIds = sessionEntryIds(session);
+          this.#saveDagRun(conversationId, node.runId ?? node.id, mapEngineMessages(session.messages, (message) => entryIds.get(message), this.#subagentReasoning.get(node.runId ?? node.id), undefined, sessionCompletionTimes(session)));
+          const output = lastAssistantText(session.messages);
+          if (output) this.#dagStore.patch(conversationId, node.id, { output });
+        },
+        tools: granted,
+        prepareTask: (chars) => buildPrompt(node, upstream, chars),
+        childrenReady: () => this.#dagScheduler.descendants(conversationId, node.id).every((child) => dagNodeFinished(child.status)),
+      },
     });
     const runId = node.runId ?? node.id;
     const transcript = this.#subagentMessages.get(runId);
-    if (transcript) this.#saveDagRun(conversationId, runId, transcript);
+    if (transcript && this.#dagStore.node(conversationId, node.id) && this.#saveDagRun(conversationId, runId, transcript)) this.#subagentMessages.delete(runId);
+    if (!this.#dagStore.node(conversationId, node.id)) { this.#subagentMessages.delete(runId); this.#subagents.delete(runId); }
     const output = lastAssistantText(response.messages);
     const aborted = response.stopReason === "aborted";
     return {
-      status: aborted ? "aborted" : response.exitCode === 0 ? "completed" : "failed",
+      status: aborted ? "aborted" : response.report?.outcome === "blocked" ? "blocked" : response.exitCode === 0 ? "completed" : "failed",
       output,
+      ...(response.report ? { report: response.report } : {}),
       ...(response.errorMessage && !aborted ? { error: response.errorMessage } : {}),
       ...(response.model ? { model: response.model } : {}),
     };
@@ -727,15 +772,17 @@ export class PiProcessManager {
     return join(this.#paths.dagRunsDir, conversationId, `${runId}.json`);
   }
 
-  #saveDagRun(conversationId: string, runId: string, messages: ChatMessage[]): void {
+  #saveDagRun(conversationId: string, runId: string, messages: ChatMessage[]): boolean {
     const file = this.#dagRunFile(conversationId, runId);
-    if (!file) return;
+    if (!file) return false;
     try {
       mkdirSync(dirname(file), { recursive: true });
       writeFileSync(`${file}.tmp`, JSON.stringify(messages));
       renameSync(`${file}.tmp`, file);
+      return true;
     } catch (error) {
       console.warn(`[dag] could not save the transcript of ${runId}:`, error);
+      return false;
     }
   }
 
@@ -754,6 +801,7 @@ export class PiProcessManager {
   #dropDag(conversationId: string): void {
     this.#dagScheduler.dropConversation(conversationId);
     this.#dagParentModel.delete(conversationId);
+    for (const [id, info] of this.#subagents) if (info.conversationId === conversationId && isDagNodeId(id)) { this.#subagentMessages.delete(id); this.#subagents.delete(id); }
     if (!/^[\w.-]+$/.test(conversationId)) return;
     void rm(join(this.#paths.dagRunsDir, conversationId), { recursive: true, force: true }).catch(() => undefined);
   }
@@ -767,22 +815,23 @@ export class PiProcessManager {
    * how each task ended). `followUp` waits for a run in progress; on an idle chat `triggerTurn`
    * starts the turn that writes the summary.
    */
-  async #announceDagSettled(conversationId: string, nodes: DagNode[]): Promise<void> {
-    if (this.#queueShutdown || !this.#catalog.get(conversationId)) return;
+  async #announceDagSettled(conversationId: string, nodes: DagNode[]): Promise<boolean> {
+    if (this.#queueShutdown || !this.#catalog.get(conversationId)) return false;
+    const settled = !(this.#dagStore.get(conversationId)?.nodes.some((node) => !dagNodeFinished(node.status)) ?? false);
     const counts = new Map<string, number>();
     for (const node of nodes) counts.set(node.status, (counts.get(node.status) ?? 0) + 1);
     const label = (status: string): string =>
-      ({ completed: uiText("完成", "completed"), failed: uiText("失败", "failed"), skipped: uiText("跳过", "skipped"), cancelled: uiText("取消", "cancelled") })[status] ?? status;
-    const summary = ["completed", "failed", "skipped", "cancelled"]
+      ({ completed: uiText("完成", "completed"), failed: uiText("失败", "failed"), blocked: uiText("阻塞", "blocked"), skipped: uiText("跳过", "skipped"), cancelled: uiText("取消", "cancelled") })[status] ?? status;
+    const summary = ["completed", "failed", "blocked", "skipped", "cancelled"]
       .filter((status) => counts.get(status))
       .map((status) => `${counts.get(status)} ${label(status)}`)
       .join(uiText("，", ", "));
     const lines = nodes.map((node) => {
       const reason = node.status !== "completed" && node.error ? uiText(`：${node.error}`, `: ${node.error}`) : "";
-      return `- ${node.id} ${node.title} — ${label(node.status)}${reason}`;
+      return `- ${node.id} ${node.title} — ${label(node.status)}${reason.slice(0, 500)}${node.report ? `: ${node.report.summary.slice(0, 600)}` : ""}`.slice(0, Math.floor(12000 / Math.max(1, nodes.length)));
     });
     const text = [
-      uiText(`子任务已全部结束（${summary}）。`, `All sub-tasks have finished (${summary}).`),
+      settled ? uiText(`子任务已全部结束（${summary}）。`, `All sub-tasks have finished (${summary}).`) : uiText(`子任务有需要处理的新结果（${summary}），其他任务仍在执行。`, `Sub-tasks need attention (${summary}); other tasks are still running.`),
       ...lines,
       "",
       uiText(
@@ -790,15 +839,25 @@ export class PiProcessManager {
         "Read the outputs you need with dag_result and summarise the results for the user; explain any failed or skipped task, and retry with dag_retry if it makes sense.",
       ),
     ].join("\n");
+    const noticeId = nodes.map((node) => `${node.id}:${node.runId ?? "skip"}:${node.status}:${node.endedAt}`).join("|");
+    let deliveredSession: AgentSession | undefined;
+    const alreadyDelivered = (): boolean => deliveredSession?.messages.some((message) => {
+      const raw = message as unknown as { customType?: string; details?: { noticeId?: string } };
+      return raw.customType === "dag-settled" && raw.details?.noticeId === noticeId;
+    }) ?? false;
     try {
       const { session } = await this.#sessionFor(conversationId);
-      if (this.#queueShutdown) return;
+      deliveredSession = session;
+      if (alreadyDelivered()) return true;
+      if (this.#queueShutdown || this.#dagStore.get(conversationId)?.paused) return false;
       await session.sendCustomMessage(
-        { customType: "dag-settled", content: text, display: false, details: { nodes: nodes.map((node) => ({ id: node.id, status: node.status })) } },
+        { customType: "dag-settled", content: text, display: false, details: { noticeId, settled, nodes: nodes.map((node) => ({ id: node.id, status: node.status })) } },
         { triggerTurn: true, deliverAs: "followUp" },
       );
+      return true;
     } catch (error) {
       console.warn(`[dag] could not tell ${conversationId} its sub-tasks finished:`, error);
+      return alreadyDelivered();
     }
   }
   /**
@@ -883,6 +942,7 @@ export class PiProcessManager {
   }
 
   async stop(): Promise<void> {
+    this.#promptPreparations.cancel();
     this.#queueShutdown = true;
     this.#dagScheduler.stop(uiText("引擎已停止", "The engine was stopped"));
     this.#stopSessionSweep();
@@ -1274,6 +1334,7 @@ export class PiProcessManager {
    */
   async abort(conversationId?: string): Promise<void> {
     const queueOwner = conversationId ?? this.#activeId ?? undefined;
+    if (queueOwner) this.#promptPreparations.cancel(queueOwner);
     // Stopping the chat stops what it set running: its sub-agent tasks are not left to carry on
     // behind a Stop the user believes ended everything. Told before the session is awaited, so a
     // slow stop cannot let a node start in the meantime.
@@ -1335,6 +1396,10 @@ export class PiProcessManager {
     const control = this.#subagentControls.get(subagentId);
     if (!control) return;
     this.#stoppedSubagents.add(subagentId);
+    if (owner && isDagNodeId(subagentId)) {
+      const node = this.#dagStore.get(owner)?.nodes.find((item) => item.runId === subagentId);
+      if (node) this.#dagScheduler.cancel(owner, [node.id], uiText("已被用户终止", "Stopped by the user"));
+    }
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([
@@ -3049,7 +3114,7 @@ export class PiProcessManager {
       extensionFactories: [{
         name: "fastvibe-memory",
         hidden: true,
-        factory: this.#memory.extension(conversation.id, conversation.project ?? cwd),
+        factory: this.#memory.extension(conversation.id, conversation.project ?? cwd, () => this.#promptPreparations.signal(conversation.id)),
       }, {
         // MCP tools are registered through an extension factory rather than the
         // SDK's one-shot `customTools` option. That lets session.reload() rebuild
@@ -3098,6 +3163,7 @@ export class PiProcessManager {
       resourceLoader,
       ...(sessionStartEvent ? { sessionStartEvent } : {}),
     });
+    this.#promptPreparations.install(conversation.id, result.session);
     await result.session.bindExtensions({
       // Extensions see `rpc`, not the default `print`: FastVibe bridges dialogs,
       // status, widgets and session replacement, so TUI-aware plugins
@@ -4320,11 +4386,21 @@ export class PiProcessManager {
       listWorktrees: () => this.#listGitWorktrees(conversationId),
       appConfig: (request) =>
         this.#appConfigHost ? this.#appConfigHost(request) : Promise.resolve({ ok: false, error: uiText("当前宿主不支持修改 FastVibe 设置", "This host cannot change FastVibe settings") }),
-      dag: (request, signal) => {
+      dag: async (request, signal) => {
         const model = this.#sessions.get(conversationId)?.session.model;
         if (model) this.#dagParentModel.set(conversationId, `${model.provider}/${model.id}`);
+        const ownedNode = owner !== conversationId ? this.#dagStore.get(conversationId)?.nodes.find((node) => node.runId === owner) : undefined;
+        if (owner !== conversationId && !ownedNode) return { ok: false, error: "这次子任务已结束" };
         return runDagTool(
           {
+            tools: [...DAG_TOOLS, ...(await this.#mcp.tools()).map((tool) => tool.name)],
+            ...(ownedNode ? { scope: { nodeId: ownedNode.id, runId: owner } } : {}),
+            send: async (id, message) => {
+              const node = this.#dagStore.node(conversationId, id);
+              const child = node?.runId ? this.#subagentSessions.get(node.runId) : undefined;
+              if (!node || node.status !== "running" || !child || this.#subagentControls.get(node.runId!)?.aborted) throw new Error("任务当前无法接收信息；待执行或已结束的任务请用 dag_update");
+              await child.steer(message);
+            },
             store: this.#dagStore,
             scheduler: this.#dagScheduler,
             // Read at call time: a role saved in Settings mid-conversation is reusable on the
