@@ -48,6 +48,11 @@
     "mobile:android": "pnpm --filter @fastvibe/mobile android",
     "mobile:web": "pnpm --filter @fastvibe/mobile web",
     "mobile:typecheck": "pnpm --filter @fastvibe/mobile typecheck",
+    "flutter:analyze": "cd apps/mobile_flutter && PATH=\"$HOME/development/flutter/bin:$PATH\" flutter analyze",
+    "flutter:test": "cd apps/mobile_flutter && PATH=\"$HOME/development/flutter/bin:$PATH\" flutter test",
+    "flutter:ios": "cd apps/mobile_flutter && PATH=\"$HOME/development/flutter/bin:$PATH\" flutter build ios --release --no-codesign",
+    "flutter:apk": "cd apps/mobile_flutter && PATH=\"$HOME/development/flutter/bin:$PATH\" tool/build_release.sh",
+    "flutter:i18n": "node apps/mobile_flutter/tool/gen_i18n.mjs",
     "fetch:cua-driver": "node scripts/fetch-cua-driver.mjs"
   },
   "packageManager": "pnpm@11.22.0",
