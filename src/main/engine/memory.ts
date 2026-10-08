@@ -7,10 +7,10 @@ import { Type } from "typebox";
 import { canonicalize, type Answer, type DecideRequest } from "./decision/protocol";
 import { acceptValid } from "./decision/dispatch";
 import { createJevBackend } from "./decision/backends/jev";
+import { resolveSystemOne } from "./decision/systemone";
 import { DecisionRuntime } from "./decision/runtime";
 import { DecisionTraceFile } from "./decision/trace";
 import { readDecisionConfig } from "./decision/store";
-import { loadProviderKeys } from "./providers";
 import type { FastVibePaths } from "./paths";
 import type {
   MemoryDetail,
@@ -472,10 +472,10 @@ export class MemoryManager {
 
   /** A Jev budget for one operation; without a key every call falls back. */
   async #jevBudget(budgetKey: string, maxCalls: number, timeMs: number): Promise<JevBudget> {
-    const key = await this.#jevKey().catch(() => undefined);
-    const runtime = key
+    const resolved = await this.#jevResolved().catch(() => undefined);
+    const runtime = resolved
       ? new DecisionRuntime({
-          backend: createJevBackend({ apiKey: key }),
+          backend: createJevBackend(resolved),
           trace: new DecisionTraceFile(this.#paths.decisionTraceFile),
           requestTimeoutMs: JEV_MEM_PROFILE.timeoutMs * (JEV_MEM_PROFILE.maxRetries + 1),
           attemptTimeoutMs: JEV_MEM_PROFILE.timeoutMs,
@@ -779,10 +779,14 @@ export class MemoryManager {
     return Boolean(await this.#jevKey());
   }
 
-  async #jevKey(): Promise<string | undefined> {
+  async #jevResolved(): Promise<{ apiKey: string; endpoint: string; model: string } | undefined> {
     const decision = readDecisionConfig(this.#paths.decisionFile);
-    const key = (await loadProviderKeys(this.#paths))["FASTVIBE_JEV_API_KEY"];
-    return decision.kind === "jev" && decision.memoryControl === true ? key : undefined;
+    if (!(decision.kind === "jev" && decision.memoryControl === true)) return undefined;
+    return resolveSystemOne(this.#paths);
+  }
+
+  async #jevKey(): Promise<string | undefined> {
+    return (await this.#jevResolved())?.apiKey;
   }
 
   #emit(): void {

@@ -230,6 +230,8 @@
     "pathPreview": "预览",
     "pathReveal": "在文件夹中显示",
     "pathCopy": "复制完整路径",
+    "copy": "复制内容",
+    "quoteCode": "引用代码到对话",
     "pathMissing": "文件不存在"
   },
   "model": {

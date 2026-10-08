@@ -8,6 +8,7 @@ import {
 } from "electron";
 import { statSync } from "node:fs";
 import { homedir } from "node:os";
+import { VERSION as piVersion } from "@earendil-works/pi-coding-agent";
 import { Ipc, type AppModelsDevInfo } from "@shared/ipc";
 import { broadcast } from "./broadcast";
 import { registerEngineIpc } from "./engine-handlers";
@@ -492,6 +493,7 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): void {
     const paths = getFastVibePaths();
     return {
       version: app.getVersion(),
+      engineVersion: piVersion,
       userData: paths.userData,
       runtimeRoot: paths.runtimeRoot,
       platform: process.platform,

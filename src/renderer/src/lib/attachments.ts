@@ -29,6 +29,17 @@ export function pastedTextAttachmentName(text: string): string {
   return chars.length > PASTED_TEXT_NAME_LENGTH ? `${head}…` : head;
 }
 
+/** Build a text attachment for selections, previews and other in-app references. */
+export function createTextAttachment(text: string, name?: string): ChatAttachment {
+  return {
+    id: randomUUID(),
+    kind: "file",
+    name: name || pastedTextAttachmentName(text),
+    mimeType: "text/plain",
+    text,
+  };
+}
+
 function graphemes(text: string): string[] {
   if (typeof Intl !== "undefined" && "Segmenter" in Intl) {
     return [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text)].map((part) => part.segment);

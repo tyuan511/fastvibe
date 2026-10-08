@@ -230,6 +230,8 @@
     "pathPreview": "Preview",
     "pathReveal": "Show in folder",
     "pathCopy": "Copy full path",
+    "copy": "Copy content",
+    "quoteCode": "Quote code into chat",
     "pathMissing": "File not found"
   },
   "model": {

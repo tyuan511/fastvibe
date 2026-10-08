@@ -772,7 +772,7 @@ export type ProviderModel = {
 };
 
 /** Streaming APIs offered in settings; values match pi-coding-agent's `api` field. */
-export const PROVIDER_APIS = ["openai-completions", "openai-responses", "anthropic-messages", "google-generative-ai"] as const;
+export const PROVIDER_APIS = ["openai-completions", "openai-responses", "anthropic-messages", "google-generative-ai", "systemone"] as const;
 
 export type ProviderApi = (typeof PROVIDER_APIS)[number];
 
@@ -1385,4 +1385,20 @@ export type ImportRunResult = {
   outcomes: ImportOutcome[];
   /** The refreshed catalog, so the shell's sidebar picks the new chats up. */
   snapshot: WorkspaceSnapshot;
+};
+
+/** What one "sync configuration to global pi" wrote. Names and counts only — no secrets. */
+export type PiConfigSyncReport = {
+  agentDir: string;
+  /** Set when an existing file was copied aside before it changed. */
+  backupDir?: string;
+  providersWritten: string[];
+  providersKept: string[];
+  providersSkipped: string[];
+  authWritten: string[];
+  settingsUpdated: string[];
+  mcpWritten: string[];
+  mcpKept: string[];
+  mcpSkipped: string[];
+  unchanged: boolean;
 };

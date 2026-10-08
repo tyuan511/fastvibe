@@ -40,6 +40,10 @@
     "reveal": "在访达中显示",
     "refresh": "刷新",
     "back": "返回目录树",
+    "copy": "复制内容",
+    "copied": "已复制",
+    "copyFailed": "复制失败",
+    "quoted": "代码已添加到对话",
     "previewFailed": "无法预览该文件"
   },
   "changes": {

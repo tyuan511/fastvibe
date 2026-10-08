@@ -1,5 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import type { AuthOperationOptions, Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
 
 /**
@@ -97,6 +98,11 @@ export function readOAuthProviderIds(file: string): Set<string> {
   return new Set(Object.keys(readCredentialsFile(file)));
 }
 
+/** Every stored credential, oauth and api-key alike. Missing or corrupt files are empty. */
+export function readOAuthCredentials(file: string): Record<string, Credential> {
+  return readCredentialsFile(file);
+}
+
 export function hasOAuthCredential(file: string, providerId: string): boolean {
   return providerId in readCredentialsFile(file);
 }
@@ -153,4 +159,26 @@ function writeCredentialsFile(file: string, credentials: Record<string, Credenti
   // `mode` on write only applies when the file is created; a file that already
   // existed keeps its old permissions, and an older build could have made it 0644.
   chmodSync(file, 0o600);
+}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The stable id of this installation, created on first use and kept beside the OAuth
+ * file. "Sign in with ChatGPT" sends it to OpenAI as the agent host id and refuses to
+ * start without one (`getDeviceId` in the SDK's `LoginOptions`); it must be the same
+ * on every later login, so it is persisted rather than minted per call.
+ */
+export function readOrCreateDeviceId(oauthFile: string): string {
+  const file = join(dirname(oauthFile), "device-id");
+  try {
+    const stored = readFileSync(file, "utf8").trim();
+    if (UUID_PATTERN.test(stored)) return stored;
+  } catch {
+    // Missing on first use.
+  }
+  const id = randomUUID();
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, `${id}\n`, { mode: 0o600 });
+  return id;
 }

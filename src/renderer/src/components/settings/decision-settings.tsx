@@ -1,19 +1,15 @@
 import { useEffect, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { HugeiconsIcon } from "@hugeicons/react";
-import { CircleQuestionMarkIcon } from "@hugeicons/core-free-icons";
 import { Ipc } from "@shared/ipc";
-import { DECISION_SCENARIOS, DEFAULT_DECISION_MODEL, decisionModelConfigOf, type DecisionKeyState, type DecisionModelConfig, type DecisionScenario } from "@shared/decision";
+import { DECISION_SCENARIOS, DEFAULT_DECISION_MODEL, decisionModelConfigOf, type DecisionModelConfig, type DecisionModelRef, type DecisionScenario } from "@shared/decision";
+import type { ProviderConfig } from "@shared/types";
 import { blockedRemotely } from "@/lib/remote-unavailable";
 import { cleanError } from "@/lib/ipc-error";
 import { IS_REMOTE } from "@/lib/platform";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SettingsGroup, SettingsRow } from "./settings-group";
 
 const EMPTY: DecisionModelConfig = DEFAULT_DECISION_MODEL;
@@ -35,9 +31,7 @@ export function DecisionSettings() {
   const [draft, setDraft] = useState<DecisionModelConfig>(EMPTY);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [keys, setKeys] = useState<DecisionKeyState>({ jev: false });
-  const [keyDraft, setKeyDraft] = useState("");
-  const [keySaving, setKeySaving] = useState(false);
+  const [providers, setProviders] = useState<ProviderConfig[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -46,9 +40,9 @@ export function DecisionSettings() {
       applyExternal(config);
       setLoading(false);
     });
-    window.fastvibe.decision.keyState().then((state) => {
-      if (!cancelled) setKeys(state);
-    });
+    window.fastvibe.providers.list().then((list) => {
+      if (!cancelled) setProviders(list);
+    }).catch(() => undefined);
     const unsubscribe = window.fastvibe.decision.onChanged((config) => applyExternal(config));
     return () => {
       cancelled = true;
@@ -63,7 +57,6 @@ export function DecisionSettings() {
     setDraft(next);
   }
 
-  const kind = draft.kind;
   const dirty = DECISION_SCENARIOS.some((key) => draft[key] !== saved[key]);
 
   async function save(next: DecisionModelConfig) {
@@ -83,12 +76,18 @@ export function DecisionSettings() {
    * Switch the engine at once, with the scenarios as last *saved*: an unsaved tick in
    * 应用场景 stays a draft (still shown, still needing Save) rather than riding along.
    */
-  async function saveKind(nextKind: DecisionModelConfig["kind"]) {
+  async function saveSelection(value: string) {
     if (blockedRemotely(Ipc.decisionSaveConfig)) return;
     const pending = scenariosOf(draft);
+    const model = value === "off" ? undefined : modelFromValue(value);
+    if (value !== "off" && !model) return;
     setSaving(true);
     try {
-      const stored = decisionModelConfigOf(await window.fastvibe.decision.saveConfig({ ...saved, kind: nextKind }));
+      const stored = decisionModelConfigOf(await window.fastvibe.decision.saveConfig({
+        ...saved,
+        kind: model ? "jev" : "off",
+        ...(model ? { model } : { model: undefined }),
+      }));
       setSaved(stored);
       setDraft({ ...stored, ...pending });
       toast.success(t("decision.saved"));
@@ -99,82 +98,48 @@ export function DecisionSettings() {
     }
   }
 
-  async function saveKey(value: string) {
-    if (blockedRemotely(Ipc.decisionSetKey)) return;
-    setKeySaving(true);
-    try {
-      setKeys(await window.fastvibe.decision.setKey(value));
-      setKeyDraft("");
-      toast.success(t(value.trim() ? "decision.keyStored" : "decision.keyCleared"));
-    } catch (cause) {
-      toast.error(t("decision.saveFailed", { error: cleanError(cause) }));
-    } finally {
-      setKeySaving(false);
-    }
-  }
-
-  const models = { off: t("decision.off"), jev: t("decision.jev") };
-  const verifying = keySaving && Boolean(keyDraft.trim());
+  const choices = systemOneChoices(providers);
+  const selected = draft.kind === "jev" && draft.model && choices.some((item) => item.provider.id === draft.model?.provider && item.model.id === draft.model?.id)
+    ? optionValue(draft.model)
+    : "off";
+  const items: Record<string, string> = { off: t("decision.off") };
+  for (const choice of choices) items[optionValue(choice)] = `${choice.provider.name} / ${choice.model.name || choice.model.id}`;
 
   return (
     <SettingsGroup>
       <SettingsRow
         title={t("decision.model")}
-        description={IS_REMOTE ? t("decision.remoteHint") : undefined}
+        description={IS_REMOTE ? t("decision.remoteHint") : choices.length === 0 ? t("decision.noSystemOne") : undefined}
         control={
           <Select
-            value={kind}
-            items={models}
+            value={selected}
+            items={items}
             disabled={loading || saving}
             onValueChange={(value) => {
-              const next = value === "jev" ? "jev" : "off";
-              if (!value || next === saved.kind) return;
-              void saveKind(next);
+              if (!value || value === selected) return;
+              void saveSelection(value);
             }}
           >
-            <SelectTrigger aria-label={t("decision.model")} className="w-44">
+            <SelectTrigger aria-label={t("decision.model")} className="w-72">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="off">{models.off}</SelectItem>
-              <SelectItem value="jev">{models.jev}</SelectItem>
+              <SelectItem value="off">{t("decision.off")}</SelectItem>
+              {groupChoices(choices).map((group) => (
+                <SelectGroup key={group.provider.id}>
+                  <SelectLabel>{group.provider.name}</SelectLabel>
+                  {group.models.map((model) => (
+                    <SelectItem key={optionValue({ provider: group.provider, model })} value={optionValue({ provider: group.provider, model })}>
+                      {model.name || model.id}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              ))}
             </SelectContent>
           </Select>
         }
       />
-      {kind === "jev" && (
-        <SettingsRow
-          title={
-            <>
-              <Label>{t("decision.apiKey")}</Label>
-              <KeyHelp />
-            </>
-          }
-          description={keys.jev ? t("decision.keySaved") : t("decision.keyMissing")}
-          control={
-            <div className="flex items-center gap-2">
-              <Input
-                type="password"
-                aria-label={t("decision.apiKey")}
-                className="w-44"
-                placeholder={keys.jev ? "••••••••" : t("decision.keyPlaceholder")}
-                value={keyDraft}
-                disabled={keySaving}
-                onChange={(event) => setKeyDraft(event.target.value)}
-              />
-              <Button size="sm" variant="outline" disabled={keySaving || !keyDraft.trim()} onClick={() => void saveKey(keyDraft)}>
-                {t(verifying ? "decision.keyVerifying" : "decision.keySave")}
-              </Button>
-              {keys.jev && (
-                <Button size="sm" variant="ghost" disabled={keySaving} onClick={() => void saveKey("")}>
-                  {t("decision.keyClear")}
-                </Button>
-              )}
-            </div>
-          }
-        />
-      )}
-      {kind === "jev" && (
+      {draft.kind === "jev" && draft.model && (
         <SettingsRow
           align="start"
           title={t("decision.scenarios")}
@@ -210,35 +175,34 @@ export function DecisionSettings() {
   );
 }
 
-function KeyHelp(): JSX.Element {
-  const { t } = useTranslation("settings");
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <span
-            tabIndex={0}
-            aria-label={t("decision.keyHelp")}
-            className="inline-flex size-4 shrink-0 items-center justify-center rounded text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-          />
-        }
-      >
-        <HugeiconsIcon strokeWidth={2} icon={CircleQuestionMarkIcon} className="size-3.5" />
-      </TooltipTrigger>
-      <TooltipContent side="bottom" className="max-w-80 whitespace-normal">
-        <span>
-          {t("decision.keyHelp")}{" "}
-          <a
-            href="https://console.typesafe.ai"
-            target="_blank"
-            rel="noreferrer"
-            className="font-medium text-primary underline underline-offset-3 hover:text-primary/80"
-          >
-            {t("decision.keyConsole")}
-          </a>{" "}
-          {t("decision.keySteps")}
-        </span>
-      </TooltipContent>
-    </Tooltip>
+type SystemOneChoice = { provider: ProviderConfig; model: ProviderConfig["models"][number] };
+
+function systemOneChoices(providers: ProviderConfig[]): SystemOneChoice[] {
+  return providers.flatMap((provider) =>
+    provider.enabled
+      ? provider.models
+          .filter((model) => (model.api ?? provider.api) === "systemone")
+          .map((model) => ({ provider, model }))
+      : [],
   );
+}
+
+function groupChoices(choices: SystemOneChoice[]): Array<{ provider: ProviderConfig; models: ProviderConfig["models"] }> {
+  const groups: Array<{ provider: ProviderConfig; models: ProviderConfig["models"] }> = [];
+  for (const choice of choices) {
+    const group = groups.find((item) => item.provider.id === choice.provider.id);
+    if (group) group.models.push(choice.model);
+    else groups.push({ provider: choice.provider, models: [choice.model] });
+  }
+  return groups;
+}
+
+function optionValue(ref: DecisionModelRef | SystemOneChoice): string {
+  return "model" in ref ? `${ref.provider.id}\t${ref.model.id}` : `${ref.provider}\t${ref.id}`;
+}
+
+function modelFromValue(value: string): DecisionModelRef | undefined {
+  const [provider, id] = value.split("\t");
+  if (!provider || !id) return undefined;
+  return { provider, id };
 }

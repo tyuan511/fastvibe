@@ -8,8 +8,13 @@
  * There is no secret in this shape — Jev's key lives in the agent `.env` under
  * `JEV_KEY_ENV`, never here — so it is safe to hand a renderer or a remote client whole.
  */
+/** A System One model chosen in 模型管理. Absent when the engine is off. */
+export type DecisionModelRef = { provider: string; id: string };
+
 export type DecisionModelConfig = {
   kind: "off" | "jev";
+  /** Which System One model decides. The key and endpoint live on that provider. */
+  model?: DecisionModelRef;
   /** Offer `browser_task`. Absent on older files: on only when Jev was already selected. */
   browserControl: boolean;
   /**
@@ -46,12 +51,21 @@ export type DecisionScenario = (typeof DECISION_SCENARIOS)[number];
  * Laya model, removed for being unable to hold a web page in its 512-token window —
  * reads as off. A file written before `browserControl` existed keeps the tool on for Jev.
  */
+function decisionModelRefOf(value: unknown): DecisionModelRef | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const { provider, id } = value as { provider?: unknown; id?: unknown };
+  if (typeof provider !== "string" || typeof id !== "string" || !provider || !id) return undefined;
+  return { provider, id };
+}
+
 export function decisionModelConfigOf(value: unknown): DecisionModelConfig {
   if (typeof value !== "object" || value === null) return DEFAULT_DECISION_MODEL;
-  const record = value as { kind?: unknown; browserControl?: unknown; computerControl?: unknown; batchDecide?: unknown; memoryControl?: unknown };
+  const record = value as { kind?: unknown; model?: unknown; browserControl?: unknown; computerControl?: unknown; batchDecide?: unknown; memoryControl?: unknown };
   const kind = record.kind === "jev" ? "jev" : "off";
+  const model = decisionModelRefOf(record.model);
   return {
     kind,
+    ...(model ? { model } : {}),
     browserControl: typeof record.browserControl === "boolean" ? record.browserControl : kind === "jev",
     computerControl: record.computerControl === true,
     batchDecide: record.batchDecide === true,

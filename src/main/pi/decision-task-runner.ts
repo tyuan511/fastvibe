@@ -4,12 +4,13 @@ import { parseTextValue, TEXT_VALUE_INSTRUCTIONS } from "../engine/decision/brow
 import { createJevBackend } from "../engine/decision/backends/jev";
 import { acceptValid } from "../engine/decision/dispatch";
 import { DecisionRuntime, type DecisionBackend } from "../engine/decision/runtime";
+import { resolveSystemOne } from "../engine/decision/systemone";
 import { DecisionTraceFile } from "../engine/decision/trace";
 import { readDecisionConfig } from "../engine/decision/store";
 import { getFastVibePaths } from "../engine/paths";
-import { loadProviderKeys } from "../engine/providers";
+import { adoptLegacyJevProvider } from "../engine/providers";
 import { uiText } from "../engine/ui-text";
-import { JEV_KEY_ENV, type DecisionModelConfig } from "@shared/decision";
+import type { DecisionModelConfig } from "@shared/decision";
 
 /**
  * What `browser_task` and `computer_task` share (docs/decision-layer.md §7): the
@@ -79,9 +80,11 @@ export function trackDecisionWork(stop: AbortController): () => void {
 /** The backend the saved config selects, or the sentence explaining why there is none. */
 export async function backendFor(config: DecisionModelConfig): Promise<DecisionBackend | string> {
   if (config.kind === "jev") {
-    const key = (await loadProviderKeys(getFastVibePaths()))[JEV_KEY_ENV];
-    if (!key) return uiText("还没有配置 Jev API key（设置 → 决策引擎）", "No Jev API key is configured (Settings → Decision engine)");
-    return createJevBackend({ apiKey: key });
+    const paths = getFastVibePaths();
+    await adoptLegacyJevProvider(paths);
+    const resolved = await resolveSystemOne(paths);
+    if (!resolved) return uiText("还没有可用的 System One 模型（设置 → 模型管理）", "No System One model is available (Settings → Models)");
+    return createJevBackend(resolved);
   }
   return uiText("决策引擎未启用，请改用逐步操作的工具", "The decision engine is off; use the step-by-step tools instead");
 }

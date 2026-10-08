@@ -38,6 +38,7 @@ import type {
   ImportCandidate,
   ImportRunResult,
   ImportSourceId,
+  PiConfigSyncReport,
   ImportSourceStatus,
   McpServerConfig,
   McpServerStatus,
@@ -265,6 +266,9 @@ export function createFastVibeApi(t: ApiTransport) {
         t.invoke(Ipc.engineImportCandidates, { source }),
       importSessions: (source: ImportSourceId, ids: string[]): Promise<ImportRunResult> =>
         t.invoke(Ipc.engineImportSessions, { source, ids }),
+      /** 设置 → 关于: write the connected config into the global pi agent directory. */
+      syncPiConfig: (mode: "merge" | "replace"): Promise<PiConfigSyncReport> =>
+        t.invoke(Ipc.engineSyncPiConfig, { mode }),
       promptConversation: (id: string, message: string, images?: PromptImage[]): Promise<void> =>
         t.invoke(Ipc.enginePromptConversation, { id, message, images }),
       getConversationMessages: (id: string): Promise<ChatMessage[]> =>

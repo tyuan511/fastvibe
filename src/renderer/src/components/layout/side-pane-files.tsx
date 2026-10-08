@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { ArrowLeft01Icon, Folder01Icon, RefreshIcon } from "@hugeicons/core-free-icons";
+import { ArrowLeft01Icon, Copy01Icon, Folder01Icon, RefreshIcon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { IconButton } from "@/components/icon-button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { FileIcon } from "@/components/file-icon";
-import { PreviewBody } from "@/components/chat/preview-panel";
+import { PreviewBody, previewText } from "@/components/chat/preview-panel";
 import { cn } from "@/lib/utils";
 import { useSidePaneStore, type SidePaneTab } from "@/stores/side-pane";
 import type { DirEntry, FilePreview } from "@shared/types";
@@ -13,6 +13,9 @@ import { isRemoteRef } from "@/lib/remote-project";
 import { blockedRemotely } from "@/lib/remote-unavailable";
 import { Ipc } from "@shared/ipc";
 import { readExpandedDirs, writeExpandedDirs } from "@/lib/file-tree-state";
+import { createTextAttachment } from "@/lib/attachments";
+import { useSessionStore } from "@/stores/session";
+import { toast } from "sonner";
 
 type DirMap = Record<string, DirEntry[]>;
 
@@ -210,6 +213,27 @@ function FilePreviewPane({
   backClassName?: string;
 }): JSX.Element {
   const { t } = useTranslation("sidepane");
+  const [copied, setCopied] = useState(false);
+  const text = previewText(preview);
+
+  async function copyContent(): Promise<void> {
+    if (text === undefined) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    } catch {
+      toast.error(t("files.copyFailed"));
+    }
+  }
+
+  function quoteCode(code: string): void {
+    const store = useSessionStore.getState();
+    if (!store.activeId) return;
+    store.setComposer(store.draft, [...store.attachments, createTextAttachment(code, preview.name)]);
+    toast.success(t("files.quoted"));
+  }
+
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="flex h-10 shrink-0 items-center gap-1.5 border-b border-border px-2">
@@ -226,6 +250,16 @@ function FilePreviewPane({
         <span className="min-w-0 flex-1 truncate text-xs font-medium" title={preview.path}>
           {preview.name}
         </span>
+        {text !== undefined ? (
+          <IconButton
+            size="icon-xs"
+            variant="ghost"
+            label={copied ? t("files.copied") : t("files.copy")}
+            onClick={() => void copyContent()}
+          >
+            <HugeiconsIcon strokeWidth={2} icon={copied ? Tick02Icon : Copy01Icon} />
+          </IconButton>
+        ) : null}
         {preview.kind !== "error" && !isRemoteRef(preview.path) ? (
           <IconButton
             size="icon-xs"
@@ -241,7 +275,10 @@ function FilePreviewPane({
         ) : null}
       </div>
       <ScrollArea className="min-h-0 flex-1">
-        <PreviewBody preview={preview} />
+        <PreviewBody
+          preview={preview}
+          onQuote={preview.kind === "code" || preview.kind === "diff" ? quoteCode : undefined}
+        />
       </ScrollArea>
     </div>
   );

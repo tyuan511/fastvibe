@@ -40,6 +40,10 @@
     "reveal": "Show in Finder",
     "refresh": "Refresh",
     "back": "Back to tree",
+    "copy": "Copy content",
+    "copied": "Copied",
+    "copyFailed": "Copy failed",
+    "quoted": "Code added to the conversation",
     "previewFailed": "Could not preview this file"
   },
   "changes": {

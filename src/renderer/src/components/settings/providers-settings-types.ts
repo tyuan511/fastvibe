@@ -5,6 +5,7 @@ export const PROVIDER_API_ITEMS: Record<ProviderApi, string> = {
   "openai-responses": "OpenAI Responses (/responses)",
   "anthropic-messages": "Anthropic Messages (/v1/messages)",
   "google-generative-ai": "Google Gemini (/v1beta)",
+  systemone: "System One (/systemone)",
 };
 
 /** Short label for a model's pinned protocol, where the row is too narrow for the full one. */
@@ -13,6 +14,7 @@ export const PROVIDER_API_SHORT: Record<ProviderApi, string> = {
   "openai-responses": "Responses",
   "anthropic-messages": "Messages",
   "google-generative-ai": "Gemini",
+  systemone: "System One",
 };
 
 /** `native` = a pi-coding-agent built-in provider configured with an API key or a login. */

@@ -6,6 +6,14 @@ import { Download01Icon, RefreshIcon, RotateCcwIcon } from "@hugeicons/core-free
 import { AppLogo } from "@/components/app-logo";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
 import { cleanError } from "@/lib/ipc-error";
 import { useSettingsStore } from "@/stores/settings";
@@ -18,10 +26,12 @@ import { Ipc } from "@shared/ipc";
 /**
  * Settings → 关于: who this install is (logo, version) and what it is built from.
  *
- * Two cards below the identity header. 更新 first — the app's own update check. 更多 holds
- * everything else about this install: the models.dev snapshot (refreshable now; it also
- * refreshes on its own hourly — limits and prices move faster than releases), where its data
- * lives, exporting the main/renderer logs as a zip, and resetting preferences.
+ * Three cards below the identity header. 更新 is the app's own update check. The next card
+ * is the embedded engine: its pi coding agent version, and the one-shot merge of the
+ * connected config into the global pi install. 更多 holds everything else about this
+ * install: the models.dev snapshot (refreshable now; it also refreshes on its own hourly —
+ * limits and prices move faster than releases), where its data lives, exporting the
+ * main/renderer logs as a zip, and resetting preferences.
  */
 export function AboutSettings(): JSX.Element {
   const { t } = useTranslation("settings");
@@ -31,6 +41,8 @@ export function AboutSettings(): JSX.Element {
   const [exporting, setExporting] = useState(false);
   const [exportedPath, setExportedPath] = useState("");
   const [resetting, setResetting] = useState(false);
+  const [confirmSync, setConfirmSync] = useState(false);
+  const [syncing, setSyncing] = useState<"merge" | "replace" | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -82,6 +94,21 @@ export function AboutSettings(): JSX.Element {
 
   const modelsDev = info?.modelsDev;
 
+  function syncConfig(mode: "merge" | "replace"): void {
+    setSyncing(mode);
+    void window.fastvibe.engine
+      .syncPiConfig(mode)
+      .then((report) => {
+        setConfirmSync(false);
+        if (report.unchanged) toast.success(t("about.syncUnchanged"));
+        else toast.success(report.backupDir ? t("about.syncDoneBackup") : t("about.syncDone"));
+      })
+      .catch((err: unknown) => {
+        toast.error(t("about.syncFailed", { error: err instanceof Error ? err.message : String(err) }));
+      })
+      .finally(() => setSyncing(null));
+  }
+
   return (
     <div className="space-y-6">
       <header className="flex items-center gap-4">
@@ -98,6 +125,45 @@ export function AboutSettings(): JSX.Element {
       </header>
 
       <AboutUpdate />
+
+      <SettingsGroup>
+        <SettingsRow
+          title={t("about.engine")}
+          description={t("about.engineDesc")}
+          control={
+            <span className="font-mono text-sm">{info?.engineVersion ?? "—"}</span>
+          }
+        />
+        <SettingsRow
+          title={t("about.sync")}
+          description={t("about.syncDesc")}
+          control={
+            <Button size="xs" variant="outline" disabled={syncing !== null} onClick={() => setConfirmSync(true)}>
+              {syncing ? t("about.syncing") : t("about.syncAction")}
+            </Button>
+          }
+        />
+      </SettingsGroup>
+
+      <Dialog open={confirmSync} onOpenChange={(open) => { if (!syncing) setConfirmSync(open); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("about.syncConfirmTitle")}</DialogTitle>
+            <DialogDescription>{t("about.syncConfirmBody")}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" disabled={syncing !== null} onClick={() => setConfirmSync(false)}>
+              {t("about.syncCancel")}
+            </Button>
+            <Button variant="outline" disabled={syncing !== null} onClick={() => syncConfig("merge")}>
+              {syncing === "merge" ? t("about.syncing") : t("about.syncMerge")}
+            </Button>
+            <Button disabled={syncing !== null} onClick={() => syncConfig("replace")}>
+              {syncing === "replace" ? t("about.syncing") : t("about.syncReplace")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <SettingsGroup title={t("about.more")}>
         <SettingsRow

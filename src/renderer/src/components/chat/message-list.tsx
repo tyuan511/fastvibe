@@ -24,6 +24,12 @@ import type { ChatAttachment, ChatMessage } from "@shared/types";
 import { SelectionActionBar } from "./selection-action-bar";
 import { NewSessionHero } from "./new-session";
 import { TurnRail, type TurnMarker } from "./turn-rail";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 
 const PROMPT_LIMIT = 140;
 const REPLY_LIMIT = 180;
@@ -294,6 +300,13 @@ function usePinnedPrompt(): { ref: (node: HTMLDivElement | null) => void; pinned
  * prompt is actually covering something, so a reply's first line is never dimmed at
  * rest. `content-visibility` would take the sticky element out of the scroll flow.
  */
+function copyableRowText(row: MessageRow): string {
+  return row.messages
+    .map((message) => stripAttachmentBlock(message.text).trim())
+    .filter(Boolean)
+    .join("\n\n");
+}
+
 function ThreadRow({
   row,
   last,
@@ -317,6 +330,8 @@ function ThreadRow({
   showTimestamp: boolean;
   collapseRuns: boolean;
 }): JSX.Element {
+  const { t } = useTranslation("chat");
+  const selectionRef = useRef("");
   const isUser = row.messages[0].role === "user";
   const { ref, pinned } = usePinnedPrompt();
 
@@ -330,16 +345,41 @@ function ThreadRow({
         isUser && "relative sticky top-0 z-10 bg-background pt-2",
       )}
     >
-      <ChatMessageRow
-        messages={row.messages}
-        streaming={streaming && last && !isUser}
-        onRetry={amendable ? onRetry : undefined}
-        onEdit={amendable ? onEdit : undefined}
-        onFork={onFork}
-        showThinking={showThinking}
-        showTimestamp={showTimestamp}
-        collapseRuns={collapseRuns}
-      />
+      <ContextMenu>
+        <ContextMenuTrigger
+          className="block w-full"
+          onContextMenu={(event) => {
+            const selection = window.getSelection();
+            const anchor = selection?.anchorNode;
+            selectionRef.current =
+              selection && !selection.isCollapsed && anchor && event.currentTarget.contains(anchor)
+                ? selection.toString().trim()
+                : "";
+          }}
+        >
+          <ChatMessageRow
+            messages={row.messages}
+            streaming={streaming && last && !isUser}
+            onRetry={amendable ? onRetry : undefined}
+            onEdit={amendable ? onEdit : undefined}
+            onFork={onFork}
+            showThinking={showThinking}
+            showTimestamp={showTimestamp}
+            collapseRuns={collapseRuns}
+          />
+        </ContextMenuTrigger>
+        <ContextMenuContent className="w-32">
+          <ContextMenuItem
+            disabled={!copyableRowText(row)}
+            onClick={() => {
+              const text = selectionRef.current || copyableRowText(row);
+              if (text) void navigator.clipboard?.writeText(text);
+            }}
+          >
+            {t("message.copy")}
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
       {isUser && pinned ? (
         <div
           aria-hidden

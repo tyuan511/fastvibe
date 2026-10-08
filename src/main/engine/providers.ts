@@ -4,9 +4,12 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { INPUT_MODALITIES, PROVIDER_APIS, THINKING_EFFORT_LEVELS, type CostTier, type FastVibeModel, type ModelCost, type ModelPrice, type NativeProviderConfig, type ProviderApi, type ProviderConfig, type ProviderModel, type ThinkingLevel } from "@shared/types";
 import { catalogPrice, enrichModel, loadModelsDev, type ModelsDevIndex } from "./models-dev";
 import { findNativeProvider, listNativeProviders, mergeNativeModels, selectedNativeModels } from "./native-providers";
+import { piProviderModelsEntry } from "./pi-global-sync.ts";
 import { engineModelBaseUrl, trimBaseUrl } from "./provider-url";
 import { automaticModelApi } from "./model-api";
 import { isGatewayKind, probeGateway, readGatewayCredentials, type GatewayKind } from "./gateway-probe";
+import { JEV_KEY_ENV } from "@shared/decision";
+import { readDecisionConfig, writeDecisionConfig } from "./decision/store";
 import { deleteOAuthCredential, readOAuthProviderIds } from "./oauth-store";
 import type { FastVibePaths } from "./paths";
 import { orderProviderModels } from "@shared/model-order";
@@ -339,9 +342,10 @@ function listedFromUnknown(payload: unknown): ListedModel[] {
   const raw = extractModelList(payload);
   const out: ListedModel[] = [];
   for (const entry of raw) {
-    const id = typeof entry === "string" ? entry : isRecord(entry) ? String(entry.id ?? entry.model ?? "") : "";
+    // Jev's catalog is `{ models: [{ name }] }` with no `id`. The name is the id.
+    const id = typeof entry === "string" ? entry : isRecord(entry) ? String(entry.id ?? entry.model ?? entry.name ?? "") : "";
     if (!id) continue;
-    const name = isRecord(entry) ? String(entry.name ?? entry.display_name ?? "") : "";
+    const name = isRecord(entry) ? String(entry.display_name ?? entry.name ?? "") : "";
     out.push({ id, name });
   }
   return out;
@@ -379,15 +383,16 @@ export function applyProviders(paths: FastVibePaths): FastVibeModel[] {
     (provider) => connected.has(provider.id) &&
       (provider.kind !== "native" || provider.models.some((model) => model.edited === true)),
   );
-  writeFileSync(paths.modelsJson, renderModelsJson(writable), "utf8");
+  writeFileSync(paths.modelsJson, renderModelsJson(writable.map(chatProvider)), "utf8");
 
   // Only connected providers: returning a keyless provider's models here would put
   // them in the composer's menu even though models.json omits them, and selecting
-  // one would then fail with "模型不存在".
+  // one would then fail with "模型不存在". System One models are not chat models —
+  // 决策引擎 is the only caller — so they stay out of this list and out of models.json.
   return providers
     .filter((provider) => connected.has(provider.id))
     .flatMap((provider) =>
-      orderProviderModels(provider.models, provider.modelOrder).map((model) => ({
+      orderProviderModels(chatProvider(provider).models, provider.modelOrder).map((model) => ({
         provider: provider.id,
         providerName: provider.name,
         id: model.id,
@@ -397,116 +402,25 @@ export function applyProviders(paths: FastVibePaths): FastVibeModel[] {
     );
 }
 
-/**
- * Compatibility pins for one model, derived from the api it will actually be
- * streamed with. Model level rather than provider level on purpose: a provider whose
- * models are split across protocols (FastVibe's Responses default plus a few
- * `/chat/completions` models) would otherwise leak the chat-completions pin onto its
- * siblings, and `parseModels` merges model compat over provider compat anyway.
- *
- * Every provider written here is an OpenAI-compatible endpoint behind a base URL the
- * SDK does not recognise, so pi-ai cannot tell whether the upstream accepts the
- * OpenAI `developer` role that replaced `system`. Unknown URLs default to
- * `supportsDeveloperRole: true`, which silently 400s on upstreams that only speak
- * `system` (e.g. Qwen via the FastVibe gateway). `system` is accepted everywhere, so
- * pin it for chat-completions models instead of risking an opaque 400. The Responses
- * API sends the system prompt as `instructions` and ignores the pin.
- */
-function modelCompat(api: string, model: ProviderModel): Record<string, unknown> | undefined {
-  if (api !== "openai-completions") return undefined;
-  const compat: Record<string, unknown> = { supportsDeveloperRole: false };
-  // GLM/Z.AI upstreams take a top-level `enable_thinking` instead of
-  // `reasoning_effort`; unknown gateways are never auto-detected as `zai`.
-  if (model.thinkingFormat === "zai") compat.thinkingFormat = "zai";
-  return compat;
-}
-
 function renderModelsJson(providers: StoredProvider[]): string {
   const result: Record<string, unknown> = { providers: {} };
   const output = result.providers as Record<string, unknown>;
   for (const provider of providers) {
-    if (provider.kind === "native") {
-      const modelOverrides = Object.fromEntries(
-        provider.models
-          .filter((model) => model.edited === true)
-          .map((model) => [model.id, nativeModelOverride(model)]),
-      );
-      if (Object.keys(modelOverrides).length > 0) output[provider.id] = { modelOverrides };
-      continue;
-    }
-    output[provider.id] = {
-      name: provider.name,
-      baseUrl: trimBaseUrl(provider.baseUrl),
-      api: provider.api,
-      apiKey: provider.apiKeyEnv,
-      // Gemini authenticates with `x-goog-api-key` via the SDK client, not Bearer.
-      authHeader: provider.api !== "google-generative-ai",
-      models: orderProviderModels(provider.models, provider.modelOrder).map((model) => {
-        const api = model.api ?? provider.api;
-        const compat = modelCompat(api, model);
-        const thinking = thinkingLevelMap(model);
-        // Each protocol's client wants a different version segment, so a model streaming
-        // one other than the provider's gets its own `baseUrl`; pi reads a model-level
-        // `baseUrl` over the provider's. See `engineModelBaseUrl`.
-        const baseUrl = engineModelBaseUrl(provider.baseUrl, api);
-        return {
-          id: model.id,
-          name: model.name,
-          contextWindow: model.contextWindow,
-          maxTokens: model.maxTokens,
-          reasoning: model.reasoning,
-          input: engineInputs(model.input),
-          // Omitted when the model inherits the provider's api, which keeps
-          // `models.json` a faithful mirror of what the user configured.
-          ...(model.api ? { api: model.api } : {}),
-          ...(baseUrl !== trimBaseUrl(provider.baseUrl) ? { baseUrl } : {}),
-          ...(compat ? { compat } : {}),
-          ...(thinking ? { thinkingLevelMap: thinking } : {}),
-          // Only real prices: the engine's own default is all zeros, so writing the
-          // same zeros back would just bloat the file.
-          ...(model.cost ? { cost: model.cost } : {}),
-        };
-      }),
-    };
+    // The env-var name, not the secret: the process injects the key itself.
+    // A sync out to global pi passes the secret through the same builder.
+    const entry = piProviderModelsEntry(provider, provider.apiKeyEnv);
+    if (entry) output[provider.id] = entry;
   }
   return `${JSON.stringify(result, null, 2)}\n`;
 }
 
-/** Only the metadata fields supported by pi's native modelOverrides are emitted. */
-function nativeModelOverride(model: ProviderModel): Record<string, unknown> {
-  const thinking = thinkingLevelMap(model);
+/** System One is a decision protocol, not a chat API, so those models never reach the engine. */
+function chatProvider(provider: StoredProvider): StoredProvider {
+  if (provider.kind === "native") return provider;
   return {
-    name: model.name,
-    contextWindow: model.contextWindow,
-    maxTokens: model.maxTokens,
-    reasoning: model.reasoning,
-    input: engineInputs(model.input),
-    ...(thinking ? { thinkingLevelMap: thinking } : {}),
+    ...provider,
+    models: provider.models.filter((model) => (model.api ?? provider.api) !== "systemone"),
   };
-}
-
-/**
- * pi's `thinkingLevelMap` for one model: an effort the user unchecked is mapped to
- * `null` (unsupported), so the engine clamps a request for it instead of sending a
- * parameter the upstream rejects. `off` is never mapped — see `THINKING_EFFORT_LEVELS`,
- * and note that FastVibe never requests it at all.
- * A level whose provider name differs keeps its provider value. `xhigh` and `max` are
- * special: pi offers either only when the model maps it, so a checked one must carry a
- * mapping, and an unchecked one is written as `null` like everything else.
- */
-function thinkingLevelMap(model: ProviderModel): Record<string, string | null> | undefined {
-  if (!model.reasoning || !model.thinkingLevels) return undefined;
-  const allowed = new Set<ThinkingLevel>(model.thinkingLevels);
-  const map: Record<string, string | null> = {};
-  for (const level of THINKING_EFFORT_LEVELS) {
-    if (!allowed.has(level)) {
-      map[level] = null;
-      continue;
-    }
-    const providerValue = model.effortMap?.[level] ?? (level === "xhigh" || level === "max" ? level : undefined);
-    if (providerValue) map[level] = providerValue;
-  }
-  return Object.keys(map).length > 0 ? map : undefined;
 }
 
 /**
@@ -557,17 +471,6 @@ function readProviderKeysSync(paths: FastVibePaths): Record<string, string> {
   }
 }
 
-/**
- * The engine's models.json schema only accepts `text` and `image` modalities, and a
- * single unknown value invalidates the whole file (every custom provider is then
- * dropped from the registry). models.dev also reports `video`/`file`, which we keep
- * in the UI metadata but must not hand to the engine.
- */
-function engineInputs(input: string[] | undefined): string[] {
-  if (!input) return [];
-  return input.filter((item) => item === "text" || item === "image");
-}
-
 /* ---------------- mutations ---------------- */
 
 export async function saveFastVibe(
@@ -601,6 +504,80 @@ export async function addProvider(
   writeProviders(paths, providers);
   await setProviderKey(paths, apiKeyEnv, draft.apiKey);
   return id;
+}
+
+const JEV_OFFICIAL_BASE = "https://api.typesafe.ai/v1";
+
+/** The one model the old decision engine called when the user never picked one. */
+function fallbackJevModel(): ProviderModel {
+  return {
+    id: "jev-latest",
+    name: "jev-latest",
+    contextWindow: 128000,
+    maxTokens: 8192,
+    reasoning: false,
+    input: ["text"],
+  };
+}
+
+/** A provider whose own protocol is System One — not a chat provider that merely pins one model. */
+function officialSystemOneProvider(providers: StoredProvider[]): StoredProvider | undefined {
+  return providers.find((provider) => provider.api === "systemone");
+}
+
+/**
+ * A Jev key saved by 决策引擎 before System One was a provider protocol.
+ *
+ * Adds the official Jev endpoint as its own provider, copies that key onto it, and
+ * fills the model list from the endpoint when it answers. If 决策引擎 was already on,
+ * its selection moves to this provider (`jev-latest` when the list has it). A provider
+ * the user already set to System One is left as it is. One System One model pinned on
+ * a chat provider does not count — that is not the official endpoint.
+ */
+export async function adoptLegacyJevProvider(paths: FastVibePaths): Promise<void> {
+  const existing = officialSystemOneProvider(readProviders(paths));
+  if (existing) {
+    retargetDecisionModel(paths, existing, false);
+    return;
+  }
+  const key = (await loadProviderKeys(paths))[JEV_KEY_ENV];
+  if (!key) return;
+  let models: ProviderModel[];
+  try {
+    models = await Promise.race([
+      fetchProviderModels(JEV_OFFICIAL_BASE, key, "systemone"),
+      new Promise<ProviderModel[]>((_, reject) => setTimeout(() => reject(new Error("timeout")), 8000)),
+    ]);
+  } catch {
+    models = [];
+  }
+  if (models.length === 0) models = [fallbackJevModel()];
+  const id = await addProvider(paths, { name: "Jev", baseUrl: JEV_OFFICIAL_BASE, apiKey: key, api: "systemone" }, models);
+  const created = readProviders(paths).find((provider) => provider.id === id);
+  if (created) retargetDecisionModel(paths, created, true);
+}
+
+/**
+ * Point an enabled Jev decision at a System One model of `provider`.
+ * `force` is the migration that just created the official provider: the old selection
+ * is replaced even when some other provider happens to list a System One model.
+ */
+function retargetDecisionModel(paths: FastVibePaths, provider: StoredProvider, force: boolean): void {
+  const config = readDecisionConfig(paths.decisionFile);
+  if (config.kind !== "jev") return;
+  const models = provider.models.filter((model) => (model.api ?? provider.api) === "systemone");
+  const current = config.model;
+  if (!force && current && systemOneSelection(paths, current)) return;
+  if (current?.provider === provider.id && models.some((model) => model.id === current.id)) return;
+  const pick = models.find((model) => model.id === "jev-latest") ?? models[0];
+  if (!pick) return;
+  writeDecisionConfig(paths.decisionFile, { ...config, model: { provider: provider.id, id: pick.id } });
+}
+
+function systemOneSelection(paths: FastVibePaths, selected: { provider: string; id: string }): boolean {
+  const provider = readProviders(paths).find((item) => item.id === selected.provider);
+  const model = provider?.models.find((item) => item.id === selected.id);
+  return Boolean(provider && model && (model.api ?? provider.api) === "systemone");
 }
 
 /**

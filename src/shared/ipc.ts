@@ -68,6 +68,8 @@ export const Ipc = {
   engineImportSources: "engine:import-sources",
   engineImportCandidates: "engine:import-candidates",
   engineImportSessions: "engine:import-sessions",
+  /** Merge the connected provider / model / MCP config into the global pi agent directory. */
+  engineSyncPiConfig: "engine:sync-pi-config",
   workspacePick: "workspace:pick",
   event: "engine:event",
   status: "engine:status",
@@ -283,6 +285,8 @@ export type AppModelsDevInfo = {
 
 export type AppInfo = {
   version: string;
+  /** The embedded pi coding agent version, shown as 内核版本 in Settings → 关于. */
+  engineVersion: string;
   userData: string;
   runtimeRoot: string;
   platform: string;

@@ -22,6 +22,8 @@ import { configureFastVibeUserData, getFastVibePaths, type FastVibePaths } from 
 import { readDecisionConfig, writeDecisionConfig } from "./engine/decision/store";
 import { testJevConnection } from "./engine/decision/backends/jev";
 import { decisionModelConfigOf, JEV_KEY_ENV, type DecisionKeyState, type DecisionModelConfig, type DecisionTestResult } from "@shared/decision";
+import { adoptLegacyJevProvider } from "./engine/providers";
+import { resolveSystemOne } from "./engine/decision/systemone";
 import { installBrowserTaskGlobal } from "./pi/browser-task-runner";
 import { installComputerTaskGlobal } from "./pi/computer-task-runner";
 import { installDecisionScenarioGlobals } from "./pi/decision-scenarios";
@@ -276,8 +278,14 @@ function modelsDevInfo(stats: ModelsDevStats): AppModelsDevInfo {
  */
 function registerDecisionIpc(): void {
   const paths = () => getFastVibePaths();
-  const keyState = async (): Promise<DecisionKeyState> => ({ jev: Boolean((await loadProviderKeys(paths()))[JEV_KEY_ENV]) });
-  handle(Ipc.decisionGetConfig, () => readDecisionConfig(paths().decisionFile));
+  const keyState = async (): Promise<DecisionKeyState> => {
+    await adoptLegacyJevProvider(paths());
+    return { jev: Boolean(await resolveSystemOne(paths())) };
+  };
+  handle(Ipc.decisionGetConfig, async () => {
+    await adoptLegacyJevProvider(paths());
+    return readDecisionConfig(paths().decisionFile);
+  });
   handle(Ipc.decisionSaveConfig, (payload: unknown, ctx) => {
     const config = decisionModelConfigOf(payload);
     const previous = readDecisionConfig(paths().decisionFile);
@@ -301,12 +309,14 @@ function registerDecisionIpc(): void {
     return keyState();
   });
   handle(Ipc.decisionTest, async (payload: unknown): Promise<DecisionTestResult> => {
+    await adoptLegacyJevProvider(paths());
     const config: DecisionModelConfig = decisionModelConfigOf(payload);
     if (config.kind !== "jev") return { ok: false, error: uiText("未选择决策模型", "No decision model is selected") };
-    const key = (await loadProviderKeys(paths()))[JEV_KEY_ENV];
-    if (!key) return { ok: false, error: uiText("还没有保存 API key", "No API key is saved") };
-    const result = await testJevConnection(key);
-    return result.ok ? { ok: true } : { ok: false, error: result.message };
+    const resolved = await resolveSystemOne(paths());
+    if (!resolved) return { ok: false, error: uiText("还没有可用的 System One 模型", "No System One model is available") };
+    const modelsUrl = resolved.endpoint.replace(/\/systemone$/, "/models");
+    const result = await testJevConnection(resolved.apiKey, { url: modelsUrl });
+    return result.ok ? { ok: true, model: resolved.model } : { ok: false, error: result.message };
   });
 }
 

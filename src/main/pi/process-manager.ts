@@ -108,6 +108,7 @@ import { installSdkQueueAdapter, type SdkQueueAdapter } from "./sdk-queue-adapte
 import {
   addNativeProvider as addNativeProviderConfig,
   addProvider as addProviderConfig,
+  adoptLegacyJevProvider,
   applyProviders,
   fetchProviderModels,
   listProviderConfigs,
@@ -127,7 +128,7 @@ import {
 import { importCcSwitch, scanCcSwitch } from "../engine/cc-switch";
 import { catalogPrice } from "../engine/models-dev";
 import { findNativeProvider } from "../engine/native-providers";
-import { hasOAuthCredential, OAuthCredentialStore } from "../engine/oauth-store";
+import { hasOAuthCredential, OAuthCredentialStore, readOrCreateDeviceId } from "../engine/oauth-store";
 import { priceUsage } from "../engine/pricing";
 import { fetchOpenAIAccountQuota, openAICodexAccountId } from "../engine/openai-quota";
 import { fetchGatewayBalance, gatewayTargets, probeGateway, readGatewayCredentials, writeGatewayCredentials } from "../engine/gateway-probe";
@@ -624,6 +625,10 @@ export class PiProcessManager {
           await unlink(item.sessionFile).catch(() => undefined);
         }),
       );
+      // A Jev key from before System One lived in 模型管理 becomes the official
+      // provider here, before the registry is built. A failure leaves the previous
+      // providers in place and must not stop the window opening.
+      await adoptLegacyJevProvider(this.#paths).catch(() => undefined);
       const keys = await loadProviderKeys(this.#paths);
       const providers = usableProviders(this.#paths, keys);
       // No provider is a normal first-run state, not a boot failure: `applyProviders`
@@ -2254,7 +2259,7 @@ export class PiProcessManager {
         signal: login.abort.signal,
         notify,
         prompt: (prompt) => this.#askOAuth(id, prompt, login),
-      });
+      }, { getDeviceId: () => readOrCreateDeviceId(this.#paths.oauthFile) });
       const env = providerKeyEnv(this.#paths, id);
       if (env) await setProviderKey(this.#paths, env, "");
       await this.reloadProviders();
@@ -2998,27 +3003,26 @@ export class PiProcessManager {
       if (event.type === "message_start" && isAssistantEngineMessage(event.message)) {
         this.#forgetRetained(conversation.id, "auto_retry_start");
       }
-      if (this.#activeId === conversation.id || conversation.kind === "side-chat") {
-        this.#emit(payload);
-        return;
-      }
-      this.#publishWatched(conversation.id, payload);
-      // A settled run in a background chat is the one moment the user cannot see for
-      // themselves, so it is reported — as `completed` or `failed`, the same
-      // `#interruptedRuns` verdict that decides whether the queued work may drain. A run
-      // that ended because the user stopped it is neither: they were there for it, and
-      // 「任务已完成」 over a deliberate Stop would be a notification nobody asked for.
-      if (event.type === "agent_settled") {
-        const interrupted = settledVerdict;
-        if (interrupted !== "stopped") {
-          this.#emit({
+      // This terminal notice is also sent for the chat currently selected on the
+      // desktop. A mobile client can be backgrounded while the desktop happens to be
+      // looking at the same chat, and it still needs the one durable end-of-turn signal.
+      // Focused desktop windows suppress their own native notice in `raiseNotification`.
+      const activity = event.type === "agent_settled" && conversation.kind !== "side-chat" && settledVerdict !== "stopped"
+        ? {
             type: "conversation_activity",
             conversationId: conversation.id,
             title: this.#catalog.get(conversation.id)?.title ?? uiText("会话", "Chat"),
-            status: interrupted === "error" ? "failed" : "completed",
-          });
-        }
+            status: settledVerdict === "error" ? "failed" : "completed",
+            ...(typeof payload.seq === "number" ? { seq: payload.seq } : {}),
+          }
+        : null;
+      if (this.#activeId === conversation.id || conversation.kind === "side-chat") {
+        this.#emit(payload);
+        if (activity) this.#emit(activity);
+        return;
       }
+      this.#publishWatched(conversation.id, payload);
+      if (activity) this.#emit(activity);
     }));
     this.#installQueueBoundary(conversation.id, result.session);
     this.#sessions.set(conversation.id, managed);

@@ -193,6 +193,7 @@ const ALLOWED = new Set<string>([
   Ipc.engineImportCandidates,
   Ipc.engineImportSessions,
   Ipc.engineImportSources,
+  Ipc.engineSyncPiConfig,
   Ipc.engineInstallExtensionPackage,
   Ipc.engineListExtensionPackages,
   Ipc.engineListMarketPackages,

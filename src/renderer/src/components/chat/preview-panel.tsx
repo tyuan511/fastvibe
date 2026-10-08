@@ -1,7 +1,7 @@
-import type { JSX } from "react";
+import { useRef, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Cancel01Icon, Folder01Icon } from "@hugeicons/core-free-icons";
+import { Cancel01Icon, Copy01Icon, Folder01Icon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { IconButton } from "@/components/icon-button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { FilePreview } from "@shared/types";
@@ -11,6 +11,12 @@ import { DiffView } from "./diff-view";
 import { isRemoteRef } from "@/lib/remote-project";
 import { blockedRemotely } from "@/lib/remote-unavailable";
 import { Ipc } from "@shared/ipc";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 
 export function PreviewPanel({
   preview,
@@ -48,7 +54,64 @@ export function PreviewPanel({
   );
 }
 
-export function PreviewBody({ preview }: { preview: FilePreview }): JSX.Element {
+export function previewText(preview: FilePreview): string | undefined {
+  switch (preview.kind) {
+    case "markdown":
+    case "html":
+    case "diff":
+    case "code":
+      return preview.text;
+    case "csv":
+      return preview.rows.map((row) => row.join("\t")).join("\n");
+    default:
+      return undefined;
+  }
+}
+
+function TextPreviewMenu({
+  text,
+  quote,
+  onQuote,
+  children,
+}: {
+  text: string;
+  quote?: boolean;
+  onQuote?: (text: string) => void;
+  children: JSX.Element;
+}): JSX.Element {
+  const { t } = useTranslation("chat");
+  const selectionRef = useRef("");
+  const selectedOrAll = (): string => selectionRef.current || text;
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger
+        className="block w-full"
+        onContextMenu={(event) => {
+          const selection = window.getSelection();
+          const anchor = selection?.anchorNode;
+          selectionRef.current =
+            selection && !selection.isCollapsed && anchor && event.currentTarget.contains(anchor)
+              ? selection.toString().trim()
+              : "";
+        }}
+      >
+        {children}
+      </ContextMenuTrigger>
+      <ContextMenuContent className="w-48">
+        <ContextMenuItem onClick={() => void navigator.clipboard?.writeText(selectedOrAll())}>
+          {t("preview.copy")}
+        </ContextMenuItem>
+        {quote && onQuote ? (
+          <ContextMenuItem onClick={() => onQuote(selectedOrAll())}>
+            {t("preview.quoteCode")}
+          </ContextMenuItem>
+        ) : null}
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
+export function PreviewBody({ preview, onQuote }: { preview: FilePreview; onQuote?: (text: string) => void }): JSX.Element {
   const { t } = useTranslation("chat");
   if (preview.kind === "error") {
     return <p className="px-3 py-3 text-sm text-destructive">{preview.message}</p>;
@@ -70,44 +133,58 @@ export function PreviewBody({ preview }: { preview: FilePreview }): JSX.Element 
   }
   if (preview.kind === "markdown") {
     return (
-      <div className="chat-markdown px-3 py-3 text-sm">
-        <MarkdownView text={preview.text} />
-      </div>
+      <TextPreviewMenu text={preview.text}>
+        <div className="chat-markdown px-3 py-3 text-sm">
+          <MarkdownView text={preview.text} />
+        </div>
+      </TextPreviewMenu>
     );
   }
   if (preview.kind === "html") {
     return (
-      <iframe
-        title={preview.name}
-        sandbox=""
-        className="h-[70vh] w-full rounded-lg border border-border bg-white"
-        srcDoc={preview.text}
-      />
+      <TextPreviewMenu text={preview.text}>
+        <iframe
+          title={preview.name}
+          sandbox=""
+          className="h-[70vh] w-full rounded-lg border border-border bg-white"
+          srcDoc={preview.text}
+        />
+      </TextPreviewMenu>
     );
   }
   if (preview.kind === "csv") {
     return (
-      <div className="overflow-x-auto rounded-lg border border-border">
-        <table className="w-full border-collapse text-left">
-          <tbody>
-            {preview.rows.map((row, index) => (
-              <tr key={index}>
-                {row.map((cell, cellIndex) => (
-                  <td key={cellIndex} className="border-b border-border px-2 py-1.5">
-                    {cell}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <TextPreviewMenu text={previewText(preview) ?? ""}>
+        <div className="overflow-x-auto rounded-lg border border-border">
+          <table className="w-full border-collapse text-left">
+            <tbody>
+              {preview.rows.map((row, index) => (
+                <tr key={index}>
+                  {row.map((cell, cellIndex) => (
+                    <td key={cellIndex} className="border-b border-border px-2 py-1.5">
+                      {cell}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </TextPreviewMenu>
     );
   }
   if (preview.kind === "diff") {
-    return <DiffView text={preview.text} className="mt-0 max-h-none rounded-none border-0 bg-transparent text-xs" />;
+    return (
+      <TextPreviewMenu text={preview.text} quote onQuote={onQuote}>
+        <DiffView text={preview.text} className="mt-0 max-h-none rounded-none border-0 bg-transparent text-xs" />
+      </TextPreviewMenu>
+    );
   }
-  return <CodePreview text={preview.text} language={preview.language} />;
+  return (
+    <TextPreviewMenu text={preview.text} quote onQuote={onQuote}>
+      <CodePreview text={preview.text} language={preview.language} />
+    </TextPreviewMenu>
+  );
 }
 
 /**

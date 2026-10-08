@@ -23,6 +23,10 @@ type Fetch = typeof fetch;
 
 export type JevBackendOptions = {
   apiKey: string;
+  /** Decide URL. Defaults to TypeSafe's own System One endpoint. */
+  endpoint?: string;
+  /** Model id sent in the body when the request does not name one. */
+  model?: string;
   fetch?: Fetch;
 };
 
@@ -97,10 +101,10 @@ export function createJevBackend(options: JevBackendOptions): DecisionBackend {
   return {
     id: "jev",
     async decide(request, { signal }) {
-      const response = await doFetch(JEV_ENDPOINT, {
+      const response = await doFetch(options.endpoint ?? JEV_ENDPOINT, {
         method: "POST",
         headers: { Authorization: `Bearer ${options.apiKey}`, "Content-Type": "application/json" },
-        body: JSON.stringify(buildJevBody(request)),
+        body: JSON.stringify(buildJevBody({ ...request, model: request.model ?? options.model })),
         redirect: "error",
         signal,
       });
@@ -125,11 +129,11 @@ export function createJevBackend(options: JevBackendOptions): DecisionBackend {
  */
 export async function testJevConnection(
   apiKey: string,
-  options: { fetch?: Fetch; signal?: AbortSignal } = {},
+  options: { fetch?: Fetch; signal?: AbortSignal; url?: string } = {},
 ): Promise<{ ok: true } | { ok: false; kind: DecisionBackendError["kind"]; message: string }> {
   const doFetch = options.fetch ?? fetch;
   try {
-    const response = await doFetch(JEV_MODELS_ENDPOINT, {
+    const response = await doFetch(options.url ?? JEV_MODELS_ENDPOINT, {
       headers: { Authorization: `Bearer ${apiKey}` },
       redirect: "error",
       signal: options.signal,

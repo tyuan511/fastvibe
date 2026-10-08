@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { promisify } from "node:util";
+import { VERSION as piVersion } from "@earendil-works/pi-coding-agent";
 import { Ipc } from "@shared/ipc";
 import type { AgentConfigSyncPayload } from "@shared/agent-config";
 import type { CallerContext } from "../main/ipc/registry";
@@ -156,7 +157,7 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
   handle(Ipc.settingsClear, () => {
     clearAppSettings(paths);
   });
-  handle(Ipc.appGetInfo, () => ({ version: process.env.FASTVIBE_VERSION ?? "agent", userData: paths.userData, runtimeRoot: paths.runtimeRoot, platform: process.platform }));
+  handle(Ipc.appGetInfo, () => ({ version: process.env.FASTVIBE_VERSION ?? "agent", engineVersion: piVersion, userData: paths.userData, runtimeRoot: paths.runtimeRoot, platform: process.platform }));
   handle(Ipc.workspaceFileIcons, () => ({ files: {}, folders: {} }));
   handle(Ipc.statsUsage, (_payload?: { range?: UsageRange }) => ({ range: "30d", from: "", to: "", totals: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, tokens: 0, cost: 0, requests: 0, toolCalls: 0, activeDays: 0 }, days: [], models: [], sessions: 0, longestSessionMinutes: 0, currentStreak: 0, longestStreak: 0 }));
 

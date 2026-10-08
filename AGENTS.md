@@ -1786,6 +1786,17 @@ multi-select picker of that agent's sessions; nothing is imported until the user
 - **Icons** are the four brands from LobeHub (`components/agent-brand-icon.tsx`), inlined as
   `currentColor` paths rather than `<img>` so they follow the active theme.
 
+### 同步配置到全局 pi（设置 → 关于）
+
+One direction, and not a shared data root. `syncFastVibeConfigToPi`
+(`src/main/engine/sync-pi-config.ts`) writes connected providers, the default model,
+thinking level and MCP into `~/.pi/agent`. The confirm offers both: merge replaces a
+shared provider or MCP server and keeps one that exists only in pi; replace drops
+those. Sessions, UI preferences and FastVibe's own runtime stay put either way. API keys are written as pi
+config literals — `escapePiConfigSecret`, because a raw `$` is interpolated and a
+leading `!` is a shell command. Existing files are copied under `backups/` before a
+real change. A file that is not valid JSON stops the sync before anything is written.
+
 ## Usage statistics (使用统计)
 
 Settings → 使用统计 (`components/settings/usage-settings.tsx`) is fed by

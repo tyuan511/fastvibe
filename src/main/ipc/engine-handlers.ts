@@ -4,6 +4,8 @@ import type { ImportSourceId } from "@shared/types";
 import { handle } from "./registry";
 import { uiText } from "../engine/ui-text";
 import { fetchPackageCatalog } from "../pi/package-catalog";
+import { getFastVibePaths } from "../engine/paths";
+import { syncFastVibeConfigToPi } from "../engine/sync-pi-config";
 import { PiProcessManager } from "../pi/process-manager";
 
 /** Register engine/session IPC without mixing it into the Electron bootstrap. */
@@ -242,6 +244,11 @@ export function registerEngineIpc(engine: PiProcessManager): void {
   );
   handle(Ipc.engineImportSessions, async (payload: { source: ImportSourceId; ids: string[] }) =>
     engine.importSessions(payload.source, payload.ids),
+  );
+  // One-shot write into ~/.pi/agent. It does not touch the live engine or its sessions.
+  // `replace` drops providers and MCP servers that exist only in pi; `merge` keeps them.
+  handle(Ipc.engineSyncPiConfig, async (payload?: { mode?: "merge" | "replace" }) =>
+    syncFastVibeConfigToPi(getFastVibePaths(), undefined, payload?.mode === "replace" ? "replace" : "merge"),
   );
 
 }
