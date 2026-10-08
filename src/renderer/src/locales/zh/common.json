@@ -146,6 +146,38 @@
       "missing_value": "缺少信息",
       "denied": "已被拒绝",
       "error": "出错"
+    },
+    "dag": {
+      "add": {
+        "running": "正在创建子任务",
+        "done": "创建子任务"
+      },
+      "status": {
+        "running": "正在查看子任务",
+        "done": "查看子任务"
+      },
+      "result": {
+        "running": "正在读取子任务结果",
+        "done": "读取子任务结果"
+      },
+      "wait": {
+        "running": "等待子任务完成",
+        "done": "等待子任务"
+      },
+      "cancel": {
+        "running": "正在取消子任务",
+        "done": "取消子任务"
+      },
+      "resume": {
+        "running": "正在恢复子任务",
+        "done": "恢复子任务"
+      },
+      "retry": {
+        "running": "正在重试子任务",
+        "done": "重试子任务"
+      },
+      "all": "全部",
+      "more": "{{shown}} 等 {{count}} 个"
     }
   },
   "group": {

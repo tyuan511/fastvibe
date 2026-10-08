@@ -66,6 +66,9 @@
     "subagents": "Subagents",
     "running": "Running"
   },
+  "handoff": {
+    "needChat": "There is no conversation to hand off"
+  },
   "queue": {
     "stopped": "The queue is paused because you interrupted the current reply",
     "error": "The queue is paused because the current reply failed (nothing was lost)",
@@ -181,6 +184,8 @@
     "collapseCode": "Collapse code",
     "selection": {
       "label": "Selected text actions",
+      "copy": "Copy",
+      "quoteCode": "Quote code into chat",
       "addToConversation": "Add to conversation",
       "askInSideChat": "Ask in side chat"
     },
@@ -230,11 +235,16 @@
     "pathPreview": "Preview",
     "pathReveal": "Show in folder",
     "pathCopy": "Copy full path",
-    "copy": "Copy content",
-    "quoteCode": "Quote code into chat",
     "pathMissing": "File not found"
   },
   "model": {
     "switched": "Model switched to"
+  },
+  "dag": {
+    "settled": "Sub-tasks finished",
+    "completed": "{{count}} completed",
+    "failed": "{{count}} failed",
+    "skipped": "{{count}} skipped",
+    "cancelled": "{{count}} cancelled"
   }
 }

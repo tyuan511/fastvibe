@@ -324,6 +324,8 @@
  },
  "subagents": {
   "title": "子 Agent 工作台",
+  "dynamicDag": "动态子 Agent 编排",
+  "dynamicDagDesc": "让主 Agent 创建并运行子任务图。关闭后不再提供这些工具。",
   "desc": "管理可委派的角色，每个角色可独立设置模型和推理强度。",
   "fallback": "未指定模型时跟随主 Agent，推理强度默认中等。",
   "builtins": "内置子 Agent",

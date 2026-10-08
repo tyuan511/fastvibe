@@ -254,6 +254,11 @@ export const Ipc = {
   memoryDelete: "memory:delete",
   memoryClear: "memory:clear",
   memoryChanged: "memory:changed",
+  /** 子 agent 任务编排：每个会话的 DAG 图。 */
+  dagList: "dag:list",
+  dagCancel: "dag:cancel",
+  dagRetry: "dag:retry",
+  dagResume: "dag:resume",
   /** 远程访问（网页/手机）: server lifecycle, credentials and devices. */
   remoteGetState: "remote:get-state",
   remoteSetPassword: "remote:set-password",

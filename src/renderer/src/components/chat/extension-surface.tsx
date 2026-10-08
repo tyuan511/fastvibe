@@ -21,9 +21,10 @@ import { TuiLines } from "./tui-lines";
 /**
  * Status keys FastVibe renders with its own chrome instead of the generic text
  * line above the composer: `goal` becomes the `GoalPanel`, `goal-armed` a badge
- * beside the permission control.
+ * beside the permission control, and `handoff` the composer's own placeholder
+ * while the summary is written.
  */
-const BADGE_STATUS_KEYS = new Set(["goal", "goal-armed"]);
+const BADGE_STATUS_KEYS = new Set(["goal", "goal-armed", "handoff"]);
 
 async function runExtensionCommand(command: string): Promise<void> {
   try {

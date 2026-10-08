@@ -7,6 +7,7 @@ import { Ipc } from "@shared/ipc";
 import type { AgentConfigSyncPayload } from "@shared/agent-config";
 import type { CallerContext } from "../main/ipc/registry";
 import { broadcast, subscribe } from "../main/ipc/broadcast";
+import { registerDagIpc } from "../main/ipc/dag-handlers";
 import { dispatch, handle, handlerChannels } from "../main/ipc/registry";
 import type { PiProcessManager } from "../main/pi/process-manager";
 import { readFilePreview } from "../main/engine/file-preview";
@@ -15,6 +16,7 @@ import { existingFiles } from "../main/engine/path-exists";
 import { TerminalSessions } from "../main/engine/terminal-sessions";
 import { applyLanguages } from "../main/engine/ai-language";
 import { clearAppSettings, invalidateAppSettingsCache, readAppSettings, writeAppSettings } from "../main/engine/runtime-settings";
+import { toolModeSettingsChanged } from "../main/engine/tool-modes";
 import { writeAgentConfig } from "../main/engine/runtime-config";
 import type { FastVibePaths } from "../main/engine/paths";
 import type { GitBranch, GitDiffSource, GitStatus } from "@shared/ipc";
@@ -81,6 +83,7 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
   handle(Ipc.engineSyncConfig, async (payload: AgentConfigSyncPayload) => {
     const expectedToken = process.env.FASTVIBE_AGENT_SYNC_TOKEN;
     if (!expectedToken || payload?.syncToken !== expectedToken) throw new Error("配置同步凭据无效");
+    const previousSettings = readAppSettings(paths);
     const previousMcp = readFileOrEmpty(paths.mcpFile);
     const { syncToken: _syncToken, ...snapshot } = payload;
     writeAgentConfig(paths, snapshot);
@@ -88,9 +91,13 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
     const settings = readAppSettings(paths);
     applyLanguages(settings);
     await engine.reloadProviders();
-    if (payload && "mcp" in payload && payload.mcp !== previousMcp) {
+    const mcpChanged = payload && "mcp" in payload && payload.mcp !== previousMcp;
+    if (mcpChanged) {
       const parsed = typeof payload.mcp === "string" ? JSON.parse(payload.mcp) as unknown : [];
       await engine.saveMcpServers(Array.isArray(parsed) ? parsed : []);
+    } else if (toolModeSettingsChanged(previousSettings, settings)) {
+      // An MCP save already reloads every session, which re-reads these switches.
+      void engine.refreshToolModes().catch(() => undefined);
     }
   });
   handle(Ipc.engineSetModel, (payload: { provider: string; modelId: string; conversationId?: string }) => engine.setModel(payload.provider, payload.modelId, payload.conversationId));
@@ -106,6 +113,8 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
   handle(Ipc.engineSetFollowUp, (payload: { mode: "all" | "one-at-a-time"; conversationId?: string }) => engine.setFollowUpMode(payload.mode, payload.conversationId));
   handle(Ipc.enginePromptConversation, (payload: { id: string; message: string; images?: Array<{ type: "image"; data: string; mimeType: string }> }) => engine.promptConversation(payload.id, payload.message, payload.images));
   handle(Ipc.engineGetConversationMessages, (payload: { id: string }) => engine.getConversationMessages(payload.id));
+  // The sub-agent task graph runs inside this engine; the desktop reads and steers it through these.
+  registerDagIpc(engine);
 
   handle(Ipc.conversationsList, () => engine.listWorkspace());
   handle(Ipc.conversationsCreate, (payload?: { project?: string; activate?: boolean; reuseEmpty?: boolean }) => engine.createConversation(payload?.project, {
@@ -151,11 +160,16 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
 
   handle(Ipc.settingsGet, () => readAppSettings(paths));
   handle(Ipc.settingsSet, (payload: Record<string, unknown>) => {
-    writeAppSettings(paths, payload && typeof payload === "object" ? payload : {});
+    const previous = readAppSettings(paths);
+    const next = payload && typeof payload === "object" ? payload : {};
+    writeAppSettings(paths, next);
+    if (toolModeSettingsChanged(previous, next)) void engine.refreshToolModes().catch(() => undefined);
     return undefined;
   });
   handle(Ipc.settingsClear, () => {
+    const previous = readAppSettings(paths);
     clearAppSettings(paths);
+    if (toolModeSettingsChanged(previous, {})) void engine.refreshToolModes().catch(() => undefined);
   });
   handle(Ipc.appGetInfo, () => ({ version: process.env.FASTVIBE_VERSION ?? "agent", engineVersion: piVersion, userData: paths.userData, runtimeRoot: paths.runtimeRoot, platform: process.platform }));
   handle(Ipc.workspaceFileIcons, () => ({ files: {}, folders: {} }));

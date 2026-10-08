@@ -14,7 +14,7 @@ import { randomUUID } from "../../../../shared/random.ts";
 import { engine, promptConversation } from "@/lib/engine-client";
 import { translate } from "@/lib/i18n";
 import type { ChatAttachment, ChatMessage } from "@shared/types";
-import { parseCompactCommand } from "@shared/slash";
+import { parseCompactCommand, parseHandoffCommand } from "@shared/slash";
 import { isAbortOutcome } from "@shared/abort";
 
 /** Side chats already handed the composer once. Survives the tab unmounting. */
@@ -113,7 +113,7 @@ export function SidePaneChat({
     const id = tab.conversationId;
     const items = attachments;
     if ((!text && items.length === 0) || !id || tab.streaming) return;
-    if (parseCompactCommand(text)) {
+    if (parseCompactCommand(text) || parseHandoffCommand(text)) {
       patchTab(tab.id, { draft: "" });
       try {
         await promptConversation(id, text);
@@ -178,6 +178,7 @@ export function SidePaneChat({
           className="px-0 pb-0"
           value={tab.draft ?? ""}
           disabled={!tab.conversationId}
+          conversationId={tab.conversationId}
           focusSignal={focusSignal || undefined}
           streaming={streaming}
           working={conversationWorking}

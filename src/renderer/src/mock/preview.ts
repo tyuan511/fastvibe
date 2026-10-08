@@ -349,7 +349,44 @@ function installIconRewrite(): void {
 
 /* ------------------------------------------------------------------ the bridge */
 
+/* ------------------------------------------------------------------ DAG of sub-agent tasks */
+
+// `mock.html` — the first fixture chat has a graph in every state, so the 任务图 tab and the
+// sidebar's sub-task arrow have something to draw.
+const dagProfile = (name: string) => ({ name, instructions: "…", tools: ["read", "grep"] });
+const dagNode = (id: string, title: string, status: string, dependsOn: string[], extra: Record<string, unknown> = {}) => ({
+  id,
+  ...(status === "pending" || status === "skipped" ? {} : { runId: id, attempt: 1 }),
+  title,
+  instruction: `${title}：阅读相关代码并给出结论。`,
+  profile: dagProfile(title.includes("汇总") ? "synthesizer" : "code-reader"),
+  dependsOn,
+  status,
+  createdAt: Date.now() - 600000,
+  ...extra,
+});
+const dagFixture = {
+  conversationId: "conv-theme",
+  createdAt: Date.now() - 600000,
+  updatedAt: Date.now(),
+  nodes: [
+    dagNode("T-0001", "梳理主题加载", "completed", [], { startedAt: Date.now() - 500000, endedAt: Date.now() - 400000, output: "主题在 `useThemeSync` 中应用。" }),
+    dagNode("T-0002", "梳理设置页入口", "completed", [], { startedAt: Date.now() - 500000, endedAt: Date.now() - 380000, output: "设置页入口在 `theme-select.tsx`。" }),
+    dagNode("T-0003", "检查快捷键冲突", "running", ["T-0001"], { startedAt: Date.now() - 60000 }),
+    dagNode("T-0004", "核对暗色样式", "failed", ["T-0002"], { startedAt: Date.now() - 300000, endedAt: Date.now() - 200000, error: "读取 index.css 超时" }),
+    dagNode("T-0005", "汇总结论", "skipped", ["T-0003", "T-0004"], { blockedBy: "T-0004", error: "上游 T-0004 没有成功（failed）" }),
+  ],
+};
+const dagApi = {
+  list: async () => [dagFixture],
+  cancel: async () => [] as string[],
+  retry: async () => [] as string[],
+  resume: async () => [] as string[],
+  onChanged: () => () => undefined,
+};
+
 const api = {
+  dag: dagApi,
   engine: {
     getStatus: async () => status,
     start: async () => status,

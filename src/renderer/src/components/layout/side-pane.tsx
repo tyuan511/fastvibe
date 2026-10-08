@@ -1,5 +1,6 @@
 import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
+import { findSubagent } from "@shared/subagent-state";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Add01Icon,
@@ -46,6 +47,7 @@ import { SidePaneChat } from "./side-pane-chat";
 import { SidePaneChanges } from "./side-pane-changes";
 import { SidePaneFiles } from "./side-pane-files";
 import { SidePaneGit } from "./side-pane-git";
+import { SidePaneDagNode } from "./side-pane-dag-node";
 import { SidePaneSubagent } from "./side-pane-subagent";
 import { releaseTerminal } from "./side-pane-terminal-registry";
 
@@ -81,7 +83,7 @@ export function disposeSidePaneTabs(tabs: SidePaneTab[]): void {
 }
 
 function PaneTabTitle({ tab }: { tab: SidePaneTab }): JSX.Element {
-  const info = useSessionStore((state) => tab.subagentId ? state.subagents.find((item) => item.id === tab.subagentId) : undefined);
+  const info = useSessionStore((state) => tab.subagentId ? findSubagent(state.subagents, tab.subagentId, tab.subagentConversationId ?? tab.conversationId) : undefined);
   useTranslation("sidepane");
   return <>{tab.type === "subagent" ? `${info?.name ?? tab.title} · ${subagentStatusText(info, tab.subagentStatus)}` : sidePaneTabTitle(tab)}</>;
 }
@@ -160,7 +162,7 @@ function MaximizeButton(): JSX.Element {
 }
 
 function tabIcon(type: SidePaneTab["type"]) {
-  if (type === "subagent") return BotIcon;
+  if (type === "subagent" || type === "dag-node") return BotIcon;
   if (type === "git") return GitCompareIcon;
   if (type === "changes") return FileEditIcon;
   if (type === "terminal") return TerminalIcon;
@@ -256,7 +258,7 @@ export const SidePane = memo(function SidePane({
         // Aux chats and delegated runs belong to the chat on screen: a parent's
         // tab bar must not list another conversation's subagents.
         if (item.type === "selection-side-chat") return Boolean(parentId && item.parentSessionId === parentId);
-        if (item.type === "subagent") return !parentId || item.subagentConversationId === parentId;
+        if (item.type === "subagent" || item.type === "dag-node") return !parentId || item.subagentConversationId === parentId;
         return true;
       }),
     [parentId, tabs],
@@ -533,7 +535,7 @@ export const SidePane = memo(function SidePane({
             <SidePaneChat tab={active} project={project} parentId={parentId} />
           ) : null}
           {visibleTabs.map((tab) =>
-            tab.type === "terminal" || tab.type === "browser" || tab.type === "files" || tab.type === "subagent" ? (
+            tab.type === "terminal" || tab.type === "browser" || tab.type === "files" || tab.type === "subagent" || tab.type === "dag-node" ? (
               <div key={tab.id} hidden={tab.id !== activeTabId} className="flex min-h-0 flex-1 flex-col">
                 {tab.type === "terminal" ? (
                   <Suspense fallback={<div className="min-h-0 flex-1" />}>
@@ -541,8 +543,12 @@ export const SidePane = memo(function SidePane({
                   </Suspense>
                 ) : tab.type === "browser" ? (
                   <SidePaneBrowser tabId={tab.id} url={tab.url ?? ""} visible={tab.id === activeTabId} />
+                ) : tab.type === "files" ? (
+                  <SidePaneFiles tab={tab} cwd={cwd} remote={isRemoteProject(workspace)} onError={onError} />
+                ) : tab.type === "dag-node" ? (
+                  <SidePaneDagNode tab={tab} />
                 ) : (
-                  tab.type === "files" ? <SidePaneFiles tab={tab} cwd={cwd} remote={isRemoteProject(workspace)} onError={onError} /> : <SidePaneSubagent tab={tab} />
+                  <SidePaneSubagent tab={tab} />
                 )}
               </div>
             ) : null,

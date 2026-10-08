@@ -240,5 +240,45 @@
     "pull": "Pull",
     "push": "Push",
     "openTerminal": "Open terminal"
+  },
+  "dag": {
+    "empty": "This conversation has no sub-tasks yet",
+    "progress": "{{done}}/{{total}} done",
+    "cancelAll": "Cancel all",
+    "viewRun": "View run",
+    "stop": "Stop",
+    "retry": "Retry",
+    "profile": "Profile",
+    "tools": "Tools",
+    "dependsOn": "Depends on",
+    "unlocks": "Unlocks",
+    "none": "None",
+    "instruction": "Instruction",
+    "output": "Output",
+    "status": {
+      "pending": "Pending",
+      "running": "Running",
+      "completed": "Completed",
+      "failed": "Failed",
+      "skipped": "Skipped",
+      "cancelled": "Cancelled"
+    },
+    "state": {
+      "running": "Running",
+      "stopped": "Stopped",
+      "failed": "Has failures",
+      "completed": "Completed"
+    },
+    "resume": "Resume",
+    "attempt": "run {{n}}",
+    "model": "Model",
+    "expand": "Show more",
+    "collapse": "Show less",
+    "title": "Sub-tasks",
+    "maximize": "Maximize",
+    "pickNode": "Pick a task on the left to see its details and execution",
+    "gone": "This sub-task is gone",
+    "tabDetail": "Details",
+    "tabRun": "Execution"
   }
 }

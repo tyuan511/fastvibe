@@ -1,12 +1,32 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mergeSubagentSnapshot, reduceSubagent, subagentFinished, subagentResultStatus, subagentViewStatus } from "../src/shared/subagent-state.ts";
+import { findSubagent, mergeSubagentSnapshot, reduceSubagent, subagentFinished, subagentKey, subagentResultStatus, subagentViewStatus, upsertSubagent } from "../src/shared/subagent-state.ts";
 import type { SubagentInfo, ToolCallBlock } from "../src/shared/types.ts";
 
 const event = (seq: number, extra: Record<string, unknown> = {}) => ({
   type: "subagent_lifecycle", subagentId: "call:0", conversationId: "chat-a", status: "running", seq, ...extra,
 });
 const start = () => reduceSubagent(undefined, event(1), 100)!;
+
+test("same DAG run ids on local and remote engines retain independent lifecycle and snapshot state", () => {
+  const local = "chat-a";
+  const remote = "remote:server-a:chat-a";
+  const remoteB = "remote:server-b:chat-a";
+  const runId = "T-0001";
+  let list = upsertSubagent([], event(100, { subagentId: runId, conversationId: local, status: "completed" }));
+  list = upsertSubagent(list, event(1, { subagentId: runId, conversationId: remote }));
+  list = mergeSubagentSnapshot(list, [{ id: runId, conversationId: remoteB, status: "running", revision: 2 }]);
+  assert.equal(list.length, 3);
+  assert.equal(findSubagent(list, runId, local)?.status, "completed");
+  assert.equal(findSubagent(list, runId, remote)?.status, "running");
+  assert.equal(findSubagent(list, runId, remoteB)?.status, "running");
+  assert.equal(findSubagent(list, runId), undefined, "an ownerless lookup cannot guess a host");
+  list = upsertSubagent(list, event(3, { subagentId: runId, conversationId: remote, status: "aborted" }));
+  const stale = mergeSubagentSnapshot(list, [{ id: runId, conversationId: remote, status: "running", revision: 1 }]);
+  assert.equal(stale, list);
+  assert.equal(findSubagent(list, runId, remoteB)?.status, "running");
+  assert.equal(new Set([local, remote, remoteB].map((owner) => subagentKey(runId, owner))).size, 3);
+});
 
 test("a background lifecycle owns its conversation without any parent tool_start", () => {
   assert.equal(start().conversationId, "chat-a");

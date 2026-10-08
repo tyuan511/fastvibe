@@ -130,3 +130,60 @@ function writeTranscriptText(file: string, text: string): void {
     throw error;
   }
 }
+
+/**
+ * What a transcript says about whether its chat is empty: any `message` entry at all, and the
+ * first thing the user said (the text a sidebar row previews).
+ *
+ * The catalog calls a chat empty when it has no `preview`, which `recordPrompt` sets on the
+ * first send. A chat whose first messages were written another way — an extension's
+ * `ctx.newSession` seeding a handoff, a switch to a session file — has content and no preview,
+ * so it was hidden from the sidebar and handed back by 新对话 as if it were the project's blank
+ * draft. This is the check that tells the two apart.
+ */
+export function transcriptPrompt(entries: Iterable<unknown>): { hasMessages: boolean; prompt?: string } {
+  let hasMessages = false;
+  for (const entry of entries) {
+    const record = entry as { type?: unknown; message?: { role?: unknown; content?: unknown } } | null;
+    if (!record || record.type !== "message" || !record.message) continue;
+    hasMessages = true;
+    if (record.message.role !== "user") continue;
+    const content = record.message.content;
+    const text = typeof content === "string"
+      ? content
+      : Array.isArray(content)
+        ? content.flatMap((part) => {
+            const value = part && typeof part === "object" ? (part as { text?: unknown }).text : undefined;
+            return typeof value === "string" ? [value] : [];
+          }).join(" ")
+        : "";
+    const prompt = text.replace(/\s+/g, " ").trim();
+    if (prompt) return { hasMessages, prompt: prompt.slice(0, 80) };
+  }
+  return { hasMessages };
+}
+
+/** `transcriptPrompt` over a session file on disk; an unreadable file reads as empty. */
+export function readTranscriptPrompt(file: string): { hasMessages: boolean; prompt?: string } {
+  let text: string;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch {
+    return { hasMessages: false };
+  }
+  let hasMessages = false;
+  for (const line of text.split("\n")) {
+    // Only message lines matter, and a long transcript should not be parsed whole for them.
+    if (!line.includes('"type":"message"')) continue;
+    let entry: unknown;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue; // A torn line is not a message.
+    }
+    const found = transcriptPrompt([entry]);
+    hasMessages ||= found.hasMessages;
+    if (found.prompt) return { hasMessages, prompt: found.prompt };
+  }
+  return { hasMessages };
+}

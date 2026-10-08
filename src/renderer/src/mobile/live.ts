@@ -147,6 +147,22 @@ export async function refreshCatalog(): Promise<void> {
 
 const RUN_BOUNDARIES = new Set(["agent_end", "agent_settled", "compaction_end", "auto_compaction_end"]);
 
+/**
+ * The next `conversation_opened` belongs to a handoff this page just started.
+ *
+ * The phone does not follow the desktop's active chat. A handoff it started itself
+ * is the exception: the new chat is the one the summary was written for, and missing
+ * the open leaves that summary in a chat the page never shows.
+ */
+let followNextOpen = false;
+
+export function armHandoffNavigation(): () => void {
+  followNextOpen = true;
+  return () => {
+    followNextOpen = false;
+  };
+}
+
 function isFailedEnd(event: EngineEvent): boolean {
   if (event.type === "compaction_end" || event.type === "auto_compaction_end") {
     return event.aborted === true || Boolean(event.errorMessage);
@@ -168,6 +184,16 @@ function isFailedEnd(event: EngineEvent): boolean {
  * have no screen here (side pane, file previews, subagent tabs).
  */
 function routeEvent(event: EngineEvent): void {
+  if (followNextOpen && event.type === "conversation_opened") {
+    followNextOpen = false;
+    const result = event.result;
+    const openedId =
+      result && typeof result === "object" && "conversation" in result
+        ? (result as { conversation?: { id?: unknown } }).conversation?.id
+        : undefined;
+    if (typeof openedId === "string") void showConversation(openedId);
+    return;
+  }
   const store = useSessionStore.getState();
   const conversationId = typeof event.conversationId === "string" ? event.conversationId : null;
   // Marks and parked prompts are kept for every conversation: the list draws them.

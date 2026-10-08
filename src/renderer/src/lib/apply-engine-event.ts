@@ -496,6 +496,19 @@ function applyEvent(
   let nextStreaming = streaming;
   const type = event.type;
 
+  // Main submits a handoff without the renderer's normal optimistic send. Keep
+  // its stable local id so the real SDK echo is skipped and persistence adopts it.
+  if (type === "opening_prompt") {
+    const message = isRecord(event.message) ? event.message : undefined;
+    if (message?.role === "user" && typeof message.id === "string" && typeof message.text === "string" && !next.some((row) => row.id === message.id)) {
+      next = appendMessage(next, message as unknown as ChatMessage);
+    }
+    return { messages: next, streaming: nextStreaming };
+  }
+  if (type === "opening_prompt_cancelled") {
+    return { messages: next.filter((row) => row.id !== event.messageId), streaming: nextStreaming };
+  }
+
   // The engine persisted the optimistic user turn and handed back its session
   // entry id. Adopt it so the row can branch (retry / edit) later; the message
   // itself is unchanged. Optimistic turns are minted with a `local:` id.

@@ -21,6 +21,7 @@ import {
   type DropAnimation,
 } from "@dnd-kit/core";
 import { Button } from "@/components/ui/button";
+import { DagStatusIcon } from "@/components/dag-status-icon";
 import { RunningMark } from "@/components/running-mark";
 import { IconButton } from "@/components/icon-button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -43,6 +44,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { cn } from "@/lib/utils";
 import { bindingStateKey, displayRemotePath, isRemoteProject, remoteProjectActivityKey } from "@/lib/remote-project";
 import type { RemoteHostConnectionState } from "@shared/remote-host";
+import type { DagNode } from "@shared/dag";
 import type { Conversation, Project } from "@shared/types";
 
 export const COLLAPSED_KEY = "fastvibe.sidebar.collapsed";
@@ -434,6 +436,9 @@ function SessionRowContent({
   failed = false,
   renamingThis,
   leadSlot = true,
+  subTaskCount = 0,
+  subTasksOpen = false,
+  onToggleSubTasks,
   onOpen,
   onTogglePin,
   onArchive,
@@ -451,6 +456,10 @@ function SessionRowContent({
   renamingThis: boolean;
   /** Reserve the folder-icon column so titles line up with project names. Off for 聊天. */
   leadSlot?: boolean;
+  /** How many sub-agent tasks this chat's agent has set running; 0 draws no arrow. */
+  subTaskCount?: number;
+  subTasksOpen?: boolean;
+  onToggleSubTasks?: () => void;
   onOpen: () => void;
   onTogglePin: () => void;
   onArchive: () => void;
@@ -468,7 +477,26 @@ function SessionRowContent({
     >
       {/* Project chats keep an empty folder-icon column so titles line up with
           the group name. 聊天 has no parent icon, so titles sit flush left. */}
-      {leadSlot ? <span className="size-3.5 shrink-0" /> : null}
+      {subTaskCount > 0 ? (
+        // The arrow stands where the folder column would be; a chat with sub-tasks is the only
+        // one that has it. It is a control of its own — it must not open the chat.
+        <button
+          type="button"
+          aria-expanded={subTasksOpen}
+          aria-label={subTasksOpen ? t("sidebar.collapseSubTasks") : t("sidebar.expandSubTasks", { count: subTaskCount })}
+          title={subTasksOpen ? t("sidebar.collapseSubTasks") : t("sidebar.expandSubTasks", { count: subTaskCount })}
+          className="flex size-3.5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
+          onClick={(event) => {
+            event.stopPropagation();
+            onToggleSubTasks?.();
+          }}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <HugeiconsIcon strokeWidth={2} icon={ArrowRight01Icon} className={cn("size-3.5 transition-transform", subTasksOpen && "rotate-90")} />
+        </button>
+      ) : leadSlot ? (
+        <span className="size-3.5 shrink-0" />
+      ) : null}
       {renamingThis ? (
         <InlineRename value={item.title} onSubmit={onRename} onCancel={onCancelRename} />
       ) : (
@@ -579,6 +607,9 @@ export function DraggableSession({
   failed = false,
   renamingThis,
   leadSlot,
+  subTasks,
+  openDagNodeId,
+  onOpenSubTask,
   onOpen,
   onTogglePin,
   onFork,
@@ -597,6 +628,12 @@ export function DraggableSession({
   failed?: boolean;
   renamingThis: boolean;
   leadSlot?: boolean;
+  /** The sub-agent tasks of this chat's DAG, in creation order. */
+  subTasks?: DagNode[];
+  /** The node currently open in this chat's side pane, so its row can show that. */
+  openDagNodeId?: string;
+  /** Open the chat and show this sub-task in the side pane. */
+  onOpenSubTask?: (node: DagNode) => void;
   onOpen: () => void;
   onTogglePin: () => void;
   onFork: () => void;
@@ -608,9 +645,14 @@ export function DraggableSession({
   const { t } = useTranslation("app");
   const { listeners, setNodeRef, isDragging } = useDraggable({ id: item.id });
   const { setNodeRef: setDroppableRef } = useDroppable({ id: item.id });
+  const [subTasksOpen, setSubTasksOpen] = useState(false);
+  const subTaskCount = subTasks?.length ?? 0;
+  // The sub-tasks sit outside the draggable box: dragging one must not pick the chat up,
+  // and the drop indicators are measured on the chat's own row.
   return (
-    // pan-y lets a touchscreen scroll the list; mouse drag is unaffected (the
-    // PointerSensor only needs `touch-action` for touch pointers).
+    <div>
+    {/* pan-y lets a touchscreen scroll the list; mouse drag is unaffected (the
+        PointerSensor only needs `touch-action` for touch pointers). */}
     <div
       ref={(node) => {
         setNodeRef(node);
@@ -631,6 +673,9 @@ export function DraggableSession({
             failed={failed}
             renamingThis={renamingThis}
             leadSlot={leadSlot}
+            subTaskCount={subTaskCount}
+            subTasksOpen={subTasksOpen}
+            onToggleSubTasks={() => setSubTasksOpen((open) => !open)}
             onOpen={onOpen}
             onTogglePin={onTogglePin}
             onArchive={onArchive}
@@ -661,6 +706,39 @@ export function DraggableSession({
         </ContextMenuContent>
       </ContextMenu>
       </div>
+    </div>
+    {subTasksOpen && subTasks && subTasks.length > 0 ? (
+      // Hung off a guide line under the arrow, so the tasks read as the chat's own and not as
+      // chats of the project.
+      <ul className="mt-0.5 ml-[0.9375rem] space-y-0.5 border-l border-sidebar-border pl-2">
+        {subTasks.map((node) => (
+          <li key={node.id}>
+            <button
+              type="button"
+              title={`${node.id} ${node.title}`}
+              aria-current={openDagNodeId === node.id || undefined}
+              className={cn(
+                "flex h-7 pointer-coarse:h-9 w-full items-center gap-2 rounded-md px-2 text-left text-sm transition-colors",
+                openDagNodeId === node.id ? "bg-sidebar-accent text-sidebar-accent-foreground" : "hover:bg-sidebar-accent/50",
+              )}
+              onClick={() => onOpenSubTask?.(node)}
+            >
+              <DagStatusIcon status={node.status} label={node.status} />
+              <span className={cn("shrink-0 font-mono text-xs", openDagNodeId === node.id ? "text-sidebar-accent-foreground/70" : "text-muted-foreground")}>{node.id}</span>
+              <span
+                className={cn(
+                  "min-w-0 truncate",
+                  openDagNodeId === node.id ? "text-sidebar-accent-foreground" : node.status === "skipped" || node.status === "cancelled" ? "text-muted-foreground" : "text-sidebar-foreground/90",
+                  (node.status === "skipped" || node.status === "cancelled") && "line-through decoration-muted-foreground/50",
+                )}
+              >
+                {node.title}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    ) : null}
     </div>
   );
 }

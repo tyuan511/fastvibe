@@ -28,6 +28,7 @@ import { formatDuration } from "@/lib/time";
 import { matchChord, resolveBinding } from "@/lib/shortcuts";
 import { useShortcutLabel } from "@/lib/use-shortcuts";
 import { useSettingsStore } from "@/stores/settings";
+import { useExtensionStatusValue } from "@/stores/session";
 import { GitBranchChip } from "./git-branch-chip";
 import { AttachmentChip } from "./attachment-chip";
 import { MessageQueue } from "./message-queue";
@@ -203,6 +204,7 @@ export function Composer({
   streaming,
   working,
   placeholder,
+  conversationId,
   models,
   model,
   thinkingLevel,
@@ -317,6 +319,12 @@ export function Composer({
   focusSignal?: number;
   className?: string;
   /**
+   * The conversation this composer sends to. Read for the one piece of per-chat state
+   * the composer draws itself (a handoff owning the input); omitted by surfaces that
+   * have no conversation of their own.
+   */
+  conversationId?: string;
+  /**
    * The composer is being shown for a run the user cannot steer — a delegated run's
    * pane. The input is locked and every control that would change the run (attach,
    * the model / thinking menus) is dropped; what stays is what is
@@ -331,6 +339,15 @@ export function Composer({
   const [dragging, setDragging] = useState(false);
   const [slashIndex, setSlashIndex] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState(false);
+  /**
+   * A `/handoff` writing this chat's summary owns its composer: the sentence goes in
+   * the placeholder and nothing may be typed or sent, because the engine refuses
+   * another prompt to this conversation until the command returns. The status belongs
+   * to a conversation, so it is the caller's `conversationId` — not the chat on screen.
+   */
+  const handoff = useExtensionStatusValue(conversationId, "handoff");
+  const notice = readOnly ? undefined : handoff;
+  const locked = disabled || Boolean(notice);
   const [histIndex, setHistIndex] = useState<number | null>(null);
   const [projectOpen, setProjectOpen] = useState(false);
   const [projectQuery, setProjectQuery] = useState("");
@@ -768,8 +785,8 @@ export function Composer({
           ref={textareaRef}
           rows={1}
           value={value}
-          disabled={disabled || readOnly}
-          placeholder={!readOnly && streaming ? t("composer.placeholderQueued") : placeholder ?? t("composer.placeholder")}
+          disabled={locked || readOnly}
+          placeholder={notice ?? (!readOnly && streaming ? t("composer.placeholderQueued") : placeholder ?? t("composer.placeholder"))}
           className={cn(
             "field-sizing-content max-h-56 min-h-13 resize-none border-0 bg-transparent px-4 text-sm leading-6 shadow-none focus-visible:ring-0 disabled:bg-transparent disabled:opacity-100 dark:bg-transparent",
             attachments.length > 0 ? "pt-2" : "pt-3.5",
@@ -786,7 +803,7 @@ export function Composer({
               variant="ghost"
               className="rounded-full text-muted-foreground"
               label={t("composer.attach")}
-              disabled={disabled}
+              disabled={locked}
               onClick={() => fileRef.current?.click()}
             >
               <HugeiconsIcon strokeWidth={2} icon={AttachmentIcon} />
@@ -887,7 +904,7 @@ export function Composer({
               label={streaming ? t("composer.queue") : t("composer.send")}
               data-fv-action="send"
               shortcut={sendShortcut}
-              disabled={disabled || !hasContent}
+              disabled={locked || !hasContent}
               onClick={submit}
             >
               <HugeiconsIcon strokeWidth={2} icon={ArrowUp02Icon} />

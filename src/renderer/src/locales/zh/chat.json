@@ -66,6 +66,9 @@
     "subagents": "子 Agent",
     "running": "运行中"
   },
+  "handoff": {
+    "needChat": "还没有对话可以交接"
+  },
   "queue": {
     "stopped": "由于你中断了当前响应，队列已暂停",
     "error": "由于当前响应出错，队列已暂停（内容未丢失）",
@@ -181,6 +184,8 @@
     "collapseCode": "收起代码",
     "selection": {
       "label": "选中文本操作",
+      "copy": "复制",
+      "quoteCode": "引用代码到对话",
       "addToConversation": "添加到对话",
       "askInSideChat": "在侧边聊天中提问"
     },
@@ -230,11 +235,16 @@
     "pathPreview": "预览",
     "pathReveal": "在文件夹中显示",
     "pathCopy": "复制完整路径",
-    "copy": "复制内容",
-    "quoteCode": "引用代码到对话",
     "pathMissing": "文件不存在"
   },
   "model": {
     "switched": "模型已切换至"
+  },
+  "dag": {
+    "settled": "子任务已全部结束",
+    "completed": "{{count}} 完成",
+    "failed": "{{count}} 失败",
+    "skipped": "{{count}} 跳过",
+    "cancelled": "{{count}} 取消"
   }
 }

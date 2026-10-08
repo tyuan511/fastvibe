@@ -1169,12 +1169,47 @@ engine is gone because the SDK never read them.
 ## Plugins & extensions
 
 FastVibe hosts pi extensions (the SDK's plugin system) and bridges their
-terminal-only surface onto the GUI. Fourteen **built-in** extensions ship with the app
-(`resources/extensions/goal.ts`, `todo.ts`, `question.ts`, `folder-consent.ts`, `session-title.ts`,
+terminal-only surface onto the GUI. **Built-in** extensions ship with the app
+(`resources/extensions/goal.ts`, `handoff.ts`, `todo.ts`, `question.ts`, `folder-consent.ts`, `session-title.ts`,
 `browser-use.ts`, `computer-use.ts`, `web-search.ts`, `conversation-search.ts`, `worktree.ts`,
-`output-language.ts`, `batch-decide.ts`, `app-config.ts`, `subagent/index.ts`); anything else
+`output-language.ts`, `batch-decide.ts`, `app-config.ts`, `dag.ts`, `subagent/index.ts`); anything else
 the user installs at runtime via 设置 → 插件, which writes to the isolated `agentDir`
 (`ExtensionManager` → SDK `DefaultPackageManager`), never `~/.pi`.
+
+**Handoff** (`handoff.ts`) is `/handoff <下一步>`. The current model writes a self-contained
+prompt from this branch — the latest compaction summary plus what it kept, not the raw turns
+that summary replaced — the user reviews it in `ctx.ui.editor`, and submitting that review
+opens a new conversation and **sends the prompt there**: the dialog is the confirmation, there
+is no second press in the composer. The editor's prefill has to reach the dialog or the summary
+is discarded. The source chat stays. A bare `/handoff` asks for the goal. Like `/compact`, the
+slash line is not a user message and is not steered into a live run, and a second prompt to
+that chat is refused until the command returns. The new chat keeps the source chat's model.
+The answer is not awaited (`sendUserMessage` resolves when the run is *over*): the new chat's
+own events draw the reply, and the phone follows the open it started.
+
+The replacement's first text submission is published immediately by
+`#replacementContext`: an `opening_prompt` row and a `handoff` preparation status,
+before the SDK awaits input hooks or memory retrieval. Main holds that row in
+`#openingPrompts` and includes it in snapshots, so switching away or reconnecting
+does not make it disappear. `sendOpeningPrompt` retires it after the SDK's user
+`message_end` is persisted, without waiting for the answer; the renderer adopts the
+real entry id instead of adding a second row. A refused/consumed submission removes
+the pending row, unlocks the composer and returns its text. Do not mark this phase as
+an agent run: the SDK has not started one yet.
+
+**A chat Main fills itself has to reach the sidebar like any other.** `preview` is what every
+list in the sidebar filters on — and what marks the project's blank draft for 新对话 — but only
+the renderer's `recordPrompt` wrote it, and a handoff sends its opening prompt from Main. The
+creation-time `#healPreview` looked at a transcript that was still empty, so the new chat stayed
+invisible until a restart. `#adoptPromptPreview` now runs on the conversation's first user
+message and writes the same title and preview through `promptPreview` (`engine/prompt-preview.ts`)
+that `recordPrompt` uses — one function, so the two paths cannot drift into different rows. It
+defers to an existing preview, so a later message never rewrites the first, and to `titleManual`,
+and it skips side chats, which the sidebar hides on purpose.
+
+While the summary is being written the source chat's composer is the thing that is busy, so it
+says so **in its own placeholder** and is disabled — the `handoff` status is read by id for the
+conversation the composer sends to, not as a line above it.
 
 **内置技能是另一套东西**：`resources/skills/<name>/SKILL.md`，由 `builtinSkillPaths()`（`BUILTIN_SKILLS`，
 新增一个就要在那里加一行）列进每个会话的 `additionalSkillPaths`。它们只是提示词，不注册工具，也不需要
@@ -1502,10 +1537,20 @@ viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`
   and `questions` (multi-question, paged) render as the inline `PermissionPanel` in the composer
   slot — one panel for every kind of question; only
   `editor` (multi-line prefill) keeps the modal `PermissionDialog`.
+- **A dialog that holds typed text does not close on an outside press.** `PermissionDialog`
+  passes Base UI's `disablePointerDismissal` for `editor` and `input`: a modal backdrop covers
+  the whole window, so one stray click anywhere outside the popup used to throw away a summary
+  or answer that took a while to write. Cancel and the ✕ (and Escape, which is deliberate) still
+  close it. `confirm` / `select` keep the ordinary behaviour — there is nothing typed to lose.
 - **Fire-and-forget UI** — `notify`, `setStatus`, `setWidget` (string lines) and
   `set_editor_text` reach the renderer store and render as toasts, a status row, a
   panel above the composer, and composer prefill (`ExtensionWidgets`,
-  `ExtensionNotices`).
+  `ExtensionNotices`). A status key FastVibe draws with its own chrome is listed in
+  `BADGE_STATUS_KEYS` (`extension-surface.tsx`) so the same sentence is not printed
+  twice: `goal` is the `GoalPanel`, `goal-armed` a badge, and `handoff` the composer's
+  own placeholder. A surface that knows which chat it belongs to reads a named status by
+  id (`useExtensionStatusValue`) — `useExtensionStatus` answers for the chat on screen,
+  which puts a 辅助对话's composer on the main chat's state.
 - **TUI components → GUI** — `src/main/pi/tui-bridge.ts` renders pi-tui components
   produced by plugins: component-factory widgets (`setWidget(factory)`, re-rendered
   every second with change detection) and `registerMessageRenderer` output. ANSI SGR
@@ -2157,6 +2202,74 @@ FastVibe 是一个窗口、一个进程：`app.requestSingleInstanceLock()` 在�
 杀掉旧子进程再起新的，新进程可能在旧进程还没释放锁的时候来抢——那会让 `pnpm dev` 变成一个
 没有窗口也没有报错的应用（旧进程以为是自己被替换了，新进程以为旧的那个还在）。在主进程里，
 `false` 恰好是错的那个答案。
+
+## 子 agent 任务编排（DAG）
+
+主 agent 用 `dag_*` 工具**动态生成**子 agent 任务和依赖图，FastVibe 按图**自主执行**；图**内联在对话里**（每次「创建子任务」调用就地画成它创建的那批任务），最大化按钮打开整张图的弹窗。设置 → 子 Agent 的「动态子 Agent 编排」默认开着；关掉后这些工具离开活动集（`dynamicDag`，和代码模式同一条 reload），已有的图还在，只是主 agent 不再拿到工具。
+一个会话至多一张图，主 agent 可以随时再追加节点（新节点可以依赖已有节点），所以图是「长出来的」。节点优先**复用已配置的子 Agent**
+（设置 → 子 Agent，和 `subagent` 工具同一份名单）：任务对得上就设 `agent` 为其名字，于是用它的系统指令、工具、模型和推理强度，
+`profile` 被忽略；没有合适的才现写 `profile`，那种节点**模型跟随主 agent**。复用在 `resolveDrafts` 里按名字（大小写不敏感）解析，
+角色连同模型记在节点上，所以重试和恢复重跑的还是它，不因之后改了配置而变。角色配了节点跑不了的工具（如 `subagent`）会被去掉；
+写了不存在的名字整批退回并列出可用角色。
+
+- **整套 DAG 归引擎（`PiProcessManager`）所有**：`DagStore`、`DagScheduler`、工具宿主（`ctx.ui.dag` → `runDagTool`）、转写落盘、跑完通知都在引擎里。
+  所以 **SSH 远端 Agent 跑的是同一份代码**（`src/agent/handlers.ts` 也 `registerDagIpc(engine)`），不需要 Electron Main 拼装。图的每次变化以
+  **引擎事件 `dag_changed`** 发出（不是单独的推送频道）：远端的引擎事件本来就被网关改写会话 id 后转发，于是远端会话的图在本地照样出现。
+  `dag:list` 在网关里汇总本机和每台已连服务器的图（`#allDagGraphs`，改写 `conversationId`）；`dag:cancel/retry/resume` 按 `conversationId` 自动路由；
+  节点的停止（`engine:abort-subagent`）和转写（`engine:get-subagent-messages`）走已有的路由。远端要用，需要发布带这些改动的 agent runtime。
+- **编号 `T-0001`，同一引擎内只增不减。** `formatDagId`（`shared/dag.ts`）：至少四位补零，超过 9999 按实际位数（`T-10000`）。计数器 `seq`
+  单独存进 `dag.json`，不从现有节点推算——否则删掉最大号后它会被再发出去。`dagSeq` / `canonicalDagId` 让 `t-1` / `T0001` 也认（模型常这么写）。
+  **每次运行一个新 id**（`runId`：`T-0001`，重跑是 `T-0001.2`、`T-0001.3` …，`attempt` 记次数）：共享的 `reduceSubagent` 不让一个已结束的 id
+  回到运行中，渲染层又按 id 累积转写——复用节点编号会让重试 / 恢复显示旧状态、新转写接在旧转写后面。`runId` 就是 subagentId，
+  `abortSubagent`、执行标签页都按已有的子 agent 机制工作。打开执行标签页时节点状态要经 `dagRunStatus` 换成运行的词汇（failed→error、
+  cancelled/skipped→aborted）：那个视图只在 completed / error / aborted 时去读缓存的转写，重启后别的东西不会告诉它这次运行已经结束。
+- **`DagScheduler`（`pi/dag-scheduler.ts`）的规则**：依赖全部 `completed` 才开始；依赖里有 failed / skipped / cancelled 的节点被 `skipped` 并记下
+  `blockedBy`，沿图传下去（不拿没做成的上游的空结果去跑下游）；同图同时最多 **5** 个（`DAG_CONCURRENCY`，固定、暂不开放设置）；每个节点结束都再泵一次，
+  所以图自己往前走。状态只写进 `DagStore`（去抖落盘，`onChange` 是唯一的通知口），调度器不另存一份。runner 是注入的（`engine.runDagNode`），
+  所以规则能不起引擎就测。上游产出由 `buildPrompt` 拼进下游提示词（每个最多 6000 字）。
+- **不同主机可以都有 `T-0001`。** `MessageList` 用 `TranscriptConversationContext` 传递转写所属会话，内联图只读这个会话的图，
+  不再跨图搜编号。子 agent 状态、流式转写和标签页以 `subagentKey(runId, conversationId)` 隔离；会话 id 已含远端命名空间，
+  调用停止 / 读转写时仍传原始 runId 和所属会话。`namespaceDagGraph` 同时用于列表和推送，保证事件外层与图内的会话 id 一致。
+  首次 `dag:list` 返回前的实时事件（包括删除）由 `watchDagGraphs` 按会话保留，合并到快照后再发布，旧快照不能覆盖新状态。
+- **并行的节点必须真正独立**：没有依赖路径相连的节点会同时跑在**同一个工作目录**里，所以不能需要彼此的结果、不能改同一批文件——要么拆开，要么用
+  `depends_on` 串起来。这条写在工具的 promptGuidelines 里，由主 agent 分配任务时保证，FastVibe 不为节点各建 worktree。
+- **校验在 `resolveDrafts`，整批要么全加要么全不加**：空字段、超限（一次 30、一图 100）、重复 `ref`、引用不存在、自依赖、批内成环、未知工具。
+  已有节点不可能依赖新节点，所以环只可能在一批之内。错误写给主 agent 读，要说清哪个节点错在哪。
+- **profile 由主 agent 为这个节点现写**：`name`、`instructions`（系统指令）、`tools`（缺省只读 `read/grep/find/ls`；`edit/write/bash` 要明确给）。
+  运行时 `agentSource: "project"`，所以和内置角色同名的 profile 不会借到那个角色在 `subagents.json` 里的模型覆盖——模型始终跟随主 agent
+  （`#dagParentModel` 记着主会话的模型，节点可能在会话被空闲回收之后才开始）。子 agent 不加载 `dag` 扩展，不能再生成图。
+- **工具**：`dag_add_tasks`（加节点并立刻开跑）、`dag_status`、`dag_result`（全文）、`dag_wait`（阻塞到结束或超时，默认 600s、上限 1800s，用工具的
+  `signal` 中止；**节点失败不让它报错**，失败是结果；不存在的编号报错而不是当作「都结束了」）、`dag_cancel`、`dag_resume`、`dag_retry`。
+- **图跑完时主动告诉主 agent**（`#announceDagSettled`）：不再有等待中 / 运行中的节点、不是被停止的（有成功或失败的结果）、而主 agent 此刻没在
+  `dag_wait` 里等它（`onSettled` 读的是这一刻的等待者），引擎就往主会话发一条 **custom message**（`customType: "dag-settled"`，`triggerTurn` +
+  `deliverAs: "followUp"`）：列出每个节点的结局、要求主 agent 读结果并向用户汇总。它是 `display: false` 的隐藏消息，模型收到全文；对话里只画一条系统事件
+  （「子任务已全部结束 · 4 完成」，分隔线同模型切换），不画任务清单和那句给模型的指令。`mapEngineMessages` 按 `customType` 收成这条事件，旧的可见副本也一样。主会话正在跑时排在这轮之后。每「跑完一次」只通知一次，追加 / 重试 / 恢复后再跑完会再通知；
+  一批刚加进来就全被跳过（什么都没跑）不通知——主 agent 从自己的 `dag_add_tasks` 回复里已经知道。
+- **主会话的 Stop 取消图**（`abort()` 里直接 `cancel(…, 「主会话已停止」)`，在等会话之前，慢停止期间不会再起新节点），但**可以恢复**：`resume`（侧边「恢复」/
+  `dag_resume`）把所有 `cancelled` 的节点——以及按下停止时还在退出、仍是 running 的节点（`#resumeWanted`：回来时直接回到等待，而不是落成已取消让图
+  又停一半）——和因它们被跳过的下游重置为等待并继续跑，**已完成的节点原样保留、产出照旧交给下游**；失败的不动（失败是结果，逐个 `retry`）。
+  图的状态（运行中 / 已停止 / 有失败 / 已完成）由 `dagGraphState` 从节点**推出**，不单独存。被停止的图不发「跑完」通知。
+  再次 Stop 必须清除 `#resumeWanted`，所以「停止 → 恢复 → 再停止」以最后一次停止为准。
+- **引擎退出先停调度，再释放会话。** `PiProcessManager.stop()` 在等待操作队列之前调用 `DagScheduler.stop()`：关调度、清恢复标记、
+  取消所有图的未完成节点。旧运行随后收尾也不能填补空位或发完成通知；引擎重新 ready 后才 `start()`，任务仍需显式恢复。
+- **应用重启**：没结束的节点标成 `cancelled`（「应用退出时被中断」），图是「已停止」，点「恢复」只重跑被中断的；**不会在启动时自动恢复**。
+  **子 agent 的转写落盘**（`dag-runs/<会话>/<runId>.json`，`#saveDagRun`）：每次运行结束时写一次，退出时还在跑的在 `flush()` 里写下当时的进度；
+  `getSubagentMessages` 在内存里找不到 DAG 运行时读文件，所以重启后「查看执行过程」仍有内容。重试是新的 `runId`，旧那次的记录保留。
+  删会话 / 删项目时 `#dropDag`：停掉运行中的节点、丢掉图、删掉转写目录。路径的两段都按 id 形状校验，不是 id 的不拼路径。
+- **图内联在对话里，不进侧边栏**（`components/dag/`）。每个跑完的 `dag_add_tasks` 调用由 `ToolCard` 画成 `DagInline`——它创建的那批节点的实时图，而不是
+  「创建子任务」一行加一块 JSON；图长过几次调用就按批分别画，整张图不重复画。这张图**留在「用时 …」折叠之外**（`isDagGraphPart`，`message-row.tsx`）：
+  它是这一轮启动的东西，不是过程。卡片顶部一行：状态、进度条、「取消全部 / 恢复」、**最大化**。图找不到时（被删了，或这个客户端没有图数据）退回普通工具行。
+- **最大化弹窗**（`DagDialog`，挂在 `App.tsx`，状态在 `useDagStore.viewer`）：左边整张图 + 状态 / 进度 / 图例，右边是选中的节点，分「详情」和「执行过程」
+  两页。详情（`DagNodeDetail`）：错误、角色、工具（写入类标警示色）、模型、依赖 / 被依赖（可点，切换节点）、任务说明（折叠）、产出，以及
+  「查看执行过程 / 停止 / 重试」。执行过程就是委派运行用的那个只读转写视图（`SidePaneSubagent`，含停止按钮），被交给一个描述这次运行的 tab 形对象；
+  状态经 `dagRunStatus` 换词。在内联图里点节点：跑过的直接开在执行过程，没跑过的开在详情。
+- **画法**（`dag-canvas.tsx`，内联与弹窗共用）：`lib/dag-layout.ts` 自上而下分层（层 = 依赖链最长长度，所以每条边都朝下），同层按父节点列的重心排序，
+  每层按最宽那层居中；比容器宽时按宽度缩小（内联最小 0.5、弹窗 0.6，再宽就滚动），从不放大。边按状态区分（流入运行中节点的是流动的虚线、已交付结果的是实线、
+  还在等的是灰虚线），选中节点的上下游高亮。节点卡片：状态色条、状态图标、编号、耗时、标题、角色。**DAG 运行不会在开始时自动开侧边标签页**（`isDagNodeId` 跳过 `registerSubagent`）；侧栏点一行才按需打开。
+- **侧栏**：有子任务的会话在行左侧（原来文件夹图标列的位置）有一个箭头，点开在一条竖线下列出「T-0001 标题」。点一行先打开该会话，再在**侧边面板**里打开这个节点（`openDagNode`），不弹出整张图：
+  跑过的是执行过程，没跑过的是详情。子任务行在可拖拽的会话行**之外**，拖它不会拿起会话。
+- **其他 `dag_*` 工具行**（`describeDagTool`，`lib/tool-presentation.tsx`）说的是做了什么——「等待子任务 · 3 已完成 · 1 失败」——而不是工具名加一块 JSON。
+- `dag:*` 登记在 `remote-policy.ts` 的 ALLOWED，能力归到 `engine`（`app-server/capabilities.ts`）。预览：`mock.html` 的 store 里第一个会话带一张各种状态的图。
 
 ## 测试
 

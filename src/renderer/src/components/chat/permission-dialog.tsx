@@ -26,19 +26,30 @@ export function PermissionDialog({
   }) => void;
 }): JSX.Element | null {
   const { t } = useTranslation("chat");
-  const [value, setValue] = useState("");
+  // The dialog stays mounted across requests. Remember which request the text
+  // belongs to, and fall back to that request's prefill until the user types —
+  // an editor that opened empty made `/handoff` throw the summary away.
+  const requestId = request?.id ?? "";
+  const [draft, setDraft] = useState<{ id: string; value: string } | null>(null);
+  const value = draft?.id === requestId ? draft.value : (request?.prefill ?? "");
   if (!request) return null;
 
   const title = request.title || (request.method === "confirm" ? t("permission.needConfirm") : t("permission.needDecision"));
+  // `editor` and `input` hold text the user had to write. A modal backdrop covers the
+  // whole window, so an outside press anywhere would throw that away — there is an
+  // explicit 取消 and a ✕ (and Escape) to leave on purpose. A `confirm` / `select` is a
+  // single click with nothing to lose, so it keeps the usual dismissal.
+  const typed = request.method === "editor" || request.method === "input";
 
   return (
     <Dialog
       open
+      disablePointerDismissal={typed}
       onOpenChange={(open) => {
         if (!open) onRespond({ id: request.id, cancelled: true });
       }}
     >
-      <DialogContent>
+      <DialogContent className={request.method === "editor" ? "sm:max-w-2xl" : undefined}>
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           {request.message ? <DialogDescription className="whitespace-pre-wrap">{request.message}</DialogDescription> : null}
@@ -65,10 +76,15 @@ export function PermissionDialog({
           </div>
         ) : null}
         {request.method === "input" ? (
-          <Input value={value} autoFocus onChange={(event) => setValue(event.target.value)} />
+          <Input value={value} autoFocus onChange={(event) => setDraft({ id: requestId, value: event.target.value })} />
         ) : null}
         {request.method === "editor" ? (
-          <Textarea value={value} autoFocus className="min-h-32" onChange={(event) => setValue(event.target.value)} />
+          <Textarea
+            value={value}
+            autoFocus
+            className="max-h-[50vh] min-h-40"
+            onChange={(event) => setDraft({ id: requestId, value: event.target.value })}
+          />
         ) : null}
         <DialogFooter>
           <Button variant="outline" onClick={() => onRespond({ id: request.id, cancelled: true })}>

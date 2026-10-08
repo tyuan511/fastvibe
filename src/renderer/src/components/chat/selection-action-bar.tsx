@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useState, type RefObject, type JSX } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type RefObject, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -9,12 +9,17 @@ export function SelectionActionBar({
   containerRef,
   onAddToConversation,
   onAskInSideChat,
+  onQuote,
 }: {
   containerRef: RefObject<HTMLElement | null>;
   onAddToConversation?: (text: string) => void;
   onAskInSideChat?: (text: string) => void;
+  /** Quote the selection into the composer. File previews use this; the chat does not. */
+  onQuote?: (text: string) => void;
 }): JSX.Element | null {
   const { t } = useTranslation("chat");
+  const barRef = useRef<HTMLDivElement>(null);
+  const [barWidth, setBarWidth] = useState(0);
   const [selection, setSelection] = useState<{ text: string; rect: SelectionRect } | null>(null);
 
   useEffect(() => {
@@ -52,20 +57,43 @@ export function SelectionActionBar({
     };
   }, [containerRef]);
 
+  const buttons: { key: string; label: string; run: (text: string) => void }[] = [
+    {
+      key: "copy",
+      label: t("message.selection.copy"),
+      run: (text) => void navigator.clipboard?.writeText(text),
+    },
+  ];
+  if (onQuote) {
+    buttons.push({ key: "quote", label: t("message.selection.quoteCode"), run: onQuote });
+  }
+  if (onAddToConversation) {
+    buttons.push({ key: "add", label: t("message.selection.addToConversation"), run: onAddToConversation });
+  }
+  if (onAskInSideChat) {
+    buttons.push({ key: "ask", label: t("message.selection.askInSideChat"), run: onAskInSideChat });
+  }
+
   useLayoutEffect(() => {
     if (!selection) return;
     // Re-check after layout so a newly mounted toolbar does not affect the range.
     const current = window.getSelection();
-    if (!current || current.isCollapsed) setSelection(null);
-  }, [selection]);
+    if (!current || current.isCollapsed) {
+      setSelection(null);
+      return;
+    }
+    const next = barRef.current?.offsetWidth ?? 0;
+    if (next && next !== barWidth) setBarWidth(next);
+  }, [selection, barWidth, buttons.length]);
 
-  if (!selection || (!onAddToConversation && !onAskInSideChat)) return null;
+  if (!selection) return null;
 
-  const toolbarWidth = 310;
-  const left = Math.max(8, Math.min(window.innerWidth - toolbarWidth - 8, selection.rect.left + selection.rect.width / 2 - toolbarWidth / 2));
+  const width = barWidth || 240;
+  const left = Math.max(8, Math.min(window.innerWidth - width - 8, selection.rect.left + selection.rect.width / 2 - width / 2));
   const above = selection.rect.top > 64;
   return (
     <div
+      ref={barRef}
       role="toolbar"
       aria-label={t("message.selection.label")}
       className={cn(
@@ -75,35 +103,23 @@ export function SelectionActionBar({
       style={{ left, top: above ? selection.rect.top - 8 : selection.rect.bottom + 8, transform: above ? "translateY(-100%)" : undefined }}
       onMouseDown={(event) => event.preventDefault()}
     >
-      {onAddToConversation ? (
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-8 rounded-lg px-3 text-sm"
-          onClick={() => {
-            const text = selection.text;
-            setSelection(null);
-            onAddToConversation(text);
-          }}
-        >
-          {t("message.selection.addToConversation")}
-        </Button>
-      ) : null}
-      {onAddToConversation && onAskInSideChat ? <div className="h-5 w-px bg-border" /> : null}
-      {onAskInSideChat ? (
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-8 rounded-lg px-3 text-sm"
-          onClick={() => {
-            const text = selection.text;
-            setSelection(null);
-            onAskInSideChat(text);
-          }}
-        >
-          {t("message.selection.askInSideChat")}
-        </Button>
-      ) : null}
+      {buttons.map((button, index) => (
+        <Fragment key={button.key}>
+          {index > 0 ? <div className="h-5 w-px bg-border" /> : null}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 rounded-lg px-3 text-sm whitespace-nowrap"
+            onClick={() => {
+              const text = selection.text;
+              setSelection(null);
+              button.run(text);
+            }}
+          >
+            {button.label}
+          </Button>
+        </Fragment>
+      ))}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { BotIcon, ChromeIcon, ComputerIcon, FileEditIcon, FileMinusIcon, FilePlusIcon, FileTextIcon, FolderTreeIcon, ListChecksIcon, MessageQuestionIcon, Plug01Icon, Search01Icon, SourceCodeIcon, SparklesIcon, SquareTerminalIcon, Wrench01Icon } from "@hugeicons/core-free-icons";
+import { BotIcon, ChromeIcon, ComputerIcon, FileEditIcon, FileMinusIcon, FilePlusIcon, FileTextIcon, FolderTreeIcon, ListChecksIcon, MessageQuestionIcon, Plug01Icon, Search01Icon, SourceCodeIcon, SparklesIcon, SquareTerminalIcon, WorkflowSquare01Icon, Wrench01Icon } from "@hugeicons/core-free-icons";
 import type { ToolCallBlock } from "@shared/types";
 import { i18n } from "@/lib/i18n";
 import { codemodeCalls, codemodeCode, codemodeFailures, codemodeSummary } from "./codemode";
@@ -159,6 +159,7 @@ export function describeTool(tool: ToolCallBlock, cwd?: string): ToolView {
   const statusLabel = tool.status === "error" ? (i18n.t("common:tool.failed") as string) : undefined;
   const view: ToolView = { family, icon: ICONS[family], label, statusLabel, running };
   if (tool.name === "browser_task" || tool.name === "computer_task") return describeDecisionTask(tool, view);
+  if (DAG_ACTIONS.has(tool.name)) return describeDagTool(tool, view);
 
   switch (family) {
     case "read":
@@ -334,6 +335,51 @@ function describeDecisionTask(tool: ToolCallBlock, view: ToolView): ToolView {
     parts.push(i18n.t(`common:tool.decisionStatus.${result.status}`, { defaultValue: result.status }) as string);
   }
   view.badge = parts.join(" · ");
+  return view;
+}
+
+const DAG_ACTIONS = new Set(["dag_add_tasks", "dag_status", "dag_result", "dag_wait", "dag_cancel", "dag_resume", "dag_retry"]);
+const DAG_SUMMARY_ORDER = ["completed", "running", "failed", "cancelled", "skipped", "pending"];
+
+/**
+ * The `dag_*` tools: what the agent did to its graph of sub-agent tasks, in words — 「创建子任务
+ * 梳理主题加载、检查快捷键 等 4 个」, 「等待子任务 · 3 已完成 · 1 失败」 — instead of a tool name
+ * over a block of JSON. The graph itself is in the side pane; this row only has to say what happened.
+ */
+function describeDagTool(tool: ToolCallBlock, view: ToolView): ToolView {
+  const action = tool.name.slice("dag_".length).replace(/_tasks$/, "");
+  view.icon = <HugeiconsIcon strokeWidth={2} icon={WorkflowSquare01Icon} className="size-3.5" />;
+  view.label = i18n.t(`common:tool.dag.${action}.${view.running ? "running" : "done"}`) as string;
+  const args = asRecord(tool.args);
+  if (action === "add") {
+    const titles = (Array.isArray(args?.tasks) ? args.tasks : [])
+      .map((item) => asRecord(item)?.title)
+      .filter((title): title is string => typeof title === "string" && Boolean(title.trim()));
+    const shown = titles.slice(0, 2).join("、");
+    view.subject = titles.length > 2 ? (i18n.t("common:tool.dag.more", { shown, count: titles.length }) as string) : shown;
+    view.title = titles.join("\n");
+  } else {
+    const id = typeof args?.id === "string" ? args.id : undefined;
+    const ids = Array.isArray(args?.ids) ? (args.ids as unknown[]).map(String) : undefined;
+    view.subject = id ?? (ids && ids.length > 0 ? ids.join(", ") : action === "resume" || action === "cancel" || action === "status" || action === "wait" ? (i18n.t("common:tool.dag.all") as string) : undefined);
+    view.title = view.subject;
+  }
+  if (!view.running) {
+    const result = parsedResult(tool.result);
+    const summary = asRecord(result?.summary);
+    if (summary) {
+      view.badge = DAG_SUMMARY_ORDER.flatMap((status) =>
+        typeof summary[status] === "number" && summary[status] > 0
+          ? [`${summary[status] as number} ${i18n.t(`sidepane:dag.status.${status}`) as string}`]
+          : [],
+      ).join(" · ");
+    } else if (Array.isArray(result?.added)) {
+      view.badge = (result.added as unknown[])
+        .map((item) => asRecord(item)?.id)
+        .filter((value): value is string => typeof value === "string")
+        .join(" ");
+    }
+  }
   return view;
 }
 

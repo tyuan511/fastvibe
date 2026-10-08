@@ -9,3 +9,14 @@ export function parseCompactCommand(text: string): { instructions?: string } | n
   const instructions = match[1]?.trim();
   return { instructions: instructions || undefined };
 }
+
+/**
+ * `/handoff` is an extension command, not a prompt. The goal is everything
+ * after the command, including newlines. A bare `/handoff` asks for one.
+ */
+export function parseHandoffCommand(text: string): { goal?: string } | null {
+  const match = text.trim().match(/^\/handoff(?:\s+([\s\S]*))?$/i);
+  if (!match) return null;
+  const goal = match[1]?.trim();
+  return { goal: goal || undefined };
+}

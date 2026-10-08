@@ -26,6 +26,7 @@ import { ToolCard } from "./tool-card";
 import { ToolRow } from "./tool-row";
 import { ToolGroupRow } from "./tool-group";
 import { CompactNotice } from "./compact-notice";
+import { DagSettledNotice } from "./dag-settled-notice";
 import { ModelChangeNotice } from "./model-change-notice";
 import { RunCollapse } from "./run-collapse";
 import { TuiLines } from "./tui-lines";
@@ -259,6 +260,11 @@ function PartSlot({ children }: { children: JSX.Element }): JSX.Element {
 /**
  * User prompts clamp to two lines so a sticky turn header stays compact. The
  * expand control only appears when the prompt actually overflows that cap.
+ * Expanding still caps the bubble: a pasted prompt would otherwise grow to the
+ * whole viewport and pin itself over the reply. The rest scrolls inside.
+ * The scrollport fills the bubble so its bar sits on the outer edge, with the
+ * padding reapplied around the text. Collapse is its own full-width row under
+ * that, not a label sitting at the end of the last line.
  */
 function UserPromptBubble({ text: raw }: { text: string }): JSX.Element {
   const { t } = useTranslation("chat");
@@ -295,22 +301,44 @@ function UserPromptBubble({ text: raw }: { text: string }): JSX.Element {
     return () => observer.disconnect();
   }, [text, expanded]);
 
+  const toggle = (
+    <button
+      type="button"
+      className={cn(
+        "text-xs leading-4 text-muted-foreground transition-colors hover:text-foreground",
+        expanded
+          ? "w-full border-t border-border px-3 py-1.5 text-left hover:bg-foreground/5"
+          : "mt-1",
+      )}
+      aria-expanded={expanded}
+      onClick={() => setExpanded((value) => !value)}
+    >
+      {expanded ? t("message.collapse") : t("message.expand")}
+    </button>
+  );
+
   return (
     <Bubble variant="secondary" align="end">
-      <BubbleContent className="chat-markdown text-sm leading-6">
-        <div ref={bodyRef} className={expanded ? undefined : "line-clamp-2"}>
-          <MarkdownView text={text} />
-        </div>
-        {overflows ? (
-          <button
-            type="button"
-            className="mt-1 text-xs leading-4 text-muted-foreground transition-colors hover:text-foreground"
-            aria-expanded={expanded}
-            onClick={() => setExpanded((value) => !value)}
-          >
-            {expanded ? t("message.collapse") : t("message.expand")}
-          </button>
-        ) : null}
+      <BubbleContent className={cn("chat-markdown text-sm leading-6", expanded && "p-0")}>
+        {expanded ? (
+          // One grid column sized by the text, so the footer stretches to that
+          // width instead of shrinking to the word 「收起」.
+          <div className="grid">
+            <div className="max-h-[min(20rem,40vh)] overflow-y-auto px-3 py-2">
+              <div ref={bodyRef}>
+                <MarkdownView text={text} />
+              </div>
+            </div>
+            {overflows ? toggle : null}
+          </div>
+        ) : (
+          <>
+            <div ref={bodyRef} className="line-clamp-2">
+              <MarkdownView text={text} />
+            </div>
+            {overflows ? toggle : null}
+          </>
+        )}
       </BubbleContent>
     </Bubble>
   );
@@ -408,6 +436,11 @@ function ProcessOverflow({
       </CollapsibleContent>
     </Collapsible>
   );
+}
+
+/** A finished 「创建子任务」 call, which `ToolCard` draws as the graph of the tasks it created. */
+function isDagGraphPart(part: RenderPart): boolean {
+  return part.kind === "tool" && part.tool.name === "dag_add_tasks" && part.tool.status !== "running";
 }
 
 function ChatMessageRowImpl({
@@ -583,6 +616,13 @@ function ChatMessageRowImpl({
         </div>
       );
     }
+    if (message.kind === "dag") {
+      return (
+        <div className="flex w-full flex-col py-1">
+          <DagSettledNotice dag={message.dag} />
+        </div>
+      );
+    }
     // An extension custom message: the plugin's own renderer produced these runs.
     if (message.kind === "custom" && message.runs && message.runs.length > 0) {
       return (
@@ -705,9 +745,16 @@ function ChatMessageRowImpl({
 
         {fold && foldHead < fold.cut ? (
           <RunCollapse durationMs={fold.durationMs}>
-            {parts.slice(foldHead, fold.cut).map((part, index) => renderPart(part, foldHead + index))}
+            {parts
+              .slice(foldHead, fold.cut)
+              .map((part, index) => (isDagGraphPart(part) ? null : renderPart(part, foldHead + index)))}
           </RunCollapse>
         ) : null}
+        {/* The graph of sub-tasks a run created is what the run set going, not how it got there:
+            it stays on screen when the rest of the process folds away. */}
+        {fold && foldHead < fold.cut
+          ? parts.slice(foldHead, fold.cut).map((part, index) => (isDagGraphPart(part) ? renderPart(part, foldHead + index) : null))
+          : null}
 
         {fold
           ? parts.slice(fold.cut).map((part, index) => renderPart(part, fold.cut + index))

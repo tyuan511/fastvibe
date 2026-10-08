@@ -14,6 +14,9 @@ import { bindingProjectKey, encodeRemoteConversationId } from "../src/shared/pro
 import type { RemoteConnectionStatus } from "../src/shared/remote-connection.ts";
 import type { RemoteHostProfile } from "../src/shared/remote-host.ts";
 import { Ipc } from "../src/shared/ipc.ts";
+import { namespaceRemotePush } from "../src/shared/remote-events.ts";
+import { dagBatch } from "../src/renderer/src/lib/dag-batch.ts";
+import type { DagGraph } from "../src/shared/dag.ts";
 import type { Conversation, Project, WorkspaceSnapshot } from "../src/shared/types.ts";
 
 function bindingsFile(): string {
@@ -368,6 +371,44 @@ test("subagent snapshots keep their owner conversation namespaced", async () => 
     method: Ipc.engineGetSubagents,
     payload: { conversationId: "chat-1" },
   });
+});
+
+test("DAG lists, pushes and node actions remain scoped with matching ids on three engines", async () => {
+  const file = bindingsFile();
+  saveBinding(file, binding());
+  saveBinding(file, binding({ id: "bind_beta", connectionId: "host-b", serverInstanceId: "srv_beta" }));
+  const graph: DagGraph = {
+    conversationId: "c1", createdAt: 1, updatedAt: 1,
+    nodes: [{ id: "T-0001", runId: "T-0001.2", status: "running", title: "work", instruction: "work", profile: { name: "worker", instructions: "work" }, dependsOn: [], createdAt: 1 }],
+  };
+  const connections = fakeConnections({
+    servers: [
+      { connectionId: "host-a", serverInstanceId: "srv_alpha", capabilities: ["engine"] },
+      { connectionId: "host-b", serverInstanceId: "srv_beta", capabilities: ["engine"] },
+    ],
+    results: { [Ipc.dagList]: [graph], [Ipc.dagCancel]: ["T-0001"] },
+  });
+  const { instance } = gateway({ file, connections, localDispatch: async (method) => {
+    assert.equal(method, Ipc.dagList, "remote actions must not reach the local engine");
+    return [graph];
+  } });
+  const list = await instance.dispatch(Ipc.dagList, undefined, {}) as DagGraph[];
+  assert.deepEqual(list.map((item) => item.conversationId), ["c1", "remote:srv_alpha:c1", "remote:srv_beta:c1"]);
+  for (const server of ["srv_alpha", "srv_beta"]) {
+    const event = namespaceRemotePush(Ipc.event, { type: "dag_changed", conversationId: "c1", graph }, server) as { conversationId: string; graph: DagGraph };
+    assert.deepEqual(event.graph, list.find((item) => item.conversationId === event.conversationId));
+    const batch = dagBatch(event.graph, event.conversationId, ["T-0001"])!;
+    await instance.dispatch(Ipc.dagCancel, { conversationId: batch.conversationId, ids: batch.nodes.map((node) => node.id) }, {});
+    await instance.dispatch(Ipc.dagRetry, { conversationId: batch.conversationId, id: "T-0001" }, {});
+    await instance.dispatch(Ipc.engineAbortSubagent, { conversationId: batch.conversationId, subagentId: "T-0001.2" }, {});
+    await instance.dispatch(Ipc.engineGetSubagentMessages, { conversationId: batch.conversationId, subagentId: "T-0001.2" }, {});
+    assert.deepEqual(connections.calls.slice(-4), [
+      { server, method: Ipc.dagCancel, payload: { conversationId: "c1", ids: ["T-0001"] } },
+      { server, method: Ipc.dagRetry, payload: { conversationId: "c1", id: "T-0001" } },
+      { server, method: Ipc.engineAbortSubagent, payload: { conversationId: "c1", subagentId: "T-0001.2" } },
+      { server, method: Ipc.engineGetSubagentMessages, payload: { conversationId: "c1", subagentId: "T-0001.2" } },
+    ]);
+  }
 });
 
 test("two servers plus local: aggregate lists every bound row and keeps the local catalog", async () => {

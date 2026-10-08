@@ -47,6 +47,7 @@ import { applyPendingInstall, registerUpdater, scheduleUpdateCheck } from "./upd
 import { PiProcessManager } from "./pi/process-manager";
 import { applyAppIcon, createDesktopWindow, windowOrigin } from "./desktop-window";
 import { registerDesktopIpc } from "./ipc/desktop-handlers";
+import { registerDagIpc } from "./ipc/dag-handlers";
 import { MemoryManager } from "./engine/memory";
 import { TerminalSessions } from "./engine/terminal-sessions";
 import { SshManager, openSshAppTransport } from "./ssh/ssh-manager";
@@ -564,6 +565,7 @@ app.whenReady().then(async () => {
     queueSettingsWrite,
     refreshModelsDev,
   });
+  registerDagIpc(engine);
   registerUpdater(
     () => windows,
     () => createWindow(),

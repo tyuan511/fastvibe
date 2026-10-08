@@ -21,6 +21,10 @@ export type FastVibePaths = {
   /** Subscription (OAuth) tokens; the one credential that must outlive a restart. */
   oauthFile: string;
   conversationsFile: string;
+  /** 每个会话的子 agent 任务 DAG，见 `dag-store.ts`。 */
+  dagFile: string;
+  /** 每次 DAG 节点运行的转写，`<会话>/<runId>.json`，重启后仍能查看执行过程。 */
+  dagRunsDir: string;
   providersFile: string;
   gatewayCredentialsFile: string;
   mcpFile: string;
@@ -157,6 +161,8 @@ function buildFastVibePaths(): FastVibePaths {
     agentEnv: join(agentDir, ".env"),
     oauthFile: join(agentDir, "oauth.json"),
     conversationsFile: join(userData, "conversations.json"),
+    dagFile: join(userData, "dag.json"),
+    dagRunsDir: join(runtimeRoot, "dag-runs"),
     providersFile: join(userData, "providers.json"),
     /** Panel credentials for custom relays (new-api); never served, never in providers.json. */
     gatewayCredentialsFile: join(userData, "gateway-credentials.json"),

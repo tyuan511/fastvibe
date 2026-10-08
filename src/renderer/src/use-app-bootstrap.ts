@@ -4,6 +4,8 @@ import { toast } from "sonner";
 import { i18n } from "@/lib/i18n";
 import { engine, getStatus, onConversationReady, onEvent, onStatus } from "@/lib/engine-client";
 import { createConversationRefresh } from "@/lib/conversation-refresh";
+import { isDagNodeId } from "@shared/dag";
+import { findSubagent } from "@shared/subagent-state";
 import { conversationIdFromHash, conversationPath } from "@/lib/routes";
 import { resolvePath } from "@/lib/workspace-path";
 import { IS_REMOTE } from "@/lib/platform";
@@ -242,8 +244,9 @@ export function useAppBootstrap(args: AppBootstrapArgs): void {
         // no side-pane write per token.
         if (event.type !== "subagent_event" && event.type !== "subagent_state") {
           const subagentId = typeof event.subagentId === "string" ? event.subagentId : "";
-          if (subagentId) {
-            const info = useSessionStore.getState().subagents.find((item) => item.id === subagentId);
+          // A DAG node is opened on demand from the graph, not given a tab as it starts.
+          if (subagentId && !isDagNodeId(subagentId)) {
+            const info = findSubagent(useSessionStore.getState().subagents, subagentId, conversationId);
             useSidePaneStore.getState().registerSubagent(subagentId, {
               conversationId: typeof event.conversationId === "string" ? event.conversationId : info?.conversationId,
               title: info?.name || info?.agent,

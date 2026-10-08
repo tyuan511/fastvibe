@@ -1,6 +1,7 @@
 import { useSessionStore } from "@/stores/session";
 import { useSidePaneStore } from "@/stores/side-pane";
 import type { ChatMessage, SubagentInfo, ToolCallBlock } from "@shared/types";
+import { subagentKey } from "@shared/subagent-state";
 
 /** No SDK/provider calls: reproduces a stale tab + scoped snapshot while the pane
  * and parent tool card must keep the live run's state and composer metadata. */
@@ -22,7 +23,7 @@ export function previewSubagent(mode: string): void {
   const messages: ChatMessage[] = [{ id: "preview-parent", role: "assistant", text: "", tools: [tool], parts: [{ kind: "tool", toolId: tool.id }], createdAt: startedAt }];
   useSessionStore.setState({
     subagents: [info], messages,
-    subagentStreams: { [id]: [{ id: "preview-child", role: "assistant", text: "已检查状态链路。", tools: [], parts: [{ kind: "text", text: "已检查状态链路。" }], createdAt: startedAt }] },
+    subagentStreams: { [subagentKey(id, conversationId)]: [{ id: "preview-child", role: "assistant", text: "已检查状态链路。", tools: [], parts: [{ kind: "text", text: "已检查状态链路。" }], createdAt: startedAt }] },
   });
   useSidePaneStore.getState().openSubagent(id, { conversationId, title: "explorer", status: "running", brief: info.detail });
   // Neither a different conversation's list nor a stale in-flight read may erase

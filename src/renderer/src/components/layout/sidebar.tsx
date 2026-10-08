@@ -45,6 +45,9 @@ import { setSidebarCollapsed, useIsNarrowViewport, useSidebarCollapsed } from "@
 import { SidebarUpdateButton } from "@/components/layout/sidebar-update-button";
 import { AppLogo } from "@/components/app-logo";
 import { cn } from "@/lib/utils";
+import { useDagStore } from "@/stores/dag";
+import { useSidePaneStore } from "@/stores/side-pane";
+import type { DagNode } from "@shared/dag";
 import { readSidebarWidth, writeSidebarWidth, SIDEBAR_MIN_WIDTH } from "@/lib/sidebar-width";
 import { HAS_CUSTOM_TITLE_BAR, HAS_TRAFFIC_LIGHTS } from "@/lib/platform";
 import { useArchivedIds } from "@/stores/archive";
@@ -97,6 +100,7 @@ export const Sidebar = memo(function Sidebar({
   onReorderProjects,
   onOpenSettings,
   onOpenMarket,
+  onOpenSubTask,
   onSearch,
 }: {
   projects: Project[];
@@ -123,9 +127,17 @@ export const Sidebar = memo(function Sidebar({
   onReorderProjects: (cwds: string[]) => void;
   onOpenSettings: () => void;
   onOpenMarket: () => void;
+  /** Open a chat and show one of its sub-agent tasks in the side pane. */
+  onOpenSubTask: (conversationId: string, node: DagNode) => void;
   onSearch: () => void;
 }): JSX.Element {
   const { t } = useTranslation("app");
+  // Each chat's DAG of sub-agent tasks: a chat that has one gets an arrow that opens its list.
+  const dagGraphs = useDagStore((state) => state.graphs);
+  const openDagNodeId = useSidePaneStore((state) => {
+    const tab = state.tabs.find((item) => item.id === state.activeTabId);
+    return tab?.type === "dag-node" ? tab.dagNodeId : undefined;
+  });
   const [width] = useState(readSidebarWidth);
   const sidebarCollapsed = useSidebarCollapsed();
   const narrow = useIsNarrowViewport();
@@ -376,6 +388,12 @@ export const Sidebar = memo(function Sidebar({
         failed={failedInBackground[item.id] === true}
         renamingThis={renaming?.type === "session" && renaming.id === item.id}
         leadSlot={leadSlot}
+        subTasks={dagGraphs[item.id]?.nodes}
+        openDagNodeId={item.id === activeId ? openDagNodeId : undefined}
+        onOpenSubTask={(node) => {
+          onOpenSubTask(item.id, node);
+          dismissDrawer();
+        }}
         onOpen={() => {
           onOpen(item.id);
           dismissDrawer();

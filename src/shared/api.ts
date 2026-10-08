@@ -1,4 +1,5 @@
 import { Ipc } from "@shared/ipc";
+import type { DagGraph } from "@shared/dag";
 import type {
   ChatMessage,
   TranscriptTail,
@@ -393,6 +394,23 @@ export function createFastVibeApi(t: ApiTransport) {
        */
       onChanged: (listener: (snapshot: WorkspaceSnapshot) => void): (() => void) =>
         t.subscribe(Ipc.workspaceChanged, listener),
+    },
+    dag: {
+      list: (): Promise<DagGraph[]> => t.invoke(Ipc.dagList),
+      cancel: (conversationId: string, ids?: string[]): Promise<string[]> => t.invoke(Ipc.dagCancel, { conversationId, ids }),
+      retry: (conversationId: string, id: string): Promise<string[]> => t.invoke(Ipc.dagRetry, { conversationId, id }),
+      resume: (conversationId: string): Promise<string[]> => t.invoke(Ipc.dagResume, { conversationId }),
+      /**
+       * A conversation's graph changed (null once it is dropped). Carried as the engine event
+       * `dag_changed`, not a channel of its own: engine events from an SSH Agent are already relayed
+       * with their conversation ids rewritten, so a remote chat's graph arrives here the same way.
+       */
+      onChanged: (listener: (payload: { conversationId: string; graph: DagGraph | null }) => void): (() => void) =>
+        t.subscribe(Ipc.event, (event: unknown) => {
+          const record = event as { type?: unknown; conversationId?: unknown; graph?: unknown } | null;
+          if (!record || record.type !== "dag_changed" || typeof record.conversationId !== "string") return;
+          listener({ conversationId: record.conversationId, graph: (record.graph as DagGraph | null) ?? null });
+        }),
     },
     projects: {
       add: (): Promise<ProjectAddResult | null> => t.invoke(Ipc.projectsAdd),

@@ -102,6 +102,17 @@ export function useExtensionStatus(): Record<string, string> {
   );
 }
 
+/**
+ * One named status of one conversation, for a surface that knows which chat it belongs
+ * to. `useExtensionStatus` answers for the chat on screen, which is the wrong question
+ * for a 辅助对话's composer: its pane is open while the main chat is the active one, and
+ * the main chat's handoff would be shown — and its input locked — on a chat that is not
+ * running one.
+ */
+export function useExtensionStatusValue(conversationId: string | null | undefined, key: string): string | undefined {
+  return useSessionStore((state) => (conversationId ? state.extensionStatus[conversationId]?.[key] : undefined));
+}
+
 /** The string-line widgets the conversation on screen owns. Same rule as status. */
 const NO_EXTENSION_WIDGETS: Record<string, ExtensionWidget> = {};
 export function useExtensionWidgets(): Record<string, ExtensionWidget> {
@@ -223,6 +234,7 @@ export type SessionStore = {
    */
   canResume: boolean;
   preview: FilePreview | null;
+  /** Keyed by subagentKey(runId, conversationId), never by the engine-local run id alone. */
   subagentStreams: Record<string, ChatMessage[]>;
   /**
    * Forget one conversation's extension status / widgets.
@@ -339,7 +351,7 @@ export type SessionStore = {
  * new chat's transcript lands has to be re-checked against the new owner, or the
  * tail of the conversation being left is flushed into the one being opened.
  *
- * Subagent traffic is exempt: it is keyed by run id, feeds `subagentStreams`, and is
+ * Subagent traffic is exempt: it is keyed by owner and run id, feeds `subagentStreams`, and is
  * deliberately applied whichever chat is on screen so a backgrounded run stays live.
  * Transcript events without an owner cannot be applied to an open conversation.
  *

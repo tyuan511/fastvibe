@@ -27,6 +27,11 @@ export type AppSettings = ProxySettings & {
   /** Offer the model `tool_search`, which finds and loads tools that are not declared up front. */
   toolSearch: boolean;
   /**
+   * 动态子 Agent 编排 (设置 → 子 Agent). When on, the main agent is given the `dag_*` tools.
+   * Off leaves them out of the active set, so a turn cannot create or drive a graph.
+   */
+  dynamicDag: boolean;
+  /**
    * browser-use drives the system browser over CDP instead of the side-pane webview.
    * Off by default: it opens a separate Chrome window with its own profile.
    */
@@ -147,6 +152,7 @@ const DEFAULTS: AppSettings = {
   keepAwake: true,
   codemode: true,
   toolSearch: true,
+  dynamicDag: true,
   browserUseSystem: false,
   browserEngine: "auto",
   compactCode: false,
@@ -217,6 +223,7 @@ function sanitize(parsed: Partial<AppSettings>): Partial<AppSettings> {
   if (typeof next.keepAwake !== "boolean") delete next.keepAwake;
   if (typeof next.codemode !== "boolean") delete next.codemode;
   if (typeof next.toolSearch !== "boolean") delete next.toolSearch;
+  if (typeof next.dynamicDag !== "boolean") delete next.dynamicDag;
   if (typeof next.browserUseSystem !== "boolean") delete next.browserUseSystem;
   if (!isBrowserEngine(next.browserEngine)) delete next.browserEngine;
   // Retired transcript toggles (折叠运行过程 / 显示思考过程 / 显示消息时间). The

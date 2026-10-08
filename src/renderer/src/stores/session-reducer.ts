@@ -76,6 +76,7 @@ export function parsePermission(event: EngineEvent): PermissionRequest | null {
     title: typeof event.title === "string" ? event.title : undefined,
     message: typeof event.message === "string" ? event.message : undefined,
     placeholder: typeof event.placeholder === "string" ? event.placeholder : undefined,
+    prefill: typeof event.prefill === "string" ? event.prefill : undefined,
     options: parseStringList(event.options),
     optionDetails: parseOptionDetails(event.optionDetails),
     questions: parseQuestions(event.questions),

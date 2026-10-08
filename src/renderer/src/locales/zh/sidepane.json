@@ -240,5 +240,45 @@
     "pull": "拉取",
     "push": "推送",
     "openTerminal": "打开终端"
+  },
+  "dag": {
+    "empty": "这个会话还没有子任务",
+    "progress": "{{done}}/{{total}} 已完成",
+    "cancelAll": "取消全部",
+    "viewRun": "查看执行过程",
+    "stop": "停止",
+    "retry": "重试",
+    "profile": "角色",
+    "tools": "工具",
+    "dependsOn": "依赖",
+    "unlocks": "被依赖",
+    "none": "无",
+    "instruction": "任务说明",
+    "output": "产出",
+    "status": {
+      "pending": "等待中",
+      "running": "运行中",
+      "completed": "已完成",
+      "failed": "失败",
+      "skipped": "已跳过",
+      "cancelled": "已取消"
+    },
+    "state": {
+      "running": "运行中",
+      "stopped": "已停止",
+      "failed": "有失败",
+      "completed": "已完成"
+    },
+    "resume": "恢复",
+    "attempt": "第 {{n}} 次运行",
+    "model": "模型",
+    "expand": "展开",
+    "collapse": "收起",
+    "title": "子任务",
+    "maximize": "最大化",
+    "pickNode": "在左侧选一个任务查看详情和执行过程",
+    "gone": "这个子任务已经不在了",
+    "tabDetail": "详情",
+    "tabRun": "执行过程"
   }
 }

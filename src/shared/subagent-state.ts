@@ -4,6 +4,24 @@ type Event = Record<string, unknown>;
 const record = (value: unknown): Event | undefined =>
   value !== null && typeof value === "object" ? value as Event : undefined;
 
+/** Engine-local run ids can collide across hosts; the namespaced conversation owns each run. */
+export function subagentKey(id: string, conversationId?: string | null): string {
+  return JSON.stringify([conversationId ?? null, id]);
+}
+
+export function findSubagent(list: readonly SubagentInfo[], id: string, conversationId?: string | null): SubagentInfo | undefined {
+  return list.find((item) => item.id === id && item.conversationId === (conversationId ?? undefined));
+}
+
+export function upsertSubagent(list: SubagentInfo[], event: Event): SubagentInfo[] {
+  if (typeof event.subagentId !== "string") return list;
+  const owner = typeof event.conversationId === "string" ? event.conversationId : undefined;
+  const previous = findSubagent(list, event.subagentId, owner);
+  const next = reduceSubagent(previous, event);
+  if (!next || next === previous) return list;
+  return previous ? list.map((item) => item === previous ? next : item) : [next, ...list];
+}
+
 export function subagentFinished(status: string | undefined): boolean {
   return status === "completed" || status === "error" || status === "aborted";
 }
@@ -56,12 +74,13 @@ export function reduceSubagent(previous: SubagentInfo | undefined, event: Event,
 /** A snapshot is scoped to one conversation, not a replacement for the global
  * registry. Its per-run revision also prevents an old reply undoing a live push. */
 export function mergeSubagentSnapshot(current: SubagentInfo[], snapshot: SubagentInfo[]): SubagentInfo[] {
-  const next = new Map(current.map((item) => [item.id, item]));
+  const next = new Map(current.map((item) => [subagentKey(item.id, item.conversationId), item]));
   let changed = false;
   for (const item of snapshot) {
-    const before = next.get(item.id);
+    const key = subagentKey(item.id, item.conversationId);
+    const before = next.get(key);
     if (before && (before.revision ?? 0) >= (item.revision ?? 0)) continue;
-    next.set(item.id, { ...before, ...item });
+    next.set(key, { ...before, ...item });
     changed = true;
   }
   return changed ? [...next.values()] : current;

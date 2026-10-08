@@ -1,7 +1,7 @@
 import { memo, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { subagentStatusText } from "@/lib/subagent-status";
-import { subagentResultStatus } from "@shared/subagent-state";
+import { findSubagent, subagentResultStatus } from "@shared/subagent-state";
 import { Spinner } from "@/components/ui/spinner";
 import type { ToolCallBlock } from "@shared/types";
 import { useSessionStore, useWorkspacePath } from "@/stores/session";
@@ -15,6 +15,8 @@ import { MarkdownView } from "./markdown-view";
 import { QuestionAnswers } from "./question-answers";
 import { TodoChecklist } from "./todo-list";
 import { ToolRow } from "./tool-row";
+import { DagInline, useDagBatch } from "@/components/dag/dag-inline";
+import { useTranscriptConversation } from "./conversation-context";
 import { isRemoteRef } from "@/lib/remote-project";
 import { blockedRemotely } from "@/lib/remote-unavailable";
 import { Ipc } from "@shared/ipc";
@@ -295,10 +297,11 @@ function subagentEntries(args: unknown): SubagentEntry[] {
 
 function SubagentSummary({ tool }: { tool: ToolCallBlock }): JSX.Element {
   useTranslation("sidepane");
+  const conversationId = useTranscriptConversation();
   const subagents = useSessionStore((state) => state.subagents);
   const counts = new Map<string, number>();
   subagentEntries(tool.args).forEach((_, index) => {
-    const info = subagents.find((item) => item.id === `${tool.id}:${index}`);
+    const info = findSubagent(subagents, `${tool.id}:${index}`, conversationId);
     const label = subagentStatusText(info, subagentResultStatus(tool, index));
     counts.set(label, (counts.get(label) ?? 0) + 1);
   });
@@ -313,6 +316,7 @@ function SubagentSummary({ tool }: { tool: ToolCallBlock }): JSX.Element {
  */
 function SubagentPanel({ tool }: { tool: ToolCallBlock }): JSX.Element {
   useTranslation("sidepane");
+  const conversationId = useTranscriptConversation();
   const subagents = useSessionStore((state) => state.subagents);
   const openSubagent = useSidePaneStore((state) => state.openSubagent);
   const entries = subagentEntries(tool.args);
@@ -321,7 +325,7 @@ function SubagentPanel({ tool }: { tool: ToolCallBlock }): JSX.Element {
     <div className="flex flex-col gap-1.5">
       {entries.map((entry, index) => {
         const id = `${tool.id}:${index}`;
-        const state = subagents.find((item) => item.id === id);
+        const state = findSubagent(subagents, id, conversationId);
         const fallback = subagentResultStatus(tool, index);
         const status = subagentStatusText(state, fallback);
         return (
@@ -331,7 +335,7 @@ function SubagentPanel({ tool }: { tool: ToolCallBlock }): JSX.Element {
             className="flex w-full min-w-0 cursor-pointer items-center gap-2 rounded-lg border border-border px-2.5 py-2 text-left hover:bg-muted/50"
             onClick={() =>
               openSubagent(id, {
-                conversationId: state?.conversationId,
+                conversationId: conversationId ?? undefined,
                 title: entry.agent,
                 status: state?.status ?? fallback,
                 brief: entry.task ?? state?.detail,
@@ -406,6 +410,8 @@ export const ToolCard = memo(function ToolCard({
   const cwd = useWorkspacePath();
   const view = describeTool(tool, cwd);
   const running = tool.status === "running";
+  // Every finished 「创建子任务」 call is drawn as the graph of the tasks it created.
+  const dagBatch = useDagBatch(tool, useTranscriptConversation());
   // read / search / list are single-line rows in zcode: the subject opens the file
   // viewer instead of expanding an inline body.
   const inline = INLINE_FAMILIES.has(familyOf(tool.name));
@@ -420,6 +426,7 @@ export const ToolCard = memo(function ToolCard({
     Boolean(tool.result?.length) ||
     Boolean(diffText(tool)) ||
     (tool.args !== undefined && !inline);
+  if (dagBatch) return <DagInline conversationId={dagBatch.conversationId} nodes={dagBatch.nodes} />;
   // A subagent tool row expands into its runs; each row in that panel is itself
   // the doorway to that run's tab (see SubagentPanel).
   return (

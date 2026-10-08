@@ -146,6 +146,38 @@
       "missing_value": "missing information",
       "denied": "declined",
       "error": "failed"
+    },
+    "dag": {
+      "add": {
+        "running": "Creating sub-tasks",
+        "done": "Created sub-tasks"
+      },
+      "status": {
+        "running": "Checking sub-tasks",
+        "done": "Checked sub-tasks"
+      },
+      "result": {
+        "running": "Reading sub-task result",
+        "done": "Read sub-task result"
+      },
+      "wait": {
+        "running": "Waiting for sub-tasks",
+        "done": "Waited for sub-tasks"
+      },
+      "cancel": {
+        "running": "Cancelling sub-tasks",
+        "done": "Cancelled sub-tasks"
+      },
+      "resume": {
+        "running": "Resuming sub-tasks",
+        "done": "Resumed sub-tasks"
+      },
+      "retry": {
+        "running": "Retrying sub-task",
+        "done": "Retried sub-task"
+      },
+      "all": "all",
+      "more": "{{shown}} and {{count}} in all"
     }
   },
   "group": {

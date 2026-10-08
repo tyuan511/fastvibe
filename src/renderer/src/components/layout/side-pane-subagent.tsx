@@ -7,7 +7,7 @@ import { MessageList } from "@/components/chat/message-list";
 import { usagePercent } from "@/components/chat/session-controls";
 import { useSessionStore } from "@/stores/session";
 import { abortSubagent, getSubagentMessages, getSubagents } from "@/lib/engine-client";
-import { subagentFinished, subagentViewStatus } from "@shared/subagent-state";
+import { findSubagent, subagentFinished, subagentKey, subagentViewStatus } from "@shared/subagent-state";
 import { subagentStatusText } from "@/lib/subagent-status";
 import { toast } from "sonner";
 import type { ChatMessage } from "@shared/types";
@@ -51,10 +51,11 @@ function SubagentEmpty(): JSX.Element {
 export const SidePaneSubagent = memo(function SidePaneSubagent({ tab }: { tab: SidePaneTab }): JSX.Element {
   const { t } = useTranslation("sidepane");
   const subagentId = tab.subagentId ?? null;
+  const conversationId = tab.subagentConversationId ?? tab.conversationId;
   const active = useSessionStore((state) =>
-    subagentId ? state.subagents.find((item) => item.id === subagentId) : undefined,
+    subagentId ? findSubagent(state.subagents, subagentId, conversationId) : undefined,
   );
-  const streamed = useSessionStore((state) => (subagentId ? state.subagentStreams[subagentId] : undefined));
+  const streamed = useSessionStore((state) => (subagentId ? state.subagentStreams[subagentKey(subagentId, conversationId)] : undefined));
   const models = useSessionStore((state) => state.models);
   const [loaded, setLoaded] = useState<ChatMessage[] | null>(null);
 
@@ -68,8 +69,8 @@ export const SidePaneSubagent = memo(function SidePaneSubagent({ tab }: { tab: S
 
   useEffect(() => {
     setLoaded(null);
-    void getSubagents(tab.conversationId).then(useSessionStore.getState().setSubagents).catch(() => undefined);
-  }, [subagentId, tab.conversationId]);
+    void getSubagents(conversationId).then(useSessionStore.getState().setSubagents).catch(() => undefined);
+  }, [subagentId, conversationId]);
 
   // Pull the cached transcript exactly once, when the run is over. Reading it while
   // the run was live mixed a mid-flight snapshot into the growing stream and swapped
@@ -78,7 +79,7 @@ export const SidePaneSubagent = memo(function SidePaneSubagent({ tab }: { tab: S
   useEffect(() => {
     if (!subagentId || !finished) return;
     let cancelled = false;
-    void getSubagentMessages(subagentId, tab.conversationId)
+    void getSubagentMessages(subagentId, conversationId)
       .then((result) => {
         if (!cancelled && result.length > 0) setLoaded(result);
       })
@@ -86,7 +87,7 @@ export const SidePaneSubagent = memo(function SidePaneSubagent({ tab }: { tab: S
     return () => {
       cancelled = true;
     };
-  }, [subagentId, finished, tab.conversationId]);
+  }, [subagentId, finished, conversationId]);
 
   const brief = useMemo<ChatMessage | null>(() => {
     if (!task) return null;
@@ -119,6 +120,7 @@ export const SidePaneSubagent = memo(function SidePaneSubagent({ tab }: { tab: S
           <MessageList
             messages={messages}
             streaming={running}
+            conversationId={conversationId}
           />
         )}
       </div>
@@ -147,7 +149,7 @@ export const SidePaneSubagent = memo(function SidePaneSubagent({ tab }: { tab: S
           onChange={noop}
           onSubmit={noop}
           onAbort={() => {
-            if (subagentId) void abortSubagent(subagentId, tab.conversationId).catch((error: unknown) => toast.error(String(error)));
+            if (subagentId) void abortSubagent(subagentId, conversationId).catch((error: unknown) => toast.error(String(error)));
           }}
           onPickWorkspace={noop}
           onSelectProject={noop}
@@ -173,5 +175,6 @@ export const SidePaneSubagent = memo(function SidePaneSubagent({ tab }: { tab: S
   prev.tab.subagentBrief === next.tab.subagentBrief &&
   prev.tab.openedAt === next.tab.openedAt &&
   prev.tab.conversationId === next.tab.conversationId &&
+  prev.tab.subagentConversationId === next.tab.subagentConversationId &&
   prev.tab.subagentStatus === next.tab.subagentStatus,
 );

@@ -1,7 +1,7 @@
 import { useRef, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Cancel01Icon, Copy01Icon, Folder01Icon, Tick02Icon } from "@hugeicons/core-free-icons";
+import { Cancel01Icon, Folder01Icon } from "@hugeicons/core-free-icons";
 import { IconButton } from "@/components/icon-button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { FilePreview } from "@shared/types";
@@ -11,12 +11,7 @@ import { DiffView } from "./diff-view";
 import { isRemoteRef } from "@/lib/remote-project";
 import { blockedRemotely } from "@/lib/remote-unavailable";
 import { Ipc } from "@shared/ipc";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
+import { SelectionActionBar } from "./selection-action-bar";
 
 export function PreviewPanel({
   preview,
@@ -68,46 +63,20 @@ export function previewText(preview: FilePreview): string | undefined {
   }
 }
 
-function TextPreviewMenu({
-  text,
-  quote,
+/** Selected text uses the same floating bar as the chat, not a separate context menu. */
+function SelectableText({
   onQuote,
   children,
 }: {
-  text: string;
-  quote?: boolean;
   onQuote?: (text: string) => void;
   children: JSX.Element;
 }): JSX.Element {
-  const { t } = useTranslation("chat");
-  const selectionRef = useRef("");
-  const selectedOrAll = (): string => selectionRef.current || text;
+  const ref = useRef<HTMLDivElement>(null);
   return (
-    <ContextMenu>
-      <ContextMenuTrigger
-        className="block w-full"
-        onContextMenu={(event) => {
-          const selection = window.getSelection();
-          const anchor = selection?.anchorNode;
-          selectionRef.current =
-            selection && !selection.isCollapsed && anchor && event.currentTarget.contains(anchor)
-              ? selection.toString().trim()
-              : "";
-        }}
-      >
-        {children}
-      </ContextMenuTrigger>
-      <ContextMenuContent className="w-48">
-        <ContextMenuItem onClick={() => void navigator.clipboard?.writeText(selectedOrAll())}>
-          {t("preview.copy")}
-        </ContextMenuItem>
-        {quote && onQuote ? (
-          <ContextMenuItem onClick={() => onQuote(selectedOrAll())}>
-            {t("preview.quoteCode")}
-          </ContextMenuItem>
-        ) : null}
-      </ContextMenuContent>
-    </ContextMenu>
+    <div ref={ref}>
+      {children}
+      <SelectionActionBar containerRef={ref} onQuote={onQuote} />
+    </div>
   );
 }
 
@@ -133,28 +102,28 @@ export function PreviewBody({ preview, onQuote }: { preview: FilePreview; onQuot
   }
   if (preview.kind === "markdown") {
     return (
-      <TextPreviewMenu text={preview.text}>
+      <SelectableText>
         <div className="chat-markdown px-3 py-3 text-sm">
           <MarkdownView text={preview.text} />
         </div>
-      </TextPreviewMenu>
+      </SelectableText>
     );
   }
   if (preview.kind === "html") {
     return (
-      <TextPreviewMenu text={preview.text}>
+      <SelectableText>
         <iframe
           title={preview.name}
           sandbox=""
           className="h-[70vh] w-full rounded-lg border border-border bg-white"
           srcDoc={preview.text}
         />
-      </TextPreviewMenu>
+      </SelectableText>
     );
   }
   if (preview.kind === "csv") {
     return (
-      <TextPreviewMenu text={previewText(preview) ?? ""}>
+      <SelectableText>
         <div className="overflow-x-auto rounded-lg border border-border">
           <table className="w-full border-collapse text-left">
             <tbody>
@@ -170,20 +139,20 @@ export function PreviewBody({ preview, onQuote }: { preview: FilePreview; onQuot
             </tbody>
           </table>
         </div>
-      </TextPreviewMenu>
+      </SelectableText>
     );
   }
   if (preview.kind === "diff") {
     return (
-      <TextPreviewMenu text={preview.text} quote onQuote={onQuote}>
+      <SelectableText onQuote={onQuote}>
         <DiffView text={preview.text} className="mt-0 max-h-none rounded-none border-0 bg-transparent text-xs" />
-      </TextPreviewMenu>
+      </SelectableText>
     );
   }
   return (
-    <TextPreviewMenu text={preview.text} quote onQuote={onQuote}>
+    <SelectableText onQuote={onQuote}>
       <CodePreview text={preview.text} language={preview.language} />
-    </TextPreviewMenu>
+    </SelectableText>
   );
 }
 

@@ -6,6 +6,7 @@ import { useSettingsStore } from "@/stores/settings";
 import type { ChangedFile } from "@/lib/changed-files";
 import type { ChatAttachment, ChatMessage, EngineEvent, FilePreview } from "@shared/types";
 import type { GitDiffSource } from "@shared/ipc";
+import { subagentKey } from "@shared/subagent-state";
 
 export type SidePaneTabType =
   | "git"
@@ -14,6 +15,7 @@ export type SidePaneTabType =
   | "selection-side-chat"
   | "files"
   | "subagent"
+  | "dag-node"
   | "changes";
 
 /** Everything needed to mint/re-title a subagent run's tab. */
@@ -71,6 +73,8 @@ export type SidePaneTab = {
   subagentStatus?: string;
   /** The delegated brief; the pane renders it as the run's opening user message. */
   subagentBrief?: string;
+  /** The DAG node this tab shows (`type: "dag-node"`), e.g. `T-0001`. */
+  dagNodeId?: string;
   /**
    * A file the 审查 tab should select on open, and which diff source to select it in.
    *
@@ -252,6 +256,16 @@ type SidePaneStore = {
    */
   openSubagent: (subagentId: string, init?: SubagentTabInit) => void;
   /**
+   * Open (or focus) one DAG node's own tab in that conversation's pane.
+   *
+   * The sidebar's sub-task row uses this instead of the graph dialog: a run is
+   * drawn as its execution, and a node that has not started yet as its details.
+   * `conversationId` is stored on `subagentConversationId`, not `conversationId` —
+   * the latter is how a side chat's own stream is matched, and a parent id there
+   * would pour the main transcript into this tab.
+   */
+  openDagNode: (conversationId: string, node: { id: string; title: string }) => void;
+  /**
    * Ensure a run has its own tab, without focusing it or un-collapsing the pane.
    * Called as each delegated run starts, so every run gets a distinct view; the
    * tool card re-focuses it on demand.
@@ -289,8 +303,8 @@ const STREAM_FLUSH_MS = 32;
  * never merged into a shared pane: two chats delegating at once, or a chain, must
  * stay distinguishable.
  */
-function subagentTabId(subagentId: string): string {
-  return `subagent:${subagentId}`;
+function subagentTabId(subagentId: string, conversationId?: string): string {
+  return `subagent:${subagentKey(subagentId, conversationId)}`;
 }
 
 const SUBAGENT_TAB_STATUS: Record<string, string> = {
@@ -319,6 +333,7 @@ export function subagentTabLabel(tab: SidePaneTab): string {
  */
 export function sidePaneTabTitle(tab: SidePaneTab): string {
   if (tab.type === "subagent") return subagentTabLabel(tab);
+  if (tab.type === "dag-node") return tab.title;
   if (tab.type === "selection-side-chat") return tab.title;
   if (tab.type === "files" && tab.title !== i18n.t("sidepane:tabs.files")) return tab.title;
   return i18n.t(`sidepane:tabs.${tab.type}`) as string;
@@ -326,9 +341,10 @@ export function sidePaneTabTitle(tab: SidePaneTab): string {
 
 /** The single tab that shows one run. */
 function upsertSubagentTab(tabs: SidePaneTab[], subagentId: string, init?: SubagentTabInit): SidePaneTab {
-  const existing = tabs.find((item) => item.id === subagentTabId(subagentId));
+  const id = subagentTabId(subagentId, init?.conversationId);
+  const existing = tabs.find((item) => item.id === id);
   return {
-    ...(existing ?? { id: subagentTabId(subagentId), type: "subagent" as const, openedAt: Date.now() }),
+    ...(existing ?? { id, type: "subagent" as const, openedAt: Date.now() }),
     subagentId,
     subagentConversationId: init?.conversationId ?? existing?.subagentConversationId,
     // The base name stays stable; the tab bar appends the live status at render
@@ -768,6 +784,25 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
       const key = init?.conversationId ?? scopeKeyOf(state);
       const scope = state.scopes[key] ?? EMPTY_SCOPE;
       const tab = upsertSubagentTab(scope.tabs, subagentId, stampScope(key, init));
+      return writeScope(
+        state,
+        key,
+        { ...scope, tabs: upsert(scope.tabs, tab), activeTabId: tab.id },
+        key === scopeKeyOf(state) ? { collapsed: false } : undefined,
+      );
+    }),
+  openDagNode: (conversationId, node) =>
+    set((state) => {
+      const key = conversationId;
+      const scope = state.scopes[key] ?? EMPTY_SCOPE;
+      const id = `dag-node:${node.id}`;
+      const existing = scope.tabs.find((item) => item.id === id);
+      const tab: SidePaneTab = {
+        ...(existing ?? { id, type: "dag-node" as const, openedAt: Date.now() }),
+        title: node.title.trim() || node.id,
+        dagNodeId: node.id,
+        subagentConversationId: conversationId,
+      };
       return writeScope(
         state,
         key,

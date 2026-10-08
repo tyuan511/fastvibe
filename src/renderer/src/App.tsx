@@ -62,10 +62,13 @@ import { shouldQueueSubmission } from "@/lib/composer-race";
 import { readDrafts, useDraftPersistence } from "@/lib/draft-persistence";
 
 import { SETTINGS_SECTIONS, type SectionId } from "@/components/settings/settings-sections";
-import { setSidebarCollapsed, useIsNarrowViewport, useSidebarCollapsed } from "@/lib/sidebar-visibility";
+import { isNarrowViewport, setSidebarCollapsed, useIsNarrowViewport, useSidebarCollapsed } from "@/lib/sidebar-visibility";
 import type { DeleteConversationsResult } from "@/components/settings/archived-settings";
 import { useConversationWorking, useSessionStore, working } from "@/stores/session";
 import { useSettingsStore } from "@/stores/settings";
+import { useDagStore, useDagSync } from "@/stores/dag";
+import type { DagNode } from "@shared/dag";
+import { DagDialog } from "@/components/dag/dag-dialog";
 import { useThemeSync } from "@/lib/use-theme";
 import { useLanguageSync } from "@/lib/use-language";
 import { useTranslation } from "react-i18next";
@@ -83,7 +86,7 @@ import type {
   SlashCommand,
   WorkspaceSnapshot,
 } from "@shared/types";
-import { parseCompactCommand } from "@shared/slash";
+import { parseCompactCommand, parseHandoffCommand } from "@shared/slash";
 import { conversationIdFromHash, conversationIdFromPath, conversationPath, workspacePath } from "@/lib/routes";
 import { useSidePaneStore } from "@/stores/side-pane";
 import { useAppShortcuts, useShortcutLabel } from "@/lib/use-shortcuts";
@@ -117,6 +120,8 @@ const { refreshStats, reloadActiveState, reloadActiveMessages } =
 export function App(): JSX.Element {
   // Applies light/dark theme selection (and reacts to OS changes in system mode).
   useThemeSync();
+  // Each conversation's DAG of sub-agent tasks, and its 任务图 tab in the side pane.
+  useDagSync();
   useLanguageSync();
   // Another window's preference write. Every window keeps its own copy of
   // `settings.json`, so without this they drifted (two themes, two font sizes) and
@@ -727,6 +732,32 @@ export function App(): JSX.Element {
         }
         return;
       }
+      // `/handoff` is a command too. Awaiting it would hold the send lock across the
+      // review dialog and every other chat; the engine refuses a second prompt to
+      // this conversation until the command returns.
+      const handoff = parseHandoffCommand(text);
+      if (handoff && !queueAtSubmit) {
+        if (!submitOwner) {
+          setError(i18n.t("chat:handoff.needChat"));
+          return;
+        }
+        const owner = submitOwner;
+        setDraft("");
+        void engine.prompt(text, { conversationId: owner }).then(
+          () => {
+            // The command resolved without leaving this chat: cancelled, or there was
+            // nothing to hand off. The new chat's open replaces this draft itself.
+            const state = useSessionStore.getState();
+            if (state.activeId === owner && !state.draft.trim()) setDraft(text);
+          },
+          (err: unknown) => {
+            if (isAbortOutcome(err)) return;
+            if (useSessionStore.getState().activeId === owner) setDraft(text);
+            setError(err instanceof Error ? err.message : String(err));
+          },
+        );
+        return;
+      }
       // Nothing to run a turn on: keep the draft and ask for a model. Creating the
       // conversation first would leave a chat whose prompt the engine then refuses.
       if ((await availableModels()).length === 0) {
@@ -754,9 +785,9 @@ export function App(): JSX.Element {
       }
       consumedOwner = conversationId;
       consumedVersion = useSessionStore.getState().composerDrafts[conversationId]?.version;
-      // A queued `/compact` is a command, not a prompt: it must not become the chat's
-      // title or preview.
-      if (!compact) {
+      // A queued `/compact` or `/handoff` is a command, not a prompt: it must not
+      // become the chat's title or preview.
+      if (!compact && !handoff) {
         const beforePrompt = useSessionStore.getState().conversations.find((item) => item.id === conversationId);
         const nextList = await window.fastvibe.conversations.recordPrompt(conversationId, promptText);
         applyList(nextList);
@@ -780,7 +811,9 @@ export function App(): JSX.Element {
           const queue = await window.fastvibe.engine.queueAdd({
             conversationId,
             text: promptText,
-            message: payload,
+            // The goal is the command's argument. An attachment suffix would become
+            // part of the task the summary is asked to write.
+            message: handoff ? text : payload,
             // Never a steer: a steer is injected into the run as a user message, and the
             // model would be handed the literal `/compact`.
             behavior: "followUp",
@@ -1622,6 +1655,21 @@ export function App(): JSX.Element {
   const onSidebarOpenSettings = useStable(() => navigate("/settings/general"));
   const onSidebarOpenMarket = useStable(() => navigate("/settings/extensions"));
   const onSidebarSearch = useStable(() => setCommandOpen(true));
+  const onSidebarOpenSubTask = useStable((conversationId: string, node: DagNode) => {
+    void (async () => {
+      // The pane belongs to the chat that owns the task, so that chat has to be
+      // the one on screen. The task itself opens there, not over the thread.
+      // A narrow layout has no side pane, so the graph dialog is the only place
+      // the same node can be shown.
+      if (useSessionStore.getState().activeId !== conversationId) await handleOpen(conversationId);
+      if (isNarrowViewport()) {
+        useDagStore.getState().openViewer(conversationId, node.id, node.runId ? "run" : "detail");
+        return;
+      }
+      useDagStore.getState().closeViewer();
+      useSidePaneStore.getState().openDagNode(conversationId, node);
+    })();
+  });
   const onSidePaneNewChat = useStable(() => void handleNewChat());
 
   const composer = (
@@ -1633,6 +1681,7 @@ export function App(): JSX.Element {
           streaming={streaming}
           working={conversationWorking}
           placeholder={canChat ? t("composer.ready") : modelsLoaded && !hasModel ? t("composer.needModel") : t("composer.preparing")}
+          conversationId={activeId ?? undefined}
           models={models}
           model={session?.model}
           thinkingLevel={session?.thinkingLevel}
@@ -1737,6 +1786,7 @@ export function App(): JSX.Element {
             onReorderProjects={onSidebarReorderProjects}
             onOpenSettings={onSidebarOpenSettings}
             onOpenMarket={onSidebarOpenMarket}
+            onOpenSubTask={onSidebarOpenSubTask}
             onSearch={onSidebarSearch}
           />
           {narrow || sidebarCollapsed ? null : <ResizableHandle />}
@@ -1910,6 +1960,8 @@ export function App(): JSX.Element {
           />
         </Suspense>
       ) : null}
+      {/* A conversation's sub-agent task graph, maximised (opened from the inline graph or the sidebar). */}
+      <DagDialog />
       <CommandPalette
         open={commandOpen}
         conversations={conversations}

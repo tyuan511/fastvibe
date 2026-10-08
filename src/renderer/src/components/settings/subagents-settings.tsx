@@ -24,7 +24,10 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { SettingsGroup, SettingsRow } from "./settings-group";
+import { useSettingsStore } from "@/stores/settings";
 import { ModelThinkingSelect } from "@/components/model-thinking-select";
 import {
   AlertDialog,
@@ -78,6 +81,8 @@ function formFrom(config?: SubagentConfig): FormState {
 
 export function SubagentsSettings({ models }: { models: FastVibeModel[] }): JSX.Element {
   const { t } = useTranslation("settings");
+  const dynamicDag = useSettingsStore((state) => state.settings.dynamicDag);
+  const updateSettings = useSettingsStore((state) => state.update);
   const [agents, setAgents] = useState<SubagentConfig[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -246,6 +251,13 @@ export function SubagentsSettings({ models }: { models: FastVibeModel[] }): JSX.
 
   return (
     <div className="space-y-7">
+      <SettingsGroup>
+        <SettingsRow
+          title={t("subagents.dynamicDag")}
+          description={t("subagents.dynamicDagDesc")}
+          control={<Switch checked={dynamicDag} onCheckedChange={(checked) => updateSettings({ dynamicDag: checked })} />}
+        />
+      </SettingsGroup>
       <div className="flex flex-col gap-4 border-b border-border pb-5 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex min-w-0 items-center gap-3">
           <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary ring-1 ring-primary/15">

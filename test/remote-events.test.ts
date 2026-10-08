@@ -6,6 +6,7 @@ import {
   isConversationPush,
   namespaceCatalogSnapshot,
   namespaceConversationSnapshot,
+  namespaceDagGraph,
   namespaceIdList,
   namespaceIdMap,
   namespaceQueueState,
@@ -14,6 +15,20 @@ import {
 } from "../src/shared/remote-events.ts";
 
 const SERVER = "srv_alpha";
+
+test("DAG pushes and lists namespace graph ownership without rewriting node ids or outputs", () => {
+  const graph = { conversationId: "c1", nodes: [{ id: "T-0001", runId: "T-0001.2", output: "c1 T-0001" }] };
+  const pushed = namespaceRemotePush(Ipc.event, { type: "dag_changed", conversationId: "c1", graph }, SERVER) as {
+    conversationId: string; graph: typeof graph;
+  };
+  assert.equal(pushed.conversationId, "remote:srv_alpha:c1");
+  assert.equal(pushed.graph.conversationId, pushed.conversationId);
+  assert.deepEqual(pushed.graph, namespaceDagGraph(graph, SERVER));
+  assert.equal(pushed.graph.nodes, graph.nodes);
+  assert.equal(graph.conversationId, "c1", "the engine's own graph is not mutated");
+  const deleted = namespaceRemotePush(Ipc.event, { type: "dag_changed", conversationId: "c1", graph: null }, SERVER) as { graph: unknown };
+  assert.equal(deleted.graph, null);
+});
 
 test("catalog and engine pushes are classified; settings and global status are dropped", () => {
   assert.equal(classifyRemotePush(Ipc.workspaceChanged), "catalog");

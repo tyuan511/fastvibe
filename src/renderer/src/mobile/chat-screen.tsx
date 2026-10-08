@@ -15,6 +15,7 @@ import {
   SquareIcon,
 } from "@hugeicons/core-free-icons";
 import { isAbortOutcome } from "@shared/abort";
+import { parseHandoffCommand } from "@shared/slash";
 import { THINKING_EFFORT_LEVELS, type ChatAttachment, type EngineModel, type ThinkingLevel } from "@shared/types";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -26,9 +27,10 @@ import { RunningMark } from "@/components/running-mark";
 import { attachmentPromptSuffix, attachmentsToImages } from "@/lib/attachments";
 import { shouldQueueSubmission } from "@/lib/composer-race";
 import { engine, respondPermission } from "@/lib/engine-client";
+import { armHandoffNavigation } from "@/mobile/live";
 import { thinkingLabel } from "@/lib/thinking-levels";
 import { cn } from "@/lib/utils";
-import { activePermission, useConversationWorking, useSessionStore } from "@/stores/session";
+import { activePermission, useConversationWorking, useExtensionStatusValue, useSessionStore } from "@/stores/session";
 import { useSettingsStore } from "@/stores/settings";
 import { ConversationMenu } from "./conversation-menu";
 import { photoToAttachment } from "./images";
@@ -187,6 +189,7 @@ function modelKey(model: EngineModel): string {
 
 function MobileComposer({ draft, onDraftChange }: { draft: Draft; onDraftChange: (draft: Draft) => void }): JSX.Element {
   const { t } = useTranslation("app");
+  const { t: tChat } = useTranslation("chat");
   const activeId = useSessionStore((state) => state.activeId);
   const text = useSessionStore((state) => state.draft);
   const attachments = useSessionStore((state) => state.attachments);
@@ -197,6 +200,7 @@ function MobileComposer({ draft, onDraftChange }: { draft: Draft; onDraftChange:
   const models = useSessionStore((state) => state.models);
   const allQueued = useSessionStore((state) => state.queued);
   const queuePause = useSessionStore((state) => state.queuePause);
+  const handoff = useExtensionStatusValue(activeId, "handoff");
   const queued = activeId ? allQueued.filter((item) => item.conversationId === activeId) : [];
   /** A prompt is busy only while the direct RPC is awaiting acceptance. */
   const sending = useRef(false);
@@ -223,7 +227,41 @@ function MobileComposer({ draft, onDraftChange }: { draft: Draft; onDraftChange:
     const images = attachmentsToImages(files);
     const store = useSessionStore.getState();
     let id = store.activeId;
+    const handoff = parseHandoffCommand(message);
     try {
+      if (handoff && !id) {
+        toast.error(tChat("handoff.needChat"));
+        return;
+      }
+      if (handoff && id) {
+        const current = useSessionStore.getState();
+        const queue = shouldQueueSubmission({
+          hasConversation: true,
+          running: current.running[id] === true,
+          hasQueuedItems: current.queued.some((item) => item.conversationId === id),
+        });
+        current.setComposer("", []);
+        const disarm = armHandoffNavigation();
+        try {
+          if (queue) {
+            const next = await window.fastvibe.engine.queueAdd({
+              conversationId: id,
+              text: message,
+              message,
+              behavior: "followUp",
+            });
+            useSessionStore.getState().setQueueState(next);
+          } else {
+            await engine.prompt(message, { conversationId: id });
+          }
+          const latest = useSessionStore.getState();
+          // Cancelled, or there was nothing to hand off: stay here and put the command back.
+          if (latest.activeId === id && !latest.draft.trim()) latest.setComposer(message, files);
+        } finally {
+          disarm();
+        }
+        return;
+      }
       if (!id) {
         // Created without activating: the desktop keeps the chat it is showing.
         const created = await window.fastvibe.conversations.create(draft.project, { activate: false });
@@ -409,6 +447,7 @@ function MobileComposer({ draft, onDraftChange }: { draft: Draft; onDraftChange:
         />
         <Textarea
           value={text}
+          disabled={handoff !== undefined}
           onChange={(event) => setText(event.target.value)}
           onKeyDown={(event) => {
             // A soft keyboard's Enter is a newline; a hardware keyboard gets ⌘/Ctrl+Enter.
@@ -418,7 +457,8 @@ function MobileComposer({ draft, onDraftChange }: { draft: Draft; onDraftChange:
             }
           }}
           placeholder={
-            !hasModel ? t("mobile.needModel") : queueing ? t("mobile.placeholderQueue") : t("mobile.placeholder")
+            handoff ??
+            (!hasModel ? t("mobile.needModel") : queueing ? t("mobile.placeholderQueue") : t("mobile.placeholder"))
           }
           aria-label={t("mobile.placeholder")}
           rows={1}
@@ -429,7 +469,7 @@ function MobileComposer({ draft, onDraftChange }: { draft: Draft; onDraftChange:
           size="icon-lg"
           className={cn("size-10 shrink-0 rounded-full", action === "stop" && "bg-foreground text-background hover:bg-foreground/80")}
           aria-label={t(`mobile.${action}`)}
-          disabled={action === "send" ? !hasContent || busy : false}
+          disabled={action === "send" ? !hasContent || busy || handoff !== undefined : false}
           onClick={() => {
             if (action === "stop") stop();
             else if (action === "continue") resume();

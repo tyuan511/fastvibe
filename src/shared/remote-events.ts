@@ -111,6 +111,11 @@ export function namespaceConversationSnapshot(value: unknown, serverInstanceId: 
   return record;
 }
 
+/** Graph ownership is routing metadata; node/run ids and tool payloads stay in the server's vocabulary. */
+export function namespaceDagGraph(value: unknown, serverInstanceId: string): unknown {
+  return namespaceConversationSnapshot(value, serverInstanceId);
+}
+
 /**
  * A catalog snapshot (`workspace:changed`, `conversations:list`).
  *
@@ -180,6 +185,9 @@ function namespaceEngineEvent(payload: unknown, serverInstanceId: string): unkno
   const next = { ...record };
   if (typeof next.conversationId === "string" && next.conversationId) {
     next.conversationId = namespaceConversationId(next.conversationId, serverInstanceId);
+  }
+  if (next.type === "dag_changed") {
+    next.graph = namespaceDagGraph(next.graph, serverInstanceId);
   }
   if (typeof next.snapshot === "object" && next.snapshot !== null) {
     next.snapshot = namespaceCatalogSnapshot(next.snapshot, serverInstanceId);

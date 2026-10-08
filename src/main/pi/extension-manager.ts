@@ -7,11 +7,12 @@ import { uiText } from "../engine/ui-text.ts";
 /**
  * FastVibe's own extensions. They are plain files shipped outside the asar
  * archive (`resources/extensions`, copied to `resourcesPath/extensions`) and
- * loaded through the SDK's jiti loader, so `/goal`, the todo tool,
+ * loaded through the SDK's jiti loader, so `/goal`, `/handoff`, the todo tool,
  * web search and auto session titles work on a fresh install with no network and no npm package.
  */
 export const BUILTIN_EXTENSIONS: Array<{ source: string; file: string }> = [
   { source: "fastvibe:goal", file: "goal.ts" },
+  { source: "fastvibe:handoff", file: "handoff.ts" },
   { source: "fastvibe:todo", file: "todo.ts" },
   { source: "fastvibe:question", file: "question.ts" },
   { source: "fastvibe:output-language", file: "output-language.ts" },
@@ -24,6 +25,7 @@ export const BUILTIN_EXTENSIONS: Array<{ source: string; file: string }> = [
   { source: "fastvibe:worktree", file: "worktree.ts" },
   { source: "fastvibe:batch-decide", file: "batch-decide.ts" },
   { source: "fastvibe:app-config", file: "app-config.ts" },
+  { source: "fastvibe:dag", file: "dag.ts" },
   { source: "fastvibe:pdf-attachment", file: "pdf-attachment.ts" },
   { source: "fastvibe:subagent-team", file: "subagent/index.ts" },
 ];

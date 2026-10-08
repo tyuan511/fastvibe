@@ -205,7 +205,7 @@ export type ChatMessage = {
    */
   completedAt?: number;
   createdAt: number;
-  kind?: "message" | "notice" | "compact" | "custom";
+  kind?: "message" | "notice" | "compact" | "custom" | "dag";
   /** Extension custom message (`pi.sendMessage`): the plugin's own type id. */
   customType?: string;
   /** Structured spans of the extension's registered message renderer. */
@@ -229,6 +229,19 @@ export type ChatMessage = {
   };
   /** Present when `kind` is `"compact"`: running / finished / cancelled compaction. */
   compact?: CompactInfo;
+  /**
+   * Present when `kind` is `"dag"`: the graph-settled notice, drawn as a system
+   * event rather than the prompt that was sent to the model.
+   */
+  dag?: DagSettledInfo;
+};
+
+/** Outcome counts for a finished sub-task graph. Zeros are omitted on screen. */
+export type DagSettledInfo = {
+  completed: number;
+  failed: number;
+  skipped: number;
+  cancelled: number;
 };
 
 export type CompactReason = "manual" | "threshold" | "overflow";
@@ -678,6 +691,8 @@ export type PermissionRequest = {
   message?: string;
   /** Placeholder for `input` dialogs. */
   placeholder?: string;
+  /** Initial text for an `editor` dialog. The handoff review is this. */
+  prefill?: string;
   options?: string[];
   optionDetails?: Array<{ description?: string }>;
   /** Multi-question payload for `method: "questions"`. */

@@ -1,8 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
-import { mkdir, unlink } from "node:fs/promises";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdir, rm, unlink } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { InMemoryModelsStore, type AssistantMessage, type AuthPrompt } from "@earendil-works/pi-ai";
@@ -67,11 +67,12 @@ import type {
   ImportSourceId,
   ImportSourceStatus,
 } from "@shared/types";
-import { parseCompactCommand } from "@shared/slash";
+import { parseCompactCommand, parseHandoffCommand } from "@shared/slash";
 import { buildCommitMessagePlan, type CommitFileMaterial } from "../engine/commit-message";
 import { ConversationCatalog } from "../engine/conversation-catalog";
+import { promptPreview } from "../engine/prompt-preview";
 import { searchConversationContent } from "../engine/conversation-search";
-import { repairTranscriptFile, writeTranscriptEntries } from "../engine/transcript-file";
+import { readTranscriptPrompt, repairTranscriptFile, transcriptPrompt, writeTranscriptEntries } from "../engine/transcript-file";
 import {
   ConversationTranscriptError,
   loadConversationTranscriptBranch,
@@ -138,7 +139,7 @@ import { SubagentManager } from "../engine/subagents";
 import { reduceSubagent } from "@shared/subagent-state";
 import { SubagentControl } from "./subagent-control";
 import { SubagentTurnRunner, type SubagentHostRequest, type SubagentHostResponse } from "./process-manager-subagent";
-import type { SubagentConfig, SubagentDraft, GatewayBalanceResult, GatewayKind } from "@shared/types";
+import { THINKING_EFFORT_LEVELS, type SubagentConfig, type SubagentDraft, type GatewayBalanceResult, type GatewayKind } from "@shared/types";
 import { isAbortOutcome } from "@shared/abort";
 import { McpManager, type McpServerConfig, type McpServerStatus } from "./mcp-manager";
 import {
@@ -161,12 +162,33 @@ import {
 import { projectSessionMessages } from "./process-manager-transcript";
 import { SkillManager } from "./skill-manager";
 import { promptAccepted } from "./prompt-acceptance";
+import { sendOpeningPrompt } from "./opening-prompt";
 import type { AppConfigHostRequest, AppConfigHostResult } from "@shared/app-config";
+import type { DagHostRequest, DagHostResult } from "@shared/dag-tools";
+import { dagNodeFinished, isDagNodeId, type DagGraph, type DagNode } from "@shared/dag";
+import { DagScheduler, type DagNodeRun, type DagRunner } from "./dag-scheduler";
+import { DagStore } from "../engine/dag-store";
+import { runDagTool } from "../dag-tools";
 import { builtinExtensionFile, builtinExtensionPaths, builtinSkillPaths, ExtensionManager } from "./extension-manager";
 import { branchExists, createGitWorktree, gitBranch, gitCommonRoot, gitToplevel, listGitWorktrees, removeGitWorktree } from "./git-worktree";
 import { bindBrowserConversation, bindComputerConversation } from "./conversation-binding";
 import { createTuiWidget, renderTuiComponent, type TuiComponent } from "./tui-bridge";
 import { ActivationTicket } from "./activation-ticket";
+
+/** The last assistant message's text parts, joined — what a finished sub-agent run reports. */
+function lastAssistantText(messages: unknown[]): string {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index] as { role?: unknown; content?: unknown } | undefined;
+    if (!message || message.role !== "assistant") continue;
+    if (typeof message.content === "string") return message.content.trim();
+    if (!Array.isArray(message.content)) return "";
+    return message.content
+      .map((part) => (part && typeof part === "object" && (part as { type?: unknown }).type === "text" ? String((part as { text?: unknown }).text ?? "") : ""))
+      .join("")
+      .trim();
+  }
+  return "";
+}
 
 type ManagedSession = { conversationId: string; cwd: string; session: AgentSession; extensions: LoadExtensionsResult; unsubscribe: () => void };
 /** SDK UI context plus FastVibe's single-panel multi-question prompt. */
@@ -185,6 +207,8 @@ type FastVibeExtensionUIContext = ExtensionUIContext & {
   listWorktrees(): Promise<GitWorktreeInfo[]>;
   /** FastVibe's own settings, for the built-in `app-config` extension (`src/main/app-config.ts`). */
   appConfig(request: AppConfigHostRequest): Promise<AppConfigHostResult>;
+  /** The DAG of sub-agent tasks, for the built-in `dag` extension (`src/main/dag-tools.ts`). */
+  dag(request: DagHostRequest, signal?: AbortSignal): Promise<DagHostResult>;
 };
 
 type ConversationSearchHostRequest = ConversationTranscriptSearchRequest & {
@@ -417,6 +441,16 @@ export class PiProcessManager {
    */
   #pendingModel: EngineModel | undefined;
   #pendingThinking: string | undefined;
+  /**
+   * Conversations whose slash command is still inside its handler.
+   *
+   * `/handoff` stays there while the summary is written and the review dialog
+   * is open. A second prompt in that window would start a turn on a session
+   * that has not finished leaving, so it is refused until the command returns.
+   */
+  #commandsInFlight = new Set<string>();
+  /** Opening messages submitted by extensions, still in SDK input/memory hooks. */
+  #openingPrompts = new Map<string, ChatMessage>();
   /** Per-conversation timings for the composer's turn statistics. */
   #timing = new Map<string, RunTiming>();
   /** Live thinking blocks per conversation; filed against the entry when it lands. */
@@ -457,6 +491,20 @@ export class PiProcessManager {
   #mcpReloadPromise: Promise<void> | null = null;
   #skills: SkillManager;
   #appConfigHost: ((request: AppConfigHostRequest) => Promise<AppConfigHostResult>) | null = null;
+  /**
+   * The DAG of sub-agent tasks, per conversation. Owned by the engine rather than by Electron Main
+   * so an SSH Agent runtime — the same class, no Electron — runs graphs exactly as the desktop does,
+   * and its changes reach the desktop as ordinary engine events (`dag_changed`), whose conversation
+   * ids the remote gateway already rewrites.
+   */
+  #dagStore: DagStore;
+  #dagScheduler: DagScheduler;
+  /**
+   * The parent chat's model as of the last time it used the DAG tools. A node can start long
+   * after the call that created it, when an idle session may have been swept — and a sub-agent
+   * follows its parent's model, so the answer has to outlive the session.
+   */
+  #dagParentModel = new Map<string, string>();
   /** pi package installs (extensions), kept in the isolated agentDir. */
   #extensions: ExtensionManager;
   #memory: MemoryHost;
@@ -514,6 +562,11 @@ export class PiProcessManager {
     this.#skills = new SkillManager(this.#paths.agentDir, this.#paths.skillsDir);
     this.#extensions = new ExtensionManager(this.#paths.agentDir, this.#paths.scratchDir);
     this.#subagentManager = new SubagentManager(this.#paths);
+    this.#dagStore = new DagStore(this.#paths.dagFile);
+    this.#dagStore.onChange = (conversationId, graph) => this.#emit({ type: "dag_changed", conversationId, graph });
+    this.#dagScheduler = new DagScheduler(this.#dagStore, (args) => this.runDagNode(args), {
+      onSettled: (conversationId, nodes) => void this.#announceDagSettled(conversationId, nodes),
+    });
     // The extension API's getAgentDir() is environment-based, while FastVibe passes
     // the isolated directory programmatically to createAgentSession. Keep the role
     // discovery path on that same private root as well.
@@ -572,6 +625,19 @@ export class PiProcessManager {
     this.#catalog.flush();
     this.#reasoning.flush();
     this.#usage.flush();
+    this.#dagStore.flush();
+    // A node still running when the app quits keeps what it had done so far: its transcript is
+    // what 恢复 / 重启后 shows for that run.
+    for (const [runId, session] of this.#subagentSessions) {
+      const owner = this.#subagents.get(runId)?.conversationId;
+      if (!owner || !isDagNodeId(runId)) continue;
+      try {
+        const entryIds = sessionEntryIds(session);
+        this.#saveDagRun(owner, runId, mapEngineMessages(session.messages, (message) => entryIds.get(message), this.#subagentReasoning.get(runId), undefined, sessionCompletionTimes(session)));
+      } catch {
+        // A transcript that cannot be written is lost for that run; the quit must not be.
+      }
+    }
     void saveCheckpoints(checkpointFile(this.#paths.runtimeRoot)).catch(() => undefined);
   }
   get status(): EngineStatus { return this.#status; }
@@ -593,6 +659,147 @@ export class PiProcessManager {
    */
   setStreamWatch(watch: StreamWatch | null): void {
     this.#streamWatch = watch;
+  }
+  /** Every conversation's graph (the side pane's 任务图 and the sidebar's sub-tasks read these). */
+  listDagGraphs(): DagGraph[] {
+    return this.#dagStore.list();
+  }
+  cancelDag(conversationId: string, ids?: string[]): string[] {
+    return this.#dagScheduler.cancel(conversationId, ids);
+  }
+  retryDagNode(conversationId: string, id: string): string[] {
+    return this.#dagScheduler.retry(conversationId, id);
+  }
+  resumeDag(conversationId: string): string[] {
+    return this.#dagScheduler.resume(conversationId);
+  }
+  /**
+   * Run one DAG node as a sub-agent on a throwaway in-process session: the node's own
+   * profile as its system prompt, only the tools the profile allows (read-only unless the
+   * main agent granted more), the parent chat's model. Each run has its own id (`runId`:
+   * `T-0001`, then `T-0001.2` …), so `abortSubagent` and the pane's transcript tab address it like
+   * any other delegated run, and a rerun never inherits the previous run's status or transcript.
+   */
+  runDagNode: DagRunner = async ({ conversationId, node, prompt, signal }): Promise<DagNodeRun> => {
+    const conversation = this.#catalog.get(conversationId);
+    const live = this.#sessions.get(conversationId)?.session.model;
+    const parent = live ? `${live.provider}/${live.id}` : this.#dagParentModel.get(conversationId);
+    const response = await this.#runSubagent(conversationId, {
+      subagentId: node.runId ?? node.id,
+      agent: node.profile.name,
+      // `project`: a node's profile is written for it by the main agent, so a built-in role
+      // that happens to share its name must not lend it that role's model override. A node
+      // that reuses a configured agent carries that agent's model itself (`node.model`),
+      // which outranks the parent below.
+      agentSource: "project",
+      task: prompt,
+      systemPrompt: node.profile.instructions,
+      tools: node.profile.tools && node.profile.tools.length > 0 ? node.profile.tools : ["read", "grep", "find", "ls"],
+      ...(node.model ? { model: node.model } : {}),
+      ...(node.thinkingLevel && (THINKING_EFFORT_LEVELS as readonly string[]).includes(node.thinkingLevel)
+        ? { thinkingLevel: node.thinkingLevel as ThinkingLevel }
+        : {}),
+      ...(parent ? { fallbackModel: parent } : {}),
+      cwd: conversation?.cwd ?? this.#cwd,
+      signal,
+    });
+    const runId = node.runId ?? node.id;
+    const transcript = this.#subagentMessages.get(runId);
+    if (transcript) this.#saveDagRun(conversationId, runId, transcript);
+    const output = lastAssistantText(response.messages);
+    const aborted = response.stopReason === "aborted";
+    return {
+      status: aborted ? "aborted" : response.exitCode === 0 ? "completed" : "failed",
+      output,
+      ...(response.errorMessage && !aborted ? { error: response.errorMessage } : {}),
+      ...(response.model ? { model: response.model } : {}),
+    };
+  };
+
+  /**
+   * A DAG run's transcript on disk, so the execution a node did is still there after a restart.
+   * One file per run (`dag-runs/<conversation>/<runId>.json`): a retry is a new run and keeps the
+   * earlier attempt's record, and deleting the conversation removes the folder.
+   */
+  #dagRunFile(conversationId: string, runId: string): string | undefined {
+    // Both halves become path segments; anything but an id shape is refused rather than joined.
+    if (!/^[\w.-]+$/.test(conversationId) || !isDagNodeId(runId)) return undefined;
+    return join(this.#paths.dagRunsDir, conversationId, `${runId}.json`);
+  }
+
+  #saveDagRun(conversationId: string, runId: string, messages: ChatMessage[]): void {
+    const file = this.#dagRunFile(conversationId, runId);
+    if (!file) return;
+    try {
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(`${file}.tmp`, JSON.stringify(messages));
+      renameSync(`${file}.tmp`, file);
+    } catch (error) {
+      console.warn(`[dag] could not save the transcript of ${runId}:`, error);
+    }
+  }
+
+  #readDagRun(conversationId: string, runId: string): ChatMessage[] {
+    const file = this.#dagRunFile(conversationId, runId);
+    if (!file) return [];
+    try {
+      const parsed = JSON.parse(readFileSync(file, "utf8")) as unknown;
+      return Array.isArray(parsed) ? (parsed as ChatMessage[]) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** The conversation is gone: stop its graph, drop it, and remove the run transcripts with it. */
+  #dropDag(conversationId: string): void {
+    this.#dagScheduler.dropConversation(conversationId);
+    this.#dagParentModel.delete(conversationId);
+    if (!/^[\w.-]+$/.test(conversationId)) return;
+    void rm(join(this.#paths.dagRunsDir, conversationId), { recursive: true, force: true }).catch(() => undefined);
+  }
+
+  /**
+   * A graph finished while the main agent was not waiting on it: tell the agent, so it reads the
+   * results and answers the user instead of the work ending silently in the side pane.
+   *
+   * A hidden custom message (`display: false`), not a user prompt: the model receives the full
+   * note, and the transcript draws only a one-line system event (the inline graph already shows
+   * how each task ended). `followUp` waits for a run in progress; on an idle chat `triggerTurn`
+   * starts the turn that writes the summary.
+   */
+  async #announceDagSettled(conversationId: string, nodes: DagNode[]): Promise<void> {
+    if (this.#queueShutdown || !this.#catalog.get(conversationId)) return;
+    const counts = new Map<string, number>();
+    for (const node of nodes) counts.set(node.status, (counts.get(node.status) ?? 0) + 1);
+    const label = (status: string): string =>
+      ({ completed: uiText("完成", "completed"), failed: uiText("失败", "failed"), skipped: uiText("跳过", "skipped"), cancelled: uiText("取消", "cancelled") })[status] ?? status;
+    const summary = ["completed", "failed", "skipped", "cancelled"]
+      .filter((status) => counts.get(status))
+      .map((status) => `${counts.get(status)} ${label(status)}`)
+      .join(uiText("，", ", "));
+    const lines = nodes.map((node) => {
+      const reason = node.status !== "completed" && node.error ? uiText(`：${node.error}`, `: ${node.error}`) : "";
+      return `- ${node.id} ${node.title} — ${label(node.status)}${reason}`;
+    });
+    const text = [
+      uiText(`子任务已全部结束（${summary}）。`, `All sub-tasks have finished (${summary}).`),
+      ...lines,
+      "",
+      uiText(
+        "请用 dag_result 读取需要的产出，向用户汇总结果；失败或被跳过的任务说明原因，必要时用 dag_retry 重试。",
+        "Read the outputs you need with dag_result and summarise the results for the user; explain any failed or skipped task, and retry with dag_retry if it makes sense.",
+      ),
+    ].join("\n");
+    try {
+      const { session } = await this.#sessionFor(conversationId);
+      if (this.#queueShutdown) return;
+      await session.sendCustomMessage(
+        { customType: "dag-settled", content: text, display: false, details: { nodes: nodes.map((node) => ({ id: node.id, status: node.status })) } },
+        { triggerTurn: true, deliverAs: "followUp" },
+      );
+    } catch (error) {
+      console.warn(`[dag] could not tell ${conversationId} its sub-tasks finished:`, error);
+    }
   }
   /**
    * Where the `fastvibe_config_*` tools land. Injected rather than imported because the
@@ -660,8 +867,12 @@ export class PiProcessManager {
       await this.#models.refresh({ allowNetwork: false });
       await this.#mcp.load();
       await this.#mcp.connectAll();
+      // Chats an earlier build left with content and no preview: they are missing from the
+      // sidebar, and 新对话 would open them.
+      for (const item of this.#catalog.listAll()) this.#healPreview(item);
       const active = this.#catalog.activeId ? this.#catalog.get(this.#catalog.activeId) : undefined;
       if (active) await this.#ensureSession(active);
+      this.#dagScheduler.start();
       this.#setStatus({ state: "ready", cwd: this.#cwd });
       // Durable work belongs to every conversation, not only whichever chat happened
       // to be active when Main restarted. Drains lazily create background sessions.
@@ -673,6 +884,7 @@ export class PiProcessManager {
 
   async stop(): Promise<void> {
     this.#queueShutdown = true;
+    this.#dagScheduler.stop(uiText("引擎已停止", "The engine was stopped"));
     this.#stopSessionSweep();
     await this.#queue(async () => {
       const sessions = [...this.#sessions.values()];
@@ -718,6 +930,7 @@ export class PiProcessManager {
       // A stopped engine is a fresh start: nothing a session published before it is
       // still true, and the sessions that republish on `session_start` will.
       this.#extensionStatuses.clear();
+      this.#openingPrompts.clear();
       await Promise.all(
         [...this.#subagentSessions.values()].map(async (session) => {
           try {
@@ -750,49 +963,54 @@ export class PiProcessManager {
     },
   ): Promise<void> {
     const { id, session } = await this.#sessionFor(options?.conversationId);
-    if (await this.#compactIfCommand(session, message)) return;
-    // A pause with nothing held is a leftover (Stop on an idle chat); clear it so it
-    // cannot catch this turn's follow-ups. A pause over held rows is the user's to
-    // release (立即 / 继续发送) — a fresh turn does not release it.
-    if (id && this.#messageQueue.releaseEmptyPause(id)) this.#emitQueue(id);
-    if (id) this.#queueDrainFaults.delete(id);
-    // A user turn begins: this turn's file checkpoint starts empty (see `#beginTurn`).
-    this.#beginTurn(id);
-    if (id) await this.#flushModelRebind(id);
-    // A caller may consider the run over and still land inside the settle window —
-    // an `agent_end` the SDK is about to retry, compact, or continue. The session is
-    // not idle across any of it, and a plain prompt there throws ("Agent is already
-    // processing"; "Cannot submit a prompt while compaction is in progress" for a
-    // standalone `/compact`, which has no run at all), so wait it out.
-    if (!session.isIdle && !options?.streamingBehavior) await session.waitForIdle();
-    // The call answers "was this message sent", not "did the run finish". It resolves
-    // the moment the SDK accepts the prompt (`preflightResult(true)`: model, auth, input
-    // hooks and before_agent_start all passed, the user message is built) and rejects
-    // only when it was refused. What the run does afterwards is reported by events —
-    // `agent_end`, `conversation_activity`, the transcript's `stopReason` — which every
-    // client already reads. Holding the call open for the whole run made a caller treat
-    // a failure mid-run, a remote call's deadline or a dropped socket as "never sent":
-    // the optimistic row was rolled back and the text put back in the composer while
-    // the run was still going.
-    //
-    // Pass only what the SDK understands: `conversationId` is ours, and the SDK's own
-    // options object must not receive a key it never declared.
-    await promptAccepted(
-      (preflightResult) => session.prompt(message, {
-        streamingBehavior: options?.streamingBehavior,
-        images: options?.images,
-        preflightResult,
-      }),
-      {
-        // Stop aborts the in-flight request promise. It is already represented by the
-        // transcript's `stopReason: "aborted"`; do not turn that normal control flow
-        // into a rejected IPC call and a renderer-level error toast.
-        isAbort: isAbortOutcome,
-        onLateFailure: (error) => {
-          console.error(`[engine] run failed after the prompt was accepted (${id ?? "no conversation"}):`, error);
+    const held = this.#holdCommand(id, message);
+    try {
+      if (await this.#compactIfCommand(session, message)) return;
+      // A pause with nothing held is a leftover (Stop on an idle chat); clear it so it
+      // cannot catch this turn's follow-ups. A pause over held rows is the user's to
+      // release (立即 / 继续发送) — a fresh turn does not release it.
+      if (id && this.#messageQueue.releaseEmptyPause(id)) this.#emitQueue(id);
+      if (id) this.#queueDrainFaults.delete(id);
+      // A user turn begins: this turn's file checkpoint starts empty (see `#beginTurn`).
+      this.#beginTurn(id);
+      if (id) await this.#flushModelRebind(id);
+      // A caller may consider the run over and still land inside the settle window —
+      // an `agent_end` the SDK is about to retry, compact, or continue. The session is
+      // not idle across any of it, and a plain prompt there throws ("Agent is already
+      // processing"; "Cannot submit a prompt while compaction is in progress" for a
+      // standalone `/compact`, which has no run at all), so wait it out.
+      if (!session.isIdle && !options?.streamingBehavior) await session.waitForIdle();
+      // The call answers "was this message sent", not "did the run finish". It resolves
+      // the moment the SDK accepts the prompt (`preflightResult(true)`: model, auth, input
+      // hooks and before_agent_start all passed, the user message is built) and rejects
+      // only when it was refused. What the run does afterwards is reported by events —
+      // `agent_end`, `conversation_activity`, the transcript's `stopReason` — which every
+      // client already reads. Holding the call open for the whole run made a caller treat
+      // a failure mid-run, a remote call's deadline or a dropped socket as "never sent":
+      // the optimistic row was rolled back and the text put back in the composer while
+      // the run was still going.
+      //
+      // Pass only what the SDK understands: `conversationId` is ours, and the SDK's own
+      // options object must not receive a key it never declared.
+      await promptAccepted(
+        (preflightResult) => session.prompt(message, {
+          streamingBehavior: options?.streamingBehavior,
+          images: options?.images,
+          preflightResult,
+        }),
+        {
+          // Stop aborts the in-flight request promise. It is already represented by the
+          // transcript's `stopReason: "aborted"`; do not turn that normal control flow
+          // into a rejected IPC call and a renderer-level error toast.
+          isAbort: isAbortOutcome,
+          onLateFailure: (error) => {
+            console.error(`[engine] run failed after the prompt was accepted (${id ?? "no conversation"}):`, error);
+          },
         },
-      },
-    );
+      );
+    } finally {
+      held.release();
+    }
   }
 
   async promptConversation(id: string, message: string, images?: Array<{ type: "image"; data: string; mimeType: string }>): Promise<void> {
@@ -807,7 +1025,7 @@ export class PiProcessManager {
     this.#beginTurn(id);
     await this.#flushModelRebind(id);
     try {
-      await this.#promptWhenIdle(managed.session, message, images);
+      await this.#promptWhenIdle(managed.session, message, images, id);
     } catch (error) {
       // Same contract as prompt(): an AbortError is the result of Stop, not a send
       // failure. Real failures continue across IPC unchanged.
@@ -862,11 +1080,11 @@ export class PiProcessManager {
     // steer parked in that window is picked up by that continuation rather than
     // being sent to a runtime that has already stopped.
     if (!this.#isLive(id)) {
-      await this.#promptWhenIdle(session, message, images);
+      await this.#promptWhenIdle(session, message, images, id);
       return;
     }
     if (this.#interruptMode === "wait") {
-      await this.#promptWhenIdle(session, message, images);
+      await this.#promptWhenIdle(session, message, images, id);
       return;
     }
     await session.steer(message, images);
@@ -891,7 +1109,7 @@ export class PiProcessManager {
   ): Promise<void> {
     const { id, session } = await this.#sessionFor(conversationId);
     if (!this.#isLive(id)) {
-      await this.#promptWhenIdle(session, message, images);
+      await this.#promptWhenIdle(session, message, images, id);
       return;
     }
     await session.followUp(message, images);
@@ -1003,9 +1221,10 @@ export class PiProcessManager {
       this.#bumpQueueEpoch(item.conversationId);
       this.#queueDrainFaults.delete(item.conversationId);
       this.#messageQueue.pause(item.conversationId, null);
-      // A queued `/compact` is a command for the session, not words for the model: it
-      // waits for the run (see `#compactIfCommand`) rather than being steered into it.
-      const command = parseCompactCommand(current.sentText ?? current.text) !== null;
+      // A queued `/compact` or `/handoff` is a command for the session, not words for
+      // the model: it waits for the run rather than being steered into it.
+      const queuedText = current.sentText ?? current.text;
+      const command = parseCompactCommand(queuedText) !== null || parseHandoffCommand(queuedText) !== null;
       if (!command && this.#isLive(item.conversationId) && this.#interruptMode === "immediate") {
         await this.#insertQueuedSteer(current);
       } else {
@@ -1055,6 +1274,10 @@ export class PiProcessManager {
    */
   async abort(conversationId?: string): Promise<void> {
     const queueOwner = conversationId ?? this.#activeId ?? undefined;
+    // Stopping the chat stops what it set running: its sub-agent tasks are not left to carry on
+    // behind a Stop the user believes ended everything. Told before the session is awaited, so a
+    // slow stop cannot let a node start in the meantime.
+    if (queueOwner) this.#dagScheduler.cancel(queueOwner, undefined, uiText("主会话已停止", "The main chat was stopped"));
     if (queueOwner) {
       // Invalidate drains before waiting for session creation or the queue lock. A
       // drain waiting on the same promise must observe Stop before entering the SDK.
@@ -1501,7 +1724,11 @@ export class PiProcessManager {
         sessionCompletionTimes(live),
       );
     }
-    return this.#subagentMessages.get(subagentId)?.slice() ?? [];
+    const cached = this.#subagentMessages.get(subagentId);
+    if (cached) return cached.slice();
+    // A DAG run from before a restart: its transcript was written to disk when it ended.
+    if (isDagNodeId(subagentId) && conversationId) return this.#readDagRun(conversationId, subagentId);
+    return [];
   }
   async getSubagents(conversationId?: string): Promise<SubagentInfo[]> {
     return [...this.#subagents.values()]
@@ -1535,6 +1762,36 @@ export class PiProcessManager {
   }
   async newSession(): Promise<void> { await (await this.#active()).abort(); }
 
+  /**
+   * Give a chat that has content but no `preview` the preview it should have had. Returns
+   * whether it had content.
+   *
+   * "No preview" is how the catalog spots the project's blank draft, and `recordPrompt` is the
+   * only thing that sets one. A chat filled another way (an extension's `ctx.newSession`
+   * handoff, a switch to a session file) was therefore hidden from the sidebar and handed back
+   * by 新对话 as the blank draft — a new chat opening on an old conversation's messages.
+   */
+  #healPreview(conversation: Conversation): boolean {
+    if (conversation.preview || conversation.kind === "side-chat") return false;
+    const live = this.#sessions.get(conversation.id)?.session;
+    const found = live
+      ? transcriptPrompt(live.sessionManager.getBranch())
+      : conversation.sessionFile
+        ? readTranscriptPrompt(conversation.sessionFile)
+        : { hasMessages: false };
+    if (!found.hasMessages) return false;
+    this.#catalog.update(conversation.id, { preview: found.prompt || conversation.title || uiText("新会话", "New chat") });
+    return true;
+  }
+
+  /** The project's blank draft, skipping any chat that only looks blank (see `#healPreview`). */
+  #findReusableEmpty(project?: string): Conversation | undefined {
+    for (;;) {
+      const candidate = this.#catalog.findEmpty(project);
+      if (!candidate || !this.#healPreview(candidate)) return candidate;
+    }
+  }
+
   async createConversation(project?: string, options?: { activate?: boolean; reuseEmpty?: boolean }): Promise<ConversationOpenResult> {
       // An unfinished chat is the project's composer workspace. Keep it around when
       // the user opens another chat, and reuse it instead of creating a second empty
@@ -1542,7 +1799,7 @@ export class PiProcessManager {
       // where a long prompt (and its model choices) could live before Send. Clients
       // that present an explicit new-chat flow can opt out of that draft reuse.
       const activate = options?.activate !== false;
-      const existing = options?.reuseEmpty === false ? undefined : this.#catalog.findEmpty(project);
+      const existing = options?.reuseEmpty === false ? undefined : this.#findReusableEmpty(project);
       if (existing && activate) return this.openConversation(existing.id);
       // Do not let catalog.create publish a foreground id before the session is ready:
       // another create/open can finish first. The activation ticket decides which one
@@ -1595,6 +1852,7 @@ export class PiProcessManager {
     for (const child of children) await this.deleteConversation(child.id);
     const wasActive = this.#catalog.activeId === id;
     const removed = this.#catalog.remove(id);
+    this.#dropDag(id);
     if (removed?.sessionFile) {
       // Fold the transcript into the usage ledger *before* unlinking it: a turn the
       // live hook never saw (history from before the ledger existed, or a run that
@@ -1711,15 +1969,30 @@ export class PiProcessManager {
     return this.#listGitWorktrees(id);
   }
   recordPrompt(id: string, text: string): WorkspaceSnapshot {
-    const preview = text.trim().slice(0, 80);
+    this.#writePromptPreview(id, text);
+    return this.#catalog.snapshot();
+  }
+  /**
+   * Give a prompt that reached this conversation from Main the row a composer send
+   * would have given it.
+   *
+   * `recordPrompt` is the renderer's, and it is the only thing that writes a `preview`
+   * — which is what the sidebar lists on, and what tells 新对话 that a chat is not the
+   * project's blank draft. An extension command that sends its own opening message
+   * (`/handoff`) skipped it, so the chat it opened stayed out of the sidebar until a
+   * restart. Only while the preview is missing, so a real send is never overwritten.
+   */
+  #adoptPromptPreview(id: string, text: string | undefined): void {
+    const conversation = this.#catalog.get(id);
+    if (!conversation || conversation.preview || conversation.kind === "side-chat") return;
+    if (!text?.trim()) return;
+    this.#writePromptPreview(id, text);
+  }
+  #writePromptPreview(id: string, text: string): void {
     const current = this.#catalog.get(id);
-    const keepTitle =
-      Boolean(current?.titleManual) ||
-      Boolean(current?.title && current.title !== "新会话" && current.title !== "新任务");
-    const title = keepTitle && current?.title ? current.title : preview.slice(0, 24) || uiText("新会话", "New chat");
+    const { title, preview } = promptPreview({ title: current?.title, titleManual: current?.titleManual }, text);
     this.#catalog.update(id, { title, preview });
     // Leave `sessionName` empty so the session-title extension can generate one.
-    return this.#catalog.snapshot();
   }
   restorePromptPreview(payload: { id: string; expectedTitle: string; expectedPreview?: string; title: string; preview?: string }): WorkspaceSnapshot {
     this.#catalog.restorePromptPreview(
@@ -1736,6 +2009,7 @@ export class PiProcessManager {
     const wasActive = this.#catalog.get(this.#catalog.activeId ?? "")?.project === cwd;
     const removed = this.#catalog.removeProject(cwd);
     await Promise.all(removed.map(async (item) => {
+      this.#dropDag(item.id);
       this.#queueRebuilds.add(item.id);
       this.#bumpQueueEpoch(item.id);
       try {
@@ -1825,7 +2099,15 @@ export class PiProcessManager {
       running,
       queue: id ? this.#messageQueue.state(id) : { conversationId: "", revision: 0, items: [], pause: null },
       pendingUi,
-      turnEvents: turn ? [...turn.events] : [],
+      turnEvents: [
+        ...(turn?.events ?? []),
+        // A phone reconnecting during preflight has not seen setStatus yet. The
+        // submitted row is in messages; replay only its composer preparation state.
+        ...(id && this.#openingPrompts.has(id) ? [{
+          type: "extension_ui_request", conversationId: id, method: "setStatus",
+          statusKey: "handoff", statusText: this.#extensionStatusSnapshot(id).handoff,
+        }] : []),
+      ],
       overflowed: turn?.overflowed ?? false,
       seq: this.#eventSeq,
     };
@@ -2097,6 +2379,7 @@ export class PiProcessManager {
    */
   #clearBusy(id: string): void {
     const wasBusy = this.#busyBroadcast.get(id) === true;
+    this.#openingPrompts.delete(id);
     this.#running.delete(id);
     this.#compacting.delete(id);
     this.#busyBroadcast.delete(id);
@@ -2414,18 +2697,74 @@ export class PiProcessManager {
     const sessionManager = SessionManager.create(cwd, sessionDir);
     if (options?.setup) await options.setup(sessionManager);
     const conversation = this.#catalog.create(source?.project, minted ? { cwd, sessionId: minted } : { cwd }, { activate: false });
+    const sourceSession = this.#sessions.get(sourceId)?.session;
+    const inheritedModel = sourceSession?.model;
+    const inheritedThinking = sourceSession?.thinkingLevel;
     const managed = await this.#createSession(conversation, cwd, sessionManager, {
       type: "session_start",
       reason: "new",
       ...(options?.parentSession ? { previousSessionFile: options.parentSession } : {}),
     });
+    // A handoff keeps going on the model the source chat was using. An empty
+    // session would otherwise adopt the pinned default, which is a different
+    // choice from the one that just did the work.
+    if (inheritedModel && inheritedModel.provider !== "unknown" && this.#models?.hasConfiguredAuth(inheritedModel)) {
+      const current = managed.session.model;
+      if (!current || current.provider !== inheritedModel.provider || current.id !== inheritedModel.id) {
+        try {
+          await managed.session.setModel(inheritedModel);
+        } catch {
+          // The new chat keeps the model it already started with.
+        }
+      }
+    }
+    if (inheritedThinking && managed.session.thinkingLevel !== inheritedThinking) {
+      managed.session.setThinkingLevel(inheritedThinking);
+    }
     const state = this.#state(managed.session, conversation.id);
-    const updated = this.#catalog.update(conversation.id, { sessionFile: state.sessionFile, sessionId: state.sessionId }) ?? conversation;
+    let updated = this.#catalog.update(conversation.id, { sessionFile: state.sessionFile, sessionId: state.sessionId }) ?? conversation;
+    // `setup` may have seeded the chat; without a preview it would read as the blank draft.
+    this.#healPreview(updated);
+    updated = this.#catalog.get(conversation.id) ?? updated;
     if (!this.#activationTicket.isCurrent(activation)) return { cancelled: false };
     this.#activate(managed);
     this.#emit({ type: "conversation_opened", result: this.#opened(updated, [], state) });
-    if (options?.withSession) await options.withSession(managed.session.createReplacedSessionContext());
+    if (options?.withSession) await options.withSession(this.#replacementContext(managed));
     return { cancelled: false };
+  }
+
+  #replacementContext(managed: ManagedSession): ReplacementContext {
+    const context = managed.session.createReplacedSessionContext();
+    const send = context.sendUserMessage;
+    context.sendUserMessage = (content, options) => {
+      const id = managed.conversationId;
+      if (this.#openingPrompts.has(id)) {
+        return Promise.reject(new Error(uiText("消息正在准备中", "The message is being prepared")));
+      }
+      // Only the first plain-text message needs this bridge. Follow-ups and image
+      // submissions keep the SDK's normal delivery/queue semantics.
+      if (typeof content !== "string" || !managed.session.isIdle || managed.session.messages.some((message) => message.role === "user")) {
+        return send(content, options);
+      }
+      const message: ChatMessage = {
+        id: `local:${randomUUID()}`, role: "user", text: content,
+        tools: [], parts: [{ kind: "text", text: content }], createdAt: Date.now(),
+      };
+      this.#openingPrompts.set(id, message);
+      this.#adoptPromptPreview(id, content);
+      context.ui.setStatus("handoff", uiText("正在准备消息…", "Preparing your message…"));
+      this.#emit({ type: "opening_prompt", conversationId: id, message });
+      return sendOpeningPrompt(managed.session, () => send(content, options), (delivered) => {
+        if (this.#openingPrompts.get(id) !== message) return;
+        this.#openingPrompts.delete(id);
+        context.ui.setStatus("handoff", undefined);
+        if (!delivered) {
+          this.#emit({ type: "opening_prompt_cancelled", conversationId: id, messageId: message.id });
+          context.ui.setEditorText(content);
+        }
+      });
+    };
+    return context;
   }
 
   /** Switch to a session file an extension asked for, opening it under the catalog. */
@@ -2440,7 +2779,9 @@ export class PiProcessManager {
     const managed = await this.#ensureSession(conversation);
     const state = this.#state(managed.session, conversation.id);
     const messages = this.#messages(managed.session, conversation.id);
-    const updated = this.#catalog.update(conversation.id, { sessionFile: state.sessionFile, sessionId: state.sessionId }) ?? conversation;
+    let updated = this.#catalog.update(conversation.id, { sessionFile: state.sessionFile, sessionId: state.sessionId }) ?? conversation;
+    this.#healPreview(updated);
+    updated = this.#catalog.get(conversation.id) ?? updated;
     if (!this.#activationTicket.isCurrent(activation)) return { cancelled: false };
     this.#activate(managed);
     this.#emit({ type: "conversation_opened", result: this.#opened(updated, messages, state) });
@@ -2730,8 +3071,9 @@ export class PiProcessManager {
         hidden: true,
         factory: createToolSearchExtension(),
       }, {
-        // Switches those two on or off from the settings as they are at `session_start`,
-        // which a reload emits again — the SDK's `defaultTools` setting can only add.
+        // Switches codemode, tool_search and the dag_* tools on or off from the settings
+        // as they are at `session_start`, which a reload emits again — the SDK's
+        // `defaultTools` setting can only add.
         name: "fastvibe-tool-modes",
         hidden: true,
         factory: (pi) => {
@@ -2960,6 +3302,8 @@ export class PiProcessManager {
       // (which happens immediately after this event is emitted).
       if (event.type === "message_end" && isUserEngineMessage(event.message)) {
         const userMessage = event.message;
+        // The prompt's row in the sidebar, for a prompt the renderer did not send.
+        this.#adoptPromptPreview(conversation.id, messageText(userMessage));
         queueMicrotask(() => {
           const entry = [...result.session.sessionManager.getEntries()]
             .reverse()
@@ -3200,10 +3544,47 @@ export class PiProcessManager {
    * *session* is not — and prompting then throws ("Agent is already processing", or
    * "Cannot submit a prompt while compaction is in progress" for a manual `/compact`).
    */
-  async #promptWhenIdle(session: AgentSession, message: string, images?: Array<{ type: "image"; data: string; mimeType: string }>): Promise<void> {
-    if (await this.#compactIfCommand(session, message)) return;
-    if (!session.isIdle) await session.waitForIdle();
-    await session.prompt(message, { images });
+  async #promptWhenIdle(
+    session: AgentSession,
+    message: string,
+    images?: Array<{ type: "image"; data: string; mimeType: string }>,
+    conversationId?: string,
+  ): Promise<void> {
+    const held = this.#holdCommand(conversationId, message);
+    try {
+      if (await this.#compactIfCommand(session, message)) return;
+      if (!session.isIdle) await session.waitForIdle();
+      await session.prompt(message, { images });
+    } finally {
+      held.release();
+    }
+  }
+
+  /**
+   * Refuse a prompt that would land while a slash command is still in its handler,
+   * and hold the conversation for the duration of one that is just starting.
+   *
+   * The hold is only for a slash command. A normal prompt releases nothing because
+   * it never took the slot — but it still loses when a command already holds it.
+   */
+  #holdCommand(conversationId: string | undefined, message: string): { release: () => void } {
+    if (!conversationId) return { release() {} };
+    if (this.#openingPrompts.has(conversationId)) {
+      throw new Error(uiText("消息正在准备中", "The message is being prepared"));
+    }
+    if (this.#commandsInFlight.has(conversationId)) {
+      throw new Error(uiText("上一条命令还没结束", "The previous command is still running"));
+    }
+    if (!message.trim().startsWith("/")) return { release() {} };
+    this.#commandsInFlight.add(conversationId);
+    let released = false;
+    return {
+      release: () => {
+        if (released) return;
+        released = true;
+        this.#commandsInFlight.delete(conversationId);
+      },
+    };
   }
 
   #withQueue<T>(conversationId: string, work: () => Promise<T>): Promise<T> {
@@ -3448,7 +3829,7 @@ export class PiProcessManager {
       this.#beginTurn(conversationId);
       await this.#queueSubmission.run(
         { conversationId, id: candidate.id },
-        () => this.#promptWhenIdle(session, candidate!.sentText ?? candidate!.text, candidate!.images),
+        () => this.#promptWhenIdle(session, candidate!.sentText ?? candidate!.text, candidate!.images, conversationId),
       );
       // The wrapped `agent.prompt` claims the opening prompt the moment the run takes
       // it. Still unclaimed after a successful return means no turn was started at all:
@@ -3939,6 +4320,30 @@ export class PiProcessManager {
       listWorktrees: () => this.#listGitWorktrees(conversationId),
       appConfig: (request) =>
         this.#appConfigHost ? this.#appConfigHost(request) : Promise.resolve({ ok: false, error: uiText("当前宿主不支持修改 FastVibe 设置", "This host cannot change FastVibe settings") }),
+      dag: (request, signal) => {
+        const model = this.#sessions.get(conversationId)?.session.model;
+        if (model) this.#dagParentModel.set(conversationId, `${model.provider}/${model.id}`);
+        return runDagTool(
+          {
+            store: this.#dagStore,
+            scheduler: this.#dagScheduler,
+            // Read at call time: a role saved in Settings mid-conversation is reusable on the
+            // next batch, not only after the engine restarts.
+            agents: () =>
+              this.#subagentManager.list().map((agent) => ({
+                name: agent.name,
+                description: agent.description,
+                instructions: agent.systemPrompt,
+                tools: agent.tools,
+                model: agent.model,
+                thinkingLevel: agent.thinkingLevel,
+              })),
+          },
+          request,
+          conversationId,
+          signal,
+        );
+      },
       // 需求批准 has no timeout of its own, and an unanswered prompt parks the tool (and
       // the run's settle) forever. A generous default keeps a background chat from
       // hanging for the rest of the session while still leaving the user time to answer
@@ -4039,6 +4444,7 @@ export class PiProcessManager {
     if (id === this.#activeId) return false;
     const managed = this.#sessions.get(id);
     if (!managed) return false;
+    if (this.#openingPrompts.has(id)) return false;
     if (this.#busy(id)) return false;
     if (this.#sessionPromises.has(id)) return false;
     if (this.#drainingQueues.has(id)) return false;
@@ -4156,7 +4562,7 @@ export class PiProcessManager {
     conversationId: string | undefined,
     fromEntryId?: string,
   ): { messages: ChatMessage[]; anchored: boolean } {
-    return projectSessionMessages({
+    const projected = projectSessionMessages({
       session,
       conversationId,
       fromEntryId,
@@ -4165,6 +4571,9 @@ export class PiProcessManager {
       running: this.#running,
       compacting: this.#compacting,
     });
+    const opening = conversationId ? this.#openingPrompts.get(conversationId) : undefined;
+    if (opening && !session.messages.some((message) => message.role === "user")) projected.messages.push(opening);
+    return projected;
   }
   /**
    * Force the SDK to write the session file.

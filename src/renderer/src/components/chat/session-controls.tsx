@@ -1,4 +1,5 @@
 import { useState, type JSX } from "react";
+import { subagentKey } from "@shared/subagent-state";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { BotIcon, Download01Icon, MoreHorizontalIcon, ScissorIcon } from "@hugeicons/core-free-icons";
@@ -32,7 +33,6 @@ import type {
 } from "@shared/types";
 import { MessageList } from "./message-list";
 import { getSubagentMessages } from "@/lib/engine-client";
-import { useSessionStore } from "@/stores/session";
 
 /** Header dropdown holding session actions. */
 export function SessionMenu({
@@ -181,18 +181,20 @@ export function SubagentBrowser({
   initialId?: string | null;
 }): JSX.Element {
   const { t } = useTranslation("chat");
-  const [active, setActive] = useState<string | null>(initialId ?? subagents[0]?.id ?? null);
+  const initial = subagents.find((agent) => agent.id === initialId) ?? subagents[0];
+  const [active, setActive] = useState<string | null>(initial ? subagentKey(initial.id, initial.conversationId) : null);
   const [loaded, setLoaded] = useState<Record<string, ChatMessage[]>>({});
-  const conversationId = useSessionStore((state) => state.activeId);
+  const selected = subagents.find((agent) => subagentKey(agent.id, agent.conversationId) === active);
 
-  async function select(id: string): Promise<void> {
-    setActive(id);
-    if (streams[id]?.length || loaded[id]) return;
+  async function select(agent: SubagentInfo): Promise<void> {
+    const key = subagentKey(agent.id, agent.conversationId);
+    setActive(key);
+    if (streams[key]?.length || loaded[key]) return;
     try {
-      const messages = await getSubagentMessages(id, conversationId ?? undefined);
-      setLoaded((prev) => ({ ...prev, [id]: messages }));
+      const messages = await getSubagentMessages(agent.id, agent.conversationId);
+      setLoaded((prev) => ({ ...prev, [key]: messages }));
     } catch {
-      setLoaded((prev) => ({ ...prev, [id]: [] }));
+      setLoaded((prev) => ({ ...prev, [key]: [] }));
     }
   }
 
@@ -203,12 +205,12 @@ export function SubagentBrowser({
       <div className="w-40 shrink-0 space-y-1">
         {subagents.map((agent) => (
           <button
-            key={agent.id}
+            key={subagentKey(agent.id, agent.conversationId)}
             type="button"
             className={`flex w-full flex-col rounded-md px-2 py-1.5 text-left text-xs ${
-              active === agent.id ? "bg-muted" : "hover:bg-muted/60"
+              active === subagentKey(agent.id, agent.conversationId) ? "bg-muted" : "hover:bg-muted/60"
             }`}
-            onClick={() => void select(agent.id)}
+            onClick={() => void select(agent)}
           >
             <span className="truncate font-medium">{agent.name || agent.id}</span>
             <span className="truncate text-muted-foreground">
@@ -225,7 +227,7 @@ export function SubagentBrowser({
       </div>
       <ScrollArea className="h-105 min-w-0 flex-1 rounded-lg border border-border">
         <div className="p-2">
-          <MessageList messages={messages} streaming={Boolean(active && streams[active]?.length)} />
+          <MessageList messages={messages} streaming={Boolean(active && streams[active]?.length)} conversationId={selected?.conversationId} />
         </div>
       </ScrollArea>
     </div>

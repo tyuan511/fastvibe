@@ -130,6 +130,8 @@
   "forward": "Forward",
   "search": "Search",
   "plugins": "Extensions",
+  "expandSubTasks": "Show sub-tasks ({{count}})",
+  "collapseSubTasks": "Hide sub-tasks",
   "newProject": "New project",
   "projects": "Projects",
   "noProjects": "No projects yet",
