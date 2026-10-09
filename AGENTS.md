@@ -919,12 +919,13 @@ is only offered where there is a blur to show (`HAS_VIBRANCY`). `src/shared/glas
 - **Settings hides the shell instead of covering it.** The overlay is translucent like
   everything else, so while it is open `[data-shell-split]` and the browser guest layer are
   `visibility: hidden` (not unmounted). A new full-window overlay needs the same treatment.
-- **The website and README show it from the browser harness.** `mock.html?desktop=1` paints a
-  wallpaper, makes `#root` a floating window whose own `backdrop-filter` stands in for the
-  material, and reports `simulatedVibrancy` on the bridge so `HAS_VIBRANCY` lets glass on —
-  the only way a browser (or a capture) can show it. The hero iframe and
-  `scripts/capture-website.mjs` both pass it; the window is concentric with the panes (24px
-  radius = 8px inset + 16px pane radius), so keep the two in step.
+- **The README and the marketing site show it from the browser harness.** `mock.html?desktop=1`
+  paints a wallpaper, makes `#root` a floating window whose own `backdrop-filter` stands in
+  for the material, and reports `simulatedVibrancy` on the bridge so `HAS_VIBRANCY` lets glass
+  on — the only way a browser (or a capture) can show it. The marketing site (its own private
+  repository, `tyuan511/fastvibe-services`) loads this same page in its hero iframe and takes
+  its product screenshots from it; both pass `desktop=1`, and the window is concentric with
+  the panes (24px radius = 8px inset + 16px pane radius), so keep the two in step.
 
 ### Type scale & interface size
 

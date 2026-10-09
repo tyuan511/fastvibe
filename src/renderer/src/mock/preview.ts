@@ -281,8 +281,8 @@ import fileIconAsset from "material-icon-theme/icons/file.svg?url&no-inline";
 import materialIconsRaw from "material-icon-theme/dist/material-icons.json?raw";
 
 // Under the Vite dev server the package's SVGs are served in place. The pre-compiled copy
-// the marketing site embeds (`vite.website-preview.config.ts`) ships the few the fixtures
-// use in its own `icons/` directory instead; anything else falls back to `file.svg`.
+// the marketing site embeds (its own `scripts/build-app-preview.mjs`) ships the few the
+// fixtures use in its own `icons/` directory instead; anything else falls back to `file.svg`.
 const ICONS_BASE =
   import.meta.env.BASE_URL === "/"
     ? fileIconAsset.slice(0, fileIconAsset.lastIndexOf("/") + 1)
@@ -1164,9 +1164,10 @@ if (website) {
  * makes `#root` the containing block for the app's `fixed` layers (the settings overlay),
  * so they stay inside the window rather than covering the wallpaper.
  */
-// The website draws the same wallpaper and a skeleton window at this inset while the frame
-// loads (`.preview-window` / `.preview-skeleton` in apps/website/app/globals.css), so the
-// swap to the real page does not move anything — keep the inset and the gradient in step.
+// The marketing site draws the same wallpaper and a skeleton window at this inset while
+// the frame loads (`.preview-window` / `.preview-skeleton` in its `app/globals.css`), so
+// the swap to the real page does not move anything — keep the inset and the gradient in
+// step. The site lives in tyuan511/fastvibe-services; only this fixture page is ours.
 const DESKTOP_INSET = { x: 20, y: 16 };
 if (desktop) {
   document.documentElement.dataset.desktop = "";

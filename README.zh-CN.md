@@ -11,7 +11,7 @@
 
 FastVibe 将 pi coding agent 嵌入 Electron 主进程，把会话、工具调用、扩展和项目工作区整合到一个桌面界面中。
 
-![FastVibe 界面](apps/website/public/screenshots/zh/workspace.webp)
+![FastVibe 界面](docs/images/workspace-zh.webp)
 
 ## 下载
 

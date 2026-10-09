@@ -11,7 +11,7 @@
 
 FastVibe embeds pi coding agent in an Electron desktop app, bringing conversations, tool calls, extensions, and project workspaces into one interface.
 
-![FastVibe](apps/website/public/screenshots/en/workspace.webp)
+![FastVibe](docs/images/workspace-en.webp)
 
 ## Download
 
