@@ -5,6 +5,58 @@ import 'package:fastvibe_mobile/protocol/address.dart';
 /// is a change to which machine a QR code connects to, so both clients are held to the
 /// identical table.
 void main() {
+  test('a named desktop QR provides a label and keeps metadata out of HTTP and WebSocket URLs', () {
+    final scanned = parseServerQr(
+      'http://192.168.22.139:7777?name=tangge+mbp',
+    )!;
+    expect(scanned.name, 'tangge mbp');
+    expect(scanned.address.origin, 'http://192.168.22.139:7777');
+    expect(scanned.address.wsUrl, 'ws://192.168.22.139:7777/ws');
+  });
+
+  test('QR names decode Unicode and URL-sensitive characters', () {
+    final name = '工作电脑 & #1 + 🖥';
+    final scanned = parseServerQr(
+      'https://desk.example.com?name=${Uri.encodeQueryComponent(name)}',
+    )!;
+    expect(scanned.name, name);
+    expect(scanned.address.origin, 'https://desk.example.com');
+  });
+
+  test('named IPv6 QR codes preserve encoded interface zones', () {
+    final scanned = parseServerQr('http://[fe80::20%25en0]:7777?name=Desk')!;
+    expect(scanned.name, 'Desk');
+    expect(scanned.address.origin, 'http://[fe80::20%25en0]:7777');
+    expect(parseServerQr('http://[fd00::45]:7777?name=Desk')!.name, 'Desk');
+  });
+
+  test(
+    'old QR codes and invalid optional names still yield usable addresses',
+    () {
+      for (final suffix in [
+        '',
+        '?name=',
+        '?name=+++',
+        '?name=%00Bad',
+        '?name=%ZZ',
+      ]) {
+        final scanned = parseServerQr('http://192.168.22.139:7777$suffix')!;
+        expect(scanned.name, isNull);
+        expect(scanned.address.origin, 'http://192.168.22.139:7777');
+      }
+      expect(parseServerQr('ftp://192.168.22.139?name=Desk'), isNull);
+      expect(parseServerQr('not a server'), isNull);
+      expect(
+        parseServerQr('https://desk.example.com?name=Desk#name=Other')!.name,
+        'Desk',
+      );
+      expect(
+        parseServerQr('https://desk.example.com#name=Other')!.name,
+        isNull,
+      );
+    },
+  );
+
   test('a tunnel QR is an https origin', () {
     final parsed = parseServerAddress('https://foo.trycloudflare.com/')!;
     expect(parsed.origin, 'https://foo.trycloudflare.com');
@@ -71,19 +123,39 @@ void main() {
     // What 设置 → 远程访问 copies for the LAN row when the machine is set to IPv6: no
     // scheme, and a global address, which classifies as public. TLS against the plain
     // listener failed every connection.
-    final parsed = parseServerAddress('[240e:370:a51b:a280:49f:eaac:3882:fb66]:7777')!;
-    expect(parsed.origin, 'http://[240e:370:a51b:a280:49f:eaac:3882:fb66]:7777');
-    expect(parsed.wsUrl, 'ws://[240e:370:a51b:a280:49f:eaac:3882:fb66]:7777/ws');
-    expect(parseServerAddress('[240e:370::1]')!.origin, 'http://[240e:370::1]:7777');
+    final parsed = parseServerAddress(
+      '[240e:370:a51b:a280:49f:eaac:3882:fb66]:7777',
+    )!;
+    expect(
+      parsed.origin,
+      'http://[240e:370:a51b:a280:49f:eaac:3882:fb66]:7777',
+    );
+    expect(
+      parsed.wsUrl,
+      'ws://[240e:370:a51b:a280:49f:eaac:3882:fb66]:7777/ws',
+    );
+    expect(
+      parseServerAddress('[240e:370::1]')!.origin,
+      'http://[240e:370::1]:7777',
+    );
   });
 
   test('an explicit https IPv6 address keeps https', () {
-    expect(parseServerAddress('https://[240e:370::1]')!.origin, 'https://[240e:370::1]');
+    expect(
+      parseServerAddress('https://[240e:370::1]')!.origin,
+      'https://[240e:370::1]',
+    );
   });
 
   test('wss and ws are rewritten to https and http', () {
-    expect(parseServerAddress('wss://foo.example.com')!.origin, 'https://foo.example.com');
-    expect(parseServerAddress('ws://10.0.0.5:7777')!.origin, 'http://10.0.0.5:7777');
+    expect(
+      parseServerAddress('wss://foo.example.com')!.origin,
+      'https://foo.example.com',
+    );
+    expect(
+      parseServerAddress('ws://10.0.0.5:7777')!.origin,
+      'http://10.0.0.5:7777',
+    );
   });
 
   test('an out-of-range port is refused rather than defaulted', () {

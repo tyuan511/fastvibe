@@ -231,7 +231,7 @@ export function RemoteSettings(): JSX.Element {
                      * 局域网访问 is on; with it off the server reports loopback instead,
                      * and `AddressActions` drops the code for it by itself.
                      */}
-                    <AddressActions value={`http://${addressUrl}`} />
+                    <AddressActions value={`http://${addressUrl}`} name={savedDiscoveryName || defaultDiscoveryName} />
                   </span>
                 ) : (
                   t("remote.enableDesc")

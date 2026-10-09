@@ -7,6 +7,7 @@ import { QrCode } from "@/components/ui/qr-code";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { isReachableFromAnotherDevice } from "@/lib/address-reachability";
 import { cn } from "@/lib/utils";
+import { remoteQrValue } from "@shared/remote-address";
 
 /**
  * The ways an address gets onto another device: copied, opened, or scanned.
@@ -17,15 +18,16 @@ import { cn } from "@/lib/utils";
  * space for two labelled buttons meaning 复制 and 打开. The two that are not self-evident
  * name themselves on hover.
  *
- * One string drives all three: `value` is what the copy button writes, what the anchor
- * points at, and what the code encodes. A QR that opens a different address than the one
- * you copied is a bug nobody notices until they are holding a phone.
+ * `value` is the connection address for all three. Only the QR adds optional name
+ * metadata, so the phone can fill its connection label as well as its address.
  */
 export function AddressActions({
   value,
+  name,
   className,
 }: {
   value: string;
+  name?: string;
   className?: string;
 }): JSX.Element {
   const { t } = useTranslation("settings");
@@ -47,7 +49,7 @@ export function AddressActions({
        * address-reachability.ts`): a flag would be one more place to be wrong, and the
        * first version of this component had two of them and drew two icons.
        */}
-      {isReachableFromAnotherDevice(value) ? <QrAction value={value} /> : null}
+      {isReachableFromAnotherDevice(value) ? <QrAction value={value} name={name} /> : null}
       {/*
        * `nativeButton={false}` because the rendered element is an anchor, not a button:
        * Base UI otherwise keeps the native button semantics it assumes and warns, and the
@@ -134,7 +136,7 @@ function CopyAction({ value }: { value: string }): JSX.Element {
  * leaves its trigger, and scanning means leaving the trigger to point a camera at the
  * code. `openOnHover` + a hoverable popup is the shape that survives that.
  */
-export function QrAction({ value }: { value: string }): JSX.Element {
+export function QrAction({ value, name }: { value: string; name?: string }): JSX.Element {
   const { t } = useTranslation("settings");
 
   return (
@@ -154,7 +156,8 @@ export function QrAction({ value }: { value: string }): JSX.Element {
         <HugeiconsIcon strokeWidth={2} icon={QrCode01Icon} className="size-3.5" />
       </PopoverTrigger>
       <PopoverContent align="start" sideOffset={8} className="w-auto items-center gap-2 p-3">
-        <QrCode value={value} title={value} className="size-40" />
+        <QrCode value={remoteQrValue(value, name)} title={name?.trim() || value} className="size-40" />
+        {name?.trim() ? <div className="text-sm font-medium">{name.trim()}</div> : null}
         <div className="font-mono text-xs break-all">{value}</div>
         <div className="text-xs text-muted-foreground">{t("remote.qrHint")}</div>
       </PopoverContent>

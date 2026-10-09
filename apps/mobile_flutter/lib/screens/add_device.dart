@@ -167,7 +167,11 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
     if (!mounted) return;
     final value = takeScannedAddress();
     if (value == null || value.isEmpty) return;
-    _url.text = value;
+    final scanned = parseServerQr(value);
+    _url.text = scanned?.address.origin ?? value;
+    // A scan supplies a default name. Keep a name the user has already edited, and
+    // replace previous automatic suggestions when scanning another computer.
+    if (!_aliasTouched) _alias.text = scanned?.name ?? '';
     setState(() => _error = null);
     Haptic.success();
     Timer(const Duration(milliseconds: 350), () {

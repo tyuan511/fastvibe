@@ -212,7 +212,7 @@ export function RemoteTunnel({
       ) : null}
 
       {tunnel.phase === "online" && tunnel.url ? (
-        <Online url={tunnel.url} stable={tunnel.provider === "frp"} />
+        <Online url={tunnel.url} name={state.discoveryName || state.defaultDiscoveryName} stable={tunnel.provider === "frp"} />
       ) : null}
 
       {/* Not while the credential block is up: that one already carries this reason and
@@ -241,7 +241,7 @@ export function RemoteTunnel({
  * The tunnel hostname itself breaks anywhere rather than truncating: it is one unbroken
  * token of 30-odd characters whose tail is the part that differs between runs.
  */
-function Online({ url, stable }: { url: string; stable: boolean }): JSX.Element {
+function Online({ url, name, stable }: { url: string; name: string; stable: boolean }): JSX.Element {
   const { t } = useTranslation("settings");
 
   return (
@@ -256,7 +256,7 @@ function Online({ url, stable }: { url: string; stable: boolean }): JSX.Element 
           the icons out of the card instead. */}
       <span className="flex min-w-0 items-center gap-1.5 font-mono text-xs">
         <span className="min-w-0 break-all text-foreground">{url}</span>
-        <AddressActions value={url} className="shrink-0" />
+        <AddressActions value={url} name={name} className="shrink-0" />
       </span>
     </div>
   );

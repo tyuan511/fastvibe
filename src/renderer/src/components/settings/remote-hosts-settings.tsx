@@ -323,7 +323,7 @@ export function RemoteHostsSettings(): JSX.Element {
             </div>
             {host.source === "config" ? <Badge variant="secondary">{t("remoteHosts.fromSshConfig")}</Badge> : null}
             {/* The same hover-to-scan icon 远程访问 draws; only a host with phone access has an address to scan. */}
-            {phoneAccessAddress(host) ? <QrAction value={phoneAccessAddress(host)!} /> : null}
+            {phoneAccessAddress(host) ? <QrAction value={phoneAccessAddress(host)!} name={host.label} /> : null}
             {/* 测试 / 启动 Agent / 停止 Agent are occasional, so they share one menu instead of three buttons. */}
             <DropdownMenu>
               <DropdownMenuTrigger render={<Button size="icon-xs" variant="ghost" aria-label={t("remoteHosts.more")} />}>

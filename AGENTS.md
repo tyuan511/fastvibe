@@ -267,8 +267,12 @@ in the pane as a link and a QR code (`components/ui/qr-code.tsx`).
   tallest thing in a pane otherwise made of one-line rows. Both address rows (the one
   under 允许远程连接 and this one) now read the same way: the URL, then copy / code /
   open as icons with no words. `address-actions.tsx` (`AddressActions`) is the one copy of
-  that trio, so the code and the clipboard cannot drift apart — one `value` is what is
-  copied, what the anchor points at, and what is encoded.
+  that trio. `value` is the address for copying and opening; the QR adds the optional
+  `name` query parameter via `remoteQrValue`, retaining the same destination. LAN and
+  tunnel codes carry the saved 主机名称 (or its default), SSH phone codes the host label.
+  The phone's `parseServerQr` separates name metadata from the connection origin;
+  scanning fills the name unless the user already edited it. Old plain-URL codes work
+  as before, and the QR contains no password or device token.
 - **The copy and open icons name themselves on hover; the code appears on hover.** Copy
   and open carry a tooltip because a glyph alone does not say which is which; the code
   opens as a *popover* on `openOnHover` (`delay={120}`, `closeDelay={160}`), because a
