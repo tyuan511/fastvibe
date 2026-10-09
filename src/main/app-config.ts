@@ -1,15 +1,14 @@
 import { dispatch, type CallerContext } from "./ipc/registry.ts";
-import { Ipc, type RemoteTunnelProvider } from "../shared/ipc.ts";
-import type { FrpSettingsInput, FrpSettingsView } from "../shared/frp.ts";
+import { Ipc } from "../shared/ipc.ts";
 import type { McpServerConfig, McpServerStatus } from "../shared/types.ts";
 import { APP_CONFIG_CATALOG, isAppConfigAction, type AppConfigAction, type AppConfigHostRequest, type AppConfigHostResult } from "../shared/app-config.ts";
 
 /**
  * What the agent may do to FastVibe's own configuration (the `fastvibe_config_*` tools).
  *
- * The point is that a setup like 远程访问 → frp is a dozen fields across a server the
- * user owns and a pane on this machine: the agent can do the server half over SSH with
- * its ordinary tools, and this is the other half — filling the pane for them.
+ * The point is that a setup like an MCP server is a dozen fields in a pane on this
+ * machine: the agent works out the values with its ordinary tools, and this is the part
+ * that fills the pane in for the user.
  *
  * Every action goes through the same call table the settings panes use (`dispatch`), so
  * the agent cannot do anything a click could not, and a write is broadcast to every
@@ -19,8 +18,8 @@ import { APP_CONFIG_CATALOG, isAppConfigAction, type AppConfigAction, type AppCo
  *
  * Two rules the table keeps:
  *
- * - **No action returns a secret.** SSH passwords are stripped, frp serves `hasToken`,
- *   the remote-access password is write-only.
+ * - **No action returns a secret.** SSH passwords are stripped and the remote-access
+ *   password is write-only.
  * - **The remote-access password never reaches the model.** The extension asks the user
  *   for it in the composer and hands it here directly (`resources/extensions/app-config.ts`).
  */
@@ -48,10 +47,6 @@ function stripMcpStatus(server: McpServerStatus | McpServerConfig): McpServerCon
   return { id, name, enabled, transport, command, args, env, url };
 }
 
-function isTunnelProvider(value: unknown): value is RemoteTunnelProvider {
-  return value === "cloudflared" || value === "ngrok" || value === "frp";
-}
-
 async function readHosts(): Promise<unknown> {
   const hosts = await call<{ saved: Array<Record<string, unknown>>; discovered: Array<Record<string, unknown>> }>(Ipc.sshHosts);
   const clean = (list: Array<Record<string, unknown>>) => list.map(({ password: _password, ...rest }) => rest);
@@ -60,20 +55,16 @@ async function readHosts(): Promise<unknown> {
 
 const ACTIONS: Record<AppConfigAction, Run> = {
   overview: async () => {
-    const [remote, tunnelTools, frp, sshHosts, mcp] = await Promise.all([
+    const [remote, sshHosts, mcp] = await Promise.all([
       call(Ipc.remoteGetState),
-      call(Ipc.remoteTunnelTools),
-      call(Ipc.remoteFrpGet),
       readHosts(),
       call<McpServerStatus[]>(Ipc.engineListMcpServers).then((list) =>
         list.map((item) => ({ id: item.id, name: item.name, enabled: item.enabled, transport: item.transport, connected: item.connected, error: item.error })),
       ),
     ]);
-    return { actions: APP_CONFIG_CATALOG, remote, tunnelTools, frp, sshHosts, mcp };
+    return { actions: APP_CONFIG_CATALOG, remote, sshHosts, mcp };
   },
   "remote.status": () => call(Ipc.remoteGetState),
-  "remote.tunnel_tools": () => call(Ipc.remoteTunnelTools),
-  "remote.frp_get": () => call(Ipc.remoteFrpGet),
   "ssh.hosts": readHosts,
   "mcp.list": () => call(Ipc.engineListMcpServers),
   "settings.get": () => call(Ipc.settingsGet),
@@ -84,20 +75,6 @@ const ACTIONS: Record<AppConfigAction, Run> = {
   },
   "remote.start": (input) => call(Ipc.remoteStart, typeof input.port === "number" ? { port: input.port } : {}),
   "remote.stop": () => call(Ipc.remoteStop),
-  "remote.set_tunnel": async (input) => {
-    const provider = input.provider ?? null;
-    if (provider !== null && !isTunnelProvider(provider)) throw new Error("provider 只能是 cloudflared / ngrok / frp / null");
-    return call(Ipc.remoteTunnelSet, { provider });
-  },
-  // Merged with what is stored, so the agent can change one field without restating the
-  // form — and a token it leaves out is kept, the same three-valued rule the pane uses.
-  "remote.frp_set": async (input) => {
-    const current = await call<FrpSettingsView | null>(Ipc.remoteFrpGet);
-    const base: Partial<FrpSettingsInput> = current
-      ? (({ hasToken: _hasToken, proxyName: _proxyName, ...rest }) => rest)(current)
-      : {};
-    return call(Ipc.remoteFrpSet, { ...base, ...input } as FrpSettingsInput);
-  },
   // One server at a time: handing the agent the whole-list save would let a list it
   // misremembered silently delete the user's other servers.
   "mcp.upsert": async (input) => {

@@ -255,5 +255,17 @@
   "needsYou": "「{{title}}」在等你处理",
   "finished": "「{{title}}」运行结束",
   "view": "查看"
+ },
+ "account": {
+  "signIn": "登录",
+  "signedOutTitle": "登录 FastVibe",
+  "signedOutDesc": "在浏览器中完成登录。",
+  "waiting": "请在浏览器中完成登录。",
+  "cancel": "取消登录",
+  "signOut": "退出登录",
+  "console": "打开控制台",
+  "noEmail": "没有已验证的邮箱",
+  "menuLabel": "账号：{{login}}",
+  "signedInToast": "已登录 {{login}}"
  }
 }

@@ -5,14 +5,7 @@ import { readFileSync } from "node:fs";
 /**
  * Settings copy is read by a person, so most of it is one line.
  *
- * The pane has a second kind of string that has to stay long, and it is worth naming
- * because a well-meaning 「让描述更简洁」 pass can delete exactly the sentence somebody
- * needs: the frp walkthrough, and the DNS verdicts that say what to change at the
- * registrar. Both are *instructions for something the user is doing outside this app* —
- * there is nowhere else for them to be written down, and a shortened version is a user
- * who cannot finish the setup.
- *
- * Everything else is capped. The number is not a style rule so much as a tripwire: it is
+ * Everything is capped. The number is not a style rule so much as a tripwire: it is
  * well above any one-line description in the file, so passing it means a string has
  * grown into a paragraph, which is the thing that makes a settings row read like
  * documentation. The explanation lives in this repo (AGENTS.md) and in the code's own
@@ -23,16 +16,6 @@ import { readFileSync } from "node:fs";
  * tight budget; en's is there to catch a paragraph, not to force parity.
  */
 const CAP: Record<string, number> = { zh: 130, en: 150 };
-
-/**
- * The strings that are *instructions* rather than descriptions, and stay as long as the
- * task is.
- *
- * `frpIntro` is the whole preparation for running frps; `frpDomainHelp` names the exact
- * DNS record to add. Both describe steps taken outside FastVibe, so there is nowhere else
- * for them to live and a shortened version is a user who cannot finish the setup.
- */
-const INSTRUCTION_PREFIXES = ["remote.frpIntro", "remote.frpDomainHelp"];
 
 const locales = ["zh", "en"] as const;
 
@@ -71,18 +54,8 @@ test("no settings description has grown into a paragraph", () => {
   for (const language of locales) {
     const cap = CAP[language]!;
     const offenders = [...read(language)]
-      .filter(([key]) => !INSTRUCTION_PREFIXES.includes(key))
       .filter(([, value]) => [...value].length > cap)
       .map(([key, value]) => `${key} (${[...value].length})`);
     assert.deepEqual(offenders, [], `${language} has descriptions over ${cap} characters`);
   }
-});
-
-test("the frp setup walkthrough is still there, at whatever length", () => {
-  // The cap above must not be tightened onto this one: it is the only place the DNS and
-  // firewall steps are written down, and `frpIntro` legitimately runs long.
-  const zh = read("zh");
-  const intro = zh.get("remote.frpIntro") ?? "";
-  assert.ok(intro.length > CAP.zh!, "frpIntro is the multi-step setup explanation and should not be trimmed to one line");
-  assert.ok((zh.get("remote.frpDomainHelp") ?? "").includes("A 记录"), "the DNS step has to name the record to add");
 });

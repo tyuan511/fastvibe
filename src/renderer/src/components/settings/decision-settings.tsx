@@ -1,12 +1,9 @@
 import { useEffect, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { Ipc } from "@shared/ipc";
 import { DECISION_SCENARIOS, DEFAULT_DECISION_MODEL, decisionModelConfigOf, type DecisionModelConfig, type DecisionModelRef, type DecisionScenario } from "@shared/decision";
 import type { ProviderConfig } from "@shared/types";
-import { blockedRemotely } from "@/lib/remote-unavailable";
 import { cleanError } from "@/lib/ipc-error";
-import { IS_REMOTE } from "@/lib/platform";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -60,7 +57,6 @@ export function DecisionSettings() {
   const dirty = DECISION_SCENARIOS.some((key) => draft[key] !== saved[key]);
 
   async function save(next: DecisionModelConfig) {
-    if (blockedRemotely(Ipc.decisionSaveConfig)) return;
     setSaving(true);
     try {
       applyExternal(await window.fastvibe.decision.saveConfig(next));
@@ -77,7 +73,6 @@ export function DecisionSettings() {
    * 应用场景 stays a draft (still shown, still needing Save) rather than riding along.
    */
   async function saveSelection(value: string) {
-    if (blockedRemotely(Ipc.decisionSaveConfig)) return;
     const pending = scenariosOf(draft);
     const model = value === "off" ? undefined : modelFromValue(value);
     if (value !== "off" && !model) return;
@@ -109,7 +104,7 @@ export function DecisionSettings() {
     <SettingsGroup>
       <SettingsRow
         title={t("decision.model")}
-        description={IS_REMOTE ? t("decision.remoteHint") : choices.length === 0 ? t("decision.noSystemOne") : undefined}
+        description={choices.length === 0 ? t("decision.noSystemOne") : undefined}
         control={
           <Select
             value={selected}

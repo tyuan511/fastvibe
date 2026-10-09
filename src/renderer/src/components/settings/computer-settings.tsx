@@ -8,8 +8,6 @@ import { Spinner } from "@/components/ui/spinner";
 import { Badge } from "@/components/ui/badge";
 import { SettingsGroup, SettingsRow } from "./settings-group";
 import { useSettingsStore } from "@/stores/settings";
-import { blockedRemotely } from "@/lib/remote-unavailable";
-import { Ipc } from "@shared/ipc";
 import type { ComputerPermissionStatus, GrantFlowState } from "@shared/types";
 import { cn } from "@/lib/utils";
 
@@ -42,13 +40,7 @@ export function ComputerSettings(): JSX.Element {
   const [status, setStatus] = useState<ComputerPermissionStatus | null>(lastStatus);
   const [checking, setChecking] = useState(lastStatus === null);
 
-  const remote = blockedRemotely(Ipc.computerPermissions);
-
   const refresh = useCallback(async () => {
-    if (remote) {
-      setChecking(false);
-      return;
-    }
     // Only the first read shows a spinner. A refresh that already has an answer to
     // display must not take it away and put it back — that is what made the grant
     // button flicker between "open System Settings" and "checking…".
@@ -63,7 +55,7 @@ export function ComputerSettings(): JSX.Element {
     } finally {
       setChecking(false);
     }
-  }, [remote]);
+  }, []);
 
   useEffect(() => {
     void refresh();
@@ -73,23 +65,14 @@ export function ComputerSettings(): JSX.Element {
   // looking again. Re-checking when the window regains focus is what turns "I just
   // flipped the toggle" into a pane that already agrees.
   useEffect(() => {
-    if (remote) return undefined;
     const onFocus = (): void => {
       void refresh();
     };
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
-  }, [refresh, remote]);
+  }, [refresh]);
 
   const ready = status?.ready === true;
-
-  if (remote) {
-    return (
-      <SettingsGroup>
-        <div className="px-4 py-6 text-sm text-muted-foreground">{t("computer.remoteOnly")}</div>
-      </SettingsGroup>
-    );
-  }
 
   return (
     <div className="space-y-6">

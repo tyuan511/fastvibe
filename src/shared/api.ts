@@ -55,6 +55,7 @@ import type {
   QueueBehavior,
   QueuedPromptPreview,
 } from "@shared/types";
+import type { AccountState } from "@shared/account";
 import type { RemoteHostProfile, RemoteHostConnectionState, RemoteHostTestResult, SshHostKeyScan } from "@shared/remote-host";
 import type {
   AppUpdateState,
@@ -97,28 +98,17 @@ export type ApiTransport = {
   /**
    * Preferences as they were before the page ran, so the first paint already has the
    * right theme instead of flashing the default one. Electron reads it synchronously in
-   * the preload world; a remote client takes it from its connection handshake.
+   * the preload world.
    */
   settingsInitial: Record<string, unknown>;
   /** The host's `process.platform`, which decides whether the shell draws its own title bar. */
   platform: string;
   /**
-   * Whether this bridge is a browser talking to a remote host, rather than the host's
-   * own window.
-   *
-   * `platform` alone cannot answer that: it reports the machine Main runs on, so a
-   * client connected to a Mac reads `darwin` and lays itself out for traffic lights
-   * that exist in a window 300 miles away. What the layout actually needs to know is
-   * whether there is any window chrome here at all, and only the transport knows.
-   */
-  remote: boolean;
-  /**
    * Absolute path of a file the user dropped or picked in this window.
    *
    * Not an IPC call. Electron removed `File.path`, and the replacement
    * (`webUtils.getPathForFile`) only works in the preload that can see the real
-   * `File` — handing the file to Main drops the path. A remote browser has no path
-   * on the host, so that transport leaves this unset and the bridge answers "".
+   * `File` — handing the file to Main drops the path.
    */
   pathForFile?: (file: unknown) => string;
 };
@@ -294,8 +284,6 @@ export function createFastVibeApi(t: ApiTransport) {
       }): Promise<ProviderConfig[]> => t.invoke(Ipc.providersAddNative, payload),
       fetch: (baseUrl: string, apiKey: string, api?: string): Promise<ProviderModel[]> =>
         t.invoke(Ipc.providersFetch, { baseUrl, apiKey, api }),
-      saveFastVibe: (apiKey: string, models: ProviderModel[]): Promise<ProviderConfig[]> =>
-        t.invoke(Ipc.providersSaveFastVibe, { apiKey, models }),
       add: (payload: {
         name: string;
         baseUrl: string;
@@ -476,8 +464,6 @@ export function createFastVibeApi(t: ApiTransport) {
        * (`lib/platform.ts`) instead of guessing from the user agent.
        */
       platform: t.platform,
-      /** True in the browser client. Window chrome and OS keys hang off this. */
-      remote: t.remote,
       log: (payload: import("@shared/ipc").AppLogPayload): void => {
         t.send(Ipc.appLog, payload);
       },
@@ -495,6 +481,17 @@ export function createFastVibeApi(t: ApiTransport) {
       close: (): Promise<void> => t.invoke(Ipc.windowClose),
       isMaximized: (): Promise<boolean> => t.invoke(Ipc.windowIsMaximized),
       onState: (listener: (state: WindowChromeState) => void): (() => void) => t.subscribe(Ipc.windowState, listener),
+    },
+    /**
+     * The FastVibe account (app.fastvibe.dev). `login` returns as soon as the browser is
+     * open; the outcome arrives through `onState`, because a person completes it elsewhere.
+     */
+    account: {
+      getState: (): Promise<AccountState> => t.invoke(Ipc.accountGet),
+      login: (): Promise<AccountState> => t.invoke(Ipc.accountLogin),
+      cancelLogin: (): Promise<AccountState> => t.invoke(Ipc.accountCancelLogin),
+      logout: (): Promise<AccountState> => t.invoke(Ipc.accountLogout),
+      onState: (listener: (state: AccountState) => void): (() => void) => t.subscribe(Ipc.accountState, listener),
     },
     updater: {
       getState: (): Promise<AppUpdateState> => t.invoke(Ipc.updateGetState),
@@ -601,20 +598,9 @@ export function createFastVibeApi(t: ApiTransport) {
       listDevices: (): Promise<import("@shared/ipc").RemoteDeviceInfo[]> => t.invoke(Ipc.remoteListDevices),
       revokeDevice: (id: string): Promise<import("@shared/ipc").RemoteDeviceInfo[]> =>
         t.invoke(Ipc.remoteRevokeDevice, { id }),
-      tunnelTools: (): Promise<import("@shared/ipc").RemoteTunnelTools> => t.invoke(Ipc.remoteTunnelTools),
-      /** Pick a tunnel, or `null` for none. Re-picking the current one restarts it. */
-      setTunnel: (
-        provider: import("@shared/ipc").RemoteTunnelProvider | null,
-      ): Promise<import("@shared/ipc").RemoteServerState> => t.invoke(Ipc.remoteTunnelSet, { provider }),
-      /** The frp tunnel's settings, without the token (`hasToken` says whether one is saved). */
-      frpGet: (): Promise<import("@shared/frp").FrpSettingsView | null> => t.invoke(Ipc.remoteFrpGet),
-      /** Save them; restarts a running frp tunnel onto the new config. `token` absent keeps it. */
-      frpSet: (settings: import("@shared/frp").FrpSettingsInput): Promise<import("@shared/frp").FrpSettingsView | null> =>
-        t.invoke(Ipc.remoteFrpSet, settings),
-      /** Where `domain` resolves, compared with the frps server (`FrpDnsCheck`). */
-      frpCheckDns: (payload: { domain: string; serverAddr: string }): Promise<import("@shared/frp").FrpDnsCheck> =>
-        t.invoke(Ipc.remoteFrpCheckDns, payload),
       onState: (listener: (state: import("@shared/ipc").RemoteServerState) => void): (() => void) => t.subscribe(Ipc.remoteState, listener),
+      /** Drop every phone connected through the account, leaving the connection itself up. */
+      officialDisconnect: (): Promise<import("@shared/ipc").RemoteServerState> => t.invoke(Ipc.remoteOfficialDisconnect),
     },
     stats: {
       usage: (range: UsageRange): Promise<UsageStats> => t.invoke(Ipc.statsUsage, { range }),

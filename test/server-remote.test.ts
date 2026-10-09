@@ -16,7 +16,7 @@ import { registeredChannels } from "./registered-channels.ts";
  *
  * Everything here is a door onto a machine that runs an agent with shell access, so the
  * tests are about what is *refused*: a socket that never authenticates, a token that is
- * not one, a method the policy denies, a path that climbs out of the web root. Each of
+ * not one, a method the policy denies, a page that tries to open a socket. Each of
  * those failing open looks exactly like the server working.
  */
 
@@ -38,24 +38,8 @@ async function withServer(
   options: { heartbeatMs?: number } = {},
 ): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), "fastvibe-remote-"));
-  // The real layout: the web root holds the built client and nothing else, and the
-  // credential file is a sibling of it rather than something inside what is served.
-  // A static server serves what is under its root — keeping secrets out of that
-  // directory is the rule, and the traversal check below is what enforces the boundary.
+  // The credential file is all this directory holds; the server serves no files.
   const accessFile = join(dir, "remote-access.json");
-  const webRoot = join(dir, "web");
-  await mkdir(webRoot, { recursive: true });
-  // Both built pages land in the same directory, which is the situation the routing
-  // below has to get right: the client is what a browser may have, the desktop page is
-  // what it must never be handed.
-  await writeFile(join(webRoot, "remote.html"), "<!doctype html><title>client</title>", "utf8");
-  await writeFile(join(webRoot, "index.html"), "<!doctype html><title>desktop</title>", "utf8");
-  // The icons are a directory of the icon-theme package, outside the web root: the
-  // desktop reads them through an Electron scheme, and the browser client over HTTP.
-  const iconRoot = join(dir, "icons");
-  await mkdir(iconRoot, { recursive: true });
-  await writeFile(join(iconRoot, "typescript.svg"), "<svg id='ts'/>", "utf8");
-  await writeFile(join(iconRoot, "file.svg"), "<svg id='generic'/>", "utf8");
   setPassword(accessFile, PASSWORD);
   const dispatched: Array<{ method: string; payload: unknown }> = [];
   const receivers = new Map<string, (channel: string, payload: unknown) => void>();
@@ -77,8 +61,6 @@ async function withServer(
     onStatusChange: () => {
       statusChanges += 1;
     },
-    webRoot,
-    iconRoot,
     heartbeatMs: options.heartbeatMs,
     log: silent,
   });
@@ -374,59 +356,23 @@ test("a closed socket stops receiving pushes", async () => {
   });
 });
 
-test("a path that climbs out of the web root does not escape it", async () => {
-  // The credential file sits one level above what is served. Every spelling of "go up
-  // one directory" must land back inside the root — a single one that does not is the
-  // password hash handed to whoever asked for it.
+test("the server hands a browser no page at all, and no file through any path", async () => {
+  // It once served the web client. That is gone: the phone app talks to /api/login and
+  // /ws, and the credential file sits next to where the pages used to be — so a path
+  // that reaches anything but a bare 404 is the password hash handed to whoever asked.
   await withServer(async ({ port }) => {
     const attempts = [
-      "/../remote-access.json",
-      "/../../remote-access.json",
-      "/web/../../remote-access.json",
-      "/..%2fremote-access.json",
-      "/%2e%2e/remote-access.json",
-      "/%2e%2e%2fremote-access.json",
-      "/a/b/../../../remote-access.json",
-      "/.%2e/remote-access.json",
+      "/", "/index.html", "/remote.html", "/mobile.html", "/settings/remote",
+      "/../remote-access.json", "/..%2fremote-access.json", "/%2e%2e/remote-access.json",
+      "/file-icon/typescript.svg", "/%",
     ];
     for (const path of attempts) {
       const response = await fetch(`http://127.0.0.1:${port}${path}`);
       const text = await response.text();
-      assert.doesNotMatch(text, /scrypt\$/, `leaked credentials via ${path}`);
-      assert.doesNotMatch(text, /"password"/, `leaked credentials via ${path}`);
+      assert.equal(response.status, 404, path);
+      assert.doesNotMatch(response.headers.get("content-type") ?? "", /html/, `served a page via ${path}`);
+      assert.doesNotMatch(text, /scrypt\$|"password"|<title>/, `leaked something via ${path}`);
     }
-  });
-});
-
-test("a file inside the web root is served, so the check is not simply refusing everything", async () => {
-  // Without this the traversal test above would pass just as well against a server that
-  // serves nothing at all.
-  await withServer(async ({ port }) => {
-    const response = await fetch(`http://127.0.0.1:${port}/`);
-    assert.equal(response.status, 200);
-    assert.match(await response.text(), /<title>client<\/title>/);
-  });
-});
-
-test("the desktop page is never served, by any spelling", async () => {
-  // It is the Electron window's document: it reads `window.fastvibe` as it loads, which
-  // a browser has no preload to provide, so serving it looks exactly like a client that
-  // white-screens. Asking for it by name gets the real client instead.
-  await withServer(async ({ port }) => {
-    for (const path of ["/index.html", "/./index.html", "/%69ndex.html", "/a/../index.html"]) {
-      const response = await fetch(`http://127.0.0.1:${port}${path}`);
-      const text = await response.text();
-      assert.doesNotMatch(text, /<title>desktop<\/title>/, `served the desktop page via ${path}`);
-      assert.match(text, /<title>client<\/title>/, `should fall back to the client for ${path}`);
-    }
-  });
-});
-
-test("an unknown route falls through to the client, so it can own its own paths", async () => {
-  await withServer(async ({ port }) => {
-    const response = await fetch(`http://127.0.0.1:${port}/settings/remote`);
-    assert.equal(response.status, 200);
-    assert.match(await response.text(), /<title>client<\/title>/);
   });
 });
 
@@ -439,44 +385,6 @@ test("the credential file is not world readable", async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-test("file icons are served over HTTP, because a browser has no private scheme", async () => {
-  // `fastvibe-icon://` is a `protocol.handle` in Main, so it resolves in a window and
-  // nowhere else; without this route every file chip in the web client is a broken
-  // image. Unauthenticated on purpose — the page needs them before it has a socket.
-  await withServer(async ({ port }) => {
-    const hit = await fetch(`http://127.0.0.1:${port}/file-icon/typescript.svg`);
-    assert.equal(hit.status, 200);
-    assert.equal(hit.headers.get("content-type"), "image/svg+xml");
-    assert.match(await hit.text(), /id='ts'/);
-
-    // The theme's manifest names generated clones that never shipped as files, so an
-    // unknown name is the generic glyph rather than a broken image.
-    const missing = await fetch(`http://127.0.0.1:${port}/file-icon/not-an-icon.svg`);
-    assert.equal(missing.status, 200);
-    assert.match(await missing.text(), /id='generic'/);
-  });
-});
-
-test("the icon route serves only icon names, and nothing through them", async () => {
-  // This directory is addressed by name, not resolved from a path, so the guard is the
-  // character class. A name that could name anything else is refused outright.
-  await withServer(async ({ port }) => {
-    const attempts = [
-      "/file-icon/%2e%2e%2fremote-access.json",
-      "/file-icon/..%2f..%2fremote-access.json",
-      "/file-icon/%2fetc%2fpasswd",
-      "/file-icon/sub%2fdir.svg",
-    ];
-    for (const path of attempts) {
-      const response = await fetch(`http://127.0.0.1:${port}${path}`);
-      const text = await response.text();
-      assert.doesNotMatch(text, /scrypt\$/, `leaked credentials via ${path}`);
-      assert.doesNotMatch(text, /"password"/, `leaked credentials via ${path}`);
-      assert.doesNotMatch(text, /root:/, `served a system file via ${path}`);
-    }
-  });
-});
-
 test("a request that will not parse is answered, not left hanging", async () => {
   // Both halves of a request line come off the wire: `GET /%` is not decodable, and a
   // `Host` of `bad host` makes the base URL invalid. Either one thrown out of the
@@ -485,8 +393,7 @@ test("a request that will not parse is answered, not left hanging", async () => 
   // scan of a public tunnel.
   await withServer(async ({ port }) => {
     const malformed = await fetch(`http://127.0.0.1:${port}/%`);
-    assert.equal(malformed.status, 200);
-    assert.match(await malformed.text(), /<title>client<\/title>/);
+    assert.equal(malformed.status, 404);
 
     const badHost = await new Promise<string>((settle, fail) => {
       const socket = netConnect(port, "127.0.0.1", () => {
@@ -538,72 +445,27 @@ test("a websocket upgrade with an unparseable host is refused, not thrown on", a
 
     // And the server is still answering afterwards, which is what says the throw did
     // not take the listener with it.
-    const after = await fetch(`http://127.0.0.1:${port}/`);
+    const after = await fetch(`http://127.0.0.1:${port}/api/hello`);
     assert.equal(after.status, 200);
   });
 });
 
-test("an upgrade through a tunnel that rewrites Host is allowed", async () => {
-  // Every tunnel rewrites `Host` to the address it forwards to, by default, while the
-  // page sits on the public hostname — so judging on `Host` alone refused everyone who
-  // brought their own tunnel, with 「连接被断开」 on screen and one warn line in the log.
+test("a socket opened by a web page is refused, however the Host looks", async () => {
+  // The phone app and the desktop's SSH forward are the only clients, and neither is a
+  // browser, so neither sends `Origin`. A page that does is a page the user happens to be
+  // visiting, dialling a server it guessed — whether the address is this machine's own or
+  // arrives through someone's proxy that rewrote `Host` and added forwarding headers.
   await withServer(async ({ port }) => {
-    // ngrok's default shape: `Host` rewritten, the public name in `X-Forwarded-Host`.
-    const ngrok = await upgrade(port, {
-      Host: "127.0.0.1:7777",
-      Origin: "https://calm-otter-42.ngrok-free.app",
-      "X-Forwarded-Host": "calm-otter-42.ngrok-free.app",
-      "X-Forwarded-Proto": "https",
-    });
-    assert.match(ngrok, /^HTTP\/1\.1 101 /, "ngrok's default shape should reach the socket");
-
-    // cloudflared's shape: `Host` rewritten to the origin service and no
-    // `X-Forwarded-Host` at all, only the proto/for pair.
-    const cloudflared = await upgrade(port, {
-      Host: "127.0.0.1:7777",
-      Origin: "https://random-words.trycloudflare.com",
-      "X-Forwarded-Proto": "https",
-      "X-Forwarded-For": "203.0.113.7",
-    });
-    assert.match(cloudflared, /^HTTP\/1\.1 101 /, "cloudflared's default shape should reach the socket");
-
-    // A chain of proxies sends a list, and the first entry is the host asked for.
-    const chained = await upgrade(port, {
-      Host: "127.0.0.1:7777",
-      Origin: "https://fv.example.com",
-      "X-Forwarded-Host": "fv.example.com, inner.example.com",
-    });
-    assert.match(chained, /^HTTP\/1\.1 101 /, "a forwarded host list should compare by its first entry");
-  });
-});
-
-test("the origin check still refuses a page that dials this server itself", async () => {
-  await withServer(async ({ port }) => {
-    // A page at evil.example.com opening a socket here directly: no proxy, so none of
-    // the headers rules 2 and 3 read, and the page is not where the socket points.
-    const crossOrigin = await upgrade(port, {
-      Host: `127.0.0.1:${port}`,
-      Origin: "https://evil.example.com",
-    });
-    assert.doesNotMatch(crossOrigin, /101/, "a cross-origin page must not get a socket");
-
-    // When `X-Forwarded-Host` is there it is the authoritative answer, so a value that
-    // disagrees with the origin refuses rather than falling through to the looser rule.
-    const mismatched = await upgrade(port, {
-      Host: "127.0.0.1:7777",
-      Origin: "https://evil.example.com",
-      "X-Forwarded-Host": "calm-otter-42.ngrok-free.app",
-      "X-Forwarded-Proto": "https",
-    });
-    assert.doesNotMatch(mismatched, /101/, "a forwarded host that disagrees must refuse");
-
-    // The same-origin case still works, which is what makes the two refusals mean
-    // something rather than the socket being closed for an unrelated reason.
-    const sameOrigin = await upgrade(port, {
-      Host: `127.0.0.1:${port}`,
-      Origin: `http://127.0.0.1:${port}`,
-    });
-    assert.match(sameOrigin, /^HTTP\/1\.1 101 /, "a same-origin page must still connect");
+    for (const headers of [
+      { Host: `127.0.0.1:${port}`, Origin: "https://evil.example.com" },
+      { Host: `127.0.0.1:${port}`, Origin: `http://127.0.0.1:${port}` },
+      { Host: "127.0.0.1:7777", Origin: "https://calm-otter-42.ngrok-free.app", "X-Forwarded-Host": "calm-otter-42.ngrok-free.app", "X-Forwarded-Proto": "https" },
+    ]) {
+      assert.doesNotMatch(await upgrade(port, headers), /101/, JSON.stringify(headers));
+    }
+    // And with no Origin — a native client — the same upgrade goes through, which is what
+    // makes the refusals above mean something.
+    assert.match(await upgrade(port, { Host: `127.0.0.1:${port}` }), /^HTTP\/1\.1 101 /);
   });
 });
 

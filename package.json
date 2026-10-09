@@ -60,6 +60,7 @@
     "bonjour-service": "^1.4.4",
     "electron-updater": "^6.8.9",
     "material-icon-theme": "^5.38.1",
+    "node-datachannel": "0.33.4",
     "node-pty": "^1.1.0",
     "proxy-agent": "^8.0.2",
     "sonner": "^2.0.8",

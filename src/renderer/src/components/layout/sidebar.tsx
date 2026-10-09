@@ -43,6 +43,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { ResizablePanel } from "@/components/ui/resizable";
 import { CollapsiblePanel } from "@/components/layout/collapsible-panel";
 import { setSidebarCollapsed, useIsNarrowViewport, useSidebarCollapsed } from "@/lib/sidebar-visibility";
+import { SidebarAccount } from "@/components/layout/sidebar-account";
 import { SidebarUpdateButton } from "@/components/layout/sidebar-update-button";
 import { AppLogo } from "@/components/app-logo";
 import { cn } from "@/lib/utils";
@@ -697,6 +698,7 @@ export const Sidebar = memo(function Sidebar({
           {t("palette.settings")}
         </button>
         <SidebarUpdateButton />
+        <SidebarAccount />
       </div>
 
       <AlertDialog open={pendingDelete !== null} onOpenChange={(open) => !open && setPendingDelete(null)}>

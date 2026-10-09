@@ -255,5 +255,17 @@
   "needsYou": "“{{title}}” needs you",
   "finished": "“{{title}}” finished",
   "view": "View"
+ },
+ "account": {
+  "signIn": "Sign in",
+  "signedOutTitle": "Sign in to FastVibe",
+  "signedOutDesc": "Sign in from your browser.",
+  "waiting": "Finish signing in in your browser.",
+  "cancel": "Cancel sign-in",
+  "signOut": "Sign out",
+  "console": "Open console",
+  "noEmail": "No verified email",
+  "menuLabel": "Account: {{login}}",
+  "signedInToast": "Signed in as {{login}}"
  }
 }

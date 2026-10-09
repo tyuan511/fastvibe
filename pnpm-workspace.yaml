@@ -9,6 +9,18 @@ packages: []
 # silently falls back to the hoisted top-level copy (e.g. pi-coding-agent gets
 # minimatch@3 instead of the @10 it imports).
 
+# Native modules that ship one optional package per CPU (node-datachannel, esbuild, ...)
+# are installed for both macOS architectures. The x64 release is packaged on an arm64
+# runner, and without this its app would be missing the x64 libdatachannel and could not
+# answer a phone. electron-builder.yml prunes the other architecture from each package.
+supportedArchitectures:
+  os:
+    - current
+  cpu:
+    - current
+    - x64
+    - arm64
+
 # pnpm 11 merges onlyBuiltDependencies into allowBuilds. Every dependency with a
 # build script must be listed or strictDepBuilds aborts the install.
 allowBuilds:

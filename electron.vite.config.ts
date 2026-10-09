@@ -97,8 +97,6 @@ export default defineConfig({
        */
       entries: [
         "index.html",
-        "remote.html",
-        "mobile.html",
         "mock.html",
         "src/components/dag/dag-dialog.tsx",
         "src/components/settings/settings-dialog.tsx",
@@ -116,20 +114,8 @@ export default defineConfig({
        */
       minify: "esbuild",
       rollupOptions: {
-        /**
-         * Two pages out of one app.
-         *
-         * `index.html` is what the Electron window loads, reaching Main through the
-         * preload. `remote.html` is what the remote server serves to a browser, reaching
-         * the same Main over a WebSocket. They share every chunk below the entry — it is
-         * the same React tree — and differ only in how `window.fastvibe` is installed.
-         * `mobile.html` is the third: the same bridge as `remote.html`, with the phone
-         * page behind it instead of the desktop shell.
-         */
         input: {
           index: resolve("src/renderer/index.html"),
-          remote: resolve("src/renderer/remote.html"),
-          mobile: resolve("src/renderer/mobile.html"),
         },
       },
     },

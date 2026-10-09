@@ -91,8 +91,6 @@ import { conversationIdFromHash, conversationIdFromPath, conversationPath, works
 import { useSidePaneStore } from "@/stores/side-pane";
 import { useAppShortcuts, useShortcutLabel } from "@/lib/use-shortcuts";
 import { archiveConversations, archivedIdList, restoreConversations, useArchivedIds } from "@/stores/archive";
-import { Ipc } from "@shared/ipc";
-import { blockedRemotely } from "@/lib/remote-unavailable";
 import { useStable } from "@/lib/use-stable";
 import { isAbortOutcome } from "@shared/abort";
 
@@ -1322,7 +1320,6 @@ export function App(): JSX.Element {
     // The picker would open on the machine running the server, where nobody is looking,
     // and the promise would never settle. Guarded here because three different controls
     // reach this one function.
-    if (blockedRemotely(Ipc.projectsAdd)) return;
     try {
       const added = await window.fastvibe.projects.add();
       if (!added) return;
@@ -1555,7 +1552,6 @@ export function App(): JSX.Element {
   }
 
   async function handlePickWorkspace(): Promise<void> {
-    if (blockedRemotely(Ipc.workspacePick)) return;
     const picked = await window.fastvibe.workspace.pick();
     if (!picked) return;
     setStatus(picked.status);
@@ -1644,7 +1640,6 @@ export function App(): JSX.Element {
   const onSidebarRenameProject = useStable((cwd: string, name: string) => void handleRenameProject(cwd, name));
   const onSidebarRemoveProject = useStable((cwd: string) => void handleRemoveProject(cwd));
   const onSidebarRevealProject = useStable((cwd: string) => {
-    if (blockedRemotely(Ipc.workspaceReveal)) return;
     void window.fastvibe.workspace.reveal(cwd);
   });
   const onSidebarReorderProjects = useStable((cwds: string[]) => void handleReorderProjects(cwds));

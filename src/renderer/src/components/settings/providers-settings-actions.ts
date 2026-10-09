@@ -8,48 +8,11 @@ type SetPicker = (value: PickerState | null | ((current: PickerState | null) => 
 type SetAdd = (value: AddState | null | ((current: AddState | null) => AddState | null)) => void;
 type MutateProviders = (action: () => Promise<ProviderConfig[]>) => Promise<ProviderConfig[]>;
 
-export async function startConnect(
-  provider: ProviderConfig,
-  apiKey: string,
-  setPicker: (state: PickerState) => void,
-): Promise<void> {
-  setPicker({
-    kind: "connect",
-    providerId: provider.id,
-    apiKey,
-    candidates: null,
-    selected: new Set(),
-    busy: true,
-  });
-  try {
-    const models = await window.fastvibe.providers.fetch(provider.baseUrl, apiKey, provider.api);
-    setPicker({
-      kind: "connect",
-      providerId: provider.id,
-      apiKey,
-      candidates: models,
-      selected: new Set(models.map((item) => item.id)),
-      busy: false,
-    });
-  } catch (err) {
-    toast.error(cleanError(err));
-    setPicker({
-      kind: "connect",
-      providerId: provider.id,
-      apiKey,
-      candidates: null,
-      selected: new Set(),
-      busy: false,
-    });
-  }
-}
-
 export async function startAddModels(
   provider: ProviderConfig,
   setPicker: (state: PickerState) => void,
 ): Promise<void> {
   setPicker({
-    kind: "models",
     providerId: provider.id,
     candidates: null,
     selected: new Set(provider.models.map((item) => item.id)),
@@ -59,8 +22,7 @@ export async function startAddModels(
     const models = await window.fastvibe.providers.refresh(provider.id);
     const kept = new Set(provider.models.map((item) => item.id));
     setPicker({
-      kind: "models",
-      providerId: provider.id,
+        providerId: provider.id,
       candidates: models,
       selected: new Set(models.filter((item) => kept.has(item.id)).map((item) => item.id)),
       busy: false,
@@ -68,8 +30,7 @@ export async function startAddModels(
   } catch (err) {
     toast.error(cleanError(err));
     setPicker({
-      kind: "models",
-      providerId: provider.id,
+        providerId: provider.id,
       candidates: null,
       selected: new Set(),
       busy: false,
@@ -223,11 +184,7 @@ export async function savePicker(
   });
   setPicker((current) => (current ? { ...current, busy: true } : current));
   try {
-    if (picker.kind === "connect" && picker.apiKey) {
-      await mutate(() => window.fastvibe.providers.saveFastVibe(picker.apiKey!, nextModels));
-    } else {
-      await mutate(() => window.fastvibe.providers.update({ id: picker.providerId, models: nextModels }));
-    }
+    await mutate(() => window.fastvibe.providers.update({ id: picker.providerId, models: nextModels }));
     setPicker(null);
   } catch (err) {
     toast.error(cleanError(err));

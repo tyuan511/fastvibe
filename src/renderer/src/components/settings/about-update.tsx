@@ -9,8 +9,6 @@ import { SettingsGroup, SettingsRow } from "./settings-group";
 import { UpdateDialog } from "./update-dialog";
 import { useSettingsStore } from "@/stores/settings";
 import type { AppUpdateState } from "@shared/ipc";
-import { blockedRemotely } from "@/lib/remote-unavailable";
-import { Ipc } from "@shared/ipc";
 
 function statusDescription(state: AppUpdateState | null, t: (key: string, options?: Record<string, unknown>) => string): string {
   if (!state || state.status === "idle") return t("update.idle");
@@ -65,7 +63,6 @@ export function AboutUpdate(): JSX.Element {
               // down with it. The switch above stays live: it is a stored preference,
               // and the check it governs runs on the host either way.
               onClick={() => {
-                if (blockedRemotely(Ipc.updateCheck)) return;
                 setDialogOpen(true);
               }}
             >

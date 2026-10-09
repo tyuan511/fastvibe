@@ -43,6 +43,7 @@ import {
   registerFileIconScheme,
 } from "./engine/file-icons";
 import { applyPendingInstall, registerUpdater, scheduleUpdateCheck } from "./updater";
+import { registerAccount } from "./account";
 import { PiProcessManager } from "./pi/process-manager";
 import { applyAppIcon, createDesktopWindow, windowOrigin } from "./desktop-window";
 import { registerDesktopIpc } from "./ipc/desktop-handlers";
@@ -572,7 +573,11 @@ app.whenReady().then(async () => {
     () => windows,
     () => createWindow(),
   );
-  registerRemoteIpc(queueSettingsWrite);
+  const account = registerAccount(
+    () => windows,
+    () => createWindow(),
+  );
+  registerRemoteIpc(queueSettingsWrite, account);
   registerSshIpc();
   registerDecisionIpc();
   createAppServer({

@@ -131,7 +131,6 @@ const CONFIG_SYNC_METHODS: ReadonlySet<string> = new Set([
   Ipc.providersLogout,
   Ipc.providersRefresh,
   Ipc.providersRemove,
-  Ipc.providersSaveFastVibe,
   Ipc.providersUpdate,
   Ipc.providersOAuthLogin,
   Ipc.engineSaveMcpServers,

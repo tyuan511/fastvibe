@@ -10,7 +10,6 @@ import {
   fetchProviderModels,
   listProviderConfigs,
   loadProviderKeys,
-  saveFastVibe,
 } from "./providers";
 
 const DB_PATH = join(homedir(), ".cc-switch", "cc-switch.db");
@@ -39,7 +38,6 @@ type Draft = {
   api: ProviderApi;
   apiKey: string;
   models: string[];
-  target: "fastvibe" | "custom";
 };
 
 /**
@@ -54,7 +52,7 @@ export async function scanCcSwitch(paths: FastVibePaths): Promise<CcSwitchScan> 
   const candidates = drafts.map((draft) => {
     const fingerprint = finger(draft.api, draft.baseUrl, draft.apiKey);
     if (taken.has(fingerprint)) {
-      return candidate(draft, false, draft.target === "fastvibe" ? "已写入内置 FastVibe" : "已导入");
+      return candidate(draft, false, "已导入");
     }
     return candidate(draft, true);
   });
@@ -70,15 +68,11 @@ export async function importCcSwitch(paths: FastVibePaths, ids: string[]): Promi
     const fingerprint = finger(draft.api, draft.baseUrl, draft.apiKey);
     if (taken.has(fingerprint)) continue;
     const models = await resolveModels(draft);
-    if (draft.target === "fastvibe") {
-      await saveFastVibe(paths, draft.apiKey, models);
-    } else {
-      await addProvider(
-        paths,
-        { name: draft.name, baseUrl: draft.baseUrl, apiKey: draft.apiKey, api: draft.api },
-        models,
-      );
-    }
+    await addProvider(
+      paths,
+      { name: draft.name, baseUrl: draft.baseUrl, apiKey: draft.apiKey, api: draft.api },
+      models,
+    );
     taken.add(fingerprint);
     imported += 1;
   }
@@ -137,7 +131,6 @@ function readDrafts(): Draft[] {
       api,
       apiKey,
       models,
-      target: isFastVibeGateway(baseUrl) ? "fastvibe" : "custom",
     });
   }
   return drafts;
@@ -273,15 +266,6 @@ function isOAuth(settings: unknown, meta: unknown): boolean {
   if (OAUTH_TYPES.has(type)) return true;
   const auth = asRecord(asRecord(settings)?.auth);
   return str(auth?.auth_mode).toLowerCase() === "chatgpt" || Boolean(asRecord(auth?.tokens));
-}
-
-function isFastVibeGateway(baseUrl: string): boolean {
-  try {
-    const host = new URL(baseUrl).hostname.toLowerCase();
-    return host === "fastvibe.dev" || host.endsWith(".fastvibe.dev");
-  } catch {
-    return false;
-  }
 }
 
 function apiFromFormat(raw: string, fallback: ProviderApi): ProviderApi {

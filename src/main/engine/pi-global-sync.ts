@@ -35,7 +35,7 @@ export type PiSyncProviderInput = {
    * `native` contributes overrides only. In `merge` those fold into the provider pi
    * already has; in `replace` the entry is just the overrides.
    */
-  kind: "builtin" | "native" | "custom";
+  kind: "native" | "custom";
   /** models.json provider object. Absent when this provider only contributes a credential. */
   models?: Record<string, unknown>;
   /** auth.json credential. Custom providers usually carry the key inside `models` instead. */
@@ -81,7 +81,7 @@ export type PiSyncRequest = {
  */
 export function piProviderModelsEntry(
   provider: {
-    kind: "builtin" | "native" | "custom";
+    kind: "native" | "custom";
     name: string;
     baseUrl: string;
     api: string;

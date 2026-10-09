@@ -534,7 +534,7 @@ export const MARKET_PACKAGES: MarketPackage[] = [
 export const PROVIDERS: ProviderConfig[] = [
   {
     id: "fastvibe",
-    kind: "builtin",
+    kind: "custom",
     name: "FastVibe",
     baseUrl: "https://fastvibe.dev/v1",
     api: "openai-responses",

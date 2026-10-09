@@ -41,10 +41,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
-import { blockedRemotely } from "@/lib/remote-unavailable";
 import { useSessionStore } from "@/stores/session";
 import { useSidePaneStore } from "@/stores/side-pane";
-import { Ipc } from "@shared/ipc";
 import type { BrowserImportResult, BrowserProfileInfo, BrowserRequest, ChatAttachment } from "@shared/types";
 import {
   type Entry,
@@ -233,7 +231,6 @@ export function SidePaneBrowser({
   }
 
   async function loadProfiles(): Promise<void> {
-    if (blockedRemotely(Ipc.browserListProfiles)) return;
     try {
       setProfiles(await window.fastvibe.browser.listProfiles());
     } catch (error) {
@@ -242,7 +239,6 @@ export function SidePaneBrowser({
   }
 
   async function importProfile(profile: BrowserProfileInfo): Promise<void> {
-    if (blockedRemotely(Ipc.browserImportProfile)) return;
     setImporting(true);
     try {
       const result: BrowserImportResult = await window.fastvibe.browser.importProfile(profile);
@@ -406,7 +402,6 @@ export function SidePaneBrowser({
   }
 
   async function clearData(): Promise<void> {
-    if (blockedRemotely(Ipc.browserClearData)) return;
     if (!window.confirm(t("browser.clearConfirm"))) return;
     try {
       await window.fastvibe.browser.clearData();

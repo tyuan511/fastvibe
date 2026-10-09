@@ -14,9 +14,13 @@ import { deleteOAuthCredential, readOAuthProviderIds } from "./oauth-store";
 import type { FastVibePaths } from "./paths";
 import { orderProviderModels } from "@shared/model-order";
 
-export const FASTVIBE_PROVIDER_ID = "fastvibe";
-export const FASTVIBE_API_BASE = "https://fastvibe.dev/v1";
-export const FASTVIBE_API_KEY_ENV = "FASTVIBE_API_KEY";
+/**
+ * What the retired built-in FastVibe provider was, for carrying it over (see `migrateBuiltin`).
+ * It is an ordinary custom provider now: this id and key variable are only kept so the
+ * conversations that recorded `fastvibe/<model>` and the key already in `agent/.env` keep working.
+ */
+const LEGACY_FASTVIBE_API_KEY_ENV = "FASTVIBE_API_KEY";
+const LEGACY_FASTVIBE_API: ProviderApi = "openai-responses";
 
 /**
  * `native` entries point at a pi-coding-agent built-in provider: the id is the SDK
@@ -27,7 +31,7 @@ export const FASTVIBE_API_KEY_ENV = "FASTVIBE_API_KEY";
  */
 type StoredProvider = {
   id: string;
-  kind: "builtin" | "native" | "custom";
+  kind: "native" | "custom";
   name: string;
   baseUrl: string;
   api: string;
@@ -52,35 +56,16 @@ type ProvidersFile = {
 };
 
 /**
- * On-disk schema version. 2 made the builtin provider's protocol user-selectable — in
- * v1 the code pinned it, so a v1 entry's `api` is the old default rather than a choice
- * and is migrated to the current one (see `normalizeFastVibe`).
+ * On-disk schema version.
+ *
+ * 2 made the built-in FastVibe provider's protocol user-selectable (in v1 the code pinned
+ * it, so a v1 entry's `api` is the old default rather than a choice). 3 removed the
+ * built-in provider altogether: its entry is read as a custom provider (`migrateBuiltin`)
+ * and the next write stores it as one.
  */
-const PROVIDERS_VERSION = 2;
+const PROVIDERS_VERSION = 3;
 
 const COST_KEYS: Array<keyof ModelCost> = ["input", "output", "cacheRead", "cacheWrite"];
-
-/**
- * The FastVibe gateway speaks the OpenAI Responses API by default. Models that only
- * exist behind `/chat/completions` (or a different protocol entirely) carry their own
- * `ProviderModel.api`, which overrides this per model in `models.json`.
- */
-const FASTVIBE_DEFAULT: StoredProvider = {
-  id: FASTVIBE_PROVIDER_ID,
-  kind: "builtin",
-  name: "FastVibe",
-  baseUrl: FASTVIBE_API_BASE,
-  api: "openai-responses",
-  apiKeyEnv: FASTVIBE_API_KEY_ENV,
-  /**
-   * The first-party gateway is itself a Sub2API deployment — `GET /v1/sub2api/billing`
-   * answers with this install's key — so it reads its 余额 through the same path a custom
-   * Sub2API provider does, and there is nothing to probe.
-   */
-  gateway: "sub2api",
-  enabled: true,
-  models: [],
-};
 
 export function providersFilePath(paths: FastVibePaths): string {
   return paths.providersFile;
@@ -98,16 +83,41 @@ function readProvidersFile(paths: FastVibePaths): ProvidersFile | undefined {
 export function readProviders(paths: FastVibePaths): StoredProvider[] {
   try {
     const parsed = readProvidersFile(paths);
-    if (!parsed) return [normalizeFastVibe(null)];
-    const legacy = !(typeof parsed.version === "number" && parsed.version >= PROVIDERS_VERSION);
-    return ensureFastVibe(
-      parsed.providers.filter(isStoredProvider).map(hydrateProvider).filter(isLiveProvider),
-      legacy,
-    );
+    // No providers.json yet: a fresh install has no provider, and the empty model list
+    // is the whole «not connected» signal.
+    if (!parsed) return [];
+    const protocolWasPinned = !(typeof parsed.version === "number" && parsed.version >= 2);
+    return parsed.providers
+      .filter(isStoredProvider)
+      .map((entry) => migrateBuiltin(entry, protocolWasPinned))
+      .filter((entry): entry is StoredProviderInput => entry !== null)
+      .map(hydrateProvider)
+      .filter(isLiveProvider);
   } catch {
-    // No providers.json yet: FastVibe exists but has no models until the user connects.
-    return [normalizeFastVibe(null)];
+    return [];
   }
+}
+
+/**
+ * The built-in FastVibe provider is gone: it was an ordinary Sub2API relay at
+ * `fastvibe.dev` with a code-owned name and endpoint. A stored entry of that kind becomes a
+ * custom provider in place — same id, same key variable, same models — so the key the user
+ * pasted and the conversations that recorded `fastvibe/<model>` carry over untouched.
+ *
+ * An entry with no models was never connected (a key without models reaches no model
+ * anywhere), so there is nothing to carry and it is dropped rather than left as an empty row.
+ * `protocolWasPinned` is a file from before the protocol was selectable, where the stored
+ * `api` was the code's default and not a decision.
+ */
+function migrateBuiltin(entry: StoredProviderInput, protocolWasPinned: boolean): StoredProviderInput | null {
+  if ((entry as { kind?: unknown }).kind !== "builtin") return entry;
+  if (!Array.isArray(entry.models) || entry.models.length === 0) return null;
+  return {
+    ...entry,
+    kind: "custom",
+    api: protocolWasPinned || !isProviderApi(entry.api) ? LEGACY_FASTVIBE_API : entry.api,
+    apiKeyEnv: entry.apiKeyEnv || LEGACY_FASTVIBE_API_KEY_ENV,
+  };
 }
 
 /**
@@ -130,27 +140,6 @@ function writeProviders(
     ...(legacyJevMigrated ? { legacyJevMigrated: true } : {}),
   };
   writeFileSync(paths.providersFile, `${JSON.stringify(payload, null, 2)}\n`);
-}
-
-function ensureFastVibe(list: StoredProvider[], legacy: boolean): StoredProvider[] {
-  const existing = list.find((item) => item.id === FASTVIBE_PROVIDER_ID);
-  const fastvibe = normalizeFastVibe(existing ?? null, legacy);
-  const others = list.filter((item) => item.id !== FASTVIBE_PROVIDER_ID);
-  return [fastvibe, ...others];
-}
-
-/**
- * The builtin provider keeps the user's choice of protocol, but its identity and
- * endpoint are code-owned. `legacy` marks a file written before the protocol was
- * selectable, where the stored `api` was the code's default and not a decision.
- */
-function normalizeFastVibe(existing: StoredProvider | null, legacy = false): StoredProvider {
-  return {
-    ...FASTVIBE_DEFAULT,
-    api: !legacy && isProviderApi(existing?.api) ? existing.api : FASTVIBE_DEFAULT.api,
-    models: existing?.models ?? [],
-    enabled: existing?.enabled ?? true,
-  };
 }
 
 export async function loadProviderKeys(paths: FastVibePaths): Promise<Record<string, string>> {
@@ -210,9 +199,8 @@ export function listProviderConfigs(
       supportsKey: native ? native.supportsKey : true,
       // Only an endpoint this app talks to directly has an identifiable gateway behind
       // it; the SDK owns a built-in's identity, and a login-only built-in has no Base
-      // URL to probe. The builtin FastVibe gateway is the one exception — its panel is
-      // known, so its 余额 is readable like any other relay's.
-      ...((provider.kind === "custom" || provider.kind === "builtin") && provider.gateway
+      // URL to probe.
+      ...(provider.kind === "custom" && provider.gateway
         ? { gateway: provider.gateway }
         : {}),
       ...(credentials[provider.id] ? { gatewayCredential: true } : {}),
@@ -489,15 +477,6 @@ function readProviderKeysSync(paths: FastVibePaths): Record<string, string> {
 
 /* ---------------- mutations ---------------- */
 
-export async function saveFastVibe(
-  paths: FastVibePaths,
-  apiKey: string,
-  models: ProviderModel[],
-): Promise<void> {
-  await setProviderKey(paths, FASTVIBE_API_KEY_ENV, apiKey);
-  updateProvider(paths, FASTVIBE_PROVIDER_ID, { models });
-}
-
 export async function addProvider(
   paths: FastVibePaths,
   draft: { name: string; baseUrl: string; apiKey: string; api?: ProviderApi; gateway?: GatewayKind },
@@ -720,12 +699,6 @@ export function updateProvider(
   if (patch.baseUrl !== undefined && patch.baseUrl.trim().replace(/\/+$/, "") !== current.baseUrl) {
     delete next.gateway;
   }
-  if (id === FASTVIBE_PROVIDER_ID) {
-    // Identity and endpoint stay code-owned; the protocol is the user's to pick.
-    next.name = FASTVIBE_DEFAULT.name;
-    next.baseUrl = FASTVIBE_DEFAULT.baseUrl;
-    if (!isProviderApi(next.api)) next.api = FASTVIBE_DEFAULT.api;
-  }
   if (current.kind === "native") {
     // Identity, endpoint and provider protocol stay pinned to the SDK; enablement,
     // selected models and metadata overrides are user-editable.
@@ -739,7 +712,6 @@ export function updateProvider(
 }
 
 export async function removeProvider(paths: FastVibePaths, id: string): Promise<void> {
-  if (id === FASTVIBE_PROVIDER_ID) return;
   const providers = readProviders(paths);
   const removed = providers.find((provider) => provider.id === id);
   if (!removed) return;
@@ -842,8 +814,7 @@ export function setProviderGateway(paths: FastVibePaths, id: string, kind: Gatew
 type StoredProviderInput = Partial<StoredProvider> & { id: string };
 
 function hydrateProvider(value: StoredProviderInput): StoredProvider {
-  const kind: StoredProvider["kind"] =
-    value.kind === "native" || value.kind === "builtin" ? value.kind : "custom";
+  const kind: StoredProvider["kind"] = value.kind === "native" ? "native" : "custom";
   const modelOrder = hydrateModelOrder(value.modelOrder);
   // Every field is repaired rather than trusted: a partially written entry must stay
   // visible (and repairable) instead of being filtered out and silently lost.

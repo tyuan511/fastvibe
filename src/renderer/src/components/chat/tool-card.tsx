@@ -18,8 +18,6 @@ import { ToolRow } from "./tool-row";
 import { DagInline, useDagBatch } from "@/components/dag/dag-inline";
 import { useTranscriptConversation } from "./conversation-context";
 import { isRemoteRef } from "@/lib/remote-project";
-import { blockedRemotely } from "@/lib/remote-unavailable";
-import { Ipc } from "@shared/ipc";
 
 const RESULT_LIMIT = 4000;
 
@@ -258,7 +256,7 @@ function FileActions({ path }: { path: string }): JSX.Element {
         className="font-mono text-sm text-muted-foreground underline-offset-2 hover:underline"
         onClick={() => {
           const resolved = resolvePath(path, cwd);
-          if (isRemoteRef(resolved) || isRemoteRef(cwd) || blockedRemotely(Ipc.workspaceReveal)) return;
+          if (isRemoteRef(resolved) || isRemoteRef(cwd) ) return;
           void window.fastvibe.workspace.reveal(resolved);
         }}
       >

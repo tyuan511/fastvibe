@@ -65,13 +65,13 @@ export function AddressActions({
               target="_blank"
               rel="noreferrer"
               className={ICON_CLASS}
-              aria-label={t("remote.tunnelOpen")}
+              aria-label={t("remote.openAddress")}
             />
           }
         >
           <HugeiconsIcon strokeWidth={2} icon={LinkSquare02Icon} className="size-3.5" />
         </TooltipTrigger>
-        <TooltipContent>{t("remote.tunnelOpen")}</TooltipContent>
+        <TooltipContent>{t("remote.openAddress")}</TooltipContent>
       </Tooltip>
     </span>
   );

@@ -31,9 +31,6 @@ type Harness = {
 async function withServer(fn: (h: Harness) => Promise<void>, options?: { loopbackToken?: string; password?: boolean; appServer?: AppServer }): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), "fastvibe-app-ws-"));
   const accessFile = join(dir, "remote-access.json");
-  const webRoot = join(dir, "web");
-  await mkdir(webRoot, { recursive: true });
-  await writeFile(join(webRoot, "remote.html"), "<!doctype html><title>client</title>", "utf8");
   if (options?.password !== false) setPassword(accessFile, PASSWORD);
   const dispatched: Array<{ method: string; payload: unknown }> = [];
   const server = new RemoteServer({
@@ -45,7 +42,6 @@ async function withServer(fn: (h: Harness) => Promise<void>, options?: { loopbac
       return { echoed: method };
     },
     subscribe: () => () => undefined,
-    webRoot,
     log: silent,
     ...(options?.loopbackToken ? { loopbackToken: options.loopbackToken } : {}),
   });

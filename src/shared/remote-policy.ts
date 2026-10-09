@@ -48,6 +48,12 @@ const DENIED = new Map<string, string>([
   [Ipc.updateCheck, "\u5e94\u7528\u66f4\u65b0\u53ea\u80fd\u5728\u672c\u673a\u8fdb\u884c"],
   [Ipc.updateDownload, "\u5e94\u7528\u66f4\u65b0\u53ea\u80fd\u5728\u672c\u673a\u8fdb\u884c"],
   [Ipc.updateInstall, "\u5b89\u88c5\u66f4\u65b0\u4f1a\u9000\u51fa\u5e94\u7528\uff0c\u53ea\u80fd\u5728\u672c\u673a\u8fdb\u884c"],
+  // The sign-in opens a browser on the host and waits on a loopback listener there, and
+  // the credential it yields belongs to that desktop, not to whoever is looking at it.
+  [Ipc.accountGet, "\u8d26\u53f7\u767b\u5f55\u53ea\u80fd\u5728\u672c\u673a\u8fdb\u884c"],
+  [Ipc.accountLogin, "\u8d26\u53f7\u767b\u5f55\u53ea\u80fd\u5728\u672c\u673a\u8fdb\u884c"],
+  [Ipc.accountCancelLogin, "\u8d26\u53f7\u767b\u5f55\u53ea\u80fd\u5728\u672c\u673a\u8fdb\u884c"],
+  [Ipc.accountLogout, "\u8d26\u53f7\u767b\u5f55\u53ea\u80fd\u5728\u672c\u673a\u8fdb\u884c"],
   // The browser-use bridge runs in a renderer `<webview>`, which a web client has no
   // equivalent of; a request forwarded here would wait for a reply that never comes.
   [Ipc.browserResponse, "\u6d4f\u89c8\u5668\u5de5\u5177\u4f9d\u8d56\u684c\u9762\u7aef\u7684\u5185\u5d4c\u6d4f\u89c8\u5668"],
@@ -110,11 +116,7 @@ const DENIED = new Map<string, string>([
   [Ipc.remoteStop, "远程访问的设置只能在本机更改"],
   [Ipc.remoteListDevices, "远程访问的设置只能在本机更改"],
   [Ipc.remoteRevokeDevice, "远程访问的设置只能在本机更改"],
-  [Ipc.remoteTunnelTools, "远程访问的设置只能在本机更改"],
-  [Ipc.remoteTunnelSet, "远程访问的设置只能在本机更改"],
-  [Ipc.remoteFrpGet, "远程访问的设置只能在本机更改"],
-  [Ipc.remoteFrpSet, "远程访问的设置只能在本机更改"],
-  [Ipc.remoteFrpCheckDns, "远程访问的设置只能在本机更改"],
+  [Ipc.remoteOfficialDisconnect, "远程访问的设置只能在本机更改"],
 
   // (c) A request to any URL the caller names, carrying any credential the caller
   // names, issued from this machine and from this network. That is a probe into
@@ -258,7 +260,6 @@ const ALLOWED = new Set<string>([
   Ipc.providersQuota,
   Ipc.providersRefresh,
   Ipc.providersRemove,
-  Ipc.providersSaveFastVibe,
   Ipc.providersUpdate,
   Ipc.settingsClear,
   Ipc.settingsGet,
@@ -324,9 +325,8 @@ export function assertPolicyCoverage(channels: readonly string[], options?: { re
 /**
  * Why a remote client cannot call this, or null when it can.
  *
- * What the renderer uses to decide whether a control belongs on screen at all
- * (`lib/remote-unavailable.ts`). The reason is the same sentence the server would have
- * answered with, so a tooltip and a refusal never disagree.
+ * The reason is the same sentence the server answers a refused call with, so anything that
+ * explains a denial and the refusal itself never disagree.
  */
 export function remoteDenialReason(method: string): string | null {
   const verdict = remotePolicy(method);

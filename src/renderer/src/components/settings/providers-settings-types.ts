@@ -45,9 +45,7 @@ export type AddState = {
 };
 
 export type PickerState = {
-  kind: "connect" | "models";
   providerId: string;
-  apiKey?: string;
   candidates: ProviderModel[] | null;
   selected: Set<string>;
   busy: boolean;

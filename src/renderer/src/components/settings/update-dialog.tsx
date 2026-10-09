@@ -15,8 +15,6 @@ import { Progress } from "@/components/ui/progress";
 import { Spinner } from "@/components/ui/spinner";
 import { useAppUpdate } from "@/lib/use-app-update";
 import { ReleaseNotes } from "./release-notes";
-import { blockedRemotely } from "@/lib/remote-unavailable";
-import { Ipc } from "@shared/ipc";
 
 function formatBytes(bytes: number): string {
   if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
@@ -48,7 +46,6 @@ export function UpdateDialog({
   const runCheck = useCallback((): void => {
     // Reachable without a click — the dialog checks on open — so this guard is what
     // keeps a remote client from opening it into a refusal it never asked for.
-    if (blockedRemotely(Ipc.updateCheck)) return;
     setChecking(true);
     void window.fastvibe.updater
       .check()
@@ -136,7 +133,6 @@ export function UpdateDialog({
               </Button>
               <Button
                 onClick={() => {
-                  if (blockedRemotely(Ipc.updateInstall)) return;
                   void window.fastvibe.updater.install();
                 }}
               >
@@ -151,7 +147,6 @@ export function UpdateDialog({
               </Button>
               <Button
                 onClick={() => {
-                  if (blockedRemotely(Ipc.updateDownload)) return;
                   void window.fastvibe.updater.download();
                 }}
               >

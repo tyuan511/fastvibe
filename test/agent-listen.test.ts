@@ -41,7 +41,6 @@ function serverFor(accessFile: string): RemoteServer {
     channels: () => registeredChannels(),
     dispatch: async (method) => ({ echoed: method }),
     subscribe: () => () => undefined,
-    webRoot: tmpdir(),
     log: silent,
     loopbackToken: TOKEN,
     policyScope: "subset",

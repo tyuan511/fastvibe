@@ -50,6 +50,9 @@ importers:
       material-icon-theme:
         specifier: ^5.38.1
         version: 5.38.1
+      node-datachannel:
+        specifier: 0.33.4
+        version: 0.33.4
       node-pty:
         specifier: ^1.1.0
         version: 1.1.0
@@ -1183,6 +1186,55 @@ packages:
   '@noble/hashes@1.8.0':
     resolution: {integrity: sha512-jCs9ldd7NwzpgXDIf6P3+NrHh9/sD6CQdxHyjQI+h/6rDNo88ypBxxz45UDuZHz9r3tNz7N/VInSVoVdtXEI4A==}
     engines: {node: ^14.21.3 || >=16}
+
+  '@node-datachannel/android-arm64@0.33.4':
+    resolution: {integrity: sha512-Kd1K+drJlxdGmZYBlzh5HHX2E7les99eTWlt7WldZgvJmcGf2z9L/bnUVn4zbhNm2q/MtNZ2tPX2bd+fGlDDpQ==}
+    cpu: [arm64]
+    os: [android]
+
+  '@node-datachannel/darwin-arm64@0.33.4':
+    resolution: {integrity: sha512-bkIA+IbModz/NUmbVYTSWj8dZvkiab+cU4zOa6rhfKsNcW3EkdD2/DDoJjUrRrw+LbEZ40V7NuAKUlMNFDXFsw==}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@node-datachannel/darwin-x64@0.33.4':
+    resolution: {integrity: sha512-+dLnwiwC3GdWqW0OQShZcSFYrx3hRx0+7U85swoiP3iiRqtDUARME6AIAmW3glpP0vmus1jv5KhPCy/Q+jAvqw==}
+    cpu: [x64]
+    os: [darwin]
+
+  '@node-datachannel/linux-arm64-gnu@0.33.4':
+    resolution: {integrity: sha512-rR4yjwxpI1miLSrruLGcfR9yfw0Qebw+Twt+u+lKsL9SwmXxTm5pJhUAa9RU+c35oZ98IyAxGFjRwwq85BTbog==}
+    cpu: [arm64]
+    os: [linux]
+    libc: [glibc]
+
+  '@node-datachannel/linux-arm64-musl@0.33.4':
+    resolution: {integrity: sha512-MR4o1F0aREj/AtbNlXL20YiNx8/pDI8L/5B4Vr9ldiEDottD0IOdCd0khB8fpr5Np2CW7WwU9QG+uto00QGVdw==}
+    cpu: [arm64]
+    os: [linux]
+    libc: [musl]
+
+  '@node-datachannel/linux-x64-gnu@0.33.4':
+    resolution: {integrity: sha512-xN0x3lcQ87qwOAmf1dBLVWrYY40LQ7pM4Y9wuNjP+EtN4IwiXqrhPdgupzGAElxna+n2NgBG0gT60dZpgoYU2Q==}
+    cpu: [x64]
+    os: [linux]
+    libc: [glibc]
+
+  '@node-datachannel/linux-x64-musl@0.33.4':
+    resolution: {integrity: sha512-FWqJEjL7TqOPmsqdfwmG/BUwOXQN7MfpEU8kzw6ePbglUbwgdc3976Ls9BCBUXyPgEJyLo8YE1LJyWAlbXWyvA==}
+    cpu: [x64]
+    os: [linux]
+    libc: [musl]
+
+  '@node-datachannel/win32-arm64-msvc@0.33.4':
+    resolution: {integrity: sha512-TeDV2tSPm+qAnF6MIPlLFTIlobSYLwOVe3/wQl+8hD/q3cEPTQi7vByFaQQ5lRULKKdnjKRR5iDMsxMilqbtXA==}
+    cpu: [arm64]
+    os: [win32]
+
+  '@node-datachannel/win32-x64-msvc@0.33.4':
+    resolution: {integrity: sha512-eU0w/9ykrNaA5vWs5gjVs3Qxa45jbQ8mYoMyh5OWnRCE5GzXKxHCpfhFUnO+jGqi0KxkyP0hSA6fiwXXkirk6g==}
+    cpu: [x64]
+    os: [win32]
 
   '@nodelib/fs.scandir@2.1.5':
     resolution: {integrity: sha512-vq24Bq3ym5HEQm2NKCr3yXDwjc7vTsEThRDnkp2DK9p1uqLR+DHurm/NOTo0KG7HYHU7eppKZj3MyqYuMBf62g==}
@@ -3885,6 +3937,10 @@ packages:
   node-api-version@0.2.1:
     resolution: {integrity: sha512-2xP/IGGMmmSQpI1+O/k72jF/ykvZ89JeuKX3TLJAYPDVLUalrshrLHkeVcCCZqG/eEa635cr8IBYzgnDvM2O8Q==}
 
+  node-datachannel@0.33.4:
+    resolution: {integrity: sha512-qiUrdh8vY9XhglEnx91HK0N2JEAAu8qTZl0fcR3yQd0fFrdO39NwDeJD/KpG+WKUb9/o4p2UwnP+/HftA/xMbQ==}
+    engines: {node: '>=18.20.0'}
+
   node-domexception@1.0.0:
     resolution: {integrity: sha512-/jKZoMpw0F8GRwl4/eLROPA3cfcXtLApP0QzLmUT/HuPCZWyB7IY9ZrMeKw2O/nFIqPQB3PVM9aYm0F312AXDQ==}
     engines: {node: '>=10.5.0'}
@@ -6176,6 +6232,33 @@ snapshots:
   '@noble/hashes@1.4.0': {}
 
   '@noble/hashes@1.8.0': {}
+
+  '@node-datachannel/android-arm64@0.33.4':
+    optional: true
+
+  '@node-datachannel/darwin-arm64@0.33.4':
+    optional: true
+
+  '@node-datachannel/darwin-x64@0.33.4':
+    optional: true
+
+  '@node-datachannel/linux-arm64-gnu@0.33.4':
+    optional: true
+
+  '@node-datachannel/linux-arm64-musl@0.33.4':
+    optional: true
+
+  '@node-datachannel/linux-x64-gnu@0.33.4':
+    optional: true
+
+  '@node-datachannel/linux-x64-musl@0.33.4':
+    optional: true
+
+  '@node-datachannel/win32-arm64-msvc@0.33.4':
+    optional: true
+
+  '@node-datachannel/win32-x64-msvc@0.33.4':
+    optional: true
 
   '@nodelib/fs.scandir@2.1.5':
     dependencies:
@@ -9034,6 +9117,20 @@ snapshots:
   node-api-version@0.2.1:
     dependencies:
       semver: 7.8.5
+
+  node-datachannel@0.33.4:
+    dependencies:
+      detect-libc: 2.1.2
+    optionalDependencies:
+      '@node-datachannel/android-arm64': 0.33.4
+      '@node-datachannel/darwin-arm64': 0.33.4
+      '@node-datachannel/darwin-x64': 0.33.4
+      '@node-datachannel/linux-arm64-gnu': 0.33.4
+      '@node-datachannel/linux-arm64-musl': 0.33.4
+      '@node-datachannel/linux-x64-gnu': 0.33.4
+      '@node-datachannel/linux-x64-musl': 0.33.4
+      '@node-datachannel/win32-arm64-msvc': 0.33.4
+      '@node-datachannel/win32-x64-msvc': 0.33.4
 
   node-domexception@1.0.0: {}
 

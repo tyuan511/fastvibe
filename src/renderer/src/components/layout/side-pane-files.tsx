@@ -10,8 +10,6 @@ import { cn } from "@/lib/utils";
 import { useSidePaneStore, type SidePaneTab } from "@/stores/side-pane";
 import type { DirEntry, FilePreview } from "@shared/types";
 import { isRemoteRef } from "@/lib/remote-project";
-import { blockedRemotely } from "@/lib/remote-unavailable";
-import { Ipc } from "@shared/ipc";
 import { readExpandedDirs, writeExpandedDirs } from "@/lib/file-tree-state";
 import { createTextAttachment } from "@/lib/attachments";
 import { useSessionStore } from "@/stores/session";
@@ -173,7 +171,6 @@ export function SidePaneFiles({
               variant="ghost"
               label={t("files.reveal")}
               onClick={() => {
-                if (blockedRemotely(Ipc.workspaceReveal)) return;
                 if (cwd) void window.fastvibe.workspace.reveal(cwd);
               }}
             >
@@ -266,7 +263,6 @@ function FilePreviewPane({
             variant="ghost"
             label={t("files.reveal")}
             onClick={() => {
-              if (blockedRemotely(Ipc.workspaceReveal)) return;
               void window.fastvibe.workspace.reveal(preview.path);
             }}
           >

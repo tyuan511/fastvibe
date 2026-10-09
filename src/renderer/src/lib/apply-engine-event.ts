@@ -46,7 +46,10 @@ function asString(value: unknown): string | undefined {
 export function lastUserIsLocal(messages: ChatMessage[]): boolean {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     if (messages[index].role !== "user") continue;
-    return messages[index].id.startsWith("local:");
+    // `queue:` is the turn drawn at 立即. The engine's echo arrives before
+    // `queue_delivered` renames it, so it must count as the composer's own row too.
+    const id = messages[index].id;
+    return id.startsWith("local:") || id.startsWith("queue:");
   }
   return false;
 }

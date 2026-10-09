@@ -18,7 +18,6 @@ import {
   ViewIcon,
   ViewOffSlashIcon,
 } from "@hugeicons/core-free-icons";
-import { AppLogo } from "@/components/app-logo";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { providerLabel } from "@/lib/provider-label";
@@ -31,9 +30,7 @@ import { ModelThinkingSelect } from "@/components/model-thinking-select";
 import { OAuthLoginDialog, type OAuthTarget } from "./oauth-login-dialog";
 import { GatewayCredentialDialog } from "./gateway-credential-dialog";
 import { EMPTY_ADD, PROVIDER_API_ITEMS, PROVIDER_API_SHORT, type AddMode, type AddState, type PickerState } from "./providers-settings-types";
-import { fetchAddCandidates, logout, saveAdd, savePicker, startAddModels, startConnect } from "./providers-settings-actions";
-import { blockedRemotely } from "@/lib/remote-unavailable";
-import { Ipc } from "@shared/ipc";
+import { fetchAddCandidates, logout, saveAdd, savePicker, startAddModels } from "./providers-settings-actions";
 import { useSettingsStore } from "@/stores/settings";
 import { ProjectDefaultsSection } from "./project-defaults";
 import { ProviderDetail } from "./provider-detail";
@@ -80,7 +77,7 @@ export function ProvidersSettings({ onChanged, models = [] }: { onChanged: () =>
   useEffect(() => {
     void Promise.all([refresh(), window.fastvibe.providers.native().then(setNatives)])
       .then(([next]) => {
-        setSelectedId((current) => current ?? next.find((item) => item.kind === "builtin")?.id ?? next[0]?.id ?? null);
+        setSelectedId((current) => current ?? next[0]?.id ?? null);
       })
       .catch(() => undefined)
       .finally(() => setLoading(false));
@@ -110,10 +107,9 @@ export function ProvidersSettings({ onChanged, models = [] }: { onChanged: () =>
     setDetail(null);
   }
 
-  const builtin = providers.find((item) => item.kind === "builtin");
   const nativeProviders = providers.filter((item) => item.kind === "native");
   const customs = providers.filter((item) => item.kind === "custom");
-  const selected = providers.find((item) => item.id === selectedId) ?? builtin ?? null;
+  const selected = providers.find((item) => item.id === selectedId) ?? providers[0] ?? null;
 
   if (loading) {
     return (
@@ -164,16 +160,6 @@ export function ProvidersSettings({ onChanged, models = [] }: { onChanged: () =>
         >
         <ScrollArea className="min-h-0 flex-1">
           <div className="p-2">
-            {builtin ? (
-              <div className="mb-3">
-                <p className="px-2 pb-1 text-xs font-medium text-muted-foreground">{t("providers.builtin")}</p>
-                <ProviderNavItem
-                  provider={builtin}
-                  selected={!narrow && selected?.id === builtin.id}
-                  onSelect={() => openProvider(builtin.id)}
-                />
-              </div>
-            ) : null}
             {nativeProviders.length ? (
               <div className="mb-3">
                 <p className="px-2 pb-1 text-xs font-medium text-muted-foreground">{t("providers.providers")}</p>
@@ -241,21 +227,13 @@ export function ProvidersSettings({ onChanged, models = [] }: { onChanged: () =>
         {selected ? (
           <ProviderDetail
             provider={selected}
-            onConnectFastVibe={(apiKey) => {
-              // Discovering a model list is a request to the provider's URL issued from
-              // the host's network, which the policy refuses.
-              if (blockedRemotely(Ipc.providersFetch)) return;
-              void startConnect(selected, apiKey, setPicker);
-            }}
             onAddModels={() => {
-              if (blockedRemotely(Ipc.providersFetch)) return;
               void startAddModels(selected, setPicker);
             }}
             onEditModel={(model) => setDetail({ providerId: selected.id, model })}
             onOAuth={() => {
               // The flow opens the host's system browser and waits on a loopback
               // callback there; nothing about it can complete from a tab.
-              if (blockedRemotely(Ipc.providersOAuthLogin)) return;
               if (!selected.oauth) return;
               setOauth({
                 target: { id: selected.id, name: selected.name, oauth: selected.oauth },
@@ -276,7 +254,7 @@ export function ProvidersSettings({ onChanged, models = [] }: { onChanged: () =>
             }}
             onRemoved={async (next) => {
               setProviders(next);
-              setSelectedId(builtin?.id ?? next[0]?.id ?? null);
+              setSelectedId(next[0]?.id ?? null);
               setDetailOpen(false);
               onChanged();
             }}
@@ -300,7 +278,7 @@ export function ProvidersSettings({ onChanged, models = [] }: { onChanged: () =>
         onClose={() => setCcSwitchOpen(false)}
         onImported={async (next) => {
           setProviders(next);
-          const created = next.filter((item) => item.kind !== "builtin").at(-1);
+          const created = next.at(-1);
           if (created) openProvider(created.id);
           onChanged();
           setCcSwitchOpen(false);
@@ -316,11 +294,9 @@ export function ProvidersSettings({ onChanged, models = [] }: { onChanged: () =>
         onFetch={() => {
           // 内置 needs no fetch — those model lists ship with the SDK — so the guard is
           // asked only on the path that would actually issue the request.
-          if (add?.mode !== "native" && blockedRemotely(Ipc.providersFetch)) return;
           void fetchAddCandidates(add, natives, setAdd);
         }}
         onOAuth={() => {
-          if (blockedRemotely(Ipc.providersOAuthLogin)) return;
           const provider = natives.find((item) => item.id === add?.nativeId);
           if (!provider?.oauth || !provider.id) return;
           setOauth({
@@ -343,7 +319,7 @@ export function ProvidersSettings({ onChanged, models = [] }: { onChanged: () =>
         onSave={() =>
           void saveAdd(add, setAdd, async (next) => {
             const saved = await mutate(async () => next);
-            const created = saved.filter((item) => item.kind !== "builtin").at(-1);
+            const created = saved.at(-1);
             if (created) openProvider(created.id);
           })
         }
@@ -396,9 +372,7 @@ function ProviderNavItem({
       )}
       onClick={onSelect}
     >
-      {provider.kind === "builtin" ? (
-        <AppLogo className="size-4 shrink-0 rounded-[4px]" />
-      ) : provider.kind === "native" ? (
+      {provider.kind === "native" ? (
         // The built-in's own brand mark, else a neutral glyph — the SDK catalog is what
         // decides which, see `provider-icon.tsx`.
         <ProviderIcon provider={provider.id} />

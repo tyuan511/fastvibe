@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import type { FileIconMapping } from "@shared/types";
-import { IS_REMOTE } from "@/lib/platform";
 
 /**
  * Material Icon Theme lookups. The association table is fetched once from Main
@@ -66,13 +65,9 @@ export function resolveFileIcon(mapping: FileIconMapping, name: string, kind: "f
 }
 
 /**
- * Where to fetch one icon, which depends on what can serve it.
- *
- * `fastvibe-icon://` is a `protocol.handle` registered in Main, so it resolves in a
- * desktop window and nowhere else: in the browser client every chip and file-tree row
- * came out as a broken image. The remote server serves the same directory over HTTP,
- * same-origin, which `remote.html`'s `img-src 'self'` already admits.
+ * Where to fetch one icon: `fastvibe-icon://` is a `protocol.handle` registered in Main, which
+ * serves the icon theme's directory to the window.
  */
 export function fileIconUrl(icon: string): string {
-  return IS_REMOTE ? `/file-icon/${icon}.svg` : `fastvibe-icon://icons/${icon}.svg`;
+  return `fastvibe-icon://icons/${icon}.svg`;
 }

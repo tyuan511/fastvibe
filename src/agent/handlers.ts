@@ -183,7 +183,6 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
   handle(Ipc.providersUpdate, (payload: { id: string; name?: string; baseUrl?: string; api?: any; enabled?: boolean; apiKey?: string; models?: ProviderModel[]; modelOrder?: string[] }) => engine.updateProvider(payload.id, payload));
   handle(Ipc.providersRemove, (payload: { id: string }) => engine.removeProvider(payload.id));
   handle(Ipc.providersRefresh, (payload: { id: string }) => engine.refreshProviderModels(payload.id));
-  handle(Ipc.providersSaveFastVibe, (payload: { apiKey: string; models: ProviderModel[] }) => engine.saveFastVibe(payload.apiKey, payload.models));
   handle(Ipc.providersAddNative, (payload: { id: string; apiKey: string; models: ProviderModel[] }) => engine.addNativeProvider(payload.id, payload.apiKey, payload.models));
   handle(Ipc.providersLogout, (payload: { id: string }) => engine.logoutProvider(payload.id));
   handle(Ipc.providersQuota, (payload: { id: "openai" | "openai-codex"; force?: boolean }) => engine.getOpenAIAccountQuota(payload.id, payload.force === true));

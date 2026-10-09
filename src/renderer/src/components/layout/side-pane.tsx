@@ -61,9 +61,7 @@ const SidePaneTerminal = lazy(async () => ({
 }));
 import { HAS_CUSTOM_TITLE_BAR, HAS_TRAFFIC_LIGHTS } from "@/lib/platform";
 import { toast } from "sonner";
-import { blockedRemotely } from "@/lib/remote-unavailable";
 import { bindingStateKey, isRemoteProject, projectHasCapability } from "@/lib/remote-project";
-import { Ipc } from "@shared/ipc";
 import type { AppCapability } from "@shared/app-protocol";
 import type { Project } from "@shared/types";
 
@@ -347,7 +345,6 @@ export const SidePane = memo(function SidePane({
       // The terminal beside it survives because its process runs on the host and only
       // its output travels; there is no such split for a webview.
       onOpen: () => {
-        if (blockedRemotely(Ipc.browserListProfiles)) return;
         openCapable("browser", t("pane.browser"), openBrowser);
       },
     },
@@ -459,7 +456,6 @@ export const SidePane = memo(function SidePane({
               </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={() => {
-                  if (blockedRemotely(Ipc.browserListProfiles)) return;
                   openCapable("browser", t("pane.browser"), openBrowser);
                 }}
               >

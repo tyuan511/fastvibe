@@ -3,9 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { blockedRemotely } from "@/lib/remote-unavailable";
 import { useSettingsStore, type AppSettings } from "@/stores/settings";
-import { Ipc } from "@shared/ipc";
 import type { BrowserImportResult, BrowserProfileInfo } from "@shared/types";
 import { toast } from "sonner";
 import { SettingsGroup, SettingsRow } from "./settings-group";
@@ -25,14 +23,12 @@ export function BrowserSettings(): JSX.Element {
   const settings = useSettingsStore((state) => state.settings);
   const update = useSettingsStore((state) => state.update);
 
-  const remote = blockedRemotely(Ipc.browserListProfiles);
   const [engines, setEngines] = useState<Array<{ id: string; label: string }>>([{ id: "auto", label: "" }]);
   const [profiles, setProfiles] = useState<BrowserProfileInfo[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [importing, setImporting] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    if (remote) return;
     setLoading(true);
     try {
       const [found, list] = await Promise.all([
@@ -47,14 +43,13 @@ export function BrowserSettings(): JSX.Element {
     } finally {
       setLoading(false);
     }
-  }, [remote]);
+  }, []);
 
   useEffect(() => {
     void load();
   }, [load]);
 
   async function importProfile(profile: BrowserProfileInfo): Promise<void> {
-    if (blockedRemotely(Ipc.browserImportProfile)) return;
     setImporting(profile.id);
     try {
       const result: BrowserImportResult = await window.fastvibe.browser.importProfile(profile, settings.browserUseSystem ? "system" : "builtin");
@@ -114,9 +109,7 @@ export function BrowserSettings(): JSX.Element {
       </SettingsGroup>
       <SettingsGroup title={t("browser.import")}>
         <SettingsRow title={t("browser.importTitle")} description={t(settings.browserUseSystem ? "browser.importDescSystem" : "browser.importDesc")} control={null} />
-        {remote ? (
-          <SettingsRow title={t("browser.remote")} description={t("browser.remoteDesc")} control={null} />
-        ) : profiles === null || loading ? (
+        {profiles === null || loading ? (
           <SettingsRow title={t("browser.loading")} control={null} />
         ) : profiles.length === 0 ? (
           <SettingsRow title={t("browser.noProfiles")} description={t("browser.noProfilesDesc")} control={null} />

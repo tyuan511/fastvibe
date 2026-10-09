@@ -18,6 +18,7 @@ function capabilityOf(method: string): AppCapability | null {
   if (method.startsWith("stats:")) return "stats";
   if (method.startsWith("app:")) return "settings";
   if (method.startsWith("update:")) return "native";
+  if (method.startsWith("account:")) return "native";
   if (method.startsWith("window:")) return "native";
   if (method.startsWith("browser:")) return "browser";
   if (method.startsWith("computer:")) return "native";

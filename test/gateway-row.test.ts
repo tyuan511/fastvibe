@@ -21,18 +21,17 @@ function provider(over: Partial<Parameters<typeof gatewayRowState>[0]> = {}) {
 }
 
 /**
- * The built-in FastVibe gateway is the one row that always works out of the box: it is a
- * Sub2API deployment, so its panel answers for this install's key with no probing and no
- * configuration. Gating the row on `kind === "custom"` removed exactly that row.
+ * FastVibe's own gateway is a Sub2API deployment, so it is an ordinary custom provider
+ * whose upstream is already identified; its panel answers for the key with no probing.
  */
-test("the builtin FastVibe gateway shows its balance", () => {
-  const state = gatewayRowState(provider({ id: "fastvibe", kind: "builtin", gateway: "sub2api" }));
+test("an identified sub2api custom provider shows its balance and is not offered 识别", () => {
+  const state = gatewayRowState(provider({ id: "fastvibe", gateway: "sub2api" }));
   assert.equal(state.showValue, true);
   assert.equal(state.offerIdentify, false);
 });
 
-test("a builtin is never offered 识别, even with no gateway recorded", () => {
-  const state = gatewayRowState(provider({ id: "fastvibe", kind: "builtin" }));
+test("a native provider is never offered 识别, even with no gateway recorded", () => {
+  const state = gatewayRowState(provider({ id: "deepseek", kind: "native" }));
   assert.equal(state.offerIdentify, false);
   assert.equal(state.readable, false);
 });
@@ -56,11 +55,9 @@ test("a new-api with the credential stored reads normally", () => {
   assert.equal(state.needsCredential, false);
 });
 
-test("a sub2api needs no panel credential, custom or builtin", () => {
-  for (const kind of ["custom", "builtin"] as const) {
-    const state = gatewayRowState(provider({ kind, gateway: "sub2api" }));
-    assert.equal(state.showValue, true, kind);
-  }
+test("a sub2api needs no panel credential", () => {
+  const state = gatewayRowState(provider({ gateway: "sub2api" }));
+  assert.equal(state.showValue, true);
 });
 
 test("a provider with no credential shows nothing, because there is nothing to ask with", () => {

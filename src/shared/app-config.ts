@@ -8,23 +8,15 @@
  * bundle, with no `@shared` to resolve — so it never restates the list either.
  */
 export const APP_CONFIG_CATALOG = {
-  overview: { kind: "read", summary: "一次读取远程访问状态、隧道工具、frp 表单、SSH 主机和 MCP 服务器" },
-  "remote.status": { kind: "read", summary: "远程访问服务与隧道的当前状态（公网 URL、phase、错误与隧道输出）" },
-  "remote.tunnel_tools": { kind: "read", summary: "本机是否装了 cloudflared / ngrok / frpc 及版本" },
-  "remote.frp_get": { kind: "read", summary: "当前 frp 表单（不含 token，只有 hasToken）" },
+  overview: { kind: "read", summary: "一次读取远程访问状态、SSH 主机和 MCP 服务器" },
+  "remote.status": { kind: "read", summary: "远程访问的当前状态：局域网监听、官方连接（同账号手机能否发现这台电脑）和已连接的手机" },
   "ssh.hosts": { kind: "read", summary: "FastVibe 里保存的和 ~/.ssh/config 里发现的 SSH 主机（不含密码）" },
   "mcp.list": { kind: "read", summary: "MCP 服务器配置与连接状态" },
   "settings.get": { kind: "read", summary: "settings.json 里的界面与对话偏好" },
 
   "remote.set_password": { kind: "write", summary: "设置远程访问密码：用户在输入框里填写，不经过模型，input 不需要任何字段" },
-  "remote.start": { kind: "write", summary: "启动远程访问服务并拨通已选的隧道；input: { port?: number }" },
-  "remote.stop": { kind: "write", summary: "停止远程访问服务和隧道" },
-  "remote.set_tunnel": { kind: "write", summary: "选择隧道；input: { provider: \"cloudflared\" | \"ngrok\" | \"frp\" | null }" },
-  "remote.frp_set": {
-    kind: "write",
-    summary:
-      "保存 frp 表单，与当前值合并；input: { serverAddr, serverPort, token?, mode: \"http\"|\"tcp\", domain?, vhostPort?, remotePort?, publicUrl? }。token 省略保留原值，\"\" 清空",
-  },
+  "remote.start": { kind: "write", summary: "打开远程访问：设了密码就启动局域网监听，登录了账号就接入官方连接；input: { port?: number }" },
+  "remote.stop": { kind: "write", summary: "关闭远程访问：停止局域网监听，并断开官方连接" },
   "mcp.upsert": {
     kind: "write",
     summary: "新增或按 id 替换一个 MCP 服务器；input: { server: { id, name, enabled?, transport: \"stdio\"|\"http\", command?, args?, env?, url? } }",

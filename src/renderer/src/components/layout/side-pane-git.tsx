@@ -32,8 +32,6 @@ import { useSessionStore } from "@/stores/session";
 import type { ChatMessage } from "@shared/types";
 import type { GitDiffSource, GitStatus } from "@shared/ipc";
 import { isRemoteRef } from "@/lib/remote-project";
-import { blockedRemotely } from "@/lib/remote-unavailable";
-import { Ipc } from "@shared/ipc";
 
 const SOURCE_IDS: GitDiffSource[] = ["unstaged", "staged", "branch", "last-turn"];
 const SOURCE_LABEL_KEYS: Record<GitDiffSource, string> = {
@@ -271,7 +269,6 @@ function DiffPane({
           variant="ghost"
           label={t("git.reveal")}
           onClick={() => {
-            if (blockedRemotely(Ipc.workspaceReveal)) return;
             void window.fastvibe.workspace.reveal(resolvePath(file.path, cwd));
           }}
         >

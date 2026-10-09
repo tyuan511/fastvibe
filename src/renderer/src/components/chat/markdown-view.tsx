@@ -16,8 +16,6 @@ import { useHighlightedCode } from "@/lib/highlight";
 import { splitMarkdownBlocks } from "@/lib/markdown-blocks";
 import { useSessionStore } from "@/stores/session";
 import { resolvePath } from "@/lib/workspace-path";
-import { blockedRemotely } from "@/lib/remote-unavailable";
-import { Ipc } from "@shared/ipc";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -138,7 +136,6 @@ function resolvedMarkdownPath(path: string): string {
 }
 
 async function revealMarkdownPath(path: string, missing: string): Promise<void> {
-  if (blockedRemotely(Ipc.workspaceReveal)) return;
   const result = await window.fastvibe.workspace.reveal(path);
   if (result && result.ok === false) toast.error(missing);
 }

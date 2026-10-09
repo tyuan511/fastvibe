@@ -101,15 +101,15 @@ test("completion survives other provider edits and a restart, even after deletin
   await api.removeProvider(paths, other);
   const restarted = loadProviders(async () => { assert.fail("deleted Jev must not trigger a fetch"); });
   await restarted.adoptLegacyJevProvider(paths);
-  assert.deepEqual(restarted.readProviders(paths).map((p) => p.id), ["fastvibe"]);
+  assert.deepEqual(restarted.readProviders(paths).map((p) => p.id), []);
   assert.equal((await restarted.loadProviderKeys(paths))[decision.JEV_KEY_ENV], undefined);
 });
 
 test("an existing System One provider completes migration without replacing the selected relay model", async (t) => {
   const { paths, api } = fixture(t, async () => { assert.fail("existing provider must not trigger a fetch"); });
   const id = await api.addProvider(paths, { name: "My Jev", baseUrl: officialBase, api: "systemone", apiKey: "current-key" }, [model("jev-preview")]);
-  api.updateProvider(paths, "fastvibe", { models: [{ ...model(), api: "systemone" }] });
-  const selected = { provider: "fastvibe", id: "jev-latest" };
+  const relay = await api.addProvider(paths, { name: "Relay", baseUrl: "https://relay.test/v1", apiKey: "relay-key" }, [{ ...model(), api: "systemone" }]);
+  const selected = { provider: relay, id: "jev-latest" };
   decisionStore.writeDecisionConfig(paths.decisionFile, { ...decision.DEFAULT_DECISION_MODEL, kind: "jev", model: selected });
   await api.adoptLegacyJevProvider(paths);
   assert.deepEqual(decisionStore.readDecisionConfig(paths.decisionFile).model, selected);
@@ -118,7 +118,7 @@ test("an existing System One provider completes migration without replacing the 
   assert.deepEqual(api.readProviders(paths).find((p) => p.id === id)!.models.map((m) => m.id), ["jev-preview"]);
   await api.removeProvider(paths, id);
   await loadProviders(async () => { assert.fail("migration must stay complete"); }).adoptLegacyJevProvider(paths);
-  assert.equal(api.readProviders(paths).length, 1);
+  assert.deepEqual(api.readProviders(paths).map((p) => p.id), [relay]);
 });
 
 test("a provider added while the catalog is loading is reused with its own key and models", async (t) => {
@@ -145,7 +145,7 @@ test("deleting official Jev while its legacy catalog is loading prevents resurre
   catalog.release();
   await run;
   await api.adoptLegacyJevProvider(paths);
-  assert.deepEqual(api.readProviders(paths).map((p) => p.id), ["fastvibe"]);
+  assert.deepEqual(api.readProviders(paths).map((p) => p.id), []);
   assert.equal(catalog.calls, 1);
 });
 
@@ -192,4 +192,53 @@ test("an interrupted provider write recovers its credential before retiring the 
   assert.equal(keys[api.nativeKeyEnv(id)], "legacy-key");
   assert.equal(keys[decision.JEV_KEY_ENV], undefined);
   assert.equal(keys.OTHER_KEY, "keep-me");
+});
+
+/** The retired built-in FastVibe provider, as an old build wrote it. */
+function oldFastVibeEntry(over: Record<string, unknown> = {}) {
+  return {
+    id: "fastvibe", kind: "builtin", name: "FastVibe", baseUrl: "https://fastvibe.dev/v1", api: "openai-completions",
+    apiKeyEnv: "FASTVIBE_API_KEY", gateway: "sub2api", enabled: true, models: [model("claude-sonnet-5-5")], ...over,
+  };
+}
+
+test("a fresh install has no provider at all", (t) => {
+  const { paths, api } = fixture(t);
+  assert.deepEqual(api.readProviders(paths), []);
+});
+
+test("the retired built-in FastVibe provider becomes a custom one with its key and models", async (t) => {
+  const { paths, api } = fixture(t);
+  writeFileSync(paths.providersFile, JSON.stringify({ version: 2, providers: [oldFastVibeEntry()] }));
+  writeFileSync(paths.agentEnv, "FASTVIBE_API_KEY=sk-kept\n");
+
+  const [carried] = api.readProviders(paths);
+  assert.equal(carried.id, "fastvibe", "transcripts recorded this id");
+  assert.equal(carried.kind, "custom");
+  assert.equal(carried.apiKeyEnv, "FASTVIBE_API_KEY");
+  assert.equal(carried.baseUrl, "https://fastvibe.dev/v1");
+  assert.equal(carried.api, "openai-completions", "a v2 file's protocol was the user's choice");
+  assert.deepEqual(carried.models.map((m) => m.id), ["claude-sonnet-5-5"]);
+  assert.equal((await api.loadProviderKeys(paths))[carried.apiKeyEnv], "sk-kept");
+
+  // The next write stores it as an ordinary provider, and it can now be removed.
+  api.updateProvider(paths, "fastvibe", { name: "My relay" });
+  const stored = JSON.parse(readFileSync(paths.providersFile, "utf8"));
+  assert.equal(stored.version, 3);
+  assert.equal(stored.providers[0].kind, "custom");
+  await api.removeProvider(paths, "fastvibe");
+  assert.deepEqual(api.readProviders(paths), []);
+  assert.equal((await api.loadProviderKeys(paths)).FASTVIBE_API_KEY, undefined);
+});
+
+test("a v1 file's built-in protocol was the code's default, not a choice", (t) => {
+  const { paths, api } = fixture(t);
+  writeFileSync(paths.providersFile, JSON.stringify({ version: 1, providers: [oldFastVibeEntry({ api: "openai-completions" })] }));
+  assert.equal(api.readProviders(paths)[0].api, "openai-responses");
+});
+
+test("a built-in that was never connected leaves no empty row behind", (t) => {
+  const { paths, api } = fixture(t);
+  writeFileSync(paths.providersFile, JSON.stringify({ version: 2, providers: [oldFastVibeEntry({ models: [] })] }));
+  assert.deepEqual(api.readProviders(paths), []);
 });

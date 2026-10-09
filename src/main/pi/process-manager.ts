@@ -121,7 +121,6 @@ import {
   providerKeyEnv,
   refreshProviderModels,
   removeProvider as removeProviderConfig,
-  saveFastVibe as saveFastVibeConfig,
   readProviders,
   setProviderGateway,
   setProviderKey,
@@ -2511,7 +2510,7 @@ export class PiProcessManager {
     if (!force && cached && cached.expiresAt > Date.now()) return cached.result;
     const provider = listProviderConfigs(this.#paths, await loadProviderKeys(this.#paths)).find((item) => item.id === id);
     if (!provider) throw new Error(uiText("供应商不存在", "This provider does not exist."));
-    // The gateway is what decides this, not the provider's kind: the builtin FastVibe
+    // The gateway is what decides this, not the provider's kind: the FastVibe
     // endpoint is a Sub2API deployment and reads its balance the same way a custom one
     // does. A provider whose upstream was never identified has no endpoint to call.
     if (!provider.gateway) throw new Error(uiText("未识别该站点的类型，无法读取余额", "This site was not identified, so its balance cannot be read."));
@@ -2598,7 +2597,6 @@ export class PiProcessManager {
     this.#openAIQuotaCache.set(id, { quota, expiresAt: Date.now() + 5 * 60_000 });
     return quota;
   }
-  async saveFastVibe(apiKey: string, models: ProviderModel[]): Promise<ProviderConfig[]> { await saveFastVibeConfig(this.#paths, apiKey, models); await this.reloadProviders(); return this.listProviders(); }
   async addProvider(
     draft: { name: string; baseUrl: string; apiKey: string; api?: import("@shared/types").ProviderApi; gateway?: GatewayKind },
     models: ProviderModel[],

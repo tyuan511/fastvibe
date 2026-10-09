@@ -1,8 +1,6 @@
 import { Component, type ErrorInfo, type JSX, type ReactNode } from "react";
 import { i18n } from "@/lib/i18n";
 import { logError } from "@/lib/logger";
-import { blockedRemotely } from "@/lib/remote-unavailable";
-import { Ipc } from "@shared/ipc";
 import { dismissBootLoader } from "@/lib/boot-loader";
 
 /**
@@ -64,7 +62,6 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { error: E
             type="button"
             className="rounded-md border border-border px-3 py-1.5 text-sm text-foreground hover:bg-accent"
             onClick={() => {
-              if (blockedRemotely(Ipc.appExportLogs)) return;
               void window.fastvibe.app.exportLogs();
             }}
           >

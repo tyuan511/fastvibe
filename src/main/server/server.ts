@@ -1,6 +1,4 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { createReadStream, existsSync, statSync } from "node:fs";
-import { extname, join, normalize, resolve, sep } from "node:path";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { networkInterfaces } from "node:os";
 import type { Duplex } from "node:stream";
@@ -42,6 +40,27 @@ export type RemoteLogger = {
   error(message: string, error?: unknown): void;
 };
 
+/**
+ * The slice of a WebSocket the server uses, so a transport that is not one — a WebRTC
+ * data channel (`rtc/channel-socket.ts`) — can be handed in through `attachTransport`
+ * and get everything else for free: the policy, the backpressure guard, the heartbeat,
+ * the App Protocol session. `ws`'s own `WebSocket` satisfies it as is.
+ */
+export interface RemoteSocket {
+  readonly OPEN: number;
+  readonly readyState: number;
+  readonly bufferedAmount: number;
+  send(data: string, callback?: (error?: Error) => void): void;
+  close(code?: number, reason?: string): void;
+  /** Drop it now, without waiting for the other side to agree. */
+  terminate(): void;
+  ping(): void;
+  on(event: "message", listener: (raw: Buffer, isBinary: boolean) => void): this;
+  on(event: "pong", listener: () => void): this;
+  on(event: "close", listener: (code: number, reason: Buffer) => void): this;
+  on(event: "error", listener: (error: Error) => void): this;
+}
+
 export type RemoteServerDeps = {
   /** Where the password hash and device tokens live. Never served by any method. */
   accessFile: string;
@@ -81,18 +100,6 @@ export type RemoteServerDeps = {
    * already open would otherwise sit invisible until it is closed and reopened.
    */
   onStatusChange?: () => void;
-  /** Directory holding the web client, when one has been built. */
-  webRoot?: string;
-  /**
-   * Directory holding the file-icon SVGs.
-   *
-   * The desktop renderer reads these through a private Electron scheme
-   * (`fastvibe-icon://`), which is a `protocol.handle` in Main and therefore does not
-   * exist in a browser — every file chip and file-tree row came out as a broken image.
-   * Served here under `/file-icon/` instead, so the web client has the same icons over
-   * the transport it does have.
-   */
-  iconRoot?: string;
   /**
    * How often to talk to each socket, so nothing in front of us times it out.
    *
@@ -112,41 +119,6 @@ export type RemoteServerStatus = {
   clients: number;
   failedLogins: number;
 };
-
-/**
- * The one document this server hands a browser.
- *
- * Emphatically *not* `index.html`: that is the Electron window's page, and it reaches
- * Main through a preload that does not exist in a browser — it reads `window.fastvibe`
- * as it loads and dies on the first line. Serving it was the difference between "the
- * remote server has no client yet" and "the remote server appears to have a client that
- * white-screens", so the desktop page is never served here at all, by any spelling.
- */
-const CLIENT_ENTRY = "remote.html";
-
-/**
- * The phone page: its own entry, not the desktop tree squeezed into 375pt.
- *
- * `/` hands it to a phone and the full client to everything else. Both stay reachable
- * by name (`/mobile.html`, `/remote.html`).
- */
-const MOBILE_ENTRY = "mobile.html";
-
-/** Phones, not tablets: an iPad has the width the full client is laid out for. */
-export function prefersMobileEntry(userAgent: string | undefined): boolean {
-  if (!userAgent) return false;
-  return /iphone|ipod/i.test(userAgent) || (/android/i.test(userAgent) && /mobile/i.test(userAgent));
-}
-
-/**
- * Where file icons are served.
- *
- * Unauthenticated, like the client bundle itself: these are ~1250 SVGs from a public
- * npm package, identical on every install, and the page needs them before there is a
- * socket to ask over. Nothing about which icons a client fetches says anything about
- * the machine — the names come from the manifest, not from the workspace.
- */
-const ICON_PREFIX = "/file-icon";
 
 /** A socket that has not authenticated within this long is closed. */
 const AUTH_GRACE_MS = 10_000;
@@ -204,7 +176,12 @@ export function lanAddress(): string | null {
 
 type Client = {
   id: string;
-  socket: WebSocket;
+  socket: RemoteSocket;
+  /**
+   * Attached through `attachTransport`: authenticated by whoever attached it, and not
+   * tied to the HTTP listener, so stopping the listener leaves it connected.
+   */
+  external: boolean;
   /** Arrived from 127.0.0.1 / ::1, so it may present the SSH loopback token. */
   loopback: boolean;
   deviceId: string | null;
@@ -354,10 +331,9 @@ export class RemoteServer {
         ? (lanAddresses().ipv6 ?? host)
         : host;
     this.#port = typeof address === "object" && address ? address.port : options.port;
-    this.#heartbeat = this.#beat(this.#deps.heartbeatMs ?? HEARTBEAT_MS);
     // Never the reason the process stays up: the app owns its own lifetime, and a
     // timer nobody can see would keep a test run from exiting.
-    this.#heartbeat.unref();
+    this.#ensureHeartbeat();
     if (host !== "127.0.0.1" && host !== "localhost" && host !== "::1") {
       this.#deps.log.warn(`remote server bound to ${host} — reachable beyond this machine`);
     }
@@ -366,9 +342,14 @@ export class RemoteServer {
   }
 
   async stop(): Promise<RemoteServerStatus> {
-    if (this.#heartbeat) clearInterval(this.#heartbeat);
-    this.#heartbeat = null;
-    for (const client of [...this.#clients.values()]) this.#dropClient(client);
+    // Only what came in through the listener. A connection attached by another transport
+    // does not depend on it, and switching off the password-protected door must not cut
+    // the account's own.
+    for (const client of [...this.#clients.values()]) if (!client.external) this.#dropClient(client);
+    if (this.#heartbeat && ![...this.#clients.values()].some((client) => client.external)) {
+      clearInterval(this.#heartbeat);
+      this.#heartbeat = null;
+    }
     // Shared process AppServer (Electron windows, other adapters) stays up. Only a
     // fallback instance this server constructed for itself is torn down here.
     if (this.#ownsAppServer) this.#appServer.closeAll();
@@ -405,10 +386,6 @@ export class RemoteServer {
       this.#json(response, 200, { configured: isConfigured(this.#deps.accessFile) });
       return;
     }
-    if (url.pathname.startsWith(`${ICON_PREFIX}/`)) {
-      this.#serveIcon(url.pathname.slice(ICON_PREFIX.length + 1), response);
-      return;
-    }
     if (url.pathname === "/api/login" && request.method === "POST") {
       void this.#handleLogin(request, response).catch((error: unknown) => {
         // Not the request being malformed — that is answered inside. This is the write
@@ -418,7 +395,10 @@ export class RemoteServer {
       });
       return;
     }
-    this.#serveStatic(url.pathname, response, request.headers["user-agent"]);
+    // Nothing else is served: the phone app speaks `/api/login` and `/ws`, and a browser
+    // has no page here. The answer says what this port is for rather than leaving a
+    // blank error for someone who typed the address into one.
+    this.#json(response, 404, { error: "not found", hint: "This is a FastVibe remote access endpoint; open it from the FastVibe app." });
   }
 
   async #handleLogin(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -469,37 +449,6 @@ export class RemoteServer {
     response.end(payload);
   }
 
-  /**
-   * Serve one file icon.
-   *
-   * The same rules as the desktop scheme's handler: the name is checked against a
-   * narrow character class rather than resolved and compared, because unlike the web
-   * root this directory is addressed by name and a name is all a client may give — and
-   * an unknown one falls back to the generic glyph, since the icon theme's manifest
-   * names generated clones that never shipped as files.
-   */
-  #serveIcon(name: string, response: ServerResponse): void {
-    const root = this.#deps.iconRoot;
-    const icon = name.replace(/\.svg$/, "");
-    if (!root || !/^[a-z0-9._-]+$/i.test(icon)) {
-      this.#json(response, 404, { error: "not found" });
-      return;
-    }
-    const file = join(root, `${icon}.svg`);
-    const target = existsSync(file) ? file : join(root, "file.svg");
-    if (!existsSync(target)) {
-      this.#json(response, 404, { error: "not found" });
-      return;
-    }
-    response.writeHead(200, {
-      "content-type": "image/svg+xml",
-      // Immutable for the life of a build: the name is the icon.
-      "cache-control": "public, max-age=86400",
-      "x-content-type-options": "nosniff",
-    });
-    createReadStream(target).pipe(response);
-  }
-
   /** End a request that threw, without assuming nothing was written yet. */
   #fail(response: ServerResponse): void {
     try {
@@ -510,50 +459,6 @@ export class RemoteServer {
     }
   }
 
-  /**
-   * Serve the web client.
-   *
-   * The path is resolved and then checked to be inside the root, rather than filtered
-   * for `..` beforehand: a filter has to anticipate every spelling of the same escape,
-   * while comparing the resolved path answers the actual question.
-   *
-   * What that check guarantees is only that nothing *outside* the root is reachable —
-   * everything inside it is served, by design. So the root must hold the built client
-   * and nothing else; it is not a place to keep anything that should not be downloaded.
-   *
-   * A path that resolves inside the root but names no file falls through to the client
-   * entry, which is what lets the client own its own routes.
-   */
-  #serveStatic(pathname: string, response: ServerResponse, userAgent?: string): void {
-    const root = this.#deps.webRoot;
-    if (!root) {
-      this.#json(response, 404, { error: "not found" });
-      return;
-    }
-    const rootPath = resolve(root);
-    const entry = join(rootPath, CLIENT_ENTRY);
-    // The built pages share a directory, so the desktop one is sitting right there next
-    // to the client. Asking for it by name gets the client instead of a page that would
-    // only white-screen.
-    const desktopEntry = normalizePath(pathname) === "/index.html";
-    const home = prefersMobileEntry(userAgent) && existsSync(join(rootPath, MOBILE_ENTRY)) ? MOBILE_ENTRY : CLIENT_ENTRY;
-    const requested = pathname === "/" || desktopEntry ? `/${home}` : pathname;
-    const candidate = resolve(join(rootPath, normalizePath(requested)));
-    const inside = candidate === rootPath || candidate.startsWith(rootPath + sep);
-    const file = inside && existsSync(candidate) && statSync(candidate).isFile() ? candidate : entry;
-    if (!existsSync(file)) {
-      this.#json(response, 404, { error: "not found" });
-      return;
-    }
-    response.writeHead(200, {
-      "content-type": contentType(file),
-      "cache-control": "no-cache",
-      "x-content-type-options": "nosniff",
-      "x-frame-options": "DENY",
-    });
-    createReadStream(file).pipe(response);
-  }
-
   // ---------------------------------------------------------------- WebSocket
 
   #handleUpgrade(wss: WebSocketServer, request: IncomingMessage, socket: Duplex, head: Buffer): void {
@@ -562,63 +467,16 @@ export class RemoteServer {
       socket.destroy();
       return;
     }
-    // A browser attaches `Origin` on its own and cannot forge it, so this is what stops
-    // a page the user happens to be visiting from opening a socket to a tunnel it
-    // guessed. Non-browser clients send none, which is allowed: they are not subject to
-    // the same-origin machinery this is guarding.
-    const origin = request.headers.origin;
-    if (typeof origin === "string" && !this.#originAllowed(origin, request)) {
-      this.#deps.log.warn(`remote upgrade refused origin=${origin}`);
+    // A browser attaches `Origin` on its own and cannot forge it, and the only clients of
+    // this socket are the phone app and the desktop's own SSH forward — neither is a
+    // browser, so neither sends one. Any page that does is a page the user happens to be
+    // visiting trying a server it guessed, and gets nothing.
+    if (typeof request.headers.origin === "string") {
+      this.#deps.log.warn(`remote upgrade refused origin=${request.headers.origin}`);
       socket.destroy();
       return;
     }
     wss.handleUpgrade(request, socket, head, (ws) => wss.emit("connection", ws, request));
-  }
-
-  /**
-   * Whether the page that opened this socket is served from the host it dialled.
-   *
-   * A browser attaches `Origin` itself and cannot forge it, so this is what stops a page
-   * the user happens to be visiting from opening a socket to a server it guessed — the
-   * case where the page is one thing and the socket's target another.
-   *
-   * But a tunnel is the honest version of exactly that shape. Every one of them rewrites
-   * `Host` to the address it forwards to by default — ngrok's default is literally
-   * `--host-header=rewrite`, and cloudflared sends the origin service's host — while the
-   * page, correctly, is served from the public hostname. Judging on `Host` alone refused
-   * every user who brought their own tunnel, and the only trace was one warn line here;
-   * on screen it was 「连接被断开」 next to a login form that had just succeeded. That is
-   * what the three rules below fix:
-   *
-   *   1. `Host` is the origin's host: a direct connection, or a proxy told to preserve it.
-   *   2. `X-Forwarded-Host` is present (ngrok sets it) — it is then the authoritative
-   *      answer to the question being asked, so it has to match rather than merely exist.
-   *   3. Otherwise any `X-Forwarded-*` at all says something in front of us rewrote the
-   *      request (cloudflared sets `X-Forwarded-Proto` and `-For`, but no `-Host`).
-   *
-   * A page cannot produce any of those headers — the WebSocket API gives it no way to set
-   * one — so rule 3 is out of reach for the page this check exists to refuse. What it does
-   * give up is a page going *through the user's own tunnel*, which is still not a way in:
-   * the first frame has to carry a device token, and the only place to get one is
-   * `POST /api/login`, which a cross-origin page cannot complete (no CORS headers are
-   * sent, so its preflight fails). The token, not this check, is what keeps a stranger
-   * out; this keeps the browser from being used as the transport.
-   */
-  #originAllowed(origin: string, request: IncomingMessage): boolean {
-    let originHost: string;
-    try {
-      originHost = new URL(origin).host;
-    } catch {
-      return false;
-    }
-    if (request.headers.host === originHost) return true;
-    // A chain of proxies sends a list; the first entry is the hostname the client asked
-    // for, which is the one that compares to the origin.
-    const forwardedHost = firstHeader(request.headers["x-forwarded-host"]);
-    if (forwardedHost) return forwardedHost === originHost;
-    return Boolean(
-      firstHeader(request.headers["x-forwarded-proto"]) ?? firstHeader(request.headers["x-forwarded-for"]),
-    );
   }
 
   /**
@@ -661,6 +519,7 @@ export class RemoteServer {
     const client: Client = {
       id: `remote:${randomUUID()}`,
       socket,
+      external: false,
       loopback,
       deviceId: null,
       detach: null,
@@ -676,9 +535,54 @@ export class RemoteServer {
       attachmentBytes: 0,
     };
     this.#clients.set(client.id, client);
+    this.#wire(client);
+  }
 
+  /**
+   * Take a connection that something else has already authenticated.
+   *
+   * The official remote connection is the case: the phone and this desktop were
+   * introduced by the cloud's signaling, which only connects two sessions of the same
+   * account, so there is no password to ask for and no token to present. Everything past
+   * authentication is the ordinary path, which is the point — one policy, one backpressure
+   * guard, one App Protocol session, whatever carried the bytes.
+   *
+   * It does not need the listener, or a password: the listener is how a *browser* gets
+   * in, and this is not that.
+   */
+  attachTransport(socket: RemoteSocket, peer: { id: string; label: string }): void {
+    // The check `start()` makes before it will listen. A method nobody classified must
+    // stop this door too, not only the one that opens onto a port.
+    assertPolicyCoverage(this.#deps.channels(), { requireAll: this.#deps.policyScope !== "subset" });
+    const client: Client = {
+      id: `remote:${randomUUID()}`,
+      socket,
+      external: true,
+      loopback: false,
+      deviceId: peer.id,
+      detach: null,
+      timer: null,
+      alive: true,
+      backpressure: new BackpressureGuard(),
+      backpressureTimer: null,
+      protocolClient: false,
+      appSession: null,
+      attachments: new Map(),
+      attachmentBytes: 0,
+    };
+    this.#clients.set(client.id, client);
+    this.#wire(client);
+    this.#ensureHeartbeat();
+    this.#ensureLegacySubscription(client);
+    this.#send(client, { type: "auth", ok: true, device: { id: peer.id, label: peer.label } });
+    this.#deps.log.info(`remote client attached over a trusted transport device=${peer.id}`);
+    this.#deps.onStatusChange?.();
+  }
+
+  #wire(client: Client): void {
+    const socket = client.socket;
     socket.on("message", (raw, isBinary) => {
-      void this.#handleFrame(client, raw as Buffer, isBinary).catch((error: unknown) => {
+      void this.#handleFrame(client, raw, isBinary).catch((error: unknown) => {
         this.#deps.log.error("remote frame failed", error);
       });
     });
@@ -693,6 +597,13 @@ export class RemoteServer {
       this.#deps.log.warn(`remote socket error: ${String(error)}`);
       this.#dropClient(client);
     });
+  }
+
+  /** Start the heartbeat if nothing has. It runs while any client needs it. */
+  #ensureHeartbeat(): void {
+    if (this.#heartbeat) return;
+    this.#heartbeat = this.#beat(this.#deps.heartbeatMs ?? HEARTBEAT_MS);
+    this.#heartbeat.unref();
   }
 
   async #handleFrame(client: Client, raw: Buffer, isBinary = false): Promise<void> {
@@ -955,6 +866,12 @@ export class RemoteServer {
     } catch {
       // already gone
     }
+    // Started by a transport attached while the listener was off: nothing is left to
+    // watch once the last such client has gone.
+    if (this.#heartbeat && !this.#http && this.#clients.size === 0) {
+      clearInterval(this.#heartbeat);
+      this.#heartbeat = null;
+    }
     if (wasAttached) this.#deps.onStatusChange?.();
   }
 }
@@ -975,21 +892,6 @@ function requestUrl(request: IncomingMessage): URL | null {
   }
 }
 
-/**
- * Decoded and collapsed, so `/index.html` is recognised however it was spelled.
- *
- * A malformed escape (`/%`) returns the raw path rather than throwing: it then names no
- * file and falls through to the client entry, which is what every other unknown path
- * does.
- */
-function normalizePath(pathname: string): string {
-  try {
-    return normalize(decodeURIComponent(pathname));
-  } catch {
-    return pathname;
-  }
-}
-
 /** Read a request body with a hard ceiling, so a login cannot be used to exhaust memory. */
 async function readBody(request: IncomingMessage, limit: number): Promise<string> {
   const chunks: Buffer[] = [];
@@ -1003,18 +905,6 @@ async function readBody(request: IncomingMessage, limit: number): Promise<string
   return Buffer.concat(chunks).toString("utf8");
 }
 
-/**
- * The first entry of a comma-separated header, trimmed — or undefined when there is none.
- *
- * A proxy list (`X-Forwarded-For: client, edge, lb`) is read by its first entry, which is
- * the closest thing to the client; `X-Forwarded-Host` is read the same way for the same
- * reason, the first hop being the one that knows what the client asked for.
- */
-function firstHeader(value: string | string[] | undefined): string | undefined {
-  const raw = Array.isArray(value) ? value[0] : value;
-  return raw?.split(",")[0]?.trim() || undefined;
-}
-
 function tokenMatches(expected: string | undefined, actual: string): boolean {
   if (!expected || !actual) return false;
   const a = Buffer.from(expected);
@@ -1024,28 +914,6 @@ function tokenMatches(expected: string | undefined, actual: string): boolean {
 
 function isLoopbackAddress(value: string | undefined): boolean {
   return value === "127.0.0.1" || value === "::1" || value === "::ffff:127.0.0.1";
-}
-
-const TYPES: Record<string, string> = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
-  ".mjs": "text/javascript; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".json": "application/json; charset=utf-8",
-  ".svg": "image/svg+xml",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".webp": "image/webp",
-  ".ico": "image/x-icon",
-  ".woff": "font/woff",
-  ".woff2": "font/woff2",
-  ".ttf": "font/ttf",
-  ".map": "application/json; charset=utf-8",
-};
-
-function contentType(file: string): string {
-  return TYPES[extname(file).toLowerCase()] ?? "application/octet-stream";
 }
 
 export { listDevices, passwordProblem };

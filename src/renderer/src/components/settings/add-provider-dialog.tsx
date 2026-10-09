@@ -379,7 +379,7 @@ export function ModelPickDialog({
     <Dialog open={state !== null} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>{state?.kind === "connect" ? t("providers.pickModels") : t("providers.manageModels", { name: providerLabel(provider?.name || provider?.id) })}</DialogTitle>
+          <DialogTitle>{t("providers.manageModels", { name: providerLabel(provider?.name || provider?.id) })}</DialogTitle>
           <DialogDescription>
             {state?.candidates ? t("providers.pulled", { count: state.candidates.length }) : t("providers.fetching")}
           </DialogDescription>

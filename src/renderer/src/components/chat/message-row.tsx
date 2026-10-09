@@ -31,8 +31,6 @@ import { ModelChangeNotice } from "./model-change-notice";
 import { RunCollapse, RunProgress } from "./run-collapse";
 import { TuiLines } from "./tui-lines";
 import { isRemoteRef } from "@/lib/remote-project";
-import { blockedRemotely } from "@/lib/remote-unavailable";
-import { Ipc } from "@shared/ipc";
 
 function AttachmentStrip({ items }: { items: ChatAttachment[] }): JSX.Element {
   const [preview, setPreview] = useState<ChatAttachment | null>(null);
@@ -53,7 +51,7 @@ function AttachmentStrip({ items }: { items: ChatAttachment[] }): JSX.Element {
                   ? () => setPreview(item)
                   : item.path
                     ? () => {
-                        if (isRemoteRef(item.path) || blockedRemotely(Ipc.workspaceReveal)) return;
+                        if (isRemoteRef(item.path) ) return;
                         void window.fastvibe.workspace.reveal(item.path!);
                       }
                     : undefined

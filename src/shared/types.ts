@@ -800,7 +800,7 @@ export type ProviderApi = (typeof PROVIDER_APIS)[number];
  * The distinction matters to the engine: native providers' models come from the SDK
  * registry; only user metadata overrides are written to `models.json`.
  */
-export type ProviderKind = "builtin" | "native" | "custom";
+export type ProviderKind = "native" | "custom";
 
 export type ProviderConfig = {
   id: string;

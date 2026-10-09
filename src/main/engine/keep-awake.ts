@@ -29,7 +29,8 @@ import type { PersistedSettings } from "./app-settings";
  * preference stays on.
  */
 const running = new Set<string>();
-let remoteServing = false;
+/** Who is serving remote access: the password listener, the official connection. */
+const remoteServing = new Set<string>();
 let enabled = false;
 let blockerId: number | null = null;
 
@@ -50,10 +51,15 @@ export function setConversationRunning(conversationId: string, isRunning: boolea
   sync();
 }
 
-/** Track whether the remote-access server is listening. Called on every state push. */
-export function setRemoteServing(serving: boolean): void {
-  if (remoteServing === serving) return;
-  remoteServing = serving;
+/**
+ * Track whether remote access is being served. Called on every state push, once per
+ * `source` (the password listener, the official connection): either one is enough to
+ * keep the machine up, and one going quiet must not release the other's hold.
+ */
+export function setRemoteServing(serving: boolean, source = "listener"): void {
+  if (remoteServing.has(source) === serving) return;
+  if (serving) remoteServing.add(source);
+  else remoteServing.delete(source);
   sync();
 }
 
@@ -64,7 +70,7 @@ export function clearRunningConversations(): void {
 }
 
 function sync(): void {
-  const wanted = enabled && (running.size > 0 || remoteServing);
+  const wanted = enabled && (running.size > 0 || remoteServing.size > 0);
   if (wanted) {
     if (blockerId === null) blockerId = powerSaveBlocker.start("prevent-app-suspension");
     return;

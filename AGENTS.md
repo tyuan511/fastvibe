@@ -23,6 +23,7 @@ Runtime data lives under the app userData directory:
   settings.json          UI prefs (theme, chat behaviour) — not localStorage
   conversations.json
   providers.json
+  account.json           FastVibe account sign-in (device token + who it is), 0600, never served
   mcp.json
   models-dev.json        models.dev snapshot refreshed hourly and from 设置 → 关于; wins over the bundled one
   runtime/engine/
@@ -50,10 +51,9 @@ cannot exist on the desktop and be silently missing elsewhere.
 
 Two rules keep that true:
 
-- **One bridge, two transports.** `window.fastvibe` is built by
-  `createFastVibeApi` (`src/shared/api.ts`) and handed a transport: Electron IPC in the
-  preload, a WebSocket in `renderer/src/remote/bridge.ts`. Add a method there, not in
-  either caller, or the web client silently lacks what the desktop has.
+- **One bridge, one table.** `window.fastvibe` is built by `createFastVibeApi`
+  (`src/shared/api.ts`) over a transport (Electron IPC in the preload). A method belongs in the
+  neutral call table so the phone's App Protocol reaches it too, not in a one-off handler.
 - **Register with `handle()`, never `ipcMain.handle`.** Handlers take `(payload, ctx)`;
   `ctx` carries the asking window, because `event.sender` is an Electron concept a
   non-IPC caller cannot produce. `settings:get-sync` is the one exception — `sendSync`
@@ -97,15 +97,29 @@ payloads are dropped by the `#activeId` filter in the session subscription — t
 encodes one window's idea of "the chat on screen", and a second client may be looking at
 another conversation.
 
-### 远程访问（`src/main/server/`）
+### 远程访问（`src/main/server/`、`src/main/rtc/`）
 
-A second way into the same call table, for a browser on another device. `src/main/remote.ts`
-holds everything Electron-shaped — settings, paths, the methods the settings pane calls —
-so `server/` itself imports no Electron and could run without a GUI. It is handed the very
-same `dispatch` and `subscribe` the windows use; that is what keeps a method from existing
-on the desktop and being missing on the phone.
+One switch (设置 → 远程访问) opens two ways into the same call table — the one the desktop
+windows use — so that a method cannot exist on the desktop and be missing on the phone:
 
-Four rules, each of which fails silently if broken:
+- **官方连接** (`rtc/`): a phone signed in to the **same FastVibe account** finds this
+  computer by itself and connects over WebRTC — directly (LAN, or across routers) when it
+  can, through FastVibe's TURN relay when it cannot. No password, no address, nothing to
+  configure. Needs only a signed-in account. See 官方连接 below.
+- **局域网地址 + 密码** (`server/`): the `RemoteServer` listener, which the phone app (and the
+  desktop's own SSH forward) reach with an address and a password. Needs a password; reachable
+  beyond loopback only with 允许局域网访问. This is also where 局域网发现 (mDNS) comes from.
+
+There is no browser client any more. The listener answers `/api/hello`, `POST /api/login` and
+the `/ws` upgrade, and a bare 404 to everything else; a WebSocket upgrade that carries an
+`Origin` header is a web page and is refused outright, since the phone app and the SSH forward
+send none.
+
+`src/main/remote.ts` holds everything Electron-shaped — settings, paths, the methods the
+settings pane calls — so `server/` itself imports no Electron and could run without a GUI. It
+is handed the very same `dispatch` and `subscribe` the windows use.
+
+Rules that fail silently if broken:
 
 - **Credentials never touch `settings.json`.** That file is handed whole to every renderer
   and re-broadcast on every write. The password hash and device tokens live in
@@ -117,36 +131,19 @@ Four rules, each of which fails silently if broken:
   commands, so only calls that *hang* (native dialogs), act on the wrong machine's desktop,
   or hand over a lever they would not otherwise have (`providers:fetch`) are refused —
   plus `remote:*` itself, so a stolen token cannot lock the owner out.
-- **No password, no server.** `start()` throws rather than listening, and the default bind
-  is `127.0.0.1`: a tunnel is what publishes it, and a slip in the settings pane cannot put
-  a shell onto the local network.
+- **No password, no listener.** `start()` throws rather than listening, and the default bind
+  is `127.0.0.1`: turning on 允许局域网访问 is the only thing that publishes it, and a slip in
+  the settings pane cannot put a shell onto the local network. The official connection does
+  not use the listener or the password (see below).
 - **Pushes begin at authentication, not at connection.** A socket that has not proved who
   it is is subscribed to nothing and closed after ten seconds.
 
-**The tunnel is the user's, so the server has to accept the `Host` it rewrites.** Every
-tunnel does that by default — ngrok's default *is* `--host-header=rewrite`, and cloudflared
-sends the origin service's host — while the page, correctly, stays on the public hostname.
-`#originAllowed` used to compare `Host` alone, which refused every user who brought their
-own tunnel: 「连接被断开」 on screen next to a login that had just succeeded, and one warn
-line in the log. The rules now run in this order: `Host` is the origin's host (a direct
-connection, or a proxy told to preserve it); `X-Forwarded-Host` is present, which ngrok
-sets, and then it is the authoritative answer to the question being asked, so it must
-*match* rather than merely exist; otherwise any `X-Forwarded-*` at all (cloudflared sets
-`-Proto` and `-For`, but no `-Host`). A page cannot add any of those — the WebSocket API
-gives it no way to set a header — so the loosest rule is out of reach for the page the check
-exists to refuse. What it gives up is a page going *through the user's own tunnel*, which is
-still not a way in: the first frame must carry a device token, and the only place to get one
-is `POST /api/login`, which a cross-origin page cannot complete (no CORS headers, so the
-preflight fails). The token is what keeps a stranger out; this check keeps the browser from
-being used as the transport. Accepting all three shapes is also why the app needs no
-`--host-header` flag when it runs a tunnel itself — see 内网穿透 below.
-
-**The heartbeat is for the tunnel, not for this machine.** A tunnel or reverse proxy cuts a
-quiet WebSocket — Cloudflare's edge after 100 seconds, nginx's `proxy_read_timeout` after 60
+**The heartbeat is for the network, not for this machine.** A proxy or NAT cuts a
+quiet connection — Cloudflare's edge after 100 seconds, nginx's `proxy_read_timeout` after 60
 — and quiet is the normal case here: reading a transcript, or watching a run, is a socket
 with nothing to say. So `#beat` pings each one every 30 seconds, and the browser's pong is
 half the point: traffic has to be seen in *both* directions for the timers on either side to
-reset. It doubles as liveness, which matters more through a tunnel than on a wire — a
+reset. It doubles as liveness, which matters more over the internet than on a wire — a
 half-open connection there looks attached forever and never receives anything again — so a
 socket that missed a whole round is `terminate()`d, which becomes the `close` the client
 reconnects from. `heartbeatMs` exists only so a test can watch that happen without waiting
@@ -173,157 +170,55 @@ tests cover multi-MiB bursts with/without compression and hard-limit session cle
 
 The password is exchanged once for a device token (`POST /api/login`); tokens travel on
 every later connection, are stored only as hashes, and are revoked one device at a time.
-Guessing is slowed by a global exponential backoff — global rather than per address
-because behind a tunnel every request arrives from the same one.
+Guessing is slowed by a global exponential backoff.
 
-### 内网穿透（`src/main/server/tunnel.ts`）
+### 官方连接（`src/main/rtc/`，服务端见 fastvibe-services 的 `docs/cloud-service.md`）
 
-The server listens on loopback, so on its own the settings pane could only ever show
-`127.0.0.1:7777` — an address no phone can open. That used to be answered with a
-paragraph of instructions, and a paragraph of instructions is a feature nobody finishes.
-`TunnelRunner` runs the tunnel instead: `cloudflared tunnel --url http://127.0.0.1:<port>`
-or `ngrok http <port>`, with the public URL read out of the tool's own output and shown
-in the pane as a link and a QR code (`components/ui/qr-code.tsx`).
+`OfficialConnection` (`rtc/official.ts`, Electron-free) registers this install as a device
+(`PUT /api/devices/me`, the id minted once in `rtc-device.json`), keeps the cloud's signaling
+WebSocket open (`rtc/signaling.ts`, reconnecting with backoff), and answers each phone that
+calls with a `Responder` (`rtc/responder.ts`) over libdatachannel (`node-datachannel`, behind
+`rtc/peer.ts` so tests can fake it). It follows the 远程访问 switch and the account: switch off
+or signed out → signaling closes and every phone is dropped.
 
-- **Neither binary ships.** Both are ~30 MB third-party downloads with their own update
-  channels, and one of them needs an account; bundling either would mean shipping a
-  stale copy of somebody else's client. So "not installed" is a first-class state:
-  `probeTunnelTools()` answers `remote:tunnel-tools` by finding each command on PATH
-  *and* running `--version` — a shim pointing at a deleted binary is on PATH and cannot
-  execute — and the pane renders the install command for this platform with the ngrok
-  authtoken step next to it. `findExecutable` searches PATH itself rather than trusting
-  `spawn`, because the pane has to answer "is it installed" before anything is run;
-  `applyShellPath()` has already put Homebrew on `process.env.PATH` by then, which is
-  what makes a GUI-launched Electron see a `brew install cloudflared` at all.
-- **A binary is not the same as a working setup, and ngrok proves it.** With no authtoken
-  it does not fail and it does not exit: it logs the refusal and drops into a reconnect
-  loop. So picking it used to buy a minute of 启动中…, a timeout that blamed the clock,
-  and the real reason twelve lines up in the output. Three things answer that:
-  - **`spec.credential.present()` runs before anything is spawned**, so choosing ngrok
-    with no token says so at the moment of the choice. It reads the two places ngrok
-    itself reads — `NGROK_AUTHTOKEN` and the config file (platform path plus the v2
-    `~/.ngrok2/ngrok.yml`) — because `ngrok config check` only validates the file's
-    *syntax* and answers "valid" for a config with no token in it. It is three-valued:
-    only a definite `false` stops a run, so an unreadable file (`null`) never locks
-    anybody out of a tunnel that works.
-  - **`spec.fatal(line)` ends a run from the output stream.** Separate from `problem`,
-    which only picks a sentence to quote once something has ended; this one *ends* it,
-    then kills the child so it stops reconnecting behind a pane that has already given
-    the answer. Matched on ngrok's own codes (`ERR_NGROK_4018`, `105`/`107`/`108`) first
-    — those are the part of the message ngrok keeps stable — and kept narrow, because
-    anything matched here turns a tunnel that might have come up into a failure telling
-    the user to go fix their account.
-  - **`needsAuth` on the status is a flag, not a sentence to match on.** It selects a
-    different *control*: this is the one failure with exactly one command that fixes it,
-    so the pane shows `ngrok config add-authtoken <token>` with a copy button and the
-    token page, and suppresses the generic failure block so there is one 重试, not two.
-    The pane reaches that block from either direction — the probe (before any run) or
-    `needsAuth` (after one was refused) — and only the second can catch a token that is
-    present and *wrong*, which no file check can see.
-
-  Both halves of "can this run here" are behind the test seam (`launch` and
-  `credential` deps). Whether the dep or the real check answers is decided by whether
-  the dep **exists**, never by what it returned: `??` read a deliberate `null` as no
-  answer and fell through to the machine's real config, which is the one outcome that
-  must not stop a run.
-- **No `--host-header` is passed to ngrok.** `#originAllowed` accepts all three shapes a
-  tunnel produces, so every version works untouched — while a flag value one of them
-  spells differently would be a failure to start rather than a fallback.
-- **`--no-autoupdate` for cloudflared.** Its default is to replace its own binary and
-  restart, which on a Homebrew install is a write it cannot make and on any install is a
-  restart that silently changes the URL the user is looking at.
-- **A run is identified by a number, and a retired run cannot write status.** A tunnel is
-  stopped four ways — the switch, the server stopping, the URL never arriving, the app
-  quitting — and each races the child's own `exit`, which lands after the decision. Every
-  listener checks the `#run` it captured; without that, turning the tunnel off and
-  straight back on reported 「隧道已断开」 over a tunnel that was at that moment coming up.
-  For the same reason the start timeout records its reason *before* killing the child, so
-  the exit it provokes cannot bury it under a sentence about a signal.
-- **`start()` never rejects, and never restarts by itself.** Its callers are a settings
-  pane with a place to show `status.error` and the launch-time restore path, where a
-  tunnel that cannot start must not stop the window opening — so the failure belongs in
-  the pushed status, not in a promise only one of them can catch. Nothing retries on its
-  own either: a quick tunnel that reconnects gets a *new* hostname, and silently swapping
-  it would invalidate the QR code on screen without saying so.
-- **The URL comes from a named field where there is one.** ngrok's `--log-format=json`
-  has `url`, and only that is read: its own failures quote URLs — the authtoken page is
-  one — so a pattern loose enough to accept a reserved domain reads the link out of the
-  error and reports it as the tunnel. cloudflared has no such field, so its quick-tunnel
-  hostname is matched (`*.trycloudflare.com`) out of the ASCII banner it prints.
-- **The tool's last lines are part of the state** (`tunnel.output`). The useful sentence
-  is almost always the tool's, not ours — ngrok names the command that fixes a missing
-  authtoken — and sending the user to the app log for it is sending them somewhere they
-  will not go. Output alone is not broadcast, though: both tools narrate startup over a
-  dozen lines, and each would otherwise be a push to every window for a string nothing
-  renders until `#fail` sends the whole tail with the reason.
-- **The choice outlives the process.** `remoteTunnel` in `settings.json` is a preference,
-  which is why `RemoteServerState` carries both `tunnel.provider` (null while nothing
-  runs) and `tunnelChoice`: without the second, a failed start would reset the pane's
-  select to 关闭 and hide the retry. `remote:stop` leaves the choice alone and
-  `remote:clear-password` clears it, matching what each of those switches means.
-- **The public address is one row of icons, not a QR square sat open on the pane.** It used
-  to render a 9rem code beside the URL and two labelled buttons under it — 9rem of a
-  settings pane spent on a picture that is scanned once and then is furniture, and the
-  tallest thing in a pane otherwise made of one-line rows. Both address rows (the one
-  under 允许远程连接 and this one) now read the same way: the URL, then copy / code /
-  open as icons with no words. `address-actions.tsx` (`AddressActions`) is the one copy of
-  that trio. `value` is the address for copying and opening; the QR adds the optional
-  `name` query parameter via `remoteQrValue`, retaining the same destination. LAN and
-  tunnel codes carry the saved 主机名称 (or its default), SSH phone codes the host label.
-  The phone's `parseServerQr` separates name metadata from the connection origin;
-  scanning fills the name unless the user already edited it. Old plain-URL codes work
-  as before, and the QR contains no password or device token.
-- **The copy and open icons name themselves on hover; the code appears on hover.** Copy
-  and open carry a tooltip because a glyph alone does not say which is which; the code
-  opens as a *popover* on `openOnHover` (`delay={120}`, `closeDelay={160}`), because a
-  tooltip that closes when the pointer moves cannot be scanned. Click still toggles the
-  code, which is all a touch device has — and `qr={false}` is how the loopback row drops
-  it while keeping copy and open, since a code for `127.0.0.1` leads a phone to 连接被拒绝
-  while the string is still worth pasting and the address is still openable on this machine.
-- **The tunnel goes down before the server and up after it.** Stopped the other way round
-  it spends a moment publishing a port with nothing behind it, which a phone reads as a
-  dead site rather than as remote access having been switched off.
-
-- **frp is the self-hosted one, and the only one configured rather than discovered.**
-  The user brings a server running `frps`; 远程访问 → 内网穿透 → frp shows a form
-  (`remote-frp.tsx`), and `src/shared/frp.ts` is the one place that validates it, derives
-  the public URL and renders `frpc.toml` — shared so the pane cannot accept what Main then
-  refuses. Three things differ from the other two:
-  - **The token lives in `frp.json` (0600), never `settings.json`**, and the rendered
-    `frpc.toml` beside it is 0600 too. `remote:frp-get` serves `hasToken` instead; a save
-    with no `token` keeps the stored one, `""` clears it. The proxy name is minted once and
-    kept, so two installs on one frps do not collide and a restart does not orphan it.
-  - **frpc never prints the public URL** — it depends on how the *server* is set up — so
-    the URL is derived (`http` → the domain on `vhostHTTPPort`, `tcp` → server:`remotePort`)
-    or overridden, which is also how HTTPS in front of frps is expressed. `start proxy
-    success` is the online signal; `TunnelOptions` carries the config path and URL in.
-  - **`loginFailExit = true` is load-bearing**: a wrong token then exits instead of
-    retrying forever, and `frpFatal` ends a run on `start error:` (port taken, domain
-    conflict) for the same reason. A connection refused is *not* fatal — that is frps
-    restarting, which frpc should ride out. The TOML format needs frpc ≥ 0.52.
-  - **`http` mode needs a domain that already resolves to frps, and the pane checks it.**
-    This is the one step the user takes outside both FastVibe and frps, and frpc cannot
-    see it — it registers the proxy and reports success whatever the DNS says, so a missing
-    record surfaced only as a phone that could not open the link. The form says what to add
-    (an A record to the server's IP, or a CNAME to its hostname; `vhostHTTPPort` on frps; TCP
-    mode for anyone without a domain) and looks the domain up as it is typed
-    (`remote:frp-check-dns` → `server/frp-dns.ts`, the system resolver, 5s cap). The verdict
-    (`frpDnsVerdict`) is advice, never a gate: `mismatch` is also what a CDN-proxied record
-    looks like, and a miss can be propagation that the phone's resolver has already seen past.
-    `?dns=match|mismatch|unresolved` with `?tunnel=frp` previews the three answers.
-  - **A blocked port is the user's to open, never ours to route around.** A first login
-    that times out is almost always the cloud provider's security group, which nothing on
-    either machine can change, so `frpFatal` ends that run with a sentence naming the port
-    and the console (`frpUnreachable`) instead of quoting `i/o timeout`; a refusal gets a
-    different sentence (frps down or on another port). The `fastvibe-setup` skill holds its
-    agent to the same line: stop, tell the user exactly which inbound TCP rule to add, and
-    re-check once they say it is done — no switching to a port that happens to be open, no
-    `ssh -R`, no quiet change of tunnel provider.
-
-`?tunnel=online`, `?tunnel=lan`, `?tunnel=missing`, `?tunnel=noauth` and `?tunnel=frp` on `mock.html` render
-those states in a browser — the real thing needs a password, a port and somebody else's binary.
-(`?tunnel=lan` is the branch the 允许局域网访问 row's QR icon exists for: the address in that row
-is only reachable, and so only scannable, when the server is listening on the LAN.)
+- **The account is the authentication.** The cloud only introduces two sessions of the same
+  account, and the DTLS fingerprints travel over that authenticated signaling, so a third party
+  cannot stand in for either end. The data channel is therefore attached already authenticated
+  (`RemoteServer.attachTransport`) — no password, no device token — and everything after that
+  is the ordinary path: the policy (`remote-policy.ts`), the backpressure guard, the heartbeat,
+  the App Protocol session. `stop()` of the listener leaves attached connections up; they do
+  not depend on it.
+- **The phone offers, this side answers.** The phone opens one data channel labelled
+  `fastvibe` (any other label is closed); signals are `{type:"offer"|"answer", sdp}` and
+  `{type:"candidate", candidate, mid}` inside the signaling `signal` message. Signals that
+  arrive while ICE servers are still being fetched are buffered and replayed in order. After
+  the channel opens a `hangup` only frees the phone's signaling slot — it is ignored.
+- **Frames are fragmented** (`rtc/frames.ts`; the phone's copy is `lib/protocol/rtc_frames.dart`
+  and must stay byte-identical): one header byte (`LAST`, `BINARY`, `PING`, `PONG`, `CLOSE`),
+  at most 16 KiB per message, control messages may fall between fragments. `ChannelSocket`
+  (`rtc/channel-socket.ts`) dresses a data channel as the WebSocket-shaped `RemoteSocket` the
+  server takes: queued bytes count toward `bufferedAmount`, ping/pong are real, and a close
+  carries a code.
+- **libdatachannel's `send` returning `false` means queued, not failed.** Treating it as a
+  failure closed every connection on the first large reply. A send fails when the channel is
+  not open, or throws.
+- **The path is reported, not chosen.** ICE picks host → srflx → relay; the pane shows 直连 or
+  中转 from `getSelectedCandidatePair()`, because relayed traffic is the one case that costs
+  the account something (a monthly allowance).
+- **The phone's side** (`apps/mobile_flutter`): the account (`lib/account/account.dart`: browser PKCE
+  sign-in through `flutter_web_auth_2`, `fastvibe://oauth/callback`, token in the Keychain/Keystore,
+  only ever sent to the site that issued it) and the account's computers (`official_devices.dart`),
+  which live in the same saved list as manual ones with `kind: official` and origin
+  `fastvibe-official://<device id>`. `RtcDialer` (`lib/protocol/rtc_connection.dart`) does the
+  signaling and the WebRTC offer and hands `RemoteClient` a `FrameSocket`, so the handshake, health
+  checks and reconnect are the ones every other connection uses. `Connection` carries `needsAccount`
+  (the way forward is signing in) next to `needsPassword`.
+- **Only UDP TURN on the desktop.** libdatachannel's libjuice backend has no TURN over TCP/TLS, so
+  `toIceServers` drops those entries; the phone's stack speaks them.
+- **Native module.** `node-datachannel` ships one optional package per platform;
+  `pnpm-workspace.yaml` installs both macOS CPUs (the x64 release is built on an arm64
+  runner) and `electron-builder.yml` prunes the other from each package. `nodeDataChannel.cleanup()`
+  must run at exit (`shutdownWebRtc`) or the process never ends — tests call it in `after()`.
 
 ### 局域网发现（mDNS，`src/main/server/mdns.ts`）
 
@@ -415,118 +310,9 @@ QR icon (`QrAction`, shared with 远程访问).
   outside the local network** (ATS allows only `NSAllowsLocalNetworking`), and without
   `publicUrl` the password crosses the network in the clear — put https in front.
 - **The port is the user's to open.** The pane names the firewall and the cloud security group
-  and does nothing about them, the same line 内网穿透 → frp draws.
+  and does nothing about them.
 - Preview: `mock.html?phone=on#/settings/ssh` shows a host that already allows phone connections;
   starting an Agent and turning phone access on both play their progress.
-
-### 网页客户端（`remote.html`）
-
-The same React tree the Electron window runs, served by the remote server and reaching
-Main over a WebSocket instead of a preload. `src/renderer/src/remote/bridge.ts` owns the
-boot — password gate, device token, reconnect — because the renderer reads the bridge as
-it *loads* (`stores/settings` takes the settings snapshot at module scope), so the app
-cannot be imported until a connection exists and that snapshot is in hand. That is why
-`remote.html` loads only the bridge, which imports the app at the end.
-
-Three things that are easy to get wrong here:
-
-- **The server never serves `index.html`.** That is the Electron page; in a browser it
-  reads `window.fastvibe` as it loads and white-screens. `CLIENT_ENTRY` is `remote.html`,
-  and asking for the desktop page by name gets the client instead.
-- **A dropped socket reloads the page.** Events that arrived while it was gone are not
-  replayed, so resuming in place would leave a transcript that looks complete and is not.
-  Main already serves what a precise resume needs (`engine:get-snapshot`, and a `seq` on
-  every event); wiring the renderer to re-snapshot is the better answer once it reads them.
-- **`remote:*` is denied to remote callers**, so 设置 → 远程访问 renders "只能在本机管理"
-  out here rather than a setup form it could not submit.
-- **A browser has no window chrome, whatever the host is.** `app.platform` describes the
-  machine Main runs on, so a client connected to a Mac read `darwin` and inset its first
-  row for traffic lights 300 miles away — 88px of blank space before the sidebar's own
-  buttons. `lib/platform.ts` splits the question: `HAS_TRAFFIC_LIGHTS` /
-  `HAS_CUSTOM_TITLE_BAR` are about the window and are both false out here, while `IS_MAC`
-  is about the *keyboard* and follows this device's own user agent — an iPad on a Linux
-  box still sends ⌘. `IS_REMOTE` comes off the bridge (`ApiTransport.remote`), not a
-  guess.
-- **A denied method needs a control that says so.** Refusing the call is half of it; the
-  other half is that pressing 新建项目 or 浏览器 out here has to *tell you why* rather
-  than do nothing. `blockedRemotely(Ipc.x)` (`lib/remote-unavailable.ts`) is asked at
-  each trigger, before the work, and toasts the policy's own sentence — one table, so the
-  notice and a refusal cannot disagree. The controls stay put rather than disappearing: a
-  feature that vanishes on one client and not another is its own confusion, and a
-  disabled control cannot explain itself. `deniedMethods()` is pinned by a test, so
-  denying one more method fails until something guards it.
-- **Anything the desktop reaches through an Electron `protocol.handle` has to be served
-  here too.** File icons were the first: `fastvibe-icon://` does not exist in a browser,
-  so every file chip was a broken image. The server serves the same directory under
-  `/file-icon/<name>.svg` and `fileIconUrl` picks by transport. Unauthenticated on
-  purpose — a public npm package's SVGs, needed before there is a socket to ask over.
-- **In dev the server serves `out/renderer`, which `pnpm dev` does not write.** `webRoot`
-  is the *build* output, so a client checked under `pnpm dev` is whatever `pnpm build`
-  last produced — run it before testing the web client, or you are debugging an old
-  bundle.
-
-### 手机页（`mobile.html`）
-
-A phone gets its own page, not the desktop tree at 375pt. `/` serves `mobile.html` to a
-phone (`prefersMobileEntry`: iPhone, or Android *with* `Mobile` — tablets keep the full
-client) and `remote.html` to everything else; the phone page offers no way over to the
-full client. It
-boots through the same bridge (`bootRemote` in `remote/bridge.ts`; `remote/web.ts` and
-`mobile/entry.ts` are the two entries, and both pages share `remote/gate.css`) and reuses
-the desktop's session store, `MessageList` and `PermissionPanel`, so a reply reads the same
-on both screens. One chat is on screen at a time; every other chat is in a drawer
-(`conversation-drawer.tsx`, the shadcn `sheet`) sorted by 「does this need me」 (等你处理 →
-运行中 → 最近), so going between chats never costs the one behind it. `#/` is the new-chat
-page — there is no list page to land on. The composer sends, queues, stops, continues and
-attaches photos, and its chips pick the model, thinking level and — on a
-new chat — the project, each from a bottom sheet (`option-sheet.tsx`). The header's ⋯
-renames, moves to another project, archives and deletes the chat on screen.
-
-- **A new chat's choices are held on the page, not the engine.** The desktop parks a pick
-  made before a conversation exists on the manager (`#pendingModel`), which is one value
-  for every client and is dropped when any conversation is activated. The phone keeps its
-  project / model / thinking in `Draft` and applies them (`applyDraftChoices`) to the
-  conversation its first send creates, before the prompt goes out.
-- **Leaving a deleted or archived chat goes to the new-chat page**, never to 「the next
-  chat」 the way the desktop does it: that path opens the chat, i.e. moves the engine's
-  active conversation.
-- **Photos are re-encoded in the browser** (`images.ts`): decoded (Safari reads HEIC,
-  which `filesToAttachments` would have turned into a path-less file chip), scaled to
-  2048px on the long side and sent as JPEG, so a 10 MB camera shot is not base64'd whole
-  into one WebSocket frame over the tunnel.
-- **Another chat needing you, or finishing, is a toast with the way there**
-  (`useOtherChatNotices`). Finishing is read off the busy map, not `conversation_activity`,
-  which is only emitted for chats the *desktop* is not showing.
-
-- **It never calls `conversations.open`.** That sets the engine's active conversation, which
-  every desktop window follows — reading a chat on the phone used to drag the desktop onto
-  it. The phone reads a chat with `engine:get-snapshot` and asks for its live stream by
-  subscribing to `conversation:<id>` **by name** (`lib/live-scopes.ts`). Main forwards a
-  background chat's stream only to such subscribers: `PiProcessManager.setStreamWatch`
-  asks `AppServer.hasNamedSubscriber`, and publishes with `namedOnly`, which a `*`-only
-  session (every desktop window) never receives. Without that, a token stream for a chat
-  nobody on the desktop is showing would cross IPC once per token.
-- **Subscribe, then snapshot, then drop by `seq`.** `mobile/live.ts` subscribes before it
-  asks, holds the chat's events while the snapshot is in flight, and applies only those
-  above the snapshot's `seq`. The snapshot's `pendingUi` is the whole truth for that chat:
-  a prompt answered on the desktop meanwhile is dismissed, not left as a dead panel.
-- **新对话 does not activate.** `conversations.create(project, { activate: false })` creates
-  and loads the session without touching the active id, for the same reason.
-- **等你 on the list needs `engine:get-pending-ui`**, every parked prompt across chats. A
-  prompt is announced once, as an event; a page that connected afterwards would otherwise
-  show a stuck chat as merely running.
-- **A dropped socket resumes in place** (`resumeInPlace`), unlike the full client, which
-  reloads. A phone loses its socket every time the screen locks, and a reload there was a
-  white page and a lost scroll position on every return. The bridge re-subscribes `*` plus
-  the watched scopes and calls `onLiveReconnected`, which re-reads the list and the chat on
-  screen; a journal `resync` takes the same path. Coming back into view also probes the
-  socket with a 4s call (`probeOnReturn`), because iOS freezes a page with its socket and
-  nothing on this side hears the server give up on it.
-- **Preview**: `mock-mobile.html` (`?waiting=1` parks a question, `?running=1` a run;
-  `#/c/<id>` opens a chat) — the fixture bridge from `mock.html` with the phone page behind
-  it. The mock's `getState` / `setModel` / `setThinking` answer for the conversation asked
-  about, as the engine does; without a `conversationId` the store rejects a state reply as
-  a draft, and the model chip read 默认模型 on every chat.
 
 ### 窄视口（手机）
 
@@ -582,7 +368,7 @@ The same two rules reach past the sidebar. **Touch** is `pointer-coarse:` in cla
 - `index.css` has one touch-only block: inputs are 16px (iOS zooms into anything smaller
   on focus and never zooms back), no tap flash, no double-tap delay, no pull-to-refresh.
   `#root` pads the safe-area top and sides; the bottom stays with `.safe-bottom`.
-  `remote.html` asks for `interactive-widget=resizes-content`, so on Android the keyboard
+  The page asks for `interactive-widget=resizes-content` where it can, so on Android the keyboard
   shrinks the layout and the composer sits on top of it rather than under it.
 - The composer: on touch, Enter is a newline (a soft keyboard has no Shift+Enter), and the
   project chip's folder icon is not a hidden 清除项目 — the picker grows that row instead.
@@ -720,16 +506,10 @@ and the future project file tree.
   serves the SVGs under the private `fastvibe-icon://icons/<name>.svg` scheme
   (registered privileged before app ready, `protocol.handle` after). Names the
   manifest references but that don't ship as files fall back to `file.svg`.
-- The browser client cannot use that scheme — `protocol.handle` is Main's, and a tab has
-  no Electron — so the remote server serves the same directory over HTTP under
-  `/file-icon/<name>.svg` (`fileIconsDirectory()` → `RemoteServerDeps.iconRoot`). The
-  name is guarded by a character class rather than a resolved-path check, because here a
-  name is all a client may give.
 - `workspace:file-icons` hands the renderer the lookup tables once
   (`src/renderer/src/lib/file-icons.ts`, cached module-wide); `components/file-icon.tsx`
-  resolves a name to an icon. `fileIconUrl` picks the scheme or the HTTP path by
-  transport (`IS_REMOTE`). Add `fastvibe-icon:` to the desktop CSP `img-src` when a new
-  surface loads these icons; the remote page needs nothing, `img-src 'self'` covers it.
+  resolves a name to an icon through `fileIconUrl`. Add `fastvibe-icon:` to the desktop CSP
+  `img-src` when a new surface loads these icons.
 - The right pane's **文件** tab (`components/layout/side-pane-files.tsx`) is the
   consumer: a lazily-loaded project tree (`workspace:read-dir`, hiding `.git` and
   `node_modules`). Narrow panes swap between the tree and a file preview; when
@@ -991,15 +771,7 @@ The same pass removed copy that names a *file inside the data directory* — 「
 the reader does not know where `~/.pi` is or that it matters. Say what happens, not where
 it is stored.
 
-Two things are deliberately long and are listed as exceptions in that test:
-
-- **`remote.frpIntro` / `remote.frpDomainHelp` are instructions, not descriptions.** They
-  are what the user does on the *server* (open a port, add an A record), there is nowhere
-  else for them to be written down, and a shortened version is somebody who cannot finish
-  the setup.
-- **Diagnostics keep their whole sentence.** `frpDnsMismatch` names the domain, the
-  address, the expected one and what to change — a user reading it has a DNS panel open
-  in another window, and 「解析有误」 helps none of them.
+Nothing is exempt from the cap: an instruction that outgrows a row belongs in the docs, not the pane.
 
 ## Routing
 
@@ -1049,11 +821,10 @@ controls out of the side pane's tab strip: the split layout below simply starts 
 - **The platform comes from the preload, not the user agent.** `app.platform` is a plain string on
   the bridge, read before the first paint, and the renderer reads it through
   `lib/platform.ts`.
-- **Two questions, not one.** `HAS_TRAFFIC_LIGHTS` and `HAS_CUSTOM_TITLE_BAR` describe the
-  window around the page; `IS_MAC` describes the keyboard in front of it. They agree in a
-  desktop window and part company in the browser client, which has neither bar nor traffic
-  lights and whose ⌘ key belongs to whatever device is holding it. A layout inset (`pl-22`,
-  the collapsed header's `5.5rem`) reads the chrome flags; a modifier label reads `IS_MAC`.
+- **Chrome flags and the keyboard flag.** `HAS_TRAFFIC_LIGHTS` and `HAS_CUSTOM_TITLE_BAR` describe
+  the window around the page; `IS_MAC` describes the modifier key. All three come from the host
+  platform now that the renderer only runs in the desktop window. A layout inset (`pl-22`, the
+  collapsed header's `5.5rem`) reads the chrome flags; a modifier label reads `IS_MAC`.
 - **Nothing the macOS layout keeps in the sidebar is drawn twice.** Where the bar exists, the
   sidebar's title row and its logo row are gone and the logo/搜索 live in the bar instead;
   `SidebarCollapsedChrome` drops its toggle and the main header its 展开侧边栏 button, because the
@@ -1067,20 +838,22 @@ controls out of the side pane's tab strip: the split layout below simply starts 
 
 ## Providers
 
-FastVibe (`https://fastvibe.dev/v1`) is **one provider among others**, not a forced
-onboarding gate. There is no connect wall and no separate 「not configured」 engine
-state: an install with no provider boots an ordinary engine whose model list is
-empty, and that empty list is the whole signal. The composer reads it — it goes
-read-only and its placeholder asks for a model — and the model chip's popover says
-暂无模型 above the 管理模型 entry that leads to Settings → 供应商. Users can equally add
-any OpenAI-compatible provider there.
+There is **no built-in provider**: the app ships with none, and there is no connect wall
+and no separate 「not configured」 engine state. An install with no provider boots an
+ordinary engine whose model list is empty, and that empty list is the whole signal. The
+composer reads it — it goes read-only and its placeholder asks for a model — and the model
+chip's popover says 暂无模型 above the 管理模型 entry that leads to Settings → 供应商, where
+the user adds an SDK provider or any compatible endpoint of their own. The FastVibe relay
+(`fastvibe.dev`, a Sub2API deployment) is just one such endpoint; it used to be a
+code-owned built-in entry and is not any more. The FastVibe *account* (登录, below) is a
+separate thing and does not configure a provider.
 
 A provider ships **no models** until the user connects it: configuring a provider
 fetches its `/models` list and the user picks which to keep. A provider without an
 API key is excluded from `models.json` entirely, so no models surface anywhere.
 
-**FastVibe defaults to the OpenAI Responses API** (`openai-responses`), and the
-protocol is user-selectable — both on the provider (API 格式, which sets the default
+**A custom provider's protocol is the user's choice** — both on the provider (API 格式, which
+sets the default for all its models) and per model (协议, in 模型详情) — both on the provider (API 格式, which sets the default
 for all its models) and per model (协议, in 模型详情). A model with no `api` of its own
 inherits its provider's (that is what `models.json` omits), which is why a gateway can
 serve a `/responses` model next to a `/chat/completions` one without being split into
@@ -1107,10 +880,14 @@ our own UI ever hands a user, and a relay may mount a protocol under a path of i
 z.ai's `.../coding/paas/v4` is the endpoint path, so it is never rewritten, and an OpenAI
 api's base is never rewritten either way.
 
-`providers.json` carries a `version`. **v2 made the builtin protocol selectable**; in
-v1 the code pinned it, so a v1 entry's `api` is the old default rather than a choice
-and `normalizeFastVibe` migrates it (`PROVIDERS_VERSION`). The builtin's name and
-baseUrl stay code-owned either way.
+`providers.json` carries a `version` (`PROVIDERS_VERSION`). **v3 removed the built-in
+FastVibe provider.** A `kind: "builtin"` entry from an older file is read as a custom provider
+in place (`migrateBuiltin`): the id stays `fastvibe` and the key stays in
+`FASTVIBE_API_KEY`, so the pasted key and every conversation that recorded
+`fastvibe/<model>` keep working, and it can now be renamed, re-pointed and deleted like any
+other. A v1 entry's `api` was the code's default rather than a choice, so it is read as
+`openai-responses`; an entry with no models was never connected and is dropped instead of
+left as an empty row. Nothing is written until the next ordinary provider edit.
 
 **A built-in can also be configured by a subscription login (OAuth).** Claude
 Pro/Max and ChatGPT Plus/Pro are the two people actually want, but nothing names
@@ -1273,6 +1050,39 @@ one reverted before the next prompt). The divider is therefore tied to the reply
 
 Only `models.json` is written; the `models.yml` / `config.yml` pair from the old RPC
 engine is gone because the SDK never read them.
+
+## 账号登录（FastVibe 账号，`engine/account.ts`）
+
+桌面端可以登录 `app.fastvibe.dev` 的账号（服务端在私有仓库 `tyuan511/fastvibe-services`，
+`services/cloud`，设计见该仓库 `docs/cloud-service.md`）。目前登录只表明「这台电脑是谁的」，
+**不配置任何供应商**——模型转发（`/llm`）还没做，做了之后令牌才会被拿去当 API Key。
+
+流程是原生应用的浏览器授权码 + PKCE（RFC 8252 / 7636）：
+
+1. 本机在 `127.0.0.1:<空闲端口>/callback` 起一个只绑回环的监听，用系统浏览器打开站点的
+   `/authorize`，带 `client_id=fastvibe-desktop`、PKCE 挑战、随机 `state`、设备名。
+2. 浏览器里没登录就先走 GitHub 登录再回来；用户点「允许」，站点把浏览器重定向回监听地址并带一次性 `code`。
+3. 监听核对 `state`，用 `code` + 只存在于本进程的 verifier 向 `POST /api/oauth/token` 换设备令牌
+   （`fvs_…`，90 天，用一次顺延）。浏览器标签页显示「登录成功，可以关闭」，Main 同时
+   `app.focus({ steal: true })` 把窗口拉回前台——这就是「登录完拉起客户端」。
+
+- **令牌只在 Main。** 存 `account.json`（0600，临时文件 + rename），**从不经任何方法返回**：
+  渲染层只拿 `AccountState`（谁登录了、头像、邮箱）。令牌记录它的签发站点，换了
+  `FASTVIBE_CLOUD_URL`（本地开发指向本地服务）就当作未登录，**不会把真令牌发到另一个站点**；
+  `logout` 也不会删别的站点的文件。
+- **监听只认自己的那一次。** `state` 不对（别的标签页、端口扫描）只回 400 不终止等待；`Host` 必须是
+  我们给出的回环地址（挡 DNS 重绑定）；只有 `GET /callback` 有应答；5 分钟超时；用完即关。
+  取消、超时、站点拒绝都落回「未登录」，取消与用户在浏览器里点「取消」不算错误。
+- **启动不依赖网络。** 文件里有令牌就直接显示已登录，之后后台 `refresh()` 核对：401 才清掉，
+  离线 / 5xx 保持登录。登出先清本地，再尽力 `POST /api/auth/logout` 吊销该设备。
+- **IPC**：`account:get|login|cancel-login|logout` + 推送 `account:state`。`login` 在浏览器打开后就返回，
+  结果走推送。全部在 `remote-policy.ts` 里**拒绝远程调用**（浏览器开在宿主机上、令牌属于那台电脑），
+  推送在 `remote-events.ts` 归为 `drop`。
+- **UI**：侧栏底部那一行的最右端（`components/layout/sidebar-account.tsx`）。已登录是头像 + 弹层
+  （用户名、邮箱、打开控制台、退出登录），未登录是人形图标 + 登录按钮，等待浏览器时转圈并可取消。
+  文案不写登录方式（现在是 GitHub，以后可能不是）。`mock.html?account=in|out|waiting|error` 预览。
+- 测试 `test/account.test.ts` 用假站点 + 一个代做「浏览器」的函数跑完整流程；服务端那一半在
+  fastvibe-services 的 `internal/httpapi/oauth_test.go`。
 
 ## Plugins & extensions
 
@@ -1614,14 +1424,14 @@ viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`
   low-confidence items come back as `review` for the agent to judge itself. See docs/decision-layer.md §7.10.
 - **App config** — `app-config.ts` registers `fastvibe_config_get` / `fastvibe_config_apply`, the
   agent's hands on FastVibe's *own* settings panes; the built-in skill `resources/skills/fastvibe-setup`
-  is the playbook (install frps on the user's VPS over ssh, then fill 远程访问 → frp and start it).
+  is the playbook (how remote access, MCP servers and the UI settings are filled in for the user).
   The extension holds no settings code: `ctx.ui.appConfig` reaches `runAppConfig`
   (`src/main/app-config.ts`, injected with `engine.setAppConfigHost` so an SSH Agent runtime answers
   "not available"), which dispatches the very methods the panes call, so writes broadcast like a click.
   - **An allowlist, never a channel pass-through.** Actions are named in `src/shared/app-config.ts`
     (Main's table is typed against it); `overview` and every unknown-action error serve the catalog,
     because the extension ships as a loose file and cannot import `@shared` to list it.
-  - **No action returns a secret** (SSH passwords stripped, frp serves `hasToken`), and
+  - **No action returns a secret** (SSH passwords stripped), and
     **`settings.set` refuses `remote*` and `proxy*` keys**, which have their own actions.
   - **The remote-access password never reaches the model**: `remote.set_password` collects it with
     `ctx.ui.input` inside the extension. Writes run without a confirmation; the skill tells the
@@ -2387,8 +2197,8 @@ awake while an agent run is in flight **or the remote-access server is listening
   model work on the user's own machine, and it is the last thing to finish.
 - **A listening remote server counts too** (`setRemoteServing`, driven from `announce` /
   `announceFromServer` in `remote.ts`). Counting runs alone let an idle Mac sleep under a
-  phone that was reading a transcript between prompts, which dropped the socket and the
-  tunnel together. Listening is the condition, not a connected client: a phone reconnects
+  phone that was reading a transcript between prompts, which dropped the connection. Listening
+  (or the official connection being online — `setRemoteServing` takes a source for each) is the condition, not a connected client: a phone reconnects
   whenever it likes, and sleeping between its visits is the same failure.
 - **A closed lid is out of reach, and the row says so.** `prevent-app-suspension` is IOKit's
   `PreventUserIdleSystemSleep`, which the header documents as still sleeping «for lid close»;
@@ -2415,4 +2225,4 @@ markdown renderer when a feed does hand us markdown.
 
 - Code / Office / Cowork are first-class; pi-coding-agent is the default backend.
 - Office and extra ACP agents come later; keep Host adapters (RPC/ACP) decoupled from the renderer.
-- Built-in model provider is **fastvibe** (`https://fastvibe.dev/v1`). The user pastes an API key; FastVibe fetches `/models`, writes isolated `models.json`, then starts the embedded engine. Do not mention the backend runtime in the UI.
+- There is no built-in model provider. The user adds one (a pi built-in or any compatible endpoint, e.g. the FastVibe relay at `https://fastvibe.dev/v1`) by pasting an API key; FastVibe fetches `/models`, writes isolated `models.json`, then starts the embedded engine. Do not mention the backend runtime in the UI.

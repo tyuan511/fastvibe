@@ -194,12 +194,6 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): void {
     return engine.identifyGateway(payload.id);
   });
   handle(
-    Ipc.providersSaveFastVibe,
-    async (payload: { apiKey: string; models: ProviderModel[] }) => {
-      return engine.saveFastVibe(payload.apiKey, payload.models);
-    },
-  );
-  handle(
     Ipc.providersAdd,
     async (payload: { name: string; baseUrl: string; apiKey: string; api?: import("@shared/types").ProviderApi; gateway?: import("@shared/types").GatewayKind; models: ProviderModel[] }) => {
       return engine.addProvider(

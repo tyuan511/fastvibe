@@ -1,3 +1,4 @@
+import type { OfficialState } from "./official";
 export const Ipc = {
   engineGetStatus: "engine:get-status",
   engineStart: "engine:start",
@@ -178,10 +179,15 @@ export const Ipc = {
   updateDownload: "update:download",
   updateInstall: "update:install",
   updateState: "update:state",
+  accountGet: "account:get",
+  accountLogin: "account:login",
+  accountCancelLogin: "account:cancel-login",
+  accountLogout: "account:logout",
+  /** Pushed whenever who is signed in changes: a login finishing, a logout, a refresh. */
+  accountState: "account:state",
   providersList: "providers:list",
   providersNative: "providers:native",
   providersFetch: "providers:fetch",
-  providersSaveFastVibe: "providers:save-fastvibe",
   providersAdd: "providers:add",
   providersAddNative: "providers:add-native",
   providersUpdate: "providers:update",
@@ -275,16 +281,10 @@ export const Ipc = {
   remoteStop: "remote:stop",
   remoteListDevices: "remote:list-devices",
   remoteRevokeDevice: "remote:revoke-device",
-  /** 内网穿透: which tunnel binaries this machine has, and which one to run. */
-  remoteTunnelTools: "remote:tunnel-tools",
-  remoteTunnelSet: "remote:tunnel-set",
-  /** The self-hosted frp tunnel's settings (token redacted), and saving them. */
-  remoteFrpGet: "remote:frp-get",
-  remoteFrpSet: "remote:frp-set",
-  /** Look an frp domain up and compare it with the frps server's address. */
-  remoteFrpCheckDns: "remote:frp-check-dns",
-  /** Pushed when the server starts, stops, gains a client, or the tunnel changes phase. */
+  /** Pushed when the listener starts or stops, a client connects, or the official connection changes. */
   remoteState: "remote:state",
+  /** Drop every phone connected through the account, leaving the connection itself up. */
+  remoteOfficialDisconnect: "remote:official-disconnect",
 } as const;
 
 export type AppModelsDevInfo = {
@@ -388,58 +388,25 @@ export type StartRequest = {
   cwd?: string;
 };
 
-/**
- * Which tunnel is running in front of the server.
- *
- * `off` → none. `starting` → the tool is up and has not printed a URL yet. `online` →
- * `url` is the address to hand a phone. `error` → `error` says why, and `output` holds
- * the tail of what the tool itself said about it.
- */
-export type RemoteTunnelProvider = "cloudflared" | "ngrok" | "frp";
-export type RemoteTunnelPhase = "off" | "starting" | "online" | "error";
 export type RemoteLanAddressFamily = "ipv4" | "ipv6";
 export type RemoteLanAddresses = {
   ipv4: string | null;
   ipv6: string | null;
 };
 
-export type RemoteTunnelState = {
-  provider: RemoteTunnelProvider | null;
-  phase: RemoteTunnelPhase;
-  url: string | null;
-  error: string | null;
-  output: string[];
-  /**
-   * The failure was a missing or rejected credential (ngrok's authtoken).
-   *
-   * A flag rather than a sentence for the pane to match on, because it selects a
-   * different *control*: exactly one command fixes it, and the pane puts that command on
-   * screen with a copy button instead of an error the user has to interpret.
-   */
-  needsAuth: boolean;
-};
-
-/** One tunnel binary, as found on this machine. */
-export type RemoteToolInfo = {
-  installed: boolean;
-  path: string | null;
-  version: string | null;
-  /**
-   * Whether the credential this tool needs is on this machine: `true` yes, `false`
-   * positively not, `null` not applicable (Cloudflare needs no account) or unknowable.
-   * Only `false` is acted on, so a check that cannot tell never blocks anybody.
-   */
-  authenticated: boolean | null;
-};
-
-export type RemoteTunnelTools = Record<RemoteTunnelProvider, RemoteToolInfo>;
-
 /** The remote server's state, as the settings pane and the sidebar show it. */
 export type RemoteServerState = {
+  /**
+   * Remote access is switched on. It turns on both ways in — the password listener and the
+   * official connection — and either may be waiting on its prerequisite (a password, a
+   * signed-in account) while this stays true.
+   */
+  enabled: boolean;
+  /** The password listener is up. */
   running: boolean;
   host: string;
   port: number | null;
-  /** A password has been set. Without one the server refuses to start at all. */
+  /** A password has been set. Without one the listener cannot start (the official connection does not need it). */
   configured: boolean;
   /** Whether the server is listening beyond loopback for devices on the local network. */
   lanAccess: boolean;
@@ -455,21 +422,13 @@ export type RemoteServerState = {
   /** Failed logins since the last success; the throttle grows with this. */
   failedLogins: number;
   /**
-   * The optional tunnel, which publishes the local listener beyond this machine.
+   * The official connection: reachable from phones signed in to this account.
    *
    * Part of this state rather than its own channel: the pane draws one card out of the
-   * two, and two broadcasts would let it render a public URL over a stopped server for
-   * as long as the second push took to arrive.
+   * listener and this, and two broadcasts would let it show one as up while the other's
+   * push was still on its way.
    */
-  tunnel: RemoteTunnelState;
-  /**
-   * The provider the user chose, which outlives the process it names.
-   *
-   * `tunnel.provider` is null while nothing runs, so the pane's select needs somewhere
-   * else to read the choice back from — otherwise a failed start resets the control to
-   * 关闭 and hides the retry.
-   */
-  tunnelChoice: RemoteTunnelProvider | null;
+  official: OfficialState;
 };
 
 /** One client that has logged in, without anything secret. */

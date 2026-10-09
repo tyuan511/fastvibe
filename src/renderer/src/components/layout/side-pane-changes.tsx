@@ -10,8 +10,6 @@ import type { ChangedFile } from "@/lib/changed-files";
 import { displayPath, resolvePath } from "@/lib/workspace-path";
 import { cn } from "@/lib/utils";
 import { isRemoteRef } from "@/lib/remote-project";
-import { blockedRemotely } from "@/lib/remote-unavailable";
-import { Ipc } from "@shared/ipc";
 
 function splitRelPath(path: string, cwd?: string): { name: string; dir: string } {
   const rel = displayPath(path, cwd).replace(/\\/g, "/");
@@ -140,7 +138,6 @@ function ChangeDiffPane({
           variant="ghost"
           label={t("changes.reveal")}
           onClick={() => {
-            if (blockedRemotely(Ipc.workspaceReveal)) return;
             void window.fastvibe.workspace.reveal(resolvePath(file.path, cwd));
           }}
         >

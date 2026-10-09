@@ -20,8 +20,6 @@ import { useSettingsStore } from "@/stores/settings";
 import type { AppInfo } from "@shared/ipc";
 import { AboutUpdate } from "./about-update";
 import { SettingsGroup, SettingsRow } from "./settings-group";
-import { blockedRemotely } from "@/lib/remote-unavailable";
-import { Ipc } from "@shared/ipc";
 
 /**
  * Settings → 关于: who this install is (logo, version) and what it is built from.
@@ -80,7 +78,6 @@ export function AboutSettings(): JSX.Element {
 
   async function exportLogs(): Promise<void> {
     // The zip lands in the host's downloads, where a remote caller cannot get at it.
-    if (blockedRemotely(Ipc.appExportLogs)) return;
     setExporting(true);
     try {
       const path = await window.fastvibe.app.exportLogs();
@@ -204,7 +201,6 @@ export function AboutSettings(): JSX.Element {
                 size="xs"
                 variant="outline"
                 onClick={() => {
-                  if (blockedRemotely(Ipc.workspaceReveal)) return;
                   void window.fastvibe.workspace.reveal(info.userData);
                 }}
               >

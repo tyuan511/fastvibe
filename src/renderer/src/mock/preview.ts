@@ -1,7 +1,8 @@
 import type { DagNode, DagNodeStatus } from "@shared/dag";
 import { decodeRemoteProjectKey, remoteProjectKey } from "@shared/project-binding";
 import type { ChatMessage, ConversationOpenResult, DirEntry, EngineSessionState, EngineStatus, ImportSourceId, WorkspaceSnapshot } from "@shared/types";
-import type { AppInfo, GitStatus } from "@shared/ipc";
+import type { AppInfo, GitStatus, RemoteServerState } from "@shared/ipc";
+import type { OfficialState } from "@shared/official";
 import type { MemoryState } from "@shared/memory";
 import {
   COMMANDS,
@@ -62,20 +63,13 @@ const maximize = params.get("maximize") === "1";
  */
 const platform = params.get("platform") ?? "darwin";
 /**
- * `?remote=1` renders the shell as the browser client sees it: no traffic lights to
- * inset and no hand-drawn title bar either, whatever `?platform=` says the host is.
- * This is the layout that had 88px of empty space where a Mac's traffic lights would
- * be, on a page that has none.
- */
-const remote = params.get("remote") === "1";
-/**
  * `?desktop=1` sets the window on a desktop: a colourful wallpaper fills the page and the
  * app is a floating macOS window over it, drawn with 玻璃效果 on. A browser has no system
  * blur, so the window's own `backdrop-filter` stands in for the material Electron's
  * vibrancy provides (`HAS_VIBRANCY` reads `simulatedVibrancy` off the bridge). This is
  * what the README shot and the website's hero show.
  */
-const desktop = params.get("desktop") === "1" && platform === "darwin" && !remote;
+const desktop = params.get("desktop") === "1" && platform === "darwin";
 
 // Transcript presentation is no longer a preference. The website shots still hide
 // timestamps and leave the demo run unfolded; `?collapse=off` does the latter for
@@ -311,18 +305,16 @@ async function loadIconMapping() {
 }
 
 /**
- * The real app serves icons two ways — a private `fastvibe-icon://` scheme in the
- * desktop window, `/file-icon/` over HTTP for the browser client — and this harness is
- * neither, so both are rewritten to the package's SVGs that the Vite dev server
- * exposes. Matching both is what keeps `?remote=1` previewable.
+ * The real app serves icons through a private `fastvibe-icon://` scheme in the desktop
+ * window, which this harness does not have, so it is rewritten to the package's SVGs that
+ * the Vite dev server exposes.
  */
 function rewriteIcons(scope: ParentNode): void {
   scope
-    .querySelectorAll<HTMLImageElement>('img[src^="fastvibe-icon://"], img[src^="/file-icon/"]')
+    .querySelectorAll<HTMLImageElement>('img[src^="fastvibe-icon://"]')
     .forEach((image) => {
     const name = (image.getAttribute("src") ?? "")
       .replace("fastvibe-icon://icons/", "")
-      .replace("/file-icon/", "")
       .replace(/\.svg$/, "");
     image.onerror = () => {
       image.onerror = null;
@@ -333,7 +325,7 @@ function rewriteIcons(scope: ParentNode): void {
 }
 
 function iconNameOf(src: string): string {
-  return src.replace("fastvibe-icon://icons/", "").replace("/file-icon/", "").replace(/\.svg$/, "");
+  return src.replace("fastvibe-icon://icons/", "").replace(/\.svg$/, "");
 }
 
 function installIconRewrite(): void {
@@ -341,7 +333,7 @@ function installIconRewrite(): void {
   // `fastvibe-icon://` URL is never requested (the observer below only fixes it afterwards).
   const setAttribute = HTMLImageElement.prototype.setAttribute;
   HTMLImageElement.prototype.setAttribute = function (name: string, value: string): void {
-    if (name === "src" && (value.startsWith("fastvibe-icon://") || value.startsWith("/file-icon/"))) {
+    if (name === "src" && (value.startsWith("fastvibe-icon://"))) {
       value = `${ICONS_BASE}${iconNameOf(value)}.svg`;
     }
     setAttribute.call(this, name, value);
@@ -397,6 +389,36 @@ const dagApi = {
   resume: async () => [] as string[],
   onChanged: () => () => undefined,
 };
+
+function accountMock(): typeof window.fastvibe.account {
+  const origin = "https://app.fastvibe.dev";
+  const user = { id: "u1", login: "octocat", avatarUrl: null, email: "octocat@example.com", role: "user" as const };
+  const listeners = new Set<(state: import("@shared/account").AccountState) => void>();
+  const scene = params.get("account") ?? "in";
+  let state: import("@shared/account").AccountState =
+    scene === "in" ? { status: "signed-in", origin, user }
+    : scene === "waiting" ? { status: "signing-in", origin }
+    : scene === "error" ? { status: "signed-out", origin, error: "登录已过期，请重新登录" }
+    : { status: "signed-out", origin };
+  const set = (next: typeof state) => {
+    state = next;
+    for (const listener of listeners) listener(state);
+    return state;
+  };
+  return {
+    getState: async () => state,
+    login: async () => {
+      setTimeout(() => set({ status: "signed-in", origin, user }), 1500);
+      return set({ status: "signing-in", origin });
+    },
+    cancelLogin: async () => set({ status: "signed-out", origin }),
+    logout: async () => set({ status: "signed-out", origin }),
+    onState: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+}
 
 const api = {
   dag: dagApi,
@@ -534,6 +556,11 @@ const api = {
     onStatus: () => () => undefined,
     onConversationReady: () => () => undefined,
   },
+  /**
+   * `?account=in|out|waiting|error` previews the sidebar's account control. The sign-in
+   * itself plays out locally: it needs a browser and a server, neither of which a mock has.
+   */
+  account: accountMock(),
   providers: {
     list: async () => PROVIDERS,
     native: async () => [],
@@ -551,7 +578,6 @@ const api = {
             ? { unlimited: true }
             : { unlimited: false, available: 18155.71 },
     }),
-    saveFastVibe: async () => PROVIDERS,
     add: async () => PROVIDERS,
     update: async () => PROVIDERS,
     remove: async () => PROVIDERS,
@@ -671,8 +697,6 @@ const api = {
   app: {
     /** Read by `lib/platform.ts` before the first paint; `?platform=` overrides it. */
     platform,
-    /** `?remote=1`: the window chrome the browser client has, which is none. */
-    remote,
     /** `?desktop=1`: the page paints a stand-in for the blur, so glass can be shown. */
     simulatedVibrancy: desktop,
     getInfo: async () => APP_INFO,
@@ -760,9 +784,9 @@ const api = {
         }
         return snapshot();
       },
-      connect: async (hostId: string) => ({ hostId, serverInstanceId: "srv_preview", status: "connected" as const, localPort: 17777 }),
-      disconnect: async (hostId?: string) => ({ hostId: hostId ?? null, serverInstanceId: null, status: "disconnected" as const }),
-      state: async () => ({ hostId: null, serverInstanceId: null, status: "disconnected" as const }),
+      connect: async (hostId: string) => ({ hostId, serverInstanceId: "srv_preview", status: "connected", localPort: 17777 }),
+      disconnect: async (hostId?: string) => ({ hostId: hostId ?? null, serverInstanceId: null, status: "disconnected" }),
+      state: async () => ({ hostId: null, serverInstanceId: null, status: "disconnected" }),
       states: async () => [],
       onState: () => () => undefined,
       onStates: () => () => undefined,
@@ -860,12 +884,12 @@ const api = {
     };
   })(),
   // Remote access is a real server in the main process; the preview has none to show,
-  // so every action is a no-op over one of the two fixtures `?tunnel=` picks.
+  // so every action is a no-op over the fixture `?remote=` picks.
   remote: {
     getState: async () => REMOTE_STATE,
     setPassword: async () => ({ ...REMOTE_STATE, configured: true }),
-    clearPassword: async () => REMOTE_OFF,
-    start: async () => REMOTE_STATE,
+    clearPassword: async () => ({ ...REMOTE_STATE, configured: false, running: false, lanAccess: false }),
+    start: async () => REMOTE_ONLINE,
     setDiscoveryName: async (name: string) => {
       REMOTE_STATE.discoveryName = name.trim();
       return { ...REMOTE_STATE };
@@ -873,25 +897,7 @@ const api = {
     stop: async () => REMOTE_OFF,
     listDevices: async () => REMOTE_DEVICES,
     revokeDevice: async () => [],
-    tunnelTools: async () => REMOTE_TOOLS,
-    setTunnel: async () => REMOTE_STATE,
-    frpGet: async () => REMOTE_FRP,
-    frpSet: async (input: Omit<typeof REMOTE_FRP, "hasToken" | "proxyName"> & { token?: string }) => ({
-      ...input,
-      proxyName: "fastvibe-3fa9c2",
-      hasToken: input.token === undefined ? true : input.token.length > 0,
-    }),
-    // `?dns=match|mismatch|unresolved` picks what the domain check answers.
-    frpCheckDns: async ({ domain }: { domain: string; serverAddr: string }) => {
-      const verdict = (params.get("dns") ?? "unresolved") as "match" | "mismatch" | "unresolved";
-      await new Promise((settle) => window.setTimeout(settle, 400));
-      return {
-        domain,
-        verdict,
-        domainAddresses: verdict === "unresolved" ? [] : verdict === "match" ? ["203.0.113.7"] : ["104.16.1.1"],
-        serverAddresses: ["203.0.113.7"],
-      };
-    },
+    officialDisconnect: async () => ({ ...REMOTE_STATE, official: { ...REMOTE_STATE.official, peers: [] } }),
     onState: () => () => undefined,
   },
   // The browser-use bridge is main-process driven: in the preview nothing ever
@@ -957,29 +963,28 @@ function computerStatus(): {
 /* ------------------------------------------------------------------ 远程访问 fixtures */
 
 /**
- * 远程访问 in the preview, in one of three shapes.
+ * 远程访问 in the preview, in the shapes that cannot be reached in a browser otherwise —
+ * the real thing needs a signed-in account, a cloud to answer, and a phone.
  *
- * The default is a machine nobody has set up, which is the pane's first screen and the
- * one that has to read as an invitation rather than as a failure. The other two are the
- * ends of the tunnel story, and neither can be reached in a browser otherwise — the real
- * thing needs a password, a port and somebody else's binary:
+ * The default is a machine nobody has set up: the pane's first screen, which has to read
+ * as an invitation rather than as a failure.
  *
- * - `?tunnel=online`: a running server with a Cloudflare quick tunnel in front of it,
- *   which is the only way to see the public address and its QR code here.
- * - `?tunnel=missing`: a server running with ngrok chosen and nothing installed, which
- *   is the state most machines are actually in the first time the pane is opened.
- * - `?tunnel=frp`: the user's own frps, online, with its settings form filled in.
+ * - `?remote=online`: switched on, signed in, a phone connected directly, LAN password set.
+ * - `?remote=relay`: the same, with the phone going through FastVibe's relay.
+ * - `?remote=signedout`: switched on, but nobody is signed in, so phones cannot find it.
+ * - `?remote=error`: switched on and the cloud refused the device.
+ * - `?remote=lan`: LAN access on, so the address row has a code worth scanning.
  */
-const TUNNEL_IDLE = {
-  provider: null,
-  phase: "off" as const,
-  url: null,
-  error: null,
-  output: [],
-  needsAuth: false,
+const OFFICIAL_OFF: OfficialState = {
+  enabled: false,
+  status: "off",
+  deviceId: null,
+  deviceName: "My-MacBook-Pro",
+  peers: [],
 };
 
-const REMOTE_OFF = {
+const REMOTE_OFF: RemoteServerState = {
+  enabled: false,
   discoveryName: "",
   defaultDiscoveryName: "My-MacBook-Pro",
   running: false,
@@ -988,140 +993,67 @@ const REMOTE_OFF = {
   configured: false,
   lanAccess: false,
   lanAddresses: { ipv4: "192.168.31.45", ipv6: null },
-  lanAddressFamily: "ipv4" as const,
+  lanAddressFamily: "ipv4",
   clients: 0,
   failedLogins: 0,
-  tunnel: TUNNEL_IDLE,
-  tunnelChoice: null,
+  official: OFFICIAL_OFF,
 };
 
-const REMOTE_ONLINE = {
+const REMOTE_ONLINE: RemoteServerState = {
   ...REMOTE_OFF,
+  enabled: true,
   running: true,
-  host: "127.0.0.1",
   port: 7777,
   configured: true,
-  lanAccess: false,
   clients: 1,
-  failedLogins: 0,
-  tunnel: {
-    ...TUNNEL_IDLE,
-    provider: "cloudflared" as const,
-    phase: "online" as const,
-    url: "https://fluffy-panda-rides-again.trycloudflare.com",
+  official: {
+    enabled: true,
+    status: "online",
+    deviceId: "6f1c0b52-4f0e-4a89-9a6d-1f4d0c2b7e11",
+    deviceName: "My-MacBook-Pro",
+    peers: [{ id: "call-1", name: "Ada's iPhone", platform: "ios", path: "direct" }],
   },
-  tunnelChoice: "cloudflared" as const,
 };
 
-/**
- * The one state where the row's own address is reachable and therefore scannable: LAN
- * access on, no tunnel at all. `?tunnel=lan` renders it — the branch that decides the
- * QR icon's visibility is only visible here.
- */
-const REMOTE_LAN = {
-  ...REMOTE_ONLINE,
-  host: "192.168.31.45",
-  lanAccess: true,
-  lanAddresses: { ipv4: "192.168.31.45", ipv6: "fd00::45" },
-  lanAddressFamily: "ipv4" as const,
-  clients: 0,
-  tunnel: TUNNEL_IDLE,
-  tunnelChoice: null,
-};
-
-const REMOTE_MISSING = {
-  ...REMOTE_ONLINE,
-  clients: 0,
-  tunnel: TUNNEL_IDLE,
-  tunnelChoice: "ngrok" as const,
-};
-
-/** ngrok installed, chosen, and refused for want of an authtoken. */
-const REMOTE_NOAUTH = {
-  ...REMOTE_ONLINE,
-  clients: 0,
-  tunnel: {
-    ...TUNNEL_IDLE,
-    provider: "ngrok" as const,
-    phase: "error" as const,
-    error: "ngrok 认证失败：还没有配置可用的 authtoken",
-    output: [
-      '{"lvl":"eror","msg":"authentication failed","err":"Usage of ngrok requires a verified account and authtoken. ERR_NGROK_4018"}',
-    ],
-    needsAuth: true,
+const REMOTE_STATES: Record<string, RemoteServerState> = {
+  online: REMOTE_ONLINE,
+  relay: {
+    ...REMOTE_ONLINE,
+    official: { ...REMOTE_ONLINE.official, peers: [{ id: "call-1", name: "Ada's iPhone", platform: "ios", path: "relay" }] },
   },
-  tunnelChoice: "ngrok" as const,
-};
-
-/** frp online through the user's own server, whose address does not change. */
-const REMOTE_FRP_ONLINE = {
-  ...REMOTE_ONLINE,
-  tunnel: {
-    ...TUNNEL_IDLE,
-    provider: "frp" as const,
-    phase: "online" as const,
-    url: "http://fastvibe.example.com:8080",
+  signedout: {
+    ...REMOTE_ONLINE,
+    clients: 0,
+    official: { ...REMOTE_ONLINE.official, status: "signed-out", deviceId: null, peers: [] },
   },
-  tunnelChoice: "frp" as const,
+  error: {
+    ...REMOTE_ONLINE,
+    clients: 0,
+    official: {
+      ...REMOTE_ONLINE.official,
+      status: "error",
+      deviceId: null,
+      error: "账号下的设备已达上限，请先在控制台移除不用的设备",
+      peers: [],
+    },
+  },
+  lan: {
+    ...REMOTE_ONLINE,
+    host: "192.168.31.45",
+    lanAccess: true,
+    lanAddresses: { ipv4: "192.168.31.45", ipv6: "fd00::45" },
+    clients: 0,
+    official: { ...REMOTE_ONLINE.official, peers: [] },
+  },
 };
 
-const tunnelFixture = params.get("tunnel");
+const remoteFixture = params.get("remote");
 
-const REMOTE_FRP =
-  tunnelFixture === "frp"
-    ? {
-        serverAddr: "frp.example.com",
-        serverPort: 7000,
-        mode: "http" as const,
-        domain: "fastvibe.example.com",
-        vhostPort: 8080 as number | null,
-        remotePort: null as number | null,
-        publicUrl: "",
-        proxyName: "fastvibe-3fa9c2",
-        hasToken: true,
-      }
-    : null;
+const REMOTE_STATE: RemoteServerState = REMOTE_STATES[remoteFixture ?? ""] ?? REMOTE_OFF;
 
-const REMOTE_STATE =
-  tunnelFixture === "online"
-    ? REMOTE_ONLINE
-    : tunnelFixture === "lan"
-      ? REMOTE_LAN
-      : tunnelFixture === "missing"
-        ? REMOTE_MISSING
-        : tunnelFixture === "noauth"
-          ? REMOTE_NOAUTH
-          : tunnelFixture === "frp"
-            ? REMOTE_FRP_ONLINE
-            : REMOTE_OFF;
-
-const REMOTE_DEVICES =
-  tunnelFixture === "online"
-    ? [{ id: "device-1", label: "iPhone", createdAt: Date.now() - 86_400_000, lastSeenAt: Date.now() - 120_000 }]
-    : [];
-
-/**
- * What each fixture needs of the probe.
- *
- * `?tunnel=noauth` is the one that needs ngrok *installed*: the whole point of that
- * state is a binary that is present and cannot authenticate, which is a different block
- * in the pane from a binary that is not there at all.
- */
-const REMOTE_TOOLS =
-  tunnelFixture === "noauth"
-    ? {
-        cloudflared: { installed: true, path: "/opt/homebrew/bin/cloudflared", version: "cloudflared version 2026.9.0", authenticated: null },
-        ngrok: { installed: true, path: "/opt/homebrew/bin/ngrok", version: "ngrok version 3.30.0", authenticated: false },
-        frp: { installed: false, path: null, version: null, authenticated: null },
-      }
-    : {
-        cloudflared: { installed: true, path: "/opt/homebrew/bin/cloudflared", version: "cloudflared version 2026.9.0", authenticated: null },
-        ngrok: { installed: false, path: null, version: null, authenticated: false },
-        frp:
-          tunnelFixture === "frp"
-            ? { installed: true, path: "/opt/homebrew/bin/frpc", version: "0.71.0", authenticated: null }
-            : { installed: false, path: null, version: null, authenticated: null },
-      };
+const REMOTE_DEVICES = REMOTE_STATE.configured
+  ? [{ id: "device-1", label: "iPhone", createdAt: Date.now() - 86_400_000, lastSeenAt: Date.now() - 120_000 }]
+  : [];
 
 window.fastvibe = api as unknown as typeof window.fastvibe;
 
@@ -1204,7 +1136,7 @@ if (desktop) {
   document.head.append(style);
 }
 
-if (website && platform === "darwin" && !remote) {
+if (website && platform === "darwin") {
   const controls = document.createElement("div");
   controls.setAttribute("aria-hidden", "true");
   controls.dataset.websiteTrafficLights = "true";

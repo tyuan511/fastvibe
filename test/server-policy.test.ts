@@ -102,6 +102,12 @@ test("the denied set is exactly what the UI explains, so a new denial cannot go 
   // So the set is pinned. Denying one more method fails here, and the fix is two lines:
   // add it below, and guard whatever offers it.
   assert.deepEqual([...deniedMethods()].sort(), [
+    // The sign-in opens a browser on the host and lands on a loopback listener there; the
+    // account chip is not drawn for a remote client, so nothing offers these.
+    "account:cancel-login",
+    "account:get",
+    "account:login",
+    "account:logout",
     "app:export-logs",
     "browser:clear-data",
     "browser:import-profile",
@@ -132,21 +138,15 @@ test("the denied set is exactly what the UI explains, so a new denial cannot go 
     "providers:oauth-login",
     "providers:probe-gateway",
     "remote:clear-password",
-    // 设置 › 远程访问 renders 「只能在本机管理」 from a remote client, so the frp form
-    // these two serve is never on screen there.
-    "remote:frp-check-dns",
-    "remote:frp-get",
-    "remote:frp-set",
     "remote:get-state",
     "remote:list-devices",
+    "remote:official-disconnect",
     "remote:revoke-device",
     "remote:set-discovery-name",
     "remote:set-lan-access",
     "remote:set-password",
     "remote:start",
     "remote:stop",
-    "remote:tunnel-set",
-    "remote:tunnel-tools",
     "ssh:connect",
     "ssh:disconnect",
     "ssh:host-key-scan",

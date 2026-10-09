@@ -88,7 +88,6 @@ const server = new RemoteServer({
   loopbackToken: process.env.FASTVIBE_AGENT_SYNC_TOKEN || undefined,
   dispatch: (method, payload, clientId) => dispatch(method, payload, { kind: "remote", window: null, origin: clientId }),
   subscribe,
-  webRoot: process.env.FASTVIBE_WEB_ROOT || join(here, "../renderer"),
   log: {
     info: (message) => console.info(`[fastvibe-agent] ${message}`),
     warn: (message) => console.warn(`[fastvibe-agent] ${message}`),

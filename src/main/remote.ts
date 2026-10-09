@@ -1,15 +1,9 @@
-import { app } from "electron";
-import { join } from "node:path";
 import { Ipc } from "@shared/ipc";
-import type {
-  RemoteLanAddressFamily,
-  RemoteServerState,
-  RemoteTunnelTools,
-} from "@shared/ipc";
+import type { RemoteLanAddressFamily, RemoteServerState } from "@shared/ipc";
+import type { OfficialState } from "@shared/official";
 import { broadcast, subscribe } from "./ipc/broadcast";
 import { dispatch, handle, handlerChannels } from "./ipc/registry";
 import { getFastVibePaths } from "./engine/paths";
-import { fileIconsDirectory } from "./engine/file-icons";
 import { log } from "./engine/logger";
 import { readAppSettings, writeAppSettings } from "./engine/app-settings";
 import { passwordProblem } from "./server/auth";
@@ -19,18 +13,11 @@ import { MdnsAdvertiser, mdnsInstanceName } from "./server/mdns";
 import { discoveryNameProblem, discoveryNameSetting } from "@shared/discovery-name";
 import { uiText } from "./engine/ui-text";
 import { getAppServer } from "./app-server/runtime";
-import { readFrpSettings, saveFrpSettings, writeFrpcConfig } from "./server/frp-store";
-import { checkFrpDns } from "./server/frp-dns";
 import { setRemoteServing } from "./engine/keep-awake";
-import { frpProblems, frpPublicUrl, frpView, type FrpSettingsInput, type FrpSettingsView } from "@shared/frp";
-import {
-  TunnelRunner,
-  TUNNEL_OFF,
-  isTunnelProvider,
-  probeTunnelTools,
-  type TunnelOptions,
-  type TunnelProvider,
-} from "./server/tunnel";
+import type { AccountService } from "./engine/account";
+import { hostname } from "node:os";
+import { createNodeDataChannelPeer, shutdownWebRtc } from "./rtc/peer";
+import { OfficialConnection } from "./rtc/official";
 
 /**
  * Where the remote server meets the desktop app.
@@ -45,7 +32,7 @@ import {
  */
 
 let server: RemoteServer | null = null;
-let tunnel: TunnelRunner | null = null;
+let official: OfficialConnection | null = null;
 let mdns: MdnsAdvertiser | null = null;
 
 /** Default port for the local or LAN listener. */
@@ -62,10 +49,6 @@ function instance(): RemoteServer {
       dispatch(method, payload, { kind: "remote", window: null, origin: clientId }),
     subscribe: (client) => subscribe(client),
     onStatusChange: announceFromServer,
-    webRoot: app.isPackaged
-      ? join(process.resourcesPath, "app.asar", "out", "renderer")
-      : join(__dirname, "../renderer"),
-    iconRoot: fileIconsDirectory(),
     log: {
       info: (message) => log.info(message),
       warn: (message) => log.warn(message),
@@ -74,15 +57,9 @@ function instance(): RemoteServer {
   }));
 }
 
-function tunnelInstance(): TunnelRunner {
-  return (tunnel ??= new TunnelRunner({
-    onChange: announceFromServer,
-    log: {
-      info: (message) => log.info(message),
-      warn: (message) => log.warn(message),
-      error: (message, error) => log.error(message, error),
-    },
-  }));
+/** The remote server, for the other transports that attach connections to it. */
+export function remoteServer(): RemoteServer {
+  return instance();
 }
 
 function mdnsInstance(): MdnsAdvertiser {
@@ -142,116 +119,106 @@ function listenHost(): string {
 }
 
 /**
- * The tunnel the user picked, which is a preference rather than a running process.
- *
- * Kept in `settings.json` next to `remotePort` so that a machine which had a tunnel up
- * gets it back at the next launch — the whole point of the feature is that the phone's
- * bookmark keeps working without anybody opening a terminal. Nothing secret is in it,
- * which is why it can live in the file that is handed to every renderer.
+ * Whether remote access is switched on, which is a preference rather than a running
+ * thing: it turns on both ways in at once — the password-protected listener (LAN) when a
+ * password is set, and the official connection (phones signed in to this account) when
+ * someone is signed in. Either may be unavailable for want of its prerequisite without
+ * the switch turning itself off, so the pane can say what is missing.
  */
-function readTunnelChoice(): TunnelProvider | null {
-  const value = readAppSettings(getFastVibePaths()).remoteTunnel;
-  return isTunnelProvider(value) ? value : null;
+function readEnabled(): boolean {
+  return readAppSettings(getFastVibePaths()).remoteEnabled === true;
 }
 
-function writeTunnelChoice(provider: TunnelProvider | null): void {
+function writeEnabled(enabled: boolean): void {
   const paths = getFastVibePaths();
-  writeAppSettings(paths, { ...readAppSettings(paths), remoteTunnel: provider });
+  writeAppSettings(paths, { ...readAppSettings(paths), remoteEnabled: enabled });
 }
 
-/** The one state both halves are described by, since the pane draws them as one card. */
+/** The one state the pane draws everything from: the listener, and the official connection. */
 function state(): RemoteServerState {
   return {
     ...instance().status,
+    enabled: readEnabled(),
     lanAccess: readLanAccess(),
     lanAddresses: lanAddresses(),
     lanAddressFamily: effectiveLanAddressFamily(),
     discoveryName: readDiscoveryName(),
     defaultDiscoveryName: mdnsInstanceName(),
-    tunnel: tunnelInstance().status,
-    tunnelChoice: readTunnelChoice(),
+    official: official?.state() ?? OFFICIAL_OFF,
   };
 }
 
-/** Push the server's state to every window, so two settings panes cannot disagree. */
+const OFFICIAL_OFF: OfficialState = {
+  enabled: false,
+  status: "off",
+  deviceId: null,
+  deviceName: "",
+  peers: [],
+};
+
+/** Push the state to every window, so two settings panes cannot disagree. */
 function announce(): RemoteServerState {
   const next = state();
-  setRemoteServing(next.running);
+  // Either way in is a reason not to sleep under a phone that is looking for this machine.
+  setRemoteServing(next.running, "listener");
+  setRemoteServing(next.official.enabled && next.official.status === "online", "official");
   syncDiscovery();
   broadcast(Ipc.remoteState, next);
   return next;
 }
 
 /**
- * The `onStatusChange` callback both the server and the tunnel are handed.
+ * The `onStatusChange` callback the server and the official connection are handed.
  *
  * A plain function, not `() => announce()` inlined at either construction site: that
  * expression calls `instance()` while `instance()` is still in the middle of building
  * the very object it would return, before `server` has been assigned — the memoized
  * `server ??= new RemoteServer(...)` never completes, and each nested call builds
  * another one. Reading the module-level variables here instead is safe because this
- * only ever runs later, from inside the server's or the tunnel's own event handlers, by
- * which point construction has long finished.
- *
- * The tunnel's half is read with `?.`: the server can report a login before anybody has
- * ever asked for a tunnel, and skipping the broadcast in that case would lose the
- * device list's live refresh over a feature that is not even in use.
+ * only ever runs later, from inside their own event handlers, by which point
+ * construction has long finished.
  */
 function announceFromServer(): void {
   if (!server) return;
-  setRemoteServing(server.status.running);
-  syncDiscovery();
-  broadcast(Ipc.remoteState, {
-    ...server.status,
-    lanAccess: readLanAccess(),
-    lanAddresses: lanAddresses(),
-    lanAddressFamily: effectiveLanAddressFamily(),
-    discoveryName: readDiscoveryName(),
-    defaultDiscoveryName: mdnsInstanceName(),
-    tunnel: tunnel?.status ?? TUNNEL_OFF,
-    tunnelChoice: readTunnelChoice(),
-  } satisfies RemoteServerState);
+  announce();
+}
+
+/** The name the account's device list shows for this machine. */
+function deviceName(): string {
+  return hostname().replace(/\.local$/i, "") || "FastVibe";
 }
 
 /**
- * Bring up the chosen tunnel in front of `port`, if there is one.
+ * Bring up whichever ways in the machine is able to offer, for the switch being on.
  *
- * Not awaited by the caller. A quick tunnel takes five to fifteen seconds to register
- * with an edge, and holding `remote:start` open for that would leave the switch in the
- * settings pane spinning with nothing to read — while the runner announces 启动中… and
- * then either the URL or the reason on its own. `start()` never rejects, so there is
- * nothing here for a caller to catch either.
+ * The listener needs a password and the official connection needs a signed-in account;
+ * neither failing for want of its prerequisite is an error here — the pane shows what is
+ * missing. A listener that cannot bind (the port is taken) is one: that throws.
  */
-function launchTunnel(port: number): void {
-  const provider = readTunnelChoice();
-  if (!provider) return;
-  void tunnelInstance().start(provider, port, provider === "frp" ? frpOptions(port) : {});
-}
-
-/**
- * Render `frpc.toml` for this start and work out the URL it will be reachable at.
- *
- * Rendered per start rather than per save because the local port is part of it, and the
- * port is only certain once the server is listening. An absent or invalid config returns
- * no options, which the runner turns into 「请先填写 frp 服务器配置」 in the pane rather
- * than a frpc usage dump.
- */
-function frpOptions(port: number): TunnelOptions {
+async function bringUp(): Promise<RemoteServerState> {
   const paths = getFastVibePaths();
-  const config = readFrpSettings(paths.frpFile);
-  if (!config || frpProblems(config).length > 0) return {};
-  const publicUrl = frpPublicUrl(config);
-  if (!publicUrl) return {};
-  try {
-    writeFrpcConfig(paths.frpcConfigFile, config, port);
-  } catch (error) {
-    log.error("frpc config write failed", error);
-    return {};
+  if (isConfigured(paths.remoteAccessFile)) {
+    await instance().start({ port: readPort(), host: listenHost() });
   }
-  return { configFile: paths.frpcConfigFile, publicUrl };
+  official?.setEnabled(true);
+  return announce();
 }
 
-export function registerRemoteIpc(queueSettingsWrite: (task: () => Promise<void>) => Promise<void>): void {
+export function registerRemoteIpc(queueSettingsWrite: (task: () => Promise<void>) => Promise<void>, account: AccountService): void {
+  official = new OfficialConnection({
+    account: { token: () => account.token(), origin: () => account.origin() },
+    attach: (socket, peer) => instance().attachTransport(socket, peer),
+    installFile: getFastVibePaths().rtcDeviceFile,
+    deviceName,
+    platform: process.platform,
+    onChange: () => announceFromServer(),
+    createPeer: (iceServers) => createNodeDataChannelPeer(iceServers, (message) => log.warn(message)),
+    log: { info: (message) => log.info(message), warn: (message) => log.warn(message) },
+  });
+  // Signing in or out, or a refresh finding the token revoked, decides whether there is
+  // anyone to be reachable as.
+  account.subscribe(() => official?.accountChanged());
+
   handle(Ipc.remoteGetState, () => state());
 
   handle(Ipc.remoteSetPassword, (payload: { password: string }) => {
@@ -264,29 +231,29 @@ export function registerRemoteIpc(queueSettingsWrite: (task: () => Promise<void>
     return announce();
   });
 
+  /**
+   * Remove the password, which is what the listener needs to exist: it stops, and LAN
+   * access goes with it. The official connection is not the password's to take down —
+   * it authenticates by account — so the switch itself is left as it was.
+   */
   handle(Ipc.remoteClearPassword, async () => {
-    await tunnelInstance().stop();
     await instance().stop();
     const paths = getFastVibePaths();
     clearRemoteAccess(paths.remoteAccessFile);
-    // Matches what `remote:stop` does: without this, turning access off from the danger
-    // zone left `remoteEnabled: true` on disk — harmless at the next launch, since
-    // `restoreRemoteServer` refuses to start with no password, but it logged a warning
-    // about it every time for a setting the user had already turned off on purpose.
-    // The tunnel choice goes with it: 关闭远程访问 turns off the whole feature, and a
-    // remembered provider would dial out again the moment a password was set.
-    writeAppSettings(paths, { ...readAppSettings(paths), remoteEnabled: false, remoteLanAccess: false, remoteTunnel: null });
+    writeAppSettings(paths, { ...readAppSettings(paths), remoteLanAccess: false });
     return announce();
   });
 
   handle(Ipc.remoteStart, async (payload?: { port?: number }) => {
-    const port = typeof payload?.port === "number" ? payload.port : readPort();
     const paths = getFastVibePaths();
-    if (!isConfigured(paths.remoteAccessFile)) throw new Error("请先设置远程访问密码");
-    const status = await instance().start({ port, host: listenHost() });
-    writeAppSettings(paths, { ...readAppSettings(paths), remoteEnabled: true, remotePort: status.port ?? port });
-    launchTunnel(status.port ?? port);
-    return announce();
+    if (typeof payload?.port === "number") writeAppSettings(paths, { ...readAppSettings(paths), remotePort: payload.port });
+    writeEnabled(true);
+    try {
+      return await bringUp();
+    } catch (error) {
+      announce();
+      throw error;
+    }
   });
 
   handle(Ipc.remoteSetLanAccess, async (payload?: { enabled?: unknown; family?: unknown }) => {
@@ -300,14 +267,10 @@ export function registerRemoteIpc(queueSettingsWrite: (task: () => Promise<void>
     if (enabled === previousEnabled && effectiveLanAddressFamily() === previousFamily) return announce();
 
     // Rebind the listener so the switch or address-family choice takes effect immediately.
-    // Stop the tunnel first because it must never publish a port while the server is
-    // between bindings.
     const port = instance().status.port ?? readPort();
     try {
-      await tunnelInstance().stop();
       await instance().stop();
-      const status = await instance().start({ port, host: listenHost() });
-      launchTunnel(status.port ?? port);
+      await instance().start({ port, host: listenHost() });
       return announce();
     } catch (error) {
       announce();
@@ -337,15 +300,9 @@ export function registerRemoteIpc(queueSettingsWrite: (task: () => Promise<void>
   });
 
   handle(Ipc.remoteStop, async () => {
-    // The tunnel goes down first. Stopped the other way round it would spend a moment
-    // publishing a port with nothing behind it, which a phone reads as a dead site
-    // rather than as remote access having been switched off.
-    await tunnelInstance().stop();
+    official?.setEnabled(false);
     await instance().stop();
-    const paths = getFastVibePaths();
-    // The provider is left alone: this is the switch, not the choice, and flipping it
-    // back on should bring back the tunnel the user had.
-    writeAppSettings(paths, { ...readAppSettings(paths), remoteEnabled: false });
+    writeEnabled(false);
     return announce();
   });
 
@@ -363,81 +320,36 @@ export function registerRemoteIpc(queueSettingsWrite: (task: () => Promise<void>
     return listDevices(getFastVibePaths().remoteAccessFile);
   });
 
-  handle(Ipc.remoteTunnelTools, (): Promise<RemoteTunnelTools> => probeTunnelTools());
-
-  handle(Ipc.remoteFrpGet, (): FrpSettingsView | null => frpView(readFrpSettings(getFastVibePaths().frpFile)));
-
-  handle(Ipc.remoteFrpCheckDns, (payload: { domain?: unknown; serverAddr?: unknown }) => checkFrpDns(payload ?? {}));
-
-  /**
-   * Save the frp settings, and put a running frp tunnel onto them.
-   *
-   * A restart only when frp is the tunnel in use and the server is up: saving the form
-   * while cloudflared runs must not take that tunnel down, and with the server off there
-   * is nothing to publish yet — `remote:start` renders the new config when it happens.
-   */
-  handle(Ipc.remoteFrpSet, async (payload: FrpSettingsInput): Promise<FrpSettingsView | null> => {
-    if (!payload || typeof payload !== "object") throw new Error("frp 配置无效");
-    const saved = saveFrpSettings(getFastVibePaths().frpFile, payload);
-    const status = instance().status;
-    if (readTunnelChoice() === "frp" && status.running && status.port !== null) {
-      await tunnelInstance().stop();
-      launchTunnel(status.port);
-      announce();
-    }
-    return frpView(saved);
-  });
-
-  /**
-   * Pick the tunnel, or none.
-   *
-   * Always restarts, including when the provider is the one already chosen: that is
-   * what the pane's 重试 does after a failure, and a no-op there would be a button that
-   * looks like it did nothing. The choice is written before anything is dialled, so a
-   * tunnel that fails to start is still the tunnel this machine comes back up with once
-   * the missing binary is installed.
-   */
-  handle(Ipc.remoteTunnelSet, async (payload?: { provider?: unknown }) => {
-    const provider = isTunnelProvider(payload?.provider) ? payload.provider : null;
-    writeTunnelChoice(provider);
-    await tunnelInstance().stop();
-    const status = instance().status;
-    // Nothing to publish until the server is up. The choice is saved either way, and
-    // `remote:start` dials it — so picking a provider before flipping the switch does
-    // the expected thing rather than silently nothing.
-    if (provider && status.running && status.port !== null) launchTunnel(status.port);
+  /** Drop every phone connected through the account, leaving the connection itself up. */
+  handle(Ipc.remoteOfficialDisconnect, () => {
+    official?.disconnectPeers();
     return announce();
   });
 }
 
 /**
- * Bring the server back up if it was running when the app last closed.
+ * Bring remote access back if it was on when the app last closed.
  *
- * Never starts without a password, and reports rather than throws: a port taken by
- * something else must not stop the app from launching.
+ * Reports rather than throws: a port taken by something else must not stop the app from
+ * launching, and must not stop the official connection from coming up either.
  */
 export async function restoreRemoteServer(): Promise<void> {
   const paths = getFastVibePaths();
-  const settings = readAppSettings(paths);
-  if (settings.remoteEnabled !== true) return;
-  if (!isConfigured(paths.remoteAccessFile)) {
-    log.warn("remote server was enabled but no password is set; leaving it off");
-    return;
-  }
+  if (readAppSettings(paths).remoteEnabled !== true) return;
   try {
-    const status = await instance().start({ port: readPort(), host: listenHost() });
-    launchTunnel(status.port ?? readPort());
-    announce();
+    await bringUp();
   } catch (error) {
     log.error("remote server failed to start", error);
+    official?.setEnabled(true);
+    announce();
   }
 }
 
 export async function stopRemoteServer(): Promise<void> {
-  // Before the server, and unconditionally: the tunnel is a child process, and one left
-  // behind by a quit keeps publishing a port that no longer answers.
-  if (tunnel) await tunnel.stop();
+  official?.shutdown();
+  shutdownWebRtc();
   mdns?.unpublish();
   if (server) await server.stop();
-  setRemoteServing(false);
+  setRemoteServing(false, "listener");
+  setRemoteServing(false, "official");
 }

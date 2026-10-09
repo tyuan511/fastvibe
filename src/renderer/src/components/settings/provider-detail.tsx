@@ -12,7 +12,6 @@ import {
   Download01Icon,
   Loading03Icon,
   PencilEdit02Icon,
-  CircleQuestionMarkIcon,
   DragDropVerticalIcon,
   RefreshIcon,
   Search01Icon,
@@ -70,36 +69,6 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { Field } from "./provider-field";
 
-function FastVibeInfoTooltip(): JSX.Element {
-  const { t } = useTranslation("settings");
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <span
-            tabIndex={0}
-            aria-label={t("providers.fastvibeAbout")}
-            className="inline-flex size-4 shrink-0 items-center justify-center rounded text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-          />
-        }
-      >
-        <HugeiconsIcon strokeWidth={2} icon={CircleQuestionMarkIcon} className="size-3.5" />
-      </TooltipTrigger>
-      <TooltipContent side="bottom">
-        <span>
-          {t("providers.fastvibeDescription")} {" "}<a
-            href="https://fastvibe.dev"
-            target="_blank"
-            rel="noreferrer"
-            className="font-medium text-primary underline underline-offset-3 hover:text-primary/80"
-          >
-            {t("providers.fastvibeVisit")}
-          </a>
-        </span>
-      </TooltipContent>
-    </Tooltip>
-  );
-}
 function ProviderModelRow({
   model,
   onEdit,
@@ -193,7 +162,6 @@ function SortableProviderModelRow({
 }
 export function ProviderDetail({
   provider,
-  onConnectFastVibe,
   onAddModels,
   onEditModel,
   onOAuth,
@@ -204,7 +172,6 @@ export function ProviderDetail({
   onIdentified,
 }: {
   provider: ProviderConfig;
-  onConnectFastVibe: (apiKey: string) => void;
   onAddModels: () => void;
   /** Opens 模型详情 for one entry of the model list. */
   onEditModel: (model: ProviderModel) => void;
@@ -219,7 +186,6 @@ export function ProviderDetail({
   onIdentified: () => void;
 }): JSX.Element {
   const { t } = useTranslation("settings");
-  const builtin = provider.kind === "builtin";
   const native = provider.kind === "native";
   /** Only custom providers own their identity and endpoint; the SDK owns native ones. */
   const editable = provider.kind === "custom";
@@ -340,7 +306,6 @@ export function ProviderDetail({
           ) : (
             <h3 className="truncate text-base font-medium">{providerLabel(provider.name || provider.id)}</h3>
           )}
-          {builtin ? <FastVibeInfoTooltip /> : null}
           {editable && !editingName ? (
             <Button size="icon-xs" variant="ghost" onClick={() => setEditingName(true)} aria-label={t("providers.rename")}>
               <HugeiconsIcon strokeWidth={2} icon={PencilEdit02Icon} />
@@ -359,11 +324,9 @@ export function ProviderDetail({
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <GatewayBalance provider={provider} onConfigure={onConfigureGateway} onIdentified={onIdentified} />
-          {!builtin ? (
-            <Button size="icon-xs" variant="ghost" onClick={() => void remove()} aria-label={t("providers.delete")}>
-              <HugeiconsIcon strokeWidth={2} icon={Delete02Icon} />
-            </Button>
-          ) : null}
+          <Button size="icon-xs" variant="ghost" onClick={() => void remove()} aria-label={t("providers.delete")}>
+            <HugeiconsIcon strokeWidth={2} icon={Delete02Icon} />
+          </Button>
         </div>
       </div>
 
@@ -399,8 +362,7 @@ export function ProviderDetail({
       ) : (
         <Field label={t("providers.apiFormat")}>
           <div className="space-y-1.5">
-            {/* The builtin provider's protocol is the user's choice too; only an SDK
-                built-in is pinned, because its api comes from the registry. */}
+            {/* Only an SDK built-in is pinned, because its api comes from the registry. */}
             <Select
               items={PROVIDER_API_ITEMS}
               value={provider.api}
@@ -473,19 +435,13 @@ export function ProviderDetail({
                   <HugeiconsIcon strokeWidth={2} icon={showKey ? ViewOffSlashIcon : ViewIcon} />
                 </Button>
               </div>
-              {builtin && !provider.hasKey ? (
-                <Button disabled={!apiKey.trim() || saving} onClick={() => onConnectFastVibe(apiKey.trim())}>
-                  {t("providers.connect")}
-                </Button>
-              ) : (
-                <Button
-                  variant="outline"
-                  disabled={!apiKey.trim() || saving}
-                  onClick={() => void save({ apiKey: apiKey.trim() })}
-                >
-                  {t("providers.save")}
-                </Button>
-              )}
+              <Button
+                variant="outline"
+                disabled={!apiKey.trim() || saving}
+                onClick={() => void save({ apiKey: apiKey.trim() })}
+              >
+                {t("providers.save")}
+              </Button>
             </div>
             {/* A key is resolved before a stored token, so it quietly takes over. */}
             {provider.hasOAuth && provider.hasKey ? (
@@ -559,8 +515,8 @@ export function ProviderDetail({
         <Button
           size="xs"
           variant="outline"
-          disabled={builtin && !provider.hasKey ? !apiKey.trim() : !canManageModels}
-          onClick={builtin && !provider.hasKey ? () => onConnectFastVibe(apiKey.trim()) : onAddModels}
+          disabled={!canManageModels}
+          onClick={onAddModels}
         >
           <HugeiconsIcon strokeWidth={2} icon={Add01Icon} />
           {t("providers.addModel")}

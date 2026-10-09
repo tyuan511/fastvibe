@@ -39,6 +39,7 @@ export function classifyRemotePush(channel: string): RemotePushKind {
     channel === Ipc.sshStates ||
     channel === Ipc.remoteState ||
     channel === Ipc.updateState ||
+    channel === Ipc.accountState ||
     channel === Ipc.windowState ||
     channel === Ipc.providersOAuthEvent ||
     channel === Ipc.browserRequest

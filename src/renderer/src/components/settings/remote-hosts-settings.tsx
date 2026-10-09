@@ -22,7 +22,6 @@ import { cleanError } from "@/lib/ipc-error";
 import { randomUUID } from "../../../../shared/random.ts";
 import { phoneAccessAddress, type RemoteAgentStatus, type RemoteHostProfile, type SshErrorCode } from "@shared/remote-host";
 import { SshHostKeyNotice } from "@/components/ssh-host-key";
-import { IS_REMOTE } from "@/lib/platform";
 import { SettingsGroup } from "./settings-group";
 import { QrAction } from "./address-actions";
 
@@ -284,17 +283,6 @@ export function RemoteHostsSettings(): JSX.Element {
     } finally {
       setBusy(false);
     }
-  }
-
-  if (IS_REMOTE) {
-    return (
-      <SettingsGroup>
-        <div className="px-4 py-3">
-          <p className="text-sm font-medium">{t("remoteHosts.localOnly")}</p>
-          <p className="mt-1 text-xs text-muted-foreground">{t("remoteHosts.localOnlyDesc")}</p>
-        </div>
-      </SettingsGroup>
-    );
   }
 
   return (

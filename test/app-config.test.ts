@@ -13,7 +13,6 @@ let mcp = [
   { id: "a", name: "A", enabled: true, transport: "stdio", command: "a", connected: true, tools: ["x"] },
   { id: "b", name: "B", enabled: true, transport: "http", url: "https://b", connected: false, tools: [] },
 ];
-const frp = { serverAddr: "1.2.3.4", serverPort: 7000, mode: "http", domain: "fv.example.com", vhostPort: 8080, remotePort: null, publicUrl: "", proxyName: "fastvibe-abc", hasToken: true };
 
 handle(Ipc.settingsGet, () => settings);
 handle(Ipc.settingsSet, (payload: Record<string, unknown>) => {
@@ -26,17 +25,12 @@ handle(Ipc.engineSaveMcpServers, (payload: { configs: typeof mcp }) => {
   mcp = payload.configs.map((item) => ({ ...item, connected: false, tools: [] }));
   return mcp;
 });
-handle(Ipc.remoteFrpGet, () => frp);
-handle(Ipc.remoteFrpSet, (payload: unknown) => {
-  writes.push({ channel: Ipc.remoteFrpSet, payload });
-  return payload;
-});
 handle(Ipc.sshHosts, () => ({ saved: [{ id: "h", host: "vps", password: "hunter2", hasPassword: true }], discovered: [] }));
 
 test("an unknown action is answered with the catalog, not a throw", async () => {
   const result = await runAppConfig({ action: "remote.hack" });
   assert.equal(result.ok, false);
-  assert.match(!result.ok ? result.error : "", /remote\.frp_set/);
+  assert.match(!result.ok ? result.error : "", /remote\.status/);
 });
 
 test("the read tool cannot reach a write action", async () => {
@@ -62,16 +56,6 @@ test("ssh hosts never carry a password back to the model", async () => {
   const result = await runAppConfig({ action: "ssh.hosts" });
   assert.equal(result.ok, true);
   assert.equal(JSON.stringify(result.ok && result.value).includes("hunter2"), false);
-});
-
-test("frp_set changes one field and keeps the rest of the form (and the token)", async () => {
-  writes.length = 0;
-  await runAppConfig({ action: "remote.frp_set", input: { vhostPort: 80 }, write: true });
-  const saved = writes[0]?.payload as Record<string, unknown>;
-  assert.equal(saved.vhostPort, 80);
-  assert.equal(saved.domain, "fv.example.com");
-  assert.equal("token" in saved, false, "an absent token keeps the stored one");
-  assert.equal("proxyName" in saved || "hasToken" in saved, false);
 });
 
 test("mcp.upsert touches one server and leaves the others alone", async () => {

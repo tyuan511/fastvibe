@@ -9,8 +9,6 @@ import { useHighlightedCode } from "@/lib/highlight";
 import { MarkdownView } from "./markdown-view";
 import { DiffView } from "./diff-view";
 import { isRemoteRef } from "@/lib/remote-project";
-import { blockedRemotely } from "@/lib/remote-unavailable";
-import { Ipc } from "@shared/ipc";
 import { SelectionActionBar } from "./selection-action-bar";
 
 export function PreviewPanel({
@@ -31,7 +29,6 @@ export function PreviewPanel({
             variant="ghost"
             label={t("preview.reveal")}
             onClick={() => {
-              if (blockedRemotely(Ipc.workspaceReveal)) return;
               void window.fastvibe.workspace.reveal(preview.path);
             }}
           >

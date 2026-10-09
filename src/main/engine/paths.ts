@@ -59,12 +59,15 @@ export type FastVibePaths = {
    * client that connects. Kept apart, and never served by any method.
    */
   remoteAccessFile: string;
+  /**
+   * The signed-in FastVibe account: the device token and who it belongs to. 0600, and
+   * never served by any method — the renderer is only told who is signed in.
+   */
+  accountFile: string;
+  /** This install's id in the account's device list (0600), so signing in again finds the same device. */
+  rtcDeviceFile: string;
   /** Saved SSH host profiles; the file is private because it may contain an SSH password. */
   sshHostsFile: string;
-  /** The self-hosted frp tunnel's settings, token included; 0600 and never served. */
-  frpFile: string;
-  /** The `frpc.toml` rendered from `frpFile` at each start. Holds the token too. */
-  frpcConfigFile: string;
   /**
    * Remote projects on other App Servers, as references.
    *
@@ -179,9 +182,9 @@ function buildFastVibePaths(): FastVibePaths {
     memoryModelsDir,
     messageQueueFile: join(runtimeRoot, "message-queue.json"),
     remoteAccessFile: join(userData, "remote-access.json"),
+    accountFile: join(userData, "account.json"),
+    rtcDeviceFile: join(userData, "rtc-device.json"),
     sshHostsFile: join(userData, "ssh-hosts.json"),
-    frpFile: join(userData, "frp.json"),
-    frpcConfigFile: join(userData, "frpc.toml"),
     projectBindingsFile: join(userData, "project-bindings.json"),
     serverIdentityFile: join(userData, "server-identity.json"),
   };
