@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../protocol/address.dart';
@@ -19,17 +20,19 @@ class SavedServer {
     required this.kind,
     required this.createdAt,
     this.lastConnectedAt,
+    this.favorite = false,
   });
 
   factory SavedServer.fromJson(Map<String, Object?> json) => SavedServer(
-        id: json['id']! as String,
-        alias: json['alias']! as String,
-        origin: json['origin']! as String,
-        host: json['host']! as String,
-        kind: AddressKind.values.byName(json['kind']! as String),
-        createdAt: (json['createdAt']! as num).toInt(),
-        lastConnectedAt: (json['lastConnectedAt'] as num?)?.toInt(),
-      );
+    id: json['id']! as String,
+    alias: json['alias']! as String,
+    origin: json['origin']! as String,
+    host: json['host']! as String,
+    kind: AddressKind.values.byName(json['kind']! as String),
+    createdAt: (json['createdAt']! as num).toInt(),
+    lastConnectedAt: (json['lastConnectedAt'] as num?)?.toInt(),
+    favorite: json['favorite'] == true,
+  );
 
   final String id;
   final String alias;
@@ -38,23 +41,22 @@ class SavedServer {
   final AddressKind kind;
   final int createdAt;
   final int? lastConnectedAt;
+  final bool favorite;
 
   int get sortKey => lastConnectedAt ?? createdAt;
 
   Map<String, Object?> toJson() => <String, Object?>{
-        'id': id,
-        'alias': alias,
-        'origin': origin,
-        'host': host,
-        'kind': kind.name,
-        'createdAt': createdAt,
-        if (lastConnectedAt != null) 'lastConnectedAt': lastConnectedAt,
-      };
+    'id': id,
+    'alias': alias,
+    'origin': origin,
+    'host': host,
+    'kind': kind.name,
+    'createdAt': createdAt,
+    if (lastConnectedAt != null) 'lastConnectedAt': lastConnectedAt,
+    'favorite': favorite,
+  };
 
-  SavedServer copyWith({
-    String? alias,
-    int? lastConnectedAt,
-  }) =>
+  SavedServer copyWith({String? alias, int? lastConnectedAt, bool? favorite}) =>
       SavedServer(
         id: id,
         alias: alias ?? this.alias,
@@ -63,6 +65,7 @@ class SavedServer {
         kind: kind,
         createdAt: createdAt,
         lastConnectedAt: lastConnectedAt ?? this.lastConnectedAt,
+        favorite: favorite ?? this.favorite,
       );
 
   static bool isValid(Object? value) {
@@ -84,7 +87,8 @@ String tokenKey(String id) => 'fv.token.$id';
 
 Future<String?> readToken(String id) => _secure.read(key: tokenKey(id));
 
-Future<void> writeToken(String id, String token) => _secure.write(key: tokenKey(id), value: token);
+Future<void> writeToken(String id, String token) =>
+    _secure.write(key: tokenKey(id), value: token);
 
 Future<void> deleteToken(String id) async {
   try {
@@ -99,7 +103,7 @@ Future<void> deleteToken(String id) async {
 /// Every mutation reads the file first and writes the whole list back, so two writes
 /// racing each other would drop one of them. Serialising them here is what keeps a
 /// rename made while a connect is patching `lastConnectedAt` from being lost.
-class ServerStore {
+class ServerStore extends ChangeNotifier {
   ServerStore._();
 
   static final ServerStore instance = ServerStore._();
@@ -115,45 +119,59 @@ class ServerStore {
   Future<List<SavedServer>> load() => _read();
 
   Future<SavedServer> upsert(SavedServer server) => _enqueue(() async {
-        final servers = await _read();
-        final index = servers.indexWhere((item) => item.origin == server.origin);
-        final SavedServer saved;
-        if (index >= 0) {
-          final existing = servers[index];
-          saved = SavedServer(
-            id: existing.id,
-            alias: server.alias,
-            origin: server.origin,
-            host: server.host,
-            kind: server.kind,
-            createdAt: existing.createdAt,
-            lastConnectedAt: server.lastConnectedAt ?? existing.lastConnectedAt,
-          );
-          servers[index] = saved;
-        } else {
-          saved = server;
-          servers.insert(0, saved);
-        }
-        await _write(servers);
-        return saved;
-      });
+    final servers = await _read();
+    final index = servers.indexWhere((item) => item.origin == server.origin);
+    final SavedServer saved;
+    if (index >= 0) {
+      final existing = servers[index];
+      saved = SavedServer(
+        id: existing.id,
+        alias: server.alias,
+        origin: server.origin,
+        host: server.host,
+        kind: server.kind,
+        createdAt: existing.createdAt,
+        lastConnectedAt: server.lastConnectedAt ?? existing.lastConnectedAt,
+        favorite: existing.favorite,
+      );
+      servers[index] = saved;
+    } else {
+      saved = server;
+      servers.insert(0, saved);
+    }
+    await _write(servers);
+    return saved;
+  });
 
-  Future<List<SavedServer>> patch(String id, {String? alias, int? lastConnectedAt}) => _enqueue(() async {
-        final servers = await _read();
-        final next = servers
-            .map((item) => item.id == id ? item.copyWith(alias: alias, lastConnectedAt: lastConnectedAt) : item)
-            .toList();
-        await _write(next);
-        return _sorted(next);
-      });
+  Future<List<SavedServer>> patch(
+    String id, {
+    String? alias,
+    int? lastConnectedAt,
+    bool? favorite,
+  }) => _enqueue(() async {
+    final servers = await _read();
+    final next = servers
+        .map(
+          (item) => item.id == id
+              ? item.copyWith(
+                  alias: alias,
+                  lastConnectedAt: lastConnectedAt,
+                  favorite: favorite,
+                )
+              : item,
+        )
+        .toList();
+    await _write(next);
+    return _sorted(next);
+  });
 
   Future<List<SavedServer>> remove(String id) => _enqueue(() async {
-        final servers = await _read();
-        final next = servers.where((item) => item.id != id).toList();
-        await _write(next);
-        await deleteToken(id);
-        return _sorted(next);
-      });
+    final servers = await _read();
+    final next = servers.where((item) => item.id != id).toList();
+    await _write(next);
+    await deleteToken(id);
+    return _sorted(next);
+  });
 
   Future<List<SavedServer>> _read() async {
     try {
@@ -162,7 +180,13 @@ class ServerStore {
       if (raw == null) return <SavedServer>[];
       final parsed = jsonDecode(raw);
       if (parsed is! List) return <SavedServer>[];
-      final servers = parsed.where(SavedServer.isValid).map((item) => SavedServer.fromJson((item as Map).cast<String, Object?>())).toList();
+      final servers = parsed
+          .where(SavedServer.isValid)
+          .map(
+            (item) =>
+                SavedServer.fromJson((item as Map).cast<String, Object?>()),
+          )
+          .toList();
       return _sorted(servers);
     } catch (_) {
       return <SavedServer>[];
@@ -171,11 +195,19 @@ class ServerStore {
 
   Future<void> _write(List<SavedServer> servers) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_listKey, jsonEncode(servers.map((item) => item.toJson()).toList()));
+    await prefs.setString(
+      _listKey,
+      jsonEncode(servers.map((item) => item.toJson()).toList()),
+    );
+    notifyListeners();
   }
 
   List<SavedServer> _sorted(List<SavedServer> servers) {
-    final sorted = <SavedServer>[...servers]..sort((a, b) => b.sortKey.compareTo(a.sortKey));
+    final sorted = <SavedServer>[...servers]
+      ..sort((a, b) {
+        if (a.favorite != b.favorite) return a.favorite ? -1 : 1;
+        return b.sortKey.compareTo(a.sortKey);
+      });
     return sorted;
   }
 }
@@ -184,6 +216,9 @@ class ServerStore {
 String newServerId() {
   const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789';
   final random = math.Random();
-  final suffix = List<String>.generate(8, (_) => alphabet[random.nextInt(alphabet.length)]).join();
+  final suffix = List<String>.generate(
+    8,
+    (_) => alphabet[random.nextInt(alphabet.length)],
+  ).join();
   return 'srv-${DateTime.now().millisecondsSinceEpoch.toRadixString(36)}-$suffix';
 }

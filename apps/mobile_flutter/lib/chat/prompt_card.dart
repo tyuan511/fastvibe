@@ -65,7 +65,10 @@ class _PromptCardState extends State<PromptCard> {
 
   void _confirm(bool confirmed) {
     Haptic.tap();
-    widget.onRespond(<String, Object?>{'id': widget.prompt.id, 'confirmed': confirmed});
+    widget.onRespond(<String, Object?>{
+      'id': widget.prompt.id,
+      'confirmed': confirmed,
+    });
   }
 
   void _submitText() {
@@ -77,7 +80,10 @@ class _PromptCardState extends State<PromptCard> {
 
   void _submitQuestions() {
     Haptic.tap();
-    widget.onRespond(<String, Object?>{'id': widget.prompt.id, 'answers': _answers});
+    widget.onRespond(<String, Object?>{
+      'id': widget.prompt.id,
+      'answers': _answers,
+    });
   }
 
   @override
@@ -87,7 +93,9 @@ class _PromptCardState extends State<PromptCard> {
     final isConfirm = prompt.method == 'confirm';
     final title = prompt.title ?? prompt.message ?? '';
     final questions = prompt.questions ?? const <PromptQuestion>[];
-    final answered = _answers.where((answer) => answer != null && answer.trim().isNotEmpty).length;
+    final answered = _answers
+        .where((answer) => answer != null && answer.trim().isNotEmpty)
+        .length;
 
     return Container(
       decoration: BoxDecoration(
@@ -105,8 +113,18 @@ class _PromptCardState extends State<PromptCard> {
               Container(
                 width: 36,
                 height: 36,
-                decoration: BoxDecoration(color: palette.accentSoft, borderRadius: BorderRadius.circular(11)),
-                child: Center(child: HugeIcon(icon: AppIcons.messageQuestion, size: 18, color: palette.accent, strokeWidth: 2)),
+                decoration: BoxDecoration(
+                  color: palette.accentSoft,
+                  borderRadius: BorderRadius.circular(11),
+                ),
+                child: Center(
+                  child: HugeIcon(
+                    icon: AppIcons.messageQuestion,
+                    size: 18,
+                    color: palette.accent,
+                    strokeWidth: 2,
+                  ),
+                ),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -114,7 +132,7 @@ class _PromptCardState extends State<PromptCard> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
                     Text(
-                      isConfirm ? t('prompt.confirmEyebrow') : t('prompt.answerEyebrow'),
+                      isConfirm ? t('prompt.confirm') : t('prompt.answer'),
                       style: TextStyle(
                         color: palette.accent,
                         fontSize: 12,
@@ -127,7 +145,12 @@ class _PromptCardState extends State<PromptCard> {
                       title,
                       maxLines: 3,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(color: palette.text, fontSize: 16, fontWeight: FontWeight.w700, height: 21 / 16),
+                      style: TextStyle(
+                        color: palette.text,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        height: 21 / 16,
+                      ),
                     ),
                   ],
                 ),
@@ -147,10 +170,21 @@ class _PromptCardState extends State<PromptCard> {
                       mono: isConfirm,
                       palette: palette,
                     ),
-                  if (prompt.method == 'select' && (prompt.options?.isNotEmpty ?? false))
-                    _SelectOptions(options: prompt.options!, palette: palette, onPick: _answer),
-                  if ((prompt.method == 'input' || prompt.method == 'editor') && prompt.message == null)
-                    _TextField(controller: _text, palette: palette, multiline: prompt.method == 'editor', hint: prompt.placeholder),
+                  if (prompt.method == 'select' &&
+                      (prompt.options?.isNotEmpty ?? false))
+                    _SelectOptions(
+                      options: prompt.options!,
+                      palette: palette,
+                      onPick: _answer,
+                    ),
+                  if ((prompt.method == 'input' || prompt.method == 'editor') &&
+                      prompt.message == null)
+                    _TextField(
+                      controller: _text,
+                      palette: palette,
+                      multiline: prompt.method == 'editor',
+                      hint: prompt.placeholder,
+                    ),
                   if (questions.isNotEmpty)
                     for (var index = 0; index < questions.length; index++)
                       Padding(
@@ -160,7 +194,8 @@ class _PromptCardState extends State<PromptCard> {
                           index: index,
                           value: _answers[index],
                           palette: palette,
-                          onChanged: (value) => setState(() => _answers[index] = value),
+                          onChanged: (value) =>
+                              setState(() => _answers[index] = value),
                         ),
                       ),
                 ],
@@ -173,7 +208,7 @@ class _PromptCardState extends State<PromptCard> {
               children: <Widget>[
                 Expanded(
                   child: _Button(
-                    label: t('common.no'),
+                    label: t('prompt.no'),
                     palette: palette,
                     onTap: widget.busy ? null : () => _confirm(false),
                   ),
@@ -181,7 +216,7 @@ class _PromptCardState extends State<PromptCard> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: _Button(
-                    label: t('common.yes'),
+                    label: t('prompt.yes'),
                     palette: palette,
                     primary: true,
                     onTap: widget.busy ? null : () => _confirm(true),
@@ -194,14 +229,21 @@ class _PromptCardState extends State<PromptCard> {
               label: t('prompt.submit'),
               palette: palette,
               primary: true,
-              onTap: widget.busy || _text.text.trim().isEmpty ? null : _submitText,
+              onTap: widget.busy || _text.text.trim().isEmpty
+                  ? null
+                  : _submitText,
             )
           else if (questions.isNotEmpty)
             _Button(
-              label: t('prompt.submitCount', <String, Object?>{'done': answered, 'total': questions.length}),
+              label: t('prompt.submitCount', <String, Object?>{
+                'done': answered,
+                'total': questions.length,
+              }),
               palette: palette,
               primary: true,
-              onTap: widget.busy || answered < questions.length ? null : _submitQuestions,
+              onTap: widget.busy || answered < questions.length
+                  ? null
+                  : _submitQuestions,
             ),
         ],
       ),
@@ -210,7 +252,11 @@ class _PromptCardState extends State<PromptCard> {
 }
 
 class _MessageBlock extends StatelessWidget {
-  const _MessageBlock({required this.text, required this.mono, required this.palette});
+  const _MessageBlock({
+    required this.text,
+    required this.mono,
+    required this.palette,
+  });
 
   final String text;
   final bool mono;
@@ -218,22 +264,29 @@ class _MessageBlock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        decoration: BoxDecoration(color: palette.field, borderRadius: BorderRadius.circular(Radii.md)),
-        child: SelectableText(
-          text,
-          style: TextStyle(
-            color: palette.text,
-            fontSize: mono ? 13 : 14,
-            height: 20 / 14,
-            fontFamily: mono ? 'monospace' : null,
-          ),
-        ),
-      );
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+    decoration: BoxDecoration(
+      color: palette.field,
+      borderRadius: BorderRadius.circular(Radii.md),
+    ),
+    child: SelectableText(
+      text,
+      style: TextStyle(
+        color: palette.text,
+        fontSize: mono ? 13 : 14,
+        height: 20 / 14,
+        fontFamily: mono ? 'monospace' : null,
+      ),
+    ),
+  );
 }
 
 class _SelectOptions extends StatelessWidget {
-  const _SelectOptions({required this.options, required this.palette, required this.onPick});
+  const _SelectOptions({
+    required this.options,
+    required this.palette,
+    required this.onPick,
+  });
 
   final List<String> options;
   final Palette palette;
@@ -241,40 +294,60 @@ class _SelectOptions extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        decoration: BoxDecoration(color: palette.background, borderRadius: BorderRadius.circular(Radii.md)),
-        clipBehavior: Clip.antiAlias,
-        child: Column(
-          children: <Widget>[
-            for (var index = 0; index < options.length; index++)
-              InkWell(
-                onTap: () => onPick(options[index]),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                  child: Row(
-                    children: <Widget>[
-                      Container(
-                        width: 24,
-                        height: 24,
-                        decoration: BoxDecoration(color: palette.accentSoft, borderRadius: BorderRadius.circular(7)),
-                        alignment: Alignment.center,
-                        child: Text(
-                          '${index + 1}',
-                          style: TextStyle(color: palette.accent, fontSize: 12, fontWeight: FontWeight.w800),
-                        ),
+    decoration: BoxDecoration(
+      color: palette.background,
+      borderRadius: BorderRadius.circular(Radii.md),
+    ),
+    clipBehavior: Clip.antiAlias,
+    child: Column(
+      children: <Widget>[
+        for (var index = 0; index < options.length; index++)
+          InkWell(
+            onTap: () => onPick(options[index]),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+              child: Row(
+                children: <Widget>[
+                  Container(
+                    width: 24,
+                    height: 24,
+                    decoration: BoxDecoration(
+                      color: palette.accentSoft,
+                      borderRadius: BorderRadius.circular(7),
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(
+                      '${index + 1}',
+                      style: TextStyle(
+                        color: palette.accent,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
                       ),
-                      const SizedBox(width: 10),
-                      Expanded(child: Text(options[index], style: TextStyle(color: palette.text, fontSize: 15))),
-                    ],
+                    ),
                   ),
-                ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      options[index],
+                      style: TextStyle(color: palette.text, fontSize: 15),
+                    ),
+                  ),
+                ],
               ),
-          ],
-        ),
-      );
+            ),
+          ),
+      ],
+    ),
+  );
 }
 
 class _TextField extends StatelessWidget {
-  const _TextField({required this.controller, required this.palette, required this.multiline, this.hint});
+  const _TextField({
+    required this.controller,
+    required this.palette,
+    required this.multiline,
+    this.hint,
+  });
 
   final TextEditingController controller;
   final Palette palette;
@@ -283,19 +356,22 @@ class _TextField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => TextField(
-        controller: controller,
-        maxLines: multiline ? null : 1,
-        minLines: multiline ? 4 : 1,
-        style: TextStyle(color: palette.text, fontSize: 16),
-        decoration: InputDecoration(
-          hintText: hint,
-          hintStyle: TextStyle(color: palette.subtle, fontSize: 16),
-          filled: true,
-          fillColor: palette.field,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(Radii.md), borderSide: BorderSide.none),
-        ),
-      );
+    controller: controller,
+    maxLines: multiline ? null : 1,
+    minLines: multiline ? 4 : 1,
+    style: TextStyle(color: palette.text, fontSize: 16),
+    decoration: InputDecoration(
+      hintText: hint,
+      hintStyle: TextStyle(color: palette.subtle, fontSize: 16),
+      filled: true,
+      fillColor: palette.field,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(Radii.md),
+        borderSide: BorderSide.none,
+      ),
+    ),
+  );
 }
 
 class _Question extends StatelessWidget {
@@ -322,11 +398,20 @@ class _Question extends StatelessWidget {
         if (question.header != null)
           Text(
             question.header!,
-            style: TextStyle(color: palette.accent, fontSize: 12, fontWeight: FontWeight.w700),
+            style: TextStyle(
+              color: palette.accent,
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
           ),
         Text(
           question.question,
-          style: TextStyle(color: palette.text, fontSize: 15, height: 21 / 15, fontWeight: FontWeight.w500),
+          style: TextStyle(
+            color: palette.text,
+            fontSize: 15,
+            height: 21 / 15,
+            fontWeight: FontWeight.w500,
+          ),
         ),
         const SizedBox(height: 8),
         if (options != null && options.isNotEmpty)
@@ -341,23 +426,40 @@ class _Question extends StatelessWidget {
                     onChanged(option);
                   },
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
                     decoration: BoxDecoration(
-                      color: value == option ? palette.accentSoft : palette.background,
+                      color: value == option
+                          ? palette.accentSoft
+                          : palette.background,
                       borderRadius: BorderRadius.circular(Radii.pill),
-                      border: Border.all(color: value == option ? palette.accent : palette.border, width: 0.5),
+                      border: Border.all(
+                        color: value == option
+                            ? palette.accent
+                            : palette.border,
+                        width: 0.5,
+                      ),
                     ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: <Widget>[
                         if (value == option) ...<Widget>[
-                          HugeIcon(icon: AppIcons.tick, size: 14, color: palette.accent, strokeWidth: 2.6),
+                          HugeIcon(
+                            icon: AppIcons.tick,
+                            size: 14,
+                            color: palette.accent,
+                            strokeWidth: 2.6,
+                          ),
                           const SizedBox(width: 5),
                         ],
                         Text(
                           option,
                           style: TextStyle(
-                            color: value == option ? palette.accent : palette.text,
+                            color: value == option
+                                ? palette.accent
+                                : palette.text,
                             fontSize: 14,
                           ),
                         ),
@@ -377,8 +479,14 @@ class _Question extends StatelessWidget {
               hintStyle: TextStyle(color: palette.subtle, fontSize: 15),
               filled: true,
               fillColor: palette.field,
-              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(Radii.md), borderSide: BorderSide.none),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 10,
+              ),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(Radii.md),
+                borderSide: BorderSide.none,
+              ),
             ),
           ),
       ],
@@ -387,7 +495,12 @@ class _Question extends StatelessWidget {
 }
 
 class _Button extends StatelessWidget {
-  const _Button({required this.label, required this.palette, this.primary = false, this.onTap});
+  const _Button({
+    required this.label,
+    required this.palette,
+    this.primary = false,
+    this.onTap,
+  });
 
   final String label;
   final Palette palette;
@@ -407,7 +520,11 @@ class _Button extends StatelessWidget {
           decoration: BoxDecoration(
             color: primary ? null : palette.field,
             gradient: primary
-                ? LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: palette.brand)
+                ? LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: palette.brand,
+                  )
                 : null,
             borderRadius: BorderRadius.circular(Radii.md),
           ),

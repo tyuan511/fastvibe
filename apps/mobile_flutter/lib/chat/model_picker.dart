@@ -9,6 +9,7 @@ import '../theme/theme.dart';
 import '../ui/icons.dart';
 import '../ui/feedback.dart';
 import '../ui/kit.dart';
+import '../ui/sheet.dart';
 import '../ui/preferences.dart';
 
 class PickerModel {
@@ -48,8 +49,16 @@ Future<void> rememberModel(String serverId, String provider, String id) async {
   try {
     final prefs = await SharedPreferences.getInstance();
     final key = modelKey(provider, id);
-    final next = <String>[key, ...(prefs.getStringList(_recentsKey(serverId)) ?? <String>[]).where((item) => item != key)];
-    await prefs.setStringList(_recentsKey(serverId), next.take(_recentLimit).toList());
+    final next = <String>[
+      key,
+      ...(prefs.getStringList(_recentsKey(serverId)) ?? <String>[]).where(
+        (item) => item != key,
+      ),
+    ];
+    await prefs.setStringList(
+      _recentsKey(serverId),
+      next.take(_recentLimit).toList(),
+    );
   } catch (_) {
     // A recent list that cannot be written is a convenience, not a feature.
   }
@@ -84,10 +93,9 @@ Future<void> showModelPicker(
   if (!context.mounted) return;
   final recents = await loadModelRecents(serverId);
   if (!context.mounted) return;
-  await showModalBottomSheet<void>(
+  await showAppSheet<void>(
     context: context,
-    backgroundColor: Colors.transparent,
-    isScrollControlled: true,
+    height: 220.0 + models.length.clamp(1, 7) * 60,
     builder: (sheetContext) => _ModelPickerSheet(
       models: models,
       currentProvider: currentProvider,
@@ -107,7 +115,8 @@ RemoteCatalogReader? _currentRemote;
 
 typedef RemoteCatalogReader = Future<List<Object?>> Function();
 
-void bindModelCatalogReader(RemoteCatalogReader reader) => _currentRemote = reader;
+void bindModelCatalogReader(RemoteCatalogReader reader) =>
+    _currentRemote = reader;
 
 Future<List<PickerModel>> readCatalog(RemoteCatalogReader remote) async {
   final raw = await remote();
@@ -118,13 +127,19 @@ Future<List<PickerModel>> readCatalog(RemoteCatalogReader remote) async {
     final id = item['id'];
     if (provider is! String || id is! String) continue;
     final levels = item['thinkingLevels'];
-    models.add(PickerModel(
-      provider: provider,
-      providerName: item['providerName'] is String ? item['providerName'] as String : provider,
-      id: id,
-      name: item['name'] is String ? item['name'] as String : id,
-      thinkingLevels: levels is List ? levels.whereType<String>().toList() : null,
-    ));
+    models.add(
+      PickerModel(
+        provider: provider,
+        providerName: item['providerName'] is String
+            ? item['providerName'] as String
+            : provider,
+        id: id,
+        name: item['name'] is String ? item['name'] as String : id,
+        thinkingLevels: levels is List
+            ? levels.whereType<String>().toList()
+            : null,
+      ),
+    );
   }
   return models;
 }
@@ -166,12 +181,18 @@ class _ModelPickerSheetState extends State<_ModelPickerSheet> {
     super.dispose();
   }
 
-  List<({String provider, String name, List<PickerModel> models})> get _providers {
-    final map = <String, ({String provider, String name, List<PickerModel> models})>{};
+  List<({String provider, String name, List<PickerModel> models})>
+  get _providers {
+    final map =
+        <String, ({String provider, String name, List<PickerModel> models})>{};
     for (final model in widget.models) {
       final entry = map[model.provider];
       if (entry == null) {
-        map[model.provider] = (provider: model.provider, name: model.providerName, models: <PickerModel>[model]);
+        map[model.provider] = (
+          provider: model.provider,
+          name: model.providerName,
+          models: <PickerModel>[model],
+        );
       } else {
         entry.models.add(model);
       }
@@ -181,9 +202,13 @@ class _ModelPickerSheetState extends State<_ModelPickerSheet> {
 
   List<PickerModel> get _recentModels {
     final byKey = <String, PickerModel>{
-      for (final model in widget.models) modelKey(model.provider, model.id): model,
+      for (final model in widget.models)
+        modelKey(model.provider, model.id): model,
     };
-    return widget.recents.map((key) => byKey[key]).whereType<PickerModel>().toList();
+    return widget.recents
+        .map((key) => byKey[key])
+        .whereType<PickerModel>()
+        .toList();
   }
 
   /// Few enough models that collapsing would hide more than it saves.
@@ -195,37 +220,19 @@ class _ModelPickerSheetState extends State<_ModelPickerSheet> {
     final providers = _providers;
     final needle = _query.text.trim().toLowerCase();
     final recentModels = _recentModels;
-    final height = MediaQuery.sizeOf(context).height;
 
     return Container(
-      height: height * 0.86,
-      decoration: BoxDecoration(
-        color: palette.card,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(Radii.xl)),
-      ),
+      decoration: BoxDecoration(color: Colors.transparent),
       child: SafeArea(
         top: false,
         child: Column(
           children: <Widget>[
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 12, 20, 6),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Text(
-                    t('models.title'),
-                    style: TextStyle(color: palette.text, fontSize: 18, fontWeight: FontWeight.w700, letterSpacing: -0.3),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    t('models.summary', <String, Object?>{
-                      'models': widget.models.length,
-                      'providers': providers.length,
-                    }),
-                    style: TextStyle(color: palette.muted, fontSize: 13),
-                  ),
-                ],
-              ),
+            AppSheetHeader(
+              title: t('models.title'),
+              subtitle: t('models.summary', {
+                'models': widget.models.length,
+                'providers': providers.length,
+              }),
             ),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -295,32 +302,42 @@ class _ModelPickerSheetState extends State<_ModelPickerSheet> {
     String needle,
   ) {
     final children = <Widget>[];
-    final currentKey = widget.currentProvider != null && widget.currentModelId != null
+    final currentKey =
+        widget.currentProvider != null && widget.currentModelId != null
         ? modelKey(widget.currentProvider!, widget.currentModelId!)
         : null;
 
     void pushModels(List<PickerModel> list, {required bool showProvider}) {
       for (var index = 0; index < list.length; index++) {
-        children.add(_ModelRow(
-          model: list[index],
-          selected: modelKey(list[index].provider, list[index].id) == currentKey,
-          showProvider: showProvider,
-          palette: palette,
-          onTap: () {
-            Haptic.select();
-            Navigator.of(context).pop();
-            widget.onPick(list[index]);
-          },
-        ));
+        children.add(
+          _ModelRow(
+            model: list[index],
+            selected:
+                modelKey(list[index].provider, list[index].id) == currentKey,
+            showProvider: showProvider,
+            palette: palette,
+            onTap: () {
+              Haptic.select();
+              Navigator.of(context).pop();
+              widget.onPick(list[index]);
+            },
+          ),
+        );
       }
     }
 
     if (needle.isNotEmpty) {
-      final terms = needle.split(RegExp(r'\s+')).where((term) => term.isNotEmpty).toList();
+      final terms = needle
+          .split(RegExp(r'\s+'))
+          .where((term) => term.isNotEmpty)
+          .toList();
       for (final entry in providers) {
-        if (_scopeProvider != null && _scopeProvider != entry.provider) continue;
+        if (_scopeProvider != null && _scopeProvider != entry.provider) {
+          continue;
+        }
         final matches = entry.models.where((model) {
-          final haystack = '${model.name} ${model.id} ${entry.name}'.toLowerCase();
+          final haystack = '${model.name} ${model.id} ${entry.name}'
+              .toLowerCase();
           return terms.every(haystack.contains);
         }).toList();
         if (matches.isEmpty) continue;
@@ -339,27 +356,31 @@ class _ModelPickerSheetState extends State<_ModelPickerSheet> {
         children.add(_Label(title: t('models.recentlyUsed'), palette: palette));
         pushModels(recentModels.take(3).toList(), showProvider: true);
       }
-      if (!_small) children.add(_Label(title: t('models.allProviders'), palette: palette));
+      if (!_small) {
+        children.add(_Label(title: t('models.allProviders'), palette: palette));
+      }
       for (final entry in providers) {
         final isOpen = _small || _expanded.contains(entry.provider);
         if (!_small || providers.length > 1) {
-          children.add(_ProviderHeader(
-            name: entry.name,
-            count: entry.models.length,
-            open: isOpen,
-            current: widget.currentProvider == entry.provider,
-            palette: palette,
-            onTap: () {
-              Haptic.tap();
-              setState(() {
-                if (_expanded.contains(entry.provider)) {
-                  _expanded.remove(entry.provider);
-                } else {
-                  _expanded.add(entry.provider);
-                }
-              });
-            },
-          ));
+          children.add(
+            _ProviderHeader(
+              name: entry.name,
+              count: entry.models.length,
+              open: isOpen,
+              current: widget.currentProvider == entry.provider,
+              palette: palette,
+              onTap: () {
+                Haptic.tap();
+                setState(() {
+                  if (_expanded.contains(entry.provider)) {
+                    _expanded.remove(entry.provider);
+                  } else {
+                    _expanded.add(entry.provider);
+                  }
+                });
+              },
+            ),
+          );
         }
         if (isOpen) pushModels(entry.models, showProvider: false);
       }
@@ -373,10 +394,14 @@ class _ModelPickerSheetState extends State<_ModelPickerSheet> {
             needle.isNotEmpty
                 ? t('models.noMatch')
                 : _scopeRecent
-                    ? t('models.noRecent')
-                    : t('models.none'),
+                ? t('models.noRecent')
+                : t('models.none'),
             textAlign: TextAlign.center,
-            style: TextStyle(color: palette.muted, fontSize: 14, height: 20 / 14),
+            style: TextStyle(
+              color: palette.muted,
+              fontSize: 14,
+              height: 20 / 14,
+            ),
           ),
         ),
       );
@@ -396,9 +421,16 @@ class _Label extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.fromLTRB(6, 14, 6, 6),
-        child: Text(title, style: TextStyle(color: palette.muted, fontSize: 13, fontWeight: FontWeight.w700)),
-      );
+    padding: const EdgeInsets.fromLTRB(6, 14, 6, 6),
+    child: Text(
+      title,
+      style: TextStyle(
+        color: palette.muted,
+        fontSize: 13,
+        fontWeight: FontWeight.w700,
+      ),
+    ),
+  );
 }
 
 class _ProviderHeader extends StatelessWidget {
@@ -448,7 +480,11 @@ class _ProviderHeader extends StatelessWidget {
                         name,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(color: palette.text, fontSize: 16, fontWeight: FontWeight.w600),
+                        style: TextStyle(
+                          color: palette.text,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                       Text(
                         '${t('models.count', <String, Object?>{'count': count})}${current ? t('models.current') : ''}',
@@ -459,7 +495,11 @@ class _ProviderHeader extends StatelessWidget {
                 ),
                 RotatedBox(
                   quarterTurns: open ? 2 : 0,
-                  child: HugeIcon(icon: AppIcons.arrowDown, size: 18, color: palette.muted),
+                  child: HugeIcon(
+                    icon: AppIcons.arrowDown,
+                    size: 18,
+                    color: palette.muted,
+                  ),
                 ),
               ],
             ),
@@ -488,9 +528,15 @@ class _ModelRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final name = model.name.isNotEmpty ? model.name : model.id;
-    final reasons = (model.thinkingLevels ?? const <String>[]).any((level) => level != 'off');
+    final reasons = (model.thinkingLevels ?? const <String>[]).any(
+      (level) => level != 'off',
+    );
     return Material(
-      color: selected ? palette.accentSoft : palette.background,
+      color: selected
+          ? palette.accentSoft
+          : palette.card.withValues(alpha: 0.7),
+      borderRadius: BorderRadius.circular(18),
+      clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
         child: Container(
@@ -516,37 +562,65 @@ class _ModelRow extends StatelessWidget {
                       style: TextStyle(
                         color: selected ? palette.accent : palette.text,
                         fontSize: 15,
-                        fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                        fontWeight: selected
+                            ? FontWeight.w700
+                            : FontWeight.w500,
                       ),
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      showProvider ? '${model.providerName} · ${model.id}' : model.id,
+                      showProvider
+                          ? '${model.providerName} · ${model.id}'
+                          : model.id,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(color: palette.muted, fontSize: 12, fontFamily: 'monospace'),
+                      style: TextStyle(
+                        color: palette.muted,
+                        fontSize: 12,
+                        fontFamily: 'monospace',
+                      ),
                     ),
                   ],
                 ),
               ),
               if (reasons) ...<Widget>[
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                  decoration: BoxDecoration(color: palette.card, borderRadius: BorderRadius.circular(Radii.pill)),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 7,
+                    vertical: 3,
+                  ),
+                  decoration: BoxDecoration(
+                    color: palette.card,
+                    borderRadius: BorderRadius.circular(Radii.pill),
+                  ),
                   child: Row(
                     children: <Widget>[
-                      HugeIcon(icon: AppIcons.aiBrain, size: 12, color: palette.muted),
+                      HugeIcon(
+                        icon: AppIcons.aiBrain,
+                        size: 12,
+                        color: palette.muted,
+                      ),
                       const SizedBox(width: 3),
                       Text(
                         t('models.reasoning'),
-                        style: TextStyle(color: palette.muted, fontSize: 11, fontWeight: FontWeight.w600),
+                        style: TextStyle(
+                          color: palette.muted,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ],
                   ),
                 ),
                 const SizedBox(width: 8),
               ],
-              if (selected) HugeIcon(icon: AppIcons.tick, size: 19, color: palette.accent, strokeWidth: 2.4),
+              if (selected)
+                HugeIcon(
+                  icon: AppIcons.tick,
+                  size: 19,
+                  color: palette.accent,
+                  strokeWidth: 2.4,
+                ),
             ],
           ),
         ),
@@ -587,7 +661,9 @@ class _RailChip extends StatelessWidget {
         decoration: BoxDecoration(
           color: active ? palette.accentSoft : palette.field,
           borderRadius: BorderRadius.circular(Radii.pill),
-          border: Border.all(color: active ? palette.accent : Colors.transparent),
+          border: Border.all(
+            color: active ? palette.accent : Colors.transparent,
+          ),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -597,7 +673,11 @@ class _RailChip extends StatelessWidget {
               const SizedBox(width: 3),
             ],
             if (icon != null) ...<Widget>[
-              HugeIcon(icon: icon!, size: 14, color: active ? palette.accent : palette.muted),
+              HugeIcon(
+                icon: icon!,
+                size: 14,
+                color: active ? palette.accent : palette.muted,
+              ),
               const SizedBox(width: 3),
             ],
             Padding(
@@ -606,14 +686,22 @@ class _RailChip extends StatelessWidget {
                 label,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(color: active ? palette.accent : palette.text, fontSize: 14, fontWeight: FontWeight.w600),
+                style: TextStyle(
+                  color: active ? palette.accent : palette.text,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
             if (count != null) ...<Widget>[
               const SizedBox(width: 6),
               Text(
                 '$count',
-                style: TextStyle(color: active ? palette.accent : palette.subtle, fontSize: 12, fontWeight: FontWeight.w600),
+                style: TextStyle(
+                  color: active ? palette.accent : palette.subtle,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ],
           ],

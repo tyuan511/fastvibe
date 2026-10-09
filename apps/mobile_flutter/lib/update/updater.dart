@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
-import 'package:http/http.dart' as http;
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
@@ -44,18 +44,27 @@ Future<AppRelease?> checkForUpdate({bool force = false}) {
   final settled = _settled;
   if (!force &&
       settled != null &&
-      DateTime.now().millisecondsSinceEpoch - settled.at < _checkFresh.inMilliseconds) {
+      DateTime.now().millisecondsSinceEpoch - settled.at <
+          _checkFresh.inMilliseconds) {
     return Future<AppRelease?>.value(settled.release);
   }
-  final check = findNewerRelease(appVersion, client: http.Client());
+  final check = () async {
+    final device = await DeviceInfoPlugin().androidInfo;
+    return findNewerRelease(appVersion, supportedAbis: device.supportedAbis);
+  }();
   _inflight = check;
-  check.then(
-    (release) => _settled = (at: DateTime.now().millisecondsSinceEpoch, release: release),
-    // A failure is not remembered, so the next ask tries again.
-    onError: (Object _) {},
-  ).whenComplete(() {
-    if (identical(_inflight, check)) _inflight = null;
-  });
+  check
+      .then(
+        (release) => _settled = (
+          at: DateTime.now().millisecondsSinceEpoch,
+          release: release,
+        ),
+        // A failure is not remembered, so the next ask tries again.
+        onError: (Object _) {},
+      )
+      .whenComplete(() {
+        if (identical(_inflight, check)) _inflight = null;
+      });
   return check;
 }
 
@@ -63,18 +72,31 @@ Future<AppRelease?> checkForUpdate({bool force = false}) {
 /// nothing.
 String describeCheckError(Object error) {
   final message = error is Error ? error.toString() : '$error';
-  if (error is TimeoutException || message.toLowerCase().contains('timeout')) return t('update.githubTimeout');
-  if (message.contains('SocketException') || message.contains('network')) return t('update.githubUnreachable');
-  if (error is GitHubStatusError && error.status == 403) return t('update.githubRateLimited');
+  if (error is TimeoutException || message.toLowerCase().contains('timeout')) {
+    return t('update.githubTimeout');
+  }
+  if (message.contains('SocketException') || message.contains('network')) {
+    return t('update.githubUnreachable');
+  }
+  if (error is GitHubStatusError && error.status == 403) {
+    return t('update.githubRateLimited');
+  }
   return message;
 }
 
-final List<void Function(AppRelease)> _releaseListeners = <void Function(AppRelease)>[];
+final List<void Function(AppRelease)> _releaseListeners =
+    <void Function(AppRelease)>[];
 
-void onReleaseAnnounced(void Function(AppRelease) listener) => _releaseListeners.add(listener);
+void onReleaseAnnounced(void Function(AppRelease) listener) =>
+    _releaseListeners.add(listener);
+
+void offReleaseAnnounced(void Function(AppRelease) listener) =>
+    _releaseListeners.remove(listener);
 
 void announceRelease(AppRelease release) {
-  for (final listener in List<void Function(AppRelease)>.from(_releaseListeners)) {
+  for (final listener in List<void Function(AppRelease)>.from(
+    _releaseListeners,
+  )) {
     listener(release);
   }
 }
@@ -128,12 +150,14 @@ Future<File> downloadApk(
     cancelToken: cancelToken,
     onReceiveProgress: (received, total) {
       final denominator = total > 0 ? total : release.apkSize;
-      if (denominator > 0) onProgress?.call((received / denominator).clamp(0, 1));
+      if (denominator > 0) {
+        onProgress?.call((received / denominator).clamp(0, 1));
+      }
     },
   );
   if (release.apkSize > 0 && await target.length() != release.apkSize) {
     await target.delete().catchError((Object _) => target);
-    throw StateError(t('update.downloadIncomplete'));
+    throw StateError(t('update.incomplete'));
   }
   return target;
 }
@@ -145,7 +169,9 @@ Future<void> installApk(File file) async {
     file.path,
     type: 'application/vnd.android.package-archive',
   );
-  if (result.type != ResultType.done) throw StateError(t('update.installFailed'));
+  if (result.type != ResultType.done) {
+    throw StateError(t('update.installerFailed'));
+  }
 }
 
 /// Remove APKs from older checks so the cache does not grow one release at a time.

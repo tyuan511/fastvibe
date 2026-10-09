@@ -55,14 +55,20 @@ class AppRelease {
 List<int>? parseVersion(String raw) {
   final match = RegExp(r'^v?(\d+)\.(\d+)\.(\d+)$').firstMatch(raw.trim());
   if (match == null) return null;
-  return <int>[int.parse(match.group(1)!), int.parse(match.group(2)!), int.parse(match.group(3)!)];
+  return <int>[
+    int.parse(match.group(1)!),
+    int.parse(match.group(2)!),
+    int.parse(match.group(3)!),
+  ];
 }
 
 /// Negative when `a` is older than `b`. Unparseable versions sort below everything.
 int compareVersions(String a, String b) {
   final left = parseVersion(a);
   final right = parseVersion(b);
-  if (left == null || right == null) return left != null ? 1 : (right != null ? -1 : 0);
+  if (left == null || right == null) {
+    return left != null ? 1 : (right != null ? -1 : 0);
+  }
   for (var index = 0; index < 3; index++) {
     if (left[index] != right[index]) return left[index] - right[index];
   }
@@ -91,25 +97,40 @@ List<String> versionsFromRefs(Object? refs) {
 }
 
 /// A `releases/tags/<tag>` body as an installable release, or null when it has no APK.
-AppRelease? releaseFromPayload(String version, Object? payload) {
+AppRelease? releaseFromPayload(
+  String version,
+  Object? payload, {
+  List<String> supportedAbis = const [],
+}) {
   if (payload is! Map) return null;
   if (payload['draft'] == true || payload['prerelease'] == true) return null;
   final assets = payload['assets'];
   if (assets is! List) return null;
+  final candidates = assets
+      .whereType<Map>()
+      .where(
+        (asset) =>
+            asset['name'] is String &&
+            (asset['name'] as String).toLowerCase().endsWith('.apk') &&
+            asset['browser_download_url'] is String,
+      )
+      .toList();
+  const knownAbis = ['arm64-v8a', 'armeabi-v7a', 'x86_64', 'x86'];
+  String? architecture(Map asset) => knownAbis
+      .where((abi) => (asset['name'] as String).contains(abi))
+      .firstOrNull;
   Map<dynamic, dynamic>? apk;
-  for (final asset in assets) {
-    if (asset is! Map) continue;
-    final name = asset['name'];
-    final url = asset['browser_download_url'];
-    if (name is String && name.toLowerCase().endsWith('.apk') && url is String) {
-      apk = asset;
-      break;
-    }
+  for (final abi in supportedAbis) {
+    apk = candidates.where((asset) => architecture(asset) == abi).firstOrNull;
+    if (apk != null) break;
   }
+  apk ??= candidates.where((asset) => architecture(asset) == null).firstOrNull;
   if (apk == null) return null;
   return AppRelease(
     version: version,
-    tag: payload['tag_name'] is String ? payload['tag_name'] as String : '$releaseTagPrefix$version',
+    tag: payload['tag_name'] is String
+        ? payload['tag_name'] as String
+        : '$releaseTagPrefix$version',
     notes: payload['body'] is String ? (payload['body'] as String).trim() : '',
     pageUrl: payload['html_url'] is String
         ? payload['html_url'] as String
@@ -122,7 +143,8 @@ AppRelease? releaseFromPayload(String version, Object? payload) {
 
 /// GitHub answered with an error status; `status` is what callers branch on.
 class GitHubStatusError extends Error {
-  GitHubStatusError(this.status) : message = t('update.githubStatus', <String, Object?>{'status': status});
+  GitHubStatusError(this.status)
+    : message = t('update.githubStatus', <String, Object?>{'status': status});
 
   final int status;
   final String message;
@@ -134,29 +156,51 @@ class GitHubStatusError extends Error {
 /// The newest published phone build strictly newer than `currentVersion`, or null when
 /// this install is current. Throws on a network or API failure, so a caller can tell
 /// "up to date" from "could not check".
-Future<AppRelease?> findNewerRelease(String currentVersion, {http.Client? client}) async {
+Future<AppRelease?> findNewerRelease(
+  String currentVersion, {
+  http.Client? client,
+  List<String> supportedAbis = const [],
+}) async {
   final httpClient = client ?? http.Client();
-  final refsResponse = await httpClient
-      .get(Uri.parse('$_api/repos/$releaseRepo/git/matching-refs/tags/$releaseTagPrefix'), headers: _headers)
-      .timeout(const Duration(seconds: 20));
-  if (refsResponse.statusCode < 200 || refsResponse.statusCode >= 300) {
-    throw GitHubStatusError(refsResponse.statusCode);
-  }
-  final newer = versionsFromRefs(jsonDecode(refsResponse.body))
-      .where((version) => compareVersions(version, currentVersion) > 0)
-      .toList();
-
-  for (final version in newer.take(_maxTagsTried)) {
-    final response = await httpClient
-        .get(Uri.parse('$_api/repos/$releaseRepo/releases/tags/$releaseTagPrefix$version'), headers: _headers)
+  try {
+    final refsResponse = await httpClient
+        .get(
+          Uri.parse(
+            '$_api/repos/$releaseRepo/git/matching-refs/tags/$releaseTagPrefix',
+          ),
+          headers: _headers,
+        )
         .timeout(const Duration(seconds: 20));
-    // 404: the tag is pushed but CI has not published it yet (or the build failed).
-    if (response.statusCode == 404) continue;
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw GitHubStatusError(response.statusCode);
+    if (refsResponse.statusCode < 200 || refsResponse.statusCode >= 300) {
+      throw GitHubStatusError(refsResponse.statusCode);
     }
-    final release = releaseFromPayload(version, jsonDecode(response.body));
-    if (release != null) return release;
+    final newer = versionsFromRefs(jsonDecode(refsResponse.body))
+        .where((version) => compareVersions(version, currentVersion) > 0)
+        .toList();
+
+    for (final version in newer.take(_maxTagsTried)) {
+      final response = await httpClient
+          .get(
+            Uri.parse(
+              '$_api/repos/$releaseRepo/releases/tags/$releaseTagPrefix$version',
+            ),
+            headers: _headers,
+          )
+          .timeout(const Duration(seconds: 20));
+      // 404: the tag is pushed but CI has not published it yet (or the build failed).
+      if (response.statusCode == 404) continue;
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw GitHubStatusError(response.statusCode);
+      }
+      final release = releaseFromPayload(
+        version,
+        jsonDecode(response.body),
+        supportedAbis: supportedAbis,
+      );
+      if (release != null) return release;
+    }
+    return null;
+  } finally {
+    if (client == null) httpClient.close();
   }
-  return null;
 }

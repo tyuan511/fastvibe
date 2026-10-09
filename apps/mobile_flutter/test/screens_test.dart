@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:fastvibe_mobile/chat/composer.dart';
@@ -44,26 +45,37 @@ void main() {
     await I18n.instance.setPreference(LanguagePreference.zh);
   });
 
-  Future<void> pump(WidgetTester tester, Widget child, {Palette? palette}) async {
+  Future<void> pump(
+    WidgetTester tester,
+    Widget child, {
+    Palette? palette,
+  }) async {
     final active = palette ?? light;
     await tester.pumpWidget(
       LiquidGlassWidgets.wrap(
         brightnessResolver: Theme.maybeBrightnessOf,
         child: MaterialApp(
           theme: buildTheme(active),
-          home: PaletteScope(palette: active, child: ToastHost(child: child)),
+          home: PaletteScope(
+            palette: active,
+            child: ToastHost(child: child),
+          ),
         ),
       ),
     );
     await tester.pump(const Duration(milliseconds: 350));
   }
 
-  testWidgets('the device list renders before anything is saved', (tester) async {
+  testWidgets('the device list renders before anything is saved', (
+    tester,
+  ) async {
     await pump(tester, const DevicesScreen());
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('the add-device form renders with an empty address', (tester) async {
+  testWidgets('the add-device form renders with an empty address', (
+    tester,
+  ) async {
     await pump(tester, const AddDeviceScreen());
     expect(tester.takeException(), isNull);
     expect(find.text(t('nav.addDevice')), findsWidgets);
@@ -73,24 +85,53 @@ void main() {
     await pump(tester, const SettingsScreen());
     expect(tester.takeException(), isNull);
     expect(find.text(t('settings.appearance')), findsOneWidget);
+    await tester.scrollUntilVisible(find.text(t('settings.general')), 180, scrollable: find.byType(Scrollable).first);
     expect(find.text(t('settings.general')), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text(t('settings.about')),
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
     expect(find.text(t('settings.about')), findsOneWidget);
-  });
-
-  testWidgets('the scanner asks for a camera rather than throwing', (tester) async {
-    await pump(tester, const ScanScreen());
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('a process card expands a tool call and a thinking row', (tester) async {
+  testWidgets('the scanner asks for a camera rather than throwing', (
+    tester,
+  ) async {
+    await pump(tester, const ScanScreen());
+    expect(find.byType(MobileScanner), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a process card expands a tool call and a thinking row', (
+    tester,
+  ) async {
     final steps = <ProcessStep>[
       const ThinkingStep('weighing the options'),
-      ToolStep(ToolBlock(id: 't1', name: 'read', args: <String, Object?>{'path': '/tmp/a.txt'}, result: 'hello')),
-      ToolStep(ToolBlock(id: 't2', name: 'bash', args: <String, Object?>{'command': 'ls'}, status: 'error', result: 'boom')),
+      ToolStep(
+        ToolBlock(
+          id: 't1',
+          name: 'read',
+          args: <String, Object?>{'path': '/tmp/a.txt'},
+          result: 'hello',
+        ),
+      ),
+      ToolStep(
+        ToolBlock(
+          id: 't2',
+          name: 'bash',
+          args: <String, Object?>{'command': 'ls'},
+          status: 'error',
+          result: 'boom',
+        ),
+      ),
     ];
     await pump(
       tester,
-      Scaffold(body: ProcessGroup(steps: steps, palette: light)),
+      Scaffold(
+        body: ProcessGroup(steps: steps, palette: light),
+      ),
     );
     expect(tester.takeException(), isNull);
     // Collapsed: the subject is on the row, the output is not.
@@ -104,9 +145,24 @@ void main() {
 
   testWidgets('every tool family draws a row without throwing', (tester) async {
     final names = <String>[
-      'read', 'edit', 'write', 'delete', 'grep', 'web_search', 'ls', 'bash', 'skill_view',
-      'subagent', 'todo', 'question', 'mcp__server__tool', 'codemode', 'browser_click', 'mystery_tool',
-      'dag_add_tasks', 'dag_report',
+      'read',
+      'edit',
+      'write',
+      'delete',
+      'grep',
+      'web_search',
+      'ls',
+      'bash',
+      'skill_view',
+      'subagent',
+      'todo',
+      'question',
+      'mcp__server__tool',
+      'codemode',
+      'browser_click',
+      'mystery_tool',
+      'dag_add_tasks',
+      'dag_report',
     ];
     await pump(
       tester,
@@ -115,7 +171,11 @@ void main() {
           children: <Widget>[
             for (final name in names)
               ToolCard(
-                tool: ToolBlock(id: name, name: name, args: <String, Object?>{'path': '/tmp/x', 'query': 'q'}),
+                tool: ToolBlock(
+                  id: name,
+                  name: name,
+                  args: <String, Object?>{'path': '/tmp/x', 'query': 'q'},
+                ),
                 palette: light,
               ),
           ],
@@ -125,9 +185,16 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('the transcript draws a reply, a user row and a footer', (tester) async {
+  testWidgets('the transcript draws a reply, a user row and a footer', (
+    tester,
+  ) async {
     final messages = <ChatMessage>[
-      ChatMessage(id: 'a2', role: 'assistant', text: 'the answer', lastId: 'a2'),
+      ChatMessage(
+        id: 'a2',
+        role: 'assistant',
+        text: 'the answer',
+        lastId: 'a2',
+      ),
       ChatMessage(id: 'u1', role: 'user', text: 'a question'),
       ChatMessage(id: 'a1', role: 'assistant', text: 'earlier'),
     ];
@@ -138,7 +205,13 @@ void main() {
           messages: messages,
           footers: completedTurnFooters(<ChatMessage>[
             ChatMessage(id: 'u1', role: 'user', createdAt: 1000),
-            ChatMessage(id: 'a2', role: 'assistant', text: 'the answer', createdAt: 1100, completedAt: 2000),
+            ChatMessage(
+              id: 'a2',
+              role: 'assistant',
+              text: 'the answer',
+              createdAt: 1100,
+              completedAt: 2000,
+            ),
           ], false),
           running: false,
           waiting: false,
@@ -153,28 +226,42 @@ void main() {
     expect(find.textContaining('a question'), findsOneWidget);
   });
 
-  testWidgets('the working capsule renders while a run is in flight', (tester) async {
+  testWidgets('the working capsule renders while a run is in flight', (
+    tester,
+  ) async {
     await pump(tester, Scaffold(body: WorkingPill(since: 1000, now: 61000)));
     expect(tester.takeException(), isNull);
     expect(find.text(t('chat.working')), findsOneWidget);
     expect(find.text('01:00'), findsOneWidget);
   });
 
-  testWidgets('the queue panel shows a paused queue with the way to resume', (tester) async {
+  testWidgets('the queue panel shows a paused queue with the way to resume', (
+    tester,
+  ) async {
     final queue = QueueState(
       conversationId: 'c1',
       revision: 3,
       items: <QueueItem>[
         const QueueItem(id: 'a', text: 'one', behavior: 'followUp'),
         const QueueItem(id: 'b', text: 'two', behavior: 'steer'),
-        const QueueItem(id: 'c', text: 'three', behavior: 'followUp', claimed: true),
+        const QueueItem(
+          id: 'c',
+          text: 'three',
+          behavior: 'followUp',
+          claimed: true,
+        ),
       ],
       pause: 'stopped',
     );
     await pump(
       tester,
       Scaffold(
-        body: QueuePanel(queue: queue, disabled: false, onCancel: (_) {}, onResume: () {}),
+        body: QueuePanel(
+          queue: queue,
+          disabled: false,
+          onCancel: (_) {},
+          onResume: () {},
+        ),
       ),
     );
     expect(tester.takeException(), isNull);
@@ -187,25 +274,53 @@ void main() {
     await pump(
       tester,
       Scaffold(
-        body: QueuePanel(queue: emptyQueue('c1'), disabled: false, onCancel: (_) {}, onResume: () {}),
+        body: QueuePanel(
+          queue: emptyQueue('c1'),
+          disabled: false,
+          onCancel: (_) {},
+          onResume: () {},
+        ),
       ),
     );
     expect(tester.takeException(), isNull);
     expect(find.byType(QueuePanel), findsOneWidget);
   });
 
-  testWidgets('each blocking prompt shape renders and builds its own payload', (tester) async {
+  testWidgets('each blocking prompt shape renders and builds its own payload', (
+    tester,
+  ) async {
     final cases = <(String, BlockingPrompt)>[
       (
         'confirm',
-        const BlockingPrompt(id: 'p1', method: 'confirm', title: 'Overwrite?', message: 'rm -rf build'),
+        const BlockingPrompt(
+          id: 'p1',
+          method: 'confirm',
+          title: 'Overwrite?',
+          message: 'rm -rf build',
+        ),
       ),
       (
         'select',
-        const BlockingPrompt(id: 'p2', method: 'select', title: 'Which one?', options: <String>['a', 'b']),
+        const BlockingPrompt(
+          id: 'p2',
+          method: 'select',
+          title: 'Which one?',
+          options: <String>['a', 'b'],
+        ),
       ),
-      ('input', const BlockingPrompt(id: 'p3', method: 'input', title: 'Name?')),
-      ('editor', const BlockingPrompt(id: 'p4', method: 'editor', title: 'Write it', message: 'prefill')),
+      (
+        'input',
+        const BlockingPrompt(id: 'p3', method: 'input', title: 'Name?'),
+      ),
+      (
+        'editor',
+        const BlockingPrompt(
+          id: 'p4',
+          method: 'editor',
+          title: 'Write it',
+          message: 'prefill',
+        ),
+      ),
       (
         'questions',
         const BlockingPrompt(
@@ -213,7 +328,11 @@ void main() {
           method: 'questions',
           title: 'A few things',
           questions: <PromptQuestion>[
-            PromptQuestion(question: 'First?', header: 'H1', options: <String>['x', 'y']),
+            PromptQuestion(
+              question: 'First?',
+              header: 'H1',
+              options: <String>['x', 'y'],
+            ),
             PromptQuestion(question: 'Second?'),
           ],
         ),
@@ -231,11 +350,15 @@ void main() {
           ),
         ),
       );
-      expect(tester.takeException(), isNull, reason: '$method threw while rendering');
+      expect(
+        tester.takeException(),
+        isNull,
+        reason: '$method threw while rendering',
+      );
 
       switch (method) {
         case 'confirm':
-          await tester.tap(find.text(t('common.yes')));
+          await tester.tap(find.text(t('prompt.yes')));
           expect(sent, <String, Object?>{'id': 'p1', 'confirmed': true});
         case 'select':
           await tester.tap(find.text('a'));
@@ -248,34 +371,40 @@ void main() {
     }
   });
 
-  testWidgets('the composer renders disabled on a fresh install with no model', (tester) async {
-    await pump(
-      tester,
-      Scaffold(
-        body: Composer(
-          conversationId: 'c1',
-          running: false,
-          disabled: true,
-          draft: TextEditingController(),
-          images: const <ComposerImage>[],
-          onImagesChange: (_) {},
-          onDraftChange: (_) {},
-          onSend: () async {},
-          onAbort: () {},
-          onContinue: () {},
-          canContinue: false,
+  testWidgets(
+    'the composer renders disabled on a fresh install with no model',
+    (tester) async {
+      await pump(
+        tester,
+        Scaffold(
+          body: Composer(
+            conversationId: 'c1',
+            running: false,
+            disabled: true,
+            draft: TextEditingController(),
+            images: const <ComposerImage>[],
+            onImagesChange: (_) {},
+            onDraftChange: (_) {},
+            onSend: () async {},
+            onAbort: () {},
+            onContinue: () {},
+            canContinue: false,
+          ),
         ),
-      ),
-    );
-    expect(tester.takeException(), isNull);
-    // The first-run path: no model, so the placeholder asks for one instead of failing.
-    expect(find.text(t('composer.placeholderLoading')), findsOneWidget);
-  });
+      );
+      expect(tester.takeException(), isNull);
+      // The first-run path: no model, so the placeholder asks for one instead of failing.
+      expect(find.text(t('composer.placeholderLoading')), findsOneWidget);
+    },
+  );
 
   // The app ships light *and* dark; every screen is drawn in both. A hardcoded colour
   // or a missing token shows up as an unreadable row rather than as an error, so the
   // only way to catch it is to render the dark theme too.
-  for (final (name, palette) in <(String, Palette)>[('light', light), ('dark', dark)]) {
+  for (final (name, palette) in <(String, Palette)>[
+    ('light', light),
+    ('dark', dark),
+  ]) {
     testWidgets('every screen renders in the $name theme', (tester) async {
       await pump(tester, const DevicesScreen(), palette: palette);
       expect(tester.takeException(), isNull, reason: 'devices/$name');
@@ -288,7 +417,12 @@ void main() {
         Scaffold(
           body: TranscriptView(
             messages: <ChatMessage>[
-              ChatMessage(id: 'a2', role: 'assistant', text: 'answer', lastId: 'a2'),
+              ChatMessage(
+                id: 'a2',
+                role: 'assistant',
+                text: 'answer',
+                lastId: 'a2',
+              ),
               ChatMessage(id: 'u1', role: 'user', text: 'question'),
             ],
             footers: const <String, TurnMeta>{},

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:hugeicons/hugeicons.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../app_info.dart';
@@ -50,7 +51,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _checkForUpdates() async {
     setState(() => _checking = true);
     try {
-      await checkForUpdate(force: true);
+      final release = await checkForUpdate(force: true);
+      if (release != null) {
+        announceRelease(release);
+      } else {
+        toastSuccess(t('update.upToDateVersion', {'version': appVersion}));
+      }
+    } catch (error) {
+      toastError(describeCheckError(error));
     } finally {
       if (mounted) setState(() => _checking = false);
     }
@@ -99,8 +107,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return GlassScreen(
       title: t('nav.settings'),
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
+        padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
         children: <Widget>[
+          PageHeading(
+            title: t('settings.preferencesTitle'),
+            subtitle: t('settings.personalize'),
+          ),
           _Section(
             title: t('settings.appearance'),
             palette: palette,
@@ -114,10 +126,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       children: <Widget>[
                         _RowIcon(icon: AppIcons.sun, palette: palette),
                         const SizedBox(width: 12),
-                        Text(t('settings.theme'), style: TextStyle(color: palette.text, fontSize: 16, fontWeight: FontWeight.w500)),
+                        Text(
+                          t('settings.theme'),
+                          style: TextStyle(
+                            color: palette.text,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
                       ],
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 18),
+                    _AppearancePreview(palette: palette),
+                    const SizedBox(height: 18),
                     _Segmented(
                       palette: palette,
                       value: preferences.theme,
@@ -132,6 +153,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       },
                     ),
                   ],
+                ),
+              ),
+              _Divider(palette: palette),
+              SettingsRow(
+                icon: AppIcons.sparkles,
+                label: t('settings.reduceGlass'),
+                description: t('settings.reduceGlassHint'),
+                trailing: GlassSwitch(
+                  useOwnLayer: true,
+                  enableHaptics: preferences.haptics,
+                  activeColor: palette.accent,
+                  value: preferences.reduceGlass,
+                  onChanged: preferences.setReduceGlass,
                 ),
               ),
               _Divider(palette: palette),
@@ -155,10 +189,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 icon: AppIcons.notification,
                 label: t('settings.notifications'),
                 description: t('settings.notificationsHint'),
-                trailing: Switch(
+                trailing: GlassSwitch(
+                  useOwnLayer: true,
+                  enableHaptics: preferences.haptics,
                   value: preferences.notifications,
-                  activeThumbColor: palette.accentText,
-                  activeTrackColor: palette.accent,
+                  thumbColor: palette.accentText,
+                  activeColor: palette.accent,
                   onChanged: (value) async {
                     if (value) {
                       await enableLocalNotifications();
@@ -174,10 +210,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 icon: AppIcons.touchInteraction,
                 label: t('settings.haptics'),
                 description: t('settings.hapticsHint'),
-                trailing: Switch(
+                trailing: GlassSwitch(
+                  useOwnLayer: true,
+                  enableHaptics: preferences.haptics,
                   value: preferences.haptics,
-                  activeThumbColor: palette.accentText,
-                  activeTrackColor: palette.accent,
+                  thumbColor: palette.accentText,
+                  activeColor: palette.accent,
                   onChanged: (value) {
                     preferences.setHaptics(value);
                     if (value) Haptic.success();
@@ -202,11 +240,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       children: <Widget>[
                         Text(
                           'FastVibe',
-                          style: TextStyle(color: palette.text, fontSize: 18, fontWeight: FontWeight.w800, letterSpacing: -0.3),
+                          style: TextStyle(
+                            color: palette.text,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: -0.3,
+                          ),
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          t('settings.versionValue', <String, Object?>{'version': appVersion}),
+                          t('settings.versionValue', <String, Object?>{
+                            'version': appVersion,
+                          }),
                           style: TextStyle(color: palette.muted, fontSize: 13),
                         ),
                       ],
@@ -224,7 +269,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ? SizedBox(
                           width: 16,
                           height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: palette.muted),
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: palette.muted,
+                          ),
                         )
                       : null,
                 ),
@@ -233,7 +281,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
               SettingsRow(
                 icon: AppIcons.information,
                 label: t('settings.releaseNotes'),
-                onTap: () => launchUrl(Uri.parse('https://github.com/$releaseRepo/releases')),
+                onTap: () => launchUrl(
+                  Uri.parse('https://github.com/$releaseRepo/releases'),
+                ),
               ),
               _Divider(palette: palette),
               SettingsRow(
@@ -251,7 +301,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
 }
 
 class _Section extends StatelessWidget {
-  const _Section({required this.title, required this.palette, required this.children});
+  const _Section({
+    required this.title,
+    required this.palette,
+    required this.children,
+  });
 
   final String title;
   final Palette palette;
@@ -266,10 +320,20 @@ class _Section extends StatelessWidget {
         children: <Widget>[
           Padding(
             padding: const EdgeInsets.fromLTRB(6, 0, 6, 8),
-            child: Text(title, style: TextStyle(color: palette.muted, fontSize: 13, fontWeight: FontWeight.w700)),
+            child: Text(
+              title,
+              style: TextStyle(
+                color: palette.muted,
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
           ),
           Container(
-            decoration: BoxDecoration(color: palette.card, borderRadius: BorderRadius.circular(Radii.lg)),
+            decoration: BoxDecoration(
+              color: palette.card,
+              borderRadius: BorderRadius.circular(Radii.lg),
+            ),
             clipBehavior: Clip.antiAlias,
             child: Column(children: children),
           ),
@@ -290,8 +354,18 @@ class _RowIcon extends StatelessWidget {
     return Container(
       width: 30,
       height: 30,
-      decoration: BoxDecoration(color: palette.accentSoft, borderRadius: BorderRadius.circular(9)),
-      child: Center(child: HugeIcon(icon: icon, size: 17, color: palette.accent, strokeWidth: 2)),
+      decoration: BoxDecoration(
+        color: palette.accentSoft,
+        borderRadius: BorderRadius.circular(9),
+      ),
+      child: Center(
+        child: HugeIcon(
+          icon: icon,
+          size: 17,
+          color: palette.accent,
+          strokeWidth: 2,
+        ),
+      ),
     );
   }
 }
@@ -302,12 +376,20 @@ class _Divider extends StatelessWidget {
   final Palette palette;
 
   @override
-  Widget build(BuildContext context) =>
-      Container(height: 0.5, margin: const EdgeInsets.only(left: 56), color: palette.separator);
+  Widget build(BuildContext context) => Container(
+    height: 0.5,
+    margin: const EdgeInsets.only(left: 56),
+    color: palette.separator,
+  );
 }
 
 class _Segmented extends StatelessWidget {
-  const _Segmented({required this.palette, required this.value, required this.items, required this.onChanged});
+  const _Segmented({
+    required this.palette,
+    required this.value,
+    required this.items,
+    required this.onChanged,
+  });
 
   final Palette palette;
   final ThemePreference value;
@@ -316,36 +398,102 @@ class _Segmented extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(3),
-      decoration: BoxDecoration(color: palette.field, borderRadius: BorderRadius.circular(Radii.md)),
-      child: Row(
-        children: <Widget>[
-          for (final entry in items.entries)
-            Expanded(
-              child: GestureDetector(
-                onTap: () => onChanged(entry.key),
-                child: Container(
-                  height: 34,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: value == entry.key ? palette.card : Colors.transparent,
-                    borderRadius: BorderRadius.circular(9),
-                    boxShadow: value == entry.key ? elevation(palette) : null,
-                  ),
-                  child: Text(
-                    entry.value,
-                    style: TextStyle(
-                      color: value == entry.key ? palette.text : palette.muted,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-        ],
+    return GlassSegmentedControl(
+      segments: [for (final label in items.values) GlassSegment(label: label)],
+      selectedIndex: items.keys.toList().indexOf(value),
+      onSegmentSelected: (index) => onChanged(items.keys.elementAt(index)),
+      height: 44,
+      selectedTextStyle: TextStyle(
+        color: palette.text,
+        fontSize: 14,
+        fontWeight: FontWeight.w600,
       ),
+      unselectedTextStyle: TextStyle(color: palette.muted, fontSize: 14),
     );
   }
+}
+
+/// A small, live preview explains the appearance choice before the user leaves Settings.
+class _AppearancePreview extends StatelessWidget {
+  const _AppearancePreview({required this.palette});
+  final Palette palette;
+  @override
+  Widget build(BuildContext context) => Container(
+    height: 136,
+    padding: const EdgeInsets.fromLTRB(18, 12, 18, 10),
+    decoration: BoxDecoration(
+      borderRadius: BorderRadius.circular(20),
+      gradient: LinearGradient(
+        colors: [palette.accentSoft, palette.background],
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+      ),
+      border: Border.all(color: palette.border, width: 0.5),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'FastVibe',
+          style: TextStyle(
+            color: palette.text,
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const Spacer(),
+        Align(
+          alignment: Alignment.centerRight,
+          child: Container(
+            width: 100,
+            height: 20,
+            decoration: BoxDecoration(
+              color: palette.accentSoft,
+              borderRadius: BorderRadius.circular(10),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        FractionallySizedBox(
+          widthFactor: 0.76,
+          child: Container(
+            height: 5,
+            decoration: BoxDecoration(
+              color: palette.muted.withValues(alpha: 0.3),
+              borderRadius: BorderRadius.circular(3),
+            ),
+          ),
+        ),
+        const SizedBox(height: 6),
+        FractionallySizedBox(
+          widthFactor: 0.5,
+          child: Container(
+            height: 5,
+            decoration: BoxDecoration(
+              color: palette.muted.withValues(alpha: 0.2),
+              borderRadius: BorderRadius.circular(3),
+            ),
+          ),
+        ),
+        const Spacer(),
+        Container(
+          height: 24,
+          decoration: BoxDecoration(
+            color: palette.card.withValues(alpha: 0.8),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: palette.border, width: 0.5),
+          ),
+          alignment: Alignment.centerRight,
+          padding: const EdgeInsets.all(4),
+          child: Container(
+            width: 16,
+            decoration: BoxDecoration(
+              color: palette.accent,
+              shape: BoxShape.circle,
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
 }

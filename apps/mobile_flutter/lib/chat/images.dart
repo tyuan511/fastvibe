@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/painting.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -49,8 +50,16 @@ String _imageId() {
 }
 
 /// Rebuild an image from a `data:` URL — an attachment that arrived from the machine.
-ComposerImage? fromDataUrl(String dataUrl, int width, int height, [String fallbackMimeType = 'image/jpeg']) {
-  final match = RegExp(r'^data:([^;,]+);base64,(.+)$', dotAll: true).firstMatch(dataUrl);
+ComposerImage? fromDataUrl(
+  String dataUrl,
+  int width,
+  int height, [
+  String fallbackMimeType = 'image/jpeg',
+]) {
+  final match = RegExp(
+    r'^data:([^;,]+);base64,(.+)$',
+    dotAll: true,
+  ).firstMatch(dataUrl);
   if (match == null) return null;
   final data = match.group(2)!;
   if (data.length > maxImageBase64Length) return null;
@@ -68,11 +77,11 @@ ComposerImage? fromDataUrl(String dataUrl, int width, int height, [String fallba
 Future<List<ComposerImage>> pickImages({required int limit}) async {
   if (limit <= 0) return <ComposerImage>[];
   final picked = await ImagePicker().pickMultiImage(
-    limit: limit,
+    limit: limit > 1 ? limit : null,
     imageQuality: 80,
   );
   final images = <ComposerImage>[];
-  for (final file in picked) {
+  for (final file in picked.take(limit)) {
     images.add(await preparePickedImage(file));
   }
   return images;
@@ -84,12 +93,19 @@ Future<List<ComposerImage>> pickImages({required int limit}) async {
 /// budget, and `StateError('image-encoding-failed')` when the platform codec refused.
 Future<ComposerImage> preparePickedImage(XFile file) async {
   final bytes = await File(file.path).readAsBytes();
+  return prepareImageBytes(bytes);
+}
+
+/// Shared by the photo picker and a user-initiated clipboard paste.
+Future<ComposerImage> prepareImageBytes(Uint8List bytes) async {
+  if (bytes.length > 20 * 1024 * 1024) throw StateError('image-too-large');
   var width = 0;
   var height = 0;
   try {
     final decoded = await decodeImageFromList(bytes);
     width = decoded.width;
     height = decoded.height;
+    decoded.dispose();
   } catch (_) {
     // A format the decoder will not open is handed to the compressor anyway; if that
     // fails too the error below is the useful one.
@@ -107,13 +123,15 @@ Future<ComposerImage> preparePickedImage(XFile file) async {
   final result = await FlutterImageCompress.compressWithList(
     bytes,
     quality: 78,
-    minWidth: targetWidth ?? width,
-    minHeight: targetHeight ?? height,
+    minWidth: targetWidth ?? (width > 0 ? width : maxImageLongSide),
+    minHeight: targetHeight ?? (height > 0 ? height : maxImageLongSide),
     format: CompressFormat.jpeg,
   );
   if (result.isEmpty) throw StateError('image-encoding-failed');
   final base64Data = base64Encode(result);
-  if (base64Data.length > maxImageBase64Length) throw StateError('image-too-large');
+  if (base64Data.length > maxImageBase64Length) {
+    throw StateError('image-too-large');
+  }
   return ComposerImage(
     id: _imageId(),
     data: base64Data,
@@ -124,4 +142,13 @@ Future<ComposerImage> preparePickedImage(XFile file) async {
   );
 }
 
-PromptImage promptImage(ComposerImage image) => PromptImage(data: image.data, mimeType: image.mimeType);
+PromptImage promptImage(ComposerImage image) =>
+    PromptImage(data: image.data, mimeType: image.mimeType);
+
+/// Reads only in response to the explicit Paste image action; never on app focus.
+Future<ComposerImage?> pasteImage() async {
+  const channel = MethodChannel('dev.fastvibe.mobile/device');
+  final bytes = await channel.invokeMethod<Uint8List>('readImage');
+  if (bytes == null || bytes.isEmpty) return null;
+  return prepareImageBytes(bytes);
+}

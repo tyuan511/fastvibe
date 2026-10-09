@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:hugeicons/hugeicons.dart';
-import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 import '../chat/draft_storage.dart';
 import '../chat/option_sheet.dart';
@@ -16,8 +15,10 @@ import '../storage/servers.dart';
 import '../theme/theme.dart';
 import '../ui/feedback.dart';
 import '../ui/glass_screen.dart';
+import '../ui/dock.dart';
 import '../ui/icons.dart';
 import '../ui/kit.dart';
+import '../ui/sheet.dart';
 import '../ui/preferences.dart';
 
 /// The sheet's value for 「no project filter」; a cwd can never be empty.
@@ -43,12 +44,26 @@ class _ServerScreenState extends State<ServerScreen> {
   String? _project;
   bool _creating = false;
   Timer? _searchTimer;
+  int _queryRevision = 0;
+  int _activity = 0;
+  int _loadGeneration = 0;
 
   @override
   void initState() {
     super.initState();
     _query.addListener(_onQueryChanged);
     Connection.instance.addListener(_onConnection);
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(ServerScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.serverId == widget.serverId) return;
+    _query.clear();
+    _project = null;
+    _activity = 0;
+    _password = '';
     _load();
   }
 
@@ -66,11 +81,13 @@ class _ServerScreenState extends State<ServerScreen> {
   }
 
   Future<void> _load() async {
+    final generation = ++_loadGeneration;
+    final serverId = widget.serverId;
     setState(() => _loaded = false);
     try {
       final servers = await ServerStore.instance.load();
-      if (!mounted) return;
-      final found = servers.where((item) => item.id == widget.serverId).firstOrNull;
+      if (!mounted || generation != _loadGeneration) return;
+      final found = servers.where((item) => item.id == serverId).firstOrNull;
       setState(() {
         _server = found;
         _loaded = true;
@@ -78,7 +95,8 @@ class _ServerScreenState extends State<ServerScreen> {
       if (found == null) return;
       final connection = Connection.instance;
       if (connection.server?.id == found.id &&
-          (connection.status == ConnectionStatus.ready || connection.status == ConnectionStatus.connecting)) {
+          (connection.status == ConnectionStatus.ready ||
+              connection.status == ConnectionStatus.connecting)) {
         return;
       }
       await connection.connectSaved(found);
@@ -92,7 +110,8 @@ class _ServerScreenState extends State<ServerScreen> {
   /// Titles and previews match on the phone; the transcript itself is searched on the
   /// machine, which is the only place that holds it.
   void _onQueryChanged() {
-    setState(() {});
+    final revision = ++_queryRevision;
+    setState(() => _hits = {});
     _searchTimer?.cancel();
     final needle = _query.text.trim();
     if (needle.length < 2 || !_ready) {
@@ -103,12 +122,22 @@ class _ServerScreenState extends State<ServerScreen> {
       final remote = Connection.instance.client;
       if (remote == null) return;
       try {
-        final result = await remote.call('conversations:search', <String, Object?>{'query': needle});
-        if (!mounted || result is! List) return;
+        final result = await remote.call(
+          'conversations:search',
+          <String, Object?>{'query': needle},
+        );
+        if (!mounted ||
+            revision != _queryRevision ||
+            Connection.instance.client != remote ||
+            result is! List) {
+          return;
+        }
         final next = <String, String?>{};
         for (final hit in result) {
           if (hit is! Map || hit['id'] is! String) continue;
-          next[hit['id'] as String] = hit['snippet'] is String ? hit['snippet'] as String : null;
+          next[hit['id'] as String] = hit['snippet'] is String
+              ? hit['snippet'] as String
+              : null;
         }
         setState(() => _hits = next);
       } catch (_) {
@@ -117,26 +146,31 @@ class _ServerScreenState extends State<ServerScreen> {
     });
   }
 
-  bool get _ready => Connection.instance.status == ConnectionStatus.ready &&
+  bool get _ready =>
+      Connection.instance.status == ConnectionStatus.ready &&
       Connection.instance.server?.id == widget.serverId;
 
   List<CatalogConversation> get _listed => visibleConversations(
-        conversations: Connection.instance.conversations,
-        archivedIds: Connection.instance.archivedIds.toSet(),
-        running: Connection.instance.running.keys.toSet(),
-      );
+    conversations: Connection.instance.conversations,
+    archivedIds: Connection.instance.archivedIds.toSet(),
+    running: Connection.instance.running.keys.toSet(),
+  );
 
   List<CatalogConversation> get _archived {
     final archivedIds = Connection.instance.archivedIds.toSet();
     final rows = Connection.instance.conversations
-        .where((item) => item.kind != 'side-chat' && archivedIds.contains(item.id))
+        .where(
+          (item) => item.kind != 'side-chat' && archivedIds.contains(item.id),
+        )
         .toList();
     rows.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     return rows;
   }
 
-  Map<String, String> get _projectNames =>
-      <String, String>{for (final project in Connection.instance.projects) project.cwd: project.name};
+  Map<String, String> get _projectNames => <String, String>{
+    for (final project in Connection.instance.projects)
+      project.cwd: project.name,
+  };
 
   Future<void> _createChat(String selectedProject) async {
     final remote = Connection.instance.client;
@@ -156,17 +190,22 @@ class _ServerScreenState extends State<ServerScreen> {
               break;
             }
           }
-          if (chat != null && (chat.preview == null || chat.preview!.isEmpty) && (chat.project ?? '') == selectedProject) {
+          if (chat != null &&
+              (chat.preview == null || chat.preview!.isEmpty) &&
+              (chat.project ?? '') == selectedProject) {
             if (mounted) context.push('/chat/${draft.conversationId}');
             return;
           }
         }
       }
-      final result = await remote.call('conversations:create', <String, Object?>{
-        'project': selectedProject.isEmpty ? null : selectedProject,
-        'activate': false,
-        'reuseEmpty': false,
-      });
+      final result = await remote.call(
+        'conversations:create',
+        <String, Object?>{
+          'project': selectedProject.isEmpty ? null : selectedProject,
+          'activate': false,
+          'reuseEmpty': false,
+        },
+      );
       if (result is Map && result['conversation'] is Map) {
         final id = (result['conversation'] as Map)['id'];
         if (id is String && mounted) context.push('/chat/$id');
@@ -185,7 +224,10 @@ class _ServerScreenState extends State<ServerScreen> {
       unawaited(_createChat(_allProjects));
       return;
     }
-    final projects = orderProjectsByRecentUse(Connection.instance.projects, Connection.instance.conversations);
+    final projects = orderProjectsByRecentUse(
+      Connection.instance.projects,
+      Connection.instance.conversations,
+    );
     showOptionSheet(
       context,
       title: t('common.newChat'),
@@ -229,7 +271,10 @@ class _ServerScreenState extends State<ServerScreen> {
           value: 'archive',
           label: t('common.archive'),
           icon: AppIcons.archive,
-          onSelect: () => archiveConversation(chat.id, running: Connection.instance.running[chat.id] == true),
+          onSelect: () => archiveConversation(
+            chat.id,
+            running: Connection.instance.running[chat.id] == true,
+          ),
         ),
         SheetOption(
           value: 'delete',
@@ -258,7 +303,9 @@ class _ServerScreenState extends State<ServerScreen> {
     final confirmed = await AppDialog.confirm(
       context,
       title: t('server.deleteChatTitle'),
-      message: t('server.deleteChatBody', <String, Object?>{'title': chat.title}),
+      message: t('server.deleteChatBody', <String, Object?>{
+        'title': chat.title,
+      }),
       confirmLabel: t('common.delete'),
       destructive: true,
     );
@@ -271,47 +318,40 @@ class _ServerScreenState extends State<ServerScreen> {
       await Connection.instance.refreshConnection();
     } catch (_) {
       // A failed refresh leaves the last list; the header says whether we are connected.
-    } finally {
-
     }
   }
 
   void _openArchiveSheet() {
     Haptic.tap();
     final names = _projectNames;
-    showModalBottomSheet<void>(
+    showAppSheet<void>(
       context: context,
-      backgroundColor: Colors.transparent,
+      height: 130.0 + _archived.length.clamp(1, 7) * 76,
       builder: (sheetContext) {
         final palette = paletteOf(sheetContext);
         final rows = _archived;
-        return Container(
-          decoration: BoxDecoration(
-            color: palette.card,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(Radii.xl)),
-          ),
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
           child: SafeArea(
             top: false,
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                Text(
-                  t('server.archived'),
-                  style: TextStyle(color: palette.text, fontSize: 18, fontWeight: FontWeight.w700, letterSpacing: -0.3),
+                AppSheetHeader(
+                  title: t('server.archived'),
+                  subtitle: t('common.chatCount', {'count': rows.length}),
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  t('common.chatCount', <String, Object?>{'count': rows.length}),
-                  style: TextStyle(color: palette.muted, fontSize: 13),
-                ),
-                const SizedBox(height: 12),
                 Flexible(
                   child: rows.isEmpty
                       ? Padding(
                           padding: const EdgeInsets.symmetric(vertical: 24),
-                          child: Center(child: Text(t('server.noArchived'), style: TextStyle(color: palette.muted))),
+                          child: Center(
+                            child: Text(
+                              t('server.noArchived'),
+                              style: TextStyle(color: palette.muted),
+                            ),
+                          ),
                         )
                       : ListView.separated(
                           shrinkWrap: true,
@@ -319,7 +359,9 @@ class _ServerScreenState extends State<ServerScreen> {
                           separatorBuilder: (_, _) => const SizedBox(height: 8),
                           itemBuilder: (context, index) {
                             final chat = rows[index];
-                            final project = chat.project != null ? names[chat.project] : null;
+                            final project = chat.project != null
+                                ? names[chat.project]
+                                : null;
                             return Container(
                               padding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
                               decoration: BoxDecoration(
@@ -336,13 +378,18 @@ class _ServerScreenState extends State<ServerScreen> {
                                       },
                                       behavior: HitTestBehavior.opaque,
                                       child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
                                         children: <Widget>[
                                           Text(
                                             chat.title,
                                             maxLines: 1,
                                             overflow: TextOverflow.ellipsis,
-                                            style: TextStyle(color: palette.text, fontSize: 15, fontWeight: FontWeight.w600),
+                                            style: TextStyle(
+                                              color: palette.text,
+                                              fontSize: 15,
+                                              fontWeight: FontWeight.w600,
+                                            ),
                                           ),
                                           const SizedBox(height: 2),
                                           Text(
@@ -352,7 +399,10 @@ class _ServerScreenState extends State<ServerScreen> {
                                             ].join(' · '),
                                             maxLines: 1,
                                             overflow: TextOverflow.ellipsis,
-                                            style: TextStyle(color: palette.muted, fontSize: 12),
+                                            style: TextStyle(
+                                              color: palette.muted,
+                                              fontSize: 12,
+                                            ),
                                           ),
                                         ],
                                       ),
@@ -364,18 +414,31 @@ class _ServerScreenState extends State<ServerScreen> {
                                       await unarchiveConversation(chat.id);
                                     },
                                     child: Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 11,
+                                        vertical: 7,
+                                      ),
                                       decoration: BoxDecoration(
                                         color: palette.accentSoft,
-                                        borderRadius: BorderRadius.circular(Radii.pill),
+                                        borderRadius: BorderRadius.circular(
+                                          Radii.pill,
+                                        ),
                                       ),
                                       child: Row(
                                         children: <Widget>[
-                                          HugeIcon(icon: AppIcons.archiveRestore, size: 15, color: palette.accent),
+                                          HugeIcon(
+                                            icon: AppIcons.archiveRestore,
+                                            size: 15,
+                                            color: palette.accent,
+                                          ),
                                           const SizedBox(width: 4),
                                           Text(
                                             t('common.restore'),
-                                            style: TextStyle(color: palette.accent, fontSize: 13, fontWeight: FontWeight.w700),
+                                            style: TextStyle(
+                                              color: palette.accent,
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w700,
+                                            ),
                                           ),
                                         ],
                                       ),
@@ -402,11 +465,26 @@ class _ServerScreenState extends State<ServerScreen> {
     final status = connection.server?.id != widget.serverId
         ? null
         : switch (connection.status) {
-            ConnectionStatus.connecting => (t('server.statusConnecting'), palette.warning, palette.warningSoft),
-            ConnectionStatus.error => (t('server.statusOffline'), palette.danger, palette.dangerSoft),
-            ConnectionStatus.ready when connection.reconnecting =>
-              (t('server.statusReconnecting'), palette.warning, palette.warningSoft),
-            ConnectionStatus.ready => (t('server.statusConnected'), palette.success, palette.successSoft),
+            ConnectionStatus.connecting => (
+              t('server.statusConnecting'),
+              palette.warning,
+              palette.warningSoft,
+            ),
+            ConnectionStatus.error => (
+              t('server.statusOffline'),
+              palette.danger,
+              palette.dangerSoft,
+            ),
+            ConnectionStatus.ready when connection.reconnecting => (
+              t('server.statusReconnecting'),
+              palette.warning,
+              palette.warningSoft,
+            ),
+            ConnectionStatus.ready => (
+              t('server.statusConnected'),
+              palette.success,
+              palette.successSoft,
+            ),
             _ => null,
           };
 
@@ -415,38 +493,20 @@ class _ServerScreenState extends State<ServerScreen> {
       // The connection state belongs in the bar: it is the answer to the question a
       // failed call raises, and a row of its own would be read after the error.
       subtitle: status?.$1,
-      actions: <Widget>[
-        if (status != null)
-          Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: Container(
-              width: 9,
-              height: 9,
-              decoration: BoxDecoration(color: status.$2, shape: BoxShape.circle),
-            ),
-          ),
+      statusColor: status?.$2,
+      actions: [
+        if (_ready && _archived.isNotEmpty) GlassAction(icon: AppIcons.archive, tooltip: t('server.archived'), onPressed: _openArchiveSheet),
       ],
       body: _body(palette),
-      floatingAction: _ready
-          ? GlassButton.custom(
-              onTap: _creating ? () {} : _startChat,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    if (_creating)
-                      const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                    else
-                      HugeIcon(icon: AppIcons.chatAdd, size: 20, color: palette.text),
-                    const SizedBox(width: 8),
-                    Text(
-                      t('common.newChat'),
-                      style: TextStyle(color: palette.text, fontSize: 16, fontWeight: FontWeight.w700),
-                    ),
-                  ],
-                ),
-              ),
+      bottomBar: _ready
+          ? ConversationDock(
+              selected: _activity,
+              onSelect: (value) {
+                Haptic.select();
+                setState(() => _activity = value);
+              },
+              onCreate: _startChat,
+              creating: _creating,
             )
           : null,
     );
@@ -458,13 +518,28 @@ class _ServerScreenState extends State<ServerScreen> {
       return BrandLoading(message: t('server.loadingDevice'));
     }
     if (_server == null) {
-      return EmptyState(icon: AppIcons.alert, title: t('server.notFound'), body: t('server.notFoundBody'));
+      return EmptyState(
+        icon: AppIcons.alert,
+        title: t('server.notFound'),
+        body: t('server.notFoundBody'),
+      );
     }
-    if (connection.status == ConnectionStatus.connecting && connection.server?.id == widget.serverId) {
-      return BrandLoading(message: t('server.connectingTo', <String, Object?>{'host': _server!.host}));
+    if (connection.status == ConnectionStatus.connecting &&
+        connection.server?.id == widget.serverId) {
+      return BrandLoading(
+        message: t('server.connectingTo', <String, Object?>{
+          'host': _server!.host,
+        }),
+      );
     }
-    if (connection.server?.id == widget.serverId && connection.status == ConnectionStatus.error) {
-      return _Failure(palette: palette, server: _server!, password: _password, onPassword: (value) => setState(() => _password = value));
+    if (connection.server?.id == widget.serverId &&
+        connection.status == ConnectionStatus.error) {
+      return _Failure(
+        palette: palette,
+        server: _server!,
+        password: _password,
+        onPassword: (value) => setState(() => _password = value),
+      );
     }
     if (!_ready) return const SizedBox.shrink();
     return _readyBody(palette);
@@ -476,10 +551,14 @@ class _ServerScreenState extends State<ServerScreen> {
     final listed = _listed;
     final needle = _query.text.trim().toLowerCase();
     final visible = listed.where((item) {
+      if (_activity == 1 && connection.running[item.id] != true) return false;
+      if (_activity == 2 && connection.waiting[item.id] != true) return false;
       if (_project != null && (item.project ?? '') != _project) return false;
       if (needle.isEmpty) return true;
       if (_hits.containsKey(item.id)) return true;
-      final haystack = '${item.title} ${item.preview ?? ''} ${names[item.project ?? ''] ?? ''}'.toLowerCase();
+      final haystack =
+          '${item.title} ${item.preview ?? ''} ${names[item.project ?? ''] ?? ''}'
+              .toLowerCase();
       return haystack.contains(needle);
     }).toList();
 
@@ -490,38 +569,92 @@ class _ServerScreenState extends State<ServerScreen> {
       projectCounts[project] = (projectCounts[project] ?? 0) + 1;
     }
 
-    final waiting = visible.where((item) => connection.waiting[item.id] == true).toList();
+    final waiting = visible
+        .where((item) => connection.waiting[item.id] == true)
+        .toList();
     final running = visible
-        .where((item) => connection.waiting[item.id] != true && connection.running[item.id] == true)
+        .where(
+          (item) =>
+              connection.waiting[item.id] != true &&
+              connection.running[item.id] == true,
+        )
         .toList();
     final recent = visible
-        .where((item) => connection.waiting[item.id] != true && connection.running[item.id] != true)
+        .where(
+          (item) =>
+              connection.waiting[item.id] != true &&
+              connection.running[item.id] != true,
+        )
         .toList();
 
     return Column(
       children: <Widget>[
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 16, 24, 12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Expanded(
+                child: Text(
+                  t('server.workspaceTitle'),
+                  style: TextStyle(
+                    color: palette.text,
+                    fontSize: 32,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: -1,
+                  ),
+                ),
+              ),
+              Text(
+                '${listed.length}',
+                style: TextStyle(
+                  color: palette.subtle,
+                  fontSize: 24,
+                  fontWeight: FontWeight.w400,
+                ),
+              ),
+            ],
+          ),
+        ),
         if (connection.reconnecting)
           Container(
             margin: const EdgeInsets.fromLTRB(16, 6, 16, 0),
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(color: palette.warningSoft, borderRadius: BorderRadius.circular(Radii.md)),
+            decoration: BoxDecoration(
+              color: palette.warningSoft,
+              borderRadius: BorderRadius.circular(Radii.md),
+            ),
             child: Row(
               children: <Widget>[
                 DesktopSpinner(size: 14, color: palette.warning),
                 const SizedBox(width: 8),
-                Text(t('server.dropped'), style: TextStyle(color: palette.warning, fontSize: 13, fontWeight: FontWeight.w600)),
+                Text(
+                  t('server.dropped'),
+                  style: TextStyle(
+                    color: palette.warning,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
               ],
             ),
           ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 2),
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
           child: Row(
             children: <Widget>[
-              Expanded(child: SearchField(controller: _query, placeholder: t('server.searchPlaceholder'))),
+              Expanded(
+                child: SearchField(
+                  controller: _query,
+                  placeholder: t('server.searchPlaceholder'),
+                ),
+              ),
               if (projectCounts.isNotEmpty || _project != null) ...<Widget>[
                 const SizedBox(width: 8),
                 _ProjectFilter(
-                  label: _project == null ? t('server.projectFilter') : (names[_project] ?? _project!),
+                  label: _project == null
+                      ? t('server.projectFilter')
+                      : (names[_project] ?? _project!),
                   active: _project != null,
                   palette: palette,
                   onPress: () => _pickProject(projectCounts, names),
@@ -537,8 +670,11 @@ class _ServerScreenState extends State<ServerScreen> {
             color: palette.accent,
             child: listed.isEmpty
                 ? ListView(
+                    physics: const AlwaysScrollableScrollPhysics(),
                     children: <Widget>[
-                      SizedBox(height: MediaQuery.sizeOf(context).height * 0.12),
+                      SizedBox(
+                        height: MediaQuery.sizeOf(context).height * 0.12,
+                      ),
                       EmptyState(
                         icon: AppIcons.bubbleChat,
                         title: t('server.emptyTitle'),
@@ -556,46 +692,86 @@ class _ServerScreenState extends State<ServerScreen> {
                     ],
                   )
                 : ListView(
-                    padding: const EdgeInsets.fromLTRB(16, 2, 16, 96),
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: const EdgeInsets.fromLTRB(20, 2, 20, 20),
                     children: <Widget>[
                       if (waiting.isNotEmpty) ...<Widget>[
-                        SectionLabel(title: t('server.waiting'), count: waiting.length),
+                        SectionLabel(
+                          title: t('server.waiting'),
+                          count: waiting.length,
+                        ),
                         for (final chat in waiting)
-                          Padding(padding: const EdgeInsets.only(bottom: 8), child: _row(chat, palette, names, waiting: true)),
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 8),
+                            child: _row(chat, palette, names, waiting: true),
+                          ),
                       ],
                       if (running.isNotEmpty) ...<Widget>[
-                        SectionLabel(title: t('server.running'), count: running.length),
+                        SectionLabel(
+                          title: t('server.running'),
+                          count: running.length,
+                        ),
                         for (final chat in running)
-                          Padding(padding: const EdgeInsets.only(bottom: 8), child: _row(chat, palette, names, running: true)),
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 8),
+                            child: _row(chat, palette, names, running: true),
+                          ),
                       ],
                       if (recent.isNotEmpty) ...<Widget>[
-                        SectionLabel(title: needle.isEmpty ? t('server.recent') : t('server.results'), count: recent.length),
+                        SectionLabel(
+                          title: needle.isEmpty
+                              ? t('server.recent')
+                              : t('server.results'),
+                          count: recent.length,
+                        ),
                         for (final chat in recent)
-                          Padding(padding: const EdgeInsets.only(bottom: 8), child: _row(chat, palette, names)),
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 8),
+                            child: _row(chat, palette, names),
+                          ),
                       ],
                       if (visible.isEmpty)
                         EmptyState(
                           icon: AppIcons.bubbleChat,
                           title: t('server.noMatchTitle'),
                           body: needle.isNotEmpty
-                              ? t('server.noMatchQuery', <String, Object?>{'query': _query.text.trim()})
+                              ? t('server.noMatchQuery', <String, Object?>{
+                                  'query': _query.text.trim(),
+                                })
                               : t('server.noChatsInProject'),
                         ),
                       if (_archived.isNotEmpty && needle.isEmpty)
                         InkWell(
                           onTap: _openArchiveSheet,
                           child: Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 4),
+                            padding: const EdgeInsets.symmetric(
+                              vertical: 18,
+                              horizontal: 4,
+                            ),
                             child: Row(
                               children: <Widget>[
-                                HugeIcon(icon: AppIcons.archive, size: 16, color: palette.muted),
-                                const SizedBox(width: 6),
-                                Text(
-                                  t('server.archivedCount', <String, Object?>{'count': _archived.length}),
-                                  style: TextStyle(color: palette.muted, fontSize: 14, fontWeight: FontWeight.w600),
+                                HugeIcon(
+                                  icon: AppIcons.archive,
+                                  size: 16,
+                                  color: palette.muted,
                                 ),
                                 const SizedBox(width: 6),
-                                HugeIcon(icon: AppIcons.arrowRight, size: 14, color: palette.subtle),
+                                Text(
+                                  t('server.archivedCount', <String, Object?>{
+                                    'count': _archived.length,
+                                  }),
+                                  style: TextStyle(
+                                    color: palette.muted,
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                HugeIcon(
+                                  icon: AppIcons.arrowRight,
+                                  size: 14,
+                                  color: palette.subtle,
+                                ),
                               ],
                             ),
                           ),
@@ -617,7 +793,9 @@ class _ServerScreenState extends State<ServerScreen> {
         SheetOption(
           value: _allProjects,
           label: t('server.allProjects'),
-          description: t('common.chatCount', <String, Object?>{'count': _listed.length}),
+          description: t('common.chatCount', <String, Object?>{
+            'count': _listed.length,
+          }),
           icon: AppIcons.folder,
           onSelect: () => setState(() => _project = null),
         ),
@@ -625,7 +803,9 @@ class _ServerScreenState extends State<ServerScreen> {
           SheetOption(
             value: entry.key,
             label: names[entry.key] ?? entry.key,
-            description: t('common.chatCount', <String, Object?>{'count': entry.value}),
+            description: t('common.chatCount', <String, Object?>{
+              'count': entry.value,
+            }),
             avatar: names[entry.key] ?? entry.key,
             onSelect: () => setState(() => _project = entry.key),
           ),
@@ -642,7 +822,9 @@ class _ServerScreenState extends State<ServerScreen> {
   }) {
     return _ConversationRow(
       conversation: chat,
-      projectName: _project == null && chat.project != null ? names[chat.project] : null,
+      projectName: _project == null && chat.project != null
+          ? names[chat.project]
+          : null,
       snippet: _hits[chat.id],
       waiting: waiting,
       running: running,
@@ -690,7 +872,9 @@ class _ConversationRow extends StatelessWidget {
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(Radii.lg),
-            border: Border.all(color: waiting ? palette.warning : Colors.transparent),
+            border: Border.all(
+              color: waiting ? palette.warning : Colors.transparent,
+            ),
           ),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -699,15 +883,29 @@ class _ConversationRow extends StatelessWidget {
                 Container(
                   width: 42,
                   height: 42,
-                  decoration: BoxDecoration(color: palette.warningSoft, borderRadius: BorderRadius.circular(13)),
-                  child: Center(child: HugeIcon(icon: AppIcons.alert, size: 20, color: palette.warning)),
+                  decoration: BoxDecoration(
+                    color: palette.warningSoft,
+                    borderRadius: BorderRadius.circular(13),
+                  ),
+                  child: Center(
+                    child: HugeIcon(
+                      icon: AppIcons.alert,
+                      size: 20,
+                      color: palette.warning,
+                    ),
+                  ),
                 )
               else if (running)
                 Container(
                   width: 42,
                   height: 42,
-                  decoration: BoxDecoration(color: palette.accentSoft, borderRadius: BorderRadius.circular(13)),
-                  child: Center(child: DesktopSpinner(size: 20, color: palette.accent)),
+                  decoration: BoxDecoration(
+                    color: palette.accentSoft,
+                    borderRadius: BorderRadius.circular(13),
+                  ),
+                  child: Center(
+                    child: DesktopSpinner(size: 20, color: palette.accent),
+                  ),
                 )
               else if (projectName != null)
                 Avatar(name: projectName!, size: 42, borderRadius: 13)
@@ -715,8 +913,17 @@ class _ConversationRow extends StatelessWidget {
                 Container(
                   width: 42,
                   height: 42,
-                  decoration: BoxDecoration(color: palette.field, borderRadius: BorderRadius.circular(13)),
-                  child: Center(child: HugeIcon(icon: AppIcons.bubbleChat, size: 20, color: palette.muted)),
+                  decoration: BoxDecoration(
+                    color: palette.field,
+                    borderRadius: BorderRadius.circular(13),
+                  ),
+                  child: Center(
+                    child: HugeIcon(
+                      icon: AppIcons.bubbleChat,
+                      size: 20,
+                      color: palette.muted,
+                    ),
+                  ),
                 ),
               const SizedBox(width: 12),
               Expanded(
@@ -741,7 +948,11 @@ class _ConversationRow extends StatelessWidget {
                         const SizedBox(width: 8),
                         Text(
                           relativeTime(conversation.updatedAt),
-                          style: TextStyle(color: palette.subtle, fontSize: 12, fontWeight: FontWeight.w500),
+                          style: TextStyle(
+                            color: palette.subtle,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                          ),
                         ),
                       ],
                     ),
@@ -750,7 +961,11 @@ class _ConversationRow extends StatelessWidget {
                       snippet ?? conversation.preview ?? t('server.noPreview'),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(color: palette.muted, fontSize: 14, height: 20 / 14),
+                      style: TextStyle(
+                        color: palette.muted,
+                        fontSize: 14,
+                        height: 20 / 14,
+                      ),
                     ),
                     if (waiting || running || projectName != null) ...<Widget>[
                       const SizedBox(height: 6),
@@ -758,9 +973,18 @@ class _ConversationRow extends StatelessWidget {
                         spacing: 6,
                         runSpacing: 4,
                         children: <Widget>[
-                          if (waiting) Pill(label: t('server.waiting'), tone: PillTone.warning),
-                          if (running) Pill(label: t('server.running'), tone: PillTone.accent),
-                          if (projectName != null) Pill(label: projectName!, icon: AppIcons.folder),
+                          if (waiting)
+                            Pill(
+                              label: t('server.waiting'),
+                              tone: PillTone.warning,
+                            ),
+                          if (running)
+                            Pill(
+                              label: t('server.running'),
+                              tone: PillTone.accent,
+                            ),
+                          if (projectName != null)
+                            Pill(label: projectName!, icon: AppIcons.folder),
                         ],
                       ),
                     ],
@@ -818,10 +1042,15 @@ class _ProjectFilter extends StatelessWidget {
                       label,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(color: active ? palette.accent : palette.text, fontSize: 14, fontWeight: FontWeight.w600),
+                      style: TextStyle(
+                        color: active ? palette.accent : palette.text,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
-                  if (!active) HugeIcon(icon: AppIcons.arrowDown, size: 14, color: tint),
+                  if (!active)
+                    HugeIcon(icon: AppIcons.arrowDown, size: 14, color: tint),
                 ],
               ),
             ),
@@ -879,7 +1108,9 @@ class _FailureState extends State<_Failure> {
               ),
               child: Center(
                 child: HugeIcon(
-                  icon: needsPassword ? AppIcons.lockPassword : AppIcons.wifiDisconnected,
+                  icon: needsPassword
+                      ? AppIcons.lockPassword
+                      : AppIcons.wifiDisconnected,
                   size: 30,
                   color: needsPassword ? palette.accent : palette.danger,
                 ),
@@ -889,9 +1120,15 @@ class _FailureState extends State<_Failure> {
             Text(
               needsPassword
                   ? t('server.needLogin')
-                  : t('server.cannotConnect', <String, Object?>{'name': widget.server.alias}),
+                  : t('server.cannotConnect', <String, Object?>{
+                      'name': widget.server.alias,
+                    }),
               textAlign: TextAlign.center,
-              style: TextStyle(color: palette.text, fontSize: 19, fontWeight: FontWeight.w700),
+              style: TextStyle(
+                color: palette.text,
+                fontSize: 19,
+                fontWeight: FontWeight.w700,
+              ),
             ),
             const SizedBox(height: 8),
             ConstrainedBox(
@@ -900,11 +1137,16 @@ class _FailureState extends State<_Failure> {
                 needsPassword
                     ? (connection.error ?? '')
                     : t('server.cannotConnectBody', <String, Object?>{
-                        'error': (connection.error ?? t('server.connectFailed')).replaceAll(RegExp(r'[。.]$'), ''),
+                        'error': (connection.error ?? t('server.connectFailed'))
+                            .replaceAll(RegExp(r'[。.]$'), ''),
                         'host': widget.server.host,
                       }),
                 textAlign: TextAlign.center,
-                style: TextStyle(color: palette.muted, fontSize: 14, height: 21 / 14),
+                style: TextStyle(
+                  color: palette.muted,
+                  fontSize: 14,
+                  height: 21 / 14,
+                ),
               ),
             ),
             const SizedBox(height: 24),
@@ -933,7 +1175,10 @@ class _FailureState extends State<_Failure> {
                       child: PrimaryButton(
                         label: t('server.connect'),
                         enabled: widget.password.isNotEmpty,
-                        onPressed: () => Connection.instance.loginSaved(widget.server, widget.password),
+                        onPressed: () => Connection.instance.loginSaved(
+                          widget.server,
+                          widget.password,
+                        ),
                       ),
                     ),
                   ] else
@@ -942,7 +1187,8 @@ class _FailureState extends State<_Failure> {
                       child: PrimaryButton(
                         label: t('server.reconnect'),
                         icon: AppIcons.refresh,
-                        onPressed: () => Connection.instance.connectSaved(widget.server),
+                        onPressed: () =>
+                            Connection.instance.connectSaved(widget.server),
                       ),
                     ),
                 ],

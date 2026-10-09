@@ -6,12 +6,14 @@ import 'package:hugeicons/hugeicons.dart';
 /// lists 读取 / 编辑 / 搜索 keeps the identical glyph. Only the icons actually used are
 /// referenced, which is what lets the package tree-shake the other ~6,000 away.
 abstract final class AppIcons {
+  static const star = HugeIcons.strokeRoundedStar;
   static const aiBrain = HugeIcons.strokeRoundedAiBrain01;
   static const alert = HugeIcons.strokeRoundedAlert02;
   static const archive = HugeIcons.strokeRoundedArchive02;
   static const archiveRestore = HugeIcons.strokeRoundedArchiveArrowUp;
   static const arrowDown = HugeIcons.strokeRoundedArrowDown01;
   static const arrowDownLong = HugeIcons.strokeRoundedArrowDown02;
+  static const arrowLeft = HugeIcons.strokeRoundedArrowLeft01;
   static const arrowRight = HugeIcons.strokeRoundedArrowRight01;
   static const arrowUp = HugeIcons.strokeRoundedArrowUp02;
   static const bot = HugeIcons.strokeRoundedBot;

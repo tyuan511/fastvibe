@@ -4,7 +4,28 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// Reuse the shipping mobile key when supplied by CI. Local builds remain installable
+// test builds; they cannot replace a production installation signed with another key.
+val releaseStoreFile = System.getenv("FASTVIBE_ANDROID_STORE_FILE")
+val releaseStorePassword = System.getenv("FASTVIBE_ANDROID_STORE_PASSWORD")
+val releaseKeyAlias = System.getenv("FASTVIBE_ANDROID_KEY_ALIAS")
+val releaseKeyPassword = System.getenv("FASTVIBE_ANDROID_KEY_PASSWORD") ?: releaseStorePassword
+val releaseSigning = listOf(releaseStoreFile, releaseStorePassword, releaseKeyAlias, releaseKeyPassword)
+require(releaseSigning.all { it.isNullOrBlank() } || releaseSigning.none { it.isNullOrBlank() }) {
+    "All FASTVIBE_ANDROID signing settings must be supplied together"
+}
+
 android {
+    signingConfigs {
+        if (!releaseStoreFile.isNullOrBlank()) {
+            create("production") {
+                storeFile = file(releaseStoreFile)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
     namespace = "dev.fastvibe.fastvibe_mobile"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
@@ -19,7 +40,6 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         // The same package the Expo client ships under: an install of either is the same
         // app to Android, and the self-updater hands the system installer an APK it will
         // only accept from a matching signature.
@@ -30,10 +50,8 @@ android {
         // glass shaders want a modern Impeller path.
         minSdk = 24
         targetSdk = flutter.targetSdkVersion
-        // Uses the version code from pubspec.yaml. When using split APKs, 1000 * ABI_VERSION
-        // is added automatically by Flutter. (https://developer.android.com/studio/build/configure-apk-splits#configure-APK-versions)
-        // You can force using the value of versionCode by specifying the `-P force-version-code-ignoring-abi=true`
-        // flag during build.
+        // Keep the same monotonically increasing build number across APKs and AABs.
+        // gradle.properties disables Flutter's per-ABI offset.
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
@@ -42,9 +60,7 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName(if (releaseStoreFile.isNullOrBlank()) "debug" else "production")
         }
     }
 }

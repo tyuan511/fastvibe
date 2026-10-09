@@ -66,15 +66,15 @@ class Palette {
 
 const Palette light = Palette(
   dark: false,
-  background: Color(0xFFF3F4F7),
+  background: Color(0xFFF2F6FA),
   card: Color(0xFFFFFFFF),
   field: Color(0xFFECEEF2),
   text: Color(0xFF0F1115),
   muted: Color(0xFF6B7080),
-  subtle: Color(0xFFA0A4B0),
+  subtle: Color(0xFF717B8C),
   border: Color(0xFFE3E5EA),
   separator: Color(0xFFECEEF2),
-  accent: Color(0xFF2563EB),
+  accent: Color(0xFF1769DE),
   accentSoft: Color(0xFFE7EEFE),
   accentText: Color(0xFFFFFFFF),
   brand: <Color>[Color(0xFF3BA8FF), Color(0xFF4A3CFF)],
@@ -90,14 +90,14 @@ const Palette light = Palette(
 
 const Palette dark = Palette(
   dark: true,
-  background: Color(0xFF0B0C0F),
-  card: Color(0xFF17181C),
-  field: Color(0xFF212329),
+  background: Color(0xFF0C111B),
+  card: Color(0xFF171F2C),
+  field: Color(0xFF222C3C),
   text: Color(0xFFF2F3F5),
   muted: Color(0xFF9A9EA9),
-  subtle: Color(0xFF62666F),
-  border: Color(0xFF2A2C33),
-  separator: Color(0xFF212329),
+  subtle: Color(0xFF8B97A9),
+  border: Color(0xFF334054),
+  separator: Color(0xFF222C3C),
   accent: Color(0xFF5B8CFF),
   accentSoft: Color(0xFF1A2544),
   accentText: Color(0xFFFFFFFF),
@@ -112,12 +112,12 @@ const Palette dark = Palette(
   shadow: Color(0xFF000000),
 );
 
-/// Radius tokens, identical to the Expo client's.
+/// Continuous, generous corners for the glass design.
 abstract final class Radii {
   static const double sm = 8;
-  static const double md = 12;
-  static const double lg = 16;
-  static const double xl = 22;
+  static const double md = 16;
+  static const double lg = 24;
+  static const double xl = 30;
   static const double pill = 999;
 }
 
@@ -174,7 +174,10 @@ double androidElevation(int level) => level == 0 ? 1 : level * 2;
 String initials(String name) {
   final trimmed = name.trim();
   if (trimmed.isEmpty) return '?';
-  final words = trimmed.split(RegExp(r'[\s_\-/.]+')).where((w) => w.isNotEmpty).toList();
+  final words = trimmed
+      .split(RegExp(r'[\s_\-/.]+'))
+      .where((w) => w.isNotEmpty)
+      .toList();
   if (words.length > 1 &&
       RegExp(r'^[a-z]', caseSensitive: false).hasMatch(words[0]) &&
       RegExp(r'^[a-z0-9]', caseSensitive: false).hasMatch(words[1])) {
@@ -192,15 +195,24 @@ String formatTokens(num value) {
 
 /// Clamps `text` to `maxLines` / `maxChars`, keeping the head or the tail.
 /// Used by the tool card, which shows a command's beginning and an output's end.
-String clipText(String text, {required int maxChars, required int maxLines, required bool keepHead}) {
+String clipText(
+  String text, {
+  required int maxChars,
+  required int maxLines,
+  required bool keepHead,
+}) {
   var value = text;
   final lines = value.split('\n');
   if (lines.length > maxLines) {
-    value = keepHead ? lines.take(maxLines).join('\n') : lines.skip(lines.length - maxLines).join('\n');
+    value = keepHead
+        ? lines.take(maxLines).join('\n')
+        : lines.skip(lines.length - maxLines).join('\n');
     value = keepHead ? '$value\n…' : '…\n$value';
   }
   if (value.length > maxChars) {
-    value = keepHead ? '${value.substring(0, maxChars)}\n…' : '…\n${value.substring(value.length - maxChars)}';
+    value = keepHead
+        ? '${value.substring(0, maxChars)}\n…'
+        : '…\n${value.substring(value.length - maxChars)}';
   }
   return value;
 }
@@ -216,7 +228,8 @@ class DesktopSpinner extends StatefulWidget {
   State<DesktopSpinner> createState() => _DesktopSpinnerState();
 }
 
-class _DesktopSpinnerState extends State<DesktopSpinner> with SingleTickerProviderStateMixin {
+class _DesktopSpinnerState extends State<DesktopSpinner>
+    with SingleTickerProviderStateMixin {
   late final AnimationController _controller = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 700),
@@ -253,7 +266,13 @@ class _ArcPainter extends CustomPainter {
       ..strokeWidth = math.max(1.6, size.width * 0.16)
       ..strokeCap = StrokeCap.round;
     final rect = Offset.zero & size;
-    canvas.drawArc(rect.deflate(paint.strokeWidth / 2), -math.pi / 2, math.pi * 1.15, false, paint);
+    canvas.drawArc(
+      rect.deflate(paint.strokeWidth / 2),
+      -math.pi / 2,
+      math.pi * 1.15,
+      false,
+      paint,
+    );
   }
 
   @override

@@ -22,29 +22,47 @@ class DagNode {
     this.report,
     this.model,
     this.outputLength,
+    this.output,
     this.runId,
     this.createdAt = 0,
   });
 
   factory DagNode.fromJson(Map<String, Object?> json) => DagNode(
-        id: '${json['id'] ?? ''}',
-        title: '${json['title'] ?? ''}',
-        profile: json['profile'] is Map ? '${(json['profile'] as Map)['name'] ?? ''}' : '${json['profile'] ?? ''}',
-        dependsOn: json['dependsOn'] is List ? (json['dependsOn'] as List).whereType<String>().toList() : const <String>[],
-        status: '${json['status'] ?? 'pending'}',
-        parentId: json['parentId'] is String ? json['parentId'] as String : null,
-        parentRunId: json['parentRunId'] is String ? json['parentRunId'] as String : null,
-        coordinator: json['coordinator'] == true,
-        attempt: json['attempt'] is num ? (json['attempt'] as num).toInt() : null,
-        error: json['error'] is String ? json['error'] as String : null,
-        instruction: json['instruction'] is String ? json['instruction'] as String : null,
-        acceptance: json['acceptance'] is String ? json['acceptance'] as String : null,
-        report: json['report'] is Map ? DagReport.fromJson((json['report'] as Map).cast<String, Object?>()) : null,
-        model: json['model'] is String ? json['model'] as String : null,
-        outputLength: json['outputLength'] is num ? (json['outputLength'] as num).toInt() : null,
-        runId: json['runId'] is String ? json['runId'] as String : null,
-        createdAt: json['createdAt'] is num ? (json['createdAt'] as num).toInt() : 0,
-      );
+    id: '${json['id'] ?? ''}',
+    title: '${json['title'] ?? ''}',
+    profile: json['profile'] is Map
+        ? '${(json['profile'] as Map)['name'] ?? ''}'
+        : '${json['profile'] ?? ''}',
+    dependsOn: json['dependsOn'] is List
+        ? (json['dependsOn'] as List).whereType<String>().toList()
+        : const <String>[],
+    status: '${json['status'] ?? 'pending'}',
+    parentId: json['parentId'] is String ? json['parentId'] as String : null,
+    parentRunId: json['parentRunId'] is String
+        ? json['parentRunId'] as String
+        : null,
+    coordinator: json['coordinator'] == true,
+    attempt: json['attempt'] is num ? (json['attempt'] as num).toInt() : null,
+    error: json['error'] is String ? json['error'] as String : null,
+    instruction: json['instruction'] is String
+        ? json['instruction'] as String
+        : null,
+    acceptance: json['acceptance'] is String
+        ? json['acceptance'] as String
+        : null,
+    report: json['report'] is Map
+        ? DagReport.fromJson((json['report'] as Map).cast<String, Object?>())
+        : null,
+    model: json['model'] is String ? json['model'] as String : null,
+    output: json['output'] is String ? json['output'] as String : null,
+    outputLength: json['outputLength'] is num
+        ? (json['outputLength'] as num).toInt()
+        : null,
+    runId: json['runId'] is String ? json['runId'] as String : null,
+    createdAt: json['createdAt'] is num
+        ? (json['createdAt'] as num).toInt()
+        : 0,
+  );
 
   final String id;
   final String title;
@@ -61,38 +79,48 @@ class DagNode {
   final DagReport? report;
   final String? model;
   final int? outputLength;
+  final String? output;
   final String? runId;
   final int createdAt;
 
   DagNode copyWith({String? status}) => DagNode(
-        id: id,
-        title: title,
-        profile: profile,
-        dependsOn: dependsOn,
-        status: status ?? this.status,
-        parentId: parentId,
-        parentRunId: parentRunId,
-        coordinator: coordinator,
-        attempt: attempt,
-        error: error,
-        instruction: instruction,
-        acceptance: acceptance,
-        report: report,
-        model: model,
-        outputLength: outputLength,
-        runId: runId,
-        createdAt: createdAt,
-      );
+    id: id,
+    title: title,
+    profile: profile,
+    dependsOn: dependsOn,
+    status: status ?? this.status,
+    parentId: parentId,
+    parentRunId: parentRunId,
+    coordinator: coordinator,
+    attempt: attempt,
+    error: error,
+    instruction: instruction,
+    acceptance: acceptance,
+    report: report,
+    model: model,
+    outputLength: outputLength,
+    output: output,
+    runId: runId,
+    createdAt: createdAt,
+  );
 }
 
 class DagReport {
-  const DagReport({this.summary, this.evidence = const <String>[], this.artifacts = const <String>[]});
+  const DagReport({
+    this.summary,
+    this.evidence = const <String>[],
+    this.artifacts = const <String>[],
+  });
 
   factory DagReport.fromJson(Map<String, Object?> json) => DagReport(
-        summary: json['summary'] is String ? json['summary'] as String : null,
-        evidence: json['evidence'] is List ? (json['evidence'] as List).whereType<String>().toList() : const <String>[],
-        artifacts: json['artifacts'] is List ? (json['artifacts'] as List).whereType<String>().toList() : const <String>[],
-      );
+    summary: json['summary'] is String ? json['summary'] as String : null,
+    evidence: json['evidence'] is List
+        ? (json['evidence'] as List).whereType<String>().toList()
+        : const <String>[],
+    artifacts: json['artifacts'] is List
+        ? (json['artifacts'] as List).whereType<String>().toList()
+        : const <String>[],
+  );
 
   final String? summary;
   final List<String> evidence;
@@ -100,7 +128,12 @@ class DagReport {
 }
 
 class DagGraph {
-  const DagGraph({required this.conversationId, required this.nodes, this.revision = 0, this.paused = false});
+  const DagGraph({
+    required this.conversationId,
+    required this.nodes,
+    this.revision = 0,
+    this.paused = false,
+  });
 
   final String conversationId;
   final List<DagNode> nodes;
@@ -112,7 +145,13 @@ class DagGraph {
 const int dagPreviewChars = 4000;
 
 const List<String> dagNodeStatuses = <String>[
-  'pending', 'running', 'completed', 'blocked', 'failed', 'skipped', 'cancelled',
+  'pending',
+  'running',
+  'completed',
+  'blocked',
+  'failed',
+  'skipped',
+  'cancelled',
 ];
 
 bool dagNodeFinished(DagNode node) =>
@@ -122,7 +161,9 @@ bool dagNodeFinished(DagNode node) =>
     node.status == 'skipped' ||
     node.status == 'cancelled';
 
-({int total, int completed, int active, int attention}) dagProgress(List<DagNode> nodes) {
+({int total, int completed, int active, int attention}) dagProgress(
+  List<DagNode> nodes,
+) {
   var completed = 0;
   var active = 0;
   var attention = 0;
@@ -131,25 +172,34 @@ bool dagNodeFinished(DagNode node) =>
     if (!dagNodeFinished(node)) active++;
     if (node.status == 'failed' || node.status == 'blocked') attention++;
   }
-  return (total: nodes.length, completed: completed, active: active, attention: attention);
+  return (
+    total: nodes.length,
+    completed: completed,
+    active: active,
+    attention: attention,
+  );
 }
 
 /// running | stopped | failed | completed
 String dagGraphState(List<DagNode> nodes) {
   if (nodes.any((node) => node.status == 'running')) return 'running';
   if (nodes.any((node) => node.status == 'cancelled')) return 'stopped';
-  if (nodes.any((node) => node.status == 'failed' || node.status == 'blocked')) return 'failed';
+  if (nodes.any(
+    (node) => node.status == 'failed' || node.status == 'blocked',
+  )) {
+    return 'failed';
+  }
   if (nodes.any((node) => node.status == 'pending')) return 'running';
   return 'completed';
 }
 
 /// The execution pane's status: the same vocabulary a delegated run uses.
 String dagRunStatus(DagNode node) => switch (node.status) {
-      'running' => 'running',
-      'completed' => 'completed',
-      'failed' || 'blocked' => 'error',
-      _ => 'aborted',
-    };
+  'running' => 'running',
+  'completed' => 'completed',
+  'failed' || 'blocked' => 'error',
+  _ => 'aborted',
+};
 
 bool dagCanRetry(DagNode node, List<DagNode> nodes) {
   if (node.parentId == null) return true;
@@ -166,7 +216,11 @@ bool dagCanRetry(DagNode node, List<DagNode> nodes) {
 }
 
 class DagRow {
-  const DagRow({required this.node, required this.depth, required this.previousAttempt});
+  const DagRow({
+    required this.node,
+    required this.depth,
+    required this.previousAttempt,
+  });
 
   final DagNode node;
   final int depth;
@@ -196,7 +250,9 @@ List<DagRow> dagTaskRows(List<DagNode> nodes) {
   }
   for (final list in byParent.values) {
     list.sort((a, b) {
-      final byStatus = (priority[a.status] ?? 9).compareTo(priority[b.status] ?? 9);
+      final byStatus = (priority[a.status] ?? 9).compareTo(
+        priority[b.status] ?? 9,
+      );
       if (byStatus != 0) return byStatus;
       final byCreated = a.createdAt.compareTo(b.createdAt);
       return byCreated != 0 ? byCreated : a.id.compareTo(b.id);
@@ -251,7 +307,11 @@ class DagWatcher extends ChangeNotifier {
   bool get deleted => _deleted;
 
   void _onEvent(Map<String, Object?> event, Object? meta) {
-    if (_disposed || event['conversationId'] != conversationId || event['type'] != 'dag_changed') return;
+    if (_disposed ||
+        event['conversationId'] != conversationId ||
+        event['type'] != 'dag_changed') {
+      return;
+    }
     final raw = event['graph'];
     if (raw == null) {
       // A deletion beats a concurrent list reply.

@@ -8,14 +8,19 @@ import '../i18n/core.dart';
 import '../session/connection.dart';
 import '../ui/preferences.dart';
 import 'policy.dart';
+import 'target.dart';
 
 const String _channelId = 'fastvibe-activity';
 
-final FlutterLocalNotificationsPlugin _plugin = FlutterLocalNotificationsPlugin();
+final FlutterLocalNotificationsPlugin _plugin =
+    FlutterLocalNotificationsPlugin();
 final Set<String> _seenKeys = <String>{};
 
 /// What a tap on a banner should open.
-typedef OpenNotificationTarget = void Function(String serverId, String conversationId);
+typedef OpenNotificationTarget = void Function(
+  String serverId,
+  String conversationId,
+);
 
 /// Install the phone's local-notification bridge once from the app root.
 ///
@@ -43,13 +48,13 @@ class LocalNotifications {
       await _plugin.initialize(
         settings: settings,
         onDidReceiveNotificationResponse: (response) {
-          final payload = response.payload;
-          if (payload == null) return;
-          final parts = payload.split('|');
-          if (parts.length != 2) return;
-          _onOpen?.call(parts[0], parts[1]);
+          _openPayload(response.payload);
         },
       );
+      final launch = await _plugin.getNotificationAppLaunchDetails();
+      if (launch?.didNotificationLaunchApp == true) {
+        _openPayload(launch?.notificationResponse?.payload);
+      }
     } catch (_) {
       // A platform without notification support still runs the app.
     }
@@ -57,17 +62,30 @@ class LocalNotifications {
     Connection.instance.onEngineEvent(_handleEvent);
   }
 
+  void _openPayload(String? payload) {
+    final target = NotificationTarget.parse(payload);
+    if (target == null) return;
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _onOpen?.call(target.serverId, target.conversationId),
+    );
+    WidgetsBinding.instance.ensureVisualUpdate();
+  }
+
   void _handleEvent(Map<String, Object?> event, Object? meta) {
     final connection = Connection.instance;
-    final notice = mobileNoticeForEvent(event, NoticeContext(
-      background: WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed,
-      enabled: Preferences.instance.notifications,
-      serverId: connection.server?.id ?? '',
-      conversations: connection.conversations
-          .map((item) => (id: item.id, kind: item.kind))
-          .toList(),
-      archivedIds: connection.archivedIds,
-    ));
+    final notice = mobileNoticeForEvent(
+      event,
+      NoticeContext(
+        background:
+            WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed,
+        enabled: Preferences.instance.notifications,
+        serverId: connection.server?.id ?? '',
+        conversations: connection.conversations
+            .map((item) => (id: item.id, kind: item.kind))
+            .toList(),
+        archivedIds: connection.archivedIds,
+      ),
+    );
     if (notice == null) return;
     final key = notice.key;
     if (key != null) {
@@ -93,7 +111,9 @@ class LocalNotifications {
         : (notice.title ?? conversationTitle ?? t('common.conversation'));
     try {
       await _plugin.show(
-        id: notice.key?.hashCode ?? DateTime.now().millisecondsSinceEpoch.remainder(1 << 31),
+        id:
+            notice.key?.hashCode ??
+            DateTime.now().millisecondsSinceEpoch.remainder(1 << 31),
         title: title,
         body: noticeBody(notice),
         notificationDetails: NotificationDetails(
@@ -105,7 +125,7 @@ class LocalNotifications {
           ),
           iOS: const DarwinNotificationDetails(),
         ),
-        payload: '$serverId|${notice.conversationId}',
+        payload: NotificationTarget(serverId, notice.conversationId).encode(),
       );
     } catch (_) {
       // Notification presentation is best effort; the live event remains in-app.
@@ -130,16 +150,29 @@ class LocalNotifications {
     if (!Platform.isIOS && !Platform.isAndroid) return false;
     try {
       if (Platform.isAndroid) {
-        final android = _plugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
-        await android?.createNotificationChannel(AndroidNotificationChannel(
-          _channelId,
-          t('notifications.channel'),
-          importance: Importance.defaultImportance,
-        ));
+        final android = _plugin
+            .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin
+            >();
+        await android?.createNotificationChannel(
+          AndroidNotificationChannel(
+            _channelId,
+            t('notifications.channel'),
+            importance: Importance.defaultImportance,
+          ),
+        );
         return await android?.requestNotificationsPermission() ?? false;
       }
-      final ios = _plugin.resolvePlatformSpecificImplementation<IOSFlutterLocalNotificationsPlugin>();
-      return await ios?.requestPermissions(alert: true, badge: false, sound: true) ?? false;
+      final ios = _plugin
+          .resolvePlatformSpecificImplementation<
+            IOSFlutterLocalNotificationsPlugin
+          >();
+      return await ios?.requestPermissions(
+            alert: true,
+            badge: false,
+            sound: true,
+          ) ??
+          false;
     } catch (_) {
       return false;
     }

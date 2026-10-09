@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:hugeicons/hugeicons.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 import '../theme/theme.dart';
 import 'icons.dart';
@@ -94,7 +95,12 @@ class Avatar extends StatelessWidget {
       ),
       alignment: Alignment.center,
       child: icon != null
-          ? HugeIcon(icon: icon!, color: tint.fg, size: size * 0.52, strokeWidth: 1.9)
+          ? HugeIcon(
+              icon: icon!,
+              color: tint.fg,
+              size: size * 0.52,
+              strokeWidth: 1.9,
+            )
           : Text(
               initials(name),
               style: TextStyle(
@@ -135,12 +141,20 @@ class Pill extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
       constraints: const BoxConstraints(maxWidth: 160),
-      decoration: BoxDecoration(color: background, borderRadius: BorderRadius.circular(Radii.pill)),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(Radii.pill),
+      ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
           if (icon != null) ...<Widget>[
-            HugeIcon(icon: icon!, color: foreground, size: 11, strokeWidth: 2.2),
+            HugeIcon(
+              icon: icon!,
+              color: foreground,
+              size: 11,
+              strokeWidth: 2.2,
+            ),
             const SizedBox(width: 3),
           ],
           Flexible(
@@ -148,7 +162,11 @@ class Pill extends StatelessWidget {
               label,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(color: foreground, fontSize: 11, fontWeight: FontWeight.w600),
+              style: TextStyle(
+                color: foreground,
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
         ],
@@ -181,10 +199,18 @@ class SearchField extends StatelessWidget {
     return Container(
       height: 40,
       padding: const EdgeInsets.symmetric(horizontal: 12),
-      decoration: BoxDecoration(color: palette.field, borderRadius: BorderRadius.circular(Radii.md)),
+      decoration: BoxDecoration(
+        color: palette.field,
+        borderRadius: BorderRadius.circular(Radii.md),
+      ),
       child: Row(
         children: <Widget>[
-          HugeIcon(icon: AppIcons.search, color: palette.muted, size: 17, strokeWidth: 2),
+          HugeIcon(
+            icon: AppIcons.search,
+            color: palette.muted,
+            size: 17,
+            strokeWidth: 2,
+          ),
           const SizedBox(width: 8),
           Expanded(
             child: TextField(
@@ -212,9 +238,17 @@ class SearchField extends StatelessWidget {
               child: Container(
                 width: 16,
                 height: 16,
-                decoration: BoxDecoration(color: palette.subtle, shape: BoxShape.circle),
+                decoration: BoxDecoration(
+                  color: palette.subtle,
+                  shape: BoxShape.circle,
+                ),
                 child: Center(
-                  child: HugeIcon(icon: AppIcons.cancel, color: palette.card, size: 10, strokeWidth: 3),
+                  child: HugeIcon(
+                    icon: AppIcons.cancel,
+                    color: palette.card,
+                    size: 10,
+                    strokeWidth: 3,
+                  ),
                 ),
               ),
             ),
@@ -246,51 +280,52 @@ class PrimaryButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = paletteOf(context);
-    final active = enabled && !busy;
-    return Opacity(
-      opacity: active ? 1 : 0.45,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: active ? onPressed : null,
-          borderRadius: BorderRadius.circular(Radii.md),
-          child: BrandGradient(
-            palette: palette,
-            borderRadius: BorderRadius.circular(Radii.md),
-            child: SizedBox(
-              height: height,
-              child: Center(
-                child: busy
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2.2, color: Colors.white),
-                      )
-                    : Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: <Widget>[
-                          if (icon != null) ...<Widget>[
-                            HugeIcon(icon: icon!, color: Colors.white, size: 19, strokeWidth: 2),
-                            const SizedBox(width: 8),
-                          ],
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 20),
-                            child: Text(
-                              label,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 16,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: 0.2,
-                              ),
-                            ),
-                          ),
-                        ],
+    final active = enabled && !busy && onPressed != null;
+    return GlassButton.custom(
+      onTap: onPressed ?? () {},
+      enabled: active,
+      label: label,
+      height: height,
+      useOwnLayer: true,
+      shape: const LiquidRoundedSuperellipse(borderRadius: 25),
+      settings: LiquidGlassSettings(
+        glassColor: palette.accent.withValues(alpha: 0.88),
+        blur: 12,
+        thickness: 18,
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        child: busy
+            ? SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: palette.accentText,
+                ),
+              )
+            : Row(
+                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  if (icon != null) ...[
+                    HugeIcon(icon: icon!, size: 19, color: palette.accentText),
+                    const SizedBox(width: 8),
+                  ],
+                  Flexible(
+                    child: Text(
+                      label,
+                      maxLines: 2,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: palette.accentText,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
                       ),
+                    ),
+                  ),
+                ],
               ),
-            ),
-          ),
-        ),
       ),
     );
   }
@@ -331,14 +366,25 @@ class SecondaryButton extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.center,
             children: <Widget>[
               if (icon != null) ...<Widget>[
-                HugeIcon(icon: icon!, color: palette.accent, size: 19, strokeWidth: 2),
+                HugeIcon(
+                  icon: icon!,
+                  color: palette.accent,
+                  size: 19,
+                  strokeWidth: 2,
+                ),
                 const SizedBox(width: 8),
               ],
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                child: Text(
-                  label,
-                  style: TextStyle(color: palette.text, fontSize: 16, fontWeight: FontWeight.w600),
+              Flexible(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: Text(
+                    label,
+                    style: TextStyle(
+                      color: palette.text,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
                 ),
               ),
             ],
@@ -429,20 +475,35 @@ class EmptyState extends StatelessWidget {
                 color: palette.accentSoft,
                 borderRadius: BorderRadius.circular(20),
               ),
-              child: Center(child: HugeIcon(icon: icon, color: palette.accent, size: 28, strokeWidth: 1.8)),
+              child: Center(
+                child: HugeIcon(
+                  icon: icon,
+                  color: palette.accent,
+                  size: 28,
+                  strokeWidth: 1.8,
+                ),
+              ),
             ),
             const SizedBox(height: 14),
             Text(
               title,
               textAlign: TextAlign.center,
-              style: TextStyle(color: palette.text, fontSize: 17, fontWeight: FontWeight.w700),
+              style: TextStyle(
+                color: palette.text,
+                fontSize: 17,
+                fontWeight: FontWeight.w700,
+              ),
             ),
             if (body != null) ...<Widget>[
               const SizedBox(height: 8),
               Text(
                 body!,
                 textAlign: TextAlign.center,
-                style: TextStyle(color: palette.muted, fontSize: 14, height: 21 / 14),
+                style: TextStyle(
+                  color: palette.muted,
+                  fontSize: 14,
+                  height: 21 / 14,
+                ),
               ),
             ],
             ...children,
@@ -488,7 +549,10 @@ class BrandLoading extends StatelessWidget {
                   DesktopSpinner(size: 14, color: palette.muted),
                   if (message != null) ...<Widget>[
                     const SizedBox(width: 7),
-                    Text(message!, style: TextStyle(color: palette.muted, fontSize: 13)),
+                    Text(
+                      message!,
+                      style: TextStyle(color: palette.muted, fontSize: 13),
+                    ),
                   ],
                 ],
               ),
@@ -549,20 +613,41 @@ class SettingsRow extends StatelessWidget {
           Container(
             width: 30,
             height: 30,
-            decoration: BoxDecoration(color: palette.accentSoft, borderRadius: BorderRadius.circular(9)),
-            child: Center(child: HugeIcon(icon: icon, color: palette.accent, size: 17, strokeWidth: 1.9)),
+            decoration: BoxDecoration(
+              color: palette.accentSoft,
+              borderRadius: BorderRadius.circular(9),
+            ),
+            child: Center(
+              child: HugeIcon(
+                icon: icon,
+                color: palette.accent,
+                size: 17,
+                strokeWidth: 1.9,
+              ),
+            ),
           ),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                Text(label, style: TextStyle(color: palette.text, fontSize: 16, fontWeight: FontWeight.w500)),
+                Text(
+                  label,
+                  style: TextStyle(
+                    color: palette.text,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
                 if (description != null) ...<Widget>[
                   const SizedBox(height: 2),
                   Text(
                     description!,
-                    style: TextStyle(color: palette.muted, fontSize: 13, height: 18 / 13),
+                    style: TextStyle(
+                      color: palette.muted,
+                      fontSize: 13,
+                      height: 18 / 13,
+                    ),
                   ),
                 ],
               ],
@@ -580,7 +665,11 @@ class SettingsRow extends StatelessWidget {
             ),
           ?trailing,
           if (trailing == null && value == null && onTap != null) ...<Widget>[
-            HugeIcon(icon: AppIcons.arrowRight, color: palette.subtle, size: 16),
+            HugeIcon(
+              icon: AppIcons.arrowRight,
+              color: palette.subtle,
+              size: 16,
+            ),
           ],
         ],
       ),
@@ -589,7 +678,10 @@ class SettingsRow extends StatelessWidget {
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
-        child: ConstrainedBox(constraints: const BoxConstraints(minHeight: 54), child: content),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 54),
+          child: content,
+        ),
       ),
     );
   }
@@ -607,12 +699,22 @@ class SettingsCard extends StatelessWidget {
     final rows = <Widget>[];
     for (var index = 0; index < children.length; index++) {
       if (index > 0) {
-        rows.add(Divider(height: 0.5, thickness: 0.5, indent: 56, color: palette.separator));
+        rows.add(
+          Divider(
+            height: 0.5,
+            thickness: 0.5,
+            indent: 56,
+            color: palette.separator,
+          ),
+        );
       }
       rows.add(children[index]);
     }
     return Container(
-      decoration: BoxDecoration(color: palette.card, borderRadius: BorderRadius.circular(Radii.lg)),
+      decoration: BoxDecoration(
+        color: palette.card,
+        borderRadius: BorderRadius.circular(Radii.lg),
+      ),
       clipBehavior: Clip.antiAlias,
       child: Column(children: rows),
     );
@@ -632,7 +734,8 @@ class PaletteScope extends InheritedWidget {
   }
 
   @override
-  bool updateShouldNotify(PaletteScope oldWidget) => oldWidget.palette != palette;
+  bool updateShouldNotify(PaletteScope oldWidget) =>
+      oldWidget.palette != palette;
 }
 
 Palette paletteOf(BuildContext context) => PaletteScope.of(context);

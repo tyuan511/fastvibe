@@ -1,5 +1,8 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:hugeicons/hugeicons.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 import '../chat/dag_data.dart';
 import '../chat/markdown_view.dart';
@@ -16,7 +19,8 @@ const double _messageBottomGap = 20;
 const double _workingPillHeight = 30;
 const double _workingGap = 8;
 const double _workingBottomInset = 8;
-const double _workingScrollSpace = _workingPillHeight + _workingGap + _workingBottomInset;
+const double _workingScrollSpace =
+    _workingPillHeight + _workingGap + _workingBottomInset;
 
 /// The transcript.
 ///
@@ -58,7 +62,7 @@ class TranscriptView extends StatefulWidget {
 class _TranscriptViewState extends State<TranscriptView> {
   final ScrollController _controller = ScrollController();
   bool _away = false;
-  final double _viewport = 0;
+  double _viewport = 0;
 
   @override
   void initState() {
@@ -75,7 +79,9 @@ class _TranscriptViewState extends State<TranscriptView> {
 
   void _onScroll() {
     if (!_controller.hasClients) return;
-    final threshold = _viewport > 0 ? (_viewport * 0.6).clamp(160.0, double.infinity) : 480.0;
+    final threshold = _viewport > 0
+        ? (_viewport * 0.6).clamp(160.0, double.infinity)
+        : 480.0;
     final next = _controller.offset > threshold;
     if (next != _away) setState(() => _away = next);
   }
@@ -87,9 +93,11 @@ class _TranscriptViewState extends State<TranscriptView> {
       children: <Widget>[
         NotificationListener<ScrollNotification>(
           onNotification: (notification) {
+            _viewport = notification.metrics.viewportDimension;
             // In an inverted list the "end" is the oldest edge, so this is where older
             // pages are prefetched.
-            if (notification.metrics.extentAfter < notification.metrics.viewportDimension * 2) {
+            if (notification.metrics.extentAfter <
+                notification.metrics.viewportDimension * 2) {
               widget.onOlder();
             }
             return false;
@@ -97,25 +105,30 @@ class _TranscriptViewState extends State<TranscriptView> {
           child: ListView.builder(
             controller: _controller,
             reverse: true,
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 16),
             itemCount: widget.messages.length + 1,
             itemBuilder: (context, index) {
               // Index 0 of the list is the visual bottom: the spacer.
               if (index == 0) {
                 return SizedBox(
-                  height: widget.running && !widget.waiting ? _workingScrollSpace : _messageBottomGap,
+                  height: widget.running && !widget.waiting
+                      ? _workingScrollSpace
+                      : _messageBottomGap,
                 );
               }
               final position = index - 1;
               final message = widget.messages[position];
-              final previous = position + 1 < widget.messages.length ? widget.messages[position + 1] : null;
+              final previous = position + 1 < widget.messages.length
+                  ? widget.messages[position + 1]
+                  : null;
               return Padding(
-                padding: const EdgeInsets.only(bottom: 12),
+                padding: const EdgeInsets.only(bottom: 24),
                 child: MessageRow(
                   message: message,
                   palette: palette,
                   meta: widget.footers[message.lastId ?? message.id],
-                  turnStart: message.isAssistant && previous?.isAssistant != true,
+                  turnStart:
+                      message.isAssistant && previous?.isAssistant != true,
                   live: widget.running && position == 0,
                   dagWatcher: widget.dagWatcher,
                   onLongPress: widget.onLongPress,
@@ -130,29 +143,37 @@ class _TranscriptViewState extends State<TranscriptView> {
             right: 0,
             bottom: _workingBottomInset,
             child: IgnorePointer(
-              child: Center(child: WorkingPill(since: widget.workingSince, now: widget.now)),
+              child: Center(
+                child: WorkingPill(since: widget.workingSince, now: widget.now),
+              ),
             ),
           ),
         if (_away)
           Positioned(
             right: 14,
-            bottom: widget.running && !widget.waiting ? _workingScrollSpace + 4 : 12,
-            child: Material(
-              color: palette.card,
-              shape: CircleBorder(side: BorderSide(color: palette.border, width: 0.5)),
-              elevation: palette.dark ? 2 : 4,
-              child: InkWell(
-                customBorder: const CircleBorder(),
-                onTap: () {
-                  Haptic.tap();
-                  _controller.animateTo(0, duration: const Duration(milliseconds: 260), curve: Curves.easeOutCubic);
-                },
-                child: SizedBox(
-                  width: 38,
-                  height: 38,
-                  child: Center(child: HugeIcon(icon: AppIcons.arrowDownLong, size: 18, color: palette.text)),
-                ),
+            bottom: widget.running && !widget.waiting
+                ? _workingScrollSpace + 4
+                : 12,
+            child: GlassIconButton(
+              icon: HugeIcon(
+                icon: AppIcons.arrowDownLong,
+                size: 20,
+                color: palette.text,
               ),
+              semanticLabel: t('chat.latest'),
+              size: 44,
+              onPressed: () {
+                Haptic.tap();
+                if (MediaQuery.disableAnimationsOf(context)) {
+                  _controller.jumpTo(0);
+                } else {
+                  _controller.animateTo(
+                    0,
+                    duration: const Duration(milliseconds: 260),
+                    curve: Curves.easeOutCubic,
+                  );
+                }
+              },
             ),
           ),
       ],
@@ -185,7 +206,14 @@ class WorkingPill extends StatelessWidget {
         children: <Widget>[
           DesktopSpinner(size: 15, color: palette.accent),
           const SizedBox(width: 7),
-          Text(t('chat.working'), style: TextStyle(color: palette.text, fontSize: 13, fontWeight: FontWeight.w700)),
+          Text(
+            t('chat.working'),
+            style: TextStyle(
+              color: palette.text,
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
           const SizedBox(width: 7),
           Text(
             formatElapsed(now - (since ?? now)),
@@ -234,7 +262,9 @@ class MessageRow extends StatelessWidget {
         onTap: dagWatcher == null ? null : () => dagWatcher!.open?.call(null),
         child: _Divider(
           palette: palette,
-          label: t(message.dag?.settled == false ? 'dag.updated' : 'dag.settled'),
+          label: t(
+            message.dag?.settled == false ? 'dag.updated' : 'dag.settled',
+          ),
         ),
       );
     }
@@ -242,12 +272,22 @@ class MessageRow extends StatelessWidget {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          CompactNotice(palette: palette, text: message.text, compact: message.compact),
+          CompactNotice(
+            palette: palette,
+            text: message.text,
+            compact: message.compact,
+          ),
           if (meta != null) _TurnMetaLine(meta: meta!, palette: palette),
         ],
       );
     }
-    if (message.role == 'user') return _UserRow(message: message, palette: palette, onLongPress: onLongPress);
+    if (message.role == 'user') {
+      return _UserRow(
+        message: message,
+        palette: palette,
+        onLongPress: onLongPress,
+      );
+    }
     return _AssistantRow(
       message: message,
       palette: palette,
@@ -261,7 +301,11 @@ class MessageRow extends StatelessWidget {
 }
 
 class _UserRow extends StatelessWidget {
-  const _UserRow({required this.message, required this.palette, required this.onLongPress});
+  const _UserRow({
+    required this.message,
+    required this.palette,
+    required this.onLongPress,
+  });
 
   final ChatMessage message;
   final Palette palette;
@@ -274,12 +318,17 @@ class _UserRow extends StatelessWidget {
       child: GestureDetector(
         onLongPress: () => onLongPress(message),
         child: ConstrainedBox(
-          constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * 0.86),
+          constraints: BoxConstraints(
+            maxWidth: MediaQuery.sizeOf(context).width * 0.86,
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: <Widget>[
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 10,
+                ),
                 decoration: BoxDecoration(
                   color: palette.accentSoft,
                   borderRadius: const BorderRadius.only(
@@ -292,7 +341,8 @@ class _UserRow extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    if (message.attachments != null && message.attachments!.isNotEmpty) ...<Widget>[
+                    if (message.attachments != null &&
+                        message.attachments!.isNotEmpty) ...<Widget>[
                       Wrap(
                         spacing: 6,
                         runSpacing: 6,
@@ -301,19 +351,33 @@ class _UserRow extends StatelessWidget {
                             if (attachment.dataUrl != null)
                               ClipRRect(
                                 borderRadius: BorderRadius.circular(Radii.md),
-                                child: Image.network(attachment.dataUrl!, width: 180, height: 180, fit: BoxFit.cover),
+                                child: _AttachmentImage(
+                                  url: attachment.dataUrl!,
+                                ),
                               ),
                         ],
                       ),
                       const SizedBox(height: 4),
                     ],
-                    if (message.text.isNotEmpty) MarkdownView(text: message.text, palette: palette),
+                    if (message.text.isNotEmpty)
+                      MarkdownView(
+                        text: message.text,
+                        palette: palette,
+                        compact: true,
+                      ),
                   ],
                 ),
               ),
               if (message.error != null) ...<Widget>[
                 const SizedBox(height: 4),
-                Text(message.error!, style: TextStyle(color: palette.danger, fontSize: 14, height: 20 / 14)),
+                Text(
+                  message.error!,
+                  style: TextStyle(
+                    color: palette.danger,
+                    fontSize: 14,
+                    height: 20 / 14,
+                  ),
+                ),
               ],
             ],
           ),
@@ -355,23 +419,43 @@ class _AssistantRow extends StatelessWidget {
             if (turnStart) ...<Widget>[
               Row(
                 children: <Widget>[
-                  const BrandLogo(size: 20),
+                  const BrandLogo(size: 17),
                   const SizedBox(width: 7),
-                  Text('FastVibe', style: TextStyle(color: palette.text, fontSize: 14, fontWeight: FontWeight.w700)),
+                  Text(
+                    'FastVibe',
+                    style: TextStyle(
+                      color: palette.muted,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
                 ],
               ),
-              const SizedBox(height: 2),
+              const SizedBox(height: 12),
             ],
             for (var index = 0; index < blocks.length; index++) ...<Widget>[
-              if (index > 0) const SizedBox(height: 6),
+              if (index > 0) const SizedBox(height: 12),
               _block(blocks[index], index == blocks.length - 1),
             ],
             if (message.error != null) ...<Widget>[
               const SizedBox(height: 6),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-                decoration: BoxDecoration(color: palette.dangerSoft, borderRadius: BorderRadius.circular(Radii.md)),
-                child: Text(message.error!, style: TextStyle(color: palette.danger, fontSize: 14, height: 20 / 14)),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 9,
+                ),
+                decoration: BoxDecoration(
+                  color: palette.dangerSoft,
+                  borderRadius: BorderRadius.circular(Radii.md),
+                ),
+                child: Text(
+                  message.error!,
+                  style: TextStyle(
+                    color: palette.danger,
+                    fontSize: 14,
+                    height: 20 / 14,
+                  ),
+                ),
               ),
             ],
             if (meta != null) _TurnMetaLine(meta: meta!, palette: palette),
@@ -382,20 +466,40 @@ class _AssistantRow extends StatelessWidget {
   }
 
   Widget _block(RenderBlock block, bool isLast) => switch (block) {
-        TextBlock(:final text) => MarkdownView(text: text, palette: palette),
-        ProcessBlock(:final steps) => ProcessGroup(steps: steps, palette: palette, live: live && isLast),
-        ErrorBlock(:final text) => Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-            decoration: BoxDecoration(color: palette.dangerSoft, borderRadius: BorderRadius.circular(Radii.md)),
-            child: Text(text, style: TextStyle(color: palette.danger, fontSize: 14, height: 20 / 14)),
-          ),
-        CompactBlock(:final text, :final compact) => CompactNotice(palette: palette, text: text, compact: compact),
-        ModelBlock(:final model) => _Divider(
-            palette: palette,
-            label: t('chat.modelSwitched', <String, Object?>{'model': model ?? t('chat.newModel')}),
-          ),
-        DagBlock() => const SizedBox.shrink(),
-      };
+    TextBlock(:final text) => MarkdownView(
+      text: text,
+      palette: palette,
+      streaming: live,
+    ),
+    ProcessBlock(:final steps) => ProcessGroup(
+      steps: steps,
+      palette: palette,
+      live: live && isLast,
+    ),
+    ErrorBlock(:final text) => Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: palette.dangerSoft,
+        borderRadius: BorderRadius.circular(Radii.md),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(color: palette.danger, fontSize: 14, height: 20 / 14),
+      ),
+    ),
+    CompactBlock(:final text, :final compact) => CompactNotice(
+      palette: palette,
+      text: text,
+      compact: compact,
+    ),
+    ModelBlock(:final model) => _Divider(
+      palette: palette,
+      label: t('chat.modelSwitched', <String, Object?>{
+        'model': model ?? t('chat.newModel'),
+      }),
+    ),
+    DagBlock() => const SizedBox.shrink(),
+  };
 }
 
 class _TurnMetaLine extends StatelessWidget {
@@ -438,7 +542,14 @@ class _Divider extends StatelessWidget {
           Expanded(child: Container(height: 0.5, color: palette.border)),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 10),
-            child: Text(label, style: TextStyle(color: palette.muted, fontSize: 12, fontWeight: FontWeight.w500)),
+            child: Text(
+              label,
+              style: TextStyle(
+                color: palette.muted,
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
           ),
           Expanded(child: Container(height: 0.5, color: palette.border)),
         ],
@@ -449,7 +560,12 @@ class _Divider extends StatelessWidget {
 
 /// A compaction, drawn as its own notice: what happened, why, and the token delta.
 class CompactNotice extends StatelessWidget {
-  const CompactNotice({super.key, required this.palette, required this.text, this.compact});
+  const CompactNotice({
+    super.key,
+    required this.palette,
+    required this.text,
+    this.compact,
+  });
 
   final Palette palette;
   final String text;
@@ -457,7 +573,8 @@ class CompactNotice extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final status = compact?.status ?? (text.trim().isNotEmpty ? 'done' : 'running');
+    final status =
+        compact?.status ?? (text.trim().isNotEmpty ? 'done' : 'running');
     final running = status == 'running';
     final label = switch (status) {
       'running' => t('chat.compacting'),
@@ -468,20 +585,20 @@ class CompactNotice extends StatelessWidget {
     final reason = compact?.reason == 'threshold'
         ? t('chat.compactThreshold')
         : compact?.reason == 'overflow'
-            ? t('chat.compactOverflow')
-            : null;
+        ? t('chat.compactOverflow')
+        : null;
     final before = compact?.tokensBefore;
     final after = compact?.tokensAfter;
     final tokens = before != null && after != null
         ? '${formatTokens(before)} → ${formatTokens(after)}'
         : before != null
-            ? formatTokens(before)
-            : null;
+        ? formatTokens(before)
+        : null;
     final color = status == 'error'
         ? palette.danger
         : running
-            ? palette.accent
-            : palette.muted;
+        ? palette.accent
+        : palette.muted;
     final error = status == 'error' ? (compact?.error ?? text.trim()) : null;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
@@ -489,8 +606,8 @@ class CompactNotice extends StatelessWidget {
         color: status == 'error'
             ? palette.dangerSoft
             : running
-                ? palette.accentSoft
-                : palette.field,
+            ? palette.accentSoft
+            : palette.field,
         borderRadius: BorderRadius.circular(Radii.md),
       ),
       child: Column(
@@ -501,9 +618,21 @@ class CompactNotice extends StatelessWidget {
               if (running)
                 DesktopSpinner(size: 15, color: color)
               else
-                HugeIcon(icon: AppIcons.scissor, size: 15, color: color, strokeWidth: 2),
+                HugeIcon(
+                  icon: AppIcons.scissor,
+                  size: 15,
+                  color: color,
+                  strokeWidth: 2,
+                ),
               const SizedBox(width: 7),
-              Text(label, style: TextStyle(color: color, fontSize: 14, fontWeight: FontWeight.w600)),
+              Text(
+                label,
+                style: TextStyle(
+                  color: color,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
               if (reason != null || tokens != null) ...<Widget>[
                 const SizedBox(width: 8),
                 Flexible(
@@ -532,5 +661,47 @@ class CompactNotice extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+class _AttachmentImage extends StatelessWidget {
+  const _AttachmentImage({required this.url});
+  final String url;
+  @override
+  Widget build(BuildContext context) {
+    final fallback = Container(
+      width: 160,
+      height: 120,
+      color: paletteOf(context).field,
+      child: Center(
+        child: HugeIcon(
+          icon: AppIcons.imageAdd,
+          color: paletteOf(context).muted,
+        ),
+      ),
+    );
+    final uri = Uri.tryParse(url);
+    try {
+      if (uri?.scheme == 'data') {
+        final data = uri!.data;
+        if (data == null || !data.isBase64) return fallback;
+        return Image.memory(
+          base64Decode(data.contentText),
+          width: 160,
+          height: 160,
+          fit: BoxFit.cover,
+          errorBuilder: (_, _, _) => fallback,
+        );
+      }
+      return Image.network(
+        url,
+        width: 160,
+        height: 160,
+        fit: BoxFit.cover,
+        errorBuilder: (_, _, _) => fallback,
+      );
+    } catch (_) {
+      return fallback;
+    }
   }
 }

@@ -1,29 +1,52 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:hugeicons/hugeicons.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
-import '../theme/theme.dart';
-import 'icons.dart';
 import 'kit.dart';
 
-/// The glass shell every screen sits in.
-///
-/// Glass in the iOS 26 design system is the *navigation and control layer*: bars,
-/// floating buttons, sheets, dialogs. Content — a conversation's rows, a settings card, a
-/// transcript — stays opaque, because a reader has to read it. So this shell draws the
-/// chrome as glass and hands the body an ordinary `Scaffold`-less canvas to fill.
-///
-/// `GlassScaffold` is used rather than `Scaffold` for one reason that is not cosmetic:
-/// it owns the z-order and the edge fade, so a list scrolling under a glass bar fades
-/// instead of colliding with the buttons, and a glass card in the body can never paint
-/// over the bar.
+/// A quiet, coloured canvas gives the floating controls something to refract.
+/// Content remains opaque; the wallpaper itself has no blur or shader cost.
+class GlassWallpaper extends StatelessWidget {
+  const GlassWallpaper({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = paletteOf(context);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: p.background,
+        gradient: RadialGradient(
+          center: const Alignment(-1, -0.9),
+          radius: 1.25,
+          colors: [p.accentSoft, p.background],
+        ),
+      ),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: RadialGradient(
+            center: const Alignment(1.3, 0.35),
+            radius: 1,
+            colors: [
+              p.brand.last.withValues(alpha: p.dark ? 0.12 : 0.08),
+              p.background.withValues(alpha: 0),
+            ],
+          ),
+        ),
+        child: const SizedBox.expand(),
+      ),
+    );
+  }
+}
+
+/// All routes share pinned navigation, readable content, and keyboard-safe bounds.
 class GlassScreen extends StatelessWidget {
   const GlassScreen({
     super.key,
     required this.title,
     required this.body,
     this.subtitle,
-    this.leading,
+    this.statusColor,
     this.actions = const <Widget>[],
     this.bottomBar,
     this.floatingAction,
@@ -32,10 +55,8 @@ class GlassScreen extends StatelessWidget {
 
   final String title;
   final String? subtitle;
+  final Color? statusColor;
   final Widget body;
-
-  /// Replaces the automatic back button when the screen has something else to put there.
-  final Widget? leading;
   final List<Widget> actions;
   final Widget? bottomBar;
   final Widget? floatingAction;
@@ -45,101 +66,91 @@ class GlassScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = paletteOf(context);
     return GlassScaffold(
-      // The page behind the glass. It is the same colour the content cards sit on, so a
-      // bar reads as a material over the page rather than as a second surface.
-      backgroundColor: palette.background,
-      statusBarStyle: palette.dark ? GlassStatusBarStyle.light : GlassStatusBarStyle.dark,
-      // The bar's own labels flip with what scrolls under it — the iOS 26 behaviour, and
-      // the reason a title stays legible over a photo or a dark transcript.
+      background: const GlassWallpaper(),
+      statusBarStyle: palette.dark
+          ? GlassStatusBarStyle.light
+          : GlassStatusBarStyle.dark,
+      resizeToAvoidBottomInset: true,
+      // Bodies wrap their own scrolling content. Explicit bounds keep headings and
+      // fixed composers out of the pinned navigation and system safe areas.
+      extendBody: false,
+      // Bodies can contain a fixed composer. Fading that region hides the send button.
+      bottomEdgeFade: false,
       contentAwareBrightness: true,
-      appBar: GlassAppBar(
-        centerTitle: false,
-        title: _Title(title: title, subtitle: subtitle, palette: palette),
-        leading: leading ?? (showBack ? _BackButton(palette: palette) : null),
-        actions: <Widget>[
-          for (final action in actions)
-            Padding(padding: const EdgeInsets.only(right: 4), child: action),
-        ],
-      ),
-      bottomBar: bottomBar,
-      // `GlassScaffold` is not a `Scaffold`: it draws no Material of its own, and every
-      // `TextField`, `InkWell` and `Switch` in a body needs one — without it the first
-      // frame of any screen with an input throws `No Material widget found` and takes the
-      // whole tree down. The page colour comes from `backgroundColor` above, so this
-      // layer is deliberately transparent: it exists for the ancestor, not for a fill.
-      body: Material(
-        type: MaterialType.transparency,
-        child: Stack(
-          children: <Widget>[
-            body,
-            if (floatingAction != null)
-              Positioned(right: 18, bottom: 18, child: floatingAction!),
+      appBar: GlassAppBar.pinned(
+        centerTitle: true,
+        backButton: showBack,
+        onBack: () {
+          if (context.canPop()) {
+            context.pop();
+          } else {
+            context.go('/');
+          }
+        },
+        title: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: palette.text,
+                fontSize: 17,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            if (subtitle != null)
+              Row(mainAxisSize: MainAxisSize.min, children: [
+                if (statusColor != null) ...[
+                  Container(width: 5, height: 5, decoration: BoxDecoration(color: statusColor, shape: BoxShape.circle)),
+                  const SizedBox(width: 5),
+                ],
+                Flexible(child: Text(subtitle!, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: palette.muted, fontSize: 11))),
+              ]),
           ],
         ),
+        actions: [
+          for (var i = 0; i < actions.length; i++)
+            if (actions[i] case final GlassAction action)
+              GlassBarItem.icon(
+                id: action.tooltip ?? 'action-$i',
+                icon: HugeIcon(icon: action.icon, size: 20),
+                label: action.tooltip,
+                onTap: action.onPressed,
+              )
+            else
+              GlassBarItem.custom(child: actions[i]),
+        ],
+      ),
+      bottomBar: bottomBar == null ? null : PreferredSize(
+        preferredSize: bottomBar is PreferredSizeWidget ? (bottomBar as PreferredSizeWidget).preferredSize : const Size.fromHeight(84),
+        child: Material(type: MaterialType.transparency, child: bottomBar!),
+      ),
+      body: Material(
+        type: MaterialType.transparency,
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 880),
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                body,
+                if (floatingAction != null)
+                  Positioned(
+                    right: 20,
+                    bottom: MediaQuery.paddingOf(context).bottom + 20,
+                    child: floatingAction!,
+                  ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
 }
 
-class _Title extends StatelessWidget {
-  const _Title({required this.title, required this.subtitle, required this.palette});
-
-  final String title;
-  final String? subtitle;
-  final Palette palette;
-
-  @override
-  Widget build(BuildContext context) {
-    if (subtitle == null) {
-      return Text(
-        title,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: TextStyle(color: palette.text, fontSize: 17, fontWeight: FontWeight.w700),
-      );
-    }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: <Widget>[
-        Text(
-          title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(color: palette.text, fontSize: 16, fontWeight: FontWeight.w700),
-        ),
-        Text(
-          subtitle!,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(color: palette.muted, fontSize: 12, fontWeight: FontWeight.w500),
-        ),
-      ],
-    );
-  }
-}
-
-class _BackButton extends StatelessWidget {
-  const _BackButton({required this.palette});
-
-  final Palette palette;
-
-  @override
-  Widget build(BuildContext context) {
-    if (!Navigator.of(context).canPop()) return const SizedBox.shrink();
-    return GlassIconButton(
-      icon: HugeIcon(icon: AppIcons.arrowRight, size: 20, color: palette.text),
-      // The glyph is drawn pointing right; the back affordance points the other way.
-      onPressed: () => Navigator.of(context).maybePop(),
-      size: 36,
-      iconSize: 20,
-      shape: GlassIconButtonShape.circle,
-    );
-  }
-}
-
-/// A glass icon button for a bar's `actions`. Wraps the same component the shell's back
-/// button uses, so every control in the chrome has one look.
 class GlassAction extends StatelessWidget {
   const GlassAction({
     super.key,
@@ -147,22 +158,52 @@ class GlassAction extends StatelessWidget {
     required this.onPressed,
     this.tooltip,
   });
-
   final List<List<dynamic>> icon;
   final VoidCallback onPressed;
   final String? tooltip;
 
   @override
+  Widget build(BuildContext context) => GlassIconButton(
+    icon: HugeIcon(icon: icon, size: 20, color: paletteOf(context).text),
+    onPressed: onPressed,
+    size: 44,
+    iconSize: 20,
+    semanticLabel: tooltip,
+  );
+}
+
+/// Large editorial titles live in the content; only controls float above it.
+class PageHeading extends StatelessWidget {
+  const PageHeading({super.key, required this.title, this.subtitle});
+  final String title;
+  final String? subtitle;
+
+  @override
   Widget build(BuildContext context) {
-    final palette = paletteOf(context);
-    final button = GlassIconButton(
-      icon: HugeIcon(icon: icon, size: 18, color: palette.text),
-      onPressed: onPressed,
-      size: 34,
-      iconSize: 18,
-      shape: GlassIconButtonShape.circle,
-      semanticLabel: tooltip,
+    final p = paletteOf(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 12, 4, 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: TextStyle(
+              color: p.text,
+              fontSize: 34,
+              fontWeight: FontWeight.w700,
+              letterSpacing: -1.2,
+            ),
+          ),
+          if (subtitle != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              subtitle!,
+              style: TextStyle(color: p.muted, fontSize: 15, height: 1.5),
+            ),
+          ],
+        ],
+      ),
     );
-    return button;
   }
 }

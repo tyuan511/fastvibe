@@ -18,14 +18,14 @@ class ToastHost extends StatefulWidget {
 
   final Widget child;
 
-  static _ToastHostState? _current;
+  static final List<_ToastHostState> _hosts = [];
 
   /// Show a toast from anywhere. The host is mounted by the app root, and again inside
   /// every modal, because a modal is its own route and would cover a toast drawn only by
   /// the root.
   static void show(String message, {ToastKind kind = ToastKind.info}) {
     if (message.isEmpty) return;
-    _current?._present(message, kind);
+    if (_hosts.isNotEmpty) _hosts.last._present(message, kind);
   }
 
   @override
@@ -34,16 +34,23 @@ class ToastHost extends StatefulWidget {
 
 enum ToastKind { success, error, info }
 
-void toastSuccess(String message) => ToastHost.show(message, kind: ToastKind.success);
+void toastSuccess(String message) =>
+    ToastHost.show(message, kind: ToastKind.success);
 
-void toastError(String message) => ToastHost.show(message, kind: ToastKind.error);
+void toastError(String message) =>
+    ToastHost.show(message, kind: ToastKind.error);
 
 void toastInfo(String message) => ToastHost.show(message, kind: ToastKind.info);
 
 /// `toast.failure(error, fallback)` — the error's own message when it has one.
 void toastFailure(Object error, String fallback) {
-  final message = error is StateError && error.message.isNotEmpty ? error.message : '';
-  ToastHost.show(message.isNotEmpty ? message : fallback, kind: ToastKind.error);
+  final message = error is StateError && error.message.isNotEmpty
+      ? error.message
+      : '';
+  ToastHost.show(
+    message.isNotEmpty ? message : fallback,
+    kind: ToastKind.error,
+  );
 }
 
 class _ToastHostState extends State<ToastHost> {
@@ -54,13 +61,13 @@ class _ToastHostState extends State<ToastHost> {
   @override
   void initState() {
     super.initState();
-    ToastHost._current = this;
+    ToastHost._hosts.add(this);
   }
 
   @override
   void dispose() {
     _timer?.cancel();
-    if (identical(ToastHost._current, this)) ToastHost._current = null;
+    ToastHost._hosts.remove(this);
     super.dispose();
   }
 
@@ -71,9 +78,12 @@ class _ToastHostState extends State<ToastHost> {
       _kind = kind;
     });
     _timer?.cancel();
-    _timer = Timer(Duration(milliseconds: kind == ToastKind.error ? 4000 : 2200), () {
-      if (mounted) setState(() => _message = null);
-    });
+    _timer = Timer(
+      Duration(milliseconds: kind == ToastKind.error ? 4000 : 2200),
+      () {
+        if (mounted) setState(() => _message = null);
+      },
+    );
   }
 
   @override
@@ -90,7 +100,11 @@ class _ToastHostState extends State<ToastHost> {
             child: SafeArea(
               bottom: false,
               child: Center(
-                child: _ToastBody(message: _message!, kind: _kind, palette: palette),
+                child: _ToastBody(
+                  message: _message!,
+                  kind: _kind,
+                  palette: palette,
+                ),
               ),
             ),
           ),
@@ -100,7 +114,11 @@ class _ToastHostState extends State<ToastHost> {
 }
 
 class _ToastBody extends StatelessWidget {
-  const _ToastBody({required this.message, required this.kind, required this.palette});
+  const _ToastBody({
+    required this.message,
+    required this.kind,
+    required this.palette,
+  });
 
   final String message;
   final ToastKind kind;
@@ -109,9 +127,17 @@ class _ToastBody extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final (icon, tint, soft) = switch (kind) {
-      ToastKind.success => (AppIcons.checkCircle, palette.success, palette.successSoft),
+      ToastKind.success => (
+        AppIcons.checkCircle,
+        palette.success,
+        palette.successSoft,
+      ),
       ToastKind.error => (AppIcons.alert, palette.danger, palette.dangerSoft),
-      ToastKind.info => (AppIcons.information, palette.accent, palette.accentSoft),
+      ToastKind.info => (
+        AppIcons.information,
+        palette.accent,
+        palette.accentSoft,
+      ),
     };
     return TweenAnimationBuilder<double>(
       key: ValueKey<String>(message),
@@ -124,14 +150,10 @@ class _ToastBody extends StatelessWidget {
       ),
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 440),
-        child: Container(
-          padding: const EdgeInsets.fromLTRB(8, 8, 16, 8),
-          decoration: BoxDecoration(
-            color: palette.card,
-            borderRadius: BorderRadius.circular(Radii.pill),
-            border: Border.all(color: palette.border, width: 0.5),
-            boxShadow: elevation(palette, 2),
-          ),
+        child: GlassContainer(
+          useOwnLayer: true,
+          shape: const LiquidRoundedSuperellipse(borderRadius: 28),
+          padding: const EdgeInsets.fromLTRB(12, 12, 20, 12),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
@@ -139,7 +161,14 @@ class _ToastBody extends StatelessWidget {
                 width: 26,
                 height: 26,
                 decoration: BoxDecoration(color: soft, shape: BoxShape.circle),
-                child: Center(child: HugeIcon(icon: icon, color: tint, size: 15, strokeWidth: 2.2)),
+                child: Center(
+                  child: HugeIcon(
+                    icon: icon,
+                    color: tint,
+                    size: 15,
+                    strokeWidth: 2.2,
+                  ),
+                ),
               ),
               const SizedBox(width: 10),
               Flexible(
@@ -147,7 +176,12 @@ class _ToastBody extends StatelessWidget {
                   message,
                   maxLines: 3,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(color: palette.text, fontSize: 14, fontWeight: FontWeight.w600, height: 19 / 14),
+                  style: TextStyle(
+                    color: palette.text,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    height: 19 / 14,
+                  ),
                 ),
               ),
             ],
@@ -167,13 +201,20 @@ class _ToastBody extends StatelessWidget {
 class AppDialog {
   const AppDialog._();
 
-  static Future<void> alert(BuildContext context, {required String title, String? message}) {
+  static Future<void> alert(
+    BuildContext context, {
+    required String title,
+    String? message,
+  }) {
     return GlassDialog.show<void>(
       context: context,
       title: title,
       message: message,
       actions: <GlassDialogAction>[
-        GlassDialogAction(label: t('common.ok'), onPressed: () => Navigator.of(context).pop()),
+        GlassDialogAction(
+          label: t('common.ok'),
+          onPressed: () => Navigator.of(context, rootNavigator: true).pop(),
+        ),
       ],
     );
   }
@@ -191,13 +232,16 @@ class AppDialog {
       title: title,
       message: message,
       actions: <GlassDialogAction>[
-        GlassDialogAction(label: t('common.cancel'), onPressed: () => Navigator.of(context).pop()),
+        GlassDialogAction(
+          label: t('common.cancel'),
+          onPressed: () => Navigator.of(context, rootNavigator: true).pop(),
+        ),
         GlassDialogAction(
           label: confirmLabel ?? t('common.ok'),
           isDestructive: destructive,
           onPressed: () {
             confirmed = true;
-            Navigator.of(context).pop();
+            Navigator.of(context, rootNavigator: true).pop();
           },
         ),
       ],
@@ -216,43 +260,44 @@ class AppDialog {
   }) async {
     final controller = TextEditingController(text: initial ?? '');
     String? value;
-    await showDialog<void>(
+    final palette = paletteOf(context);
+    await GlassDialog.show<void>(
       context: context,
-      builder: (dialogContext) {
-        final palette = paletteOf(dialogContext);
-        return AlertDialog(
-          backgroundColor: palette.card,
-          title: Text(title, style: TextStyle(color: palette.text, fontSize: 18, fontWeight: FontWeight.w700)),
-          content: TextField(
-            controller: controller,
-            autofocus: true,
-            selectAllOnFocus: true,
-            style: TextStyle(color: palette.text, fontSize: 16),
-            decoration: InputDecoration(
-              hintText: placeholder,
-              filled: true,
-              fillColor: palette.field,
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(Radii.md), borderSide: BorderSide.none),
+      title: title,
+      message: message,
+      content: Material(
+        type: MaterialType.transparency,
+        child: TextField(
+          controller: controller,
+          autofocus: true,
+          selectAllOnFocus: true,
+          style: TextStyle(color: palette.text, fontSize: 16),
+          decoration: InputDecoration(
+            hintText: placeholder,
+            filled: true,
+            fillColor: palette.field,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(Radii.md),
+              borderSide: BorderSide.none,
             ),
           ),
-          actions: <Widget>[
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: Text(t('common.cancel')),
-            ),
-            TextButton(
-              onPressed: () {
-                value = controller.text.trim();
-                Navigator.of(dialogContext).pop();
-              },
-              child: Text(submitLabel ?? t('common.save')),
-            ),
-          ],
-        );
-      },
+        ),
+      ),
+      actions: [
+        GlassDialogAction(
+          label: t('common.cancel'),
+          onPressed: () => Navigator.of(context, rootNavigator: true).pop(),
+        ),
+        GlassDialogAction(
+          label: submitLabel ?? t('common.save'),
+          onPressed: () {
+            value = controller.text.trim();
+            Navigator.of(context, rootNavigator: true).pop();
+          },
+        ),
+      ],
     );
     controller.dispose();
     return value;
   }
 }
-

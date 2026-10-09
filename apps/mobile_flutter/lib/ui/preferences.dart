@@ -17,18 +17,20 @@ class Preferences extends ChangeNotifier {
   ThemePreference _theme = ThemePreference.system;
   bool _haptics = true;
   bool _notifications = true;
+  bool _reduceGlass = false;
 
   ThemePreference get theme => _theme;
 
   bool get haptics => _haptics;
 
   bool get notifications => _notifications;
+  bool get reduceGlass => _reduceGlass;
 
   ThemeMode get themeMode => switch (_theme) {
-        ThemePreference.system => ThemeMode.system,
-        ThemePreference.light => ThemeMode.light,
-        ThemePreference.dark => ThemeMode.dark,
-      };
+    ThemePreference.system => ThemeMode.system,
+    ThemePreference.light => ThemeMode.light,
+    ThemePreference.dark => ThemeMode.dark,
+  };
 
   Future<void> load() async {
     try {
@@ -43,6 +45,7 @@ class Preferences extends ChangeNotifier {
       };
       _haptics = prefs.getBool('$_key.haptics') ?? true;
       _notifications = prefs.getBool('$_key.notifications') ?? true;
+      _reduceGlass = prefs.getBool('$_key.reduceGlass') ?? false;
     } catch (_) {
       // An unreadable preference file leaves the defaults, which are usable.
     }
@@ -66,6 +69,12 @@ class Preferences extends ChangeNotifier {
     await _write();
   }
 
+  Future<void> setReduceGlass(bool value) async {
+    _reduceGlass = value;
+    notifyListeners();
+    await _write();
+  }
+
   Future<void> _write() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -73,6 +82,7 @@ class Preferences extends ChangeNotifier {
       await prefs.setString('$_key.theme', _theme.name);
       await prefs.setBool('$_key.haptics', _haptics);
       await prefs.setBool('$_key.notifications', _notifications);
+      await prefs.setBool('$_key.reduceGlass', _reduceGlass);
     } catch (_) {
       // A preference that cannot be written still applies for this run.
     }

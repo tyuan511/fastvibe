@@ -1,0 +1,3 @@
+"NSCameraUsageDescription" = "Scan the QR code on your computer to connect to FastVibe.";
+"NSPhotoLibraryUsageDescription" = "Choose photos to send to FastVibe.";
+"NSLocalNetworkUsageDescription" = "Connect to FastVibe on your local network.";

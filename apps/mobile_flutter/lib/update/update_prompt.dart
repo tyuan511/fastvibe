@@ -21,9 +21,10 @@ import 'updater.dart';
 /// A check only ever *announces* a version. Nothing downloads until the user asks, so a
 /// metered connection is never spent on an update nobody wanted.
 class UpdatePrompt extends StatefulWidget {
-  const UpdatePrompt({super.key, required this.child});
+  const UpdatePrompt({super.key, required this.child, this.enabled = true});
 
   final Widget child;
+  final bool enabled;
 
   @override
   State<UpdatePrompt> createState() => _UpdatePromptState();
@@ -34,7 +35,8 @@ const int _notesLimit = 600;
 
 enum _Phase { available, downloading, ready, installing, error }
 
-class _UpdatePromptState extends State<UpdatePrompt> with WidgetsBindingObserver {
+class _UpdatePromptState extends State<UpdatePrompt>
+    with WidgetsBindingObserver {
   AppRelease? _release;
   _Phase _phase = _Phase.available;
   double? _progress;
@@ -46,7 +48,7 @@ class _UpdatePromptState extends State<UpdatePrompt> with WidgetsBindingObserver
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    if (updatesSupported) {
+    if (widget.enabled && updatesSupported) {
       unawaited(removeStaleApks());
       onReleaseAnnounced(_show);
       unawaited(_check());
@@ -56,6 +58,7 @@ class _UpdatePromptState extends State<UpdatePrompt> with WidgetsBindingObserver
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    offReleaseAnnounced(_show);
     super.dispose();
   }
 
@@ -63,12 +66,19 @@ class _UpdatePromptState extends State<UpdatePrompt> with WidgetsBindingObserver
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // The check is not run in the background: a version offered while the phone is in a
     // pocket is a dialog nobody sees, and Android would have already killed the socket.
-    if (state == AppLifecycleState.resumed) unawaited(_check());
+    if (widget.enabled &&
+        updatesSupported &&
+        state == AppLifecycleState.resumed) {
+      unawaited(_check());
+    }
   }
 
   Future<void> _check() async {
     try {
-      final results = await Future.wait<Object?>(<Future<Object?>>[checkForUpdate(), skippedVersion()]);
+      final results = await Future.wait<Object?>(<Future<Object?>>[
+        checkForUpdate(),
+        skippedVersion(),
+      ]);
       final found = results[0] as AppRelease?;
       final skipped = results[1] as String?;
       if (found != null && found.version != skipped) _show(found);
@@ -97,9 +107,12 @@ class _UpdatePromptState extends State<UpdatePrompt> with WidgetsBindingObserver
       _progress = null;
     });
     try {
-      final file = await downloadApk(release, onProgress: (value) {
-        if (mounted) setState(() => _progress = value);
-      });
+      final file = await downloadApk(
+        release,
+        onProgress: (value) {
+          if (mounted) setState(() => _progress = value);
+        },
+      );
       if (!mounted) return;
       setState(() {
         _phase = _Phase.ready;
@@ -185,7 +198,9 @@ class _UpdateDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = paletteOf(context);
-    final notes = release.notes.length > _notesLimit ? '${release.notes.substring(0, _notesLimit)}…' : release.notes;
+    final notes = release.notes.length > _notesLimit
+        ? '${release.notes.substring(0, _notesLimit)}…'
+        : release.notes;
     return ColoredBox(
       color: palette.overlay,
       child: Center(
@@ -209,8 +224,17 @@ class _UpdateDialog extends StatelessWidget {
                       Container(
                         width: 34,
                         height: 34,
-                        decoration: BoxDecoration(color: palette.accentSoft, borderRadius: BorderRadius.circular(10)),
-                        child: Center(child: HugeIcon(icon: AppIcons.arrowUp, size: 18, color: palette.accent)),
+                        decoration: BoxDecoration(
+                          color: palette.accentSoft,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Center(
+                          child: HugeIcon(
+                            icon: AppIcons.arrowUp,
+                            size: 18,
+                            color: palette.accent,
+                          ),
+                        ),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
@@ -218,12 +242,22 @@ class _UpdateDialog extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: <Widget>[
                             Text(
-                              t('update.title'),
-                              style: TextStyle(color: palette.text, fontSize: 18, fontWeight: FontWeight.w700, height: 24 / 18),
+                              t('update.update'),
+                              style: TextStyle(
+                                color: palette.text,
+                                fontSize: 18,
+                                fontWeight: FontWeight.w700,
+                                height: 24 / 18,
+                              ),
                             ),
                             Text(
-                              t('update.version', <String, Object?>{'version': release.version}),
-                              style: TextStyle(color: palette.muted, fontSize: 13),
+                              t('update.confirmTitle', <String, Object?>{
+                                'version': release.version,
+                              }),
+                              style: TextStyle(
+                                color: palette.muted,
+                                fontSize: 13,
+                              ),
                             ),
                           ],
                         ),
@@ -237,7 +271,11 @@ class _UpdateDialog extends StatelessWidget {
                       child: SingleChildScrollView(
                         child: Text(
                           notes,
-                          style: TextStyle(color: palette.muted, fontSize: 15, height: 22 / 15),
+                          style: TextStyle(
+                            color: palette.muted,
+                            fontSize: 15,
+                            height: 22 / 15,
+                          ),
                         ),
                       ),
                     ),
@@ -253,7 +291,9 @@ class _UpdateDialog extends StatelessWidget {
                     Text(
                       progress == null
                           ? t('update.downloading')
-                          : t('update.downloadingPercent', <String, Object?>{'percent': (progress! * 100).round()}),
+                          : t('update.downloadingPercent', <String, Object?>{
+                              'percent': (progress! * 100).round(),
+                            }),
                       style: TextStyle(color: palette.muted, fontSize: 13),
                     ),
                   ],
@@ -261,8 +301,18 @@ class _UpdateDialog extends StatelessWidget {
                     const SizedBox(height: 14),
                     Container(
                       padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(color: palette.dangerSoft, borderRadius: BorderRadius.circular(Radii.md)),
-                      child: Text(error!, style: TextStyle(color: palette.danger, fontSize: 14, height: 20 / 14)),
+                      decoration: BoxDecoration(
+                        color: palette.dangerSoft,
+                        borderRadius: BorderRadius.circular(Radii.md),
+                      ),
+                      child: Text(
+                        error!,
+                        style: TextStyle(
+                          color: palette.danger,
+                          fontSize: 14,
+                          height: 20 / 14,
+                        ),
+                      ),
                     ),
                   ],
                   const SizedBox(height: 16),
@@ -270,7 +320,9 @@ class _UpdateDialog extends StatelessWidget {
                     children: <Widget>[
                       Expanded(
                         child: _DialogButton(
-                          label: phase == _Phase.ready ? t('update.later') : t('update.skip'),
+                          label: phase == _Phase.ready
+                              ? t('update.later')
+                              : t('update.skip'),
                           palette: palette,
                           onTap: onSkip,
                         ),
@@ -279,14 +331,16 @@ class _UpdateDialog extends StatelessWidget {
                       Expanded(
                         child: _DialogButton(
                           label: switch (phase) {
-                            _Phase.downloading => t('update.downloadingShort'),
+                            _Phase.downloading => t('update.downloading'),
                             _Phase.ready => t('update.install'),
                             _Phase.installing => t('update.installing'),
-                            _ => t('update.download'),
+                            _ => t('update.update'),
                           },
                           palette: palette,
                           primary: true,
-                          disabled: phase == _Phase.downloading || phase == _Phase.installing,
+                          disabled:
+                              phase == _Phase.downloading ||
+                              phase == _Phase.installing,
                           onTap: phase == _Phase.ready ? onInstall : onDownload,
                         ),
                       ),
@@ -319,28 +373,32 @@ class _DialogButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Opacity(
-        opacity: disabled ? 0.5 : 1,
-        child: GestureDetector(
-          onTap: disabled ? null : onTap,
-          child: Container(
-            height: 46,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: primary ? null : palette.field,
-              gradient: primary
-                  ? LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: palette.brand)
-                  : null,
-              borderRadius: BorderRadius.circular(Radii.md),
-            ),
-            child: Text(
-              label,
-              style: TextStyle(
-                color: primary ? Colors.white : palette.text,
-                fontSize: 16,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
+    opacity: disabled ? 0.5 : 1,
+    child: GestureDetector(
+      onTap: disabled ? null : onTap,
+      child: Container(
+        height: 46,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: primary ? null : palette.field,
+          gradient: primary
+              ? LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: palette.brand,
+                )
+              : null,
+          borderRadius: BorderRadius.circular(Radii.md),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: primary ? Colors.white : palette.text,
+            fontSize: 16,
+            fontWeight: FontWeight.w700,
           ),
         ),
-      );
+      ),
+    ),
+  );
 }

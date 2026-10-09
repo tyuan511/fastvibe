@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
@@ -15,7 +18,9 @@ import 'ui/kit.dart';
 import 'ui/preferences.dart';
 import 'update/update_prompt.dart';
 
-Future<void> main() async {
+Future<void> main() => startApp();
+
+Future<void> startApp({bool checkUpdates = true}) async {
   WidgetsFlutterBinding.ensureInitialized();
   // Pre-warms the fragment shaders so the first glass frame is not a white flash.
   await LiquidGlassWidgets.initialize();
@@ -30,28 +35,35 @@ Future<void> main() async {
     return readModelCatalog(remote);
   });
   await LocalNotifications.instance.install((serverId, conversationId) {
-    appRouter.go('/chat/$conversationId');
+    unawaited(openNotificationTarget(serverId, conversationId));
   });
-  runApp(const FastVibeApp());
+  runApp(FastVibeApp(checkUpdates: checkUpdates));
 }
 
 class FastVibeApp extends StatefulWidget {
-  const FastVibeApp({super.key});
+  const FastVibeApp({super.key, this.checkUpdates = true});
+  final bool checkUpdates;
 
   @override
   State<FastVibeApp> createState() => _FastVibeAppState();
 }
 
 class _FastVibeAppState extends State<FastVibeApp> with WidgetsBindingObserver {
+  StreamSubscription<List<ConnectivityResult>>? _network;
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _network = Connectivity().onConnectivityChanged.listen(
+      Connection.instance.handleNetworkChange,
+      onError: (Object _) {}, // Missing connectivity is unknown, not offline.
+    );
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _network?.cancel();
     super.dispose();
   }
 
@@ -69,6 +81,13 @@ class _FastVibeAppState extends State<FastVibeApp> with WidgetsBindingObserver {
       listenable: Listenable.merge(<Listenable>[i18n, Preferences.instance]),
       builder: (context, _) => LiquidGlassWidgets.wrap(
         brightnessResolver: Theme.maybeBrightnessOf,
+        adaptiveQuality: true,
+        respectSystemAccessibility: true,
+        adaptiveConfig: GlassAdaptiveScopeConfig(
+          maxQuality: Preferences.instance.reduceGlass
+              ? GlassQuality.minimal
+              : GlassQuality.premium,
+        ),
         theme: GlassThemeData.simple(blur: 12, thickness: 25),
         child: MaterialApp.router(
           title: 'FastVibe',
@@ -82,14 +101,24 @@ class _FastVibeAppState extends State<FastVibeApp> with WidgetsBindingObserver {
             // toast raised from a modal must be drawn by that modal, which is its own
             // route and would otherwise cover a host mounted only at the root.
             return PaletteScope(
-              palette: Theme.of(context).brightness == Brightness.dark ? dark : light,
+              palette: Theme.of(context).brightness == Brightness.dark
+                  ? dark
+                  : light,
               child: ToastHost(
                 child: UpdatePrompt(
+                  enabled: widget.checkUpdates,
                   child: AnnotatedRegion<SystemUiOverlayStyle>(
                     value: Theme.of(context).brightness == Brightness.dark
                         ? SystemUiOverlayStyle.light
                         : SystemUiOverlayStyle.dark,
-                    child: child ?? const SizedBox.shrink(),
+                    child: GlassAccessibilityScope(
+                      reduceTransparency: Preferences.instance.reduceGlass
+                          ? true
+                          : null,
+                      child: GlassNavigationShell(
+                        child: child ?? const SizedBox.shrink(),
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -125,9 +154,10 @@ ThemeData buildTheme(Palette palette) {
     canvasColor: palette.background,
     dividerColor: palette.separator,
     splashFactory: InkSparkle.splashFactory,
-    textTheme: Typography.material2021().black.apply(
-          bodyColor: palette.text,
-          displayColor: palette.text,
-        ),
+    textTheme:
+        (palette.dark
+                ? Typography.material2021().white
+                : Typography.material2021().black)
+            .apply(bodyColor: palette.text, displayColor: palette.text),
   );
 }

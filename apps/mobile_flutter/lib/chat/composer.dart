@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:hugeicons/hugeicons.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 import '../i18n/core.dart';
 import '../protocol/model_cache.dart';
@@ -60,11 +61,20 @@ class Composer extends StatefulWidget {
   State<Composer> createState() => _ComposerState();
 }
 
-const List<String> _thinkingLevels = <String>['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'auto'];
+const List<String> _thinkingLevels = <String>[
+  'off',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+  'auto',
+];
 
 class _ComposerState extends State<Composer> {
   final FocusNode _focus = FocusNode();
-  bool _focused = false;
+  int _refreshGeneration = 0;
   bool _imageBusy = false;
   Map<String, Object?>? _session;
   List<Map<String, Object?>> _models = <Map<String, Object?>>[];
@@ -72,7 +82,6 @@ class _ComposerState extends State<Composer> {
   @override
   void initState() {
     super.initState();
-    _focus.addListener(() => setState(() => _focused = _focus.hasFocus));
     Connection.instance.addListener(_refresh);
     _refresh();
   }
@@ -82,7 +91,10 @@ class _ComposerState extends State<Composer> {
     super.didUpdateWidget(oldWidget);
     // The context window only moves while a run is going, so the state is re-read at the
     // boundaries rather than on a timer.
-    if (oldWidget.running != widget.running) _refresh();
+    if (oldWidget.running != widget.running ||
+        oldWidget.conversationId != widget.conversationId) {
+      _refresh();
+    }
   }
 
   @override
@@ -94,13 +106,22 @@ class _ComposerState extends State<Composer> {
 
   Future<void> _refresh() async {
     final remote = Connection.instance.client;
+    final generation = ++_refreshGeneration;
+    final conversationId = widget.conversationId;
     if (remote == null) return;
     try {
       final results = await Future.wait<Object?>(<Future<Object?>>[
-        remote.call('engine:get-state', <String, Object?>{'conversationId': widget.conversationId}),
+        remote.call('engine:get-state', <String, Object?>{
+          'conversationId': widget.conversationId,
+        }),
         readModelCatalog(remote),
       ]);
-      if (!mounted) return;
+      if (!mounted ||
+          generation != _refreshGeneration ||
+          conversationId != widget.conversationId ||
+          Connection.instance.client != remote) {
+        return;
+      }
       final state = results[0];
       setState(() {
         _session = state is Map ? state.cast<String, Object?>() : null;
@@ -127,7 +148,9 @@ class _ComposerState extends State<Composer> {
     final current = _currentModel;
     if (current == null) return null;
     for (final model in _models) {
-      if (model['provider'] == current.provider && model['id'] == current.id) return model;
+      if (model['provider'] == current.provider && model['id'] == current.id) {
+        return model;
+      }
     }
     return null;
   }
@@ -153,18 +176,72 @@ class _ComposerState extends State<Composer> {
     );
   }
 
+  void _imageMenu() {
+    showOptionSheet(
+      context,
+      title: t('composer.chooseImage'),
+      options: [
+        SheetOption(
+          value: 'photos',
+          label: t('composer.chooseImage'),
+          icon: AppIcons.imageAdd,
+          onSelect: _pickImages,
+        ),
+        SheetOption(
+          value: 'paste',
+          label: t('composer.pasteImage'),
+          icon: AppIcons.clipboardPaste,
+          onSelect: _pasteImage,
+        ),
+      ],
+    );
+  }
+
+  Future<void> _pasteImage() async {
+    if (_imageBusy || widget.images.length >= maxComposerImages) return;
+    final conversationId = widget.conversationId;
+    setState(() => _imageBusy = true);
+    try {
+      final image = await pasteImage();
+      if (!mounted || conversationId != widget.conversationId) return;
+      if (image == null) {
+        toastInfo(t('composer.noImageClipboard'));
+        return;
+      }
+      widget.onImagesChange(
+        [...widget.images, image].take(maxComposerImages).toList(),
+      );
+    } catch (_) {
+      toastError(t('composer.imageFailed'));
+    } finally {
+      if (mounted) setState(() => _imageBusy = false);
+    }
+  }
+
   Future<void> _pickImages() async {
     if (_imageBusy) return;
+    final conversationId = widget.conversationId;
     final remaining = maxComposerImages - widget.images.length;
     if (remaining <= 0) {
-      toastInfo(t('composer.imageLimit', <String, Object?>{'count': maxComposerImages}));
+      toastInfo(
+        t('composer.imageLimit', <String, Object?>{'count': maxComposerImages}),
+      );
       return;
     }
     setState(() => _imageBusy = true);
     try {
       final picked = await pickImages(limit: remaining);
-      if (!mounted || picked.isEmpty) return;
-      widget.onImagesChange(<ComposerImage>[...widget.images, ...picked].take(maxComposerImages).toList());
+      if (!mounted ||
+          conversationId != widget.conversationId ||
+          picked.isEmpty) {
+        return;
+      }
+      widget.onImagesChange(
+        <ComposerImage>[
+          ...widget.images,
+          ...picked,
+        ].take(maxComposerImages).toList(),
+      );
     } catch (error) {
       final message = error is StateError ? error.message : '';
       toastError(switch (message) {
@@ -203,13 +280,17 @@ class _ComposerState extends State<Composer> {
         'conversationId': widget.conversationId,
       });
       if (!mounted) return;
-      setState(() => _session = state is Map ? state.cast<String, Object?>() : _session);
+      setState(
+        () =>
+            _session = state is Map ? state.cast<String, Object?>() : _session,
+      );
       toastSuccess(t('toast.modelSwitched', <String, Object?>{'model': id}));
       // A model with a narrower set of levels must not leave the session on one it
       // cannot take.
       final levels = _modelThinkingLevels;
       final currentLevel = _session?['thinkingLevel'];
-      if (levels.isNotEmpty && (currentLevel is! String || !levels.contains(currentLevel))) {
+      if (levels.isNotEmpty &&
+          (currentLevel is! String || !levels.contains(currentLevel))) {
         await _setThinking(levels.contains('high') ? 'high' : levels.first);
       }
     } catch (error) {
@@ -226,7 +307,10 @@ class _ComposerState extends State<Composer> {
         'conversationId': widget.conversationId,
       });
       if (!mounted) return;
-      setState(() => _session = state is Map ? state.cast<String, Object?>() : _session);
+      setState(
+        () =>
+            _session = state is Map ? state.cast<String, Object?>() : _session,
+      );
     } catch (error) {
       toastFailure(error, t('composer.thinkingFailed'));
     }
@@ -238,7 +322,9 @@ class _ComposerState extends State<Composer> {
     showOptionSheet(
       context,
       title: t('composer.thinkingTitle'),
-      subtitle: _currentModelEntry?['name'] is String ? _currentModelEntry!['name'] as String : null,
+      subtitle: _currentModelEntry?['name'] is String
+          ? _currentModelEntry!['name'] as String
+          : null,
       value: current is String ? current : null,
       options: <SheetOption>[
         for (final level in levels)
@@ -252,20 +338,27 @@ class _ComposerState extends State<Composer> {
     );
   }
 
-  String _thinkingLabel(String level) => _thinkingLevels.contains(level) ? t('thinking.$level') : level;
+  String _thinkingLabel(String level) =>
+      _thinkingLevels.contains(level) ? t('thinking.$level') : level;
 
   String? _thinkingHint(String level) =>
-      level != 'off' && level != 'auto' && _thinkingLevels.contains(level) ? t('thinking.${level}Hint') : null;
+      level != 'off' && level != 'auto' && _thinkingLevels.contains(level)
+      ? t('thinking.${level}Hint')
+      : null;
 
   void _showContext() {
     final usage = _contextUsage;
     if (usage == null) return;
     final detail = usage.tokens != null
         ? '${formatTokens(usage.tokens!)} / ${formatTokens(usage.window ?? 0)} tokens'
-        : t('composer.contextWindow', <String, Object?>{'window': formatTokens(usage.window ?? 0)});
+        : t('composer.contextWindow', <String, Object?>{
+            'window': formatTokens(usage.window ?? 0),
+          });
     AppDialog.alert(
       context,
-      title: t('composer.contextUsed', <String, Object?>{'percent': usage.percent!.round()}),
+      title: t('composer.contextUsed', <String, Object?>{
+        'percent': usage.percent!.round(),
+      }),
       message: detail,
     );
   }
@@ -273,32 +366,36 @@ class _ComposerState extends State<Composer> {
   @override
   Widget build(BuildContext context) {
     final palette = paletteOf(context);
-    final hasContent = widget.draft.text.trim().isNotEmpty || widget.images.isNotEmpty;
+    final hasContent =
+        widget.draft.text.trim().isNotEmpty || widget.images.isNotEmpty;
     final action = widget.sending
         ? 'sending'
         : widget.running && !hasContent
-            ? 'stop'
-            : widget.canContinue && !hasContent
-                ? 'continue'
-                : 'send';
-    final actionDisabled = widget.disabled ||
+        ? 'stop'
+        : widget.canContinue && !hasContent
+        ? 'continue'
+        : 'send';
+    final actionDisabled =
+        widget.disabled ||
         widget.sending ||
         _imageBusy ||
         (action == 'send' && !hasContent);
     final placeholder = widget.disabled
         ? t('composer.placeholderLoading')
         : widget.queueing
-            ? t('composer.placeholderQueue')
-            : t('composer.placeholder');
+        ? t('composer.placeholderQueue')
+        : t('composer.placeholder');
 
     return Padding(
-      padding: EdgeInsets.fromLTRB(10, 6, 10, math.max(MediaQuery.paddingOf(context).bottom, 10)),
-      child: Container(
-        decoration: BoxDecoration(
-          color: palette.card,
-          borderRadius: BorderRadius.circular(Radii.xl),
-          border: Border.all(color: _focused ? palette.accent : palette.border, width: 0.5),
-        ),
+      padding: EdgeInsets.fromLTRB(
+        10,
+        6,
+        10,
+        math.max(MediaQuery.paddingOf(context).bottom, 10),
+      ),
+      child: GlassContainer(
+        useOwnLayer: true,
+        shape: const LiquidRoundedSuperellipse(borderRadius: Radii.xl),
         padding: const EdgeInsets.only(bottom: 8),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -310,13 +407,16 @@ class _ComposerState extends State<Composer> {
                   spacing: 8,
                   runSpacing: 8,
                   children: <Widget>[
-                    for (final image in widget.images) _Thumbnail(
-                      image: image,
-                      palette: palette,
-                      onRemove: () => widget.onImagesChange(
-                        widget.images.where((item) => item.id != image.id).toList(),
+                    for (final image in widget.images)
+                      _Thumbnail(
+                        image: image,
+                        palette: palette,
+                        onRemove: () => widget.onImagesChange(
+                          widget.images
+                              .where((item) => item.id != image.id)
+                              .toList(),
+                        ),
                       ),
-                    ),
                   ],
                 ),
               ),
@@ -331,14 +431,21 @@ class _ComposerState extends State<Composer> {
               minLines: 1,
               keyboardType: TextInputType.multiline,
               textInputAction: TextInputAction.newline,
-              style: TextStyle(color: palette.text, fontSize: 16, height: 22 / 16),
+              style: TextStyle(
+                color: palette.text,
+                fontSize: 16,
+                height: 22 / 16,
+              ),
               decoration: InputDecoration(
                 border: InputBorder.none,
                 isDense: true,
                 contentPadding: const EdgeInsets.fromLTRB(16, 13, 16, 6),
                 hintText: placeholder,
                 hintStyle: TextStyle(color: palette.subtle, fontSize: 16),
-                constraints: const BoxConstraints(minHeight: 48, maxHeight: 150),
+                constraints: const BoxConstraints(
+                  minHeight: 48,
+                  maxHeight: 150,
+                ),
               ),
             ),
             Padding(
@@ -348,9 +455,13 @@ class _ComposerState extends State<Composer> {
                   IconAction(
                     icon: AppIcons.imageAdd,
                     tone: IconTone.field,
-                    size: 30,
-                    enabled: !widget.disabled && !_imageBusy && widget.images.length < maxComposerImages,
-                    onPressed: _pickImages,
+                    size: 40,
+                    enabled:
+                        !widget.disabled &&
+                        !_imageBusy &&
+                        widget.images.length < maxComposerImages,
+                    tooltip: t('composer.chooseImage'),
+                    onPressed: _imageMenu,
                   ),
                   const SizedBox(width: 8),
                   Expanded(
@@ -361,7 +472,12 @@ class _ComposerState extends State<Composer> {
                           _Chip(
                             palette: palette,
                             label: _modelLabel,
-                            leading: _currentModel == null ? null : Avatar(name: _currentModel!.provider, size: 18),
+                            leading: _currentModel == null
+                                ? null
+                                : Avatar(
+                                    name: _currentModel!.provider,
+                                    size: 18,
+                                  ),
                             enabled: !widget.disabled && _models.isNotEmpty,
                             onTap: _pickModel,
                           ),
@@ -390,13 +506,16 @@ class _ComposerState extends State<Composer> {
                           child: CustomPaint(
                             size: const Size.square(22),
                             painter: _RingPainter(
-                              percent: _contextUsage!.percent!.clamp(0, 1),
+                              percent: (_contextUsage!.percent! / 100).clamp(
+                                0,
+                                1,
+                              ),
                               track: palette.field,
                               progress: _contextUsage!.percent! >= 90
                                   ? palette.danger
                                   : _contextUsage!.percent! >= 70
-                                      ? palette.warning
-                                      : palette.accent,
+                                  ? palette.warning
+                                  : palette.accent,
                             ),
                           ),
                         ),
@@ -433,12 +552,18 @@ class _ComposerState extends State<Composer> {
 
   String get _thinkingLabelText {
     final level = _session?['thinkingLevel'];
-    return level is String && level.isNotEmpty ? _thinkingLabel(level) : t('composer.thinkingChip');
+    return level is String && level.isNotEmpty
+        ? _thinkingLabel(level)
+        : t('composer.thinkingChip');
   }
 }
 
 class _Thumbnail extends StatelessWidget {
-  const _Thumbnail({required this.image, required this.palette, required this.onRemove});
+  const _Thumbnail({
+    required this.image,
+    required this.palette,
+    required this.onRemove,
+  });
 
   final ComposerImage image;
   final Palette palette;
@@ -471,7 +596,14 @@ class _Thumbnail extends StatelessWidget {
                 shape: BoxShape.circle,
                 border: Border.all(color: palette.border, width: 0.5),
               ),
-              child: Center(child: HugeIcon(icon: AppIcons.cancel, size: 12, color: palette.text, strokeWidth: 2.5)),
+              child: Center(
+                child: HugeIcon(
+                  icon: AppIcons.cancel,
+                  size: 12,
+                  color: palette.text,
+                  strokeWidth: 2.5,
+                ),
+              ),
             ),
           ),
         ),
@@ -507,13 +639,24 @@ class _Chip extends StatelessWidget {
           height: 30,
           constraints: const BoxConstraints(maxWidth: 190),
           padding: const EdgeInsets.symmetric(horizontal: 10),
-          decoration: BoxDecoration(color: palette.field, borderRadius: BorderRadius.circular(Radii.pill)),
+          decoration: BoxDecoration(
+            color: palette.field,
+            borderRadius: BorderRadius.circular(Radii.pill),
+          ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              if (leading != null) ...<Widget>[leading!, const SizedBox(width: 5)],
+              if (leading != null) ...<Widget>[
+                leading!,
+                const SizedBox(width: 5),
+              ],
               if (icon != null) ...<Widget>[
-                HugeIcon(icon: icon!, size: 14, color: palette.muted, strokeWidth: 2),
+                HugeIcon(
+                  icon: icon!,
+                  size: 14,
+                  color: palette.muted,
+                  strokeWidth: 2,
+                ),
                 const SizedBox(width: 5),
               ],
               Flexible(
@@ -521,11 +664,20 @@ class _Chip extends StatelessWidget {
                   label,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(color: palette.text, fontSize: 13, fontWeight: FontWeight.w600),
+                  style: TextStyle(
+                    color: palette.text,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
               const SizedBox(width: 4),
-              HugeIcon(icon: AppIcons.arrowDown, size: 12, color: palette.subtle, strokeWidth: 2),
+              HugeIcon(
+                icon: AppIcons.arrowDown,
+                size: 12,
+                color: palette.subtle,
+                strokeWidth: 2,
+              ),
             ],
           ),
         ),
@@ -554,28 +706,47 @@ class _ActionButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (action == 'stop') {
-      return GestureDetector(
-        onTap: () {
-          Haptic.press();
-          onAbort();
-        },
-        child: Container(
-          width: 36,
-          height: 36,
-          decoration: BoxDecoration(color: palette.text, borderRadius: BorderRadius.circular(18)),
-          child: Center(child: HugeIcon(icon: AppIcons.square, size: 16, color: palette.card, strokeWidth: 2.4)),
+      return Semantics(
+        label: t('composer.stop'),
+        button: true,
+        enabled: !disabled,
+        child: GestureDetector(
+          onTap: disabled
+              ? null
+              : () {
+                  Haptic.press();
+                  onAbort();
+                },
+          child: Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: palette.text,
+              borderRadius: BorderRadius.circular(22),
+            ),
+            child: Center(
+              child: HugeIcon(
+                icon: AppIcons.square,
+                size: 16,
+                color: palette.card,
+                strokeWidth: 2.4,
+              ),
+            ),
+          ),
         ),
       );
     }
     final label = action == 'sending'
         ? t('composer.sending')
         : action == 'continue'
-            ? t('composer.continue')
-            : null;
+        ? t('composer.continue')
+        : t('composer.send');
     return Opacity(
       opacity: disabled ? 0.35 : 1,
       child: Semantics(
         label: label,
+        button: true,
+        enabled: !disabled,
         child: GestureDetector(
           onTap: disabled
               ? null
@@ -590,19 +761,24 @@ class _ActionButton extends StatelessWidget {
                 },
           child: BrandGradient(
             palette: palette,
-            borderRadius: BorderRadius.circular(18),
+            borderRadius: BorderRadius.circular(22),
             child: SizedBox(
-              width: 36,
-              height: 36,
+              width: 44,
+              height: 44,
               child: Center(
                 child: action == 'sending'
                     ? const SizedBox(
                         width: 16,
                         height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
                       )
                     : HugeIcon(
-                        icon: action == 'continue' ? AppIcons.play : AppIcons.arrowUp,
+                        icon: action == 'continue'
+                            ? AppIcons.play
+                            : AppIcons.arrowUp,
                         size: 18,
                         color: Colors.white,
                         strokeWidth: 2.2,
@@ -617,7 +793,11 @@ class _ActionButton extends StatelessWidget {
 }
 
 class _RingPainter extends CustomPainter {
-  _RingPainter({required this.percent, required this.track, required this.progress});
+  _RingPainter({
+    required this.percent,
+    required this.track,
+    required this.progress,
+  });
 
   final double percent;
   final Color track;

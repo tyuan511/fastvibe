@@ -7,8 +7,9 @@
  * translation review upstream was done against.
  */
 import { readFileSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
-const SRC = "/Users/yuantang/code/fastvibe/apps/mobile/src/i18n";
+const SRC = fileURLToPath(new URL("../../mobile/src/i18n/", import.meta.url));
 
 function parseDictionary(file) {
   const text = readFileSync(`${SRC}/${file}`, "utf8");

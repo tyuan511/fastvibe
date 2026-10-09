@@ -3,7 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hugeicons/hugeicons.dart';
-import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
+
+import '../ui/sheet.dart';
 
 import '../i18n/core.dart';
 import '../theme/theme.dart';
@@ -64,11 +65,10 @@ Future<void> showOptionSheet(
     if (options.isNotEmpty) SheetGroup(label: '', options: options),
   ];
   final total = all.fold<int>(0, (sum, group) => sum + group.options.length);
-  return GlassModalSheet.show<void>(
+  return showAppSheet<void>(
     context: context,
-    halfSize: 0.55,
-    peekSize: 120,
-    topBorderRadius: 28,
+    height:
+        120.0 + total.clamp(1, 8) * 60 + (total > 9 ? 56 : 0) + all.length * 12,
     builder: (sheetContext) => _OptionSheetBody(
       title: title,
       subtitle: subtitle,
@@ -114,12 +114,18 @@ class _OptionSheetBodyState extends State<_OptionSheetBody> {
     final needle = _query.text.trim().toLowerCase();
     if (needle.isEmpty) return widget.groups;
     return widget.groups
-        .map((group) => SheetGroup(
-              label: group.label,
-              options: group.options
-                  .where((option) => '${option.label} ${option.description ?? ''}'.toLowerCase().contains(needle))
-                  .toList(),
-            ))
+        .map(
+          (group) => SheetGroup(
+            label: group.label,
+            options: group.options
+                .where(
+                  (option) => '${option.label} ${option.description ?? ''}'
+                      .toLowerCase()
+                      .contains(needle),
+                )
+                .toList(),
+          ),
+        )
         .where((group) => group.options.isNotEmpty)
         .toList();
   }
@@ -129,38 +135,11 @@ class _OptionSheetBodyState extends State<_OptionSheetBody> {
     final palette = paletteOf(context);
     final groups = _shown;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+      padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          Padding(
-            padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text(
-                  widget.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: palette.text,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: -0.3,
-                  ),
-                ),
-                if (widget.subtitle != null && widget.subtitle!.isNotEmpty) ...<Widget>[
-                  const SizedBox(height: 2),
-                  Text(
-                    widget.subtitle!,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(color: palette.muted, fontSize: 13),
-                  ),
-                ],
-              ],
-            ),
-          ),
+          AppSheetHeader(title: widget.title, subtitle: widget.subtitle),
           if (widget.searchable) ...<Widget>[
             SearchField(
               controller: _query,
@@ -174,7 +153,10 @@ class _OptionSheetBodyState extends State<_OptionSheetBody> {
                 ? Padding(
                     padding: const EdgeInsets.symmetric(vertical: 24),
                     child: Center(
-                      child: Text(t('common.noMatch'), style: TextStyle(color: palette.muted, fontSize: 14)),
+                      child: Text(
+                        t('common.noMatch'),
+                        style: TextStyle(color: palette.muted, fontSize: 14),
+                      ),
                     ),
                   )
                 : ListView(
@@ -187,23 +169,37 @@ class _OptionSheetBodyState extends State<_OptionSheetBody> {
                             padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
                             child: Text(
                               group.label,
-                              style: TextStyle(color: palette.muted, fontSize: 13, fontWeight: FontWeight.w600),
+                              style: TextStyle(
+                                color: palette.muted,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
                           ),
                         Container(
                           decoration: BoxDecoration(
-                            color: palette.background,
+                            color: palette.card.withValues(alpha: 0.66),
                             borderRadius: BorderRadius.circular(Radii.lg),
                           ),
                           clipBehavior: Clip.antiAlias,
                           child: Column(
                             children: <Widget>[
-                              for (var index = 0; index < group.options.length; index++) ...<Widget>[
+                              for (
+                                var index = 0;
+                                index < group.options.length;
+                                index++
+                              ) ...<Widget>[
                                 if (index > 0)
-                                  Divider(height: 0.5, thickness: 0.5, color: palette.border),
+                                  Divider(
+                                    height: 0.5,
+                                    thickness: 0.5,
+                                    color: palette.border,
+                                  ),
                                 _OptionRow(
                                   option: group.options[index],
-                                  selected: group.options[index].value == widget.value,
+                                  selected:
+                                      group.options[index].value ==
+                                      widget.value,
                                   onTap: () {
                                     Haptic.select();
                                     final option = group.options[index];
@@ -228,7 +224,11 @@ class _OptionSheetBodyState extends State<_OptionSheetBody> {
 }
 
 class _OptionRow extends StatelessWidget {
-  const _OptionRow({required this.option, required this.selected, required this.onTap});
+  const _OptionRow({
+    required this.option,
+    required this.selected,
+    required this.onTap,
+  });
 
   final SheetOption option;
   final bool selected;
@@ -241,7 +241,7 @@ class _OptionRow extends StatelessWidget {
     return InkWell(
       onTap: onTap,
       child: ConstrainedBox(
-        constraints: const BoxConstraints(minHeight: 52),
+        constraints: const BoxConstraints(minHeight: 56),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           child: Row(
@@ -255,7 +255,9 @@ class _OptionRow extends StatelessWidget {
                   width: 30,
                   height: 30,
                   decoration: BoxDecoration(
-                    color: option.destructive ? palette.dangerSoft : palette.card,
+                    color: option.destructive
+                        ? palette.dangerSoft
+                        : palette.card,
                     borderRadius: BorderRadius.circular(9),
                   ),
                   child: Center(
@@ -280,22 +282,35 @@ class _OptionRow extends StatelessWidget {
                       style: TextStyle(
                         color: color,
                         fontSize: 16,
-                        fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                        fontWeight: selected
+                            ? FontWeight.w600
+                            : FontWeight.w400,
                       ),
                     ),
-                    if (option.description != null && option.description!.isNotEmpty) ...<Widget>[
+                    if (option.description != null &&
+                        option.description!.isNotEmpty) ...<Widget>[
                       const SizedBox(height: 2),
                       Text(
                         option.description!,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(color: palette.muted, fontSize: 13, height: 18 / 13),
+                        style: TextStyle(
+                          color: palette.muted,
+                          fontSize: 13,
+                          height: 18 / 13,
+                        ),
                       ),
                     ],
                   ],
                 ),
               ),
-              if (selected) HugeIcon(icon: AppIcons.tick, size: 19, color: palette.accent, strokeWidth: 2.4),
+              if (selected)
+                HugeIcon(
+                  icon: AppIcons.tick,
+                  size: 19,
+                  color: palette.accent,
+                  strokeWidth: 2.4,
+                ),
             ],
           ),
         ),

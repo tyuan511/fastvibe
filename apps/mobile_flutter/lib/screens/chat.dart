@@ -18,6 +18,8 @@ import '../chat/queue.dart';
 import '../chat/queue_panel.dart';
 import '../chat/snapshot_sync.dart';
 import '../chat/turn_meta.dart';
+import '../chat/transcript_search.dart';
+import '../ui/sheet.dart';
 import '../i18n/core.dart';
 import '../protocol/client.dart';
 import '../protocol/diagnostics.dart';
@@ -56,8 +58,8 @@ class ChatScreen extends StatefulWidget {
 
 class _ChatScreenState extends State<ChatScreen> {
   final List<ChatMessage> _messages = <ChatMessage>[];
-  final Map<ChatMessage, ({ChatMessage previous, ChatMessage merged})> _replyCache =
-      <ChatMessage, ({ChatMessage previous, ChatMessage merged})>{};
+  final Map<ChatMessage, ({ChatMessage previous, ChatMessage merged})>
+  _replyCache = <ChatMessage, ({ChatMessage previous, ChatMessage merged})>{};
   Timer? _paintTimer;
   bool _paintScheduled = false;
 
@@ -71,7 +73,7 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _sending = false;
   bool _responding = false;
   Object? _submitting;
-  QueueState _queue = emptyQueue('');
+  late QueueState _queue;
   bool _restored = false;
 
   SnapshotSync? _sync;
@@ -120,11 +122,14 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
+    _queue = emptyQueue(widget.conversationId);
     Connection.instance.addListener(_onConnection);
     _draft.addListener(_onDraftChanged);
     _dag = DagWatcher(_conversationId);
     _clock = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted && _running) setState(() => _now = DateTime.now().millisecondsSinceEpoch);
+      if (mounted && _running) {
+        setState(() => _now = DateTime.now().millisecondsSinceEpoch);
+      }
     });
     _hydrateDraft();
     _startSync();
@@ -134,6 +139,8 @@ class _ChatScreenState extends State<ChatScreen> {
   void didUpdateWidget(ChatScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.conversationId == widget.conversationId) return;
+    _flushDraft();
+    _draftTimer?.cancel();
     _teardownSync();
     _dag?.dispose();
     _dag = DagWatcher(widget.conversationId);
@@ -158,16 +165,27 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _onConnection() {
     if (!mounted) return;
-    // A reconnect is a new scope: re-subscribe and re-read the durable queue.
-    if (_sync != null && _remote != null && !identical(_syncScopeRemote, _remote)) {
+    // A scope may first mount before a socket is ready. Retire the old listener even
+    // while disconnected; a new socket must restore its own queue before Send enables.
+    if (!identical(_syncScopeRemote, _remote)) {
       _teardownSync();
-      _startSync();
-      return;
+      _restored = false;
+      if (_remote != null) _startSync();
+    }
+    if (_draftServerId != _serverId) {
+      _flushDraft();
+      _hydrateDraft();
     }
     setState(() {});
   }
 
   RemoteClient? _syncScopeRemote;
+  String? _syncConversationId;
+  void Function(Map<String, Object?>, EventMeta?)? _eventListener;
+  VoidCallback? _cancelScope;
+  String? _draftServerId;
+  String? _draftConversationId;
+  int _draftGeneration = 0;
 
   void _resetForConversation() {
     _messages.clear();
@@ -177,36 +195,46 @@ class _ChatScreenState extends State<ChatScreen> {
     _checkpoint = null;
     _loading = true;
     _restored = false;
+    _images = [];
+    _sending = false;
+    _submitting = null;
   }
 
   // ---- draft ---------------------------------------------------------------------
 
   Future<void> _hydrateDraft() async {
+    final generation = ++_draftGeneration;
     final serverId = _serverId;
-    _draftTouched = false;
-    _draft.text = '';
+    final conversationId = _conversationId;
+    _draftTimer?.cancel();
     _draftHydrated = false;
+    _draftServerId = serverId;
+    _draftConversationId = conversationId;
+    _draft.text = '';
+    _draftTouched = false;
     if (serverId == null) return;
-    final saved = await readDraft(serverId, _conversationId);
-    if (!mounted || _serverId != serverId || _conversationId != widget.conversationId) return;
+    final saved = await readDraft(serverId, conversationId);
+    if (!mounted || generation != _draftGeneration) return;
     if (!_draftTouched) _draft.text = saved?.text ?? '';
     setState(() => _draftHydrated = true);
   }
 
   void _onDraftChanged() {
     _draftTouched = true;
-    final serverId = _serverId;
-    if (serverId == null || !_draftHydrated) return;
+    if (!_draftHydrated) return;
     _draftTimer?.cancel();
-    _draftTimer = Timer(const Duration(milliseconds: 350), () {
-      _draftTimer = null;
-      writeDraft(serverId, _conversationId, _draft.text);
-    });
+    _draftTimer = Timer(const Duration(milliseconds: 350), _flushDraft);
+    if (mounted) setState(() {});
   }
 
   void _flushDraft() {
-    final serverId = _serverId;
-    if (serverId != null) writeDraft(serverId, _conversationId, _draft.text);
+    final serverId = _draftServerId;
+    final conversationId = _draftConversationId;
+    if (serverId != null &&
+        conversationId != null &&
+        (_draftHydrated || _draftTouched)) {
+      unawaited(writeDraft(serverId, conversationId, _draft.text));
+    }
   }
 
   // ---- transcript ------------------------------------------------------------------
@@ -214,7 +242,7 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Every event is reduced in order, but the list is painted at most once per
   /// frame-sized interval. A fast model otherwise repaints per token.
   void _setMessages(List<ChatMessage> next) {
-    if (identical(next, _messages)) return;
+    if (!mounted || identical(next, _messages)) return;
     _messages
       ..clear()
       ..addAll(next);
@@ -234,22 +262,33 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
     _syncScopeRemote = remote;
+    final conversationId = _conversationId;
+    _syncConversationId = conversationId;
+    _restored = false;
     final serverId = _serverId;
     final started = DateTime.now().millisecondsSinceEpoch;
     var cancelled = false;
+    _cancelScope = () => cancelled = true;
 
     void applyEvent(Map<String, Object?> event) {
-      if (event['conversationId'] != _conversationId) return;
+      if (cancelled || !mounted) return;
+      if (event['conversationId'] != conversationId) return;
       Connection.instance.applyChatEvent(remote, event);
       if (event['type'] == 'queue_changed') {
         _applyQueue(event['queue']);
         return;
       }
       if (event['type'] == 'queue_error') {
-        toastError(event['message'] is String ? event['message'] as String : t('chat.queueFailed'));
+        toastError(
+          event['message'] is String
+              ? event['message'] as String
+              : t('chat.queueFailed'),
+        );
       }
       if (event['type'] == 'message_start') {
-        _setMessages(applyMessageStart(List<ChatMessage>.from(_messages), event));
+        _setMessages(
+          applyMessageStart(List<ChatMessage>.from(_messages), event),
+        );
       }
       final nested = nestedParent(event) != null;
       if (event['type'] == 'message_update' ||
@@ -260,7 +299,9 @@ class _ChatScreenState extends State<ChatScreen> {
         // own — and each such call ends with an event of its own, which must not cost a
         // reload apiece.
         if (!nested) {
-          _setMessages(applyLiveEngineEvent(List<ChatMessage>.from(_messages), event));
+          _setMessages(
+            applyLiveEngineEvent(List<ChatMessage>.from(_messages), event),
+          );
         }
       }
       if (event['type'] == 'queue_delivered' ||
@@ -273,133 +314,186 @@ class _ChatScreenState extends State<ChatScreen> {
 
     late final SnapshotSync sync;
     late HistoryPager<ChatMessage> pager;
-    sync = SnapshotSync(SnapshotSyncOptions(
-      isCurrent: () => !cancelled && identical(_sync, sync),
-      subscribe: (cursor) => remote.subscribeConversation('conversation:$_conversationId', cursor),
-      load: () async {
-        final anchorEntryId = !_fullRead
-            ? _messages
-                .lastWhere(
-                  (message) => message.role == 'user' && !message.id.startsWith('local-'),
-                  orElse: () => ChatMessage(id: '', role: 'user'),
-                )
-                .id
-            : null;
-        final result = await remote.call('engine:get-snapshot', <String, Object?>{
-          'conversationId': _conversationId,
-          if (anchorEntryId != null && anchorEntryId.isNotEmpty) 'fromEntryId': anchorEntryId,
-          if (!_fullRead && _messages.isEmpty && remote.supportsHistoryPaging) 'historyLimit': 12,
-        });
-        final map = result is Map ? result.cast<String, Object?>() : <String, Object?>{};
-        return Snapshot(
-          seq: map['seq'] is int ? map['seq'] as int : 0,
-          messages: map['messages'] is List ? map['messages'] as List : null,
-          queue: map['queue'],
-          messageMode: map['messageMode'] is String ? map['messageMode'] as String : null,
-          messageAnchorId: map['messageAnchorId'] is String ? map['messageAnchorId'] as String : null,
-          running: map['running'] is bool ? map['running'] as bool : null,
-          pendingUi: map['pendingUi'] is List ? map['pendingUi'] as List : null,
-          historyBeforeEntryId: map['history'] is Map && (map['history'] as Map)['beforeEntryId'] is String
-              ? (map['history'] as Map)['beforeEntryId'] as String
-              : null,
-        );
-      },
-      onSnapshot: (snapshot) {
-        Connection.instance.applyChatSnapshot(
-          remote,
-          _conversationId,
-          seq: snapshot.seq,
-          running: snapshot.running,
-          pendingUi: snapshot.pendingUi,
-        );
-        final next = <ChatMessage>[];
-        for (final value in snapshot.messages ?? const <Object?>[]) {
-          next.add(ChatMessage.fromJson(value));
-        }
-        if (snapshot.messageMode == 'tail' && snapshot.messageAnchorId != null) {
-          final merged = mergeMessageTail(List<ChatMessage>.from(_messages), next, snapshot.messageAnchorId!);
-          _setMessages(merged ?? next);
-        } else {
-          _setMessages(next);
-        }
-        if (snapshot.messageMode != 'tail') {
-          pager.replace(snapshot.historyBeforeEntryId);
-          _fullRead = false;
-          // Warm the adjacent page after first paint; further pages are fetched before
-          // they enter view, with no extra controls or rows in the transcript.
-          if (pager.cursor != null) {
-            Timer(const Duration(milliseconds: 300), pager.prefetch);
+    sync = SnapshotSync(
+      SnapshotSyncOptions(
+        isCurrent: () => mounted && !cancelled && identical(_sync, sync),
+        subscribe: (cursor) => remote.subscribeConversation(
+          'conversation:$conversationId',
+          cursor,
+        ),
+        load: () async {
+          final anchorEntryId = !_fullRead
+              ? _messages
+                    .lastWhere(
+                      (message) =>
+                          message.role == 'user' &&
+                          !message.id.startsWith('local-'),
+                      orElse: () => ChatMessage(id: '', role: 'user'),
+                    )
+                    .id
+              : null;
+          final result = await remote.call(
+            'engine:get-snapshot',
+            <String, Object?>{
+              'conversationId': conversationId,
+              if (anchorEntryId != null && anchorEntryId.isNotEmpty)
+                'fromEntryId': anchorEntryId,
+              if (!_fullRead &&
+                  _messages.isEmpty &&
+                  remote.supportsHistoryPaging)
+                'historyLimit': 12,
+            },
+          );
+          final map = result is Map
+              ? result.cast<String, Object?>()
+              : <String, Object?>{};
+          return Snapshot(
+            seq: map['seq'] is int ? map['seq'] as int : 0,
+            messages: map['messages'] is List ? map['messages'] as List : null,
+            queue: map['queue'],
+            messageMode: map['messageMode'] is String
+                ? map['messageMode'] as String
+                : null,
+            messageAnchorId: map['messageAnchorId'] is String
+                ? map['messageAnchorId'] as String
+                : null,
+            running: map['running'] is bool ? map['running'] as bool : null,
+            pendingUi: map['pendingUi'] is List
+                ? map['pendingUi'] as List
+                : null,
+            historyBeforeEntryId:
+                map['history'] is Map &&
+                    (map['history'] as Map)['beforeEntryId'] is String
+                ? (map['history'] as Map)['beforeEntryId'] as String
+                : null,
+          );
+        },
+        onSnapshot: (snapshot) {
+          Connection.instance.applyChatSnapshot(
+            remote,
+            conversationId,
+            seq: snapshot.seq,
+            running: snapshot.running,
+            pendingUi: snapshot.pendingUi,
+          );
+          final next = <ChatMessage>[];
+          for (final value in snapshot.messages ?? const <Object?>[]) {
+            next.add(ChatMessage.fromJson(value));
           }
-        }
-        _applyQueue(snapshot.queue);
-        _restored = true;
-      },
-      onEvent: applyEvent,
-      onError: (error) {
-        if (!cancelled) toastFailure(error, t('chat.loadFailed'));
-      },
-      onRestored: (replayed) {
-        _restored = true;
-        recordConnectionDiagnostic(Diagnostic.metric(
-          'resume',
-          elapsedMs: DateTime.now().millisecondsSinceEpoch - started,
-          outcome: replayed ? 'replay' : 'snapshot',
-        ));
-      },
-    ));
+          if (snapshot.messageMode == 'tail' &&
+              snapshot.messageAnchorId != null) {
+            final merged = mergeMessageTail(
+              List<ChatMessage>.from(_messages),
+              next,
+              snapshot.messageAnchorId!,
+            );
+            _setMessages(merged ?? next);
+          } else {
+            _setMessages(next);
+          }
+          if (snapshot.messageMode != 'tail') {
+            pager.replace(snapshot.historyBeforeEntryId);
+            _fullRead = false;
+            // Warm the adjacent page after first paint; further pages are fetched before
+            // they enter view, with no extra controls or rows in the transcript.
+            if (pager.cursor != null) {
+              Timer(const Duration(milliseconds: 300), pager.prefetch);
+            }
+          }
+          _applyQueue(snapshot.queue);
+          _restored = true;
+        },
+        onEvent: applyEvent,
+        onError: (error) {
+          if (!cancelled) toastFailure(error, t('chat.loadFailed'));
+        },
+        onRestored: (replayed) {
+          _restored = true;
+          recordConnectionDiagnostic(
+            Diagnostic.metric(
+              'resume',
+              elapsedMs: DateTime.now().millisecondsSinceEpoch - started,
+              outcome: replayed ? 'replay' : 'snapshot',
+            ),
+          );
+        },
+      ),
+    );
 
-    pager = HistoryPager<ChatMessage>(HistoryPagerOptions<ChatMessage>(
-      cursor: _historyCursor,
-      load: (beforeEntryId) async {
-        final page = await remote.call('engine:get-messages-page', <String, Object?>{
-          'conversationId': _conversationId,
-          'beforeEntryId': beforeEntryId,
-          'turnLimit': 12,
-        });
-        if (page is! Map || page['conversationId'] != _conversationId || page['messages'] is! List || page['reset'] is! bool) {
-          throw StateError(t('chat.loadFailed'));
-        }
-        return HistoryPage<ChatMessage>(
-          messages: <ChatMessage>[
-            for (final value in page['messages'] as List) ChatMessage.fromJson(value),
-          ],
-          beforeEntryId: beforeEntryId,
-          nextBeforeEntryId: page['nextBeforeEntryId'] is String ? page['nextBeforeEntryId'] as String : null,
-          reset: page['reset'] as bool,
-        );
-      },
-      prepend: (older, cursor) {
-        final merged = prependHistory(List<ChatMessage>.from(_messages), older, cursor);
-        if (merged == null) return false;
-        _setMessages(merged);
-        return true;
-      },
-      cursorChanged: (cursor) => _historyCursor = cursor,
-      reset: () async {
-        _fullRead = true;
-        await sync.refresh();
-      },
-    ));
+    pager = HistoryPager<ChatMessage>(
+      HistoryPagerOptions<ChatMessage>(
+        cursor: _historyCursor,
+        load: (beforeEntryId) async {
+          final page = await remote.call(
+            'engine:get-messages-page',
+            <String, Object?>{
+              'conversationId': conversationId,
+              'beforeEntryId': beforeEntryId,
+              'turnLimit': 12,
+            },
+          );
+          if (page is! Map ||
+              page['conversationId'] != conversationId ||
+              page['messages'] is! List ||
+              page['reset'] is! bool) {
+            throw StateError(t('chat.loadFailed'));
+          }
+          return HistoryPage<ChatMessage>(
+            messages: <ChatMessage>[
+              for (final value in page['messages'] as List)
+                ChatMessage.fromJson(value),
+            ],
+            beforeEntryId: beforeEntryId,
+            nextBeforeEntryId: page['nextBeforeEntryId'] is String
+                ? page['nextBeforeEntryId'] as String
+                : null,
+            reset: page['reset'] as bool,
+          );
+        },
+        prepend: (older, cursor) {
+          final merged = prependHistory(
+            List<ChatMessage>.from(_messages),
+            older,
+            cursor,
+          );
+          if (merged == null) return false;
+          _setMessages(merged);
+          return true;
+        },
+        cursorChanged: (cursor) => _historyCursor = cursor,
+        reset: () async {
+          _fullRead = true;
+          await sync.refresh();
+        },
+      ),
+    );
 
     _pager = pager;
     _sync = sync;
 
-    Connection.instance.onEngineEvent((event, meta) {
-      if (event['conversationId'] == _conversationId) sync.receive(event, meta);
-    });
+    _eventListener = (event, meta) {
+      if (!cancelled && event['conversationId'] == conversationId) {
+        sync.receive(event, meta);
+      }
+    };
+    Connection.instance.onEngineEvent(_eventListener!);
 
     final seed = _checkpoint;
-    final usableSeed = !_conversationId.startsWith('remote:') &&
+    final usableSeed =
+        !conversationId.startsWith('remote:') &&
             remote.supportsConversationResume &&
             seed != null &&
             seed.cursor.epoch == remote.epoch
         ? seed
         : null;
-    sync.restore(usableSeed).catchError((Object error) {
-      if (!cancelled) toastFailure(error, t('chat.loadFailed'));
-    }).whenComplete(() {
-      if (!cancelled && mounted) setState(() => _loading = false);
-    });
+    sync
+        .restore(usableSeed)
+        .catchError((Object error) {
+          if (!cancelled) toastFailure(error, t('chat.loadFailed'));
+        })
+        .whenComplete(() {
+          if (!cancelled && mounted) setState(() => _loading = false);
+        });
     _syncServerId = serverId;
   }
 
@@ -413,7 +507,17 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     sync?.dispose();
     pager?.dispose();
-    _remote?.unsubscribe(<String>['conversation:$_conversationId']);
+    _cancelScope?.call();
+    _cancelScope = null;
+    if (_eventListener != null) {
+      Connection.instance.offEngineEvent(_eventListener!);
+    }
+    _eventListener = null;
+    if (_syncConversationId != null) {
+      _syncScopeRemote?.unsubscribe(['conversation:$_syncConversationId']);
+    }
+    _syncScopeRemote = null;
+    _syncConversationId = null;
     _sync = null;
     _pager = null;
   }
@@ -429,6 +533,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _applyQueue(Object? value) {
+    if (!mounted) return;
     final next = mergeQueue(_queue, value);
     if (identical(next, _queue)) return;
     setState(() => _queue = next);
@@ -441,13 +546,23 @@ class _ChatScreenState extends State<ChatScreen> {
     final selected = _images;
     final remote = _remote;
     final queueLoading = _queue.revision < 0 || !_restored;
-    if ((text.isEmpty && selected.isEmpty) || remote == null || shouldHoldSend(sending: _submitting != null, queueLoading: queueLoading)) {
+    if ((text.isEmpty && selected.isEmpty) ||
+        remote == null ||
+        shouldHoldSend(
+          sending: _submitting != null,
+          queueLoading: queueLoading,
+        )) {
       return;
     }
     // Captured before the first await: a Stop during record-prompt must keep this send
     // queued, and the decision cannot be re-read afterwards.
     final enqueue = shouldQueueMessage(_running, _queue);
+    final conversationId = _conversationId;
     final reservation = Object();
+    bool current() =>
+        mounted &&
+        _conversationId == conversationId &&
+        identical(_submitting, reservation);
     _submitting = reservation;
     final localId = 'local-${DateTime.now().microsecondsSinceEpoch}';
     setState(() => _sending = true);
@@ -464,8 +579,11 @@ class _ChatScreenState extends State<ChatScreen> {
         text: text,
         images: selected.map(promptImage).toList(),
         enqueue: enqueue,
-        previous: _chat == null ? null : (title: _chat!.title, preview: _chat!.preview),
+        previous: _chat == null
+            ? null
+            : (title: _chat!.title, preview: _chat!.preview),
         onPrompt: () {
+          if (!current()) return;
           _setMessages(<ChatMessage>[
             ..._messages,
             ChatMessage(
@@ -487,21 +605,41 @@ class _ChatScreenState extends State<ChatScreen> {
           ]);
         },
       );
-      if (next != null) _applyQueue(next);
+      if (current() && next != null) _applyQueue(next);
     } catch (error) {
-      if (!mounted) return;
+      if (!current()) return;
       if (error is! SubmissionUncertainError) {
         _setMessages(_messages.where((item) => item.id != localId).toList());
-        _draft.text = text;
-        setState(() => _images = images);
+        _draft.text = _draft.text.isEmpty ? text : '$text\n\n${_draft.text}';
+        setState(
+          () => _images = [
+            ...images,
+            ..._images,
+          ].take(maxComposerImages).toList(),
+        );
       } else {
         // The outcome is unknown, not a refusal: keep the row and re-read.
         await _reload();
       }
-      toastFailure(error, t('chat.sendFailed'));
+      if (error is SubmissionUncertainError) {
+        toastError(error.message);
+      } else {
+        toastFailure(error, t('chat.sendFailed'));
+      }
     } finally {
-      if (identical(_submitting, reservation)) _submitting = null;
-      if (mounted) setState(() => _sending = false);
+      if (current()) {
+        _submitting = null;
+        setState(() => _sending = false);
+      }
+    }
+  }
+
+  Future<void> _runAction(String method) async {
+    if (!_connected) return;
+    try {
+      await _remote?.call(method, {'conversationId': _conversationId});
+    } catch (error) {
+      toastFailure(error, t('common.operationFailed'));
     }
   }
 
@@ -509,7 +647,12 @@ class _ChatScreenState extends State<ChatScreen> {
     final remote = _remote;
     if (remote == null) return;
     try {
-      final next = await remote.call(method, id != null ? <String, Object?>{'id': id} : <String, Object?>{'conversationId': _conversationId});
+      final next = await remote.call(
+        method,
+        id != null
+            ? <String, Object?>{'id': id}
+            : <String, Object?>{'conversationId': _conversationId},
+      );
       if (next != null) _applyQueue(next);
     } catch (error) {
       toastFailure(error, t('chat.queueUpdateFailed'));
@@ -540,8 +683,42 @@ class _ChatScreenState extends State<ChatScreen> {
       title: chat.title,
       subtitle: _projectName,
       options: <SheetOption>[
-        SheetOption(value: 'rename', label: t('common.rename'), icon: AppIcons.pencilEdit, onSelect: () => _rename(chat)),
-        SheetOption(value: 'copy', label: t('chat.copyAll'), icon: AppIcons.copy, onSelect: _copyAll),
+        SheetOption(
+          value: 'rename',
+          label: t('common.rename'),
+          icon: AppIcons.pencilEdit,
+          onSelect: () => _rename(chat),
+        ),
+        SheetOption(
+          value: 'copy',
+          label: t('chat.copyAll'),
+          icon: AppIcons.copy,
+          onSelect: _copyAll,
+        ),
+        SheetOption(
+          value: 'search',
+          label: t('chat.search'),
+          icon: AppIcons.search,
+          onSelect: () {
+            final scope = _sync;
+            showAppSheet<void>(
+              context: context,
+              expanded: true,
+              builder: (_) => TranscriptSearch(
+                load: () async {
+                  if (!_connected || scope == null) {
+                    throw StateError(t('chat.loadFailed'));
+                  }
+                  await _pager?.loadAll();
+                  if (!mounted || _sync != scope || _historyCursor != null) {
+                    throw StateError(t('chat.loadFailed'));
+                  }
+                  return List<ChatMessage>.from(_messages);
+                },
+              ),
+            );
+          },
+        ),
         SheetOption(
           value: 'archive',
           label: t('common.archive'),
@@ -563,7 +740,11 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _rename(CatalogConversation chat) async {
-    final next = await AppDialog.prompt(context, title: t('common.renameChat'), initial: chat.title);
+    final next = await AppDialog.prompt(
+      context,
+      title: t('common.renameChat'),
+      initial: chat.title,
+    );
     if (next == null) return;
     final title = next.trim();
     if (title.isEmpty || title == chat.title) return;
@@ -574,7 +755,9 @@ class _ChatScreenState extends State<ChatScreen> {
     final confirmed = await AppDialog.confirm(
       context,
       title: t('server.deleteChatTitle'),
-      message: t('server.deleteChatBody', <String, Object?>{'title': chat.title}),
+      message: t('server.deleteChatBody', <String, Object?>{
+        'title': chat.title,
+      }),
       confirmLabel: t('common.delete'),
       destructive: true,
     );
@@ -590,8 +773,14 @@ class _ChatScreenState extends State<ChatScreen> {
       if (_loading && _messages.isEmpty) await _reload();
       if (_historyCursor != null) await _pager?.loadAll();
       final transcript = _messages
-          .where((message) => message.kind != 'compact' && message.text.trim().isNotEmpty)
-          .map((message) => '${message.role == 'user' ? t('common.me') : 'FastVibe'}:\n${message.text.trim()}')
+          .where(
+            (message) =>
+                message.kind != 'compact' && message.text.trim().isNotEmpty,
+          )
+          .map(
+            (message) =>
+                '${message.role == 'user' ? t('common.me') : 'FastVibe'}:\n${message.text.trim()}',
+          )
           .join('\n\n');
       await copyToClipboard(transcript);
       toastSuccess(t('toast.chatCopied'));
@@ -605,7 +794,17 @@ class _ChatScreenState extends State<ChatScreen> {
     showOptionSheet(
       context,
       title: message.role == 'user' ? t('chat.myMessage') : t('chat.reply'),
-      subtitle: message.text.trim().replaceAll(RegExp(r'\s+'), ' ').substring(0, message.text.trim().replaceAll(RegExp(r'\s+'), ' ').length.clamp(0, 60)),
+      subtitle: message.text
+          .trim()
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .substring(
+            0,
+            message.text
+                .trim()
+                .replaceAll(RegExp(r'\s+'), ' ')
+                .length
+                .clamp(0, 60),
+          ),
       options: <SheetOption>[
         SheetOption(
           value: 'copy',
@@ -634,11 +833,20 @@ class _ChatScreenState extends State<ChatScreen> {
     final chat = _chat;
     final prompt = _prompt;
     final running = _running;
-    final workingSince = currentRunStartedAt(_messages) ?? connection.runningSince[_conversationId];
+    final workingSince =
+        currentRunStartedAt(_messages) ??
+        connection.runningSince[_conversationId];
     _footers = completedTurnFooters(_messages, running, _footers);
-    final merged = mergeReplies(List<ChatMessage>.from(_messages), _replyCache).reversed.toList();
+    final merged = mergeReplies(
+      List<ChatMessage>.from(_messages),
+      _replyCache,
+    ).reversed.toList();
     final last = _messages.isEmpty ? null : _messages.last;
-    final canContinue = !running && (last?.error != null || last?.stop == 'aborted' || last?.stop == 'length');
+    final canContinue =
+        !running &&
+        (last?.error != null ||
+            last?.stop == 'aborted' ||
+            last?.stop == 'length');
     final empty = !_loading && _messages.isEmpty && !running;
 
     return GlassScreen(
@@ -652,71 +860,95 @@ class _ChatScreenState extends State<ChatScreen> {
             onPressed: _openMenu,
           ),
       ],
-      body: Column(
-        children: <Widget>[
-          if (_dag != null) MobileDagSummary(watcher: _dag!),
-          Expanded(
-            child: _loading
-                ? BrandLoading(message: t('chat.loading'))
-                : empty
-                    ? _Welcome(projectName: _projectName, onPick: (text) => _draft.text = text)
-                    : TranscriptView(
-                        messages: merged,
-                        footers: _footers,
-                        running: running,
-                        waiting: prompt != null,
-                        workingSince: workingSince,
-                        now: _now,
-                        onLongPress: _messageAction,
-                        onOlder: () => _pager?.prefetch(),
-                        dagWatcher: _dag,
-                      ),
-          ),
-          if (connection.reconnecting || (!_loading && !_connected))
-            _ReconnectBanner(
-              onRetry: () {
-                Haptic.tap();
-                if (_remote != null) {
-                  _reload();
-                } else {
-                  connection.reconnectNow();
-                }
-              },
+      body: LayoutBuilder(
+        builder: (context, constraints) => Column(
+          children: <Widget>[
+            if (_dag != null) MobileDagSummary(watcher: _dag!),
+            Expanded(
+              child: _loading
+                  ? BrandLoading(message: t('chat.loading'))
+                  : empty
+                  ? _Welcome(
+                      projectName: _projectName,
+                      onPick: (text) => _draft.text = text,
+                    )
+                  : TranscriptView(
+                      messages: merged,
+                      footers: _footers,
+                      running: running,
+                      waiting: prompt != null,
+                      workingSince: workingSince,
+                      now: _now,
+                      onLongPress: _messageAction,
+                      onOlder: () => _pager?.prefetch(),
+                      dagWatcher: _dag,
+                    ),
             ),
-          if (_queue.items.isNotEmpty)
-            QueuePanel(
-              queue: _queue,
-              disabled: !_connected,
-              onCancel: (id) => _changeQueue('engine:queue-cancel', id),
-              onResume: () => _changeQueue('engine:queue-resume'),
-            ),
-          if (prompt != null)
-            Padding(
-              padding: EdgeInsets.fromLTRB(10, 4, 10, MediaQuery.paddingOf(context).bottom + 8),
-              child: PromptCard(
-                key: ValueKey<String>(prompt.id),
-                prompt: prompt,
-                busy: _responding,
-                onRespond: _respond,
+            ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: constraints.maxHeight * 0.68,
               ),
-            )
-          else
-            Composer(
-              conversationId: _conversationId,
-              running: running,
-              sending: _sending,
-              queueing: running || _queue.items.isNotEmpty,
-              disabled: !_connected || _queue.revision < 0,
-              draft: _draft,
-              images: _images,
-              onImagesChange: (value) => setState(() => _images = value),
-              onDraftChange: (_) => setState(() {}),
-              onSend: _send,
-              onAbort: () => _remote?.call('engine:abort', <String, Object?>{'conversationId': _conversationId}),
-              onContinue: () => _remote?.call('engine:continue', <String, Object?>{'conversationId': _conversationId}),
-              canContinue: canContinue,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (connection.reconnecting || (!_loading && !_connected))
+                      _ReconnectBanner(
+                        onRetry: () {
+                          Haptic.tap();
+                          if (_remote != null) {
+                            _reload();
+                          } else {
+                            connection.reconnectNow();
+                          }
+                        },
+                      ),
+                    if (_queue.items.isNotEmpty)
+                      QueuePanel(
+                        queue: _queue,
+                        disabled: !_connected,
+                        onCancel: (id) =>
+                            _changeQueue('engine:queue-cancel', id),
+                        onResume: () => _changeQueue('engine:queue-resume'),
+                      ),
+                    if (prompt != null)
+                      Padding(
+                        padding: EdgeInsets.fromLTRB(
+                          10,
+                          4,
+                          10,
+                          MediaQuery.paddingOf(context).bottom + 8,
+                        ),
+                        child: PromptCard(
+                          key: ValueKey<String>(prompt.id),
+                          prompt: prompt,
+                          busy: _responding,
+                          onRespond: _respond,
+                        ),
+                      )
+                    else
+                      Composer(
+                        conversationId: _conversationId,
+                        running: running,
+                        sending: _sending,
+                        queueing: running || _queue.items.isNotEmpty,
+                        disabled: !_connected || _queue.revision < 0,
+                        draft: _draft,
+                        images: _images,
+                        onImagesChange: (value) =>
+                            setState(() => _images = value),
+                        onDraftChange: (_) => setState(() {}),
+                        onSend: _send,
+                        onAbort: () => _runAction('engine:abort'),
+                        onContinue: () => _runAction('engine:continue'),
+                        canContinue: canContinue,
+                      ),
+                  ],
+                ),
+              ),
             ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -748,7 +980,12 @@ class _Welcome extends StatelessWidget {
           Text(
             t('chat.welcomeTitle'),
             textAlign: TextAlign.center,
-            style: TextStyle(color: palette.text, fontSize: 22, fontWeight: FontWeight.w800, letterSpacing: -0.4),
+            style: TextStyle(
+              color: palette.text,
+              fontSize: 22,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -0.4,
+            ),
           ),
           const SizedBox(height: 8),
           ConstrainedBox(
@@ -756,7 +993,11 @@ class _Welcome extends StatelessWidget {
             child: Text(
               '${projectName != null ? t('chat.welcomeInProject', <String, Object?>{'project': projectName}) : ''}${t('chat.welcomeBody')}',
               textAlign: TextAlign.center,
-              style: TextStyle(color: palette.muted, fontSize: 14, height: 21 / 14),
+              style: TextStyle(
+                color: palette.muted,
+                fontSize: 14,
+                height: 21 / 14,
+              ),
             ),
           ),
           const SizedBox(height: 18),
@@ -773,14 +1014,27 @@ class _Welcome extends StatelessWidget {
                   },
                   borderRadius: BorderRadius.circular(Radii.lg),
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 12,
+                    ),
                     child: Row(
                       children: <Widget>[
                         Container(
                           width: 32,
                           height: 32,
-                          decoration: BoxDecoration(color: palette.accentSoft, borderRadius: BorderRadius.circular(10)),
-                          child: Center(child: HugeIcon(icon: suggestion.$1, size: 16, color: palette.accent, strokeWidth: 2)),
+                          decoration: BoxDecoration(
+                            color: palette.accentSoft,
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Center(
+                            child: HugeIcon(
+                              icon: suggestion.$1,
+                              size: 16,
+                              color: palette.accent,
+                              strokeWidth: 2,
+                            ),
+                          ),
                         ),
                         const SizedBox(width: 12),
                         Expanded(
@@ -788,7 +1042,11 @@ class _Welcome extends StatelessWidget {
                             suggestion.$2,
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
-                            style: TextStyle(color: palette.text, fontSize: 15, fontWeight: FontWeight.w500),
+                            style: TextStyle(
+                              color: palette.text,
+                              fontSize: 15,
+                              fontWeight: FontWeight.w500,
+                            ),
                           ),
                         ),
                       ],
@@ -826,7 +1084,11 @@ class _ReconnectBanner extends StatelessWidget {
           Expanded(
             child: Text(
               t('chat.reconnecting'),
-              style: TextStyle(color: palette.text, fontSize: 13, fontWeight: FontWeight.w600),
+              style: TextStyle(
+                color: palette.text,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
           GestureDetector(
@@ -835,7 +1097,11 @@ class _ReconnectBanner extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
               child: Text(
                 t('chat.reconnect'),
-                style: TextStyle(color: palette.warning, fontSize: 13, fontWeight: FontWeight.w700),
+                style: TextStyle(
+                  color: palette.warning,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ),
           ),

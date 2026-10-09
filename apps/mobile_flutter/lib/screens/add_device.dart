@@ -40,8 +40,10 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
     super.initState();
     _url.addListener(() => setState(() {}));
     if (widget.scanFirst) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) context.push('/scan');
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!mounted) return;
+        await context.push('/scan');
+        if (mounted) _applyScanned();
       });
     }
   }
@@ -78,37 +80,52 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
       _busy = true;
       _error = null;
     });
-    final name = _shownAlias.trim().isNotEmpty ? _shownAlias.trim() : address.host;
+    final name = _shownAlias.trim().isNotEmpty
+        ? _shownAlias.trim()
+        : address.host;
     try {
       final remote = RemoteClient();
-      final token = await remote.login(address.origin, _password.text, 'FastVibe $name');
-      final saved = await ServerStore.instance.upsert(SavedServer(
-        id: newServerId(),
-        alias: name,
-        origin: address.origin,
-        host: address.host,
-        kind: address.kind,
-        createdAt: DateTime.now().millisecondsSinceEpoch,
-      ));
+      final token = await remote.login(
+        address.origin,
+        _password.text,
+        'FastVibe $name',
+      );
+      final saved = await ServerStore.instance.upsert(
+        SavedServer(
+          id: newServerId(),
+          alias: name,
+          origin: address.origin,
+          host: address.host,
+          kind: address.kind,
+          createdAt: DateTime.now().millisecondsSinceEpoch,
+        ),
+      );
       await writeToken(saved.id, token);
       await Connection.instance.connectSaved(saved);
       if (!mounted) return;
       if (Connection.instance.status != ConnectionStatus.ready) {
-        setState(() => _error = Connection.instance.error ?? t('add.savedNotConnected'));
+        setState(
+          () =>
+              _error = Connection.instance.error ?? t('add.savedNotConnected'),
+        );
         return;
       }
       Haptic.success();
-      context.go('/server/${saved.id}');
+      context.replace('/server/${saved.id}');
     } catch (error) {
       Haptic.warning();
       if (!mounted) return;
-      setState(() => _error = error is StateError ? error.message : t('add.loginFailed'));
+      setState(
+        () =>
+            _error = error is StateError ? error.message : t('add.loginFailed'),
+      );
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
 
   void _applyScanned() {
+    if (!mounted) return;
     final value = takeScannedAddress();
     if (value == null || value.isEmpty) return;
     _url.text = value;
@@ -130,6 +147,10 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
           children: <Widget>[
+            PageHeading(
+              title: t('add.workspaceTitle'),
+              subtitle: t('add.workspaceSubtitle'),
+            ),
             _ScanCard(
               onTap: () async {
                 Haptic.tap();
@@ -141,7 +162,10 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
             _Divider(label: t('add.orManual'), palette: palette),
             const SizedBox(height: 14),
             Container(
-              decoration: BoxDecoration(color: palette.card, borderRadius: BorderRadius.circular(Radii.lg)),
+              decoration: BoxDecoration(
+                color: palette.card,
+                borderRadius: BorderRadius.circular(Radii.lg),
+              ),
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
               child: Column(
                 children: <Widget>[
@@ -159,7 +183,10 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
                         border: InputBorder.none,
                         isDense: true,
                         hintText: t('add.addressPlaceholder'),
-                        hintStyle: TextStyle(color: palette.subtle, fontSize: 17),
+                        hintStyle: TextStyle(
+                          color: palette.subtle,
+                          fontSize: 17,
+                        ),
                       ),
                     ),
                   ),
@@ -170,14 +197,14 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
                         palette: palette,
                         tone: NoteTone.danger,
                         icon: AppIcons.alert,
-                        text: t('add.badAddressShort'),
+                        text: t('add.unrecognized'),
                       )
                     else if (parsed.kind == AddressKind.loopback)
                       _AddressNote(
                         palette: palette,
                         tone: NoteTone.danger,
                         icon: AppIcons.alert,
-                        text: t('add.loopback'),
+                        text: t('add.loopbackWarning'),
                       )
                     else
                       _AddressNote(
@@ -204,7 +231,10 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
                         border: InputBorder.none,
                         isDense: true,
                         hintText: _shownAlias,
-                        hintStyle: TextStyle(color: palette.subtle, fontSize: 17),
+                        hintStyle: TextStyle(
+                          color: palette.subtle,
+                          fontSize: 17,
+                        ),
                       ),
                     ),
                   ),
@@ -224,7 +254,10 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
                         border: InputBorder.none,
                         isDense: true,
                         hintText: '••••••',
-                        hintStyle: TextStyle(color: palette.subtle, fontSize: 17),
+                        hintStyle: TextStyle(
+                          color: palette.subtle,
+                          fontSize: 17,
+                        ),
                       ),
                     ),
                   ),
@@ -235,13 +268,27 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
               const SizedBox(height: 14),
               Container(
                 padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(color: palette.dangerSoft, borderRadius: BorderRadius.circular(Radii.md)),
+                decoration: BoxDecoration(
+                  color: palette.dangerSoft,
+                  borderRadius: BorderRadius.circular(Radii.md),
+                ),
                 child: Row(
                   children: <Widget>[
-                    HugeIcon(icon: AppIcons.alert, color: palette.danger, size: 16),
+                    HugeIcon(
+                      icon: AppIcons.alert,
+                      color: palette.danger,
+                      size: 16,
+                    ),
                     const SizedBox(width: 8),
                     Expanded(
-                      child: Text(_error!, style: TextStyle(color: palette.danger, fontSize: 14, height: 20 / 14)),
+                      child: Text(
+                        _error!,
+                        style: TextStyle(
+                          color: palette.danger,
+                          fontSize: 14,
+                          height: 20 / 14,
+                        ),
+                      ),
                     ),
                   ],
                 ),
@@ -256,8 +303,12 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
             ),
             const SizedBox(height: 14),
             Text(
-              t('add.footer'),
-              style: TextStyle(color: palette.muted, fontSize: 13, height: 20 / 13),
+              t('add.hint'),
+              style: TextStyle(
+                color: palette.muted,
+                fontSize: 13,
+                height: 20 / 13,
+              ),
             ),
           ],
         ),
@@ -287,8 +338,18 @@ class _ScanCard extends StatelessWidget {
               Container(
                 width: 50,
                 height: 50,
-                decoration: BoxDecoration(color: palette.accent, borderRadius: BorderRadius.circular(15)),
-                child: Center(child: HugeIcon(icon: AppIcons.qrCode, size: 26, color: palette.accentText, strokeWidth: 1.9)),
+                decoration: BoxDecoration(
+                  color: palette.accent,
+                  borderRadius: BorderRadius.circular(15),
+                ),
+                child: Center(
+                  child: HugeIcon(
+                    icon: AppIcons.qrCode,
+                    size: 26,
+                    color: palette.accentText,
+                    strokeWidth: 1.9,
+                  ),
+                ),
               ),
               const SizedBox(width: 14),
               Expanded(
@@ -297,17 +358,29 @@ class _ScanCard extends StatelessWidget {
                   children: <Widget>[
                     Text(
                       t('add.scanTitle'),
-                      style: TextStyle(color: palette.text, fontSize: 17, fontWeight: FontWeight.w700),
+                      style: TextStyle(
+                        color: palette.text,
+                        fontSize: 17,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                     const SizedBox(height: 3),
                     Text(
                       t('add.scanBody'),
-                      style: TextStyle(color: palette.muted, fontSize: 13, height: 18 / 13),
+                      style: TextStyle(
+                        color: palette.muted,
+                        fontSize: 13,
+                        height: 18 / 13,
+                      ),
                     ),
                   ],
                 ),
               ),
-              HugeIcon(icon: AppIcons.arrowRight, size: 18, color: palette.subtle),
+              HugeIcon(
+                icon: AppIcons.arrowRight,
+                size: 18,
+                color: palette.subtle,
+              ),
             ],
           ),
         ),
@@ -327,9 +400,20 @@ class _Divider extends StatelessWidget {
     return Row(
       children: <Widget>[
         Expanded(child: Container(height: 0.5, color: palette.border)),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10),
-          child: Text(label, style: TextStyle(color: palette.subtle, fontSize: 12, fontWeight: FontWeight.w600)),
+        Flexible(
+          flex: 3,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            child: Text(
+              label,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: palette.subtle,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
         ),
         Expanded(child: Container(height: 0.5, color: palette.border)),
       ],
@@ -338,7 +422,12 @@ class _Divider extends StatelessWidget {
 }
 
 class _Field extends StatelessWidget {
-  const _Field({required this.label, required this.icon, required this.palette, required this.child});
+  const _Field({
+    required this.label,
+    required this.icon,
+    required this.palette,
+    required this.child,
+  });
 
   final String label;
   final List<List<dynamic>> icon;
@@ -354,7 +443,12 @@ class _Field extends StatelessWidget {
         children: <Widget>[
           Row(
             children: <Widget>[
-              HugeIcon(icon: icon, size: 14, color: palette.muted, strokeWidth: 2),
+              HugeIcon(
+                icon: icon,
+                size: 14,
+                color: palette.muted,
+                strokeWidth: 2,
+              ),
               const SizedBox(width: 5),
               Text(
                 label,
@@ -398,7 +492,10 @@ class _AddressNote extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(color: background, borderRadius: BorderRadius.circular(Radii.sm)),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(Radii.sm),
+      ),
       child: Row(
         children: <Widget>[
           HugeIcon(icon: icon, size: 15, color: foreground),
@@ -406,7 +503,12 @@ class _AddressNote extends StatelessWidget {
           Expanded(
             child: Text(
               text,
-              style: TextStyle(color: foreground, fontSize: 13, height: 18 / 13, fontWeight: FontWeight.w500),
+              style: TextStyle(
+                color: foreground,
+                fontSize: 13,
+                height: 18 / 13,
+                fontWeight: FontWeight.w500,
+              ),
             ),
           ),
         ],

@@ -6,6 +6,8 @@
 		<true/>
 		<key>CFBundleDevelopmentRegion</key>
 		<string>$(DEVELOPMENT_LANGUAGE)</string>
+		<key>CFBundleLocalizations</key>
+		<array><string>en</string><string>zh-Hans</string></array>
 		<key>CFBundleDisplayName</key>
 		<string>FastVibe</string>
 		<key>CFBundleExecutable</key>
@@ -24,11 +26,11 @@
 			<true/>
 		</dict>
 		<key>NSLocalNetworkUsageDescription</key>
-		<string>连接同一网络上的 FastVibe。</string>
+		<string>Connect to FastVibe on your local network.</string>
 		<key>NSCameraUsageDescription</key>
-		<string>扫描电脑上的二维码以连接 FastVibe。</string>
+		<string>Scan the QR code on your computer to connect to FastVibe.</string>
 		<key>NSPhotoLibraryUsageDescription</key>
-		<string>选择要发给 FastVibe 的照片。</string>
+		<string>Choose photos to send to FastVibe.</string>
 		<key>ITSAppUsesNonExemptEncryption</key>
 		<false/>
 		<key>CFBundlePackageType</key>
