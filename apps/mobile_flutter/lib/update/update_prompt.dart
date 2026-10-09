@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:hugeicons/hugeicons.dart';
 
+import '../chat/markdown_view.dart';
 import '../i18n/core.dart';
 import '../theme/theme.dart';
 import '../ui/icons.dart';
@@ -29,9 +30,6 @@ class UpdatePrompt extends StatefulWidget {
   @override
   State<UpdatePrompt> createState() => _UpdatePromptState();
 }
-
-/// Longest stretch of release notes shown in the dialog.
-const int _notesLimit = 600;
 
 enum _Phase { available, downloading, ready, installing, error }
 
@@ -198,9 +196,9 @@ class _UpdateDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = paletteOf(context);
-    final notes = release.notes.length > _notesLimit
-        ? '${release.notes.substring(0, _notesLimit)}…'
-        : release.notes;
+    // The whole note, scrolled: it is the release's own docs/release/app-v*.md, and
+    // cutting markdown at a character count can leave half a list item or link.
+    final notes = notesForDisplay(release.notes);
     return ColoredBox(
       color: palette.overlay,
       child: Center(
@@ -267,15 +265,12 @@ class _UpdateDialog extends StatelessWidget {
                   if (notes.isNotEmpty) ...<Widget>[
                     const SizedBox(height: 14),
                     ConstrainedBox(
-                      constraints: const BoxConstraints(maxHeight: 200),
+                      constraints: const BoxConstraints(maxHeight: 260),
                       child: SingleChildScrollView(
-                        child: Text(
-                          notes,
-                          style: TextStyle(
-                            color: palette.muted,
-                            fontSize: 15,
-                            height: 22 / 15,
-                          ),
+                        child: MarkdownView(
+                          text: notes,
+                          palette: palette,
+                          compact: true,
                         ),
                       ),
                     ),

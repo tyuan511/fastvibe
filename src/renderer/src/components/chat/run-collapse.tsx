@@ -37,7 +37,7 @@ export function RunProgress({ startedAt }: { startedAt: number }): JSX.Element {
 
 /**
  * 折叠运行过程: a finished run's work — thinking, tool calls, and the prose it wrote along
- * the way — behind one collapsed 「用时 1分钟 24秒」 row, with the reply that followed the
+ * the way — behind one collapsed 「用时 1 分钟 24 秒」 row, with the reply that followed the
  * last tool call left out as the answer.
  *
  * Only ever rendered for a run that has settled *and* wrote an answer, so the block is always

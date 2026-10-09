@@ -10,12 +10,12 @@ export function formatRelativeTime(timestamp: number): string {
 }
 
 /**
- * A millisecond span as a spoken duration: `41秒`, `3分钟 41秒`, `1小时 2分钟 3秒`
+ * A millisecond span as a spoken duration: `41 秒`, `3 分钟 41 秒`, `1 小时 2 分钟 3 秒`
  * (English: `41s`, `3m 41s`, `1h 2m 3s`).
  *
  * The app's only duration format. It is used by the transcript's 折叠运行过程 header, by each
  * reply's footer, and by the turn-statistics popover — three surfaces that sit next to each
- * other and read the same turns, so a compact `1m05s` beside a `1分钟 5秒` was two notations
+ * other and read the same turns, so a compact `1m05s` beside a `1 分钟 5 秒` was two notations
  * for one number.
  *
  * `null`/negative spans return an empty string, leaving the caller to pick its own placeholder

@@ -32,7 +32,11 @@ interface RefreshStore {
 export function reloadAnchor(messages: ChatMessage[]): string | undefined {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (message.role !== "user" || message.id.startsWith("local:")) continue;
+    // `queue:` is a turn drawn ahead of the engine (立即). Anchoring a tail read on
+    // it asks Main for an entry that does not exist yet, and the miss falls back to a
+    // full read of a transcript that does not hold the turn — which is exactly the
+    // read that would drop it. The last persisted prompt is the anchor either way.
+    if (message.role !== "user" || message.id.startsWith("local:") || message.id.startsWith("queue:")) continue;
     return message.id;
   }
   return undefined;

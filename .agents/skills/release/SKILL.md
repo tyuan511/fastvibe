@@ -205,6 +205,24 @@ workflow 读的是 **tag 上的**那个文件，所以在 `main` 上补一次提
 下一次重跑同一条 workflow 也不会（它 checkout 的是 tag 对应的提交）。要两者一致，得改文件并
 重打 tag（见回滚）。只想让文件别再落后于现实时，补提交到 `main` 就够了。
 
+## 手机 App（`app-vX.Y.Z`）
+
+App 的 note 和桌面端同一个规则：先写进 `docs/release/app-vX.Y.Z.md`，再随版本提交一起推，
+`mobile-android.yml` 开头跑 `check-release-note.mjs --tag app-vX.Y.Z`，发布时用
+`body_path` 把它当 Release body。**App 里的「更新日志」就是这份文件**：更新弹窗显示新版本的
+note，设置 → 关于 → 更新日志显示当前安装版本的 note，都按 Markdown 渲染（`**Full Changelog**`
+那一行在 App 里隐藏）。
+
+```bash
+node .agents/skills/release/scripts/release-notes.mjs --tag app-vX.Y.Z   # 从上一个 app-v tag 起，只列 apps/mobile_flutter 的提交
+# 改写后写入 docs/release/app-vX.Y.Z.md，pubspec.yaml 改成 X.Y.Z+BUILD
+node scripts/check-release-note.mjs --tag app-vX.Y.Z
+git tag -a app-vX.Y.Z -m "FastVibe Mobile app-vX.Y.Z" && git push origin app-vX.Y.Z
+```
+
+改写规则同上（英文、面向用户），范围换成手机 App；需要新版桌面端配合的，写明
+「Update your FastVibe host to **vX.Y.Z or newer** …」。
+
 ## 为什么这么排
 
 - **note 在 bump 提交之前生成**：版本提交本身不该出现在功能列表里。脚本会过滤
@@ -254,5 +272,5 @@ workflow 读的是 **tag 上的**那个文件，所以在 `main` 上补一次提
 | --- | --- |
 | `scripts/env.sh` | 拼 PATH（node / pnpm / gh），每条命令前 source |
 | `scripts/bump-version.mjs` | 推断并写入 `package.json` 版本，`--dry-run` 只看不写 |
-| `scripts/release-notes.mjs` | 由 `git log` 生成 note 草稿，`--tag` 必填，`--from` 可覆盖范围 |
+| `scripts/release-notes.mjs` | 由 `git log` 生成 note 草稿，`--tag` 必填（`vX.Y.Z` 或 `app-vX.Y.Z`），`--from` 可覆盖范围 |
 | `docs/release/README.md` | note 文件的约定（命名、英文、它是 Release body） |

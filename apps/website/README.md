@@ -6,8 +6,7 @@ FastVibe 产品介绍与下载页，使用 Next.js App Router 和 next-intl。
 
 在仓库根目录运行 `pnpm website:dev`，或在本目录运行 `pnpm dev`。
 
-- `/zh`、`/en`：中文、英文页面，文案位于 `messages/`。
-- `/`：next-intl 根据语言偏好 cookie、浏览器语言选择页面；默认英文。
+- `/`：中英文同一个地址，文案位于 `messages/`。语言记在 `FASTVIBE_LOCALE` cookie 里，不写进地址；没有 cookie 时按浏览器语言选，默认英文。旧的 `/zh`、`/en` 会写下 cookie 后跳回同一路径。
 - 首屏是真实客户端界面：`components/app-preview.tsx` 用 iframe 加载预编译的 `public/app-preview/mock.html`（渲染层自己的 fixture 页，`website=1` 模式），并把官网当前主题通过 URL 与 `postMessage` 同步进去。改了渲染层或 `mock/preview.ts` 之后运行 `pnpm --filter @fastvibe/website preview:build` 重新生成并提交。
 - 首屏以下的图都是示意图（`components/illustrations.tsx`，纯标记，跟随主题），不用截图。`public/screenshots/{zh,en}/` 现在只供 README 与分享图使用。
 - 「远程控制」里的手机图放在 `public/mobile/{zh,en}/chat-{light,dark}.jpg`。当前图片来自已移除的旧客户端；原生手机端由 `apps/mobile_flutter` 维护。`scripts/mobile-demo-server.mjs [--lang zh|en]` 可作为演示机器（任何密码都能登录，数据取自桌面 mock 的同一份 fixture），供 Flutter 客户端生成后续产品素材。
@@ -40,7 +39,7 @@ pnpm website:build
 浏览器回归（先启动网站）：
 
 ```bash
-WEBSITE_URL=http://localhost:3000 pnpm --filter @fastvibe/website test:browser
+WEBSITE_URL=http://localhost:9088 pnpm --filter @fastvibe/website test:browser
 ```
 
 覆盖中英文 × 明暗主题 × 五种视口宽度、实时系统主题变化、忽略旧版手动偏好，以及对应语言截图、源码入口、下载控件、截图弹窗、语言记忆与无 JavaScript 的服务端页面。可用 `CHECK_SCREENSHOTS_DIR` 保存 375px / 1440px 的完整页面截图。

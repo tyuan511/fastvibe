@@ -4,6 +4,10 @@
  *
  *   node .agents/skills/release/scripts/release-notes.mjs --tag v0.2.0
  *   node .agents/skills/release/scripts/release-notes.mjs --tag v0.2.0 --from v0.1.0
+ *   node .agents/skills/release/scripts/release-notes.mjs --tag app-v0.4.5
+ *
+ * An `app-v` tag drafts the phone app's note: the range starts at the previous `app-v`
+ * tag and only commits touching `apps/mobile_flutter` are listed.
  *
  * Markdown goes to stdout (nothing else); the range being summarised goes to
  * stderr. The output is a *draft*: every entry is still an English commit
@@ -40,11 +44,12 @@ const value = (name) => {
   return index === -1 ? undefined : argv[index + 1];
 };
 const tag = value("--tag");
-if (!tag || !/^v?\d+\.\d+\.\d+/.test(tag)) fail("--tag vX.Y.Z is required");
+if (!tag || !/^(app-)?v?\d+\.\d+\.\d+/.test(tag)) fail("--tag vX.Y.Z or app-vX.Y.Z is required");
+const mobile = tag.startsWith("app-");
 
 const from =
   value("--from") ??
-  git(["tag", "--merged", "HEAD", "--sort=-v:refname", "--list", "v[0-9]*"])
+  git(["tag", "--merged", "HEAD", "--sort=-v:refname", "--list", mobile ? "app-v[0-9]*" : "v[0-9]*"])
     .split("\n")
     .find((name) => name && name !== tag) ??
   "";
@@ -112,7 +117,13 @@ function parseCommit(entry) {
   };
 }
 
-const log = git(["log", "--no-merges", "--pretty=%H%x1f%s%x1f%b%x1e", range]);
+const log = git([
+  "log",
+  "--no-merges",
+  "--pretty=%H%x1f%s%x1f%b%x1e",
+  range,
+  ...(mobile ? ["--", "apps/mobile_flutter"] : []),
+]);
 const commits = log
   .split("\x1e")
   .map((entry) => entry.trim())

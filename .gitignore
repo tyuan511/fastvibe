@@ -36,3 +36,6 @@ resources/models-dev/**
 # Fetched at build time by scripts/fetch-cua-driver.mjs, pinned and checksummed there.
 # 63 MB of third-party executable belongs in the release artifact, not in history.
 resources/cua-driver/
+
+# Local spike build, not source.
+services/cloud/spike/bifrost/bifrost

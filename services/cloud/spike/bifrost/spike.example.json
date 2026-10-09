@@ -1,0 +1,15 @@
+{
+  "listen": "127.0.0.1:8090",
+  "usage_log": "usage.jsonl",
+  "tokens": ["local-dev-token"],
+  "upstreams": [
+    { "name": "openai", "type": "openai", "key_env": ["OPENAI_API_KEY"] },
+    { "name": "anthropic", "type": "anthropic", "key_env": ["ANTHROPIC_API_KEY"] },
+    { "name": "gemini", "type": "gemini", "key_env": ["GEMINI_API_KEY"] }
+  ],
+  "models": {
+    "gpt-5.5": [{ "upstream": "openai", "model": "gpt-5.5" }],
+    "claude-sonnet-4-5": [{ "upstream": "anthropic", "model": "claude-sonnet-4-5" }],
+    "gemini-2.5-pro": [{ "upstream": "gemini", "model": "gemini-2.5-pro" }]
+  }
+}

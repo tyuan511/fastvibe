@@ -1,0 +1,39 @@
+# Every setting with its default. Pass with -config or FASTVIBE_CONFIG; any key can be
+# overridden by an environment variable: FASTVIBE_ + the path in capitals, with a
+# double underscore between levels (database.url → FASTVIBE_DATABASE__URL).
+# Secrets (the database URL, OAuth secrets, encryption keys) go in the environment.
+
+env: production                 # development switches logs to the console format
+public_origin: https://app.fastvibe.dev
+
+http:
+  listen: ":9089"
+  read_timeout: 60s
+  idle_timeout: 120s
+  shutdown_timeout: 30s         # how long in-flight requests get on SIGTERM
+  body_limit: 33554432          # 32 MiB, matches nginx client_max_body_size
+  trusted_proxies: []           # the nginx address(es); empty = trust no forwarded header
+
+database:
+  # url: set FASTVIBE_DATABASE__URL instead
+  max_conns: 20
+  min_conns: 2
+  max_conn_lifetime: 30m
+
+log:
+  level: info                   # debug | info | warn | error
+  format: json                  # json | console
+
+github:
+  # An OAuth App (not a GitHub App). Callback URL: <public_origin>/api/auth/github/callback.
+  # Required in production; set both through the environment:
+  #   FASTVIBE_GITHUB__CLIENT_ID, FASTVIBE_GITHUB__CLIENT_SECRET
+
+admin:
+  # GitHub numeric ids promoted to admin at their next sign-in (promotion only).
+  # FASTVIBE_ADMIN__GITHUB_IDS=583231,9919
+  github_ids: []
+
+session:
+  web_ttl: 720h                 # a browser session lapses after this long unused (30 days)
+  cache_ttl: 30s                # how late a revocation on another instance can take effect

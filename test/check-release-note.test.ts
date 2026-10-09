@@ -32,6 +32,14 @@ test("accepts the note named after the tag, prerelease tags included", () => {
   });
 });
 
+test("accepts the phone app's app-v tags by the same rule", () => {
+  fixture({ "app-v0.4.5.md": "### Fixed\n\n- A bug.\n" }, (root) => {
+    assert.equal(checkReleaseNote("app-v0.4.5", root).tag, "app-v0.4.5");
+    throws(() => checkReleaseNote("app-v0.4.6", root), /missing release note: docs\/release\/app-v0\.4\.6\.md/);
+    throws(() => checkReleaseNote("app-0.4.5", root), /not a release tag/);
+  });
+});
+
 test("refuses a note it cannot find, name it what it may", () => {
   fixture({ "v0.11.0.md": "### Added\n\n- A thing.\n" }, (root) => {
     // The tag is what selects the file: 0.11.0, or a tag with no note at all.

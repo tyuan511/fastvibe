@@ -41,6 +41,9 @@ import {
   extensionScope,
   parsePermission,
   activeRunning,
+  optimisticQueuedTurn,
+  preserveOptimisticTail,
+  shownQueueIds,
   reconcileMessages,
   settledBoundary,
   waitingForUserAfter,
@@ -295,6 +298,14 @@ export type SessionStore = {
   resolvePermission: (id: string) => void;
   dismissNotice: (id: string) => void;
   addUserMessage: (text: string, attachments?: ChatAttachment[]) => void;
+  /**
+   * Draw a queued message as a sent turn immediately.
+   *
+   * 立即 stops the run in flight before the next prompt can start, and that stop is
+   * an IPC hop the user can see. The row goes up at the click; `queue_delivered`
+   * adopts its id once the engine has actually taken the message.
+   */
+  showQueuedNow: (id: string) => void;
   /** Remove a fresh prompt that Main rejected before it entered the transcript. */
   rollbackOptimisticPrompt: () => void;
   dropEmptyAssistant: () => void;
@@ -692,8 +703,9 @@ export const useSessionStore = create<SessionStore>((set, get) => {
     set((state) => {
       if (conversationId && conversationId !== state.activeId) return state;
       // Keep the object identity of every row the read did not actually change, so
-      // the thread re-renders only where it differs.
-      const reconciled = reconcileMessages(state.messages, messages);
+      // the thread re-renders only where it differs. A turn shown ahead of the engine
+      // (立即) is not in this read yet and must survive it.
+      const reconciled = reconcileMessages(state.messages, preserveOptimisticTail(state.messages, messages));
       if (reconciled === state.messages) return state;
       return {
         messages: reconciled,
@@ -724,7 +736,7 @@ export const useSessionStore = create<SessionStore>((set, get) => {
       const at = current.messages.findIndex((message) => message.id === anchorId);
       if (at < 0) return current;
       const previousTail = current.messages.slice(at);
-      const reconciled = reconcileMessages(previousTail, tail);
+      const reconciled = reconcileMessages(previousTail, preserveOptimisticTail(previousTail, tail));
       // `reconcileMessages` hands back the array it was given when every row was
       // reused, and `previousTail` is fresh here — so this is "the turn is unchanged".
       if (reconciled === previousTail) return current;
@@ -823,6 +835,24 @@ export const useSessionStore = create<SessionStore>((set, get) => {
         running: activeRunning(state, startsTurn),
       };
     }),
+  showQueuedNow: (id) =>
+    set((state) => {
+      const item = state.queued.find((entry) => entry.id === id);
+      if (!item || item.conversationId !== state.activeId) return state;
+      if (state.messages.some((message) => message.id === `queue:${id}`)) return state;
+      const added = optimisticQueuedTurn(item);
+      return {
+        messages: [...state.messages, ...added],
+        queued: state.queued.filter((entry) => entry.id !== id),
+        // A slash command never starts a turn of its own; lighting the mark here left a
+        // chat looking busy over a command the engine runs without one.
+        streaming: added.length > 1,
+        error: null,
+        runInterrupted: null,
+        canResume: false,
+        running: activeRunning(state, added.length > 1),
+      };
+    }),
   rollbackOptimisticPrompt: () =>
     set((state) => {
       const messages = [...state.messages];
@@ -912,10 +942,13 @@ export const useSessionStore = create<SessionStore>((set, get) => {
       const queuePauseByConversation = { ...state.queuePauseByConversation };
       if (queue.pause) queuePauseByConversation[queue.conversationId] = queue.pause;
       else delete queuePauseByConversation[queue.conversationId];
+      // A row already drawn as a turn (立即) stays a turn. Putting it back in the tray
+      // the moment its snapshot arrived would undo the click until the engine echoed it.
+      const shown = shownQueueIds(state.messages);
       return {
         queued: [
           ...state.queued.filter((item) => item.conversationId !== queue.conversationId),
-          ...queue.items,
+          ...queue.items.filter((item) => !shown.has(item.id)),
         ],
         queueRevisionByConversation: {
           ...state.queueRevisionByConversation,

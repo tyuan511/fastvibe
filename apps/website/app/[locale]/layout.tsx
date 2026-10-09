@@ -4,6 +4,7 @@ import { hasLocale, NextIntlClientProvider } from "next-intl";
 import { getMessages, getTranslations, setRequestLocale } from "next-intl/server";
 import { notFound } from "next/navigation";
 import { routing } from "@/i18n/routing";
+import { PageScrollbar } from "@/components/page-scrollbar";
 import { revealInitScript } from "@/lib/reveal";
 import { themeInitScript } from "@/lib/theme";
 import "../globals.css";
@@ -30,14 +31,11 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     description: t("description"),
     metadataBase: new URL("https://fastvibe.dev"),
     icons: { icon: "/brand/f-mark.png" },
-    alternates: {
-      canonical: `/${locale}`,
-      languages: { zh: "/zh", en: "/en", "x-default": "/" },
-    },
+    alternates: { canonical: "/" },
     openGraph: {
       title: t("title"),
       description: t("description"),
-      url: `/${locale}`,
+      url: "/",
       locale: locale === "zh" ? "zh_CN" : "en_US",
       type: "website",
       images: [{ url: `/screenshots/${locale}/workspace.webp`, width: 2880, height: 1800, alt: t("features.workspace.alt") }],
@@ -54,6 +52,7 @@ export default async function LocaleLayout({ children, params }: Props & { child
     <html lang={locale === "zh" ? "zh-CN" : "en"} suppressHydrationWarning>
       <head><script dangerouslySetInnerHTML={{ __html: themeInitScript + revealInitScript }} /></head>
       <body>
+        <PageScrollbar />
         <NextIntlClientProvider locale={locale} messages={messages}>{children}</NextIntlClientProvider>
       </body>
     </html>

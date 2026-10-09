@@ -78,7 +78,7 @@
     "discardSubmitted": "Remove submitted message",
     "recall": "Recall",
     "delete": "Delete",
-    "now": "Now",
+    "now": "Send now",
     "edit": "Edit",
     "remove": "Remove queued message",
     "draftBusy": "Send or clear the current draft before editing a queued message.",

@@ -243,20 +243,13 @@ export function DraggableProject({
   const { t } = useTranslation("app");
   const { attributes, listeners, setNodeRef: setDraggableRef, setActivatorNodeRef, isDragging } = useDraggable({ id: cwd });
   const { setNodeRef: setDroppableRef } = useDroppable({ id: cwd });
-  /**
-   * The path hint has to clear the sidebar, not its trigger: the name's right edge
-   * sits a run of hover actions inside the sidebar's, so anchoring the popup there
-   * paints it back over the session list it is meant to sit beside. The trigger is
-   * measured as it opens and the distance to the sidebar's edge becomes the side
-   * offset, so the hint lands just past the border at any width and font size.
-   */
+  // The path hint clears the sidebar edge, not the name: hover actions sit between
+  // the name and that edge, so a popup anchored to the name covers the session list.
   const pathTriggerRef = useRef<HTMLElement | null>(null);
   const [pathOffset, setPathOffset] = useState(PATH_HINT_GAP);
 
   function measurePathOffset(): void {
     const trigger = pathTriggerRef.current;
-    // The sidebar's own edge is what the hint has to clear, so measure that rather
-    // than the trigger it happens to hang off.
     const aside = trigger?.closest("aside");
     if (!trigger || !aside) return;
     setPathOffset(Math.round(aside.getBoundingClientRect().right + PATH_HINT_GAP - trigger.getBoundingClientRect().right));
@@ -267,9 +260,8 @@ export function DraggableProject({
       <Collapsible open={open} onOpenChange={onOpenChange}>
         <ContextMenu>
           <ContextMenuTrigger className="w-full">
-            {/* Both refs sit on the header row: the droppable so the above/below
-                midpoint tracks a 32px row, and the draggable so the active rect used
-                for that midpoint is the header rather than the whole expanded group. */}
+            {/* Header only: a droppable on the expanded group would measure the whole
+                list, and drag listeners there would start a project drag from a session. */}
             <div
               ref={(node) => {
                 setDraggableRef(node);
@@ -283,9 +275,7 @@ export function DraggableProject({
               {...attributes}
               {...listeners}
             >
-              {/* The name is truncated to the sidebar width, so the header doubles
-                  as the project's full path on hover. Skipped while renaming — a
-                  tooltip over the inline input would cover what is being typed. */}
+              {/* No path tooltip while renaming: it would cover the inline input. */}
               <Tooltip onOpenChange={(next) => next && measurePathOffset()}>
                 <TooltipTrigger
                   render={
@@ -293,7 +283,8 @@ export function DraggableProject({
                       ref={(node) => {
                         pathTriggerRef.current = node;
                       }}
-                      className="flex min-w-0 flex-1 items-center gap-2.5 text-left text-sm"
+                      // Fill the h-8 row: content height left a dead band above and below.
+                      className="flex h-full min-w-0 flex-1 items-center gap-2.5 self-stretch text-left text-sm"
                     />
                   }
                 >
@@ -339,9 +330,7 @@ export function DraggableProject({
                   </TooltipContent>
                 )}
               </Tooltip>
-              {/* A touchscreen has no hover to reveal these, and an invisible button is still
-                  a tappable one: a tap near the row's right edge used to create a chat or
-                  open the menu from nothing on screen. So there they simply show. */}
+              {/* Shown on touch: an invisible button is still tappable. */}
               <div className="flex shrink-0 items-center gap-0.5 opacity-0 group-hover/project:opacity-100 focus-within:opacity-100 has-[[aria-expanded=true]]:opacity-100 pointer-coarse:opacity-100">
                 <DropdownMenu>
                   <DropdownMenuTrigger

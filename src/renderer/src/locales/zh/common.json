@@ -17,9 +17,9 @@
     "hoursAgo_other": "{{count}} 小时前"
   },
   "duration": {
-    "hours": "{{n}}小时",
-    "minutes": "{{n}}分钟",
-    "seconds": "{{n}}秒"
+    "hours": "{{n}} 小时",
+    "minutes": "{{n}} 分钟",
+    "seconds": "{{n}} 秒"
   },
   "startup": {
     "slow": "启动时间较长，可以继续等待或重新加载。"

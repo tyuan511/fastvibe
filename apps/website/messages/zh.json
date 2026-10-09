@@ -9,7 +9,8 @@
     "tasks": "任务场景",
     "practices": "最佳实践",
     "download": "下载",
-    "github": "GitHub"
+    "github": "GitHub",
+    "signIn": "登录"
   },
   "hero": {
     "download": "下载 FastVibe",
@@ -110,5 +111,74 @@
   },
   "theme": {
     "toggle": "切换主题"
+  },
+  "login": {
+    "title": "登录 FastVibe",
+    "lead": "使用 GitHub 账号继续。我们只读取你的公开资料和已验证的邮箱，不会接触你的密码。",
+    "github": "使用 GitHub 继续",
+    "home": "返回首页",
+    "errors": {
+      "invalid_state": "登录链接已过期，或不是从这里发起的，请重试。",
+      "github_denied": "你取消了 GitHub 登录。",
+      "github_rejected": "GitHub 没有接受这次登录，请重试。",
+      "github_unavailable": "GitHub 暂时没有响应，请稍后再试。",
+      "account_disabled": "该账号已被停用。如果你认为这是误判，请联系我们。",
+      "internal_error": "我们这边出了点问题，请重试。",
+      "unknown": "登录失败，请重试。"
+    }
+  },
+  "console": {
+    "label": "控制台",
+    "nav": {
+      "account": "账号",
+      "sessions": "设备",
+      "more": "更多功能"
+    },
+    "signOut": "退出登录",
+    "loading": "加载中…",
+    "loadFailed": "页面加载失败，请检查网络后重试。",
+    "retry": "重试",
+    "justNow": "刚刚",
+    "account": {
+      "title": "账号",
+      "lead": "你用来登录的 GitHub 账号。",
+      "username": "GitHub 用户名",
+      "email": "邮箱",
+      "noEmail": "没有已验证的邮箱。在 GitHub 上验证主邮箱并重新登录后，这里会显示。",
+      "role": "角色",
+      "roles": {
+        "user": "普通用户",
+        "admin": "管理员"
+      },
+      "since": "注册时间",
+      "openGithub": "在 GitHub 上查看"
+    },
+    "sessions": {
+      "title": "设备",
+      "lead": "当前登录你账号的浏览器和设备。不认识的请退出。",
+      "current": "当前设备",
+      "unknownDevice": "未知设备",
+      "kinds": {
+        "web": "浏览器",
+        "desktop": "桌面端",
+        "mobile": "手机端"
+      },
+      "lastActive": "{when}活跃",
+      "signedIn": "登录于 {date}",
+      "revoke": "退出",
+      "revoking": "正在退出…",
+      "revokeFailed": "退出该设备失败，请重试。",
+      "deviceLabel": "{os} 上的 {browser}"
+    },
+    "more": {
+      "title": "更多功能",
+      "lead": "这里会放上账号之外的功能。正在准备，先看看接下来有什么。",
+      "badge": "敬请期待",
+      "previews": {
+        "models": { "title": "模型与额度", "lead": "查看可用模型和剩余额度" },
+        "usage": { "title": "用量", "lead": "按天看看用了多少" },
+        "keys": { "title": "访问密钥", "lead": "管理调用接口的密钥" }
+      }
+    }
   }
 }

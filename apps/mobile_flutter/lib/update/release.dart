@@ -42,7 +42,8 @@ class AppRelease {
   final String version;
   final String tag;
 
-  /// The release body, markdown as written in the workflow.
+  /// The release body: `docs/release/app-v<version>.md`, the note committed with the
+  /// version bump. Markdown; read it through [notesForDisplay].
   final String notes;
   final String pageUrl;
   final String apkUrl;
@@ -139,6 +140,47 @@ AppRelease? releaseFromPayload(
     apkName: apk['name'] as String,
     apkSize: apk['size'] is num ? (apk['size'] as num).toInt() : 0,
   );
+}
+
+/// A release note as the app shows it. The note is written for the GitHub Release page,
+/// whose last line is a `**Full Changelog**` compare link between two tags — a diff
+/// nobody reads on a phone.
+String notesForDisplay(String body) => body
+    .split('\n')
+    .where((line) => !line.trimLeft().startsWith('**Full Changelog**'))
+    .join('\n')
+    .trim();
+
+/// The release page of one phone version, for when its note cannot be read in the app.
+String releasePageUrl(String version) =>
+    'https://github.com/$releaseRepo/releases/tag/$releaseTagPrefix$version';
+
+/// The note of one published phone version, as written in `docs/release/app-v<version>.md`
+/// (the workflow publishes that file as the release body). Null when the version was
+/// never published — a debug build, or a tag whose build has not finished. Unlike
+/// [findNewerRelease] this needs no APK, so it answers on iOS too.
+Future<String?> fetchReleaseNotes(String version, {http.Client? client}) async {
+  final httpClient = client ?? http.Client();
+  try {
+    final response = await httpClient
+        .get(
+          Uri.parse(
+            '$_api/repos/$releaseRepo/releases/tags/$releaseTagPrefix$version',
+          ),
+          headers: _headers,
+        )
+        .timeout(const Duration(seconds: 20));
+    if (response.statusCode == 404) return null;
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw GitHubStatusError(response.statusCode);
+    }
+    final payload = jsonDecode(response.body);
+    if (payload is! Map || payload['draft'] == true) return null;
+    final body = payload['body'];
+    return body is String ? notesForDisplay(body) : '';
+  } finally {
+    if (client == null) httpClient.close();
+  }
 }
 
 /// GitHub answered with an error status; `status` is what callers branch on.

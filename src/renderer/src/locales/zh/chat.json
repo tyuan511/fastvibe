@@ -78,7 +78,7 @@
     "discardSubmitted": "移除已提交消息",
     "recall": "撤回",
     "delete": "删除",
-    "now": "立即",
+    "now": "立即发送",
     "edit": "编辑",
     "remove": "移除待发送消息",
     "draftBusy": "请先发送或清空当前草稿，再编辑队列消息。",

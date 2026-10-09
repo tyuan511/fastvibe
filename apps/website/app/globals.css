@@ -47,6 +47,7 @@
   --scrim: #0a0a10c7;
   --selection: #cfd8ff;
   --scrollbar-thumb: rgb(0 0 0 / .2);
+  --scrollbar-thumb-hover: rgb(0 0 0 / .36);
   --sans: "DM Sans Variable", -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --header-h: 4rem;
@@ -91,6 +92,7 @@
     --shadow: 0 30px 80px -24px rgb(0 0 0 / .7);
     --selection: #34407a;
     --scrollbar-thumb: rgb(255 255 255 / .22);
+    --scrollbar-thumb-hover: rgb(255 255 255 / .4);
   }
 }
 :root[data-theme="dark"] {
@@ -131,18 +133,29 @@
   --shadow: 0 30px 80px -24px rgb(0 0 0 / .7);
   --selection: #34407a;
   --scrollbar-thumb: rgb(255 255 255 / .22);
+  --scrollbar-thumb-hover: rgb(255 255 255 / .4);
 }
 
 * { box-sizing: border-box; }
 html {
   scroll-behavior: smooth;
   scroll-padding-top: 5rem;
-  scrollbar-width: thin;
-  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
-::-webkit-scrollbar { width: .75rem; height: .75rem; }
-::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
-::-webkit-scrollbar-thumb { min-height: 2.5rem; border: .1875rem solid transparent; border-radius: 9999px; background: var(--scrollbar-thumb); background-clip: content-box; }
+/* The native bar is gone entirely. `width: 0` no longer hides it, so the floating thumb is the only one. */
+html, body { scrollbar-width: none; }
+html::-webkit-scrollbar, body::-webkit-scrollbar { display: none; }
+.page-scrollbar {
+  position: fixed; top: 0; right: .25rem; bottom: 0; z-index: 70;
+  width: .375rem; pointer-events: none;
+}
+.page-scrollbar span {
+  position: absolute; left: 0; width: 100%; min-height: 2.75rem;
+  border-radius: 9999px; background: var(--scrollbar-thumb);
+  opacity: 0; transition: opacity .2s ease, background-color .18s ease;
+}
+html.scrollbar-live .page-scrollbar span, .page-scrollbar:hover span { opacity: 1; }
+.page-scrollbar:hover { pointer-events: auto; }
+.page-scrollbar:hover span { background: var(--scrollbar-thumb-hover); }
 
 body { margin: 0; background: var(--bg); color: var(--body); font: 1rem/1.6 var(--sans); -webkit-font-smoothing: antialiased; }
 button, a, summary { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
@@ -163,19 +176,19 @@ h1, h2, h3, p { margin: 0; }
    a handful of variables so the at-the-top, scrolled, menu-open and no-JS states share one rule. */
 .site-header {
   position: fixed; inset: 0 0 auto; z-index: 50; pointer-events: none;
-  --h-width: 100%; --h-height: var(--header-h); --h-top: 0px; --h-radius: 0px; --h-pad: 1.5rem;
+  --h-width: min(76rem, calc(100% - 3rem)); --h-height: var(--header-h); --h-top: .75rem; --h-radius: 9999px; --h-pad: 1.25rem;
   --h-bg: transparent; --h-border: transparent; --h-shadow: 0 0 0 0 transparent; --h-blur: blur(0px) saturate(100%); --h-fg: #fff;
   --h-rim: 0;
 }
 :root[data-scrolled] .site-header, .site-header[data-open] {
-  --h-width: min(72rem, calc(100% - 2rem)); --h-height: 3.5rem; --h-top: .75rem; --h-radius: 9999px; --h-pad: 1rem;
+  --h-width: min(68rem, calc(100% - 4rem)); --h-height: 3.5rem; --h-top: .875rem; --h-radius: 9999px; --h-pad: 1rem;
   --h-bg: color-mix(in srgb, var(--bg) 40%, transparent); --h-border: transparent; --h-rim: 1;
   --h-shadow: inset 0 0 0 .5px var(--glass-edge), inset 0 18px 32px -28px var(--glass-sheen);
   --h-blur: blur(24px) saturate(190%); --h-fg: var(--fg);
 }
 @media (scripting: none) {
   .site-header {
-    --h-width: min(72rem, calc(100% - 2rem)); --h-height: 3.5rem; --h-top: .75rem; --h-radius: 9999px; --h-pad: 1rem;
+    --h-width: min(68rem, calc(100% - 4rem)); --h-height: 3.5rem; --h-top: .875rem; --h-radius: 9999px; --h-pad: 1rem;
     --h-bg: color-mix(in srgb, var(--bg) 40%, transparent); --h-border: transparent; --h-rim: 1;
     --h-shadow: inset 0 0 0 .5px var(--glass-edge), inset 0 18px 32px -28px var(--glass-sheen);
     --h-blur: blur(24px) saturate(190%); --h-fg: var(--fg);
@@ -219,8 +232,16 @@ h1, h2, h3, p { margin: 0; }
   :root:not([data-theme="light"]) .theme-switch .icon-sun { display: block; }
   :root:not([data-theme="light"]) .theme-switch .icon-moon { display: none; }
 }
-.header-github { display: inline-flex; align-items: center; gap: .4rem; height: 2.125rem; padding-inline: 1.125rem; border-radius: 9999px; font-size: .875rem; font-weight: 500; background: color-mix(in srgb, currentColor 12%, transparent); }
-.header-github:hover { background: color-mix(in srgb, currentColor 20%, transparent); }
+.header-github { display: grid; place-items: center; flex: none; width: 2.125rem; height: 2.125rem; border-radius: 9999px; background: color-mix(in srgb, currentColor 9%, transparent); }
+.header-github:hover { background: color-mix(in srgb, currentColor 18%, transparent); }
+/* Signed out: a pill. Signed in: the avatar, which links to the console. */
+.header-signin { display: inline-flex; align-items: center; height: 2.125rem; padding-inline: 1.125rem; border-radius: 9999px; font-size: .875rem; font-weight: 500; white-space: nowrap; background: color-mix(in srgb, currentColor 12%, transparent); }
+.header-signin:hover { background: color-mix(in srgb, currentColor 20%, transparent); }
+.header-avatar { display: inline-grid; place-items: center; flex: none; width: 2.125rem; height: 2.125rem; border-radius: 9999px; overflow: hidden; font-size: .875rem; font-weight: 600; background: color-mix(in srgb, currentColor 14%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, currentColor 24%, transparent); }
+.header-avatar:hover { box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 44%, transparent); }
+.header-avatar img { display: block; width: 100%; height: 100%; object-fit: cover; }
+/* Holds the place of the sign-in pill until the page knows which of the two to draw. */
+.header-account-slot { display: inline-block; width: 4.75rem; height: 2.125rem; }
 .menu-toggle { display: none; width: 2.25rem; height: 2.25rem; place-items: center; border-radius: 9999px; }
 
 /* ── Hero ──────────────────────────────────────────────────────────────────────── */
@@ -546,8 +567,8 @@ h1, h2, h3, p { margin: 0; }
   .site-header[data-open] .site-nav { display: flex; }
   .site-nav a { height: 2.75rem; font-size: 1rem; opacity: 1; }
   .menu-toggle { display: grid; }
-  .header-github span { display: none; }
-  .header-github { width: 2.125rem; padding: 0; justify-content: center; }
+  .header-signin { padding-inline: .75rem; font-size: .8125rem; }
+  .header-account-slot { width: 3.75rem; }
   .preview-window { height: 34rem; }
   .mac-screen .preview-window { height: 32rem; }
 }

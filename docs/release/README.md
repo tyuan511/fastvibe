@@ -20,4 +20,17 @@ Conventions:
   the workflow reads the committed file at the tag, so a correction is a `gh release edit`
   (and a fix to the file for the record).
 
+## Phone app notes
+
+The phone app follows the same rule with its own tags: `docs/release/app-v0.4.5.md` for
+`app-v0.4.5`. `mobile-android.yml` checks it first and publishes it as the release body
+(`body_path`), so it is committed with the `pubspec.yaml` bump. Draft it with
+`release-notes.mjs --tag app-vX.Y.Z`, which starts at the previous `app-v` tag and lists only
+commits touching `apps/mobile_flutter`.
+
+The app reads that body itself: the update prompt shows the new version's note, and
+设置 → 关于 → 更新日志 shows the installed version's note, both rendered as Markdown. So write it
+for someone holding the phone: it should say what changed in the app and which host version it
+needs. The trailing `**Full Changelog**` line stays for GitHub; the app hides it.
+
 The flow that writes one is `.agents/skills/release/SKILL.md`.

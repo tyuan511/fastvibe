@@ -1,0 +1,35 @@
+version: "2"
+sql:
+  - engine: postgresql
+    schema: migrations
+    queries: internal/store/queries
+    gen:
+      go:
+        package: gen
+        out: internal/store/gen
+        sql_package: pgx/v5
+        emit_pointers_for_null_types: true
+        overrides:
+          - db_type: uuid
+            go_type: github.com/google/uuid.UUID
+          - db_type: uuid
+            nullable: true
+            go_type:
+              import: github.com/google/uuid
+              type: UUID
+              pointer: true
+          - db_type: timestamptz
+            go_type: time.Time
+          - db_type: timestamptz
+            nullable: true
+            go_type:
+              type: time.Time
+              pointer: true
+          - db_type: inet
+            go_type: net/netip.Addr
+          - db_type: inet
+            nullable: true
+            go_type:
+              import: net/netip
+              type: Addr
+              pointer: true

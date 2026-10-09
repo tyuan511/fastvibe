@@ -485,7 +485,14 @@ export class PiProcessManager {
   /** Exact SDK message object -> durable queue id, assigned at the ownership boundary. */
   #queuedSdkMessages = new SdkQueueClaims();
   /** Terminal verdict held until `agent_settled`, when queued work may drain. */
-  #interruptedRuns = new Map<string, "stopped" | "error">();
+  /**
+   * Why the run in flight is ending, read once at `agent_settled`.
+   *
+   * `stopped` and `error` pause the queue. `handoff` is 立即: the run was stopped
+   * because the user wants the next queued message to run, so the queue must *not*
+   * pause — pausing it would hold the message they just asked to send.
+   */
+  #interruptedRuns = new Map<string, "stopped" | "error" | "handoff">();
   /** Sessions whose catalog cwd changed mid-run; rebound once the turn settles. */
   #pendingCwdRebind = new Set<string>();
   #interruptMode: "immediate" | "wait" = "immediate";
@@ -1288,24 +1295,26 @@ export class PiProcessManager {
   async sendQueuedNow(id: string): Promise<ConversationQueueState | null> {
     const item = this.#messageQueue.get(id);
     if (!item) return null;
-    await this.#withQueue(item.conversationId, async () => {
+    // Stop before taking the queue lock. The lock is what the run's own settle waits
+    // on, so aborting while holding it would deadlock the stop against itself.
+    const conversationId = item.conversationId;
+    const queuedText = item.sentText ?? item.text;
+    const command = parseCompactCommand(queuedText) !== null || parseHandoffCommand(queuedText) !== null;
+    if (!command && this.#isLive(conversationId)) await this.#interruptForNextPrompt(conversationId);
+    await this.#withQueue(conversationId, async () => {
       const current = this.#messageQueue.get(id);
       if (!current || current.claimed || current.sending) return;
-      this.#bumpQueueEpoch(item.conversationId);
-      this.#queueDrainFaults.delete(item.conversationId);
-      this.#messageQueue.pause(item.conversationId, null);
+      this.#bumpQueueEpoch(conversationId);
+      this.#queueDrainFaults.delete(conversationId);
+      this.#messageQueue.pause(conversationId, null);
       // A queued `/compact` or `/handoff` is a command for the session, not words for
-      // the model: it waits for the run rather than being steered into it.
-      const queuedText = current.sentText ?? current.text;
-      const command = parseCompactCommand(queuedText) !== null || parseHandoffCommand(queuedText) !== null;
-      if (!command && this.#isLive(item.conversationId) && this.#interruptMode === "immediate") {
-        await this.#insertQueuedSteer(current);
-      } else {
-        this.#emitQueue(item.conversationId);
-        this.#scheduleQueueDrain(item.conversationId, id);
-      }
+      // the model: it waits for the run rather than being steered into it. Everything
+      // else is sent as the next turn — the run above was stopped so this one can
+      // start, instead of being injected into the reply the user just cut off.
+      this.#emitQueue(conversationId);
+      this.#scheduleQueueDrain(conversationId, id);
     });
-    return this.#messageQueue.state(item.conversationId);
+    return this.#messageQueue.state(conversationId);
   }
 
   async reorderQueued(conversationId: string, ids: string[]): Promise<ConversationQueueState> {
@@ -3317,7 +3326,11 @@ export class PiProcessManager {
           .reverse()
           .find((message): message is AssistantMessage => (message as { role?: unknown }).role === "assistant");
         if (
+          // `handoff` is a stop the user asked for so the next message can run. The
+          // aborted turn reports `stopReason: "aborted"`, and reading that as an error
+          // would pause the queue 立即 just released.
           this.#interruptedRuns.get(conversation.id) !== "stopped" &&
+          this.#interruptedRuns.get(conversation.id) !== "handoff" &&
           (last?.stopReason === "error" || last?.stopReason === "aborted" || last?.stopReason === "length")
         ) {
           this.#interruptedRuns.set(conversation.id, "error");
@@ -3439,7 +3452,8 @@ export class PiProcessManager {
       // desktop. A mobile client can be backgrounded while the desktop happens to be
       // looking at the same chat, and it still needs the one durable end-of-turn signal.
       // Focused desktop windows suppress their own native notice in `raiseNotification`.
-      const activity = event.type === "agent_settled" && conversation.kind !== "side-chat" && settledVerdict !== "stopped"
+      // 立即 cuts the reply short on purpose, so it is neither 「任务完成」 nor 「任务出错」.
+      const activity = event.type === "agent_settled" && conversation.kind !== "side-chat" && settledVerdict !== "stopped" && settledVerdict !== "handoff"
         ? {
             type: "conversation_activity",
             conversationId: conversation.id,
@@ -3619,6 +3633,38 @@ export class PiProcessManager {
     this.#catalog.update(id, { title });
     this.#emit({ type: "conversation_renamed", conversationId: id, title, snapshot: this.#catalog.snapshot() });
   }
+  /**
+   * Stop the run in flight without pausing the queue.
+   *
+   * 立即 wants the *next* message to run, so this is not `abort()`: that one latches
+   * the queue as `stopped` and the message the user just asked to send would sit
+   * behind 「你中断了当前响应」 until they released it by hand. The verdict recorded
+   * here is what `#settleQueue` reads, and `handoff` tells it to leave the queue
+   * running — the rows stay exactly as they are and the idle drain sends the next one.
+   *
+   * `agent.abort()` rather than `session.abort()`: the session wrapper also cancels
+   * the retry and the compaction, then waits until the whole post-run sequence has
+   * settled, which is the wait this action exists to spare the user. The wrapper
+   * observes the abort on its own and ends the run; this call only has to confirm the
+   * request itself was aborted.
+   */
+  async #interruptForNextPrompt(conversationId: string): Promise<void> {
+    const managed = this.#sessions.get(conversationId);
+    if (!managed || managed.session.isIdle) return;
+    this.#interruptedRuns.set(conversationId, "handoff");
+    managed.session.agent.abort();
+    const deadline = Date.now() + 15_000;
+    while (managed.session.agent.state.isStreaming && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    if (managed.session.agent.state.isStreaming) {
+      // The abort did not land. Leaving the verdict set would turn the run's own
+      // later failure into a silent handoff, so restore the ordinary reading.
+      if (this.#interruptedRuns.get(conversationId) === "handoff") this.#interruptedRuns.delete(conversationId);
+      throw new Error(uiText("停止当前响应超时", "Stopping the current reply timed out"));
+    }
+  }
+
   /** True when the active conversation has a run in flight (`agent_settled` clears it). */
   #isLive(conversationId?: string): boolean {
     const id = conversationId ?? this.#activeId;
@@ -3642,7 +3688,19 @@ export class PiProcessManager {
     try {
       if (await this.#compactIfCommand(session, message)) return;
       if (!session.isIdle) await session.waitForIdle();
-      await session.prompt(message, { images });
+      // Same acceptance contract as `prompt()`: the call resolves once the SDK has
+      // taken the message, not once the run finishes. The queue drain sends the next
+      // row when this one returns, and waiting out the whole answer kept every later
+      // 立即 behind the reply it had already interrupted.
+      await promptAccepted(
+        (preflightResult) => session.prompt(message, { images, preflightResult }),
+        {
+          isAbort: isAbortOutcome,
+          onLateFailure: (error) => {
+            console.error(`[engine] queued run failed after the prompt was accepted (${conversationId ?? "no conversation"}):`, error);
+          },
+        },
+      );
     } finally {
       held.release();
     }
@@ -3766,7 +3824,7 @@ export class PiProcessManager {
    * releases it (立即 / 继续发送). A pause with nothing left to hold is cleared, so a
    * leftover cannot catch the next follow-up queued during a live run.
    */
-  #settleQueue(conversationId: string, interrupted: "stopped" | "error" | undefined): void {
+  #settleQueue(conversationId: string, interrupted: "stopped" | "error" | "handoff" | undefined): void {
     void this.#withQueue(conversationId, async () => {
       const adapter = this.#sdkQueueAdapters.get(conversationId);
       let changed = false;
@@ -3783,7 +3841,9 @@ export class PiProcessManager {
       if (this.#reconcileClaims(conversationId)) changed = true;
       const items = this.#messageQueue.all(conversationId);
       const pause = this.#messageQueue.state(conversationId).pause;
-      if (interrupted) {
+      // `handoff` is 立即: the run was stopped *so the queue could continue*, and
+      // pausing it here would hold the very message the user just asked to send.
+      if (interrupted && interrupted !== "handoff") {
         if (items.length > 0 && pause !== interrupted) {
           this.#messageQueue.pause(conversationId, interrupted);
           changed = true;
@@ -3793,7 +3853,9 @@ export class PiProcessManager {
         changed = true;
       }
       if (changed) this.#emitQueue(conversationId);
-      if (!interrupted) this.#scheduleQueueDrain(conversationId);
+      // `handoff` stopped the run so the queue could continue, so it drains exactly
+      // like a run that ended on its own. Only a real stop or failure holds it.
+      if (!interrupted || interrupted === "handoff") this.#scheduleQueueDrain(conversationId);
     }).catch(() => {
       // A failed durable write must not spin; an explicit resume clears the fault.
       this.#queueDrainFaults.add(conversationId);

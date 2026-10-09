@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../app_info.dart';
 import '../chat/option_sheet.dart';
@@ -13,7 +12,7 @@ import '../ui/icons.dart';
 import '../ui/kit.dart';
 import '../ui/preferences.dart';
 import '../notifications/local.dart';
-import '../update/release.dart';
+import '../update/release_notes_sheet.dart';
 import '../update/updater.dart';
 
 /// Settings that belong to this phone. Which model the agent runs and what it may do are
@@ -285,9 +284,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       SettingsRow(
                         icon: AppIcons.information,
                         label: t('settings.releaseNotes', context: context),
-                        onTap: () => launchUrl(
-                          Uri.parse('https://github.com/$releaseRepo/releases'),
-                        ),
+                        onTap: () => showReleaseNotesSheet(context),
                       ),
                       SettingsRow(
                         icon: AppIcons.copy,

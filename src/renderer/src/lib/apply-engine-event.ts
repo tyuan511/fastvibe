@@ -511,17 +511,33 @@ function applyEvent(
 
   // The engine persisted the optimistic user turn and handed back its session
   // entry id. Adopt it so the row can branch (retry / edit) later; the message
-  // itself is unchanged. Optimistic turns are minted with a `local:` id.
+  // itself is unchanged. Optimistic turns are minted with a `local:` id, and a turn
+  // shown ahead of a queued send carries `queue:` until its delivery lands.
   if (type === "user_message_persisted") {
     const entryId = asString(event.entryId);
     if (entryId) {
       for (let index = next.length - 1; index >= 0; index -= 1) {
-        if (next[index].role !== "user" || !next[index].id.startsWith("local:")) continue;
+        const id = next[index].id;
+        if (next[index].role !== "user" || !(id.startsWith("local:") || id.startsWith("queue:"))) continue;
         const list = next.slice();
         list[index] = { ...next[index], id: entryId };
         next = list;
         break;
       }
+    }
+    return { messages: next, streaming: nextStreaming };
+  }
+
+  // The durable queue row left because the engine took it. The turn was already drawn
+  // at the click (立即); adopt the id the transcript will persist it under, so the
+  // echo of that same message does not draw a second row beside it.
+  if (type === "queue_delivered" && typeof event.queueId === "string") {
+    const shown = `queue:${event.queueId}`;
+    const index = next.findIndex((message) => message.id === shown);
+    if (index >= 0) {
+      const list = next.slice();
+      list[index] = { ...next[index], id: `local:${event.queueId}` };
+      next = list;
     }
     return { messages: next, streaming: nextStreaming };
   }

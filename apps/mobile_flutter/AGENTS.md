@@ -196,7 +196,10 @@ late error on whichever test happens to be running.
 and pushes to main without signing secrets. Both release workflows run those checks too.
 The Flutter SDK is pinned by `environment.flutter` in `pubspec.yaml`.
 
-- Android: bump `pubspec.yaml` to `MAJOR.MINOR.PATCH+BUILD` and push `app-v<version>`.
+- Android: bump `pubspec.yaml` to `MAJOR.MINOR.PATCH+BUILD`, commit the release note
+  `docs/release/app-v<version>.md` with it, and push `app-v<version>`. The workflow refuses
+  a tag without that note and publishes it as the release body, which is what the update
+  prompt and 设置 → 关于 → 更新日志 render (`lib/update/release_notes_sheet.dart`).
   The build must be at least `MAJOR * 10000 + MINOR * 100 + PATCH` to remain compatible
   with existing installations. `check_release.sh` enforces that floor and the tag.
   The tag dispatches the existing `mobile-android.yml` onto main for reusable caches;

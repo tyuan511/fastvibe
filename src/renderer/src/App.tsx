@@ -964,6 +964,11 @@ export function App(): JSX.Element {
 
   async function handleSendQueuedNow(id: string): Promise<void> {
     const owner = useSessionStore.getState().queued.find((entry) => entry.id === id)?.conversationId;
+    // The stop this triggers waits out the request in flight. Draw the turn now, so
+    // the click reads as sent instead of as a row that sits at 发送中 until the
+    // engine confirms it. The queue snapshot that follows puts the row back if Main
+    // could not take it.
+    useSessionStore.getState().showQueuedNow(id);
     try {
       const queue = await window.fastvibe.engine.queueSendNow(id, owner);
       if (queue) setQueueState(queue);

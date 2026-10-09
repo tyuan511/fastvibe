@@ -11,6 +11,7 @@ import '../theme/theme.dart';
 import '../ui/icons.dart';
 import '../ui/kit.dart';
 import '../ui/preferences.dart';
+import '../ui/scroll_fade.dart';
 
 /// One option in a sheet: a label, an optional second line, an icon or a coloured
 /// initial, and whether it is the destructive one.
@@ -159,62 +160,66 @@ class _OptionSheetBodyState extends State<_OptionSheetBody> {
                       ),
                     ),
                   )
-                : ListView(
-                    shrinkWrap: true,
-                    padding: EdgeInsets.zero,
-                    children: <Widget>[
-                      for (final group in groups) ...<Widget>[
-                        if (group.label.isNotEmpty)
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
-                            child: Text(
-                              group.label,
-                              style: TextStyle(
-                                color: palette.muted,
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
+                // A long list (a machine with many projects) is cut by the sheet's
+                // bounds; fade that edge rather than slice the rounded card square.
+                : ScrollFade(
+                    child: ListView(
+                      shrinkWrap: true,
+                      padding: EdgeInsets.zero,
+                      children: <Widget>[
+                        for (final group in groups) ...<Widget>[
+                          if (group.label.isNotEmpty)
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
+                              child: Text(
+                                group.label,
+                                style: TextStyle(
+                                  color: palette.muted,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
                             ),
-                          ),
-                        Container(
-                          decoration: BoxDecoration(
-                            color: palette.card.withValues(alpha: 0.66),
-                            borderRadius: BorderRadius.circular(Radii.lg),
-                          ),
-                          clipBehavior: Clip.antiAlias,
-                          child: Column(
-                            children: <Widget>[
-                              for (
-                                var index = 0;
-                                index < group.options.length;
-                                index++
-                              ) ...<Widget>[
-                                if (index > 0)
-                                  Divider(
-                                    height: 0.5,
-                                    thickness: 0.5,
-                                    color: palette.border,
+                          Container(
+                            decoration: BoxDecoration(
+                              color: palette.card.withValues(alpha: 0.66),
+                              borderRadius: BorderRadius.circular(Radii.lg),
+                            ),
+                            clipBehavior: Clip.antiAlias,
+                            child: Column(
+                              children: <Widget>[
+                                for (
+                                  var index = 0;
+                                  index < group.options.length;
+                                  index++
+                                ) ...<Widget>[
+                                  if (index > 0)
+                                    Divider(
+                                      height: 0.5,
+                                      thickness: 0.5,
+                                      color: palette.border,
+                                    ),
+                                  _OptionRow(
+                                    option: group.options[index],
+                                    selected:
+                                        group.options[index].value ==
+                                        widget.value,
+                                    onTap: () {
+                                      Haptic.select();
+                                      final option = group.options[index];
+                                      Navigator.of(context).pop();
+                                      widget.onSelect?.call(option.value);
+                                      option.onSelect?.call();
+                                    },
                                   ),
-                                _OptionRow(
-                                  option: group.options[index],
-                                  selected:
-                                      group.options[index].value ==
-                                      widget.value,
-                                  onTap: () {
-                                    Haptic.select();
-                                    final option = group.options[index];
-                                    Navigator.of(context).pop();
-                                    widget.onSelect?.call(option.value);
-                                    option.onSelect?.call();
-                                  },
-                                ),
+                                ],
                               ],
-                            ],
+                            ),
                           ),
-                        ),
-                        const SizedBox(height: 8),
+                          const SizedBox(height: 8),
+                        ],
                       ],
-                    ],
+                    ),
                   ),
           ),
         ],

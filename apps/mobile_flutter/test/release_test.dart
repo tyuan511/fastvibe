@@ -101,4 +101,33 @@ void main() {
     expect(asked.last, endsWith('app-v0.5.0'));
     client.close();
   });
+
+  test('release notes drop the GitHub compare link, which means nothing on a phone', () {
+    expect(
+      notesForDisplay(
+        '### Fixed\n\n- A bug.\n\n**Full Changelog**: https://example.test/compare/a...b\n',
+      ),
+      '### Fixed\n\n- A bug.',
+    );
+  });
+
+  test('the changelog reads the installed version, and an unpublished one is null', () async {
+    final asked = <String>[];
+    final client = MockClient((request) async {
+      asked.add(request.url.path);
+      if (request.url.path.endsWith('app-v0.4.5')) {
+        return http.Response(
+          jsonEncode({
+            'body': '- Faster.\n\n**Full Changelog**: https://example.test/x',
+          }),
+          200,
+        );
+      }
+      return http.Response('{}', 404);
+    });
+    expect(await fetchReleaseNotes('0.4.5', client: client), '- Faster.');
+    expect(asked.single, endsWith('/releases/tags/app-v0.4.5'));
+    expect(await fetchReleaseNotes('0.0.1', client: client), isNull);
+    client.close();
+  });
 }

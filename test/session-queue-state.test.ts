@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import test from "node:test";
 import type { ConversationQueueState, EngineEvent, QueuePauseReason } from "../src/shared/types.ts";
 import { shouldQueueSubmission } from "../src/renderer/src/lib/composer-race.ts";
+import { shownQueueIds } from "../src/renderer/src/stores/session-reducer.ts";
 
 const ts = createRequire(import.meta.url)("typescript") as typeof import("typescript");
 const source = readFileSync(new URL("../src/renderer/src/stores/session.ts", import.meta.url), "utf8");
@@ -27,7 +28,7 @@ function extract(name: string): string {
 function fixture() {
   let state = {
     activeId: "chat",
-    messages: [],
+    messages: [] as Array<{ id: string }>,
     streaming: false,
     queued: [] as ConversationQueueState["items"],
     queuePause: null as QueuePauseReason | null,
@@ -50,8 +51,9 @@ function fixture() {
     (value: unknown) => value, (value: unknown) => value,
     () => ({}), () => null, () => ({}),
   ) as (state: State, events: EngineEvent[]) => Partial<State>;
-  const setQueue = new Function("set", `${extract("setQueueState")} return setQueueState;`)(
+  const setQueue = new Function("set", "shownQueueIds", `${extract("setQueueState")} return setQueueState;`)(
     (update: (state: State) => Partial<State>) => { state = { ...state, ...update(state) }; },
+    shownQueueIds,
   ) as (queue: ConversationQueueState) => void;
   return {
     get state() { return state; },
@@ -89,6 +91,14 @@ test("real durable pauses survive transcript settlement until a newer queue snap
     f.setQueue(queue(3, null));
     assert.equal(f.state.queuePause, null);
   }
+});
+
+test("a row already drawn as a turn stays out of the tray its snapshot puts back", () => {
+  const f = fixture();
+  f.state.messages = [{ id: "queue:q1" }];
+  f.setQueue(queue(1, null));
+  assert.equal(f.state.queued.length, 0, "the click already showed it; the snapshot must not undo that");
+  assert.equal(f.state.queueRevisionByConversation.chat, 1);
 });
 
 test("delivery followed by late settlement leaves fresh Send usable", () => {

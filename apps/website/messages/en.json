@@ -9,7 +9,8 @@
     "tasks": "Tasks",
     "practices": "Best practices",
     "download": "Download",
-    "github": "GitHub"
+    "github": "GitHub",
+    "signIn": "Sign in"
   },
   "hero": {
     "download": "Download FastVibe",
@@ -110,5 +111,74 @@
   },
   "theme": {
     "toggle": "Toggle theme"
+  },
+  "login": {
+    "title": "Sign in to FastVibe",
+    "lead": "Continue with your GitHub account. We read your public profile and your verified email — never your password.",
+    "github": "Continue with GitHub",
+    "home": "Back to home",
+    "errors": {
+      "invalid_state": "That sign-in link expired or didn’t start here. Please try again.",
+      "github_denied": "GitHub sign-in was cancelled.",
+      "github_rejected": "GitHub didn’t accept that sign-in. Please try again.",
+      "github_unavailable": "GitHub is not responding right now. Please try again in a moment.",
+      "account_disabled": "This account has been disabled. Contact support if you think this is a mistake.",
+      "internal_error": "Something went wrong on our side. Please try again.",
+      "unknown": "Sign-in failed. Please try again."
+    }
+  },
+  "console": {
+    "label": "Console",
+    "nav": {
+      "account": "Account",
+      "sessions": "Devices",
+      "more": "More"
+    },
+    "signOut": "Sign out",
+    "loading": "Loading…",
+    "loadFailed": "We couldn’t load this page. Check your connection and try again.",
+    "retry": "Retry",
+    "justNow": "just now",
+    "account": {
+      "title": "Account",
+      "lead": "The GitHub account you signed in with.",
+      "username": "GitHub username",
+      "email": "Email",
+      "noEmail": "No verified email. Verify a primary email on GitHub and sign in again to show it here.",
+      "role": "Role",
+      "roles": {
+        "user": "Member",
+        "admin": "Admin"
+      },
+      "since": "Member since",
+      "openGithub": "View on GitHub"
+    },
+    "sessions": {
+      "title": "Devices",
+      "lead": "Browsers and devices signed in to your account. Sign out any you don’t recognise.",
+      "current": "This device",
+      "unknownDevice": "Unknown device",
+      "kinds": {
+        "web": "Browser",
+        "desktop": "Desktop app",
+        "mobile": "Mobile app"
+      },
+      "lastActive": "Active {when}",
+      "signedIn": "Signed in {date}",
+      "revoke": "Sign out",
+      "revoking": "Signing out…",
+      "revokeFailed": "Couldn’t sign that device out. Please try again.",
+      "deviceLabel": "{browser} on {os}"
+    },
+    "more": {
+      "title": "More",
+      "lead": "Everything beyond your account will live here. It is on the way — here is what is coming.",
+      "badge": "Coming soon",
+      "previews": {
+        "models": { "title": "Models and quota", "lead": "See the models you can use and what is left" },
+        "usage": { "title": "Usage", "lead": "A day-by-day look at what you have used" },
+        "keys": { "title": "Access keys", "lead": "Manage the keys that call the API" }
+      }
+    }
   }
 }

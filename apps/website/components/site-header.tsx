@@ -1,8 +1,11 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
 import { useTranslations } from "next-intl";
+import { Link } from "@/i18n/navigation";
+import { fetchMe } from "@/lib/api";
+import { readViewerHint, writeViewerHint, type Viewer } from "@/lib/viewer";
 import { LanguageSwitch } from "./language-switch";
 import { Icon } from "./icons";
 import { ThemeSwitch } from "./theme-switch";
@@ -25,6 +28,29 @@ const links = [
 export function SiteHeader() {
   const t = useTranslations();
   const [open, setOpen] = useState(false);
+  // "unknown" until the remembered hint or /api/me says otherwise; null is signed out.
+  const [viewer, setViewer] = useState<Viewer | null | "unknown">("unknown");
+
+  // Draw what was true last time before the first paint, then confirm it.
+  useLayoutEffect(() => {
+    const hint = readViewerHint();
+    if (hint !== undefined) setViewer(hint);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchMe().then(
+      (me) => {
+        writeViewerHint(me);
+        if (!cancelled) setViewer({ login: me.login, avatar: me.avatar_url });
+      },
+      () => {
+        writeViewerHint(null);
+        if (!cancelled) setViewer(null);
+      },
+    );
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -52,9 +78,21 @@ export function SiteHeader() {
         <div className="header-actions">
           <LanguageSwitch />
           <ThemeSwitch />
-          <a className="header-github" href={GITHUB_URL} target="_blank" rel="noreferrer">
-            <Icon name="github" size={15} /><span>{t("nav.github")}</span>
+          <a className="header-github" href={GITHUB_URL} target="_blank" rel="noreferrer" aria-label={t("nav.github")} title="GitHub">
+            <Icon name="github" size={16} />
           </a>
+          {viewer === "unknown" && <span className="header-account-slot" aria-hidden="true" />}
+          {viewer === null && <Link className="header-signin" href="/login">{t("nav.signIn")}</Link>}
+          {viewer && viewer !== "unknown" && (
+            <Link className="header-avatar" href="/console" aria-label={t("console.label")} title={viewer.login}>
+              {viewer.avatar ? (
+                // eslint-disable-next-line @next/next/no-img-element -- a 34px avatar from GitHub's CDN; next/image would proxy it for nothing
+                <img src={viewer.avatar} alt="" width={34} height={34} referrerPolicy="no-referrer" />
+              ) : (
+                viewer.login.slice(0, 1).toUpperCase()
+              )}
+            </Link>
+          )}
           <button
             type="button"
             className="menu-toggle"

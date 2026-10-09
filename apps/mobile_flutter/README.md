@@ -109,7 +109,9 @@ Strings live in `tool/i18n/{zh,en}.json`. Edit those files, then run
   translation checks on pull requests and pushes to main that change the mobile client.
 - **Mobile Android APK** keeps the `app-v*` tag and manual-run entry points. Tag pushes
   dispatch a build on main, checking out the tagged commit so caches can be reused.
-  It publishes `FastVibe-app-v<version>-arm64-v8a.apk` and its `.sha256` checksum.
+  It publishes `FastVibe-app-v<version>-arm64-v8a.apk` and its `.sha256` checksum, with
+  `docs/release/app-v<version>.md` as the release body; a tag without that note fails
+  before building. The app renders the same body as its changelog.
   The ABI stays in the name so the updater can reject incompatible devices.
   A manual run without a tag only uploads build artifacts. It reuses the existing
   `FASTVIBE_ANDROID_KEYSTORE_BASE64`, `FASTVIBE_ANDROID_STORE_PASSWORD`,

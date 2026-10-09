@@ -20,7 +20,9 @@ import 'package:fastvibe_mobile/theme/theme.dart';
 import 'package:fastvibe_mobile/ui/context_menu.dart';
 import 'package:fastvibe_mobile/ui/feedback.dart';
 import 'package:fastvibe_mobile/ui/glass_screen.dart';
+import 'package:fastvibe_mobile/ui/icons.dart';
 import 'package:fastvibe_mobile/ui/kit.dart';
+import 'package:fastvibe_mobile/ui/scroll_fade.dart';
 
 void main() {
   setUpAll(() async {
@@ -165,6 +167,79 @@ void main() {
       await tester.pump(const Duration(seconds: 3));
     },
   );
+
+  testWidgets('a bar menu longer than the screen scrolls to its last row', (
+    tester,
+  ) async {
+    // The project filter on a machine with many projects ran off the bottom of the
+    // screen: the bar's pull-down never bounded itself, so the rest was unreachable.
+    String? picked;
+    await pump(
+      tester,
+      GlassScreen(
+        title: 'List',
+        actions: <Widget>[
+          GlassMenuAction(
+            icon: AppIcons.folder,
+            tooltip: 'Projects',
+            items: <Widget>[
+              for (var i = 0; i < 30; i++)
+                GlassMenuItem(
+                  title: 'Project $i',
+                  subtitle: '$i chats',
+                  onTap: () => picked = '$i',
+                ),
+            ],
+          ),
+        ],
+        body: const SizedBox.expand(),
+      ),
+    );
+    await tester.tap(find.bySemanticsLabel('Projects').last);
+    await tester.pumpAndSettle();
+    final last = find.text('Project 29');
+    expect(last, findsOneWidget);
+    final screen = tester.view.physicalSize / tester.view.devicePixelRatio;
+    expect(tester.getTopLeft(last).dy, greaterThan(screen.height));
+    await tester.dragUntilVisible(
+      last,
+      find.byType(Scrollable).last,
+      const Offset(0, -200),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.getBottomLeft(last).dy, lessThan(screen.height));
+    await tester.tap(last);
+    await tester.pumpAndSettle();
+    expect(picked, '29');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a long option sheet fades its cut edge instead of slicing it', (
+    tester,
+  ) async {
+    await pump(
+      tester,
+      Builder(
+        builder: (context) => Scaffold(
+          body: TextButton(
+            onPressed: () => showOptionSheet(
+              context,
+              title: 'Pick',
+              options: [
+                for (var i = 0; i < 30; i++)
+                  SheetOption(value: '$i', label: 'Project $i'),
+              ],
+            ),
+            child: const Text('Open'),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+    expect(find.byType(ScrollFade), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
     'glass prompt saves edited text without disposing its field mid-dismissal',

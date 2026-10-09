@@ -2143,8 +2143,8 @@ timestamps always show.
   process. A run that produced everything in a single request has no boundary to measure and
   falls back to that request's span. Both survive a reload, and because the fold only exists
   once the run has settled there is no live-ticking case. Both go through `formatDuration`
-  (`lib/time.ts`), the app's only duration format (`3分钟 41秒`), so the two numbers read in one
-  notation — a compact `3m41s` beside a `3分钟 41秒` was two spellings of the same unit. The
+  (`lib/time.ts`), the app's only duration format (`3 分钟 41 秒`), so the two numbers read in one
+  notation — a compact `3m41s` beside a `3 分钟 41 秒` was two spellings of the same unit. The
   compact formatter it replaced is gone, and `formatDuration` returns `""` for a null span, so
   the statistics popover spells out its own `—`.
 - **Collapsed by default, and entirely the reader's afterwards** — nothing re-folds it under

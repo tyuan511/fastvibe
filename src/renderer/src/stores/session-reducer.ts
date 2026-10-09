@@ -11,6 +11,52 @@ import type {
   TuiRun,
 } from "@shared/types";
 
+/** Queue ids the transcript is already showing as a sent turn. */
+export function shownQueueIds(messages: ChatMessage[]): Set<string> {
+  const shown = new Set<string>();
+  for (const message of messages) {
+    if (message.id.startsWith("queue:") || message.id.startsWith("local:")) {
+      shown.add(message.id.slice(message.id.indexOf(":") + 1));
+    }
+  }
+  return shown;
+}
+
+/**
+ * One queued message drawn as a sent turn, before Main has stopped the run it
+ * interrupts. `queue:<id>` is what `queue_delivered` adopts, so the row the engine
+ * then persists replaces this one instead of appearing beside it.
+ */
+export function optimisticQueuedTurn(item: {
+  id: string;
+  text: string;
+  attachments?: ChatMessage["attachments"];
+}): ChatMessage[] {
+  const now = Date.now();
+  const text = item.text;
+  const startsTurn = !text.trim().startsWith("/");
+  const messages: ChatMessage[] = [{
+    id: `queue:${item.id}`,
+    role: "user",
+    text,
+    tools: [],
+    parts: text ? [{ kind: "text", text }] : [],
+    createdAt: now,
+    attachments: item.attachments,
+  }];
+  if (startsTurn) {
+    messages.push({
+      id: `local:${item.id}`,
+      role: "assistant",
+      text: "",
+      tools: [],
+      parts: [],
+      createdAt: now,
+    });
+  }
+  return messages;
+}
+
 export function settledBoundary(messages: ChatMessage[]): number {
   const last = messages.at(-1);
   return last?.role === "assistant" ? (last.parts?.length ?? 0) : 0;
@@ -21,6 +67,31 @@ export function settledBoundary(messages: ChatMessage[]): number {
  * sidebar lights up the moment a prompt is sent, without waiting for the engine's
  * `agent_start` IPC round-trip.
  */
+/**
+ * A transcript read says nothing about a turn the user just sent.
+ *
+ * `queue:` rows are drawn the instant 立即 is pressed, while the run they interrupt is
+ * still being stopped. A reload that lands in that window — the interrupted run's own
+ * `agent_settled` triggers one — replays a transcript that does not hold the turn yet,
+ * and applying it as given erased the row until the next prompt was finally accepted.
+ * Keep every optimistic turn the read has not caught up with, in the order they were
+ * sent. A slash command has no placeholder reply, so it is kept on its own.
+ */
+export function preserveOptimisticTail(previous: ChatMessage[], next: ChatMessage[]): ChatMessage[] {
+  const kept: ChatMessage[] = [];
+  for (let index = 0; index < previous.length; index += 1) {
+    const message = previous[index];
+    if (!message.id.startsWith("queue:")) continue;
+    if (next.some((item) => item.id === message.id)) continue;
+    const reply = previous[index + 1];
+    const placeholder = reply?.role === "assistant" && reply.id.startsWith("local:") ? reply : undefined;
+    if (placeholder) index += 1;
+    kept.push(message);
+    if (placeholder) kept.push(placeholder);
+  }
+  return kept.length > 0 ? [...next, ...kept] : next;
+}
+
 export function activeRunning(
   state: { activeId: string | null; running: Record<string, boolean> },
   running: boolean,

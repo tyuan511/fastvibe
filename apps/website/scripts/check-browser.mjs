@@ -3,7 +3,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium } from "playwright";
 
-const origin = process.env.WEBSITE_URL ?? "http://localhost:3000";
+const origin = process.env.WEBSITE_URL ?? "http://localhost:9088";
 const output = process.env.CHECK_SCREENSHOTS_DIR;
 const browser = await chromium.launch({
   headless: true,
@@ -34,7 +34,7 @@ try {
       await assertTheme(page, colorScheme);
       assert.equal(await page.locator("html").getAttribute("lang"), locale === "zh" ? "zh-CN" : "en");
       assert.match(await page.locator("h1").innerText(), locale === "zh" ? /为 Agent 打造的工作区/ : /workspace for your agents/);
-      assert.equal(await page.locator("link[rel=canonical]").getAttribute("href"), `https://fastvibe.dev/${locale}`);
+      assert.equal(await page.locator("link[rel=canonical]").getAttribute("href"), "https://fastvibe.dev/");
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `${locale}/${width}: horizontal overflow`);
       for (const id of ["tasks", "practices", "access"]) {
         assert.equal(await page.locator(`main section#${id}`).count(), 1, `missing #${id}`);
@@ -95,13 +95,16 @@ try {
     console.log(`PASS ${locale}/${colorScheme}: embedded client UI follows the theme switch`);
 
     const other = locale === "en" ? "zh" : "en";
+    const here = new URL(page.url()).pathname;
     await page.locator(`.language-switch a[hreflang="${other}"]`).click();
-    await page.waitForURL(`**/${other}`);
+    await page.waitForURL((url) => url.pathname === here);
     await page.waitForLoadState("networkidle");
+    assert.equal(new URL(page.url()).pathname, here);
     assert.equal(await page.locator("html").getAttribute("lang"), other === "zh" ? "zh-CN" : "en");
     assert.equal((await context.cookies()).find((cookie) => cookie.name === "FASTVIBE_LOCALE")?.value, other);
     await page.goto(origin);
-    assert.equal(new URL(page.url()).pathname, `/${other}`);
+    assert.equal(new URL(page.url()).pathname, "/");
+    assert.equal(await page.locator("html").getAttribute("lang"), other === "zh" ? "zh-CN" : "en");
     console.log(`PASS ${locale}/${colorScheme}: download menu, tabs, modal, language switch & persistence`);
 
     const opposite = colorScheme === "light" ? "dark" : "light";
@@ -109,8 +112,9 @@ try {
     await assertTheme(page, opposite);
     await page.reload({ waitUntil: "networkidle" });
     await assertTheme(page, opposite);
+    const stayed = new URL(page.url()).pathname;
     await page.locator(`.language-switch a[hreflang="${locale}"]`).click();
-    await page.waitForURL(`**/${locale}`);
+    await page.waitForURL((url) => url.pathname === stayed);
     await assertTheme(page, opposite);
     await page.emulateMedia({ colorScheme });
     await assertTheme(page, colorScheme);
@@ -140,7 +144,8 @@ try {
     const context = await browser.newContext({ locale, colorScheme, javaScriptEnabled: false });
     const page = await context.newPage();
     await page.goto(origin);
-    assert.equal(new URL(page.url()).pathname, `/${locale.startsWith("zh") ? "zh" : "en"}`);
+    assert.equal(new URL(page.url()).pathname, "/");
+    assert.equal(await page.locator("html").getAttribute("lang"), locale.startsWith("zh") ? "zh-CN" : "en");
     assert.equal(await page.locator(".download-menu-group a").count(), 5);
     assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement).colorScheme), colorScheme);
     assert.ok((await page.locator("h1").innerText()).length > 0);

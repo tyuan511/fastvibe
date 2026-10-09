@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:hugeicons/hugeicons.dart';
@@ -176,8 +178,14 @@ class GlassScreen extends StatelessWidget {
           ? <Widget>[
               _BarScrim(
                 top: true,
-                height: MediaQuery.paddingOf(context).top + 44 + 30,
-                solid: MediaQuery.paddingOf(context).top + 44,
+                // The blur band reaches ~30pt past the bar, which is exactly where a
+                // large title's glyph tops sit — they were drawn through the gradient and
+                // came out soft. The type is 34pt at a 1.1 line height, so its top sits
+                // ~37pt below the bar; hold the page colour just past that and let the
+                // fade begin under the glyphs, where the title row still has room to
+                // dissolve as it collapses.
+                height: MediaQuery.paddingOf(context).top + 44 + 46,
+                solid: MediaQuery.paddingOf(context).top + 44 + 40,
                 palette: palette,
               ),
               if (bottomBar != null)
@@ -262,6 +270,7 @@ class GlassScreen extends StatelessWidget {
                 label: menu.tooltip,
                 menuItems: menu.items,
                 menuWidth: 240,
+                menuHeight: _barMenuHeight(context, menu.items),
                 background: menu.active
                     ? GlassBarItemBackground.separate
                     : GlassBarItemBackground.shared,
@@ -361,6 +370,38 @@ class _BarScrim extends StatelessWidget {
 /// A bar button that opens an iOS pull-down menu ([GlassMenuItem]s, [GlassMenuDivider]s)
 /// instead of acting itself — the chat's ⋯, the project filter. Only meaningful in a
 /// [GlassScreen]'s `actions`, which turns it into the bar's own menu item.
+/// The height a nav-bar pull-down is held to, or null while its rows fit.
+///
+/// A bar item's menu never bounds itself: the package caps a menu only with
+/// `autoAdjustToScreen`, which [GlassBarItem.menu] cannot set, so a project filter with
+/// more rows than the screen ran off the bottom with no way to reach the rest. A fixed
+/// `menuHeight` is what switches on the menu's own scrolling, so it is passed only once
+/// the rows — measured the way the package measures them — outgrow the room below the bar.
+double? _barMenuHeight(BuildContext context, List<Widget> items) {
+  final media = MediaQuery.of(context);
+  final scaler = media.textScaler;
+  var natural = 24.0 + math.max(0, items.length - 1) * 2.0;
+  for (final item in items) {
+    if (item is GlassMenuItem) {
+      final title =
+          scaler.scale(item.titleStyle?.fontSize ?? 17) * 1.2 * item.maxLines;
+      final subtitle = item.subtitle == null
+          ? 0.0
+          : scaler.scale(item.subtitleStyle?.fontSize ?? 13) * 1.2;
+      natural += math.max(item.height, title + subtitle + 16);
+    } else if (item is GlassMenuDivider) {
+      natural += item.height;
+    } else {
+      natural += 44;
+    }
+  }
+  // The capsule sits just under the status bar; keep the menu clear of the home
+  // indicator with the same breathing room the sheets keep from the screen edge.
+  final room =
+      media.size.height - media.padding.top - media.padding.bottom - 72;
+  return natural > room ? math.max(room, 160.0) : null;
+}
+
 class GlassMenuAction extends StatelessWidget {
   const GlassMenuAction({
     super.key,

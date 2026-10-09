@@ -7,8 +7,9 @@
  *
  * A release's body is `docs/release/<tag>.md`, committed with the version bump. The
  * tag is what selects it, so the note has to be named after the tag and has to be
- * there *before* the tag is pushed. This is run by every job in release.yml, near the
- * top: without it a tag whose note was never added still spends twenty minutes
+ * there *before* the tag is pushed. The phone app's `app-vX.Y.Z` tags follow the same
+ * rule (`docs/release/app-vX.Y.Z.md`), and the app shows that body as its 更新日志. This
+ * is run by every job in release.yml, and by mobile-android.yml, near the top: without it a tag whose note was never added still spends twenty minutes
  * packaging and then publishes a release with an empty body, which is the one thing
  * about a release nobody can fix in a rerun.
  *
@@ -27,8 +28,8 @@ import { fileURLToPath } from "node:url";
 // point it at a fixture tree instead of writing into the real `docs/release/`.
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-/** `v1.2.3` and `v1.2.3-rc.1`; not `latest`, not `1.2.3`. */
-export const RELEASE_TAG = /^v\d+\.\d+\.\d+/;
+/** `v1.2.3`, `v1.2.3-rc.1` and the phone app's `app-v1.2.3`; not `latest`, not `1.2.3`. */
+export const RELEASE_TAG = /^(app-)?v\d+\.\d+\.\d+/;
 
 /**
  * Returns `{ tag, path, lines }` when the note is present and has content, otherwise
@@ -37,7 +38,7 @@ export const RELEASE_TAG = /^v\d+\.\d+\.\d+/;
  */
 export function checkReleaseNote(tag, root = ROOT) {
   if (!tag) throw new Error("no tag: set GITHUB_REF_NAME or pass --tag vX.Y.Z");
-  if (!RELEASE_TAG.test(tag)) throw new Error(`not a release tag: ${tag} (expected vX.Y.Z)`);
+  if (!RELEASE_TAG.test(tag)) throw new Error(`not a release tag: ${tag} (expected vX.Y.Z or app-vX.Y.Z)`);
 
   const path = join(root, "docs", "release", `${tag}.md`);
   const relative = `docs/release/${tag}.md`;

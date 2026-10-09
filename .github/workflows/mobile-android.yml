@@ -57,6 +57,13 @@ jobs:
         with:
           node-version: 22
 
+      # The release body is docs/release/<tag>.md, written and committed with the version
+      # bump, and the app shows it as its 更新日志. Fail here, in seconds, rather than after
+      # the build has spent its fifteen minutes.
+      - name: Check release note
+        if: startsWith(inputs.tag, 'app-v')
+        run: node scripts/check-release-note.mjs --tag "$RELEASE_TAG"
+
       - name: Set up Java
         uses: actions/setup-java@v5
         with:
@@ -193,10 +200,7 @@ jobs:
         with:
           tag_name: ${{ inputs.tag }}
           name: FastVibe Mobile ${{ inputs.tag }}
-          body: |
-            Android arm64-v8a APK built with Flutter for direct download. This build is signed with FastVibe's release key.
-
-            The SHA-256 checksum is included as `${{ env.APK }}.sha256`.
+          body_path: docs/release/${{ inputs.tag }}.md
           draft: false
           prerelease: false
           make_latest: false
