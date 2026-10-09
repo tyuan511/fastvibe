@@ -1,5 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:fastvibe_mobile/chat/image_bytes.dart';
+import 'package:fastvibe_mobile/chat/image_note.dart';
 import 'package:fastvibe_mobile/chat/message.dart';
 import 'package:fastvibe_mobile/chat/queue.dart';
 import 'package:fastvibe_mobile/chat/turn_meta.dart';
@@ -109,6 +111,37 @@ void main() {
       final first = completedTurnFooters(messages, false);
       final second = completedTurnFooters(messages, false, first);
       expect(identical(first, second), isTrue);
+    });
+  });
+
+  group('image notes', () {
+    const note =
+        '[Image: original 922x2048, displayed at 900x2000. Multiply coordinates by 1.02 to map to original image.]';
+
+    test('the resize note the engine appends is not part of the prompt', () {
+      expect(stripImageDimensionNote('这个底部的切角太丑了\n\n$note'), '这个底部的切角太丑了');
+    });
+
+    test('one note per image, and a note quoted mid-prompt stays', () {
+      expect(
+        stripImageDimensionNote('看这两张\n\n$note\n\n$note'),
+        '看这两张',
+      );
+      const quoted = '引擎会写这么一句：$note，然后继续';
+      expect(stripImageDimensionNote(quoted), quoted);
+    });
+
+    test('a photo is decoded once and remembered', () {
+      clearImageBytes();
+      const url = 'data:image/jpeg;base64,aGVsbG8=';
+      final first = imageBytesOf(url)!;
+      final second = imageBytesOf(url)!;
+      expect(identical(first, second), isTrue);
+      expect(imageBytesOf('https://example.com/a.jpg'), isNull);
+      expect(
+        identical(imageBytesOfPayload(url, 'aGVsbG8='), first),
+        isTrue,
+      );
     });
   });
 

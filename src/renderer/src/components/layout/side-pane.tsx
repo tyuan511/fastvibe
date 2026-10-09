@@ -41,7 +41,7 @@ import { useSettingsStore } from "@/stores/settings";
 import { useSessionStore } from "@/stores/session";
 import { subagentStatusText } from "@/lib/subagent-status";
 import { useSidePanel } from "@/lib/use-resizable-panel";
-import { MIN_WIDTH, useSidePaneStore, type SidePaneTab, sidePaneTabTitle } from "@/stores/side-pane";
+import { MIN_WIDTH, useSidePaneStore, type SidePaneTab, sidePaneTabTitle, subagentTabName } from "@/stores/side-pane";
 import { releaseBrowser, SidePaneBrowser } from "./side-pane-browser";
 import { SidePaneChat } from "./side-pane-chat";
 import { SidePaneChanges } from "./side-pane-changes";
@@ -85,7 +85,7 @@ export function disposeSidePaneTabs(tabs: SidePaneTab[]): void {
 function PaneTabTitle({ tab }: { tab: SidePaneTab }): JSX.Element {
   const info = useSessionStore((state) => tab.subagentId ? findSubagent(state.subagents, tab.subagentId, tab.subagentConversationId ?? tab.conversationId) : undefined);
   useTranslation("sidepane");
-  return <>{tab.type === "subagent" ? `${info?.name ?? tab.title} · ${subagentStatusText(info, tab.subagentStatus)}` : sidePaneTabTitle(tab)}</>;
+  return <>{tab.type === "subagent" ? `${info?.name ?? subagentTabName(tab)} · ${subagentStatusText(info, tab.subagentStatus)}` : sidePaneTabTitle(tab)}</>;
 }
 
 function CollapseButton(): JSX.Element {

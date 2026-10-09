@@ -61,7 +61,7 @@ class MobileDagSummary extends StatelessWidget {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      '${t('dag.title')} · ${t('dag.progress', <String, Object?>{'done': progress.completed, 'total': progress.total})}',
+                      '${t('dag.title', context: context)} · ${t('dag.progress', vars: <String, Object?>{'done': progress.completed, 'total': progress.total}, context: context)}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
@@ -73,11 +73,11 @@ class MobileDagSummary extends StatelessWidget {
                   ),
                   Text(
                     !connected
-                        ? t('dag.offline')
+                        ? t('dag.offline', context: context)
                         : progress.attention > 0
-                        ? t('dag.attention', <String, Object?>{
+                        ? t('dag.attention', vars: <String, Object?>{
                             'count': progress.attention,
-                          })
+                          }, context: context)
                         : '',
                     style: TextStyle(
                       color: progress.attention > 0
@@ -149,13 +149,13 @@ class _DagSheetState extends State<_DagSheet> {
                 AppSheetHeader(
                   title: selected != null
                       ? '${selected.id} · ${selected.title}'
-                      : t('dag.title'),
+                      : t('dag.title', context: context),
                   subtitle: selected != null
                       ? selected.profile
-                      : t('dag.progress', {
+                      : t('dag.progress', vars: {
                           'done': progress.completed,
                           'total': progress.total,
-                        }),
+                        }, context: context),
                   onBack: selected == null
                       ? null
                       : () => setState(() => _selected = null),
@@ -231,9 +231,9 @@ class _NodeList extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.only(bottom: 10),
             child: Text(
-              t('dag.attention', <String, Object?>{
+              t('dag.attention', vars: <String, Object?>{
                 'count': progress.attention,
-              }),
+              }, context: context),
               style: TextStyle(
                 color: palette.warning,
                 fontSize: 13,
@@ -245,7 +245,7 @@ class _NodeList extends StatelessWidget {
           children: <Widget>[
             if (progress.active > 0)
               _Action(
-                label: t('dag.cancelAll'),
+                label: t('dag.cancelAll', context: context),
                 palette: palette,
                 disabled: disabled,
                 onTap: () => _run(context, 'dag:cancel', <String, Object?>{
@@ -254,7 +254,7 @@ class _NodeList extends StatelessWidget {
               ),
             if (graphState == 'stopped')
               _Action(
-                label: t('dag.resume'),
+                label: t('dag.resume', context: context),
                 palette: palette,
                 disabled: disabled,
                 onTap: () => _run(context, 'dag:resume', <String, Object?>{
@@ -317,9 +317,9 @@ class _NodeList extends StatelessWidget {
                       ),
                       Text(
                         row.previousAttempt
-                            ? t('dag.previousAttempt')
+                            ? t('dag.previousAttempt', context: context)
                             : row.node.coordinator
-                            ? t('dag.coordinator')
+                            ? t('dag.coordinator', context: context)
                             : row.node.profile,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -400,7 +400,7 @@ class _NodeDetailState extends State<_NodeDetail> {
           children: <Widget>[
             if (node.runId != null)
               _Action(
-                label: t('dag.execution'),
+                label: t('dag.execution', context: context),
                 palette: palette,
                 disabled: disabled,
                 onTap: () => showAppSheet<void>(
@@ -413,17 +413,17 @@ class _NodeDetailState extends State<_NodeDetail> {
                 ),
               ),
             if (node.coordinator)
-              _Tag(label: t('dag.coordinator'), palette: palette),
+              _Tag(label: t('dag.coordinator', context: context), palette: palette),
             if (node.attempt != null)
               _Tag(
-                label: t('dag.attempt', <String, Object?>{
+                label: t('dag.attempt', vars: <String, Object?>{
                   'count': node.attempt,
-                }),
+                }, context: context),
                 palette: palette,
               ),
             if (!dagNodeFinished(node))
               _Action(
-                label: t('dag.stop'),
+                label: t('dag.stop', context: context),
                 palette: palette,
                 disabled: disabled,
                 onTap: () => _run('dag:cancel', <String, Object?>{
@@ -436,7 +436,7 @@ class _NodeDetailState extends State<_NodeDetail> {
                     node.status == 'cancelled') &&
                 dagCanRetry(node, widget.nodes))
               _Action(
-                label: t('dag.retry'),
+                label: t('dag.retry', context: context),
                 palette: palette,
                 disabled: disabled,
                 onTap: () => _run('dag:retry', <String, Object?>{
@@ -474,19 +474,19 @@ class _NodeDetailState extends State<_NodeDetail> {
             children: <Widget>[
               if (node.parentId != null)
                 _Link(
-                  label: '${t('dag.parent')} ${node.parentId}',
+                  label: '${t('dag.parent', context: context)} ${node.parentId}',
                   palette: palette,
                   onTap: () => widget.onSelect(node.parentId!),
                 ),
               for (final dependency in node.dependsOn)
                 _Link(
-                  label: '${t('dag.dependencies')} $dependency',
+                  label: '${t('dag.dependencies', context: context)} $dependency',
                   palette: palette,
                   onTap: () => widget.onSelect(dependency),
                 ),
               for (final child in children)
                 _Link(
-                  label: '${t('dag.children')} $child',
+                  label: '${t('dag.children', context: context)} $child',
                   palette: palette,
                   onTap: () => widget.onSelect(child),
                 ),
@@ -495,39 +495,39 @@ class _NodeDetailState extends State<_NodeDetail> {
         ],
         if (node.instruction != null)
           _Section(
-            title: t('dag.instruction'),
+            title: t('dag.instruction', context: context),
             body: node.instruction!,
             palette: palette,
           ),
         if (node.acceptance != null)
           _Section(
-            title: t('dag.acceptance'),
+            title: t('dag.acceptance', context: context),
             body: node.acceptance!,
             palette: palette,
           ),
         if (node.report?.summary != null)
           _Section(
-            title: t('dag.conclusion'),
+            title: t('dag.conclusion', context: context),
             body: node.report!.summary!,
             palette: palette,
           ),
         if (node.report?.evidence.isNotEmpty == true)
           _Section(
-            title: t('dag.evidence'),
+            title: t('dag.evidence', context: context),
             body: node.report!.evidence.join('\n\n'),
             palette: palette,
           ),
         if (node.report?.artifacts.isNotEmpty == true)
           _Section(
-            title: t('dag.artifacts'),
+            title: t('dag.artifacts', context: context),
             body: node.report!.artifacts.join('\n'),
             palette: palette,
           ),
         if (node.model != null)
-          _Section(title: t('dag.model'), body: node.model!, palette: palette),
+          _Section(title: t('dag.model', context: context), body: node.model!, palette: palette),
         if (_output != null || node.output != null)
           _Section(
-            title: t('dag.output'),
+            title: t('dag.output', context: context),
             body: _output ?? node.output!,
             palette: palette,
           ),
@@ -536,14 +536,14 @@ class _NodeDetailState extends State<_NodeDetail> {
             ((node.outputLength ?? 0) > dagPreviewChars ||
                 dagNodeFinished(node)))
           _Action(
-            label: t('dag.readFull'),
+            label: t('dag.readFull', context: context),
             palette: palette,
             disabled: disabled,
             onTap: _readOutput,
           )
         else if (_output != null && _offset < _total)
           _Action(
-            label: t('dag.readMore'),
+            label: t('dag.readMore', context: context),
             palette: palette,
             disabled: disabled,
             onTap: _readOutput,

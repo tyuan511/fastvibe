@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { randomUUID } from "../../../shared/random.ts";
 import { applyEngineEvent } from "@/lib/apply-engine-event";
 import { i18n } from "@/lib/i18n";
+import { tabTitleIsData } from "@/lib/pane-tab-title";
 import { useSettingsStore } from "@/stores/settings";
 import type { ChangedFile } from "@/lib/changed-files";
 import type { ChatAttachment, ChatMessage, EngineEvent, FilePreview } from "@shared/types";
@@ -315,11 +316,24 @@ const SUBAGENT_TAB_STATUS: Record<string, string> = {
   aborted: "tabs.status.aborted",
 };
 
+/**
+ * The run's display name: its role when known, else the pane's own label.
+ *
+ * The role is data (`explorer` — the same string in either language). The fallback is
+ * not, so it is read at render time rather than stored on the tab: a run that was
+ * registered before the role arrived would otherwise keep the label of whichever
+ * language was active when its tab was minted.
+ */
+export function subagentTabName(tab: SidePaneTab): string {
+  return tab.title || (i18n.t("sidepane:tabs.subagent") as string);
+}
+
 /** `子 Agent` tab label: role plus live status, e.g. `explorer · 运行中`. */
 export function subagentTabLabel(tab: SidePaneTab): string {
   const key = tab.subagentStatus ? SUBAGENT_TAB_STATUS[tab.subagentStatus] : undefined;
   const status = key ? (i18n.t(`sidepane:${key}`) as string) : tab.subagentStatus;
-  return status ? `${tab.title} · ${status}` : tab.title;
+  const base = subagentTabName(tab);
+  return status ? `${base} · ${status}` : base;
 }
 
 /**
@@ -327,15 +341,15 @@ export function subagentTabLabel(tab: SidePaneTab): string {
  *
  * Singleton tabs (`git` / `terminal` / `browser` / `files` / `changes`) are named by
  * their *type* at render time, so switching 界面语言 renames them without closing
- * anything. A subagent tab keeps the stored role name and appends its live status;
- * a 辅助对话 tab keeps the conversation's own title, which is real data the engine
- * was given when the chat was created.
+ * anything. A tab whose stored `title` is data — a run's role, a DAG node, a side
+ * conversation, the file being previewed — keeps it, because data is not re-translated
+ * (`tabTitleIsData`, which is what replaced comparing `title` against a translated
+ * string: a tab opened in the previous language always looked like data, and stayed in
+ * that language until it was reopened).
  */
 export function sidePaneTabTitle(tab: SidePaneTab): string {
   if (tab.type === "subagent") return subagentTabLabel(tab);
-  if (tab.type === "dag-node") return tab.title;
-  if (tab.type === "selection-side-chat") return tab.title;
-  if (tab.type === "files" && tab.title !== i18n.t("sidepane:tabs.files")) return tab.title;
+  if (tabTitleIsData(tab)) return tab.title;
   return i18n.t(`sidepane:tabs.${tab.type}`) as string;
 }
 
@@ -349,7 +363,9 @@ function upsertSubagentTab(tabs: SidePaneTab[], subagentId: string, init?: Subag
     subagentConversationId: init?.conversationId ?? existing?.subagentConversationId,
     // The base name stays stable; the tab bar appends the live status at render
     // time (`subagentStatus`), so a re-title from the tool card cannot clobber it.
-    title: init?.title || existing?.title || (i18n.t("sidepane:tabs.subagent") as string),
+    // Empty when no role is known yet — `subagentTabName` reads the pane's own label
+    // in that case, so a language switch still renames the tab.
+    title: init?.title || existing?.title || "",
     subagentStatus: init?.status ?? existing?.subagentStatus,
     subagentBrief: init?.brief || existing?.subagentBrief,
   };
@@ -768,7 +784,10 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
       const existing = scope.tabs.find((item) => item.type === "files");
       const tab: SidePaneTab = {
         ...(existing ?? { id: "files", type: "files" as const, openedAt: Date.now() }),
-        title: i18n.t("sidepane:tabs.files") as string,
+        // Re-opening 文件 must not replace the name of a file already on screen with
+        // the tab's own label: that label is derived from the type at render time and
+        // is never read back off a tab that has a preview.
+        title: existing?.path ? existing.title : (i18n.t("sidepane:tabs.files") as string),
       };
       return writeScope(
         state,
@@ -834,13 +853,19 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
     set((state) => {
       const scope = scopeOf(state);
       const existing = scope.tabs.find((item) => item.type === "files");
+      // The tab is named after what it shows. Defaulting to the preview's own file name
+      // is what keeps the label honest: callers that pass no title (the transcript's
+      // chips, the file tree, the browser harness) would otherwise leave the previous
+      // file's name — or the tab's chrome label — on a tab that is showing something
+      // else now.
+      const name = title || preview.name;
       const tab: SidePaneTab = existing
-        ? { ...existing, path: preview.path, preview, ...(title ? { title } : {}) }
+        ? { ...existing, path: preview.path, preview, title: name }
         : {
             id: "files",
             type: "files",
             openedAt: Date.now(),
-            title: title || i18n.t("sidepane:tabs.files") as string,
+            title: name,
             path: preview.path,
             preview,
           };

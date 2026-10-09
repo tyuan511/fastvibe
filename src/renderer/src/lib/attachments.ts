@@ -150,6 +150,23 @@ const ATTACHMENT_BLOCK = new RegExp(
 );
 
 /**
+ * The note pi appends after it resizes a prompt image (`formatDimensionNote`).
+ * It tells the model how to map coordinates back to the original photo; the
+ * reader already sees the photo itself, so the bubble must not grow the sentence.
+ * Anchored to the end, one line per image, so a prompt that quotes it mid-text
+ * is left alone.
+ */
+const IMAGE_DIMENSION_NOTE =
+  /(?:\n{2}\[Image: original \d+x\d+, displayed at \d+x\d+\. Multiply coordinates by [\d.]+ to map to original image\.\])+\s*$/;
+
+/** Drop the engine's image-resize note. A prompt that merely quotes it is unchanged. */
+export function stripImageDimensionNote(text: string): string {
+  if (!text.includes("[Image: original ")) return text;
+  const stripped = text.replace(IMAGE_DIMENSION_NOTE, "");
+  return stripped === text ? text : stripped.trimEnd();
+}
+
+/**
  * Strip the model-facing attachment block for display.
  *
  * The engine's own copy of a user message keeps the block (a retry replays it, and a
@@ -158,9 +175,12 @@ const ATTACHMENT_BLOCK = new RegExp(
  * path list the moment the transcript is re-read.
  */
 export function stripAttachmentBlock(text: string): string {
-  if (!text.includes(`<${ATTACHMENT_TAG}>`) && !text.includes(`<${PASTED_TEXT_TAG}>`)) return text;
-  const stripped = text.replace(ATTACHMENT_BLOCK, "");
-  return stripped === text ? text : stripped.trimEnd();
+  const withoutNote = stripImageDimensionNote(text);
+  if (!withoutNote.includes(`<${ATTACHMENT_TAG}>`) && !withoutNote.includes(`<${PASTED_TEXT_TAG}>`)) {
+    return withoutNote;
+  }
+  const stripped = withoutNote.replace(ATTACHMENT_BLOCK, "");
+  return stripped === withoutNote ? withoutNote : stripped.trimEnd();
 }
 
 function guessMime(name: string): string {

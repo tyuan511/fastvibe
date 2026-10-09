@@ -144,7 +144,7 @@ AppRelease? releaseFromPayload(
 /// GitHub answered with an error status; `status` is what callers branch on.
 class GitHubStatusError extends Error {
   GitHubStatusError(this.status)
-    : message = t('update.githubStatus', <String, Object?>{'status': status});
+    : message = t('update.githubStatus', vars: <String, Object?>{'status': status});
 
   final int status;
   final String message;

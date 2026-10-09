@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/cupertino.dart' show CupertinoActivityIndicator;
@@ -14,6 +13,7 @@ import '../ui/feedback.dart';
 import '../ui/icons.dart';
 import '../ui/kit.dart';
 import '../ui/preferences.dart';
+import 'image_bytes.dart';
 import 'images.dart';
 import 'model_picker.dart';
 import 'option_sheet.dart';
@@ -225,7 +225,7 @@ class _ComposerState extends State<Composer> {
     final remaining = maxComposerImages - widget.images.length;
     if (remaining <= 0) {
       toastInfo(
-        t('composer.imageLimit', <String, Object?>{'count': maxComposerImages}),
+        t('composer.imageLimit', vars: <String, Object?>{'count': maxComposerImages}),
       );
       return;
     }
@@ -285,7 +285,7 @@ class _ComposerState extends State<Composer> {
         () =>
             _session = state is Map ? state.cast<String, Object?>() : _session,
       );
-      toastSuccess(t('toast.modelSwitched', <String, Object?>{'model': id}));
+      toastSuccess(t('toast.modelSwitched', vars: <String, Object?>{'model': id}));
       // A model with a narrower set of levels must not leave the session on one it
       // cannot take.
       final levels = _modelThinkingLevels;
@@ -352,12 +352,12 @@ class _ComposerState extends State<Composer> {
     if (usage == null) return;
     final detail = usage.tokens != null
         ? '${formatTokens(usage.tokens!)} / ${formatTokens(usage.window ?? 0)} tokens'
-        : t('composer.contextWindow', <String, Object?>{
+        : t('composer.contextWindow', vars: <String, Object?>{
             'window': formatTokens(usage.window ?? 0),
           });
     AppDialog.alert(
       context,
-      title: t('composer.contextUsed', <String, Object?>{
+      title: t('composer.contextUsed', vars: <String, Object?>{
         'percent': usage.percent!.round(),
       }),
       message: detail,
@@ -382,10 +382,10 @@ class _ComposerState extends State<Composer> {
         _imageBusy ||
         (action == 'send' && !hasContent);
     final placeholder = widget.disabled
-        ? t('composer.placeholderLoading')
+        ? t('composer.placeholderLoading', context: context)
         : widget.queueing
-        ? t('composer.placeholderQueue')
-        : t('composer.placeholder');
+        ? t('composer.placeholderQueue', context: context)
+        : t('composer.placeholder', context: context);
 
     return Padding(
       padding: EdgeInsets.fromLTRB(
@@ -461,7 +461,7 @@ class _ComposerState extends State<Composer> {
                         !widget.disabled &&
                         !_imageBusy &&
                         widget.images.length < maxComposerImages,
-                    tooltip: t('composer.chooseImage'),
+                    tooltip: t('composer.chooseImage', context: context),
                     onPressed: _imageMenu,
                   ),
                   const SizedBox(width: 8),
@@ -582,11 +582,15 @@ class _Thumbnail extends StatelessWidget {
       children: <Widget>[
         ClipRRect(
           borderRadius: BorderRadius.circular(Radii.md),
+          // Keyed by the photo, and fed bytes decoded once: a rebuild per keystroke
+          // otherwise re-decodes the base64 and the thumbnail flickers while typing.
           child: Image.memory(
-            base64Decode(image.data),
+            imageBytesOfPayload(image.uri, image.data),
+            key: ValueKey<String>(image.id),
             width: 64,
             height: 64,
             fit: BoxFit.cover,
+            gaplessPlayback: true,
           ),
         ),
         Positioned(
@@ -716,7 +720,7 @@ class _ActionButton extends StatelessWidget {
   Widget build(BuildContext context) {
     if (action == 'stop') {
       return Semantics(
-        label: t('composer.stop'),
+        label: t('composer.stop', context: context),
         button: true,
         enabled: !disabled,
         child: GestureDetector(
@@ -747,10 +751,10 @@ class _ActionButton extends StatelessWidget {
       );
     }
     final label = action == 'sending'
-        ? t('composer.sending')
+        ? t('composer.sending', context: context)
         : action == 'continue'
-        ? t('composer.continue')
-        : t('composer.send');
+        ? t('composer.continue', context: context)
+        : t('composer.send', context: context);
     return Opacity(
       opacity: disabled ? 0.35 : 1,
       child: Semantics(

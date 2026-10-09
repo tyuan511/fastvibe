@@ -7,6 +7,7 @@ import {
   resolveDroppedPath,
   shouldAttachPastedText,
   stripAttachmentBlock,
+  stripImageDimensionNote,
 } from "../src/renderer/src/lib/attachments.ts";
 import { extractPromptAttachments } from "../src/shared/attachment-metadata.ts";
 
@@ -77,4 +78,13 @@ test("real file chips are still rebuilt from the persisted prompt suffix", () =>
 test("attachment-looking text in the middle of a prompt is not stripped", () => {
   const text = "<fastvibe-attachments>\n- /tmp/not-real.txt\n</fastvibe-attachments>\nkeep going";
   assert.equal(stripAttachmentBlock(text), text);
+});
+
+test("the image resize note the engine appends is hidden, and a quoted one is not", () => {
+  const note = "[Image: original 922x2048, displayed at 900x2000. Multiply coordinates by 1.02 to map to original image.]";
+  assert.equal(stripImageDimensionNote(`这个底部的切角太丑了\n\n${note}`), "这个底部的切角太丑了");
+  assert.equal(stripAttachmentBlock(`看这两张\n\n${note}\n\n${note}`), "看这两张");
+  const quoted = `引擎会写这么一句：${note}，然后继续`;
+  assert.equal(stripImageDimensionNote(quoted), quoted);
+  assert.equal(stripAttachmentBlock("请看这张"), "请看这张");
 });

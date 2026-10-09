@@ -1,10 +1,10 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:hugeicons/hugeicons.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 import '../chat/dag_data.dart';
+import '../chat/image_bytes.dart';
+import '../chat/image_note.dart';
 import '../chat/markdown_view.dart';
 import '../chat/message.dart';
 import '../chat/process_group.dart';
@@ -171,7 +171,7 @@ class _TranscriptViewState extends State<TranscriptView> {
                 size: 20,
                 color: palette.text,
               ),
-              semanticLabel: t('chat.latest'),
+              semanticLabel: t('chat.latest', context: context),
               size: 44,
               onPressed: () {
                 Haptic.tap();
@@ -218,7 +218,7 @@ class WorkingPill extends StatelessWidget {
           DesktopSpinner(size: 15, color: palette.accent),
           const SizedBox(width: 7),
           Text(
-            t('chat.working'),
+            t('chat.working', context: context),
             style: TextStyle(
               color: palette.text,
               fontSize: 13,
@@ -275,6 +275,7 @@ class MessageRow extends StatelessWidget {
           palette: palette,
           label: t(
             message.dag?.settled == false ? 'dag.updated' : 'dag.settled',
+            context: context,
           ),
         ),
       );
@@ -324,6 +325,9 @@ class _UserRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // The engine appends a resize note for the model; the photo above the text is
+    // how the reader sees the image, so the note never reaches the bubble.
+    final text = stripImageDimensionNote(message.text);
     return Align(
       alignment: Alignment.centerRight,
       child: GestureDetector(
@@ -370,9 +374,9 @@ class _UserRow extends StatelessWidget {
                       ),
                       const SizedBox(height: 4),
                     ],
-                    if (message.text.isNotEmpty)
+                    if (text.isNotEmpty)
                       MarkdownView(
-                        text: message.text,
+                        text: text,
                         palette: palette,
                         compact: true,
                       ),
@@ -505,7 +509,7 @@ class _AssistantRow extends StatelessWidget {
     ),
     ModelBlock(:final model) => _Divider(
       palette: palette,
-      label: t('chat.modelSwitched', <String, Object?>{
+      label: t('chat.modelSwitched', vars: <String, Object?>{
         'model': model ?? t('chat.newModel'),
       }),
     ),
@@ -588,15 +592,15 @@ class CompactNotice extends StatelessWidget {
         compact?.status ?? (text.trim().isNotEmpty ? 'done' : 'running');
     final running = status == 'running';
     final label = switch (status) {
-      'running' => t('chat.compacting'),
-      'aborted' => t('chat.compactCancelled'),
-      'error' => t('chat.compactFailed'),
-      _ => t('chat.compacted'),
+      'running' => t('chat.compacting', context: context),
+      'aborted' => t('chat.compactCancelled', context: context),
+      'error' => t('chat.compactFailed', context: context),
+      _ => t('chat.compacted', context: context),
     };
     final reason = compact?.reason == 'threshold'
-        ? t('chat.compactThreshold')
+        ? t('chat.compactThreshold', context: context)
         : compact?.reason == 'overflow'
-        ? t('chat.compactOverflow')
+        ? t('chat.compactOverflow', context: context)
         : null;
     final before = compact?.tokensBefore;
     final after = compact?.tokensAfter;
@@ -678,6 +682,19 @@ class CompactNotice extends StatelessWidget {
 class _AttachmentImage extends StatelessWidget {
   const _AttachmentImage({required this.url});
   final String url;
+
+  /// A `data:` URL is never a valid widget key (it is megabytes long), so the
+  /// key is a short fingerprint of it. Stable across rebuilds, which is what
+  /// lets the image codec reuse the frame it already decoded instead of
+  /// flashing a fresh one on every streamed token.
+  String get _key {
+    var hash = 0x811c9dc5;
+    for (final unit in url.codeUnits) {
+      hash = (hash ^ unit) * 0x01000193;
+    }
+    return '${url.length}:${hash & 0x7fffffff}';
+  }
+
   @override
   Widget build(BuildContext context) {
     final fallback = Container(
@@ -691,28 +708,27 @@ class _AttachmentImage extends StatelessWidget {
         ),
       ),
     );
-    final uri = Uri.tryParse(url);
-    try {
-      if (uri?.scheme == 'data') {
-        final data = uri!.data;
-        if (data == null || !data.isBase64) return fallback;
-        return Image.memory(
-          base64Decode(data.contentText),
-          width: 160,
-          height: 160,
-          fit: BoxFit.cover,
-          errorBuilder: (_, _, _) => fallback,
-        );
-      }
-      return Image.network(
-        url,
+    final bytes = imageBytesOf(url);
+    if (bytes != null) {
+      return Image.memory(
+        bytes,
+        key: ValueKey<String>(_key),
         width: 160,
         height: 160,
         fit: BoxFit.cover,
+        gaplessPlayback: true,
         errorBuilder: (_, _, _) => fallback,
       );
-    } catch (_) {
-      return fallback;
     }
+    if (url.startsWith('data:')) return fallback;
+    return Image.network(
+      url,
+      key: ValueKey<String>(url),
+      width: 160,
+      height: 160,
+      fit: BoxFit.cover,
+      gaplessPlayback: true,
+      errorBuilder: (_, _, _) => fallback,
+    );
   }
 }

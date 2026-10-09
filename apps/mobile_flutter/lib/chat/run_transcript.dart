@@ -121,9 +121,9 @@ class _RunTranscriptState extends State<RunTranscript> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        AppSheetHeader(title: t('dag.execution')),
+        AppSheetHeader(title: t('dag.execution', context: context)),
         if (_failed)
-          CupertinoButton(onPressed: _read, child: Text(t('dag.refresh'))),
+          CupertinoButton(onPressed: _read, child: Text(t('dag.refresh', context: context))),
         if (_loading)
           const Padding(
             padding: EdgeInsets.all(12),
@@ -136,11 +136,11 @@ class _RunTranscriptState extends State<RunTranscript> {
               if (_messages.length > _limit)
                 CupertinoButton(
                   onPressed: () => setState(() => _limit += 40),
-                  child: Text(t('dag.earlier')),
+                  child: Text(t('dag.earlier', context: context)),
                 ),
               if (!_loading && messages.isEmpty)
                 Text(
-                  t(_failed ? 'dag.loadFailed' : 'dag.noExecution'),
+                  t(_failed ? 'dag.loadFailed' : 'dag.noExecution', context: context),
                   style: TextStyle(color: p.muted),
                 ),
               for (final message in messages)

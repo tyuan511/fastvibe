@@ -674,8 +674,8 @@ export function Composer({
                 <span className="max-w-44 truncate">{project ? projects.find((item) => item.cwd === project)?.name ?? workspaceLabel : t("composer.pickProject")}</span>
                 <HugeiconsIcon strokeWidth={1.8} icon={ArrowDown01Icon} className="size-3 shrink-0" />
               </PopoverTrigger>
-              <PopoverContent align="start" side="top" sideOffset={12} className="w-70 gap-0 rounded-xl p-1 shadow-lg">
-                <div className="relative mb-0.5 px-0.5 pt-0.5">
+              <PopoverContent align="start" side="top" sideOffset={12} className="w-70 max-h-(--available-height) gap-0 overflow-hidden rounded-xl p-1 shadow-lg">
+                <div className="relative mb-0.5 shrink-0 px-0.5 pt-0.5">
                   <HugeiconsIcon strokeWidth={2} icon={Search01Icon} className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
                   <Input
                     autoFocus
@@ -685,7 +685,7 @@ export function Composer({
                     onChange={(event) => setProjectQuery(event.target.value)}
                   />
                 </div>
-                <div className="max-h-52 overflow-y-auto">
+                <div className="min-h-0 flex-1 overflow-y-auto">
                   {filteredProjects.length > 0 ? filteredProjects.map((item) => (
                     <button
                       key={item.cwd}
@@ -706,11 +706,11 @@ export function Composer({
                     <div className="px-2 py-1.5 text-sm text-muted-foreground">{t("composer.noProject")}</div>
                   )}
                 </div>
-                <div className="my-0.5 border-t border-border" />
+                <div className="my-0.5 shrink-0 border-t border-border" />
                 {project ? (
                   <button
                     type="button"
-                    className="hidden w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm text-muted-foreground hover:bg-muted hover:text-foreground pointer-coarse:flex"
+                    className="hidden w-full shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm text-muted-foreground hover:bg-muted hover:text-foreground pointer-coarse:flex"
                     onClick={() => {
                       setProjectOpen(false);
                       onSelectProject(null);
@@ -722,7 +722,7 @@ export function Composer({
                 ) : null}
                 <button
                   type="button"
-                  className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+                  className="flex w-full shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
                   onClick={() => {
                     setProjectOpen(false);
                     onPickWorkspace();

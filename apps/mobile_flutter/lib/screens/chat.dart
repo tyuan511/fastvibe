@@ -10,6 +10,7 @@ import '../chat/dag_data.dart';
 import '../chat/dag_panel.dart';
 import '../chat/draft_storage.dart';
 import '../chat/history_pager.dart';
+import '../chat/image_note.dart';
 import '../chat/images.dart';
 import '../chat/live_events.dart';
 import '../chat/message.dart';
@@ -724,7 +725,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final confirmed = await AppDialog.confirm(
       context,
       title: t('server.deleteChatTitle'),
-      message: t('server.deleteChatBody', <String, Object?>{
+      message: t('server.deleteChatBody', vars: <String, Object?>{
         'title': chat.title,
       }),
       confirmLabel: t('common.delete'),
@@ -744,11 +745,12 @@ class _ChatScreenState extends State<ChatScreen> {
       final transcript = _messages
           .where(
             (message) =>
-                message.kind != 'compact' && message.text.trim().isNotEmpty,
+                message.kind != 'compact' &&
+                stripImageDimensionNote(message.text).trim().isNotEmpty,
           )
           .map(
             (message) =>
-                '${message.role == 'user' ? t('common.me') : 'FastVibe'}:\n${message.text.trim()}',
+                '${message.role == 'user' ? t('common.me') : 'FastVibe'}:\n${stripImageDimensionNote(message.text).trim()}',
           )
           .join('\n\n');
       await copyToClipboard(transcript);
@@ -768,7 +770,7 @@ class _ChatScreenState extends State<ChatScreen> {
           label: t('common.copy'),
           icon: AppIcons.copy,
           onSelect: () async {
-            await copyToClipboard(message.text.trim());
+            await copyToClipboard(stripImageDimensionNote(message.text).trim());
             toastSuccess(t('toast.copied'));
           },
         ),
@@ -777,7 +779,8 @@ class _ChatScreenState extends State<ChatScreen> {
             value: 'reuse',
             label: t('chat.reuse'),
             icon: AppIcons.pencilEdit,
-            onSelect: () => _draft.text = message.text.trim(),
+            onSelect: () =>
+                _draft.text = stripImageDimensionNote(message.text).trim(),
           ),
       ]),
     );
@@ -806,13 +809,13 @@ class _ChatScreenState extends State<ChatScreen> {
     final empty = !_loading && _messages.isEmpty && !running;
 
     return GlassScreen(
-      title: chat?.title ?? t('common.conversation'),
+      title: chat?.title ?? t('common.conversation', context: context),
       subtitle: _projectName,
       actions: <Widget>[
         if (chat != null)
           GlassMenuAction(
             icon: AppIcons.moreHorizontal,
-            tooltip: t('server.chatActions'),
+            tooltip: t('server.chatActions', context: context),
             items: _menuItems(chat),
           ),
       ],
@@ -837,7 +840,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         ),
                       Expanded(
                         child: _loading
-                            ? BrandLoading(message: t('chat.loading'))
+                            ? BrandLoading(message: t('chat.loading', context: context))
                             : empty
                             ? _Welcome(
                                 projectName: _projectName,
@@ -1032,10 +1035,10 @@ class _Welcome extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = paletteOf(context);
     final suggestions = <(List<List<dynamic>>, String)>[
-      (AppIcons.idea, t('chat.suggest1')),
-      (AppIcons.bug, t('chat.suggest2')),
-      (AppIcons.testTube, t('chat.suggest3')),
-      (AppIcons.code, t('chat.suggest4')),
+      (AppIcons.idea, t('chat.suggest1', context: context)),
+      (AppIcons.bug, t('chat.suggest2', context: context)),
+      (AppIcons.testTube, t('chat.suggest3', context: context)),
+      (AppIcons.code, t('chat.suggest4', context: context)),
     ];
     return SingleChildScrollView(
       padding: EdgeInsets.fromLTRB(24, 32 + topInset, 24, 32 + bottomInset),
@@ -1045,7 +1048,7 @@ class _Welcome extends StatelessWidget {
           const BrandLogo(size: 64),
           const SizedBox(height: 10),
           Text(
-            t('chat.welcomeTitle'),
+            t('chat.welcomeTitle', context: context),
             textAlign: TextAlign.center,
             style: TextStyle(
               color: palette.text,
@@ -1058,7 +1061,7 @@ class _Welcome extends StatelessWidget {
           ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 300),
             child: Text(
-              '${projectName != null ? t('chat.welcomeInProject', <String, Object?>{'project': projectName}) : ''}${t('chat.welcomeBody')}',
+              '${projectName != null ? t('chat.welcomeInProject', vars: <String, Object?>{'project': projectName}, context: context) : ''}${t('chat.welcomeBody', context: context)}',
               textAlign: TextAlign.center,
               style: TextStyle(
                 color: palette.muted,
@@ -1150,7 +1153,7 @@ class _ReconnectBanner extends StatelessWidget {
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              t('chat.reconnecting'),
+              t('chat.reconnecting', context: context),
               style: TextStyle(
                 color: palette.text,
                 fontSize: 13,
@@ -1163,7 +1166,7 @@ class _ReconnectBanner extends StatelessWidget {
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
               child: Text(
-                t('chat.reconnect'),
+                t('chat.reconnect', context: context),
                 style: TextStyle(
                   color: palette.warning,
                   fontSize: 13,

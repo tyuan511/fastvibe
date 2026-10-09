@@ -143,7 +143,7 @@ class _OptionSheetBodyState extends State<_OptionSheetBody> {
           if (widget.searchable) ...<Widget>[
             SearchField(
               controller: _query,
-              placeholder: t('common.search'),
+              placeholder: t('common.search', context: context),
               onChanged: (_) => setState(() {}),
             ),
             const SizedBox(height: 8),
@@ -154,7 +154,7 @@ class _OptionSheetBodyState extends State<_OptionSheetBody> {
                     padding: const EdgeInsets.symmetric(vertical: 24),
                     child: Center(
                       child: Text(
-                        t('common.noMatch'),
+                        t('common.noMatch', context: context),
                         style: TextStyle(color: palette.muted, fontSize: 14),
                       ),
                     ),

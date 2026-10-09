@@ -8,7 +8,7 @@ import 'connection.dart';
 
 bool _fail(String title, Object error) {
   final message = error is StateError ? error.message : '$error';
-  toastError(message.isNotEmpty ? t('toast.failedWith', <String, Object?>{'title': title, 'message': message}) : title);
+  toastError(message.isNotEmpty ? t('toast.failedWith', vars: <String, Object?>{'title': title, 'message': message}) : title);
   return false;
 }
 

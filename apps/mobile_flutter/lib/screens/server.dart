@@ -327,7 +327,7 @@ class _ServerScreenState extends State<ServerScreen> {
     final confirmed = await AppDialog.confirm(
       context,
       title: t('server.deleteChatTitle'),
-      message: t('server.deleteChatBody', <String, Object?>{
+      message: t('server.deleteChatBody', vars: <String, Object?>{
         'title': chat.title,
       }),
       confirmLabel: t('common.delete'),
@@ -364,7 +364,7 @@ class _ServerScreenState extends State<ServerScreen> {
               children: <Widget>[
                 AppSheetHeader(
                   title: t('server.archived'),
-                  subtitle: t('common.chatCount', {'count': rows.length}),
+                  subtitle: t('common.chatCount', vars: {'count': rows.length}),
                 ),
                 Flexible(
                   child: rows.isEmpty
@@ -519,7 +519,7 @@ class _ServerScreenState extends State<ServerScreen> {
     final status = _statusLine(palette);
 
     return GlassScreen(
-      title: _server?.alias ?? t('common.device'),
+      title: _server?.alias ?? t('common.device', context: context),
       // The connection state belongs in the bar: it is the answer to the question a
       // failed call raises, and a row of its own would be read after the error.
       subtitle: status?.$1,
@@ -537,14 +537,14 @@ class _ServerScreenState extends State<ServerScreen> {
             (_projectCounts.isNotEmpty || _project != null))
           GlassMenuAction(
             icon: AppIcons.folder,
-            tooltip: t('server.projectFilter'),
+            tooltip: t('server.projectFilter', context: context),
             active: _project != null,
             items: <Widget>[
               GlassMenuItem(
-                title: t('server.allProjects'),
-                subtitle: t('common.chatCount', <String, Object?>{
+                title: t('server.allProjects', context: context),
+                subtitle: t('common.chatCount', vars: <String, Object?>{
                   'count': _listed.length,
-                }),
+                }, context: context),
                 isSelected: _project == null,
                 onTap: () => setState(() => _project = null),
               ),
@@ -552,9 +552,9 @@ class _ServerScreenState extends State<ServerScreen> {
               for (final entry in _projectCounts.entries)
                 GlassMenuItem(
                   title: _projectNames[entry.key] ?? entry.key,
-                  subtitle: t('common.chatCount', <String, Object?>{
+                  subtitle: t('common.chatCount', vars: <String, Object?>{
                     'count': entry.value,
-                  }),
+                  }, context: context),
                   isSelected: _project == entry.key,
                   onTap: () => setState(() => _project = entry.key),
                 ),
@@ -591,7 +591,7 @@ class _ServerScreenState extends State<ServerScreen> {
     if (connection.status == ConnectionStatus.connecting &&
         connection.server?.id == widget.serverId) {
       return BrandLoading(
-        message: t('server.connectingTo', <String, Object?>{
+        message: t('server.connectingTo', vars: <String, Object?>{
           'host': _server!.host,
         }),
       );
@@ -775,7 +775,7 @@ class _ServerScreenState extends State<ServerScreen> {
                       icon: AppIcons.bubbleChat,
                       title: t('server.noMatchTitle'),
                       body: needle.isNotEmpty
-                          ? t('server.noMatchQuery', <String, Object?>{
+                          ? t('server.noMatchQuery', vars: <String, Object?>{
                               'query': _query.text.trim(),
                             })
                           : t('server.noChatsInProject'),
@@ -800,7 +800,7 @@ class _ServerScreenState extends State<ServerScreen> {
                   Padding(
                     padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
                     child: Text(
-                      t('common.chatCount', <String, Object?>{
+                      t('common.chatCount', vars: <String, Object?>{
                         'count': listed.length,
                       }),
                       textAlign: TextAlign.center,
@@ -891,7 +891,7 @@ class _ConversationRow extends StatelessWidget {
               color: palette.muted,
             ),
           );
-    final preview = snippet ?? conversation.preview ?? t('server.noPreview');
+    final preview = snippet ?? conversation.preview ?? t('server.noPreview', context: context);
     return Material(
       color: palette.card,
       borderRadius: BorderRadius.circular(Radii.card),
@@ -1043,10 +1043,10 @@ class _FailureState extends State<_Failure> {
             const SizedBox(height: 8),
             Text(
               needsPassword
-                  ? t('server.needLogin')
-                  : t('server.cannotConnect', <String, Object?>{
+                  ? t('server.needLogin', context: context)
+                  : t('server.cannotConnect', vars: <String, Object?>{
                       'name': widget.server.alias,
-                    }),
+                    }, context: context),
               textAlign: TextAlign.center,
               style: TextStyle(
                 color: palette.text,
@@ -1060,11 +1060,15 @@ class _FailureState extends State<_Failure> {
               child: Text(
                 needsPassword
                     ? (connection.error ?? '')
-                    : t('server.cannotConnectBody', <String, Object?>{
-                        'error': (connection.error ?? t('server.connectFailed'))
-                            .replaceAll(RegExp(r'[。.]$'), ''),
-                        'host': widget.server.host,
-                      }),
+                    : t(
+                        'server.cannotConnectBody',
+                        vars: <String, Object?>{
+                          'error': (connection.error ?? t('server.connectFailed', context: context))
+                              .replaceAll(RegExp(r'[。.]$'), ''),
+                          'host': widget.server.host,
+                        },
+                        context: context,
+                      ),
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: palette.muted,
@@ -1084,7 +1088,7 @@ class _FailureState extends State<_Failure> {
                       obscureText: true,
                       style: TextStyle(color: palette.text, fontSize: 16),
                       decoration: InputDecoration(
-                        hintText: t('add.passwordPlaceholder'),
+                        hintText: t('add.passwordPlaceholder', context: context),
                         filled: true,
                         fillColor: palette.card,
                         border: OutlineInputBorder(
@@ -1097,7 +1101,7 @@ class _FailureState extends State<_Failure> {
                     SizedBox(
                       width: double.infinity,
                       child: PrimaryButton(
-                        label: t('server.connect'),
+                        label: t('server.connect', context: context),
                         enabled: widget.password.isNotEmpty,
                         onPressed: () => Connection.instance.loginSaved(
                           widget.server,
@@ -1109,7 +1113,7 @@ class _FailureState extends State<_Failure> {
                     SizedBox(
                       width: double.infinity,
                       child: PrimaryButton(
-                        label: t('server.reconnect'),
+                        label: t('server.reconnect', context: context),
                         icon: AppIcons.refresh,
                         onPressed: () =>
                             Connection.instance.connectSaved(widget.server),

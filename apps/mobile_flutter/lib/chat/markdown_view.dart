@@ -88,8 +88,8 @@ class MarkdownView extends StatelessWidget {
               fontWeight: FontWeight.w600,
               letterSpacing: 0.5,
             ),
-            copyLabel: t('common.copy'),
-            copiedLabel: t('common.copied'),
+            copyLabel: t('common.copy', context: context),
+            copiedLabel: t('common.copied', context: context),
           ),
           link: LinkStyle(
             color: palette.accent,

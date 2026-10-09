@@ -54,17 +54,39 @@ void main() {
     await tester.pumpWidget(
       LiquidGlassWidgets.wrap(
         brightnessResolver: Theme.maybeBrightnessOf,
-        child: MaterialApp(
-          theme: buildTheme(active),
-          home: PaletteScope(
-            palette: active,
-            child: ToastHost(child: child),
+        child: ListenableBuilder(
+          listenable: i18n,
+          builder: (context, _) => MaterialApp(
+            theme: buildTheme(active),
+            home: LanguageScope(
+              language: i18n.language,
+              child: PaletteScope(
+                palette: active,
+                child: ToastHost(child: child),
+              ),
+            ),
           ),
         ),
       ),
     );
     await tester.pump(const Duration(milliseconds: 350));
   }
+
+  testWidgets('a page already open follows a language switch', (tester) async {
+    // The bug this pins: the root repaints on a language change but go_router keeps
+    // each page by its key, so a page that was already open went on drawing the
+    // language it was opened in until it was reopened.
+    await pump(tester, const DevicesScreen());
+    final before = t('devices.workspaces');
+    expect(find.text(before), findsWidgets);
+
+    await i18n.setPreference(LanguagePreference.en);
+    await tester.pump();
+
+    expect(find.text(t('devices.workspaces')), findsWidgets);
+    expect(find.text(before), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('the device list renders before anything is saved', (
     tester,

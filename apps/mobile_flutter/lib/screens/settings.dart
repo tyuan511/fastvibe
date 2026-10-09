@@ -58,7 +58,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (release != null) {
         announceRelease(release);
       } else {
-        toastSuccess(t('update.upToDateVersion', {'version': appVersion}));
+        toastSuccess(t('update.upToDateVersion', vars: {'version': appVersion}));
       }
     } catch (error) {
       toastError(describeCheckError(error));
@@ -108,7 +108,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final palette = paletteOf(context);
     final preferences = Preferences.instance;
     return GlassScreen(
-      title: t('nav.settings'),
+      title: t('nav.settings', context: context),
       largeTitleController: _title,
       body: Builder(
         builder: (context) => CustomScrollView(
@@ -117,7 +117,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             SliverToBoxAdapter(
               child: SizedBox(height: GlassInsets.pad(context).top),
             ),
-            GlassLargeTitle(text: t('nav.settings'), controller: _title),
+            GlassLargeTitle(text: t('nav.settings', context: context), controller: _title),
             SliverPadding(
               padding: EdgeInsets.fromLTRB(
                 16,
@@ -131,7 +131,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               sliver: SliverList(
                 delegate: SliverChildListDelegate(<Widget>[
                   _Section(
-                    title: t('settings.appearance'),
+                    title: t('settings.appearance', context: context),
                     palette: palette,
                     children: <Widget>[
                       Padding(
@@ -144,7 +144,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 const SettingsIcon(icon: AppIcons.sun),
                                 const SizedBox(width: 12),
                                 Text(
-                                  t('settings.theme'),
+                                  t('settings.theme', context: context),
                                   style: TextStyle(
                                     color: palette.text,
                                     fontSize: 16,
@@ -160,9 +160,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               palette: palette,
                               value: preferences.theme,
                               items: <ThemePreference, String>{
-                                ThemePreference.system: t('settings.system'),
-                                ThemePreference.light: t('settings.light'),
-                                ThemePreference.dark: t('settings.dark'),
+                                ThemePreference.system: t('settings.system', context: context),
+                                ThemePreference.light: t('settings.light', context: context),
+                                ThemePreference.dark: t('settings.dark', context: context),
                               },
                               onChanged: (value) {
                                 Haptic.select();
@@ -174,7 +174,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                       SettingsRow(
                         icon: AppIcons.sparkles,
-                        label: t('settings.reduceGlass'),
+                        label: t('settings.reduceGlass', context: context),
                         trailing: GlassSwitch(
                           useOwnLayer: true,
                           enableHaptics: preferences.haptics,
@@ -185,9 +185,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                       SettingsRow(
                         icon: AppIcons.globe,
-                        label: t('settings.language'),
+                        label: t('settings.language', context: context),
                         value: switch (i18n.preference) {
-                          LanguagePreference.system => t('settings.system'),
+                          LanguagePreference.system => t('settings.system', context: context),
                           LanguagePreference.zh => '简体中文',
                           LanguagePreference.en => 'English',
                         },
@@ -196,12 +196,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ],
                   ),
                   _Section(
-                    title: t('settings.general'),
+                    title: t('settings.general', context: context),
                     palette: palette,
                     children: <Widget>[
                       SettingsRow(
                         icon: AppIcons.notification,
-                        label: t('settings.notifications'),
+                        label: t('settings.notifications', context: context),
                         trailing: GlassSwitch(
                           useOwnLayer: true,
                           enableHaptics: preferences.haptics,
@@ -220,7 +220,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                       SettingsRow(
                         icon: AppIcons.touchInteraction,
-                        label: t('settings.haptics'),
+                        label: t('settings.haptics', context: context),
                         trailing: GlassSwitch(
                           useOwnLayer: true,
                           enableHaptics: preferences.haptics,
@@ -237,7 +237,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ],
                   ),
                   _Section(
-                    title: t('settings.about'),
+                    title: t('settings.about', context: context),
                     palette: palette,
                     children: <Widget>[
                       Padding(
@@ -259,9 +259,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 ),
                                 const SizedBox(height: 2),
                                 Text(
-                                  t('settings.versionValue', <String, Object?>{
+                                  t('settings.versionValue', vars: <String, Object?>{
                                     'version': appVersion,
-                                  }),
+                                  }, context: context),
                                   style: TextStyle(
                                     color: palette.muted,
                                     fontSize: 13,
@@ -275,7 +275,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       if (updatesSupported) ...<Widget>[
                         SettingsRow(
                           icon: AppIcons.arrowUp,
-                          label: t('update.check'),
+                          label: t('update.check', context: context),
                           onTap: _checking ? null : _checkForUpdates,
                           trailing: _checking
                               ? DesktopSpinner(size: 16, color: palette.muted)
@@ -284,14 +284,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ],
                       SettingsRow(
                         icon: AppIcons.information,
-                        label: t('settings.releaseNotes'),
+                        label: t('settings.releaseNotes', context: context),
                         onTap: () => launchUrl(
                           Uri.parse('https://github.com/$releaseRepo/releases'),
                         ),
                       ),
                       SettingsRow(
                         icon: AppIcons.copy,
-                        label: t('settings.connectionDiagnostics'),
+                        label: t('settings.connectionDiagnostics', context: context),
                         onTap: _copyDiagnostics,
                       ),
                     ],

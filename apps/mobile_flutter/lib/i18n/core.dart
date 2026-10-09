@@ -1,6 +1,7 @@
 
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'en.dart';
@@ -106,7 +107,38 @@ class I18n extends ChangeNotifier {
 }
 
 /// The one entry point every widget uses: `t('common.save')`.
-String t(String key, [Map<String, Object?>? vars]) => I18n.instance.t(key, vars);
+///
+/// A call that builds text a widget draws passes `context:`. That registers the
+/// widget on the language scope the app root publishes, so a switch in 设置 re-runs
+/// the build of every page already on the stack. Without it a route stays as it was
+/// drawn: the root rebuilds, but the router keeps each page by its key and never
+/// asks it to build again, so the new language only appears after the page is
+/// reopened. A string built for a toast, an error or a notification has no widget to
+/// rebuild and omits it — it is read at the moment it is shown.
+String t(String key, {Map<String, Object?>? vars, BuildContext? context}) {
+  // `mounted` because a call from an event handler can arrive after the page it was
+  // drawn on has closed, and registering a dependency on a dead element throws.
+  if (context != null && context.mounted) {
+    context.dependOnInheritedWidgetOfExactType<LanguageScope>();
+  }
+  return I18n.instance.t(key, vars);
+}
+
+/// Publishes the active language down the tree. The app root rebuilds it whenever
+/// [I18n] notifies, which is what makes a `t(key, context: context)` call rebuild.
+class LanguageScope extends InheritedWidget {
+  const LanguageScope({
+    super.key,
+    required this.language,
+    required super.child,
+  });
+
+  final AppLanguage language;
+
+  @override
+  bool updateShouldNotify(LanguageScope oldWidget) =>
+      oldWidget.language != language;
+}
 
 I18n get i18n => I18n.instance;
 
@@ -122,5 +154,7 @@ String formatMonthDay(DateTime date, {required bool withYear}) {
     'monthName': _months[date.month - 1],
     'day': date.day,
   };
-  return withYear ? t('time.yearMonthDay', vars) : t('time.monthDay', vars);
+  return withYear
+      ? t('time.yearMonthDay', vars: vars)
+      : t('time.monthDay', vars: vars);
 }

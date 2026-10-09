@@ -184,7 +184,7 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
     final palette = paletteOf(context);
     final parsed = _parsed;
     return GlassScreen(
-      title: t('nav.addDevice'),
+      title: t('nav.addDevice', context: context),
       body: GestureDetector(
         onTap: () => FocusScope.of(context).unfocus(),
         child: Builder(
@@ -208,7 +208,7 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 7, 16, 0),
                 child: Text(
-                  t('add.workspaceSubtitle'),
+                  t('add.workspaceSubtitle', context: context),
                   style: TextStyle(
                     color: palette.muted,
                     fontSize: 13,
@@ -225,7 +225,7 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
                   onPick: _pickNearby,
                 ),
               ],
-              SectionLabel(title: t('add.orManual')),
+              SectionLabel(title: t('add.orManual', context: context)),
               Container(
                 decoration: BoxDecoration(
                   color: palette.card,
@@ -238,7 +238,7 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
                 child: Column(
                   children: <Widget>[
                     _Field(
-                      label: t('add.address'),
+                      label: t('add.address', context: context),
                       icon: AppIcons.link,
                       palette: palette,
                       child: TextField(
@@ -250,7 +250,7 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
                         decoration: InputDecoration(
                           border: InputBorder.none,
                           isDense: true,
-                          hintText: t('add.addressPlaceholder'),
+                          hintText: t('add.addressPlaceholder', context: context),
                           hintStyle: TextStyle(
                             color: palette.subtle,
                             fontSize: 17,
@@ -269,14 +269,14 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
                           palette: palette,
                           tone: NoteTone.danger,
                           icon: AppIcons.alert,
-                          text: t('add.unrecognized'),
+                          text: t('add.unrecognized', context: context),
                         )
                       else if (parsed.kind == AddressKind.loopback)
                         _AddressNote(
                           palette: palette,
                           tone: NoteTone.danger,
                           icon: AppIcons.alert,
-                          text: t('add.loopbackWarning'),
+                          text: t('add.loopbackWarning', context: context),
                         )
                       else
                         _AddressNote(
@@ -288,7 +288,7 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
                     ],
                     Divider(height: 0.5, thickness: 0.5, color: palette.border),
                     _Field(
-                      label: t('add.alias'),
+                      label: t('add.alias', context: context),
                       icon: AppIcons.pencilEdit,
                       palette: palette,
                       child: TextField(
@@ -312,7 +312,7 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
                     ),
                     Divider(height: 0.5, thickness: 0.5, color: palette.border),
                     _Field(
-                      label: t('add.password'),
+                      label: t('add.password', context: context),
                       icon: AppIcons.lockPassword,
                       palette: palette,
                       child: TextField(
@@ -368,14 +368,14 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
               ],
               const SizedBox(height: 18),
               PrimaryButton(
-                label: t('add.submit'),
+                label: t('add.submit', context: context),
                 busy: _busy,
                 enabled: parsed != null && _password.text.isNotEmpty,
                 onPressed: _submit,
               ),
               const SizedBox(height: 14),
               Text(
-                t('add.hint'),
+                t('add.hint', context: context),
                 style: TextStyle(
                   color: palette.muted,
                   fontSize: 13,
@@ -430,7 +430,7 @@ class _ScanCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
                     Text(
-                      t('add.scanTitle'),
+                      t('add.scanTitle', context: context),
                       style: TextStyle(
                         color: palette.text,
                         fontSize: 17,
@@ -439,7 +439,7 @@ class _ScanCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 3),
                     Text(
-                      t('add.scanBody'),
+                      t('add.scanBody', context: context),
                       style: TextStyle(
                         color: palette.muted,
                         fontSize: 13,
@@ -491,7 +491,7 @@ class _NearbyList extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
             child: Text(
-              t('add.nearbyTitle'),
+              t('add.nearbyTitle', context: context),
               style: TextStyle(
                 color: palette.muted,
                 fontSize: 12,
@@ -504,7 +504,7 @@ class _NearbyList extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 6, 16, 10),
               child: Text(
-                t('add.nearbySearching'),
+                t('add.nearbySearching', context: context),
                 style: TextStyle(color: palette.subtle, fontSize: 14),
               ),
             ),

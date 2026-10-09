@@ -69,12 +69,12 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     final palette = paletteOf(context);
     return GlassScreen(
-      title: t('nav.scan'),
+      title: t('nav.scan', context: context),
       edgeFade: false,
       body: MobileScanner(
         controller: _controller,
         onDetect: _handle,
-        placeholderBuilder: (_) => BrandLoading(message: t('scan.requesting')),
+        placeholderBuilder: (_) => BrandLoading(message: t('scan.requesting', context: context)),
         errorBuilder: (_, error) => _PermissionRequest(
           palette: palette,
           onAllow: () async {
@@ -120,15 +120,15 @@ class _PermissionRequest extends StatelessWidget {
       color: palette.background,
       child: EmptyState(
         icon: AppIcons.qrCode,
-        title: t('scan.needCamera'),
-        body: t('scan.needCameraBody'),
+        title: t('scan.needCamera', context: context),
+        body: t('scan.needCameraBody', context: context),
         children: <Widget>[
           ...<Widget>[
             const SizedBox(height: 20),
             ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 320),
               child: PrimaryButton(
-                label: t(denied ? 'scan.openSettings' : 'server.reconnect'),
+                label: t(denied ? 'scan.openSettings' : 'server.reconnect', context: context),
                 onPressed: onAllow,
               ),
             ),
@@ -211,7 +211,7 @@ class _ScanFrameState extends State<_ScanFrame>
               child: Column(
                 children: <Widget>[
                   Text(
-                    t('scan.aim'),
+                    t('scan.aim', context: context),
                     textAlign: TextAlign.center,
                     style: const TextStyle(
                       color: Colors.white,
@@ -221,7 +221,7 @@ class _ScanFrameState extends State<_ScanFrame>
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    t('scan.where'),
+                    t('scan.where', context: context),
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       color: Colors.white.withValues(alpha: 0.75),

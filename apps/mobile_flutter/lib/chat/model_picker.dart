@@ -228,17 +228,17 @@ class _ModelPickerSheetState extends State<_ModelPickerSheet> {
         child: Column(
           children: <Widget>[
             AppSheetHeader(
-              title: t('models.title'),
-              subtitle: t('models.summary', {
+              title: t('models.title', context: context),
+              subtitle: t('models.summary', vars: {
                 'models': widget.models.length,
                 'providers': providers.length,
-              }),
+              }, context: context),
             ),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: SearchField(
                 controller: _query,
-                placeholder: t('models.search'),
+                placeholder: t('models.search', context: context),
                 onChanged: (_) => setState(() {}),
               ),
             ),
@@ -250,7 +250,7 @@ class _ModelPickerSheetState extends State<_ModelPickerSheet> {
                   padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
                   children: <Widget>[
                     _RailChip(
-                      label: t('models.all'),
+                      label: t('models.all', context: context),
                       active: !_scopeRecent && _scopeProvider == null,
                       palette: palette,
                       onPress: () => setState(() {
@@ -261,7 +261,7 @@ class _ModelPickerSheetState extends State<_ModelPickerSheet> {
                     if (recentModels.isNotEmpty) ...<Widget>[
                       const SizedBox(width: 8),
                       _RailChip(
-                        label: t('models.recent'),
+                        label: t('models.recent', context: context),
                         active: _scopeRecent,
                         icon: AppIcons.clock,
                         palette: palette,
@@ -484,7 +484,7 @@ class _ProviderHeader extends StatelessWidget {
                       ),
                     ),
                     Text(
-                      '${t('models.count', <String, Object?>{'count': count})}${current ? t('models.current') : ''}',
+                      '${t('models.count', vars: <String, Object?>{'count': count}, context: context)}${current ? t('models.current', context: context) : ''}',
                       style: TextStyle(color: palette.muted, fontSize: 12),
                     ),
                   ],

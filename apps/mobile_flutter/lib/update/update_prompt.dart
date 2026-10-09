@@ -242,7 +242,7 @@ class _UpdateDialog extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: <Widget>[
                             Text(
-                              t('update.update'),
+                              t('update.update', context: context),
                               style: TextStyle(
                                 color: palette.text,
                                 fontSize: 18,
@@ -251,9 +251,9 @@ class _UpdateDialog extends StatelessWidget {
                               ),
                             ),
                             Text(
-                              t('update.confirmTitle', <String, Object?>{
+                              t('update.confirmTitle', vars: <String, Object?>{
                                 'version': release.version,
-                              }),
+                              }, context: context),
                               style: TextStyle(
                                 color: palette.muted,
                                 fontSize: 13,
@@ -290,10 +290,10 @@ class _UpdateDialog extends StatelessWidget {
                     const SizedBox(height: 6),
                     Text(
                       progress == null
-                          ? t('update.downloading')
-                          : t('update.downloadingPercent', <String, Object?>{
+                          ? t('update.downloading', context: context)
+                          : t('update.downloadingPercent', vars: <String, Object?>{
                               'percent': (progress! * 100).round(),
-                            }),
+                            }, context: context),
                       style: TextStyle(color: palette.muted, fontSize: 13),
                     ),
                   ],
@@ -321,8 +321,8 @@ class _UpdateDialog extends StatelessWidget {
                       Expanded(
                         child: _DialogButton(
                           label: phase == _Phase.ready
-                              ? t('update.later')
-                              : t('update.skip'),
+                              ? t('update.later', context: context)
+                              : t('update.skip', context: context),
                           palette: palette,
                           onTap: onSkip,
                         ),
@@ -331,10 +331,10 @@ class _UpdateDialog extends StatelessWidget {
                       Expanded(
                         child: _DialogButton(
                           label: switch (phase) {
-                            _Phase.downloading => t('update.downloading'),
-                            _Phase.ready => t('update.install'),
-                            _Phase.installing => t('update.installing'),
-                            _ => t('update.update'),
+                            _Phase.downloading => t('update.downloading', context: context),
+                            _Phase.ready => t('update.install', context: context),
+                            _Phase.installing => t('update.installing', context: context),
+                            _ => t('update.update', context: context),
                           },
                           palette: palette,
                           primary: true,

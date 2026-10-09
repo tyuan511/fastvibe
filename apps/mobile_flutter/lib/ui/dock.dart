@@ -41,9 +41,9 @@ class ConversationDock extends StatelessWidget implements PreferredSizeWidget {
               Expanded(
                 child: GlassSegmentedControl(
                   segments: <GlassSegment>[
-                    GlassSegment(label: t('server.filterAll')),
-                    GlassSegment(label: t('server.filterActive')),
-                    GlassSegment(label: t('server.filterWaiting')),
+                    GlassSegment(label: t('server.filterAll', context: context)),
+                    GlassSegment(label: t('server.filterActive', context: context)),
+                    GlassSegment(label: t('server.filterWaiting', context: context)),
                   ],
                   selectedIndex: selected,
                   onSegmentSelected: onSelect,
@@ -69,7 +69,7 @@ class ConversationDock extends StatelessWidget implements PreferredSizeWidget {
                 size: 48,
                 iconSize: 22,
                 shape: GlassIconButtonShape.circle,
-                semanticLabel: t('common.newChat'),
+                semanticLabel: t('common.newChat', context: context),
               ),
             ],
           ),
@@ -101,7 +101,7 @@ class DeviceDock extends StatelessWidget implements PreferredSizeWidget {
             height: 60,
             shape: const LiquidRoundedSuperellipse(borderRadius: 30),
             onTap: onAdd,
-            label: t('devices.add'),
+            label: t('devices.add', context: context),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
@@ -113,7 +113,7 @@ class DeviceDock extends StatelessWidget implements PreferredSizeWidget {
                 ),
                 const SizedBox(width: 8),
                 Text(
-                  t('devices.add'),
+                  t('devices.add', context: context),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(

@@ -67,7 +67,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
     if (!await AppDialog.confirm(
       context,
       title: t('devices.deleteTitle'),
-      message: t('devices.deleteBody', {'name': server.alias}),
+      message: t('devices.deleteBody', vars: {'name': server.alias}),
       confirmLabel: t('common.delete'),
       destructive: true,
     )) {
@@ -156,13 +156,13 @@ class _DevicesScreenState extends State<DevicesScreen> {
     final favorites = shown.where((s) => s.favorite).toList();
     final others = shown.where((s) => !s.favorite).toList();
     return GlassScreen(
-      title: t('devices.workspaces'),
+      title: t('devices.workspaces', context: context),
       showBack: false,
       largeTitleController: _title,
       actions: [
         GlassAction(
           icon: AppIcons.settings,
-          tooltip: t('nav.settings'),
+          tooltip: t('nav.settings', context: context),
           onPressed: () => context.push('/settings'),
         ),
       ],
@@ -176,13 +176,13 @@ class _DevicesScreenState extends State<DevicesScreen> {
               iosRefreshControl(onRefresh: _reload, topInset: top),
               SliverToBoxAdapter(child: SizedBox(height: top)),
               GlassLargeTitle(
-                text: t('devices.workspaces'),
+                text: t('devices.workspaces', context: context),
                 controller: _title,
                 searchBar: _servers.isEmpty
                     ? null
                     : GlassSearchBar(
                         controller: _query,
-                        placeholder: t('devices.search'),
+                        placeholder: t('devices.search', context: context),
                         onChanged: (_) => setState(() {}),
                         height: 40,
                       ),
@@ -205,7 +205,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
                         child: BrandLoading(),
                       )
                     else if (_servers.isEmpty) ...<Widget>[
-                      SectionLabel(title: t('devices.heroTitle')),
+                      SectionLabel(title: t('devices.heroTitle', context: context)),
                       InsetGroup(
                         separatorIndent: 16 + 29 + 12,
                         children: <Widget>[
@@ -215,7 +215,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
                       ),
                     ] else ...<Widget>[
                       if (favorites.isNotEmpty) ...<Widget>[
-                        SectionLabel(title: t('devices.favorites')),
+                        SectionLabel(title: t('devices.favorites', context: context)),
                         InsetGroup(
                           separatorIndent: 16 + 40 + 12,
                           children: <Widget>[
@@ -224,7 +224,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
                         ),
                       ],
                       if (others.isNotEmpty) ...<Widget>[
-                        SectionLabel(title: t('devices.allDevices')),
+                        SectionLabel(title: t('devices.allDevices', context: context)),
                         InsetGroup(
                           separatorIndent: 16 + 40 + 12,
                           children: <Widget>[
@@ -235,8 +235,8 @@ class _DevicesScreenState extends State<DevicesScreen> {
                       if (shown.isEmpty)
                         EmptyState(
                           icon: AppIcons.search,
-                          title: t('common.noMatch'),
-                          body: t('devices.search'),
+                          title: t('common.noMatch', context: context),
+                          body: t('devices.search', context: context),
                         ),
                     ],
                   ]),
@@ -296,7 +296,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
                     connected
                         ? t('devices.connected')
                         : when != null
-                        ? t('devices.connectedAgo', {'when': when})
+                        ? t('devices.connectedAgo', vars: {'when': when})
                         : t('devices.neverConnected'),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -374,7 +374,7 @@ class _Step extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
                 Text(
-                  t('devices.step${index}Title'),
+                  t('devices.step${index}Title', context: context),
                   style: TextStyle(
                     color: palette.text,
                     fontSize: 17,
@@ -383,7 +383,7 @@ class _Step extends StatelessWidget {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  t('devices.step${index}Body'),
+                  t('devices.step${index}Body', context: context),
                   style: TextStyle(
                     color: palette.muted,
                     fontSize: 15,

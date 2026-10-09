@@ -55,8 +55,8 @@ class QueuePanel extends StatelessWidget {
                 Expanded(
                   child: Text(
                     paused
-                        ? t('queue.paused', <String, Object?>{'count': queue.items.length})
-                        : t('queue.pending', <String, Object?>{'count': queue.items.length}),
+                        ? t('queue.paused', vars: <String, Object?>{'count': queue.items.length}, context: context)
+                        : t('queue.pending', vars: <String, Object?>{'count': queue.items.length}, context: context),
                     style: TextStyle(
                       color: paused ? palette.warning : palette.text,
                       fontSize: 13,
@@ -74,7 +74,7 @@ class QueuePanel extends StatelessWidget {
                         borderRadius: BorderRadius.circular(Radii.pill),
                       ),
                       child: Text(
-                        t('queue.resume'),
+                        t('queue.resume', context: context),
                         style: TextStyle(
                           color: disabled ? palette.muted : palette.accentText,
                           fontSize: 12,
@@ -90,7 +90,7 @@ class QueuePanel extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.only(bottom: 4),
               child: Text(
-                queue.pause == 'stopped' ? t('queue.stoppedNote') : t('queue.errorNote'),
+                queue.pause == 'stopped' ? t('queue.stoppedNote', context: context) : t('queue.errorNote', context: context),
                 style: TextStyle(color: palette.muted, fontSize: 12),
               ),
             ),

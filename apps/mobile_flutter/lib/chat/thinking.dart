@@ -66,7 +66,7 @@ class _ThinkingRowState extends State<ThinkingRow> {
                   ),
                   const SizedBox(width: 8),
                   Text(
-                    live ? t('chat.thinking') : t('chat.thoughts'),
+                    live ? t('chat.thinking', context: context) : t('chat.thoughts', context: context),
                     style: TextStyle(
                       color: live ? palette.accent : palette.muted,
                       fontSize: 13,

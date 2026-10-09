@@ -135,7 +135,7 @@ export function GitBranchChip({
         align="start"
         side="top"
         sideOffset={12}
-        className="w-70 gap-0 rounded-xl p-1 shadow-lg"
+        className="w-70 max-h-(--available-height) gap-0 overflow-hidden rounded-xl p-1 shadow-lg"
       >
         {creating ? (
           <div className="p-1">
@@ -181,7 +181,7 @@ export function GitBranchChip({
           </div>
         ) : (
           <>
-            <div className="relative mb-0.5 px-0.5 pt-0.5">
+            <div className="relative mb-0.5 shrink-0 px-0.5 pt-0.5">
               <HugeiconsIcon
                 strokeWidth={2}
                 icon={Search01Icon}
@@ -195,8 +195,8 @@ export function GitBranchChip({
                 onChange={(event) => setQuery(event.target.value)}
               />
             </div>
-            <div className="px-2 py-0.5 text-xs font-medium text-muted-foreground">{t("git.branches")}</div>
-            <div className="max-h-52 overflow-y-auto">
+            <div className="shrink-0 px-2 py-0.5 text-xs font-medium text-muted-foreground">{t("git.branches")}</div>
+            <div className="min-h-0 flex-1 overflow-y-auto">
               {branches === null ? (
                 <div className="px-2 py-1.5 text-sm text-muted-foreground">{t("git.loading")}</div>
               ) : filtered.length > 0 ? (
@@ -232,11 +232,11 @@ export function GitBranchChip({
                 <div className="px-2 py-1.5 text-sm text-muted-foreground">{t("git.none")}</div>
               )}
             </div>
-            {error ? <div className="px-2 pb-1 text-xs text-destructive">{error}</div> : null}
-            <div className="my-0.5 border-t border-border" />
+            {error ? <div className="shrink-0 px-2 pb-1 text-xs text-destructive">{error}</div> : null}
+            <div className="my-0.5 shrink-0 border-t border-border" />
             <button
               type="button"
-              className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              className="flex w-full shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
               onClick={() => {
                 setNewName(query.trim());
                 setQuery("");

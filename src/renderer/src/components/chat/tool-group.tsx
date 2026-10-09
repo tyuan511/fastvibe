@@ -1,4 +1,5 @@
 import { memo, type JSX } from "react";
+import { useTranslation } from "react-i18next";
 import type { ToolGroup } from "@/lib/group-parts";
 import { describeTool } from "@/lib/tool-presentation";
 import { useWorkspacePath } from "@/stores/session";
@@ -21,6 +22,13 @@ function DiffStat({ added, removed }: { added: number; removed: number }): JSX.E
  * run is still in flight.
  */
 export const ToolGroupRow = memo(function ToolGroupRow({ group }: { group: ToolGroup }): JSX.Element {
+  // Every string on this row arrives already translated — the group's own label and
+  // aggregate from `groupParts`, the live child from `describeTool` — so the group
+  // object is the only thing that could change, and a language switch changes none of
+  // its props. Subscribing here is what redraws the row: it refreshes from `groupParts`
+  // being re-run with the new language, and no longer relies on that caller keeping
+  // `i18n.language` in its memo dependencies.
+  useTranslation("common");
   const cwd = useWorkspacePath();
   const last = group.tools.at(-1);
   const live = group.running && last ? describeTool(last, cwd) : undefined;

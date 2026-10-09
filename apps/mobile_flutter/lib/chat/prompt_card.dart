@@ -132,7 +132,7 @@ class _PromptCardState extends State<PromptCard> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
                     Text(
-                      isConfirm ? t('prompt.confirm') : t('prompt.answer'),
+                      isConfirm ? t('prompt.confirm', context: context) : t('prompt.answer', context: context),
                       style: TextStyle(
                         color: palette.accent,
                         fontSize: 12,
@@ -208,7 +208,7 @@ class _PromptCardState extends State<PromptCard> {
               children: <Widget>[
                 Expanded(
                   child: _Button(
-                    label: t('prompt.no'),
+                    label: t('prompt.no', context: context),
                     palette: palette,
                     onTap: widget.busy ? null : () => _confirm(false),
                   ),
@@ -216,7 +216,7 @@ class _PromptCardState extends State<PromptCard> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: _Button(
-                    label: t('prompt.yes'),
+                    label: t('prompt.yes', context: context),
                     palette: palette,
                     primary: true,
                     onTap: widget.busy ? null : () => _confirm(true),
@@ -226,7 +226,7 @@ class _PromptCardState extends State<PromptCard> {
             )
           else if (prompt.method == 'input' || prompt.method == 'editor')
             _Button(
-              label: t('prompt.submit'),
+              label: t('prompt.submit', context: context),
               palette: palette,
               primary: true,
               onTap: widget.busy || _text.text.trim().isEmpty
@@ -235,10 +235,10 @@ class _PromptCardState extends State<PromptCard> {
             )
           else if (questions.isNotEmpty)
             _Button(
-              label: t('prompt.submitCount', <String, Object?>{
+              label: t('prompt.submitCount', vars: <String, Object?>{
                 'done': answered,
                 'total': questions.length,
-              }),
+              }, context: context),
               palette: palette,
               primary: true,
               onTap: widget.busy || answered < questions.length

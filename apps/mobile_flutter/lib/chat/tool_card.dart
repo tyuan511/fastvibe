@@ -190,7 +190,7 @@ ToolSummary summarize(ToolBlock tool) {
       if (subject.isEmpty) subject = t('tool.webPage');
       final sources = _asRecord(tool.details)?['sources'];
       if (sources is List && sources.isNotEmpty) {
-        context = t('tool.sources', <String, Object?>{'count': sources.length});
+        context = t('tool.sources', vars: <String, Object?>{'count': sources.length});
       }
     case ToolFamily.list:
       subject = argString(tool.args, <String>['path', 'dir', 'directory', 'pattern']);
@@ -210,7 +210,7 @@ ToolSummary summarize(ToolBlock tool) {
       }
       subject = first.isNotEmpty ? first : t('tool.clarify');
       if (questions is List && questions.length > 1) {
-        context = t('tool.questions', <String, Object?>{'count': questions.length});
+        context = t('tool.questions', vars: <String, Object?>{'count': questions.length});
       }
     case ToolFamily.todo:
       final todos = _todoItems(tool);
@@ -226,14 +226,14 @@ ToolSummary summarize(ToolBlock tool) {
       if (todos.isNotEmpty) {
         final index = current != null ? todos.indexOf(current) + 1 : todos.length;
         subject = '$index/${todos.length}${current?.content != null ? ' · ${current!.content}' : ''}';
-        context = t('tool.todosDone', <String, Object?>{'done': done, 'total': todos.length});
+        context = t('tool.todosDone', vars: <String, Object?>{'done': done, 'total': todos.length});
       } else {
         subject = t('tool.updateList');
       }
     case ToolFamily.agent:
       final roles = _agentRoles(tool.args);
       subject = roles.isNotEmpty ? _compactRoles(roles) : t('tool.agent');
-      if (roles.length > 1) context = t('tool.tasks', <String, Object?>{'count': roles.length});
+      if (roles.length > 1) context = t('tool.tasks', vars: <String, Object?>{'count': roles.length});
     case ToolFamily.codemode:
       // The script is the call: the row says what it is for and how many tools it ran.
       final summary = codemodeSummary(codemodeCode(tool.args));
@@ -242,8 +242,8 @@ ToolSummary summarize(ToolBlock tool) {
       if (calls.isNotEmpty) {
         final failed = codemodeFailures(calls);
         context = failed > 0
-            ? t('tool.callsFailed', <String, Object?>{'count': calls.length, 'failed': failed})
-            : t('tool.calls', <String, Object?>{'count': calls.length});
+            ? t('tool.callsFailed', vars: <String, Object?>{'count': calls.length, 'failed': failed})
+            : t('tool.calls', vars: <String, Object?>{'count': calls.length});
       }
     case ToolFamily.browser:
       subject = argString(tool.args, <String>['url', 'text', 'selector', 'tabId', 'key']);
@@ -361,7 +361,7 @@ class _ToolCardState extends State<ToolCard> {
               const Spacer(),
               if (summary.error)
                 Text(
-                  t('tool.failed'),
+                  t('tool.failed', context: context),
                   style: TextStyle(color: palette.danger, fontSize: 12, fontWeight: FontWeight.w700),
                 ),
               const SizedBox(width: 4),
@@ -486,7 +486,7 @@ class _Detail extends StatelessWidget {
           if (calls != null && calls.isNotEmpty) ...<Widget>[
             _Block(
               palette: palette,
-              label: t('tool.calledTools'),
+              label: t('tool.calledTools', context: context),
               labelColor: palette.muted,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -500,7 +500,7 @@ class _Detail extends StatelessWidget {
           if (detail.output.isNotEmpty)
             _Block(
               palette: palette,
-              label: error ? t('tool.error') : t('tool.output'),
+              label: error ? t('tool.error', context: context) : t('tool.output', context: context),
               labelColor: error ? palette.danger : palette.muted,
               child: SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
@@ -518,7 +518,7 @@ class _Detail extends StatelessWidget {
           else if (!running)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 2),
-              child: Text(t('tool.noOutput'), style: TextStyle(color: palette.muted, fontSize: 12)),
+              child: Text(t('tool.noOutput', context: context), style: TextStyle(color: palette.muted, fontSize: 12)),
             ),
         ],
       ),

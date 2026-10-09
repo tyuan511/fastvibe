@@ -125,7 +125,7 @@ class AppSheetHeader extends StatelessWidget {
             icon: onBack != null ? AppIcons.arrowLeft : AppIcons.cancel,
             tone: IconTone.field,
             size: 40,
-            tooltip: t(onBack != null ? 'dag.back' : 'common.close'),
+            tooltip: t(onBack != null ? 'dag.back' : 'common.close', context: context),
             onPressed: onBack ?? () => Navigator.of(context).pop(),
           ),
         ],

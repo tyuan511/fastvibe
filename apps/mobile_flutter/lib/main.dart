@@ -105,31 +105,39 @@ class _FastVibeAppState extends State<FastVibeApp> with WidgetsBindingObserver {
             final palette = Theme.of(context).brightness == Brightness.dark
                 ? dark
                 : light;
-            return PaletteScope(
-              palette: palette,
-              // Text drawn outside any page's Material — the bar's pull-down menus,
-              // which GlassNavigationShell hoists above the Navigator, and every other
-              // overlay — falls back to the framework's debug style, the yellow double
-              // underline. One default here, above the shell and the Navigator, covers
-              // all of them instead of patching each overlay as it turns up.
-              child: DefaultTextStyle(
-                style: Theme.of(context).textTheme.bodyMedium!.copyWith(
-                  color: palette.text,
-                  decoration: TextDecoration.none,
-                ),
-                child: ToastHost(
-                  child: UpdatePrompt(
-                    enabled: widget.checkUpdates,
-                    child: AnnotatedRegion<SystemUiOverlayStyle>(
-                      value: Theme.of(context).brightness == Brightness.dark
-                          ? SystemUiOverlayStyle.light
-                          : SystemUiOverlayStyle.dark,
-                      child: GlassAccessibilityScope(
-                        reduceTransparency: Preferences.instance.reduceGlass
-                            ? true
-                            : null,
-                        child: GlassNavigationShell(
-                          child: child ?? const SizedBox.shrink(),
+            return LanguageScope(
+              // Above every route, not inside one: go_router keeps a page by its key,
+              // so the root rebuilding alone repaints the bar and leaves the already
+              // open chat, device list and server screen on the language they were
+              // opened with. Pages subscribe through `t(key, context: context)`, and
+              // this is the value they are subscribing to.
+              language: i18n.language,
+              child: PaletteScope(
+                palette: palette,
+                // Text drawn outside any page's Material — the bar's pull-down menus,
+                // which GlassNavigationShell hoists above the Navigator, and every other
+                // overlay — falls back to the framework's debug style, the yellow double
+                // underline. One default here, above the shell and the Navigator, covers
+                // all of them instead of patching each overlay as it turns up.
+                child: DefaultTextStyle(
+                  style: Theme.of(context).textTheme.bodyMedium!.copyWith(
+                    color: palette.text,
+                    decoration: TextDecoration.none,
+                  ),
+                  child: ToastHost(
+                    child: UpdatePrompt(
+                      enabled: widget.checkUpdates,
+                      child: AnnotatedRegion<SystemUiOverlayStyle>(
+                        value: Theme.of(context).brightness == Brightness.dark
+                            ? SystemUiOverlayStyle.light
+                            : SystemUiOverlayStyle.dark,
+                        child: GlassAccessibilityScope(
+                          reduceTransparency: Preferences.instance.reduceGlass
+                              ? true
+                              : null,
+                          child: GlassNavigationShell(
+                            child: child ?? const SizedBox.shrink(),
+                          ),
                         ),
                       ),
                     ),

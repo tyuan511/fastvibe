@@ -81,9 +81,9 @@ String formatTurnSpent(int milliseconds) {
   final minutes = (total % 3600) ~/ 60;
   final seconds = total % 60;
   final parts = <String>[];
-  if (hours > 0) parts.add(t('time.hours', <String, Object?>{'n': hours}));
-  if (minutes > 0) parts.add(t('time.minutes', <String, Object?>{'n': minutes}));
-  if (seconds > 0 || parts.isEmpty) parts.add(t('time.seconds', <String, Object?>{'n': seconds}));
+  if (hours > 0) parts.add(t('time.hours', vars: <String, Object?>{'n': hours}));
+  if (minutes > 0) parts.add(t('time.minutes', vars: <String, Object?>{'n': minutes}));
+  if (seconds > 0 || parts.isEmpty) parts.add(t('time.seconds', vars: <String, Object?>{'n': seconds}));
   return parts.join(' ');
 }
 
@@ -91,7 +91,7 @@ String formatTurnMeta(TurnMeta meta, [int? now]) {
   final clock = formatTurnClock(meta.endedAt, now);
   if (clock.isEmpty) return '';
   final spent = meta.elapsedMs != null ? formatTurnSpent(meta.elapsedMs!) : '';
-  return spent.isNotEmpty ? t('time.turnSpent', <String, Object?>{'clock': clock, 'spent': spent}) : clock;
+  return spent.isNotEmpty ? t('time.turnSpent', vars: <String, Object?>{'clock': clock, 'spent': spent}) : clock;
 }
 
 /// `刚刚` / `5分钟前` / `3小时前` / `昨天` / `9月3日` — a list row's timestamp.
@@ -99,8 +99,8 @@ String relativeTime(int timestamp, [int? now]) {
   final reference = now ?? DateTime.now().millisecondsSinceEpoch;
   final diff = reference - timestamp;
   if (diff < 60000) return t('time.justNow');
-  if (diff < 3600000) return t('time.minutesAgo', <String, Object?>{'n': diff ~/ 60000});
-  if (diff < 86400000) return t('time.hoursAgo', <String, Object?>{'n': diff ~/ 3600000});
+  if (diff < 3600000) return t('time.minutesAgo', vars: <String, Object?>{'n': diff ~/ 60000});
+  if (diff < 86400000) return t('time.hoursAgo', vars: <String, Object?>{'n': diff ~/ 3600000});
   if (diff < 172800000) return t('time.yesterday');
   final date = DateTime.fromMillisecondsSinceEpoch(timestamp);
   return formatMonthDay(date, withYear: date.year != DateTime.fromMillisecondsSinceEpoch(reference).year);
