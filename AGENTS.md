@@ -321,6 +321,41 @@ those states in a browser — the real thing needs a password, a port and somebo
 (`?tunnel=lan` is the branch the 允许局域网访问 row's QR icon exists for: the address in that row
 is only reachable, and so only scannable, when the server is listening on the LAN.)
 
+### 局域网发现（mDNS，`src/main/server/mdns.ts`）
+
+允许局域网访问开着、服务器在监听时，桌面端用 `bonjour-service` 广播 `_fastvibe._tcp`，
+实例名默认是主机名（去掉 `.local`），可在远程访问设置里修改。手机的「添加设备」页据此列出
+「附近的电脑」，点一下就填好地址，连接名默认用这个名称。记录里只有端口和 `v=1`，不含任何凭据。
+
+- **显示名与解析名分开。** 服务实例名供人识别，但 SRV target 和 A/AAAA 记录使用这个
+  advertiser 独有的 `fastvibe-<uuid>.local`。不能让 `bonjour-service` 默认使用 `os.hostname()`：
+  它会把所有网卡的地址广播到同一个名字下，与 macOS 按网卡发布的系统记录冲突，导致系统提示
+  主机名被占用、不断加 `-2` / `-3`，手机也可能拿到失效的解析记录。
+- **设置 → 远程访问 → 主机名称** 修改手机发现列表中的名称，保存为 `remoteDiscoveryName`；
+  留空保存跟随系统主机名，输入框和保存按钮同行。`remote:set-discovery-name` 只替换广播，不重启远程服务器；
+  同端口下也比较名称才能让改名生效。保存加入设置写入队列，普通偏好保存保留当前名称，避免旧快照
+  覆盖；该方法仍仅限本机。共享校验限制 63 个 UTF-8 字节并拒绝库会重写的字符，重名后缀按字节
+  截断原名称，不切断 Unicode 字符。独立的 SRV target 不随用户改名而变化。
+- **`publish()` 返回不等于广播成功。** 只有 `up` 才记录已发布；探测中的同端口请求仍是空操作。
+  `bonjour-service` 1.4.x 发现服务名冲突时只停掉服务、不发事件，2 秒的探测检查据 `activated`
+  识别这条路径，改用 `名字 (2)` 等后缀，最多试 5 个名字。失败清理 socket 后才允许再发起；
+  停止和换端口取消检查，旧实例的迟到回调不能恢复广播。底层 socket 的 `error` 要单独接住，
+  库的构造回调只接查询应答错误，service 的监听器接不到绑定失败。
+- **广播由服务器状态推出来，不在各调用点开关。** `remote.ts` 的 `syncDiscovery()` 挂在两个 announce
+  路径里（启动、停止、重绑、清除密码都会经过），条件是「正在监听且 `remoteLanAccess`」；仅回环不广播。
+  `publish` 对同一端口和名称是空操作，换端口或名称则替换记录；失败只记日志，不能拖垮远程访问。
+- **一台电脑会广播它每块网卡的地址**（Wi-Fi、VPN、虚拟机桥接……），手机侧
+  `originsFor` 把私网 IPv4 排最前、丢掉链路本地地址，`firstReachable` 并发探测、按排名取第一个有响应的。
+  不用 `.local` 主机名：Android 的解析器不做 mDNS。
+- **广播的地址族跟随设置里的地址类型，与正在运行的监听器一致。** IPv4 只发 A（`disableIPv6: true`），
+  IPv6 只发 AAAA。库没有 `disableIPv4`，所以在异步探测结束前包装 `service.records()` 过滤 A；
+  注册、应答、重发和撤销都使用同一套记录。`nsd_android` 2.2.0 只把 `NsdServiceInfo.host` 的一个地址交给 Dart，
+  即便指定 `IpLookupType.any`，已有地址时也不会再查询；如果这个地址是 `fe80::`，手机过滤后连行都不显示。
+  `syncDiscovery` 根据当前服务器地址选族，不能提前跟随重绑前刚写入的偏好；同端口换族也必须重新广播。
+- **手机端用 `nsd` 原生浏览**（不是纯 Dart 的 `multicast_dns`：iOS 14+ 的原始多播需要苹果审批的 entitlement）。
+  iOS 要 `NSBonjourServices`，Android 要 `CHANGE_WIFI_MULTICAST_STATE`。发现不可用（拒绝本地网络、
+  网络过滤多播）时列表为空，扫码和手动输入照旧。原生手机客户端由 Flutter 实现。
+
 ### SSH 主机的手机连接（`phoneAccess`）
 
 A server whose Agent was deployed over SSH is reachable from the desktop and nowhere else:

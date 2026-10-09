@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../protocol/client.dart';
 import '../session/connection.dart';
 
 /// One node of a conversation's task graph.
@@ -278,18 +279,22 @@ String? dagToolNodeId(Object? args) {
 
 /// Watches one conversation's graph.
 ///
-/// Two rules keep the panel honest:
+/// Rules that keep the panel honest:
 ///
 /// - **A revision gate.** A `dag_changed` push and a `dag:list` reply race each other
 ///   constantly; a graph whose `revision` is older than what is on screen is dropped, and
 ///   a deletion (`graph == null`) beats a concurrent list reply that still has the graph.
 /// - **No `conversations.open`.** Reading a task graph must never move the engine's active
 ///   conversation — every desktop window follows that, and the phone reads chat by name.
+/// - **Refresh on every replacement connection.** The journal may have a gap, and a
+///   conversation snapshot does not contain its task graph. Replies from retired reads
+///   or reads overtaken by a graph push cannot overwrite the current graph.
 class DagWatcher extends ChangeNotifier {
   DagWatcher(this.conversationId) {
     _listener = _onEvent;
     Connection.instance.onEngineEvent(_listener!);
-    unawaited(refresh());
+    Connection.instance.addListener(_connectionChanged);
+    _connectionChanged();
   }
 
   final String conversationId;
@@ -299,6 +304,10 @@ class DagWatcher extends ChangeNotifier {
   int _revision = -1;
   bool _busy = false;
   bool _disposed = false;
+  RemoteClient? _remote;
+  String? _serverId;
+  int _refreshGeneration = 0;
+  int _eventGeneration = 0;
 
   DagGraph? get graph => _graph;
 
@@ -306,8 +315,24 @@ class DagWatcher extends ChangeNotifier {
 
   bool get deleted => _deleted;
 
+  void _connectionChanged() {
+    if (_disposed) return;
+    final connection = Connection.instance;
+    _serverId ??= connection.server?.id;
+    final next = connection.server?.id == _serverId ? connection.client : null;
+    if (identical(_remote, next)) return;
+    _remote = next;
+    _refreshGeneration++;
+    // Retain the last graph on screen, but the next connection establishes its own
+    // revision baseline (the host may have restarted or restored older state).
+    _revision = -1;
+    if (next != null) unawaited(refresh());
+  }
+
   void _onEvent(Map<String, Object?> event, Object? meta) {
     if (_disposed ||
+        _remote == null ||
+        !identical(_remote, Connection.instance.client) ||
         event['conversationId'] != conversationId ||
         event['type'] != 'dag_changed') {
       return;
@@ -315,24 +340,33 @@ class DagWatcher extends ChangeNotifier {
     final raw = event['graph'];
     if (raw == null) {
       // A deletion beats a concurrent list reply.
+      _eventGeneration++;
       _deleted = true;
       _graph = null;
+      _revision = -1;
       notifyListeners();
       return;
     }
     final next = _parseGraph(raw);
     if (next == null) return;
-    _deleted = false;
+    _eventGeneration++;
     _accept(next);
   }
 
   Future<void> refresh() async {
-    final remote = Connection.instance.client;
+    final remote = _remote;
     if (remote == null || _disposed) return;
+    final generation = ++_refreshGeneration;
+    final eventGeneration = _eventGeneration;
     try {
       final result = await remote.call('dag:list');
-      if (_disposed || result is! List) return;
-      if (_deleted) return;
+      if (_disposed ||
+          generation != _refreshGeneration ||
+          !identical(remote, Connection.instance.client) ||
+          eventGeneration != _eventGeneration ||
+          result is! List) {
+        return;
+      }
       for (final item in result) {
         final next = _parseGraph(item);
         if (next != null && next.conversationId == conversationId) {
@@ -345,6 +379,7 @@ class DagWatcher extends ChangeNotifier {
       if (_graph != null) {
         _graph = null;
         _deleted = true;
+        _revision = -1;
         notifyListeners();
       }
     } catch (_) {
@@ -356,6 +391,7 @@ class DagWatcher extends ChangeNotifier {
     if (next.revision < _revision) return;
     _revision = next.revision;
     _graph = next;
+    _deleted = false;
     notifyListeners();
   }
 
@@ -392,6 +428,7 @@ class DagWatcher extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    Connection.instance.removeListener(_connectionChanged);
     if (_listener != null) Connection.instance.offEngineEvent(_listener!);
     super.dispose();
   }

@@ -7,7 +7,10 @@
 		<key>CFBundleDevelopmentRegion</key>
 		<string>$(DEVELOPMENT_LANGUAGE)</string>
 		<key>CFBundleLocalizations</key>
-		<array><string>en</string><string>zh-Hans</string></array>
+		<array>
+			<string>en</string>
+			<string>zh-Hans</string>
+		</array>
 		<key>CFBundleDisplayName</key>
 		<string>FastVibe</string>
 		<key>CFBundleExecutable</key>
@@ -27,6 +30,10 @@
 		</dict>
 		<key>NSLocalNetworkUsageDescription</key>
 		<string>Connect to FastVibe on your local network.</string>
+		<key>NSBonjourServices</key>
+		<array>
+			<string>_fastvibe._tcp</string>
+		</array>
 		<key>NSCameraUsageDescription</key>
 		<string>Scan the QR code on your computer to connect to FastVibe.</string>
 		<key>NSPhotoLibraryUsageDescription</key>

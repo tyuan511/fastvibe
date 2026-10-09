@@ -307,23 +307,31 @@ class _ModelPickerSheetState extends State<_ModelPickerSheet> {
         ? modelKey(widget.currentProvider!, widget.currentModelId!)
         : null;
 
-    void pushModels(List<PickerModel> list, {required bool showProvider}) {
-      for (var index = 0; index < list.length; index++) {
-        children.add(
+    List<Widget> modelRows(
+      List<PickerModel> list, {
+      required bool showProvider,
+    }) {
+      return <Widget>[
+        for (final model in list)
           _ModelRow(
-            model: list[index],
-            selected:
-                modelKey(list[index].provider, list[index].id) == currentKey,
+            model: model,
+            selected: modelKey(model.provider, model.id) == currentKey,
             showProvider: showProvider,
             palette: palette,
             onTap: () {
               Haptic.select();
               Navigator.of(context).pop();
-              widget.onPick(list[index]);
+              widget.onPick(model);
             },
           ),
-        );
-      }
+      ];
+    }
+
+    // A provider and its models are one rounded group with hairlines between the rows,
+    // not a header with its own corners above a stack of separately rounded pills.
+    void pushGroup(List<Widget> rows) {
+      if (rows.isEmpty) return;
+      children.add(_Group(palette: palette, children: rows));
     }
 
     if (needle.isNotEmpty) {
@@ -342,27 +350,27 @@ class _ModelPickerSheetState extends State<_ModelPickerSheet> {
         }).toList();
         if (matches.isEmpty) continue;
         children.add(_Label(title: entry.name, palette: palette));
-        pushModels(matches, showProvider: false);
+        pushGroup(modelRows(matches, showProvider: false));
       }
     } else if (_scopeRecent) {
-      pushModels(recentModels, showProvider: true);
+      pushGroup(modelRows(recentModels, showProvider: true));
     } else if (_scopeProvider != null) {
       for (final entry in providers) {
         if (entry.provider != _scopeProvider) continue;
-        pushModels(entry.models, showProvider: false);
+        pushGroup(modelRows(entry.models, showProvider: false));
       }
     } else {
       if (recentModels.isNotEmpty && !_small) {
         children.add(_Label(title: t('models.recentlyUsed'), palette: palette));
-        pushModels(recentModels.take(3).toList(), showProvider: true);
+        pushGroup(modelRows(recentModels.take(3).toList(), showProvider: true));
       }
       if (!_small) {
         children.add(_Label(title: t('models.allProviders'), palette: palette));
       }
       for (final entry in providers) {
         final isOpen = _small || _expanded.contains(entry.provider);
-        if (!_small || providers.length > 1) {
-          children.add(
+        pushGroup(<Widget>[
+          if (!_small || providers.length > 1)
             _ProviderHeader(
               name: entry.name,
               count: entry.models.length,
@@ -380,9 +388,8 @@ class _ModelPickerSheetState extends State<_ModelPickerSheet> {
                 });
               },
             ),
-          );
-        }
-        if (isOpen) pushModels(entry.models, showProvider: false);
+          if (isOpen) ...modelRows(entry.models, showProvider: false),
+        ]);
       }
     }
 
@@ -452,57 +459,86 @@ class _ProviderHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(top: 8),
-      child: Material(
-        color: palette.background,
-        borderRadius: BorderRadius.vertical(
-          top: const Radius.circular(Radii.lg),
-          bottom: Radius.circular(open ? 0 : Radii.lg),
-        ),
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.vertical(
-            top: const Radius.circular(Radii.lg),
-            bottom: Radius.circular(open ? 0 : Radii.lg),
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            children: <Widget>[
+              Avatar(name: name, size: 30),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: palette.text,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    Text(
+                      '${t('models.count', <String, Object?>{'count': count})}${current ? t('models.current') : ''}',
+                      style: TextStyle(color: palette.muted, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+              RotatedBox(
+                quarterTurns: open ? 2 : 0,
+                child: HugeIcon(
+                  icon: AppIcons.arrowDown,
+                  size: 18,
+                  color: palette.muted,
+                ),
+              ),
+            ],
           ),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            child: Row(
-              children: <Widget>[
-                Avatar(name: name, size: 30),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      Text(
-                        name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: palette.text,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      Text(
-                        '${t('models.count', <String, Object?>{'count': count})}${current ? t('models.current') : ''}',
-                        style: TextStyle(color: palette.muted, fontSize: 12),
-                      ),
-                    ],
+        ),
+      ),
+    );
+  }
+}
+
+/// One rounded card holding a provider's header and its models, with a hairline between
+/// the rows. The card owns the corners and clips, so every row inside is flat.
+class _Group extends StatelessWidget {
+  const _Group({required this.palette, required this.children});
+
+  final Palette palette;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: palette.card.withValues(alpha: 0.66),
+          borderRadius: BorderRadius.circular(Radii.lg),
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(Radii.lg),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              for (var index = 0; index < children.length; index++) ...<Widget>[
+                if (index > 0)
+                  Divider(
+                    height: 0.5,
+                    thickness: 0.5,
+                    indent: 14,
+                    color: palette.border,
                   ),
-                ),
-                RotatedBox(
-                  quarterTurns: open ? 2 : 0,
-                  child: HugeIcon(
-                    icon: AppIcons.arrowDown,
-                    size: 18,
-                    color: palette.muted,
-                  ),
-                ),
+                children[index],
               ],
-            ),
+            ],
           ),
         ),
       ),
@@ -528,23 +564,13 @@ class _ModelRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final name = model.name.isNotEmpty ? model.name : model.id;
-    final reasons = (model.thinkingLevels ?? const <String>[]).any(
-      (level) => level != 'off',
-    );
     return Material(
-      color: selected
-          ? palette.accentSoft
-          : palette.card.withValues(alpha: 0.7),
-      borderRadius: BorderRadius.circular(18),
-      clipBehavior: Clip.antiAlias,
+      color: selected ? palette.accentSoft : Colors.transparent,
       child: InkWell(
         onTap: onTap,
         child: Container(
           constraints: const BoxConstraints(minHeight: 54),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          decoration: BoxDecoration(
-            border: Border(top: BorderSide(color: palette.border, width: 0.5)),
-          ),
           child: Row(
             children: <Widget>[
               if (showProvider) ...<Widget>[
@@ -567,53 +593,18 @@ class _ModelRow extends StatelessWidget {
                             : FontWeight.w500,
                       ),
                     ),
-                    const SizedBox(height: 2),
-                    Text(
-                      showProvider
-                          ? '${model.providerName} · ${model.id}'
-                          : model.id,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: palette.muted,
-                        fontSize: 12,
-                        fontFamily: 'monospace',
+                    if (showProvider) ...<Widget>[
+                      const SizedBox(height: 2),
+                      Text(
+                        model.providerName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(color: palette.muted, fontSize: 12),
                       ),
-                    ),
+                    ],
                   ],
                 ),
               ),
-              if (reasons) ...<Widget>[
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 7,
-                    vertical: 3,
-                  ),
-                  decoration: BoxDecoration(
-                    color: palette.card,
-                    borderRadius: BorderRadius.circular(Radii.pill),
-                  ),
-                  child: Row(
-                    children: <Widget>[
-                      HugeIcon(
-                        icon: AppIcons.aiBrain,
-                        size: 12,
-                        color: palette.muted,
-                      ),
-                      const SizedBox(width: 3),
-                      Text(
-                        t('models.reasoning'),
-                        style: TextStyle(
-                          color: palette.muted,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 8),
-              ],
               if (selected)
                 HugeIcon(
                   icon: AppIcons.tick,

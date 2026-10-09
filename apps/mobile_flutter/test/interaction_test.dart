@@ -17,7 +17,9 @@ import 'package:fastvibe_mobile/screens/settings.dart';
 import 'package:fastvibe_mobile/session/connection.dart';
 import 'package:fastvibe_mobile/storage/servers.dart';
 import 'package:fastvibe_mobile/theme/theme.dart';
+import 'package:fastvibe_mobile/ui/context_menu.dart';
 import 'package:fastvibe_mobile/ui/feedback.dart';
+import 'package:fastvibe_mobile/ui/glass_screen.dart';
 import 'package:fastvibe_mobile/ui/kit.dart';
 
 void main() {
@@ -61,6 +63,40 @@ void main() {
   }
 
   testWidgets(
+    'a long press asked from above the screen still opens its context menu',
+    (tester) async {
+      // A screen's handlers run in its State's context, which is above its
+      // GlassScreen and so above the menu host. That lookup used to find nothing and
+      // every long press (a chat row, a device, a message) silently did nothing.
+      var renamed = false;
+      await pump(
+        tester,
+        Builder(
+          builder: (outer) => GlassScreen(
+            title: 'List',
+            body: Center(
+              child: GestureDetector(
+                onLongPress: () => showContextMenu(outer, <Widget>[
+                  GlassMenuItem(title: 'Rename', onTap: () => renamed = true),
+                ]),
+                child: const Text('row'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.longPress(find.text('row'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(find.text('Rename'), findsOneWidget);
+      await tester.tap(find.text('Rename'));
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(renamed, isTrue);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
     'saved devices refresh after a mutation and search respects the name',
     (tester) async {
       await pump(tester, const DevicesScreen());
@@ -76,10 +112,12 @@ void main() {
       );
       await tester.pump(const Duration(milliseconds: 100));
       expect(find.text('Studio'), findsOneWidget);
-      await tester.enterText(find.byType(TextField), 'missing');
+      // The search field is the iOS one now (GlassSearchBar), not a Material TextField;
+      // every text input ends in an EditableText, so that is what is looked for.
+      await tester.enterText(find.byType(EditableText), 'missing');
       await tester.pump();
       expect(find.text('Studio'), findsNothing);
-      await tester.enterText(find.byType(TextField), 'STUDIO');
+      await tester.enterText(find.byType(EditableText), 'STUDIO');
       await tester.pump();
       expect(find.text('Studio'), findsOneWidget);
       await ServerStore.instance.patch('s1', favorite: true);

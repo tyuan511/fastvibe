@@ -866,6 +866,10 @@ const api = {
     setPassword: async () => ({ ...REMOTE_STATE, configured: true }),
     clearPassword: async () => REMOTE_OFF,
     start: async () => REMOTE_STATE,
+    setDiscoveryName: async (name: string) => {
+      REMOTE_STATE.discoveryName = name.trim();
+      return { ...REMOTE_STATE };
+    },
     stop: async () => REMOTE_OFF,
     listDevices: async () => REMOTE_DEVICES,
     revokeDevice: async () => [],
@@ -976,6 +980,8 @@ const TUNNEL_IDLE = {
 };
 
 const REMOTE_OFF = {
+  discoveryName: "",
+  defaultDiscoveryName: "My-MacBook-Pro",
   running: false,
   host: "127.0.0.1",
   port: null,
@@ -990,6 +996,7 @@ const REMOTE_OFF = {
 };
 
 const REMOTE_ONLINE = {
+  ...REMOTE_OFF,
   running: true,
   host: "127.0.0.1",
   port: 7777,

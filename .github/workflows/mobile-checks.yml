@@ -1,0 +1,52 @@
+name: Mobile Flutter checks
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/mobile_flutter/**"
+      - ".github/workflows/mobile-*.yml"
+      - "test/flutter-release.test.ts"
+  pull_request:
+    paths:
+      - "apps/mobile_flutter/**"
+      - ".github/workflows/mobile-*.yml"
+      - "test/flutter-release.test.ts"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version-file: apps/mobile_flutter/pubspec.yaml
+          cache: true
+          pub-cache-key: flutter-pub-${{ runner.os }}-${{ hashFiles('apps/mobile_flutter/pubspec.lock') }}
+      - name: Verify release metadata and translations
+        run: |
+          bash apps/mobile_flutter/tool/check_release.sh
+          node --test test/flutter-release.test.ts
+          node apps/mobile_flutter/tool/gen_i18n.mjs --check
+      - name: Install Flutter dependencies
+        working-directory: apps/mobile_flutter
+        run: flutter pub get --enforce-lockfile
+      - name: Analyze
+        working-directory: apps/mobile_flutter
+        run: flutter analyze
+      - name: Test
+        working-directory: apps/mobile_flutter
+        run: flutter test

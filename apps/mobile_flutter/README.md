@@ -1,7 +1,7 @@
 # FastVibe for Flutter
 
 A native iOS / Android client for FastVibe machines, using the same App Protocol v1
-as the React Native app in `../mobile`. Flutter owns its visual design: soft light
+as the desktop and web clients. Flutter owns its visual design: soft light
 and dark backgrounds, pinned liquid-glass navigation, floating composer, glass
 sheets and dialogs. Transcripts and dense content stay readable and opaque.
 
@@ -54,7 +54,7 @@ flutter drive --driver=test_driver/integration_test.dart \
   --target=integration_test/app_flow_test.dart -d <simulator-or-emulator-id>
 
 flutter build ios --release --no-codesign
-tool/build_release.sh   # split APKs and Android App Bundle
+bash tool/build_release.sh   # arm64-v8a APK only
 ```
 
 Unit/widget coverage includes real HTTP/WebSocket handshakes, concurrent responses,
@@ -92,21 +92,52 @@ signing key through `FASTVIBE_ANDROID_STORE_FILE`, `FASTVIBE_ANDROID_STORE_PASSW
 password). An incomplete signing configuration fails immediately. Never publish a
 locally debug-signed APK as an upgrade to the production app.
 
-All split APKs and the AAB retain the build number from `pubspec.yaml`; Flutter's
-per-ABI version offset is disabled. The updater selects the device's supported ABI
-before falling back to a universal APK. iOS builds above intentionally omit signing
-and uploading. Existing React Native release workflows remain the shipping pipeline.
+Android builds only `arm64-v8a`, using `--split-per-abi --target-platform android-arm64`.
+The APK retains the build number in `pubspec.yaml`; Flutter's per-ABI offset is disabled.
+The build number must be at least `MAJOR * 10000 + MINOR * 100 + PATCH`, matching the
+previous client's versionCode scheme. For example, `0.4.2+402` can replace build 402.
+Future releases must increase both the version and build number. `tool/check_release.sh`
+rejects a lower build number or an `app-v*` tag that does not match the version.
 
-Strings are shared with React Native: edit `../mobile/src/i18n/{zh,en}.ts`, then run
-`node tool/gen_i18n.mjs`. The tests reject untranslated literal keys.
+Strings live in `tool/i18n/{zh,en}.json`. Edit those files, then run
+`node tool/gen_i18n.mjs` (or `pnpm flutter:i18n` from the repo root).
+`node tool/gen_i18n.mjs --check` verifies translations and generated output.
 
-## Verification on 2026-10-09
+### GitHub Actions
 
-- `flutter analyze`: zero issues; `flutter test`: 98 passed.
-- React Native TypeScript check passed; 113 existing mobile regression tests passed.
-- iOS 27 simulator and Android 16 emulator: complete native workflow and screenshot checks passed.
-- iOS release build passed without codesigning.
-- Android release builds passed for all three split APKs and the AAB. The arm64 APK
-  reports `dev.fastvibe.mobile`, build 42, and was installed and launched on the emulator.
+- **Mobile Flutter checks** runs `flutter analyze`, `flutter test`, release metadata and
+  translation checks on pull requests and pushes to main that change the mobile client.
+- **Mobile Android APK** keeps the `app-v*` tag and manual-run entry points. Tag pushes
+  dispatch a build on main, checking out the tagged commit so caches can be reused.
+  It publishes `FastVibe-app-v<version>-arm64-v8a.apk` and its `.sha256` checksum.
+  The ABI stays in the name so the updater can reject incompatible devices.
+  A manual run without a tag only uploads build artifacts. It reuses the existing
+  `FASTVIBE_ANDROID_KEYSTORE_BASE64`, `FASTVIBE_ANDROID_STORE_PASSWORD`,
+  `FASTVIBE_ANDROID_KEY_ALIAS` and `FASTVIBE_ANDROID_KEY_PASSWORD` secrets.
+- **Mobile iOS TestFlight** archives the Flutter `Runner` app, then automatically signs
+  and exports it with `APPLE_API_KEY_P8`, `APPLE_API_KEY_ID` and `APPLE_API_ISSUER`.
+  `APPLE_TEAM_ID` overrides the team. `TESTFLIGHT_AUTO=true` enables uploads on `app-v*`
+  tags; a manual run with `upload` off exports an IPA artifact. The build number is
+  `github.run_number.github.run_attempt`, including reruns. The App Store Connect app
+  record must already exist for `dev.fastvibe.mobile`.
 
-These are local validation results, not an App Store or Google Play release.
+Both release workflows analyze and test the app before building. All three workflows
+read the Flutter SDK version from `environment.flutter` in `pubspec.yaml`.
+
+## CI migration verification on 2026-10-09
+
+- `flutter analyze`: zero issues; `flutter test`: 106 passed.
+- Android arm64 release build passed. APK inspection confirms only `arm64-v8a` native
+  libraries, package `dev.fastvibe.mobile`, version `0.4.2`, build 402, about 18.6 MB.
+  The local APK uses the debug key; production CI supplies the existing release key.
+- `flutter build ipa --release --no-codesign --build-number 402.1` passed and produced
+  `build/ios/archive/Runner.xcarchive`. Its bundle ID is `dev.fastvibe.mobile`, version
+  `0.4.2`, build `402.1`.
+- All three mobile workflows passed `actionlint`; translation checks, shell syntax,
+  TypeScript checking and frozen-lockfile installation passed.
+- Repository tests: 1211 passed with `node --test --test-concurrency=1 'test/**/*.test.ts'`.
+  Concurrent runs hit existing timing-sensitive assertions; they passed in the serial run.
+
+GitHub release signing and TestFlight export/upload require a workflow run with the
+repository's existing signing secrets; they were not executed locally. No desktop GUI
+or Computer Use verification was performed for this migration.

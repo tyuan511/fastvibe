@@ -572,7 +572,7 @@ app.whenReady().then(async () => {
     () => windows,
     () => createWindow(),
   );
-  registerRemoteIpc();
+  registerRemoteIpc(queueSettingsWrite);
   registerSshIpc();
   registerDecisionIpc();
   createAppServer({

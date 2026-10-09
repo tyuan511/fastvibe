@@ -21,6 +21,9 @@
     "minutes": "{{n}}m",
     "seconds": "{{n}}s"
   },
+  "startup": {
+    "slow": "Startup is taking longer than usual. You can keep waiting or reload."
+  },
   "crash": {
     "title": "The interface hit an error",
     "description": "Conversations and runs live in the main process, so reloading the interface loses nothing.",

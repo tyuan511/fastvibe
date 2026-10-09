@@ -271,6 +271,7 @@ export const Ipc = {
   remoteClearPassword: "remote:clear-password",
   remoteStart: "remote:start",
   remoteSetLanAccess: "remote:set-lan-access",
+  remoteSetDiscoveryName: "remote:set-discovery-name",
   remoteStop: "remote:stop",
   remoteListDevices: "remote:list-devices",
   remoteRevokeDevice: "remote:revoke-device",
@@ -446,6 +447,9 @@ export type RemoteServerState = {
   lanAddresses: RemoteLanAddresses;
   /** Address family currently selected for the LAN listener. */
   lanAddressFamily: RemoteLanAddressFamily;
+  /** User-chosen LAN discovery name; empty follows defaultDiscoveryName. */
+  discoveryName: string;
+  defaultDiscoveryName: string;
   /** Clients connected right now. */
   clients: number;
   /** Failed logins since the last success; the throttle grows with this. */

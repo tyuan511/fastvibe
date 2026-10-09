@@ -1,9 +1,10 @@
-import { useEffect, type MutableRefObject } from "react";
+import { useEffect, useState, type MutableRefObject } from "react";
 import type { NavigateFunction } from "react-router";
 import { toast } from "sonner";
 import { i18n } from "@/lib/i18n";
 import { engine, getStatus, onConversationReady, onEvent, onStatus } from "@/lib/engine-client";
 import { createConversationRefresh } from "@/lib/conversation-refresh";
+import { createWorkspaceRestore } from "@/lib/workspace-restore";
 import { isDagNodeId } from "@shared/dag";
 import { findSubagent } from "@shared/subagent-state";
 import { conversationIdFromHash, conversationPath } from "@/lib/routes";
@@ -16,16 +17,17 @@ import type { ConversationOpenResult, EngineEvent, EngineSessionState, EngineSta
 
 const { refreshStats, reloadActiveState, reloadActiveMessages } = createConversationRefresh(engine, useSessionStore.getState);
 
+export type ConversationOpenSource = "user" | "history" | "remote" | "restore";
+
 export type AppBootstrapArgs = {
   setStatus: (status: EngineStatus) => void;
   setEngineKnown: (known: boolean) => void;
   applyList: (snapshot: WorkspaceSnapshot) => void;
   applyOpen: (result: ConversationOpenResult) => void;
   navigate: NavigateFunction;
-  restoreId: MutableRefObject<string | null>;
   followedActiveId: MutableRefObject<string | null | undefined>;
   intendedActiveId: MutableRefObject<string | null>;
-  openLatest: MutableRefObject<((id: string, source?: "user" | "history" | "remote") => Promise<void>) | null>;
+  openLatest: MutableRefObject<((id: string, source?: ConversationOpenSource) => Promise<void>) | null>;
   abortInFlight: MutableRefObject<Map<string, Promise<void>>>;
   applyEvent: (event: EngineEvent) => void;
   setCommands: (commands: SlashCommand[]) => void;
@@ -34,14 +36,14 @@ export type AppBootstrapArgs = {
 };
 
 /** Boot, catalog follow, and the live engine subscription. Split out of `App` so the shell stays the layout. */
-export function useAppBootstrap(args: AppBootstrapArgs): void {
+export function useAppBootstrap(args: AppBootstrapArgs): boolean {
+  const [workspaceReady, setWorkspaceReady] = useState(false);
   const {
     setStatus,
     setEngineKnown,
     applyList,
     applyOpen,
     navigate,
-    restoreId,
     followedActiveId,
     intendedActiveId,
     openLatest,
@@ -52,9 +54,29 @@ export function useAppBootstrap(args: AppBootstrapArgs): void {
     setSession,
   } = args;
   useEffect(() => {
-    void getStatus().then((next) => {
+    let disposed = false;
+    let statusPushed = false;
+    const restore = createWorkspaceRestore({
+      hasSelection: () => Boolean(useSessionStore.getState().activeId || intendedActiveId.current),
+      restore: async (id) => { await openLatest.current?.(id, "restore"); },
+      onSettled: () => setWorkspaceReady(true),
+      onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
+    });
+    const receiveStatus = (next: EngineStatus): void => {
+      if (disposed) return;
       setStatus(next);
       setEngineKnown(true);
+      restore.setStatus(next.state);
+    };
+    // Subscribe first. A pushed status is newer than the initial async read.
+    const offStatus = onStatus((next) => {
+      statusPushed = true;
+      receiveStatus(next);
+    });
+    void getStatus().then((next) => {
+      if (!statusPushed) receiveStatus(next);
+    }).catch((error: unknown) => {
+      if (!statusPushed) receiveStatus({ state: "error", message: String(error) });
     });
     // A fresh window has no run history: ask the engine which conversations are
     // still working so their spinners survive a reload.
@@ -63,6 +85,7 @@ export function useAppBootstrap(args: AppBootstrapArgs): void {
       .then((ids) => useSessionStore.getState().setRunningConversations(ids))
       .catch(() => undefined);
     void window.fastvibe.conversations.list().then((snapshot) => {
+      if (disposed) return;
       applyList(snapshot);
       // A browser client reloads on every dropped socket, and its URL still names the
       // chat it was on — possibly one it was about to leave when the socket went. The
@@ -72,26 +95,8 @@ export function useAppBootstrap(args: AppBootstrapArgs): void {
       const pending = IS_REMOTE
         ? snapshot.activeId ?? conversationIdFromHash()
         : conversationIdFromHash() ?? snapshot.activeId;
-      if (
-        pending &&
-        useSessionStore.getState().status.state === "ready" &&
-        !useSessionStore.getState().activeId
-      ) {
-        restoreId.current = null;
-        void window.fastvibe.conversations
-          .open(pending)
-          .then((opened) => {
-            applyOpen(opened);
-            if (!window.location.hash.includes("/settings") && conversationIdFromHash() !== pending) {
-              navigate(conversationPath(pending), { replace: true });
-            }
-          })
-          .catch(() => undefined);
-      } else {
-        restoreId.current = pending ?? null;
-      }
-    });
-    const offStatus = onStatus(setStatus);
+      restore.setConversation(pending ?? null);
+    }).catch(restore.fail);
     // Background conversation init finished: fill in the transcript, unless the
     // user already sent a message (then their optimistic thread wins and engine
     // events will replace it).
@@ -340,10 +345,13 @@ export function useAppBootstrap(args: AppBootstrapArgs): void {
       }
     });
     return () => {
+      disposed = true;
+      restore.dispose();
       offStatus();
       offReady();
       offEvent();
       offWorkspace();
     };
   }, [applyEvent, applySnapshot, setSession, setStatus]);
+  return workspaceReady;
 }

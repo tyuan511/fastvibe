@@ -9,8 +9,7 @@ import { cn } from "@/lib/utils";
  * The mark is the shipped app icon (white F on the brand-gradient tile); the
  * halo is a blurred radial disc behind it, which keeps the loader legible on
  * both the light and the dark background. `index.html` paints the same mark in
- * its boot splash, so `dismissBootLoader()` hands the screen off with a fade
- * instead of restarting the animation.
+ * its boot splash, which stays opaque until the restored conversation is ready.
  */
 export function FLoader({
   className,

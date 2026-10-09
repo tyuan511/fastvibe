@@ -19,9 +19,9 @@
        * Painted from the raw document so the brand mark is already breathing
        * before the module bundle runs — in dev the app stylesheet only arrives
        * with JS, so a rule in index.css would land too late. The splash is a
-       * solid, un-themed background with the mark centred; `dismissBootLoader()`
-       * fades the node out once the shell is ready, so the hand-off to the app is
-       * a single opacity transition rather than a restart.
+       * solid background with the mark centred; `dismissBootLoader()` removes it
+       * only after the restored workspace is committed. Keep the cover opaque:
+       * a fade would expose intermediate loading placeholders underneath it.
        *
        * The loader rules below are duplicated for the React <FLoader> in index.css
        * (which cannot be relied on pre-JS); keep the two in sync.
@@ -56,11 +56,6 @@
         align-items: center;
         justify-content: center;
         background: var(--background, #ffffff);
-        transition: opacity 220ms ease;
-      }
-      #fastvibe-boot[data-dismissed] {
-        opacity: 0;
-        pointer-events: none;
       }
       #fastvibe-boot .fv-loader {
         width: 96px;

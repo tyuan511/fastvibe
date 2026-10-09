@@ -78,6 +78,40 @@ void main() {
     expect(await pending, 'first');
   });
 
+  test('continue waits for a healthy run longer than 30 seconds', () async {
+    final finished = Completer<Object?>();
+    server.handlers['engine:continue'] = (_) => finished.future;
+    await connect();
+    client.setActive(true);
+    final completeRun = Timer(const Duration(seconds: 31), () => finished.complete(null));
+    addTearDown(() {
+      completeRun.cancel();
+      if (!finished.isCompleted) finished.complete(null);
+    });
+    await expectLater(client.call('engine:continue', {'conversationId': 'c1'}), completes);
+    expect(server.calls.where((call) => call['method'] == 'engine:continue').length, 1);
+    expect(server.frames.any((frame) => frame['kind'] == 'cancel'), isFalse);
+    expect(server.frames.any((frame) => frame['kind'] == 'ping'), isTrue);
+  }, timeout: const Timeout(Duration(seconds: 40)));
+
+  test('a dropped socket still rejects a pending continuation', () async {
+    final accepted = Completer<void>();
+    final finished = Completer<Object?>();
+    server.handlers['engine:continue'] = (_) {
+      accepted.complete();
+      return finished.future;
+    };
+    await connect();
+    final pending = expectLater(
+      client.call('engine:continue', {'conversationId': 'c1'}),
+      throwsA(isA<TransportError>().having((e) => e.code, 'code', 'dropped')),
+    );
+    await accepted.future;
+    await server.drop();
+    await pending;
+    finished.complete(null);
+  });
+
   test(
     'atomic submit sends images once; busy send stays in durable queue',
     () async {

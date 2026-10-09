@@ -26,7 +26,12 @@ Future<T?> showAppSheet<T>({
     initialState: GlassSheetState.half,
     halfSize: fraction,
     fullSize: 0.92,
-    fillThreshold: 0.96,
+    // The package defaults to `instant`: the glass holds until `fillThreshold`, then snaps
+    // to the opaque `expandedColor` in one frame — a hard white flash at the top of the
+    // drag. `gradual` cross-fades glass → solid along an ease-in-out over the rest of the
+    // travel, so the blur thins out as the sheet rises instead of cutting away.
+    fillTransition: GlassFillTransition.gradual,
+    fillThreshold: 0.2,
     horizontalMargin: 12,
     bottomMargin: 12,
     topBorderRadius: 32,

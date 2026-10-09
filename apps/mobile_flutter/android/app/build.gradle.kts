@@ -40,9 +40,8 @@ android {
     }
 
     defaultConfig {
-        // The same package the Expo client ships under: an install of either is the same
-        // app to Android, and the self-updater hands the system installer an APK it will
-        // only accept from a matching signature.
+        // Keep the shipping package ID so a release signed with the same key can
+        // upgrade an existing installation.
         applicationId = "dev.fastvibe.mobile"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
@@ -50,10 +49,20 @@ android {
         // glass shaders want a modern Impeller path.
         minSdk = 24
         targetSdk = flutter.targetSdkVersion
-        // Keep the same monotonically increasing build number across APKs and AABs.
+        // Keep the shipping build number on the arm64 APK.
         // gradle.properties disables Flutter's per-ABI offset.
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+    }
+
+    packaging {
+        jniLibs {
+            // AGP stores native libraries uncompressed so they can be mapped straight out
+            // of the APK. For an APK downloaded over a phone connection (the in-app
+            // updater fetches one file) the download matters more than install-time
+            // extraction: libflutter, libapp and the ML Kit scanner are most of the size.
+            useLegacyPackaging = true
+        }
     }
 
     buildTypes {

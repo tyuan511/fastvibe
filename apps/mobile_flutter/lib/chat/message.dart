@@ -296,15 +296,18 @@ List<MessagePart> partsOf(ChatMessage message) {
 ///
 /// The cache is keyed by the incoming message object and only reused while the row it was
 /// merged against is the same instance, so a completed reply keeps its identity across
-/// streamed updates (and a card the reader opened stays open).
+/// streamed updates (and a card the reader opened stays open). Retire obsolete keys on
+/// every projection: live deltas replace message objects, and a Map holds them strongly.
 List<ChatMessage> mergeReplies(List<ChatMessage> messages, Map<ChatMessage, ({ChatMessage previous, ChatMessage merged})> cache) {
   final out = <ChatMessage>[];
+  final used = <ChatMessage>{};
   for (final message in messages) {
     final previous = out.isEmpty ? null : out.last;
     if (previous == null || !previous.joinable || !message.joinable) {
       out.add(message);
       continue;
     }
+    used.add(message);
     var entry = cache[message];
     if (entry == null || !identical(entry.previous, previous)) {
       entry = (previous: previous, merged: combineReplies(previous, message));
@@ -312,6 +315,7 @@ List<ChatMessage> mergeReplies(List<ChatMessage> messages, Map<ChatMessage, ({Ch
     }
     out[out.length - 1] = entry.merged;
   }
+  cache.removeWhere((message, _) => !used.contains(message));
   return out;
 }
 

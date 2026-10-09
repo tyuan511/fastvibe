@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart' show CupertinoActivityIndicator;
 import 'package:flutter/material.dart';
 import 'package:hugeicons/hugeicons.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
@@ -6,8 +7,10 @@ import '../i18n/core.dart';
 import 'icons.dart';
 import 'kit.dart';
 
-/// The conversation's navigation and primary action form one thumb-level dock.
-/// The filter pill and compose button own separate glass surfaces.
+/// The conversation list's bottom toolbar: the 全部 / 进行中 / 待处理 filter as a segmented
+/// control, and the compose button at the trailing edge. iOS puts a segmented control in a
+/// toolbar when it narrows the screen's one list (a tab bar would mean separate places),
+/// and keeps it in thumb reach at the bottom.
 class ConversationDock extends StatelessWidget implements PreferredSizeWidget {
   const ConversationDock({
     super.key,
@@ -22,56 +25,53 @@ class ConversationDock extends StatelessWidget implements PreferredSizeWidget {
   final bool creating;
 
   @override
-  Size get preferredSize => const Size.fromHeight(84);
+  Size get preferredSize => const Size.fromHeight(72);
 
   @override
   Widget build(BuildContext context) {
     final p = paletteOf(context);
-    final options = [
-      (AppIcons.bubbleChat, t('server.filterAll')),
-      (AppIcons.loading, t('server.filterActive')),
-      (AppIcons.messageQuestion, t('server.filterWaiting')),
-    ];
     return Align(
       heightFactor: 1,
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 640),
-        child: GlassTabBar.bottom(
-          tabs: [
-            for (var i = 0; i < options.length; i++)
-              GlassTab(
-                icon: HugeIcon(
-                  icon: options[i].$1,
-                  size: 22,
-                  color: i == selected ? p.accent : p.muted,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+          child: Row(
+            children: <Widget>[
+              Expanded(
+                child: GlassSegmentedControl(
+                  segments: <GlassSegment>[
+                    GlassSegment(label: t('server.filterAll')),
+                    GlassSegment(label: t('server.filterActive')),
+                    GlassSegment(label: t('server.filterWaiting')),
+                  ],
+                  selectedIndex: selected,
+                  onSegmentSelected: onSelect,
+                  height: 48,
+                  selectedTextStyle: TextStyle(
+                    color: p.text,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  unselectedTextStyle: TextStyle(color: p.muted, fontSize: 15),
                 ),
-                label: options[i].$2,
               ),
-          ],
-          selectedIndex: selected,
-          onTabSelected: onSelect,
-          horizontalPadding: 16,
-          verticalPadding: 12,
-          barHeight: 60,
-          iconLabelSpacing: 3,
-          selectedLabelColor: p.accent,
-          unselectedLabelColor: p.muted,
-          labelFontSize: 11,
-          extraButton: GlassTabBarExtraButton(
-            icon: creating
-                ? SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: p.accent,
-                    ),
-                  )
-                : HugeIcon(icon: AppIcons.chatAdd, size: 25, color: p.accent),
-            label: t('common.newChat'),
-            enabled: !creating,
-            size: 60,
-            onTap: onCreate,
+              const SizedBox(width: 10),
+              GlassIconButton(
+                icon: creating
+                    ? CupertinoActivityIndicator(color: p.accent)
+                    : HugeIcon(
+                        icon: AppIcons.chatAdd,
+                        size: 22,
+                        color: p.accent,
+                      ),
+                onPressed: creating ? null : onCreate,
+                size: 48,
+                iconSize: 22,
+                shape: GlassIconButtonShape.circle,
+                semanticLabel: t('common.newChat'),
+              ),
+            ],
           ),
         ),
       ),
@@ -79,9 +79,11 @@ class ConversationDock extends StatelessWidget implements PreferredSizeWidget {
   }
 }
 
+/// The device list's bottom bar: one 添加 button. Scanning a code and typing an address
+/// are two ways of the same thing, so they are one page (the scan card leads it) rather
+/// than two competing buttons.
 class DeviceDock extends StatelessWidget implements PreferredSizeWidget {
-  const DeviceDock({super.key, required this.onScan, required this.onAdd});
-  final VoidCallback onScan;
+  const DeviceDock({super.key, required this.onAdd});
   final VoidCallback onAdd;
   @override
   Size get preferredSize => const Size.fromHeight(84);
@@ -95,46 +97,33 @@ class DeviceDock extends StatelessWidget implements PreferredSizeWidget {
         constraints: const BoxConstraints(maxWidth: 540),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-          child: Row(
-            children: [
-              Expanded(
-                child: GlassButton.custom(
-                  height: 60,
-                  shape: const LiquidRoundedSuperellipse(borderRadius: 30),
-                  onTap: onScan,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      HugeIcon(
-                        icon: AppIcons.qrCode,
-                        size: 22,
-                        color: p.accent,
-                      ),
-                      const SizedBox(width: 10),
-                      Flexible(
-                        child: Text(
-                          t('devices.scanAdd'),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: p.text,
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ],
+          child: GlassButton.custom(
+            height: 60,
+            shape: const LiquidRoundedSuperellipse(borderRadius: 30),
+            onTap: onAdd,
+            label: t('devices.add'),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                HugeIcon(
+                  icon: AppIcons.plus,
+                  size: 22,
+                  color: p.accent,
+                  strokeWidth: 2.2,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  t('devices.add'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: p.text,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
-              ),
-              const SizedBox(width: 12),
-              GlassIconButton(
-                icon: HugeIcon(icon: AppIcons.link, size: 23, color: p.accent),
-                size: 60,
-                semanticLabel: t('devices.enterAddress'),
-                onPressed: onAdd,
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

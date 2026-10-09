@@ -15,7 +15,6 @@ import 'package:fastvibe_mobile/chat/images.dart';
 import 'package:fastvibe_mobile/chat/model_picker.dart';
 import 'package:fastvibe_mobile/chat/queue_panel.dart';
 import 'package:fastvibe_mobile/chat/run_transcript.dart';
-import 'package:fastvibe_mobile/chat/transcript_search.dart';
 import 'package:fastvibe_mobile/i18n/core.dart';
 import 'package:fastvibe_mobile/protocol/address.dart';
 import 'package:fastvibe_mobile/router.dart';
@@ -200,28 +199,13 @@ void main() {
             .isNotEmpty,
         reason: 'Chat navigation must return after closing a sheet',
       );
+      // The ⋯ button is the bar's pull-down menu (search was removed from it).
       await tester.tap(find.bySemanticsLabel(t('server.chatActions')));
-      await until(() => find.text(t('chat.search')).evaluate().isNotEmpty);
-      await tester.pump(const Duration(milliseconds: 800));
-      await tester.pump(const Duration(milliseconds: 300));
-      await tester.tap(find.text(t('chat.search')));
-      await until(() => find.byType(TranscriptSearch).evaluate().isNotEmpty);
-      await tester.enterText(
-        find.descendant(
-          of: find.byType(TranscriptSearch),
-          matching: find.byType(TextField),
-        ),
-        'workspace',
-      );
-      await until(
-        () => find
-            .textContaining('The workspace is ready.')
-            .evaluate()
-            .isNotEmpty,
-      );
-      await shot('search-glass');
-      appRouter.pop();
+      await until(() => find.text(t('common.rename')).evaluate().isNotEmpty);
       await tester.pump(const Duration(milliseconds: 500));
+      await shot('chat-actions-menu');
+      await tester.tapAt(const Offset(24, 420));
+      await tester.pump(const Duration(milliseconds: 600));
 
       await tester.enterText(input, 'Keep this draft');
       appRouter.pop();

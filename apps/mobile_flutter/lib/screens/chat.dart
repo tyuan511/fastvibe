@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:hugeicons/hugeicons.dart';
 
 import '../chat/composer.dart';
@@ -18,8 +19,6 @@ import '../chat/queue.dart';
 import '../chat/queue_panel.dart';
 import '../chat/snapshot_sync.dart';
 import '../chat/turn_meta.dart';
-import '../chat/transcript_search.dart';
-import '../ui/sheet.dart';
 import '../i18n/core.dart';
 import '../protocol/client.dart';
 import '../protocol/diagnostics.dart';
@@ -33,6 +32,7 @@ import '../ui/icons.dart';
 import '../ui/kit.dart';
 import '../ui/preferences.dart';
 import 'transcript.dart';
+import '../ui/context_menu.dart';
 
 /// One conversation.
 ///
@@ -57,6 +57,10 @@ class ChatScreen extends StatefulWidget {
 }
 
 class _ChatScreenState extends State<ChatScreen> {
+  /// Height of the footer (banner, queue, prompt/composer) drawn over the bottom of the
+  /// transcript. The transcript scrolls underneath it, so it pads its end by this much.
+  double _footerHeight = 0;
+
   final List<ChatMessage> _messages = <ChatMessage>[];
   final Map<ChatMessage, ({ChatMessage previous, ChatMessage merged})>
   _replyCache = <ChatMessage, ({ChatMessage previous, ChatMessage merged})>{};
@@ -674,69 +678,34 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  void _openMenu() {
-    final chat = _chat;
-    if (chat == null) return;
-    Haptic.tap();
-    showOptionSheet(
-      context,
-      title: chat.title,
-      subtitle: _projectName,
-      options: <SheetOption>[
-        SheetOption(
-          value: 'rename',
-          label: t('common.rename'),
-          icon: AppIcons.pencilEdit,
-          onSelect: () => _rename(chat),
-        ),
-        SheetOption(
-          value: 'copy',
-          label: t('chat.copyAll'),
-          icon: AppIcons.copy,
-          onSelect: _copyAll,
-        ),
-        SheetOption(
-          value: 'search',
-          label: t('chat.search'),
-          icon: AppIcons.search,
-          onSelect: () {
-            final scope = _sync;
-            showAppSheet<void>(
-              context: context,
-              expanded: true,
-              builder: (_) => TranscriptSearch(
-                load: () async {
-                  if (!_connected || scope == null) {
-                    throw StateError(t('chat.loadFailed'));
-                  }
-                  await _pager?.loadAll();
-                  if (!mounted || _sync != scope || _historyCursor != null) {
-                    throw StateError(t('chat.loadFailed'));
-                  }
-                  return List<ChatMessage>.from(_messages);
-                },
-              ),
-            );
-          },
-        ),
-        SheetOption(
-          value: 'archive',
-          label: t('common.archive'),
-          icon: AppIcons.archive,
-          onSelect: () async {
-            final done = await archiveConversation(chat.id, running: _running);
-            if (done && mounted) context.pop();
-          },
-        ),
-        SheetOption(
-          value: 'delete',
-          label: t('common.delete'),
-          icon: AppIcons.delete,
-          destructive: true,
-          onSelect: () => _confirmDelete(chat),
-        ),
-      ],
+  /// The chat's actions, as the bar's ⋯ pull-down menu (`UIBarButtonItem.menu`).
+  List<Widget> _menuItems(CatalogConversation chat) {
+    Widget item(
+      String label,
+      List<List<dynamic>> icon,
+      VoidCallback onTap, {
+      bool destructive = false,
+    }) => GlassMenuItem(
+      title: label,
+      icon: HugeIcon(icon: icon, size: 18),
+      isDestructive: destructive,
+      onTap: onTap,
     );
+    return <Widget>[
+      item(t('common.rename'), AppIcons.pencilEdit, () => _rename(chat)),
+      item(t('chat.copyAll'), AppIcons.copy, _copyAll),
+      item(t('common.archive'), AppIcons.archive, () async {
+        final done = await archiveConversation(chat.id, running: _running);
+        if (done && mounted) context.pop();
+      }),
+      const GlassMenuDivider(),
+      item(
+        t('common.delete'),
+        AppIcons.delete,
+        () => _confirmDelete(chat),
+        destructive: true,
+      ),
+    ];
   }
 
   Future<void> _rename(CatalogConversation chat) async {
@@ -789,23 +758,11 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  /// A long press on a message: the iOS context menu where the finger is.
   Future<void> _messageAction(ChatMessage message) async {
-    Haptic.press();
-    showOptionSheet(
+    showContextMenu(
       context,
-      title: message.role == 'user' ? t('chat.myMessage') : t('chat.reply'),
-      subtitle: message.text
-          .trim()
-          .replaceAll(RegExp(r'\s+'), ' ')
-          .substring(
-            0,
-            message.text
-                .trim()
-                .replaceAll(RegExp(r'\s+'), ' ')
-                .length
-                .clamp(0, 60),
-          ),
-      options: <SheetOption>[
+      contextMenuItems(<SheetOption>[
         SheetOption(
           value: 'copy',
           label: t('common.copy'),
@@ -819,11 +776,10 @@ class _ChatScreenState extends State<ChatScreen> {
           SheetOption(
             value: 'reuse',
             label: t('chat.reuse'),
-            description: t('chat.reuseHint'),
             icon: AppIcons.pencilEdit,
             onSelect: () => _draft.text = message.text.trim(),
           ),
-      ],
+      ]),
     );
   }
 
@@ -854,111 +810,222 @@ class _ChatScreenState extends State<ChatScreen> {
       subtitle: _projectName,
       actions: <Widget>[
         if (chat != null)
-          GlassAction(
+          GlassMenuAction(
             icon: AppIcons.moreHorizontal,
             tooltip: t('server.chatActions'),
-            onPressed: _openMenu,
+            items: _menuItems(chat),
           ),
       ],
-      body: LayoutBuilder(
-        builder: (context, constraints) => Column(
-          children: <Widget>[
-            if (_dag != null) MobileDagSummary(watcher: _dag!),
-            Expanded(
-              child: _loading
-                  ? BrandLoading(message: t('chat.loading'))
-                  : empty
-                  ? _Welcome(
-                      projectName: _projectName,
-                      onPick: (text) => _draft.text = text,
-                    )
-                  : TranscriptView(
-                      messages: merged,
-                      footers: _footers,
-                      running: running,
-                      waiting: prompt != null,
-                      workingSince: workingSince,
-                      now: _now,
-                      onLongPress: _messageAction,
-                      onOlder: () => _pager?.prefetch(),
-                      dagWatcher: _dag,
+      // The transcript runs under the glass bar and under the footer, dissolving into the
+      // page at both (a scroll view under an iOS 26 bar and a floating input), rather than
+      // being cut off at their edges. It pads itself by how far each reaches.
+      fadeBottom: false,
+      body: Builder(
+        builder: (context) {
+          final insets = GlassInsets.maybeOf(context);
+          final top = insets?.top ?? 0;
+          return LayoutBuilder(
+            builder: (context, constraints) => Stack(
+              children: <Widget>[
+                Positioned.fill(
+                  child: Column(
+                    children: <Widget>[
+                      if (_dag != null)
+                        Padding(
+                          padding: EdgeInsets.only(top: top),
+                          child: MobileDagSummary(watcher: _dag!),
+                        ),
+                      Expanded(
+                        child: _loading
+                            ? BrandLoading(message: t('chat.loading'))
+                            : empty
+                            ? _Welcome(
+                                projectName: _projectName,
+                                topInset: _dag != null ? 0 : top,
+                                bottomInset: _footerHeight,
+                                onPick: (text) => _draft.text = text,
+                              )
+                            : TranscriptView(
+                                messages: merged,
+                                footers: _footers,
+                                running: running,
+                                waiting: prompt != null,
+                                workingSince: workingSince,
+                                now: _now,
+                                topInset: _dag != null ? 0 : top,
+                                bottomInset: _footerHeight,
+                                onLongPress: _messageAction,
+                                onOlder: () => _pager?.prefetch(),
+                                dagWatcher: _dag,
+                              ),
+                      ),
+                    ],
+                  ),
+                ),
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: _FooterFrame(
+                    palette: paletteOf(context),
+                    onHeight: (height) {
+                      if ((height - _footerHeight).abs() > 0.5) {
+                        setState(() => _footerHeight = height);
+                      }
+                    },
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxHeight: constraints.maxHeight * 0.68,
+                      ),
+                      child: SingleChildScrollView(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (connection.reconnecting ||
+                                (!_loading && !_connected))
+                              _ReconnectBanner(
+                                onRetry: () {
+                                  Haptic.tap();
+                                  if (_remote != null) {
+                                    _reload();
+                                  } else {
+                                    connection.reconnectNow();
+                                  }
+                                },
+                              ),
+                            if (_queue.items.isNotEmpty)
+                              QueuePanel(
+                                queue: _queue,
+                                disabled: !_connected,
+                                onCancel: (id) =>
+                                    _changeQueue('engine:queue-cancel', id),
+                                onResume: () =>
+                                    _changeQueue('engine:queue-resume'),
+                              ),
+                            if (prompt != null)
+                              Padding(
+                                padding: EdgeInsets.fromLTRB(
+                                  10,
+                                  4,
+                                  10,
+                                  MediaQuery.paddingOf(context).bottom + 8,
+                                ),
+                                child: PromptCard(
+                                  key: ValueKey<String>(prompt.id),
+                                  prompt: prompt,
+                                  busy: _responding,
+                                  onRespond: _respond,
+                                ),
+                              )
+                            else
+                              Composer(
+                                conversationId: _conversationId,
+                                running: running,
+                                sending: _sending,
+                                queueing: running || _queue.items.isNotEmpty,
+                                disabled: !_connected || _queue.revision < 0,
+                                draft: _draft,
+                                images: _images,
+                                onImagesChange: (value) =>
+                                    setState(() => _images = value),
+                                onDraftChange: (_) => setState(() {}),
+                                onSend: _send,
+                                onAbort: () => _runAction('engine:abort'),
+                                onContinue: () => _runAction('engine:continue'),
+                                canContinue: canContinue,
+                              ),
+                          ],
+                        ),
+                      ),
                     ),
+                  ),
+                ),
+              ],
             ),
-            ConstrainedBox(
-              constraints: BoxConstraints(
-                maxHeight: constraints.maxHeight * 0.68,
-              ),
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (connection.reconnecting || (!_loading && !_connected))
-                      _ReconnectBanner(
-                        onRetry: () {
-                          Haptic.tap();
-                          if (_remote != null) {
-                            _reload();
-                          } else {
-                            connection.reconnectNow();
-                          }
-                        },
-                      ),
-                    if (_queue.items.isNotEmpty)
-                      QueuePanel(
-                        queue: _queue,
-                        disabled: !_connected,
-                        onCancel: (id) =>
-                            _changeQueue('engine:queue-cancel', id),
-                        onResume: () => _changeQueue('engine:queue-resume'),
-                      ),
-                    if (prompt != null)
-                      Padding(
-                        padding: EdgeInsets.fromLTRB(
-                          10,
-                          4,
-                          10,
-                          MediaQuery.paddingOf(context).bottom + 8,
-                        ),
-                        child: PromptCard(
-                          key: ValueKey<String>(prompt.id),
-                          prompt: prompt,
-                          busy: _responding,
-                          onRespond: _respond,
-                        ),
-                      )
-                    else
-                      Composer(
-                        conversationId: _conversationId,
-                        running: running,
-                        sending: _sending,
-                        queueing: running || _queue.items.isNotEmpty,
-                        disabled: !_connected || _queue.revision < 0,
-                        draft: _draft,
-                        images: _images,
-                        onImagesChange: (value) =>
-                            setState(() => _images = value),
-                        onDraftChange: (_) => setState(() {}),
-                        onSend: _send,
-                        onAbort: () => _runAction('engine:abort'),
-                        onContinue: () => _runAction('engine:continue'),
-                        canContinue: canContinue,
-                      ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// The footer over the transcript: a soft scrim so text scrolling beneath does not show
+/// through the gaps around the composer, and a report of its own height so the transcript
+/// can pad its end by exactly that.
+class _FooterFrame extends StatefulWidget {
+  const _FooterFrame({
+    required this.palette,
+    required this.onHeight,
+    required this.child,
+  });
+
+  final Palette palette;
+  final ValueChanged<double> onHeight;
+  final Widget child;
+
+  @override
+  State<_FooterFrame> createState() => _FooterFrameState();
+}
+
+class _FooterFrameState extends State<_FooterFrame> {
+  final GlobalKey _key = GlobalKey();
+
+  void _report() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final box = _key.currentContext?.findRenderObject();
+      if (!mounted || box is! RenderBox || !box.hasSize) return;
+      widget.onHeight(box.size.height);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    _report();
+    final background = widget.palette.background;
+    return Stack(
+      clipBehavior: Clip.none,
+      children: <Widget>[
+        // Reaches above the footer so the fade starts before the composer's edge.
+        Positioned(
+          left: 0,
+          right: 0,
+          top: -28,
+          bottom: 0,
+          child: IgnorePointer(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  stops: const <double>[0, 0.4, 1],
+                  colors: <Color>[
+                    background.withValues(alpha: 0),
+                    background.withValues(alpha: 0.86),
+                    background.withValues(alpha: 0.96),
                   ],
                 ),
               ),
             ),
-          ],
+          ),
         ),
-      ),
+        KeyedSubtree(key: _key, child: widget.child),
+      ],
     );
   }
 }
 
 /// The empty state: the mark, a question, and four things worth trying.
 class _Welcome extends StatelessWidget {
-  const _Welcome({required this.projectName, required this.onPick});
+  const _Welcome({
+    required this.projectName,
+    required this.onPick,
+    this.topInset = 0,
+    this.bottomInset = 0,
+  });
 
   final String? projectName;
+  final double topInset;
+  final double bottomInset;
   final ValueChanged<String> onPick;
 
   @override
@@ -971,7 +1038,7 @@ class _Welcome extends StatelessWidget {
       (AppIcons.code, t('chat.suggest4')),
     ];
     return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+      padding: EdgeInsets.fromLTRB(24, 32 + topInset, 24, 32 + bottomInset),
       child: Column(
         children: <Widget>[
           const SizedBox(height: 24),

@@ -15,6 +15,9 @@ import { readAppSettings, writeAppSettings } from "./engine/app-settings";
 import { passwordProblem } from "./server/auth";
 import { clearRemoteAccess, isConfigured, listDevices, revokeDevice, setPassword } from "./server/store";
 import { lanAddresses, RemoteServer } from "./server/server";
+import { MdnsAdvertiser, mdnsInstanceName } from "./server/mdns";
+import { discoveryNameProblem, discoveryNameSetting } from "@shared/discovery-name";
+import { uiText } from "./engine/ui-text";
 import { getAppServer } from "./app-server/runtime";
 import { readFrpSettings, saveFrpSettings, writeFrpcConfig } from "./server/frp-store";
 import { checkFrpDns } from "./server/frp-dns";
@@ -43,6 +46,7 @@ import {
 
 let server: RemoteServer | null = null;
 let tunnel: TunnelRunner | null = null;
+let mdns: MdnsAdvertiser | null = null;
 
 /** Default port for the local or LAN listener. */
 const DEFAULT_PORT = 7777;
@@ -79,6 +83,32 @@ function tunnelInstance(): TunnelRunner {
       error: (message, error) => log.error(message, error),
     },
   }));
+}
+
+function mdnsInstance(): MdnsAdvertiser {
+  return (mdns ??= new MdnsAdvertiser({
+    log: { info: (message) => log.info(message), warn: (message) => log.warn(message) },
+  }));
+}
+
+/**
+ * Keep the mDNS announcement equal to «the server is listening beyond this machine».
+ *
+ * Derived from the server's own status rather than toggled at each call site, and called
+ * from both announce paths: the places that start, stop or rebind the listener are many
+ * and the next one added would otherwise leave a phone listing a machine that is gone.
+ * Loopback-only is never announced — nothing off this machine could connect to it.
+ */
+function syncDiscovery(): void {
+  const status = server?.status;
+  if (status?.running && status.port !== null && readLanAccess()) {
+    // Use the running listener, not a preference written just before a rebind.
+    mdnsInstance().publish(status.port, readDiscoveryName(), status.host.includes(":") ? "ipv6" : "ipv4");
+  } else mdns?.unpublish();
+}
+
+function readDiscoveryName(): string {
+  return discoveryNameSetting(readAppSettings(getFastVibePaths()).remoteDiscoveryName);
 }
 
 function readPort(): number {
@@ -136,6 +166,8 @@ function state(): RemoteServerState {
     lanAccess: readLanAccess(),
     lanAddresses: lanAddresses(),
     lanAddressFamily: effectiveLanAddressFamily(),
+    discoveryName: readDiscoveryName(),
+    defaultDiscoveryName: mdnsInstanceName(),
     tunnel: tunnelInstance().status,
     tunnelChoice: readTunnelChoice(),
   };
@@ -145,6 +177,7 @@ function state(): RemoteServerState {
 function announce(): RemoteServerState {
   const next = state();
   setRemoteServing(next.running);
+  syncDiscovery();
   broadcast(Ipc.remoteState, next);
   return next;
 }
@@ -167,11 +200,14 @@ function announce(): RemoteServerState {
 function announceFromServer(): void {
   if (!server) return;
   setRemoteServing(server.status.running);
+  syncDiscovery();
   broadcast(Ipc.remoteState, {
     ...server.status,
     lanAccess: readLanAccess(),
     lanAddresses: lanAddresses(),
     lanAddressFamily: effectiveLanAddressFamily(),
+    discoveryName: readDiscoveryName(),
+    defaultDiscoveryName: mdnsInstanceName(),
     tunnel: tunnel?.status ?? TUNNEL_OFF,
     tunnelChoice: readTunnelChoice(),
   } satisfies RemoteServerState);
@@ -215,7 +251,7 @@ function frpOptions(port: number): TunnelOptions {
   return { configFile: paths.frpcConfigFile, publicUrl };
 }
 
-export function registerRemoteIpc(): void {
+export function registerRemoteIpc(queueSettingsWrite: (task: () => Promise<void>) => Promise<void>): void {
   handle(Ipc.remoteGetState, () => state());
 
   handle(Ipc.remoteSetPassword, (payload: { password: string }) => {
@@ -277,6 +313,27 @@ export function registerRemoteIpc(): void {
       announce();
       throw error;
     }
+  });
+
+  handle(Ipc.remoteSetDiscoveryName, async (payload?: { name?: unknown }) => {
+    if (typeof payload?.name !== "string") throw new Error(uiText("主机名称无效", "Invalid computer name"));
+    const name = payload.name.trim();
+    const problem = discoveryNameProblem(name);
+    if (problem === "invalidCharacters") throw new Error(uiText(
+      "名称不能包含句点、反斜杠或控制字符", "Names cannot contain dots, backslashes or control characters",
+    ));
+    if (problem === "tooLong") throw new Error(uiText(
+      "名称过长，请缩短后重试（最多 63 字节）", "Name is too long; shorten it and try again (63 bytes maximum)",
+    ));
+    await queueSettingsWrite(async () => {
+      const paths = getFastVibePaths();
+      const settings = { ...readAppSettings(paths), remoteDiscoveryName: name };
+      writeAppSettings(paths, settings);
+      broadcast(Ipc.settingsChanged, settings);
+      // Replace only the discovery record; existing HTTP/WebSocket sessions stay live.
+      announce();
+    });
+    return state();
   });
 
   handle(Ipc.remoteStop, async () => {
@@ -380,6 +437,7 @@ export async function stopRemoteServer(): Promise<void> {
   // Before the server, and unconditionally: the tunnel is a child process, and one left
   // behind by a quit keeps publishing a port that no longer answers.
   if (tunnel) await tunnel.stop();
+  mdns?.unpublish();
   if (server) await server.stop();
   setRemoteServing(false);
 }

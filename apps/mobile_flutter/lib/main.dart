@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter/cupertino.dart' show CupertinoPageTransitionsBuilder;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
@@ -92,6 +93,7 @@ class _FastVibeAppState extends State<FastVibeApp> with WidgetsBindingObserver {
         child: MaterialApp.router(
           title: 'FastVibe',
           debugShowCheckedModeBanner: false,
+          scrollBehavior: const _IosScrollBehavior(),
           routerConfig: appRouter,
           theme: buildTheme(light),
           darkTheme: buildTheme(dark),
@@ -100,23 +102,35 @@ class _FastVibeAppState extends State<FastVibeApp> with WidgetsBindingObserver {
             // Every route gets the palette, the toast host and the overlay scope: a
             // toast raised from a modal must be drawn by that modal, which is its own
             // route and would otherwise cover a host mounted only at the root.
+            final palette = Theme.of(context).brightness == Brightness.dark
+                ? dark
+                : light;
             return PaletteScope(
-              palette: Theme.of(context).brightness == Brightness.dark
-                  ? dark
-                  : light,
-              child: ToastHost(
-                child: UpdatePrompt(
-                  enabled: widget.checkUpdates,
-                  child: AnnotatedRegion<SystemUiOverlayStyle>(
-                    value: Theme.of(context).brightness == Brightness.dark
-                        ? SystemUiOverlayStyle.light
-                        : SystemUiOverlayStyle.dark,
-                    child: GlassAccessibilityScope(
-                      reduceTransparency: Preferences.instance.reduceGlass
-                          ? true
-                          : null,
-                      child: GlassNavigationShell(
-                        child: child ?? const SizedBox.shrink(),
+              palette: palette,
+              // Text drawn outside any page's Material — the bar's pull-down menus,
+              // which GlassNavigationShell hoists above the Navigator, and every other
+              // overlay — falls back to the framework's debug style, the yellow double
+              // underline. One default here, above the shell and the Navigator, covers
+              // all of them instead of patching each overlay as it turns up.
+              child: DefaultTextStyle(
+                style: Theme.of(context).textTheme.bodyMedium!.copyWith(
+                  color: palette.text,
+                  decoration: TextDecoration.none,
+                ),
+                child: ToastHost(
+                  child: UpdatePrompt(
+                    enabled: widget.checkUpdates,
+                    child: AnnotatedRegion<SystemUiOverlayStyle>(
+                      value: Theme.of(context).brightness == Brightness.dark
+                          ? SystemUiOverlayStyle.light
+                          : SystemUiOverlayStyle.dark,
+                      child: GlassAccessibilityScope(
+                        reduceTransparency: Preferences.instance.reduceGlass
+                            ? true
+                            : null,
+                        child: GlassNavigationShell(
+                          child: child ?? const SizedBox.shrink(),
+                        ),
                       ),
                     ),
                   ),
@@ -153,11 +167,42 @@ ThemeData buildTheme(Palette palette) {
     scaffoldBackgroundColor: palette.background,
     canvasColor: palette.background,
     dividerColor: palette.separator,
-    splashFactory: InkSparkle.splashFactory,
+    // The app is drawn to iOS conventions on both platforms, so the framework is told it
+    // is on iOS: push/pop are the Cupertino slide with the edge swipe back, text
+    // selection uses the iOS handles and menu, and adaptive widgets pick their iOS form.
+    platform: TargetPlatform.iOS,
+    pageTransitionsTheme: const PageTransitionsTheme(
+      builders: <TargetPlatform, PageTransitionsBuilder>{
+        TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
+        TargetPlatform.android: CupertinoPageTransitionsBuilder(),
+      },
+    ),
+    // iOS answers a press by dimming the row, never with an ink ripple.
+    splashFactory: NoSplash.splashFactory,
+    splashColor: Colors.transparent,
+    highlightColor: palette.text.withValues(alpha: palette.dark ? 0.10 : 0.06),
+    hoverColor: Colors.transparent,
     textTheme:
         (palette.dark
-                ? Typography.material2021().white
-                : Typography.material2021().black)
+                ? Typography.material2021(platform: TargetPlatform.iOS).white
+                : Typography.material2021(platform: TargetPlatform.iOS).black)
             .apply(bodyColor: palette.text, displayColor: palette.text),
   );
+}
+
+/// iOS scrolling everywhere: the rubber-band bounce at the ends, and no Android glow or
+/// stretch indicator.
+class _IosScrollBehavior extends MaterialScrollBehavior {
+  const _IosScrollBehavior();
+
+  @override
+  ScrollPhysics getScrollPhysics(BuildContext context) =>
+      const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics());
+
+  @override
+  Widget buildOverscrollIndicator(
+    BuildContext context,
+    Widget child,
+    ScrollableDetails details,
+  ) => child;
 }

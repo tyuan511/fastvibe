@@ -4,8 +4,7 @@
 /// The settings pane copies a LAN address as `192.168.x.x:7777` — no scheme.
 /// A tunnel QR is a full `https://` URL. Both have to become one origin.
 ///
-/// This is a line-by-line port of `apps/mobile/src/protocol/address.ts`, including its
-/// quirks: the RFC 6874 IPv6 zone form is carried through to the socket untouched, and
+/// Address normalization retains the existing protocol behavior: the RFC 6874 IPv6 zone form is carried through to the socket untouched, and
 /// a bare IP literal is always plain http (a global IPv6 LAN address has no certificate
 /// to offer, and reading it as public made every connection try TLS against the plain
 /// listener).

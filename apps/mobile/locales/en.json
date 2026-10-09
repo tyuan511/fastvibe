@@ -1,7 +1,0 @@
-{
-  "ios": {
-    "NSCameraUsageDescription": "Used to scan the QR code that connects the app to your FastVibe.",
-    "NSPhotoLibraryUsageDescription": "Used to choose photos to send to your FastVibe.",
-    "NSLocalNetworkUsageDescription": "Used to connect to FastVibe on the same local network."
-  }
-}

@@ -595,6 +595,8 @@ export function createFastVibeApi(t: ApiTransport) {
         family?: import("@shared/ipc").RemoteLanAddressFamily,
       ): Promise<import("@shared/ipc").RemoteServerState> =>
         t.invoke(Ipc.remoteSetLanAccess, { enabled, family }),
+      setDiscoveryName: (name: string): Promise<import("@shared/ipc").RemoteServerState> =>
+        t.invoke(Ipc.remoteSetDiscoveryName, { name }),
       stop: (): Promise<import("@shared/ipc").RemoteServerState> => t.invoke(Ipc.remoteStop),
       listDevices: (): Promise<import("@shared/ipc").RemoteDeviceInfo[]> => t.invoke(Ipc.remoteListDevices),
       revokeDevice: (id: string): Promise<import("@shared/ipc").RemoteDeviceInfo[]> =>

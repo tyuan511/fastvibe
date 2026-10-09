@@ -898,6 +898,13 @@
   "lanAccess": "Allow LAN access",
   "lanAccessDesc": "Devices on the same network can open the address below.",
   "lanAccessOnDesc": "LAN address: {{address}}; the remote-access password is still required.",
+  "discoveryName": "Computer name",
+  "discoveryNameDesc": "Shown in Nearby computers on your phone. Leave blank to use the default name.",
+  "discoveryNameSave": "Save",
+  "discoveryNameErrors": {
+   "invalidCharacters": "Names cannot contain dots, backslashes or control characters",
+   "tooLong": "This name is too long. Shorten it before saving."
+  },
   "lanAddressFamily": "Address family",
   "lanAddressFamilyDesc": "Choose whether LAN devices use the IPv4 or IPv6 address.",
   "tunnelHint": "{{address}} is only this computer's local address. Pick a tunnel below to publish it.",

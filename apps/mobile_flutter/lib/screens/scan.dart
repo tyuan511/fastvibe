@@ -70,6 +70,7 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
     final palette = paletteOf(context);
     return GlassScreen(
       title: t('nav.scan'),
+      edgeFade: false,
       body: MobileScanner(
         controller: _controller,
         onDetect: _handle,

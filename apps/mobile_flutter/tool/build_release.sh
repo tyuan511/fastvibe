@@ -11,10 +11,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-flutter build apk --release --split-per-abi
-flutter build appbundle --release
+bash tool/check_release.sh
+flutter build apk --release --split-per-abi --target-platform android-arm64
 
 echo
-echo "APKs (one per architecture, plus the Play bundle):"
-ls -lh build/app/outputs/flutter-apk/*.apk 2>/dev/null | awk '{print "  " $5 "\t" $9}'
-ls -lh build/app/outputs/bundle/release/*.aab 2>/dev/null | awk '{print "  " $5 "\t" $9}'
+echo "Android arm64-v8a APK:"
+ls -lh build/app/outputs/flutter-apk/app-arm64-v8a-release.apk | awk '{print "  " $5 "\t" $9}'

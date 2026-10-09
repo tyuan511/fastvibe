@@ -1,10 +1,11 @@
 name: fastvibe_mobile
 description: "FastVibe mobile client for connecting to saved remote machines"
 publish_to: "none"
-version: 0.4.2+42
+version: 0.4.2+402
 
 environment:
   sdk: ^3.13.5
+  flutter: 3.47.6
 
 dependencies:
   flutter:
@@ -13,7 +14,7 @@ dependencies:
   # iOS 26 / 27 liquid glass: shader-based blur, refraction, jelly physics.
   liquid_glass_widgets: ^1.11.0
 
-  # The same icon set the Expo client draws with, so a screen reads identically.
+  # The same icon set as the desktop client.
   hugeicons: ^1.2.0
 
   # Not used directly: `liquid_glass_widgets` draws several of its defaults with it, and
@@ -23,7 +24,7 @@ dependencies:
   # Markdown with tables, code fences and LaTeX (`$…$` / `$$…$$`).
   gpt_markdown: ^1.3.4
 
-  # Navigation. The Expo client's file routes map one-to-one onto these paths.
+  # Navigation between devices, conversations and phone settings.
   go_router: ^18.0.2
 
   # Device token (Keychain / Keystore) and this phone's preferences.
@@ -57,6 +58,7 @@ dependencies:
   device_info_plus: ^13.3.0
 
   crypto: ^3.0.7
+  nsd: ^5.0.1
 
 dev_dependencies:
   integration_test:
@@ -65,20 +67,23 @@ dev_dependencies:
     sdk: flutter
   flutter_lints: ^6.0.0
 
-  # Regenerates every launcher icon and splash from `assets/` — the same artwork the
-  # Expo client ships, so the two builds are the same app to a home screen.
+  # Regenerates every launcher icon and splash from the app artwork in `assets/`.
   flutter_launcher_icons: ^0.14.4
   flutter_native_splash: ^2.4.6
 
 flutter:
   uses-material-design: true
+  # Only `assets/icon.png` (the in-app logo, 256px) is bundled: `- assets/` takes the
+  # files directly in the folder and no subfolder. The 1024px sources the launcher icons
+  # and the splash are generated from live in `assets/brand/` and `assets/android/`,
+  # so they stay out of the APK.
   assets:
     - assets/
 
 # `dart run flutter_launcher_icons` — the icon is the app's identity, so it is generated
 # from the shared artwork rather than hand-placed per density.
 flutter_launcher_icons:
-  image_path: "assets/icon.png"
+  image_path: "assets/brand/icon.png"
   android: "ic_launcher"
   ios: true
   remove_alpha_ios: true
@@ -89,14 +94,14 @@ flutter_launcher_icons:
 # `dart run flutter_native_splash:create` — the launch screen the OS draws before Dart
 # starts, in both themes.
 flutter_native_splash:
-  color: "#ffffff"
-  image: assets/splash.png
-  color_dark: "#000000"
-  image_dark: assets/splash.png
+  color: "#F2F6FA"
+  image: assets/brand/splash.png
+  color_dark: "#0C111B"
+  image_dark: assets/brand/splash.png
   android_12:
-    image: assets/splash.png
-    color: "#ffffff"
-    image_dark: assets/splash.png
-    color_dark: "#000000"
+    image: assets/brand/splash.png
+    color: "#F2F6FA"
+    image_dark: assets/brand/splash.png
+    color_dark: "#0C111B"
   ios: true
   android: true

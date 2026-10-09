@@ -12,6 +12,9 @@ abstract final class AppIcons {
   static const archive = HugeIcons.strokeRoundedArchive02;
   static const archiveRestore = HugeIcons.strokeRoundedArchiveArrowUp;
   static const arrowDown = HugeIcons.strokeRoundedArrowDown01;
+
+  /// SF Symbols' `chevron.up.chevron.down`: the mark of an iOS pop-up button.
+  static const chevronUpDown = HugeIcons.strokeRoundedUnfoldMore;
   static const arrowDownLong = HugeIcons.strokeRoundedArrowDown02;
   static const arrowLeft = HugeIcons.strokeRoundedArrowLeft01;
   static const arrowRight = HugeIcons.strokeRoundedArrowRight01;
@@ -21,6 +24,7 @@ abstract final class AppIcons {
   static const bug = HugeIcons.strokeRoundedBug01;
   static const cancel = HugeIcons.strokeRoundedCancel01;
   static const chatAdd = HugeIcons.strokeRoundedChatAdd01;
+  static const plus = HugeIcons.strokeRoundedAdd01;
   static const checkCircle = HugeIcons.strokeRoundedCheckmarkCircle02;
   static const chrome = HugeIcons.strokeRoundedChrome;
   static const clock = HugeIcons.strokeRoundedClock01;

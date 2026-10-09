@@ -5,7 +5,7 @@ name: Mobile Android APK
 # on the tag therefore started cold every time (0 restored, 0 saved — 543 of 617 Gradle
 # tasks executed) and wrote a cache no later tag could read. So pushing `app-v*` only
 # hands the tag to a workflow_dispatch run on main, which reads and writes main's
-# Gradle and pnpm caches and checks out the tag's commit to build.
+# Gradle and Flutter caches and checks out the tag's commit to build.
 on:
   push:
     tags:
@@ -52,16 +52,10 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref }}
 
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 11.22.0
-
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: pnpm
 
       - name: Set up Java
         uses: actions/setup-java@v5
@@ -69,37 +63,34 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      # ubuntu-latest already includes the Android SDK, platform 35 and build tools.
-      # Do not run android-actions/setup-android here: its legacy `sdkmanager tools`
-      # call fails against current SDK repositories before the build can start.
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version-file: apps/mobile_flutter/pubspec.yaml
+          cache: true
+          pub-cache-key: flutter-pub-${{ runner.os }}-${{ hashFiles('apps/mobile_flutter/pubspec.lock') }}
 
-      - name: Install JavaScript dependencies
-        run: pnpm install --frozen-lockfile
+      - name: Verify mobile release version
+        run: bash apps/mobile_flutter/tool/check_release.sh
 
-      - name: Typecheck mobile app
-        run: pnpm --filter @fastvibe/mobile typecheck
+      - name: Verify generated translations
+        run: node apps/mobile_flutter/tool/gen_i18n.mjs --check
 
-      - name: Verify app tag version
-        if: startsWith(inputs.tag, 'app-v')
-        run: |
-          node -e "const fs=require('fs');const v=JSON.parse(fs.readFileSync('apps/mobile/app.json','utf8')).expo.version;if(process.env.RELEASE_TAG !== 'app-v'+v) process.exit(1)"
+      - name: Install Flutter dependencies
+        working-directory: apps/mobile_flutter
+        run: flutter pub get --enforce-lockfile
 
-      # The native project is generated only inside CI. Keep the Expo project managed in
-      # the repository and do not commit android/ or ios/ directories.
-      - name: Generate Android project
-        working-directory: apps/mobile
-        run: pnpm exec expo prebuild --platform android --clean --no-install --non-interactive
+      - name: Analyze mobile app
+        working-directory: apps/mobile_flutter
+        run: flutter analyze
 
-      # setup-gradle keeps its wrapper handling, but not its cache. Its basic provider has
-      # no restore keys and hashes every `*.gradle` file for the key — including
-      # android/app/build.gradle, where prebuild writes the versionCode. So every release
-      # missed the cache the previous one saved, by construction.
-      #
-      # The key here follows the lockfile instead, and a miss falls back to the newest
-      # earlier entry: after a dependency bump most modules' outputs are still in the
-      # Gradle build cache (`--build-cache` below). A hit saves nothing, so main keeps
-      # one entry per lockfile. Only main can save one that a later run can read, which
-      # is why a release is dispatched onto main (see the top of this file).
+      - name: Test mobile app
+        working-directory: apps/mobile_flutter
+        run: flutter test
+
+      # The committed Flutter native project is built directly; cache keys follow its
+      # dependencies and Gradle configuration, with previous entries as a fallback.
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
         with:
@@ -111,9 +102,9 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: gradle-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          key: flutter-gradle-${{ runner.os }}-${{ hashFiles('apps/mobile_flutter/pubspec.lock', 'apps/mobile_flutter/android/**/*.gradle.kts', 'apps/mobile_flutter/android/gradle/wrapper/gradle-wrapper.properties') }}
           restore-keys: |
-            gradle-${{ runner.os }}-
+            flutter-gradle-${{ runner.os }}-
 
       - name: Decode Android release keystore
         env:
@@ -149,45 +140,37 @@ jobs:
             echo "key-password=key" >> "$GITHUB_OUTPUT"
           fi
 
-      # The config plugin wires these CI-only environment variables into the generated
-      # release signing config. The key never enters the repository or the APK artifact.
-      - name: Build signed release APK
-        working-directory: apps/mobile/android
+      # User Gradle properties outrank the project's local-build memory settings.
+      - name: Configure Gradle for CI
+        run: |
+          mkdir -p "$HOME/.gradle"
+          cat >> "$HOME/.gradle/gradle.properties" <<'EOF'
+          org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8
+          org.gradle.caching=true
+          EOF
+
+      - name: Build signed arm64 APK
+        working-directory: apps/mobile_flutter
         env:
           FASTVIBE_ANDROID_STORE_FILE: ${{ runner.temp }}/fastvibe-release.keystore
           FASTVIBE_ANDROID_STORE_PASSWORD: ${{ secrets.FASTVIBE_ANDROID_STORE_PASSWORD }}
           FASTVIBE_ANDROID_KEY_ALIAS: ${{ secrets.FASTVIBE_ANDROID_KEY_ALIAS }}
           FASTVIBE_ANDROID_KEY_PASSWORD: ${{ steps.signing.outputs.key-password == 'store' && secrets.FASTVIBE_ANDROID_STORE_PASSWORD || secrets.FASTVIBE_ANDROID_KEY_PASSWORD }}
-        # arm64-v8a only. The template builds every C++ module (worklets, reanimated,
-        # screens, expo-modules-core, gesture-handler) for four ABIs, and that was most of
-        # a 24-minute build: x86/x86_64 exist only for emulators, and armeabi-v7a is
-        # 32-bit Android, which current phones do not run.
-        #
-        # The template's 2 GiB heap and 512 MiB metaspace ran out: the daemon expired
-        # mid-build "after running out of JVM Metaspace", and R8 needs the heap. A -D on
-        # the command line outranks the generated gradle.properties.
-        #
-        # lintVitalRelease is skipped: it analyses every module for a report nobody reads
-        # here, on every release.
-        run: >-
-          ./gradlew assembleRelease --build-cache -PreactNativeArchitectures=arm64-v8a
-          -x lintVitalRelease
-          "-Dorg.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8"
-          --stacktrace
+        run: bash tool/build_release.sh
 
       # Stop the daemon before the cache step packs ~/.gradle, so it is not archiving
       # files the daemon still holds open.
       - name: Stop Gradle daemon
-        if: always() && hashFiles('apps/mobile/android/gradlew') != ''
-        working-directory: apps/mobile/android
+        if: always() && hashFiles('apps/mobile_flutter/android/gradlew') != ''
+        working-directory: apps/mobile_flutter/android
         run: ./gradlew --stop
 
       - name: Name and verify APK
         run: |
           set -euo pipefail
-          apk="FastVibe-${RELEASE_TAG:-main-${GITHUB_SHA::7}}.apk"
+          apk="FastVibe-${RELEASE_TAG:-main-${GITHUB_SHA::7}}-arm64-v8a.apk"
           echo "APK=$apk" >> "$GITHUB_ENV"
-          cp apps/mobile/android/app/build/outputs/apk/release/app-release.apk "$apk"
+          cp apps/mobile_flutter/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk "$apk"
           apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)"
           test -n "$apksigner"
           "$apksigner" verify --verbose --print-certs "$apk"
@@ -211,7 +194,7 @@ jobs:
           tag_name: ${{ inputs.tag }}
           name: FastVibe Mobile ${{ inputs.tag }}
           body: |
-            Android APK for direct download. This build is signed with FastVibe's release key.
+            Android arm64-v8a APK built with Flutter for direct download. This build is signed with FastVibe's release key.
 
             The SHA-256 checksum is included as `${{ env.APK }}.sha256`.
           draft: false
@@ -223,3 +206,7 @@ jobs:
             ${{ env.APK }}.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Remove Android release keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/fastvibe-release.keystore"

@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { cleanError } from "@/lib/ipc-error";
 import type { RemoteDeviceInfo, RemoteLanAddressFamily, RemoteServerState, RemoteTunnelProvider } from "@shared/ipc";
 import { formatRemoteAddress } from "@shared/remote-address";
+import { discoveryNameProblem } from "@shared/discovery-name";
 import { AddressActions } from "./address-actions";
 import { SettingsGroup, SettingsRow } from "./settings-group";
 import { RemoteTunnel } from "./remote-tunnel";
@@ -29,6 +30,13 @@ export function RemoteSettings(): JSX.Element {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
+  const [discoveryName, setDiscoveryName] = useState("");
+  const savedDiscoveryName = state?.discoveryName ?? "";
+  const defaultDiscoveryName = state?.defaultDiscoveryName ?? "";
+  useEffect(() => {
+    setDiscoveryName(savedDiscoveryName || defaultDiscoveryName);
+  }, [savedDiscoveryName, defaultDiscoveryName]);
+  const nameProblem = discoveryNameProblem(discoveryName);
   /** Shows the password form again over an already-configured server, to replace it. */
   const [changingPassword, setChangingPassword] = useState(false);
   /**
@@ -118,6 +126,15 @@ export function RemoteSettings(): JSX.Element {
   async function setTunnel(provider: RemoteTunnelProvider | null): Promise<void> {
     const next = await run(() => window.fastvibe.remote.setTunnel(provider));
     if (next) setState(next);
+  }
+
+  async function saveDiscoveryName(name = discoveryName): Promise<void> {
+    if (busy || discoveryNameProblem(name)) return;
+    const next = await run(() => window.fastvibe.remote.setDiscoveryName(name.trim()));
+    if (next) {
+      setState(next);
+      setDiscoveryName(next.discoveryName || next.defaultDiscoveryName);
+    }
   }
 
   async function setLanAddressFamily(family: RemoteLanAddressFamily): Promise<void> {
@@ -231,6 +248,44 @@ export function RemoteSettings(): JSX.Element {
               }
               control={
                 <Switch checked={state.lanAccess} disabled={busy} onCheckedChange={(v) => void toggleLanAccess(v)} />
+              }
+            />
+            <SettingsRow
+              title={t("remote.discoveryName")}
+              description={t("remote.discoveryNameDesc")}
+              control={
+                <div className="w-64 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Input
+                      className="min-w-0 flex-1"
+                      aria-label={t("remote.discoveryName")}
+                      aria-invalid={Boolean(nameProblem)}
+                      aria-describedby={nameProblem ? "remote-discovery-name-error" : undefined}
+                      value={discoveryName}
+                      placeholder={defaultDiscoveryName}
+                      disabled={busy}
+                      onChange={(event) => setDiscoveryName(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+                          event.preventDefault();
+                          void saveDiscoveryName();
+                        }
+                      }}
+                    />
+                    <Button
+                      size="sm"
+                      disabled={busy || Boolean(nameProblem) || discoveryName.trim() === (savedDiscoveryName || defaultDiscoveryName)}
+                      onClick={() => void saveDiscoveryName()}
+                    >
+                      {t("remote.discoveryNameSave")}
+                    </Button>
+                  </div>
+                  {nameProblem ? (
+                    <p id="remote-discovery-name-error" role="alert" className="text-xs text-destructive">
+                      {t(`remote.discoveryNameErrors.${nameProblem}`)}
+                    </p>
+                  ) : null}
+                </div>
               }
             />
             {state.lanAccess && state.lanAddresses.ipv4 && state.lanAddresses.ipv6 ? (

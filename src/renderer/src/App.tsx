@@ -10,7 +10,7 @@ import { GitStatusPopover } from "@/components/chat/git-status-popover";
 import { ExtensionNotices, ExtensionWidgets, GoalPanel } from "@/components/chat/extension-surface";
 import { TodoPanel } from "@/components/chat/todo-list";
 import { ComposerSlot, DraftKeeper, MessageThread, availableModels, orderProjectsByCwd } from "@/app-thread";
-import { useAppBootstrap } from "@/use-app-bootstrap";
+import { useAppBootstrap, type ConversationOpenSource } from "@/use-app-bootstrap";
 import { NewSessionHero, SuggestionChips } from "@/components/chat/new-session";
 import { PermissionDialog } from "@/components/chat/permission-dialog";
 import { PermissionPanel, type PermissionResponse } from "@/components/chat/permission-panel";
@@ -217,7 +217,6 @@ export function App(): JSX.Element {
   const setQueueState = useSessionStore((state) => state.setQueueState);
   const setRunInterrupted = useSessionStore((state) => state.setRunInterrupted);
   const setCanResume = useSessionStore((state) => state.setCanResume);
-  const restoreId = useRef<string | null>(null);
   /**
    * The latest `handleOpen`, so the `workspace:changed` subscription below can mount
    * once and still call the current one.
@@ -226,7 +225,7 @@ export function App(): JSX.Element {
    * the pathname as it was at mount, which compares wrong forever and pushes a history
    * entry for a route the app is already on.
    */
-  const openLatest = useRef<((id: string, source?: "user" | "history" | "remote") => Promise<void>) | null>(null);
+  const openLatest = useRef<((id: string, source?: ConversationOpenSource) => Promise<void>) | null>(null);
   /**
    * The conversation this client believes it should be showing.
    *
@@ -295,6 +294,7 @@ export function App(): JSX.Element {
   // placeholder. Track whether the real status has landed: the shell shows the F
   // loader (and keeps the boot splash up) until it has.
   const [engineKnown, setEngineKnown] = useState(false);
+  const [booting, setBooting] = useState(() => Boolean(document.getElementById("fastvibe-boot")));
   // Bumped whenever a fresh conversation is started so the composer grabs focus.
   const [composerFocus, setComposerFocus] = useState(0);
   // Skills the engine can load, surfaced by the composer's 技能 picker. Refetched
@@ -307,13 +307,6 @@ export function App(): JSX.Element {
   // means 还没问到; after that it means the install has no model to chat with.
   const [modelsLoaded, setModelsLoaded] = useState(false);
 
-  // Hand the pre-JS boot splash off to the shell only once the engine has settled.
-  // While it is still starting, the static splash *is* the app's loader, so fading
-  // it earlier would flash a second loader (or a still-empty shell) underneath it.
-  useEffect(() => {
-    if (!engineKnown || status.state === "starting") return;
-    dismissBootLoader();
-  }, [engineKnown, status.state]);
   const paneCollapsed = useSidePaneStore((state) => state.collapsed);
   const paneMaximized = useSidePaneStore((state) => state.maximized);
   const togglePane = useSidePaneStore((state) => state.toggle);
@@ -355,13 +348,12 @@ export function App(): JSX.Element {
   const toggleSidebarShortcut = useShortcutLabel("toggleSidebar");
   const toggleSidePaneShortcut = useShortcutLabel("toggleSidePane");  const newChatShortcut = useShortcutLabel("newChat");
 
-  useAppBootstrap({
+  const workspaceReady = useAppBootstrap({
     setStatus,
     setEngineKnown,
     applyList,
     applyOpen,
     navigate,
-    restoreId,
     followedActiveId,
     intendedActiveId,
     openLatest,
@@ -372,6 +364,16 @@ export function App(): JSX.Element {
     setSession,
   });
 
+  // Engine readiness alone says nothing about the catalog/transcript IPC replies.
+  // Reveal the first complete workspace, including a real empty first-run state.
+  useEffect(() => {
+    if (!engineKnown || status.state === "starting" || !workspaceReady || opening) return;
+    const frame = requestAnimationFrame(() => {
+      dismissBootLoader();
+      setBooting(false);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [engineKnown, status.state, workspaceReady, opening]);
 
   function listedChatIds(): string[] {
     return conversations
@@ -492,19 +494,6 @@ export function App(): JSX.Element {
       .getSubagents()
       .then(setSubagents)
       .catch(() => undefined);
-    const pending = restoreId.current;
-    if (pending && !useSessionStore.getState().activeId) {
-      restoreId.current = null;
-      void window.fastvibe.conversations
-        .open(pending)
-        .then((opened) => {
-          applyOpen(opened);
-          if (!window.location.hash.includes("/settings") && conversationIdFromHash() !== pending) {
-            navigate(conversationPath(pending), { replace: true });
-          }
-        })
-        .catch(() => undefined);
-    }
   }, [setModels, setSession, status.state]);
 
   // Shared by the inline panel (confirm/select/input/questions) and the modal (editor).
@@ -1279,7 +1268,7 @@ export function App(): JSX.Element {
    */
   async function handleOpen(
     id: string,
-    source: "user" | "history" | "remote" = "user",
+    source: ConversationOpenSource = "user",
   ): Promise<void> {
     const store = useSessionStore.getState();
     // Re-opening the active chat is pointless once it has content or a reply is
@@ -1293,13 +1282,14 @@ export function App(): JSX.Element {
     // Claimed before the hop, not after: the push this call is about to cause can beat
     // its own reply back here (see `intendedActiveId`).
     intendedActiveId.current = id;
-    const ticket = beginOpening(id, isRemoteRef(id));
+    const ticket = beginOpening(id, source === "restore" || !workspaceReady || isRemoteRef(id));
     try {
       const opened = await window.fastvibe.conversations.open(id);
       if (!openingStillCurrent(ticket)) return;
       applyOpen(opened);
       if (source === "user") revealConversation(id);
       else if (source === "remote") revealConversation(id, true);
+      else if (source === "restore" && !window.location.hash.includes("/settings")) revealConversation(id, true);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1609,8 +1599,9 @@ export function App(): JSX.Element {
   // that — the transcript is on its way, and the hero would hide the loader.
   const isNewSession = !opening && !active?.preview;
   // `loading` is the engine coming up, never the model question — plus the window
-  // before `getStatus()` lands, which the boot splash is already covering.
-  const loading = empty && (!engineKnown || status.state === "starting");
+  // before the initial catalog and transcript land. This also keeps the greeting
+  // out of clients with no static splash, too.
+  const loading = empty && (!engineKnown || !workspaceReady || status.state === "starting");
   // A fresh conversation swaps the transcript for the centred greeting hero.
   const showHero = empty && !loading && !opening;
 
@@ -1896,13 +1887,13 @@ export function App(): JSX.Element {
             ) : (
               <>
                 <div className="relative min-h-0 flex-1">
-                  <MessageThread
+                  {booting && (loading || opening) ? null : <MessageThread
                     loading={loading || opening}
                     loadingReplaces={opening}
                     onRetry={handleRetry}
                     onEdit={handleEdit}
                     onFork={handleForkFromEntry}
-                  />
+                  />}
                 </div>
                 {/* Everything under the transcript shares its column: the transcript's
                     scroller reserves a scrollbar gutter, so this box reserves the same one

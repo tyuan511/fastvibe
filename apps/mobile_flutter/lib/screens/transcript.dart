@@ -42,6 +42,8 @@ class TranscriptView extends StatefulWidget {
     required this.onLongPress,
     required this.onOlder,
     this.dagWatcher,
+    this.topInset = 0,
+    this.bottomInset = 0,
   });
 
   /// Newest first, already merged into one row per reply.
@@ -54,6 +56,11 @@ class TranscriptView extends StatefulWidget {
   final void Function(ChatMessage message) onLongPress;
   final VoidCallback onOlder;
   final DagWatcher? dagWatcher;
+
+  /// How far the glass bar above and the footer below reach into this view. The list runs
+  /// under both, so its content is padded by them rather than clipped at their edges.
+  final double topInset;
+  final double bottomInset;
 
   @override
   State<TranscriptView> createState() => _TranscriptViewState();
@@ -105,15 +112,17 @@ class _TranscriptViewState extends State<TranscriptView> {
           child: ListView.builder(
             controller: _controller,
             reverse: true,
-            padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 16),
+            padding: EdgeInsets.fromLTRB(22, 16 + widget.topInset, 22, 16),
             itemCount: widget.messages.length + 1,
             itemBuilder: (context, index) {
               // Index 0 of the list is the visual bottom: the spacer.
               if (index == 0) {
                 return SizedBox(
-                  height: widget.running && !widget.waiting
-                      ? _workingScrollSpace
-                      : _messageBottomGap,
+                  height:
+                      (widget.running && !widget.waiting
+                          ? _workingScrollSpace
+                          : _messageBottomGap) +
+                      widget.bottomInset,
                 );
               }
               final position = index - 1;
@@ -141,7 +150,7 @@ class _TranscriptViewState extends State<TranscriptView> {
           Positioned(
             left: 0,
             right: 0,
-            bottom: _workingBottomInset,
+            bottom: _workingBottomInset + widget.bottomInset,
             child: IgnorePointer(
               child: Center(
                 child: WorkingPill(since: widget.workingSince, now: widget.now),
@@ -151,9 +160,11 @@ class _TranscriptViewState extends State<TranscriptView> {
         if (_away)
           Positioned(
             right: 14,
-            bottom: widget.running && !widget.waiting
-                ? _workingScrollSpace + 4
-                : 12,
+            bottom:
+                (widget.running && !widget.waiting
+                    ? _workingScrollSpace + 4
+                    : 12) +
+                widget.bottomInset,
             child: GlassIconButton(
               icon: HugeIcon(
                 icon: AppIcons.arrowDownLong,

@@ -580,7 +580,13 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): void {
   };
   handle(Ipc.settingsSet, (settings: Record<string, unknown>, ctx) => queueSettingsWrite(async () => {
     const incoming = settings && typeof settings === "object" ? settings : {};
-    await commitSettings(mergeSettingsPreservingProxy(readAppSettings(getFastVibePaths()), incoming), ctx);
+    const current = readAppSettings(getFastVibePaths());
+    await commitSettings({
+      ...mergeSettingsPreservingProxy(current, incoming),
+      // Managed by remote:set-discovery-name; stale preference snapshots must not
+      // undo a rename or let a remote client bypass that method's local-only policy.
+      remoteDiscoveryName: current.remoteDiscoveryName,
+    }, ctx);
   }));
   handle(Ipc.settingsProxySet, (settings: Record<string, unknown>, ctx) => queueSettingsWrite(async () => {
     const incoming = settings && typeof settings === "object" ? settings : {};

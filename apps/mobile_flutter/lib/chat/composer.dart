@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:math' as math;
 
+import 'package:flutter/cupertino.dart' show CupertinoActivityIndicator;
 import 'package:flutter/material.dart';
 import 'package:hugeicons/hugeicons.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
@@ -433,15 +434,15 @@ class _ComposerState extends State<Composer> {
               textInputAction: TextInputAction.newline,
               style: TextStyle(
                 color: palette.text,
-                fontSize: 16,
-                height: 22 / 16,
+                fontSize: 17,
+                height: 22 / 17,
               ),
               decoration: InputDecoration(
                 border: InputBorder.none,
                 isDense: true,
                 contentPadding: const EdgeInsets.fromLTRB(16, 13, 16, 6),
                 hintText: placeholder,
-                hintStyle: TextStyle(color: palette.subtle, fontSize: 16),
+                hintStyle: TextStyle(color: palette.subtle, fontSize: 17),
                 constraints: const BoxConstraints(
                   minHeight: 48,
                   maxHeight: 150,
@@ -527,7 +528,12 @@ class _ComposerState extends State<Composer> {
                     palette: palette,
                     action: action,
                     disabled: actionDisabled,
-                    onSend: widget.onSend,
+                    // Sending puts the keyboard away, as Messages does: what comes next
+                    // is the reply, which needs the screen the keyboard is covering.
+                    onSend: () {
+                      _focus.unfocus();
+                      return widget.onSend();
+                    },
                     onAbort: widget.onAbort,
                     onContinue: widget.onContinue,
                   ),
@@ -635,12 +641,15 @@ class _Chip extends StatelessWidget {
       opacity: enabled ? 1 : 0.5,
       child: GestureDetector(
         onTap: enabled ? onTap : null,
+        // An iOS pop-up button (the model, the thinking level): the current value and the
+        // up-down chevron, on a faint capsule — the composer is already glass, so no
+        // glass control of its own inside it.
         child: Container(
-          height: 30,
-          constraints: const BoxConstraints(maxWidth: 190),
+          height: 32,
+          constraints: const BoxConstraints(maxWidth: 200),
           padding: const EdgeInsets.symmetric(horizontal: 10),
           decoration: BoxDecoration(
-            color: palette.field,
+            color: palette.text.withValues(alpha: palette.dark ? 0.10 : 0.06),
             borderRadius: BorderRadius.circular(Radii.pill),
           ),
           child: Row(
@@ -666,16 +675,16 @@ class _Chip extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     color: palette.text,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
               ),
-              const SizedBox(width: 4),
+              const SizedBox(width: 3),
               HugeIcon(
-                icon: AppIcons.arrowDown,
-                size: 12,
-                color: palette.subtle,
+                icon: AppIcons.chevronUpDown,
+                size: 14,
+                color: palette.muted,
                 strokeWidth: 2,
               ),
             ],
@@ -718,11 +727,12 @@ class _ActionButton extends StatelessWidget {
                   onAbort();
                 },
           child: Container(
-            width: 44,
-            height: 44,
+            width: 36,
+            height: 36,
+            margin: const EdgeInsets.all(4),
             decoration: BoxDecoration(
               color: palette.text,
-              borderRadius: BorderRadius.circular(22),
+              shape: BoxShape.circle,
             ),
             child: Center(
               child: HugeIcon(
@@ -759,22 +769,20 @@ class _ActionButton extends StatelessWidget {
                     onSend();
                   }
                 },
-          child: BrandGradient(
-            palette: palette,
-            borderRadius: BorderRadius.circular(22),
+          child: Container(
+            width: 36,
+            height: 36,
+            margin: const EdgeInsets.all(4),
+            decoration: BoxDecoration(
+              color: palette.accent,
+              shape: BoxShape.circle,
+            ),
             child: SizedBox(
-              width: 44,
-              height: 44,
+              width: 36,
+              height: 36,
               child: Center(
                 child: action == 'sending'
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      )
+                    ? const CupertinoActivityIndicator(color: Colors.white)
                     : HugeIcon(
                         icon: action == 'continue'
                             ? AppIcons.play

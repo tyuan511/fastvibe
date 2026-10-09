@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:hugeicons/hugeicons.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 import '../chat/draft_storage.dart';
 import '../chat/option_sheet.dart';
@@ -20,6 +21,7 @@ import '../ui/icons.dart';
 import '../ui/kit.dart';
 import '../ui/sheet.dart';
 import '../ui/preferences.dart';
+import '../ui/context_menu.dart';
 
 /// The sheet's value for 「no project filter」; a cwd can never be empty.
 const String _allProjects = '';
@@ -37,6 +39,9 @@ class ServerScreen extends StatefulWidget {
 
 class _ServerScreenState extends State<ServerScreen> {
   final TextEditingController _query = TextEditingController();
+
+  /// Drives the large 会话 title's collapse into the bar, and owns the list's scroll controller.
+  final GlassLargeTitleController _title = GlassLargeTitleController();
   SavedServer? _server;
   bool _loaded = false;
   String _password = '';
@@ -71,6 +76,7 @@ class _ServerScreenState extends State<ServerScreen> {
   void dispose() {
     _query.removeListener(_onQueryChanged);
     _query.dispose();
+    _title.dispose();
     Connection.instance.removeListener(_onConnection);
     _searchTimer?.cancel();
     super.dispose();
@@ -167,6 +173,27 @@ class _ServerScreenState extends State<ServerScreen> {
     return rows;
   }
 
+  /// The pages that have no large title of their own and so keep the bar's.
+  bool get _showsBarTitle {
+    if (!_loaded) return false;
+    if (_server == null) return true;
+    final connection = Connection.instance;
+    return connection.server?.id == widget.serverId &&
+        connection.status == ConnectionStatus.error;
+  }
+
+  /// How many of the visible chats each project holds — the filter's rows.
+  Map<String, int> get _projectCounts {
+    final names = _projectNames;
+    final counts = <String, int>{};
+    for (final chat in _listed) {
+      final project = chat.project;
+      if (project == null || !names.containsKey(project)) continue;
+      counts[project] = (counts[project] ?? 0) + 1;
+    }
+    return counts;
+  }
+
   Map<String, String> get _projectNames => <String, String>{
     for (final project in Connection.instance.projects)
       project.cwd: project.name,
@@ -254,13 +281,10 @@ class _ServerScreenState extends State<ServerScreen> {
   }
 
   void _openMenu(CatalogConversation chat) {
-    Haptic.press();
-    final names = _projectNames;
-    showOptionSheet(
+    // A long press opens the iOS context menu where the finger is.
+    showContextMenu(
       context,
-      title: chat.title,
-      subtitle: chat.project != null ? names[chat.project] : null,
-      options: <SheetOption>[
+      contextMenuItems(<SheetOption>[
         SheetOption(
           value: 'rename',
           label: t('common.rename'),
@@ -283,7 +307,7 @@ class _ServerScreenState extends State<ServerScreen> {
           destructive: true,
           onSelect: () => _confirmDelete(chat),
         ),
-      ],
+      ]),
     );
   }
 
@@ -458,11 +482,11 @@ class _ServerScreenState extends State<ServerScreen> {
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final palette = paletteOf(context);
+  /// The connection's state as (label, colour, soft colour), or null when this machine is
+  /// not the one the app is connected to.
+  (String, Color, Color)? _statusLine(Palette palette) {
     final connection = Connection.instance;
-    final status = connection.server?.id != widget.serverId
+    return connection.server?.id != widget.serverId
         ? null
         : switch (connection.status) {
             ConnectionStatus.connecting => (
@@ -487,6 +511,12 @@ class _ServerScreenState extends State<ServerScreen> {
             ),
             _ => null,
           };
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = paletteOf(context);
+    final status = _statusLine(palette);
 
     return GlassScreen(
       title: _server?.alias ?? t('common.device'),
@@ -494,8 +524,42 @@ class _ServerScreenState extends State<ServerScreen> {
       // failed call raises, and a row of its own would be read after the error.
       subtitle: status?.$1,
       statusColor: status?.$2,
+      // Held from the first frame, loading included: the bar's own title is the one the
+      // large 会话 title hands over to on scroll, so attaching the controller only once
+      // the list was ready showed 「设备名 · 已连接」 in the bar for the loading moment
+      // and then hid it again — a flash on every entry. Only the two pages with no large
+      // title (a machine not found, a connection that failed) keep the bar title.
+      largeTitleController: _showsBarTitle ? null : _title,
       actions: [
-        if (_ready && _archived.isNotEmpty) GlassAction(icon: AppIcons.archive, tooltip: t('server.archived'), onPressed: _openArchiveSheet),
+        if (_loaded &&
+            _server != null &&
+            _ready &&
+            (_projectCounts.isNotEmpty || _project != null))
+          GlassMenuAction(
+            icon: AppIcons.folder,
+            tooltip: t('server.projectFilter'),
+            active: _project != null,
+            items: <Widget>[
+              GlassMenuItem(
+                title: t('server.allProjects'),
+                subtitle: t('common.chatCount', <String, Object?>{
+                  'count': _listed.length,
+                }),
+                isSelected: _project == null,
+                onTap: () => setState(() => _project = null),
+              ),
+              const GlassMenuDivider(),
+              for (final entry in _projectCounts.entries)
+                GlassMenuItem(
+                  title: _projectNames[entry.key] ?? entry.key,
+                  subtitle: t('common.chatCount', <String, Object?>{
+                    'count': entry.value,
+                  }),
+                  isSelected: _project == entry.key,
+                  onTap: () => setState(() => _project = entry.key),
+                ),
+            ],
+          ),
       ],
       body: _body(palette),
       bottomBar: _ready
@@ -587,229 +651,167 @@ class _ServerScreenState extends State<ServerScreen> {
         )
         .toList();
 
-    return Column(
-      children: <Widget>[
-        Padding(
-          padding: const EdgeInsets.fromLTRB(24, 16, 24, 12),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Expanded(
-                child: Text(
-                  t('server.workspaceTitle'),
-                  style: TextStyle(
-                    color: palette.text,
-                    fontSize: 32,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: -1,
-                  ),
-                ),
-              ),
-              Text(
-                '${listed.length}',
-                style: TextStyle(
-                  color: palette.subtle,
-                  fontSize: 24,
-                  fontWeight: FontWeight.w400,
-                ),
-              ),
-            ],
-          ),
-        ),
-        if (connection.reconnecting)
-          Container(
-            margin: const EdgeInsets.fromLTRB(16, 6, 16, 0),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              color: palette.warningSoft,
-              borderRadius: BorderRadius.circular(Radii.md),
-            ),
-            child: Row(
-              children: <Widget>[
-                DesktopSpinner(size: 14, color: palette.warning),
-                const SizedBox(width: 8),
-                Text(
-                  t('server.dropped'),
-                  style: TextStyle(
-                    color: palette.warning,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
-          child: Row(
-            children: <Widget>[
-              Expanded(
-                child: SearchField(
-                  controller: _query,
-                  placeholder: t('server.searchPlaceholder'),
-                ),
-              ),
-              if (projectCounts.isNotEmpty || _project != null) ...<Widget>[
-                const SizedBox(width: 8),
-                _ProjectFilter(
-                  label: _project == null
-                      ? t('server.projectFilter')
-                      : (names[_project] ?? _project!),
-                  active: _project != null,
-                  palette: palette,
-                  onPress: () => _pickProject(projectCounts, names),
-                  onClear: () => setState(() => _project = null),
-                ),
-              ],
-            ],
-          ),
-        ),
-        Expanded(
-          child: RefreshIndicator(
+    return Builder(
+      builder: (context) => CustomScrollView(
+        controller: _title.scrollController,
+        slivers: <Widget>[
+          iosRefreshControl(
             onRefresh: _refresh,
-            color: palette.accent,
-            child: listed.isEmpty
-                ? ListView(
-                    physics: const AlwaysScrollableScrollPhysics(),
-                    children: <Widget>[
-                      SizedBox(
-                        height: MediaQuery.sizeOf(context).height * 0.12,
+            topInset: GlassInsets.pad(context).top,
+          ),
+          SliverToBoxAdapter(
+            child: SizedBox(height: GlassInsets.pad(context).top),
+          ),
+          // The iOS large title and its search field: they scroll away with the list
+          // (the title first, then the field) and the bar's own title fades in as they go.
+          GlassLargeTitle(
+            text: t('server.workspaceTitle'),
+            controller: _title,
+            searchBar: GlassSearchBar(
+              controller: _query,
+              placeholder: t('server.searchPlaceholder'),
+              height: 40,
+            ),
+          ),
+          SliverPadding(
+            padding: EdgeInsets.only(
+              bottom: GlassInsets.pad(
+                context,
+                const EdgeInsets.only(bottom: 4),
+              ).bottom,
+            ),
+            sliver: SliverList(
+              delegate: SliverChildListDelegate(<Widget>[
+                // Connected is the normal state, so it is not announced here (the bar's title
+                // carries it once the large one has scrolled away); only a filter that is
+                // narrowing the list is, because otherwise the list looks short for no reason.
+                if (_project != null)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: GestureDetector(
+                        onTap: () => setState(() => _project = null),
+                        child: Pill(
+                          label: '${names[_project] ?? _project!}  ✕',
+                          tone: PillTone.accent,
+                          icon: AppIcons.folder,
+                        ),
                       ),
-                      EmptyState(
-                        icon: AppIcons.bubbleChat,
-                        title: t('server.emptyTitle'),
-                        body: t('server.emptyBody'),
+                    ),
+                  ),
+                if (connection.reconnecting)
+                  Container(
+                    margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: palette.warningSoft,
+                      borderRadius: BorderRadius.circular(Radii.md),
+                    ),
+                    child: Row(
+                      children: <Widget>[
+                        DesktopSpinner(size: 14, color: palette.warning),
+                        const SizedBox(width: 8),
+                        Text(
+                          t('server.dropped'),
+                          style: TextStyle(
+                            color: palette.warning,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                if (listed.isEmpty) ...<Widget>[
+                  SizedBox(height: MediaQuery.sizeOf(context).height * 0.12),
+                  EmptyState(
+                    icon: AppIcons.bubbleChat,
+                    title: t('server.emptyTitle'),
+                    body: t('server.emptyBody'),
+                    children: <Widget>[
+                      const SizedBox(height: 14),
+                      PrimaryButton(
+                        label: t('server.startChat'),
+                        icon: AppIcons.chatAdd,
+                        busy: _creating,
+                        onPressed: _startChat,
+                      ),
+                    ],
+                  ),
+                ] else ...<Widget>[
+                  for (final section
+                      in <(String, List<CatalogConversation>, bool, bool)>[
+                        (t('server.waiting'), waiting, true, false),
+                        (t('server.running'), running, false, true),
+                        (
+                          needle.isEmpty
+                              ? t('server.recent')
+                              : t('server.results'),
+                          recent,
+                          false,
+                          false,
+                        ),
+                      ])
+                    if (section.$2.isNotEmpty) ...<Widget>[
+                      SectionLabel(title: section.$1),
+                      for (final chat in section.$2)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+                          child: _row(
+                            chat,
+                            palette,
+                            names,
+                            waiting: section.$3,
+                            running: section.$4,
+                          ),
+                        ),
+                    ],
+                  if (visible.isEmpty)
+                    EmptyState(
+                      icon: AppIcons.bubbleChat,
+                      title: t('server.noMatchTitle'),
+                      body: needle.isNotEmpty
+                          ? t('server.noMatchQuery', <String, Object?>{
+                              'query': _query.text.trim(),
+                            })
+                          : t('server.noChatsInProject'),
+                    ),
+                  // Archived chats are a place to go, like Mail's folders: a row of their own.
+                  if (_archived.isNotEmpty && needle.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 24, 16, 0),
+                      child: SettingsCard(
                         children: <Widget>[
-                          const SizedBox(height: 14),
-                          PrimaryButton(
-                            label: t('server.startChat'),
-                            icon: AppIcons.chatAdd,
-                            busy: _creating,
-                            onPressed: _startChat,
+                          SettingsRow(
+                            icon: AppIcons.archive,
+                            label: t('server.archived'),
+                            value: '${_archived.length}',
+                            onTap: _openArchiveSheet,
                           ),
                         ],
                       ),
-                    ],
-                  )
-                : ListView(
-                    physics: const AlwaysScrollableScrollPhysics(),
-                    padding: const EdgeInsets.fromLTRB(20, 2, 20, 20),
-                    children: <Widget>[
-                      if (waiting.isNotEmpty) ...<Widget>[
-                        SectionLabel(
-                          title: t('server.waiting'),
-                          count: waiting.length,
-                        ),
-                        for (final chat in waiting)
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 8),
-                            child: _row(chat, palette, names, waiting: true),
-                          ),
-                      ],
-                      if (running.isNotEmpty) ...<Widget>[
-                        SectionLabel(
-                          title: t('server.running'),
-                          count: running.length,
-                        ),
-                        for (final chat in running)
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 8),
-                            child: _row(chat, palette, names, running: true),
-                          ),
-                      ],
-                      if (recent.isNotEmpty) ...<Widget>[
-                        SectionLabel(
-                          title: needle.isEmpty
-                              ? t('server.recent')
-                              : t('server.results'),
-                          count: recent.length,
-                        ),
-                        for (final chat in recent)
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 8),
-                            child: _row(chat, palette, names),
-                          ),
-                      ],
-                      if (visible.isEmpty)
-                        EmptyState(
-                          icon: AppIcons.bubbleChat,
-                          title: t('server.noMatchTitle'),
-                          body: needle.isNotEmpty
-                              ? t('server.noMatchQuery', <String, Object?>{
-                                  'query': _query.text.trim(),
-                                })
-                              : t('server.noChatsInProject'),
-                        ),
-                      if (_archived.isNotEmpty && needle.isEmpty)
-                        InkWell(
-                          onTap: _openArchiveSheet,
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(
-                              vertical: 18,
-                              horizontal: 4,
-                            ),
-                            child: Row(
-                              children: <Widget>[
-                                HugeIcon(
-                                  icon: AppIcons.archive,
-                                  size: 16,
-                                  color: palette.muted,
-                                ),
-                                const SizedBox(width: 6),
-                                Text(
-                                  t('server.archivedCount', <String, Object?>{
-                                    'count': _archived.length,
-                                  }),
-                                  style: TextStyle(
-                                    color: palette.muted,
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                                const SizedBox(width: 6),
-                                HugeIcon(
-                                  icon: AppIcons.arrowRight,
-                                  size: 14,
-                                  color: palette.subtle,
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                    ],
+                    ),
+                ],
+                if (listed.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
+                    child: Text(
+                      t('common.chatCount', <String, Object?>{
+                        'count': listed.length,
+                      }),
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: palette.subtle, fontSize: 13),
+                    ),
                   ),
+              ]),
+            ),
           ),
-        ),
-      ],
-    );
-  }
-
-  void _pickProject(Map<String, int> projectCounts, Map<String, String> names) {
-    showOptionSheet(
-      context,
-      title: t('server.filterByProject'),
-      value: _project ?? _allProjects,
-      options: <SheetOption>[
-        SheetOption(
-          value: _allProjects,
-          label: t('server.allProjects'),
-          description: t('common.chatCount', <String, Object?>{
-            'count': _listed.length,
-          }),
-          icon: AppIcons.folder,
-          onSelect: () => setState(() => _project = null),
-        ),
-        for (final entry in projectCounts.entries)
-          SheetOption(
-            value: entry.key,
-            label: names[entry.key] ?? entry.key,
-            description: t('common.chatCount', <String, Object?>{
-              'count': entry.value,
-            }),
-            avatar: names[entry.key] ?? entry.key,
-            onSelect: () => setState(() => _project = entry.key),
-          ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -861,76 +863,55 @@ class _ConversationRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = paletteOf(context);
+    // One card per conversation: the leading mark, the title with the time trailing it,
+    // one line of preview cut with an ellipsis, and the project on a line of its own.
+    // Which section the card sits in already says waiting / running, so the card says it
+    // only with its leading mark. A press dims the card, as iOS does; no ripple.
+    final Widget leading = waiting
+        ? _LeadingMark(
+            background: palette.warningSoft,
+            child: HugeIcon(
+              icon: AppIcons.alert,
+              size: 20,
+              color: palette.warning,
+            ),
+          )
+        : running
+        ? _LeadingMark(
+            background: palette.accentSoft,
+            child: DesktopSpinner(size: 18, color: palette.accent),
+          )
+        : projectName != null
+        ? Avatar(name: projectName!, size: 40, borderRadius: 10)
+        : _LeadingMark(
+            background: palette.field,
+            child: HugeIcon(
+              icon: AppIcons.bubbleChat,
+              size: 20,
+              color: palette.muted,
+            ),
+          );
+    final preview = snippet ?? conversation.preview ?? t('server.noPreview');
     return Material(
       color: palette.card,
-      borderRadius: BorderRadius.circular(Radii.lg),
+      borderRadius: BorderRadius.circular(Radii.card),
+      clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
         onLongPress: onLongPress,
-        borderRadius: BorderRadius.circular(Radii.lg),
-        child: Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(Radii.lg),
-            border: Border.all(
-              color: waiting ? palette.warning : Colors.transparent,
-            ),
-          ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 16, 12),
           child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              if (waiting)
-                Container(
-                  width: 42,
-                  height: 42,
-                  decoration: BoxDecoration(
-                    color: palette.warningSoft,
-                    borderRadius: BorderRadius.circular(13),
-                  ),
-                  child: Center(
-                    child: HugeIcon(
-                      icon: AppIcons.alert,
-                      size: 20,
-                      color: palette.warning,
-                    ),
-                  ),
-                )
-              else if (running)
-                Container(
-                  width: 42,
-                  height: 42,
-                  decoration: BoxDecoration(
-                    color: palette.accentSoft,
-                    borderRadius: BorderRadius.circular(13),
-                  ),
-                  child: Center(
-                    child: DesktopSpinner(size: 20, color: palette.accent),
-                  ),
-                )
-              else if (projectName != null)
-                Avatar(name: projectName!, size: 42, borderRadius: 13)
-              else
-                Container(
-                  width: 42,
-                  height: 42,
-                  decoration: BoxDecoration(
-                    color: palette.field,
-                    borderRadius: BorderRadius.circular(13),
-                  ),
-                  child: Center(
-                    child: HugeIcon(
-                      icon: AppIcons.bubbleChat,
-                      size: 20,
-                      color: palette.muted,
-                    ),
-                  ),
-                ),
+              leading,
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
                     Row(
+                      crossAxisAlignment: CrossAxisAlignment.baseline,
+                      textBaseline: TextBaseline.alphabetic,
                       children: <Widget>[
                         Expanded(
                           child: Text(
@@ -939,52 +920,46 @@ class _ConversationRow extends StatelessWidget {
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                               color: palette.text,
-                              fontSize: 16,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: -0.2,
+                              fontSize: 17,
+                              fontWeight: FontWeight.w600,
                             ),
                           ),
                         ),
                         const SizedBox(width: 8),
                         Text(
                           relativeTime(conversation.updatedAt),
-                          style: TextStyle(
-                            color: palette.subtle,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w500,
-                          ),
+                          style: TextStyle(color: palette.subtle, fontSize: 12),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 3),
                     Text(
-                      snippet ?? conversation.preview ?? t('server.noPreview'),
-                      maxLines: 2,
+                      preview,
+                      maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: palette.muted,
-                        fontSize: 14,
-                        height: 20 / 14,
-                      ),
+                      style: TextStyle(color: palette.muted, fontSize: 15),
                     ),
-                    if (waiting || running || projectName != null) ...<Widget>[
-                      const SizedBox(height: 6),
-                      Wrap(
-                        spacing: 6,
-                        runSpacing: 4,
+                    if (projectName != null) ...<Widget>[
+                      const SizedBox(height: 4),
+                      Row(
                         children: <Widget>[
-                          if (waiting)
-                            Pill(
-                              label: t('server.waiting'),
-                              tone: PillTone.warning,
+                          HugeIcon(
+                            icon: AppIcons.folder,
+                            size: 13,
+                            color: palette.subtle,
+                          ),
+                          const SizedBox(width: 4),
+                          Flexible(
+                            child: Text(
+                              projectName!,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: palette.subtle,
+                                fontSize: 13,
+                              ),
                             ),
-                          if (running)
-                            Pill(
-                              label: t('server.running'),
-                              tone: PillTone.accent,
-                            ),
-                          if (projectName != null)
-                            Pill(label: projectName!, icon: AppIcons.folder),
+                          ),
                         ],
                       ),
                     ],
@@ -999,74 +974,23 @@ class _ConversationRow extends StatelessWidget {
   }
 }
 
-/// The toolbar's project filter: one pill that opens a sheet, instead of a row of every
-/// project.
-class _ProjectFilter extends StatelessWidget {
-  const _ProjectFilter({
-    required this.label,
-    required this.active,
-    required this.palette,
-    required this.onPress,
-    required this.onClear,
-  });
+/// A 40pt rounded tile behind a row's leading glyph.
+class _LeadingMark extends StatelessWidget {
+  const _LeadingMark({required this.background, required this.child});
 
-  final String label;
-  final bool active;
-  final Palette palette;
-  final VoidCallback onPress;
-  final VoidCallback onClear;
+  final Color background;
+  final Widget child;
 
   @override
-  Widget build(BuildContext context) {
-    final tint = active ? palette.accent : palette.muted;
-    return Container(
-      width: 124,
-      height: 40,
-      padding: const EdgeInsets.symmetric(horizontal: 11),
-      decoration: BoxDecoration(
-        color: active ? palette.accentSoft : palette.field,
-        borderRadius: BorderRadius.circular(Radii.md),
-      ),
-      child: Row(
-        children: <Widget>[
-          Expanded(
-            child: GestureDetector(
-              onTap: onPress,
-              behavior: HitTestBehavior.opaque,
-              child: Row(
-                children: <Widget>[
-                  HugeIcon(icon: AppIcons.folder, size: 16, color: tint),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: active ? palette.accent : palette.text,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                  if (!active)
-                    HugeIcon(icon: AppIcons.arrowDown, size: 14, color: tint),
-                ],
-              ),
-            ),
-          ),
-          if (active)
-            GestureDetector(
-              onTap: onClear,
-              child: Padding(
-                padding: const EdgeInsets.only(left: 4),
-                child: HugeIcon(icon: AppIcons.cancel, size: 14, color: tint),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) => Container(
+    width: 40,
+    height: 40,
+    decoration: BoxDecoration(
+      color: background,
+      borderRadius: BorderRadius.circular(10),
+    ),
+    child: Center(child: child),
+  );
 }
 
 /// 需要重新登录 / 无法连接: the two ways a machine can fail to answer.

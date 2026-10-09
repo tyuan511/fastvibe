@@ -896,6 +896,13 @@
   "lanAccess": "允许局域网访问",
   "lanAccessDesc": "同一网络中的设备可以用下面的地址访问。",
   "lanAccessOnDesc": "局域网地址：{{address}}；仍需输入远程访问密码。",
+  "discoveryName": "主机名称",
+  "discoveryNameDesc": "手机在「附近的电脑」中显示的名称，留空使用默认名称。",
+  "discoveryNameSave": "保存",
+  "discoveryNameErrors": {
+   "invalidCharacters": "名称不能包含句点、反斜杠或控制字符",
+   "tooLong": "名称太长，请缩短后再保存"
+  },
   "lanAddressFamily": "地址类型",
   "lanAddressFamilyDesc": "选择局域网设备访问时使用 IPv4 或 IPv6 地址。",
   "tunnelHint": "{{address}} 只是本机监听地址，其他设备连不上。下面选一个内网穿透工具发布到公网。",

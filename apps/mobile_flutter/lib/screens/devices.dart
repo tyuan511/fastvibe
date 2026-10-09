@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:hugeicons/hugeicons.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 import '../chat/option_sheet.dart';
 import '../chat/turn_meta.dart';
@@ -13,6 +15,7 @@ import '../ui/dock.dart';
 import '../ui/icons.dart';
 import '../ui/kit.dart';
 import '../ui/preferences.dart';
+import '../ui/context_menu.dart';
 
 class DevicesScreen extends StatefulWidget {
   const DevicesScreen({super.key});
@@ -24,6 +27,9 @@ class _DevicesScreenState extends State<DevicesScreen> {
   List<SavedServer> _servers = [];
   bool _loaded = false;
   final _query = TextEditingController();
+
+  /// The large 工作空间 title's collapse into the bar; owns the list's scroll controller.
+  final _title = GlassLargeTitleController();
   int _loadGeneration = 0;
 
   @override
@@ -39,6 +45,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
     ServerStore.instance.removeListener(_reload);
     Connection.instance.removeListener(_changed);
     _query.dispose();
+    _title.dispose();
     super.dispose();
   }
 
@@ -92,52 +99,51 @@ class _DevicesScreenState extends State<DevicesScreen> {
     }
   }
 
+  /// The row's actions, as an iOS pull-down menu (the ⋯ button) — the same list a long
+  /// press opens as a sheet.
+  List<SheetOption> _actions(SavedServer server) => <SheetOption>[
+    SheetOption(
+      value: 'favorite',
+      label: t(server.favorite ? 'devices.unfavorite' : 'devices.favorite'),
+      icon: AppIcons.star,
+      onSelect: () async {
+        try {
+          await ServerStore.instance.patch(
+            server.id,
+            favorite: !server.favorite,
+          );
+        } catch (error) {
+          toastFailure(error, t('common.operationFailed'));
+        }
+      },
+    ),
+    SheetOption(
+      value: 'rename',
+      label: t('common.rename'),
+      icon: AppIcons.pencilEdit,
+      onSelect: () => _rename(server),
+    ),
+    SheetOption(
+      value: 'copy',
+      label: t('devices.copyAddress'),
+      icon: AppIcons.copy,
+      onSelect: () async {
+        await copyToClipboard(server.origin);
+        toastSuccess(t('toast.addressCopied'));
+      },
+    ),
+    SheetOption(
+      value: 'delete',
+      label: t('common.delete'),
+      icon: AppIcons.delete,
+      destructive: true,
+      onSelect: () => _remove(server),
+    ),
+  ];
+
+  /// A long press: the same actions, as the iOS context menu at the finger.
   void _menu(SavedServer server) {
-    Haptic.press();
-    showOptionSheet(
-      context,
-      title: server.alias,
-      subtitle: server.host,
-      options: [
-        SheetOption(
-          value: 'favorite',
-          label: t(server.favorite ? 'devices.unfavorite' : 'devices.favorite'),
-          icon: AppIcons.star,
-          onSelect: () async {
-            try {
-              await ServerStore.instance.patch(
-                server.id,
-                favorite: !server.favorite,
-              );
-            } catch (error) {
-              toastFailure(error, t('common.operationFailed'));
-            }
-          },
-        ),
-        SheetOption(
-          value: 'rename',
-          label: t('common.rename'),
-          icon: AppIcons.pencilEdit,
-          onSelect: () => _rename(server),
-        ),
-        SheetOption(
-          value: 'copy',
-          label: t('devices.copyAddress'),
-          icon: AppIcons.copy,
-          onSelect: () async {
-            await copyToClipboard(server.origin);
-            toastSuccess(t('toast.addressCopied'));
-          },
-        ),
-        SheetOption(
-          value: 'delete',
-          label: t('common.delete'),
-          icon: AppIcons.delete,
-          destructive: true,
-          onSelect: () => _remove(server),
-        ),
-      ],
-    );
+    showContextMenu(context, contextMenuItems(_actions(server)));
   }
 
   @override
@@ -150,8 +156,9 @@ class _DevicesScreenState extends State<DevicesScreen> {
     final favorites = shown.where((s) => s.favorite).toList();
     final others = shown.where((s) => !s.favorite).toList();
     return GlassScreen(
-      title: 'FastVibe',
+      title: t('devices.workspaces'),
       showBack: false,
+      largeTitleController: _title,
       actions: [
         GlassAction(
           icon: AppIcons.settings,
@@ -159,116 +166,91 @@ class _DevicesScreenState extends State<DevicesScreen> {
           onPressed: () => context.push('/settings'),
         ),
       ],
-      bottomBar: DeviceDock(
-        onScan: () => context.push('/add?scan=1'),
-        onAdd: () => context.push('/add'),
-      ),
-      body: RefreshIndicator(
-        onRefresh: _reload,
-        child: ListView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.fromLTRB(20, 4, 20, 40),
-          children: [
-            PageHeading(
-              title: t('devices.workspaces'),
-              subtitle: t('devices.workspaceHint'),
-            ),
-            if (!_loaded)
-              const BrandLoading()
-            else if (_servers.isEmpty) ...[
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                child: Text(
-                  t('devices.heroTitle'),
-                  style: TextStyle(
-                    color: p.text,
-                    fontSize: 22,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
+      bottomBar: DeviceDock(onAdd: () => context.push('/add')),
+      body: Builder(
+        builder: (context) {
+          final top = GlassInsets.pad(context).top;
+          return CustomScrollView(
+            controller: _title.scrollController,
+            slivers: <Widget>[
+              iosRefreshControl(onRefresh: _reload, topInset: top),
+              SliverToBoxAdapter(child: SizedBox(height: top)),
+              GlassLargeTitle(
+                text: t('devices.workspaces'),
+                controller: _title,
+                searchBar: _servers.isEmpty
+                    ? null
+                    : GlassSearchBar(
+                        controller: _query,
+                        placeholder: t('devices.search'),
+                        onChanged: (_) => setState(() {}),
+                        height: 40,
+                      ),
               ),
-              for (final i in [1, 2, 3])
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: Container(
-                    padding: const EdgeInsets.all(20),
-                    decoration: BoxDecoration(
-                      color: p.card,
-                      borderRadius: BorderRadius.circular(Radii.lg),
-                    ),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '0$i',
-                          style: TextStyle(
-                            color: p.accent,
-                            fontSize: 20,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                t('devices.step${i}Title'),
-                                style: TextStyle(
-                                  color: p.text,
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                              const SizedBox(height: 6),
-                              Text(
-                                t('devices.step${i}Body'),
-                                style: TextStyle(
-                                  color: p.muted,
-                                  fontSize: 14,
-                                  height: 1.5,
-                                ),
-                              ),
-                            ],
-                          ),
+              SliverPadding(
+                padding: EdgeInsets.fromLTRB(
+                  16,
+                  0,
+                  16,
+                  GlassInsets.pad(
+                    context,
+                    const EdgeInsets.only(bottom: 8),
+                  ).bottom,
+                ),
+                sliver: SliverList(
+                  delegate: SliverChildListDelegate(<Widget>[
+                    if (!_loaded)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 40),
+                        child: BrandLoading(),
+                      )
+                    else if (_servers.isEmpty) ...<Widget>[
+                      SectionLabel(title: t('devices.heroTitle')),
+                      InsetGroup(
+                        separatorIndent: 16 + 29 + 12,
+                        children: <Widget>[
+                          for (final i in <int>[1, 2, 3])
+                            _Step(index: i, palette: p),
+                        ],
+                      ),
+                    ] else ...<Widget>[
+                      if (favorites.isNotEmpty) ...<Widget>[
+                        SectionLabel(title: t('devices.favorites')),
+                        InsetGroup(
+                          separatorIndent: 16 + 40 + 12,
+                          children: <Widget>[
+                            for (final server in favorites) _row(server),
+                          ],
                         ),
                       ],
-                    ),
-                  ),
+                      if (others.isNotEmpty) ...<Widget>[
+                        SectionLabel(title: t('devices.allDevices')),
+                        InsetGroup(
+                          separatorIndent: 16 + 40 + 12,
+                          children: <Widget>[
+                            for (final server in others) _row(server),
+                          ],
+                        ),
+                      ],
+                      if (shown.isEmpty)
+                        EmptyState(
+                          icon: AppIcons.search,
+                          title: t('common.noMatch'),
+                          body: t('devices.search'),
+                        ),
+                    ],
+                  ]),
                 ),
-            ] else ...[
-              SearchField(
-                controller: _query,
-                placeholder: t('devices.search'),
-                onChanged: (_) => setState(() {}),
               ),
-              if (favorites.isNotEmpty) ...[
-                SectionLabel(
-                  title: t('devices.favorites'),
-                  count: favorites.length,
-                ),
-                for (final server in favorites) _row(server),
-              ],
-              if (others.isNotEmpty) ...[
-                SectionLabel(
-                  title: t('devices.allDevices'),
-                  count: others.length,
-                ),
-                for (final server in others) _row(server),
-              ],
-              if (shown.isEmpty)
-                EmptyState(
-                  icon: AppIcons.search,
-                  title: t('common.noMatch'),
-                  body: t('devices.search'),
-                ),
             ],
-          ],
-        ),
+          );
+        },
       ),
     );
   }
 
+  /// One machine, as an iOS navigation row: icon, name, address and last connection,
+  /// the ⋯ pull-down, and the whole row opening the machine.
   Widget _row(SavedServer server) {
     final p = paletteOf(context);
     final connected =
@@ -278,70 +260,140 @@ class _DevicesScreenState extends State<DevicesScreen> {
     final when = server.lastConnectedAt == null
         ? null
         : relativeTime(server.lastConnectedAt!);
+    return InkWell(
+      onTap: () {
+        Haptic.tap();
+        context.push('/server/${server.id}');
+      },
+      onLongPress: () => _menu(server),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 10, 6, 10),
+        child: Row(
+          children: <Widget>[
+            Avatar(
+              name: server.alias,
+              icon: AppIcons.computer,
+              size: 40,
+              borderRadius: 10,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    server.alias,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: p.text,
+                      fontSize: 17,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 1),
+                  Text(
+                    connected
+                        ? t('devices.connected')
+                        : when != null
+                        ? t('devices.connectedAgo', {'when': when})
+                        : t('devices.neverConnected'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: connected ? p.success : p.muted,
+                      fontSize: 15,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            GlassPullDownButton(
+              icon: HugeIcon(
+                icon: AppIcons.moreHorizontal,
+                size: 20,
+                color: p.muted,
+              ),
+              semanticLabel: t('devices.actions'),
+              buttonWidth: 36,
+              buttonHeight: 36,
+              menuAlignment: GlassMenuAlignment.topRight,
+              items: <Widget>[
+                for (final option in _actions(server))
+                  GlassMenuItem(
+                    title: option.label,
+                    icon: option.icon == null
+                        ? null
+                        : HugeIcon(icon: option.icon!, size: 18),
+                    isDestructive: option.destructive,
+                    onTap: () => option.onSelect?.call(),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// One step of first-run setup, as a numbered row.
+class _Step extends StatelessWidget {
+  const _Step({required this.index, required this.palette});
+
+  final int index;
+  final Palette palette;
+
+  @override
+  Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Material(
-        color: p.card,
-        borderRadius: BorderRadius.circular(Radii.lg),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(Radii.lg),
-          onTap: () {
-            Haptic.tap();
-            context.push('/server/${server.id}');
-          },
-          onLongPress: () => _menu(server),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(18, 20, 10, 20),
-            child: Row(
-              children: [
-                Avatar(name: server.alias, icon: AppIcons.computer, size: 48),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        server.alias,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: p.text,
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        server.host,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(color: p.muted, fontSize: 13),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        connected
-                            ? t('devices.connected')
-                            : when != null
-                            ? t('devices.connectedAgo', {'when': when})
-                            : t('devices.neverConnected'),
-                        style: TextStyle(
-                          color: connected ? p.success : p.subtle,
-                          fontSize: 12,
-                        ),
-                      ),
-                    ],
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Container(
+            width: 29,
+            height: 29,
+            decoration: BoxDecoration(
+              color: palette.accent,
+              shape: BoxShape.circle,
+            ),
+            alignment: Alignment.center,
+            child: Text(
+              '$index',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  t('devices.step${index}Title'),
+                  style: TextStyle(
+                    color: palette.text,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
-                IconAction(
-                  icon: AppIcons.moreHorizontal,
-                  size: 44,
-                  tooltip: t('devices.actions'),
-                  onPressed: () => _menu(server),
+                const SizedBox(height: 2),
+                Text(
+                  t('devices.step${index}Body'),
+                  style: TextStyle(
+                    color: palette.muted,
+                    fontSize: 15,
+                    height: 20 / 15,
+                  ),
                 ),
               ],
             ),
           ),
-        ),
+        ],
       ),
     );
   }

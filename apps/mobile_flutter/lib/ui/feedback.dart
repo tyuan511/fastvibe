@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/cupertino.dart' show showCupertinoDialog;
 import 'package:flutter/material.dart';
 import 'package:hugeicons/hugeicons.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
@@ -126,7 +127,7 @@ class _ToastBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final (icon, tint, soft) = switch (kind) {
+    final (icon, tint, _) = switch (kind) {
       ToastKind.success => (
         AppIcons.checkCircle,
         palette.success,
@@ -152,25 +153,14 @@ class _ToastBody extends StatelessWidget {
         constraints: const BoxConstraints(maxWidth: 440),
         child: GlassContainer(
           useOwnLayer: true,
-          shape: const LiquidRoundedSuperellipse(borderRadius: 28),
-          padding: const EdgeInsets.fromLTRB(12, 12, 20, 12),
+          shape: const LiquidRoundedSuperellipse(borderRadius: 26),
+          padding: const EdgeInsets.fromLTRB(16, 13, 20, 13),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              Container(
-                width: 26,
-                height: 26,
-                decoration: BoxDecoration(color: soft, shape: BoxShape.circle),
-                child: Center(
-                  child: HugeIcon(
-                    icon: icon,
-                    color: tint,
-                    size: 15,
-                    strokeWidth: 2.2,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
+              // iOS's own HUD capsule: a tinted glyph, no disc behind it.
+              HugeIcon(icon: icon, color: tint, size: 20, strokeWidth: 2),
+              const SizedBox(width: 8),
               Flexible(
                 child: Text(
                   message,
@@ -178,9 +168,9 @@ class _ToastBody extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     color: palette.text,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    height: 19 / 14,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w500,
+                    height: 20 / 15,
                   ),
                 ),
               ),
@@ -198,6 +188,42 @@ class _ToastBody extends StatelessWidget {
 /// here, and the typed text must survive an outside press — a modal backdrop covers the
 /// whole window, so one stray tap would otherwise throw away an answer that took a while
 /// to write.
+/// `GlassDialog.show` is `showCupertinoDialog` around the package's dialog, and a
+/// Cupertino route has no `Material` above it: every `Text` in the dialog then falls
+/// back to the framework's debug style — the yellow double underline. The route also
+/// ran the full refractive shader (own layer, plus one per action button) over the page
+/// behind it, which is what made opening one stutter. So the dialog is built here:
+/// a `Material` for the text style, and `GlassQuality.minimal` — the same frosted card
+/// from a plain backdrop blur, no shader pass.
+Future<void> _showGlassDialog({
+  required BuildContext context,
+  required List<GlassDialogAction> actions,
+  String? title,
+  String? message,
+  Widget? content,
+}) {
+  final p = paletteOf(context);
+  return showCupertinoDialog<void>(
+    context: context,
+    useRootNavigator: true,
+    builder: (dialogContext) => Material(
+      type: MaterialType.transparency,
+      child: GlassDialog(
+        title: title,
+        message: message,
+        content: content,
+        actions: actions,
+        quality: GlassQuality.minimal,
+        settings: LiquidGlassSettings(
+          glassColor: p.card.withValues(alpha: p.dark ? 0.72 : 0.82),
+          blur: 22,
+          thickness: 14,
+        ),
+      ),
+    ),
+  );
+}
+
 class AppDialog {
   const AppDialog._();
 
@@ -206,7 +232,7 @@ class AppDialog {
     required String title,
     String? message,
   }) {
-    return GlassDialog.show<void>(
+    return _showGlassDialog(
       context: context,
       title: title,
       message: message,
@@ -227,7 +253,7 @@ class AppDialog {
     bool destructive = false,
   }) async {
     var confirmed = false;
-    await GlassDialog.show<void>(
+    await _showGlassDialog(
       context: context,
       title: title,
       message: message,
@@ -258,30 +284,22 @@ class AppDialog {
     String? placeholder,
     String? submitLabel,
   }) async {
-    final controller = TextEditingController(text: initial ?? '');
+    // The text is read from `typed`, not from a controller held here: the dialog is still
+    // animating out after `show` returns, and its field keeps listening to its controller
+    // until the route is gone. A controller disposed at that point throws "used after
+    // being disposed", so the field owns its own (`_PromptField`).
+    var typed = initial ?? '';
     String? value;
     final palette = paletteOf(context);
-    await GlassDialog.show<void>(
+    await _showGlassDialog(
       context: context,
       title: title,
       message: message,
-      content: Material(
-        type: MaterialType.transparency,
-        child: TextField(
-          controller: controller,
-          autofocus: true,
-          selectAllOnFocus: true,
-          style: TextStyle(color: palette.text, fontSize: 16),
-          decoration: InputDecoration(
-            hintText: placeholder,
-            filled: true,
-            fillColor: palette.field,
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(Radii.md),
-              borderSide: BorderSide.none,
-            ),
-          ),
-        ),
+      content: _PromptField(
+        initial: initial ?? '',
+        placeholder: placeholder,
+        palette: palette,
+        onChanged: (text) => typed = text,
       ),
       actions: [
         GlassDialogAction(
@@ -291,13 +309,67 @@ class AppDialog {
         GlassDialogAction(
           label: submitLabel ?? t('common.save'),
           onPressed: () {
-            value = controller.text.trim();
+            value = typed.trim();
             Navigator.of(context, rootNavigator: true).pop();
           },
         ),
       ],
     );
-    controller.dispose();
     return value;
+  }
+}
+
+/// The prompt's input. A widget of its own so the controller lives and dies with the
+/// field rather than with the call that opened the dialog.
+class _PromptField extends StatefulWidget {
+  const _PromptField({
+    required this.initial,
+    required this.placeholder,
+    required this.palette,
+    required this.onChanged,
+  });
+
+  final String initial;
+  final String? placeholder;
+  final Palette palette;
+  final ValueChanged<String> onChanged;
+
+  @override
+  State<_PromptField> createState() => _PromptFieldState();
+}
+
+class _PromptFieldState extends State<_PromptField> {
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.initial,
+  );
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = widget.palette;
+    return Material(
+      type: MaterialType.transparency,
+      child: TextField(
+        controller: _controller,
+        autofocus: true,
+        selectAllOnFocus: true,
+        onChanged: widget.onChanged,
+        style: TextStyle(color: palette.text, fontSize: 16),
+        decoration: InputDecoration(
+          hintText: widget.placeholder,
+          filled: true,
+          fillColor: palette.field,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(Radii.md),
+            borderSide: BorderSide.none,
+          ),
+        ),
+      ),
+    );
   }
 }

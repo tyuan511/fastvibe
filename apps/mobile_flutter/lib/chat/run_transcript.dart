@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:flutter/cupertino.dart'
+    show CupertinoActivityIndicator, CupertinoButton;
 import 'package:flutter/material.dart';
 
 import '../i18n/core.dart';
@@ -121,14 +123,18 @@ class _RunTranscriptState extends State<RunTranscript> {
       children: [
         AppSheetHeader(title: t('dag.execution')),
         if (_failed)
-          TextButton(onPressed: _read, child: Text(t('dag.refresh'))),
-        if (_loading) const LinearProgressIndicator(),
+          CupertinoButton(onPressed: _read, child: Text(t('dag.refresh'))),
+        if (_loading)
+          const Padding(
+            padding: EdgeInsets.all(12),
+            child: CupertinoActivityIndicator(),
+          ),
         Expanded(
           child: ListView(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
             children: [
               if (_messages.length > _limit)
-                TextButton(
+                CupertinoButton(
                   onPressed: () => setState(() => _limit += 40),
                   child: Text(t('dag.earlier')),
                 ),

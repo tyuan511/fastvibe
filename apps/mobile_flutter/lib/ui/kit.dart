@@ -1,3 +1,8 @@
+import 'package:flutter/cupertino.dart'
+    show
+        CupertinoActivityIndicator,
+        CupertinoSliverRefreshControl,
+        RefreshIndicatorMode;
 import 'package:flutter/material.dart';
 import 'package:hugeicons/hugeicons.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
@@ -62,7 +67,7 @@ class IconAction extends StatelessWidget {
       ),
     );
     if (tooltip == null) return button;
-    return Tooltip(message: tooltip!, child: button);
+    return Semantics(label: tooltip, button: true, child: button);
   }
 }
 
@@ -175,8 +180,9 @@ class Pill extends StatelessWidget {
   }
 }
 
-/// The list's search box. Recessed fill, a leading glyph, and a clear button once there
-/// is something to clear.
+/// A search field on a surface that is already glass (a sheet), where `GlassSearchBar`
+/// would refract inside refraction. Drawn to `UISearchTextField`'s metrics: 36pt tall,
+/// 10pt corners, the system fill, 17pt text, a magnifier and a clear button.
 class SearchField extends StatelessWidget {
   const SearchField({
     super.key,
@@ -197,11 +203,11 @@ class SearchField extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = paletteOf(context);
     return Container(
-      height: 40,
-      padding: const EdgeInsets.symmetric(horizontal: 12),
+      height: 36,
+      padding: const EdgeInsets.symmetric(horizontal: 8),
       decoration: BoxDecoration(
         color: palette.field,
-        borderRadius: BorderRadius.circular(Radii.md),
+        borderRadius: BorderRadius.circular(10),
       ),
       child: Row(
         children: <Widget>[
@@ -211,7 +217,7 @@ class SearchField extends StatelessWidget {
             size: 17,
             strokeWidth: 2,
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
           Expanded(
             child: TextField(
               controller: controller,
@@ -220,12 +226,12 @@ class SearchField extends StatelessWidget {
               autofocus: autofocus,
               textInputAction: TextInputAction.search,
               autocorrect: false,
-              style: TextStyle(color: palette.text, fontSize: 16),
+              style: TextStyle(color: palette.text, fontSize: 17),
               decoration: InputDecoration(
                 isDense: true,
                 border: InputBorder.none,
                 hintText: placeholder,
-                hintStyle: TextStyle(color: palette.subtle, fontSize: 16),
+                hintStyle: TextStyle(color: palette.subtle, fontSize: 17),
               ),
             ),
           ),
@@ -296,14 +302,7 @@ class PrimaryButton extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 20),
         child: busy
-            ? SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: palette.accentText,
-                ),
-              )
+            ? CupertinoActivityIndicator(color: palette.accentText)
             : Row(
                 mainAxisSize: MainAxisSize.min,
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -331,7 +330,8 @@ class PrimaryButton extends StatelessWidget {
   }
 }
 
-/// A secondary action: 取消, 重新连接 — a card fill with a hairline border.
+/// A secondary action: 取消, 重新连接. The iOS 26 `.glass` button — the neutral twin of
+/// [PrimaryButton]'s `.glassProminent` — rather than a bordered card.
 class SecondaryButton extends StatelessWidget {
   const SecondaryButton({
     super.key,
@@ -349,94 +349,69 @@ class SecondaryButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = paletteOf(context);
-    return Material(
-      color: palette.card,
-      borderRadius: BorderRadius.circular(Radii.md),
-      child: InkWell(
-        onTap: onPressed,
-        borderRadius: BorderRadius.circular(Radii.md),
-        child: Container(
-          height: height,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(Radii.md),
-            border: Border.all(color: palette.border, width: 0.5),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: <Widget>[
-              if (icon != null) ...<Widget>[
-                HugeIcon(
-                  icon: icon!,
+    return GlassButton.custom(
+      onTap: onPressed ?? () {},
+      enabled: onPressed != null,
+      label: label,
+      height: height,
+      useOwnLayer: true,
+      shape: const LiquidRoundedSuperellipse(borderRadius: 25),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: <Widget>[
+            if (icon != null) ...<Widget>[
+              HugeIcon(
+                icon: icon!,
+                color: palette.accent,
+                size: 19,
+                strokeWidth: 2,
+              ),
+              const SizedBox(width: 8),
+            ],
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
                   color: palette.accent,
-                  size: 19,
-                  strokeWidth: 2,
-                ),
-                const SizedBox(width: 8),
-              ],
-              Flexible(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  child: Text(
-                    label,
-                    style: TextStyle(
-                      color: palette.text,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
+                  fontSize: 17,
+                  fontWeight: FontWeight.w500,
                 ),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
   }
 }
 
-/// A list section header: 我的设备, 等你处理, 最近.
+/// The header above an inset grouped section: 收藏, 等你处理, 最近. iOS draws it in the
+/// footnote style (13pt, regular, secondary), aligned with the text inside the group, with
+/// no count — a list does not announce how long it is in its headers.
 class SectionLabel extends StatelessWidget {
-  const SectionLabel({
-    super.key,
-    required this.title,
-    this.count,
-    this.trailing,
-  });
+  const SectionLabel({super.key, required this.title, this.trailing});
 
   final String title;
-  final int? count;
   final Widget? trailing;
 
   @override
   Widget build(BuildContext context) {
     final palette = paletteOf(context);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(4, 14, 4, 6),
+      padding: const EdgeInsets.fromLTRB(16, 18, 16, 7),
       child: Row(
         children: <Widget>[
-          Text(
-            title,
-            style: TextStyle(
-              color: palette.muted,
-              fontSize: 13,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 0.2,
+          Expanded(
+            child: Text(
+              title,
+              style: TextStyle(color: palette.muted, fontSize: 13),
             ),
           ),
-          if (count != null) ...<Widget>[
-            const SizedBox(width: 6),
-            Text(
-              '$count',
-              style: TextStyle(
-                color: palette.subtle,
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                fontFeatures: const <FontFeature>[FontFeature.tabularFigures()],
-              ),
-            ),
-          ],
-          const Spacer(),
           ?trailing,
         ],
       ),
@@ -444,7 +419,46 @@ class SectionLabel extends StatelessWidget {
   }
 }
 
-/// The centred empty state: a tinted glyph block, a title and a line of explanation.
+/// An inset grouped section: one rounded card, rows separated by hairlines that start
+/// where the row's text starts (`separatorIndent`), never under the leading icon.
+class InsetGroup extends StatelessWidget {
+  const InsetGroup({
+    super.key,
+    required this.children,
+    this.separatorIndent = 16,
+    this.color,
+  });
+
+  final List<Widget> children;
+  final double separatorIndent;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = paletteOf(context);
+    return Material(
+      color: color ?? palette.card,
+      borderRadius: BorderRadius.circular(Radii.group),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          for (var index = 0; index < children.length; index++) ...<Widget>[
+            if (index > 0)
+              Padding(
+                padding: EdgeInsets.only(left: separatorIndent),
+                child: Container(height: 0.5, color: palette.separator),
+              ),
+            children[index],
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// The centred empty state, drawn like iOS's `ContentUnavailableView`: a large secondary
+/// glyph with no tile behind it, a title, a line of explanation, then any actions.
 class EmptyState extends StatelessWidget {
   const EmptyState({
     super.key,
@@ -468,21 +482,11 @@ class EmptyState extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
-            Container(
-              width: 60,
-              height: 60,
-              decoration: BoxDecoration(
-                color: palette.accentSoft,
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Center(
-                child: HugeIcon(
-                  icon: icon,
-                  color: palette.accent,
-                  size: 28,
-                  strokeWidth: 1.8,
-                ),
-              ),
+            HugeIcon(
+              icon: icon,
+              color: palette.subtle,
+              size: 48,
+              strokeWidth: 1.6,
             ),
             const SizedBox(height: 14),
             Text(
@@ -490,19 +494,19 @@ class EmptyState extends StatelessWidget {
               textAlign: TextAlign.center,
               style: TextStyle(
                 color: palette.text,
-                fontSize: 17,
-                fontWeight: FontWeight.w700,
+                fontSize: 20,
+                fontWeight: FontWeight.w600,
               ),
             ),
             if (body != null) ...<Widget>[
-              const SizedBox(height: 8),
+              const SizedBox(height: 6),
               Text(
                 body!,
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: palette.muted,
-                  fontSize: 14,
-                  height: 21 / 14,
+                  fontSize: 15,
+                  height: 20 / 15,
                 ),
               ),
             ],
@@ -572,8 +576,10 @@ class BrandLogo extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(size * 0.22),
+    // The artwork is full-bleed, so the mask is the whole shape: iOS's continuous
+    // (superellipse) corner, 22.37% of the side, the same as the home-screen icon.
+    return ClipRSuperellipse(
+      borderRadius: BorderRadius.circular(size * 0.2237),
       child: Image.asset(
         'assets/icon.png',
         width: size,
@@ -607,25 +613,10 @@ class SettingsRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = paletteOf(context);
     final content = Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       child: Row(
         children: <Widget>[
-          Container(
-            width: 30,
-            height: 30,
-            decoration: BoxDecoration(
-              color: palette.accentSoft,
-              borderRadius: BorderRadius.circular(9),
-            ),
-            child: Center(
-              child: HugeIcon(
-                icon: icon,
-                color: palette.accent,
-                size: 17,
-                strokeWidth: 1.9,
-              ),
-            ),
-          ),
+          SettingsIcon(icon: icon),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
@@ -633,11 +624,7 @@ class SettingsRow extends StatelessWidget {
               children: <Widget>[
                 Text(
                   label,
-                  style: TextStyle(
-                    color: palette.text,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w500,
-                  ),
+                  style: TextStyle(color: palette.text, fontSize: 17),
                 ),
                 if (description != null) ...<Widget>[
                   const SizedBox(height: 2),
@@ -660,8 +647,15 @@ class SettingsRow extends StatelessWidget {
                 value!,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(color: palette.muted, fontSize: 15),
+                style: TextStyle(color: palette.muted, fontSize: 17),
               ),
+            ),
+          if (value != null && onTap != null) const SizedBox(width: 6),
+          if (value != null && onTap != null)
+            HugeIcon(
+              icon: AppIcons.arrowRight,
+              color: palette.subtle,
+              size: 15,
             ),
           ?trailing,
           if (trailing == null && value == null && onTap != null) ...<Widget>[
@@ -679,7 +673,7 @@ class SettingsRow extends StatelessWidget {
       child: InkWell(
         onTap: onTap,
         child: ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: 54),
+          constraints: const BoxConstraints(minHeight: 44),
           child: content,
         ),
       ),
@@ -687,38 +681,98 @@ class SettingsRow extends StatelessWidget {
   }
 }
 
-/// A settings card: rows on a raised surface, separated by a hairline inset past the icon.
+/// The coloured tile in front of a settings row, as in the Settings app: a 29pt rounded
+/// square in the accent with a white glyph.
+class SettingsIcon extends StatelessWidget {
+  const SettingsIcon({super.key, required this.icon, this.color});
+
+  final List<List<dynamic>> icon;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = paletteOf(context);
+    return Container(
+      width: 29,
+      height: 29,
+      decoration: BoxDecoration(
+        color: color ?? palette.accent,
+        borderRadius: BorderRadius.circular(7),
+      ),
+      child: Center(
+        child: HugeIcon(
+          icon: icon,
+          color: Colors.white,
+          size: 17,
+          strokeWidth: 1.9,
+        ),
+      ),
+    );
+  }
+}
+
+/// A settings section's rows: an [InsetGroup] whose hairlines start at the label, past
+/// the 29pt icon tile.
 class SettingsCard extends StatelessWidget {
   const SettingsCard({super.key, required this.children});
 
   final List<Widget> children;
 
   @override
-  Widget build(BuildContext context) {
-    final palette = paletteOf(context);
-    final rows = <Widget>[];
-    for (var index = 0; index < children.length; index++) {
-      if (index > 0) {
-        rows.add(
-          Divider(
-            height: 0.5,
-            thickness: 0.5,
-            indent: 56,
-            color: palette.separator,
+  Widget build(BuildContext context) =>
+      InsetGroup(separatorIndent: 16 + 29 + 12, children: children);
+}
+
+/// iOS pull-to-refresh, for a list that runs under the glass bar.
+///
+/// `CupertinoSliverRefreshControl` only sees the pull when it is the scroll view's
+/// **first** sliver (a spacer before it swallows the overscroll — pinned by a probe test),
+/// so it cannot sit below the bar's spacer. It goes first, and the indicator is drawn
+/// `topInset` lower than its box, so it appears just under the bar instead of behind it.
+Widget iosRefreshControl({
+  required Future<void> Function() onRefresh,
+  required double topInset,
+}) {
+  const diameter = 28.0;
+  return CupertinoSliverRefreshControl(
+    onRefresh: onRefresh,
+    builder: (context, mode, pulled, trigger, extent) {
+      final progress = (pulled / trigger).clamp(0.0, 1.0);
+      final Widget? indicator = switch (mode) {
+        RefreshIndicatorMode.inactive => null,
+        RefreshIndicatorMode.drag =>
+          CupertinoActivityIndicator.partiallyRevealed(
+            radius: diameter / 2,
+            progress: progress,
           ),
-        );
-      }
-      rows.add(children[index]);
-    }
-    return Container(
-      decoration: BoxDecoration(
-        color: palette.card,
-        borderRadius: BorderRadius.circular(Radii.lg),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Column(children: rows),
-    );
-  }
+        RefreshIndicatorMode.armed ||
+        RefreshIndicatorMode.refresh ||
+        RefreshIndicatorMode.done => const CupertinoActivityIndicator(
+          radius: diameter / 2,
+        ),
+      };
+      if (indicator == null) return const SizedBox.shrink();
+      // The strip the pull has opened is `pulled` tall and starts under the bar, at
+      // `topInset`; the title sits right below it and rides up as it closes. The
+      // indicator is centred in that strip and fades out before the strip is thinner
+      // than itself, so on the way back it never runs into the title.
+      final fade = ((pulled - diameter) / diameter).clamp(0.0, 1.0);
+      return Stack(
+        clipBehavior: Clip.none,
+        children: <Widget>[
+          Positioned(
+            top: topInset + pulled / 2 - diameter / 2,
+            left: 0,
+            right: 0,
+            child: Opacity(
+              opacity: fade,
+              child: Center(child: indicator),
+            ),
+          ),
+        ],
+      );
+    },
+  );
 }
 
 /// Reads the active palette. Set once by the app root from 设置 → 外观.

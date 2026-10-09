@@ -56,6 +56,21 @@ void main() {
       isNull,
     );
   });
+  test('the published arm64 build is offered only to compatible devices', () {
+    final payload = {
+      'assets': [
+        asset('FastVibe-app-v0.5.0-arm64-v8a.apk'),
+        asset('FastVibe-app-v0.5.0-arm64-v8a.apk.sha256'),
+      ],
+    };
+    expect(
+      releaseFromPayload('0.5.0', payload, supportedAbis: ['arm64-v8a'])?.apkName,
+      'FastVibe-app-v0.5.0-arm64-v8a.apk',
+    );
+    for (final abis in [['armeabi-v7a'], ['x86_64', 'x86']]) {
+      expect(releaseFromPayload('0.5.0', payload, supportedAbis: abis), isNull);
+    }
+  });
   test('tags sort numerically and unfinished builds fall back to a published release', () async {
     final asked = <String>[];
     final client = MockClient((request) async {

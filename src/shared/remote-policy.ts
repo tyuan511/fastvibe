@@ -106,6 +106,7 @@ const DENIED = new Map<string, string>([
   [Ipc.remoteClearPassword, "远程访问的设置只能在本机更改"],
   [Ipc.remoteStart, "远程访问的设置只能在本机更改"],
   [Ipc.remoteSetLanAccess, "远程访问的设置只能在本机更改"],
+  [Ipc.remoteSetDiscoveryName, "远程访问的设置只能在本机更改"],
   [Ipc.remoteStop, "远程访问的设置只能在本机更改"],
   [Ipc.remoteListDevices, "远程访问的设置只能在本机更改"],
   [Ipc.remoteRevokeDevice, "远程访问的设置只能在本机更改"],

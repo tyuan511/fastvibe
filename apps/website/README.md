@@ -10,7 +10,7 @@ FastVibe 产品介绍与下载页，使用 Next.js App Router 和 next-intl。
 - `/`：next-intl 根据语言偏好 cookie、浏览器语言选择页面；默认英文。
 - 首屏是真实客户端界面：`components/app-preview.tsx` 用 iframe 加载预编译的 `public/app-preview/mock.html`（渲染层自己的 fixture 页，`website=1` 模式），并把官网当前主题通过 URL 与 `postMessage` 同步进去。改了渲染层或 `mock/preview.ts` 之后运行 `pnpm --filter @fastvibe/website preview:build` 重新生成并提交。
 - 首屏以下的图都是示意图（`components/illustrations.tsx`，纯标记，跟随主题），不用截图。`public/screenshots/{zh,en}/` 现在只供 README 与分享图使用。
-- 「远程控制」里的手机图是原生手机端（`apps/mobile`）在 iOS 模拟器里的真实截图，中英文、浅深色各一张，放在 `public/mobile/{zh,en}/chat-{light,dark}.jpg`。手机端要连上一台机器才有内容，所以用 `scripts/mobile-demo-server.mjs [--lang zh|en]` 当一台假机器（任何密码都能登录，数据取自桌面 mock 的同一份 fixture）。重拍步骤：`pnpm mobile:ios` 启动 Expo Go，在 Expo Go 的 `EXDevMenuShowFloatingActionButton` 设为 `NO` 以去掉悬浮按钮，`simctl status_bar` 固定 9:41，用「添加设备」填入假机器的局域网地址，进入第一条对话后 `simctl io screenshot`，再用 `simctl ui appearance` 切深浅色、在手机设置里切语言。
+- 「远程控制」里的手机图放在 `public/mobile/{zh,en}/chat-{light,dark}.jpg`。当前图片来自已移除的旧客户端；原生手机端由 `apps/mobile_flutter` 维护。`scripts/mobile-demo-server.mjs [--lang zh|en]` 可作为演示机器（任何密码都能登录，数据取自桌面 mock 的同一份 fixture），供 Flutter 客户端生成后续产品素材。
 - 「随时随地使用」两张卡的设备图都是真实界面：桌面端是预编译客户端（`public/app-preview/`，`scene=workspace`）在 1440×900 @2x 下的截图，放在 `public/desktop/{zh,en}/workspace-{light,dark}.jpg`；手机端同上一条。iOS 按钮指向 TestFlight 公测链接，Android 指向 GitHub Releases 的 APK（`components/access-module.tsx`）。
 - DM Sans 通过 Fontsource 本地托管，不依赖 Google Fonts 请求。
 - 视觉使用 FastVibe 标志的紫色与青色、桌面式圆角和真实工作区首屏，不使用蓝灰雾面或仿终端下载窗。

@@ -140,6 +140,7 @@ test("the denied set is exactly what the UI explains, so a new denial cannot go 
     "remote:get-state",
     "remote:list-devices",
     "remote:revoke-device",
+    "remote:set-discovery-name",
     "remote:set-lan-access",
     "remote:set-password",
     "remote:start",

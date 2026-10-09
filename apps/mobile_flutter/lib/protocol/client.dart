@@ -79,7 +79,7 @@ class _Pending {
   _Pending(this.completer, this.timer, this.started, this.metric);
 
   final Completer<Object?> completer;
-  Timer timer;
+  final Timer? timer;
   final int started;
   final String metric;
 }
@@ -426,7 +426,7 @@ class RemoteClient {
       if (requestId is! int) return;
       final pending = _pending[requestId];
       if (pending == null) return;
-      pending.timer.cancel();
+      pending.timer?.cancel();
       _pending.remove(requestId);
       recordConnectionDiagnostic(Diagnostic.metric(
         pending.metric,
@@ -461,8 +461,10 @@ class RemoteClient {
     }
   }
 
-  /// A request whose answer may never arrive. `timeoutMs` is the caller's budget.
-  Future<Object?> call(String method, [Object? payload, int timeoutMs = 30000]) {
+  /// Ordinary calls have a 30s deadline. A continuation answers only when its run
+  /// settles, so it has no default deadline; socket closure and health probes still
+  /// reject it. An explicit `timeoutMs` overrides the method's default budget.
+  Future<Object?> call(String method, [Object? payload, int? timeoutMs]) {
     final ws = _ws;
     if (ws == null || ws.readyState != WebSocket.open) {
       return Future<Object?>.error(StateError(t('conn.notConnected')));
@@ -477,7 +479,8 @@ class RemoteClient {
                 ? 'submission'
                 : 'rpc';
     final completer = Completer<Object?>();
-    final timer = Timer(Duration(milliseconds: timeoutMs), () {
+    final budget = timeoutMs ?? (method == 'engine:continue' ? null : 30000);
+    final timer = budget == null ? null : Timer(Duration(milliseconds: budget), () {
       _pending.remove(requestId);
       recordConnectionDiagnostic(Diagnostic.metric(metric,
           elapsedMs: DateTime.now().millisecondsSinceEpoch - started, outcome: 'timeout'));
@@ -492,7 +495,7 @@ class RemoteClient {
     try {
       ws.add(jsonEncode(<String, Object?>{'kind': 'call', 'requestId': requestId, 'method': method, 'payload': payload}));
     } catch (_) {
-      timer.cancel();
+      timer?.cancel();
       _pending.remove(requestId);
       // The socket can close between the readyState check and add(). The request may
       // already have crossed the wire, so callers must treat this as an unknown
@@ -598,7 +601,7 @@ class RemoteClient {
   void _failPending(String code) {
     final message = t(code == 'dropped' ? 'conn.dropped' : 'conn.closed');
     for (final pending in _pending.values) {
-      pending.timer.cancel();
+      pending.timer?.cancel();
       if (!pending.completer.isCompleted) {
         pending.completer.completeError(TransportError(code, message));
       }

@@ -3,6 +3,7 @@ import { i18n } from "@/lib/i18n";
 import { logError } from "@/lib/logger";
 import { blockedRemotely } from "@/lib/remote-unavailable";
 import { Ipc } from "@shared/ipc";
+import { dismissBootLoader } from "@/lib/boot-loader";
 
 /**
  * The last line of defence for a render-time throw.
@@ -30,6 +31,8 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { error: E
   }
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
+    // The recovery controls must remain reachable even if startup never settles.
+    dismissBootLoader();
     // The stack of the component that threw, alongside the message — the message
     // alone ("MenuGroupContext is missing") rarely names the surface it came from.
     logError(`renderer crash: ${error.message}\n${error.stack ?? ""}\n${info.componentStack ?? ""}`);

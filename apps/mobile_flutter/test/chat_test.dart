@@ -177,6 +177,28 @@ void main() {
   });
 
   group('reply merging', () {
+    test('streaming evicts obsolete replies without changing the row identity', () {
+      final cache = <ChatMessage, ({ChatMessage previous, ChatMessage merged})>{};
+      var messages = <ChatMessage>[
+        ChatMessage(id: 'a1', role: 'assistant', text: 'Planning'),
+        ChatMessage(id: 'a2', role: 'assistant'),
+      ];
+      for (var i = 0; i < 200; i++) {
+        messages = applyLiveEngineEvent(messages, {
+          'type': 'message_update',
+          'assistantMessageEvent': {'type': 'text_delta', 'delta': 'x' * 64},
+        });
+        final rows = mergeReplies(messages, cache);
+        expect(rows.single.id, 'a1');
+        expect(rows.single.text, 'Planning\n\n${'x' * ((i + 1) * 64)}');
+        expect(cache.length, 1);
+      }
+      final last = mergeReplies(messages, cache).single;
+      expect(identical(mergeReplies(messages, cache).single, last), isTrue);
+      mergeReplies([ChatMessage(id: 'u2', role: 'user')], cache);
+      expect(cache, isEmpty);
+    });
+
     test('a merged row keeps the first id and the last id is the footer anchor', () {
       final cache = <ChatMessage, ({ChatMessage previous, ChatMessage merged})>{};
       final rows = mergeReplies(<ChatMessage>[

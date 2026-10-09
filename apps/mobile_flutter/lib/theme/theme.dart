@@ -1,5 +1,4 @@
-import 'dart:math' as math;
-
+import 'package:flutter/cupertino.dart' show CupertinoActivityIndicator;
 import 'package:flutter/material.dart';
 
 /// The phone's design tokens.
@@ -118,6 +117,12 @@ abstract final class Radii {
   static const double md = 16;
   static const double lg = 24;
   static const double xl = 30;
+
+  /// An inset grouped section's corners.
+  static const double group = 24;
+
+  /// A free-standing list card (one conversation): a little tighter than a group.
+  static const double card = 20;
   static const double pill = 999;
 }
 
@@ -217,66 +222,19 @@ String clipText(
   return value;
 }
 
-/// The app's single spinner: a rotating arc, linear, 700 ms a turn.
-class DesktopSpinner extends StatefulWidget {
+/// The app's single spinner: the iOS activity indicator (`UIActivityIndicatorView`), at
+/// the size and colour asked for.
+class DesktopSpinner extends StatelessWidget {
   const DesktopSpinner({super.key, this.size = 16, required this.color});
 
   final double size;
   final Color color;
 
   @override
-  State<DesktopSpinner> createState() => _DesktopSpinnerState();
-}
-
-class _DesktopSpinnerState extends State<DesktopSpinner>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _controller = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 700),
-  )..repeat();
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return RotationTransition(
-      turns: _controller,
-      child: CustomPaint(
-        size: Size.square(widget.size),
-        painter: _ArcPainter(widget.color),
-      ),
-    );
-  }
-}
-
-class _ArcPainter extends CustomPainter {
-  _ArcPainter(this.color);
-
-  final Color color;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = math.max(1.6, size.width * 0.16)
-      ..strokeCap = StrokeCap.round;
-    final rect = Offset.zero & size;
-    canvas.drawArc(
-      rect.deflate(paint.strokeWidth / 2),
-      -math.pi / 2,
-      math.pi * 1.15,
-      false,
-      paint,
-    );
-  }
-
-  @override
-  bool shouldRepaint(_ArcPainter oldDelegate) => oldDelegate.color != color;
+  Widget build(BuildContext context) => SizedBox.square(
+    dimension: size,
+    child: CupertinoActivityIndicator(radius: size / 2, color: color),
+  );
 }
 
 /// The brand gradient, drawn from the top-left to the bottom-right like the icon.

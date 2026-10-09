@@ -67,7 +67,7 @@ void main() {
     );
   }
 
-  testWidgets('conversation filters and compose share the bottom dock', (
+  testWidgets('the bottom toolbar holds the filter and the compose button', (
     tester,
   ) async {
     await i18n.setPreference(LanguagePreference.en);
