@@ -45,6 +45,9 @@ abstract final class AppIcons {
   static const idea = HugeIcons.strokeRoundedIdea01;
   static const information = HugeIcons.strokeRoundedInformationCircle;
   static const link = HugeIcons.strokeRoundedLink01;
+  static const login = HugeIcons.strokeRoundedLogin01;
+  static const logout = HugeIcons.strokeRoundedLogout01;
+  static const user = HugeIcons.strokeRoundedUser;
   static const listChecks = HugeIcons.strokeRoundedListChecks;
   static const loading = HugeIcons.strokeRoundedLoading03;
   static const lockPassword = HugeIcons.strokeRoundedLockPassword;

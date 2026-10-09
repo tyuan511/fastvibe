@@ -3,6 +3,8 @@ import 'package:go_router/go_router.dart';
 import 'package:hugeicons/hugeicons.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
+import '../account/account.dart';
+import '../account/official_devices.dart';
 import '../chat/option_sheet.dart';
 import '../chat/turn_meta.dart';
 import '../i18n/core.dart';
@@ -28,7 +30,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
   bool _loaded = false;
   final _query = TextEditingController();
 
-  /// The large 工作空间 title's collapse into the bar; owns the list's scroll controller.
+  /// The large 设备列表 title's collapse into the bar; owns the list's scroll controller.
   final _title = GlassLargeTitleController();
   int _loadGeneration = 0;
 
@@ -37,6 +39,8 @@ class _DevicesScreenState extends State<DevicesScreen> {
     super.initState();
     ServerStore.instance.addListener(_reload);
     Connection.instance.addListener(_changed);
+    AccountService.instance.addListener(_changed);
+    OfficialDevices.instance.addListener(_changed);
     _reload();
   }
 
@@ -44,6 +48,8 @@ class _DevicesScreenState extends State<DevicesScreen> {
   void dispose() {
     ServerStore.instance.removeListener(_reload);
     Connection.instance.removeListener(_changed);
+    AccountService.instance.removeListener(_changed);
+    OfficialDevices.instance.removeListener(_changed);
     _query.dispose();
     _title.dispose();
     super.dispose();
@@ -61,6 +67,13 @@ class _DevicesScreenState extends State<DevicesScreen> {
       _servers = servers;
       _loaded = true;
     });
+  }
+
+  /// Pull-to-refresh: the saved list, and — signed in — which of the account's computers
+  /// are online right now.
+  Future<void> _refresh() async {
+    if (AccountService.instance.signedIn) await OfficialDevices.instance.refresh();
+    await _reload();
   }
 
   Future<void> _remove(SavedServer server) async {
@@ -117,6 +130,8 @@ class _DevicesScreenState extends State<DevicesScreen> {
         }
       },
     ),
+    // A computer on the account is named, listed and removed by the account.
+    if (!server.isOfficial) ...<SheetOption>[
     SheetOption(
       value: 'rename',
       label: t('common.rename'),
@@ -138,7 +153,8 @@ class _DevicesScreenState extends State<DevicesScreen> {
       icon: AppIcons.delete,
       destructive: true,
       onSelect: () => _remove(server),
-    ),
+    )
+    ],
   ];
 
   /// A long press: the same actions, as the iOS context menu at the finger.
@@ -173,7 +189,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
           return CustomScrollView(
             controller: _title.scrollController,
             slivers: <Widget>[
-              iosRefreshControl(onRefresh: _reload, topInset: top),
+              iosRefreshControl(onRefresh: _refresh, topInset: top),
               SliverToBoxAdapter(child: SizedBox(height: top)),
               GlassLargeTitle(
                 text: t('devices.workspaces', context: context),
@@ -199,13 +215,19 @@ class _DevicesScreenState extends State<DevicesScreen> {
                 ),
                 sliver: SliverList(
                   delegate: SliverChildListDelegate(<Widget>[
+                    if (!AccountService.instance.signedIn) ...<Widget>[
+                      _signInCard(),
+                      const SizedBox(height: 16),
+                    ],
                     if (!_loaded)
                       const Padding(
                         padding: EdgeInsets.only(top: 40),
                         child: BrandLoading(),
                       )
                     else if (_servers.isEmpty) ...<Widget>[
-                      SectionLabel(title: t('devices.heroTitle', context: context)),
+                      SectionLabel(
+                        title: t('devices.heroTitle', context: context),
+                      ),
                       InsetGroup(
                         separatorIndent: 16 + 29 + 12,
                         children: <Widget>[
@@ -215,22 +237,24 @@ class _DevicesScreenState extends State<DevicesScreen> {
                       ),
                     ] else ...<Widget>[
                       if (favorites.isNotEmpty) ...<Widget>[
-                        SectionLabel(title: t('devices.favorites', context: context)),
-                        InsetGroup(
-                          separatorIndent: 16 + 40 + 12,
-                          children: <Widget>[
-                            for (final server in favorites) _row(server),
-                          ],
+                        SectionLabel(
+                          title: t('devices.favorites', context: context),
                         ),
+                        for (final server in favorites)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 10),
+                            child: _row(server),
+                          ),
                       ],
                       if (others.isNotEmpty) ...<Widget>[
-                        SectionLabel(title: t('devices.allDevices', context: context)),
-                        InsetGroup(
-                          separatorIndent: 16 + 40 + 12,
-                          children: <Widget>[
-                            for (final server in others) _row(server),
-                          ],
+                        SectionLabel(
+                          title: t('devices.allDevices', context: context),
                         ),
+                        for (final server in others)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 10),
+                            child: _row(server),
+                          ),
                       ],
                       if (shown.isEmpty)
                         EmptyState(
@@ -249,6 +273,23 @@ class _DevicesScreenState extends State<DevicesScreen> {
     );
   }
 
+  /// The way to the account's computers, for a phone that is not signed in.
+  Widget _signInCard() {
+    final account = AccountService.instance;
+    final signingIn = account.status == AccountStatus.signingIn;
+    return SettingsCard(
+      children: <Widget>[
+        SettingsRow(
+          icon: AppIcons.login,
+          label: signingIn ? t('account.signingIn') : t('official.signInPrompt'),
+          description: account.error ?? t('account.signedOutBody'),
+          onTap: signingIn ? null : account.login,
+          trailing: signingIn ? DesktopSpinner(size: 16, color: paletteOf(context).muted) : null,
+        ),
+      ],
+    );
+  }
+
   /// One machine, as an iOS navigation row: icon, name, address and last connection,
   /// the ⋯ pull-down, and the whole row opening the machine.
   Widget _row(SavedServer server) {
@@ -257,80 +298,81 @@ class _DevicesScreenState extends State<DevicesScreen> {
         Connection.instance.server?.id == server.id &&
         Connection.instance.status == ConnectionStatus.ready &&
         !Connection.instance.reconnecting;
+    final online = server.isOfficial && OfficialDevices.instance.isOnline(server);
     final when = server.lastConnectedAt == null
         ? null
         : relativeTime(server.lastConnectedAt!);
-    return InkWell(
-      onTap: () {
-        Haptic.tap();
-        context.push('/server/${server.id}');
-      },
-      onLongPress: () => _menu(server),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 10, 6, 10),
-        child: Row(
-          children: <Widget>[
-            Avatar(
-              name: server.alias,
-              icon: AppIcons.computer,
-              size: 40,
-              borderRadius: 10,
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Text(
-                    server.alias,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: p.text,
-                      fontSize: 17,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 1),
-                  Text(
-                    connected
-                        ? t('devices.connected')
-                        : when != null
-                        ? t('devices.connectedAgo', vars: {'when': when})
-                        : t('devices.neverConnected'),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: connected ? p.success : p.muted,
-                      fontSize: 15,
-                    ),
-                  ),
-                ],
+    return Material(
+      color: p.card,
+      borderRadius: BorderRadius.circular(Radii.card),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: () {
+          Haptic.tap();
+          context.push('/server/${server.id}');
+        },
+        onLongPress: () => _menu(server),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 16, 12),
+          child: Row(
+            children: <Widget>[
+              Avatar(
+                name: server.alias,
+                icon: AppIcons.computer,
+                size: 40,
+                borderRadius: 10,
               ),
-            ),
-            GlassPullDownButton(
-              icon: HugeIcon(
-                icon: AppIcons.moreHorizontal,
-                size: 20,
-                color: p.muted,
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Row(
+                      children: <Widget>[
+                        Expanded(
+                          child: Text(
+                            server.alias,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: p.text,
+                              fontSize: 17,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        if (server.favorite) ...<Widget>[
+                          const SizedBox(width: 6),
+                          HugeIcon(
+                            icon: AppIcons.star,
+                            size: 17,
+                            color: p.warning,
+                            strokeWidth: 2.2,
+                          ),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      connected
+                          ? t('devices.connected')
+                          : server.isOfficial
+                          ? '${t('official.badge')} · ${t(online ? 'official.online' : 'official.offline')}'
+                          : when != null
+                          ? t('devices.connectedAgo', vars: {'when': when})
+                          : t('devices.neverConnected'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: connected || online ? p.success : p.muted,
+                        fontSize: 15,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              semanticLabel: t('devices.actions'),
-              buttonWidth: 36,
-              buttonHeight: 36,
-              menuAlignment: GlassMenuAlignment.topRight,
-              items: <Widget>[
-                for (final option in _actions(server))
-                  GlassMenuItem(
-                    title: option.label,
-                    icon: option.icon == null
-                        ? null
-                        : HugeIcon(icon: option.icon!, size: 18),
-                    isDestructive: option.destructive,
-                    onTap: () => option.onSelect?.call(),
-                  ),
-              ],
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

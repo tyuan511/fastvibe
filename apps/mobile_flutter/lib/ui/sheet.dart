@@ -16,6 +16,7 @@ Future<T?> showAppSheet<T>({
 }) {
   final p = paletteOf(context);
   final screen = MediaQuery.sizeOf(context);
+  final bottomSafeArea = MediaQuery.paddingOf(context).bottom;
   final scale = MediaQuery.textScalerOf(context).scale(14) / 14;
   final desired = height == null
       ? (expanded ? 620.0 : 400.0)
@@ -33,7 +34,9 @@ Future<T?> showAppSheet<T>({
     fillTransition: GlassFillTransition.gradual,
     fillThreshold: 0.2,
     horizontalMargin: 12,
-    bottomMargin: 12,
+    // Keep the floating sheet above the gesture/navigation area while retaining a
+    // small visual gap on devices without a bottom inset.
+    bottomMargin: 12 + bottomSafeArea,
     topBorderRadius: 32,
     bottomBorderRadius: 32,
     fullTopBorderRadius: 32,
@@ -55,11 +58,15 @@ Future<T?> showAppSheet<T>({
       child: ToastHost(
         child: Material(
           type: MaterialType.transparency,
-          child: MediaQuery.removePadding(
-            context: context,
-            removeTop: true,
-            removeBottom: true,
-            child: builder(context),
+          child: SafeArea(
+            top: false,
+            minimum: const EdgeInsets.only(bottom: 12),
+            child: MediaQuery.removePadding(
+              context: context,
+              removeTop: true,
+              removeBottom: true,
+              child: builder(context),
+            ),
           ),
         ),
       ),
@@ -125,7 +132,10 @@ class AppSheetHeader extends StatelessWidget {
             icon: onBack != null ? AppIcons.arrowLeft : AppIcons.cancel,
             tone: IconTone.field,
             size: 40,
-            tooltip: t(onBack != null ? 'dag.back' : 'common.close', context: context),
+            tooltip: t(
+              onBack != null ? 'dag.back' : 'common.close',
+              context: context,
+            ),
             onPressed: onBack ?? () => Navigator.of(context).pop(),
           ),
         ],

@@ -57,6 +57,7 @@ void main() {
         final markdown = tester.widget<GptMarkdown>(find.byType(GptMarkdown));
         expect(markdown.styleSheet?.table?.overflow, TableOverflow.scroll);
         expect(markdown.styleSheet?.codeBlock?.copyLabel, 'Copy');
+        expect(markdown.styleSheet?.inlineCode?.borderWidth, 0);
         await tester.drag(
           find.byType(SingleChildScrollView).first,
           const Offset(0, -500),

@@ -725,9 +725,10 @@ class _ChatScreenState extends State<ChatScreen> {
     final confirmed = await AppDialog.confirm(
       context,
       title: t('server.deleteChatTitle'),
-      message: t('server.deleteChatBody', vars: <String, Object?>{
-        'title': chat.title,
-      }),
+      message: t(
+        'server.deleteChatBody',
+        vars: <String, Object?>{'title': chat.title},
+      ),
       confirmLabel: t('common.delete'),
       destructive: true,
     );
@@ -823,6 +824,7 @@ class _ChatScreenState extends State<ChatScreen> {
       // page at both (a scroll view under an iOS 26 bar and a floating input), rather than
       // being cut off at their edges. It pads itself by how far each reaches.
       fadeBottom: false,
+      topScrim: false,
       body: Builder(
         builder: (context) {
           final insets = GlassInsets.maybeOf(context);
@@ -840,7 +842,9 @@ class _ChatScreenState extends State<ChatScreen> {
                         ),
                       Expanded(
                         child: _loading
-                            ? BrandLoading(message: t('chat.loading', context: context))
+                            ? BrandLoading(
+                                message: t('chat.loading', context: context),
+                              )
                             : empty
                             ? _Welcome(
                                 projectName: _projectName,

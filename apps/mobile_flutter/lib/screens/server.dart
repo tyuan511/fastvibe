@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:hugeicons/hugeicons.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
+import '../account/account.dart';
 import '../chat/draft_storage.dart';
 import '../chat/option_sheet.dart';
 import '../chat/turn_meta.dart';
@@ -280,6 +281,36 @@ class _ServerScreenState extends State<ServerScreen> {
     );
   }
 
+  void _pickProject() {
+    Haptic.tap();
+    showOptionSheet(
+      context,
+      title: t('server.projectFilter', context: context),
+      value: _project ?? _allProjects,
+      options: <SheetOption>[
+        SheetOption(
+          value: _allProjects,
+          label: t('server.allProjects', context: context),
+          description: t('common.chatCount', vars: <String, Object?>{
+            'count': _listed.length,
+          }, context: context),
+          icon: AppIcons.folder,
+          onSelect: () => setState(() => _project = null),
+        ),
+        for (final entry in _projectCounts.entries)
+          SheetOption(
+            value: entry.key,
+            label: _projectNames[entry.key] ?? entry.key,
+            description: t('common.chatCount', vars: <String, Object?>{
+              'count': entry.value,
+            }, context: context),
+            avatar: _projectNames[entry.key] ?? entry.key,
+            onSelect: () => setState(() => _project = entry.key),
+          ),
+      ],
+    );
+  }
+
   void _openMenu(CatalogConversation chat) {
     // A long press opens the iOS context menu where the finger is.
     showContextMenu(
@@ -535,30 +566,14 @@ class _ServerScreenState extends State<ServerScreen> {
             _server != null &&
             _ready &&
             (_projectCounts.isNotEmpty || _project != null))
-          GlassMenuAction(
+          // A sheet, not a pull-down: the menu grows from the bar and the package
+          // clipped a long project list with no way to reach the rest. The sheet
+          // scrolls and searches, like the project picker for a new chat.
+          GlassAction(
             icon: AppIcons.folder,
             tooltip: t('server.projectFilter', context: context),
             active: _project != null,
-            items: <Widget>[
-              GlassMenuItem(
-                title: t('server.allProjects', context: context),
-                subtitle: t('common.chatCount', vars: <String, Object?>{
-                  'count': _listed.length,
-                }, context: context),
-                isSelected: _project == null,
-                onTap: () => setState(() => _project = null),
-              ),
-              const GlassMenuDivider(),
-              for (final entry in _projectCounts.entries)
-                GlassMenuItem(
-                  title: _projectNames[entry.key] ?? entry.key,
-                  subtitle: t('common.chatCount', vars: <String, Object?>{
-                    'count': entry.value,
-                  }, context: context),
-                  isSelected: _project == entry.key,
-                  onTap: () => setState(() => _project = entry.key),
-                ),
-            ],
+            onPressed: _pickProject,
           ),
       ],
       body: _body(palette),
@@ -1017,6 +1032,7 @@ class _FailureState extends State<_Failure> {
     final palette = widget.palette;
     final connection = Connection.instance;
     final needsPassword = connection.needsPassword;
+    final needsAccount = connection.needsAccount;
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(32),
@@ -1027,22 +1043,24 @@ class _FailureState extends State<_Failure> {
               width: 68,
               height: 68,
               decoration: BoxDecoration(
-                color: needsPassword ? palette.accentSoft : palette.dangerSoft,
+                color: needsPassword || needsAccount ? palette.accentSoft : palette.dangerSoft,
                 borderRadius: BorderRadius.circular(22),
               ),
               child: Center(
                 child: HugeIcon(
-                  icon: needsPassword
+                  icon: needsPassword || needsAccount
                       ? AppIcons.lockPassword
                       : AppIcons.wifiDisconnected,
                   size: 30,
-                  color: needsPassword ? palette.accent : palette.danger,
+                  color: needsPassword || needsAccount ? palette.accent : palette.danger,
                 ),
               ),
             ),
             const SizedBox(height: 8),
             Text(
-              needsPassword
+              needsAccount
+                  ? t('account.signedOutTitle', context: context)
+                  : needsPassword
                   ? t('server.needLogin', context: context)
                   : t('server.cannotConnect', vars: <String, Object?>{
                       'name': widget.server.alias,
@@ -1058,7 +1076,7 @@ class _FailureState extends State<_Failure> {
             ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 320),
               child: Text(
-                needsPassword
+                needsPassword || needsAccount
                     ? (connection.error ?? '')
                     : t(
                         'server.cannotConnectBody',
@@ -1082,7 +1100,21 @@ class _FailureState extends State<_Failure> {
               constraints: const BoxConstraints(maxWidth: 320),
               child: Column(
                 children: <Widget>[
-                  if (needsPassword) ...<Widget>[
+                  if (needsAccount)
+                    SizedBox(
+                      width: double.infinity,
+                      child: PrimaryButton(
+                        label: t('account.signIn', context: context),
+                        icon: AppIcons.login,
+                        onPressed: () async {
+                          await AccountService.instance.login();
+                          if (AccountService.instance.signedIn) {
+                            await Connection.instance.connectSaved(widget.server);
+                          }
+                        },
+                      ),
+                    )
+                  else if (needsPassword) ...<Widget>[
                     TextField(
                       onChanged: widget.onPassword,
                       obscureText: true,

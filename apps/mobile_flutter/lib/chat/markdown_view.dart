@@ -60,6 +60,8 @@ class MarkdownView extends StatelessWidget {
           inlineCode: InlineCodeStyle(
             backgroundColor: palette.field,
             color: palette.accent,
+            borderColor: Colors.transparent,
+            borderWidth: 0,
             borderRadius: const Radius.circular(5),
             fontSizeFactor: 0.88,
           ),
@@ -125,7 +127,8 @@ class MarkdownView extends StatelessWidget {
         ),
         onLinkTap: (url, title) {
           final uri = Uri.tryParse(url);
-          if (uri == null || !['https', 'http', 'mailto'].contains(uri.scheme)) {
+          if (uri == null ||
+              !['https', 'http', 'mailto'].contains(uri.scheme)) {
             return;
           }
           launchUrl(uri, mode: LaunchMode.externalApplication);

@@ -3,12 +3,15 @@ import 'dart:async';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/widgets.dart';
 
+import '../account/account.dart';
+import '../account/official_devices.dart';
 import '../app_info.dart';
 import '../i18n/core.dart';
 import '../protocol/address.dart';
 import '../protocol/client.dart';
 import '../protocol/diagnostics.dart';
 import '../protocol/model_cache.dart';
+import '../protocol/rtc_connection.dart';
 import '../storage/servers.dart';
 import 'catalog.dart';
 
@@ -73,6 +76,10 @@ class Connection extends ChangeNotifier {
   ConnectionStatus status = ConnectionStatus.idle;
   String? error;
   bool needsPassword = false;
+
+  /// The computer is on the account and the account is not signed in (or its sign-in was
+  /// refused): the way forward is signing in, not a password.
+  bool needsAccount = false;
   SavedServer? server;
   List<CatalogProject> projects = <CatalogProject>[];
   List<CatalogConversation> conversations = <CatalogConversation>[];
@@ -177,7 +184,7 @@ class Connection extends ChangeNotifier {
     _reset(server: server, status: ConnectionStatus.connecting);
     String? token;
     try {
-      token = await readToken(server.id);
+      token = server.isOfficial ? AccountService.instance.token : await readToken(server.id);
     } catch (exception) {
       if (selection != _selectionGeneration) return;
       _abandonConnection();
@@ -187,7 +194,11 @@ class Connection extends ChangeNotifier {
     if (selection != _selectionGeneration) return;
     if (token == null || token.isEmpty) {
       _abandonConnection();
-      _reset(server: server, status: ConnectionStatus.error, needsPassword: true, error: t('conn.needPassword'));
+      if (server.isOfficial) {
+        _reset(server: server, status: ConnectionStatus.error, needsAccount: true, error: t('conn.accountRequired'));
+      } else {
+        _reset(server: server, status: ConnectionStatus.error, needsPassword: true, error: t('conn.needPassword'));
+      }
       return;
     }
     final next = _beginTarget(server, token);
@@ -214,6 +225,15 @@ class Connection extends ChangeNotifier {
         needsPassword: true,
         error: exception is StateError ? exception.message : t('conn.loginFailed'),
       );
+    }
+  }
+
+  /// The account signed out (or its sign-in was refused): a connection made through it is
+  /// no longer one the phone has the right to hold.
+  void handleAccountChange() {
+    final current = server;
+    if (current != null && current.isOfficial && !AccountService.instance.signedIn) {
+      disconnect();
     }
   }
 
@@ -263,8 +283,8 @@ class Connection extends ChangeNotifier {
     if (!_isCurrentTarget(next, generation) || _opening != null) return;
     _clearReconnectTimer();
     reconnecting = silent;
-    final address = parseServerAddress(server.origin);
-    if (address == null) {
+    final address = server.isOfficial ? null : parseServerAddress(server.origin);
+    if (!server.isOfficial && address == null) {
       _abandonConnection();
       _reset(server: server, status: ConnectionStatus.error, error: t('conn.badAddress'));
       return;
@@ -309,11 +329,27 @@ class Connection extends ChangeNotifier {
         reconnecting = true;
         error = null;
         needsPassword = false;
+        needsAccount = false;
       });
       _scheduleReconnect(next, generation, immediate: !restoring);
     });
     try {
-      await remote.connect(address, next.token);
+      if (server.isOfficial) {
+        final account = AccountService.instance;
+        final deviceId = server.officialDeviceId!;
+        final name = await account.deviceLabel();
+        await remote.connectOpened(
+          () => RtcDialer(
+            origin: account.origin,
+            token: next.token,
+            deviceId: deviceId,
+            clientName: name,
+            platform: account.platform,
+          ).dial(),
+        );
+      } else {
+        await remote.connect(address!, next.token);
+      }
       if (!_isCurrentTarget(next, generation) || _client != remote) return;
       remote.subscribe(<String>['*']);
       final catalog = _refreshCatalog(remote);
@@ -341,6 +377,7 @@ class Connection extends ChangeNotifier {
         this.server = server;
         error = null;
         needsPassword = false;
+        needsAccount = false;
       });
     } catch (exception) {
       if (!_isCurrentTarget(next, generation) || _client != remote) return;
@@ -355,22 +392,31 @@ class Connection extends ChangeNotifier {
       ));
       final unauthorized = connectionError != null &&
           (connectionError.code == 'unauthorized' || connectionError.detail?.code == 4001);
+      // A computer that is no longer on the account will not come back by retrying.
+      final gone = server.isOfficial && connectionError?.code == 'gone';
+      if (server.isOfficial && unauthorized) unawaited(AccountService.instance.tokenRejected(next.token));
+      if (gone) unawaited(OfficialDevices.instance.refresh());
       if (identical(_client, remote)) {
         _client = null;
         _retireClient(remote);
       }
-      if (unauthorized || !silent) reconnecting = false;
-      if (unauthorized) {
+      if (unauthorized || gone || !silent) reconnecting = false;
+      if (unauthorized || gone) {
         _target = null;
         _connectionGeneration += 1;
         _clearReconnectTimer();
       }
-      if (unauthorized || !silent) {
+      if (unauthorized || gone || !silent) {
         _reset(
           server: server,
           status: ConnectionStatus.error,
-          needsPassword: unauthorized,
-          error: unauthorized ? t('conn.expired') : (exception is StateError ? exception.message : '$exception'),
+          needsPassword: unauthorized && !server.isOfficial,
+          needsAccount: unauthorized && server.isOfficial,
+          error: server.isOfficial && connectionError != null && !unauthorized
+              ? connectionError.message
+              : unauthorized
+                  ? (server.isOfficial ? t('conn.accountRequired') : t('conn.expired'))
+                  : (exception is StateError ? exception.message : '$exception'),
         );
       } else {
         reconnecting = true;
@@ -382,9 +428,10 @@ class Connection extends ChangeNotifier {
           this.server = server;
           error = null;
           needsPassword = false;
+          needsAccount = false;
         });
       }
-      if (!unauthorized) _scheduleReconnect(next, generation);
+      if (!unauthorized && !gone) _scheduleReconnect(next, generation);
     } finally {
       if (identical(_opening, remote)) _opening = null;
     }
@@ -726,11 +773,13 @@ class Connection extends ChangeNotifier {
     ConnectionStatus status = ConnectionStatus.idle,
     String? error,
     bool needsPassword = false,
+    bool needsAccount = false,
   }) {
     _setState(() {
       this.status = status;
       this.error = error;
       this.needsPassword = needsPassword;
+      this.needsAccount = needsAccount;
       this.server = server;
       projects = <CatalogProject>[];
       conversations = <CatalogConversation>[];

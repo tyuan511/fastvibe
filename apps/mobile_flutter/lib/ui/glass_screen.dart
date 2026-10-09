@@ -99,6 +99,7 @@ class GlassScreen extends StatelessWidget {
     this.showBack = true,
     this.edgeFade = true,
     this.fadeBottom = true,
+    this.topScrim = true,
     this.contentBehindBars = true,
     this.largeTitleController,
   });
@@ -119,6 +120,10 @@ class GlassScreen extends StatelessWidget {
   /// The bottom half of that fade. A body that draws its own footer over the content (the
   /// chat's composer) turns it off, or the fade would wash out the footer too.
   final bool fadeBottom;
+
+  /// Keeps the large-title area readable on list pages. Detail pages whose title
+  /// lives only in the pinned bar can leave the wallpaper gradient unobstructed.
+  final bool topScrim;
 
   /// `false` keeps the body between the bars, for a body that cannot pad itself.
   final bool contentBehindBars;
@@ -169,6 +174,8 @@ class GlassScreen extends StatelessWidget {
       // still there, which is what the iOS 26 scroll-edge effect does.
       edgeStyle: GlassScrollEdgeStyle.blur,
       maxSigma: 14,
+      // Keep a short buffer for the pinned bar's gradient, while the explicit
+      // scrim below ends before the large title so its glyphs stay crisp.
       topEdgeFadeExtent: 8,
       bottomEdgeFadeExtent: 8,
       // The fade's target colour: the page, or the content would dissolve into black.
@@ -176,18 +183,15 @@ class GlassScreen extends StatelessWidget {
       contentAwareBrightness: true,
       bodyOverlays: contentBehindBars && edgeFade
           ? <Widget>[
-              _BarScrim(
-                top: true,
-                // The blur band reaches ~30pt past the bar, which is exactly where a
-                // large title's glyph tops sit — they were drawn through the gradient and
-                // came out soft. The type is 34pt at a 1.1 line height, so its top sits
-                // ~37pt below the bar; hold the page colour just past that and let the
-                // fade begin under the glyphs, where the title row still has room to
-                // dissolve as it collapses.
-                height: MediaQuery.paddingOf(context).top + 44 + 46,
-                solid: MediaQuery.paddingOf(context).top + 44 + 40,
-                palette: palette,
-              ),
+              if (topScrim)
+                _BarScrim(
+                  top: true,
+                  // End the wash in the spacer before the large title. Extending it
+                  // into the title row leaves the glyph tops soft under the header.
+                  height: MediaQuery.paddingOf(context).top + 44 + 8,
+                  solid: MediaQuery.paddingOf(context).top + 44,
+                  palette: palette,
+                ),
               if (bottomBar != null)
                 _BarScrim(
                   top: false,

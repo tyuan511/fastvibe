@@ -59,6 +59,8 @@ dependencies:
 
   crypto: ^3.0.7
   nsd: ^5.0.1
+  flutter_webrtc: ^1.6.2+hotfix.4
+  flutter_web_auth_2: ^5.1.0
 
 dev_dependencies:
   integration_test:

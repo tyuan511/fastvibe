@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
+import '../account/account.dart';
 import '../app_info.dart';
 import '../chat/option_sheet.dart';
 import '../i18n/core.dart';
@@ -36,12 +37,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.initState();
     i18n.addListener(_onChange);
     Preferences.instance.addListener(_onChange);
+    AccountService.instance.addListener(_onChange);
   }
 
   @override
   void dispose() {
     i18n.removeListener(_onChange);
     Preferences.instance.removeListener(_onChange);
+    AccountService.instance.removeListener(_onChange);
     _title.dispose();
     super.dispose();
   }
@@ -73,6 +76,58 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } catch (_) {
       toastError(t('settings.diagnosticsCopyFailed'));
     }
+  }
+
+  Future<void> _confirmSignOut() async {
+    if (!await AppDialog.confirm(
+      context,
+      title: t('account.signOut'),
+      message: t('account.signOutBody'),
+      confirmLabel: t('account.signOut'),
+      destructive: true,
+    )) {
+      return;
+    }
+    await AccountService.instance.logout();
+  }
+
+  /// Who this phone is signed in as, or the way to sign in. The computers on the account
+  /// show up on the device list by themselves once it is.
+  Widget _accountSection(Palette palette, BuildContext context) {
+    final account = AccountService.instance;
+    final user = account.user;
+    if (account.signedIn && user != null) {
+      return _Section(
+        title: t('account.title', context: context),
+        palette: palette,
+        children: <Widget>[
+          SettingsRow(
+            icon: AppIcons.user,
+            label: t('account.signedInAs', vars: <String, Object?>{'login': user.login}, context: context),
+            description: user.email,
+          ),
+          SettingsRow(
+            icon: AppIcons.logout,
+            label: t('account.signOut', context: context),
+            onTap: _confirmSignOut,
+          ),
+        ],
+      );
+    }
+    final signingIn = account.status == AccountStatus.signingIn;
+    return _Section(
+      title: t('account.title', context: context),
+      palette: palette,
+      children: <Widget>[
+        SettingsRow(
+          icon: AppIcons.login,
+          label: signingIn ? t('account.signingIn', context: context) : t('account.signIn', context: context),
+          description: account.error ?? t('account.signedOutBody', context: context),
+          onTap: signingIn ? null : account.login,
+          trailing: signingIn ? DesktopSpinner(size: 16, color: palette.muted) : null,
+        ),
+      ],
+    );
   }
 
   Future<void> _pickLanguage() async {
@@ -129,6 +184,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
               sliver: SliverList(
                 delegate: SliverChildListDelegate(<Widget>[
+                  _accountSection(palette, context),
                   _Section(
                     title: t('settings.appearance', context: context),
                     palette: palette,

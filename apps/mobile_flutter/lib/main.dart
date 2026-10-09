@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
+import 'account/account.dart';
+import 'account/official_devices.dart';
 import 'app_info.dart';
 import 'chat/model_picker.dart';
 import 'i18n/core.dart';
@@ -28,6 +30,7 @@ Future<void> startApp({bool checkUpdates = true}) async {
   await loadAppVersion();
   await i18n.load();
   await Preferences.instance.load();
+  await _startAccount();
   // The model picker needs the catalog but must not import the connection layer, which
   // would make it and the composer import each other.
   bindModelCatalogReader(() {
@@ -39,6 +42,27 @@ Future<void> startApp({bool checkUpdates = true}) async {
     unawaited(openNotificationTarget(serverId, conversationId));
   });
   runApp(FastVibeApp(checkUpdates: checkUpdates));
+}
+
+/// The account decides which computers are on the list: signing in brings them, signing out
+/// takes them (and any connection through the account) away.
+Future<void> _startAccount() async {
+  final account = AccountService.instance;
+  var wasSignedIn = false;
+  account.addListener(() {
+    final signedIn = account.signedIn;
+    Connection.instance.handleAccountChange();
+    if (signedIn == wasSignedIn) return;
+    wasSignedIn = signedIn;
+    if (signedIn) {
+      unawaited(OfficialDevices.instance.refresh());
+    } else {
+      unawaited(OfficialDevices.instance.clear());
+    }
+  });
+  await account.init();
+  wasSignedIn = account.signedIn;
+  if (wasSignedIn) unawaited(OfficialDevices.instance.refresh());
 }
 
 class FastVibeApp extends StatefulWidget {
@@ -74,6 +98,10 @@ class _FastVibeAppState extends State<FastVibeApp> with WidgetsBindingObserver {
     // loses its socket every time the screen locks, and nothing on this side hears the
     // server give up on it.
     ConnectionLifecycle.handle(state);
+    // Which computers are online changes while the phone is in a pocket.
+    if (state == AppLifecycleState.resumed && AccountService.instance.signedIn) {
+      unawaited(OfficialDevices.instance.refresh());
+    }
   }
 
   @override

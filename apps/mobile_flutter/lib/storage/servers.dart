@@ -45,6 +45,13 @@ class SavedServer {
 
   int get sortKey => lastConnectedAt ?? createdAt;
 
+  /// A computer on the signed-in account: reached over WebRTC through the account, with the
+  /// account's token, not by address and device token.
+  bool get isOfficial => kind == AddressKind.official;
+
+  /// The account's id for this computer, for an [isOfficial] server.
+  String? get officialDeviceId => isOfficial ? Uri.tryParse(origin)?.host : null;
+
   Map<String, Object?> toJson() => <String, Object?>{
     'id': id,
     'alias': alias,
@@ -141,6 +148,45 @@ class ServerStore extends ChangeNotifier {
     }
     await _write(servers);
     return saved;
+  });
+
+  /// Make the saved official computers match the account's list: add the new, rename the
+  /// changed, drop the ones no longer on the account. Everything else in the list is left
+  /// alone. Pass an empty list when signed out to drop them all.
+  Future<List<SavedServer>> syncOfficial(List<SavedServer> devices) => _enqueue(() async {
+    final servers = await _read();
+    final keep = servers.where((item) => !item.isOfficial).toList();
+    final byOrigin = <String, SavedServer>{
+      for (final item in servers.where((item) => item.isOfficial)) item.origin: item,
+    };
+    final next = <SavedServer>[...keep];
+    for (final device in devices) {
+      final existing = byOrigin[device.origin];
+      next.add(
+        existing == null
+            ? device
+            : SavedServer(
+                id: existing.id,
+                alias: device.alias,
+                origin: device.origin,
+                host: device.host,
+                kind: AddressKind.official,
+                createdAt: existing.createdAt,
+                lastConnectedAt: existing.lastConnectedAt,
+                favorite: existing.favorite,
+              ),
+      );
+    }
+    // Nothing changed is not a write, so a refresh that finds the same list does not wake
+    // every screen that listens.
+    final same = servers.length == next.length &&
+        servers.every((item) => next.any((other) => jsonEncode(other.toJson()) == jsonEncode(item.toJson())));
+    if (same) return _sorted(servers);
+    for (final gone in byOrigin.values.where((item) => !devices.any((d) => d.origin == item.origin))) {
+      await deleteToken(gone.id);
+    }
+    await _write(next);
+    return _sorted(next);
   });
 
   Future<List<SavedServer>> patch(

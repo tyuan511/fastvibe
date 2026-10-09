@@ -10,7 +10,15 @@
 /// listener).
 library;
 
-enum AddressKind { lan, public, loopback }
+enum AddressKind {
+  lan,
+  public,
+  loopback,
+
+  /// A computer on the signed-in FastVibe account, reached through the account rather than
+  /// by address (`fastvibe-official://<device id>`). Never produced by parsing an address.
+  official,
+}
 
 class ServerAddress {
   const ServerAddress({

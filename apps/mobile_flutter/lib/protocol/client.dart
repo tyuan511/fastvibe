@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import '../i18n/core.dart';
 import 'address.dart';
 import 'diagnostics.dart';
+import 'frame_socket.dart';
 
 const Duration connectTimeout = Duration(seconds: 20);
 const Duration healthInterval = Duration(seconds: 15);
@@ -101,7 +102,7 @@ class RemoteClient {
   RemoteClient({String version = '0.0.0'}) : _version = version; // ignore: prefer_initializing_formals
 
   final String _version;
-  WebSocket? _ws;
+  FrameSocket? _ws;
   int _generation = 0;
   int _nextId = 1;
   final Map<int, _Pending> _pending = <int, _Pending>{};
@@ -252,7 +253,23 @@ class RemoteClient {
   }
 
   /// Opens the socket and completes the handshake: `auth`, then `hello` → `welcome`.
-  Future<void> connect(ServerAddress address, String token) {
+  Future<void> connect(ServerAddress address, String token) => _connectWith(
+    () async => WebSocketFrameSocket(await WebSocket.connect(address.wsUrl)),
+    unreachable: _unreachable(address.origin),
+    token: token,
+  );
+
+  /// The same handshake over a socket the caller opened — the official connection, whose
+  /// data channel was authenticated by the account before it ever carried a frame. No token is
+  /// sent; the desktop answers `auth` on its own once it has attached the channel.
+  Future<void> connectOpened(Future<FrameSocket> Function() open) =>
+      _connectWith(open, unreachable: t('conn.unreachable'));
+
+  Future<void> _connectWith(
+    Future<FrameSocket> Function() open, {
+    required String unreachable,
+    String? token,
+  }) {
     _drop(notify: false);
     _features = <String, Object?>{};
     _epoch = '';
@@ -280,7 +297,7 @@ class RemoteClient {
       fail(ConnectionError('timeout', t('conn.timeout')));
     });
 
-    WebSocket.connect(address.wsUrl).then((socket) {
+    open().then((socket) {
       if (stale()) {
         socket.close();
         return;
@@ -289,7 +306,7 @@ class RemoteClient {
       recordConnectionDiagnostic(Diagnostic.metric('socket', elapsedMs: DateTime.now().millisecondsSinceEpoch - started));
       phaseStarted = DateTime.now().millisecondsSinceEpoch;
       try {
-        socket.add(jsonEncode(<String, Object?>{'type': 'auth', 'token': token}));
+        if (token != null) socket.add(jsonEncode(<String, Object?>{'type': 'auth', 'token': token}));
         // Frames on this socket are ordered. The host authenticates before it
         // handles hello; pipeline both without an extra WAN round trip.
         socket.add(jsonEncode(<String, Object?>{
@@ -302,7 +319,7 @@ class RemoteClient {
           },
         }));
       } catch (_) {
-        fail(ConnectionError('unreachable', _unreachable(address.origin)));
+        fail(ConnectionError('unreachable', unreachable));
       }
 
       socket.listen(
@@ -347,7 +364,7 @@ class RemoteClient {
         onError: (Object _) {
           if (stale()) return;
           if (!settled) {
-            fail(ConnectionError('unreachable', _unreachable(address.origin)));
+            fail(ConnectionError('unreachable', unreachable));
           } else {
             _drop(notify: true, detail: const DisconnectDetail('socket-error'));
           }
@@ -372,7 +389,7 @@ class RemoteClient {
         cancelOnError: false,
       );
     }).catchError((Object _) {
-      fail(ConnectionError('unreachable', _unreachable(address.origin)));
+      fail(ConnectionError('unreachable', unreachable));
     });
 
     return completer.future;
@@ -466,7 +483,7 @@ class RemoteClient {
   /// reject it. An explicit `timeoutMs` overrides the method's default budget.
   Future<Object?> call(String method, [Object? payload, int? timeoutMs]) {
     final ws = _ws;
-    if (ws == null || ws.readyState != WebSocket.open) {
+    if (ws == null || !ws.isOpen) {
       return Future<Object?>.error(StateError(t('conn.notConnected')));
     }
     final requestId = _nextId++;
@@ -514,7 +531,7 @@ class RemoteClient {
 
   /// A subscription acknowledgement is an ordering fence after all replay frames.
   Future<SubscriptionResult> subscribeConversation(String scope, [EventCursor? cursor]) {
-    if (!_ready || _ws?.readyState != WebSocket.open) {
+    if (!_ready || !(_ws?.isOpen ?? false)) {
       return Future<SubscriptionResult>.error(TransportError('closed', t('conn.closed')));
     }
     if (!supportsConversationResume) {
@@ -564,7 +581,7 @@ class RemoteClient {
 
   void _send(Object? frame) {
     final ws = _ws;
-    if (ws == null || ws.readyState != WebSocket.open) return;
+    if (ws == null || !ws.isOpen) return;
     try {
       ws.add(jsonEncode(frame));
     } catch (_) {
@@ -588,9 +605,7 @@ class RemoteClient {
     _ws = null;
     if (ws != null) {
       try {
-        if (ws.readyState == WebSocket.open || ws.readyState == WebSocket.connecting) {
-          ws.close();
-        }
+        ws.close();
       } catch (_) {
         // A failed native socket may already have been disposed.
       }
