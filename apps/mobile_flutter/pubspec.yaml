@@ -1,7 +1,7 @@
 name: fastvibe_mobile
 description: "FastVibe mobile client for connecting to saved remote machines"
 publish_to: "none"
-version: 0.4.3+403
+version: 0.4.4+404
 
 environment:
   sdk: ^3.13.5
