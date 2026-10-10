@@ -38,6 +38,11 @@ files:
   # alternate bundles that must not enter a desktop package.
   - "!**/node_modules/onnxruntime-web{,/**/*}"
 
+# Fails the build when a package in the archive is missing a dependency it needs. The
+# collector can drop one without failing (v0.19.0 shipped without cross-spawn and nine more);
+# this runs before any installer exists, so a bad package never becomes a release.
+afterPack: scripts/check-packaged-deps.cjs
+
 # Runtime assets are looked up under process.resourcesPath (src/main/index.ts,
 # src/main/engine/models-dev.ts), so they must live outside the asar archive.
 extraResources:

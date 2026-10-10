@@ -1701,6 +1701,26 @@ pnpm check:scripts  # only the browser page scripts (a compile error there is a
 pnpm shadcn add <component> -y
 ```
 
+## 依赖版本与安装包完整性
+
+`undici` 和 `typebox` 在 `package.json` 里的版本**必须和 `pi-coding-agent` 自己声明的一致**
+（现在是 `undici 8.10.2`、`typebox 1.3.27`；升级 pi 时一起改）。对不上时 pnpm 会把
+`pi-ai` 等装成两个 peer 变体，electron-builder 的 pnpm 收集器认不出这种包，**构建不报错**，
+却把它底下的依赖整片丢掉：v0.19.0 就是这样发出去的，缺 `cross-spawn`、`@anthropic-ai/sdk`
+等 9 个包，启动即崩。对不上的 `typebox` 还会让每个 `pi-*` 各带一份，白白多 4 MB。
+
+两道检查，都不需要人记得去跑：
+
+- `scripts/check-pnpm-variants.mjs`（在 `pnpm typecheck` 里）：锁文件里 `pi-ai` / `pi-coding-agent` /
+  `pi-mcp` / `pi-tui` 出现不止一个变体就失败，并列出区别。
+- `scripts/check-packaged-deps.cjs`（`electron-builder.yml` 的 `afterPack`）：打出来的
+  `app.asar` 里每个包声明的 `dependencies` 都得能按 Node 的规则找到，缺一个就让构建失败，
+  这时还没有任何安装包或 Release。也可以对已安装的应用直接跑：
+  `node scripts/check-packaged-deps.cjs /Applications/FastVibe.app/Contents/Resources/app.asar`。
+
+升级依赖后要确认：`pnpm typecheck` 通过，并且本地 `electron-builder --dir` 的日志里没有
+`cannot find path for dependency`。
+
 ## 发版与 release note
 
 版本号写 `package.json`，release note 写 `docs/release/<tag>.md`（如
