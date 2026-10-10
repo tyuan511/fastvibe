@@ -1388,6 +1388,9 @@ viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`
     `subagent:<toolCallId>:<index>` on lifecycle, tagged with the owning
     `conversationId`, and `SidePane` only lists tabs belonging to the chat on
     screen — parallel/chain runs and runs from different chats never share a view.
+    The tab is quiet: starting a run never un-collapses the pane, and switching back
+    to the chat does not either. The tool card's row (and the sidebar's sub-task row)
+    is what opens it.
     A `subagent` tool card does not dump its parameters — it lists the spawned
     runs (role · brief · status, the whole row opening that run's tab; no
     「查看对话」 button). The collapsed row summarises the fan-out rather than
@@ -1449,7 +1452,10 @@ viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`
     short `nth-of-type` path), so `browser_click` / `browser_type` target the element instead of
     guessing from text; a miss returns the labels that *were* on offer.
   - **Reuse, not sprawl.** `browser_open` navigates the tab already on screen (one Chromium guest
-    per call made later calls slow and timeout-prone); `newTab: true` is the escape hatch. A
+    per call made later calls slow and timeout-prone); `newTab: true` is the escape hatch. A tool
+    never un-collapses the pane to show that tab (`openBrowserQuiet`): the page loads parked, the
+    tab sits in the bar, and the pane opens only when the user opens it — the same rule a delegated
+    run's tab follows. Opening the browser from the pane's own menu still shows it. A
     click/keypress is awaited through its possible navigation, and a dead guest is retired —
     dropped from the registry and its pane tab closed. **A dead tab is never a tool error.**
     The browser is a shared side-pane resource the user can close or crash at any moment, so

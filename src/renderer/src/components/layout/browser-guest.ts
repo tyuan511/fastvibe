@@ -636,7 +636,7 @@ async function openBrowserTab(request: BrowserAutomationRequest): Promise<unknow
   for (let attempt = 0; attempt < 2 && !entry; attempt++) {
     const existing = request.newTab || replaced ? undefined : store.browserTabIds(paneId)[0];
     reused = Boolean(existing);
-    tabId = existing ?? store.openBrowser(url, paneId);
+    tabId = existing ?? store.openBrowserQuiet(url, paneId);
     const candidate = ensureGuest(tabId, url);
     if (await usable(candidate)) {
       entry = candidate;
@@ -718,7 +718,7 @@ export async function handleBrowserRequest(request: BrowserAutomationRequest): P
 async function replace(tabId: string, url: string, request: BrowserAutomationRequest): Promise<Entry> {
   if (registry.has(tabId)) retire(tabId);
   const paneId = paneConversationId(request.conversationId);
-  const entry = ensureGuest(useSidePaneStore.getState().openBrowser(url, paneId), url);
+  const entry = ensureGuest(useSidePaneStore.getState().openBrowserQuiet(url, paneId), url);
   // `dom-ready` is the fresh document the src navigation produced, so the retry
   // injects into the resumed page rather than the one that is on its way out. A guest
   // that never gets there is dead too — this is the one failure worth reporting, since

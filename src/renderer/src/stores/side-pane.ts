@@ -70,6 +70,13 @@ export type SidePaneTab = {
   subagentId?: string;
   /** The conversation whose tool call spawned that run; scopes the tab. */
   subagentConversationId?: string;
+  /**
+   * Created by a tool (browser-use, a delegated run) without the user asking to
+   * see it. It is a real tab — the pane lists it, and clicking it opens it — but
+   * it must not un-collapse the pane, and switching back to its chat must not
+   * either. Cleared the moment something the user did focuses it.
+   */
+  quiet?: boolean;
   /** Live status of that run, mirrored into the tab title. */
   subagentStatus?: string;
   /** The delegated brief; the pane renders it as the run's opening user message. */
@@ -242,6 +249,14 @@ type SidePaneStore = {
   openBrowser: (url?: string, conversationId?: string) => string;
   /** Browser tab ids in one conversation's pane (the active chat when omitted). */
   browserTabIds: (conversationId?: string) => string[];
+  /**
+   * The tab a tool needs, without showing it. Same tab as `openBrowser`, but it
+   * stays quiet: the pane is not un-collapsed and the tab is not focused while
+   * the user is looking at something else.
+   */
+  openBrowserQuiet: (url?: string, conversationId?: string) => string;
+  /** Shared by `openBrowser` and `openBrowserQuiet`. `quiet` keeps the pane as it is. */
+  openBrowserTab: (url: string | undefined, conversationId: string | undefined, quiet: boolean) => string;
   openSideChat: (
     parentSessionId: string,
     ordinal: number,
@@ -354,11 +369,11 @@ export function sidePaneTabTitle(tab: SidePaneTab): string {
 }
 
 /** The single tab that shows one run. */
-function upsertSubagentTab(tabs: SidePaneTab[], subagentId: string, init?: SubagentTabInit): SidePaneTab {
+function upsertSubagentTab(tabs: SidePaneTab[], subagentId: string, init?: SubagentTabInit, quiet?: boolean): SidePaneTab {
   const id = subagentTabId(subagentId, init?.conversationId);
   const existing = tabs.find((item) => item.id === id);
   return {
-    ...(existing ?? { id, type: "subagent" as const, openedAt: Date.now() }),
+    ...(existing ?? { id, type: "subagent" as const, openedAt: Date.now(), quiet }),
     subagentId,
     subagentConversationId: init?.conversationId ?? existing?.subagentConversationId,
     // The base name stays stable; the tab bar appends the live status at render
@@ -539,8 +554,10 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
         maximized: hasTabs ? scope.maximized : false,
         // An explicit choice on this chat wins; otherwise a chat with tabs shows
         // them, while a fresh empty scope starts closed instead of inheriting the
-        // previous conversation's visible pane.
-        collapsed: scope.collapsed ?? (hasTabs ? false : true),
+        // previous conversation's visible pane. A tab a tool opened on its own does
+        // not count: switching back must not pop the pane open for a browser or a run
+        // the user never asked to see.
+        collapsed: scope.collapsed ?? (scope.tabs.some((item) => !item.quiet) ? false : true),
       };
     });
   },
@@ -607,7 +624,13 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
     });
   },
   activate: (id) =>
-    set((state) => writeScope(state, scopeKeyOf(state), { ...scopeOf(state), activeTabId: id }, { collapsed: false })),
+    set((state) => {
+      const scope = scopeOf(state);
+      // Focusing a tab is the user looking at it, so a tool-opened tab stops being
+      // quiet here: from now on this chat's pane opens with it, as the user left it.
+      const tabs = scope.tabs.map((item) => (item.id === id && item.quiet ? { ...item, quiet: undefined } : item));
+      return writeScope(state, scopeKeyOf(state), { ...scope, tabs, activeTabId: id }, { collapsed: false });
+    }),
   close: (id, options) =>
     set((state) => {
       const collapse = options?.collapse !== false;
@@ -720,7 +743,9 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
         { collapsed: false },
       );
     }),
-  openBrowser: (url, conversationId) => {
+  openBrowser: (url, conversationId) => get().openBrowserTab(url, conversationId, false),
+  openBrowserQuiet: (url, conversationId) => get().openBrowserTab(url, conversationId, true),
+  openBrowserTab: (url, conversationId, quiet) => {
     let tabId = "";
     set((state) => {
       // A background chat's browser belongs in that chat's pane, the same way a
@@ -729,10 +754,23 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
       const key = conversationId ?? scopeKeyOf(state);
       const scope = state.scopes[key] ?? EMPTY_SCOPE;
       const existing = url ? undefined : scope.tabs.find((item) => item.type === "browser");
-      const focus = key === scopeKeyOf(state) ? { collapsed: false } : undefined;
+      // A tool-opened tab never un-collapses the pane. Reusing one the user already
+      // has in front of them still does: that tab is what they are looking at.
+      const onScreen = key === scopeKeyOf(state) && !state.collapsed;
+      const focus = !quiet && key === scopeKeyOf(state) ? { collapsed: false } : undefined;
       if (existing) {
         tabId = existing.id;
-        return writeScope(state, key, { ...scope, activeTabId: existing.id, collapsed: false }, focus);
+        const revealed = { ...existing, quiet: quiet && !onScreen ? existing.quiet ?? true : undefined };
+        return writeScope(
+          state,
+          key,
+          {
+            ...scope,
+            tabs: scope.tabs.map((item) => (item.id === existing.id ? revealed : item)),
+            activeTabId: quiet && !onScreen ? scope.activeTabId : existing.id,
+          },
+          focus,
+        );
       }
       const tab: SidePaneTab = {
         id: `browser:${uid()}`,
@@ -742,12 +780,19 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
         // No URL means an empty tab: the pane opens blank and waits for the user.
         url: url?.trim() || "",
         conversationId: key === DRAFT_SCOPE ? undefined : key,
+        quiet: quiet || undefined,
       };
       tabId = tab.id;
       return writeScope(
         state,
         key,
-        { ...scope, tabs: [...scope.tabs, tab], activeTabId: tab.id, collapsed: false },
+        {
+          ...scope,
+          tabs: [...scope.tabs, tab],
+          // Keep whatever the user is already looking at. A quiet tab is there to be
+          // opened, not to replace the tab on screen.
+          activeTabId: quiet && (key !== scopeKeyOf(state) || state.collapsed) ? scope.activeTabId : tab.id,
+        },
         focus,
       );
     });
@@ -802,7 +847,7 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
       // when a background chat's stream is what triggered the open.
       const key = init?.conversationId ?? scopeKeyOf(state);
       const scope = state.scopes[key] ?? EMPTY_SCOPE;
-      const tab = upsertSubagentTab(scope.tabs, subagentId, stampScope(key, init));
+      const tab = { ...upsertSubagentTab(scope.tabs, subagentId, stampScope(key, init)), quiet: undefined };
       return writeScope(
         state,
         key,
@@ -836,7 +881,9 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
       // background run cannot appear in the chat on screen.
       const key = init?.conversationId ?? scopeOwningSubagent(state, subagentId) ?? scopeKeyOf(state);
       const scope = state.scopes[key] ?? EMPTY_SCOPE;
-      const tab = upsertSubagentTab(scope.tabs, subagentId, stampScope(key, init));
+      // Quiet, like a tool-opened browser tab: the run is listed, never shown until
+      // the user opens it. A tab they already focused keeps that (no `quiet` here).
+      const tab = upsertSubagentTab(scope.tabs, subagentId, stampScope(key, init), true);
       const existing = scope.tabs.find((item) => item.id === tab.id);
       if (
         existing &&
