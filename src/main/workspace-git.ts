@@ -140,13 +140,39 @@ function parseGitNumstat(output: string): { additions: number; deletions: number
   return { additions, deletions };
 }
 
+/**
+ * A read-only git call made behind the user's back (the composer's branch chip polls).
+ * `--no-optional-locks` keeps `status` and `diff` from taking `index.lock` to save a
+ * refreshed index: the agent's own `git add` / `git commit` in the same tree would
+ * otherwise find the lock held and fail.
+ */
+function gitRead(cwd: string, args: string[]): Promise<{ stdout: string }> {
+  return execFileAsync("git", ["--no-optional-locks", "-C", cwd, ...args], { timeout: 5000, maxBuffer: 256 * 1024 });
+}
+
+/**
+ * Workspaces whose last read found no repository. The poll keeps asking about them (a
+ * `git init` has to be noticed), but a second process started beside `status` only to
+ * fail with it is waste, so these go back to asking `status` first.
+ */
+const notRepositories = new Set<string>();
+
 export async function readGitStatus(cwd: string): Promise<GitStatus> {
   const empty: GitStatus = { cwd, isRepository: false, changed: 0, staged: 0, additions: 0, deletions: 0, files: [] };
+  // Settled to `null` on failure, so a rejection nobody is awaiting yet is never unhandled.
+  const readHeadStats = () => gitRead(cwd, ["diff", "--numstat", "HEAD", "--"]).then((diff) => parseGitNumstat(diff.stdout), () => null);
+  // Started beside `status`, not after it: neither needs the other's answer, and on a
+  // large tree each is most of a second.
+  const eager = notRepositories.has(cwd) ? undefined : readHeadStats();
   try {
-    const { stdout } = await execFileAsync("git", ["-C", cwd, "status", "--short", "--branch"], { timeout: 5000, maxBuffer: 256 * 1024 });
+    const { stdout } = await gitRead(cwd, ["status", "--short", "--branch"]);
     const lines = stdout.split(/\r?\n/).filter(Boolean);
     const header = lines.shift() ?? "";
-    if (!header.startsWith("## ")) return empty;
+    if (!header.startsWith("## ")) {
+      notRepositories.add(cwd);
+      return empty;
+    }
+    notRepositories.delete(cwd);
     const branch = parseBranchHeader(header.slice(3));
     const ahead = Number(header.match(/ahead (\d+)/)?.[1] ?? 0);
     const behind = Number(header.match(/behind (\d+)/)?.[1] ?? 0);
@@ -159,25 +185,21 @@ export async function readGitStatus(cwd: string): Promise<GitStatus> {
       if (line[0] !== " " && line[0] !== "?") staged += 1;
       files.push({ index: line[0] === "?" ? "?" : line[0], worktree: line[1] ?? " ", path: line.slice(3).trim() });
     }
-    let additions = 0;
-    let deletions = 0;
-    try {
-      const diff = await execFileAsync("git", ["-C", cwd, "diff", "--numstat", "HEAD", "--"], { timeout: 5000, maxBuffer: 256 * 1024 });
-      ({ additions, deletions } = parseGitNumstat(diff.stdout));
-    } catch {
+    let stats = await (eager ?? readHeadStats());
+    if (!stats) {
       // An unborn branch has no HEAD. Its staged and unstaged layers are still useful,
       // and summing them is the closest line-level status available before first commit.
       const [stagedDiff, workingDiff] = await Promise.all([
-        execFileAsync("git", ["-C", cwd, "diff", "--numstat", "--cached", "--"], { timeout: 5000, maxBuffer: 256 * 1024 }).catch(() => ({ stdout: "" })),
-        execFileAsync("git", ["-C", cwd, "diff", "--numstat", "--"], { timeout: 5000, maxBuffer: 256 * 1024 }).catch(() => ({ stdout: "" })),
+        gitRead(cwd, ["diff", "--numstat", "--cached", "--"]).catch(() => ({ stdout: "" })),
+        gitRead(cwd, ["diff", "--numstat", "--"]).catch(() => ({ stdout: "" })),
       ]);
       const stagedStats = parseGitNumstat(stagedDiff.stdout);
       const workingStats = parseGitNumstat(workingDiff.stdout);
-      additions = stagedStats.additions + workingStats.additions;
-      deletions = stagedStats.deletions + workingStats.deletions;
+      stats = { additions: stagedStats.additions + workingStats.additions, deletions: stagedStats.deletions + workingStats.deletions };
     }
-    return { cwd, isRepository: true, branch, changed, staged, additions, deletions, ahead, behind, files };
+    return { cwd, isRepository: true, branch, changed, staged, ...stats, ahead, behind, files };
   } catch {
+    notRepositories.add(cwd);
     return empty;
   }
 }
