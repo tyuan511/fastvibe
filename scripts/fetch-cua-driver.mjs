@@ -12,8 +12,7 @@
  * driver runs as its own process.
  *
  * Pinned to the release that matches the npm package exactly. cua's own README:
- * "Upgrade the bindings and native library together." Both are 0.28.2 here, and the
- * daemon confirms it at startup (`driverVersion: 0.28.2, contract: 0.8.0`).
+ * "Upgrade the bindings and native library together." Both are 0.34.0 here.
  *
  * One universal archive is downloaded and then split, so each package carries only the
  * slice it can run: ~30 MB instead of 63. The split is what makes that safe — a local
@@ -28,11 +27,11 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-const VERSION = "0.28.2";
+const VERSION = "0.34.0";
 const TAG = `cua-driver-rs-v${VERSION}`;
 const ASSET = `cua-driver-rs-${VERSION}-darwin-universal-binary.tar.gz`;
 /** From the release's own checksums.txt, verified once and pinned here. */
-const SHA256 = "386db225a3080714a0f9f935525e61efaf46709587ef8b94dd2df81aeb2f6daa";
+const SHA256 = "940dc008e0f7c5d217d14c0f247d1ebab91b1bac965f4a649d19e8c789bdfd81";
 const URL = `https://github.com/trycua/cua/releases/download/${TAG}/${ASSET}`;
 
 const OUT_DIR = "resources/cua-driver";
