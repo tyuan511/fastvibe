@@ -3112,10 +3112,12 @@ export class PiProcessManager {
         console.warn(`[transcript] repair failed for ${conversation.sessionFile}`, error);
       }
     }
+    const openStarted = performance.now();
     const sessionManager = conversation.sessionFile
       ? SessionManager.open(conversation.sessionFile, undefined, cwd)
       : SessionManager.create(cwd, sessionDir);
-    const creation = this.#createSession(conversation, cwd, sessionManager);
+    const openMs = performance.now() - openStarted;
+    const creation = this.#createSession(conversation, cwd, sessionManager, undefined, openMs);
     this.#sessionPromises.set(conversation.id, creation);
     try {
       return await creation;
@@ -3128,8 +3130,19 @@ export class PiProcessManager {
     cwd: string,
     sessionManager: ReturnType<typeof SessionManager.create>,
     sessionStartEvent?: SessionStartEvent,
+    transcriptMs = 0,
   ): Promise<ManagedSession> {
     if (!this.#runtime || !this.#models) throw new Error("engine not ready");
+    // Where the time went when a chat is slow to open: a cold conversation is opened by
+    // building its whole agent session, and which step is the slow one differs by machine
+    // (extensions, a plugin's `session_start`, a bridge another chat is holding).
+    const phases: Array<[string, number]> = [["transcript", transcriptMs]];
+    let mark = performance.now();
+    const lap = (name: string): void => {
+      const now = performance.now();
+      phases.push([name, now - mark]);
+      mark = now;
+    };
     const settingsManager = SettingsManager.create(cwd, this.#paths.agentDir);
     // A loader we own lets us splice in FastVibe's built-in extensions
     // (`goal`, `todo`, session-title, web-search) alongside whatever the user installed. `createAgentSession`
@@ -3180,9 +3193,11 @@ export class PiProcessManager {
     // browser-use and computer-use both close over the conversation id at factory time,
     // which is this reload. Nested rather than merged: each bridge owns its own global
     // and its own serialisation, and a reload is the only moment either needs stamping.
+    lap("setup");
     await bindBrowserConversation(conversation.id, () =>
       bindComputerConversation(conversation.id, () => resourceLoader.reload()),
     );
+    lap("extensions");
     const result = await createAgentSession({
       cwd,
       agentDir: this.#paths.agentDir,
@@ -3192,6 +3207,7 @@ export class PiProcessManager {
       resourceLoader,
       ...(sessionStartEvent ? { sessionStartEvent } : {}),
     });
+    lap("session");
     this.#promptPreparations.install(conversation.id, result.session);
     await result.session.bindExtensions({
       // Extensions see `rpc`, not the default `print`: FastVibe bridges dialogs,
@@ -3217,6 +3233,11 @@ export class PiProcessManager {
       },
       onError: (error) => this.#emit({ type: "extension_error", conversationId: conversation.id, extensionPath: error.extensionPath, event: error.event, error: error.error }),
     });
+    lap("bind");
+    const total = phases.reduce((sum, [, ms]) => sum + ms, 0);
+    if (total >= 300) {
+      console.info(`[session] opening ${conversation.id} took ${Math.round(total)} ms: ${phases.map(([name, ms]) => `${name} ${Math.round(ms)}`).join(", ")}`);
+    }
     const managed: ManagedSession = { conversationId: conversation.id, cwd, session: result.session, extensions: result.extensionsResult, unsubscribe: () => undefined };
     managed.unsubscribe = result.session.subscribe(guardSessionListener(`conversation ${conversation.id}`, (event) => {
       // Accumulate wall-clock timings for the composer's turn statistics. Tools

@@ -4,7 +4,7 @@ import { dirname } from "node:path";
 import type { OfficialPeer, OfficialState, OfficialStatus } from "../../shared/official.ts";
 import type { RemoteSocket } from "../server/server.ts";
 import { uiText } from "../engine/ui-text.ts";
-import { toIceServers } from "./ice.ts";
+import { iceExpiry, stunServers, toIceServers, type IceServerConfig } from "./ice.ts";
 import type { PeerFactory } from "./peer.ts";
 import { Responder } from "./responder.ts";
 import { SignalingClient, type SignalingStop } from "./signaling.ts";
@@ -22,6 +22,10 @@ import { SignalingClient, type SignalingStop } from "./signaling.ts";
  */
 
 const REQUEST_TIMEOUT_MS = 15_000;
+/** Stop using a server list this long before the service says it expires. */
+const ICE_MARGIN_MS = 10 * 60_000;
+const ICE_RECHECK_MS = 30 * 60_000;
+const ICE_EMPTY_MS = 60_000;
 const DEFAULT_CONNECT_TIMEOUT_MS = 30_000;
 const DEFAULT_PATH_POLL_MS = 3_000;
 const DEFAULT_REGISTER_RETRY_MS = [5_000, 15_000, 30_000, 60_000];
@@ -62,6 +66,8 @@ export class OfficialConnection {
   #signaling: SignalingClient | null = null;
   #boundToken: string | null = null;
   #responders = new Map<string, Responder>();
+  #ice: { token: string; servers: IceServerConfig[]; validUntil: number } | null = null;
+  #iceFlight: { token: string; servers: Promise<IceServerConfig[]> } | null = null;
   /** Bumped by every teardown so a registration that was overtaken cannot start signaling. */
   #generation = 0;
   #bringingUp = false;
@@ -75,14 +81,23 @@ export class OfficialConnection {
   }
 
   state(): OfficialState {
-    const peers: OfficialPeer[] = [...this.#responders.values()]
-      .filter((responder) => responder.connected)
-      .map((responder) => ({
-        id: responder.cid,
-        name: responder.peer.name,
-        ...(responder.peer.platform ? { platform: responder.peer.platform } : {}),
-        path: responder.path,
-      }));
+    // A phone that sends an id is told apart by it (and its older connection is closed when
+    // it calls again). One that does not — an older app — is known only by a name and a
+    // platform, which is a guess, so the older of two alike is left out of the list and
+    // nothing is closed: a second phone of the same model keeps working.
+    const newest = new Map<string, Responder>();
+    for (const responder of this.#responders.values()) {
+      if (!responder.connected) continue;
+      const key = responder.clientId ?? `${responder.peer.name}\u0000${responder.peer.platform ?? ""}`;
+      const seen = newest.get(key);
+      if (!seen || responder.connectedAt >= seen.connectedAt) newest.set(key, responder);
+    }
+    const peers: OfficialPeer[] = [...newest.values()].map((responder) => ({
+      id: responder.cid,
+      name: responder.peer.name,
+      ...(responder.peer.platform ? { platform: responder.peer.platform } : {}),
+      path: responder.path,
+    }));
     return {
       enabled: this.#enabled,
       status: this.#status,
@@ -103,6 +118,19 @@ export class OfficialConnection {
   /** The account signed in, out, or changed. */
   accountChanged(): void {
     this.#reconcile();
+  }
+
+  /**
+   * The name this computer goes by changed: tell the account, so its device list and the
+   * phones' lists show it. Registering again is how the cloud learns it, and leaves the
+   * signaling and any connected phone alone. A failure is only logged; the next
+   * registration (switching off and on, signing in again) carries the new name anyway.
+   */
+  async renamed(): Promise<void> {
+    const token = this.#deps.account.token();
+    if (!this.#enabled || !token || !this.#deviceId) return;
+    const registration = await this.#register(token);
+    if (!registration.ok) this.#deps.log.warn(`official: could not update the device name: ${registration.message || "unauthorized"}`);
   }
 
   /** Drop every connected phone, leaving the connection itself up. */
@@ -188,8 +216,11 @@ export class OfficialConnection {
       events: {
         status: (status) => {
           if (this.#signaling !== signaling) return;
-          if (status === "online") this.#set("online");
-          else this.#set("connecting");
+          if (status === "online") {
+            this.#set("online");
+            // Have the server list in hand before the first phone calls.
+            void this.#loadIce().catch(() => undefined);
+          } else this.#set("connecting");
         },
         incoming: (cid, peer) => this.#accept(signaling, cid, peer),
         signal: (cid, data) => this.#responders.get(cid)?.signal(data),
@@ -270,6 +301,14 @@ export class OfficialConnection {
       sendSignal: (data) => signaling.signal(cid, data),
       attach: (socket) => this.#deps.attach(socket, { id: `rtc:${cid}`, label: peer.name }),
       onChange: () => this.#emit(),
+      onClientId: (id) => {
+        // The same phone calling again (the app restarted, the network changed) while its
+        // old connection still waits for the heartbeat to notice it is gone: that one is a
+        // ghost, and keeping it would list the phone twice.
+        for (const other of [...this.#responders.values()]) {
+          if (other !== responder && other.clientId === id) other.close();
+        }
+      },
       onEnd: () => {
         this.#responders.delete(cid);
         // Free the call on the service too; harmless if the phone already did.
@@ -284,12 +323,48 @@ export class OfficialConnection {
     void responder.start();
   }
 
-  async #loadIce() {
+  /**
+   * The servers a call gathers with, kept between calls.
+   *
+   * Asking the service for every call put an HTTPS round trip in front of the answer, and
+   * the phone was already waiting on it. The list is the same for an hour, so it is
+   * fetched when signaling comes up and reused until shortly before it would expire.
+   */
+  async #loadIce(): Promise<IceServerConfig[]> {
     const token = this.#deps.account.token();
-    if (!token) return [];
-    const response = await this.#call("/api/rtc/ice", { token });
-    if (!response.ok) throw new Error(`ice servers: ${response.status}`);
-    return toIceServers(await response.json());
+    if (!token) {
+      this.#deps.log.warn("official: no account token, so a call has no STUN server to gather with");
+      return [];
+    }
+    const now = Date.now();
+    const cached = this.#ice;
+    if (cached && cached.token === token && now < cached.validUntil) return cached.servers;
+    const flight = this.#iceFlight;
+    if (flight && flight.token === token) return flight.servers;
+    const servers = (async () => {
+      const response = await this.#call("/api/rtc/ice", { token });
+      if (!response.ok) throw new Error(`ice servers: ${response.status}`);
+      const reply: unknown = await response.json();
+      const list = stunServers(toIceServers(reply));
+      const expiry = iceExpiry(reply);
+      // No expiry means a list with no relay credential in it; nothing in it goes stale,
+      // but look again before long in case the service's address changed.
+      // An empty list is what a service with its relay switched off answers; keep it only
+      // briefly, since with nothing to gather with a phone off this network cannot connect.
+      const validUntil = list.length === 0
+        ? Date.now() + ICE_EMPTY_MS
+        : expiry === null ? Date.now() + ICE_RECHECK_MS : expiry - ICE_MARGIN_MS;
+      if (validUntil > Date.now()) this.#ice = { token, servers: list, validUntil };
+      if (list.length === 0) this.#deps.log.warn("official: the service listed no STUN server");
+      return list;
+    })();
+    const mine = { token, servers };
+    this.#iceFlight = mine;
+    try {
+      return await servers;
+    } finally {
+      if (this.#iceFlight === mine) this.#iceFlight = null;
+    }
   }
 
   /* ------------------------------------------------------------ registration */

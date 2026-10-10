@@ -1,7 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
+import { deflateRawSync } from "node:zlib";
 import {
   BINARY,
+  COMPRESS_MIN_BYTES,
+  DEFLATE,
   FrameAssembler,
   FrameError,
   LAST,
@@ -9,6 +13,7 @@ import {
   PING,
   PONG,
   closeMessage,
+  compressFrame,
   controlMessage,
   splitFrame,
 } from "../src/main/rtc/frames.ts";
@@ -82,7 +87,7 @@ test("a close message carries its code and reason", () => {
 test("what the format does not allow is refused", () => {
   const assembler = () => new FrameAssembler(1 << 20);
   assert.throws(() => assembler().push(Buffer.alloc(0)), FrameError);
-  assert.throws(() => assembler().push(Buffer.from([0x20, 1])), FrameError);
+  assert.throws(() => assembler().push(Buffer.from([0x40, 1])), FrameError);
   assert.throws(() => assembler().push(Buffer.from([0x10, 0])), FrameError);
   const mixed = assembler();
   mixed.push(Buffer.from([0x00, 1]));
@@ -102,4 +107,41 @@ test("the bytes are the contract", () => {
   assert.deepEqual([...controlMessage(PING)], [4]);
   assert.deepEqual([...controlMessage(PONG)], [8]);
   assert.deepEqual([...closeMessage(4001, "no")], [16, 15, 161, 110, 111]);
+});
+
+test("a compressed frame survives the split and comes back inflated", () => {
+  const data = Buffer.from(JSON.stringify({ messages: Array.from({ length: 400 }, (_, i) => ({ id: i, text: "hello world ".repeat(8) })) }));
+  const packed = compressFrame(data);
+  assert.ok(packed && packed.byteLength < data.byteLength / 4, "JSON compresses well");
+  const assembler = new FrameAssembler(32 * 1024 * 1024);
+  const messages = splitFrame(packed, false, true);
+  assert.ok(messages.every((m) => (m[0] & DEFLATE) !== 0), "every fragment says so");
+  let out;
+  for (const message of messages) out = assembler.push(message);
+  assert.equal(out?.kind, "frame");
+  if (out?.kind === "frame") {
+    assert.ok(out.data.equals(data));
+    assert.equal(out.binary, false);
+  }
+});
+
+test("a frame too short, or that does not shrink, is not compressed", () => {
+  assert.equal(compressFrame(Buffer.from("short")), null);
+  const noise = randomBytes(COMPRESS_MIN_BYTES * 4);
+  assert.equal(compressFrame(noise), null);
+});
+
+test("a compressed frame cannot inflate past the frame limit", () => {
+  const bomb = deflateRawSync(Buffer.alloc(4 * 1024 * 1024));
+  assert.ok(bomb.byteLength < 8 * 1024);
+  const assembler = new FrameAssembler(1024 * 1024);
+  assert.throws(() => assembler.push(splitFrame(bomb, false, true)[0]), FrameError);
+});
+
+test("garbage marked compressed, and mixed fragments, are refused", () => {
+  const assembler = new FrameAssembler(1 << 20);
+  assert.throws(() => assembler.push(Buffer.from([LAST | DEFLATE, 0x07, 0xff, 0xff])), FrameError);
+  const second = new FrameAssembler(1 << 20);
+  second.push(Buffer.concat([Buffer.from([DEFLATE]), Buffer.alloc(10)]));
+  assert.throws(() => second.push(Buffer.concat([Buffer.from([LAST]), Buffer.alloc(4)])), FrameError);
 });

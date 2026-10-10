@@ -577,8 +577,9 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): void {
     const current = readAppSettings(getFastVibePaths());
     await commitSettings({
       ...mergeSettingsPreservingProxy(current, incoming),
-      // Managed by remote:set-discovery-name; stale preference snapshots must not
+      // Managed by remote:set-device-name; stale preference snapshots must not
       // undo a rename or let a remote client bypass that method's local-only policy.
+      remoteDeviceName: current.remoteDeviceName,
       remoteDiscoveryName: current.remoteDiscoveryName,
     }, ctx);
   }));

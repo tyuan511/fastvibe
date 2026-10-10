@@ -887,11 +887,11 @@ const api = {
   // so every action is a no-op over the fixture `?remote=` picks.
   remote: {
     getState: async () => REMOTE_STATE,
-    setPassword: async () => ({ ...REMOTE_STATE, configured: true }),
-    clearPassword: async () => ({ ...REMOTE_STATE, configured: false, running: false, lanAccess: false }),
+    setPassword: async () => ({ ...REMOTE_STATE, configured: true, running: REMOTE_STATE.enabled, port: 7777 }),
+    clearPassword: async () => ({ ...REMOTE_STATE, configured: false, running: false, port: null }),
     start: async () => REMOTE_ONLINE,
-    setDiscoveryName: async (name: string) => {
-      REMOTE_STATE.discoveryName = name.trim();
+    setDeviceName: async (name: string) => {
+      REMOTE_STATE.deviceName = name.trim();
       return { ...REMOTE_STATE };
     },
     stop: async () => REMOTE_OFF,
@@ -973,7 +973,8 @@ function computerStatus(): {
  * - `?remote=relay`: the same, with the phone going through FastVibe's relay.
  * - `?remote=signedout`: switched on, but nobody is signed in, so phones cannot find it.
  * - `?remote=error`: switched on and the cloud refused the device.
- * - `?remote=lan`: LAN access on, so the address row has a code worth scanning.
+ * - `?remote=lan`: switched on with a LAN password and both IPv4 and IPv6, so the QR code has two to switch between.
+ * - `?remote=nopassword`: switched on, but no LAN password yet, so the pane asks for one.
  */
 const OFFICIAL_OFF: OfficialState = {
   enabled: false,
@@ -985,15 +986,13 @@ const OFFICIAL_OFF: OfficialState = {
 
 const REMOTE_OFF: RemoteServerState = {
   enabled: false,
-  discoveryName: "",
-  defaultDiscoveryName: "My-MacBook-Pro",
+  deviceName: "",
+  defaultDeviceName: "My-MacBook-Pro",
   running: false,
   host: "127.0.0.1",
   port: null,
   configured: false,
-  lanAccess: false,
   lanAddresses: { ipv4: "192.168.31.45", ipv6: null },
-  lanAddressFamily: "ipv4",
   clients: 0,
   failedLogins: 0,
   official: OFFICIAL_OFF,
@@ -1003,6 +1002,7 @@ const REMOTE_ONLINE: RemoteServerState = {
   ...REMOTE_OFF,
   enabled: true,
   running: true,
+  host: "192.168.31.45",
   port: 7777,
   configured: true,
   clients: 1,
@@ -1037,14 +1037,21 @@ const REMOTE_STATES: Record<string, RemoteServerState> = {
       peers: [],
     },
   },
-  lan: {
-    ...REMOTE_ONLINE,
-    host: "192.168.31.45",
-    lanAccess: true,
-    lanAddresses: { ipv4: "192.168.31.45", ipv6: "fd00::45" },
-    clients: 0,
-    official: { ...REMOTE_ONLINE.official, peers: [] },
-  },
+};
+
+REMOTE_STATES.lan = {
+  ...REMOTE_ONLINE,
+  lanAddresses: { ipv4: "192.168.31.45", ipv6: "fd00::45" },
+  clients: 0,
+  official: { ...REMOTE_ONLINE.official, peers: [] },
+};
+REMOTE_STATES.nopassword = {
+  ...REMOTE_ONLINE,
+  running: false,
+  host: "127.0.0.1",
+  port: null,
+  configured: false,
+  clients: 0,
 };
 
 const remoteFixture = params.get("remote");

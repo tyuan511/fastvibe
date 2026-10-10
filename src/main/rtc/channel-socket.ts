@@ -5,6 +5,7 @@ import {
   PING,
   PONG,
   closeMessage,
+  compressFrame,
   controlMessage,
   splitFrame,
 } from "./frames.ts";
@@ -63,10 +64,13 @@ export class ChannelSocket extends EventEmitter implements RemoteSocket {
   #queue: Outgoing[] = [];
   #queuedBytes = 0;
   #closed = false;
+  /** The peer reads compressed frames (it said so while the call was being set up). */
+  readonly #compress: boolean;
 
-  constructor(channel: DataChannelLike, options: { maxFrameBytes: number }) {
+  constructor(channel: DataChannelLike, options: { maxFrameBytes: number; compress?: boolean }) {
     super();
     this.#channel = channel;
+    this.#compress = options.compress === true;
     this.#assembler = new FrameAssembler(options.maxFrameBytes);
     this.#state = channel.isOpen() ? 1 : 0;
     channel.setBufferedAmountLowThreshold(LOW_WATER_BYTES);
@@ -96,7 +100,8 @@ export class ChannelSocket extends EventEmitter implements RemoteSocket {
     }
     const binary = typeof data !== "string";
     const bytes = binary ? data : Buffer.from(data, "utf8");
-    const fragments = splitFrame(bytes, binary);
+    const packed = this.#compress ? compressFrame(bytes) : null;
+    const fragments = packed ? splitFrame(packed, binary, true) : splitFrame(bytes, binary);
     fragments.forEach((message, index) => {
       this.#queue.push({ message, done: index === fragments.length - 1 ? callback : undefined });
       this.#queuedBytes += message.byteLength;

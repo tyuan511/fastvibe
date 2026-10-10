@@ -28,13 +28,13 @@ description: 帮用户配置 FastVibe 客户端自身的功能——远程访问
 打开远程访问（`remote.start`）会同时打开两条路，各有各的前提，缺哪个就只开另一个，不算失败：
 
 - **官方连接**：需要这台电脑登录了 FastVibe 账号。用同一个账号登录的手机会自动发现这台电脑，不需要密码，也不需要用户做任何网络配置——能直连就直连（局域网内、跨 NAT），直连不通才经 FastVibe 中转。
-- **局域网地址**：需要先设置密码（`remote.set_password`，由用户在输入框里填）。设置后用户可以开「允许局域网访问」，手机在同一 Wi‑Fi 下用地址 + 密码登录，或者在「附近的电脑」里发现。
+- **局域网地址**：需要先设置密码（`remote.set_password`，由用户在输入框里填）。设置后局域网监听随开关一起启动（同时监听 IPv4 和 IPv6），设置 → 远程访问 里直接显示局域网二维码（IPv4 / IPv6 可切换）；手机在同一 Wi‑Fi 下扫码，或在「附近的电脑」里发现，再输入这个密码登录。
 
 用法：
 
 1. `remote.status` 看现状：`official.status`（`signed-out` 表示还没登录账号，`online` 表示手机已经能发现）、`configured`（是否设了密码）、`running`（局域网监听是否在跑）。
 2. 想让手机自动发现：确认 `official.status` 不是 `signed-out`。没登录就请用户点侧栏左下角的账号图标登录，**不要**绕过。然后 `remote.start`。
-3. 想用地址 + 密码：先 `remote.set_password`，再 `remote.start`；需要局域网内访问时，请用户在 设置 → 远程访问 里打开「允许局域网访问」。
+3. 想用地址 + 密码：先 `remote.set_password`，再 `remote.start`；之后请用户在 设置 → 远程访问 里扫局域网二维码。
 4. 验证：`remote.status`，`official.status === "online"`（官方连接）或 `running === true`（局域网）。`official.peers` 是已连接的手机，每个带 `path`：`direct` 直连，`relay` 经 FastVibe 中转（中转计入账号的月度中转流量）。
 5. `remote.stop` 同时关掉两条路。
 

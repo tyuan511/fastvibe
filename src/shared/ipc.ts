@@ -271,17 +271,16 @@ export const Ipc = {
   dagCancel: "dag:cancel",
   dagRetry: "dag:retry",
   dagResume: "dag:resume",
-  /** 远程访问（网页/手机）: server lifecycle, credentials and devices. */
+  /** 远程访问（手机）: the switch, this computer's name, the LAN password and devices, and the account connection. */
   remoteGetState: "remote:get-state",
   remoteSetPassword: "remote:set-password",
   remoteClearPassword: "remote:clear-password",
   remoteStart: "remote:start",
-  remoteSetLanAccess: "remote:set-lan-access",
-  remoteSetDiscoveryName: "remote:set-discovery-name",
+  remoteSetDeviceName: "remote:set-device-name",
   remoteStop: "remote:stop",
   remoteListDevices: "remote:list-devices",
   remoteRevokeDevice: "remote:revoke-device",
-  /** Pushed when the listener starts or stops, a client connects, or the official connection changes. */
+  /** Pushed when the switch, the name, the LAN listener or the official connection changes. */
   remoteState: "remote:state",
   /** Drop every phone connected through the account, leaving the connection itself up. */
   remoteOfficialDisconnect: "remote:official-disconnect",
@@ -388,41 +387,42 @@ export type StartRequest = {
   cwd?: string;
 };
 
+/** Which address family a LAN address, or an mDNS record, is in. */
 export type RemoteLanAddressFamily = "ipv4" | "ipv6";
+
+/** This machine's usable LAN addresses, one per family. */
 export type RemoteLanAddresses = {
   ipv4: string | null;
   ipv6: string | null;
 };
 
-/** The remote server's state, as the settings pane and the sidebar show it. */
+/** The remote access state, as the settings pane shows it. */
 export type RemoteServerState = {
   /**
-   * Remote access is switched on. It turns on both ways in — the password listener and the
-   * official connection — and either may be waiting on its prerequisite (a password, a
-   * signed-in account) while this stays true.
+   * Remote access is switched on. It turns on both ways in — the LAN listener (once a
+   * password is set) and the official connection (once someone is signed in) — and either
+   * may be waiting on its prerequisite while this stays true.
    */
   enabled: boolean;
-  /** The password listener is up. */
+  /** The LAN listener is up. It listens on IPv4 and IPv6 at once. */
   running: boolean;
   host: string;
   port: number | null;
   /** A password has been set. Without one the listener cannot start (the official connection does not need it). */
   configured: boolean;
-  /** Whether the server is listening beyond loopback for devices on the local network. */
-  lanAccess: boolean;
-  /** Addresses discovered on the local network, used to offer IPv4/IPv6 selection. */
+  /** Addresses a phone on the local network can use, one per family; a family this machine has none of is null. */
   lanAddresses: RemoteLanAddresses;
-  /** Address family currently selected for the LAN listener. */
-  lanAddressFamily: RemoteLanAddressFamily;
-  /** User-chosen LAN discovery name; empty follows defaultDiscoveryName. */
-  discoveryName: string;
-  defaultDiscoveryName: string;
-  /** Clients connected right now. */
+  /** The name chosen in settings; empty follows `defaultDeviceName`. */
+  deviceName: string;
+  /** The computer's own name, used until one is chosen. */
+  defaultDeviceName: string;
+  /** Clients connected to the LAN listener right now. */
   clients: number;
   /** Failed logins since the last success; the throttle grows with this. */
   failedLogins: number;
   /**
    * The official connection: reachable from phones signed in to this account.
+   * Its `deviceName` is the name the account's device list shows right now.
    *
    * Part of this state rather than its own channel: the pane draws one card out of the
    * listener and this, and two broadcasts would let it show one as up while the other's

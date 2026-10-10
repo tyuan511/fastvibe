@@ -60,3 +60,37 @@ function parseIceUrl(url: string): { hostname: string; port: number; relay: IceS
   const relay = scheme === "turns" ? "TurnTls" : transport === "tcp" ? "TurnTcp" : "TurnUdp";
   return { hostname, port, relay };
 }
+
+/**
+ * The servers this desktop gathers with: STUN only.
+ *
+ * The phone is the end that asks for a relay. A second one here would rarely be used and
+ * costs what is scarce: the service allows an account four relays at a time, shared by both
+ * ends of every call, and refuses a relay that sends to another relay — so the pair that
+ * works off the local network is the phone's relay to this computer's public address, which
+ * needs nothing from here but STUN. libjuice also holds its allocation until it expires
+ * (ten minutes) rather than giving it back when a call ends, so a few calls in a row left
+ * neither end able to get one (error 486), and the phone could not connect at all.
+ *
+ * A TURN server answers STUN too, so a list that names only relays still yields a public
+ * address.
+ */
+export function stunServers(servers: IceServerConfig[]): IceServerConfig[] {
+  const out: IceServerConfig[] = [];
+  const seen = new Set<string>();
+  for (const server of servers) {
+    const key = `${server.hostname.toLowerCase()}:${server.port}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ hostname: server.hostname, port: server.port });
+  }
+  return out;
+}
+
+/** When the list stops being usable (ms since the epoch), or null when it does not say. */
+export function iceExpiry(reply: unknown): number | null {
+  const raw = (reply as { expires_at?: unknown } | null)?.expires_at;
+  if (typeof raw !== "string") return null;
+  const at = Date.parse(raw);
+  return Number.isFinite(at) ? at : null;
+}

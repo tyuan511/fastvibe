@@ -579,7 +579,7 @@ export function createFastVibeApi(t: ApiTransport) {
       onChanged: (listener: (state: import("./memory").MemoryState) => void): (() => void) =>
         t.subscribe(Ipc.memoryChanged, listener),
     },
-    /** 远程访问：把这台机器上的 agent 通过网页开放给其他设备。 */
+    /** 远程访问：让登录同一账号的手机找到并连接这台电脑。 */
     remote: {
       getState: (): Promise<import("@shared/ipc").RemoteServerState> => t.invoke(Ipc.remoteGetState),
       setPassword: (password: string): Promise<import("@shared/ipc").RemoteServerState> =>
@@ -587,13 +587,8 @@ export function createFastVibeApi(t: ApiTransport) {
       clearPassword: (): Promise<import("@shared/ipc").RemoteServerState> => t.invoke(Ipc.remoteClearPassword),
       start: (port?: number): Promise<import("@shared/ipc").RemoteServerState> =>
         t.invoke(Ipc.remoteStart, { port }),
-      setLanAccess: (
-        enabled: boolean,
-        family?: import("@shared/ipc").RemoteLanAddressFamily,
-      ): Promise<import("@shared/ipc").RemoteServerState> =>
-        t.invoke(Ipc.remoteSetLanAccess, { enabled, family }),
-      setDiscoveryName: (name: string): Promise<import("@shared/ipc").RemoteServerState> =>
-        t.invoke(Ipc.remoteSetDiscoveryName, { name }),
+      setDeviceName: (name: string): Promise<import("@shared/ipc").RemoteServerState> =>
+        t.invoke(Ipc.remoteSetDeviceName, { name }),
       stop: (): Promise<import("@shared/ipc").RemoteServerState> => t.invoke(Ipc.remoteStop),
       listDevices: (): Promise<import("@shared/ipc").RemoteDeviceInfo[]> => t.invoke(Ipc.remoteListDevices),
       revokeDevice: (id: string): Promise<import("@shared/ipc").RemoteDeviceInfo[]> =>

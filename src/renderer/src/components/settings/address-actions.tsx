@@ -80,7 +80,7 @@ export function AddressActions({
 const ICON_CLASS = "text-muted-foreground/70 hover:text-foreground";
 
 /** Copy the address, and say so on the glyph itself. */
-function CopyAction({ value }: { value: string }): JSX.Element {
+export function CopyAction({ value }: { value: string }): JSX.Element {
   const { t } = useTranslation("settings");
   const [copied, setCopied] = useState(false);
 

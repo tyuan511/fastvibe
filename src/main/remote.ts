@@ -1,5 +1,5 @@
 import { Ipc } from "@shared/ipc";
-import type { RemoteLanAddressFamily, RemoteServerState } from "@shared/ipc";
+import type { RemoteServerState } from "@shared/ipc";
 import type { OfficialState } from "@shared/official";
 import { broadcast, subscribe } from "./ipc/broadcast";
 import { dispatch, handle, handlerChannels } from "./ipc/registry";
@@ -10,7 +10,7 @@ import { passwordProblem } from "./server/auth";
 import { clearRemoteAccess, isConfigured, listDevices, revokeDevice, setPassword } from "./server/store";
 import { lanAddresses, RemoteServer } from "./server/server";
 import { MdnsAdvertiser, mdnsInstanceName } from "./server/mdns";
-import { discoveryNameProblem, discoveryNameSetting } from "@shared/discovery-name";
+import { defaultDeviceName, deviceNameProblem, deviceNameSetting } from "@shared/device-name";
 import { uiText } from "./engine/ui-text";
 import { getAppServer } from "./app-server/runtime";
 import { setRemoteServing } from "./engine/keep-awake";
@@ -20,11 +20,18 @@ import { createNodeDataChannelPeer, shutdownWebRtc } from "./rtc/peer";
 import { OfficialConnection } from "./rtc/official";
 
 /**
- * Where the remote server meets the desktop app.
+ * Where remote access meets the desktop app.
  *
- * Everything Electron-shaped lives here — the settings that decide whether it runs, the
+ * One switch turns on two ways in. Phones signed in to the same FastVibe account reach
+ * this computer through `rtc/official.ts`: signaling introduces two sessions of the
+ * account and a WebRTC data channel carries the App Protocol, with no address and no
+ * password. And once a password is set, phones on the local network use the listener
+ * below, found by mDNS or by scanning the address's QR code. Both end in the same
+ * `RemoteServer`, which applies the remote policy and runs the protocol.
+ *
+ * Everything Electron-shaped lives here — the setting that decides whether it runs, the
  * methods the settings pane calls, the paths — so that `server/` itself stays free of
- * Electron and could run without a GUI later.
+ * Electron and the headless Agent can use it too.
  *
  * The server is handed the *same* `dispatch` and `subscribe` the windows use. That is
  * the whole point of the table: a method is reachable both ways by construction, and a
@@ -35,7 +42,7 @@ let server: RemoteServer | null = null;
 let official: OfficialConnection | null = null;
 let mdns: MdnsAdvertiser | null = null;
 
-/** Default port for the local or LAN listener. */
+/** Default port for the LAN listener. */
 const DEFAULT_PORT = 7777;
 
 function instance(): RemoteServer {
@@ -69,23 +76,21 @@ function mdnsInstance(): MdnsAdvertiser {
 }
 
 /**
- * Keep the mDNS announcement equal to «the server is listening beyond this machine».
+ * Keep the mDNS announcement equal to «the LAN listener is up».
  *
  * Derived from the server's own status rather than toggled at each call site, and called
- * from both announce paths: the places that start, stop or rebind the listener are many
- * and the next one added would otherwise leave a phone listing a machine that is gone.
- * Loopback-only is never announced — nothing off this machine could connect to it.
+ * from the announce path: the places that start, stop or rebind the listener are many and
+ * the next one added would otherwise leave a phone listing a machine that is gone. The
+ * record carries one address family — the phone's discovery hands back a single address
+ * per service, and a link-local IPv6 one is of no use — so IPv4 wins when this machine
+ * has one, even though the listener answers on both.
  */
 function syncDiscovery(): void {
   const status = server?.status;
-  if (status?.running && status.port !== null && readLanAccess()) {
-    // Use the running listener, not a preference written just before a rebind.
-    mdnsInstance().publish(status.port, readDiscoveryName(), status.host.includes(":") ? "ipv6" : "ipv4");
+  if (status?.running && status.port !== null) {
+    const addresses = lanAddresses();
+    mdnsInstance().publish(status.port, mdnsInstanceName(deviceName()), addresses.ipv4 || !addresses.ipv6 ? "ipv4" : "ipv6");
   } else mdns?.unpublish();
-}
-
-function readDiscoveryName(): string {
-  return discoveryNameSetting(readAppSettings(getFastVibePaths()).remoteDiscoveryName);
 }
 
 function readPort(): number {
@@ -95,32 +100,42 @@ function readPort(): number {
     : DEFAULT_PORT;
 }
 
-function readLanAccess(): boolean {
-  return readAppSettings(getFastVibePaths()).remoteLanAccess === true;
+/**
+ * Listen on every interface, on IPv4 and IPv6 at once: `::` is dual-stack, so one socket
+ * answers both families and a phone is not told which of them to use. A machine with IPv6
+ * switched off cannot bind it, and gets IPv4 alone.
+ */
+async function startListener(port: number): Promise<void> {
+  try {
+    await instance().start({ port, host: "::" });
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | null)?.code;
+    if (code !== "EAFNOSUPPORT" && code !== "EADDRNOTAVAIL" && code !== "EPROTONOSUPPORT") throw error;
+    log.warn("IPv6 is not available here; the LAN listener is IPv4 only");
+    await instance().start({ port, host: "0.0.0.0" });
+  }
 }
 
-function readLanAddressFamily(): RemoteLanAddressFamily {
-  const value = readAppSettings(getFastVibePaths()).remoteLanAddressFamily;
-  return value === "ipv6" ? "ipv6" : "ipv4";
+/** The name chosen in settings; empty follows the computer's own name. */
+function readChosenName(): string {
+  const settings = readAppSettings(getFastVibePaths());
+  // `remoteDiscoveryName` is what this was called while it named the computer on the LAN.
+  return deviceNameSetting(settings.remoteDeviceName ?? settings.remoteDiscoveryName);
 }
 
-function effectiveLanAddressFamily(): RemoteLanAddressFamily {
-  const addresses = lanAddresses();
-  const requested = readLanAddressFamily();
-  if (requested === "ipv6" && addresses.ipv6) return "ipv6";
-  if (addresses.ipv4) return "ipv4";
-  if (addresses.ipv6) return "ipv6";
-  return requested;
+/** The computer's own name, used until one is chosen. */
+function computerName(): string {
+  return defaultDeviceName(hostname());
 }
 
-function listenHost(): string {
-  if (!readLanAccess()) return "127.0.0.1";
-  return effectiveLanAddressFamily() === "ipv6" ? "::" : "0.0.0.0";
+/** The name the account's device list, the console and the phone show for this computer. */
+function deviceName(): string {
+  return readChosenName() || computerName();
 }
 
 /**
  * Whether remote access is switched on, which is a preference rather than a running
- * thing: it turns on both ways in at once — the password-protected listener (LAN) when a
+ * thing: it turns on both ways in at once — the password-protected LAN listener when a
  * password is set, and the official connection (phones signed in to this account) when
  * someone is signed in. Either may be unavailable for want of its prerequisite without
  * the switch turning itself off, so the pane can say what is missing.
@@ -134,16 +149,14 @@ function writeEnabled(enabled: boolean): void {
   writeAppSettings(paths, { ...readAppSettings(paths), remoteEnabled: enabled });
 }
 
-/** The one state the pane draws everything from: the listener, and the official connection. */
+/** The one state the pane draws everything from. */
 function state(): RemoteServerState {
   return {
     ...instance().status,
     enabled: readEnabled(),
-    lanAccess: readLanAccess(),
     lanAddresses: lanAddresses(),
-    lanAddressFamily: effectiveLanAddressFamily(),
-    discoveryName: readDiscoveryName(),
-    defaultDiscoveryName: mdnsInstanceName(),
+    deviceName: readChosenName(),
+    defaultDeviceName: computerName(),
     official: official?.state() ?? OFFICIAL_OFF,
   };
 }
@@ -168,24 +181,18 @@ function announce(): RemoteServerState {
 }
 
 /**
- * The `onStatusChange` callback the server and the official connection are handed.
+ * The `onStatusChange` callback the server and the official connection are handed: a
+ * phone attached or dropped, or the official connection changed.
  *
  * A plain function, not `() => announce()` inlined at either construction site: that
- * expression calls `instance()` while `instance()` is still in the middle of building
- * the very object it would return, before `server` has been assigned — the memoized
- * `server ??= new RemoteServer(...)` never completes, and each nested call builds
- * another one. Reading the module-level variables here instead is safe because this
- * only ever runs later, from inside their own event handlers, by which point
- * construction has long finished.
+ * expression calls `instance()` while `instance()` is still in the middle of building the
+ * very object it would return, before `server` has been assigned — the memoized
+ * `server ??= new RemoteServer(...)` never completes, and each nested call builds another
+ * one. This only ever runs later, from inside their own event handlers.
  */
 function announceFromServer(): void {
   if (!server) return;
   announce();
-}
-
-/** The name the account's device list shows for this machine. */
-function deviceName(): string {
-  return hostname().replace(/\.local$/i, "") || "FastVibe";
 }
 
 /**
@@ -196,10 +203,7 @@ function deviceName(): string {
  * missing. A listener that cannot bind (the port is taken) is one: that throws.
  */
 async function bringUp(): Promise<RemoteServerState> {
-  const paths = getFastVibePaths();
-  if (isConfigured(paths.remoteAccessFile)) {
-    await instance().start({ port: readPort(), host: listenHost() });
-  }
+  if (isConfigured(getFastVibePaths().remoteAccessFile)) await startListener(readPort());
   official?.setEnabled(true);
   return announce();
 }
@@ -221,26 +225,33 @@ export function registerRemoteIpc(queueSettingsWrite: (task: () => Promise<void>
 
   handle(Ipc.remoteGetState, () => state());
 
-  handle(Ipc.remoteSetPassword, (payload: { password: string }) => {
+  handle(Ipc.remoteSetPassword, async (payload: { password: string }) => {
     const password = typeof payload?.password === "string" ? payload.password : "";
     const problem = passwordProblem(password);
     if (problem) throw new Error(problem);
     setPassword(getFastVibePaths().remoteAccessFile, password);
-    // Every previously issued token stopped working with the old password, so any
-    // client still connected is now holding one that no longer resolves.
+    // Every previously issued token stopped working with the old password, so any client
+    // still connected is now holding one that no longer resolves. With the switch already
+    // on, the password is the last thing the listener was waiting for.
+    if (readEnabled() && !instance().status.running) {
+      try {
+        await startListener(readPort());
+      } catch (error) {
+        announce();
+        throw error;
+      }
+    }
     return announce();
   });
 
   /**
-   * Remove the password, which is what the listener needs to exist: it stops, and LAN
-   * access goes with it. The official connection is not the password's to take down —
-   * it authenticates by account — so the switch itself is left as it was.
+   * Remove the password, which is what the listener needs to exist: it stops, and the LAN
+   * goes with it. The official connection is not the password's to take down — it
+   * authenticates by account — so the switch itself is left as it was.
    */
   handle(Ipc.remoteClearPassword, async () => {
     await instance().stop();
-    const paths = getFastVibePaths();
-    clearRemoteAccess(paths.remoteAccessFile);
-    writeAppSettings(paths, { ...readAppSettings(paths), remoteLanAccess: false });
+    clearRemoteAccess(getFastVibePaths().remoteAccessFile);
     return announce();
   });
 
@@ -256,47 +267,24 @@ export function registerRemoteIpc(queueSettingsWrite: (task: () => Promise<void>
     }
   });
 
-  handle(Ipc.remoteSetLanAccess, async (payload?: { enabled?: unknown; family?: unknown }) => {
-    const enabled = payload?.enabled === true;
-    const previousEnabled = readLanAccess();
-    const previousFamily = effectiveLanAddressFamily();
-    const requestedFamily: RemoteLanAddressFamily = payload?.family === "ipv6" ? "ipv6" : payload?.family === "ipv4" ? "ipv4" : readLanAddressFamily();
-    const paths = getFastVibePaths();
-    writeAppSettings(paths, { ...readAppSettings(paths), remoteLanAccess: enabled, remoteLanAddressFamily: requestedFamily });
-    if (!instance().status.running) return announce();
-    if (enabled === previousEnabled && effectiveLanAddressFamily() === previousFamily) return announce();
-
-    // Rebind the listener so the switch or address-family choice takes effect immediately.
-    const port = instance().status.port ?? readPort();
-    try {
-      await instance().stop();
-      await instance().start({ port, host: listenHost() });
-      return announce();
-    } catch (error) {
-      announce();
-      throw error;
-    }
-  });
-
-  handle(Ipc.remoteSetDiscoveryName, async (payload?: { name?: unknown }) => {
-    if (typeof payload?.name !== "string") throw new Error(uiText("主机名称无效", "Invalid computer name"));
+  handle(Ipc.remoteSetDeviceName, async (payload?: { name?: unknown }) => {
+    if (typeof payload?.name !== "string") throw new Error(uiText("电脑名称无效", "Invalid computer name"));
     const name = payload.name.trim();
-    const problem = discoveryNameProblem(name);
-    if (problem === "invalidCharacters") throw new Error(uiText(
-      "名称不能包含句点、反斜杠或控制字符", "Names cannot contain dots, backslashes or control characters",
-    ));
+    const problem = deviceNameProblem(name);
+    if (problem === "invalidCharacters") throw new Error(uiText("名称不能包含控制字符", "Names cannot contain control characters"));
     if (problem === "tooLong") throw new Error(uiText(
-      "名称过长，请缩短后重试（最多 63 字节）", "Name is too long; shorten it and try again (63 bytes maximum)",
+      "名称过长，请缩短后重试（最多 64 个字符）", "Name is too long; shorten it and try again (64 characters maximum)",
     ));
     await queueSettingsWrite(async () => {
       const paths = getFastVibePaths();
-      const settings = { ...readAppSettings(paths), remoteDiscoveryName: name };
+      const { remoteDiscoveryName: _legacy, ...rest } = readAppSettings(paths) as Record<string, unknown>;
+      const settings = { ...rest, remoteDeviceName: name };
       writeAppSettings(paths, settings);
       broadcast(Ipc.settingsChanged, settings);
-      // Replace only the discovery record; existing HTTP/WebSocket sessions stay live.
-      announce();
     });
-    return state();
+    // The account's device list and the phones' lists carry the name, so tell the cloud.
+    await official?.renamed();
+    return announce();
   });
 
   handle(Ipc.remoteStop, async () => {
@@ -334,8 +322,7 @@ export function registerRemoteIpc(queueSettingsWrite: (task: () => Promise<void>
  * launching, and must not stop the official connection from coming up either.
  */
 export async function restoreRemoteServer(): Promise<void> {
-  const paths = getFastVibePaths();
-  if (readAppSettings(paths).remoteEnabled !== true) return;
+  if (readAppSettings(getFastVibePaths()).remoteEnabled !== true) return;
   try {
     await bringUp();
   } catch (error) {

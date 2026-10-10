@@ -58,6 +58,29 @@ export function handlerFor(channel: string): StoredHandler | undefined {
   return handlers.get(channel);
 }
 
+/** A call that took at least this long is reported to the observer. */
+export const SLOW_CALL_MS = 300;
+
+/**
+ * Calls that answer when their work is over, not when it is accepted — a run, a
+ * compaction, a login waiting on a browser. Their length says nothing about the app.
+ */
+const LONG_BY_NATURE = /^(engine:(prompt|prompt-conversation|submit-prompt|continue|compact)|providers:oauth-login|ssh:)/;
+
+let slowCallObserver: ((channel: string, ms: number, kind: CallerContext["kind"], failed: boolean) => void) | null = null;
+
+/**
+ * Be told about slow calls. One observer, set once at startup: the table itself knows
+ * nothing about logging, and a second caller would only log the same line twice.
+ *
+ * It exists because «the app is slow» was undiagnosable from outside: a phone waiting ten
+ * seconds for a chat to open looked like a slow network, while the reply it was waiting
+ * for was a few hundred bytes that Main took all ten seconds to produce.
+ */
+export function observeSlowCalls(observer: typeof slowCallObserver): void {
+  slowCallObserver = observer;
+}
+
 /**
  * Run one call. Awaited here so both transports see the same thing: a value, or a
  * throw — never a handler's un-awaited promise leaking past the boundary.
@@ -65,5 +88,17 @@ export function handlerFor(channel: string): StoredHandler | undefined {
 export async function dispatch(channel: string, payload: unknown, ctx: CallerContext): Promise<unknown> {
   const handler = handlers.get(channel);
   if (!handler) throw new Error(`unknown method: ${channel}`);
-  return await handler(payload, ctx);
+  const observer = slowCallObserver;
+  if (!observer || LONG_BY_NATURE.test(channel)) return await handler(payload, ctx);
+  const started = performance.now();
+  let failed = false;
+  try {
+    return await handler(payload, ctx);
+  } catch (error) {
+    failed = true;
+    throw error;
+  } finally {
+    const ms = performance.now() - started;
+    if (ms >= SLOW_CALL_MS) observer(channel, Math.round(ms), ctx.kind, failed);
+  }
 }

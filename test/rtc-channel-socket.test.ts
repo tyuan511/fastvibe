@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ChannelSocket, type DataChannelLike } from "../src/main/rtc/channel-socket.ts";
-import { MAX_MESSAGE_BYTES } from "../src/main/rtc/frames.ts";
+import { DEFLATE, MAX_MESSAGE_BYTES } from "../src/main/rtc/frames.ts";
 
 /**
  * The adapter between a data channel and the WebSocket-shaped socket the remote server
@@ -183,4 +183,34 @@ test("a send the channel reports as queued is not a failure", async () => {
   const [data] = await received;
   assert.equal(data.toString(), "still fine");
   assert.equal(left.readyState, 1);
+});
+
+test("with compression agreed, a large frame crosses compressed and arrives whole; a small one does not", async () => {
+  const a = new FakeChannel();
+  const b = new FakeChannel();
+  a.peer = b;
+  b.peer = a;
+  const sender = new ChannelSocket(a, { maxFrameBytes: 1 << 24, compress: true });
+  const receiver = new ChannelSocket(b, { maxFrameBytes: 1 << 24 });
+  const got: string[] = [];
+  const both = new Promise<void>((settle) => {
+    receiver.on("message", (data: Buffer) => {
+      got.push(data.toString("utf8"));
+      if (got.length === 2) settle();
+    });
+  });
+  const big = JSON.stringify({ rows: Array.from({ length: 500 }, (_, i) => ({ i, text: "lorem ipsum ".repeat(6) })) });
+  sender.send(big);
+  const wire = a.sent.reduce((n, m) => n + m.byteLength, 0);
+  sender.send("tiny");
+  await both;
+  assert.ok(got[0] === big && got[1] === "tiny", "both frames arrive whole and in order");
+  assert.ok(wire < Buffer.byteLength(big) / 3, `compressed on the wire (${wire} of ${Buffer.byteLength(big)})`);
+  assert.equal(a.sent.at(-1)![0] & DEFLATE, 0, "the small frame is sent as it is");
+});
+
+test("without agreement nothing is compressed, so an older peer is never sent a header it refuses", () => {
+  const { a, left } = pair();
+  left.send("x".repeat(50_000));
+  assert.ok(a.sent.every((m) => (m[0] & DEFLATE) === 0));
 });

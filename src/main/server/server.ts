@@ -14,7 +14,6 @@ import {
   type AppCapability,
   type AppServerIdentity,
 } from "../../shared/app-protocol.ts";
-import type { RemoteLanAddresses } from "../../shared/ipc.ts";
 import {
   decodeBinaryAttachment,
   materializeBinaryAttachments,
@@ -144,7 +143,9 @@ const CLOSE_BACKPRESSURE = 4004;
 const MAX_ATTACHMENT_BYTES = 32 * 1024 * 1024;
 const ATTACHMENT_TTL_MS = 60_000;
 
-/** Pick usable IPv4/IPv6 addresses for the LAN link shown in settings. */
+export type RemoteLanAddresses = { ipv4: string | null; ipv6: string | null };
+
+/** Pick usable IPv4/IPv6 addresses of this machine, to report where a listener is reachable. */
 export function lanAddresses(): RemoteLanAddresses {
   const ipv4: string[] = [];
   const ipv6: string[] = [];

@@ -105,14 +105,13 @@ const DENIED = new Map<string, string>([
   [Ipc.sshStates, "SSH 主机只能在本机管理"],
 
   // Remote access administers itself only from the desktop. A stolen token must not be
-  // able to change the password, revoke the owner's other devices, or switch the server
-  // off — that turns one compromised client into a locked-out owner.
+  // able to change the password, revoke the owner's other devices, rename the computer or
+  // switch the server off — that turns one compromised client into a locked-out owner.
   [Ipc.remoteGetState, "远程访问的设置只能在本机更改"],
   [Ipc.remoteSetPassword, "远程访问的设置只能在本机更改"],
   [Ipc.remoteClearPassword, "远程访问的设置只能在本机更改"],
   [Ipc.remoteStart, "远程访问的设置只能在本机更改"],
-  [Ipc.remoteSetLanAccess, "远程访问的设置只能在本机更改"],
-  [Ipc.remoteSetDiscoveryName, "远程访问的设置只能在本机更改"],
+  [Ipc.remoteSetDeviceName, "远程访问的设置只能在本机更改"],
   [Ipc.remoteStop, "远程访问的设置只能在本机更改"],
   [Ipc.remoteListDevices, "远程访问的设置只能在本机更改"],
   [Ipc.remoteRevokeDevice, "远程访问的设置只能在本机更改"],

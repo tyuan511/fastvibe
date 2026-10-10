@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { Ipc, type AppModelsDevInfo } from "@shared/ipc";
 import { broadcast } from "./ipc/broadcast";
-import { dispatch, handle, handlerChannels, type CallerContext } from "./ipc/registry";
+import { dispatch, handle, handlerChannels, observeSlowCalls, type CallerContext } from "./ipc/registry";
 import { registerRemoteIpc, restoreRemoteServer, stopRemoteServer } from "./remote";
 import { runAppConfig } from "./app-config";
 import { loadModelsDev, type ModelsDevStats } from "./engine/models-dev";
@@ -604,6 +604,10 @@ app.whenReady().then(async () => {
     },
   });
   wireElectronTransport();
+  // What Main itself spent on a call, so «slow» can be told apart from «far away».
+  observeSlowCalls((channel, ms, kind, failed) => {
+    log.info(`slow call ${channel} ${ms} ms (${kind}${failed ? ", failed" : ""})`);
+  });
   scheduleUpdateCheck(startupSettings.autoCheckUpdates !== false);
 
   engine.onStatus(() => broadcastStatus());

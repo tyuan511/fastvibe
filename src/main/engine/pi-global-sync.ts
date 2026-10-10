@@ -1,5 +1,6 @@
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import type { ProviderModel } from "@shared/types";
 import type { PiConfigSyncReport } from "../../shared/types.ts";
 import { orderProviderModels } from "../../shared/model-order.ts";
@@ -108,7 +109,7 @@ export function piProviderModelsEntry(
     models: orderProviderModels(provider.models, provider.modelOrder).map((model) => {
       const api = model.api ?? provider.api;
       const compat = modelCompat(api, model);
-      const thinking = thinkingLevelMap(model);
+      const thinking = withAdaptiveOff(api, model, thinkingLevelMap(model));
       const modelBase = engineModelBaseUrl(provider.baseUrl, api);
       const cost = modelCost(model.cost);
       return {
@@ -458,12 +459,59 @@ function isHttpUrl(value: string): boolean {
  * The Responses API sends the system prompt as `instructions` and ignores the pin.
  */
 function modelCompat(api: string, model: ProviderModel): Record<string, unknown> | undefined {
+  if (api === "anthropic-messages") {
+    const known = anthropicCatalogCompat(model.id);
+    if (!known?.adaptive && !known?.fixedTemperature) return undefined;
+    return {
+      ...(known.adaptive ? { forceAdaptiveThinking: true } : {}),
+      ...(known.fixedTemperature ? { supportsTemperature: false } : {}),
+    };
+  }
   if (api !== "openai-completions") return undefined;
   const compat: Record<string, unknown> = { supportsDeveloperRole: false };
   // GLM/Z.AI upstreams take a top-level `enable_thinking` instead of
   // `reasoning_effort`; unknown gateways are never auto-detected as `zai`.
   if (model.thinkingFormat === "zai") compat.thinkingFormat = "zai";
   return compat;
+}
+
+/**
+ * What pi-ai's own catalog says about a Claude model's thinking format, looked up by id.
+ *
+ * pi-ai flags the models it lists with `compat.forceAdaptiveThinking` (the upstream accepts
+ * only `thinking.type: "adaptive"` and rejects budgeted and `disabled` thinking), but it reads
+ * the flag off the catalog entry, never off the id. A model reached through a custom
+ * Anthropic-compatible gateway is an unknown id to it and would stream with budgeted thinking
+ * (a 400: "requires adaptive thinking"). So the gateway's model borrows the first-party entry
+ * with the same id. Only the two request-shape pins are taken — the catalog's `supportsMidConvo*`
+ * flags switch on first-party-only betas a relay may not forward. A vendor prefix
+ * (`anthropic/…`) or a date suffix does not change which entry a model is.
+ */
+function anthropicCatalogCompat(id: string): { adaptive: boolean; fixedTemperature: boolean } | undefined {
+  anthropicCatalog ??= new Map(
+    (builtinProviders().find((provider) => provider.id === "anthropic")?.getModels() ?? []).map((model) => {
+      const compat = (model.compat ?? {}) as { forceAdaptiveThinking?: boolean; supportsTemperature?: boolean };
+      return [model.id, { adaptive: compat.forceAdaptiveThinking === true, fixedTemperature: compat.supportsTemperature === false }];
+    }),
+  );
+  const name = id.toLowerCase().split("/").pop() ?? "";
+  return anthropicCatalog.get(name) ?? anthropicCatalog.get(name.replace(/-\d{8}$/, ""));
+}
+
+let anthropicCatalog: Map<string, { adaptive: boolean; fixedTemperature: boolean }> | undefined;
+
+function adaptiveThinkingModel(id: string): boolean {
+  return anthropicCatalogCompat(id)?.adaptive === true;
+}
+
+/** An adaptive-only model cannot be told `thinking: disabled`; `off: null` makes pi-ai omit the field instead. */
+function withAdaptiveOff(
+  api: string,
+  model: ProviderModel,
+  map: Record<string, string | null> | undefined,
+): Record<string, string | null> | undefined {
+  if (api !== "anthropic-messages" || !model.reasoning || !adaptiveThinkingModel(model.id)) return map;
+  return { ...map, off: null };
 }
 
 function nativeModelOverride(model: ProviderModel): Record<string, unknown> {

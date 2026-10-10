@@ -113,6 +113,37 @@ test("off by default; switching on registers the device and goes online", async 
   });
 });
 
+test("a new computer name is registered under the same device, without restarting the connection", async () => {
+  const name = { value: "Test Mac" };
+  await withRig(async ({ official, cloud }) => {
+    official.setEnabled(true);
+    await until(() => official.state().status === "online", "online");
+    const deviceId = official.state().deviceId;
+
+    name.value = "Desk";
+    await official.renamed();
+    assert.equal(cloud.registrations.length, 2);
+    assert.deepEqual(cloud.registrations.map((r) => r.name), ["Test Mac", "Desk"]);
+    assert.equal(cloud.registrations[1].installId, cloud.registrations[0].installId, "the same install, so the same device");
+    assert.equal(official.state().deviceName, "Desk");
+    assert.equal(official.state().deviceId, deviceId);
+    assert.equal(official.state().status, "online");
+  }, { deviceName: () => name.value });
+});
+
+test("renaming while the connection is off or signed out tells the cloud nothing", async () => {
+  await withRig(async ({ official, cloud, token }) => {
+    await official.renamed();
+    official.setEnabled(true);
+    await until(() => official.state().status === "online", "online");
+    token.value = null;
+    official.accountChanged();
+    const before = cloud.registrations.length;
+    await official.renamed();
+    assert.equal(cloud.registrations.length, before);
+  });
+});
+
 test("with the switch on but nobody signed in it waits, then starts when someone is", async () => {
   await withRig(async ({ official, token, cloud }) => {
     token.value = null;
@@ -177,8 +208,9 @@ test("a server error is retried until it clears", async () => {
   await withRig(async ({ official, cloud }) => {
     cloud.registration = { status: 503, body: { error: { code: "unavailable" } } };
     official.setEnabled(true);
-    await until(() => cloud.registrations.length >= 2, "a retry");
-    assert.equal(official.state().status, "error");
+    // The status is «connecting» while a retry is in the air and «error» once it is
+    // refused, so wait for the refusal rather than read the status mid-request.
+    await until(() => cloud.registrations.length >= 2 && official.state().status === "error", "a refused retry");
     cloud.registration = null;
     await until(() => official.state().status === "online", "online after recovery");
   });
@@ -213,7 +245,7 @@ test("a call: answers the offer, relays the answer and candidates, and attaches 
     const phone = await cloud.phone("fvs_good");
     const cid = await phone.connect(official.state().deviceId!);
     await until(() => peers.length === 1, "a peer connection");
-    assert.equal(iceCalls(), 1, "fresh ICE servers for each call");
+    assert.equal(iceCalls(), 1, "the server list is fetched once, when signaling comes up, not for the call");
 
     phone.signal(cid, { type: "offer", sdp: "v=0 offer" });
     phone.signal(cid, { type: "candidate", candidate: "candidate:1 1 UDP 1 10.0.0.2 5000 typ host", mid: "0" });
@@ -241,6 +273,91 @@ test("a call: answers the offer, relays the answer and candidates, and attaches 
   });
 });
 
+test("a phone that reconnects is listed once, as its newest connection", async () => {
+  await withRig(async ({ official, cloud, peers }) => {
+    official.setEnabled(true);
+    await until(() => official.state().status === "online", "online");
+    const open = async (index: number): Promise<void> => {
+      const { a } = FakeChannelPair.create();
+      (a as unknown as { getLabel(): string }).getLabel = () => "fastvibe";
+      (a as unknown as { onOpen(cb: () => void): void }).onOpen = (cb) => cb();
+      peers[index].channel?.(a as unknown as PeerChannel);
+    };
+    const first = await cloud.phone("fvs_good");
+    const firstCid = await first.connect(official.state().deviceId!);
+    await until(() => peers.length === 1, "the first call");
+    await open(0);
+    const second = await cloud.phone("fvs_good");
+    const secondCid = await second.connect(official.state().deviceId!);
+    await until(() => peers.length === 2, "the second call");
+    await new Promise((settle) => setTimeout(settle, 5));
+    await open(1);
+    assert.notEqual(firstCid, secondCid);
+    assert.deepEqual(official.state().peers.map((p) => p.id), [secondCid]);
+  });
+});
+
+test("a phone that calls again with the same id replaces its old connection", async () => {
+  await withRig(async ({ official, cloud, peers }) => {
+    official.setEnabled(true);
+    await until(() => official.state().status === "online", "online");
+    const open = (index: number): void => {
+      const { a } = FakeChannelPair.create();
+      (a as unknown as { getLabel(): string }).getLabel = () => "fastvibe";
+      (a as unknown as { onOpen(cb: () => void): void }).onOpen = (cb) => cb();
+      peers[index].channel?.(a as unknown as PeerChannel);
+    };
+    const call = async (index: number, id: string) => {
+      const phone = await cloud.phone("fvs_good");
+      const cid = await phone.connect(official.state().deviceId!);
+      await until(() => peers.length === index + 1, `call ${index}`);
+      phone.signal(cid, { type: "offer", sdp: "v=0 offer", client_id: id });
+      await until(() => peers[index].applied.length === 1, "the offer");
+      open(index);
+      return cid;
+    };
+    await call(0, "phone-a");
+    await call(1, "phone-b");
+    assert.equal(official.state().peers.length, 2, "two ids, two phones, even with one name");
+    const again = await call(2, "phone-a");
+    await until(() => peers[0].closed, "the old connection of phone-a to be closed");
+    assert.equal(peers[1].closed, false);
+    assert.deepEqual(official.state().peers.map((p) => p.id).includes(again), true);
+    assert.equal(official.state().peers.length, 2);
+  });
+});
+
+test("compression is agreed in the answer only when the offer asked for it", async () => {
+  await withRig(async ({ official, cloud, peers }) => {
+    official.setEnabled(true);
+    await until(() => official.state().status === "online", "online");
+    const answerTo = async (index: number, offer: Record<string, unknown>): Promise<Record<string, unknown>> => {
+      const phone = await cloud.phone("fvs_good");
+      const cid = await phone.connect(official.state().deviceId!);
+      await until(() => peers.length === index + 1, `call ${index}`);
+      phone.signal(cid, { type: "offer", sdp: "v=0 offer", ...offer });
+      await until(() => phone.messages.some((m) => m.type === "signal" && (m.data as { type: string }).type === "answer"), "the answer");
+      return phone.messages.find((m) => m.type === "signal" && (m.data as { type: string }).type === "answer")!.data as Record<string, unknown>;
+    };
+    assert.equal((await answerTo(0, { deflate: true })).deflate, true);
+    assert.equal((await answerTo(1, {})).deflate, undefined, "an older phone is never told to expect compressed frames");
+  });
+});
+
+test("the server list is asked for once and reused by the calls that follow", async () => {
+  await withRig(async ({ official, cloud, peers, iceCalls }) => {
+    cloud.ice = { ice_servers: [{ urls: ["stun:turn.example.com:3478"] }, { urls: ["turn:turn.example.com:3478?transport=udp"], username: "u", credential: "p" }], expires_at: new Date(Date.now() + 3_600_000).toISOString() };
+    official.setEnabled(true);
+    await until(() => official.state().status === "online", "online");
+    for (let index = 0; index < 3; index += 1) {
+      const phone = await cloud.phone("fvs_good");
+      await phone.connect(official.state().deviceId!);
+      await until(() => peers.length === index + 1, `call ${index}`);
+    }
+    assert.equal(iceCalls(), 1);
+  });
+});
+
 test("signals that arrive before the ICE servers are in are replayed in order", async () => {
   let release!: () => void;
   const gate = new Promise<void>((settle) => { release = settle; });
@@ -250,7 +367,7 @@ test("signals that arrive before the ICE servers are in are replayed in order", 
     const phone = await cloud.phone("fvs_good");
     const cid = await phone.connect(official.state().deviceId!);
     phone.signal(cid, { type: "offer", sdp: "v=0 offer" });
-    phone.signal(cid, { type: "candidate", candidate: "candidate:1", mid: "0" });
+    phone.signal(cid, { type: "candidate", candidate: "candidate:1 1 udp 2122260223 192.168.1.5 54321 typ host", mid: "0" });
     await new Promise((settle) => setTimeout(settle, 80));
     assert.equal(peers.length, 0, "still waiting on the ICE request");
     release();
