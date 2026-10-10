@@ -15,6 +15,14 @@ import { ModelThinkingSelect } from "@/components/model-thinking-select";
 import { useSettingsStore } from "@/stores/settings";
 import { useSessionStore } from "@/stores/session";
 
+/**
+ * What an install with no per-project default reads. One object, not a `{}` per render:
+ * the draft effect below depends on it, and a fresh identity each time re-ran that
+ * effect after every render it caused — an endless render loop for as long as
+ * 设置 → 供应商 was open, on every install that had never pinned a project default.
+ */
+const NO_PROJECT_DEFAULTS: Record<string, ProjectModelDefault> = {};
+
 export function ProjectDefaultsSection({ models }: { models: FastVibeModel[] }): JSX.Element {
   const { t } = useTranslation("settings");
   const projects = useSessionStore((state) => state.projects);
@@ -25,7 +33,7 @@ export function ProjectDefaultsSection({ models }: { models: FastVibeModel[] }):
   const [draft, setDraft] = useState<{ model?: EngineModel; thinkingLevel: typeof settings.thinkingLevel }>({
     thinkingLevel: "auto",
   });
-  const projectDefaults = settings.projectDefaults ?? {};
+  const projectDefaults = settings.projectDefaults ?? NO_PROJECT_DEFAULTS;
   const localProjects = projects.filter((project) => project.kind !== "remote");
   const configured = localProjects.filter((project) => Boolean(projectDefaults[project.cwd]));
   const unconfigured = localProjects.filter((project) => !projectDefaults[project.cwd]);
