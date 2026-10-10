@@ -302,39 +302,7 @@ class Connection extends ChangeNotifier {
       _reset(server: server, status: ConnectionStatus.connecting);
     }
     remote.onPush((channel, payload, meta) => _handlePushInternal(channel, payload, meta: meta));
-    remote.onDisconnect((detail) {
-      if (_client != remote || !_isCurrentTarget(next, generation)) return;
-      recordConnectionDiagnostic(Diagnostic(
-        event: 'disconnected',
-        serverId: server.id,
-        detailKind: detail.kind,
-        detailCode: detail.code,
-        elapsedMs: DateTime.now().millisecondsSinceEpoch - started,
-      ));
-      final restoring = identical(_opening, remote) && !identical(_transportReady, remote);
-      if (identical(_transportReady, remote)) _transportReady = null;
-      _client = null;
-      if (identical(_opening, remote)) _opening = null;
-      remote.onPush(null);
-      remote.onDisconnect(null);
-      if (detail.code == 4001) {
-        _abandonConnection();
-        _reset(server: server, status: ConnectionStatus.error, error: t('conn.expired'), needsPassword: true);
-        return;
-      }
-      reconnecting = true;
-      // Keep the current catalog and conversation on screen while the replacement
-      // socket is negotiated. A dropped mobile socket is expected during backgrounding
-      // and a visible error page makes a short Wi-Fi blip feel like a logout.
-      _setState(() {
-        status = ConnectionStatus.ready;
-        reconnecting = true;
-        error = null;
-        needsPassword = false;
-        needsAccount = false;
-      });
-      _scheduleReconnect(next, generation, immediate: !restoring);
-    });
+    remote.onDisconnect((detail) => _onRemoteDisconnect(remote, next, generation, started, detail));
     try {
       if (server.isOfficial) {
         final account = AccountService.instance;
@@ -361,6 +329,7 @@ class Connection extends ChangeNotifier {
       _statusCursors.clear();
       _transportReady = remote;
       reconnecting = false;
+      _armRollover();
       // Notify the mounted chat immediately. It gates its controls on its own
       // snapshot/replay, independently of the still-loading global catalog.
       _setState(() => reconnecting = false);
@@ -441,6 +410,172 @@ class Connection extends ChangeNotifier {
     }
   }
 
+  void _onRemoteDisconnect(
+    RemoteClient remote,
+    ConnectionTarget next,
+    int generation,
+    int started,
+    DisconnectDetail detail,
+  ) {
+    final server = next.server;
+    if (_client != remote || !_isCurrentTarget(next, generation)) return;
+    recordConnectionDiagnostic(Diagnostic(
+      event: 'disconnected',
+      serverId: server.id,
+      detailKind: detail.kind,
+      detailCode: detail.code,
+      elapsedMs: DateTime.now().millisecondsSinceEpoch - started,
+    ));
+    final restoring = identical(_opening, remote) && !identical(_transportReady, remote);
+    if (identical(_transportReady, remote)) _transportReady = null;
+    _client = null;
+    if (identical(_opening, remote)) _opening = null;
+    _rolloverTimer?.cancel();
+    _rolloverTimer = null;
+    remote.onPush(null);
+    remote.onDisconnect(null);
+    if (detail.code == 4001) {
+      _abandonConnection();
+      _reset(server: server, status: ConnectionStatus.error, error: t('conn.expired'), needsPassword: true);
+      return;
+    }
+    reconnecting = true;
+    // Keep the current catalog and conversation on screen while the replacement
+    // socket is negotiated. A dropped mobile socket is expected during backgrounding
+    // and a visible error page makes a short Wi-Fi blip feel like a logout.
+    _setState(() {
+      status = ConnectionStatus.ready;
+      reconnecting = true;
+      error = null;
+      needsPassword = false;
+      needsAccount = false;
+    });
+    _scheduleReconnect(next, generation, immediate: !restoring);
+  }
+
+  /// How long before a relay credential expires its connection is replaced. Long enough
+  /// for a whole handshake over a slow path (the dial gives up after twenty seconds) and
+  /// for the old one to finish what it is answering; short enough that the replacement is
+  /// not spent on credential life the old connection still has.
+  static const Duration _rolloverLead = Duration(seconds: 75);
+  Timer? _rolloverTimer;
+  RemoteClient? _renewing;
+
+  /// A connection through the relay lasts exactly as long as the credential it was made
+  /// with. So before that runs out, a second connection is made with a new one and the
+  /// session moves onto it: the screens re-attach to the new client the way they do after
+  /// any reconnect (from the checkpoint they hold), but nothing is dropped and no banner
+  /// shows, because the old connection is still up while it happens.
+  void _armRollover() {
+    _rolloverTimer?.cancel();
+    _rolloverTimer = null;
+    final remote = _client;
+    final target = _target;
+    if (remote == null || target == null || !identical(remote, _transportReady) || !_appIsActive()) return;
+    final expires = remote.credentialExpiresAt;
+    if (expires == null) return;
+    final generation = _connectionGeneration;
+    var wait = expires.difference(DateTime.now()) - _rolloverLead;
+    if (wait < Duration.zero) wait = Duration.zero;
+    _rolloverTimer = Timer(wait, () {
+      _rolloverTimer = null;
+      unawaited(_rollover(remote, target, generation));
+    });
+  }
+
+  Future<void> _rollover(RemoteClient old, ConnectionTarget next, int generation, {int attempt = 0}) async {
+    bool current() =>
+        _isCurrentTarget(next, generation) && identical(_client, old) && identical(_transportReady, old);
+    final server = next.server;
+    if (!current() || !server.isOfficial || _renewing != null || !_appIsActive()) return;
+    // A direct connection never depended on the credential, and a relayed one on a
+    // different path is not the credential's to end.
+    if (!await old.usesRelay() || !current()) return;
+    final started = DateTime.now().millisecondsSinceEpoch;
+    final fresh = RemoteClient(version: appVersion);
+    _renewing = fresh;
+    fresh.setActive(true);
+    try {
+      final account = AccountService.instance;
+      final name = await account.deviceLabel();
+      final clientId = await stableDeviceId();
+      await fresh.connectOpened(
+        () => RtcDialer(
+          origin: account.origin,
+          token: next.token,
+          deviceId: server.officialDeviceId!,
+          clientName: name,
+          platform: account.platform,
+          clientId: clientId,
+        ).dial(renewal: true),
+      );
+    } catch (exception) {
+      fresh.close();
+      if (identical(_renewing, fresh)) _renewing = null;
+      recordConnectionDiagnostic(Diagnostic(
+        event: 'rollover-failed',
+        serverId: server.id,
+        elapsedMs: DateTime.now().millisecondsSinceEpoch - started,
+        failure: exception is ConnectionError ? exception.code : 'rollover-failed',
+      ));
+      // The old connection is still good for a little while: try again, a few times.
+      final left = old.credentialExpiresAt?.difference(DateTime.now()) ?? Duration.zero;
+      if (current() && attempt < 3 && left > const Duration(seconds: 15)) {
+        _rolloverTimer?.cancel();
+        _rolloverTimer = Timer(const Duration(seconds: 4), () {
+          _rolloverTimer = null;
+          unawaited(_rollover(old, next, generation, attempt: attempt + 1));
+        });
+      }
+      return;
+    }
+    if (identical(_renewing, fresh)) _renewing = null;
+    if (!current()) {
+      // The old one went away, or the user chose another target, while this was being made.
+      fresh.close();
+      return;
+    }
+    recordConnectionDiagnostic(Diagnostic(
+      event: 'rolled-over',
+      serverId: server.id,
+      elapsedMs: DateTime.now().millisecondsSinceEpoch - started,
+    ));
+    old.onPush(null);
+    old.onDisconnect(null);
+    fresh.onPush((channel, payload, meta) => _handlePushInternal(channel, payload, meta: meta));
+    fresh.onDisconnect((detail) => _onRemoteDisconnect(fresh, next, generation, started, detail));
+    fresh.setActive(_appIsActive());
+    _client = fresh;
+    _transportReady = fresh;
+    fresh.subscribe(<String>['*']);
+    final catalog = _refreshCatalog(fresh);
+    _conversationFloors.clear();
+    _statusCursors.clear();
+    // The open chat sees a new client and restores onto it from its own checkpoint.
+    _setState(() {});
+    _armRollover();
+    unawaited(_retireAfterDrain(old));
+    try {
+      await catalog;
+    } catch (_) {
+      // The catalog on screen is still right; a failed refresh retries with the next event.
+    }
+  }
+
+  /// Let a replaced connection finish the requests it is answering, then close it. What is
+  /// still unanswered when its credential runs out is lost with it, the same as on any
+  /// dropped connection, and its callers already treat that as "maybe sent".
+  Future<void> _retireAfterDrain(RemoteClient old) async {
+    final until = DateTime.now().add(const Duration(seconds: 45));
+    final limit = old.credentialExpiresAt?.subtract(const Duration(seconds: 5));
+    while (old.pendingCalls > 0 &&
+        DateTime.now().isBefore(until) &&
+        (limit == null || DateTime.now().isBefore(limit))) {
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+    }
+    old.close();
+  }
+
   ConnectionTarget _beginTarget(SavedServer server, String token) {
     _retireClient();
     _clearReconnectTimer();
@@ -465,6 +600,10 @@ class Connection extends ChangeNotifier {
   void _retireClient([RemoteClient? value]) {
     final remote = value ?? _client;
     if (remote == null) return;
+    if (identical(remote, _client)) {
+      _rolloverTimer?.cancel();
+      _rolloverTimer = null;
+    }
     remote.onDisconnect(null);
     remote.onPush(null);
     remote.close();
@@ -510,6 +649,8 @@ class Connection extends ChangeNotifier {
     }
     _wakeConnection(fast: true);
     _refreshNetworkState();
+    // Timers were frozen while the app was away; the credential's clock was not.
+    _armRollover();
   }
 
   void _wakeConnection({bool fast = false, bool replaceOpening = false}) {

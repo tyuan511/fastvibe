@@ -68,3 +68,17 @@ class WebSocketFrameSocket implements FrameSocket {
     }
   }
 }
+
+/// A [FrameSocket] whose path can run out from under it: a relayed WebRTC connection stops
+/// working when the credential it allocated with expires, and can only be replaced by a
+/// connection made with a new one. [RemoteClient] reports it so the session can do that
+/// replacing before it is too late; a socket that has no such deadline just is not one.
+abstract class ExpiringFrameSocket implements FrameSocket {
+  /// When the relay credential this connection was made with stops being accepted, or null
+  /// when it holds none.
+  DateTime? get credentialExpiresAt;
+
+  /// Whether the path in use right now goes through the relay. A connection on a direct path
+  /// does not depend on the credential at all.
+  Future<bool> usesRelay();
+}

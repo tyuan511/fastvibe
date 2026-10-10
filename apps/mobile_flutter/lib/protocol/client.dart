@@ -135,6 +135,22 @@ class RemoteClient {
 
   String get epoch => _epoch;
 
+  /// When the relay credential under this connection stops being accepted, or null when it
+  /// has none (a LAN connection, a WebSocket, or a direct path that never needed one).
+  DateTime? get credentialExpiresAt {
+    final ws = _ws;
+    return ws is ExpiringFrameSocket ? ws.credentialExpiresAt : null;
+  }
+
+  /// Whether the connection is going through the relay right now.
+  Future<bool> usesRelay() async {
+    final ws = _ws;
+    return ws is ExpiringFrameSocket && await ws.usesRelay();
+  }
+
+  /// Requests sent and not yet answered.
+  int get pendingCalls => _pending.length;
+
   bool get ready => _ready;
 
   int? get rttMs => _rtt;

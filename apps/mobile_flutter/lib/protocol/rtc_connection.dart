@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show HttpDate;
 import 'dart:typed_data';
 
 import 'package:flutter_webrtc/flutter_webrtc.dart';
@@ -123,8 +124,12 @@ class RtcDialer {
   final http.Client _http;
 
   /// Open a connection, resolving once the data channel is open.
-  Future<RtcFrameSocket> dial() async {
-    final attempt = _Attempt(this);
+  ///
+  /// [renewal] is a connection made to replace a live one whose relay credential is about to
+  /// run out: it asks for a credential of its own rather than reusing the list that
+  /// connection was made with, and tells the desktop not to treat the old one as a ghost.
+  Future<RtcFrameSocket> dial({bool renewal = false}) async {
+    final attempt = _Attempt(this, renewal: renewal);
     try {
       return await attempt.run();
     } catch (_) {
@@ -141,21 +146,24 @@ class RtcDialer {
     unawaited(_loadIce(origin, token, client ?? http.Client()).then((_) {}, onError: (_) {}));
   }
 
-  Future<List<Map<String, Object?>>> _iceServers() => _loadIce(origin, token, _http);
+  Future<_IceList> _iceServers({bool fresh = false}) => _loadIce(origin, token, _http, fresh: fresh);
 
   /// The STUN/TURN servers for this account, kept until shortly before the relay credential
-  /// in them runs out (an hour after it is issued). Asking again for every dial was a whole
+  /// in them runs out (minutes after it is issued). Asking again for every dial was a whole
   /// HTTPS round trip to the service before anything else could start.
-  static Future<List<Map<String, Object?>>> _loadIce(String origin, String token, http.Client client) async {
+  ///
+  /// [fresh] skips what is kept. A connection that replaces one about to lose its credential
+  /// must not be handed the very list that is about to stop working.
+  static Future<_IceList> _loadIce(String origin, String token, http.Client client, {bool fresh = false}) async {
     final started = DateTime.now().millisecondsSinceEpoch;
     final key = '$origin\n$token';
     final cached = _iceCache;
-    if (cached != null && cached.key == key && started < cached.validUntil) {
+    if (!fresh && cached != null && cached.key == key && started < cached.validUntil) {
       recordConnectionDiagnostic(Diagnostic.metric('rtc.ice', elapsedMs: 0, outcome: 'cached'));
-      return cached.servers;
+      return cached.list;
     }
     final flight = _iceFlight;
-    if (flight != null && flight.key == key) return flight.servers;
+    if (!fresh && flight != null && flight.key == key) return flight.servers;
     final next = _IceFlight(key, _fetchIce(origin, token, client, started));
     _iceFlight = next;
     try {
@@ -165,7 +173,7 @@ class RtcDialer {
     }
   }
 
-  static Future<List<Map<String, Object?>>> _fetchIce(String origin, String token, http.Client client, int started) async {
+  static Future<_IceList> _fetchIce(String origin, String token, http.Client client, int started) async {
     try {
       final response = await client
           .get(
@@ -177,11 +185,11 @@ class RtcDialer {
       if (response.statusCode != 200) {
         recordConnectionDiagnostic(Diagnostic.metric('rtc.ice',
             elapsedMs: DateTime.now().millisecondsSinceEpoch - started, outcome: 'http-${response.statusCode}'));
-        return const <Map<String, Object?>>[];
+        return _IceList.empty;
       }
       final body = jsonDecode(response.body);
       final servers = body is Map ? body['ice_servers'] : null;
-      if (servers is! List) return const <Map<String, Object?>>[];
+      if (servers is! List) return _IceList.empty;
       final list = <Map<String, Object?>>[
         for (final entry in servers)
           if (entry is Map && entry['urls'] is List)
@@ -192,16 +200,30 @@ class RtcDialer {
             },
       ];
       final now = DateTime.now().millisecondsSinceEpoch;
-      final expires = body is Map && body['expires_at'] is String ? DateTime.tryParse(body['expires_at'] as String) : null;
+      var expires = body is Map && body['expires_at'] is String ? DateTime.tryParse(body['expires_at'] as String) : null;
+      // The credential's life is minutes, so a phone clock a minute out is the difference
+      // between replacing a connection in time and finding it dead. The service's own clock
+      // is in the response's Date header: measure the expiry against that.
+      if (expires != null) {
+        final stamp = response.headers['date'];
+        DateTime? serverNow;
+        try {
+          if (stamp != null) serverNow = HttpDate.parse(stamp);
+        } catch (_) {}
+        if (serverNow != null) expires = expires.subtract(serverNow.difference(DateTime.now().toUtc()));
+      }
       // No expiry means no relay credential in the list (the allowance is used up, or the
       // relay is off); look again soon, since that can change.
       final validUntil = expires == null
           ? now + _iceRecheckMs
           : expires.millisecondsSinceEpoch - _iceMarginMs;
-      if (list.isNotEmpty && validUntil > now) _iceCache = _IceCache('$origin\n$token', list, validUntil);
+      // Only a list that carries a relay credential can run out; STUN alone never does.
+      final hasCredential = list.any((entry) => entry['username'] is String);
+      final result = _IceList(list, hasCredential ? expires : null);
+      if (list.isNotEmpty && validUntil > now) _iceCache = _IceCache('$origin\n$token', result, validUntil);
       recordConnectionDiagnostic(Diagnostic.metric('rtc.ice',
           elapsedMs: now - started, outcome: 'fetched', frameChars: list.length));
-      return list;
+      return result;
     } on ConnectionError {
       rethrow;
     } catch (_) {
@@ -209,21 +231,34 @@ class RtcDialer {
           elapsedMs: DateTime.now().millisecondsSinceEpoch - started, outcome: 'failed'));
       // Without ICE servers the phone can still reach a computer on the same network,
       // which beats failing outright because the list could not be fetched.
-      return const <Map<String, Object?>>[];
+      return _IceList.empty;
     }
   }
 }
 
-/// A relay credential is good for an hour; stop using a list ten minutes before that, so a
-/// connection made with it has time to be set up and its first refresh to succeed.
-const int _iceMarginMs = 10 * 60 * 1000;
+/// A relay credential is good for five minutes, and a relayed connection lasts exactly as
+/// long as the one it was made with. Stop reusing a list with two and a half minutes left:
+/// a connection made with less would be replaced almost as soon as it was up (the service
+/// hands out lists with at least three minutes in them, so this keeps its reuse for the first
+/// half of their life).
+const int _iceMarginMs = 150 * 1000;
 const int _iceRecheckMs = 5 * 60 * 1000;
 
+/// A server list and when the relay credential in it expires (null when it holds none).
+class _IceList {
+  const _IceList(this.servers, this.relayExpiresAt);
+
+  static const _IceList empty = _IceList(<Map<String, Object?>>[], null);
+
+  final List<Map<String, Object?>> servers;
+  final DateTime? relayExpiresAt;
+}
+
 class _IceCache {
-  const _IceCache(this.key, this.servers, this.validUntil);
+  const _IceCache(this.key, this.list, this.validUntil);
 
   final String key;
-  final List<Map<String, Object?>> servers;
+  final _IceList list;
   final int validUntil;
 }
 
@@ -231,20 +266,23 @@ class _IceFlight {
   const _IceFlight(this.key, this.servers);
 
   final String key;
-  final Future<List<Map<String, Object?>>> servers;
+  final Future<_IceList> servers;
 }
 
 _IceCache? _iceCache;
 _IceFlight? _iceFlight;
 
 class _Attempt {
-  _Attempt(this._dialer) {
+  _Attempt(this._dialer, {this.renewal = false}) {
     // It can fail before anything is waiting on it (signaling closes while the offer is
     // still being made); the waiter that comes later still gets the error.
     unawaited(_opened.future.then((_) {}, onError: (_) {}));
   }
 
   final RtcDialer _dialer;
+  /// This connection replaces one that is about to lose its relay credential.
+  final bool renewal;
+  DateTime? _relayExpiresAt;
   /// The call on the service's signaling, once it has been named.
   SignalingCall? _call;
   Future<SignalingCall>? _calling;
@@ -270,7 +308,7 @@ class _Attempt {
     // The server list, the signaling socket and the peer connection do not wait for one
     // another: each is a round trip (or several) to a service that can be far away, and
     // run one after the other they were most of the time a connection took to start.
-    final iceLoading = _dialer._iceServers();
+    final iceLoading = _dialer._iceServers(fresh: renewal);
     final calling = SignalingCall.place(
       origin: _dialer.origin,
       token: _dialer.token,
@@ -289,9 +327,10 @@ class _Attempt {
     // Awaited below; until then a failure must not surface as an unhandled error.
     unawaited(calling.then((_) {}, onError: (_) {}));
 
-    final ice = await iceLoading;
+    final iceList = await iceLoading;
+    _relayExpiresAt = iceList.relayExpiresAt;
     final pc = await createPeerConnection(<String, Object?>{
-      'iceServers': ice,
+      'iceServers': iceList.servers,
       'sdpSemantics': 'unified-plan',
       // The desktop speaks no ICE-TCP. Not `candidateNetworkPolicy: low_cost`: it drops every
       // network dearer than the cheapest, and the loopback interface is the cheapest of all,
@@ -329,7 +368,7 @@ class _Attempt {
     channel.onDataChannelState = (state) {
       if (state == RTCDataChannelState.RTCDataChannelOpen && !_opened.isCompleted) {
         _handedOver = true;
-        final socket = RtcFrameSocket._(pc, channel, _deflate);
+        final socket = RtcFrameSocket._(pc, channel, _deflate, _relayExpiresAt);
         _opened.complete(socket);
         recordConnectionDiagnostic(Diagnostic.metric('rtc.open', elapsedMs: since(), outcome: _kinds()));
         // The answer only permitted compression. Follow the path it is actually on:
@@ -357,6 +396,9 @@ class _Attempt {
       'type': 'offer',
       'sdp': offer.sdp,
       if (_dialer.clientId != null) 'client_id': _dialer.clientId,
+      // Tells the desktop not to close this phone's other connection: it is still carrying
+      // the session until this one has taken over.
+      if (renewal) 'rollover': true,
       // Through the relay a phone on mobile data is hundreds of milliseconds from the
       // desktop, and a transcript is mostly JSON. Only used if the answer agrees.
       'deflate': true,
@@ -466,8 +508,8 @@ class _Attempt {
 
 /// A data channel as the [FrameSocket] [RemoteClient] speaks over: whole frames in and out
 /// (fragmented per `rtc_frames.dart`), with the keepalive the desktop's heartbeat expects.
-class RtcFrameSocket implements FrameSocket {
-  RtcFrameSocket._(this._pc, this._channel, this._deflate) {
+class RtcFrameSocket implements ExpiringFrameSocket {
+  RtcFrameSocket._(this._pc, this._channel, this._deflate, this.credentialExpiresAt) {
     _channel.bufferedAmountLowThreshold = _lowWaterBytes;
     _channel.onBufferedAmountLow = (_) => _pump();
     _channel.onMessage = _receive;
@@ -488,6 +530,8 @@ class RtcFrameSocket implements FrameSocket {
 
   final RTCPeerConnection _pc;
   final RTCDataChannel _channel;
+  @override
+  final DateTime? credentialExpiresAt;
   /// The desktop agreed to read compressed frames. Permission only — see [followPath].
   final bool _deflate;
   /// Set once the selected path is the relay. Until then, and on a direct path, frames
@@ -562,6 +606,9 @@ class RtcFrameSocket implements FrameSocket {
     recordConnectionDiagnostic(Diagnostic.metric('rtc.path', outcome: path ?? 'unknown'));
     _compress = path == 'relay';
   }
+
+  @override
+  Future<bool> usesRelay() async => await selectedPath() == 'relay';
 
   /// Which kind of path ICE chose: `direct` (LAN or across NATs) or `relay` (through
   /// FastVibe's relay, which counts against the account's monthly allowance). Null until known.
