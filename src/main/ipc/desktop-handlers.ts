@@ -30,7 +30,8 @@ import { uiText } from "../engine/ui-text";
 import { exportLogs, writeRendererLog } from "../engine/logger";
 import { applyKeepAwake } from "../engine/keep-awake";
 import { toolModeSettingsChanged } from "../engine/tool-modes";
-import { assertProxySettings, mergeSettingsPreservingProxy, proxySettingsOf } from "../../shared/proxy";
+import { assertProxySettings, proxySettingsOf } from "../../shared/proxy";
+import { mergeClientSettings, remoteSettingsOf } from "../../shared/settings-merge";
 import { getFileIconMapping } from "../engine/file-icons";
 import { collectUsageStats } from "../engine/usage-stats";
 import { scheduleUpdateCheck } from "../updater";
@@ -575,13 +576,9 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): void {
   handle(Ipc.settingsSet, (settings: Record<string, unknown>, ctx) => queueSettingsWrite(async () => {
     const incoming = settings && typeof settings === "object" ? settings : {};
     const current = readAppSettings(getFastVibePaths());
-    await commitSettings({
-      ...mergeSettingsPreservingProxy(current, incoming),
-      // Managed by remote:set-device-name; stale preference snapshots must not
-      // undo a rename or let a remote client bypass that method's local-only policy.
-      remoteDeviceName: current.remoteDeviceName,
-      remoteDiscoveryName: current.remoteDiscoveryName,
-    }, ctx);
+    // Proxy and remote-access keys are written by their own methods; a preference
+    // snapshot — stale by nature, and possibly a remote client's — changes neither.
+    await commitSettings(mergeClientSettings(current, incoming), ctx);
   }));
   handle(Ipc.settingsProxySet, (settings: Record<string, unknown>, ctx) => queueSettingsWrite(async () => {
     const incoming = settings && typeof settings === "object" ? settings : {};
@@ -591,8 +588,14 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): void {
   handle(Ipc.settingsClear, (_payload: void, ctx) => queueSettingsWrite(async () => {
     const paths = getFastVibePaths();
     const previous = readAppSettings(paths);
+    // 恢复默认 resets preferences. Remote access is not one: dropping its switch here
+    // left the listener running with nothing to bring it back at the next launch.
+    const kept = remoteSettingsOf(previous);
     await networkProxy?.apply({});
-    try { clearAppSettings(paths); }
+    try {
+      clearAppSettings(paths);
+      if (Object.keys(kept).length > 0) writeAppSettings(paths, kept);
+    }
     catch (error) { await networkProxy?.apply(previous); throw error; }
     applyNativeTheme({});
     applyLanguages({});
@@ -601,7 +604,7 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): void {
     paintWindows(windows, {});
     // 恢复默认 is a write like any other: the other windows hold their own copy and
     // would otherwise keep — and later re-save — the settings that were just reset.
-    broadcastSettings(ctx.origin, {});
+    broadcastSettings(ctx.origin, kept);
   }));
 
   handle(Ipc.workspacePick, async () => {

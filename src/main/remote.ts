@@ -144,9 +144,14 @@ function readEnabled(): boolean {
   return readAppSettings(getFastVibePaths()).remoteEnabled === true;
 }
 
-function writeEnabled(enabled: boolean): void {
+/**
+ * Write remote-access keys into `settings.json`. Call it inside the settings write queue:
+ * a preference save reads the file, awaits, then writes, and a write landing in that gap
+ * would be lost with it.
+ */
+function writeRemoteSettings(patch: { remoteEnabled?: boolean; remotePort?: number }): void {
   const paths = getFastVibePaths();
-  writeAppSettings(paths, { ...readAppSettings(paths), remoteEnabled: enabled });
+  writeAppSettings(paths, { ...readAppSettings(paths), ...patch });
 }
 
 /** The one state the pane draws everything from. */
@@ -256,9 +261,10 @@ export function registerRemoteIpc(queueSettingsWrite: (task: () => Promise<void>
   });
 
   handle(Ipc.remoteStart, async (payload?: { port?: number }) => {
-    const paths = getFastVibePaths();
-    if (typeof payload?.port === "number") writeAppSettings(paths, { ...readAppSettings(paths), remotePort: payload.port });
-    writeEnabled(true);
+    await queueSettingsWrite(async () => writeRemoteSettings({
+      ...(typeof payload?.port === "number" ? { remotePort: payload.port } : {}),
+      remoteEnabled: true,
+    }));
     try {
       return await bringUp();
     } catch (error) {
@@ -290,7 +296,7 @@ export function registerRemoteIpc(queueSettingsWrite: (task: () => Promise<void>
   handle(Ipc.remoteStop, async () => {
     official?.setEnabled(false);
     await instance().stop();
-    writeEnabled(false);
+    await queueSettingsWrite(async () => writeRemoteSettings({ remoteEnabled: false }));
     return announce();
   });
 

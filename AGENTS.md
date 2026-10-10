@@ -2175,6 +2175,13 @@ from an event payload. So it is as fresh as the last `reloadActiveState()`.
 「恢复默认」（`settings:clear`）也算一次写入，同样要广播，否则另一个窗口会继续用旧副本
 并在下次保存时把刚清掉的值写回去。
 
+**`settings:set` 收到的是整份快照，所以不属于客户端的键不能从快照里取。** 每个窗口保存的都是启动时读到的
+那一份，天然是旧的。`proxy*` 和 `remote*` 各有自己的方法写入，`mergeClientSettings`（`shared/settings-merge.ts`）
+让这两组键只从文件取：`remote:start` 把 `remoteEnabled` 写进文件时窗口并不知道，下一次无关的保存（拖一下侧栏
+就是一次）曾把开关写回窗口打开时的值——监听还在跑所以没人察觉，下次启动（通常是更新之后）远程访问就是关的。
+`settings:clear`（恢复默认）同样保留 `remote*`；`remote:start` / `remote:stop` 的写入走 `queueSettingsWrite`，
+否则会落在一次保存的「读文件 → await → 写文件」中间被盖掉。新增一个由 Main 自己方法管理的设置键时，照这个办。
+
 ## 系统通知（设置 → 通用）
 
 设置里只剩一个总开关，**默认打开**。任务完成、任务出错、需要确认、应用更新不再各自可关：总开关
