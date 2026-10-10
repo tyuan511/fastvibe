@@ -42,6 +42,16 @@ export const DEFLATE = 0x20;
 
 /** Frames shorter than this are sent as they are: the saving would not pay for the work. */
 export const COMPRESS_MIN_BYTES = 1024;
+/**
+ * Frames at least this large are compressed off Main's thread (`ChannelSocket.send`).
+ * Below it the work is under a millisecond and a round trip to the thread pool costs more.
+ */
+export const ASYNC_COMPRESS_MIN_BYTES = 64 * 1024;
+/**
+ * Level 3: most of the gain of level 9 at a fraction of the time, and JSON, which is
+ * nearly everything here, compresses well early.
+ */
+export const COMPRESS_LEVEL = 3;
 
 /**
  * Largest data channel message sent, header included, when the peer's limit is unknown.
@@ -51,7 +61,11 @@ export const COMPRESS_MIN_BYTES = 1024;
  * negotiated at least that much. Guessing high closes the channel.
  */
 export const MAX_MESSAGE_BYTES = 16 * 1024;
-/** A direct path's ceiling. libdatachannel's own default, so a negotiated channel can take it. */
+/**
+ * A direct path's ceiling. libdatachannel's own default, so a negotiated channel can take it.
+ * Not raised further on purpose: 128 KiB was measured against 64 on loopback (12 MB, real
+ * peers) and made no difference, so there is nothing to buy by sending closer to the limit.
+ */
 export const DIRECT_MAX_MESSAGE_BYTES = 64 * 1024;
 
 /** Close reasons are short by contract (WebSocket allows 123 bytes). */
@@ -61,12 +75,11 @@ export class FrameError extends Error {}
 
 /**
  * The frame, compressed — or null when that is not worth sending: too short, or no
- * smaller. Level 3 because this runs on Main's thread: most of the gain of level 9 at a
- * fraction of the time, and JSON, which is nearly everything here, compresses well early.
+ * smaller. Synchronous, so for frames small enough that it costs nothing to notice.
  */
 export function compressFrame(data: Uint8Array): Buffer | null {
   if (data.byteLength < COMPRESS_MIN_BYTES) return null;
-  const packed = deflateRawSync(data, { level: 3 });
+  const packed = deflateRawSync(data, { level: COMPRESS_LEVEL });
   return packed.byteLength < data.byteLength ? packed : null;
 }
 

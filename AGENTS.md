@@ -233,11 +233,17 @@ or signed out → signaling closes and every phone is dropped.
   before ICE nominates, send frames as they are — deflating JSON on Main's thread costs more
   than the bytes save when the round trip is a millisecond. The bit is per fragment, so a
   path that moves later changes the next frame without reconnecting. The phone does the same
-  with its own `getStats()`.
+  with its own `getStats()`. On the relay a frame of 64 KiB or more is deflated off Main's
+  thread (`ChannelSocket.send`): megabytes of transcript take tens of milliseconds, on the
+  thread every agent's stream runs on. The frame keeps its place meanwhile — the channel
+  carries no sequence number, so nothing sent after it may be handed over before it — and
+  counts toward `bufferedAmount`, so the backpressure guard still sees it.
   Fragment size follows the path too, but only as far as the peer negotiated: a direct path
   reads `maxMessageSize()` and sends up to 64 KiB (libdatachannel's own default), while a
   relay and a path not yet chosen stay at 16 KiB. The phone's stack cannot read that number,
   so it keeps sending 16 KiB; receiving the desktop's larger fragments needs no change.
+  64 KiB is not a step toward the 256 KiB both stacks negotiate: 128 was measured against 64
+  on loopback (12 MB, real peers) and made no difference.
 - **The phone's side** (`apps/mobile_flutter`): the account (`lib/account/account.dart`: browser PKCE
   sign-in through `flutter_web_auth_2`, `fastvibe://oauth/callback`, token in the Keychain/Keystore,
   only ever sent to the site that issued it) and the account's computers (`official_devices.dart`),
@@ -246,6 +252,26 @@ or signed out → signaling closes and every phone is dropped.
   signaling and the WebRTC offer and hands `RemoteClient` a `FrameSocket`, so the handshake, health
   checks and reconnect are the ones every other connection uses. `Connection` carries `needsAccount`
   (the way forward is signing in) next to `needsPassword`.
+  - **A signaling socket outlives its call for 20 seconds** (`lib/protocol/rtc_signaling.dart`,
+    `SignalingCall`). Opening one is a TCP and a TLS handshake and an upgrade before the call
+    can be placed, and a reconnecting phone places several in a row — the desktop answers
+    `device_offline` while its own signaling comes back. A kept socket has already said
+    `hello`, so the next call sends `connect` alone. Three things keep that from being slower
+    than not keeping it: a kept socket gets 2.5 seconds to answer before a fresh one replaces
+    it, a network change or leaving the foreground drops it (`dropKeptSignaling`), and what
+    still arrives about the previous call is told apart by its `cid` — the service answers a
+    `hangup` that crossed the desktop's with `unknown_call` *for that call*, and an error that
+    answers `connect` names none.
+  - **Host candidates have their own share of the budget** (`CandidateBudget`: 8 in all, 4
+    host, 2 relay). They are found first — the public address and the relay each wait on a
+    round trip — so a phone with enough interfaces used to fill the budget before the relay
+    arrived, and the relay is the one address a desktop on another network must be *told*:
+    its router lets nothing in from an address it has not sent to.
+  - **`Disconnected` is acted on, not waited out.** ICE reports it within seconds and calls
+    the path failed only much later, and the routine health check is 15 seconds apart with
+    15 to answer. `RtcFrameSocket` reports it through `FrameSocket.onSuspect` and
+    `RemoteClient` probes at once (`checkHealth(fast: true)`); a path that recovers answers
+    the probe and nothing is dropped.
 - **SCTP is tuned once, for the whole process.** usrsctp keeps one set of settings, so a
   relayed call and a direct one share them and neither can be tuned alone. Two of the
   library's defaults are moved (`peer.ts`, applied before the first peer or they are
@@ -253,8 +279,22 @@ or signed out → signaling closes and every phone is dropped.
   wait is the whole latency of a small frame, and the initial congestion window from 10 to
   64 MTUs, so a snapshot does not trickle out over the first few round trips. The buffers
   stay at the library's 1MB — larger only helps a transfer the relay would then have to carry.
-- **Only UDP TURN on the desktop.** libdatachannel's libjuice backend has no TURN over TCP/TLS, so
-  `toIceServers` drops those entries; the phone's stack speaks them.
+- **The desktop gathers with STUN only.** The phone is the end that asks for a relay
+  (`stunServers` in `rtc/ice.ts` says why: the account's allocation quota, and libjuice holding
+  an allocation until it expires). libjuice has no TURN over TCP/TLS either, so a desktop on a
+  network that blocks UDP outright cannot be reached at all.
+- **The STUN list is never waited on once there is one** (`OfficialConnection.#loadIce`). It is
+  fetched as signaling comes up; after that a list due for another look is handed out as it is
+  and looked up again behind the call. What is kept has no credential in it, so nothing in it
+  expires with the service's hour — whereas waiting on the service and getting no answer sent
+  the call on with no server, which a phone off this network cannot connect through. Only a
+  call with nothing to gather with waits, for three seconds rather than the request's fifteen.
+- **Signaling is pinged from this side too** (`SignalingClient.probe`, every 15 seconds, 8 to
+  answer). The service's own ping is 25 seconds apart and its silence is called dead after 70,
+  which is how long this computer stayed unreachable after its network changed under it:
+  every phone that called meanwhile was told `device_offline`. A call ending asks at once —
+  a network change ends a phone's connection and the signaling together, and only the first
+  of those says so.
 - **Native module.** `node-datachannel` ships one optional package per platform;
   `pnpm-workspace.yaml` installs both macOS CPUs (the x64 release is built on an arm64
   runner) and `electron-builder.yml` prunes the other from each package. `nodeDataChannel.cleanup()`

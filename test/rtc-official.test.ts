@@ -459,6 +459,59 @@ test("ICE servers that cannot be fetched do not stop a LAN connection", async ()
   });
 });
 
+test("a list due for another look is still used when the service cannot be asked", async () => {
+  const gathered: Array<Array<{ hostname: string }>> = [];
+  let failing = false;
+  let asked = 0;
+  const iceCalls = () => asked;
+  await withRig(async ({ official, cloud }) => {
+    // Already inside the margin before its expiry: every call after the first finds it due.
+    cloud.ice = { ice_servers: [{ urls: ["stun:turn.example.com:3478"] }], expires_at: new Date(Date.now() + 60_000).toISOString() };
+    official.setEnabled(true);
+    await until(() => official.state().status === "online" && iceCalls() === 1, "the list fetched as signaling came up");
+    await new Promise((settle) => setTimeout(settle, 30));
+    failing = true;
+    const phone = await cloud.phone("fvs_good");
+    await phone.connect(official.state().deviceId!);
+    await until(() => gathered.length === 1, "a peer connection");
+    assert.deepEqual(gathered[0].map((server) => server.hostname), ["turn.example.com"], "the call gathers with the list in hand");
+    await until(() => iceCalls() === 2, "and the list is asked for again behind it");
+  }, {
+    createPeer: (servers) => { gathered.push(servers); return new FakePeer(); },
+    fetch: async (input, init) => {
+      if (String(input).endsWith("/api/rtc/ice")) {
+        asked += 1;
+        if (failing) throw new Error("offline");
+      }
+      return fetch(input, init);
+    },
+  });
+});
+
+test("a call with no list waits for the service only briefly", async () => {
+  const gathered: unknown[][] = [];
+  await withRig(async ({ official, cloud }) => {
+    official.setEnabled(true);
+    await until(() => official.state().status === "online", "online");
+    const phone = await cloud.phone("fvs_good");
+    const started = Date.now();
+    await phone.connect(official.state().deviceId!);
+    await until(() => gathered.length === 1, "a peer connection without the list");
+    assert.ok(Date.now() - started < 1000, "long before the request itself would give up");
+    assert.deepEqual(gathered[0], []);
+  }, {
+    iceWaitMs: 40,
+    createPeer: (servers) => { gathered.push(servers); return new FakePeer(); },
+    fetch: (input, init) => {
+      // Never answers; only the request's own abort ends it.
+      if (String(input).endsWith("/api/rtc/ice")) {
+        return new Promise((_, reject) => init?.signal?.addEventListener("abort", () => reject(new Error("aborted"))));
+      }
+      return fetch(input, init);
+    },
+  });
+});
+
 test("a call that never opens a channel is abandoned", async () => {
   await withRig(async ({ official, cloud, peers }) => {
     official.setEnabled(true);

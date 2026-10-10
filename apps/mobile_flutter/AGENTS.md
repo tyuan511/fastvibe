@@ -36,7 +36,7 @@ lib/
   router.dart        go_router; devices, conversations and phone settings
   theme/theme.dart   the design tokens — Palette, Radii, elevation, nameTint, DesktopSpinner
   i18n/              zh.dart + en.dart are GENERATED; core.dart is the reader
-  protocol/          address, client (the socket), diagnostics, model cache
+  protocol/          address, client (the socket), diagnostics, model cache, rtc_* (the official connection)
   session/           connection (the one live link), catalog, conversation actions
   storage/servers.dart
   chat/              message model, queue, snapshot sync, tool cards, composer, DAG

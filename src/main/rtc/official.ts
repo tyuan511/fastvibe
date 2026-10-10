@@ -26,6 +26,8 @@ const REQUEST_TIMEOUT_MS = 15_000;
 const ICE_MARGIN_MS = 10 * 60_000;
 const ICE_RECHECK_MS = 30 * 60_000;
 const ICE_EMPTY_MS = 60_000;
+/** How long a call with no list at all waits for one before it goes on without. */
+const DEFAULT_ICE_WAIT_MS = 3_000;
 const DEFAULT_CONNECT_TIMEOUT_MS = 30_000;
 const DEFAULT_PATH_POLL_MS = 3_000;
 const DEFAULT_REGISTER_RETRY_MS = [5_000, 15_000, 30_000, 60_000];
@@ -52,6 +54,9 @@ export type OfficialDeps = {
   registerRetryMs?: number[];
   signalingBackoffMs?: number[];
   signalingSilenceMs?: number;
+  signalingProbeMs?: number;
+  signalingProbeTimeoutMs?: number;
+  iceWaitMs?: number;
 };
 
 type Registration = { ok: true; deviceId: string } | { ok: false; retry: boolean; unauthorized?: boolean; message: string };
@@ -66,7 +71,7 @@ export class OfficialConnection {
   #signaling: SignalingClient | null = null;
   #boundToken: string | null = null;
   #responders = new Map<string, Responder>();
-  #ice: { token: string; servers: IceServerConfig[]; validUntil: number } | null = null;
+  #ice: { token: string; servers: IceServerConfig[]; refreshAt: number } | null = null;
   #iceFlight: { token: string; servers: Promise<IceServerConfig[]> } | null = null;
   /** Bumped by every teardown so a registration that was overtaken cannot start signaling. */
   #generation = 0;
@@ -213,6 +218,8 @@ export class OfficialConnection {
       log: this.#deps.log,
       backoffMs: this.#deps.signalingBackoffMs,
       silenceMs: this.#deps.signalingSilenceMs,
+      probeMs: this.#deps.signalingProbeMs,
+      probeTimeoutMs: this.#deps.signalingProbeTimeoutMs,
       events: {
         status: (status) => {
           if (this.#signaling !== signaling) return;
@@ -313,6 +320,10 @@ export class OfficialConnection {
         this.#responders.delete(cid);
         // Free the call on the service too; harmless if the phone already did.
         signaling.hangup(cid);
+        // A network that changed under this computer ends a phone's connection and the
+        // signaling together, and only the first of those says so. The phone is about to
+        // call again: find out now whether there is still a line for it to call on.
+        signaling.probe();
         this.#emit();
       },
       connectTimeoutMs: this.#deps.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS,
@@ -328,7 +339,14 @@ export class OfficialConnection {
    *
    * Asking the service for every call put an HTTPS round trip in front of the answer, and
    * the phone was already waiting on it. The list is the same for an hour, so it is
-   * fetched when signaling comes up and reused until shortly before it would expire.
+   * fetched when signaling comes up and reused.
+   *
+   * A list that is due for another look is still handed out, and looked up again behind
+   * the call. What this side keeps is STUN addresses with no credential in them
+   * (`stunServers`), so nothing in an old list stops working when the service's hour is
+   * up — whereas waiting on the service here, and getting no answer, sent the call on with
+   * no server at all, which a phone off this network cannot connect through. Only a call
+   * with nothing to gather with waits, and not for long.
    */
   async #loadIce(): Promise<IceServerConfig[]> {
     const token = this.#deps.account.token();
@@ -336,9 +354,30 @@ export class OfficialConnection {
       this.#deps.log.warn("official: no account token, so a call has no STUN server to gather with");
       return [];
     }
-    const now = Date.now();
     const cached = this.#ice;
-    if (cached && cached.token === token && now < cached.validUntil) return cached.servers;
+    const usable = cached && cached.token === token && cached.servers.length > 0;
+    if (cached && cached.token === token && Date.now() < cached.refreshAt) return cached.servers;
+    const fetching = this.#fetchIce(token);
+    if (usable) {
+      fetching.catch((error: unknown) => this.#deps.log.warn(`official: could not refresh the STUN servers (${String(error)}); keeping the ones in hand`));
+      return cached.servers;
+    }
+    let timer: NodeJS.Timeout | null = null;
+    const waited = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("ice servers: no answer in time")), this.#deps.iceWaitMs ?? DEFAULT_ICE_WAIT_MS);
+      timer.unref();
+    });
+    // Left running when the wait gives up: the call after this one finds its answer.
+    fetching.catch(() => undefined);
+    try {
+      return await Promise.race([fetching, waited]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  /** One request at a time for the server list; whoever asks meanwhile shares it. */
+  async #fetchIce(token: string): Promise<IceServerConfig[]> {
     const flight = this.#iceFlight;
     if (flight && flight.token === token) return flight.servers;
     const servers = (async () => {
@@ -351,10 +390,10 @@ export class OfficialConnection {
       // but look again before long in case the service's address changed.
       // An empty list is what a service with its relay switched off answers; keep it only
       // briefly, since with nothing to gather with a phone off this network cannot connect.
-      const validUntil = list.length === 0
+      const refreshAt = list.length === 0
         ? Date.now() + ICE_EMPTY_MS
         : expiry === null ? Date.now() + ICE_RECHECK_MS : expiry - ICE_MARGIN_MS;
-      if (validUntil > Date.now()) this.#ice = { token, servers: list, validUntil };
+      this.#ice = { token, servers: list, refreshAt };
       if (list.length === 0) this.#deps.log.warn("official: the service listed no STUN server");
       return list;
     })();

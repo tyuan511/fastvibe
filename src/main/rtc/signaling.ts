@@ -14,6 +14,17 @@ const CLOSE_REPLACED = 4001;
 const CLOSE_KICKED = 4005;
 
 const PING_TIMEOUT_MS = 70_000;
+/**
+ * How often this side asks the service whether it is still there, and how long it waits.
+ *
+ * The service's own ping comes every 25 seconds and its silence is only called dead after
+ * 70, which is how long this computer stayed unreachable after its network changed under
+ * it (another Wi-Fi, a VPN going up or down): the socket was gone, nothing said so, and
+ * every phone that called meanwhile was told the device was offline. A ping of our own
+ * finds out within one interval and one wait.
+ */
+const PROBE_EVERY_MS = 15_000;
+const PROBE_TIMEOUT_MS = 8_000;
 const HANDSHAKE_TIMEOUT_MS = 10_000;
 const DEFAULT_BACKOFF_MS = [1_000, 2_000, 4_000, 8_000, 15_000, 30_000];
 
@@ -55,6 +66,9 @@ export type SignalingDeps = {
   random?: () => number;
   /** How long without a word from the service counts as a dead link. */
   silenceMs?: number;
+  /** How often to ping the service, and how long its pong may take. */
+  probeMs?: number;
+  probeTimeoutMs?: number;
 };
 
 export class SignalingClient {
@@ -62,6 +76,8 @@ export class SignalingClient {
   #socket: WebSocket | null = null;
   #timer: NodeJS.Timeout | null = null;
   #watchdog: NodeJS.Timeout | null = null;
+  #probeTimer: NodeJS.Timeout | null = null;
+  #pongDeadline: NodeJS.Timeout | null = null;
   #attempt = 0;
   #running = false;
   #status: SignalingStatus = "offline";
@@ -107,6 +123,31 @@ export class SignalingClient {
     return this.#send({ type: "hangup", cid });
   }
 
+  /**
+   * Ask the service whether this link is still alive, now rather than at the next round.
+   *
+   * For whoever has just seen something that a dead network would also explain — a
+   * phone's connection ending is the case. One question at a time: a probe already
+   * waiting for its pong is the answer to this one too.
+   */
+  probe(): void {
+    const socket = this.#socket;
+    if (!socket || socket.readyState !== WebSocket.OPEN || this.#pongDeadline) return;
+    try {
+      socket.ping();
+    } catch {
+      // Closing; its close event decides what happens next.
+      return;
+    }
+    this.#pongDeadline = setTimeout(() => {
+      this.#pongDeadline = null;
+      if (this.#socket !== socket) return;
+      this.#deps.log.warn("signaling did not answer a ping; reconnecting");
+      socket.terminate();
+    }, this.#deps.probeTimeoutMs ?? PROBE_TIMEOUT_MS);
+    this.#pongDeadline.unref();
+  }
+
   #send(message: unknown): boolean {
     const socket = this.#socket;
     if (!socket || socket.readyState !== WebSocket.OPEN || this.#status !== "online") return false;
@@ -136,8 +177,16 @@ export class SignalingClient {
       if (this.#socket !== socket) return;
       socket.send(JSON.stringify({ type: "hello", role: "device", device_id: this.#deps.deviceId, platform: this.#deps.platform }));
       this.#armWatchdog(socket);
+      this.#probeTimer = setInterval(() => this.probe(), this.#deps.probeMs ?? PROBE_EVERY_MS);
+      this.#probeTimer.unref();
     });
     socket.on("ping", () => this.#armWatchdog(socket));
+    socket.on("pong", () => {
+      if (this.#socket !== socket) return;
+      if (this.#pongDeadline) clearTimeout(this.#pongDeadline);
+      this.#pongDeadline = null;
+      this.#armWatchdog(socket);
+    });
     socket.on("message", (raw) => {
       if (this.#socket !== socket) return;
       this.#armWatchdog(socket);
@@ -244,8 +293,12 @@ export class SignalingClient {
   #clearTimers(): void {
     if (this.#timer) clearTimeout(this.#timer);
     if (this.#watchdog) clearTimeout(this.#watchdog);
+    if (this.#probeTimer) clearInterval(this.#probeTimer);
+    if (this.#pongDeadline) clearTimeout(this.#pongDeadline);
     this.#timer = null;
     this.#watchdog = null;
+    this.#probeTimer = null;
+    this.#pongDeadline = null;
   }
 
   #setStatus(status: SignalingStatus): void {

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ChannelSocket, type DataChannelLike } from "../src/main/rtc/channel-socket.ts";
-import { DEFLATE, MAX_MESSAGE_BYTES } from "../src/main/rtc/frames.ts";
+import { ASYNC_COMPRESS_MIN_BYTES, DEFLATE, DIRECT_MAX_MESSAGE_BYTES, MAX_MESSAGE_BYTES } from "../src/main/rtc/frames.ts";
 
 /**
  * The adapter between a data channel and the WebSocket-shaped socket the remote server
@@ -124,7 +124,7 @@ test("a direct path sends larger fragments only when the peer negotiated them", 
   const again = once<[Buffer, boolean]>(right, "message");
   left.send(text);
   assert.ok(a.sent.length < 8, `a direct path takes the peer's limit, not 16 KiB (${a.sent.length} fragments)`);
-  assert.ok(a.sent.every((m) => m.byteLength <= 64 * 1024), "never past our own ceiling, whatever the peer claims");
+  assert.ok(a.sent.every((m) => m.byteLength <= DIRECT_MAX_MESSAGE_BYTES), "never past our own ceiling, whatever the peer claims");
   assert.equal((await again)[0].toString(), text);
 
   a.sent = [];
@@ -239,6 +239,52 @@ test("once the relay is confirmed, a large frame crosses compressed and arrives 
   assert.ok(got[0] === big && got[1] === "tiny", "both frames arrive whole and in order");
   assert.ok(wire < Buffer.byteLength(big) / 3, `compressed on the wire (${wire} of ${Buffer.byteLength(big)})`);
   assert.equal(a.sent.at(-1)![0] & DEFLATE, 0, "the small frame is sent as it is");
+});
+
+test("a frame compressed off this thread keeps its place: what was sent after it arrives after it", async () => {
+  const a = new FakeChannel();
+  const b = new FakeChannel();
+  a.peer = b;
+  b.peer = a;
+  const sender = new ChannelSocket(a, { maxFrameBytes: 1 << 24, compress: true });
+  const receiver = new ChannelSocket(b, { maxFrameBytes: 1 << 24 });
+  sender.setCompress(true);
+  const got: string[] = [];
+  const all = new Promise<void>((settle) => {
+    receiver.on("message", (data: Buffer) => {
+      got.push(data.toString("utf8"));
+      if (got.length === 3) settle();
+    });
+  });
+  const big = JSON.stringify({ rows: Array.from({ length: 4000 }, (_, i) => ({ i, text: "lorem ipsum ".repeat(6) })) });
+  assert.ok(Buffer.byteLength(big) >= ASYNC_COMPRESS_MIN_BYTES, "large enough to leave this thread");
+  const done: string[] = [];
+  sender.send(big, () => done.push("big"));
+  sender.send("after", () => done.push("after"));
+  sender.send("last", () => done.push("last"));
+  assert.equal(a.sent.length, 0, "nothing overtakes the frame still being compressed");
+  assert.ok(sender.bufferedAmount >= Buffer.byteLength(big), "and it counts as buffered while it waits");
+  await all;
+  assert.deepEqual(got, [big, "after", "last"]);
+  assert.deepEqual(done, ["big", "after", "last"]);
+  assert.equal(sender.bufferedAmount, 0);
+  const wire = a.sent.reduce((n, m) => n + m.byteLength, 0);
+  assert.ok(wire < Buffer.byteLength(big) / 3, `compressed on the wire (${wire} of ${Buffer.byteLength(big)})`);
+});
+
+test("closing while a frame is still being compressed fails its callback and sends nothing", async () => {
+  const a = new FakeChannel();
+  const b = new FakeChannel();
+  a.peer = b;
+  b.peer = a;
+  const sender = new ChannelSocket(a, { maxFrameBytes: 1 << 24, compress: true });
+  sender.setCompress(true);
+  const big = "lorem ipsum ".repeat(20_000);
+  const failed = new Promise<Error | undefined>((settle) => sender.send(big, settle));
+  sender.terminate();
+  assert.ok(await failed, "the waiting frame is told it did not go");
+  await new Promise((settle) => setTimeout(settle, 50));
+  assert.equal(a.sent.length, 0);
 });
 
 test("without agreement nothing is compressed, so an older peer is never sent a header it refuses", () => {

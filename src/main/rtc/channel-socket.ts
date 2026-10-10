@@ -1,5 +1,8 @@
 import { EventEmitter } from "node:events";
+import { deflateRaw } from "node:zlib";
 import {
+  ASYNC_COMPRESS_MIN_BYTES,
+  COMPRESS_LEVEL,
   DIRECT_MAX_MESSAGE_BYTES,
   FrameAssembler,
   FrameError,
@@ -48,6 +51,13 @@ const CLOSE_PROTOCOL = 1002;
 type Outgoing = { message: Buffer; done?: (error?: Error) => void };
 
 /**
+ * One frame on its way to the queue. `fragments` is null while the frame is still being
+ * compressed off this thread; frames behind it wait, because the channel carries no
+ * sequence number and a frame that overtook another would arrive as the earlier one.
+ */
+type Staged = { fragments: Buffer[] | null; bytes: number; done?: (error?: Error) => void };
+
+/**
  * A data channel dressed as the WebSocket the remote server expects.
  *
  * `RemoteServer.attachTransport` takes anything shaped like `RemoteSocket`, and this is
@@ -67,6 +77,8 @@ export class ChannelSocket extends EventEmitter implements RemoteSocket {
   #state: 0 | 1 | 2 | 3;
   #queue: Outgoing[] = [];
   #queuedBytes = 0;
+  #staged: Staged[] = [];
+  #stagedBytes = 0;
   #closed = false;
   /**
    * The peer reads compressed frames (it said so while the call was being set up).
@@ -104,7 +116,7 @@ export class ChannelSocket extends EventEmitter implements RemoteSocket {
   }
 
   get bufferedAmount(): number {
-    return this.#queuedBytes + (this.#closed ? 0 : this.#channel.bufferedAmount());
+    return this.#queuedBytes + this.#stagedBytes + (this.#closed ? 0 : this.#channel.bufferedAmount());
   }
 
   send(data: string | Uint8Array, callback?: (error?: Error) => void): void {
@@ -116,13 +128,38 @@ export class ChannelSocket extends EventEmitter implements RemoteSocket {
     }
     const binary = typeof data !== "string";
     const bytes = binary ? data : Buffer.from(data, "utf8");
-    const packed = this.#compress ? compressFrame(bytes) : null;
     const limit = this.#fragmentLimit();
-    const fragments = packed ? splitFrame(packed, binary, true, limit) : splitFrame(bytes, binary, false, limit);
-    fragments.forEach((message, index) => {
-      this.#queue.push({ message, done: index === fragments.length - 1 ? callback : undefined });
-      this.#queuedBytes += message.byteLength;
-    });
+    const frame: Staged = { fragments: null, bytes: bytes.byteLength, done: callback };
+    if (this.#compress && bytes.byteLength >= ASYNC_COMPRESS_MIN_BYTES) {
+      // A transcript of megabytes takes tens of milliseconds to deflate, and this is the
+      // thread every agent's stream runs on. The frame keeps its place in line meanwhile,
+      // and counts toward `bufferedAmount`, so the backpressure guard still sees it.
+      deflateRaw(bytes, { level: COMPRESS_LEVEL }, (error, packed) => {
+        if (this.#closed) return;
+        const smaller = !error && packed.byteLength < bytes.byteLength;
+        frame.fragments = splitFrame(smaller ? packed : bytes, binary, smaller, limit);
+        this.#release();
+      });
+    } else {
+      const packed = this.#compress ? compressFrame(bytes) : null;
+      frame.fragments = packed ? splitFrame(packed, binary, true, limit) : splitFrame(bytes, binary, false, limit);
+    }
+    this.#staged.push(frame);
+    this.#stagedBytes += frame.bytes;
+    this.#release();
+  }
+
+  /** Move every frame that is ready, in the order it was sent, on to the channel's queue. */
+  #release(): void {
+    while (this.#staged.length > 0 && this.#staged[0].fragments) {
+      const frame = this.#staged.shift()!;
+      this.#stagedBytes -= frame.bytes;
+      const fragments = frame.fragments!;
+      fragments.forEach((message, index) => {
+        this.#queue.push({ message, done: index === fragments.length - 1 ? frame.done : undefined });
+        this.#queuedBytes += message.byteLength;
+      });
+    }
     this.#pump();
   }
 
@@ -245,10 +282,14 @@ export class ChannelSocket extends EventEmitter implements RemoteSocket {
     this.#closed = true;
     this.#state = 3;
     const pending = this.#queue;
+    const staged = this.#staged;
     this.#queue = [];
     this.#queuedBytes = 0;
+    this.#staged = [];
+    this.#stagedBytes = 0;
     const error = new Error("data channel closed");
     for (const item of pending) item.done?.(error);
+    for (const frame of staged) frame.done?.(error);
     try {
       this.#channel.close();
     } catch {

@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_webrtc/flutter_webrtc.dart';
@@ -11,6 +10,7 @@ import 'client.dart';
 import 'diagnostics.dart';
 import 'frame_socket.dart';
 import 'rtc_frames.dart';
+import 'rtc_signaling.dart';
 
 /// The one data channel label the desktop expects; anything else it closes.
 const String rtcChannelLabel = 'fastvibe';
@@ -18,7 +18,6 @@ const String rtcChannelLabel = 'fastvibe';
 /// Largest frame accepted from the desktop. A transcript page is the big one.
 const int _maxFrameBytes = 24 * 1024 * 1024;
 
-const Duration _signalTimeout = Duration(seconds: 12);
 const Duration _channelTimeout = Duration(seconds: 25);
 const Duration _httpTimeout = Duration(seconds: 15);
 
@@ -29,7 +28,14 @@ const Duration _httpTimeout = Duration(seconds: 15);
 /// so the call never connects while the STUN requests are plainly arriving. An Android phone
 /// gathers far more than that: every interface, IPv6 temporaries, a TCP twin of each host
 /// address, and one relay per TURN URL.
+///
+/// Host addresses have a share of their own, because they are found first: nothing has to
+/// be asked for them, while the public address and the relay each wait on a round trip. A
+/// phone with enough interfaces filled the whole budget before either arrived, and then the
+/// relay — the one address a desktop on another network has to be told about, since its
+/// router lets nothing in from an address it has not sent to — was never sent at all.
 const int _maxCandidates = 8;
+const int _maxHostCandidates = 4;
 const int _maxRelayCandidates = 2;
 
 /// Keeps the STUN addresses and a single TURN one — UDP when there is one, which is the only
@@ -54,13 +60,33 @@ bool wantsCandidate(String line) {
   return true;
 }
 
+/// Which of one call's candidates are sent to the desktop.
+class CandidateBudget {
+  final Set<String> _sent = <String>{};
+  int _count = 0;
+  int _hosts = 0;
+  int _relays = 0;
+
+  /// Whether this candidate is sent: wanted, not a repeat, and within the call's budget.
+  bool admit(String line) {
+    if (!wantsCandidate(line)) return false;
+    if (_count >= _maxCandidates || _sent.contains(line)) return false;
+    final host = line.contains(' typ host');
+    final relay = line.contains(' typ relay');
+    if (host && _hosts >= _maxHostCandidates) return false;
+    if (relay && _relays >= _maxRelayCandidates) return false;
+    _sent.add(line);
+    _count += 1;
+    if (host) _hosts += 1;
+    if (relay) _relays += 1;
+    return true;
+  }
+}
+
 /// Stop handing fragments to the channel above this much queued inside it, and carry on
 /// once it drains. A data channel accepts megabytes at once and reports the cost nowhere.
 const int _highWaterBytes = 256 * 1024;
 const int _lowWaterBytes = 64 * 1024;
-
-/// A signaling message from the cloud (`docs/cloud-service.md`, 信令协议).
-typedef _Message = Map<String, Object?>;
 
 /// Reaches a computer on the same FastVibe account over WebRTC.
 ///
@@ -213,27 +239,24 @@ _IceFlight? _iceFlight;
 
 class _Attempt {
   _Attempt(this._dialer) {
-    // Either can fail before anything is waiting on it (signaling closes while the offer is
+    // It can fail before anything is waiting on it (signaling closes while the offer is
     // still being made); the waiter that comes later still gets the error.
-    unawaited(_connected.future.then((_) {}, onError: (_) {}));
     unawaited(_opened.future.then((_) {}, onError: (_) {}));
   }
 
   final RtcDialer _dialer;
-  WebSocket? _signal;
+  /// The call on the service's signaling, once it has been named.
+  SignalingCall? _call;
+  Future<SignalingCall>? _calling;
   RTCPeerConnection? _pc;
   RTCDataChannel? _channel;
-  String? _cid;
-  final Completer<_Message> _connected = Completer<_Message>();
   final Completer<RtcFrameSocket> _opened = Completer<RtcFrameSocket>();
   final List<RTCIceCandidate> _early = <RTCIceCandidate>[];
-  final Set<String> _sent = <String>{};
+  final CandidateBudget _budget = CandidateBudget();
   /// Signals made before the service has named the call, in the order they must arrive.
   final List<Map<String, Object?>> _outbox = <Map<String, Object?>>[];
   final Map<String, int> _localKinds = <String, int>{};
   final Map<String, int> _remoteKinds = <String, int>{};
-  int _sentCount = 0;
-  int _sentRelays = 0;
   /// The desktop's answer agreed to compressed frames (it was offered them below).
   bool _deflate = false;
   bool _haveRemote = false;
@@ -248,10 +271,21 @@ class _Attempt {
     // another: each is a round trip (or several) to a service that can be far away, and
     // run one after the other they were most of the time a connection took to start.
     final iceLoading = _dialer._iceServers();
-    final calling = _call().then((cid) {
+    final calling = SignalingCall.place(
+      origin: _dialer.origin,
+      token: _dialer.token,
+      deviceId: _dialer.deviceId,
+      clientName: _dialer.clientName,
+      platform: _dialer.platform,
+      onSignal: (data) => unawaited(_applySignal(data)),
+      onEnd: (error) {
+        if (!_handedOver && !_opened.isCompleted) _opened.completeError(error);
+      },
+    ).then((call) {
       recordConnectionDiagnostic(Diagnostic.metric('rtc.call', elapsedMs: since()));
-      return cid;
+      return call;
     });
+    _calling = calling;
     // Awaited below; until then a failure must not surface as an unhandled error.
     unawaited(calling.then((_) {}, onError: (_) {}));
 
@@ -272,7 +306,7 @@ class _Attempt {
     pc.onIceCandidate = (candidate) {
       final text = candidate.candidate;
       if (text == null || text.isEmpty) return;
-      if (!_admit(text)) return;
+      if (!_budget.admit(text)) return;
       _count(_localKinds, text);
       _sendSignal(<String, Object?>{'type': 'candidate', 'candidate': text, 'mid': candidate.sdpMid ?? '0'});
     };
@@ -303,8 +337,7 @@ class _Attempt {
         unawaited(socket.followPath());
         // From here signaling plays no part. Releasing the call frees this phone's slot
         // on the service; the desktop ignores a hangup once its channel is up.
-        _sendHangup();
-        unawaited(_closeSignaling());
+        _call?.release();
       } else if (state == RTCDataChannelState.RTCDataChannelClosed && !_opened.isCompleted) {
         _opened.completeError(ConnectionError('closed-early', t('conn.closedEarly')));
       }
@@ -331,7 +364,7 @@ class _Attempt {
     await pc.setLocalDescription(offer);
 
     try {
-      _cid = await calling;
+      _call = await calling;
       _flushSignals();
       return await _opened.future.timeout(_channelTimeout, onTimeout: () {
         throw ConnectionError('timeout', t('conn.rtcTimeout'));
@@ -342,27 +375,6 @@ class _Attempt {
       recordConnectionDiagnostic(Diagnostic.metric('rtc.failed', elapsedMs: since(), outcome: _kinds()));
       rethrow;
     }
-  }
-
-  /// Open signaling and place the call; the id the service gives it is what every later
-  /// signal is addressed with. `hello` and `connect` go out together — the service reads
-  /// them in order, so waiting for the first answer was a round trip spent on nothing.
-  Future<String> _call() async {
-    await _openSignaling();
-    _signal!
-      ..add(jsonEncode(<String, Object?>{
-        'type': 'hello',
-        'role': 'client',
-        'name': _dialer.clientName,
-        'platform': _dialer.platform,
-      }))
-      ..add(jsonEncode(<String, Object?>{'type': 'connect', 'device_id': _dialer.deviceId}));
-    final connected = await _connected.future.timeout(_signalTimeout, onTimeout: () {
-      throw ConnectionError('timeout', t('conn.rtcTimeout'));
-    });
-    final cid = connected['cid'];
-    if (cid is! String || cid.isEmpty) throw ConnectionError('unreachable', t('conn.rtcFailed'));
-    return cid;
   }
 
   /// `host:2 srflx:1 relay:1 / host:4 srflx:1` — what this phone sent, then what the
@@ -377,92 +389,6 @@ class _Attempt {
     final match = RegExp(r' typ (\w+)').firstMatch(candidate);
     final kind = match?.group(1) ?? 'unknown';
     kinds[kind] = (kinds[kind] ?? 0) + 1;
-  }
-
-  /// Whether this candidate is sent: wanted, not a repeat, and within the call's budget.
-  bool _admit(String line) {
-    if (!wantsCandidate(line)) return false;
-    if (_sentCount >= _maxCandidates) return false;
-    if (!_sent.add(line)) return false;
-    if (line.contains(' typ relay')) {
-      if (_sentRelays >= _maxRelayCandidates) return false;
-      _sentRelays += 1;
-    }
-    _sentCount += 1;
-    return true;
-  }
-
-  Future<void> _openSignaling() async {
-    final uri = Uri.parse('${_dialer.origin}/api/rtc/signal').replace(
-      scheme: _dialer.origin.startsWith('https://') ? 'wss' : 'ws',
-    );
-    try {
-      _signal = await WebSocket.connect(
-        uri.toString(),
-        headers: <String, Object>{'authorization': 'Bearer ${_dialer.token}'},
-      ).timeout(_signalTimeout);
-    } on WebSocketException catch (error) {
-      // A refused upgrade carries the status in the message; the token is the usual cause.
-      if ('$error'.contains('401') || '$error'.contains('403')) {
-        throw ConnectionError('unauthorized', t('conn.expired'));
-      }
-      throw ConnectionError('unreachable', t('conn.unreachable'));
-    } on TimeoutException {
-      throw ConnectionError('timeout', t('conn.timeout'));
-    } catch (_) {
-      throw ConnectionError('unreachable', t('conn.unreachable'));
-    }
-    _signal!.listen(
-      _onSignal,
-      onDone: () {
-        if (_handedOver) return;
-        final error = ConnectionError('closed-early', t('conn.closedEarly'));
-        if (!_connected.isCompleted) _connected.completeError(error);
-        if (!_opened.isCompleted) _opened.completeError(error);
-      },
-      onError: (Object _) {},
-      cancelOnError: false,
-    );
-  }
-
-  void _onSignal(Object? raw) {
-    if (_disposed || raw is! String) return;
-    final Object? decoded;
-    try {
-      decoded = jsonDecode(raw);
-    } catch (_) {
-      return;
-    }
-    if (decoded is! Map) return;
-    final message = decoded.cast<String, Object?>();
-    switch (message['type']) {
-      case 'hello':
-        // Nothing waits for it: `connect` was sent with it, and its answer is what matters.
-        break;
-      case 'connected':
-        if (!_connected.isCompleted) _connected.complete(message);
-      case 'error':
-        final error = _signalError(message['code']);
-        if (!_connected.isCompleted) _connected.completeError(error);
-        if (!_opened.isCompleted) _opened.completeError(error);
-      case 'hangup':
-        if (!_handedOver && !_opened.isCompleted) {
-          _opened.completeError(ConnectionError('closed-early', t('conn.closedEarly')));
-        }
-      case 'signal':
-        if (message['cid'] == _cid) unawaited(_applySignal(message['data']));
-    }
-  }
-
-  ConnectionError _signalError(Object? code) {
-    switch (code) {
-      case 'device_offline':
-        return ConnectionError('offline', t('conn.deviceOffline'));
-      case 'device_not_found':
-        return ConnectionError('gone', t('conn.deviceGone'));
-      default:
-        return ConnectionError('unreachable', t('conn.rtcFailed'));
-    }
   }
 
   Future<void> _applySignal(Object? data) async {
@@ -507,38 +433,12 @@ class _Attempt {
 
   void _sendSignal(Map<String, Object?> data) {
     if (_disposed) return;
-    final cid = _cid;
-    final signal = _signal;
-    if (cid == null || signal == null) {
+    final call = _call;
+    if (call == null) {
       _outbox.add(data);
       return;
     }
-    try {
-      signal.add(jsonEncode(<String, Object?>{'type': 'signal', 'cid': cid, 'data': data}));
-    } catch (_) {
-      // The signaling socket closed; the attempt fails on its own.
-    }
-  }
-
-  void _sendHangup() {
-    final cid = _cid;
-    final signal = _signal;
-    if (cid == null || signal == null) return;
-    try {
-      signal.add(jsonEncode(<String, Object?>{'type': 'hangup', 'cid': cid}));
-    } catch (_) {
-      // already closed
-    }
-  }
-
-  Future<void> _closeSignaling() async {
-    final signal = _signal;
-    _signal = null;
-    try {
-      await signal?.close();
-    } catch (_) {
-      // gone
-    }
+    call.signal(data);
   }
 
   /// Tear down what a failed attempt left behind. A connection that was handed over is the
@@ -547,7 +447,6 @@ class _Attempt {
     if (_disposed) return;
     _disposed = true;
     if (!_handedOver) {
-      _sendHangup();
       try {
         await _channel?.close();
       } catch (_) {}
@@ -555,7 +454,13 @@ class _Attempt {
         await _pc?.close();
       } catch (_) {}
     }
-    await _closeSignaling();
+    final call = _call;
+    if (call != null) {
+      call.release();
+    } else {
+      // Still being placed (the offer failed first): let go of it when it lands.
+      unawaited(_calling?.then((placed) => placed.release(), onError: (_) {}));
+    }
   }
 }
 
@@ -573,6 +478,10 @@ class RtcFrameSocket implements FrameSocket {
       if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed ||
           state == RTCPeerConnectionState.RTCPeerConnectionStateClosed) {
         _finish(1006, '');
+      } else if (state == RTCPeerConnectionState.RTCPeerConnectionStateDisconnected && !_closed) {
+        // ICE has stopped hearing from the desktop. It declares failure only much later,
+        // and often recovers; meanwhile this is the earliest sign there is of a dead path.
+        _suspect?.call();
       }
     };
   }
@@ -588,6 +497,7 @@ class RtcFrameSocket implements FrameSocket {
   final FrameAssembler _assembler = FrameAssembler(_maxFrameBytes);
   final List<Uint8List> _queue = <Uint8List>[];
   final StreamController<Object?> _frames = StreamController<Object?>(sync: true);
+  void Function()? _suspect;
   bool _closed = false;
   bool _pumping = false;
   int? _code;
@@ -601,6 +511,9 @@ class RtcFrameSocket implements FrameSocket {
 
   @override
   String? get closeReason => _reason;
+
+  @override
+  set onSuspect(void Function()? handler) => _suspect = handler;
 
   @override
   void add(String data) {

@@ -19,8 +19,8 @@ type Cloud = {
   close(): Promise<void>;
 };
 
-async function startCloud(): Promise<Cloud> {
-  const wss = new WebSocketServer({ noServer: true });
+async function startCloud(options: { autoPong?: boolean } = {}): Promise<Cloud> {
+  const wss = new WebSocketServer({ noServer: true, autoPong: options.autoPong ?? true });
   const cloud: Cloud = {
     origin: "",
     sockets: [],
@@ -218,6 +218,43 @@ test("a connection that goes silent is dropped and re-dialled", async () => {
   c.start();
   await until(() => c.status === "online", "online");
   await until(() => cloud.sockets.length >= 2, "re-dial after silence");
+  c.stop();
+  await cloud.close();
+});
+
+test("a link that stops answering pings is dropped long before it would count as silent", async () => {
+  const cloud = await startCloud({ autoPong: false });
+  const { log, handlers } = events();
+  const c = client(cloud, handlers, { silenceMs: 60_000, probeMs: 20, probeTimeoutMs: 40 });
+  c.start();
+  await until(() => cloud.sockets.length >= 2, "a second connection after the unanswered ping");
+  assert.ok(log.statuses.includes("offline"));
+  c.stop();
+  await cloud.close();
+});
+
+test("a link that answers its pings is left alone", async () => {
+  const cloud = await startCloud();
+  const { handlers } = events();
+  const c = client(cloud, handlers, { probeMs: 10, probeTimeoutMs: 200 });
+  c.start();
+  await until(() => c.status === "online", "online");
+  await new Promise((settle) => setTimeout(settle, 120));
+  assert.equal(cloud.sockets.length, 1);
+  assert.equal(c.status, "online");
+  c.stop();
+  await cloud.close();
+});
+
+test("asking now finds a dead link without waiting for the next round", async () => {
+  const cloud = await startCloud({ autoPong: false });
+  const { handlers } = events();
+  const c = client(cloud, handlers, { silenceMs: 60_000, probeMs: 60_000, probeTimeoutMs: 30 });
+  c.start();
+  await until(() => c.status === "online", "online");
+  c.probe();
+  c.probe();
+  await until(() => cloud.sockets.length >= 2, "a reconnect after the probe went unanswered");
   c.stop();
   await cloud.close();
 });

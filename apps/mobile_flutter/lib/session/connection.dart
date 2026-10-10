@@ -13,6 +13,7 @@ import '../protocol/client.dart';
 import '../protocol/diagnostics.dart';
 import '../protocol/model_cache.dart';
 import '../protocol/rtc_connection.dart';
+import '../protocol/rtc_signaling.dart';
 import '../storage/servers.dart';
 import 'catalog.dart';
 
@@ -503,6 +504,8 @@ class Connection extends ChangeNotifier {
     _client?.setActive(state == AppLifecycleState.resumed);
     if (state != AppLifecycleState.resumed) {
       _clearReconnectTimer();
+      // Its timers stop with the app, and the socket will not be there on the way back.
+      dropKeptSignaling();
       return;
     }
     _wakeConnection(fast: true);
@@ -530,6 +533,8 @@ class Connection extends ChangeNotifier {
       networkType: next.map((result) => result.name).join(','),
       connected: !next.every((result) => result == ConnectivityResult.none),
     ));
+    // A signaling socket kept from the last call was opened on the network that just went.
+    dropKeptSignaling();
     if (next.isNotEmpty && next.every((result) => result == ConnectivityResult.none)) {
       _clearReconnectTimer();
       return;

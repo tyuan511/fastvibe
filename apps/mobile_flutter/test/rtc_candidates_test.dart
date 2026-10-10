@@ -12,6 +12,32 @@ void main() {
     expect(wantsCandidate('garbage'), isFalse);
   });
 
+  test('host addresses cannot use up the budget before the public address and the relay arrive', () {
+    final budget = CandidateBudget();
+    final hosts = <bool>[
+      for (var index = 0; index < 12; index++)
+        budget.admit('candidate:$index 1 udp 2122260223 10.0.0.$index 5000 typ host'),
+    ];
+    expect(hosts.where((sent) => sent).length, 4);
+    expect(budget.admit('candidate:20 1 udp 1686052607 203.0.113.7 6000 typ srflx raddr 10.0.0.1 rport 5000'), isTrue);
+    expect(budget.admit('candidate:21 1 udp 41885439 198.51.100.2 50000 typ relay raddr 0.0.0.0 rport 0'), isTrue);
+    expect(budget.admit('candidate:22 1 udp 41885439 198.51.100.2 50001 typ relay raddr 0.0.0.0 rport 0'), isTrue);
+    expect(budget.admit('candidate:23 1 udp 41885439 198.51.100.2 50002 typ relay raddr 0.0.0.0 rport 0'), isFalse,
+        reason: 'two relays are the most one call offers');
+  });
+
+  test('a repeat is not sent twice, and the whole call stays within what the desktop keeps', () {
+    final budget = CandidateBudget();
+    const line = 'candidate:1 1 udp 1686052607 203.0.113.7 6000 typ srflx raddr 10.0.0.1 rport 5000';
+    expect(budget.admit(line), isTrue);
+    expect(budget.admit(line), isFalse);
+    var sent = 1;
+    for (var index = 0; index < 20; index++) {
+      if (budget.admit('candidate:${index + 2} 1 udp 1686052607 203.0.113.$index 6000 typ srflx raddr 10.0.0.1 rport 5000')) sent += 1;
+    }
+    expect(sent, 8);
+  });
+
   test('one TURN address is kept, UDP preferred', () {
     expect(
       oneRelayPerServer(<String>[

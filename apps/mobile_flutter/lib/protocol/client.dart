@@ -308,6 +308,13 @@ class RemoteClient {
         return;
       }
       _ws = socket;
+      // A path the transport doubts is asked about now. Left to the routine check, a
+      // connection that had quietly died stayed on screen for up to half a minute.
+      socket.onSuspect = () {
+        if (stale()) return;
+        recordConnectionDiagnostic(Diagnostic.metric('suspect'));
+        checkHealth(fast: true);
+      };
       recordConnectionDiagnostic(Diagnostic.metric('socket', elapsedMs: DateTime.now().millisecondsSinceEpoch - started));
       phaseStarted = DateTime.now().millisecondsSinceEpoch;
       try {

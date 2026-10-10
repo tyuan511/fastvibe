@@ -227,6 +227,29 @@ void main() {
       client.close();
     });
 
+    test('a path the transport doubts is asked about at once, and survives an answer', () async {
+      final socket = ScriptedSocket();
+      final client = RemoteClient(version: '1.0.0');
+      var dropped = 0;
+      client.onDisconnect((_) => dropped += 1);
+      final connected = client.connectOpened(() async => socket);
+      await Future<void>.delayed(Duration.zero);
+      socket.receive(jsonEncode(<String, Object?>{'type': 'auth', 'ok': true, 'device': <String, Object?>{'id': 'rtc:1', 'label': 'x'}}));
+      socket.receive(jsonEncode(<String, Object?>{'kind': 'welcome', 'epoch': 'e1', 'features': <String, Object?>{}}));
+      await connected;
+      client.setActive(true);
+      socket.receive(jsonEncode(<String, Object?>{'kind': 'pong'}));
+      int pings() => socket.sent.where((frame) => (jsonDecode(frame) as Map)['kind'] == 'ping').length;
+      final before = pings();
+
+      socket.suspect!();
+      expect(pings(), before + 1, reason: 'asked now, not at the next routine check');
+      socket.receive(jsonEncode(<String, Object?>{'kind': 'pong'}));
+      expect(client.ready, isTrue);
+      expect(dropped, 0);
+      client.close();
+    });
+
     test('a socket that closes before the welcome fails the connect', () async {
       final socket = ScriptedSocket();
       final client = RemoteClient(version: '1.0.0');
@@ -248,6 +271,12 @@ class ScriptedSocket implements FrameSocket {
   final StreamController<Object?> _in = StreamController<Object?>(sync: true);
   bool _open = true;
   int? _code;
+
+  /// What the client asked to be told when the path looks doubtful.
+  void Function()? suspect;
+
+  @override
+  set onSuspect(void Function()? handler) => suspect = handler;
 
   void receive(String frame) => _in.add(frame);
 

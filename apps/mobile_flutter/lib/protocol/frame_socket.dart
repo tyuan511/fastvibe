@@ -24,6 +24,11 @@ abstract class FrameSocket {
   int? get closeCode;
   String? get closeReason;
 
+  /// Called when the transport itself doubts the path — it has not failed, and may well
+  /// recover, but something under it stopped answering. The owner asks the far end at once
+  /// instead of waiting for its next routine check. A socket with no such notion never calls it.
+  set onSuspect(void Function()? handler);
+
   void close();
 }
 
@@ -51,6 +56,10 @@ class WebSocketFrameSocket implements FrameSocket {
 
   @override
   String? get closeReason => _socket.closeReason;
+
+  /// A WebSocket says nothing until it closes.
+  @override
+  set onSuspect(void Function()? handler) {}
 
   @override
   void close() {
