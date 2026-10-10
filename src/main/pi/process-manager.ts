@@ -69,6 +69,8 @@ import type {
 } from "@shared/types";
 import { parseCompactCommand, parseHandoffCommand } from "@shared/slash";
 import { buildCommitMessagePlan, type CommitFileMaterial } from "../engine/commit-message";
+import { summarizeToolCalls } from "@shared/tool-summary";
+import type { ToolDetailLevel } from "@shared/transcript-page";
 import { ConversationCatalog } from "../engine/conversation-catalog";
 import { promptPreview } from "../engine/prompt-preview";
 import { searchConversationContent } from "../engine/conversation-search";
@@ -2166,11 +2168,11 @@ export class PiProcessManager {
    * `seq` is the last event number in existence at that instant. A caller that
    * subscribes afterwards discards anything at or below it and applies the rest.
    */
-  async getSnapshot(conversationId?: string, fromEntryId?: string, historyLimit?: number): Promise<ConversationSnapshot> {
+  async getSnapshot(conversationId?: string, fromEntryId?: string, historyLimit?: number, toolDetail?: ToolDetailLevel): Promise<ConversationSnapshot> {
     const { id, session } = await this.#sessionFor(conversationId);
     const page = !fromEntryId && typeof historyLimit === "number" ? { turnLimit: historyLimit } : undefined;
     const projected = this.#messagesFrom(session, id, fromEntryId, page);
-    const messages = projected.messages;
+    const messages = toolDetail === "summary" ? summarizeToolCalls(projected.messages) : projected.messages;
     const running = id ? this.#busy(id) : false;
     const turn = running && id ? this.#turnEvents.get(id) : undefined;
     const pendingUi: Array<Record<string, unknown>> = [];
@@ -2200,11 +2202,11 @@ export class PiProcessManager {
       seq: this.#eventSeq,
     };
   }
-  async getMessagesPage(conversationId: string, beforeEntryId: string, turnLimit = 12) {
+  async getMessagesPage(conversationId: string, beforeEntryId: string, turnLimit = 12, toolDetail?: ToolDetailLevel) {
     if (!conversationId || typeof beforeEntryId !== "string" || !beforeEntryId) throw new Error(uiText("历史消息游标无效", "Invalid history cursor"));
     const { id, session } = await this.#sessionFor(conversationId);
     const page = this.#messagesFrom(session, id, undefined, { turnLimit, beforeEntryId });
-    return { conversationId: id ?? null, messages: page.messages, beforeEntryId,
+    return { conversationId: id ?? null, messages: toolDetail === "summary" ? summarizeToolCalls(page.messages) : page.messages, beforeEntryId,
       nextBeforeEntryId: page.history?.beforeEntryId ?? null, reset: page.pageAnchorFound === false };
   }
   /**

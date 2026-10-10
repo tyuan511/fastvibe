@@ -137,6 +137,11 @@ export type ToolCallBlock = {
    * Such a call is data — the turn's changed-file chips read it — but has no card of its own.
    */
   parentId?: string;
+  /**
+   * What a summary transcript left out of this block (`shared/tool-summary.ts`). Absent on
+   * a whole block.
+   */
+  omitted?: import("./tool-summary").ToolOmission;
 };
 
 /**

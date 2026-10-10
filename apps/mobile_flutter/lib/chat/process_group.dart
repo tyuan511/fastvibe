@@ -9,9 +9,8 @@ import 'tool_card.dart';
 /// drawn as one card, one line each, even across the model's round trips.
 ///
 /// Nothing a reader needs sits between them, and a card per call made a busy turn a
-/// column of boxes. Collapsed is still the default, because the reply is the thing on
-/// screen; but a phone is often the only screen the user has, and a failed command whose
-/// output cannot be read at all is a dead end — so every line expands on its own tap.
+/// column of boxes. Tool rows stay compact because the reply is the thing on screen;
+/// detailed tool output belongs to the desktop transcript.
 class ProcessGroup extends StatelessWidget {
   const ProcessGroup({
     super.key,

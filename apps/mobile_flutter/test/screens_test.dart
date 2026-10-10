@@ -107,7 +107,11 @@ void main() {
     await pump(tester, const SettingsScreen());
     expect(tester.takeException(), isNull);
     expect(find.text(t('settings.appearance')), findsOneWidget);
-    await tester.scrollUntilVisible(find.text(t('settings.general')), 180, scrollable: find.byType(Scrollable).first);
+    await tester.scrollUntilVisible(
+      find.text(t('settings.general')),
+      180,
+      scrollable: find.byType(Scrollable).first,
+    );
     expect(find.text(t('settings.general')), findsOneWidget);
     await tester.scrollUntilVisible(
       find.text(t('settings.about')),
@@ -126,9 +130,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('a process card expands a tool call and a thinking row', (
-    tester,
-  ) async {
+  testWidgets('a process card keeps tool calls compact', (tester) async {
     final steps = <ProcessStep>[
       const ThinkingStep('weighing the options'),
       ToolStep(
@@ -156,12 +158,12 @@ void main() {
       ),
     );
     expect(tester.takeException(), isNull);
-    // Collapsed: the subject is on the row, the output is not.
+    // Mobile keeps the tool row compact; arguments and output are never shown.
     expect(find.text('a.txt'), findsOneWidget);
     expect(find.text('hello'), findsNothing);
     await tester.tap(find.text('a.txt'));
     await tester.pump();
-    expect(find.text('hello'), findsOneWidget);
+    expect(find.text('hello'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 

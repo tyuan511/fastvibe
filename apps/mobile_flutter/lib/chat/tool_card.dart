@@ -7,12 +7,12 @@ import '../ui/icons.dart';
 import 'codemode.dart';
 import 'message.dart';
 
-/// Mobile keeps each tool call to one compact transcript row until it is tapped.
+/// Mobile keeps each tool call to one compact transcript row.
 ///
 /// The desktop has room for a disclosure panel with parameters, output and diffs. On a
-/// phone those bodies make a reply jump several screens and bury the answer. The
-/// collapsed row therefore answers only the useful question — what is the agent doing,
-/// and what is it doing it to? — and the input and the output's tail wait behind a tap.
+/// phone those bodies make a reply jump several screens and bury the answer, so the
+/// mobile row answers only the useful question — what is the agent doing, and what is it
+/// doing it to?
 enum ToolFamily {
   read,
   edit,
@@ -358,8 +358,11 @@ ToolSummary summarize(ToolBlock tool) {
   );
 }
 
-/// One tool call, collapsed to a line and expanded on a tap.
-class ToolCard extends StatefulWidget {
+/// One tool call, rendered as a compact line on the phone.
+///
+/// Tool arguments, output and diffs stay out of the mobile transcript. A DAG row may
+/// still open the dedicated graph view, which is navigation rather than tool detail.
+class ToolCard extends StatelessWidget {
   const ToolCard({
     super.key,
     required this.tool,
@@ -377,37 +380,22 @@ class ToolCard extends StatefulWidget {
   final VoidCallback? onOpenDag;
 
   @override
-  State<ToolCard> createState() => _ToolCardState();
-}
-
-class _ToolCardState extends State<ToolCard> {
-  bool _open = false;
-
-  @override
   Widget build(BuildContext context) {
-    final palette = widget.palette;
-    final tool = widget.tool;
+    final palette = this.palette;
+    final tool = this.tool;
     final summary = summarize(tool);
     final opensDag =
         tool.name.startsWith('dag_') &&
         tool.name != 'dag_report' &&
         !summary.error &&
-        widget.onOpenDag != null;
+        onOpenDag != null;
     final tint = summary.error
         ? palette.danger
         : summary.running
         ? palette.accent
         : palette.muted;
-    final detail = _open ? _toolDetail(tool) : null;
-
     final row = InkWell(
-      onTap: () {
-        if (opensDag) {
-          widget.onOpenDag!.call();
-        } else {
-          setState(() => _open = !_open);
-        }
-      },
+      onTap: opensDag ? onOpenDag : null,
       child: ConstrainedBox(
         constraints: const BoxConstraints(minHeight: 40),
         child: Padding(
@@ -489,16 +477,15 @@ class _ToolCardState extends State<ToolCard> {
                     fontWeight: FontWeight.w700,
                   ),
                 ),
-              const SizedBox(width: 4),
-              RotatedBox(
-                quarterTurns: _open ? 1 : 0,
-                child: HugeIcon(
+              if (opensDag) ...<Widget>[
+                const SizedBox(width: 4),
+                HugeIcon(
                   icon: AppIcons.arrowRight,
                   size: 14,
                   color: palette.subtle,
                   strokeWidth: 2,
                 ),
-              ),
+              ],
             ],
           ),
         ),
@@ -506,321 +493,14 @@ class _ToolCardState extends State<ToolCard> {
     );
 
     return Container(
-      decoration: widget.divider
+      decoration: divider
           ? BoxDecoration(
               border: Border(
                 top: BorderSide(color: palette.separator, width: 0.5),
               ),
             )
           : null,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: <Widget>[
-          row,
-          if (detail != null)
-            _Detail(
-              detail: detail,
-              palette: palette,
-              error: summary.error,
-              running: summary.running,
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ToolDetail {
-  const _ToolDetail({
-    required this.inputLabel,
-    required this.input,
-    required this.output,
-    this.calls,
-  });
-
-  final String inputLabel;
-  final String input;
-  final String output;
-  final List<CodemodeCall>? calls;
-}
-
-const int _outputLines = 40;
-const int _outputChars = 4000;
-
-/// What a tapped row shows: the call's input in its most readable form, then the output's
-/// tail — which is where an error is.
-_ToolDetail _toolDetail(ToolBlock tool) {
-  final family = familyOf(tool.name);
-  if (family == ToolFamily.codemode) {
-    // The script as written, not the `{"code": "…\n…"}` it travels as.
-    return _ToolDetail(
-      inputLabel: t('tool.script'),
-      input: _clip(codemodeBody(codemodeCode(tool.args)), 1600, 24, head: true),
-      output: _clip(tool.result ?? '', _outputChars, _outputLines, head: false),
-      calls: codemodeCalls(tool.details),
-    );
-  }
-  var inputLabel = t('tool.args');
-  var input = '';
-  if (family == ToolFamily.terminal) {
-    inputLabel = t('tool.command');
-    input = argString(tool.args, _commandKeys);
-  } else if (family == ToolFamily.read ||
-      family == ToolFamily.edit ||
-      family == ToolFamily.write ||
-      family == ToolFamily.delete) {
-    inputLabel = t('tool.file');
-    input = argString(tool.args, _fileKeys);
-  }
-  if (input.isEmpty && tool.args != null) {
-    input = tool.args is String ? tool.args! as String : encodeJson(tool.args);
-  }
-  return _ToolDetail(
-    inputLabel: inputLabel,
-    input: _clip(input, 1600, 24, head: true),
-    output: _clip(tool.result ?? '', _outputChars, _outputLines, head: false),
-  );
-}
-
-/// Bound a block for a phone: long output keeps its end (where errors are), long input
-/// its start.
-String _clip(String text, int chars, int lines, {required bool head}) {
-  final trimmed = text.replaceFirst(RegExp(r'\s+$'), '');
-  final all = trimmed.split('\n');
-  var out = all.length > lines
-      ? (head ? all.take(lines) : all.skip(all.length - lines)).join('\n')
-      : trimmed;
-  if (out.length > chars) {
-    out = head ? out.substring(0, chars) : out.substring(out.length - chars);
-  }
-  if (out.length == trimmed.length) return out;
-  return head ? '$out\n…' : '…\n$out';
-}
-
-class _Detail extends StatelessWidget {
-  const _Detail({
-    required this.detail,
-    required this.palette,
-    required this.error,
-    required this.running,
-  });
-
-  final _ToolDetail detail;
-  final Palette palette;
-  final bool error;
-  final bool running;
-
-  @override
-  Widget build(BuildContext context) {
-    final calls = detail.calls;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: <Widget>[
-          if (detail.input.isNotEmpty) ...<Widget>[
-            _Block(
-              palette: palette,
-              label: detail.inputLabel,
-              labelColor: palette.muted,
-              child: SelectableText(
-                detail.input,
-                style: TextStyle(
-                  color: palette.text,
-                  fontFamily: 'monospace',
-                  fontSize: 12,
-                  height: 18 / 12,
-                ),
-              ),
-            ),
-            const SizedBox(height: 6),
-          ],
-          if (calls != null && calls.isNotEmpty) ...<Widget>[
-            _Block(
-              palette: palette,
-              label: t('tool.calledTools', context: context),
-              labelColor: palette.muted,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  for (final call in calls)
-                    _CallRow(call: call, palette: palette),
-                ],
-              ),
-            ),
-            const SizedBox(height: 6),
-          ],
-          if (detail.output.isNotEmpty)
-            _Block(
-              palette: palette,
-              label: error
-                  ? t('tool.error', context: context)
-                  : t('tool.output', context: context),
-              labelColor: error ? palette.danger : palette.muted,
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: SelectableText(
-                  detail.output,
-                  style: TextStyle(
-                    color: error ? palette.danger : palette.text,
-                    fontFamily: 'monospace',
-                    fontSize: 12,
-                    height: 18 / 12,
-                  ),
-                ),
-              ),
-            )
-          else if (!running)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 2),
-              child: Text(
-                t('tool.noOutput', context: context),
-                style: TextStyle(color: palette.muted, fontSize: 12),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-class _Block extends StatelessWidget {
-  const _Block({
-    required this.palette,
-    required this.label,
-    required this.labelColor,
-    required this.child,
-  });
-
-  final Palette palette;
-  final String label;
-  final Color labelColor;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        color: palette.field,
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Text(
-            label,
-            style: TextStyle(
-              color: labelColor,
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 0.3,
-            ),
-          ),
-          const SizedBox(height: 4),
-          child,
-        ],
-      ),
-    );
-  }
-}
-
-/// One tool a script ran: whether it worked, what it was called with, how long it took.
-class _CallRow extends StatelessWidget {
-  const _CallRow({required this.call, required this.palette});
-
-  final CodemodeCall call;
-  final Palette palette;
-
-  @override
-  Widget build(BuildContext context) {
-    final duration = formatCallDuration(call.durationMs);
-    final glyph = call.status == 'ok'
-        ? '✓'
-        : (call.status == 'error' ? '✕' : '–');
-    final tint = call.status == 'ok'
-        ? palette.success
-        : call.status == 'error'
-        ? palette.danger
-        : palette.muted;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 1),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Row(
-            children: <Widget>[
-              if (call.status == 'running')
-                SizedBox(
-                  width: 11,
-                  child: Center(
-                    child: DesktopSpinner(size: 11, color: palette.accent),
-                  ),
-                )
-              else
-                SizedBox(
-                  width: 11,
-                  child: Text(
-                    glyph,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: tint,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              const SizedBox(width: 6),
-              Flexible(
-                child: Text(
-                  call.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: palette.text,
-                    fontFamily: 'monospace',
-                    fontSize: 12.5,
-                  ),
-                ),
-              ),
-              const Spacer(),
-              if (duration.isNotEmpty)
-                Text(
-                  duration,
-                  style: TextStyle(color: palette.muted, fontSize: 11.5),
-                ),
-            ],
-          ),
-          if (call.args.isNotEmpty && call.args != '{}')
-            Padding(
-              padding: const EdgeInsets.only(left: 17),
-              child: Text(
-                call.args,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: palette.muted,
-                  fontFamily: 'monospace',
-                  fontSize: 11.5,
-                ),
-              ),
-            ),
-          if (call.error != null)
-            Padding(
-              padding: const EdgeInsets.only(left: 17),
-              child: Text(
-                call.error!,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: palette.danger,
-                  fontFamily: 'monospace',
-                  fontSize: 11.5,
-                ),
-              ),
-            ),
-        ],
-      ),
+      child: row,
     );
   }
 }

@@ -341,6 +341,10 @@ class _ChatScreenState extends State<ChatScreen> {
             'engine:get-snapshot',
             <String, Object?>{
               'conversationId': conversationId,
+              // The phone only renders compact tool rows. Keep large arguments and
+              // results out of snapshots so a relayed connection does not carry UI
+              // data that can never be displayed here.
+              'toolDetail': 'summary',
               if (anchorEntryId != null && anchorEntryId.isNotEmpty)
                 'fromEntryId': anchorEntryId,
               if (!_fullRead &&
@@ -435,6 +439,7 @@ class _ChatScreenState extends State<ChatScreen> {
               'conversationId': conversationId,
               'beforeEntryId': beforeEntryId,
               'turnLimit': 12,
+              'toolDetail': 'summary',
             },
           );
           if (page is! Map ||
