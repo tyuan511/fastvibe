@@ -17,7 +17,8 @@
 /// DEFLATE is for the relay, where a phone on mobile data can be a few hundred milliseconds from
 /// the desktop. A sender may only set it once the peer has said it understands it — the phone
 /// offers `deflate`, the desktop's answer agrees — because an older reader refuses unknown header
-/// bits and closes the channel.
+/// bits and closes the channel. The agreement is permission: the bit is per fragment, and a
+/// sender compresses only while the selected path is the relay.
 ///
 /// The channel is reliable and ordered, which is what lets fragments carry no sequence number:
 /// a sender never interleaves two frames, so every fragment up to the next LAST belongs to one
@@ -38,9 +39,11 @@ const int fragDeflate = 0x20;
 /// Frames shorter than this are sent as they are: the saving would not pay for the work.
 const int compressMinBytes = 1024;
 
-/// Largest data channel message sent, header included.
+/// Largest data channel message the phone sends, header included.
+///
+/// The desktop may send larger fragments on a direct path, because it can read the size the
+/// peer negotiated. This stack cannot, so the phone stays at what interoperates everywhere.
 const int maxMessageBytes = 16 * 1024;
-const int _maxPayloadBytes = maxMessageBytes - 1;
 const int _maxReasonBytes = 123;
 
 class FrameError implements Exception {
@@ -64,9 +67,10 @@ Uint8List? compressFrame(List<int> data) {
 List<Uint8List> splitFrame(List<int> data, {required bool binary, bool deflated = false}) {
   final flag = (binary ? fragBinary : 0) | (deflated ? fragDeflate : 0);
   if (data.isEmpty) return <Uint8List>[Uint8List.fromList(<int>[fragLast | flag])];
+  const payloadBytes = maxMessageBytes - 1;
   final out = <Uint8List>[];
-  for (var offset = 0; offset < data.length; offset += _maxPayloadBytes) {
-    final end = offset + _maxPayloadBytes < data.length ? offset + _maxPayloadBytes : data.length;
+  for (var offset = 0; offset < data.length; offset += payloadBytes) {
+    final end = offset + payloadBytes < data.length ? offset + payloadBytes : data.length;
     final message = Uint8List(1 + end - offset);
     message[0] = flag | (end == data.length ? fragLast : 0);
     message.setRange(1, message.length, data, offset);

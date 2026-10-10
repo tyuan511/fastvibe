@@ -1,7 +1,9 @@
 import { EventEmitter } from "node:events";
 import {
+  DIRECT_MAX_MESSAGE_BYTES,
   FrameAssembler,
   FrameError,
+  MAX_MESSAGE_BYTES,
   PING,
   PONG,
   closeMessage,
@@ -24,6 +26,8 @@ export interface DataChannelLike {
    */
   sendMessageBinary(message: Buffer): boolean;
   bufferedAmount(): number;
+  /** The largest message this channel will accept, once negotiated. Absent on a fake. */
+  maxMessageSize?(): number;
   setBufferedAmountLowThreshold(bytes: number): void;
   onBufferedAmountLow(callback: () => void): void;
   onMessage(callback: (message: string | Buffer | ArrayBuffer) => void): void;
@@ -64,13 +68,25 @@ export class ChannelSocket extends EventEmitter implements RemoteSocket {
   #queue: Outgoing[] = [];
   #queuedBytes = 0;
   #closed = false;
-  /** The peer reads compressed frames (it said so while the call was being set up). */
-  readonly #compress: boolean;
+  /**
+   * The peer reads compressed frames (it said so while the call was being set up).
+   *
+   * Permission only. Compression runs on this thread and pays for itself on the relay,
+   * where a phone is hundreds of milliseconds away; on a direct path the CPU costs more
+   * than the bytes. The path is not known when the channel opens — ICE nominates after —
+   * so a frame leaves as it is until the path is reported as the relay, and a later change
+   * applies to the next frame. The bit rides each fragment, so the two can mix.
+   */
+  readonly #compressAllowed: boolean;
+  #compress = false;
+  /** Direct-path fragments grow to this, and only when the peer negotiated it. */
+  #direct = false;
+  #maxMessageBytes = MAX_MESSAGE_BYTES;
 
   constructor(channel: DataChannelLike, options: { maxFrameBytes: number; compress?: boolean }) {
     super();
     this.#channel = channel;
-    this.#compress = options.compress === true;
+    this.#compressAllowed = options.compress === true;
     this.#assembler = new FrameAssembler(options.maxFrameBytes);
     this.#state = channel.isOpen() ? 1 : 0;
     channel.setBufferedAmountLowThreshold(LOW_WATER_BYTES);
@@ -101,12 +117,40 @@ export class ChannelSocket extends EventEmitter implements RemoteSocket {
     const binary = typeof data !== "string";
     const bytes = binary ? data : Buffer.from(data, "utf8");
     const packed = this.#compress ? compressFrame(bytes) : null;
-    const fragments = packed ? splitFrame(packed, binary, true) : splitFrame(bytes, binary);
+    const limit = this.#fragmentLimit();
+    const fragments = packed ? splitFrame(packed, binary, true, limit) : splitFrame(bytes, binary, false, limit);
     fragments.forEach((message, index) => {
       this.#queue.push({ message, done: index === fragments.length - 1 ? callback : undefined });
       this.#queuedBytes += message.byteLength;
     });
     this.#pump();
+  }
+
+  /**
+   * Whether the next frame should be compressed. `null` (the path is not known yet) and
+   * `false` (it is direct) both send frames as they are; only a confirmed relay enables it,
+   * and only when the peer agreed to read compressed frames.
+   */
+  setCompress(compress: boolean | null): void {
+    this.#compress = this.#compressAllowed && compress === true;
+    // A direct path is the one that can afford fewer, larger fragments. The relay stays
+    // at the interoperable size: a lossy hop is where a large SCTP message costs retries.
+    this.#direct = compress === false;
+  }
+
+  /**
+   * How large one fragment may be. The interoperable size unless the path is direct
+   * *and* the open channel reports the peer accepted more — never past our own ceiling,
+   * and never on a number the peer did not negotiate.
+   */
+  #fragmentLimit(): number {
+    if (!this.#direct) return MAX_MESSAGE_BYTES;
+    if (this.#maxMessageBytes > MAX_MESSAGE_BYTES) return this.#maxMessageBytes;
+    const reported = this.#channel.maxMessageSize?.();
+    if (typeof reported === "number" && Number.isFinite(reported) && reported > MAX_MESSAGE_BYTES) {
+      this.#maxMessageBytes = Math.min(Math.floor(reported), DIRECT_MAX_MESSAGE_BYTES);
+    }
+    return this.#maxMessageBytes;
   }
 
   ping(): void {

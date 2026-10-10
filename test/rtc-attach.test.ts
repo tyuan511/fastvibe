@@ -95,7 +95,8 @@ test("it works with the listener off and no password set", async () => {
     assert.equal(server.status.configured, false);
     const p = phone(server);
     await p.next((f) => f.type === "auth");
-    assert.equal(server.status.clients, 1);
+    // An official connection is attached, but it is not a LAN login, so the LAN count stays at zero.
+    assert.equal(server.status.clients, 0);
   });
 });
 
@@ -142,10 +143,9 @@ test("stopping the listener leaves an attached connection up, and the heartbeat 
     const p = phone(server);
     await p.next((f) => f.type === "auth");
     await server.stop();
-    assert.equal(server.status.clients, 1);
+    assert.equal(server.status.clients, 0, "the LAN count never included this connection");
     // Several heartbeat rounds (40 ms) with the pong answered by the adapter: still here.
     await new Promise((settle) => setTimeout(settle, 250));
-    assert.equal(server.status.clients, 1);
     assert.equal(p.host.readyState, 1);
   });
 });
@@ -158,7 +158,6 @@ test("a connection that stops answering is dropped by the heartbeat", async () =
     server.attachTransport(host, { id: "rtc:silent", label: "silent" });
     b.muted = true; // the far end stops answering, as a phone that left the network does
     await new Promise((settle) => setTimeout(settle, 300));
-    assert.equal(server.status.clients, 0);
     assert.equal(host.readyState, 3);
   });
 });

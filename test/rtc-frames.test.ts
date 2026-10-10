@@ -6,6 +6,7 @@ import {
   BINARY,
   COMPRESS_MIN_BYTES,
   DEFLATE,
+  DIRECT_MAX_MESSAGE_BYTES,
   FrameAssembler,
   FrameError,
   LAST,
@@ -44,6 +45,19 @@ test("the binary flag rides on every fragment", () => {
   const messages = splitFrame(Buffer.alloc(MAX_MESSAGE_BYTES * 2 + 5, 7), true);
   assert.equal(messages.length, 3);
   assert.deepEqual(messages.map((m) => m[0]), [BINARY, BINARY, BINARY | LAST]);
+});
+
+test("a direct path's larger limit still round-trips, and stays within it", () => {
+  const data = Buffer.alloc(DIRECT_MAX_MESSAGE_BYTES * 2 + 10);
+  for (let i = 0; i < data.byteLength; i += 1) data[i] = i % 251;
+  const messages = splitFrame(data, false, false, DIRECT_MAX_MESSAGE_BYTES);
+  assert.equal(messages.length, 3, "four times fewer fragments than the interoperable size");
+  assert.ok(messages.every((message) => message.byteLength <= DIRECT_MAX_MESSAGE_BYTES));
+  const assembler = new FrameAssembler(8 * 1024 * 1024);
+  let result;
+  for (const message of messages) result = assembler.push(message);
+  assert.equal(result?.kind, "frame");
+  if (result?.kind === "frame") assert.ok(result.data.equals(data));
 });
 
 test("frames of every size survive the split", () => {

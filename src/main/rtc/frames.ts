@@ -23,7 +23,9 @@ import { deflateRawSync, inflateRawSync } from "node:zlib";
  * a few hundred milliseconds from this computer, where a transcript of a megabyte of JSON is
  * the difference between seconds and a fraction of one. A sender may only set it once the
  * peer has said it understands it — the phone offers `deflate`, the desktop's answer agrees
- * — because an older reader refuses unknown header bits and closes the channel.
+ * — because an older reader refuses unknown header bits and closes the channel. That
+ * agreement is permission, not a decision: the bit is per fragment, so a sender compresses
+ * only while the selected path is the relay and sends the rest as it is.
  *
  * The channel must be reliable and ordered (the default), which is what lets fragments
  * carry no sequence number: a sender never interleaves two frames, so every fragment up to
@@ -41,9 +43,16 @@ export const DEFLATE = 0x20;
 /** Frames shorter than this are sent as they are: the saving would not pay for the work. */
 export const COMPRESS_MIN_BYTES = 1024;
 
-/** Largest data channel message sent, header included. */
+/**
+ * Largest data channel message sent, header included, when the peer's limit is unknown.
+ *
+ * 16 KiB is what interoperates with every stack. A direct path may send more — up to
+ * `DIRECT_MAX_MESSAGE_BYTES` — but only once the open channel reports that the peer
+ * negotiated at least that much. Guessing high closes the channel.
+ */
 export const MAX_MESSAGE_BYTES = 16 * 1024;
-const MAX_PAYLOAD_BYTES = MAX_MESSAGE_BYTES - 1;
+/** A direct path's ceiling. libdatachannel's own default, so a negotiated channel can take it. */
+export const DIRECT_MAX_MESSAGE_BYTES = 64 * 1024;
 
 /** Close reasons are short by contract (WebSocket allows 123 bytes). */
 const MAX_REASON_BYTES = 123;
@@ -65,12 +74,13 @@ export function compressFrame(data: Uint8Array): Buffer | null {
  * Cut one frame into data channel messages. An empty frame is a single empty LAST fragment.
  * `deflated` says `data` is already compressed (`compressFrame`) and marks every fragment.
  */
-export function splitFrame(data: Uint8Array, binary: boolean, deflated = false): Buffer[] {
+export function splitFrame(data: Uint8Array, binary: boolean, deflated = false, maxMessageBytes = MAX_MESSAGE_BYTES): Buffer[] {
   const flag = (binary ? BINARY : 0) | (deflated ? DEFLATE : 0);
   if (data.byteLength === 0) return [Buffer.from([LAST | flag])];
+  const payloadBytes = Math.max(1, maxMessageBytes - 1);
   const out: Buffer[] = [];
-  for (let offset = 0; offset < data.byteLength; offset += MAX_PAYLOAD_BYTES) {
-    const end = Math.min(offset + MAX_PAYLOAD_BYTES, data.byteLength);
+  for (let offset = 0; offset < data.byteLength; offset += payloadBytes) {
+    const end = Math.min(offset + payloadBytes, data.byteLength);
     const message = Buffer.allocUnsafe(1 + end - offset);
     message[0] = flag | (end === data.byteLength ? LAST : 0);
     message.set(data.subarray(offset, end), 1);

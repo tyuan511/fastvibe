@@ -195,6 +195,7 @@ export function RemoteLan({
                     : t("remote.neverConnected")}
                 </p>
               </div>
+              <Badge variant="outline" className="shrink-0">{t("remote.viaLan")}</Badge>
               <Button
                 size="xs"
                 variant="ghost"

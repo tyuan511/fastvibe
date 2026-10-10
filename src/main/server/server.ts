@@ -115,6 +115,10 @@ export type RemoteServerStatus = {
   port: number | null;
   /** Whether a password has been set. Without one the server refuses to start. */
   configured: boolean;
+  /**
+   * Phones on the listener right now. An official connection is attached here too, but it
+   * is counted on the official pane, so the LAN's number stays its own.
+   */
   clients: number;
   failedLogins: number;
 };
@@ -250,7 +254,7 @@ export class RemoteServer {
           : this.#host,
       port: this.#port,
       configured: isConfigured(this.#deps.accessFile),
-      clients: this.#clients.size,
+      clients: [...this.#clients.values()].filter((client) => !client.external && client.deviceId !== null).length,
       failedLogins: this.#throttle.failures,
     };
   }

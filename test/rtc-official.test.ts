@@ -362,6 +362,8 @@ test("the server list is asked for once and reused by the calls that follow", as
 class GatheringPeer extends FakePeer {
   gathering: ((state: string) => void) | null = null;
   onGatheringStateChange(cb: (state: string) => void) { this.gathering = cb; }
+  /** What this side found locally, as the real peer reports it. */
+  found(candidate: string): void { this.candidate?.(candidate, "0"); }
 }
 
 test("the phone's candidates wait for this side's own gathering, then go in together", async () => {
@@ -377,11 +379,31 @@ test("the phone's candidates wait for this side's own gathering, then go in toge
     await until(() => peers[0].applied.length === 1, "the offer");
     await new Promise((settle) => setTimeout(settle, 80));
     assert.deepEqual(peers[0].applied.map((a) => a.kind), ["offer"], "no connectivity check goes out before the STUN request has");
-    (peers[0] as GatheringPeer).gathering?.("complete");
+    // The relay allocation is still ahead; the public address is enough to let the checks start.
+    (peers[0] as GatheringPeer).found("candidate:9 1 udp 1694498815 203.0.113.4 50001 typ srflx raddr 0.0.0.0 rport 0");
     assert.deepEqual(peers[0].applied.map((a) => a.kind), ["offer", "candidate", "candidate"]);
+    (peers[0] as GatheringPeer).gathering?.("complete");
     // One that arrives afterwards is applied at once.
     phone.signal(cid, { type: "candidate", candidate: "candidate:3 1 udp 1686052607 203.0.113.9 40001 typ srflx raddr 0.0.0.0 rport 0", mid: "0" });
     await until(() => peers[0].applied.length === 4, "a late candidate");
+  }, {}, GatheringPeer);
+});
+
+test("a host candidate of our own does not release the phone's, a reflexive one does", async () => {
+  await withRig(async ({ official, cloud, peers }) => {
+    official.setEnabled(true);
+    await until(() => official.state().status === "online", "online");
+    const phone = await cloud.phone("fvs_good");
+    const cid = await phone.connect(official.state().deviceId!);
+    await until(() => peers.length === 1, "a peer connection");
+    phone.signal(cid, { type: "offer", sdp: "v=0 offer" });
+    phone.signal(cid, { type: "candidate", candidate: "candidate:1 1 udp 2122260223 10.3.126.7 40000 typ host", mid: "0" });
+    await until(() => peers[0].applied.length === 1, "the offer");
+    (peers[0] as GatheringPeer).found("candidate:8 1 udp 2122260223 192.168.1.9 50002 typ host");
+    await new Promise((settle) => setTimeout(settle, 80));
+    assert.deepEqual(peers[0].applied.map((a) => a.kind), ["offer"], "a private address of our own proves nothing about the STUN request");
+    (peers[0] as GatheringPeer).found("candidate:9 1 udp 1694498815 203.0.113.4 50001 typ srflx raddr 0.0.0.0 rport 0");
+    assert.deepEqual(peers[0].applied.map((a) => a.kind), ["offer", "candidate"]);
   }, {}, GatheringPeer);
 });
 

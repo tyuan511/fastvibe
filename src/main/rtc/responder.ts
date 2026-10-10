@@ -13,9 +13,15 @@ const MAX_SDP_CHARS = 64 * 1024;
 const MAX_FRAME_BYTES = 24 * 1024 * 1024;
 
 /**
- * How long the phone's candidates are held back for this side's own gathering to finish.
- * Asking the STUN server is one round trip; this is the ceiling for a server that does not
- * answer, after which the call goes on with whatever it has.
+ * How long the phone's candidates are held back for this side to find its own public address.
+ *
+ * They are held at all so a connectivity check cannot be the first packet on a socket a proxy
+ * routes by that packet: the check is addressed at the phone's private address, and the STUN
+ * request that should have followed it then went the same way and was never answered. The
+ * moment this side has a server-reflexive candidate, that request has already gone out, and
+ * holding on until gathering *completes* only adds the relay allocation — a round trip to
+ * TURN that a phone on the same network never needed. This is the ceiling for a STUN server
+ * that does not answer, after which the call goes on with whatever it has.
  */
 const GATHER_WAIT_MS = 1500;
 
@@ -79,7 +85,7 @@ export class Responder {
   #connectedAt = 0;
   #startedAt = Date.now();
   #clientId: string | null = null;
-  /** The phone offered to read compressed frames; the answer agrees and the socket then sends them. */
+  /** The phone offered to read compressed frames; the answer agrees, which permits sending them. */
   #deflate = false;
   /**
    * The phone's candidates, held until this side has finished finding its own.
@@ -95,6 +101,8 @@ export class Responder {
    */
   #held: Array<{ candidate: string; mid: string }> | null = [];
   #gatherTimer: NodeJS.Timeout | null = null;
+  /** Set once this side has found its own public address, which is what the hold waits for. */
+  #haveReflexive = false;
   #path: OfficialPath = "connecting";
   #timeout: NodeJS.Timeout | null = null;
   #poll: NodeJS.Timeout | null = null;
@@ -160,6 +168,12 @@ export class Responder {
       // Host candidates are the common, uninteresting ones; the others decide whether a
       // phone off this network can connect at all.
       if (!sent || type !== "host") this.#deps.log.info(`rtc ${this.cid}: local ${type} candidate ${sent ? "sent" : "NOT sent (signaling is down)"}`);
+      // The public address is what the hold is for. A relay candidate comes after it and
+      // is a second round trip, so it must not keep a phone on this network waiting.
+      if (type === "srflx" && !this.#haveReflexive) {
+        this.#haveReflexive = true;
+        this.#releaseCandidates();
+      }
     });
     pc.onStateChange((state) => {
       if (state === "failed" || state === "closed") this.close();
@@ -249,7 +263,7 @@ export class Responder {
     }
   }
 
-  /** Hand the phone's candidates over, now that this side has its own (or has waited long enough). */
+  /** Hand the phone's candidates over, now that this side has its public address (or has waited long enough). */
   #releaseCandidates(): void {
     const held = this.#held;
     if (!held) return;
@@ -284,7 +298,7 @@ export class Responder {
       this.#socket = socket;
       this.#connected = true;
       this.#connectedAt = Date.now();
-      this.#deps.log.info(`rtc ${this.cid}: channel open after ${this.#connectedAt - this.#startedAt} ms${this.#deflate ? ", compressed" : ""}`);
+      this.#deps.log.info(`rtc ${this.cid}: channel open after ${this.#connectedAt - this.#startedAt} ms${this.#deflate ? ", deflate available" : ""}`);
       if (this.#timeout) clearTimeout(this.#timeout);
       this.#timeout = null;
       socket.once("close", () => this.close());
@@ -300,9 +314,16 @@ export class Responder {
 
   #refreshPath(): void {
     const path = this.#pc?.selectedPath() ?? null;
+    // Compress only once the relay is confirmed. Until ICE nominates — and on a direct
+    // path, which is the usual LAN case — frames go out as they are: deflating them on
+    // this thread costs more than the bytes save.
+    // `null` until ICE nominates: neither the relay's compression nor the direct path's
+    // larger fragments, both of which want a path that has actually been selected.
+    this.#socket?.setCompress(path === null ? null : path === "relay");
     const next: OfficialPath = path ?? "connecting";
     if (next === this.#path) return;
     this.#path = next;
+    this.#deps.log.info(`rtc ${this.cid}: path ${next}${next === "relay" && this.#deflate ? ", compressed" : ""}`);
     this.#deps.onChange();
   }
 }

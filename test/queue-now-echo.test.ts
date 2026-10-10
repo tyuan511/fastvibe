@@ -21,6 +21,20 @@ new Function("require", "exports", compiled)((name: string) => {
   throw new Error(`Unexpected dependency: ${name}`);
 }, exports);
 
+test("a reply placeholder counts from the prompt, not from the event that rebuilt it", () => {
+  const row = (id: string, role: "user" | "assistant", text: string, createdAt: number): ChatMessage =>
+    ({ id, role, text, tools: [], parts: text ? [{ kind: "text", text }] : [], createdAt });
+  const before = Date.now();
+  const next = exports.applyEngineEvent!(
+    [row("u1", "user", "do the thing", 1_000)],
+    { type: "agent_start" } as EngineEvent,
+    false,
+  ).messages;
+  assert.equal(next.at(-1)?.role, "assistant");
+  assert.equal(next.at(-1)?.createdAt, 1_000);
+  assert.ok(before <= Date.now());
+});
+
 test("the engine's echo of a 立即 turn does not draw a second user row", () => {
   const row = (id: string, role: "user" | "assistant", text: string): ChatMessage =>
     ({ id, role, text, tools: [], parts: text ? [{ kind: "text", text }] : [], createdAt: 1 });

@@ -298,9 +298,9 @@ class _Attempt {
         final socket = RtcFrameSocket._(pc, channel, _deflate);
         _opened.complete(socket);
         recordConnectionDiagnostic(Diagnostic.metric('rtc.open', elapsedMs: since(), outcome: _kinds()));
-        unawaited(socket.selectedPath().then((path) {
-          recordConnectionDiagnostic(Diagnostic.metric('rtc.path', outcome: path ?? 'unknown'));
-        }));
+        // The answer only permitted compression. Follow the path it is actually on:
+        // a direct one sends frames as they are, and the relay is the one worth deflating.
+        unawaited(socket.followPath());
         // From here signaling plays no part. Releasing the call frees this phone's slot
         // on the service; the desktop ignores a hangup once its channel is up.
         _sendHangup();
@@ -579,8 +579,12 @@ class RtcFrameSocket implements FrameSocket {
 
   final RTCPeerConnection _pc;
   final RTCDataChannel _channel;
-  /// The desktop agreed to read compressed frames.
+  /// The desktop agreed to read compressed frames. Permission only — see [followPath].
   final bool _deflate;
+  /// Set once the selected path is the relay. Until then, and on a direct path, frames
+  /// leave as they are: deflating them costs more than the bytes save on a LAN.
+  bool _compress = false;
+  Timer? _pathWatch;
   final FrameAssembler _assembler = FrameAssembler(_maxFrameBytes);
   final List<Uint8List> _queue = <Uint8List>[];
   final StreamController<Object?> _frames = StreamController<Object?>(sync: true);
@@ -602,7 +606,7 @@ class RtcFrameSocket implements FrameSocket {
   void add(String data) {
     if (_closed) throw StateError('data channel is closed');
     final bytes = utf8.encode(data);
-    final packed = _deflate ? compressFrame(bytes) : null;
+    final packed = _compress ? compressFrame(bytes) : null;
     _queue.addAll(packed != null ? splitFrame(packed, binary: false, deflated: true) : splitFrame(bytes, binary: false));
     unawaited(_pump());
   }
@@ -622,6 +626,28 @@ class RtcFrameSocket implements FrameSocket {
       _channel.send(RTCDataChannelMessage.fromBinary(closeMessage(1000)));
     } catch (_) {}
     _finish(1000, '');
+  }
+
+  /// Watch the selected path and compress only while it is the relay.
+  ///
+  /// ICE nominates after the channel opens, and may move a call onto the relay later, so
+  /// this keeps looking until the socket closes. Frames sent before the first answer go
+  /// out uncompressed, which is the right default for the LAN and harmless on the relay.
+  Future<void> followPath() async {
+    if (!_deflate) return;
+    await _applyPath();
+    _pathWatch ??= Timer.periodic(const Duration(seconds: 3), (_) => unawaited(_applyPath()));
+  }
+
+  Future<void> _applyPath() async {
+    if (_closed) {
+      _pathWatch?.cancel();
+      _pathWatch = null;
+      return;
+    }
+    final path = await selectedPath();
+    recordConnectionDiagnostic(Diagnostic.metric('rtc.path', outcome: path ?? 'unknown'));
+    _compress = path == 'relay';
   }
 
   /// Which kind of path ICE chose: `direct` (LAN or across NATs) or `relay` (through

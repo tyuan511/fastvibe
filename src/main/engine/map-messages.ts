@@ -191,9 +191,30 @@ function assistantStop(message: Record<string, unknown>): ChatMessage["stop"] {
 
 function unwrapMessage(entry: unknown): Record<string, unknown> | null {
   if (!isRecord(entry)) return null;
-  if (isRecord(entry.message)) return { ...entry.message, id: entry.id ?? entry.message.id, _messageId: entry.message.id, timestamp: entry.timestamp };
+  if (isRecord(entry.message)) {
+    // A user row's own `timestamp` is when the message was *built*, which is not when
+    // it was sent: a queued prompt keeps the instant it was composed, and the entry is
+    // what records the delivery. The entry's stamp wins, and only for a user row — an
+    // assistant message's own timestamp is its request start, which the entry cannot
+    // say because the entry is written when the reply finishes.
+    const delivered = entry.message.role === "user" ? entryTimestamp(entry.timestamp) : undefined;
+    return {
+      ...entry.message,
+      id: entry.id ?? entry.message.id,
+      _messageId: entry.message.id,
+      timestamp: delivered ?? entry.message.timestamp ?? entry.timestamp,
+    };
+  }
   if (typeof entry.role === "string") return entry;
   return null;
+}
+
+/** A session entry's `timestamp` is an ISO string; a bare message's is already epoch ms. */
+function entryTimestamp(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) return value;
+  if (typeof value !== "string") return undefined;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 function extractContent(content: unknown): {

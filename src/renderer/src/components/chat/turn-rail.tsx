@@ -4,7 +4,6 @@ import {
   useEffect,
   useLayoutEffect,
   useRef,
-  useState,
   type JSX,
   type MutableRefObject,
 } from "react";
@@ -12,6 +11,7 @@ import { useTranslation } from "react-i18next";
 import { motion, useMotionValue, useReducedMotion, useSpring, useTransform, type MotionValue } from "motion/react";
 import { useMessageScroller } from "@/components/ui/message-scroller";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { activeTurnIndex } from "@/lib/turn-rail";
 import { cn } from "@/lib/utils";
 
 /**
@@ -28,8 +28,7 @@ import { cn } from "@/lib/utils";
 export type TurnMarker = {
   /** Row id handed to `MessageScrollerItem` — the jump target. */
   id: string;
-  /** Position of the prompt's row in the transcript: the viewport reports rows
-   *  (prompts *and* replies), and this maps a row back to the turn that owns it. */
+  /** Position of the prompt's row in the flat transcript. */
   rowIndex: number;
   /** Flattened user prompt, already clipped. */
   prompt: string;
@@ -79,6 +78,11 @@ const DOCK = {
  *  this wide, so hovering never shifts the transcript or reflows the marks. */
 const RAIL_WIDTH = 44;
 
+/** How far below the viewport's top edge a turn counts as the one being read (px).
+ *  The scroller's own "at the top edge" margin, so the highlight flips when a
+ *  prompt reaches the reading position rather than the instant it peeks in. */
+const READING_LINE = 64;
+
 /** A tick's length in px for a pointer that many px away along the rail. */
 function dockWidth(distance: number, base: number): number {
   if (distance >= DOCK.reach) return base;
@@ -94,16 +98,6 @@ function sameMarkers(a: TurnMarker[], b: TurnMarker[]): boolean {
     const left = a[index];
     const right = b[index];
     if (left.id !== right.id || left.prompt !== right.prompt || left.reply !== right.reply) return false;
-  }
-  return true;
-}
-
-/** Row ids only change when rows are added or removed, never on a streamed token. */
-function sameRowIds(a: string[], b: string[]): boolean {
-  if (a === b) return true;
-  if (a.length !== b.length) return false;
-  for (let index = 0; index < a.length; index += 1) {
-    if (a[index] !== b[index]) return false;
   }
   return true;
 }
@@ -191,72 +185,23 @@ function Tick({
 
 export const TurnRail = memo(function TurnRail({
   markers,
-  rowIds,
+  scrollOffset,
+  turnStarts,
 }: {
   markers: TurnMarker[];
-  /** Every row id in transcript order — the viewport reports rows, not just
-   *  prompts, so a reply at the top edge still resolves to its turn. */
-  rowIds: string[];
+  /** The viewport's scroll position, in the same coordinate as `turnStarts`. */
+  scrollOffset: number;
+  /** Each turn's position in the transcript, in order. A turn the virtualizer has
+   *  not measured yet is `undefined` and cannot win the highlight. */
+  turnStarts: ReadonlyArray<number | undefined>;
 }): JSX.Element {
   const { t } = useTranslation("chat");
   const navRef = useRef<HTMLElement | null>(null);
-  const [active, setActive] = useState(-1);
 
-  // The resolver reads these on every intersection change; keeping them in a ref
-  // means the observer below survives a stream of new tokens.
-  const latest = useRef({ markers, rowIds });
-  useEffect(() => {
-    latest.current = { markers, rowIds };
-  });
-
-  // Rows are only appended (or cleared on a conversation switch), so the length
-  // and tail id describe the whole transcript shape.
-  const rowKey = `${rowIds.length}:${rowIds.at(-1) ?? ""}`;
-
-  useEffect(() => {
-    const root = navRef.current?.closest('[data-slot="message-scroller"]');
-    const viewport = root?.querySelector<HTMLElement>('[data-slot="message-scroller-viewport"]');
-    if (!viewport || typeof IntersectionObserver === "undefined") return;
-
-    const visible = new Set<string>();
-    const resolve = (): void => {
-      const { markers: turns, rowIds: rows } = latest.current;
-      // The turn being read owns the topmost visible row: scrolling inside a long
-      // reply keeps its prompt lit, and once the prompt itself scrolls away the
-      // reply still points back at it.
-      let topRow = Number.POSITIVE_INFINITY;
-      for (const id of visible) {
-        const index = rows.indexOf(id);
-        if (index >= 0 && index < topRow) topRow = index;
-      }
-      if (topRow === Number.POSITIVE_INFINITY) return;
-      let next = -1;
-      for (let index = 0; index < turns.length; index += 1) {
-        if (turns[index].rowIndex <= topRow) next = index;
-        else break;
-      }
-      if (next >= 0) setActive(next);
-    };
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          const id = entry.target instanceof HTMLElement ? entry.target.dataset.messageId : undefined;
-          if (!id) continue;
-          if (entry.isIntersecting) visible.add(id);
-          else visible.delete(id);
-        }
-        resolve();
-      },
-      // Matches the scroller's own "at the top edge" margin, so the highlight
-      // flips when a row actually reaches the reading position.
-      { root: viewport, rootMargin: "-64px 0px 0px 0px" },
-    );
-    viewport.querySelectorAll<HTMLElement>("[data-message-id]").forEach((element) => observer.observe(element));
-    return () => observer.disconnect();
-    // `rowKey` is the transcript's shape; the ref carries the rest.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rowKey]);
+  // The reading line sits one inset below the viewport's top edge — the same inset
+  // the scroller treats as "at the top" — so a prompt lights up as it arrives
+  // there, not while it is still sliding in under the sticky row above it.
+  const active = activeTurnIndex(turnStarts, scrollOffset + READING_LINE);
 
   // Raw pointer position, then a spring on top so a tick's length eases toward the
   // cursor instead of tracking it rigidly; reset to the rail's centre on leave.
@@ -341,4 +286,17 @@ export const TurnRail = memo(function TurnRail({
       </div>
     </nav>
   );
-}, (prev, next) => sameMarkers(prev.markers, next.markers) && sameRowIds(prev.rowIds, next.rowIds));
+}, (prev, next) =>
+  sameMarkers(prev.markers, next.markers) &&
+  prev.scrollOffset === next.scrollOffset &&
+  sameStarts(prev.turnStarts, next.turnStarts));
+
+/** Positions change when a turn is measured or grows, never on a streamed token. */
+function sameStarts(a: ReadonlyArray<number | undefined>, b: ReadonlyArray<number | undefined>): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let index = 0; index < a.length; index += 1) {
+    if (a[index] !== b[index]) return false;
+  }
+  return true;
+}

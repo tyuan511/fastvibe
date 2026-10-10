@@ -145,7 +145,7 @@ test("a phone on the account connects over WebRTC and uses the app", async () =>
     // Direct on loopback, and the pane is told so.
     await until(() => official.state().peers[0]?.path === "direct", "the path to be known");
     assert.deepEqual(official.state().peers.map((p) => p.name), ["Test phone"]);
-    assert.equal(server.status.clients, 1);
+    assert.equal(server.status.clients, 0, "an official connection is not a LAN login");
     assert.ok(states.some((s) => s.peers.length === 1));
 
     // The phone releases its signaling slot, as the real client does; the link stays up.
@@ -155,7 +155,7 @@ test("a phone on the account connects over WebRTC and uses the app", async () =>
     assert.equal((await call.next((f) => f.kind === "result" && f.requestId === 3)).ok, true);
 
     call.close();
-    await until(() => server.status.clients === 0 && official.state().peers.length === 0, "the phone to be gone");
+    await until(() => official.state().peers.length === 0, "the phone to be gone");
   });
 });
 
@@ -182,9 +182,11 @@ test("two phones at once, each its own connection", async () => {
     const second = await callDesktop(cloud, official.state().deviceId!);
     await first.next((f) => f.type === "auth");
     await second.next((f) => f.type === "auth");
-    await until(() => server.status.clients === 2, "two clients");
+    // Both stand-ins introduce themselves as the same phone, so the pane's list — which
+    // keeps one row per phone — shows one of them. What matters here is that both
+    // connections are up, and closing one leaves the other.
+    await until(() => server.status.clients === 0, "neither counts as a LAN login");
     first.close();
-    await until(() => server.status.clients === 1, "one client left");
     second.send(hello);
     assert.equal((await second.next((f) => f.kind === "welcome")).kind, "welcome");
     second.close();
@@ -201,7 +203,7 @@ test("switching it off drops the phones and takes the desktop offline", async ()
 
     official.setEnabled(false);
     assert.equal(official.state().status, "off");
-    await until(() => server.status.clients === 0, "the phone to be dropped");
+    await until(() => official.state().peers.length === 0, "the phone to be dropped");
     await until(() => !cloud.deviceSockets.has(deviceId), "signaling to close");
     call.close();
   });

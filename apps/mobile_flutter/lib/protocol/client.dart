@@ -320,7 +320,13 @@ class RemoteClient {
             'protocol': 'fastvibe.app',
             'protocolVersion': 1,
             'client': <String, Object?>{'kind': 'mobile', 'version': _version},
-            'features': <String, Object?>{'eventBatch': true, 'conversationResume': true},
+            'features': <String, Object?>{
+              'eventBatch': true,
+              'conversationResume': true,
+              // A thinking block is one collapsed row here, so per-token deltas are
+              // folded by the desktop before they cross the connection.
+              'thinkingSummary': true,
+            },
           },
         }));
       } catch (_) {

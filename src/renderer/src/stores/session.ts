@@ -824,7 +824,9 @@ export const useSessionStore = create<SessionStore>((set, get) => {
           text: "",
           tools: [],
           parts: [],
-          createdAt: Date.now(),
+          // Same instant as the prompt above it, so 已处理 starts when the message was
+          // sent rather than a moment later, when the placeholder was appended.
+          createdAt: messages[messages.length - 1].createdAt,
         });
       }
       return {

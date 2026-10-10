@@ -76,6 +76,12 @@ export type AppClientHello = {
     eventBatch?: boolean;
     binaryAttachments?: boolean;
     conversationResume?: boolean;
+    /**
+     * The client draws a thinking block from its final text, not from each delta, so
+     * the server may coalesce `thinking_delta` events for it. A client that omits this
+     * still receives every delta.
+     */
+    thinkingSummary?: boolean;
   };
 };
 
@@ -294,10 +300,12 @@ function readHello(value: unknown): AppClientHello | null {
     if (declared.eventBatch !== undefined && typeof declared.eventBatch !== "boolean") return null;
     if (declared.binaryAttachments !== undefined && typeof declared.binaryAttachments !== "boolean") return null;
     if (declared.conversationResume !== undefined && typeof declared.conversationResume !== "boolean") return null;
+    if (declared.thinkingSummary !== undefined && typeof declared.thinkingSummary !== "boolean") return null;
     features = {
       ...(declared.eventBatch !== undefined ? { eventBatch: declared.eventBatch } : {}),
       ...(declared.binaryAttachments !== undefined ? { binaryAttachments: declared.binaryAttachments } : {}),
       ...(declared.conversationResume !== undefined ? { conversationResume: declared.conversationResume } : {}),
+      ...(declared.thinkingSummary !== undefined ? { thinkingSummary: declared.thinkingSummary } : {}),
     };
   }
   return {

@@ -81,9 +81,8 @@ function replyPreview(row: MessageRow | undefined): string {
 }
 
 /** One mark per turn: a user prompt plus the reply it produced. */
-function turnMarkers(rows: MessageRow[]): { markers: TurnMarker[]; rowIds: string[] } {
+function turnMarkers(rows: MessageRow[]): { markers: TurnMarker[] } {
   const markers: TurnMarker[] = [];
-  const rowIds = rows.map((row) => row.id);
   for (let index = 0; index < rows.length; index += 1) {
     const row = rows[index];
     if (row.messages[0].role !== "user") continue;
@@ -94,7 +93,7 @@ function turnMarkers(rows: MessageRow[]): { markers: TurnMarker[]; rowIds: strin
       reply: replyPreview(rows[index + 1]),
     });
   }
-  return { markers, rowIds };
+  return { markers };
 }
 
 /**
@@ -248,16 +247,27 @@ function pinRegistryFor(scroller: HTMLElement): PinRegistry {
     const cuts = new Map<HTMLElement, number>();
     for (const [node, watcher] of watchers) {
       const rect = node.getBoundingClientRect();
+      const turnTop = watcher.turn.getBoundingClientRect().top;
       const pinned =
         Math.abs(rect.top - edge) <= PIN_SLACK &&
-        rect.top > watcher.turn.getBoundingClientRect().top + PIN_SLACK;
+        rect.top > turnTop + PIN_SLACK;
       watcher.notify(pinned);
       if (!glass || !pinned) continue;
       // Only this turn's reply can be under its prompt: the next turn's prompt is
       // what pushes this one away. Rows below the fade are left alone, and so is
       // everything after the first of them.
+      //
+      // The mask stays only while the prompt is still covering those rows. Sticky
+      // lets go one frame before the geometry reads as unpinned: the next turn's
+      // prompt has already pushed this bubble up, but `rect.top` is still on the
+      // edge, so `pinned` is still true. The bubble is a translucent glass tint,
+      // and a mask that outlives the overlap punches the reply through it — the
+      // two texts read as one garbled line for that frame. `turnTop` has moved by
+      // then; once the bubble's bottom sits on the turn, nothing is underneath.
+      const covered = rect.top - turnTop;
+      if (covered <= PIN_SLACK) continue;
       for (let row = node.nextElementSibling; row instanceof HTMLElement; row = row.nextElementSibling) {
-        const offset = rect.bottom - row.getBoundingClientRect().top;
+        const offset = Math.min(rect.bottom - row.getBoundingClientRect().top, covered);
         if (offset <= -GLASS_CUT_FEATHER) break;
         cuts.set(row, Math.round(offset));
       }
@@ -480,7 +490,7 @@ export function MessageList({
     }
     return null;
   }, [rows]);
-  const { markers, rowIds } = useMemo(() => turnMarkers(rows), [rows]);
+  const { markers } = useMemo(() => turnMarkers(rows), [rows]);
   // Turns scope the sticky prompt; the flat index still decides which row streams.
   const turns = useMemo(() => groupTurns(rows), [rows]);
   const rowIndex = useMemo(() => new Map(rows.map((row, index) => [row.id, index])), [rows]);
@@ -751,8 +761,16 @@ export function MessageList({
                   </div>
                 </MessageScrollerContent>
               </MessageScrollerViewport>
-              {/* A single turn has nothing to navigate between. */}
-              {markers.length > 1 ? <TurnRail markers={markers} rowIds={rowIds} /> : null}
+              {/* A single turn has nothing to navigate between. The highlight comes from
+                  the virtualizer's own positions: the mounted rows are only the turns near
+                  the viewport, so watching them lights a turn above the one on screen. */}
+              {markers.length > 1 ? (
+                <TurnRail
+                  markers={markers}
+                  scrollOffset={virtualizer.scrollOffset ?? 0}
+                  turnStarts={virtualizer.measurementsCache.map((measurement) => measurement?.start)}
+                />
+              ) : null}
               <MessageScrollerButton />
             </MessageScroller>
             <SelectionActionBar

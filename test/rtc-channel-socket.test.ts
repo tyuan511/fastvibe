@@ -11,6 +11,8 @@ import { DEFLATE, MAX_MESSAGE_BYTES } from "../src/main/rtc/frames.ts";
 class FakeChannel implements DataChannelLike {
   peer!: FakeChannel;
   open = true;
+  /** What the peer negotiated. Absent until a test sets it. */
+  maxMessageSize?: () => number;
   /** What the "network" holds: the sender's buffer, drained by `flush`. */
   buffered = 0;
   stalled = false;
@@ -102,6 +104,35 @@ test("no message exceeds the interoperable size", async () => {
   assert.ok(a.sent.every((m) => m.byteLength <= MAX_MESSAGE_BYTES));
 });
 
+test("a direct path sends larger fragments only when the peer negotiated them", async () => {
+  const a = new FakeChannel();
+  const b = new FakeChannel();
+  a.peer = b;
+  b.peer = a;
+  a.maxMessageSize = () => 256 * 1024;
+  const left = new ChannelSocket(a, { maxFrameBytes: 1 << 24 });
+  const right = new ChannelSocket(b, { maxFrameBytes: 1 << 24 });
+  const text = "z".repeat(200_000);
+  const received = once<[Buffer, boolean]>(right, "message");
+
+  left.send(text);
+  assert.ok(a.sent.every((m) => m.byteLength <= MAX_MESSAGE_BYTES), "an unconfirmed path stays interoperable");
+  assert.equal((await received)[0].toString(), text);
+
+  a.sent = [];
+  left.setCompress(false);
+  const again = once<[Buffer, boolean]>(right, "message");
+  left.send(text);
+  assert.ok(a.sent.length < 8, `a direct path takes the peer's limit, not 16 KiB (${a.sent.length} fragments)`);
+  assert.ok(a.sent.every((m) => m.byteLength <= 64 * 1024), "never past our own ceiling, whatever the peer claims");
+  assert.equal((await again)[0].toString(), text);
+
+  a.sent = [];
+  left.setCompress(null);
+  left.send(text);
+  assert.ok(a.sent.every((m) => m.byteLength <= MAX_MESSAGE_BYTES), "losing the path returns to the interoperable size");
+});
+
 test("ping is answered with a pong the sender sees", async () => {
   const { left } = pair();
   const pong = once(left, "pong");
@@ -185,13 +216,14 @@ test("a send the channel reports as queued is not a failure", async () => {
   assert.equal(left.readyState, 1);
 });
 
-test("with compression agreed, a large frame crosses compressed and arrives whole; a small one does not", async () => {
+test("once the relay is confirmed, a large frame crosses compressed and arrives whole; a small one does not", async () => {
   const a = new FakeChannel();
   const b = new FakeChannel();
   a.peer = b;
   b.peer = a;
   const sender = new ChannelSocket(a, { maxFrameBytes: 1 << 24, compress: true });
   const receiver = new ChannelSocket(b, { maxFrameBytes: 1 << 24 });
+  sender.setCompress(true);
   const got: string[] = [];
   const both = new Promise<void>((settle) => {
     receiver.on("message", (data: Buffer) => {
@@ -211,6 +243,45 @@ test("with compression agreed, a large frame crosses compressed and arrives whol
 
 test("without agreement nothing is compressed, so an older peer is never sent a header it refuses", () => {
   const { a, left } = pair();
+  left.setCompress(true);
   left.send("x".repeat(50_000));
   assert.ok(a.sent.every((m) => (m[0] & DEFLATE) === 0));
+});
+
+test("compression follows the path: off until the relay is confirmed, then on, and off again when it leaves", async () => {
+  const a = new FakeChannel();
+  const b = new FakeChannel();
+  a.peer = b;
+  b.peer = a;
+  const sender = new ChannelSocket(a, { maxFrameBytes: 1 << 24, compress: true });
+  const receiver = new ChannelSocket(b, { maxFrameBytes: 1 << 24 });
+  const big = JSON.stringify({ rows: Array.from({ length: 200 }, (_, i) => ({ i, text: "lorem ipsum ".repeat(6) })) });
+  const take = (): Promise<string> => new Promise((settle) => receiver.once("message", (data: Buffer) => settle(data.toString("utf8"))));
+
+  const direct = take();
+  sender.send(big);
+  assert.equal(await direct, big);
+  assert.ok(a.sent.every((m) => (m[0] & DEFLATE) === 0), "an unconfirmed path is sent as it is");
+
+  a.sent = [];
+  sender.setCompress(null);
+  const unknown = take();
+  sender.send(big);
+  assert.equal(await unknown, big);
+  assert.ok(a.sent.every((m) => (m[0] & DEFLATE) === 0), "a path that is not known yet is not the relay");
+
+  a.sent = [];
+  sender.setCompress(true);
+  const relayed = take();
+  sender.send(big);
+  assert.equal(await relayed, big);
+  const wire = a.sent.reduce((n, m) => n + m.byteLength, 0);
+  assert.ok(a.sent.every((m) => (m[0] & DEFLATE) !== 0) && wire < Buffer.byteLength(big) / 2, "the relay compresses");
+
+  a.sent = [];
+  sender.setCompress(false);
+  const back = take();
+  sender.send(big);
+  assert.equal(await back, big);
+  assert.ok(a.sent.every((m) => (m[0] & DEFLATE) === 0), "leaving the relay sends the next frame as it is");
 });

@@ -101,6 +101,24 @@ test("a removed or no-longer-safe cursor requests a reset instead of serving a d
   assert.deepEqual(page.messages, []);
 });
 
+test("a reply that has not started yet counts from when its prompt was sent", () => {
+  const sent = Date.parse("2026-10-08T00:00:00.000Z");
+  const deps = setup([entry("u", "user", "current")], true);
+  // The fixture's streaming message stands in for a reply that has begun; clearing it
+  // is the gap before the first token, which is where the clock used to read "now".
+  (deps.session.state as { streamingMessage?: unknown }).streamingMessage = undefined;
+  const before = Date.now();
+  const placeholder = project(deps).messages.at(-1);
+  assert.equal(placeholder?.id, "running:chat");
+  assert.equal(placeholder?.createdAt, sent);
+  // The prompt has no stamp at all only on a transcript that predates one; the clock
+  // then falls back to the read itself rather than to zero.
+  const unstamped = setup([{ id: "u", type: "message", message: { role: "user", content: "current" } }], true);
+  (unstamped.session.state as { streamingMessage?: unknown }).streamingMessage = undefined;
+  const fallback = project(unstamped).messages.at(-1)?.createdAt ?? 0;
+  assert.ok(fallback >= before && fallback <= Date.now());
+});
+
 test("small transcripts, legacy full reads and empty transcripts remain complete", () => {
   const deps = setup([entry("u", "user", "current"), entry("a", "assistant", "reply")]);
   assert.deepEqual(project({ ...deps, page: { turnLimit: 12 } }).messages, project(deps).messages);

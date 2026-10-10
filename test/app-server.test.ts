@@ -470,6 +470,49 @@ test("a declaration cannot open headless-native methods", async () => {
   assert.equal(result.error?.code, "capability.unsupported");
 });
 
+test("thinking deltas fold for a client that asked, and pass through for one that did not", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { server, session: desktop, cap: desktopCap } = createHarness({ kind: "window", origin: "win" });
+  const phoneMessages: AppServerMessage[] = [];
+  const phone = server.attach({
+    identity: { subject: "device-2", kind: "remote", clientKind: "mobile", clientVersion: "1" },
+    send: (message) => {
+      phoneMessages.push(message);
+      return true;
+    },
+    origin: "phone",
+  });
+  const phoneHello = {
+    ...hello,
+    hello: { ...hello.hello, client: { kind: "mobile", version: "1" }, features: { thinkingSummary: true, eventBatch: true } },
+  };
+  await server.receive(desktop, hello);
+  await server.receive(phone, phoneHello);
+  await server.receive(desktop, { kind: "subscribe", scopes: ["conversation:c1"] });
+  await server.receive(phone, { kind: "subscribe", scopes: ["conversation:c1"] });
+  desktopCap.messages.length = 0;
+
+  const delta = (text: string) => ({ type: "message_update", conversationId: "c1", assistantMessageEvent: { type: "thinking_delta", delta: text } });
+  server.publish(Ipc.event, delta("one"));
+  server.publish(Ipc.event, delta("two"));
+  assert.equal(phoneMessages.filter((message) => message.kind === "event" || message.kind === "events").length, 0, "held, not sent per token");
+  assert.equal(desktopCap.messages.length, 2, "a client that did not ask still gets each delta");
+
+  server.publish(Ipc.event, { type: "message_update", conversationId: "c1", assistantMessageEvent: { type: "text_delta", delta: "Hi" } });
+  t.mock.timers.tick(250);
+  // The folded delta then rides the ordinary event batch, which waits out its own window.
+  t.mock.timers.tick(25);
+  const folded = phoneMessages.find((message) => message.kind === "events");
+  assert.ok(folded && folded.kind === "events");
+  const thinking = folded.events[0]?.payload as { assistantMessageEvent: { delta: string } };
+  assert.equal(thinking.assistantMessageEvent.delta, "onetwo", "the two deltas left as one, ahead of the prose");
+  const desktopDeltas = desktopCap.messages
+    .filter((message) => message.kind === "event")
+    .map((message) => (message.payload as { assistantMessageEvent: { delta: string } }).assistantMessageEvent.delta);
+  assert.deepEqual(desktopDeltas, ["one", "two", "Hi"], "folding never rewrites another client's event");
+  server.closeAll();
+});
+
 test("a named-only event reaches the client that watches its scope, not the `*` windows", async () => {
   const { server, session: window, cap: windowCap } = createHarness({ kind: "window", origin: "win" });
   const phoneMessages: AppServerMessage[] = [];

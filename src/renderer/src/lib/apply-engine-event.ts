@@ -252,9 +252,21 @@ function withAssistant(messages: ChatMessage[]): { list: ChatMessage[]; assistan
     text: "",
     tools: [],
     parts: [],
-    createdAt: Date.now(),
+    // The reply has no request start of its own yet, so the clock reads the prompt
+    // that started the run. `Date.now()` here reset 已处理 whenever this row was
+    // rebuilt — opening the chat again, or a stream event arriving first.
+    createdAt: promptStartedAt(messages) ?? Date.now(),
   };
   return { list: [...messages, assistant], assistant };
+}
+
+/** When the run's prompt was sent: the newest user row that carries a stamp. */
+function promptStartedAt(messages: ChatMessage[]): number | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role === "user" && message.createdAt > 0) return message.createdAt;
+  }
+  return undefined;
 }
 
 function appendMessage(messages: ChatMessage[], message: ChatMessage): ChatMessage[] {

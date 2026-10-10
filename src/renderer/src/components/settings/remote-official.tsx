@@ -82,7 +82,12 @@ export function RemoteOfficial({
       ) : null}
 
       {needsLogin ? null : (
-        <SettingsGroup title={t("remote.official.peers")}>
+        <SettingsGroup title={t("remote.official.section")}>
+          <SettingsRow
+            title={t("remote.official.peers")}
+            description={t("remote.official.peersDesc")}
+            control={<Badge variant="secondary">{official.peers.length}</Badge>}
+          />
           {official.peers.length > 0 ? (
             official.peers.map((peer) => (
               <div key={peer.id} className="flex items-center justify-between gap-3 px-4 py-2.5">
@@ -90,7 +95,10 @@ export function RemoteOfficial({
                   <p className="truncate text-sm">{peer.name}</p>
                   {peer.platform ? <p className="text-xs text-muted-foreground">{peer.platform}</p> : null}
                 </div>
-                <Badge variant={peer.path === "relay" ? "outline" : "secondary"}>{pathLabel(peer.path, t)}</Badge>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  <Badge variant="outline">{t("remote.official.via")}</Badge>
+                  <Badge variant={peer.path === "relay" ? "outline" : "secondary"}>{pathLabel(peer.path, t)}</Badge>
+                </div>
               </div>
             ))
           ) : (

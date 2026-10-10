@@ -44,7 +44,8 @@ import '../ui/context_menu.dart';
 ///   never by arrival time — the wildcard subscription can deliver a live frame before
 ///   the named replay is requested.
 /// - **The transcript is not re-read on every boundary.** A `message_end` asks for a
-///   refresh, which is coalesced: one read in flight, at most one queued behind it.
+///   refresh, which is coalesced: one read in flight, at most one queued behind it. A
+///   tool finishing does not: its execution event already updated the row.
 /// - **Streaming events are reduced in place**, at most once per frame-sized interval, so
 ///   a fast model does not repaint the list once per token.
 /// - **Older history has its own flight**, so scrolling back never blocks the live path.
@@ -309,10 +310,13 @@ class _ChatScreenState extends State<ChatScreen> {
           );
         }
       }
+      // A tool finishing is already on screen: the execution event above updated its
+      // row. Re-reading the transcript there pulled the tail of the chat once per call,
+      // which on a direct connection cost more than the event itself. The reply's own
+      // end still reconciles, which is where a call's recorded result can differ.
       if (event['type'] == 'queue_delivered' ||
           event['type'] == 'agent_settled' ||
-          event['type'] == 'message_end' ||
-          (event['type'] == 'tool_execution_end' && !nested)) {
+          event['type'] == 'message_end') {
         _reload(event['seq'] is int ? event['seq'] as int : null);
       }
     }

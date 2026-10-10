@@ -49,7 +49,12 @@ export function projectSessionMessages(
       const role: unknown = isRecord(message) ? message.role : undefined;
       if (entry.type === "compaction" && role === "system") continue;
       entryIds.set(message, entry.id);
-      transcript.push(message);
+      // The projected message is the entry's own object, which carries when it was
+      // composed. The entry's timestamp is when it was written — for a user message,
+      // when it was sent — and `mapEngineMessages` can only prefer it when it travels
+      // with the message. Wrapping only the user rows keeps an assistant message's own
+      // request-start stamp intact.
+      transcript.push(role === "user" ? { id: entry.id, timestamp: entry.timestamp, message } : message);
     }
     if (entry.type !== "message") continue;
     const completedAt = Date.parse(entry.timestamp);
@@ -84,7 +89,17 @@ export function projectSessionMessages(
         tools: inFlight.tools.map((tool) => ({ ...tool, status: "running" as const })),
       });
     } else if (messages.at(-1)?.role !== "assistant") {
-      messages.push({ id: `running:${conversationId}`, role: "assistant", text: "", tools: [], parts: [], createdAt: Date.now() });
+      // Nothing of the reply exists yet, so the clock falls back to the prompt that
+      // started the run. Stamping it with `now` is what made 已处理 restart at 0
+      // every time the conversation was reopened mid-run.
+      messages.push({
+        id: `running:${conversationId}`,
+        role: "assistant",
+        text: "",
+        tools: [],
+        parts: [],
+        createdAt: promptStartedAt(messages) ?? Date.now(),
+      });
     }
   }
   if (!deps.page?.beforeEntryId && conversationId && deps.compacting.has(conversationId)) {
@@ -109,6 +124,21 @@ export function projectSessionMessages(
     }
   }
   return { messages, anchored, ...(window ? { history: { beforeEntryId: window.beforeEntryId }, pageAnchorFound: window.found } : {}) };
+}
+
+/**
+ * When the run's prompt was sent: the newest user row that carries a stamp.
+ *
+ * A reply that has not started yet has no request time of its own, and the placeholder
+ * row's clock has to come from somewhere that survives reopening the conversation. The
+ * prompt's stamp does — it is written when the message is sent, not when it is read.
+ */
+function promptStartedAt(messages: ChatMessage[]): number | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role === "user" && message.createdAt > 0) return message.createdAt;
+  }
+  return undefined;
 }
 
 function insertModelSwitches(

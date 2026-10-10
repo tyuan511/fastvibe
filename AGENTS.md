@@ -209,8 +209,13 @@ or signed out → signaling closes and every phone is dropped.
 - **The phone offers, this side answers.** The phone opens one data channel labelled
   `fastvibe` (any other label is closed); signals are `{type:"offer"|"answer", sdp}` and
   `{type:"candidate", candidate, mid}` inside the signaling `signal` message. Signals that
-  arrive while ICE servers are still being fetched are buffered and replayed in order. After
-  the channel opens a `hangup` only frees the phone's signaling slot — it is ignored.
+  arrive while ICE servers are still being fetched are buffered and replayed in order. The
+  phone's candidates are held until this side has a server-reflexive candidate of its own —
+  that is the STUN request having gone out, which is the whole point of the hold — and not
+  until gathering completes, because the relay allocation after it is a round trip a phone
+  on this network never needs. A STUN server that never answers still releases them after
+  the same bounded wait. After the channel opens a `hangup` only frees the phone's signaling
+  slot — it is ignored.
 - **Frames are fragmented** (`rtc/frames.ts`; the phone's copy is `lib/protocol/rtc_frames.dart`
   and must stay byte-identical): one header byte (`LAST`, `BINARY`, `PING`, `PONG`, `CLOSE`),
   at most 16 KiB per message, control messages may fall between fragments. `ChannelSocket`
@@ -222,7 +227,17 @@ or signed out → signaling closes and every phone is dropped.
   not open, or throws.
 - **The path is reported, not chosen.** ICE picks host → srflx → relay; the pane shows 直连 or
   中转 from `getSelectedCandidatePair()`, because relayed traffic is the one case that costs
-  the account something (a monthly allowance).
+  the account something (a monthly allowance). Compression follows that same report, and only
+  that report: the offer's `deflate` is permission (an older reader refuses the bit), and a
+  frame is deflated only once the selected pair is a relay. A direct path, and the window
+  before ICE nominates, send frames as they are — deflating JSON on Main's thread costs more
+  than the bytes save when the round trip is a millisecond. The bit is per fragment, so a
+  path that moves later changes the next frame without reconnecting. The phone does the same
+  with its own `getStats()`.
+  Fragment size follows the path too, but only as far as the peer negotiated: a direct path
+  reads `maxMessageSize()` and sends up to 64 KiB (libdatachannel's own default), while a
+  relay and a path not yet chosen stay at 16 KiB. The phone's stack cannot read that number,
+  so it keeps sending 16 KiB; receiving the desktop's larger fragments needs no change.
 - **The phone's side** (`apps/mobile_flutter`): the account (`lib/account/account.dart`: browser PKCE
   sign-in through `flutter_web_auth_2`, `fastvibe://oauth/callback`, token in the Keychain/Keystore,
   only ever sent to the site that issued it) and the account's computers (`official_devices.dart`),
@@ -231,6 +246,13 @@ or signed out → signaling closes and every phone is dropped.
   signaling and the WebRTC offer and hands `RemoteClient` a `FrameSocket`, so the handshake, health
   checks and reconnect are the ones every other connection uses. `Connection` carries `needsAccount`
   (the way forward is signing in) next to `needsPassword`.
+- **SCTP is tuned once, for the whole process.** usrsctp keeps one set of settings, so a
+  relayed call and a direct one share them and neither can be tuned alone. Two of the
+  library's defaults are moved (`peer.ts`, applied before the first peer or they are
+  ignored): the delayed acknowledgement from 20ms to 5ms, because on a direct path that
+  wait is the whole latency of a small frame, and the initial congestion window from 10 to
+  64 MTUs, so a snapshot does not trickle out over the first few round trips. The buffers
+  stay at the library's 1MB — larger only helps a transfer the relay would then have to carry.
 - **Only UDP TURN on the desktop.** libdatachannel's libjuice backend has no TURN over TCP/TLS, so
   `toIceServers` drops those entries; the phone's stack speaks them.
 - **Native module.** `node-datachannel` ships one optional package per platform;
