@@ -375,7 +375,10 @@ type Listener = {
  * Bound to the loopback interface only, so nothing off this machine can reach it; a
  * request must carry our `state` to count, so a stray one — another tab, a port
  * scanner — is answered and ignored without ending the wait; and the `Host` header must
- * be the loopback address we gave out, which is what a DNS-rebinding page cannot fake.
+ * be a loopback name with our port, which is what a DNS-rebinding page cannot fake. We
+ * hand out `127.0.0.1`, but `localhost` is accepted too: it can only resolve to this
+ * machine (the listener is bound to 127.0.0.1), and something between the site and the
+ * browser may well spell the redirect that way.
  */
 async function listen(state: string, timeoutMs: number): Promise<Listener> {
   let settle!: { resolve: (code: string) => void; reject: (error: Error) => void };
@@ -392,7 +395,7 @@ async function listen(state: string, timeoutMs: number): Promise<Listener> {
 
   const server: Server = createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
-    const hostOk = req.headers.host === `127.0.0.1:${port}`;
+    const hostOk = req.headers.host === `127.0.0.1:${port}` || req.headers.host === `localhost:${port}`;
     if (req.method !== "GET" || url.pathname !== CALLBACK_PATH || !hostOk) {
       res.writeHead(404, { "Content-Type": "text/plain" }).end("Not found");
       return;

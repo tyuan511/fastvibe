@@ -212,6 +212,20 @@ test("a callback that does not carry our state is ignored, and the wait goes on"
   } finally { closeAll(r); }
 });
 
+test("the callback also answers to localhost, which is the same loopback listener", async () => {
+  const r = await rig();
+  try {
+    r.browse = async (url) => {
+      const redirect = new URL(url.searchParams.get("redirect_uri")!);
+      r.cloud.codes.set("c1", { challenge: url.searchParams.get("code_challenge")!, redirectUri: redirect.toString() });
+      const asLocalhost = `http://localhost:${redirect.port}${redirect.pathname}`;
+      await fetch(`${asLocalhost}?code=c1&state=${encodeURIComponent(url.searchParams.get("state")!)}`);
+    };
+    await r.service.login();
+    assert.equal((await settled(r, "signed-in")).user?.login, "octocat");
+  } finally { closeAll(r); }
+});
+
 test("only the callback path on the loopback address answers", async () => {
   const r = await rig();
   try {
