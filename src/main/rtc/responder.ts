@@ -13,6 +13,13 @@ const MAX_SDP_CHARS = 64 * 1024;
 const MAX_FRAME_BYTES = 24 * 1024 * 1024;
 
 /**
+ * How long the phone's candidates are held back for this side's own gathering to finish.
+ * Asking the STUN server is one round trip; this is the ceiling for a server that does not
+ * answer, after which the call goes on with whatever it has.
+ */
+const GATHER_WAIT_MS = 1500;
+
+/**
  * Whether a phone's candidate can pair with anything here. libjuice keeps only ten remote
  * candidates per call and refuses the rest — including the phone's own address as its checks
  * reveal it — so a call that fills the list with TCP twins and link-local addresses never
@@ -74,6 +81,20 @@ export class Responder {
   #clientId: string | null = null;
   /** The phone offered to read compressed frames; the answer agrees and the socket then sends them. */
   #deflate = false;
+  /**
+   * The phone's candidates, held until this side has finished finding its own.
+   *
+   * A candidate handed over at once starts connectivity checks at once, and on a machine
+   * whose traffic goes through a proxy that decides a socket's route by its first packet,
+   * those checks — addressed to the phone's private addresses — went out before the STUN
+   * request did. The socket was then routed directly, the STUN request with it, and across
+   * a border that drops UDP it was never answered: the call offered only this computer's
+   * private addresses, and a phone off this network could not connect at all. Finishing
+   * the gathering first costs one round trip and is right anywhere: the public address is
+   * what a phone on another network needs most.
+   */
+  #held: Array<{ candidate: string; mid: string }> | null = [];
+  #gatherTimer: NodeJS.Timeout | null = null;
   #path: OfficialPath = "connecting";
   #timeout: NodeJS.Timeout | null = null;
   #poll: NodeJS.Timeout | null = null;
@@ -143,6 +164,13 @@ export class Responder {
     pc.onStateChange((state) => {
       if (state === "failed" || state === "closed") this.close();
     });
+    if (pc.onGatheringStateChange) {
+      pc.onGatheringStateChange((state) => {
+        if (state === "complete") this.#releaseCandidates();
+      });
+    } else {
+      this.#held = null;
+    }
     pc.onDataChannel((channel) => this.#onChannel(channel));
 
     const waiting = this.#buffered;
@@ -172,7 +200,9 @@ export class Responder {
     this.#closed = true;
     if (this.#timeout) clearTimeout(this.#timeout);
     if (this.#poll) clearInterval(this.#poll);
-    this.#timeout = this.#poll = null;
+    if (this.#gatherTimer) clearTimeout(this.#gatherTimer);
+    this.#timeout = this.#poll = this.#gatherTimer = null;
+    this.#held = null;
     const socket = this.#socket;
     this.#socket = null;
     if (socket && socket.readyState < 2) socket.close(1000, "closing");
@@ -194,6 +224,11 @@ export class Responder {
         // Before the offer is applied: the answer it produces has to carry the agreement.
         this.#deflate = message.deflate === true;
         pc.setRemoteDescription(message.sdp, "offer");
+        // Applying the offer is what starts this side's gathering.
+        if (this.#held && !this.#gatherTimer) {
+          this.#gatherTimer = setTimeout(() => this.#releaseCandidates(), GATHER_WAIT_MS);
+          this.#gatherTimer.unref();
+        }
         const id = message.client_id;
         if (typeof id === "string" && id.length > 0 && id.length <= 128 && !this.#clientId) {
           this.#clientId = id;
@@ -201,11 +236,34 @@ export class Responder {
         }
       } else if (message.type === "candidate" && typeof message.candidate === "string" && message.candidate.length <= 2048) {
         if (!usableRemoteCandidate(message.candidate)) return;
-        pc.addRemoteCandidate(message.candidate, typeof message.mid === "string" ? message.mid : "0");
+        const mid = typeof message.mid === "string" ? message.mid : "0";
+        if (this.#held) {
+          if (this.#held.length < MAX_BUFFERED_SIGNALS) this.#held.push({ candidate: message.candidate, mid });
+          return;
+        }
+        pc.addRemoteCandidate(message.candidate, mid);
       }
     } catch (error) {
       // A bad description or candidate from the far end is that call's problem only.
       this.#deps.log.warn(`rtc ${this.cid}: rejected a signal: ${String(error)}`);
+    }
+  }
+
+  /** Hand the phone's candidates over, now that this side has its own (or has waited long enough). */
+  #releaseCandidates(): void {
+    const held = this.#held;
+    if (!held) return;
+    this.#held = null;
+    if (this.#gatherTimer) clearTimeout(this.#gatherTimer);
+    this.#gatherTimer = null;
+    const pc = this.#pc;
+    if (!pc || this.#closed) return;
+    for (const { candidate, mid } of held) {
+      try {
+        pc.addRemoteCandidate(candidate, mid);
+      } catch (error) {
+        this.#deps.log.warn(`rtc ${this.cid}: rejected a signal: ${String(error)}`);
+      }
     }
   }
 

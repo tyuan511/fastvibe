@@ -15,6 +15,8 @@ export interface PeerLike {
   onLocalDescription(callback: (sdp: string, type: string) => void): void;
   onLocalCandidate(callback: (candidate: string, mid: string) => void): void;
   onStateChange(callback: (state: string) => void): void;
+  /** `new`, `in-progress`, then `complete` once every local candidate has been found. */
+  onGatheringStateChange?(callback: (state: string) => void): void;
   onDataChannel(callback: (channel: PeerChannel) => void): void;
   setRemoteDescription(sdp: string, type: "offer" | "answer"): void;
   addRemoteCandidate(candidate: string, mid: string): void;
@@ -39,6 +41,7 @@ export function createNodeDataChannelPeer(iceServers: IceServerConfig[], log?: (
     onLocalDescription: (cb) => pc.onLocalDescription(cb),
     onLocalCandidate: (cb) => pc.onLocalCandidate(cb),
     onStateChange: (cb) => pc.onStateChange(cb),
+    onGatheringStateChange: (cb) => pc.onGatheringStateChange(cb),
     onDataChannel: (cb) => pc.onDataChannel((channel) => cb(channel as unknown as PeerChannel)),
     setRemoteDescription: (sdp, type) => pc.setRemoteDescription(sdp, type),
     addRemoteCandidate: (candidate, mid) => pc.addRemoteCandidate(candidate, mid),

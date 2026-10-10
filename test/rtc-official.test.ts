@@ -46,7 +46,7 @@ type Rig = {
   iceCalls: () => number;
 };
 
-async function withRig(fn: (rig: Rig) => Promise<void>, over: Partial<OfficialDeps> = {}): Promise<void> {
+async function withRig(fn: (rig: Rig) => Promise<void>, over: Partial<OfficialDeps> = {}, Peer: new () => FakePeer = FakePeer): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), "fastvibe-official-"));
   const cloud = await startFakeCloud();
   const peers: FakePeer[] = [];
@@ -62,7 +62,7 @@ async function withRig(fn: (rig: Rig) => Promise<void>, over: Partial<OfficialDe
     deviceName: () => "Test Mac",
     platform: "darwin",
     onChange: (state) => states.push(state),
-    createPeer: () => { const peer = new FakePeer(); peers.push(peer); return peer; },
+    createPeer: () => { const peer = new Peer(); peers.push(peer); return peer; },
     fetch: (input, init) => {
       if (String(input).endsWith("/api/rtc/ice")) ice += 1;
       return realFetch(input, init);
@@ -356,6 +356,46 @@ test("the server list is asked for once and reused by the calls that follow", as
     }
     assert.equal(iceCalls(), 1);
   });
+});
+
+/** A peer that reports its gathering, as the real one does. */
+class GatheringPeer extends FakePeer {
+  gathering: ((state: string) => void) | null = null;
+  onGatheringStateChange(cb: (state: string) => void) { this.gathering = cb; }
+}
+
+test("the phone's candidates wait for this side's own gathering, then go in together", async () => {
+  await withRig(async ({ official, cloud, peers }) => {
+    official.setEnabled(true);
+    await until(() => official.state().status === "online", "online");
+    const phone = await cloud.phone("fvs_good");
+    const cid = await phone.connect(official.state().deviceId!);
+    await until(() => peers.length === 1, "a peer connection");
+    phone.signal(cid, { type: "offer", sdp: "v=0 offer" });
+    phone.signal(cid, { type: "candidate", candidate: "candidate:1 1 udp 2122260223 10.3.126.7 40000 typ host", mid: "0" });
+    phone.signal(cid, { type: "candidate", candidate: "candidate:2 1 udp 41885439 198.51.100.2 50000 typ relay raddr 0.0.0.0 rport 0", mid: "0" });
+    await until(() => peers[0].applied.length === 1, "the offer");
+    await new Promise((settle) => setTimeout(settle, 80));
+    assert.deepEqual(peers[0].applied.map((a) => a.kind), ["offer"], "no connectivity check goes out before the STUN request has");
+    (peers[0] as GatheringPeer).gathering?.("complete");
+    assert.deepEqual(peers[0].applied.map((a) => a.kind), ["offer", "candidate", "candidate"]);
+    // One that arrives afterwards is applied at once.
+    phone.signal(cid, { type: "candidate", candidate: "candidate:3 1 udp 1686052607 203.0.113.9 40001 typ srflx raddr 0.0.0.0 rport 0", mid: "0" });
+    await until(() => peers[0].applied.length === 4, "a late candidate");
+  }, {}, GatheringPeer);
+});
+
+test("a STUN server that never answers does not hold the call up for long", async () => {
+  await withRig(async ({ official, cloud, peers }) => {
+    official.setEnabled(true);
+    await until(() => official.state().status === "online", "online");
+    const phone = await cloud.phone("fvs_good");
+    const cid = await phone.connect(official.state().deviceId!);
+    await until(() => peers.length === 1, "a peer connection");
+    phone.signal(cid, { type: "offer", sdp: "v=0 offer" });
+    phone.signal(cid, { type: "candidate", candidate: "candidate:1 1 udp 2122260223 192.168.1.7 40000 typ host", mid: "0" });
+    await until(() => peers[0].applied.length === 2, "the candidate, once the wait is over", 3000);
+  }, { connectTimeoutMs: 5000 }, GatheringPeer);
 });
 
 test("signals that arrive before the ICE servers are in are replayed in order", async () => {
