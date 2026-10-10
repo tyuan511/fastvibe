@@ -327,6 +327,35 @@ test("a phone that calls again with the same id replaces its old connection", as
   });
 });
 
+test("a phone renewing its relay credential does not lose the connection it is renewing", async () => {
+  await withRig(async ({ official, cloud, peers }) => {
+    official.setEnabled(true);
+    await until(() => official.state().status === "online", "online");
+    const open = (index: number): void => {
+      const { a } = FakeChannelPair.create();
+      (a as unknown as { getLabel(): string }).getLabel = () => "fastvibe";
+      (a as unknown as { onOpen(cb: () => void): void }).onOpen = (cb) => cb();
+      peers[index].channel?.(a as unknown as PeerChannel);
+    };
+    const call = async (index: number, offer: Record<string, unknown>) => {
+      const phone = await cloud.phone("fvs_good");
+      const cid = await phone.connect(official.state().deviceId!);
+      await until(() => peers.length === index + 1, `call ${index}`);
+      phone.signal(cid, { type: "offer", sdp: "v=0 offer", client_id: "phone-a", ...offer });
+      await until(() => peers[index].applied.length === 1, "the offer");
+      open(index);
+    };
+    await call(0, {});
+    await call(1, { rollover: true });
+    await new Promise((settle) => setTimeout(settle, 20));
+    assert.equal(peers[0].closed, false, "the old connection carries the session until the phone lets go");
+    assert.equal(peers[1].closed, false);
+    // The ordinary case is unchanged: a third call that is not a renewal replaces them.
+    await call(2, {});
+    await until(() => peers[0].closed && peers[1].closed, "both older connections to be closed");
+  });
+});
+
 test("compression is agreed in the answer only when the offer asked for it", async () => {
   await withRig(async ({ official, cloud, peers }) => {
     official.setEnabled(true);

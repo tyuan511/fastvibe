@@ -23,7 +23,7 @@ import { SignalingClient, type SignalingStop } from "./signaling.ts";
 
 const REQUEST_TIMEOUT_MS = 15_000;
 /** Stop using a server list this long before the service says it expires. */
-const ICE_MARGIN_MS = 10 * 60_000;
+const ICE_MARGIN_MS = 60_000;
 const ICE_RECHECK_MS = 30 * 60_000;
 const ICE_EMPTY_MS = 60_000;
 /** How long a call with no list at all waits for one before it goes on without. */
@@ -308,10 +308,16 @@ export class OfficialConnection {
       sendSignal: (data) => signaling.signal(cid, data),
       attach: (socket) => this.#deps.attach(socket, { id: `rtc:${cid}`, label: peer.name }),
       onChange: () => this.#emit(),
-      onClientId: (id) => {
+      onClientId: (id, { successor }) => {
         // The same phone calling again (the app restarted, the network changed) while its
         // old connection still waits for the heartbeat to notice it is gone: that one is a
         // ghost, and keeping it would list the phone twice.
+        //
+        // Not when the phone says it is renewing: a relayed connection is rebuilt a little
+        // before its credential runs out, and the old one has to keep carrying the session
+        // until the new one is up. The phone closes it; if the phone dies first, the old
+        // one dies with its credential.
+        if (successor) return;
         for (const other of [...this.#responders.values()]) {
           if (other !== responder && other.clientId === id) other.close();
         }
@@ -338,12 +344,12 @@ export class OfficialConnection {
    * The servers a call gathers with, kept between calls.
    *
    * Asking the service for every call put an HTTPS round trip in front of the answer, and
-   * the phone was already waiting on it. The list is the same for an hour, so it is
+   * the phone was already waiting on it. The list is the same for minutes, so it is
    * fetched when signaling comes up and reused.
    *
    * A list that is due for another look is still handed out, and looked up again behind
    * the call. What this side keeps is STUN addresses with no credential in them
-   * (`stunServers`), so nothing in an old list stops working when the service's hour is
+   * (`stunServers`), so nothing in an old list stops working when the service's credential is
    * up — whereas waiting on the service here, and getting no answer, sent the call on with
    * no server at all, which a phone off this network cannot connect through. Only a call
    * with nothing to gather with waits, and not for long.

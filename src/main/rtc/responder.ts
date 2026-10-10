@@ -54,8 +54,11 @@ export type ResponderDeps = {
   /**
    * The phone said which phone it is, in its offer. Called once, when the offer is applied.
    * The id is the phone's own claim, which is as far as an account's own devices are trusted.
+   * `successor` is the phone saying this call replaces one of its own that is about to lose
+   * its relay credential: the old one is still carrying the session and the phone closes it
+   * itself once the new one has taken over.
    */
-  onClientId?: (id: string) => void;
+  onClientId?: (id: string, info: { successor: boolean }) => void;
   /** This call is over, whichever way. Called once. */
   onEnd: () => void;
   /** How long a call may take to open its channel before it is abandoned. */
@@ -232,7 +235,7 @@ export class Responder {
   #apply(data: unknown): void {
     const pc = this.#pc;
     if (!pc || typeof data !== "object" || data === null) return;
-    const message = data as { type?: unknown; sdp?: unknown; candidate?: unknown; mid?: unknown; client_id?: unknown; deflate?: unknown };
+    const message = data as { type?: unknown; sdp?: unknown; candidate?: unknown; mid?: unknown; client_id?: unknown; deflate?: unknown; rollover?: unknown };
     try {
       if (message.type === "offer" && typeof message.sdp === "string" && message.sdp.length <= MAX_SDP_CHARS) {
         // Before the offer is applied: the answer it produces has to carry the agreement.
@@ -246,7 +249,7 @@ export class Responder {
         const id = message.client_id;
         if (typeof id === "string" && id.length > 0 && id.length <= 128 && !this.#clientId) {
           this.#clientId = id;
-          this.#deps.onClientId?.(id);
+          this.#deps.onClientId?.(id, { successor: message.rollover === true });
         }
       } else if (message.type === "candidate" && typeof message.candidate === "string" && message.candidate.length <= 2048) {
         if (!usableRemoteCandidate(message.candidate)) return;
