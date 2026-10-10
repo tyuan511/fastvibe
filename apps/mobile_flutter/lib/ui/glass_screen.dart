@@ -67,6 +67,14 @@ class GlassInsets extends InheritedWidget {
   static GlassInsets? maybeOf(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<GlassInsets>();
 
+  /// The top inset alone. A keyboard changes [GlassInsets.bottom] (the home
+  /// indicator yields), and a transcript that only needs the bar must not
+  /// rebuild for that.
+  static double topOf(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<GlassTopInset>()?.top ??
+      maybeOf(context)?.top ??
+      0;
+
   /// `base` with the bars' reach added to its top and bottom.
   static EdgeInsets pad(
     BuildContext context, [
@@ -85,6 +93,61 @@ class GlassInsets extends InheritedWidget {
       top != oldWidget.top || bottom != oldWidget.bottom;
 }
 
+/// Notifies only when the top bar's reach changes.
+class GlassTopInset extends InheritedWidget {
+  const GlassTopInset({super.key, required this.top, required super.child});
+
+  final double top;
+
+  @override
+  bool updateShouldNotify(GlassTopInset oldWidget) => top != oldWidget.top;
+}
+
+/// Publishes the keyboard overlap and hides it from [child].
+///
+/// [GlassScaffold] reads the whole [MediaQuery], and with
+/// `resizeToAvoidBottomInset` it pads the body by `viewInsets` on every frame
+/// of the keyboard animation. A long transcript cannot lay its visible
+/// messages out again that often. Descendants that have to stay above the
+/// keyboard read [of]; the page underneath sees a stable inset of zero and
+/// keeps its size.
+class KeyboardLift extends StatelessWidget {
+  const KeyboardLift({super.key, required this.child});
+
+  final Widget child;
+
+  static double of(BuildContext context) =>
+      context
+          .dependOnInheritedWidgetOfExactType<_KeyboardLiftScope>()
+          ?.bottom ??
+      0;
+
+  @override
+  Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
+    final bottom = media.viewInsets.bottom;
+    // Zeroing the inset makes this data equal to the previous frame's for as
+    // long as nothing but the keyboard moved, so the page is not rebuilt.
+    final data = bottom == 0
+        ? media
+        : media.copyWith(viewInsets: media.viewInsets.copyWith(bottom: 0));
+    return _KeyboardLiftScope(
+      bottom: bottom,
+      child: MediaQuery(data: data, child: child),
+    );
+  }
+}
+
+class _KeyboardLiftScope extends InheritedWidget {
+  const _KeyboardLiftScope({required this.bottom, required super.child});
+
+  final double bottom;
+
+  @override
+  bool updateShouldNotify(_KeyboardLiftScope oldWidget) =>
+      bottom != oldWidget.bottom;
+}
+
 /// All routes share pinned navigation, readable content, and keyboard-safe bounds.
 class GlassScreen extends StatelessWidget {
   const GlassScreen({
@@ -101,6 +164,7 @@ class GlassScreen extends StatelessWidget {
     this.fadeBottom = true,
     this.topScrim = true,
     this.contentBehindBars = true,
+    this.resizeToAvoidBottomInset = true,
     this.largeTitleController,
   });
 
@@ -128,6 +192,11 @@ class GlassScreen extends StatelessWidget {
   /// `false` keeps the body between the bars, for a body that cannot pad itself.
   final bool contentBehindBars;
 
+  /// `false` leaves the body full height while the keyboard moves. The chat
+  /// does this: resizing would lay out every visible message on each frame.
+  /// Pair it with [KeyboardLift], which is what actually clears the keyboard.
+  final bool resizeToAvoidBottomInset;
+
   /// A page with an iOS large title (`GlassLargeTitle` in its scroll view) passes the
   /// controller it shares with it; the bar's own title then fades in as the large one goes.
   final GlassLargeTitleController? largeTitleController;
@@ -135,23 +204,27 @@ class GlassScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = paletteOf(context);
-    final media = MediaQuery.of(context);
+    // padding, not the whole MediaQuery: viewInsets animates with the keyboard,
+    // and depending on it would rebuild this page on every frame of that.
+    final padding = MediaQuery.paddingOf(context);
     const barHeight = 44.0;
     final bottomBarHeight = bottomBar == null
         ? 0.0
         : bottomBar is PreferredSizeWidget
         ? (bottomBar as PreferredSizeWidget).preferredSize.height
         : 84.0;
-    final insets = GlassInsets(
-      top: contentBehindBars ? media.padding.top + barHeight + 8 : 0,
-      bottom: contentBehindBars
-          ? media.padding.bottom +
-                bottomBarHeight +
-                (bottomBar == null ? 12 : 8)
-          : 0,
-      child: _scaffold(context, palette),
+    final top = contentBehindBars ? padding.top + barHeight + 8 : 0.0;
+    final bottom = contentBehindBars
+        ? padding.bottom + bottomBarHeight + (bottomBar == null ? 12 : 8)
+        : 0.0;
+    return GlassTopInset(
+      top: top,
+      child: GlassInsets(
+        top: top,
+        bottom: bottom,
+        child: _scaffold(context, palette),
+      ),
     );
-    return insets;
   }
 
   Widget _scaffold(BuildContext context, Palette palette) {
@@ -160,7 +233,7 @@ class GlassScreen extends StatelessWidget {
       statusBarStyle: palette.dark
           ? GlassStatusBarStyle.light
           : GlassStatusBarStyle.dark,
-      resizeToAvoidBottomInset: true,
+      resizeToAvoidBottomInset: resizeToAvoidBottomInset,
       // The body runs under the bars and dissolves into the page at their edges, as a
       // list does under an iOS 26 navigation bar. Bodies pad their own scrolling content
       // with `GlassInsets`, so the first row still starts below the bar.
@@ -391,8 +464,8 @@ class _BarScrim extends StatelessWidget {
 /// `menuHeight` is what switches on the menu's own scrolling, so it is passed only once
 /// the rows — measured the way the package measures them — outgrow the room below the bar.
 double? _barMenuHeight(BuildContext context, List<Widget> items) {
-  final media = MediaQuery.of(context);
-  final scaler = media.textScaler;
+  final padding = MediaQuery.paddingOf(context);
+  final scaler = MediaQuery.textScalerOf(context);
   var natural = 24.0 + math.max(0, items.length - 1) * 2.0;
   for (final item in items) {
     if (item is GlassMenuItem) {
@@ -411,7 +484,7 @@ double? _barMenuHeight(BuildContext context, List<Widget> items) {
   // The capsule sits just under the status bar; keep the menu clear of the home
   // indicator with the same breathing room the sheets keep from the screen edge.
   final room =
-      media.size.height - media.padding.top - media.padding.bottom - 72;
+      MediaQuery.sizeOf(context).height - padding.top - padding.bottom - 72;
   return natural > room ? math.max(room, 160.0) : null;
 }
 

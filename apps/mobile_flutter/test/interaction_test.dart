@@ -305,6 +305,68 @@ void main() {
     },
   );
 
+  testWidgets('a keyboard frame does not rebuild the page under KeyboardLift', (
+    tester,
+  ) async {
+    var builds = 0;
+    final page = Builder(
+      builder: (context) {
+        builds++;
+        return const SizedBox.expand();
+      },
+    );
+    Future<void> host(double inset) {
+      return tester.pumpWidget(
+        MediaQuery(
+          data: MediaQueryData(
+            size: const Size(390, 844),
+            viewInsets: EdgeInsets.only(bottom: inset),
+          ),
+          child: KeyboardLift(child: page),
+        ),
+      );
+    }
+
+    await host(0);
+    expect(builds, 1);
+    await host(80);
+    await host(180);
+    await host(320);
+    await host(0);
+    expect(builds, 1);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('dismissing the keyboard does not resize the conversation', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() {
+      tester.view.resetViewInsets();
+      tester.binding.setSurfaceSize(null);
+    });
+    await pump(tester, const ChatScreen(conversationId: 'keyboard'));
+    final transcript = find.ancestor(
+      of: find.text(t('chat.welcomeTitle')),
+      matching: find.byType(SingleChildScrollView),
+    );
+    final body = tester.getSize(transcript);
+    final composer = tester.getTopLeft(find.byType(TextField)).dy;
+    // viewInsets are physical pixels; the lift follows the logical overlap.
+    const physical = 320.0;
+    tester.view.viewInsets = const FakeViewPadding(bottom: physical);
+    await tester.pump();
+    final lift = physical / tester.view.devicePixelRatio;
+    expect(tester.getSize(transcript).height, body.height);
+    expect(
+      tester.getTopLeft(find.byType(TextField)).dy,
+      closeTo(composer - lift, 1),
+    );
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+  });
+
   testWidgets(
     'a long question form stays scrollable above a small-screen keyboard',
     (tester) async {
