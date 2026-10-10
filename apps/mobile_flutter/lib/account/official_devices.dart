@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 
 import '../i18n/core.dart';
 import '../protocol/address.dart';
+import '../protocol/rtc_connection.dart';
 import '../storage/servers.dart';
 import 'account.dart';
 
@@ -92,6 +93,8 @@ class OfficialDevices extends ChangeNotifier {
       }
       await _store.syncOfficial(devices);
       if (generation != _generation) return;
+      // A computer in the list is about to be tapped: have what its connection needs first.
+      if (devices.isNotEmpty) RtcDialer.warm(origin: _account.origin, token: token, client: _client);
       _online
         ..clear()
         ..addAll(online);

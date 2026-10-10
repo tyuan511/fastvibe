@@ -77,12 +77,13 @@ typedef PushHandler = void Function(String channel, Object? payload, EventMeta? 
 typedef DisconnectHandler = void Function(DisconnectDetail detail);
 
 class _Pending {
-  _Pending(this.completer, this.timer, this.started, this.metric);
+  _Pending(this.completer, this.timer, this.started, this.metric, this.method);
 
   final Completer<Object?> completer;
   final Timer? timer;
   final int started;
   final String metric;
+  final String method;
 }
 
 class _PendingSubscription {
@@ -112,6 +113,10 @@ class RemoteClient {
   bool _ready = false;
   bool _active = false;
   int _lastReceived = 0;
+
+  /// The frame being handled right now: its size and how long its JSON took to decode.
+  int _frameChars = 0;
+  int _parseMs = 0;
   Timer? _healthTimer;
   Timer? _probeTimer;
   bool _probeFast = false;
@@ -325,9 +330,12 @@ class RemoteClient {
       socket.listen(
         (data) {
           if (stale()) return;
+          final parseStarted = DateTime.now().millisecondsSinceEpoch;
           final message = _parseFrame(data);
           if (message == null) return;
           _lastReceived = DateTime.now().millisecondsSinceEpoch;
+          _frameChars = data is String ? data.length : 0;
+          _parseMs = _lastReceived - parseStarted;
           if (!authed) {
             if (message['type'] != 'auth') return;
             if (message['ok'] != true) {
@@ -449,6 +457,9 @@ class RemoteClient {
         pending.metric,
         elapsedMs: DateTime.now().millisecondsSinceEpoch - pending.started,
         outcome: message['ok'] == true ? 'ok' : 'error',
+        name: pending.method,
+        frameChars: _frameChars,
+        parseMs: _parseMs,
       ));
       if (message['ok'] == true) {
         if (!pending.completer.isCompleted) pending.completer.complete(message['result']);
@@ -508,7 +519,7 @@ class RemoteClient {
       // Do not replay a call Main may have accepted. Probe the connection instead.
       checkHealth();
     });
-    _pending[requestId] = _Pending(completer, timer, started, metric);
+    _pending[requestId] = _Pending(completer, timer, started, metric, method);
     try {
       ws.add(jsonEncode(<String, Object?>{'kind': 'call', 'requestId': requestId, 'method': method, 'payload': payload}));
     } catch (_) {

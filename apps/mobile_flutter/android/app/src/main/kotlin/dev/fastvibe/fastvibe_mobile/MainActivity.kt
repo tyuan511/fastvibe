@@ -22,6 +22,12 @@ class MainActivity : FlutterActivity() {
                     } catch (_: Exception) { result.success(false) }
                     return@setMethodCallHandler
                 }
+                if (call.method == "deviceId") {
+                    // ANDROID_ID: stable across reinstalls of an app signed with the same key,
+                    // and the nearest thing to a device id an app is allowed to read.
+                    result.success(Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID))
+                    return@setMethodCallHandler
+                }
                 if (call.method != "readImage") {
                     result.notImplemented()
                     return@setMethodCallHandler

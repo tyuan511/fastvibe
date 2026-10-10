@@ -190,14 +190,12 @@ class GlassScreen extends StatelessWidget {
                   // into the title row leaves the glyph tops soft under the header.
                   height: MediaQuery.paddingOf(context).top + 44 + 8,
                   solid: MediaQuery.paddingOf(context).top + 44,
-                  palette: palette,
                 ),
               if (bottomBar != null)
                 _BarScrim(
                   top: false,
                   height: MediaQuery.paddingOf(context).bottom + 84 + 20,
                   solid: MediaQuery.paddingOf(context).bottom + 84 - 8,
-                  palette: palette,
                 ),
             ]
           : null,
@@ -321,15 +319,19 @@ class GlassScreen extends StatelessWidget {
   }
 }
 
-/// A wash of the page colour behind a bar: nearly opaque where the bar's text sits, fading
-/// out below it. The progressive blur alone is weakest exactly under a title — the row a
-/// reader looks at — so a card's text scrolling past still showed through it.
+/// A wash behind a bar: nearly opaque where the bar's text sits, fading out below it. The
+/// progressive blur alone is weakest exactly under a title — the row a reader looks at — so a
+/// card's text scrolling past still showed through it.
+///
+/// The wash is the wallpaper itself, cut by a gradient mask, not a flat page colour. The
+/// wallpaper is a gradient (a tinted corner under the top bar), so a flat `background` wash
+/// came out as a lighter band against it before anything had scrolled — it only has to be
+/// invisible at rest, and drawing the same pixels over the same pixels is.
 class _BarScrim extends StatelessWidget {
   const _BarScrim({
     required this.top,
     required this.height,
     required this.solid,
-    required this.palette,
   });
 
   final bool top;
@@ -337,18 +339,21 @@ class _BarScrim extends StatelessWidget {
 
   /// How much of `height` is held at full strength before the fade begins.
   final double solid;
-  final Palette palette;
 
   @override
   Widget build(BuildContext context) {
     final hold = (solid / height).clamp(0.0, 1.0);
-    final color = palette.background;
-    final stops = <double>[0, hold, 1];
-    final colors = <Color>[
-      color.withValues(alpha: top ? 0.9 : 0.78),
-      color.withValues(alpha: top ? 0.86 : 0.7),
-      color.withValues(alpha: 0),
-    ];
+    final screen = MediaQuery.sizeOf(context).height;
+    final mask = LinearGradient(
+      begin: top ? Alignment.topCenter : Alignment.bottomCenter,
+      end: top ? Alignment.bottomCenter : Alignment.topCenter,
+      stops: <double>[0, hold, 1],
+      colors: <Color>[
+        Color.fromRGBO(0, 0, 0, top ? 0.9 : 0.78),
+        Color.fromRGBO(0, 0, 0, top ? 0.86 : 0.7),
+        const Color(0x00000000),
+      ],
+    );
     return Positioned(
       left: 0,
       right: 0,
@@ -356,13 +361,17 @@ class _BarScrim extends StatelessWidget {
       bottom: top ? null : 0,
       height: height,
       child: IgnorePointer(
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: top ? Alignment.topCenter : Alignment.bottomCenter,
-              end: top ? Alignment.bottomCenter : Alignment.topCenter,
-              stops: stops,
-              colors: colors,
+        child: ShaderMask(
+          blendMode: BlendMode.dstIn,
+          shaderCallback: mask.createShader,
+          // The wallpaper at full screen height, anchored to the bar's edge, so the strip
+          // shows exactly the part of it that lies behind the strip.
+          child: ClipRect(
+            child: OverflowBox(
+              alignment: top ? Alignment.topCenter : Alignment.bottomCenter,
+              minHeight: screen,
+              maxHeight: screen,
+              child: const GlassWallpaper(),
             ),
           ),
         ),

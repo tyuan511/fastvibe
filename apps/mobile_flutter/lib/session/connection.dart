@@ -4,6 +4,7 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/widgets.dart';
 
 import '../account/account.dart';
+import '../account/device_id.dart';
 import '../account/official_devices.dart';
 import '../app_info.dart';
 import '../i18n/core.dart';
@@ -338,6 +339,7 @@ class Connection extends ChangeNotifier {
         final account = AccountService.instance;
         final deviceId = server.officialDeviceId!;
         final name = await account.deviceLabel();
+        final clientId = await stableDeviceId();
         await remote.connectOpened(
           () => RtcDialer(
             origin: account.origin,
@@ -345,6 +347,7 @@ class Connection extends ChangeNotifier {
             deviceId: deviceId,
             clientName: name,
             platform: account.platform,
+            clientId: clientId,
           ).dial(),
         );
       } else {

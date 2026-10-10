@@ -110,6 +110,7 @@
   "server.needLogin": "需要重新登录",
   "server.cannotConnect": "无法连接 {name}",
   "server.cannotConnectBody": "{error}。请确认电脑上的 FastVibe 正在运行，且手机能访问 {host}。",
+  "server.cannotConnectOfficialBody": "请确保电脑端登录了同一个账号，且远程访问已开启。",
   "server.thisDevice": "这台设备",
   "server.connectFailed": "连接失败",
   "server.connect": "连接",

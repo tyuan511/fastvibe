@@ -113,6 +113,7 @@ const Map<String, String> en = <String, String>{
   'server.needLogin': 'Sign in again',
   'server.cannotConnect': 'Can\'t connect to {name}',
   'server.cannotConnectBody': '{error}. Make sure FastVibe is running on the computer and this phone can reach {host}.',
+  'server.cannotConnectOfficialBody': 'Make sure the computer is signed in to the same account and Remote Access is turned on.',
   'server.thisDevice': 'this device',
   'server.connectFailed': 'Connection failed',
   'server.connect': 'Connect',

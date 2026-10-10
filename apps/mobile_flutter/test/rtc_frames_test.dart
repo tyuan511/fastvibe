@@ -71,7 +71,7 @@ void main() {
   test('what the format does not allow is refused', () {
     FrameAssembler fresh() => FrameAssembler(1 << 20);
     expect(() => fresh().push(Uint8List(0)), throwsA(isA<FrameError>()));
-    expect(() => fresh().push(Uint8List.fromList(<int>[0x20, 1])), throwsA(isA<FrameError>()));
+    expect(() => fresh().push(Uint8List.fromList(<int>[0x40, 1])), throwsA(isA<FrameError>()));
     expect(() => fresh().push(Uint8List.fromList(<int>[0x10, 0])), throwsA(isA<FrameError>()));
     final mixed = fresh()..push(Uint8List.fromList(<int>[0x00, 1]));
     expect(() => mixed.push(Uint8List.fromList(<int>[fragBinary | fragLast, 1])), throwsA(isA<FrameError>()));
@@ -90,5 +90,61 @@ void main() {
     expect(controlMessage(fragPing), <int>[4]);
     expect(controlMessage(fragPong), <int>[8]);
     expect(closeMessage(4001, 'no'), <int>[16, 15, 161, 110, 111]);
+  });
+
+  group('deflate', () {
+    final json = jsonEncode(<String, Object?>{
+      'messages': List<Object?>.generate(400, (i) => <String, Object?>{'id': i, 'text': 'hello world ' * 8}),
+    });
+
+    test('a compressed frame survives the split and comes back inflated', () {
+      final data = utf8.encode(json);
+      final packed = compressFrame(data)!;
+      expect(packed.length < data.length ~/ 4, isTrue, reason: 'JSON compresses well');
+      final messages = splitFrame(packed, binary: false, deflated: true);
+      expect(messages.every((m) => m[0] & fragDeflate != 0), isTrue, reason: 'every fragment says so');
+      final assembler = FrameAssembler(32 * 1024 * 1024);
+      Incoming? out;
+      for (final message in messages) {
+        out = assembler.push(message);
+      }
+      expect((out! as IncomingFrame).data, data);
+    });
+
+    test('a frame too short, or that does not shrink, is not compressed', () {
+      expect(compressFrame(utf8.encode('short')), isNull);
+      final noise = Uint8List.fromList(List<int>.generate(compressMinBytes * 4, (i) => (i * 2654435761 >> 7) & 0xff));
+      // Pseudo-random enough that deflate cannot make it smaller than itself plus framing.
+      final packed = compressFrame(noise);
+      expect(packed == null || packed.length < noise.length, isTrue);
+    });
+
+    test('a compressed frame cannot inflate past the frame limit', () {
+      final bomb = compressFrame(Uint8List(4 * 1024 * 1024))!;
+      expect(bomb.length < 64 * 1024, isTrue, reason: 'a tiny input that inflates to megabytes');
+      final assembler = FrameAssembler(1024 * 1024);
+      expect(() {
+        for (final message in splitFrame(bomb, binary: false, deflated: true)) {
+          assembler.push(message);
+        }
+      }, throwsA(isA<FrameError>()));
+    });
+
+    test('garbage marked compressed, and mixed fragments, are refused', () {
+      expect(
+        () => FrameAssembler(1 << 20).push(Uint8List.fromList(<int>[fragLast | fragDeflate, 0x07, 0xff, 0xff])),
+        throwsA(isA<FrameError>()),
+      );
+      final mixed = FrameAssembler(1 << 20)..push(Uint8List.fromList(<int>[fragDeflate, 0, 0, 0]));
+      expect(() => mixed.push(Uint8List.fromList(<int>[fragLast, 0, 0])), throwsA(isA<FrameError>()));
+    });
+
+    // Produced by the desktop's `deflateRawSync(..., { level: 3 })`: the two sides must agree
+    // on the bytes, not only on each other's round trip.
+    test('reads what the desktop wrote', () {
+      const wire = <int>[0xab, 0x56, 0xca, 0x48, 0xcd, 0xc9, 0xc9, 0x57, 0xb2, 0x52, 0x4a, 0x4b, 0x2c, 0x2e, 0x29, 0xcb, 0x4c, 0x4a, 0x55, 0x48, 0x2b, 0x4a, 0xcc, 0x4d, 0x2d, 0x56, 0xd2, 0x51, 0xca, 0x53, 0xb2, 0x8a, 0x36, 0xd4, 0x31, 0xd2, 0x31, 0xd6, 0x31, 0xd1, 0x31, 0xd5, 0x31, 0xd3, 0x31, 0xd7, 0xb1, 0xd0, 0xb1, 0xd4, 0x31, 0x34, 0x88, 0xad, 0x05, 0x00];
+      final out = FrameAssembler(1 << 20).push(Uint8List.fromList(<int>[fragLast | fragDeflate, ...wire])) as IncomingFrame;
+      expect(utf8.decode(out.data), '{"hello":"fastvibe frames","n":[1,2,3,4,5,6,7,8,9,10]}');
+    });
   });
 }

@@ -16,6 +16,8 @@ class Diagnostic {
     this.metric,
     this.frameChars,
     this.outcome,
+    this.name,
+    this.parseMs,
   }) : at = DateTime.now().toUtc().toIso8601String();
 
   factory Diagnostic.metric(
@@ -23,6 +25,8 @@ class Diagnostic {
     int? elapsedMs,
     int? frameChars,
     String? outcome,
+    String? name,
+    int? parseMs,
   }) =>
       Diagnostic(
         event: 'metric',
@@ -30,6 +34,8 @@ class Diagnostic {
         elapsedMs: elapsedMs,
         frameChars: frameChars,
         outcome: outcome,
+        name: name,
+        parseMs: parseMs,
       );
 
   final String event;
@@ -45,6 +51,12 @@ class Diagnostic {
   final String? metric;
   final int? frameChars;
   final String? outcome;
+
+  /// Which call or phase a sample is of (a method name, never its payload).
+  final String? name;
+
+  /// How long decoding the reply's JSON took, for a reply large enough to matter.
+  final int? parseMs;
   final String at;
 
   Map<String, Object?> toJson() => <String, Object?>{
@@ -64,6 +76,8 @@ class Diagnostic {
         if (metric != null) 'metric': metric,
         if (frameChars != null) 'frameChars': frameChars,
         if (outcome != null) 'outcome': outcome,
+        if (name != null) 'name': name,
+        if (parseMs != null) 'parseMs': parseMs,
       };
 }
 
@@ -73,7 +87,13 @@ final Map<String, List<Diagnostic>> _metrics = <String, List<Diagnostic>>{};
 const int _maxEntries = 100;
 const int _maxMetricSamples = 32;
 
+/// `--dart-define=FASTVIBE_TRACE=true` also writes every sample to the device log as it is
+/// taken, for measuring a build on a real network. Off in a shipped build.
+const bool _trace = bool.fromEnvironment('FASTVIBE_TRACE');
+
 void recordConnectionDiagnostic(Diagnostic entry) {
+  // ignore: avoid_print
+  if (_trace) print('FVTRACE ${jsonEncode(entry.toJson())}');
   if (entry.event == 'metric' && entry.metric != null) {
     final recent = _metrics.putIfAbsent(entry.metric!, () => <Diagnostic>[]);
     recent.add(entry);

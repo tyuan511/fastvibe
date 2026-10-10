@@ -607,7 +607,7 @@ class _ServerScreenState extends State<ServerScreen> {
         connection.server?.id == widget.serverId) {
       return BrandLoading(
         message: t('server.connectingTo', vars: <String, Object?>{
-          'host': _server!.host,
+          'host': _server!.alias,
         }),
       );
     }
@@ -1079,7 +1079,9 @@ class _FailureState extends State<_Failure> {
                 needsPassword || needsAccount
                     ? (connection.error ?? '')
                     : t(
-                        'server.cannotConnectBody',
+                        // An account computer has no address: its `host` is the platform name,
+                        // which read as 「手机能访问 darwin」.
+                        widget.server.isOfficial ? 'server.cannotConnectOfficialBody' : 'server.cannotConnectBody',
                         vars: <String, Object?>{
                           'error': (connection.error ?? t('server.connectFailed', context: context))
                               .replaceAll(RegExp(r'[。.]$'), ''),
