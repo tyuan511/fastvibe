@@ -229,8 +229,8 @@ export class AccountService {
 
   async #complete(attempt: Attempt, listener: Listener, verifier: string): Promise<void> {
     try {
-      const code = await listener.code;
-      const stored = await this.#exchange(code, listener.redirectUri, verifier);
+      const { code, redirectUri } = await listener.code;
+      const stored = await this.#exchange(code, redirectUri, verifier);
       if (this.#attempt !== attempt) {
         // Cancelled while the code was being traded: the device session the site just
         // opened would sit unused in the person's device list, so close it again.
@@ -359,8 +359,14 @@ function describe(error: unknown): string {
 
 type Listener = {
   redirectUri: string;
-  /** Resolves with the authorization code the browser delivered. */
-  code: Promise<string>;
+  /**
+   * Resolves with the authorization code the browser delivered, and the address it
+   * delivered it to. The site ties a code to the redirect it was issued for and wants
+   * that same string back at the token endpoint — and that is whatever the browser was
+   * sent to, which is `localhost` whenever something on the way rewrote our `127.0.0.1`.
+   * Trading the code under the address we handed out was refused as `invalid_grant`.
+   */
+  code: Promise<{ code: string; redirectUri: string }>;
   /** End the wait with this failure. */
   fail: (error: Error) => void;
   cancel: () => void;
@@ -381,8 +387,8 @@ type Listener = {
  * browser may well spell the redirect that way.
  */
 async function listen(state: string, timeoutMs: number): Promise<Listener> {
-  let settle!: { resolve: (code: string) => void; reject: (error: Error) => void };
-  const code = new Promise<string>((resolve, reject) => {
+  let settle!: { resolve: (arrived: { code: string; redirectUri: string }) => void; reject: (error: Error) => void };
+  const code = new Promise<{ code: string; redirectUri: string }>((resolve, reject) => {
     settle = { resolve, reject };
   });
   // Rejected before anyone awaits it when the browser fails to open; that is handled by
@@ -414,7 +420,8 @@ async function listen(state: string, timeoutMs: number): Promise<Listener> {
     const denied = url.searchParams.get("error");
     const authorization = url.searchParams.get("code");
     if (denied) settle.reject(new CancelledLogin("denied"));
-    else if (authorization) settle.resolve(authorization);
+    // `hostOk` left only our two loopback spellings, so this is one of two known strings.
+    else if (authorization) settle.resolve({ code: authorization, redirectUri: `http://${req.headers.host}${CALLBACK_PATH}` });
     else settle.reject(new LoginError(uiText("登录没有成功，请重试", "Sign-in didn't go through. Try again.")));
   });
 

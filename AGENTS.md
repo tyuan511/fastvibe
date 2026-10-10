@@ -1153,6 +1153,12 @@ engine is gone because the SDK never read them.
 - **监听只认自己的那一次。** `state` 不对（别的标签页、端口扫描）只回 400 不终止等待；`Host` 必须是
   我们给出的回环地址（挡 DNS 重绑定）；只有 `GET /callback` 有应答；5 分钟超时；用完即关。
   取消、超时、站点拒绝都落回「未登录」，取消与用户在浏览器里点「取消」不算错误。
+- **换令牌用回调实际到达的地址，不用自己发出去的那个。** 站点把授权码绑在签发时的 `redirect_uri` 上，
+  换令牌要原样交回。我们发出的是 `127.0.0.1`，但站点的 Next 中间件（`NextURL`）会把 URL 里第一个回环地址
+  改成 `localhost`，查询串也不例外——未登录时经过登录页的那一趟，码就签给了 `localhost`。于是监听按
+  `Host` 头把到达的地址（两种写法之一）连同 `code` 一起交出来。写死 `127.0.0.1` 的结果是：每个人的第一次
+  登录都是 `invalid_grant`，重试（已登录，不经过登录页）才成功。网站那边也改了（`login-card.tsx` 在浏览器里读
+  `return_to`），这里是兜底。
 - **启动不依赖网络。** 文件里有令牌就直接显示已登录，之后后台 `refresh()` 核对：401 才清掉，
   离线 / 5xx 保持登录。登出先清本地，再尽力 `POST /api/auth/logout` 吊销该设备。
 - **IPC**：`account:get|login|cancel-login|logout` + 推送 `account:state`。`login` 在浏览器打开后就返回，

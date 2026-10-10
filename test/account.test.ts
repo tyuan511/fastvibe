@@ -212,13 +212,15 @@ test("a callback that does not carry our state is ignored, and the wait goes on"
   } finally { closeAll(r); }
 });
 
-test("the callback also answers to localhost, which is the same loopback listener", async () => {
+test("the callback also answers to localhost, and the code is traded under that spelling", async () => {
   const r = await rig();
   try {
+    // The site's login page rewrites `127.0.0.1` in the request to `localhost`, so the
+    // code is issued for — and the browser sent to — an address we did not hand out.
     r.browse = async (url) => {
       const redirect = new URL(url.searchParams.get("redirect_uri")!);
-      r.cloud.codes.set("c1", { challenge: url.searchParams.get("code_challenge")!, redirectUri: redirect.toString() });
       const asLocalhost = `http://localhost:${redirect.port}${redirect.pathname}`;
+      r.cloud.codes.set("c1", { challenge: url.searchParams.get("code_challenge")!, redirectUri: asLocalhost });
       await fetch(`${asLocalhost}?code=c1&state=${encodeURIComponent(url.searchParams.get("state")!)}`);
     };
     await r.service.login();
