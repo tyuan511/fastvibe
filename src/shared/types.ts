@@ -210,6 +210,12 @@ export type ChatMessage = {
    */
   completedAt?: number;
   createdAt: number;
+  /**
+   * When the run now in flight (re)started on this reply, if later than `createdAt`:
+   * 继续 / a retry after a failed or stopped attempt reuses the same row, and the live
+   * 已处理 clock must not count the failure and the wait before the user came back.
+   */
+  runStartedAt?: number;
   kind?: "message" | "notice" | "compact" | "custom" | "dag";
   /** Extension custom message (`pi.sendMessage`): the plugin's own type id. */
   customType?: string;

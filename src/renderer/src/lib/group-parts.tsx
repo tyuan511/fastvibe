@@ -132,8 +132,20 @@ export function mergeAssistantRun(messages: ChatMessage[]): ChatMessage {
   // through the run: an open round-trip has no end yet, and borrowing the previous
   // one's would report a stale finish time the moment it is read mid-stream.
   const completedAt = last?.completedAt;
+  // Where the run that produced this row's last round-trips began. A failed or stopped
+  // round-trip followed by another one means the user came back (继续, a retry on another
+  // model) — the failure and the wait before it are not that run's work. Reading it off the
+  // transcript is what keeps the clock right after a reload, which the live stamp cannot.
+  let runStartedAt = first.runStartedAt;
+  for (let index = 0; index < messages.length - 1; index += 1) {
+    const item = messages[index];
+    if (item.role !== "assistant" || (item.error === undefined && item.stop === undefined)) continue;
+    const next = messages.slice(index + 1).find((candidate) => candidate.role === "assistant");
+    if (next) runStartedAt = next.createdAt;
+  }
   const merged: ChatMessage = {
     ...first,
+    runStartedAt,
     text: texts.join("\n\n"),
     thinking: thoughts.length > 0 ? thoughts.join("\n\n") : undefined,
     tools: [...tools.values()],

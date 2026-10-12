@@ -41,9 +41,11 @@ import {
   extensionScope,
   parsePermission,
   activeRunning,
+  applyAroundSentNow,
   optimisticQueuedTurn,
   preserveOptimisticTail,
-  shownQueueIds,
+  retractOptimisticTurn,
+  type SentNow,
   reconcileMessages,
   settledBoundary,
   waitingForUserAfter,
@@ -206,8 +208,16 @@ export type SessionStore = {
    * they made, never text the user typed while an IPC call was in flight.
    */
   composerDrafts: Record<string, { draft: string; attachments: ChatAttachment[]; version: number }>;
-  /** Renderer-side follow-ups for every conversation, retained across chat switches. */
+  /**
+   * Main's queue for every conversation, retained across chat switches.
+   *
+   * The whole of it: a row drawn as a sent turn (`sentNow`) is still queued until the
+   * engine takes it, so it stays here — a Send made meanwhile has to queue behind it —
+   * and is left out where the tray is drawn (`visibleQueue`).
+   */
   queued: QueuedPrompt[];
+  /** The queued message shown as a sent turn ahead of the engine (立即), if any. */
+  sentNow: SentNow | null;
   /** Last Main revision applied per conversation; rejects stale multi-window replies. */
   queueRevisionByConversation: Record<string, number>;
   /** Pause reasons retained per conversation; `queuePause` mirrors the active chat. */
@@ -302,10 +312,13 @@ export type SessionStore = {
    * Draw a queued message as a sent turn immediately.
    *
    * 立即 stops the run in flight before the next prompt can start, and that stop is
-   * an IPC hop the user can see. The row goes up at the click; `queue_delivered`
-   * adopts its id once the engine has actually taken the message.
+   * an IPC hop the user can see. The row goes up at the click and is the engine's
+   * once it echoes the prompt. One at a time: a second click takes the first turn
+   * back, because the engine sends whichever was asked for last.
    */
   showQueuedNow: (id: string) => void;
+  /** Take that turn back: Main refused the request, so no run is coming for it. */
+  retractQueuedNow: (id: string) => void;
   /** Remove a fresh prompt that Main rejected before it entered the transcript. */
   rollbackOptimisticPrompt: () => void;
   dropEmptyAssistant: () => void;
@@ -392,6 +405,7 @@ function reduceEvents(state: SessionStore, events: EngineEvent[]): Partial<Sessi
   let draft = state.draft;
   let pendingPermissions = state.pendingPermissions;
   let queued = state.queued;
+  let sentNow = state.sentNow;
   let runInterrupted = state.runInterrupted;
   /** Sidebar mark for this batch when it is not simply `streaming` (a compaction). */
   let workingOverride: boolean | undefined;
@@ -414,9 +428,14 @@ function reduceEvents(state: SessionStore, events: EngineEvent[]): Partial<Sessi
     if (event.type === "queue_delivered" && typeof event.queueId === "string") {
       queued = queued.filter((item) => item.id !== event.queueId);
     }
-    const applied = applyEngineEvent(messages, event, streaming, partBoundary);
+    const applied = applyAroundSentNow({ messages, streaming, boundary: partBoundary, sentNow }, event, applyEngineEvent);
     messages = applied.messages;
     streaming = applied.streaming;
+    sentNow = applied.sentNow;
+    // The engine has the prompt now, so its row is no longer a queued one. The
+    // snapshot that drops it is a message behind the echo, and the tray would show the
+    // row for that long.
+    if (applied.adopted) queued = queued.filter((item) => item.id !== applied.adopted);
     if (applied.partBoundary !== undefined) partBoundary = applied.partBoundary;
     /**
      * How the run stopped early, if it did.
@@ -526,9 +545,16 @@ function reduceEvents(state: SessionStore, events: EngineEvent[]): Partial<Sessi
     subagents,
     subagentStreams,
     queued,
+    sentNow,
     runInterrupted,
     waitingForUser: waitingFrom(pendingPermissions, state.waitingForUser),
   };
+}
+
+/** The tray's rows for one conversation: its queue, less the one already drawn as a turn. */
+export function visibleQueue(queued: QueuedPrompt[], conversationId: string | null, sentNow: SentNow | null): QueuedPrompt[] {
+  if (!conversationId) return [];
+  return queued.filter((item) => item.conversationId === conversationId && item.id !== sentNow?.id);
 }
 
 
@@ -600,6 +626,7 @@ export const useSessionStore = create<SessionStore>((set, get) => {
   attachments: [],
   composerDrafts: {},
   queued: [],
+  sentNow: null,
   queueRevisionByConversation: {},
   queuePauseByConversation: {},
   queuePause: null,
@@ -704,11 +731,15 @@ export const useSessionStore = create<SessionStore>((set, get) => {
       if (conversationId && conversationId !== state.activeId) return state;
       // Keep the object identity of every row the read did not actually change, so
       // the thread re-renders only where it differs. A turn shown ahead of the engine
-      // (立即) is not in this read yet and must survive it.
-      const reconciled = reconcileMessages(state.messages, preserveOptimisticTail(state.messages, messages));
-      if (reconciled === state.messages) return state;
+      // (立即) is not in this read yet and must survive it — in its own chat only.
+      const owner = conversationId ?? state.activeId;
+      const mine = state.sentNow !== null && state.sentNow.conversationId === owner;
+      const sentNow = mine ? state.sentNow : null;
+      const reconciled = reconcileMessages(state.messages, preserveOptimisticTail(state.messages, messages, mine));
+      if (reconciled === state.messages) return sentNow === state.sentNow ? state : { sentNow };
       return {
         messages: reconciled,
+        sentNow,
         // The run flags are deliberately left alone: a transcript read says nothing
         // about whether a run is in flight. `reloadActiveMessages()` fires at every
         // `agent_end` and `compaction_end`, and its reply is an expensive full
@@ -736,7 +767,8 @@ export const useSessionStore = create<SessionStore>((set, get) => {
       const at = current.messages.findIndex((message) => message.id === anchorId);
       if (at < 0) return current;
       const previousTail = current.messages.slice(at);
-      const reconciled = reconcileMessages(previousTail, preserveOptimisticTail(previousTail, tail));
+      const mine = current.sentNow !== null && current.sentNow.conversationId === (conversationId ?? current.activeId);
+      const reconciled = reconcileMessages(previousTail, preserveOptimisticTail(previousTail, tail, mine));
       // `reconcileMessages` hands back the array it was given when every row was
       // reused, and `previousTail` is fresh here — so this is "the turn is unchanged".
       if (reconciled === previousTail) return current;
@@ -840,20 +872,40 @@ export const useSessionStore = create<SessionStore>((set, get) => {
   showQueuedNow: (id) =>
     set((state) => {
       const item = state.queued.find((entry) => entry.id === id);
-      if (!item || item.conversationId !== state.activeId) return state;
-      if (state.messages.some((message) => message.id === `queue:${id}`)) return state;
-      const added = optimisticQueuedTurn(item);
+      if (!item || !state.activeId || item.conversationId !== state.activeId) return state;
+      // Already with the engine, or already drawn.
+      if (item.sending || item.claimed || state.sentNow?.id === id) return state;
+      // A slash line may be a command the engine runs without a turn (`/compact`
+      // waits for the run instead of replacing it). It is not drawn as one: a turn
+      // that never comes is exactly what this row would then be.
+      if (item.text.trim().startsWith("/")) return state;
+      const prior = state.sentNow;
+      const cleared = prior ? retractOptimisticTurn(state.messages) : state.messages;
+      // What this turn waits behind. A turn it replaces was waiting behind the same
+      // thing; otherwise it is whatever is on screen now. `streaming` alone does not
+      // say a run is live once a turn has been drawn, hence the order.
+      const over: SentNow["over"] = prior
+        ? prior.over
+        : state.streaming ? "run" : state.running[state.activeId] === true ? "compaction" : null;
       return {
-        messages: [...state.messages, ...added],
-        queued: state.queued.filter((entry) => entry.id !== id),
-        // A slash command never starts a turn of its own; lighting the mark here left a
-        // chat looking busy over a command the engine runs without one.
-        streaming: added.length > 1,
+        messages: [...cleared, ...optimisticQueuedTurn(item)],
+        sentNow: {
+          conversationId: state.activeId,
+          id,
+          over,
+          revision: state.queueRevisionByConversation[state.activeId] ?? -1,
+        },
+        streaming: true,
         error: null,
         runInterrupted: null,
         canResume: false,
-        running: activeRunning(state, added.length > 1),
+        running: activeRunning(state, true),
       };
+    }),
+  retractQueuedNow: (id) =>
+    set((state) => {
+      if (state.sentNow?.id !== id) return state;
+      return { messages: retractOptimisticTurn(state.messages), sentNow: null };
     }),
   rollbackOptimisticPrompt: () =>
     set((state) => {
@@ -944,14 +996,21 @@ export const useSessionStore = create<SessionStore>((set, get) => {
       const queuePauseByConversation = { ...state.queuePauseByConversation };
       if (queue.pause) queuePauseByConversation[queue.conversationId] = queue.pause;
       else delete queuePauseByConversation[queue.conversationId];
-      // A row already drawn as a turn (立即) stays a turn. Putting it back in the tray
-      // the moment its snapshot arrived would undo the click until the engine echoed it.
-      const shown = shownQueueIds(state.messages);
+      // A row drawn as a turn (立即) goes back to the tray when Main's queue says it is
+      // not being sent: the row is gone without having been delivered (`queue_delivered`
+      // always precedes the snapshot that drops a delivered row), or the queue was
+      // paused after the click. A pause from before the click is the one it released.
+      const sent = state.sentNow?.conversationId === queue.conversationId ? state.sentNow : null;
+      const withdrawn = sent !== null && (
+        !queue.items.some((item) => item.id === sent.id) ||
+        (queue.pause !== null && queue.revision > sent.revision)
+      );
       return {
         queued: [
           ...state.queued.filter((item) => item.conversationId !== queue.conversationId),
-          ...queue.items.filter((item) => !shown.has(item.id)),
+          ...queue.items,
         ],
+        ...(withdrawn ? { messages: retractOptimisticTurn(state.messages), sentNow: null } : {}),
         queueRevisionByConversation: {
           ...state.queueRevisionByConversation,
           [queue.conversationId]: queue.revision,
@@ -1067,6 +1126,7 @@ export const useSessionStore = create<SessionStore>((set, get) => {
           )
         : state.queuePauseByConversation,
       queuePause: null,
+      sentNow: null,
       runInterrupted: null,
       canResume: false,
     }));

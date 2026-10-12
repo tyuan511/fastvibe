@@ -167,6 +167,8 @@ import {
 import { projectSessionMessages } from "./process-manager-transcript";
 import { SkillManager } from "./skill-manager";
 import { promptAccepted } from "./prompt-acceptance";
+import { type RunVerdict, verdictAfterEnd, verdictAfterStart } from "./run-verdict";
+import { SendNowSpans } from "./send-now";
 import { PromptPreparations } from "./prompt-preparation";
 import { sendOpeningPrompt } from "./opening-prompt";
 import type { AppConfigHostRequest, AppConfigHostResult } from "@shared/app-config";
@@ -471,8 +473,16 @@ export class PiProcessManager {
   #drainingQueues = new Set<string>();
   /** The actual drain promise, so session replacement can wait for old SDK work. */
   #drainPromises = new Map<string, Promise<void>>();
-  /** A drain requested by the user while another drain was running. */
+  /**
+   * The row the user asked to send next (立即), kept until a drain can act on it.
+   *
+   * A drain that finds the chat busy or the queue paused selects nothing, and used to
+   * forget the request on the way out — so the run's own settle, which drains without
+   * a preference, sent the head of the queue instead of the row that was clicked.
+   */
   #preferredQueueIds = new Map<string, string>();
+  /** 立即 in flight: keeps the chat working between the run it stops and the one it starts. */
+  #sendNow = new SendNowSpans();
   /** Session replacement temporarily blocks scheduled drains from binding to the old agent. */
   #queueRebuilds = new Set<string>();
   /** A drain whose durable write failed stays stopped until an explicit resume. */
@@ -486,15 +496,15 @@ export class PiProcessManager {
   #queueSubmission = new AsyncLocalStorage<{ conversationId: string; id: string }>();
   /** Exact SDK message object -> durable queue id, assigned at the ownership boundary. */
   #queuedSdkMessages = new SdkQueueClaims();
-  /** Terminal verdict held until `agent_settled`, when queued work may drain. */
   /**
    * Why the run in flight is ending, read once at `agent_settled`.
    *
    * `stopped` and `error` pause the queue. `handoff` is 立即: the run was stopped
    * because the user wants the next queued message to run, so the queue must *not*
-   * pause — pausing it would hold the message they just asked to send.
+   * pause — pausing it would hold the message they just asked to send. Which events
+   * may change a verdict is in `run-verdict.ts`.
    */
-  #interruptedRuns = new Map<string, "stopped" | "error" | "handoff">();
+  #interruptedRuns = new Map<string, RunVerdict>();
   /** Sessions whose catalog cwd changed mid-run; rebound once the turn settles. */
   #pendingCwdRebind = new Set<string>();
   #interruptMode: "immediate" | "wait" = "immediate";
@@ -999,6 +1009,7 @@ export class PiProcessManager {
       this.#queueRebuilds.clear();
       this.#queueDrainFaults.clear();
       this.#interruptedRuns.clear();
+      this.#sendNow.clear();
       this.#timing.clear();
       this.#runTouchedFiles.clear();
       // A stopped engine is a fresh start: nothing a session published before it is
@@ -1298,28 +1309,53 @@ export class PiProcessManager {
     });
   }
 
+  /**
+   * 立即: send this queued row as the next turn, stopping the reply in flight for it.
+   *
+   * Three things are settled before the run is touched, because its settle acts on
+   * all of them the instant it happens: the span that keeps the chat working across
+   * the gap (opened before the first await, so no idle is announced in between), the
+   * pause (a paused queue drains nothing), and which row is next (the settle drains
+   * without a preference of its own). The stop itself runs outside the queue lock —
+   * the run's settle waits on that lock, and stopping while holding it would deadlock
+   * the stop against itself.
+   */
   async sendQueuedNow(id: string): Promise<ConversationQueueState | null> {
     const item = this.#messageQueue.get(id);
     if (!item) return null;
-    // Stop before taking the queue lock. The lock is what the run's own settle waits
-    // on, so aborting while holding it would deadlock the stop against itself.
     const conversationId = item.conversationId;
     const queuedText = item.sentText ?? item.text;
     const command = parseCompactCommand(queuedText) !== null || parseHandoffCommand(queuedText) !== null;
-    if (!command && this.#isLive(conversationId)) await this.#interruptForNextPrompt(conversationId);
-    await this.#withQueue(conversationId, async () => {
-      const current = this.#messageQueue.get(id);
-      if (!current || current.claimed || current.sending) return;
-      this.#bumpQueueEpoch(conversationId);
-      this.#queueDrainFaults.delete(conversationId);
-      this.#messageQueue.pause(conversationId, null);
+    this.#sendNow.begin(conversationId, id, this.#isLive(conversationId));
+    this.#announceWorking(conversationId);
+    try {
+      let accepted = false;
+      await this.#withQueue(conversationId, async () => {
+        const current = this.#messageQueue.get(id);
+        if (!current || current.claimed || current.sending) return;
+        accepted = true;
+        this.#bumpQueueEpoch(conversationId);
+        this.#queueDrainFaults.delete(conversationId);
+        this.#messageQueue.pause(conversationId, null);
+        this.#preferredQueueIds.set(conversationId, id);
+        this.#sendNow.arm(conversationId, id);
+        this.#emitQueue(conversationId);
+      });
+      if (!accepted) {
+        // Delivered, withdrawn or already with the engine: there is nothing to send.
+        this.#endSendNow(conversationId, id);
+        return this.#messageQueue.state(conversationId);
+      }
       // A queued `/compact` or `/handoff` is a command for the session, not words for
       // the model: it waits for the run rather than being steered into it. Everything
-      // else is sent as the next turn — the run above was stopped so this one can
-      // start, instead of being injected into the reply the user just cut off.
-      this.#emitQueue(conversationId);
-      this.#scheduleQueueDrain(conversationId, id);
-    });
+      // else is sent as the next turn — the run is stopped so this one can start,
+      // instead of being injected into the reply the user just cut off.
+      if (!command && this.#isLive(conversationId)) await this.#interruptForNextPrompt(conversationId);
+      this.#scheduleQueueDrain(conversationId);
+    } catch (error) {
+      this.#endSendNow(conversationId, id);
+      throw error;
+    }
     return this.#messageQueue.state(conversationId);
   }
 
@@ -1406,6 +1442,12 @@ export class PiProcessManager {
       // sent to a runtime whose termination was not confirmed.
       this.#setStatus({ state: "error", cwd: this.#cwd, message: error instanceof Error ? error.message : uiText("停止运行失败", "Failed to stop") });
       throw error;
+    }
+    // A verdict is read by the settle of the run it stopped. With no run to stop
+    // there is no settle, and a verdict left behind would be read by whichever run
+    // comes next — an ordinary reply filed as one the user stopped.
+    if (queueOwner && !this.#isLive(queueOwner) && this.#interruptedRuns.get(queueOwner) === "stopped") {
+      this.#interruptedRuns.delete(queueOwner);
     }
   }
   /**
@@ -2178,7 +2220,7 @@ export class PiProcessManager {
     const page = !fromEntryId && typeof historyLimit === "number" ? { turnLimit: historyLimit } : undefined;
     const projected = this.#messagesFrom(session, id, fromEntryId, page);
     const messages = toolDetail === "summary" ? summarizeToolCalls(projected.messages) : projected.messages;
-    const running = id ? this.#busy(id) : false;
+    const running = id ? this.#working(id) : false;
     const turn = running && id ? this.#turnEvents.get(id) : undefined;
     const pendingUi: Array<Record<string, unknown>> = [];
     if (id) {
@@ -2500,9 +2542,9 @@ export class PiProcessManager {
     const session = await this.#activeSession();
     return session ? this.#state(session, this.#activeId ?? undefined) : this.#draftState();
   }
-  /** Conversation ids with work in flight (a run or a compaction), for the sidebar's indicators. */
+  /** Conversation ids with work in flight (a run, a compaction, a 立即), for the sidebar's indicators. */
   getRunningConversations(): string[] {
-    return [...new Set([...this.#running.keys(), ...this.#compacting.keys()])].filter((id) => this.#busy(id));
+    return [...new Set([...this.#running.keys(), ...this.#compacting.keys(), ...this.#busyBroadcast.keys()])].filter((id) => this.#working(id));
   }
   /**
    * Every prompt parked waiting for a human, in every conversation, as the
@@ -2523,6 +2565,56 @@ export class PiProcessManager {
    */
   #busy(id: string): boolean { return this.#running.get(id) === true || this.#compacting.has(id); }
   /**
+   * What a client is told about a conversation: `#busy`, or a 立即 between its two runs.
+   *
+   * Kept apart from `#busy` on purpose. That one gates the queue drain and steering
+   * ("may a prompt be submitted now"), and the gap a 立即 spans is exactly when the
+   * answer there is yes.
+   */
+  #working(id: string): boolean { return this.#busy(id) || this.#sendNow.has(id); }
+  /** Broadcast `conversation_running` when what a client should believe has changed. */
+  #announceWorking(id: string): void {
+    const working = this.#working(id);
+    if (this.#busyBroadcast.get(id) === working) return;
+    this.#busyBroadcast.set(id, working);
+    // A turn's retained events start empty and are dropped once it settles — at
+    // which point the transcript holds the whole thing and a replay would only
+    // duplicate it. The events that arrive after this point in the same tick (the
+    // `agent_settled` payload itself) are retained but never served: a snapshot
+    // taken while idle reports no turn at all.
+    if (working) this.#turnEvents.set(id, { events: [], overflowed: false });
+    else this.#turnEvents.delete(id);
+    this.#emit({ type: "conversation_running", conversationId: id, running: working });
+  }
+  /**
+   * Close a 立即 that will not start its run, and let the chat go idle if nothing
+   * else holds it. That idle is also the client's cue to take the message back out
+   * of the transcript it drew it into.
+   */
+  #endSendNow(conversationId: string, queueId?: string): void {
+    const target = this.#sendNow.target(conversationId);
+    if (!this.#sendNow.end(conversationId, queueId)) return;
+    if (target && this.#preferredQueueIds.get(conversationId) === target) this.#preferredQueueIds.delete(conversationId);
+    this.#announceWorking(conversationId);
+  }
+  /**
+   * Check a 立即 against the queue it is waiting on.
+   *
+   * Called wherever the queue changes (`#emitQueue`) and when a drain finishes with
+   * nothing further scheduled, rather than at each place that could end one: a Stop,
+   * a failed send, a withdrawn row and a command that ran without a turn all land in
+   * one of those two. A row the run has claimed is past this check — its
+   * `agent_start` closes the span, or the settle of a run that never started does.
+   */
+  #reviewSendNow(conversationId: string, drainOver = false): void {
+    const target = this.#sendNow.target(conversationId);
+    if (!target) return;
+    const item = this.#messageQueue.get(target);
+    if (item?.claimed) return;
+    const held = this.#messageQueue.state(conversationId).pause !== null;
+    if (!item || held || (drainOver && !this.#busy(conversationId))) this.#endSendNow(conversationId, target);
+  }
+  /**
    * Drop every trace of a conversation's work when its session is thrown away.
    *
    * A session discarded mid-run (or mid-compaction) never emits `agent_settled`, so
@@ -2535,6 +2627,7 @@ export class PiProcessManager {
     this.#openingPrompts.delete(id);
     this.#running.delete(id);
     this.#compacting.delete(id);
+    this.#sendNow.end(id);
     this.#busyBroadcast.delete(id);
     this.#turnEvents.delete(id);
     if (wasBusy) this.#emit({ type: "conversation_running", conversationId: id, running: false });
@@ -3365,7 +3458,12 @@ export class PiProcessManager {
       // `_isAgentRunActive`, which `session.isIdle` reports), so it is the only event
       // that means this conversation is really idle again.
       if (event.type === "agent_start" || event.type === "turn_start") {
-        this.#interruptedRuns.delete(conversation.id);
+        const verdict = verdictAfterStart(this.#interruptedRuns.get(conversation.id));
+        if (verdict) this.#interruptedRuns.set(conversation.id, verdict);
+        else this.#interruptedRuns.delete(conversation.id);
+        // The run a 立即 was waiting for is here. Only a start with no run live counts:
+        // a retry or continuation of the run being stopped is not it.
+        if (event.type === "agent_start" && !this.#isLive(conversation.id)) this.#sendNow.runStarted(conversation.id);
         // A run that began without `prompt()` — 继续, or one an extension started —
         // skipped its leftover-pause release, so an earlier Stop's latch would hold the
         // first Send made during this run. Rows that are actually held keep theirs.
@@ -3385,17 +3483,16 @@ export class PiProcessManager {
         const last = [...messages]
           .reverse()
           .find((message): message is AssistantMessage => (message as { role?: unknown }).role === "assistant");
-        if (
-          // `handoff` is a stop the user asked for so the next message can run. The
-          // aborted turn reports `stopReason: "aborted"`, and reading that as an error
-          // would pause the queue 立即 just released.
-          this.#interruptedRuns.get(conversation.id) !== "stopped" &&
-          this.#interruptedRuns.get(conversation.id) !== "handoff" &&
-          (last?.stopReason === "error" || last?.stopReason === "aborted" || last?.stopReason === "length")
-        ) {
-          this.#interruptedRuns.set(conversation.id, "error");
-        }
+        // `handoff` is a stop the user asked for so the next message can run. The
+        // aborted turn reports `stopReason: "aborted"`, and reading that as an error
+        // would pause the queue 立即 just released.
+        const verdict = verdictAfterEnd(this.#interruptedRuns.get(conversation.id), last?.stopReason);
+        if (verdict) this.#interruptedRuns.set(conversation.id, verdict);
       }
+      // Read before the run flag below drops: `replaced` is the run 立即 stopped, and
+      // the chat stays working across it; `ended` is a prompt the SDK settled without
+      // ever starting, which leaves the span nothing to wait for.
+      const sendNowSettle = event.type === "agent_settled" ? this.#sendNow.runSettled(conversation.id) : undefined;
       const running =
         event.type === "agent_start" || event.type === "turn_start"
           ? true
@@ -3419,20 +3516,11 @@ export class PiProcessManager {
         compactionEnded = true;
       }
       if (running !== undefined) this.#running.set(conversation.id, running);
-      if (running !== undefined || compactionTouched) {
-        const busy = this.#busy(conversation.id);
-        if (this.#busyBroadcast.get(conversation.id) !== busy) {
-          this.#busyBroadcast.set(conversation.id, busy);
-          // A turn's retained events start empty and are dropped once it settles — at
-          // which point the transcript holds the whole thing and a replay would only
-          // duplicate it. The events that arrive after this point in the same tick (the
-          // `agent_settled` payload itself) are retained but never served: a snapshot
-          // taken while idle reports no turn at all.
-          if (busy) this.#turnEvents.set(conversation.id, { events: [], overflowed: false });
-          else this.#turnEvents.delete(conversation.id);
-          this.#emit({ type: "conversation_running", conversationId: conversation.id, running: busy });
-        }
-      }
+      if (running !== undefined || compactionTouched) this.#announceWorking(conversation.id);
+      // The chat never went idle, so nothing above reset the turn — but the events
+      // retained for the run that was just replaced describe a reply that is over,
+      // and a client connecting now must not replay them onto the next one.
+      if (sendNowSettle === "replaced") this.#turnEvents.set(conversation.id, { events: [], overflowed: false });
       if (compactionEnded && !this.#busy(conversation.id)) {
         // Standalone /compact has no agent_settled event. A prompt queued while the
         // compaction was running otherwise remains pending until another user action.
@@ -3490,6 +3578,17 @@ export class PiProcessManager {
         ...slimStreamEvent(event as unknown as Record<string, unknown>),
         conversationId: conversation.id,
       };
+      // 立即 cut this reply short so the next message can run. A client reads the two
+      // marks differently from an ordinary stop: the end of the attempt is not an
+      // interruption to resume from, and the settle is not the chat going idle.
+      if (event.type === "agent_end" && this.#interruptedRuns.get(conversation.id) === "handoff") payload.replaced = true;
+      if (sendNowSettle === "replaced") payload.replaced = true;
+      // Which queue row this user turn is, or `null` for one that is nobody's row. A
+      // client that drew a queued message ahead of the engine matches the echo to its
+      // row by this, not by "the last thing I drew".
+      if (event.type === "message_start" && isUserEngineMessage(event.message)) {
+        payload.queueId = this.#queuedSdkMessages.peek(event.message as object) ?? null;
+      }
       // Bounds of the block being streamed, so the renderer derives its elapsed time
       // from the same clock that will be filed against the entry later — including
       // when the user switches back into a block that is still open.
@@ -3702,26 +3801,41 @@ export class PiProcessManager {
    * here is what `#settleQueue` reads, and `handoff` tells it to leave the queue
    * running — the rows stay exactly as they are and the idle drain sends the next one.
    *
-   * `agent.abort()` rather than `session.abort()`: the session wrapper also cancels
-   * the retry and the compaction, then waits until the whole post-run sequence has
-   * settled, which is the wait this action exists to spare the user. The wrapper
-   * observes the abort on its own and ends the run; this call only has to confirm the
-   * request itself was aborted.
+   * It does have to end the *run*, though, and `agent.abort()` only ends the request
+   * in flight. A run waiting out a retry backoff or compacting has no request to
+   * abort, so nothing stopped and the message waited for a reply that was still being
+   * written; and after an aborted request the session carries on with whatever was
+   * queued for it (a goal's continuation, a steer), as a run nobody asked to stop any
+   * more. `session.abort()` is the one call that ends all of it. A prompt parked in an
+   * extension dialog is answered first, exactly as `abort()` does: the tool cannot see
+   * the abort while it waits on one, and the run would never settle.
    */
   async #interruptForNextPrompt(conversationId: string): Promise<void> {
     const managed = this.#sessions.get(conversationId);
     if (!managed || managed.session.isIdle) return;
     this.#interruptedRuns.set(conversationId, "handoff");
-    managed.session.agent.abort();
-    const deadline = Date.now() + 15_000;
-    while (managed.session.agent.state.isStreaming && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
-    if (managed.session.agent.state.isStreaming) {
-      // The abort did not land. Leaving the verdict set would turn the run's own
+    this.#resolvePendingUi(conversationId);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        managed.session.abort(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(uiText("停止当前响应超时", "Stopping the current reply timed out"))), 15_000);
+          timer.unref?.();
+        }),
+      ]);
+    } catch (error) {
+      // The stop did not land. Leaving the verdict set would turn the run's own
       // later failure into a silent handoff, so restore the ordinary reading.
       if (this.#interruptedRuns.get(conversationId) === "handoff") this.#interruptedRuns.delete(conversationId);
-      throw new Error(uiText("停止当前响应超时", "Stopping the current reply timed out"));
+      throw error;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+    // The run settled on its own before the stop reached it: nothing read the
+    // verdict, and the next run must not inherit it.
+    if (!this.#isLive(conversationId) && this.#interruptedRuns.get(conversationId) === "handoff") {
+      this.#interruptedRuns.delete(conversationId);
     }
   }
 
@@ -3806,6 +3920,7 @@ export class PiProcessManager {
 
   #emitQueue(conversationId: string): void {
     this.#emit({ type: "queue_changed", conversationId, queue: this.#messageQueue.state(conversationId) });
+    this.#reviewSendNow(conversationId);
   }
 
   #restoreQueuedPreview(item: StoredQueuedPrompt): void {
@@ -3989,15 +4104,19 @@ export class PiProcessManager {
     return Boolean(item && !item.claimed && !item.sending);
   }
 
-  #scheduleQueueDrain(conversationId: string, preferredId?: string): void {
-    if (preferredId) this.#preferredQueueIds.set(conversationId, preferredId);
-    if (this.#queueShutdown || this.#queueDrainFaults.has(conversationId) || this.#queueRebuilds.has(conversationId)) return;
+  #scheduleQueueDrain(conversationId: string): void {
+    if (this.#queueShutdown || this.#queueDrainFaults.has(conversationId) || this.#queueRebuilds.has(conversationId)) {
+      this.#reviewSendNow(conversationId, true);
+      return;
+    }
     queueMicrotask(() => {
-      if (this.#queueShutdown || this.#queueDrainFaults.has(conversationId) || this.#queueRebuilds.has(conversationId) || this.#drainingQueues.has(conversationId)) return;
+      if (this.#drainingQueues.has(conversationId)) return;
+      if (this.#queueShutdown || this.#queueDrainFaults.has(conversationId) || this.#queueRebuilds.has(conversationId)) {
+        this.#reviewSendNow(conversationId, true);
+        return;
+      }
       this.#drainingQueues.add(conversationId);
-      const requested = this.#preferredQueueIds.get(conversationId);
-      this.#preferredQueueIds.delete(conversationId);
-      const run = this.#drainQueue(conversationId, requested);
+      const run = this.#drainQueue(conversationId);
       this.#drainPromises.set(conversationId, run);
       void run
         .catch(() => {
@@ -4009,25 +4128,29 @@ export class PiProcessManager {
           this.#drainingQueues.delete(conversationId);
           if (this.#drainPromises.get(conversationId) === run) this.#drainPromises.delete(conversationId);
           const state = this.#messageQueue.state(conversationId);
-          const nextPreferred = this.#preferredQueueIds.get(conversationId);
-          this.#preferredQueueIds.delete(conversationId);
           if (!this.#queueShutdown && !this.#queueDrainFaults.has(conversationId) && !this.#queueRebuilds.has(conversationId) && !state.pause && state.items.some((item) => !item.claimed && !item.sending) && !this.#busy(conversationId)) {
-            this.#scheduleQueueDrain(conversationId, nextPreferred);
+            this.#scheduleQueueDrain(conversationId);
+          } else {
+            // Nothing further is going to send it right now. A 立即 still waiting on a
+            // row nobody took has no run coming, and must not hold the chat as working.
+            this.#reviewSendNow(conversationId, true);
           }
         });
     });
   }
 
-  async #drainQueue(conversationId: string, preferredId?: string): Promise<void> {
+  async #drainQueue(conversationId: string): Promise<void> {
     let candidate: StoredQueuedPrompt | undefined;
     let epoch = 0;
     await this.#withQueue(conversationId, async () => {
       const state = this.#messageQueue.state(conversationId);
+      // The preference is left in place: this pass cannot send anything, and the one
+      // that can (the run's settle, a resume) has to find it.
       if (state.pause || this.#busy(conversationId)) return;
-      const items = this.#messageQueue.all(conversationId);
-      candidate = preferredId
-        ? items.find((item) => item.id === preferredId && !item.claimed && !item.sending)
-        : items.find((item) => !item.claimed && !item.sending);
+      const pending = this.#messageQueue.all(conversationId).filter((item) => !item.claimed && !item.sending);
+      const preferredId = this.#preferredQueueIds.get(conversationId);
+      this.#preferredQueueIds.delete(conversationId);
+      candidate = pending.find((item) => item.id === preferredId) ?? pending[0];
       epoch = this.#queueEpochs.get(conversationId) ?? 0;
     });
     if (!candidate) return;
@@ -4858,7 +4981,7 @@ export class PiProcessManager {
     // composer's chip; reporting nothing makes the chip ask for one instead.
     const picked = model && model.provider !== "unknown" ? { provider: model.provider, id: model.id } : undefined;
     const usage = session.getContextUsage();
-    return { conversationId, running: conversationId ? this.#running.get(conversationId) === true : false, model: picked, thinkingLevel: session.thinkingLevel, isStreaming: session.isStreaming, isCompacting: session.isCompacting, canResume: canResumeRun(session.messages), interruptMode: this.#interruptMode, sessionFile: session.sessionFile, sessionId: session.sessionId, sessionName: session.sessionName, messageCount: session.messages.length, queuedMessageCount: session.pendingMessageCount, autoCompactionEnabled: session.autoCompactionEnabled, steeringMode: session.steeringMode, followUpMode: session.followUpMode, contextUsage: usage ? { tokens: usage.tokens, contextWindow: usage.contextWindow, percent: usage.percent } : undefined };
+    return { conversationId, running: conversationId ? this.#running.get(conversationId) === true || this.#sendNow.has(conversationId) : false, model: picked, thinkingLevel: session.thinkingLevel, isStreaming: session.isStreaming, isCompacting: session.isCompacting, canResume: canResumeRun(session.messages), interruptMode: this.#interruptMode, sessionFile: session.sessionFile, sessionId: session.sessionId, sessionName: session.sessionName, messageCount: session.messages.length, queuedMessageCount: session.pendingMessageCount, autoCompactionEnabled: session.autoCompactionEnabled, steeringMode: session.steeringMode, followUpMode: session.followUpMode, contextUsage: usage ? { tokens: usage.tokens, contextWindow: usage.contextWindow, percent: usage.percent } : undefined };
   }
   /** State for the empty hero: no session exists, so only the composer's own picks are known. */
   #draftState(): EngineSessionState { return { model: this.#pendingModel, thinkingLevel: this.#pendingThinking, isStreaming: false, running: false, interruptMode: this.#interruptMode }; }

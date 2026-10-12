@@ -591,7 +591,19 @@ function applyEvent(
     // A new turn replaces a previous failure (including auto-retry). Keep the
     // bubble, but drop the stale error so the working state can take over.
     ensureAssistant();
-    return { messages: clearTrailingAssistantErrors(next), streaming: true };
+    const resumed = next.at(-1);
+    // A run resuming on a reply that ended in failure or a stop (继续, or a retry on another
+    // model) reuses its row, so the clock restarts here: the earlier attempt and the time
+    // spent before coming back are not this run's work. An SDK auto-retry has no `error` or
+    // `stop` on the row by now, so its backoff still counts.
+    const restarted = resumed?.role === "assistant" && (resumed.error !== undefined || resumed.stop !== undefined);
+    const cleared = clearTrailingAssistantErrors(next);
+    if (restarted) {
+      const list = cleared.slice();
+      list[list.length - 1] = { ...list[list.length - 1], runStartedAt: Date.now() };
+      return { messages: list, streaming: true };
+    }
+    return { messages: cleared, streaming: true };
   }
 
   if (type === "message_end") {

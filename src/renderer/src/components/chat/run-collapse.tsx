@@ -14,7 +14,10 @@ function RunHeader({ children }: { children: ReactNode }): JSX.Element {
   );
 }
 
-/** A live run shares the fold header's layout, with no interactive control. */
+/**
+ * A live run shares the fold header's layout, with no interactive control. It opens at
+ * 1 秒 rather than 0: a clock that reads 0 is a header with nothing to report yet.
+ */
 export function RunProgress({ startedAt }: { startedAt: number }): JSX.Element {
   const { t } = useTranslation("chat");
   const [now, setNow] = useState(() => Date.now());
@@ -29,7 +32,7 @@ export function RunProgress({ startedAt }: { startedAt: number }): JSX.Element {
   return (
     <RunHeader>
       <span data-slot="run-progress" role="timer" className="truncate text-sm text-muted-foreground tabular-nums">
-        {t("run.processing", { duration: formatDuration(Math.max(0, now - startedAt)) })}
+        {t("run.processing", { duration: formatDuration(Math.max(1000, now - startedAt)) })}
       </span>
     </RunHeader>
   );

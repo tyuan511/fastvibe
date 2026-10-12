@@ -29,7 +29,7 @@ test("engine stop suspends DAG work before waiting on its operation queue or tea
   const Harness = new Function("uiText", `${compiled}; return Harness;`)((zh: string) => zh);
   const host = new Harness();
   host.openingPrompts = new Map();
-  for (const name of ["sessions", "sessionTouched", "sessionPromises", "pendingMcpReloads", "subagentControls", "oauthLogins", "widgetTimers", "busyBroadcast", "running", "compacting", "sdkQueueAdapters", "drainingQueues", "drainPromises", "preferredQueueIds", "queueRebuilds", "queueDrainFaults", "interruptedRuns", "timing", "runTouchedFiles", "extensionStatuses", "subagentSessions", "stoppedSubagents", "subagentReasoning", "reasoningRun"]) host[name] = new Map();
+  for (const name of ["sessions", "sessionTouched", "sessionPromises", "pendingMcpReloads", "subagentControls", "oauthLogins", "widgetTimers", "busyBroadcast", "running", "compacting", "sdkQueueAdapters", "drainingQueues", "drainPromises", "preferredQueueIds", "queueRebuilds", "queueDrainFaults", "interruptedRuns", "sendNow", "timing", "runTouchedFiles", "extensionStatuses", "subagentSessions", "stoppedSubagents", "subagentReasoning", "reasoningRun"]) host[name] = new Map();
   let unlock!: () => void;
   const queue = new Promise<void>((resolve) => { unlock = resolve; });
   let preparationStopped = false;

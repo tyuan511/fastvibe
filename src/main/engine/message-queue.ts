@@ -133,6 +133,11 @@ export class SdkQueueClaims {
     this.#ids.set(message, id);
   }
 
+  /** The queue row this object was taken for, without acknowledging it. */
+  peek(message: object): string | undefined {
+    return this.#ids.get(message);
+  }
+
   take(message: object): string | undefined {
     const id = this.#ids.get(message);
     if (id) this.#ids.delete(message);

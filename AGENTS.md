@@ -2119,6 +2119,66 @@ it has no transcript entry until the summary lands — so `#messages()` re-serve
 「正在压缩上下文」 card from `#compacting` for an in-flight compaction. Without it, switching
 away and back mid-compaction lost the card until the summary was finally written.
 
+## 排队消息的「立即发送」
+
+立即 on a queued row means: stop the reply in flight and send this row as the next turn.
+Between the two runs there is a real gap — the old run has to settle, and the new prompt
+still passes session setup, input hooks and memory retrieval before `agent_start` — and
+everything that went wrong went wrong in that gap, on three layers at once.
+
+**Main (`sendQueuedNow`, `pi/run-verdict.ts`, `pi/send-now.ts`)**
+
+- **A verdict that was asked for survives `turn_start`.** Aborting a run in the middle of a
+  tool call makes the agent loop close that tool's turn and open one more (`turn_start`)
+  before it reads the abort and ends. Clearing `#interruptedRuns` there left the aborted
+  reply to be read as a failure: 立即 paused the queue with 「当前响应出错」 over the very
+  message it was sending and raised a 任务出错 notification, and a plain 停止 was filed the
+  same way. Only a verdict read off a reply (`error`) is dropped by a new attempt; `stopped`
+  and `handoff` are consumed by `agent_settled` alone — and by whoever set one with no run
+  live to read it (`abort()` on an idle chat).
+- **The stop ends the run, not just the request.** `agent.abort()` has nothing to abort
+  during a retry backoff or a compaction, and after an aborted request the session carries
+  on with whatever was queued for it (a goal's continuation, a steer). `#interruptForNextPrompt`
+  calls `session.abort()`, and answers parked extension prompts first, as `abort()` does.
+- **A span keeps the chat working across the gap** (`SendNowSpans`). `#working()` is `#busy()`
+  or an open span, and it is what a client is told: `conversation_running`,
+  `EngineSessionState.running`, the snapshot. `#busy()` stays the run-or-compaction half,
+  because the queue drain and steering read it and the gap is exactly when a prompt *may* be
+  submitted. A span ends when the run it waits for starts, or when it cannot: the queue is
+  paused, the row is gone, or a drain finished with nothing further scheduled. That is
+  checked where the queue changes (`#emitQueue`) and where a drain ends, not at each place
+  that could cause it.
+- **The clicked row stays next until a drain can act on it.** A drain that found the chat
+  busy used to forget `#preferredQueueIds` on its way out, so the run's own settle — which
+  drains with no preference — sent the head of the queue instead. The pause, the preference
+  and the span are all set *before* the run is stopped, because its settle acts on them.
+- Two marks ride the stream: `replaced: true` on the `agent_end` / `agent_settled` of the
+  run that was stopped for a message, and `queueId` on every user `message_start` (`null`
+  for a turn that is nobody's row).
+
+**Renderer (`sentNow`, `applyAroundSentNow` in `stores/session-reducer.ts`)**
+
+- The click draws the turn at once: a `queue:<id>` prompt and a `queue-reply:<id>` reply.
+  **One at a time** — a second click takes the first back, since Main sends whichever was
+  asked for last. A slash line is not drawn (`/compact` waits for the run and starts no turn).
+- **What the stopped run still says goes above the turn.** The transcript reducer addresses
+  "the trailing reply", and the click put an empty one there while the old run was still
+  talking: its last deltas, its tool results and the 已中断 of its own abort landed in the
+  new turn, then vanished at the next transcript read. While `sentNow.over` is set, events
+  are applied to the transcript above the turn; it is released by that run's
+  `agent_settled` (or the `compaction_end` of a standalone compaction).
+- **The turn is taken back whenever Main is not sending it**: the chat goes idle with the
+  prompt still unadopted, the queue is paused after the click, the row leaves the queue
+  undelivered, a user echo names another row, or the call itself is refused. Taking it back
+  is always safe — the path that draws nothing is complete on its own.
+- `queued` is Main's queue whole. The drawn row is left out where the tray is drawn
+  (`visibleQueue`), not out of the store: a Send made meanwhile has to queue behind it.
+- A transcript read keeps the drawn turn only for its own conversation; the read that opens
+  another chat used to carry it across.
+
+The reply that was cut keeps its 已中断 mark, as it does after 停止: it is where that reply
+stops. What must not appear is an interruption on the *new* turn, or a paused queue.
+
 ## 折叠运行过程
 
 A finished run's thinking and tool calls always fold behind one collapsed 「用时 …」 row,

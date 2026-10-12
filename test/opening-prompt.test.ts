@@ -105,7 +105,7 @@ async function fixture(t: Parameters<Parameters<typeof test>[1]>[0], options: { 
   Object.assign(host, {
     openingPrompts: new Map(), commandsInFlight: new Set(), pendingUi: new Map(), turnEvents: new Map(), eventSeq: 0,
     running: new Map(), compacting: new Map(), reasoning: { get: () => undefined }, widgetWidth: 80,
-    busy: () => false, sessionFor: async () => ({ id: "next", session }),
+    busy: () => false, working: () => false, sessionFor: async () => ({ id: "next", session }),
     extensionStatusSnapshot: () => ({ ...statuses }),
     messageQueue: { state: () => ({ conversationId: "next", revision: 0, items: [], pause: null }) },
     adoptPromptPreview: (_id: string, text: string) => { host.preview = text; },

@@ -503,10 +503,9 @@ function ChatMessageRowImpl({
 
   // The run's own span: the first round-trip's request start to the instant its last entry was
   // persisted. This is the turn's total, and it is what the footer reports as 耗时.
+  const runStart = message.runStartedAt ?? message.createdAt;
   const runMs =
-    message.completedAt === undefined
-      ? undefined
-      : Math.max(0, message.completedAt - message.createdAt);
+    message.completedAt === undefined ? undefined : Math.max(0, message.completedAt - runStart);
 
   // What the fold hides took until the reply's *final* message began — the work before the
   // answer, since the answer's own generation is not part of the process the fold stands for.
@@ -517,9 +516,9 @@ function ChatMessageRowImpl({
   const workMs = useMemo(() => {
     if (runMs === undefined) return undefined;
     if (messages.length <= 1) return runMs;
-    const split = Math.max(0, messages[messages.length - 1].createdAt - message.createdAt);
+    const split = Math.max(0, messages[messages.length - 1].createdAt - runStart);
     return split > 0 ? split : runMs;
-  }, [message.createdAt, messages, runMs]);
+  }, [messages, runMs, runStart]);
 
   // A thinking block's measured bounds are the only record of how long it thought, and they can
   // legitimately be missing — a transcript from a build that did not time them, a delegated
@@ -738,7 +737,7 @@ function ChatMessageRowImpl({
       <MessageContent className={isUser ? "items-end" : "items-start"}>
         {message.attachments?.length ? <AttachmentStrip items={message.attachments} /> : null}
 
-        {streaming && !isUser ? <RunProgress startedAt={message.createdAt} /> : null}
+        {streaming && !isUser ? <RunProgress startedAt={runStart} /> : null}
 
         {foldHead > 0 ? parts.slice(0, foldHead).map((part, index) => renderPart(part, index)) : null}
 

@@ -11,21 +11,30 @@ import type {
   TuiRun,
 } from "@shared/types";
 
-/** Queue ids the transcript is already showing as a sent turn. */
-export function shownQueueIds(messages: ChatMessage[]): Set<string> {
-  const shown = new Set<string>();
-  for (const message of messages) {
-    if (message.id.startsWith("queue:") || message.id.startsWith("local:")) {
-      shown.add(message.id.slice(message.id.indexOf(":") + 1));
-    }
-  }
-  return shown;
-}
+/**
+ * The one queued message drawn as a sent turn ahead of the engine (立即).
+ *
+ * `over` is the work that was on screen at the click and has not ended yet: the
+ * reply being stopped for this message, or a standalone compaction it waits behind.
+ * Until that ends, what the engine still says belongs *above* the new turn.
+ * `revision` is the queue revision the click was made against, so only a snapshot
+ * newer than the click can say the message is being held.
+ */
+export type SentNow = {
+  conversationId: string;
+  id: string;
+  over: "run" | "compaction" | null;
+  revision: number;
+};
+
+const QUEUED_TURN = "queue:";
+const QUEUED_REPLY = "queue-reply:";
 
 /**
  * One queued message drawn as a sent turn, before Main has stopped the run it
- * interrupts. `queue:<id>` is what `queue_delivered` adopts, so the row the engine
- * then persists replaces this one instead of appearing beside it.
+ * interrupts: the prompt, and the reply it is about to get. `queue:<id>` is what the
+ * engine's echo is matched against, so the row it persists replaces this one instead
+ * of appearing beside it.
  */
 export function optimisticQueuedTurn(item: {
   id: string;
@@ -34,27 +43,140 @@ export function optimisticQueuedTurn(item: {
 }): ChatMessage[] {
   const now = Date.now();
   const text = item.text;
-  const startsTurn = !text.trim().startsWith("/");
-  const messages: ChatMessage[] = [{
-    id: `queue:${item.id}`,
-    role: "user",
-    text,
-    tools: [],
-    parts: text ? [{ kind: "text", text }] : [],
-    createdAt: now,
-    attachments: item.attachments,
-  }];
-  if (startsTurn) {
-    messages.push({
-      id: `local:${item.id}`,
-      role: "assistant",
-      text: "",
+  return [
+    {
+      id: `${QUEUED_TURN}${item.id}`,
+      role: "user",
+      text,
       tools: [],
-      parts: [],
+      parts: text ? [{ kind: "text", text }] : [],
       createdAt: now,
-    });
+      attachments: item.attachments,
+    },
+    { id: `${QUEUED_REPLY}${item.id}`, role: "assistant", text: "", tools: [], parts: [], createdAt: now },
+  ];
+}
+
+/**
+ * Split the turn drawn at 立即 off the transcript it was appended to.
+ *
+ * There is at most one, and it is always the tail: nothing is written after it until
+ * its own run starts, and by then the engine has adopted the prompt.
+ */
+export function splitOptimisticTail(messages: ChatMessage[]): { base: ChatMessage[]; tail: ChatMessage[] } {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].id.startsWith(QUEUED_TURN)) {
+      return { base: messages.slice(0, index), tail: messages.slice(index) };
+    }
   }
-  return messages;
+  return { base: messages, tail: [] };
+}
+
+function hasContent(message: ChatMessage | undefined): boolean {
+  if (!message) return false;
+  return Boolean(message.text || message.thinking || message.error || message.tools.length > 0 || (message.parts?.length ?? 0) > 0);
+}
+
+/**
+ * Take the turn drawn at 立即 back out of the transcript: the engine is not sending
+ * it now, and its row belongs in the queue tray again.
+ *
+ * A reply that already has content is not a placeholder any more — the run did
+ * start, and only the acknowledgement was missed. That turn is kept and the prompt
+ * becomes an ordinary sent row, which the next transcript read replaces.
+ */
+export function retractOptimisticTurn(messages: ChatMessage[]): ChatMessage[] {
+  const { base, tail } = splitOptimisticTail(messages);
+  if (tail.length === 0) return messages;
+  const [prompt, ...rest] = tail;
+  if (rest.some(hasContent)) {
+    return [...base, { ...prompt, id: `local:${prompt.id.slice(QUEUED_TURN.length)}` }, ...rest];
+  }
+  return [...base, ...rest.filter((message) => !message.id.startsWith(QUEUED_REPLY))];
+}
+
+type TranscriptStep = {
+  messages: ChatMessage[];
+  streaming: boolean;
+  interrupted?: "aborted" | "error";
+  partBoundary?: number;
+};
+
+/**
+ * Apply one engine event to a transcript that may hold a turn drawn at 立即.
+ *
+ * Everything the transcript reducer does is addressed to "the trailing reply", and
+ * the click put a new, empty one there while the old run was still talking. Applied
+ * as given, the rest of that run — its last deltas, its tool results, the 已中断
+ * stamp of its own abort — landed in the new turn, and vanished again when the
+ * transcript was next read. So until the old work ends (`over`), events are applied
+ * to the transcript above the turn.
+ *
+ * It is also where the turn stops being ours: adopted once the engine has echoed the
+ * prompt, taken back when the engine says it is sending something else or nothing.
+ */
+export function applyAroundSentNow(
+  view: { messages: ChatMessage[]; streaming: boolean; boundary: number; sentNow: SentNow | null },
+  event: EngineEvent,
+  apply: (messages: ChatMessage[], event: EngineEvent, streaming: boolean, boundary: number) => TranscriptStep,
+): TranscriptStep & { sentNow: SentNow | null; adopted?: string } {
+  let { messages, sentNow } = view;
+  const type = event.type;
+  // 立即 replaced this run: its end is not an interruption to recover from, and its
+  // settle is not the chat going idle. Main says so itself for a client that drew
+  // nothing; one that did also knows from the turn it is holding.
+  const replaced = event.replaced === true;
+  // Subagent and prompt traffic is applied whichever chat is on screen; only what the
+  // turn's own conversation says is read as being about it.
+  if (sentNow && typeof event.conversationId === "string" && event.conversationId !== sentNow.conversationId) {
+    return { ...apply(messages, event, view.streaming, view.boundary), sentNow };
+  }
+  if (!sentNow) {
+    const applied = apply(messages, event, view.streaming, view.boundary);
+    return {
+      ...applied,
+      streaming: replaced && type === "agent_settled" ? view.streaming : applied.streaming,
+      interrupted: replaced ? undefined : applied.interrupted,
+      sentNow: null,
+    };
+  }
+  const userEcho = type === "message_start" && (event.message as { role?: unknown } | undefined)?.role === "user";
+  const echoId: unknown = userEcho ? event.queueId : undefined;
+  // The prompt of this very turn is being echoed, so its run has begun whatever the
+  // hold believes; holding on would write that run above its own prompt.
+  if (sentNow.over && echoId === sentNow.id) sentNow = { ...sentNow, over: null };
+  // Main lowered the mark while the turn is still only ours: no run is coming for it.
+  // The same goes for a user turn that is somebody else's — the engine is sending
+  // that one, not this. (`undefined` is an engine that does not say; keep the turn.)
+  const idle = type === "conversation_running" && event.running !== true;
+  const other = userEcho && !sentNow.over && echoId !== undefined && echoId !== sentNow.id;
+  if (idle || other) {
+    messages = retractOptimisticTurn(messages);
+    sentNow = null;
+    return { ...apply(messages, event, view.streaming, view.boundary), sentNow };
+  }
+  let applied: TranscriptStep;
+  if (sentNow.over) {
+    const { base, tail } = splitOptimisticTail(messages);
+    applied = apply(base, event, view.streaming, view.boundary);
+    applied = { ...applied, messages: tail.length > 0 ? [...applied.messages, ...tail] : applied.messages };
+    const ended = sentNow.over === "run"
+      ? type === "agent_settled"
+      : type === "compaction_end" || type === "auto_compaction_end";
+    // The stop of the run being replaced is the click's own doing, not a verdict.
+    if (sentNow.over === "run") applied = { ...applied, interrupted: undefined };
+    if (ended) sentNow = { ...sentNow, over: null };
+  } else {
+    applied = apply(messages, event, view.streaming, view.boundary);
+  }
+  if (replaced) applied = { ...applied, interrupted: undefined };
+  // Whatever just settled, the turn on screen has not run yet.
+  if (type === "agent_settled") applied = { ...applied, streaming: true };
+  const prompt = `${QUEUED_TURN}${sentNow.id}`;
+  // The engine's acknowledgement renames the prompt row; without it the turn is the
+  // engine's and no longer ours to take back.
+  const pending = applied.messages.some((message) => message.id === prompt);
+  return pending ? { ...applied, sentNow } : { ...applied, sentNow: null, adopted: sentNow.id };
 }
 
 export function settledBoundary(messages: ChatMessage[]): number {
@@ -63,35 +185,27 @@ export function settledBoundary(messages: ChatMessage[]): number {
 }
 
 /**
+ * A transcript read says nothing about a turn the user just sent.
+ *
+ * The turn is drawn the instant 立即 is pressed, while the run it interrupts is still
+ * being stopped. A reload that lands in that window — the interrupted run's own
+ * `agent_settled` triggers one — replays a transcript that does not hold the turn yet,
+ * and applying it as given erased the row until the next prompt was finally accepted.
+ *
+ * Only for the conversation the turn was sent in (`keep`): the read that opens
+ * another chat replaces a transcript that still holds it, and carried it across.
+ */
+export function preserveOptimisticTail(previous: ChatMessage[], next: ChatMessage[], keep: boolean): ChatMessage[] {
+  if (!keep) return next;
+  const { tail } = splitOptimisticTail(previous);
+  return tail.length > 0 ? [...next, ...tail] : next;
+}
+
+/**
  * Mirror the active conversation's busy state into the per-conversation map so the
  * sidebar lights up the moment a prompt is sent, without waiting for the engine's
  * `agent_start` IPC round-trip.
  */
-/**
- * A transcript read says nothing about a turn the user just sent.
- *
- * `queue:` rows are drawn the instant 立即 is pressed, while the run they interrupt is
- * still being stopped. A reload that lands in that window — the interrupted run's own
- * `agent_settled` triggers one — replays a transcript that does not hold the turn yet,
- * and applying it as given erased the row until the next prompt was finally accepted.
- * Keep every optimistic turn the read has not caught up with, in the order they were
- * sent. A slash command has no placeholder reply, so it is kept on its own.
- */
-export function preserveOptimisticTail(previous: ChatMessage[], next: ChatMessage[]): ChatMessage[] {
-  const kept: ChatMessage[] = [];
-  for (let index = 0; index < previous.length; index += 1) {
-    const message = previous[index];
-    if (!message.id.startsWith("queue:")) continue;
-    if (next.some((item) => item.id === message.id)) continue;
-    const reply = previous[index + 1];
-    const placeholder = reply?.role === "assistant" && reply.id.startsWith("local:") ? reply : undefined;
-    if (placeholder) index += 1;
-    kept.push(message);
-    if (placeholder) kept.push(placeholder);
-  }
-  return kept.length > 0 ? [...next, ...kept] : next;
-}
-
 export function activeRunning(
   state: { activeId: string | null; running: Record<string, boolean> },
   running: boolean,

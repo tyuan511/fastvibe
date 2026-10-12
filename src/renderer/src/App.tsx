@@ -64,7 +64,7 @@ import { readDrafts, useDraftPersistence } from "@/lib/draft-persistence";
 import { SETTINGS_SECTIONS, type SectionId } from "@/components/settings/settings-sections";
 import { isNarrowViewport, setSidebarCollapsed, useIsNarrowViewport, useSidebarCollapsed } from "@/lib/sidebar-visibility";
 import type { DeleteConversationsResult } from "@/components/settings/archived-settings";
-import { useConversationWorking, useSessionStore, working } from "@/stores/session";
+import { useConversationWorking, useSessionStore, visibleQueue, working } from "@/stores/session";
 import { useSettingsStore } from "@/stores/settings";
 import { useDagStore, useDagSync } from "@/stores/dag";
 import type { DagNode } from "@shared/dag";
@@ -205,9 +205,8 @@ export function App(): JSX.Element {
   const setSubagents = useSessionStore((state) => state.setSubagents);
   const resolvePermission = useSessionStore((state) => state.resolvePermission);
   const allQueued = useSessionStore((state) => state.queued);
-  const queued = activeId
-    ? allQueued.filter((item) => item.conversationId === activeId)
-    : [];
+  const sentNow = useSessionStore((state) => state.sentNow);
+  const queued = visibleQueue(allQueued, activeId, sentNow);
   const setAttachments = useSessionStore((state) => state.setAttachments);
   const setComposer = useSessionStore((state) => state.setComposer);
   const restoreComposer = useSessionStore((state) => state.restoreComposer);
@@ -964,13 +963,20 @@ export function App(): JSX.Element {
     const owner = useSessionStore.getState().queued.find((entry) => entry.id === id)?.conversationId;
     // The stop this triggers waits out the request in flight. Draw the turn now, so
     // the click reads as sent instead of as a row that sits at 发送中 until the
-    // engine confirms it. The queue snapshot that follows puts the row back if Main
-    // could not take it.
+    // engine confirms it. Everything after that is Main's: the chat stays working
+    // until the turn's run starts, and the turn comes back out if it will not.
     useSessionStore.getState().showQueuedNow(id);
+    // The run flags were raised for a turn that is not coming; ask Main what is true.
+    const takeBack = (): void => {
+      useSessionStore.getState().retractQueuedNow(id);
+      void reloadActiveState();
+    };
     try {
       const queue = await window.fastvibe.engine.queueSendNow(id, owner);
       if (queue) setQueueState(queue);
+      else takeBack();
     } catch (err) {
+      takeBack();
       queueActionError(err, owner);
     }
   }
