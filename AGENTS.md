@@ -1843,6 +1843,8 @@ pnpm shadcn add <component> -y
 这个步骤。note 文件本身的约定见 `docs/release/README.md`，完整流程见
 `.agents/skills/release/SKILL.md`。
 
+**提交信息一律写英文**：`fix:` / `feat:` 这类前缀和 scope 照旧，subject 与正文也用英文。
+
 ### 主进程文案里不要出现独立的 `import`
 
 `package.json` 是 `"type": "module"`，主进程产物是 ESM，于是 electron-vite 的
