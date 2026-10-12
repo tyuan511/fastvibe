@@ -131,10 +131,14 @@ git push origin vX.Y.Z
 ```
 
 推 tag 就是触发远端 CI。tag 必须带 `v` 前缀（`release.yml` 只监听 `v*`），用
-`-a` 与已有的 `v0.0.1` 保持一致。`release.yml` 是 mac / linux / win 三平台矩阵，各自
+`-a` 与已有的 `v0.0.1` 保持一致。`release.yml` 是 mac ×2 / linux ×2 / win 的矩阵，各自
 `build → stage:app → electron-builder`，把 dmg / zip / exe / AppImage / deb /
-blockmap / `latest*.yml` 传到**同一个 draft Release** 上；两条 Linux 腿另外产出
-`fastvibe-agent-linux-*.tar.gz`。
+blockmap / `latest*.yml` 传到**同一个 draft Release** 上。Linux 两条腿按架构分开，产出
+`FastVibe-<v>.AppImage` / `fastvibe_<v>_amd64.deb` / `latest-linux.yml` 与
+`FastVibe-<v>-arm64.AppImage` / `fastvibe_<v>_arm64.deb` / `latest-linux-arm64.yml`；
+`latest-linux-arm64.yml` 正是 arm64 上 electron-updater 按 `process.arch` 去取的文件名，
+所以两条腿不会互相覆盖更新通道。Agent runtime 的 `fastvibe-agent-linux-*.tar.gz` 不在这里
+产出，它由独立的 `agent-runtime.yml` 发布（见 `docs/agent-runtime.md`）。
 
 **draft 是对用户不可见的窗口期，最后一步才转正。** 这些产物有 130 MB 量级，而
 `latest.yml` 只有几百字节：一旦 Release 提前公开，自动更新会在用户那边立刻看到新版本，
@@ -192,8 +196,8 @@ diff <(gh release view vX.Y.Z --json body --jq .body) docs/release/vX.Y.Z.md
 ```
 
 校验四项：tag 对、不是 draft、上面那条 `diff` 无输出、产物齐全（mac 两条 dmgs/zip +
-blockmap、win exe、linux AppImage/deb、`latest-mac.yml` / `latest.yml` /
-`latest-linux.yml`）；title 是 `FastVibe vX.Y.Z`。最后把 `url` 给用户。
+blockmap、win exe、linux 两条腿的 AppImage/deb、`latest-mac.yml` / `latest.yml` /
+`latest-linux.yml` / `latest-linux-arm64.yml`）；title 是 `FastVibe vX.Y.Z`。最后把 `url` 给用户。
 
 若 body 确实错了（写成中文、漏了内容等），改的是**那条 Release**，不是重打产物：
 

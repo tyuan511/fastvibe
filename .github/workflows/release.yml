@@ -75,8 +75,27 @@ jobs:
           - os: macos-latest
             platform: mac
             arch: x64
+          # Linux is split per architecture for the same reason macOS is: the native
+          # modules cannot be shared between them. `@node-datachannel/*` and
+          # `@mariozechner/clipboard-*` ship one optional package per CPU, and node-pty is
+          # not prebuilt for Linux at all (its npm tarball carries only darwin/win32
+          # prebuilds), so `node-gyp` compiles it during `pnpm install` — the arch a leg
+          # runs on is the arch its natives are. `electron-builder.yml`'s `${arch}`
+          # filters then keep exactly one of each.
+          #
+          # Each leg writes its own update manifest, and that is what keeps this safe:
+          # `latest-linux.yml` for x64, `latest-linux-arm64.yml` for arm64 — the name
+          # electron-updater derives from `process.arch` (`getChannelFilePrefix`), so an
+          # arm64 client never reads the x64 file and neither leg can overwrite the
+          # other's update channel. Same for the artifacts (`FastVibe-<v>-arm64.AppImage`,
+          # `fastvibe_<v>_arm64.deb`), so no `files` glob or `publish` step has to learn
+          # about the second architecture.
           - os: ubuntu-24.04
             platform: linux
+            arch: x64
+          - os: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
           - os: windows-latest
             platform: win
     steps:

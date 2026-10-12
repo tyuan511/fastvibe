@@ -19,7 +19,7 @@ Download the latest installer from [GitHub Releases](https://github.com/tyuan511
 
 - macOS: `.dmg` or `.zip`
 - Windows: `.exe`
-- Linux: `.AppImage` or `.deb`
+- Linux: `.AppImage` or `.deb` (x64 and arm64)
 
 ## Features
 

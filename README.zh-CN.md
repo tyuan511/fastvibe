@@ -19,7 +19,7 @@ FastVibe 将 pi coding agent 嵌入 Electron 主进程，把会话、工具调�
 
 - macOS：`.dmg` 或 `.zip`
 - Windows：`.exe`
-- Linux：`.AppImage` 或 `.deb`
+- Linux：`.AppImage` 或 `.deb`（x64 与 arm64）
 
 ## 功能
 
