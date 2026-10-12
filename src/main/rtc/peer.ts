@@ -22,10 +22,25 @@ export interface PeerLike {
   addRemoteCandidate(candidate: string, mid: string): void;
   /** Which kind of path was chosen, once one has been: `relay` if either end is a relay. */
   selectedPath(): "direct" | "relay" | null;
+  /**
+   * What the chosen path is made of: each end's candidate type and the address family.
+   * For the log — it is the only record of *why* a call was direct or was not.
+   */
+  selectedPair?(): SelectedPair | null;
   close(): void;
 }
 
-export type PeerFactory = (iceServers: IceServerConfig[]) => PeerLike;
+export type SelectedPair = { local: string; remote: string; family: "IPv4" | "IPv6" };
+
+/** How one call's socket is opened, when the network asked for something other than the default (`netpath.ts`). */
+export type PeerOptions = {
+  /** Bind to this local address instead of every interface. */
+  bindAddress?: string;
+  /** Use exactly this local port, so the router can be asked to forward to it. */
+  port?: number;
+};
+
+export type PeerFactory = (iceServers: IceServerConfig[], options?: PeerOptions) => PeerLike;
 
 let loggerStarted = false;
 
@@ -59,7 +74,7 @@ function tuneSctp(): void {
 }
 
 /** The real thing: libdatachannel through `node-datachannel`. */
-export function createNodeDataChannelPeer(iceServers: IceServerConfig[], log?: (message: string) => void): PeerLike {
+export function createNodeDataChannelPeer(iceServers: IceServerConfig[], log?: (message: string) => void, options: PeerOptions = {}): PeerLike {
   if (!loggerStarted) {
     loggerStarted = true;
     // Warnings and worse only; the library is chatty about every ICE step below that.
@@ -67,7 +82,11 @@ export function createNodeDataChannelPeer(iceServers: IceServerConfig[], log?: (
     // Before any peer exists: a setting applied after usrsctp has started is ignored.
     tuneSctp();
   }
-  const pc = new nodeDataChannel.PeerConnection("fastvibe-desktop", { iceServers });
+  const pc = new nodeDataChannel.PeerConnection("fastvibe-desktop", {
+    iceServers,
+    ...(options.bindAddress ? { bindAddress: options.bindAddress } : {}),
+    ...(options.port ? { portRangeBegin: options.port, portRangeEnd: options.port } : {}),
+  });
   return {
     onLocalDescription: (cb) => pc.onLocalDescription(cb),
     onLocalCandidate: (cb) => pc.onLocalCandidate(cb),
@@ -81,6 +100,11 @@ export function createNodeDataChannelPeer(iceServers: IceServerConfig[], log?: (
       if (!pair) return null;
       const kinds = [pair.local.type, pair.remote.type].map((type) => type.toLowerCase());
       return kinds.includes("relay") ? "relay" : "direct";
+    },
+    selectedPair() {
+      const pair = pc.getSelectedCandidatePair();
+      if (!pair) return null;
+      return { local: pair.local.type.toLowerCase(), remote: pair.remote.type.toLowerCase(), family: pair.remote.address.includes(":") ? "IPv6" : "IPv4" };
     },
     close: () => pc.close(),
   };

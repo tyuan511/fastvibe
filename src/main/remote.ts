@@ -17,6 +17,8 @@ import { setRemoteServing } from "./engine/keep-awake";
 import type { AccountService } from "./engine/account";
 import { hostname } from "node:os";
 import { createNodeDataChannelPeer, shutdownWebRtc } from "./rtc/peer";
+import { probePath, systemInterfaces } from "./rtc/netpath";
+import { PortMapper } from "./rtc/portmap";
 import { OfficialConnection } from "./rtc/official";
 
 /**
@@ -41,6 +43,8 @@ import { OfficialConnection } from "./rtc/official";
 let server: RemoteServer | null = null;
 let official: OfficialConnection | null = null;
 let mdns: MdnsAdvertiser | null = null;
+/** Asks the router to forward a port to each official call, for the length of that call. */
+const portMapper = new PortMapper({ log: { info: (message) => log.info(message), warn: (message) => log.warn(message) } });
 
 /** Default port for the LAN listener. */
 const DEFAULT_PORT = 7777;
@@ -221,7 +225,9 @@ export function registerRemoteIpc(queueSettingsWrite: (task: () => Promise<void>
     deviceName,
     platform: process.platform,
     onChange: () => announceFromServer(),
-    createPeer: (iceServers) => createNodeDataChannelPeer(iceServers, (message) => log.warn(message)),
+    createPeer: (iceServers, options) => createNodeDataChannelPeer(iceServers, (message) => log.warn(message), options),
+    network: { probe: (servers) => probePath(servers), interfaces: systemInterfaces },
+    portMap: portMapper,
     log: { info: (message) => log.info(message), warn: (message) => log.warn(message) },
   });
   // Signing in or out, or a refresh finding the token revoked, decides whether there is
@@ -340,6 +346,8 @@ export async function restoreRemoteServer(): Promise<void> {
 
 export async function stopRemoteServer(): Promise<void> {
   official?.shutdown();
+  // Closing the calls takes their forwarded ports down; this is for one still being asked for.
+  void portMapper.close();
   shutdownWebRtc();
   mdns?.unpublish();
   if (server) await server.stop();

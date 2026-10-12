@@ -5,7 +5,9 @@ import type { OfficialPeer, OfficialState, OfficialStatus } from "../../shared/o
 import type { RemoteSocket } from "../server/server.ts";
 import { uiText } from "../engine/ui-text.ts";
 import { iceExpiry, stunServers, toIceServers, type IceServerConfig } from "./ice.ts";
+import { maskAddress, networkSignature, type InterfaceAddress, type PathPlan } from "./netpath.ts";
 import type { PeerFactory } from "./peer.ts";
+import type { PortMapping } from "./portmap.ts";
 import { Responder } from "./responder.ts";
 import { SignalingClient, type SignalingStop } from "./signaling.ts";
 
@@ -28,6 +30,10 @@ const ICE_RECHECK_MS = 30 * 60_000;
 const ICE_EMPTY_MS = 60_000;
 /** How long a call with no list at all waits for one before it goes on without. */
 const DEFAULT_ICE_WAIT_MS = 3_000;
+/** A plan this old is still handed out, and measured again behind the call that took it. */
+const PLAN_FRESH_MS = 5 * 60_000;
+/** How long a call with no plan for this network waits for one before it goes on without. */
+const DEFAULT_PLAN_WAIT_MS = 1_500;
 const DEFAULT_CONNECT_TIMEOUT_MS = 30_000;
 const DEFAULT_PATH_POLL_MS = 3_000;
 const DEFAULT_REGISTER_RETRY_MS = [5_000, 15_000, 30_000, 60_000];
@@ -47,6 +53,22 @@ export type OfficialDeps = {
   platform: string;
   onChange: (state: OfficialState) => void;
   createPeer: PeerFactory;
+  /**
+   * Asks the network how a call's socket should be opened (`netpath.ts`), and reads the
+   * interfaces that tell one network from the next. Without them every call is set up the
+   * plain way, which is what the tests that do not care about the network get.
+   */
+  network?: {
+    probe: (servers: IceServerConfig[]) => Promise<PathPlan>;
+    interfaces: () => InterfaceAddress[];
+  };
+  /** Asks the router to forward a port to a call (`portmap.ts`). */
+  portMap?: {
+    warm: (localAddress: string) => void;
+    forget: () => void;
+    reserve: (localAddress: string) => Promise<number | null>;
+    map: (localAddress: string, port: number) => Promise<PortMapping | null>;
+  };
   fetch?: typeof fetch;
   log: { info(message: string): void; warn(message: string): void };
   connectTimeoutMs?: number;
@@ -57,6 +79,7 @@ export type OfficialDeps = {
   signalingProbeMs?: number;
   signalingProbeTimeoutMs?: number;
   iceWaitMs?: number;
+  planWaitMs?: number;
 };
 
 type Registration = { ok: true; deviceId: string } | { ok: false; retry: boolean; unauthorized?: boolean; message: string };
@@ -73,6 +96,8 @@ export class OfficialConnection {
   #responders = new Map<string, Responder>();
   #ice: { token: string; servers: IceServerConfig[]; refreshAt: number } | null = null;
   #iceFlight: { token: string; servers: Promise<IceServerConfig[]> } | null = null;
+  #plan: { signature: string; plan: PathPlan; at: number } | null = null;
+  #planFlight: { signature: string; plan: Promise<PathPlan> } | null = null;
   /** Bumped by every teardown so a registration that was overtaken cannot start signaling. */
   #generation = 0;
   #bringingUp = false;
@@ -225,8 +250,9 @@ export class OfficialConnection {
           if (this.#signaling !== signaling) return;
           if (status === "online") {
             this.#set("online");
-            // Have the server list in hand before the first phone calls.
-            void this.#loadIce().catch(() => undefined);
+            // Have the server list, and what the network does to a call, in hand before
+            // the first phone calls.
+            void this.#loadPlan().catch(() => undefined);
           } else this.#set("connecting");
         },
         incoming: (cid, peer) => this.#accept(signaling, cid, peer),
@@ -305,6 +331,8 @@ export class OfficialConnection {
       peer,
       createPeer: this.#deps.createPeer,
       loadIce: () => this.#loadIce(),
+      loadPlan: () => this.#loadPlan(),
+      ...(this.#deps.portMap ? { portMap: this.#deps.portMap } : {}),
       sendSignal: (data) => signaling.signal(cid, data),
       attach: (socket) => this.#deps.attach(socket, { id: `rtc:${cid}`, label: peer.name }),
       onChange: () => this.#emit(),
@@ -379,6 +407,68 @@ export class OfficialConnection {
       return await Promise.race([fetching, waited]);
     } finally {
       if (timer) clearTimeout(timer);
+    }
+  }
+
+  /**
+   * How a call's socket should be opened on the network this computer is on now.
+   *
+   * Measured when signaling comes up and kept for as long as the interfaces stay the same:
+   * the measurement is a handful of packets and their round trips, and a phone is already
+   * waiting by the time a call arrives. An old plan for the same network is handed out as
+   * it is and measured again behind the call. A plan for *another* network is never used —
+   * it may name an address this computer no longer has — so the first call after the
+   * network changes waits, briefly, and goes on plain if the answer is slow.
+   */
+  async #loadPlan(): Promise<PathPlan | null> {
+    const network = this.#deps.network;
+    if (!network) {
+      await this.#loadIce().catch(() => undefined);
+      return null;
+    }
+    const servers = await this.#loadIce().catch(() => [] as IceServerConfig[]);
+    const signature = `${networkSignature(network.interfaces())}|${servers.map((server) => `${server.hostname}:${server.port}`).join(",")}`;
+    const cached = this.#plan;
+    if (cached && cached.signature === signature) {
+      if (Date.now() - cached.at > PLAN_FRESH_MS) void this.#measure(signature, servers).catch(() => undefined);
+      return cached.plan;
+    }
+    if (cached) this.#deps.portMap?.forget();
+    this.#plan = null;
+    const measuring = this.#measure(signature, servers);
+    let timer: NodeJS.Timeout | null = null;
+    const waited = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), this.#deps.planWaitMs ?? DEFAULT_PLAN_WAIT_MS);
+      timer.unref();
+    });
+    try {
+      return await Promise.race([measuring.catch(() => null), waited]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  /** One measurement at a time per network; whoever asks meanwhile shares it. */
+  async #measure(signature: string, servers: IceServerConfig[]): Promise<PathPlan> {
+    const network = this.#deps.network;
+    if (!network) throw new Error("no network to measure");
+    const flight = this.#planFlight;
+    if (flight && flight.signature === signature) return flight.plan;
+    const plan = network.probe(servers).then((found) => {
+      this.#plan = { signature, plan: found, at: Date.now() };
+      const way = found.bindAddress ? `bind to ${maskAddress(found.bindAddress)} past a tunnel` : found.tunnel ? "a tunnel that cannot be got past" : "the default route";
+      this.#deps.log.info(`official: network plan: ${way}, public ${maskAddress(found.publicAddress)}, router ports ${found.mapping}${found.nativeV6 ? ", IPv6" : ""}`);
+      // Find the router now, so a call does not wait on the search.
+      const forwardTo = found.bindAddress ?? (found.tunnel ? null : found.localAddress);
+      if (forwardTo) this.#deps.portMap?.warm(forwardTo);
+      return found;
+    });
+    const mine = { signature, plan };
+    this.#planFlight = mine;
+    try {
+      return await plan;
+    } finally {
+      if (this.#planFlight === mine) this.#planFlight = null;
     }
   }
 

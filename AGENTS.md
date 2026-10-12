@@ -270,6 +270,17 @@ or signed out → signaling closes and every phone is dropped.
     round trip — so a phone with enough interfaces used to fill the budget before the relay
     arrived, and the relay is the one address a desktop on another network must be *told*:
     its router lets nothing in from an address it has not sent to.
+  - **Neither address family takes every host place** (3 of the 4), and a unique-local IPv6
+    address is not sent at all. Hosts arrive in the system's interface order, and a phone on
+    Wi-Fi and mobile data had enough IPv4 ones to fill the share before its public IPv6
+    address — the one that needs no NAT traversed — turned up.
+  - **A network that carries no UDP is dialled again over TCP** (`_udpProbe`, `relayOverTcp`).
+    Four seconds with no address beyond the phone's own ends the attempt and starts one with
+    the relay alone, over TLS on 443 when the service lists it. Only then: a second relay on
+    every dial would be a second allocation where UDP works.
+  - **The path is the pair the transport selected** (`selectedPairFrom`), not the first pair
+    that succeeded — the relay's and a direct one can both have. `rtc.path` records what it is
+    made of (`direct srflx/prflx v4`) when it changes.
   - **`Disconnected` is acted on, not waited out.** ICE reports it within seconds and calls
     the path failed only much later, and the routine health check is 15 seconds apart with
     15 to answer. `RtcFrameSocket` reports it through `FrameSocket.onSuspect` and
@@ -292,6 +303,49 @@ or signed out → signaling closes and every phone is dropped.
   expires with the service's hour — whereas waiting on the service and getting no answer sent
   the call on with no server, which a phone off this network cannot connect through. Only a
   call with nothing to gather with waits, for three seconds rather than the request's fifteen.
+- **A call's socket is set up from a plan measured before the call** (`rtc/netpath.ts`,
+  `OfficialConnection.#loadPlan`). The library gives a call one socket, one STUN server picked
+  at random from the list and whatever route the system hands out, and three things about that
+  route decide whether a phone on another network gets a direct path. The plan is a few STUN
+  requests on sockets of our own, made as signaling comes up, kept while the interfaces stay
+  the same (`networkSignature`) and measured again behind a call once it is five minutes old; a
+  plan for another network is never used, and a call that has none waits 1.5 seconds and goes
+  on plain. It answers:
+  - **Whether a tunnel owns the default route.** A proxy or VPN running as an interface carries
+    the STUN request away, and the call then offers the tunnel's far end as this computer's
+    public address — the phone connects through the proxy or not at all. A socket *bound* to
+    the real interface's address stays off the tunnel (`bindAddress`; measured on macOS, and
+    tried rather than assumed everywhere: the plan binds only when a bound probe is answered
+    with a different public address). Such a socket cannot use a made-up address from a
+    fake-IP resolver, so the STUN server's real one is asked for from that interface and
+    handed to the library as a literal. A bound socket is IPv4 only: where this computer has
+    IPv6 the tunnel leaves alone *and* the phone offers a public IPv6 address, the call is left
+    unbound (`#phoneHasGlobalV6` waits 250ms past the offer to see), and a bound call drops the
+    phone's IPv6 candidates rather than spend the library's few places on them.
+  - **Which server answers**, so the call is given that one instead of a random pick.
+  - **What the router does with a second destination** (`classifyMapping`): keeps the port,
+    hands out the next one along, or picks at random.
+- **A router that hands out ports in order is met with guesses** (`predictedCandidates`, sent
+  as one `candidates` message so twenty lines are not twenty messages against the signaling
+  rate limit; a phone that does not know the message ignores it). What makes a guess land is
+  how little time passes between this side's STUN request and its first packet to the phone's
+  public address, so on such a router the offer is *kept back* until the phone's
+  server-reflexive candidate arrives (`PAIRING_HOLD_MS`, 700ms at most) and the phone's
+  candidates follow the STUN request by 25ms instead of by its round trip. Measured with the
+  real library against a listener on another continent, on a router giving out some hundred
+  ports a second: applied the old way the port toward the phone was 2 to 75 past the STUN one
+  (6 of 8 within 16); kept back, 2 to 5 past in seven of ten and within 20 in nine. It only
+  helps a phone whose own NAT keeps its port — one that does not still needs the relay — and it
+  costs a call on such a network the phone's STUN round trip before it starts.
+- **A forwarded port, when the router offers one** (`rtc/portmap.ts`: NAT-PMP and UPnP IGD).
+  Asked for per call on a port reserved for that call's socket, announced as one more
+  server-reflexive candidate (`mappedCandidate`), renewed at half its lease and taken down with
+  the call; `PortMapper.close()` runs at quit. It replaces the guesses: a forwarded port takes
+  a packet from anywhere. Nothing is asked of a router that reports a private address of its
+  own (it is behind the provider's NAT and its port leads nowhere), one whose address is not
+  the one STUN saw, or one that only makes permanent mappings — a mapping that outlived a
+  crash would stay open until somebody found it. **Not run against a real router**: the one
+  this was built behind answers neither protocol; the tests speak both from the specifications.
 - **Signaling is pinged from this side too** (`SignalingClient.probe`, every 15 seconds, 8 to
   answer). The service's own ping is 25 seconds apart and its silence is called dead after 70,
   which is how long this computer stayed unreachable after its network changed under it:

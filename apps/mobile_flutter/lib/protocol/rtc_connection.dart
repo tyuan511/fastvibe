@@ -35,9 +35,24 @@ const Duration _httpTimeout = Duration(seconds: 15);
 /// phone with enough interfaces filled the whole budget before either arrived, and then the
 /// relay — the one address a desktop on another network has to be told about, since its
 /// router lets nothing in from an address it has not sent to — was never sent at all.
+///
+/// Within the hosts, neither address family may take every place. They arrive in whatever
+/// order the system lists its interfaces, and a phone on Wi-Fi and mobile data at once has
+/// enough IPv4 ones to fill the share — after which its public IPv6 address, the one that
+/// needs no hole punched in any NAT, was never sent.
 const int _maxCandidates = 8;
 const int _maxHostCandidates = 4;
+const int _maxHostsPerFamily = 3;
 const int _maxRelayCandidates = 2;
+
+/// The most guessed ports one message from the desktop may add (`candidates`, below).
+const int _maxPredictedCandidates = 32;
+
+/// How long a dial waits to learn any address beyond the phone's own before it concludes
+/// that this network carries no UDP to the internet, and starts again through the relay
+/// over TCP. A public address is one round trip to the STUN server; a computer on the same
+/// network is connected long before this.
+const Duration _udpProbe = Duration(seconds: 4);
 
 /// Keeps the STUN addresses and a single TURN one — UDP when there is one, which is the only
 /// kind the desktop can use at its end. Every TURN address is a relay allocation, and the
@@ -50,14 +65,32 @@ List<String> oneRelayPerServer(List<String> urls) {
   return <String>[...urls.where((url) => !isTurn(url)), ?chosen];
 }
 
+/// The same list for a network that carries no UDP: the relay reached over TLS on 443 when
+/// the service offers that, which is the one port such a network is sure to let out, and
+/// over plain TCP otherwise. STUN is left out — it is UDP, and it is what did not answer.
+/// Null when the list has no relay to reach that way.
+List<String>? relayOverTcp(List<String> urls) {
+  bool tls(String url) => url.startsWith('turns:');
+  bool tcp(String url) => url.startsWith('turn:') && url.toLowerCase().contains('transport=tcp');
+  final secure = urls.where(tls).toList();
+  if (secure.isNotEmpty) {
+    return <String>[secure.firstWhere((url) => RegExp(r':443(\?|$)').hasMatch(url), orElse: () => secure.first)];
+  }
+  final plain = urls.where(tcp).toList();
+  return plain.isEmpty ? null : <String>[plain.first];
+}
+
 /// Whether a candidate line is worth sending the desktop. Only UDP can pair with it (it does
-/// not do ICE-TCP), and a link-local address is not reachable from another machine.
+/// not do ICE-TCP), and a link-local address is not reachable from another machine. Nor is
+/// a unique-local IPv6 one from anywhere but its own network, where the IPv4 address
+/// already serves — and each one sent is a place a public address does not get.
 bool wantsCandidate(String line) {
   final parts = line.split(' ');
   if (parts.length < 5) return false;
   if (parts[2].toLowerCase() != 'udp') return false;
   final address = parts[4].toLowerCase();
   if (address.startsWith('fe80:') || address.startsWith('127.') || address == '::1') return false;
+  if (address.contains(':') && (address.startsWith('fc') || address.startsWith('fd'))) return false;
   return true;
 }
 
@@ -66,6 +99,8 @@ class CandidateBudget {
   final Set<String> _sent = <String>{};
   int _count = 0;
   int _hosts = 0;
+  int _hostsV4 = 0;
+  int _hostsV6 = 0;
   int _relays = 0;
 
   /// Whether this candidate is sent: wanted, not a repeat, and within the call's budget.
@@ -74,14 +109,89 @@ class CandidateBudget {
     if (_count >= _maxCandidates || _sent.contains(line)) return false;
     final host = line.contains(' typ host');
     final relay = line.contains(' typ relay');
+    final v6 = line.split(' ')[4].contains(':');
     if (host && _hosts >= _maxHostCandidates) return false;
+    if (host && (v6 ? _hostsV6 : _hostsV4) >= _maxHostsPerFamily) return false;
     if (relay && _relays >= _maxRelayCandidates) return false;
     _sent.add(line);
     _count += 1;
-    if (host) _hosts += 1;
+    if (host) {
+      _hosts += 1;
+      if (v6) {
+        _hostsV6 += 1;
+      } else {
+        _hostsV4 += 1;
+      }
+    }
     if (relay) _relays += 1;
     return true;
   }
+}
+
+/// One report from the peer connection's statistics, as far as choosing a path reads it.
+class StatsEntry {
+  const StatsEntry(this.id, this.type, this.values);
+
+  final String id;
+  final String type;
+  final Map<dynamic, dynamic> values;
+}
+
+/// The path a connection is on: each end's candidate type and the address family.
+class SelectedPair {
+  const SelectedPair(this.local, this.remote, this.v6);
+
+  final String local;
+  final String remote;
+  final bool? v6;
+
+  /// `relay` if either end is one, which is the only kind that costs the account anything.
+  String get path => local == 'relay' || remote == 'relay' ? 'relay' : 'direct';
+
+  /// `direct srflx/prflx v4` — for the diagnostics log.
+  String describe() => '$path $local/$remote${v6 == null ? '' : (v6! ? ' v6' : ' v4')}';
+}
+
+/// Reads the pair in use out of the statistics.
+///
+/// The transport says which pair it selected, and that is the answer. Several pairs can
+/// have *succeeded* at once — the relay's and a direct one found a moment later — so the
+/// first succeeded pair in the list is only a fallback for a stack that reports no
+/// transport, and a nominated one is preferred even then.
+SelectedPair? selectedPairFrom(List<StatsEntry> stats) {
+  final byId = <String, StatsEntry>{for (final entry in stats) entry.id: entry};
+  SelectedPair? read(StatsEntry? pair) {
+    if (pair == null) return null;
+    final local = byId[pair.values['localCandidateId']]?.values;
+    final remote = byId[pair.values['remoteCandidateId']]?.values;
+    final localType = local?['candidateType'];
+    final remoteType = remote?['candidateType'];
+    if (localType is! String && remoteType is! String) return null;
+    final address = remote?['address'] ?? remote?['ip'];
+    return SelectedPair(
+      localType is String ? localType : 'unknown',
+      remoteType is String ? remoteType : 'unknown',
+      address is String && address.isNotEmpty ? address.contains(':') : null,
+    );
+  }
+
+  for (final entry in stats) {
+    if (entry.type != 'transport') continue;
+    final chosen = read(byId[entry.values['selectedCandidatePairId']]);
+    if (chosen != null) return chosen;
+  }
+  final pairs = stats.where((entry) => entry.type == 'candidate-pair').toList();
+  for (final wanted in <bool Function(StatsEntry)>[
+    (entry) => entry.values['nominated'] == true && entry.values['state'] == 'succeeded',
+    (entry) => entry.values['nominated'] == true,
+    (entry) => entry.values['state'] == 'succeeded',
+  ]) {
+    for (final entry in pairs.where(wanted)) {
+      final found = read(entry);
+      if (found != null) return found;
+    }
+  }
+  return null;
 }
 
 /// Stop handing fragments to the channel above this much queued inside it, and carry on
@@ -128,10 +238,25 @@ class RtcDialer {
   /// [renewal] is a connection made to replace a live one whose relay credential is about to
   /// run out: it asks for a credential of its own rather than reusing the list that
   /// connection was made with, and tells the desktop not to treat the old one as a ghost.
+  ///
+  /// A network that lets no UDP out — some offices, hotels and campuses — gives the first
+  /// attempt nothing but the phone's own addresses. It is ended early and made again with
+  /// the relay reached over TCP, which such a network does carry.
   Future<RtcFrameSocket> dial({bool renewal = false}) async {
-    final attempt = _Attempt(this, renewal: renewal);
+    var attempt = _Attempt(this, renewal: renewal);
     try {
       return await attempt.run();
+    } on _UdpBlocked {
+      await attempt.dispose();
+      recordConnectionDiagnostic(Diagnostic.metric('rtc.tcp-relay', outcome: 'retry'));
+      attempt = _Attempt(this, renewal: renewal, overTcp: true);
+      try {
+        return await attempt.run();
+      } catch (_) {
+        _iceCache = null;
+        await attempt.dispose();
+        rethrow;
+      }
     } catch (_) {
       // The list may be what was wrong (a credential the relay stopped accepting).
       _iceCache = null;
@@ -199,6 +324,13 @@ class RtcDialer {
               if (entry['credential'] is String) 'credential': entry['credential'],
             },
       ];
+      // The same credential, reached over TCP: what a dial falls back to where UDP is blocked.
+      final overTcp = <Map<String, Object?>>[
+        for (final entry in servers)
+          if (entry is Map && entry['urls'] is List && entry['username'] is String && entry['credential'] is String)
+            if (relayOverTcp((entry['urls'] as List).whereType<String>().toList()) case final urls?)
+              <String, Object?>{'urls': urls, 'username': entry['username'], 'credential': entry['credential']},
+      ];
       final now = DateTime.now().millisecondsSinceEpoch;
       var expires = body is Map && body['expires_at'] is String ? DateTime.tryParse(body['expires_at'] as String) : null;
       // The credential's life is minutes, so a phone clock a minute out is the difference
@@ -219,7 +351,7 @@ class RtcDialer {
           : expires.millisecondsSinceEpoch - _iceMarginMs;
       // Only a list that carries a relay credential can run out; STUN alone never does.
       final hasCredential = list.any((entry) => entry['username'] is String);
-      final result = _IceList(list, hasCredential ? expires : null);
+      final result = _IceList(list, hasCredential ? expires : null, overTcp);
       if (list.isNotEmpty && validUntil > now) _iceCache = _IceCache('$origin\n$token', result, validUntil);
       recordConnectionDiagnostic(Diagnostic.metric('rtc.ice',
           elapsedMs: now - started, outcome: 'fetched', frameChars: list.length));
@@ -246,12 +378,20 @@ const int _iceRecheckMs = 5 * 60 * 1000;
 
 /// A server list and when the relay credential in it expires (null when it holds none).
 class _IceList {
-  const _IceList(this.servers, this.relayExpiresAt);
+  const _IceList(this.servers, this.relayExpiresAt, [this.overTcp = const <Map<String, Object?>>[]]);
 
   static const _IceList empty = _IceList(<Map<String, Object?>>[], null);
 
   final List<Map<String, Object?>> servers;
   final DateTime? relayExpiresAt;
+
+  /// The relay alone, reached over TCP or TLS; empty when the list has none.
+  final List<Map<String, Object?>> overTcp;
+}
+
+/// The first attempt learned no address but the phone's own: this network carries no UDP.
+class _UdpBlocked implements Exception {
+  const _UdpBlocked();
 }
 
 class _IceCache {
@@ -273,7 +413,7 @@ _IceCache? _iceCache;
 _IceFlight? _iceFlight;
 
 class _Attempt {
-  _Attempt(this._dialer, {this.renewal = false}) {
+  _Attempt(this._dialer, {this.renewal = false, this.overTcp = false}) {
     // It can fail before anything is waiting on it (signaling closes while the offer is
     // still being made); the waiter that comes later still gets the error.
     unawaited(_opened.future.then((_) {}, onError: (_) {}));
@@ -282,6 +422,9 @@ class _Attempt {
   final RtcDialer _dialer;
   /// This connection replaces one that is about to lose its relay credential.
   final bool renewal;
+  /// Made after an attempt that found UDP blocked: only the relay, reached over TCP.
+  final bool overTcp;
+  Timer? _udpWatch;
   DateTime? _relayExpiresAt;
   /// The call on the service's signaling, once it has been named.
   SignalingCall? _call;
@@ -330,12 +473,15 @@ class _Attempt {
     final iceList = await iceLoading;
     _relayExpiresAt = iceList.relayExpiresAt;
     final pc = await createPeerConnection(<String, Object?>{
-      'iceServers': iceList.servers,
+      'iceServers': overTcp ? iceList.overTcp : iceList.servers,
       'sdpSemantics': 'unified-plan',
       // The desktop speaks no ICE-TCP. Not `candidateNetworkPolicy: low_cost`: it drops every
       // network dearer than the cheapest, and the loopback interface is the cheapest of all,
       // so on mobile data the only candidates left were loopback ones and nothing connected.
-      'tcpCandidatePolicy': 'disabled',
+      // Left at its default for the attempt over TCP, so that nothing about TCP is switched
+      // off under the one connection that needs it; the TCP candidates that then turn up
+      // are not sent ([wantsCandidate]).
+      if (!overTcp) 'tcpCandidatePolicy': 'disabled',
       // Keep gathering as networks come and go. The default gathers once, with whatever the
       // system has listed at that instant, and on a cold start that can be the loopback
       // interface alone — the cellular one turns up a moment later and was never used.
@@ -404,6 +550,13 @@ class _Attempt {
       'deflate': true,
     });
     await pc.setLocalDescription(offer);
+    // Only worth ending early when there is another way to try.
+    if (!overTcp && iceList.overTcp.isNotEmpty) {
+      _udpWatch = Timer(_udpProbe, () {
+        final beyond = (_localKinds['srflx'] ?? 0) + (_localKinds['relay'] ?? 0) + (_localKinds['prflx'] ?? 0);
+        if (beyond == 0 && !_opened.isCompleted) _opened.completeError(const _UdpBlocked());
+      });
+    }
 
     try {
       _call = await calling;
@@ -411,11 +564,16 @@ class _Attempt {
       return await _opened.future.timeout(_channelTimeout, onTimeout: () {
         throw ConnectionError('timeout', t('conn.rtcTimeout'));
       });
+    } on _UdpBlocked {
+      recordConnectionDiagnostic(Diagnostic.metric('rtc.udp-blocked', elapsedMs: since(), outcome: _kinds()));
+      rethrow;
     } catch (_) {
       // What each end offered says why: a call that had only private addresses to try
       // could never have left the local network.
       recordConnectionDiagnostic(Diagnostic.metric('rtc.failed', elapsedMs: since(), outcome: _kinds()));
       rethrow;
+    } finally {
+      _udpWatch?.cancel();
     }
   }
 
@@ -460,6 +618,23 @@ class _Attempt {
           } else {
             _early.add(candidate);
           }
+        case 'candidates':
+          // Several at once: the ports a desktop's router is about to give its socket,
+          // when that router hands them out in order. Each is one more address to try
+          // the desktop at, and the one its router really chose is the direct path.
+          final lines = data['candidates'];
+          if (lines is! List) return;
+          final mid = data['mid'];
+          for (final text in lines.whereType<String>().take(_maxPredictedCandidates)) {
+            if (text.isEmpty) continue;
+            _remoteKinds['predicted'] = (_remoteKinds['predicted'] ?? 0) + 1;
+            final candidate = RTCIceCandidate(text, mid is String ? mid : '0', 0);
+            if (_haveRemote) {
+              await pc.addCandidate(candidate);
+            } else {
+              _early.add(candidate);
+            }
+          }
       }
     } catch (_) {
       // A candidate the stack rejects is that candidate's problem only.
@@ -488,6 +663,7 @@ class _Attempt {
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
+    _udpWatch?.cancel();
     if (!_handedOver) {
       try {
         await _channel?.close();
@@ -537,6 +713,7 @@ class RtcFrameSocket implements ExpiringFrameSocket {
   /// Set once the selected path is the relay. Until then, and on a direct path, frames
   /// leave as they are: deflating them costs more than the bytes save on a LAN.
   bool _compress = false;
+  String? _lastPath;
   Timer? _pathWatch;
   final FrameAssembler _assembler = FrameAssembler(_maxFrameBytes);
   final List<Uint8List> _queue = <Uint8List>[];
@@ -602,9 +779,15 @@ class RtcFrameSocket implements ExpiringFrameSocket {
       _pathWatch = null;
       return;
     }
-    final path = await selectedPath();
-    recordConnectionDiagnostic(Diagnostic.metric('rtc.path', outcome: path ?? 'unknown'));
-    _compress = path == 'relay';
+    final pair = await selectedPair();
+    // What the path is made of, written down when it changes: it is the only record of
+    // why a connection was direct or was not.
+    final described = pair?.describe() ?? 'unknown';
+    if (described != _lastPath) {
+      _lastPath = described;
+      recordConnectionDiagnostic(Diagnostic.metric('rtc.path', outcome: described));
+    }
+    _compress = pair?.path == 'relay';
   }
 
   @override
@@ -612,23 +795,18 @@ class RtcFrameSocket implements ExpiringFrameSocket {
 
   /// Which kind of path ICE chose: `direct` (LAN or across NATs) or `relay` (through
   /// FastVibe's relay, which counts against the account's monthly allowance). Null until known.
-  Future<String?> selectedPath() async {
+  Future<String?> selectedPath() async => (await selectedPair())?.path;
+
+  /// The pair of addresses the connection is on, or null until one is chosen.
+  Future<SelectedPair?> selectedPair() async {
     try {
       final stats = await _pc.getStats();
-      final byId = <String, StatsReport>{for (final report in stats) report.id: report};
-      for (final report in stats) {
-        if (report.type != 'candidate-pair') continue;
-        final values = report.values;
-        if (values['nominated'] != true && values['state'] != 'succeeded') continue;
-        final kinds = <String?>[
-          byId[values['localCandidateId']]?.values['candidateType'] as String?,
-          byId[values['remoteCandidateId']]?.values['candidateType'] as String?,
-        ];
-        if (kinds.every((kind) => kind == null)) continue;
-        return kinds.contains('relay') ? 'relay' : 'direct';
-      }
-    } catch (_) {}
-    return null;
+      return selectedPairFrom(<StatsEntry>[
+        for (final report in stats) StatsEntry(report.id, report.type, report.values),
+      ]);
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<void> _pump() async {

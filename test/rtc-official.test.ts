@@ -587,3 +587,87 @@ test("a data channel with another label is refused", async () => {
     assert.deepEqual(attached, []);
   }, { connectTimeoutMs: 5000 });
 });
+
+test("the network is measured as signaling comes up, kept while the interfaces stay, and measured again when they change", async () => {
+  const wifi = { name: "en0", address: "192.168.22.7", family: "IPv4" as const, internal: false };
+  const tunnel = { name: "utun4", address: "198.18.0.1", family: "IPv4" as const, internal: false };
+  const interfaces = { value: [wifi] };
+  const probed: string[][] = [];
+  const created: Array<{ servers: string[]; bind: string | undefined }> = [];
+  const mapper = { warmed: [] as string[], forgotten: 0 };
+  await withRig(async ({ official, cloud }) => {
+    cloud.ice = { ice_servers: [{ urls: ["stun:stun.example.com:3478", "stun:stun.example.com:443"] }] };
+    official.setEnabled(true);
+    await until(() => probed.length === 1, "the first measurement, before any phone calls");
+    assert.deepEqual(probed[0], ["stun.example.com:3478", "stun.example.com:443"]);
+    assert.deepEqual(mapper.warmed, ["192.168.22.7"]);
+
+    const phone = await cloud.phone("fvs_good");
+    await phone.connect(official.state().deviceId!);
+    await until(() => created.length === 1, "a call");
+    await phone.connect(official.state().deviceId!);
+    await until(() => created.length === 2, "another call");
+    assert.equal(probed.length, 1, "one measurement serves both");
+    assert.deepEqual(created[0], { servers: ["stun.example.com:3478"], bind: undefined });
+
+    // A tunnel comes up: the old plan no longer describes this network.
+    interfaces.value = [wifi, tunnel];
+    await phone.connect(official.state().deviceId!);
+    await until(() => created.length === 3, "a call on the changed network");
+    assert.equal(probed.length, 2);
+    assert.equal(mapper.forgotten, 1);
+    assert.deepEqual(created[2], { servers: ["162.159.207.1:3478"], bind: "192.168.22.7" });
+  }, {
+    connectTimeoutMs: 5000,
+    createPeer: (servers, options) => {
+      created.push({ servers: servers.map((server) => `${server.hostname}:${server.port}`), bind: options?.bindAddress });
+      return new FakePeer();
+    },
+    network: {
+      interfaces: () => interfaces.value,
+      probe: async (servers) => {
+        probed.push(servers.map((server) => `${server.hostname}:${server.port}`));
+        const tunnelled = interfaces.value.length > 1;
+        return {
+          stun: tunnelled ? { hostname: "162.159.207.1", port: 3478 } : { hostname: "stun.example.com", port: 3478 },
+          bindAddress: tunnelled ? "192.168.22.7" : null,
+          localAddress: "192.168.22.7",
+          publicAddress: "183.156.1.2",
+          mapping: "independent",
+          tunnel: tunnelled,
+          nativeV6: false,
+        };
+      },
+    },
+    portMap: {
+      warm: (address) => { mapper.warmed.push(address); },
+      forget: () => { mapper.forgotten += 1; },
+      reserve: async () => null,
+      map: async () => null,
+    },
+  });
+});
+
+test("a call does not wait long on a measurement that is slow", async () => {
+  const created: Array<{ servers: number; bind: string | undefined }> = [];
+  await withRig(async ({ official, cloud }) => {
+    cloud.ice = { ice_servers: [{ urls: ["stun:stun.example.com:3478", "stun:stun.example.com:443"] }] };
+    official.setEnabled(true);
+    await until(() => official.state().status === "online", "online");
+    const phone = await cloud.phone("fvs_good");
+    const started = Date.now();
+    await phone.connect(official.state().deviceId!);
+    await until(() => created.length === 1, "a call that went on without a plan");
+    assert.ok(Date.now() - started < 1000);
+    // Set up plain: every listed server, no binding.
+    assert.deepEqual(created[0], { servers: 2, bind: undefined });
+  }, {
+    connectTimeoutMs: 5000,
+    planWaitMs: 40,
+    createPeer: (servers, options) => { created.push({ servers: servers.length, bind: options?.bindAddress }); return new FakePeer(); },
+    network: {
+      interfaces: () => [{ name: "en0", address: "192.168.22.7", family: "IPv4", internal: false }],
+      probe: () => new Promise(() => undefined),
+    },
+  });
+});
