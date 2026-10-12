@@ -27,6 +27,18 @@ const { createRequire } = require("node:module");
 const REMOVED_ON_PURPOSE = {
 };
 
+/**
+ * The same, for what only one platform's `files` filters remove. The Linux build drops the whole
+ * `@trycua/cua-driver` SDK because computer use is not offered there, and the app declares it.
+ */
+const REMOVED_ON_PURPOSE_BY_PLATFORM = {
+  linux: { fastvibe: ["@trycua/cua-driver"] },
+};
+
+function skippedDeps(packageName, platform) {
+  return new Set([...(REMOVED_ON_PURPOSE[packageName] ?? []), ...(REMOVED_ON_PURPOSE_BY_PLATFORM[platform]?.[packageName] ?? [])]);
+}
+
 function loadAsar() {
   // electron-builder carries its own copy; this repo does not depend on it directly.
   // pnpm does not hoist it, so it is reached through electron-builder.
@@ -76,7 +88,7 @@ function resolves(header, root, dep) {
   return false;
 }
 
-function check(asarPath) {
+function check(asarPath, platform) {
   const asar = loadAsar();
   const header = JSON.parse(JSON.stringify(asar.getRawHeader(asarPath).header));
   const read = (file) => {
@@ -91,7 +103,7 @@ function check(asarPath) {
   for (const root of roots) {
     const pkg = read(`${root}/package.json`);
     if (!pkg) continue;
-    const skip = new Set(REMOVED_ON_PURPOSE[pkg.name] ?? []);
+    const skip = skippedDeps(pkg.name, platform);
     for (const dep of Object.keys(pkg.dependencies ?? {})) {
       if (skip.has(dep) || resolves(header, root, dep)) continue;
       missing.push(`${root.replace(/(^|\/)node_modules\//g, "$1")} needs ${dep}`);
@@ -99,7 +111,9 @@ function check(asarPath) {
   }
   // The app's own package.json sits at the archive root.
   const app = read("package.json");
+  const skipApp = skippedDeps(app?.name, platform);
   for (const dep of Object.keys(app?.dependencies ?? {})) {
+    if (skipApp.has(dep)) continue;
     if (!lookup(header, ["node_modules", ...dep.split("/")])) missing.push(`the app needs ${dep}`);
   }
   return { packages: roots.length, missing };
@@ -113,8 +127,8 @@ function asarPathFor(context) {
   return path.join(appOutDir, "resources", "app.asar");
 }
 
-function report(asarPath) {
-  const { packages, missing } = check(asarPath);
+function report(asarPath, platform) {
+  const { packages, missing } = check(asarPath, platform);
   if (missing.length === 0) {
     console.log(`  • packaged dependencies complete  packages=${packages}`);
     return;
@@ -128,18 +142,20 @@ function report(asarPath) {
 }
 
 /** electron-builder `afterPack`. */
+exports.skippedDeps = skippedDeps;
+
 exports.default = async function afterPack(context) {
-  report(asarPathFor(context));
+  report(asarPathFor(context), context.electronPlatformName);
 };
 
 if (require.main === module) {
   const target = process.argv[2];
   if (!target) {
-    console.error("usage: node scripts/check-packaged-deps.cjs <path to app.asar>");
+    console.error("usage: node scripts/check-packaged-deps.cjs <path to app.asar> [darwin|linux|win32]");
     process.exit(2);
   }
   try {
-    report(path.resolve(target));
+    report(path.resolve(target), process.argv[3]);
   } catch (error) {
     console.error(error.message);
     process.exit(1);
