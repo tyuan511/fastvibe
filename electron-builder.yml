@@ -33,10 +33,6 @@ files:
   - "!**/node_modules/@anthropic-ai/sdk/src{,/**/*}"
   - "!**/node_modules/@mistralai/mistralai/{src,tests,examples}{,/**/*}"
   - "!**/node_modules/@google/genai/dist/web{,/**/*}"
-  # Transformers.js uses the Node ONNX backend in Main. Its web package is a
-  # dependency for browser builds only and carries roughly 140 MB of WASM and
-  # alternate bundles that must not enter a desktop package.
-  - "!**/node_modules/onnxruntime-web{,/**/*}"
 
 # Fails the build when a package in the archive is missing a dependency it needs. The
 # collector can drop one without failing (v0.19.0 shipped without cross-spawn and nine more);
@@ -57,6 +53,9 @@ extraResources:
   # build and the skills silently apply only in development.
   - from: resources/skills
     to: skills
+  # The memory pipeline's prompt templates are read by path at runtime (`memory-templates.ts`).
+  - from: resources/memories
+    to: memories
   # The floating grant panel is a static page loaded by path into its own window, and
   # it references `../icon.png` — which is why it sits next to the icon out here rather
   # than becoming a third renderer entry point.
@@ -155,12 +154,6 @@ mac:
     # filters matter when a build host installs several (`supportedArchitectures`).
     - "!**/node_modules/@trycua/cua-driver-{win32,linux}-*{,/**/*}"
     - "!**/node_modules/@trycua/cua-driver-darwin-!(${arch}){,/**/*}"
-    # Keep only the ONNX Runtime native slice used by this macOS build.
-    - "!**/node_modules/onnxruntime-node/bin/napi-v6/{linux,win32}{,/**/*}"
-    - "!**/node_modules/onnxruntime-node/bin/napi-v6/darwin/!(${arch}){,/**/*}"
-    # The binding links libonnxruntime.1.dylib directly; the fully versioned
-    # sibling is a duplicate install artifact and is not loaded at runtime.
-    - "!**/node_modules/onnxruntime-node/bin/napi-v6/darwin/${arch}/libonnxruntime.1.*.dylib"
   # No `arch:` here on purpose. `computeArchToTargetNamesMap` only falls back to the
   # architectures named on the command line when a target declares none of its own
   # (`archs == null ? defaultArchs : asArray(archs)`), so listing them here made
@@ -187,9 +180,6 @@ win:
     - "!**/node_modules/@node-datachannel/win32-!(${arch}*){,/**/*}"
     - "!**/node_modules/@trycua/cua-driver-{darwin,linux}-*{,/**/*}"
     - "!**/node_modules/@trycua/cua-driver-win32-!(${arch}*){,/**/*}"
-    # Keep only the ONNX Runtime native slice used by this Windows build.
-    - "!**/node_modules/onnxruntime-node/bin/napi-v6/{darwin,linux}{,/**/*}"
-    - "!**/node_modules/onnxruntime-node/bin/napi-v6/win32/!(${arch}){,/**/*}"
   target:
     - target: nsis
       arch:
@@ -225,13 +215,6 @@ linux:
     - "!**/node_modules/@trycua/cua-driver{,/**/*}"
     - "!**/node_modules/@trycua/cua-driver-linux-*{,/**/*}"
     - "!**/node_modules/@ubjs/{,/**/*}"
-    # Keep only the ONNX Runtime native slice used by this Linux build.
-    - "!**/node_modules/onnxruntime-node/bin/napi-v6/{darwin,win32}{,/**/*}"
-    - "!**/node_modules/onnxruntime-node/bin/napi-v6/linux/!(${arch}){,/**/*}"
-    # Memory runs the CPU backend (`device: cpu`); the Linux package also ships
-    # optional CUDA/TensorRT providers, including a ~268 MB CUDA library.
-    - "!**/node_modules/onnxruntime-node/bin/napi-v6/linux/${arch}/libonnxruntime_providers_cuda.so"
-    - "!**/node_modules/onnxruntime-node/bin/napi-v6/linux/${arch}/libonnxruntime_providers_tensorrt.so"
   target:
     - AppImage
     - deb

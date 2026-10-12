@@ -1,5 +1,6 @@
 import type { ChatAttachment, ChatMessage, DagSettledInfo, MessagePart, ThinkingTiming, ToolCallBlock, TuiRun } from "@shared/types";
 import { extractPromptAttachments } from "../../shared/attachment-metadata.ts";
+import { stripMemoryCitation } from "../../shared/memory-citation.ts";
 import { toolResultStatus } from "../../shared/tool-result.ts";
 import { uiText } from "./ui-text.ts";
 
@@ -239,8 +240,9 @@ function extractContent(content: unknown): {
 
   for (const part of content) {
     if (typeof part === "string") {
-      texts.push(part);
-      if (part) parts.push({ kind: "text", text: part });
+      const text = stripMemoryCitation(part);
+      texts.push(text);
+      if (text) parts.push({ kind: "text", text });
       continue;
     }
     if (!isRecord(part)) continue;
@@ -254,8 +256,10 @@ function extractContent(content: unknown): {
       continue;
     }
     if (typeof part.text === "string") {
-      texts.push(part.text);
-      if (part.text) parts.push({ kind: "text", text: part.text });
+      // The memory citation block is for the pipeline, not for the person reading.
+      const text = stripMemoryCitation(part.text);
+      texts.push(text);
+      if (text) parts.push({ kind: "text", text });
     }
     if (type === "tool_use" || type === "toolcall" || type === "tool_call" || type === "toolCall") {
       const id = String(part.id ?? crypto.randomUUID());

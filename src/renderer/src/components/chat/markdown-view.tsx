@@ -16,6 +16,7 @@ import { useHighlightedCode } from "@/lib/highlight";
 import { splitMarkdownBlocks } from "@/lib/markdown-blocks";
 import { useSessionStore } from "@/stores/session";
 import { resolvePath } from "@/lib/workspace-path";
+import { stripMemoryCitation } from "@shared/memory-citation";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -254,7 +255,8 @@ const MarkdownBlock = memo(function MarkdownBlock({ text }: { text: string }): J
  * so the DOM is unchanged.
  */
 export const MarkdownView = memo(function MarkdownView({ text }: { text: string }): JSX.Element {
-  const blocks = useMemo(() => splitMarkdownBlocks(text), [text]);
+  // A reply that used memory ends with a citation block the pipeline reads; the reader does not.
+  const blocks = useMemo(() => splitMarkdownBlocks(stripMemoryCitation(text)), [text]);
   if (blocks.length === 1) return <MarkdownBlock text={blocks[0]} />;
   return (
     <>

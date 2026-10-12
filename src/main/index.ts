@@ -48,7 +48,7 @@ import { PiProcessManager } from "./pi/process-manager";
 import { applyAppIcon, createDesktopWindow, windowOrigin } from "./desktop-window";
 import { registerDesktopIpc } from "./ipc/desktop-handlers";
 import { registerDagIpc } from "./ipc/dag-handlers";
-import { MemoryManager } from "./engine/memory";
+import { MemoryManager, removeLegacyMemory } from "./engine/memory";
 import { TerminalSessions } from "./engine/terminal-sessions";
 import { SshManager, openSshAppTransport } from "./ssh/ssh-manager";
 import { readAgentRuntimeSource, type AgentRuntimeSource } from "./ssh/agent-runtime";
@@ -113,6 +113,9 @@ function bundledAgentRuntime(): AgentRuntimeSource {
 
 const agentRuntime = bundledAgentRuntime();
 const paths = getFastVibePaths();
+// The SQLite index and the embedding model of the memory this one replaced; derived data, and
+// the model alone was 118 MB.
+removeLegacyMemory(paths.runtimeRoot);
 const memory = new MemoryManager(paths);
 const engine = new PiProcessManager(paths, memory);
 const terminals = new TerminalSessions();

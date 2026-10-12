@@ -44,10 +44,12 @@ export type FastVibePaths = {
   usageLedgerFile: string;
   /** Durable memory configuration, separate from renderer settings. */
   memoryFile: string;
-  /** SQLite semantic/JEV memory index. */
-  memoryDatabaseFile: string;
-  /** On-demand local embedding model cache. */
-  memoryModelsDir: string;
+  /** What the memory pipeline has distilled per conversation (its bookkeeping, not the files the agent reads). */
+  memoryStateFile: string;
+  /** The folder the agent reads memory from: `memory_summary.md`, `MEMORY.md`, `rollout_summaries/`… */
+  memoriesDir: string;
+  /** A copy of that folder as it was when the last consolidation succeeded; the next one is shown the diff from it. */
+  memoriesBaselineDir: string;
   /** Durable, Main-owned user message queue. */
   messageQueueFile: string;
   /**
@@ -145,9 +147,8 @@ function buildFastVibePaths(): FastVibePaths {
   const sessionsDir = join(agentDir, "sessions");
   const worktreesDir = join(runtimeRoot, "wt");
   const scratchDir = join(runtimeRoot, "scratch");
-  const memoryModelsDir = join(runtimeRoot, "models", "memory");
 
-  for (const dir of [logs, agentDir, skillsDir, sessionsDir, worktreesDir, scratchDir, memoryModelsDir]) {
+  for (const dir of [logs, agentDir, skillsDir, sessionsDir, worktreesDir, scratchDir]) {
     mkdirSync(dir, { recursive: true });
   }
 
@@ -178,8 +179,9 @@ function buildFastVibePaths(): FastVibePaths {
     reasoningFile: join(runtimeRoot, "reasoning.json"),
     usageLedgerFile: join(runtimeRoot, "usage-ledger.jsonl"),
     memoryFile: join(runtimeRoot, "memory.json"),
-    memoryDatabaseFile: join(runtimeRoot, "memory.sqlite"),
-    memoryModelsDir,
+    memoryStateFile: join(runtimeRoot, "memory-state.json"),
+    memoriesDir: join(runtimeRoot, "memories"),
+    memoriesBaselineDir: join(runtimeRoot, "memories-baseline"),
     messageQueueFile: join(runtimeRoot, "message-queue.json"),
     remoteAccessFile: join(userData, "remote-access.json"),
     accountFile: join(userData, "account.json"),

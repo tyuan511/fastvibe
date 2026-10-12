@@ -1,225 +1,48 @@
 import type { EngineModel } from "./types.ts";
 
-/** The three memory paths exposed by FastVibe. */
-export type MemoryMode = "default" | "semantic" | "jev";
-
-export type MemoryEmbeddingProvider = "local-minilm-multilingual-q8";
-
-export type MemoryTypeScores = {
-  episodic: number;
-  semantic: number;
-  procedural: number;
-  preference: number;
-};
-
-export type MemoryRelationView = "semantic" | "temporal" | "causal" | "entity";
-
+/**
+ * Long-term memory, after Codex's: one switch. On, FastVibe distills finished conversations
+ * into a small set of files and puts the summary in front of the agent; off, there is
+ * no memory at all. Nothing else is configurable on purpose — see `docs/memory.md`.
+ */
 export type MemoryConfig = {
-  /** Kept in the wire shape for compatibility; Default memory is always enabled. */
   enabled: boolean;
-  /** `default` is model-free; `semantic` adds local embeddings; `jev` adds Jev decisions. */
-  mode: MemoryMode;
-  /** Capture final user and assistant turns automatically. */
-  autoCapture: boolean;
-  embeddingProvider: MemoryEmbeddingProvider;
-  maxResults: number;
-  maxContextChars: number;
-  /** Daily idle maintenance, shared by all three memory modes. */
-  autoMaintain: boolean;
-  temporaryRetentionDays: number;
-  archiveRetentionDays: number;
-  /** Active-memory target; explicitly retained memories may exceed it. */
-  maxActiveItems: number;
-  /** Explicit System-Two model used for JEV memory consolidation. */
-  systemTwoModel?: EngineModel;
+  /** The model that reads conversations and consolidates them. Absent: the default model. */
+  model?: EngineModel;
 };
 
-export type MemoryModelState = {
-  provider: MemoryEmbeddingProvider;
-  status: "not-installed" | "downloading" | "ready" | "error";
-  progress?: number;
-  /** Bytes fetched so far and the download's total, across every model file; set while downloading. */
-  loadedBytes?: number;
-  totalBytes?: number;
-  error?: string;
-  /** Approximate on-disk size reported by the model loader when available. */
-  sizeBytes?: number;
-};
+export const DEFAULT_MEMORY_CONFIG: MemoryConfig = { enabled: false };
+
+/** What the pipeline is doing right now, for the settings row. */
+export type MemoryPhase = "idle" | "extracting" | "consolidating";
 
 export type MemoryState = {
   config: MemoryConfig;
-  model: MemoryModelState;
-  items: number;
-  edges: number;
-  maintenance?: MemoryMaintenanceState;
-};
-
-export type MemoryMaintenanceState = {
-  active: number;
-  archived: number;
-  overBudget: number;
+  phase: MemoryPhase;
+  /** Conversations distilled so far (stage-1 outputs kept). */
+  conversations: number;
+  /** Conversations waiting to be distilled once they have been idle long enough. */
+  pending: number;
+  /** True once consolidation has produced a summary the agent can read. */
+  ready: boolean;
   lastRunAt?: number;
-  archivedLastRun?: number;
-  deletedLastRun?: number;
-  pending?: boolean;
+  /** The last pass's failure, cleared by the next success. */
   error?: string;
-};
-
-export type MemoryArchiveReason = "expired" | "duplicate" | "superseded" | "merged" | "capacity";
-
-export type MemorySearchRequest = {
-  query: string;
-  conversationId?: string;
-  project?: string;
-  limit?: number;
-};
-
-export type MemoryItem = {
-  id: string;
-  conversationId?: string;
-  project?: string;
-  role: "user" | "assistant" | "fact" | "entity" | "summary";
-  kind: "fact" | "preference" | "task" | "episode" | "entity" | "procedural" | "semantic" | "other";
-  content: string;
-  createdAt: number;
-  importance: number;
-  confidence: number;
-  /** Overlapping Jev-Mem type scores, retained alongside the original observation. */
-  typeScores?: MemoryTypeScores;
-  /** Deterministic entity identifiers used for candidate discovery and entity edges. */
-  entities?: string[];
-  sourceEntryId?: string;
-  metadata?: Record<string, unknown>;
-  score?: number;
-  pinned?: boolean;
-  lastAccessedAt?: number;
-  archivedAt?: number;
-  archiveReason?: MemoryArchiveReason;
-  replacementId?: string;
-};
-
-/**
- * Which stage made an edge, after the Jev-Mem reference: `jev` the write-time Jev
- * relations, `sequence` the write-time temporal links, `consolidation` periodic
- * consolidation, `magma` the fallback write when a Jev call fails.
- */
-export type MemoryEdgeOrigin = "jev" | "sequence" | "consolidation" | "magma";
-
-export type MemoryEdge = {
-  sourceId: string;
-  targetId: string;
-  view: MemoryRelationView;
-  /** Defaults to `jev`. Edges of different origins between one pair coexist. */
-  origin?: MemoryEdgeOrigin;
-  relation: "supports" | "contradicts" | "elaborates" | "duplicates" | "temporally_close" | "same_episode" | "same_entity" | "related" | "before" | "after" | "during" | "contains" | "overlaps" | "same_time" | "causes" | "caused_by" | "unknown" | "none";
-  weight: number;
-  confidence?: number;
-};
-
-/** 设置 → 长期记忆 → 关系图: which memories to draw. */
-export type MemoryGraphRequest = {
-  /** One project's memories; omitted for every project. */
-  project?: string;
-  limit?: number;
-  status?: "active" | "archived";
-  offset?: number;
-};
-
-/** The newest memories the graph draws at most; older ones are counted, not drawn. */
-export const MEMORY_GRAPH_LIMIT = 300;
-
-/** A memory as the graph draws it: enough to place, colour and label it. */
-export type MemoryGraphNode = {
-  id: string;
-  role: MemoryItem["role"];
-  kind: MemoryItem["kind"];
-  createdAt: number;
-  /** The first characters of the content. */
-  preview: string;
-  project?: string;
-  conversationId?: string;
-  /** Written by the fallback path when a Jev call failed. */
-  fallback?: boolean;
-};
-
-export type MemoryGraphEdge = {
-  sourceId: string;
-  targetId: string;
-  view: MemoryRelationView;
-  relation: MemoryEdge["relation"];
-  origin: MemoryEdgeOrigin;
-  weight: number;
-};
-
-export type MemoryGraph = {
-  nodes: MemoryGraphNode[];
-  /** Edges whose both ends are among `nodes`. */
-  edges: MemoryGraphEdge[];
-  /** Projects that hold memories, most recently written first. */
-  projects: string[];
-  /** Memories in the requested scope, drawn or not. */
-  total: number;
-};
-
-/** One memory in full, with every edge that touches it. */
-export type MemoryDetail = {
-  item: MemoryItem & { keywords?: string[] };
-  relations: Array<{ edge: MemoryGraphEdge; direction: "out" | "in"; neighbor: MemoryGraphNode }>;
-};
-
-export type MemorySearchResult = {
-  items: MemoryItem[];
-  mode: MemoryMode;
-  usedEmbedding: boolean;
-  usedJev: boolean;
-};
-
-export const DEFAULT_MEMORY_CONFIG: MemoryConfig = {
-  enabled: true,
-  mode: "default",
-  autoCapture: true,
-  embeddingProvider: "local-minilm-multilingual-q8",
-  maxResults: 8,
-  maxContextChars: 6_000,
-  autoMaintain: true,
-  temporaryRetentionDays: 90,
-  archiveRetentionDays: 30,
-  maxActiveItems: 10_000,
-  systemTwoModel: undefined,
+  /** Where the files live, so the settings pane can reveal the folder. */
+  folder: string;
 };
 
 export function memoryConfigOf(value: unknown): MemoryConfig {
   if (typeof value !== "object" || value === null) return DEFAULT_MEMORY_CONFIG;
-  const input = value as Partial<MemoryConfig>;
-  // Older builds stored `{ enabled: false, mode: "semantic" }` before the
-  // model-free Default mode existed. Migrate that state without starting a
-  // surprise model download; users can opt into Semantic memory explicitly.
-  const mode = input.enabled === false
-    ? "default"
-    : input.mode === "semantic" || input.mode === "jev" ? input.mode : "default";
-  return {
-    enabled: true,
-    mode,
-    autoCapture: input.autoCapture !== false,
-    embeddingProvider: "local-minilm-multilingual-q8",
-    maxResults: clampInt(input.maxResults, 1, 32, DEFAULT_MEMORY_CONFIG.maxResults),
-    maxContextChars: clampInt(input.maxContextChars, 1_000, 20_000, DEFAULT_MEMORY_CONFIG.maxContextChars),
-    autoMaintain: input.autoMaintain !== false,
-    temporaryRetentionDays: clampInt(input.temporaryRetentionDays, 7, 3650, DEFAULT_MEMORY_CONFIG.temporaryRetentionDays),
-    archiveRetentionDays: clampInt(input.archiveRetentionDays, 7, 365, DEFAULT_MEMORY_CONFIG.archiveRetentionDays),
-    maxActiveItems: clampInt(input.maxActiveItems, 100, 100_000, DEFAULT_MEMORY_CONFIG.maxActiveItems),
-    ...(isEngineModel(input.systemTwoModel) ? { systemTwoModel: input.systemTwoModel } : {}),
-  };
+  // Files from the three-mode era carried `mode`, an embedding model and retention knobs;
+  // they were always on, so only an explicit `enabled: true` written by this version counts.
+  const input = value as { enabled?: unknown; version?: unknown; model?: unknown };
+  const model = input.model as Partial<EngineModel> | undefined;
+  const pinned = typeof model?.provider === "string" && typeof model.id === "string" && model.provider && model.id
+    ? { provider: model.provider, id: model.id }
+    : undefined;
+  return { enabled: input.version === MEMORY_CONFIG_VERSION && input.enabled === true, ...(pinned ? { model: pinned } : {}) };
 }
 
-function isEngineModel(value: unknown): value is EngineModel {
-  return typeof value === "object" && value !== null
-    && typeof (value as EngineModel).provider === "string"
-    && typeof (value as EngineModel).id === "string"
-    && (value as EngineModel).provider.length > 0
-    && (value as EngineModel).id.length > 0;
-}
-
-function clampInt(value: unknown, min: number, max: number, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) ? Math.min(max, Math.max(min, Math.round(value))) : fallback;
-}
+/** Marks a `memory.json` written by the file-based memory, as opposed to the retired modes. */
+export const MEMORY_CONFIG_VERSION = 2;

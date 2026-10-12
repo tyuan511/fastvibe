@@ -92,38 +92,12 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): void {
     refreshModelsDev,
   } = deps;
 
+  // Every change reaches every client through `memory.onChange` (wired in `index.ts`), so
+  // none of these broadcasts for itself.
   handle(Ipc.memoryGetState, () => engine.memory.state());
-  handle(Ipc.memoryPrepareModel, () => engine.memory.prepareModel());
-  handle(Ipc.memorySetConfig, async (payload: unknown, ctx) => {
-    const state = await engine.memory.setConfig(payload);
-    broadcast(Ipc.memoryChanged, state, { except: ctx.origin });
-    return state;
-  });
-  handle(Ipc.memorySearch, async (payload: import("@shared/memory").MemorySearchRequest) => engine.memory.search(payload ?? { query: "" }));
-  handle(Ipc.memoryGraph, (payload: import("@shared/memory").MemoryGraphRequest | undefined) => engine.memory.graph(payload ?? {}));
-  // `null`, not `undefined`, for a memory that is gone: an undefined reply does not survive the remote client's JSON.
-  handle(Ipc.memoryDetail, (payload: { id?: unknown }) => (typeof payload?.id === "string" ? engine.memory.detail(payload.id) ?? null : null));
-  handle(Ipc.memoryMaintain, () => engine.memory.maintain());
-  handle(Ipc.memoryRestore, (payload: { id?: unknown }) => {
-    if (typeof payload?.id !== "string" || !payload.id.trim()) throw new Error(uiText("记忆 ID 不能为空", "Memory ID is required"));
-    return engine.memory.restore(payload.id.trim());
-  });
-  handle(Ipc.memorySetPinned, (payload: { id?: unknown; pinned?: unknown }) => {
-    if (typeof payload?.id !== "string" || !payload.id.trim() || typeof payload.pinned !== "boolean") throw new Error(uiText("记忆参数无效", "Invalid memory parameters"));
-    return engine.memory.setPinned(payload.id.trim(), payload.pinned);
-  });
-  handle(Ipc.memoryDelete, (payload: { id?: unknown }, ctx) => {
-    const id = typeof payload?.id === "string" ? payload.id.trim() : "";
-    if (!id) throw new Error("记忆 ID 不能为空");
-    const state = engine.memory.delete(id);
-    broadcast(Ipc.memoryChanged, state, { except: ctx.origin });
-    return state;
-  });
-  handle(Ipc.memoryClear, (_payload: void, ctx) => {
-    const state = engine.memory.clear();
-    broadcast(Ipc.memoryChanged, state, { except: ctx.origin });
-    return state;
-  });
+  handle(Ipc.memorySetConfig, (payload: unknown) => engine.memory.setConfig(payload));
+  handle(Ipc.memoryRun, () => engine.memory.run());
+  handle(Ipc.memoryClear, () => engine.memory.clear());
   handle(Ipc.browserResponse, (payload: { id: string; ok: boolean; result?: unknown; error?: string }) => {
     respondBrowserRequest(payload);
   });

@@ -1,203 +1,129 @@
 # FastVibe memory
 
-FastVibe has three memory modes backed by one local store:
+One switch (设置 → 长期记忆), off by default, and one choice: which model does the work. Off means off: nothing is read, written or
+injected, and the files already on disk stay until the user clears them. On, FastVibe runs
+**Codex's memory pipeline** (`codex-rs/memories`): two background phases that turn finished
+conversations into Markdown files, and a read path that costs one prompt section. The four
+prompts are Codex's own, vendored under `resources/memories/` (Apache-2.0, see its
+`NOTICE.md` for the commit each came from and the few lines changed).
 
-- **Default memory** is always on and does not download an embedding model. It writes
-  final user and assistant text to `runtime/engine/memory.sqlite` and uses SQLite FTS5
-  for local text retrieval.
-- **Semantic memory** is an explicit opt-in mode. It keeps the FTS index and stores a 384
-  dimensional multilingual embedding. The embedding model is
-  `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`, loaded through
-  Transformers.js and the architecture-specific ONNX INT8 file (about 118 MB). The
-  model is downloaded only after the user confirms the mode change and lives under
-  `runtime/engine/models/memory`.
-- **JEV-enhanced memory** keeps the same local canonical store and adds a System-One
-  control plane after Jev-Mem (arXiv:2609.23986). It requires the Decision engine to use
-  Jev, have a saved API key, have the `Enhanced memory` application scenario checked, and
-  have the local embedding model available.
+There used to be three modes (default, semantic, JEV-enhanced) over a SQLite index with
+embeddings and a relation graph. All of that is gone: `memory.sqlite`, the 118 MB embedding
+model and the graph view. `removeLegacyMemory` deletes the leftovers at startup, and a
+`memory.json` from that era reads as "off" (only a file carrying `version: 2` can switch the
+new memory on).
 
-In JEV mode, automatic context preparation uses one batched relevance request over
-locally recalled candidates. Explicit `memory_search` keeps adaptive multi-hop
-retrieval for questions that need deeper recall. Both use the same project/chat scope.
+## The files
 
-### How JEV-enhanced memory follows the paper
+`runtime/engine/memories/` is the folder the agent reads, and what 打开文件夹 reveals:
 
-JEV-enhanced memory is a port of the paper's reference implementation
-(github.com/libingzheren/Jev-Mem @ `81574eb`, MIT), not a reading of the paper alone.
-`src/main/engine/memory-jev.ts` holds its control plane — question texts, candidate
-scoring, relation/consolidation rules, budget allocation, stopping, traversal scoring,
-temporal references, entity and keyword extraction — with no I/O, and its header maps
-each part to the reference file it mirrors. `JEV_MEM_PROFILE` is the paper's profile,
-`config/jev_mem.json` over `JevMemConfig`'s defaults.
+```
+memory_summary.md     first line `v1`; a compact map, placed in the system prompt of every turn
+MEMORY.md             the handbook, by task group, citing recap files; read with grep
+raw_memories.md       input to consolidation: `## Thread <id>` per selected conversation
+rollout_summaries/    one recap per conversation: <created UTC>-<hash4>-<slug>.md
+skills/               optional, written by the consolidation agent
+```
 
-`test/fixtures/jev-mem-reference.json` is the reference's own output (its Python modules
-run on fixed inputs): every question text and criterion, budget allocations including
-ties, temporal references, keywords and entities. `test/memory-jev.test.ts` checks the
-port against it, so drifting from the reference fails a test rather than a benchmark.
+Bookkeeping lives outside the folder, where the agent has no reason to look:
+`runtime/engine/memory-state.json` (what stage 1 produced per conversation, usage counts, retry
+state) and `runtime/engine/memories-baseline/` (a copy of the folder as the last successful
+consolidation left it).
 
-- **Write** (`MemoryBuilder.build`): admission is off, so every observation is kept.
-  One typing request (four Nouls over `[speaker]: text`); candidates scored as
-  2·cos (vector top 10) + 2·shared entity + keyword overlap + 0.25/(1+Δdays), top 10;
-  one relation request (semantic, both causal directions, entity alias only when no
-  identifier matches exactly); edges at probability ≥ 0.60, exact identifiers at 1.0.
-  Then MAGMA's temporal links: PRECEDES/SUCCEEDS with the predecessor and
-  TEMPORALLY_CLOSE from up to nine earlier memories within 24 h.
-- **Fallback write** (`_build_magma` → `add_event`): if typing or relations fall back,
-  the Jev node is dropped and the observation is written the MAGMA way. The System-Two
-  model extracts a narrative, entities, keywords and emotion with the reference's prompt
-  (its simple rules when the model is unavailable or answers something unparseable);
-  the narrative is embedded and is what Jev reads, while the memory shown and injected
-  stays the original text. The memory is linked to its predecessor in time and both
-  ways (RELATED_TO) to its three nearest neighbours by vector. It does not count as a
-  Jev write.
-- **Every edge records its stage** (`origin`: `jev`, `sequence`, `consolidation`,
-  `magma`), and edges of different stages between one pair coexist, as separate links
-  do in the reference. Traversal shows each with the properties its stage gives it
-  (a probability, a time difference, or a similarity score).
-- **Consolidation** runs on every 20th successful Jev write, over that memory's own
-  candidates. Each pair's decision is recorded on the memory; at most one semantic link
-  is added (CONTRADICTS over REDUNDANT_WITH over RELATED_TO) when the strongest of
-  link/redundant/contradiction reaches 0.85; obsolescence is recorded, not linked.
-  System Two writes a new memory for a pair only when merge/promote is selected at
-  ≥ 0.85 and contradiction is below 0.85; that memory goes through the full write path.
-  FastVibe's optional retention policy then applies stricter archive rules described below.
-- **Adaptive read** (based on `RetrievalController.query`): route (six Nouls) alongside
-  local embedding, vector + keyword anchors fused by RRF and scored by cosine, then
-  rounds of local expansion and a combined assessment/scoring request. A stopping
-  decision discards the speculative candidate scores. Budgets follow Eqs. 13–14 (B = 80,
-  θ_act = 0.10, largest remainder, ties by name), depth Eq. 15 (D_max = 8), transition
-  score Eq. 23 with λ = (0.25, 0.35, 0.15, 0.15, 0.10), recency Eq. 25 against the newest
-  evidence. Stop at sufficiency ≥ 0.95 with missing/contradiction < 0.15, or
-  continue < 0.15, and within 60 nodes, 2,400 edges, 16 Jev calls and 15 s.
-- **Write/adaptive calls** retain whole-batch validation, 3 s per attempt, up to three
-  attempts, and an LRU of 1,024 identical requests that costs no budget.
+## Stage 1 — extraction (`memory.ts`, `memory-plan.ts`, `memory-transcript.ts`)
 
-FastVibe differences, each marked `FastVibe:` in the code:
+A pass runs 45 seconds after launch, every 15 minutes, when the switch goes on, and from
+设置 → 立即整理. It prunes, then reads at most 2 conversations (`max_rollouts_per_startup`).
 
-- Chinese patterns next to the English-only heuristics (temporal references, temporal
-  and intent keywords, quoted-name entities, character-bigram keywords).
-- A per-memory content cap in Jev requests (18,000 characters shared per request): the
-  reference sends short LoCoMo turns whole, ours can be long replies.
-- Candidate discovery reads the latest 2,000 memories of the scope rather than all.
-- `top_k` is the Memory settings' result count (default 8); the paper ran LoCoMo at 40.
-- Memory spans a project's conversations (or one chat without a project); temporal
-  links follow each conversation's own sequence.
-- System Two is the model chosen in Memory settings, and the retrieved memories are
-  injected into the main agent's system prompt instead of answered by System Two.
-- Automatic context preparation has a 2 s total budget, including model loading,
-  embedding, credential resolution and Jev calls. Explicit searches retain a 15 s
-  total budget. Timeout or cancellation returns the local keyword/vector results
-  already found; a failed routing call also returns those results directly.
-- Automatic context uses 24 local keyword/vector candidates (up to the requested
-  result count when that is larger), plus their best one-hop neighbours, bounded at
-  40 candidates and 240 examined edges. One `memory.read.context` request asks for
-  each candidate's usefulness and whether recency matters. Relevance below 0.5 is
-  excluded; remaining memories are ranked by relevance with the usual recency
-  adjustment. A valid batch may select nothing; a failed batch returns local hits.
-  This path makes at most one HTTP request, with no retry or remote routing.
-- Explicit searches overlap query-only routing with local loading/inference, then
-  use `memory.read.round` to assess the current evidence and score the next hop in
-  one batch. Each later hop still depends on the previous results. Stopping questions
-  explicitly consider only existing evidence, not the speculative candidates.
-- Complete embedding caches load from their absolute local directory without remote
-  metadata probes. Retrieval never downloads a missing model; only explicit mode
-  setup or model preparation may download it. Empty scopes skip model and Jev work.
-- Hard retrieval limits are checked before asking whether to continue, avoiding an
-  assessment request after the last permitted expansion. Keyword/vector candidates
-  are read once per search and reused for both local fallback and Jev anchors.
-- The reference also enriches text with keywords before embedding; FastVibe embeds the
-  raw text with its local MiniLM model.
+- **Which conversations** (Codex's defaults): a side chat belongs to its parent and a running
+  chat is not finished. A conversation is read once its **transcript file** has been quiet for
+  6 hours (the file's mtime, not the catalog's `updatedAt`, which moves on a rename) and is at
+  most 10 days old. One already read at its current mtime is skipped, so a chat that is
+  continued is read again and one that is not is never read twice.
+- **What the model sees**: Codex's `stage_one_system.md` as the system prompt and
+  `stage_one_input.md` (rollout path, cwd, contents) as the user message. The contents are one
+  branch rendered as text — user messages, replies, tool calls, tool results (clipped at 8,000
+  characters; a row at 10,000, as Codex's tiered input does) — never thinking blocks or hidden
+  messages. The budget is 70% of the model's window (Codex's `CONTEXT_WINDOW_PERCENT`), the
+  middle dropped past it. Secrets are replaced with `[REDACTED_SECRET]` on the way in and again
+  on the way out.
+- **What it returns**: JSON `{ raw_memory, rollout_summary, rollout_slug }`. No note or no recap
+  means "nothing worth saving": the conversation is recorded as empty and not asked again until
+  it changes. A conversation with no real exchange is never sent.
+- **Failure**: retried after an hour, three times, then left until the transcript changes. The
+  message shows in the settings row.
+- **Pruning**: a distilled conversation that nothing has used for 30 days, and the memory of a
+  deleted conversation, are dropped.
+- **The model** is the one chosen in 设置 → 长期记忆 (`config.model`, used for both stages, where Codex
+  has separate `extract_model` and `consolidation_model`). Unset, or no longer authenticated, it is the
+  user's default model, else the one the active chat is on, else anything authenticated
+  (`#backgroundModel` in `process-manager.ts`).
 
-Memory is injected through a hidden per-session extension's `before_agent_start`
-handler. The retrieved text is an ephemeral system-prompt section; it is not appended
-to the conversation transcript. Main tracks preparation separately from a running
-turn: Stop cancels that chat's memory read and checks cancellation again at the SDK
-preflight boundary, before a prompt can start a provider request. Capture happens at
-the SDK `message_end` boundary, after a user or final assistant message is complete. Thinking blocks, tool results,
-passwords and hidden fields are not captured.
+## Stage 2 — consolidation (`memory-workspace.ts`, `pi/memory-agent.ts`)
 
-## Retention and idle maintenance
+The top 256 distilled conversations (most used first, then the most recently touched; ones
+unused for 30 days are out) are written to `raw_memories.md` and `rollout_summaries/`, which are
+brought in line with that selection exactly.
 
-All three modes enable automatic maintenance by default. Settings → Long-term memory
-offers the switch, retention periods, active-memory target, last-run counts and a
-“Maintain now” action. The graph can show active memories or those awaiting deletion;
-an archived memory can be restored, and any memory can be retained manually.
+Codex keeps the folder in a git repository and gives the agent `phase2_workspace_diff.md`, the
+diff from the last baseline; no changes means no agent. FastVibe cannot count on a `git`
+binary, so it compares the folder with the baseline copy and writes the same file in the same
+git style (a status list, then `diff --git` hunks, capped at 4 MiB). **A folder identical to
+its baseline, with a valid `MEMORY.md` and summary, is not consolidated.** Anything else
+— new recaps, a recap that was deleted, a conversation that moved on, or a user's own edit to
+`MEMORY.md` — is in the diff, and the prompt calls every change in it authoritative.
 
-- The manager checks every minute, runs once a day while idle, and catches up after
-  a restart using a durable checkpoint. Chat runs, compactions, memory reads, captures
-  and JEV consolidation defer it. Manual maintenance queues behind the same work.
-  Each category processes at most 500 rows per transaction and resumes at a later idle
-  poll when there is more work. App shutdown clears the timer.
-- Temporary `task`/`episode` memories archive after **90 unused days** by default.
-  Only evidence returned to the agent refreshes last-use time, not candidates merely
-  examined by a search. Facts and semantic memories do not expire just because they
-  are old. Preferences, procedures, summaries, explicit standing-rule wording and
-  manually retained memories are exempt from age and capacity eviction. The wording
-  detector is conservative and only preserves content; it cannot declare a fact obsolete.
-- Exact duplicate content from the same speaker in the same project is consolidated
-  locally, keeping the newest copy (a manually retained copy takes precedence). Chats
-  without a project are separate scopes. Code whitespace is significant. JEV adds
-  semantic replacement: obsolescence or redundancy ≥ 0.95 with contradiction < 0.15
-  can archive an older candidate in the same scope. An assistant statement cannot
-  replace a user statement. A successful merge at ≥ 0.95 can archive its original
-  pair only after the summary has been stored. Uncertain/conflicting pairs stay.
-- The default **10,000 active-memory target** first archives temporary, low-importance,
-  least-recently-used evidence. Protected memories can exceed this target; the settings
-  report that overflow rather than delete protected facts. This is an active-item
-  budget, not a hard database-byte limit; archived rows remain during their grace period.
-- Archived rows immediately leave keyword/CJK fallback, vector, entity, recent and
-  graph-based retrieval. Management detail/graph calls still expose them. Asynchronous
-  reads re-check their final results, so a concurrent archive cannot inject stale data.
-- The **30-day archive grace period** starts at archival, including on upgraded
-  installations. After it expires, the row, FTS entry, vector and graph edges are
-  deleted atomically. SQLite reuses freed pages; maintenance does not run a blocking
-  full `VACUUM`, so the file need not shrink immediately. Transcripts are unaffected.
-- Restore also pins the memory, preventing immediate re-archival. Disabling automatic
-  maintenance stops archival and automatic deletion; existing archives stay excluded
-  until restored. Clearing the store invalidates in-flight writes and summaries.
+The agent is a **throwaway in-memory session** with the memory folder as its workspace, given
+Codex's `consolidation.md` as its one user message, at medium reasoning (`pi/memory-agent.ts`).
+Its tools are `read / edit / write / grep / find / ls`: no shell, so nothing outside the folder
+and no network, which is what Codex's sandbox achieves. No extensions, so no memory read for
+the thing that writes memory; ten-minute cap.
 
-Lifecycle columns and protection flags migrate existing databases without archiving
-on open. No additional model/API call is needed for the daily local sweep. JEV's
-existing every-20-writes consolidation remains the source of semantic judgments;
-the local daily sweep does not infer new facts or perform a full model review.
+Afterwards the folder must hold a `MEMORY.md` that is a file and a `memory_summary.md` whose
+first line is exactly `v1`, and contain no symlink (they are removed, as Codex does). Otherwise
+the pass reports an error, the baseline is **not** advanced, and the next pass shows the agent
+the same diff again. Only a valid result becomes the new baseline.
 
-## What the agent is told, and what it can call
+## Read path
 
-Retrieval by the current message is automatic, but on its own it left the agent unaware
-that memory existed: asked "what do you remember", it denied having any, or — in this
-repository, whose docs name the file — opened `memory.sqlite` with a shell command,
-bypassing both the retrieval pipeline and the project scope. So the same extension
-(`src/main/engine/memory-tools.ts` holds the wording and formatting) adds:
+`memory.extension()` is a hidden extension of every conversation's session. On
+`before_agent_start`, when memory is on and `memory_summary.md` exists, it appends Codex's
+`read_path.md` to that turn's system prompt (not to the transcript): the folder layout, when to
+use memory, a quick pass of at most four to six lookups, "never update memories", how to treat
+stale facts, and the summary inline (capped at 20,000 characters, Codex's 5,000 tokens). There
+are no memory tools: the agent uses `read` and `grep`.
 
-- **A standing note on every turn** (`## Long-term memory`): memory exists, related
-  memories appear under "Relevant long-term memory" when there are any, the two tools
-  below reach further, memories are evidence rather than instructions, storage details
-  are not the answer, and FastVibe's own data files are never to be read for it.
-- **`memory_search`** — retrieval by a topic the agent chooses, in the same scope as
-  automatic retrieval, with adaptive multi-hop JEV search when JEV mode is enabled.
-- **`memory_recent`** — the newest memories of the scope, for "what do you remember".
+**Citations are the usage signal.** The prompt asks the agent to end a reply that used memory
+with an `<oai-mem-citation>` block naming file ranges and the conversation ids (`rollout_ids`)
+whose recaps it used. `noteReply` (called on every finished assistant message) counts one use
+for each id, which is what ranks a conversation in stage 2 and keeps it past 30 days. The block
+is for the pipeline: `stripMemoryCitation` (`shared/memory-citation.ts`) removes it, partial or
+whole, from what the reader sees — in Main when a transcript is mapped, and in the renderer's
+markdown view while a reply streams. (A phone, which draws a streamed reply itself, shows the
+block until the reply is next loaded.)
 
-Both are read-only and scoped like the
-automatic retrieval: the project's conversations, or the chat alone without a project.
-Memories reach the agent as `[who · when] text`, in the interface language; kinds,
-scores and paths are not shown. Delegated subagents load no extensions and get neither.
+## IPC
 
-## Files and IPC
+`memory:get-state`, `memory:set-config` (`{ enabled }`), `memory:run`, `memory:clear`, and the
+push `memory:changed` (every change, to every client — the handlers do not broadcast for
+themselves). All four are allowed remotely like the rest of settings. Delegated subagents load
+no extensions, so they have no memory.
 
-- `src/main/engine/memory.ts`: model lifecycle, hybrid retrieval, the JEV write/read loops
-  and the session extension.
-- `src/main/engine/memory-jev.ts`: the JEV control plane — prompts, thresholds, formulas.
-- `src/main/engine/memory-tools.ts`: the agent's memory note, `memory_search` /
-  `memory_recent` wording and result formatting.
-- `src/main/engine/memory-store.ts`: SQLite schema, FTS5 index, embeddings, graph
-  edges and the `memory_meta` counters.
-- `src/shared/memory.ts`: persisted configuration and transport types.
-- `runtime/engine/memory.json`: memory mode configuration.
-- `runtime/engine/memory.sqlite`: local canonical memory and graph.
-- `memory:get-state`, `memory:set-config`, `memory:search`, `memory:delete`,
-  `memory:clear`: transport-neutral IPC methods.
+## Where this differs from Codex, on purpose or not yet
 
-The memory mode selector is separate from the Decision engine selector. Selecting JEV
-memory does not turn on browser or computer control; it requires the dedicated memory
-scenario instead. Selecting Semantic memory prompts before downloading the model, and
-refusing leaves Default memory selected.
+- **State** is a JSON file and in-process flags, not a state database with leases and a global
+  lock: there is one FastVibe process, so there is no second worker to exclude.
+- **Triggers**: Codex starts a pass when a root session starts. FastVibe runs one on a timer, so
+  it takes at most 2 conversations per pass but passes come every 15 minutes.
+- **Stage-1 input** is rendered text, not Codex's serialized response items, and a tool result
+  and a row are clipped as in Codex's tiered (v2) input rather than not at all.
+- **No shell** for the consolidation agent (above), so Codex's `wc -l` / `rg` hints in the prompt
+  were reworded; the diff is produced here rather than by git.
+- **Not done**: per-chat control (`/memories`), keeping chats that used MCP or web search out of
+  generation, the rate-limit guard, a separate model per stage, memory
+  extensions (`extensions/`), and stage 1's strict output schema (the answer is parsed leniently).
+- **Skills**: the agent may write `skills/<name>/SKILL.md` in the memory folder and the read
+  prompt tells later agents to open them from `MEMORY.md`, but FastVibe does not register them
+  as skills in the skill list.
+- **Scope**: one store for the whole machine, like Codex's; the handbook records which cwd each
+  entry applies to.

@@ -563,18 +563,9 @@ export function createFastVibeApi(t: ApiTransport) {
     },
     memory: {
       getState: (): Promise<import("./memory").MemoryState> => t.invoke(Ipc.memoryGetState),
-      prepareModel: (): Promise<import("./memory").MemoryState> => t.invoke(Ipc.memoryPrepareModel),
-      setConfig: (patch: Partial<import("./memory").MemoryConfig>): Promise<import("./memory").MemoryState> =>
+      setConfig: (patch: Partial<Omit<import("./memory").MemoryConfig, "model">> & { model?: import("./types").EngineModel | null }): Promise<import("./memory").MemoryState> =>
         t.invoke(Ipc.memorySetConfig, patch),
-      search: (request: import("./memory").MemorySearchRequest): Promise<import("./memory").MemorySearchResult> =>
-        t.invoke(Ipc.memorySearch, request),
-      graph: (request: import("./memory").MemoryGraphRequest = {}): Promise<import("./memory").MemoryGraph> =>
-        t.invoke(Ipc.memoryGraph, request),
-      detail: (id: string): Promise<import("./memory").MemoryDetail | null> => t.invoke(Ipc.memoryDetail, { id }),
-      maintain: (): Promise<import("./memory").MemoryState> => t.invoke(Ipc.memoryMaintain),
-      restore: (id: string): Promise<import("./memory").MemoryState> => t.invoke(Ipc.memoryRestore, { id }),
-      setPinned: (id: string, pinned: boolean): Promise<import("./memory").MemoryState> => t.invoke(Ipc.memorySetPinned, { id, pinned }),
-      delete: (id: string): Promise<import("./memory").MemoryState> => t.invoke(Ipc.memoryDelete, { id }),
+      run: (): Promise<import("./memory").MemoryState> => t.invoke(Ipc.memoryRun),
       clear: (): Promise<import("./memory").MemoryState> => t.invoke(Ipc.memoryClear),
       onChanged: (listener: (state: import("./memory").MemoryState) => void): (() => void) =>
         t.subscribe(Ipc.memoryChanged, listener),

@@ -25,7 +25,6 @@ const { createRequire } = require("node:module");
  * as `package -> dependency`. Anything not listed here is a real gap.
  */
 const REMOVED_ON_PURPOSE = {
-  "@huggingface/transformers": ["onnxruntime-web"],
 };
 
 function loadAsar() {

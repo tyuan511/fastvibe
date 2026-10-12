@@ -3,8 +3,7 @@
  * `src/main/engine/decision/`. `off` keeps browser use on the `browser_*` tools the main
  * model drives and every other scenario on its default path; `jev` turns on each scenario
  * whose switch is set: the `browser_task` loop (`browserControl`), the `computer_task`
- * loop (`computerControl`), the `batch_decide` tool (`batchDecide`) and enhanced
- * memory (`memoryControl`).
+ * loop (`computerControl`) and the `batch_decide` tool (`batchDecide`).
  * There is no secret in this shape — Jev's key lives in the agent `.env` under
  * `JEV_KEY_ENV`, never here — so it is safe to hand a renderer or a remote client whole.
  */
@@ -24,8 +23,6 @@ export type DecisionModelConfig = {
   computerControl: boolean;
   /** Offer `batch_decide` to the main agent. Absent means off. */
   batchDecide: boolean;
-  /** Let Jev make typing, relation, consolidation and retrieval decisions for enhanced memory. */
-  memoryControl?: boolean;
 };
 
 /** The fixed `.env` variable holding the Jev API key; callers never choose a variable name. */
@@ -42,7 +39,7 @@ export const DEFAULT_DECISION_MODEL: DecisionModelConfig = {
 };
 
 /** The per-scenario switches, in the order 设置 → 决策引擎 › 应用场景 lists them. */
-export const DECISION_SCENARIOS = ["browserControl", "computerControl", "batchDecide", "memoryControl"] as const;
+export const DECISION_SCENARIOS = ["browserControl", "computerControl", "batchDecide"] as const;
 export type DecisionScenario = (typeof DECISION_SCENARIOS)[number];
 
 /**
@@ -69,7 +66,6 @@ export function decisionModelConfigOf(value: unknown): DecisionModelConfig {
     browserControl: typeof record.browserControl === "boolean" ? record.browserControl : kind === "jev",
     computerControl: record.computerControl === true,
     batchDecide: record.batchDecide === true,
-    ...(typeof record.memoryControl === "boolean" ? { memoryControl: record.memoryControl } : {}),
   };
 }
 

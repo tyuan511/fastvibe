@@ -142,6 +142,7 @@ import { SubagentManager } from "../engine/subagents";
 import { reduceSubagent } from "@shared/subagent-state";
 import { SubagentControl } from "./subagent-control";
 import { resolveSubagentModel } from "./subagent-model";
+import { runMemoryAgent } from "./memory-agent";
 import { SubagentTurnRunner, type SubagentHostRequest, type SubagentHostResponse } from "./process-manager-subagent";
 import { THINKING_EFFORT_LEVELS, type SubagentConfig, type SubagentDraft, type GatewayBalanceResult, type GatewayKind } from "@shared/types";
 import { isAbortOutcome } from "@shared/abort";
@@ -558,9 +559,6 @@ export class PiProcessManager {
   constructor(paths: FastVibePaths = getFastVibePaths(), memory: MemoryHost = new DisabledMemoryHost()) {
     this.#paths = paths;
     this.#memory = memory;
-    this.#memory.setSystemTwoGenerator((conversationId, model, system, user, signal) =>
-      this.completeDecisionText(conversationId, system, user, signal, model),
-    );
     this.#catalog = new ConversationCatalog(this.#paths.conversationsFile, this.#paths.scratchDir);
     // Every catalog change, from one place. The alternative was announcing at each of
     // the dozen methods below that mutate it, which is how a new one silently stops
@@ -575,6 +573,13 @@ export class PiProcessManager {
     this.#skills = new SkillManager(this.#paths.agentDir, this.#paths.skillsDir);
     this.#extensions = new ExtensionManager(this.#paths.agentDir, this.#paths.scratchDir);
     this.#subagentManager = new SubagentManager(this.#paths);
+    this.#memory.attach({
+      conversations: () => this.#catalog.list(),
+      loadBranch: (file, cwd) => loadConversationTranscriptBranch(file, cwd),
+      complete: (system, user, signal, model) => this.#completeMemoryText(system, user, signal, model),
+      inputBudgetChars: (model) => this.#memoryInputBudget(model),
+      runAgent: (request) => this.#runMemoryAgent(request),
+    });
     this.#dagStore = new DagStore(this.#paths.dagFile);
     this.#dagStore.onChange = (conversationId, graph) => this.#emit({ type: "dag_changed", conversationId, graph });
     this.#dagScheduler = new DagScheduler(this.#dagStore, (args) => this.runDagNode(args), {
@@ -2226,12 +2231,12 @@ export class PiProcessManager {
    * is the point — the helper returns `{"text": …}` and nothing it could think about
    * changes that; with reasoning on it only cost more time per field.
    */
-  async completeDecisionText(conversationId: string, system: string, user: string, signal?: AbortSignal, modelOverride?: EngineModel): Promise<string> {
+  async completeDecisionText(conversationId: string, system: string, user: string, signal?: AbortSignal): Promise<string> {
     await this.#ensureReady();
     const registry = this.#models;
     if (!registry) throw new Error(uiText("模型尚未就绪", "Model is not ready"));
     const { session } = await this.#sessionFor(conversationId);
-    const model = modelOverride ? registry.find(modelOverride.provider, modelOverride.id) : session.model;
+    const model = session.model;
     if (!model || !registry.hasConfiguredAuth(model)) {
       throw new Error(uiText("还没有可用的模型", "No model is available"));
     }
@@ -2242,6 +2247,57 @@ export class PiProcessManager {
     );
     return response.content.map((block) => (block.type === "text" ? block.text : "")).join("").trim();
   }
+  /**
+   * The model background work (memory) runs on: the user's default model, else the one
+   * the active chat is on, else whatever this install can authenticate. It belongs to no
+   * conversation, so it must not depend on one being open.
+   */
+  #backgroundModel(pinned?: EngineModel): ReturnType<ModelRegistry["find"]> {
+    const registry = this.#models;
+    if (!registry) return undefined;
+    // A model the user chose for the job, when it can still be authenticated; else the usual order.
+    const chosen = pinned ? registry.find(pinned.provider, pinned.id) : undefined;
+    if (chosen && registry.hasConfiguredAuth(chosen)) return chosen;
+    const preferred = readDefaultModel(this.#paths);
+    const activeId = this.#catalog.activeId;
+    const active = activeId ? this.#sessions.get(activeId)?.session.model : undefined;
+    return resolveSubagentModel(
+      registry,
+      preferred ? `${preferred.provider}/${preferred.id}` : undefined,
+      active ? `${active.provider}/${active.id}` : undefined,
+    ) ?? registry.getAvailable()[0];
+  }
+
+  /** Codex gives one extraction 70% of the model's window; three characters a token is a safe floor for mixed CJK text. */
+  #memoryInputBudget(pinned?: EngineModel): number {
+    const window = this.#backgroundModel(pinned)?.contextWindow;
+    return window && window > 0 ? Math.min(1_500_000, Math.floor(window * 0.7 * 3)) : 450_000;
+  }
+
+  async #completeMemoryText(system: string, user: string, signal?: AbortSignal, pinned?: EngineModel): Promise<string> {
+    await this.#ensureReady();
+    const registry = this.#models;
+    const model = this.#backgroundModel(pinned);
+    if (!registry || !model) throw new Error(uiText("还没有可用的模型", "No model is available"));
+    const response = await registry.complete(
+      model,
+      { systemPrompt: system, messages: [{ role: "user", content: user, timestamp: Date.now() }] },
+      // A raw note and a recap have no size limit in Codex's prompt, so they get room.
+      { maxTokens: Math.min(16_000, model.maxTokens || 16_000), cacheRetention: "none", timeoutMs: 180_000, ...(signal ? { signal } : {}) },
+    );
+    if (response.stopReason === "error" || response.stopReason === "aborted") {
+      throw new Error(response.errorMessage || uiText("模型没有返回结果", "The model returned nothing"));
+    }
+    return response.content.map((block) => (block.type === "text" ? block.text : "")).join("").trim();
+  }
+
+  async #runMemoryAgent(request: { cwd: string; task: string; signal?: AbortSignal; model?: EngineModel }): Promise<void> {
+    await this.#ensureReady();
+    if (!this.#runtime || !this.#models) throw new Error(uiText("模型尚未就绪", "Model is not ready"));
+    await mkdir(request.cwd, { recursive: true });
+    await runMemoryAgent({ runtime: this.#runtime, models: this.#models, paths: this.#paths, model: this.#backgroundModel(request.model) }, request);
+  }
+
   /** Generate one concise commit subject without adding anything to the conversation. */
   async generateCommitMessage(files: CommitFileMaterial[], conversationId?: string): Promise<string> {
     if (files.length === 0) throw new Error(uiText("没有要提交的改动", "No changes to commit"));
@@ -3158,7 +3214,7 @@ export class PiProcessManager {
       extensionFactories: [{
         name: "fastvibe-memory",
         hidden: true,
-        factory: this.#memory.extension(conversation.id, conversation.project ?? cwd, () => this.#promptPreparations.signal(conversation.id)),
+        factory: this.#memory.extension(),
       }, {
         // MCP tools are registered through an extension factory rather than the
         // SDK's one-shot `customTools` option. That lets session.reload() rebuild
@@ -3281,25 +3337,8 @@ export class PiProcessManager {
       // if this conversation is later deleted.
       if (event.type === "message_end" && isAssistantEngineMessage(event.message)) {
         this.#recordUsage(event.message, result.session, now);
-      }
-      if (event.type === "message_end" && (isUserEngineMessage(event.message) || isAssistantEngineMessage(event.message))) {
-        const role = isUserEngineMessage(event.message) ? "user" : "assistant";
-        const text = messageText(event.message);
-        if (text) {
-          const messageRef: unknown = event.message;
-          queueMicrotask(() => {
-            const entry = [...result.session.sessionManager.getEntries()]
-              .reverse()
-              .find((item) => item.type === "message" && item.message === messageRef);
-            void this.#memory.capture({
-              conversationId: conversation.id,
-              project: conversation.project ?? cwd,
-              role,
-              content: text,
-              sourceEntryId: entry?.type === "message" ? entry.id : undefined,
-            }).catch(() => undefined);
-          });
-        }
+        // A reply that cites memory is how consolidation learns which conversations were used.
+        this.#memory.noteReply(messageText(event.message));
       }
       // A model switch is announced when the new model actually starts answering, not
       // when it was picked: `#announceModelUse` compares this reply against the last

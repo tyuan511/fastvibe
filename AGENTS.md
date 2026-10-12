@@ -33,6 +33,9 @@ Runtime data lives under the app userData directory:
     agent/models.json    the only provider config the SDK reads (custom + builtin providers)
     reasoning.json       thinking-block start/end times Main timed from the live stream
     usage-ledger.jsonl   append-only record of finalized turns, so 使用统计 survives deletion
+    memory.json          长期记忆开关（`{ version: 2, enabled }`）
+    memory-state.json    记忆整理的账本：每个对话提取出了什么、使用次数、重试状态
+    memories/            智能体读取的记忆文件夹：memory_summary.md、MEMORY.md、rollout_summaries/…
     wt                   git worktrees for isolated conversations
     scratch/<conversationId>   workspace for one conversation not bound to a project
 ```
@@ -1594,6 +1597,40 @@ Deliberately deferred. Plugin authors are expected to degrade via `ctx.mode` /
    already dependencies.
 4. **`registerMarkdownTransformer`, `setEditorComponent`, `addAutocompleteProvider`,
    theme selection** — no-ops.
+
+## 长期记忆（`engine/memory*.ts`，详见 `docs/memory.md`）
+
+照搬 Codex 的文件式记忆（`codex-rs/memories`），**一个开关加一个模型选项**（设置 → 长期记忆，默认关；模型留空 = 跟随默认模型，阶段 1 和阶段 2 共用，Codex 是分开的两项；选的模型不可用时回退到默认模型）。关 = 不读、
+不写、不注入；文件留在磁盘上，直到用户点「清除」。原来的三种模式（默认 / 语义 / JEV 增强，SQLite + embedding +
+关系图）已整体移除，`removeLegacyMemory` 在启动时删掉遗留的 `memory.sqlite` 和模型缓存。
+
+- **四份提示词是 Codex 原文**，放在 `resources/memories/`（`stage_one_system.md`、`stage_one_input.md`、
+  `consolidation.md`、`read_path.md`，Apache-2.0，`NOTICE.md` 记着来源提交和改过的几行），运行时按路径读
+  （`memory-templates.ts`，和内置扩展/技能同一套 `FASTVIBE_RESOURCES_PATH`，打包要有 `extraResources` 那一条）。
+  改它们就是改每个用户的记忆长什么样；想和上游对齐就重新抓原文，不要凭印象改写。
+- **参数是 Codex 的默认值**（`memory-plan.ts`）：对话文件安静 6 小时、不超过 10 天才读；每轮 2 个；
+  整合取前 256 个；30 天没人用的丢掉。看的是转写**文件的 mtime**，不是 catalog 的 `updatedAt`（改名也会动它）。
+- **阶段 1**：模型读一个对话，返回 `{ raw_memory, rollout_summary, rollout_slug }`；笔记或回顾为空 = 没什么
+  值得记的，记下来、转写不变就不再问。读入和输出两端都过 `redactSecrets`（`[REDACTED_SECRET]`）。
+- **阶段 2**：把选中的写成 `raw_memories.md` 和 `rollout_summaries/`，再起一个**一次性 agent 会话**（工作目录
+  就是记忆文件夹，工具只有 read/edit/write/grep/find/ls，没有 bash、没有扩展，medium 推理），用 Codex 的
+  `consolidation.md` 当唯一一条用户消息。Codex 用 git 仓库给它 `phase2_workspace_diff.md`；这里没有 git 可依赖，
+  所以文件夹旁边留一份**基线副本**（`memories-baseline/`），差异自己生成（`memory-workspace.ts`，Myers 行差异，
+  `git apply` 验证过）。文件夹和基线一致且产物有效 = 不唤醒 agent。
+- **产物校验**：`MEMORY.md` 是文件、`memory_summary.md` 第一行恰好是 `v1`、没有符号链接（会被删掉）。不过关
+  就报错、**不推进基线**，下一轮 agent 会再看到同一份差异。
+- **读取**：隐藏扩展在 `before_agent_start` 把 `read_path.md`（含摘要全文，上限 20,000 字符）追加到当轮系统提示，
+  不进转写。没有记忆工具，智能体用普通的 `read` / `grep`。
+- **使用次数靠引用块**：read_path 要求用了记忆的回复末尾带 `<oai-mem-citation>`，里面的 `rollout_ids`
+  （就是对话 id）经 `MemoryManager.noteReply` 记一次使用，决定整合时谁留下。引用块对读者没用，
+  `stripMemoryCitation`（`shared/memory-citation.ts`）在 Main 映射转写时和渲染层 markdown 里都会去掉，
+  流式时连半截标签也不露。
+- **纯逻辑与副作用分开**：`memory-plan.ts` / `memory-transcript.ts` / `memory-templates.ts` / `memory-workspace.ts`
+  只碰文件或不碰，`memory.ts` 的 `MemoryManager` 通过 `MemoryRuntime`（目录、转写、模型、agent）与引擎对话，
+  所以 `test/memory-*.test.ts` 能用假的运行时完整跑一遍。
+- **新旧配置**：没有 `version: 2` 的 `memory.json`（旧版本一律常开）读作「关」，不会静默开始把对话发给模型。
+- **和 Codex 不一样的地方**写在 `docs/memory.md` 末尾：无状态数据库/租约、定时触发而非会话启动触发、阶段 1
+  输入是渲染文本、整合 agent 没有 shell、没做 `/memories` 单对话开关和额度保护。
 
 ## MCP（`src/main/pi/mcp-manager.ts`）
 

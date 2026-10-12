@@ -155,18 +155,11 @@ const ALLOWED = new Set<string>([
   // which decision model is selected, and whether a key exists, costs nothing.
   Ipc.decisionGetConfig,
   Ipc.decisionKeyState,
-  // Memory data is already local to this FastVibe instance; remote clients may use the
-  // same local index and change its memory mode.
+  // Memory is local to this FastVibe instance; remote clients may switch it, run a pass
+  // and clear it, exactly as the desktop can.
   Ipc.memoryGetState,
-  Ipc.memoryPrepareModel,
   Ipc.memorySetConfig,
-  Ipc.memorySearch,
-  Ipc.memoryGraph,
-  Ipc.memoryDetail,
-  Ipc.memoryMaintain,
-  Ipc.memoryRestore,
-  Ipc.memorySetPinned,
-  Ipc.memoryDelete,
+  Ipc.memoryRun,
   Ipc.memoryClear,
   // 图和它的操作都在同一台机器上，手机能看、能取消、能重试，和桌面一样。
   Ipc.dagList,

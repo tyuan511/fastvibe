@@ -26,7 +26,6 @@ import {
   previewFor,
 } from "./preview-data";
 import { websiteFixture, type WebsiteLanguage } from "./website-fixtures";
-import { MEMORY_FIXTURE_COUNTS, memoryDetailFixture, memoryGraphFixture } from "./memory-fixtures";
 import { setTranscriptDisplay } from "@/lib/transcript-display";
 
 /**
@@ -800,83 +799,41 @@ const api = {
     setKey: async (key: string) => ({ jev: Boolean(key.trim()) }),
     onChanged: () => () => undefined,
   },
-  // `?memory=semantic|jev` picks the mode 设置 → 长期记忆 opens on, `?memoryModel=missing|error`
-  // the embedding model's state. setConfig echoes the patch; prepareModel plays a ~3s download.
+  // `?memory=on|running|ready` picks what 设置 → 长期记忆 opens on; run plays a short pass.
   memory: (() => {
     const mode = params.get("memory");
-    const modelParam = params.get("memoryModel");
-    const TOTAL = 118 * 1024 ** 2;
     const listeners = new Set<(state: MemoryState) => void>();
-    const archived = new Set<string>();
-    const pinned = new Set<string>();
-    const archiveTime = Date.now();
     let state: MemoryState = {
-      config: {
-        enabled: true,
-        mode: mode === "semantic" || mode === "jev" ? mode : "default",
-        autoCapture: true,
-        embeddingProvider: "local-minilm-multilingual-q8",
-        maxResults: 8,
-        maxContextChars: 4000,
-        autoMaintain: true,
-        temporaryRetentionDays: 90,
-        archiveRetentionDays: 30,
-        maxActiveItems: 10_000,
-        ...(mode === "jev" ? { systemTwoModel: { provider: MODELS[0].provider, id: MODELS[0].id } } : {}),
-      },
-      model: {
-        provider: "local-minilm-multilingual-q8",
-        status: modelParam === "error" ? "error" : modelParam === "missing" || !(mode === "semantic" || mode === "jev") ? "not-installed" : "ready",
-        ...(modelParam === "error" ? { error: "fetch failed: ECONNRESET" } : {}),
-      },
-      // `?memory=jev` also fills the index, so 关系图 has a graph to draw.
-      ...(mode === "jev" ? MEMORY_FIXTURE_COUNTS : { items: 0, edges: 0 }),
+      config: { enabled: mode === "on" || mode === "running" || mode === "ready" },
+      phase: mode === "running" ? "extracting" : "idle",
+      conversations: mode === "ready" ? 12 : 0,
+      pending: mode === "ready" ? 2 : 0,
+      ready: mode === "ready",
+      ...(mode === "ready" ? { lastRunAt: Date.now() - 3_600_000 } : {}),
+      folder: "/Users/you/Library/Application Support/FastVibe/runtime/engine/memories",
     };
     const emit = (next: MemoryState): MemoryState => {
-      state = { ...next, maintenance: { active: next.items - archived.size, archived: archived.size, overBudget: 0, ...next.maintenance } };
+      state = next;
       for (const listener of listeners) listener(state);
       return state;
     };
-    const download = async (): Promise<MemoryState> => {
-      for (let step = 0; step <= 30; step += 1) {
-        const progress = step / 30;
-        emit({ ...state, model: { ...state.model, status: "downloading", progress, loadedBytes: Math.round(TOTAL * progress), totalBytes: TOTAL, error: undefined } });
-        await new Promise((settle) => window.setTimeout(settle, 100));
-      }
-      return emit({ ...state, model: { provider: state.model.provider, status: "ready", progress: 1 } });
-    };
     return {
       getState: async () => state,
-      prepareModel: async () => (state.model.status === "ready" ? state : download()),
       setConfig: async (patch: Record<string, unknown>) => {
-        const config = { ...state.config, ...patch } as MemoryState["config"];
-        if (patch.systemTwoModel === null) delete config.systemTwoModel;
-        const next = emit({ ...state, config });
-        return config.mode !== "default" && next.model.status !== "ready" ? download() : next;
+        const { model, ...rest } = patch;
+        const config = { ...state.config, ...rest } as MemoryState["config"];
+        if (model === null) delete config.model;
+        else if (model) config.model = model as MemoryState["config"]["model"];
+        return emit({ ...state, config });
       },
-      search: async () => ({ items: [], mode: state.config.mode, usedEmbedding: false, usedJev: false }),
-      graph: async (request: { project?: string; status?: "active" | "archived"; offset?: number } = {}) => {
-        if (state.items === 0) return { nodes: [], edges: [], projects: [], total: 0 };
-        const graph = memoryGraphFixture(request.project);
-        const nodes = graph.nodes.filter((node) => archived.has(node.id) === (request.status === "archived"));
-        const ids = new Set(nodes.map((node) => node.id));
-        return { ...graph, nodes: nodes.slice(request.offset ?? 0, (request.offset ?? 0) + 300), edges: graph.edges.filter((edge) => ids.has(edge.sourceId) && ids.has(edge.targetId)), total: nodes.length };
+      run: async () => {
+        emit({ ...state, phase: "extracting" });
+        await new Promise((settle) => window.setTimeout(settle, 800));
+        emit({ ...state, phase: "consolidating" });
+        await new Promise((settle) => window.setTimeout(settle, 800));
+        return emit({ ...state, phase: "idle", conversations: 12, pending: 0, ready: true, lastRunAt: Date.now() });
       },
-      detail: async (id: string) => {
-        const detail = state.items === 0 ? null : memoryDetailFixture(id);
-        return detail ? { ...detail, item: { ...detail.item, pinned: pinned.has(id), ...(archived.has(id) ? { archivedAt: archiveTime, archiveReason: "expired" as const } : {}) } } : null;
-      },
-      maintain: async () => {
-        if (state.items > 0) for (const id of ["m03", "m09"]) if (!pinned.has(id)) archived.add(id);
-        return emit({ ...state, maintenance: { active: state.items - archived.size, archived: archived.size, overBudget: 0, lastRunAt: Date.now(), archivedLastRun: archived.size, deletedLastRun: 0 } });
-      },
-      restore: async (id: string) => {
-        archived.delete(id); pinned.add(id);
-        return emit({ ...state, maintenance: { ...state.maintenance!, active: state.items - archived.size, archived: archived.size } });
-      },
-      setPinned: async (id: string, value: boolean) => { if (value) pinned.add(id); else pinned.delete(id); return emit(state); },
-      delete: async () => state,
-      clear: async () => { archived.clear(); pinned.clear(); return emit({ ...state, items: 0, edges: 0, maintenance: { active: 0, archived: 0, overBudget: 0 } }); },
+      clear: async () => emit({ ...state, phase: "idle", conversations: 0, pending: 0, ready: false, lastRunAt: undefined }),
       onChanged: (listener: (state: MemoryState) => void) => {
         listeners.add(listener);
         return () => listeners.delete(listener);

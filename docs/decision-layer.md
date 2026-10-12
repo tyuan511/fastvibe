@@ -543,10 +543,6 @@ computer use 和 browser use 是同一类任务：每一步都从窗口里一组
 - **提示词约束**写在工具的 `promptGuidelines`：何时用、何时不用、`review` 必须自己复核、不得仅凭结果做不可逆操作、条目里不放凭证。
 - 代码：`resources/extensions/batch-decide.ts`（工具面，按回合读开关）→ `__fastvibeBatchDecide` → `src/main/pi/decision-scenarios.ts`。
 
-### 7.12 增强记忆：`memoryControl`
-
-长期记忆有一个不依赖模型的默认模式；用户选择 JEV 增强记忆时，必须先选择 Jev、保存 API key，并在本页的应用场景中勾选增强记忆（`memoryControl`）。该开关只授权记忆的类型标注、关系、整理和检索判断（按 Jev-Mem 论文不做准入过滤，每条观察都保留），不会打开浏览器或电脑操控。记忆模块在 `memory.write`、`memory.relation`、`memory.maintenance` 和 `memory.read.route` / `.score` / `.assess` 上使用同一决策运行时，请求构造与阈值集中在 `src/main/engine/memory-jev.ts`（见 `docs/memory.md`）；Jev 不可用时回到本地文本检索。
-
 ### 7.7 `subagent.role`（未来）
 
 未来可在 `resources/extensions/subagent/index.ts` 里，把“选哪个角色”变成 `decide("subagent.role", …)`。注入点现成——和 `questions` / `runSubagent` / `createWorktree` 同一个 `#extensionUi()`（`src/main/pi/process-manager.ts`）。

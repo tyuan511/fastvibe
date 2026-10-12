@@ -29,8 +29,8 @@ Download the latest installer from [GitHub Releases](https://github.com/tyuan511
 - Goal mode for long-running objectives.
 - FastVibe and OpenAI-compatible providers, model protocol settings, and OAuth login.
 - MCP, skills, todos, subagents, Git worktrees, and usage statistics.
-- Optional Jev decision engine for browser control, computer control, batch decisions, and enhanced memory.
-- Long-term memory in three modes — default, semantic, and JEV-enhanced — stored locally, captured automatically, and injected as context.
+- Optional Jev decision engine for browser control, computer control, and batch decisions.
+- Optional long-term memory, after Codex: finished conversations are distilled into local Markdown files, and the agent reads them on demand.
 - File preview, terminal, browser use, computer use, and Git review side panes.
 - Remote web / mobile clients and SSH connections to headless Linux Agents.
 - Themes, UI scaling, customizable shortcuts, and automatic updates.
@@ -44,19 +44,12 @@ Settings → Decision engine can put **Jev (TypeSafe)** behind a set of “what 
 | Browser control | The decision model drives clicking and typing in the browser (`browser_task`) |
 | Computer control | The decision model drives operations in desktop windows (`computer_task`) |
 | Batch decisions | The main agent gains the `batch_decide` tool |
-| Enhanced memory | Memory typing, relations, consolidation, and retrieval go to the decision model |
 
 When it is off every scenario takes its default path: the main model calls `browser_*` / `computer_*` directly. Jev serves decision scenarios only — it is not a chat model and never appears in the model list. Its API key stays on this machine and is never handed back to the renderer.
 
 ## Long-term memory
 
-Settings → Memory offers three modes over one local SQLite store:
-
-- **Default memory** — always on, no embedding model, using SQLite full-text retrieval to store and recall conversations.
-- **Semantic memory** — adds a local multilingual embedding model (about 118 MB, downloaded after confirmation).
-- **JEV-enhanced memory** — adds Jev's decision layer on top of the local store for write typing, relations and consolidation, and retrieval routing. Requires Jev to be selected in the decision engine with the “Enhanced memory” scenario checked.
-
-Memory is injected as an ephemeral system-prompt section before each turn and never appended to the transcript; capture happens after a user or final assistant message completes, and thinking blocks, tool results, and sensitive fields are not recorded.
+Settings → Memory is one switch, off by default. When it is on, a conversation that has been quiet for six hours is distilled by the model into a note and a recap, using Codex's own prompts; a background agent then consolidates them into a handbook (`MEMORY.md`) and a compact summary (`memory_summary.md`). Each turn the agent is shown the summary and reads the handbook and recaps on demand. Everything is Markdown on this computer, can be opened from the settings page, and is cleared with one button; turning the switch off stops reading, writing and injecting. Secrets are redacted before anything is stored. See `docs/memory.md`.
 
 ## Relationship with pi
 
@@ -111,7 +104,7 @@ Runtime data is stored in FastVibe's own userData directory:
 | Windows | `%APPDATA%\\FastVibe\\` |
 | Linux | `~/.config/FastVibe/` |
 
-Provider credentials stay in the isolated runtime and are injected into the SDK's in-memory authentication storage. They are not exported to the user's login shell or the in-app terminal. Browser login cookies are stored only in FastVibe's isolated browser session, and Long-term memory lives in the local `runtime/engine/memory.sqlite`: default and semantic modes are entirely local, and only JEV-enhanced memory sends the relevant content to the configured decision model.
+Provider credentials stay in the isolated runtime and are injected into the SDK's in-memory authentication storage. They are not exported to the user's login shell or the in-app terminal. Browser login cookies are stored only in FastVibe's isolated browser session, and long-term memory lives as Markdown files in the local `runtime/engine/memories`. While memory is on, finished conversations are sent to your configured model to be distilled.
 
 ## Project structure
 

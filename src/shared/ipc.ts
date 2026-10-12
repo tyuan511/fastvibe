@@ -251,18 +251,11 @@ export const Ipc = {
   decisionSetKey: "decision:set-key",
   /** 配置变化的广播，不带秘密——Jev key 只在 Main 的 .env 里。 */
   decisionChanged: "decision:changed",
-  /** Long-term memory: model-free default, local semantic retrieval, or JEV control plane. */
+  /** Long-term memory: one switch, a file-based pipeline behind it (docs/memory.md). */
   memoryGetState: "memory:get-state",
-  memoryPrepareModel: "memory:prepare-model",
   memorySetConfig: "memory:set-config",
-  memorySearch: "memory:search",
-  /** 设置 → 长期记忆 → 关系图: nodes and edges to draw, and one memory in full. */
-  memoryGraph: "memory:graph",
-  memoryDetail: "memory:detail",
-  memoryMaintain: "memory:maintain",
-  memoryRestore: "memory:restore",
-  memorySetPinned: "memory:set-pinned",
-  memoryDelete: "memory:delete",
+  /** 立即整理: one extraction/consolidation pass now. */
+  memoryRun: "memory:run",
   memoryClear: "memory:clear",
   memoryChanged: "memory:changed",
   /** 子 agent 任务编排：每个会话的 DAG 图。 */

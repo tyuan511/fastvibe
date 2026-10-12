@@ -95,12 +95,3 @@ test("the batch scenario defaults off and round-trips", () => {
     assert.deepEqual(readDecisionConfig(file), { kind: "jev", browserControl: false, computerControl: false, batchDecide: true });
   });
 });
-
-test("enhanced memory is an explicit Jev scenario", () => {
-  withTempFile((file) => {
-    writeFileSync(file, JSON.stringify({ version: 1, decisionModel: { kind: "jev", browserControl: true } }));
-    assert.equal(readDecisionConfig(file).memoryControl, undefined);
-    writeDecisionConfig(file, { kind: "jev", browserControl: false, computerControl: false, batchDecide: false, memoryControl: true });
-    assert.equal(readDecisionConfig(file).memoryControl, true);
-  });
-});
