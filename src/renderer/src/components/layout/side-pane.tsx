@@ -59,7 +59,7 @@ import { releaseTerminal } from "./side-pane-terminal-registry";
 const SidePaneTerminal = lazy(async () => ({
   default: (await import("./side-pane-terminal")).SidePaneTerminal,
 }));
-import { HAS_CUSTOM_TITLE_BAR, HAS_TRAFFIC_LIGHTS } from "@/lib/platform";
+import { HAS_TRAFFIC_LIGHTS } from "@/lib/platform";
 import { toast } from "sonner";
 import { bindingStateKey, isRemoteProject, projectHasCapability } from "@/lib/remote-project";
 import type { AppCapability } from "@shared/app-protocol";
@@ -110,23 +110,21 @@ function SidebarCollapsedChrome({ onNewChat }: { onNewChat: () => void }): JSX.E
   const newChatShortcut = useShortcutLabel("newChat");
   return (
     <div className="no-drag flex shrink-0 items-center gap-1">
-      {/* With a title bar of its own the sidebar's toggle is up there, on screen at
-          the same time as this row — one control, one place. */}
-      {HAS_CUSTOM_TITLE_BAR ? null : (
-        <IconButton
-          size="icon-sm"
-          variant="ghost"
-          className="text-muted-foreground"
-          label={t("pane.expandSidebar")}
-          shortcut={toggleSidebarShortcut}
-          // Through the layout-aware helper, so a narrow layout opens its drawer
-          // instead of writing the column preference every client of this machine
-          // shares. See `lib/sidebar-visibility.ts`.
-          onClick={() => setSidebarCollapsed(false)}
-        >
-          <HugeiconsIcon strokeWidth={2} icon={PanelLeftOpenIcon} />
-        </IconButton>
-      )}
+      {/* The panel is collapsed from its own top row, which is gone while it is
+          collapsed — so the way back sits here, where the panel is not. */}
+      <IconButton
+        size="icon-sm"
+        variant="ghost"
+        className="text-muted-foreground"
+        label={t("pane.expandSidebar")}
+        shortcut={toggleSidebarShortcut}
+        // Through the layout-aware helper, so a narrow layout opens its drawer
+        // instead of writing the column preference every client of this machine
+        // shares. See `lib/sidebar-visibility.ts`.
+        onClick={() => setSidebarCollapsed(false)}
+      >
+        <HugeiconsIcon strokeWidth={2} icon={PanelLeftOpenIcon} />
+      </IconButton>
       <IconButton
         size="icon-sm"
         variant="ghost"

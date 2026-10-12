@@ -942,11 +942,25 @@ to inset, and a native title bar above an app that already has a top row is two 
 them empty.
 
 So on Windows and Linux FastVibe draws the whole bar itself
-(`components/layout/title-bar.tsx`): the brand, those same three controls, 搜索, and minimise /
-maximise / close — one `h-11` row above the sidebar/main split, whose single switch is
-`HAS_CUSTOM_TITLE_BAR` (`lib/platform.ts`). A bar **spanning the window**, rather than controls
-floated over whichever row happens to reach the top-right corner, is what keeps the window
-controls out of the side pane's tab strip: the split layout below simply starts at y=44.
+(`components/layout/title-bar.tsx`): the brand, 后退 / 前进, and minimise / maximise / close —
+one `h-10` row above the sidebar/main split, whose single switch is `HAS_CUSTOM_TITLE_BAR`
+(`lib/platform.ts`). A bar **spanning the window**, rather than controls floated over whichever
+row happens to reach the top-right corner, is what keeps the window controls out of the side
+pane's tab strip: the split layout below simply starts at y=40. Its height lives in
+`lib/window-chrome.ts`, because the settings overlay starts below it too (`top-10`) and the two
+must not drift.
+
+- **Every control sits on the thing it acts on.** The brand and history — the window's own
+  furniture — ride the bar; 收起侧边栏 and 搜索 are the sidebar's top row, beside the panel they act
+  on. 搜索 is that row's right end on **both** platforms, which is also what keeps it off the path
+  a pointer takes to 最小化. macOS reaches the same arrangement from the other side: its bar is a
+  traffic-light row with no room for a logo, so the brand leads the sidebar's top row there
+  instead (and 收起 / 后退 / 前进 sit in the traffic-light row above it). A brand that moved
+  between the two bars per platform is the one thing that would make the layouts read as
+  different apps.
+- **Windows' own caption metrics.** 46px of hit area per control, squared off and flush to the
+  corner, a fixed px width (the OS does not scale its caption buttons with a font preference), and
+  close as the only one with a colour of its own (`hover:bg-destructive`).
 
 - **Main goes frameless.** `titleBarStyle: "hidden"` (plus `frame: false` on Linux, where the
   window manager is the unpredictable part), so the native bar is gone and ours is the only one.
@@ -960,15 +974,21 @@ controls out of the side pane's tab strip: the split layout below simply starts 
   `lib/platform.ts`.
 - **Chrome flags and the keyboard flag.** `HAS_TRAFFIC_LIGHTS` and `HAS_CUSTOM_TITLE_BAR` describe
   the window around the page; `IS_MAC` describes the modifier key. All three come from the host
-  platform now that the renderer only runs in the desktop window. A layout inset (`pl-22`, the
-  collapsed header's `5.5rem`) reads the chrome flags; a modifier label reads `IS_MAC`.
-- **Nothing the macOS layout keeps in the sidebar is drawn twice.** Where the bar exists, the
-  sidebar's title row and its logo row are gone and the logo/搜索 live in the bar instead;
-  `SidebarCollapsedChrome` drops its toggle and the main header its 展开侧边栏 button, because the
-  bar is on screen in both sidebar states.
-- **The settings pane starts below the bar** (`top-11`) and drops its own traffic-light spacer:
-  the window controls have to stay reachable from settings, and its content must not slide under
-  them.
+  platform now that the renderer only runs in the desktop window. A layout inset (`pl-22` on the
+  sidebar's own row, and the collapsed header's `calc(5.5rem + 8px)` — that row has no floating
+  pane of its own, so it adds back the pane's transparent border) reads the chrome flags; a
+  modifier label reads `IS_MAC`.
+- **The sidebar always draws its top row; only its left end moves.** macOS leads it with the
+  brand (its bar held that); Windows and Linux lead it with 收起侧边栏 (their bar holds the brand
+  and the history instead). Where the bar exists, the sidebar's traffic-light row is not drawn at
+  all.
+- **The way back sits where the panel is not.** 收起侧边栏 lives *in* the sidebar's top row, so
+  collapsing takes the control away with it: 展开侧边栏 therefore appears in the main header — and
+  in `SidebarCollapsedChrome` when the side pane is maximized — on every platform. Both used to be
+  skipped where a title bar exists, back when that bar carried the toggle itself.
+- **The settings pane starts below the bar** (`TITLE_BAR_OFFSET`, `top-10`) and drops its own
+traffic-light spacer: the window controls have to stay reachable from settings, and its content
+must not slide under them.
 - **Preview**: `mock.html?platform=win32` (`src/renderer/src/mock/preview.ts`, which also stubs
   the window API) renders the whole thing in a browser — how the layout was checked without a
   Windows machine.

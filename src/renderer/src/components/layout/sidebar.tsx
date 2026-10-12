@@ -469,8 +469,9 @@ export const Sidebar = memo(function Sidebar({
       className="relative flex h-full min-h-0 w-full flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground"
     >
       {/* The title row exists to sit around macOS' traffic lights; where the window
-          has a title bar of its own, those controls (and the brand under them) are
-          up there instead and the sidebar simply starts. */}
+          has a title bar of its own, those controls are up there instead and the sidebar
+          simply starts. The brand row below is the sidebar's own on every platform — the
+          bar carries the *window's* controls, not the app's identity. */}
       {HAS_CUSTOM_TITLE_BAR ? null : (
         <div className={cn("drag-region flex h-11 shrink-0 items-center gap-0.5", HAS_TRAFFIC_LIGHTS ? "pl-22" : "pl-2")}>
           <IconButton
@@ -532,29 +533,46 @@ export const Sidebar = memo(function Sidebar({
         }}
       >
         <div className={cn("no-drag px-2", HAS_CUSTOM_TITLE_BAR && "pt-2")}>
-          {HAS_CUSTOM_TITLE_BAR ? null : (
-            <div className="flex h-8 items-center justify-between">
-              <div className="flex items-center gap-2 px-2">
-                <AppLogo className="size-5 shrink-0 rounded-md" />
-                <span className="text-sm font-semibold tracking-tight">FastVibe</span>
-              </div>
+          <div className="flex h-8 items-center justify-between">
+            {/* The row leads with whatever this platform has no place else for. macOS keeps
+                the panel controls on its traffic-light row, so the brand leads here; where the
+                window has a bar of its own, the brand is up there and this end is the collapse
+                control — beside the panel it closes, on every platform. */}
+            {HAS_CUSTOM_TITLE_BAR ? (
               <div className="flex items-center gap-0.5">
                 <IconButton
                   size="icon-sm"
                   variant="ghost"
                   className="text-muted-foreground"
-                  label={t("sidebar.search")}
-                  shortcut={searchShortcut}
-                  onClick={() => {
-                    onSearch();
-                    dismissDrawer();
-                  }}
+                  label={t("sidebar.collapseSidebar")}
+                  shortcut={toggleSidebarShortcut}
+                  onClick={() => setSidebarCollapsed(true)}
                 >
-                  <HugeiconsIcon strokeWidth={2} icon={Search01Icon} />
+                  <HugeiconsIcon strokeWidth={2} icon={PanelLeftCloseIcon} />
                 </IconButton>
               </div>
+            ) : (
+              <div className="flex items-center gap-2 px-2">
+                <AppLogo className="size-5 shrink-0 rounded-md" />
+                <span className="text-sm font-semibold tracking-tight">FastVibe</span>
+              </div>
+            )}
+            <div className="flex items-center gap-0.5">
+              <IconButton
+                size="icon-sm"
+                variant="ghost"
+                className="text-muted-foreground"
+                label={t("sidebar.search")}
+                shortcut={searchShortcut}
+                onClick={() => {
+                  onSearch();
+                  dismissDrawer();
+                }}
+              >
+                <HugeiconsIcon strokeWidth={2} icon={Search01Icon} />
+              </IconButton>
             </div>
-          )}
+          </div>
 
           <div className={cn("space-y-0.5", HAS_CUSTOM_TITLE_BAR ? null : "mt-1")}>
             <button

@@ -4,16 +4,11 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import {
   ArrowLeft01Icon,
   ArrowRight01Icon,
-  PanelLeftCloseIcon,
-  PanelLeftOpenIcon,
-  Search01Icon,
-} from "@hugeicons/core-free-icons";
-import { AppLogo } from "@/components/app-logo";
+} from "@hugeicons/core-free-icons";import { AppLogo } from "@/components/app-logo";
 import { IconButton } from "@/components/icon-button";
 import { useHistoryNav } from "@/lib/use-history-nav";
-import { useShortcutLabel } from "@/lib/use-shortcuts";
 import { cn } from "@/lib/utils";
-import { setSidebarCollapsed, useSidebarCollapsed } from "@/lib/sidebar-visibility";
+import { TITLE_BAR_HEIGHT } from "@/lib/window-chrome";
 
 /**
  * The window's title bar on Windows and Linux.
@@ -21,39 +16,36 @@ import { setSidebarCollapsed, useSidebarCollapsed } from "@/lib/sidebar-visibili
  * macOS hands its traffic lights to the app as an overlay (`hiddenInset`) and the
  * sidebar's first row is built around them; there is no such thing to inset on the
  * other two, where a native title bar above the app's own top row is two bars with
- * one of them empty. So the window there is frameless and this is the whole bar:
- * the brand that the sidebar's logo row used to carry, the sidebar's controls, and
- * the window controls the OS no longer draws — the same row, on all three.
+ * one of them empty. So the window there is frameless and this is the whole bar.
+ *
+ * It carries what the OS's own bar would have carried — the brand, and history — plus the
+ * window controls the OS no longer draws. The *panel* controls are not here: 收起侧边栏 and
+ * 搜索 live in the sidebar's top row, next to the panel they act on, and macOS' equivalent
+ * row (its traffic-light row) holds the same three the same way. A brand that moved between
+ * the two bars per platform is the one thing that would make the layouts read as different
+ * apps, and 搜索 staying out of the top-right corner keeps it off the path a pointer takes to
+ * 最小化.
  *
  * Everything is one drag region except the controls themselves, so the bar can be
  * moved from anywhere between them.
  */
-export function TitleBar({ onSearch }: { onSearch: () => void }): JSX.Element {
+export function TitleBar(): JSX.Element {
   const { t } = useTranslation("app");
-  const sidebarCollapsed = useSidebarCollapsed();
-  const toggleSidebarShortcut = useShortcutLabel("toggleSidebar");
-  const searchShortcut = useShortcutLabel("commandPalette");
   const { canBack, canForward, back, forward } = useHistoryNav();
 
   return (
-    <div className="drag-region flex h-11 shrink-0 items-center justify-between border-b border-sidebar-border bg-sidebar pr-1 pl-4">
+    <div
+      className={cn(
+        "drag-region flex shrink-0 items-center justify-between border-b border-sidebar-border bg-sidebar pl-3",
+        TITLE_BAR_HEIGHT,
+      )}
+    >
       <div className="no-drag flex min-w-0 items-center gap-3">
         <div className="flex shrink-0 items-center gap-2">
           <AppLogo className="size-5 shrink-0 rounded-md" />
-          <span className="text-sm font-semibold tracking-tight">FastVibe</span>
+          <span className="truncate text-sm font-semibold tracking-tight">FastVibe</span>
         </div>
-        <span className="h-4 w-px shrink-0 bg-sidebar-border" aria-hidden />
         <div className="flex shrink-0 items-center gap-0.5">
-          <IconButton
-            size="icon-sm"
-            variant="ghost"
-            className="text-muted-foreground"
-            label={sidebarCollapsed ? t("workspace.expandSidebar") : t("sidebar.collapseSidebar")}
-            shortcut={toggleSidebarShortcut}
-            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-          >
-            <HugeiconsIcon strokeWidth={2} icon={sidebarCollapsed ? PanelLeftOpenIcon : PanelLeftCloseIcon} />
-          </IconButton>
           <IconButton
             size="icon-sm"
             variant="ghost"
@@ -77,25 +69,18 @@ export function TitleBar({ onSearch }: { onSearch: () => void }): JSX.Element {
         </div>
       </div>
 
-      <div className="no-drag flex h-full shrink-0 items-center">
-        <IconButton
-          size="icon-sm"
-          variant="ghost"
-          className="mr-2 text-muted-foreground"
-          label={t("sidebar.search")}
-          shortcut={searchShortcut}
-          onClick={onSearch}
-        >
-          <HugeiconsIcon strokeWidth={2} icon={Search01Icon} />
-        </IconButton>
-        <WindowControls />
-      </div>
+      <WindowControls />
     </div>
   );
 }
 
-/** Windows' own button metrics: 46px of hit area, squared off, flush to the corner. */
-const CONTROL_CLASS = "no-drag flex h-full w-11 items-center justify-center text-muted-foreground transition-colors";
+/**
+ * Windows' own caption-button metrics: 46px of hit area, squared off, flush to the
+ * corner. The width is a fixed px value on purpose — this row stands in for chrome the
+ * OS draws, and Windows does not scale its caption buttons with a font preference.
+ * Close is the only one with a colour of its own, exactly as the platform has it.
+ */
+const CONTROL_CLASS = "no-drag flex h-full w-[46px] items-center justify-center text-muted-foreground transition-colors";
 
 /**
  * Minimise / maximise / close, drawn by us because the window has no frame left to

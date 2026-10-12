@@ -24,6 +24,7 @@ import type { ThemeMode } from "@/lib/themes";
 import { UI_FONT_SIZE_MAX, UI_FONT_SIZE_MIN, UI_FONT_SIZE_STEP } from "@/lib/themes";
 import { readSidebarWidth } from "@/lib/sidebar-width";
 import { HAS_CUSTOM_TITLE_BAR, HAS_TRAFFIC_LIGHTS, HAS_VIBRANCY } from "@/lib/platform";
+import { TITLE_BAR_OFFSET } from "@/lib/window-chrome";
 import { cn } from "@/lib/utils";
 import { ProvidersSettings } from "./providers-settings";
 import { ArchivedSettings, type DeleteConversationsResult } from "./archived-settings";
@@ -143,7 +144,7 @@ export function SettingsDialog({
   if (!open) return null;
 
   return (
-    <div data-settings-overlay className={cn("fixed inset-x-0 bottom-0 z-50 flex bg-background", HAS_CUSTOM_TITLE_BAR ? "top-11" : "top-0")}>
+    <div data-settings-overlay className={cn("fixed inset-x-0 bottom-0 z-50 flex bg-background", HAS_CUSTOM_TITLE_BAR ? TITLE_BAR_OFFSET : "top-0")}>
       <aside
         className={cn(
           "floating-pane relative flex shrink-0 flex-col border-r border-border bg-sidebar",

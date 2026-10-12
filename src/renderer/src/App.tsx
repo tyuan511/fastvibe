@@ -1746,7 +1746,7 @@ export function App(): JSX.Element {
       {/* Windows and Linux draw the window's own bar here, above the split, so the
           controls the OS used to provide are never missing and never fight the
           sidebar or the right pane for the window's top-right corner. */}
-      {HAS_CUSTOM_TITLE_BAR ? <TitleBar onSearch={() => setCommandOpen(true)} /> : null}
+      {HAS_CUSTOM_TITLE_BAR ? <TitleBar /> : null}
       {/* Draws nothing; it is where the draft's debounced write lives, outside the
           composer's slot so a parked approval does not take it down with it. */}
       <DraftKeeper />
@@ -1798,29 +1798,31 @@ export function App(): JSX.Element {
             <motion.header
               initial={false}
               // Expanded: the collapse control lives on the sidebar, next to the
-              // traffic lights — or in the window's title bar, where there is one.
-              // Collapsed: inset this bar on macOS so the expand control, title and
-              // lights share one vertically centred row.
-              animate={{ paddingLeft: sidebarCollapsed && HAS_TRAFFIC_LIGHTS ? "5.5rem" : "1rem" }}
+              // traffic lights. Collapsed: inset this bar on macOS so the expand
+              // control, title and lights share one vertically centred row.
+              // The extra 8px is the pane's own transparent border (`index.css`):
+              // on the sidebar, 5.5rem is measured from inside that pane, and this
+              // row has no pane of its own — without it the control jumps 8px left
+              // the moment the column collapses.
+              animate={{ paddingLeft: sidebarCollapsed && HAS_TRAFFIC_LIGHTS ? "calc(5.5rem + 8px)" : "1rem" }}
               transition={PANEL_COLLAPSE_TRANSITION}
               className="drag-region flex h-11 items-center justify-between pr-4"
             >
               <div className="no-drag flex min-w-0 flex-1 items-center gap-1 pr-3">
                 {sidebarCollapsed ? (
                   <div className="flex items-center gap-1">
-                    {/* With a title bar of our own the sidebar's toggle lives up there,
-                        on the same screen as this one; two of them read as a bug. */}
-                    {HAS_CUSTOM_TITLE_BAR ? null : (
-                      <IconButton
-                        size="icon-sm"
-                        variant="ghost"
-                        label={t("workspace.expandSidebar")}
-                        shortcut={toggleSidebarShortcut}
-                        onClick={() => setSidebarCollapsed(false)}
-                      >
-                        <HugeiconsIcon strokeWidth={2} icon={PanelLeftOpenIcon} />
-                      </IconButton>
-                    )}
+                    {/* The sidebar's collapse control is in its own top row, which is gone
+                        while it is collapsed — so the way back is here, where the panel is
+                        not. Reached on macOS and Windows alike. */}
+                    <IconButton
+                      size="icon-sm"
+                      variant="ghost"
+                      label={t("workspace.expandSidebar")}
+                      shortcut={toggleSidebarShortcut}
+                      onClick={() => setSidebarCollapsed(false)}
+                    >
+                      <HugeiconsIcon strokeWidth={2} icon={PanelLeftOpenIcon} />
+                    </IconButton>
                     <IconButton
                       size="icon-sm"
                       variant="ghost"
