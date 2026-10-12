@@ -177,23 +177,27 @@ function getLayer(): HTMLDivElement {
 }
 
 /**
- * The pane animates by clipping a fixed-width frame, so the browser viewport's own
- * rect never changes while the panel opens. The nearest clipping ancestor is what
- * makes the guest follow the animation instead of appearing at full width over the
- * conversation column.
+ * Every ancestor that clips overflow, nearest first.
+ *
+ * The guest is `position: fixed` on `document.body`, so none of these actually clip
+ * it — the visible rect is their intersection. The nearest one is not enough: while
+ * the pane opens, the floating frame is locked to its resting width and only *moves*,
+ * and the box that really shrinks is the panel outside it. Measuring the frame alone
+ * parks the page off the right edge of the window until that width is released.
  */
-export function clipAncestor(node: HTMLElement): HTMLElement | null {
+export function clipAncestors(node: HTMLElement): HTMLElement[] {
+  const found: HTMLElement[] = [];
   for (let el = node.parentElement; el; el = el.parentElement) {
     const style = getComputedStyle(el);
-    if (style.overflowX === "hidden" || style.overflowY === "hidden") return el;
+    if (style.overflowX === "hidden" || style.overflowY === "hidden") found.push(el);
   }
-  return null;
+  return found;
 }
 
 /** The part of the browser viewport actually on screen. */
 export function visibleRect(
   node: HTMLElement,
-  clip: HTMLElement | null,
+  clips: readonly HTMLElement[],
 ): { left: number; top: number; width: number; height: number } {
   const box = node.getBoundingClientRect();
   // The splitter is a flex item beside the pane, not an overlay inside it, so the
@@ -202,9 +206,9 @@ export function visibleRect(
   let right = box.right;
   let top = box.top;
   let bottom = box.bottom;
-  if (clip) {
+  for (const clip of clips) {
     const frame = clip.getBoundingClientRect();
-    // While the pane slides open the clip is still left of the frame it will settle
+    // While the pane slides open its clip is still left of the frame it will settle
     // at; never let the guest paint over the conversation column.
     left = Math.max(left, frame.left);
     right = Math.min(right, frame.right);

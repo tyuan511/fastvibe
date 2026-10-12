@@ -53,7 +53,7 @@ import {
   PICK_TEXT_LIMIT,
   type ViewportMode,
   ZOOM_STEPS,
-  clipAncestor,
+  clipAncestors,
   ensureGuest,
   inject,
   normalizeUrl,
@@ -177,9 +177,11 @@ export function SidePaneBrowser({
    * Put this guest's layer over the tab's viewport while it is the one on screen,
    * and park it otherwise. The guest itself is never moved (see `getLayer`).
    *
-   * The pane clips a fixed-width frame rather than resizing it, so the viewport has
-   * to be observed through that frame's clip: the observer watches the clipping
-   * ancestor so the guest follows the collapse spring frame by frame.
+   * Opening the pane does not resize the frame the page sits in — that frame is
+   * held at its resting width and slides in, clipped by the panel outside it.
+   * A resize observer on the frame never fires for that slide, so the guest was
+   * left where the frame started (off the window) until the animation ended and
+   * the width came back. Follow the clip's position for the length of the open.
    */
   useEffect(() => {
     const entry = registry.get(tabId);
@@ -188,22 +190,48 @@ export function SidePaneBrowser({
       parkGuest(tabId);
       return;
     }
-    const clip = clipAncestor(mount);
-    const place = (): void => {
+    let raf = 0;
+    // Captured once: the clipping boxes don't come and go during an open, and
+    // re-walking computed style every frame would only repeat this list.
+    const clips = clipAncestors(mount);
+    const place = (): { left: number; top: number; width: number; height: number } | null => {
       const node = box.current;
-      if (!node) return;
-      const rect = visibleRect(node, clip);
+      if (!node) return null;
+      const rect = visibleRect(node, clips);
+      // Still collapsed to nothing: placing here pins the guest to a 0×0 box.
+      // The next real rect is what puts the page on screen.
+      if (rect.width < 1 || rect.height < 1) return rect;
       showGuest(entry, rect);
       // Read the preset live: this also runs from the resize observer, which must
       // not put back the size the pane had when the effect was set up.
       if (owner === tabId) placeDevice(entry, viewportRef.current, rect);
+      return rect;
     };
-    place();
-    const observer = new ResizeObserver(place);
+    const started = performance.now();
+    let last = "";
+    let stable = 0;
+    const follow = (): void => {
+      const rect = place();
+      const node = box.current;
+      if (!rect || !node) return;
+      const key = `${Math.round(rect.left)}|${Math.round(rect.top)}|${Math.round(rect.width)}|${Math.round(rect.height)}`;
+      const usable = rect.width >= 1 && rect.height >= 1;
+      stable = usable && key === last ? stable + 1 : 0;
+      last = key;
+      const animating = Boolean(node.closest("[data-animate]"));
+      // `data-animate` is written a frame after the pane is told to open.
+      const waiting = !usable && performance.now() - started < 400;
+      if ((animating || waiting || stable < 2) && performance.now() - started < 800) {
+        raf = requestAnimationFrame(follow);
+      }
+    };
+    follow();
+    const observer = new ResizeObserver(() => place());
     observer.observe(mount);
-    if (clip) observer.observe(clip);
+    for (const clip of clips) observer.observe(clip);
     window.addEventListener("resize", place);
     return () => {
+      cancelAnimationFrame(raf);
       observer.disconnect();
       window.removeEventListener("resize", place);
       parkGuest(tabId);

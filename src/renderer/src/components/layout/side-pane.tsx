@@ -223,6 +223,7 @@ export const SidePane = memo(function SidePane({
   const setCollapsed = useSidePaneStore((state) => state.setCollapsed);
   const persistWidth = useSidePaneStore((state) => state.persistWidth);
   const activate = useSidePaneStore((state) => state.activate);
+  const selectTab = useSidePaneStore((state) => state.selectTab);
   const patchTab = useSidePaneStore((state) => state.patchTab);
   const closeTab = useSidePaneStore((state) => state.close);
   const openGit = useSidePaneStore((state) => state.openGit);
@@ -268,8 +269,16 @@ export const SidePane = memo(function SidePane({
 
   useEffect(() => {
     if (activeTabId && visibleTabs.some((item) => item.id === activeTabId)) return;
-    if (active) activate(active.id);
-  }, [activate, active, activeTabId, visibleTabs]);
+    if (!active) return;
+    // Filling in a missing selection is not the user opening the tab. `activate`
+    // un-collapses and clears `quiet`, so a browser-use tab on an empty pane popped
+    // the pane open and the page only appeared once that animation finished.
+    if (collapsed && active.quiet) {
+      selectTab(active.id);
+      return;
+    }
+    activate(active.id);
+  }, [activate, active, activeTabId, collapsed, selectTab, visibleTabs]);
 
   useEffect(() => {
     if (!active?.id) return;

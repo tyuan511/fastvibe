@@ -41,8 +41,8 @@ function ResizablePanel({ className, style, ...props }: ResizablePrimitive.Panel
        * The library applies `className`/`style` to a nested div precisely so they
        * cannot fight the flex layout it writes on the panel itself. Making that box
        * a column flex container lets each pane's content fill it, and
-       * `overflow: hidden` makes it the clipping ancestor the browser pane measures
-       * its guest against (`side-pane-browser.tsx` → `clipAncestor`) — the panel
+       * `overflow: hidden` makes it one of the clipping ancestors the browser pane
+       * measures its guest against (`browser-guest.ts` → `clipAncestors`) — the panel
        * shrinks, so the guest follows it instead of painting over the conversation.
        */
       className={cn("flex min-h-0 min-w-0 flex-col", className)}

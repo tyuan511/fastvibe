@@ -227,6 +227,11 @@ type SidePaneStore = {
   persistWidth: (width: number) => void;
   activate: (id: string) => void;
   /**
+   * Select a tab without opening the pane or clearing `quiet`. Used when a
+   * tool-opened tab is the only one and the selection would otherwise be empty.
+   */
+  selectTab: (id: string) => void;
+  /**
    * Close a tab. `collapse` (default `true`) also hides a pane the tab left empty;
    * an internal retire passes `false` so replacing a dead tab in place cannot
    * flash the pane shut around the replacement.
@@ -630,6 +635,12 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
       // quiet here: from now on this chat's pane opens with it, as the user left it.
       const tabs = scope.tabs.map((item) => (item.id === id && item.quiet ? { ...item, quiet: undefined } : item));
       return writeScope(state, scopeKeyOf(state), { ...scope, tabs, activeTabId: id }, { collapsed: false });
+    }),
+  selectTab: (id) =>
+    set((state) => {
+      const scope = scopeOf(state);
+      if (scope.activeTabId === id || !scope.tabs.some((item) => item.id === id)) return state;
+      return writeScope(state, scopeKeyOf(state), { ...scope, activeTabId: id });
     }),
   close: (id, options) =>
     set((state) => {
