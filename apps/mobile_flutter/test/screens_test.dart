@@ -167,6 +167,53 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('a todo row opens its checklist, and stays compact until asked', (
+    tester,
+  ) async {
+    final todos = <Map<String, Object?>>[
+      <String, Object?>{'content': '读取配置', 'status': 'completed'},
+      <String, Object?>{
+        'content': '改索引',
+        'status': 'in_progress',
+        'activeForm': '正在改索引',
+      },
+      <String, Object?>{'content': '跑测试', 'status': 'pending'},
+    ];
+    final tool = ToolBlock(
+      id: 'todo1',
+      name: 'todo',
+      args: <String, Object?>{'todos': todos},
+      details: <String, Object?>{'todos': todos},
+    );
+    await pump(tester, Scaffold(body: ToolCard(tool: tool, palette: light)));
+    expect(tester.takeException(), isNull);
+    // The collapsed row is the summary every other tool row is: the step in progress,
+    // not the whole plan.
+    expect(find.text('2/3 · 正在改索引'), findsOneWidget);
+    // Language-agnostic: an earlier test in this file leaves the app on English.
+    expect(
+      find.text(
+        t(
+          'tool.todosDone',
+          vars: <String, Object?>{'done': 1, 'total': 3},
+        ),
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('跑测试'), findsNothing);
+
+    await tester.tap(find.text('2/3 · 正在改索引'));
+    await tester.pump();
+    expect(find.text('读取配置'), findsOneWidget);
+    expect(find.text('跑测试'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    await tester.tap(find.text('2/3 · 正在改索引'));
+    await tester.pump();
+    expect(find.text('跑测试'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('every tool family draws a row without throwing', (tester) async {
     final names = <String>[
       'read',

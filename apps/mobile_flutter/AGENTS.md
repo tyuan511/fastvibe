@@ -107,8 +107,11 @@ Read `lib/chat/message.dart`, `live_events.dart`, `snapshot_sync.dart` and
   Its cache retains only the current projection's keys; live deltas replace message
   objects, so retaining old keys leaks every previous version of the growing reply.
 - **Consecutive thinking and tool calls fold into one `ProcessGroup` card.** Only prose, a
-  compaction notice, a model divider or an error ends the stretch. Each line expands on
-  its own tap.
+  compaction notice, a model divider or an error ends the stretch. Each thinking line expands
+  on its own tap, and a `todo` tool row expands into its full checklist (one line per item,
+  the in-progress one spinning only while the reply streams) — the row's `1/5 · …` summary is
+  not the plan. Every other tool row is one line by design: arguments, output and diffs belong
+  to the desktop transcript.
 - **A `codemode` script's own tool calls are not rows.** They arrive with a
   `parentToolCallId` and are dropped by `applyLiveEngineEvent`; the script's card lists
   them from `details.calls`.

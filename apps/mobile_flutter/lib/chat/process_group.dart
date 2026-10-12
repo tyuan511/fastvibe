@@ -10,7 +10,9 @@ import 'tool_card.dart';
 ///
 /// Nothing a reader needs sits between them, and a card per call made a busy turn a
 /// column of boxes. Tool rows stay compact because the reply is the thing on screen;
-/// detailed tool output belongs to the desktop transcript.
+/// detailed tool output belongs to the desktop transcript. The one thing a row does
+/// open is a `todo` call's checklist — the plan the reply was written against, which
+/// the row's single line cannot state.
 class ProcessGroup extends StatelessWidget {
   const ProcessGroup({
     super.key,
@@ -59,6 +61,7 @@ class ProcessGroup extends StatelessWidget {
             tool: tool,
             palette: palette,
             divider: divider,
+            live: live,
             onOpenDag: onOpenDag == null
                 ? null
                 : () {

@@ -23,6 +23,9 @@ abstract final class AppIcons {
   static const bubbleChat = HugeIcons.strokeRoundedBubbleChat;
   static const bug = HugeIcons.strokeRoundedBug01;
   static const cancel = HugeIcons.strokeRoundedCancel01;
+
+  /// An open todo item's mark — a plain ring, not a radio button: nothing is selected.
+  static const circle = HugeIcons.strokeRoundedCircle;
   static const chatAdd = HugeIcons.strokeRoundedChatAdd01;
   static const plus = HugeIcons.strokeRoundedAdd01;
   static const checkCircle = HugeIcons.strokeRoundedCheckmarkCircle02;

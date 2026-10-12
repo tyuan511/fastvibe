@@ -287,17 +287,14 @@ ToolSummary summarize(ToolBlock tool) {
         }
       }
       current ??= todos.where((item) => item.status == 'pending').firstOrNull;
-      final done = todos
-          .where(
-            (item) => item.status == 'completed' || item.status == 'cancelled',
-          )
-          .length;
+      final done = todos.where((item) => item.settled).length;
       if (todos.isNotEmpty) {
         final index = current != null
             ? todos.indexOf(current) + 1
             : todos.length;
+        final label = current?.label ?? '';
         subject =
-            '$index/${todos.length}${current?.content != null ? ' · ${current!.content}' : ''}';
+            '$index/${todos.length}${label.isNotEmpty ? ' · $label' : ''}';
         context = t(
           'tool.todosDone',
           vars: <String, Object?>{'done': done, 'total': todos.length},
@@ -361,14 +358,17 @@ ToolSummary summarize(ToolBlock tool) {
 /// One tool call, rendered as a compact line on the phone.
 ///
 /// Tool arguments, output and diffs stay out of the mobile transcript. A DAG row may
-/// still open the dedicated graph view, which is navigation rather than tool detail.
-class ToolCard extends StatelessWidget {
+/// still open the dedicated graph view, which is navigation rather than tool detail —
+/// and a `todo` row opens its checklist, because the plan is the thing the reply was
+/// written against and reading it is why the row exists at all.
+class ToolCard extends StatefulWidget {
   const ToolCard({
     super.key,
     required this.tool,
     required this.palette,
     this.divider = false,
     this.onOpenDag,
+    this.live = false,
   });
 
   final ToolBlock tool;
@@ -379,23 +379,41 @@ class ToolCard extends StatelessWidget {
   /// that call's result is readable.
   final VoidCallback? onOpenDag;
 
+  /// The reply is still streaming, so an in-progress todo keeps its busy mark.
+  final bool live;
+
+  @override
+  State<ToolCard> createState() => _ToolCardState();
+}
+
+class _ToolCardState extends State<ToolCard> {
+  bool _open = false;
+
   @override
   Widget build(BuildContext context) {
-    final palette = this.palette;
-    final tool = this.tool;
+    final palette = widget.palette;
+    final tool = widget.tool;
     final summary = summarize(tool);
+    final todos = summary.family == ToolFamily.todo
+        ? _todoItems(tool)
+        : const <TodoItem>[];
     final opensDag =
         tool.name.startsWith('dag_') &&
         tool.name != 'dag_report' &&
         !summary.error &&
-        onOpenDag != null;
+        widget.onOpenDag != null;
+    final canExpand = !opensDag && todos.isNotEmpty;
     final tint = summary.error
         ? palette.danger
         : summary.running
         ? palette.accent
         : palette.muted;
     final row = InkWell(
-      onTap: opensDag ? onOpenDag : null,
+      onTap: opensDag
+          ? widget.onOpenDag
+          : canExpand
+          ? () => setState(() => _open = !_open)
+          : null,
       child: ConstrainedBox(
         constraints: const BoxConstraints(minHeight: 40),
         child: Padding(
@@ -486,6 +504,15 @@ class ToolCard extends StatelessWidget {
                   strokeWidth: 2,
                 ),
               ],
+              if (canExpand) ...<Widget>[
+                const SizedBox(width: 4),
+                HugeIcon(
+                  icon: _open ? AppIcons.arrowUp : AppIcons.arrowDown,
+                  size: 14,
+                  color: palette.subtle,
+                  strokeWidth: 2,
+                ),
+              ],
             ],
           ),
         ),
@@ -493,14 +520,132 @@ class ToolCard extends StatelessWidget {
     );
 
     return Container(
-      decoration: divider
+      decoration: widget.divider
           ? BoxDecoration(
               border: Border(
                 top: BorderSide(color: palette.separator, width: 0.5),
               ),
             )
           : null,
-      child: row,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          row,
+          if (canExpand && _open)
+            _TodoChecklist(items: todos, palette: palette, live: widget.live),
+        ],
+      ),
+    );
+  }
+}
+
+/// A `todo` call's full checklist — the same list the desktop transcript draws.
+///
+/// One line per item rather than the row's single summary line: which step the run is
+/// on is not readable from 「1/5」, and the plan is what the reply that follows was
+/// written against. Collapsed until the reader asks for it, like every other row.
+class _TodoChecklist extends StatelessWidget {
+  const _TodoChecklist({
+    required this.items,
+    required this.palette,
+    required this.live,
+  });
+
+  final List<TodoItem> items;
+  final Palette palette;
+  final bool live;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(10, 0, 10, 9),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: palette.field,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            for (final item in items)
+              _TodoChecklistLine(item: item, palette: palette, live: live),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TodoChecklistLine extends StatelessWidget {
+  const _TodoChecklistLine({
+    required this.item,
+    required this.palette,
+    required this.live,
+  });
+
+  final TodoItem item;
+  final Palette palette;
+  final bool live;
+
+  @override
+  Widget build(BuildContext context) {
+    final status = item.status ?? 'pending';
+    final completed = status == 'completed';
+    final cancelled = status == 'cancelled';
+    final active = status == 'in_progress';
+
+    final Widget leading;
+    if (completed) {
+      leading = HugeIcon(
+        icon: AppIcons.tick,
+        size: 13,
+        color: palette.success,
+        strokeWidth: 2,
+      );
+    } else if (cancelled) {
+      leading = HugeIcon(
+        icon: AppIcons.cancel,
+        size: 13,
+        color: palette.subtle,
+        strokeWidth: 2,
+      );
+    } else if (active && live) {
+      // The same busy mark the row uses for a tool in flight, and only while a run is
+      // actually going: a stopped chat must not keep spinning over a stalled step.
+      leading = DesktopSpinner(size: 13, color: palette.accent);
+    } else {
+      leading = HugeIcon(
+        icon: AppIcons.circle,
+        size: 13,
+        color: palette.subtle,
+        strokeWidth: 2,
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          SizedBox(width: 13, height: 16, child: Center(child: leading)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              item.label,
+              style: TextStyle(
+                color: item.settled
+                    ? palette.muted
+                    : (active ? palette.text : palette.muted),
+                fontSize: 12.5,
+                height: 16 / 12.5,
+                decoration: item.settled ? TextDecoration.lineThrough : null,
+                decorationColor: palette.subtle,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -541,10 +686,22 @@ String _friendlyName(String name) => name
     .replaceAll(RegExp(r'[_-]+'), ' ');
 
 class TodoItem {
-  const TodoItem({this.status, this.content});
+  const TodoItem({this.status, this.content, this.activeForm});
 
   final String? status;
   final String? content;
+
+  /// The present-tense form the model gives an in-progress item (「正在跑测试」).
+  final String? activeForm;
+
+  /// What this row says: an in-progress item uses its own active form, anything else
+  /// the plain content.
+  String get label => status == 'in_progress' && activeForm?.isNotEmpty == true
+      ? activeForm!
+      : (content ?? activeForm ?? '');
+
+  /// Whether a run still has something to do here — the checklist's own blank mark.
+  bool get settled => status == 'completed' || status == 'cancelled';
 }
 
 List<TodoItem> _todoItems(ToolBlock tool) {
@@ -562,9 +719,8 @@ List<TodoItem> _todoItems(ToolBlock tool) {
     items.add(
       TodoItem(
         status: record['status'] is String ? record['status'] as String : null,
-        content: content is String
-            ? content
-            : (activeForm is String ? activeForm : null),
+        content: content is String ? content : null,
+        activeForm: activeForm is String ? activeForm : null,
       ),
     );
   }
