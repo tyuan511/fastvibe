@@ -4,7 +4,18 @@ import { readFileSync, statSync } from "node:fs";
 import { basename, extname } from "node:path";
 import type { FilePreview } from "@shared/types";
 
-const MAX_BYTES = 1_000_000;
+/**
+ * What the side pane will read into memory to draw a preview.
+ *
+ * Images and PDFs are handed to Chromium as a data URL and the reader is looking at
+ * them rather than parsing them, so the ceiling is generous: the old 1 MB cap refused
+ * ordinary photos off a phone. Text is different — the renderer highlights and lays it
+ * out as DOM — so its cap is where a file stops being a preview and should be opened in
+ * an editor instead. Both stay well inside the remote transport's own frame bounds,
+ * which is what decides whether a phone can be shown the result at all.
+ */
+const MAX_MEDIA_BYTES = 16 * 1024 * 1024;
+const MAX_TEXT_BYTES = 4 * 1024 * 1024;
 const IMAGE_EXT: Record<string, string> = {
   ".png": "image/png",
   ".jpg": "image/jpeg",
@@ -56,7 +67,7 @@ export function readFilePreview(filePath: string): FilePreview {
     }
     const ext = extname(filePath).toLowerCase();
     if (ext === ".pdf") {
-      if (stat.size > MAX_BYTES) {
+      if (stat.size > MAX_MEDIA_BYTES) {
         return { kind: "binary", path: filePath, name, size: stat.size };
       }
       const data = readFileSync(filePath);
@@ -69,7 +80,7 @@ export function readFilePreview(filePath: string): FilePreview {
     }
     const mime = IMAGE_EXT[ext];
     if (mime) {
-      if (stat.size > MAX_BYTES) {
+      if (stat.size > MAX_MEDIA_BYTES) {
         return { kind: "binary", path: filePath, name, size: stat.size };
       }
       const data = readFileSync(filePath);
@@ -92,7 +103,7 @@ export function readFilePreview(filePath: string): FilePreview {
       const text = extractPptx(filePath);
       if (text) return { kind: "markdown", path: filePath, name, text };
     }
-    if (stat.size > MAX_BYTES) {
+    if (stat.size > MAX_TEXT_BYTES) {
       return { kind: "binary", path: filePath, name, size: stat.size };
     }
     const text = readFileSync(filePath, "utf8");
