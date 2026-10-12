@@ -450,25 +450,7 @@ export async function requestComputer(request: ComputerRequest): Promise<Compute
     await assertDrivable();
     const module = await driverModule();
     const active = await ensureDriver();
-    if (!sessionStarted) {
-      // A named session is what puts the labelled agent cursor on screen. Failing to
-      // start one is not fatal — the driver falls back to an implicit session — so a
-      // driver version that renames the call must not take the whole feature down.
-      await active
-        .startSession(module.StartSessionInput.new({ session: SESSION }))
-        .then(async () => {
-          sessionStarted = true;
-          // Make Cua's click-through Agent Cursor explicit. Relying on the driver's
-          // default is not enough across platforms/embedded hosts, and without this
-          // the agent can act in the background with no visible pointer or badge.
-          await active
-            .setAgentCursorEnabled(
-              module.SetAgentCursorEnabledInput.new({ session: SESSION, enabled: true }),
-            )
-            .catch(() => undefined);
-        })
-        .catch(() => undefined);
-    }
+    if (!sessionStarted) await ensureCursorSession(module, active);
     const results: ComputerResult[] = [];
     for (const [index, step] of steps.entries()) {
       // Per step rather than per call: a long sequence must not have its last action
@@ -483,7 +465,7 @@ export async function requestComputer(request: ComputerRequest): Promise<Compute
         foreground: step.foreground ?? !settings.preferBackground,
       };
       try {
-        const result = await dispatch(module, active, resolved, signal);
+        const result = await runStep(module, active, resolved, signal);
         // Named from the pid the driver actually routes to, so the app reported back
         // cannot drift from the one that was driven.
         if (resolved.pid !== undefined) {
@@ -492,11 +474,12 @@ export async function requestComputer(request: ComputerRequest): Promise<Compute
         }
         results.push(result);
       } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-        if (steps.length === 1) throw error;
+        const failure = describeDriverError(error);
+        const reason = failure.message;
+        if (steps.length === 1) throw failure;
         // Naming the step is the whole value of the report: the model has to know which
         // of the actions it batched left the desktop where it is.
-        const inner = error instanceof ComputerFailure ? error.detail : undefined;
+        const inner = failure instanceof ComputerFailure ? failure.detail : undefined;
         throw new ComputerFailure({
           code: "batch_step_failed",
           message: uiText(
@@ -512,6 +495,103 @@ export async function requestComputer(request: ComputerRequest): Promise<Compute
     }
     return steps.length === 1 ? results[0] : merge(results, steps);
   });
+}
+
+/**
+ * One driver action, reviving an ended session underneath it and trying once more.
+ *
+ * Cua ends a session after it has been idle — five minutes, per its own README — and a
+ * *named* one is then refused rather than silently recreated: every later call comes back
+ * `session 'FastVibe' has ended; call start_session with this id to revive it`. That is
+ * what `sessionStarted` used to turn into a permanent failure — it was set on the first
+ * action of an app run and never cleared, so the session was never revived and nothing
+ * but `list_apps` / `list_windows` (which take no session) worked again until the app was
+ * restarted. Only a refusal that names the ended session is retried; a genuine tool error
+ * is reported as it arrives, so the model is never told a click succeeded on the second
+ * attempt of something that could not.
+ */
+async function runStep(
+  module: DriverModule,
+  active: Driver,
+  request: ComputerRequest,
+  signal: AbortSignal,
+): Promise<ComputerResult> {
+  try {
+    return await dispatch(module, active, request, signal);
+  } catch (error) {
+    if (!sessionEnded(error)) throw error;
+    sessionStarted = false;
+    await ensureCursorSession(module, active);
+    if (!sessionStarted) throw error;
+    return dispatch(module, active, request, signal);
+  }
+}
+
+/**
+ * Make sure the labelled agent cursor's session is live, starting or reviving it.
+ *
+ * Idempotent while the session is live (`revived: false`), and the only way back once it
+ * has ended. Failing is not fatal: the driver falls back to an implicit session, so a
+ * version that renames the call must not take the whole feature down.
+ */
+async function ensureCursorSession(module: DriverModule, active: Driver): Promise<void> {
+  try {
+    await active.startSession(module.StartSessionInput.new({ session: SESSION }));
+    sessionStarted = true;
+    // Make Cua's click-through Agent Cursor explicit. Relying on the driver's default is
+    // not enough across platforms/embedded hosts, and without this the agent can act in
+    // the background with no visible pointer or badge.
+    await active
+      .setAgentCursorEnabled(module.SetAgentCursorEnabledInput.new({ session: SESSION, enabled: true }))
+      .catch(() => undefined);
+  } catch {
+    sessionStarted = false;
+  }
+}
+
+/**
+ * Whether a refusal is the driver saying the named session is gone.
+ *
+ * Matched on the explanation rather than the variant, because the variant is the same
+ * `DriverError.Tool` every refused tool call gets. A code that names the session is
+ * accepted too, since that is the spelling a newer driver uses for it.
+ */
+function sessionEnded(error: unknown): boolean {
+  const inner = driverErrorDetail(error);
+  if (!inner) return false;
+  if (typeof inner.errorCode === "string" && /session/i.test(inner.errorCode)) return true;
+  return typeof inner.message === "string" && /\bhas ended\b/i.test(inner.message);
+}
+
+/**
+ * A driver failure, in the driver's own words.
+ *
+ * uniffi reports every error lifted out of the driver as `message: "DriverError.Tool"` —
+ * the variant, not the failure — and keeps the explanation in the value's `inner` record
+ * (`{ tool, message, errorCode }` for a refused tool call, `{ reason }` for a
+ * configuration one). Rethrowing the outer object is how a refused screenshot reached the
+ * user as the word "DriverError.Tool", with nothing to act on.
+ */
+function describeDriverError(error: unknown): Error {
+  const inner = driverErrorDetail(error);
+  const message = [inner?.message, inner?.reason].find(
+    (value): value is string => typeof value === "string" && value.trim().length > 0,
+  );
+  if (!message) return error instanceof Error ? error : new Error(String(error));
+  // The driver's own classification (`session_ended`, `background_unsupported`, …) is
+  // worth keeping — it is what tells a policy refusal from a transient one. A purely
+  // numeric code is not: some driver versions report `1` for everything.
+  const code = inner?.errorCode && !/^\d+$/.test(inner.errorCode) ? ` (${inner.errorCode})` : "";
+  return new Error(`${message}${code}`);
+}
+
+function driverErrorDetail(
+  error: unknown,
+): { message?: string; reason?: string; errorCode?: string; tool?: string } | undefined {
+  const inner = (error as { inner?: unknown } | null | undefined)?.inner;
+  return inner && typeof inner === "object"
+    ? (inner as { message?: string; reason?: string; errorCode?: string; tool?: string })
+    : undefined;
 }
 
 /** What a failed batch got through, so the model can reason about where it stopped. */
