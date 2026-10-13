@@ -49,10 +49,13 @@ export function RunProgress({ startedAt }: { startedAt: number }): JSX.Element {
  */
 export function RunCollapse({
   durationMs,
+  trailing,
   children,
 }: {
   /** How long the run took: its first request start to the instant it finished. */
   durationMs: number;
+  /** What the run made, at the right end of the header — it stays in view while the process is folded. */
+  trailing?: ReactNode;
   children: ReactNode;
 }): JSX.Element {
   const { t } = useTranslation("chat");
@@ -86,6 +89,7 @@ export function RunCollapse({
             )}
           />
         </CollapsibleTrigger>
+        {trailing}
       </RunHeader>
       <CollapsibleContent>
         <div className="flex flex-col gap-2.5 pt-3">{children}</div>

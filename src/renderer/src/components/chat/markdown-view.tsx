@@ -1,6 +1,6 @@
 import { createContext, memo, useContext, useDeferredValue, useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import Markdown, { type Components } from "react-markdown";
+import Markdown, { defaultUrlTransform, type Components } from "react-markdown";
 import type { PluggableList } from "unified";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -23,7 +23,9 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { markdownMedia } from "@/lib/markdown-media";
 import { DiffView } from "./diff-view";
+import { InlineMediaItem } from "./inline-preview";
 
 /**
  * Markdown, with math.
@@ -163,6 +165,26 @@ function PathLink({ path, children }: { path: string; children: ReactNode }): JS
   );
 }
 
+/**
+ * `react-markdown` drops any protocol it does not know — `file:`, `data:` — and every image
+ * a reply writes by path would arrive with an empty `src`. These are the sources the media
+ * mapping below turns into a loadable preview, and a path link the path-link plugin made.
+ */
+function urlTransform(url: string): string {
+  if (url.startsWith("file://") || url.startsWith("fvpath:")) return url;
+  if (/^data:(image|video)\//i.test(url)) return url;
+  return defaultUrlTransform(url);
+}
+
+/** A markdown image: a picture, or — when the path says so — a video or an HTML page. */
+function MarkdownImage({ src, alt }: { src?: string; alt?: string }): JSX.Element | null {
+  const cwd = useSessionStore((state) => state.conversations.find((item) => item.id === state.activeId)?.cwd);
+  const preview = markdownMedia(src, alt, (path) => resolvePath(path, cwd));
+  if (preview) return <InlineMediaItem preview={preview} />;
+  if (!src) return null;
+  return <img src={src} alt={alt ?? ""} className="my-2 max-h-80 max-w-full rounded-lg border border-border" />;
+}
+
 // Stable component identities keep streamed updates from remounting CodeBlock.
 const MARKDOWN_COMPONENTS: Components = {
   a: ({ href, children }) => {
@@ -178,9 +200,7 @@ const MARKDOWN_COMPONENTS: Components = {
       </a>
     );
   },
-  img: ({ src, alt }) => (
-    <img src={src} alt={alt ?? ""} className="my-2 max-h-80 max-w-full rounded-lg border border-border" />
-  ),
+  img: ({ src, alt }) => <MarkdownImage src={typeof src === "string" ? src : undefined} alt={alt} />,
   table: ({ children }) => (
     <div className="my-2 overflow-x-auto rounded-lg border border-border">
       <table className="w-full min-w-96 border-collapse text-left">{children}</table>
@@ -237,6 +257,7 @@ const MarkdownBlock = memo(function MarkdownBlock({ text }: { text: string }): J
         remarkPlugins={REMARK_PLUGINS}
         rehypePlugins={REHYPE_PLUGINS}
         components={MARKDOWN_COMPONENTS}
+        urlTransform={urlTransform}
       >
         {deferred}
       </Markdown>

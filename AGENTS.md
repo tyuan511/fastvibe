@@ -1616,6 +1616,7 @@ viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`
   - **The remote-access password never reaches the model**: `remote.set_password` collects it with
     `ctx.ui.input` inside the extension. Writes run without a confirmation; the skill tells the
     agent to say what it is about to change first.
+- **Present** — `present.ts` registers `present`, which puts an image, a video or an HTML page into the conversation; see 会话内联预览.
 - **Worktree** — `worktree.ts` exposes list / create / bind / unbind over the host's
   worktree methods. Creating or binding **switches the conversation's workspace**, which is
   a change to the user's machine they never asked for, so the tool's prompt guidelines make
@@ -1663,6 +1664,41 @@ viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`
   implemented on the conversation catalog; `#extensionNewSession` seeds the manager
   via the plugin's `setup`, creates a new conversation, activates it and emits
   `conversation_opened`, then runs `withSession` against the replacement.
+
+### 会话内联预览（图片 / 视频 / HTML，`shared/inline-media.ts`）
+
+回复里产生的可看的东西直接画在转写里，而不是只给一个路径。**谁来“要”一个预览，从确定到猜测**：
+`present` 工具（模型明说“展示这个”）→ 工具结果里的图片块（MCP 生图直接返回图，没有文件）→ `write` 写出的
+图片/HTML → `bash` / MCP / `codemode` 输出里出现的路径或 https 链接（**只有这一类是猜的**）。
+
+- **纯函数、只靠转写重算。** `collectInlinePreviews(tools, resolve)` 只看 `ToolCallBlock`（参数、结果、`details`、
+  `images`），不读磁盘，所以刷新、切会话、手机重连画出来的和流式时一样。只处理 `status === "done"` 的非嵌套调用，
+  半写的 HTML 不会闪。同一个引用只出现一次，每个调用最多 4 个、每条回复最多 12 个。
+- **猜测要克制。** 只扫图片/视频，**从不猜 HTML**（构建日志里全是 `index.html`）；`ls/find/git/grep/file/du…` 这类
+  列文件的命令整个跳过；`node_modules`、`.git` 之类目录跳过；猜出来加载失败就静默不画（`explicit: false`），
+  明确要求的失败才写一行“无法加载”。`read` / `browser_*` / `computer_*` 的图片是输入或截屏，不展示。
+- **图片块随转写走。** `toolImagesOf`（`shared/tool-result.ts`，主进程映射和渲染层实时事件共用）把工具结果里的
+  image 块变成 `ToolCallBlock.images`（data URL，单张 12M 字符、一次 4 张封顶）；手机用的摘要形态会丢掉它
+  （`omitted.images`）。实时路径在 `tool_execution_end` 就带上，不用等 `agent_end` 重读转写。
+- **HTML 走独立文档，不走 `srcdoc`。** `srcdoc` 框架会继承应用的 CSP（`script-src 'self'`），脚本永远跑不起来。
+  所以 `fastvibe-media://` 也能服务本地 `.html`（`authorizeMediaMime`：请求名和真实路径必须同属“页面”或同属
+  “媒体”，不能用 `.png` 符号链接去读页面）；`media-protocol.ts` 对 `text/html` 响应**自己**加
+  `INLINE_HTML_CSP`（只允许内联代码和 https 资源，不能读本地文件、不能提交表单），远程主机来的页面也一样，
+  不信上游的头。框架是 `sandbox="allow-scripts"`，**没有** `allow-same-origin`：无存储、无 cookie、碰不到应用。
+  想收紧就改 `INLINE_HTML_CSP` 这一个常量。https 链接只展示图片和视频，不当页面开。
+- **`present`（`resources/extensions/present.ts`）只校验、不搬运。** 路径相对工作目录解析，要求文件存在且类型
+  可展示；https 链接必须以图片/视频扩展名结尾；不收 data URL（让模型把 base64 写进参数是浪费 token）。结果
+  `details.items` 记下 `{ref, title, ok, error}`，渲染层只画 `ok` 的。扩展不能 import `@shared`，所以扩展名
+  清单在两处各一份，`test/inline-media.test.ts` 把它们对齐。
+- **消息里不画大图，只画名字。** 回复里的预览是行内文件名（图标 + 名字，和路径链接同一个观感；一次调用的多项同一行换行排列；markdown 的 `![]()` 同样），**折叠运行过程后**被折叠的产物在「用时 …」那一行右端收成最多 3 个缩略图（`InlineThumbStrip`，多于 3 个是「更多（n）」）。点名字或缩略图都打开**查看器**（`Viewer`）：全窗口深色遮罩，一次一项，图片 / 视频 / HTML 都支持，底部「‹ 第 i 项，共 n 项 ›」，← / → 在**同一批**里切换，左下是名字，右上是「在侧栏中打开」和 ⋮（在文件夹中显示 / 复制路径或链接 / 在浏览器中打开）与关闭。点遮罩空白处也关。猜出来的本地路径用 `filesExist` 核对，不存在就不画名字（`useMissingGuesses`）；明确要求展示的不核对，打不开时查看器里写「无法加载」。
+- **位置。** 预览紧跟产生它的工具卡；折叠运行过程时它是**结果**不是过程，画在折叠行之下、正文之上（和 DAG 图一样
+  不被收进“用时 …”）。`shared/media-preview.ts` 不能用 `node:path`：渲染层也 import 它，浏览器构建里 `extname`
+  是 `undefined`，第一次展示文件就会抛。
+- **Markdown 里的 `![]()`** 也走同一套：绝对路径、`file://`、相对路径按会话目录解析成媒体 URL，扩展名是视频就
+  画 `<video>`、是 `.html` 就画页面（`lib/markdown-media.ts`）。`react-markdown` 默认会丢掉 `file:` / `data:`，所以
+  `urlTransform` 放行 `file://`、`data:image|video` 和路径链接插件的 `fvpath:`。内联项的根是 `span`（`display:block`），
+  因为它会出现在 `<p>` 里。
+- **预览**：`mock.html?inline=1`（浏览器里没有 `fastvibe-media://`，HTML 框架是空的，只能看版式）。
 
 ### TODO: remaining TUI→GUI gaps
 

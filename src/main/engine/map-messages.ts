@@ -1,7 +1,7 @@
 import type { ChatAttachment, ChatMessage, DagSettledInfo, MessagePart, ThinkingTiming, ToolCallBlock, TuiRun } from "@shared/types";
 import { extractPromptAttachments } from "../../shared/attachment-metadata.ts";
 import { stripMemoryCitation } from "../../shared/memory-citation.ts";
-import { toolResultStatus } from "../../shared/tool-result.ts";
+import { toolImagesOf, toolResultStatus } from "../../shared/tool-result.ts";
 import { uiText } from "./ui-text.ts";
 
 /**
@@ -122,6 +122,8 @@ export function mapEngineMessages(
         const tool = toolsById.get(id);
         if (tool) {
           if (result) tool.result = result;
+          const images = toolImagesOf(message.content);
+          if (images.length > 0) tool.images = images;
           if (message.details !== undefined) tool.details = message.details;
           tool.status = toolResultStatus(tool.name, message.isError === true, message.details);
         }

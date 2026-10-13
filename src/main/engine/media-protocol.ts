@@ -1,7 +1,7 @@
 import { Readable } from "node:stream";
 import { protocol } from "electron";
 import { decodeScopedId } from "@shared/server-scope";
-import { mediaPathFromUrl } from "@shared/media-preview";
+import { INLINE_HTML_CSP, mediaPathFromUrl } from "@shared/media-preview";
 import { openMediaBody } from "./media-file";
 import { fetchRemoteMedia, type RemoteMediaEndpoint } from "./remote-media";
 
@@ -17,16 +17,18 @@ export type MediaProtocolDeps = {
  * machine that has the file. Either way the preview payload itself holds no bytes.
  */
 export function registerMediaProtocol(deps: MediaProtocolDeps): void {
-  protocol.handle("fastvibe-media", (request) => {
+  protocol.handle("fastvibe-media", async (request) => {
     const requested = mediaPathFromUrl(request.url);
     if (!requested) return new Response(null, { status: 400 });
     const remote = decodeScopedId(requested);
     if (remote) {
-      return fetchRemoteMedia(
-        deps.remoteEndpoint(remote.serverInstanceId),
-        requested,
-        request.method,
-        request.headers.get("range"),
+      return withPageCsp(
+        await fetchRemoteMedia(
+          deps.remoteEndpoint(remote.serverInstanceId),
+          requested,
+          request.method,
+          request.headers.get("range"),
+        ),
       );
     }
     const opened = openMediaBody(requested, request.method, request.headers.get("range"));
@@ -40,6 +42,17 @@ export function registerMediaProtocol(deps: MediaProtocolDeps): void {
       request.signal.addEventListener("abort", abort);
       nodeStream.on("close", () => request.signal.removeEventListener("abort", abort));
     }
-    return new Response(body, { status: opened.status, headers: opened.headers });
+    return withPageCsp(new Response(body, { status: opened.status, headers: opened.headers }));
   });
+}
+
+/**
+ * A served HTML page carries its own policy, whichever machine it came from: the header is
+ * what keeps it from reading beyond https, so it is set here and not trusted from upstream.
+ */
+function withPageCsp(response: Response): Response {
+  if (!response.headers.get("content-type")?.startsWith("text/html")) return response;
+  const headers = new Headers(response.headers);
+  headers.set("content-security-policy", INLINE_HTML_CSP);
+  return new Response(response.body, { status: response.status, headers });
 }

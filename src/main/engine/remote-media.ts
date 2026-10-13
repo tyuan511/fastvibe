@@ -1,4 +1,4 @@
-import { decodeScopedId } from "@shared/server-scope";
+import { decodeScopedId } from "../../shared/server-scope.ts";
 
 export type RemoteMediaEndpoint = { port: number; token: string };
 

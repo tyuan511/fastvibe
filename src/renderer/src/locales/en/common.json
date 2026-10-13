@@ -111,6 +111,12 @@
       "running": "Using the browser",
       "done": "Browser"
     },
+    "present": {
+      "running": "Showing",
+      "done": "Show"
+    },
+    "presentCount_one": "{{count}} items",
+    "presentCount_other": "{{count}} items",
     "other": {
       "running": "Running",
       "done": "Tool call"

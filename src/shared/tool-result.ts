@@ -1,4 +1,4 @@
-import type { ToolCallStatus } from "./types";
+import type { ToolCallStatus, ToolImage } from "./types";
 
 type RecordValue = Record<string, unknown>;
 
@@ -33,4 +33,29 @@ export function toolResultStatus(
     return "aborted";
   }
   return "error";
+}
+
+/** An image block bigger than this is not carried through the transcript (base64 characters). */
+export const MAX_RESULT_IMAGE_CHARS = 12 * 1024 * 1024;
+/** Images of one tool result carried through the transcript. */
+export const MAX_RESULT_IMAGES = 4;
+
+/**
+ * The image blocks of a tool result's content. An image generator behind MCP answers with the
+ * picture itself, not a path, so this is the only place that picture exists; it is carried as a
+ * data URL, bounded so one result cannot swamp a snapshot.
+ */
+export function toolImagesOf(content: unknown): ToolImage[] {
+  if (!Array.isArray(content)) return [];
+  const images: ToolImage[] = [];
+  for (const part of content) {
+    if (typeof part !== "object" || part === null) continue;
+    const block = part as Record<string, unknown>;
+    if (block.type !== "image" || typeof block.data !== "string") continue;
+    if (block.data.length === 0 || block.data.length > MAX_RESULT_IMAGE_CHARS) continue;
+    const mimeType = typeof block.mimeType === "string" && block.mimeType.startsWith("image/") ? block.mimeType : "image/png";
+    images.push({ mimeType, dataUrl: `data:${mimeType};base64,${block.data}` });
+    if (images.length >= MAX_RESULT_IMAGES) break;
+  }
+  return images;
 }

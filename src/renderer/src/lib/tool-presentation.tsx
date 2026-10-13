@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { BotIcon, ChromeIcon, ComputerIcon, FileEditIcon, FileMinusIcon, FilePlusIcon, FileTextIcon, FolderTreeIcon, ListChecksIcon, MessageQuestionIcon, Plug01Icon, Search01Icon, SourceCodeIcon, SparklesIcon, SquareTerminalIcon, WorkflowSquare01Icon, Wrench01Icon } from "@hugeicons/core-free-icons";
+import { BotIcon, ChromeIcon, ComputerIcon, FileEditIcon, FileMinusIcon, FilePlusIcon, FileTextIcon, FolderTreeIcon, Image01Icon, ListChecksIcon, MessageQuestionIcon, Plug01Icon, Search01Icon, SourceCodeIcon, SparklesIcon, SquareTerminalIcon, WorkflowSquare01Icon, Wrench01Icon } from "@hugeicons/core-free-icons";
 import type { ToolCallBlock } from "@shared/types";
 import { i18n } from "@/lib/i18n";
 import { codemodeCalls, codemodeCode, codemodeFailures, codemodeSummary } from "./codemode";
@@ -31,6 +31,7 @@ export type ToolFamily =
   | "mcp"
   | "codemode"
   | "browser"
+  | "present"
   | "other";
 
 export type ToolView = {
@@ -108,6 +109,7 @@ const ICONS: Record<ToolFamily, ReactNode> = {
   mcp: <HugeiconsIcon strokeWidth={2} icon={Plug01Icon} className="size-3.5" />,
   codemode: <HugeiconsIcon strokeWidth={2} icon={SourceCodeIcon} className="size-3.5" />,
   browser: <HugeiconsIcon strokeWidth={2} icon={ChromeIcon} className="size-3.5" />,
+  present: <HugeiconsIcon strokeWidth={2} icon={Image01Icon} className="size-3.5" />,
   other: <HugeiconsIcon strokeWidth={2} icon={Wrench01Icon} className="size-3.5" />,
 };
 
@@ -120,6 +122,7 @@ export function familyOf(name: string): ToolFamily {
   const key = name.trim().toLowerCase();
   if (!key) return "other";
   if (key === "codemode") return "codemode";
+  if (key === "present") return "present";
   if (key.startsWith("mcp") || key.includes("__")) return "mcp";
   if (key.startsWith("browser_")) return "browser";
   if (/^(read|read_file|readfile|view|cat)$/.test(key)) return "read";
@@ -255,6 +258,17 @@ export function describeTool(tool: ToolCallBlock, cwd?: string): ToolView {
       } else {
         view.subject = tool.name;
       }
+      return view;
+    }
+    case "present": {
+      // What is shown is drawn under the call; the row only says how many.
+      const items = asRecord(tool.details)?.items ?? asRecord(tool.args)?.items;
+      const list = Array.isArray(items) ? items : [];
+      const first = asRecord(list[0]);
+      const name = typeof first?.title === "string" && first.title.trim() ? first.title.trim() : basename(String(first?.ref ?? first?.source ?? ""));
+      view.subject = name || tool.name;
+      view.context = list.length > 1 ? (i18n.t("common:tool.presentCount", { count: list.length }) as string) : undefined;
+      view.title = name || tool.name;
       return view;
     }
     case "browser": {

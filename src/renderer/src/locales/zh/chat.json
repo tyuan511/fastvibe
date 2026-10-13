@@ -234,10 +234,24 @@
     "close": "关闭",
     "tooLarge": "文件过大（{{size}} KB），请在访达中打开。",
     "mediaFailed": "无法加载此文件。",
+    "open": "打开",
+    "more": "更多",
+    "linkCopy": "复制链接",
+    "kind": {
+      "image": "图片",
+      "video": "视频",
+      "html": "网页"
+    },
+    "openExternal": "在浏览器中打开",
+    "inlineFailed": "无法加载 {{name}}",
     "pathPreview": "预览",
     "pathReveal": "在文件夹中显示",
     "pathCopy": "复制完整路径",
-    "pathMissing": "文件不存在"
+    "pathMissing": "文件不存在",
+    "itemOf": "第 {{index}} 项，共 {{count}} 项",
+    "previous": "上一张",
+    "next": "下一张",
+    "moreItems": "更多（{{count}}）"
   },
   "model": {
     "switched": "模型已切换至"

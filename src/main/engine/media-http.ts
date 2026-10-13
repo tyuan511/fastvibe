@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { openMediaBody } from "./media-file";
+import { openMediaBody } from "./media-file.ts";
 
 /** Write one local media file to an HTTP response, honoring `Range`. */
 export function pipeMediaHttp(request: IncomingMessage, response: ServerResponse, filePath: string): void {

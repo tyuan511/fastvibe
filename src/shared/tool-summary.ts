@@ -39,6 +39,8 @@ export type ToolOmission = {
   args?: true;
   /** Some strings in `details` were cut short. */
   details?: true;
+  /** The result's pictures were left out; this is how many. */
+  images?: number;
 };
 
 function clipStrings(value: unknown, clipped: { any: boolean }, depth = 0): unknown {
@@ -66,6 +68,11 @@ export function summarizeToolBlock(tool: ToolCallBlock): ToolCallBlock {
   if (typeof tool.result === "string" && tool.result.length > SUMMARY_RESULT_INLINE) {
     omitted.result = tool.result.length;
     delete edit().result;
+  }
+  // A picture is the heaviest thing a result can hold, and a list of calls draws none of it.
+  if (tool.images?.length) {
+    omitted.images = tool.images.length;
+    delete edit().images;
   }
   if (!STRUCTURED.test(tool.name)) {
     for (const field of ["args", "details"] as const) {

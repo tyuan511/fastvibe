@@ -1,5 +1,16 @@
-import { extname, isAbsolute } from "node:path";
 import { decodeScopedId } from "./server-scope.ts";
+
+// Not `node:path`: the renderer imports this module too, and a bundled browser build has
+// no `path` to call — `extname` would be `undefined` the first time a reply shows a file.
+function extname(filePath: string): string {
+  const name = filePath.split(/[\\/]/).pop() ?? "";
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? name.slice(dot) : "";
+}
+
+function isAbsolute(filePath: string): boolean {
+  return filePath.startsWith("/") || /^[A-Za-z]:[\\/]/.test(filePath);
+}
 
 /**
  * File preview hands the renderer a URL, not the bytes.
@@ -48,10 +59,47 @@ export function mediaPreviewKind(filePath: string): MediaPreviewKind | null {
   return "image";
 }
 
-/** Both the requested path and its real path must be media, so a renamed symlink cannot point at something else. */
+const HTML_MIME = "text/html; charset=utf-8";
+
+/**
+ * An HTML file is served by the same scheme so an inline preview can run in a
+ * sandboxed frame of its own document (a `srcdoc` frame would inherit the app's CSP and
+ * could never run a script). It is not a "media kind": `readFilePreview` still reads it as text.
+ */
+export function isHtmlFile(filePath: string): boolean {
+  const ext = extname(filePath).toLowerCase();
+  return ext === ".html" || ext === ".htm";
+}
+
+/**
+ * What a served HTML page may do. The frame that shows it is sandboxed without
+ * `allow-same-origin`, so it has no storage, no cookies and no access to the app; this adds
+ * that it can load only inline code and https resources (a chart library from a CDN), cannot
+ * reach a local file, a form target or another frame, and has no `<base>` to redirect with.
+ */
+export const INLINE_HTML_CSP = [
+  "default-src 'none'",
+  "script-src 'unsafe-inline' 'unsafe-eval' https:",
+  "style-src 'unsafe-inline' https:",
+  "img-src data: blob: https:",
+  "media-src data: blob: https:",
+  "font-src data: https:",
+  "connect-src https:",
+  "form-action 'none'",
+  "base-uri 'none'",
+].join("; ");
+
+/** The content type a path is served with, or `null` when it is neither media nor an HTML page. */
+function servedMime(filePath: string): string | null {
+  return mediaMime(filePath) ?? (isHtmlFile(filePath) ? HTML_MIME : null);
+}
+
+/** Both the requested path and its real path must be servable, so a renamed symlink cannot point at something else. */
 export function authorizeMediaMime(requested: string, real: string): string | null {
-  const mime = mediaMime(real);
-  if (!mime || !mediaMime(requested)) return null;
+  const mime = servedMime(real);
+  if (!mime || !servedMime(requested)) return null;
+  // A page is never reached under a media name, nor a picture under a page's.
+  if (isHtmlFile(requested) !== isHtmlFile(real)) return null;
   return mime;
 }
 

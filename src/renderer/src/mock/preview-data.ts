@@ -421,6 +421,66 @@ export const MESSAGES: ChatMessage[] = [
  * display block, the inline `$…$`, and — the case worth looking at — shell text that
  * uses `$` for variables, which must stay plain instead of being eaten by math.
  */
+const INLINE_SVG =
+  "data:image/svg+xml;utf8," +
+  encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="480" height="240"><rect width="480" height="240" fill="#4f46e5"/><circle cx="240" cy="120" r="70" fill="#fbbf24"/></svg>',
+  );
+
+const INLINE_SVG_MOON =
+  "data:image/svg+xml;utf8," +
+  encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="480" height="240"><rect width="480" height="240" fill="#0f172a"/><circle cx="240" cy="120" r="70" fill="#e2e8f0"/></svg>',
+  );
+
+/** `?inline=1`: a reply whose tools show a picture, a generated image and a markdown image. */
+export const INLINE_MESSAGES: ChatMessage[] = [
+  {
+    id: "msg-inline-u",
+    role: "user",
+    text: "画一张太阳的图，再做个小页面展示。",
+    tools: [],
+    parts: [{ kind: "text", text: "画一张太阳的图，再做个小页面展示。" }],
+    createdAt: NOW - 60_000,
+  },
+  {
+    id: "msg-inline-a",
+    role: "assistant",
+    text: "",
+    tools: [
+      {
+        id: "inline-gen",
+        name: "mcp_imagegen_generate",
+        args: { prompt: "a sun" },
+        result: "ok",
+        status: "done",
+        images: [{ mimeType: "image/svg+xml", dataUrl: INLINE_SVG }],
+      },
+      {
+        id: "inline-present",
+        name: "present",
+        args: { items: [{ source: "/tmp/sun.png", title: "太阳" }] },
+        result: "已在对话中展示 1 项",
+        status: "done",
+        details: {
+          items: [
+            { ref: "/tmp/sun/sun.svg", title: "太阳", ok: true },
+            { ref: INLINE_SVG_MOON, title: "月亮", ok: true },
+            { ref: "/tmp/sun/index.html", title: "展示页面", ok: true },
+          ],
+        },
+      },
+    ],
+    parts: [
+      { kind: "tool", toolId: "inline-gen" },
+      { kind: "tool", toolId: "inline-present" },
+      { kind: "text", text: "画好了：\n\n![太阳](" + INLINE_SVG + ")\n\n上面是一张 Markdown 图片，再往上是工具展示的两张。" },
+    ],
+    createdAt: NOW - 59_000,
+    completedAt: NOW - 50_000,
+  },
+];
+
 export const MATH_MESSAGES: ChatMessage[] = [
   {
     id: "msg-math-u",

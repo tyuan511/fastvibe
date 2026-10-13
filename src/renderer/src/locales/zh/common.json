@@ -111,6 +111,12 @@
       "running": "正在操作浏览器",
       "done": "浏览器"
     },
+    "present": {
+      "running": "正在展示",
+      "done": "展示"
+    },
+    "presentCount_one": "共 {{count}} 项",
+    "presentCount_other": "共 {{count}} 项",
     "other": {
       "running": "正在运行",
       "done": "工具调用"

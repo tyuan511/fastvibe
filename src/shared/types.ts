@@ -124,6 +124,8 @@ export type EngineSessionState = {
 
 export type ToolCallStatus = "running" | "done" | "error" | "aborted";
 
+export type ToolImage = { mimeType: string; dataUrl: string };
+
 export type ToolCallBlock = {
   id: string;
   name: string;
@@ -132,6 +134,11 @@ export type ToolCallBlock = {
   status: ToolCallStatus;
   /** Engine-provided structured payload, e.g. `edit`'s diff or `bash`'s truncation. */
   details?: unknown;
+  /**
+   * Pictures the tool's result carried as image blocks (an MCP image generator returns no
+   * file). Drawn inline under the call; absent when the result was text only.
+   */
+  images?: ToolImage[];
   /**
    * The model-issued call this one was made from, when a tool (`codemode`) ran it itself.
    * Such a call is data — the turn's changed-file chips read it — but has no card of its own.

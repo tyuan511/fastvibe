@@ -13,6 +13,7 @@ import {
   MARKET_PACKAGES,
   MCP_SERVERS,
   MESSAGES,
+  INLINE_MESSAGES,
   MATH_MESSAGES,
   MODELS,
   PREVIEW_CWD,
@@ -223,6 +224,7 @@ const openResult = (id: string): ConversationOpenResult => {
   // speak for a conversation that is not on screen when it lands.
   let messages = isActive ? fixtureMessages : [];
   if (!website && isActive && params.get("math") === "1") messages = [...MESSAGES.slice(0, 2), ...MATH_MESSAGES];
+  if (!website && isActive && params.get("inline") === "1") messages = INLINE_MESSAGES;
   // `?older=1` ages the thread so the footers have to name their day. Every fixture is
   // from today, so without this the date half of the timestamp rule has nothing to
   // render and could not be looked at at all. The newest turn is still from today and
@@ -527,8 +529,8 @@ const api = {
     },
     setInterruptMode: async () => fixtureSession,
     setAutoCompaction: async () => fixtureSession,
-    branch: async () => (!website && params.get("math") === "1" ? [...MESSAGES.slice(0, 2), ...MATH_MESSAGES] : fixtureMessages),
-    getMessages: async () => (!website && params.get("math") === "1" ? [...MESSAGES.slice(0, 2), ...MATH_MESSAGES] : fixtureMessages),
+    branch: async () => (!website && params.get("math") === "1" ? [...MESSAGES.slice(0, 2), ...MATH_MESSAGES] : !website && params.get("inline") === "1" ? INLINE_MESSAGES : fixtureMessages),
+    getMessages: async () => (!website && params.get("math") === "1" ? [...MESSAGES.slice(0, 2), ...MATH_MESSAGES] : !website && params.get("inline") === "1" ? INLINE_MESSAGES : fixtureMessages),
     getStats: async () => fixtureStats,
     setSteeringMode: async () => fixtureSession,
     setFollowUpMode: async () => fixtureSession,

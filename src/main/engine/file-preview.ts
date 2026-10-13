@@ -1,9 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { uiText } from "./ui-text";
+import { uiText } from "./ui-text.ts";
 import { readFileSync, statSync } from "node:fs";
 import { basename, extname } from "node:path";
-import { mediaMime, mediaPreviewKind } from "@shared/media-preview";
-import type { FilePreview } from "@shared/types";
+import { mediaMime, mediaPreviewKind } from "../../shared/media-preview.ts";
+import type { FilePreview } from "../../shared/types.ts";
 
 /**
  * What the side pane will read into memory to draw a preview.

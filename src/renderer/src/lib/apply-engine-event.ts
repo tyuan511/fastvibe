@@ -7,9 +7,10 @@ import type {
   EngineModel,
   MessagePart,
   ToolCallBlock,
+  ToolImage,
 } from "@shared/types";
 import { extractPromptAttachments } from "@shared/attachment-metadata";
-import { toolResultStatus } from "@shared/tool-result";
+import { toolImagesOf, toolResultStatus } from "@shared/tool-result";
 import { randomUUID } from "../../../shared/random.ts";
 import { i18n } from "@/lib/i18n";
 
@@ -210,6 +211,12 @@ function rawToolText(value: unknown): string | undefined {
 }
 
 /** The engine wraps tool results as `{ content, details }`; keep `details` for rich renderers. */
+/** The pictures a finished call's result carries, so an image shows when it lands rather than at the end of the run. */
+function liveToolImages(result: unknown): ToolImage[] | undefined {
+  const images = toolImagesOf(isRecord(result) ? result.content : undefined);
+  return images.length > 0 ? images : undefined;
+}
+
 function toolDetails(value: unknown): unknown {
   return isRecord(value) ? value.details : undefined;
 }
@@ -452,6 +459,7 @@ function upsertTool(message: ChatMessage, patch: Partial<ToolCallBlock> & { id: 
       result: patch.result,
       status: patch.status ?? "running",
       details: patch.details,
+      ...(patch.images ? { images: patch.images } : {}),
       ...(patch.parentId ? { parentId: patch.parentId } : {}),
     });
     // A call a tool made itself is part of that tool's card, not a row of the transcript.
@@ -466,6 +474,7 @@ function upsertTool(message: ChatMessage, patch: Partial<ToolCallBlock> & { id: 
   if (patch.result !== undefined) next.result = patch.result;
   if (patch.status !== undefined) next.status = patch.status;
   if (patch.details !== undefined) next.details = patch.details;
+  if (patch.images !== undefined) next.images = patch.images;
   message.tools[index] = next;
 }
 
@@ -535,6 +544,13 @@ function applyEvent(
         const id = next[index].id;
         if (next[index].role !== "user" || !(id.startsWith("local:") || id.startsWith("queue:"))) continue;
         const list = next.slice();
+        // A transcript read already holds this entry: the optimistic row is its twin,
+        // and renaming it would leave two rows under one id.
+        if (list.some((row) => row.id === entryId)) {
+          list.splice(index, 1);
+          next = list;
+          break;
+        }
         list[index] = { ...next[index], id: entryId };
         next = list;
         break;
@@ -991,6 +1007,7 @@ function applyEvent(
         name,
         result: toolText(event.result) ?? toolText(event.output),
         details,
+        images: liveToolImages(event.result),
         status: toolResultStatus(name ?? target.tools.find((tool) => tool.id === id)?.name, event.isError === true, details),
       });
     }

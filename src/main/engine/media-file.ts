@@ -1,6 +1,6 @@
 import { createReadStream, realpathSync, statSync, type ReadStream } from "node:fs";
 import { isAbsolute } from "node:path";
-import { authorizeMediaMime, parseByteRange } from "@shared/media-preview";
+import { authorizeMediaMime, parseByteRange } from "../../shared/media-preview.ts";
 
 export type MediaOpen =
   | { ok: false; status: number; headers?: Record<string, string> }

@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type JSX } from "react";
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { AlertCircleIcon, ArrowRight01Icon, Copy01Icon, GitForkIcon, PencilEdit02Icon, RotateCcwIcon, StopCircleIcon, Tick02Icon } from "@hugeicons/core-free-icons";
@@ -17,9 +17,13 @@ import { localeTag } from "@/lib/language";
 import { groupParts, mergeAssistantRun, resolveParts, type RenderPart } from "@/lib/group-parts";
 import { cn } from "@/lib/utils";
 import type { ChatAttachment, ChatMessage, MessagePart } from "@shared/types";
+import { collectInlinePreviews, type InlinePreview } from "@shared/inline-media";
+import { resolvePath } from "@/lib/workspace-path";
+import { useWorkspacePath } from "@/stores/session";
 import { ImagePreview } from "@/components/image-preview";
 import { AttachmentChip } from "./attachment-chip";
 import { collectChangedFiles, TurnFileChips } from "./file-chips";
+import { InlinePreviews, InlineThumbStrip } from "./inline-preview";
 import { MarkdownView } from "./markdown-view";
 import { ThinkingBlock } from "./thinking-block";
 import { ToolCard } from "./tool-card";
@@ -571,6 +575,14 @@ function ChatMessageRowImpl({
     [isUser, message.tools],
   );
 
+  // Images, videos and pages the reply's tools ask to show, by the call that asked.
+  // Recomputed from the transcript alone, so a reload draws exactly what the stream did.
+  const cwd = useWorkspacePath();
+  const inlinePreviews = useMemo(
+    () => (isUser ? new Map<string, InlinePreview[]>() : collectInlinePreviews(message.tools, (path) => resolvePath(path, cwd))),
+    [cwd, isUser, message.tools],
+  );
+
   // Keep all hooks above the role/editing branches below. Editing a user prompt and
   // rendering a system row both return early, so a hook here would change the order
   // between renders and unmount the whole transcript with React error #300.
@@ -674,7 +686,16 @@ function ChatMessageRowImpl({
     );
   }
 
-  const renderPart = (part: RenderPart, index: number): JSX.Element | null => {
+  const previewsOf = (part: RenderPart): InlinePreview[] =>
+    part.kind === "tool"
+      ? (inlinePreviews.get(part.tool.id) ?? [])
+      : part.kind === "group"
+        ? part.group.tools.flatMap((tool) => inlinePreviews.get(tool.id) ?? [])
+        : [];
+
+  // `withPreviews` is off for the parts inside 折叠运行过程: a picture the run made is its
+  // result, not its process, so it is drawn under the fold (see below) rather than hidden by it.
+  const renderPart = (part: RenderPart, index: number, withPreviews = true): JSX.Element | null => {
     const isTail = index === parts.length - 1;
     if (part.kind === "thinking") {
       if (!showThinking) return null;
@@ -708,10 +729,14 @@ function ChatMessageRowImpl({
       );
     }
     if (part.kind === "tool") {
+      const shown = withPreviews ? previewsOf(part) : [];
       return (
-        <PartSlot key={`tool-${part.tool.id}`}>
-          <ToolCard tool={part.tool} />
-        </PartSlot>
+        <Fragment key={`tool-${part.tool.id}`}>
+          <PartSlot>
+            <ToolCard tool={part.tool} />
+          </PartSlot>
+          <InlinePreviews items={shown} />
+        </Fragment>
       );
     }
     if (part.kind === "model") {
@@ -725,10 +750,14 @@ function ChatMessageRowImpl({
         </PartSlot>
       );
     }
+    const shown = withPreviews ? previewsOf(part) : [];
     return (
-      <PartSlot key={part.group.id}>
-        <ToolGroupRow group={part.group} />
-      </PartSlot>
+      <Fragment key={part.group.id}>
+        <PartSlot>
+          <ToolGroupRow group={part.group} />
+        </PartSlot>
+        <InlinePreviews items={shown} />
+      </Fragment>
     );
   };
 
@@ -742,10 +771,13 @@ function ChatMessageRowImpl({
         {foldHead > 0 ? parts.slice(0, foldHead).map((part, index) => renderPart(part, index)) : null}
 
         {fold && foldHead < fold.cut ? (
-          <RunCollapse durationMs={fold.durationMs}>
+          <RunCollapse
+            durationMs={fold.durationMs}
+            trailing={<InlineThumbStrip items={parts.slice(foldHead, fold.cut).flatMap(previewsOf)} />}
+          >
             {parts
               .slice(foldHead, fold.cut)
-              .map((part, index) => (isDagGraphPart(part) ? null : renderPart(part, foldHead + index)))}
+              .map((part, index) => (isDagGraphPart(part) ? null : renderPart(part, foldHead + index, false)))}
           </RunCollapse>
         ) : null}
         {/* The graph of sub-tasks a run created is what the run set going, not how it got there:
