@@ -4,6 +4,7 @@ import 'package:hugeicons/hugeicons.dart';
 import '../i18n/core.dart';
 import '../theme/theme.dart';
 import '../ui/icons.dart';
+import 'markdown_chunks.dart';
 
 /// A thinking block, drawn as one row of a process card.
 ///
@@ -35,11 +36,25 @@ class ThinkingRow extends StatefulWidget {
 class _ThinkingRowState extends State<ThinkingRow> {
   bool _open = false;
 
+  /// Enough of a one-line preview to fill a row, and no more.
+  static const int _previewChars = 240;
+
+  /// A block longer than this is laid out a screenful at a time when it is expanded.
+  static const int _inlineChars = 4000;
+
+  /// How much of one is on screen at once — it scrolls inside the card.
+  static const double _longBodyHeight = 320;
+
   @override
   Widget build(BuildContext context) {
     final palette = widget.palette;
     final live = widget.live;
-    final preview = widget.text.replaceAll(RegExp(r'\s+'), ' ').trim();
+    // Collapsing the whitespace of the whole block was itself an O(n) pass on every
+    // frame a reply streamed; the row shows one line of it, so only the head is read.
+    final opening = widget.text.length > _previewChars
+        ? widget.text.substring(0, _previewChars)
+        : widget.text;
+    final preview = opening.replaceAll(RegExp(r'\s+'), ' ').trim();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
@@ -101,13 +116,37 @@ class _ThinkingRowState extends State<ThinkingRow> {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(color: palette.field, borderRadius: BorderRadius.circular(10)),
-              child: SelectableText(
-                widget.text.trim(),
-                style: TextStyle(color: palette.muted, fontSize: 14, height: 21 / 14),
-              ),
+              child: _body(palette),
             ),
           ),
       ],
+    );
+  }
+
+  /// The whole block, laid out one screenful at a time when it is long.
+  ///
+  /// A `SelectableText` holding 376 KB is one paragraph the engine has to break into
+  /// lines in a single pass — the same unbounded layout a looping model puts in the reply
+  /// itself. Cutting it into rows lets the list build only what is on screen; the reader
+  /// still has all of it, scrolled inside the card.
+  Widget _body(Palette palette) {
+    final style = TextStyle(
+      color: palette.muted,
+      fontSize: 14,
+      height: 21 / 14,
+    );
+    final text = widget.text.trim();
+    if (text.length <= _inlineChars) return SelectableText(text, style: style);
+    final chunks = chunkPlainText(text);
+    return SizedBox(
+      height: _longBodyHeight,
+      child: ListView.builder(
+        primary: false,
+        padding: EdgeInsets.zero,
+        itemCount: chunks.length,
+        itemBuilder: (context, index) =>
+            SelectableText(chunks[index], style: style),
+      ),
     );
   }
 }

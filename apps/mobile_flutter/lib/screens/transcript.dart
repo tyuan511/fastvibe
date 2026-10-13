@@ -5,6 +5,7 @@ import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import '../chat/dag_data.dart';
 import '../chat/image_bytes.dart';
 import '../chat/image_note.dart';
+import '../chat/markdown_chunks.dart';
 import '../chat/markdown_view.dart';
 import '../chat/message.dart';
 import '../chat/process_group.dart';
@@ -21,6 +22,14 @@ const double _workingGap = 8;
 const double _workingBottomInset = 8;
 const double _workingScrollSpace =
     _workingPillHeight + _workingGap + _workingBottomInset;
+
+/// The gap between two blocks of one reply, and between two chunks of one block.
+///
+/// A reply is one row, so its blocks were always 12pt apart. Cutting a long block into
+/// rows makes those rows neighbours, and they have to keep the spacing the Markdown
+/// renderer would have drawn inside the block itself.
+const double _blockGap = 12;
+const double _chunkGap = 14;
 
 /// The transcript.
 ///
@@ -93,9 +102,117 @@ class _TranscriptViewState extends State<TranscriptView> {
     if (next != _away) setState(() => _away = next);
   }
 
+  /// One per long reply's prose, keyed by message and block, so a streamed reply is
+  /// only ever scanned from where it was last read.
+  final Map<String, MarkdownChunker> _chunkers = <String, MarkdownChunker>{};
+
+  /// The list's rows: one per message, except a reply long enough that its prose is cut
+  /// into chunks — see [_Row] and `MarkdownChunker`.
+  ///
+  /// Cutting a reply up is what keeps a reply that grew without bound (a model looping on
+  /// its own output) from being parsed and laid out whole, on every streamed frame and
+  /// every time the list rebuilt its row.
+  ///
+  /// Rows come out in the list's own order — the newest content first, because the list is
+  /// inverted — so a message's rows are emitted newest-block-first.
+  List<_Row> _rows() {
+    final rows = <_Row>[];
+    final live = <String>{};
+    for (var position = 0; position < widget.messages.length; position++) {
+      final message = widget.messages[position];
+      final previous = position + 1 < widget.messages.length
+          ? widget.messages[position + 1]
+          : null;
+      final previousIsAssistant = previous?.isAssistant == true;
+      final newest = position == 0;
+      final drawn = <_Row>[];
+      void push(List<RenderBlock>? blocks, double gap) => drawn.add(
+        _Row(
+          message: message,
+          blocks: blocks,
+          previousIsAssistant: previousIsAssistant,
+          newest: newest,
+          gapBefore: drawn.isEmpty ? 0 : gap,
+        ),
+      );
+
+      // Only a reply long enough to be worth cutting up is drawn from its blocks; every
+      // other message keeps the plain one-row path (and its lazy `buildBlocks` call).
+      if (message.isAssistant &&
+          message.kind == null &&
+          message.text.length > kMarkdownChunkChars) {
+        final blocks = buildBlocks(message);
+        final pending = <RenderBlock>[];
+        var gap = 0.0;
+        void flush() {
+          if (pending.isEmpty) return;
+          push(List<RenderBlock>.of(pending), gap);
+          pending.clear();
+          gap = _blockGap;
+        }
+
+        for (var index = 0; index < blocks.length; index++) {
+          final block = blocks[index];
+          if (block is! TextBlock || block.text.length <= kMarkdownChunkChars) {
+            pending.add(block);
+            continue;
+          }
+          final key = '${message.id}:$index';
+          live.add(key);
+          final chunker = _chunkers.putIfAbsent(
+            key,
+            () => MarkdownChunker(),
+          );
+          // An unchanged reply is fed back by identity on every repaint; scanning its
+          // whole text again for that is the one cost this can still avoid.
+          if (!identical(chunker.source, block.text)) chunker.update(block.text);
+          if (!chunker.isSplit) {
+            pending.add(block);
+            continue;
+          }
+          for (final chunk in chunker.chunks) {
+            flush();
+            push(<RenderBlock>[TextBlock(chunk)], _chunkGap);
+          }
+          if (chunker.tail.isNotEmpty) pending.add(TextBlock(chunker.tail));
+        }
+        flush();
+      } else {
+        push(null, 0);
+      }
+
+      // The row that opens the message carries its name; the one that closes it carries
+      // its footer, its live tail and the gap to the next message.
+      drawn.first.first = true;
+      drawn.last.last = true;
+      rows.addAll(drawn.reversed);
+    }
+    // A chunker whose reply left the transcript would otherwise be held forever.
+    _chunkers.removeWhere((key, _) => !live.contains(key));
+    return rows;
+  }
+
+  Widget _row(BuildContext context, Palette palette, _Row row) {
+    final message = row.message;
+    return Padding(
+      padding: EdgeInsets.only(top: row.gapBefore, bottom: row.last ? 24 : 0),
+      child: MessageRow(
+        message: message,
+        palette: palette,
+        blocks: row.blocks,
+        meta: row.last ? widget.footers[message.lastId ?? message.id] : null,
+        turnStart: message.isAssistant && !row.previousIsAssistant && row.first,
+        live: widget.running && row.newest && row.last,
+        dagWatcher: widget.dagWatcher,
+        onLongPress: widget.onLongPress,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final palette = paletteOf(context);
+    final rows = _rows();
     return Stack(
       children: <Widget>[
         NotificationListener<ScrollNotification>(
@@ -113,7 +230,7 @@ class _TranscriptViewState extends State<TranscriptView> {
             controller: _controller,
             reverse: true,
             padding: EdgeInsets.fromLTRB(22, 16 + widget.topInset, 22, 16),
-            itemCount: widget.messages.length + 1,
+            itemCount: rows.length + 1,
             itemBuilder: (context, index) {
               // Index 0 of the list is the visual bottom: the spacer.
               if (index == 0) {
@@ -125,24 +242,7 @@ class _TranscriptViewState extends State<TranscriptView> {
                       widget.bottomInset,
                 );
               }
-              final position = index - 1;
-              final message = widget.messages[position];
-              final previous = position + 1 < widget.messages.length
-                  ? widget.messages[position + 1]
-                  : null;
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 24),
-                child: MessageRow(
-                  message: message,
-                  palette: palette,
-                  meta: widget.footers[message.lastId ?? message.id],
-                  turnStart:
-                      message.isAssistant && previous?.isAssistant != true,
-                  live: widget.running && position == 0,
-                  dagWatcher: widget.dagWatcher,
-                  onLongPress: widget.onLongPress,
-                ),
-              );
+              return _row(context, palette, rows[index - 1]);
             },
           ),
         ),
@@ -241,6 +341,33 @@ class WorkingPill extends StatelessWidget {
   }
 }
 
+/// One row of the list.
+///
+/// A message is one row — except a reply whose prose was long enough to be cut into
+/// chunks, which becomes one row per chunk. [first] and [last] are that message's ends:
+/// its name is drawn on the first row and its footer on the last.
+class _Row {
+  _Row({
+    required this.message,
+    this.blocks,
+    required this.previousIsAssistant,
+    required this.newest,
+    this.gapBefore = 0,
+  });
+
+  final ChatMessage message;
+
+  /// The blocks this row draws; null draws the message whole.
+  final List<RenderBlock>? blocks;
+  final bool previousIsAssistant;
+
+  /// The newest message of the transcript — the one a run is streaming into.
+  final bool newest;
+  final double gapBefore;
+  bool first = true;
+  bool last = true;
+}
+
 /// One row of the transcript. A reply is a single row; its parts decide what is drawn.
 class MessageRow extends StatelessWidget {
   const MessageRow({
@@ -251,12 +378,16 @@ class MessageRow extends StatelessWidget {
     required this.turnStart,
     required this.live,
     required this.onLongPress,
+    this.blocks,
     this.dagWatcher,
   });
 
   final ChatMessage message;
   final Palette palette;
   final TurnMeta? meta;
+
+  /// The blocks to draw, when the list has already cut the reply up; null draws it whole.
+  final List<RenderBlock>? blocks;
 
   /// The first assistant row of a turn — it carries the reply's name.
   final bool turnStart;
@@ -302,6 +433,7 @@ class MessageRow extends StatelessWidget {
     }
     return _AssistantRow(
       message: message,
+      blocks: blocks,
       palette: palette,
       meta: meta,
       turnStart: turnStart,
@@ -410,10 +542,14 @@ class _AssistantRow extends StatelessWidget {
     required this.turnStart,
     required this.live,
     required this.onLongPress,
+    this.blocks,
     this.dagWatcher,
   });
 
   final ChatMessage message;
+
+  /// The blocks to draw, when the list has already cut the reply up; null draws it whole.
+  final List<RenderBlock>? blocks;
   final Palette palette;
   final TurnMeta? meta;
   final bool turnStart;
@@ -423,7 +559,7 @@ class _AssistantRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final blocks = buildBlocks(message);
+    final drawn = blocks ?? buildBlocks(message);
     return GestureDetector(
       onLongPress: () => onLongPress(message),
       child: ConstrainedBox(
@@ -448,9 +584,9 @@ class _AssistantRow extends StatelessWidget {
               ),
               const SizedBox(height: 12),
             ],
-            for (var index = 0; index < blocks.length; index++) ...<Widget>[
-              if (index > 0) const SizedBox(height: 12),
-              _block(blocks[index], index == blocks.length - 1),
+            for (var index = 0; index < drawn.length; index++) ...<Widget>[
+              if (index > 0) const SizedBox(height: _blockGap),
+              _block(drawn[index], index == drawn.length - 1),
             ],
             if (message.error != null) ...<Widget>[
               const SizedBox(height: 6),

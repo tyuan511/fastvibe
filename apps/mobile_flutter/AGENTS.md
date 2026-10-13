@@ -128,6 +128,28 @@ Read `lib/chat/message.dart`, `live_events.dart`, `snapshot_sync.dart` and
   push or replacement connection cannot overwrite newer state.
 - **Streaming is reduced in place, painted once per frame-sized interval.** A fast model
   otherwise repaints the list once per token.
+- **A block of prose is laid out bounded, and its Markdown theme is built once.**
+  `TranscriptView` cuts a reply longer than `kMarkdownChunkChars` into one list row per
+  Markdown block (`lib/chat/markdown_chunks.dart`, an incremental chunker fed the whole
+  text every frame but only reading the new lines), so `ListView.builder` builds and lays
+  out only the rows on screen and a settled chunk is never parsed again. Without it a
+  model looping on its own output (376 KB in one assistant message) was parsed whole on
+  every streamed frame and laid out inside one row — unbounded work per frame, and a row
+  that took seconds to open. The chunker's own rules: cut only where a Markdown block can
+  begin, so a fence, a `$$` formula, a loose list or a table is never split; past 2× the
+  chunk size cut anyway, closing an open fence and re-opening it in the next chunk. The
+  rows come out in the *list's* order — the newest block first, since the list is inverted
+  — and the message's first row carries its name while the last carries the footer and the
+  live tail. A long *thinking* block is the same problem one level down and scrolls inside
+  its card above `_inlineChars`.
+  The Markdown theme data and style sheet are cached per palette/size/language and handed
+  back *by identity*: `GptMarkdownTheme` is an `InheritedWidget` whose data has no value
+  equality, and a fresh instance makes every descendant re-read its dependencies, which
+  the package answers by throwing its parse caches away — a full re-parse of the reply on
+  every frame.
+  (A library is not the answer here: the whole Flutter ecosystem renders Markdown into a
+  Column, and `gpt_markdown`'s lazy path — `SliverGptMarkdown` — needs a sliver host, which
+  a one-row-per-message list is not. Row-level chunking sidesteps both.)
 - **Older history has its own flight** (`HistoryPager`), so scrolling back never blocks
   the live path. `loadAll` drains it before a copy-all, which must never silently copy
   just the visible window.
