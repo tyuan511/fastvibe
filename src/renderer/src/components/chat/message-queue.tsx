@@ -300,7 +300,9 @@ export function MessageQueue({
     <div
       data-queue-count={items.length}
       className={cn(
-        "relative z-0 w-full overflow-hidden rounded-t-2xl border border-border bg-card p-1.5",
+        "composer-tray relative z-0 w-full overflow-hidden rounded-t-2xl border border-border bg-card p-1.5",
+        // The tuck under the input card; index.css cuts it away under 玻璃效果 and
+        // repeats this depth (`--tray-tuck`).
         "-mb-7 pb-9",
       )}
     >

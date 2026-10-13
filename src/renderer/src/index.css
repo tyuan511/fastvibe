@@ -316,6 +316,23 @@ html[data-glass="true"] .thread-prompt {
 html[data-glass="true"] .thread-prompt [data-prompt-scrim] {
   display: none;
 }
+/* The follow-up queue (message-queue.tsx) tucks 1.75rem under the input card so the two
+   read as one shape, and the card's solid fill hides the part underneath. A glass card
+   hides nothing: the tray's fill doubled up into a lighter band across the top of the
+   input, with the tray's bottom hairline drawn through the placeholder. So the tray is
+   cut to the card's outline instead — everything above the card, plus the two spandrels
+   outside its rounded corners (the card's `rounded-[22px]`), which is what still joins
+   the tray's sides to the curve. */
+html[data-glass="true"] .composer-tray {
+  --tray-tuck: 1.75rem;
+  --card-radius: 22px;
+  mask:
+    linear-gradient(#000 0 0) top / 100% calc(100% - var(--tray-tuck)) no-repeat,
+    radial-gradient(circle var(--card-radius) at 100% 100%, transparent calc(var(--card-radius) - 1px), #000 var(--card-radius))
+      left 0 bottom calc(var(--tray-tuck) - var(--card-radius)) / var(--card-radius) var(--card-radius) no-repeat,
+    radial-gradient(circle var(--card-radius) at 0 100%, transparent calc(var(--card-radius) - 1px), #000 var(--card-radius))
+      right 0 bottom calc(var(--tray-tuck) - var(--card-radius)) / var(--card-radius) var(--card-radius) no-repeat;
+}
 /* Floating layers are glass too. Their content is always over the page, so the
    blur has something to work on, which is what keeps the text legible. */
 html[data-glass="true"] .overlay-surface {

@@ -835,6 +835,10 @@ is only offered where there is a blur to show (`HAS_VIBRANCY`). `src/shared/glas
   decides which prompt is pinned. The mask follows how far sticky has moved the prompt off its
   own place, not `pinned`: pushed away by the next turn, a prompt leaves the top edge but rides
   out lying on its reply's last rows, and those must stay cut until the turn is gone.
+- **The same goes for anything tucked under a card.** The follow-up queue slides 1.75rem under
+  the input card and relies on the card's fill to hide that part; under glass `.composer-tray`
+  is masked to the card's outline instead (`index.css`). A new panel that tucks under a
+  translucent card needs its own cut.
 - **Settings hides the shell instead of covering it.** The overlay is translucent like
   everything else, so while it is open `[data-shell-split]` and the browser guest layer are
   `visibility: hidden` (not unmounted). A new full-window overlay needs the same treatment.
