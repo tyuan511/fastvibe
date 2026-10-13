@@ -23,10 +23,20 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { IconButton } from "@/components/icon-button";
 import { formatRelativeTime } from "@/lib/time";
 import { restoreConversations, useArchivedIds } from "@/stores/archive";
 import { useSessionStore } from "@/stores/session";
+import { useSettingsStore } from "@/stores/settings";
+import { AUTO_ARCHIVE_DAY_OPTIONS, AUTO_ARCHIVE_OFF, readAutoArchiveDays } from "@shared/auto-archive";
+import { SettingsGroup, SettingsRow } from "./settings-group";
 import type { Conversation } from "@shared/types";
 
 /** Only deletions need a second confirmation; restoring is non-destructive. */
@@ -58,6 +68,8 @@ export function ArchivedSettings({
   const conversations = useSessionStore((state) => state.conversations);
   const projects = useSessionStore((state) => state.projects);
   const archived = useArchivedIds();
+  const autoArchiveDays = useSettingsStore((state) => state.settings.autoArchiveDays);
+  const updateSettings = useSettingsStore((state) => state.update);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [confirm, setConfirm] = useState<ConfirmTarget | null>(null);
   const [busy, setBusy] = useState(false);
@@ -131,12 +143,48 @@ export function ArchivedSettings({
   }
 
   const pendingCount = confirm?.kind === "single" ? 1 : (confirm?.ids.length ?? 0);
+  // Labels for the day picker, including 永不 for the off state.
+  const autoArchiveItems = useMemo(
+    () =>
+      Object.fromEntries(
+        AUTO_ARCHIVE_DAY_OPTIONS.map((days) => [
+          String(days),
+          days === AUTO_ARCHIVE_OFF ? t("archived.autoNever") : t("archived.autoDays", { count: days }),
+        ]),
+      ),
+    [t],
+  );
 
   return (
     <div className="space-y-4">
       <p className="px-1 text-xs leading-4 text-muted-foreground">
         {t("archived.intro")}
       </p>
+
+      <SettingsGroup>
+        <SettingsRow
+          title={t("archived.autoTitle")}
+          description={t("archived.autoDesc")}
+          control={
+            <Select
+              items={autoArchiveItems}
+              value={String(readAutoArchiveDays(autoArchiveDays))}
+              onValueChange={(value) => { if (value) updateSettings({ autoArchiveDays: Number(value) }); }}
+            >
+              <SelectTrigger size="sm" aria-label={t("archived.autoTitle")} className="w-40">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {AUTO_ARCHIVE_DAY_OPTIONS.map((days) => (
+                  <SelectItem key={days} value={String(days)}>
+                    {days === AUTO_ARCHIVE_OFF ? t("archived.autoNever") : t("archived.autoDays", { count: days })}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          }
+        />
+      </SettingsGroup>
 
       {items.length === 0 ? (
         <Empty className="border border-solid border-border bg-card">

@@ -141,6 +141,7 @@
   "cancel": "取消",
   "removeAction": "移除",
   "archived": "已归档「{{title}}」",
+  "autoArchived": "已自动归档 {{count}} 个长期未更新的对话",
   "undo": "撤销",
   "projectRemoved": "已移除项目 {{name}}"
  },

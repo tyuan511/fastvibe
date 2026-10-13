@@ -314,6 +314,10 @@
  },
  "archived": {
   "intro": "Archiving just hides a chat from the sidebar. Deleting also removes the session record, and cannot be undone.",
+  "autoTitle": "Auto archive",
+  "autoDesc": "Chats with no update for longer than this move here on their own.",
+  "autoNever": "Never",
+  "autoDays": "{{count}} days",
   "emptyTitle": "No archived chats",
   "emptyDesc": "Hover a chat in the sidebar and click the archive icon, or right-click and choose Archive.",
   "selectAll": "Select all",

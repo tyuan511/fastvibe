@@ -11,6 +11,7 @@ import {
   type ThemeMode,
 } from "@/lib/themes";
 import { normalizeNotificationSettings } from "@shared/notifications";
+import { DEFAULT_AUTO_ARCHIVE_DAYS, isAutoArchiveDays } from "@shared/auto-archive";
 import { detectSystemLanguage, isUiLanguage, type UiLanguage } from "@/lib/language";
 import { sanitizeShortcutOverrides, type ShortcutOverrides } from "@/lib/shortcuts";
 
@@ -126,6 +127,12 @@ export type AppSettings = ProxySettings & {
    */
   archivedConversations?: string[];
   /**
+   * 自动归档 (设置 → 归档对话): days without an update after which a conversation is
+   * moved to the archive list on its own. `0` is off (永不). The rules live in
+   * `@shared/auto-archive`; the shell sweeps with them (`lib/auto-archive.ts`).
+   */
+  autoArchiveDays: number;
+  /**
    * Manually dragged sidebar order, keyed by section (`pinned`, `recent`, or
    * `project:<cwd>`). Each value is that section's own id list, so reordering one
    * project never disturbs 置顶, 聊天 or another project. A conversation missing
@@ -182,6 +189,7 @@ const DEFAULTS: AppSettings = {
   computerEnabled: false,
   computerClipboard: false,
   computerPreferBackground: true,
+  autoArchiveDays: DEFAULT_AUTO_ARCHIVE_DAYS,
 };
 
 /**
@@ -213,6 +221,7 @@ function sanitize(parsed: Partial<AppSettings>): Partial<AppSettings> {
   if (!isNumberMap(next.sidePaneWidths)) delete next.sidePaneWidths;
   if (!isIdListMap(next.fileTreeExpanded)) delete next.fileTreeExpanded;
   if (!isIdList(next.archivedConversations)) delete next.archivedConversations;
+  if (!isAutoArchiveDays(next.autoArchiveDays)) delete next.autoArchiveDays;
   if (typeof next.computerEnabled !== "boolean") delete next.computerEnabled;
   if (typeof next.computerClipboard !== "boolean") delete next.computerClipboard;
   if (typeof next.computerPreferBackground !== "boolean") delete next.computerPreferBackground;

@@ -2381,6 +2381,28 @@ from an event payload. So it is as fresh as the last `reloadActiveState()`.
 `settings:clear`（恢复默认）同样保留 `remote*`；`remote:start` / `remote:stop` 的写入走 `queueSettingsWrite`，
 否则会落在一次保存的「读文件 → await → 写文件」中间被盖掉。新增一个由 Main 自己方法管理的设置键时，照这个办。
 
+## 会话自动归档（`src/shared/auto-archive.ts`）
+
+归档是本地偏好（`settings.archivedConversations`），不是引擎状态；自动归档也活在渲染层：
+`lib/auto-archive.ts` 的 `sweepAutoArchive` 读一次 store 里的会话列表和 `settings.autoArchiveDays`，
+按 `@shared/auto-archive` 的纯规则算出该归档的 id，再走用户手动归档那条 `archiveConversations`。
+规则单独放一个模块，是为了让它能像其它纯逻辑一样被单测枚举，而不是在界面上被发现。
+
+- **时间看 `updatedAt`，不看 `createdAt`。** 它是 catalog 的「最后变动」，提示词预览、改名、绑定项目、
+  打开会话都会刷新，也正是归档面板展示的「更新时间」：30 天前建、昨天还在用的会话不是陈旧的。
+- **五种会话不碰**（`staleConversationIds`）：辅助对话（在右侧面板，不属于侧栏）、没有 preview 的空草稿
+  （新对话要复用它）、正在跑的（把忙着的会话藏到用户够不到的行后面，正是手动归档那条路刻意避开的）、
+  当前打开的（行消失会让打开的会话在侧栏无迹可寻）、置顶的（置顶就是「留在我看得见的地方」，
+  而置顶在 localStorage 里，所以读取它的 `lib/pinned.ts` 从侧栏组件里提了出来）。
+  边界是 `< cutoff`：正好 N 天算还在窗口内。
+- **调度在 `App.tsx`**：workspace 加载完跑一次，之后每小时一次，覆盖应用一直开着跨过门槛的情况；
+  effect 以时间设置为依赖，所以在 设置 → 归档对话 里把时间改小会立刻扫一次。
+  一批只提示一次，带和手动归档一样的「撤销」——会话从用户正在看的列表里消失不该无声无息，
+  去处是 设置 → 归档对话。撤销只还原本批 id，不碰以后新归档的。
+- **设置是 `autoArchiveDays`，默认 30，`0` 是永不。** 选单在 设置 → 归档对话；手机写的
+  `settings:set` 是部分快照，这个键不会被它清掉。
+- **不做的**：没有后台服务，应用没运行时什么都不会发生；手机端（Flutter）还没有这个设置项。
+
 ## 系统通知（设置 → 通用）
 
 设置里只剩一个总开关，**默认打开**。任务完成、任务出错、需要确认、应用更新不再各自可关：总开关

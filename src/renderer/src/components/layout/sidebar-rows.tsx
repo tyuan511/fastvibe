@@ -47,8 +47,12 @@ import type { RemoteHostConnectionState } from "@shared/remote-host";
 import type { DagNode } from "@shared/dag";
 import type { Conversation, Project } from "@shared/types";
 
+// Pins live in `lib/pinned.ts`: the sidebar draws them and the auto-archive sweep must
+// leave a pinned chat alone, and only one of those two is a component. Re-exported here
+// so the sidebar keeps a single import for its row state.
+export { persistPinned, readPinned } from "@/lib/pinned";
+
 export const COLLAPSED_KEY = "fastvibe.sidebar.collapsed";
-const PINNED_KEY = "fastvibe.sidebar.pinned";
 /** Default visible chats under each project; the rest sit behind 展开显示. */
 export const PROJECT_SESSION_LIMIT = 5;
 
@@ -91,37 +95,6 @@ export function readIdSet(key: string): Set<string> {
   } catch {
     return new Set();
   }
-}
-
-
-/**
- * Pins are stored as `id -> pinnedAt` so the "已置顶" list can be ordered by pin
- * time. Earlier builds stored a plain id array; keep reading that shape.
- */
-export function readPinned(): Record<string, number> {
-  try {
-    const raw = localStorage.getItem(PINNED_KEY);
-    const parsed = raw ? (JSON.parse(raw) as unknown) : {};
-    if (Array.isArray(parsed)) {
-      const out: Record<string, number> = {};
-      for (const id of parsed) if (typeof id === "string") out[id] = 0;
-      return out;
-    }
-    if (parsed && typeof parsed === "object") {
-      const out: Record<string, number> = {};
-      for (const [id, at] of Object.entries(parsed)) {
-        if (typeof at === "number") out[id] = at;
-      }
-      return out;
-    }
-    return {};
-  } catch {
-    return {};
-  }
-}
-
-export function persistPinned(value: Record<string, number>): void {
-  localStorage.setItem(PINNED_KEY, JSON.stringify(value));
 }
 
 function InlineRename({

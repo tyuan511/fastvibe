@@ -314,6 +314,10 @@
  },
  "archived": {
   "intro": "归档只是从侧边栏收起，内容仍在；删除会一并移除会话记录，无法恢复。",
+  "autoTitle": "自动归档",
+  "autoDesc": "超过所选时间没有更新的对话会自动移到这里。",
+  "autoNever": "永不",
+  "autoDays": "{{count}} 天",
   "emptyTitle": "没有已归档的对话",
   "emptyDesc": "在侧边栏悬停对话点归档图标，或右键选择「归档」。",
   "selectAll": "全选",

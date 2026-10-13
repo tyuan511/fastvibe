@@ -91,6 +91,7 @@ import { conversationIdFromHash, conversationIdFromPath, conversationPath, works
 import { useSidePaneStore } from "@/stores/side-pane";
 import { useAppShortcuts, useShortcutLabel } from "@/lib/use-shortcuts";
 import { archiveConversations, archivedIdList, restoreConversations, useArchivedIds } from "@/stores/archive";
+import { AUTO_ARCHIVE_SWEEP_MS, sweepAutoArchive } from "@/lib/auto-archive";
 import { useStable } from "@/lib/use-stable";
 import { isAbortOutcome } from "@shared/abort";
 
@@ -371,6 +372,34 @@ export function App(): JSX.Element {
     });
     return () => cancelAnimationFrame(frame);
   }, [engineKnown, status.state, workspaceReady, opening]);
+
+  /**
+   * 自动归档: conversations nobody has touched inside 设置 → 归档对话's window move to the
+   * archive on their own. The rules are `@shared/auto-archive`'s; this is only where the
+   * sweep is scheduled — once the workspace has loaded, then hourly for an app left open
+   * across the threshold.
+   *
+   * A batch is announced once, with the same 撤销 the manual archive offers: chats
+   * vanishing from a list people are reading should not go quietly, even though the
+   * archive pane is where they land.
+   *
+   * Keyed on the window as well, so lowering it in 设置 → 归档对话 sweeps at once rather
+   * than waiting out the hour.
+   */
+  useEffect(() => {
+    if (!workspaceReady) return;
+    const run = () => {
+      const ids = sweepAutoArchive();
+      if (ids.length === 0) return;
+      toast.success(t("sidebar.autoArchived", { count: ids.length }), {
+        id: "auto-archived",
+        action: { label: t("sidebar.undo"), onClick: () => restoreConversations(ids) },
+      });
+    };
+    run();
+    const timer = window.setInterval(run, AUTO_ARCHIVE_SWEEP_MS);
+    return () => window.clearInterval(timer);
+  }, [workspaceReady, t, settings.autoArchiveDays]);
 
   function listedChatIds(): string[] {
     return conversations

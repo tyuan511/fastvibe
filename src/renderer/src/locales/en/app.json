@@ -141,6 +141,7 @@
   "cancel": "Cancel",
   "removeAction": "Remove",
   "archived": "Archived \"{{title}}\"",
+  "autoArchived": "Auto-archived {{count}} chats with no recent activity",
   "undo": "Undo",
   "projectRemoved": "Removed project {{name}}"
  },
