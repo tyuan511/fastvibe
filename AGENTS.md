@@ -1284,6 +1284,11 @@ real entry id instead of adding a second row. A refused/consumed submission remo
 the pending row, unlocks the composer and returns its text. Do not mark this phase as
 an agent run: the SDK has not started one yet.
 
+**The new chat is told where it came from.** The source chat stays, and `conversation_search` reads it
+by catalog id, which the new chat has no other way to learn. `withHandoffSource` appends one line naming
+that id to the prompt *after* the review (so editing the summary cannot drop it); the id reaches the
+extension as `ctx.ui.conversationId`, which `#extensionUi` sets for every context.
+
 **A chat Main fills itself has to reach the sidebar like any other.** `preview` is what every
 list in the sidebar filters on — and what marks the project's blank draft for 新对话 — but only
 the renderer's `recordPrompt` wrote it, and a handoff sends its opening prompt from Main. The
@@ -2371,6 +2376,15 @@ from an event payload. So it is as fresh as the last `reloadActiveState()`.
 - **打开时修复**：`#ensureSession` 在 `SessionManager.open` 之前跑 `repairTranscriptFile`，把父记录缺失的
   条目接到文件中的前一条上（只重写那几行，坏行原样保留，不会接成环），并在日志里记一条
   `[transcript] relinked …`。对话搜索（`loadConversationTranscriptBranch`）在内存里做同样的接续，不写盘。
+- **打开时补结果**：进程死在工具执行中途，转写以 `assistant(stopReason: "toolUse")` 结尾，它请求的调用没有任何
+  结果（助手消息在工具运行之前就已落盘）。`closeOrphanToolCalls` 紧接着 relink 之后，给当前分支末尾那条
+  助手里**没有结果的调用**各追加一条 `isError` 的 `toolResult`，文案说「可能已部分执行，先核对现场」。
+  这样转写以 `toolResult` 结尾，`canResumeRun` 本来就判为可继续，composer 出现「继续」，模型也被如实告知，
+  而不是在下一次请求里只读到提供方投影合成的 `"No result provided"`。只补分支末尾：后面跟着用户消息的
+  是被有意打断、投影已处理；以 `error` / `aborted` / `length` 结束的回复从未执行过它的工具，不碰。
+  它只在**本进程首次加载这个会话时**跑，运行中的会话不会被回收（`#sweepSessions` 跳过有运行的），所以不会
+  给一个还在执行的工具抢先写结果。与开发版共用 userData 时，另一个进程正在跑同一会话仍是已知风险。
+  不做「读/搜索类工具自动重放」：模型看到已中断的结果后会自己重新读。
 
 ## 设置跨窗口同步
 

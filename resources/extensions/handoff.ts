@@ -85,6 +85,20 @@ export function clipHandoffTranscript(text: string, maxChars = HANDOFF_TRANSCRIP
   return `${text.slice(0, head)}${note}${tail > 0 ? text.slice(text.length - tail) : ""}`;
 }
 
+/**
+ * Tell the new chat where it came from. The source chat stays, and `conversation_search`
+ * reads it by catalog id, which the new chat otherwise has no way to learn. Added after the
+ * review, so an edit of the summary cannot drop it; it shows in the transcript like any
+ * other part of the message.
+ */
+export function withHandoffSource(prompt: string, sourceId: string | undefined): string {
+  if (!sourceId) return prompt;
+  return `${prompt}\n\n${T(
+    `（交接自会话 ${sourceId}。需要交接之前的细节时，用 conversation_search 在那个会话里查，不要凭印象补全。）`,
+    `(Handed off from conversation ${sourceId}. For details from before the handoff, search that conversation with conversation_search instead of guessing.)`,
+  )}`;
+}
+
 export function handoffRequest(transcript: string, goal: string): string {
   return `<conversation>\n${transcript}\n</conversation>\n\n<goal>\n${goal}\n</goal>`;
 }
@@ -223,6 +237,8 @@ async function runHandoff(args: string, ctx: ExtensionCommandContext): Promise<v
     return;
   }
 
+  const sourceId = (ctx.ui as { conversationId?: unknown }).conversationId;
+  const outgoing = withHandoffSource(next, typeof sourceId === "string" ? sourceId : undefined);
   const parentSession = ctx.sessionManager.getSessionFile() ?? undefined;
   ctx.ui.setStatus("handoff", T("正在创建新会话…", "Creating the new chat…"));
   const created = await ctx.newSession({
@@ -234,7 +250,7 @@ async function runHandoff(args: string, ctx: ExtensionCommandContext): Promise<v
       // through its own events; holding the command open for it would keep the chat
       // being left busy for as long as the answer takes. The replacement context is
       // the new session; the context this command was called with is stale here.
-      void replacement.sendUserMessage(next).catch((error: unknown) => {
+      void replacement.sendUserMessage(outgoing).catch((error: unknown) => {
         replacement.ui.notify(error instanceof Error ? error.message : String(error), "error");
       });
     },

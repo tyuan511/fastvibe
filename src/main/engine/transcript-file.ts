@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { closeSync, fsyncSync, openSync, readFileSync, renameSync, rmSync, writeSync } from "node:fs";
 
 /**
@@ -112,6 +113,109 @@ export function repairTranscriptFile(file: string): number {
   });
   writeTranscriptText(file, lines.join("\n"));
   return relinked;
+}
+
+type ToolCallLike = { type?: unknown; id?: unknown; name?: unknown };
+type MessageEntryLike = EntryLike & { message?: { role?: unknown; content?: unknown; stopReason?: unknown; toolCallId?: unknown } };
+
+/**
+ * Close the tool calls an interrupted run left without a result.
+ *
+ * The assistant message that requests a tool is written when it ends, before the tool runs.
+ * A process that died while the tool was running therefore leaves a transcript whose last
+ * reply asks for a call nothing ever answered. The provider projection papers over that with
+ * a synthetic "No result provided", but only when the next request is built: the composer
+ * offers no 继续 for that shape, search and usage read an unfinished call, and the model is
+ * never told the call may have half-run.
+ *
+ * This appends a real error result for each such call, after the last entry, so the
+ * transcript is self-consistent for every reader and ends on a `toolResult` — which is
+ * already resumable. It only looks at the end of the current branch: an assistant that was
+ * followed by a user message was interrupted on purpose and the projection handles it, and a
+ * reply that stopped on `error` / `aborted` / `length` never ran its tools.
+ *
+ * Meant for a file no run owns, i.e. just before a session is opened in this process. The
+ * caller supplies the wording because the text is read by the model as well as the user.
+ * Returns the number of calls closed.
+ */
+export function closeOrphanToolCalls(file: string, text: (toolName: string) => string, now: Date = new Date()): number {
+  let raw: string;
+  try {
+    raw = readFileSync(file, "utf8");
+  } catch {
+    return 0;
+  }
+  const entries: MessageEntryLike[] = [];
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line) as unknown;
+      if (entry && typeof entry === "object" && !Array.isArray(entry)) entries.push(entry as MessageEntryLike);
+    } catch {
+      // The SDK skips malformed lines too.
+    }
+  }
+  if (entries[0]?.type !== "session") return 0;
+  const byId = new Map<string, MessageEntryLike>();
+  let leaf: string | null = null;
+  for (const entry of entries) {
+    if (entry.type === "session" || typeof entry.id !== "string") continue;
+    byId.set(entry.id, entry);
+    leaf = entry.id;
+  }
+  if (leaf === null) return 0;
+
+  // Walk the branch from the leaf back to its last assistant message; what lies between is
+  // the results that already answered it. A user message in between means it was answered
+  // by being interrupted.
+  const answered = new Set<string>();
+  const seen = new Set<string>();
+  let assistant: MessageEntryLike | undefined;
+  for (let id: string | null = leaf; id !== null && !seen.has(id); ) {
+    seen.add(id);
+    const entry: MessageEntryLike | undefined = byId.get(id);
+    if (!entry) break;
+    const message = entry.type === "message" ? entry.message : undefined;
+    if (message?.role === "user") return 0;
+    if (message?.role === "toolResult" && typeof message.toolCallId === "string") answered.add(message.toolCallId);
+    if (message?.role === "assistant") {
+      assistant = entry;
+      break;
+    }
+    id = typeof entry.parentId === "string" ? entry.parentId : null;
+  }
+  const message = assistant?.message;
+  if (!assistant || !message || message.stopReason !== "toolUse" || !Array.isArray(message.content)) return 0;
+  const open = (message.content as ToolCallLike[]).filter(
+    (part) => part && part.type === "toolCall" && typeof part.id === "string" && !answered.has(part.id),
+  );
+  if (open.length === 0) return 0;
+
+  const lines: string[] = [];
+  let parentId = leaf;
+  for (const call of open) {
+    let id = randomUUID().slice(0, 8);
+    while (byId.has(id)) id = randomUUID().slice(0, 8);
+    const toolName = typeof call.name === "string" ? call.name : "tool";
+    byId.set(id, { id });
+    lines.push(JSON.stringify({
+      type: "message",
+      id,
+      parentId,
+      timestamp: now.toISOString(),
+      message: {
+        role: "toolResult",
+        toolCallId: call.id,
+        toolName,
+        content: [{ type: "text", text: text(toolName) }],
+        isError: true,
+        timestamp: now.getTime(),
+      },
+    }));
+    parentId = id;
+  }
+  writeTranscriptText(file, `${raw.endsWith("\n") ? raw : `${raw}\n`}${lines.join("\n")}\n`);
+  return open.length;
 }
 
 function writeTranscriptText(file: string, text: string): void {

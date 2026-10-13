@@ -19,6 +19,8 @@
  *   dropped and the loop continues from what it was answering. A clean stop
  *   (`stop`), a tool request still `pending`, or a turn the engine deferred is a
  *   turn that *did* what it meant to, so there is nothing to resume.
+ *   A tool request left unanswered by a dead process is closed with an error result when
+ *   the session is opened (`closeOrphanToolCalls`), which turns it into the next case.
  * - a trailing `user` or `toolResult` is a half-delivered turn: the prompt or the
  *   tool output went in and no reply ever came back. That is exactly what a run
  *   aborted before its first token, or a compaction that ended the process, leaves

@@ -74,7 +74,7 @@ import type { ToolDetailLevel } from "@shared/transcript-page";
 import { ConversationCatalog } from "../engine/conversation-catalog";
 import { promptPreview } from "../engine/prompt-preview";
 import { searchConversationContent } from "../engine/conversation-search";
-import { readTranscriptPrompt, repairTranscriptFile, transcriptPrompt, writeTranscriptEntries } from "../engine/transcript-file";
+import { closeOrphanToolCalls, readTranscriptPrompt, repairTranscriptFile, transcriptPrompt, writeTranscriptEntries } from "../engine/transcript-file";
 import {
   ConversationTranscriptError,
   loadConversationTranscriptBranch,
@@ -202,6 +202,8 @@ function lastAssistantText(messages: unknown[]): string {
 type ManagedSession = { conversationId: string; cwd: string; session: AgentSession; extensions: LoadExtensionsResult; unsubscribe: () => void };
 /** SDK UI context plus FastVibe's single-panel multi-question prompt. */
 type FastVibeExtensionUIContext = ExtensionUIContext & {
+  /** The catalog id of the conversation this context serves — what `conversation_search` takes. */
+  conversationId: string;
   questions(title: string, questions: PermissionQuestion[], opts?: { timeout?: number }): Promise<Array<string | null> | undefined>;
   /**
    * Run one subagent role on a throwaway in-process session. Injected here so the
@@ -3268,6 +3270,14 @@ export class PiProcessManager {
       try {
         const relinked = repairTranscriptFile(conversation.sessionFile);
         if (relinked > 0) console.warn(`[transcript] relinked ${relinked} dangling entr${relinked === 1 ? "y" : "ies"} in ${conversation.sessionFile}`);
+        // A run the process did not survive leaves tool calls nothing answered. Close them
+        // with an error result so the chat can be continued and the model knows the call
+        // may have half-run, rather than being told "No result provided" at the next request.
+        const closed = closeOrphanToolCalls(conversation.sessionFile, (tool) => uiText(
+          `应用在执行「${tool}」期间退出，这次调用可能已经部分执行。重试前先核对现场，不要假定它没有生效。`,
+          `The app exited while "${tool}" was running, so this call may have partly run. Check the current state before retrying; do not assume it had no effect.`,
+        ));
+        if (closed > 0) console.warn(`[transcript] closed ${closed} unanswered tool call${closed === 1 ? "" : "s"} in ${conversation.sessionFile}`);
       } catch (error) {
         console.warn(`[transcript] repair failed for ${conversation.sessionFile}`, error);
       }
@@ -4715,6 +4725,7 @@ export class PiProcessManager {
       select: (title, options, opts) => dialog<string | undefined>("select", { title, options, timeout: opts?.timeout }, undefined, opts?.timeout),
       questions: (title, questions, opts) =>
         dialog<Array<string | null> | undefined>("questions", { title, questions, timeout: opts?.timeout }, undefined, opts?.timeout),
+      conversationId,
       runSubagent: (request) => this.#runSubagent(conversationId, request),
       searchConversation: (request) => this.#searchConversationForAgent(request),
       createWorktree: (options) => this.#hostCreateWorktree(conversationId, options),

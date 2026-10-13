@@ -10,7 +10,7 @@ import {
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { clipHandoffTranscript, handoffEntries, handoffRequest } from "../resources/extensions/handoff.ts";
+import { clipHandoffTranscript, handoffEntries, handoffRequest, withHandoffSource } from "../resources/extensions/handoff.ts";
 import { promptPreview } from "../src/main/engine/prompt-preview.ts";
 import { parseHandoffCommand } from "../src/shared/slash.ts";
 import { parsePermission } from "../src/renderer/src/stores/session-reducer.ts";
@@ -241,4 +241,12 @@ test("a prompt from Main gets the same sidebar row as a composer send", () => {
   // The default title of an English interface is a placeholder too, not a name.
   assert.equal(promptPreview({ title: "New chat" }, "fix the login").title, "fix the login");
   assert.equal(promptPreview({}, "a".repeat(200)).preview.length, 80);
+});
+
+test("withHandoffSource names the source chat after the reviewed summary, and only when it is known", () => {
+  const sent = withHandoffSource("Summary", "conv-123");
+  assert.ok(sent.startsWith("Summary\n\n"));
+  assert.ok(sent.includes("conv-123") && sent.includes("conversation_search"));
+  assert.equal(withHandoffSource("Summary", undefined), "Summary");
+  assert.equal(withHandoffSource("Summary", ""), "Summary");
 });
