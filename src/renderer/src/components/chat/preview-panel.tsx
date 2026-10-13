@@ -138,11 +138,20 @@ export function PreviewBody({ preview, onQuote }: { preview: FilePreview; onQuot
   if (preview.kind === "html") {
     return (
       <SelectableText>
+        {/*
+         * A page is served by the media scheme and framed, not handed to `srcDoc`: an
+         * `about:srcdoc` document inherits this window's CSP, whose `script-src 'self'`
+         * blocks every inline `<script>` the page wrote — the animation never starts.
+         * Served, it is a document of its own under `INLINE_HTML_CSP`, so it may run
+         * inline code and load https libraries while the sandbox (no `allow-same-origin`)
+         * keeps it out of the app.
+         */}
         <iframe
           title={preview.name}
-          sandbox=""
+          sandbox="allow-scripts"
+          referrerPolicy="no-referrer"
           className="h-[70vh] w-full rounded-lg border border-border bg-white"
-          srcDoc={preview.text}
+          src={mediaPreviewUrl(preview.path)}
         />
       </SelectableText>
     );
