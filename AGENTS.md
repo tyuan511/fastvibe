@@ -832,7 +832,9 @@ is only offered where there is a blur to show (`HAS_VIBRANCY`). `src/shared/glas
   page has no colour that does both (a tinted band was tried and is an ugly block). Under
   glass the row paints nothing, and `pinRegistryFor` masks the reply rows of the pinned turn
   off at the prompt's lower edge (`GLASS_CUT_FEATHER`), in the same read-then-write pass that
-  decides which prompt is pinned.
+  decides which prompt is pinned. The mask follows how far sticky has moved the prompt off its
+  own place, not `pinned`: pushed away by the next turn, a prompt leaves the top edge but rides
+  out lying on its reply's last rows, and those must stay cut until the turn is gone.
 - **Settings hides the shell instead of covering it.** The overlay is translucent like
   everything else, so while it is open `[data-shell-split]` and the browser guest layer are
   `visibility: hidden` (not unmounted). A new full-window overlay needs the same treatment.
