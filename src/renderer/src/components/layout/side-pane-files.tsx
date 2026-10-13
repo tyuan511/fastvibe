@@ -5,7 +5,7 @@ import { ArrowLeft01Icon, Copy01Icon, Folder01Icon, RefreshIcon, Tick02Icon } fr
 import { IconButton } from "@/components/icon-button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { FileIcon } from "@/components/file-icon";
-import { PreviewBody, previewText } from "@/components/chat/preview-panel";
+import { PreviewSurface, previewText } from "@/components/chat/preview-panel";
 import { cn } from "@/lib/utils";
 import { useSidePaneStore, type SidePaneTab } from "@/stores/side-pane";
 import type { DirEntry, FilePreview } from "@shared/types";
@@ -270,12 +270,10 @@ function FilePreviewPane({
           </IconButton>
         ) : null}
       </div>
-      <ScrollArea className="min-h-0 flex-1">
-        <PreviewBody
-          preview={preview}
-          onQuote={preview.kind === "code" || preview.kind === "diff" ? quoteCode : undefined}
-        />
-      </ScrollArea>
+      <PreviewSurface
+        preview={preview}
+        onQuote={preview.kind === "code" || preview.kind === "diff" ? quoteCode : undefined}
+      />
     </div>
   );
 }

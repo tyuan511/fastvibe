@@ -98,6 +98,8 @@ export type ConnectedServer = {
   closeTransport: () => Promise<void>;
   /** Secret established by the SSH bootstrap for desktop → Agent config replication. */
   configSyncToken?: string;
+  /** Loopback port of the SSH forward, so a media preview can stream bytes from the agent. */
+  port?: number;
   /** The remote user's home directory, when the transport learned it. */
   home?: string;
 };
@@ -177,6 +179,13 @@ export class RemoteConnectionManager {
       if (server.serverInstanceId === serverInstanceId) return server;
     }
     return undefined;
+  }
+
+  /** Loopback address of a connected agent, for streaming a remote preview. */
+  mediaEndpoint(serverInstanceId: string): { port: number; token: string } | null {
+    const server = this.serverForInstance(serverInstanceId);
+    if (!server?.port || !server.configSyncToken) return null;
+    return { port: server.port, token: server.configSyncToken };
   }
 
   /**
@@ -269,6 +278,7 @@ export class RemoteConnectionManager {
         client,
         closeTransport,
         configSyncToken: transport.configSyncToken,
+        port: transport.port,
         ...(transport.home ? { home: transport.home } : {}),
       };
       this.#inflight.delete(profile.id);

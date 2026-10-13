@@ -20,6 +20,7 @@ import {
 } from "../../shared/binary-attachment.ts";
 import { AppServer } from "../app-server/app-server.ts";
 import type { ClientSession } from "../app-server/client-session.ts";
+import { pipeMediaHttp } from "../engine/media-http.ts";
 
 /**
  * The remote server: a second way into the same call table the desktop windows use.
@@ -400,6 +401,18 @@ export class RemoteServer {
       });
       return;
     }
+    if (url.pathname === "/api/media" && (request.method === "GET" || request.method === "HEAD")) {
+      // The preview JSON names the file; this is the byte stream a native tag plays.
+      // Same credential as the socket: the SSH loopback token from this machine, or a
+      // device token. Neither is accepted from the wrong place.
+      if (!this.#authorizeMedia(request)) {
+        this.#json(response, 401, { error: "unauthorized" });
+        return;
+      }
+      const filePath = url.searchParams.get("path") ?? "";
+      pipeMediaHttp(request, response, filePath);
+      return;
+    }
     // Nothing else is served: the phone app speaks `/api/login` and `/ws`, and a browser
     // has no page here. The answer says what this port is for rather than leaving a
     // blank error for someone who typed the address into one.
@@ -758,6 +771,15 @@ export class RemoteServer {
       id: client.id,
       send: (channel, payload) => this.#sendPush(client, channel, payload),
     });
+  }
+
+  #authorizeMedia(request: IncomingMessage): boolean {
+    const header = request.headers.authorization;
+    const match = /^Bearer\s+(\S+)$/i.exec(typeof header === "string" ? header : "");
+    const token = match?.[1] ?? "";
+    if (!token) return false;
+    if (isLoopbackAddress(request.socket.remoteAddress) && tokenMatches(this.#deps.loopbackToken, token)) return true;
+    return authenticate(this.#deps.accessFile, token) !== null;
   }
 
   #authenticateLoopback(client: Client): void {

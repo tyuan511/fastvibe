@@ -42,6 +42,7 @@ import {
   registerFileIconProtocol,
   registerFileIconScheme,
 } from "./engine/file-icons";
+import { registerMediaProtocol } from "./engine/media-protocol";
 import { applyPendingInstall, registerUpdater, scheduleUpdateCheck } from "./updater";
 import { registerAccount } from "./account";
 import { PiProcessManager } from "./pi/process-manager";
@@ -554,6 +555,9 @@ app.whenReady().then(async () => {
   }
   applyKeepAwake(startupSettings);
   registerFileIconProtocol();
+  registerMediaProtocol({
+    remoteEndpoint: (serverInstanceId) => remoteConnections.mediaEndpoint(serverInstanceId),
+  });
   // Every module that owns methods registers them first; the transport is attached
   // once, afterwards. Wiring inside `registerDesktopIpc` meant the updater's four methods —
   // registered on the next line — landed in the table after the loop had already run,

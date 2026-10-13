@@ -233,6 +233,7 @@
     "reveal": "Show in Finder",
     "close": "Close",
     "tooLarge": "File is too large ({{size}} KB). Open it in Finder.",
+    "mediaFailed": "Could not load this file.",
     "pathPreview": "Preview",
     "pathReveal": "Show in folder",
     "pathCopy": "Copy full path",

@@ -2,30 +2,19 @@ import { execFileSync } from "node:child_process";
 import { uiText } from "./ui-text";
 import { readFileSync, statSync } from "node:fs";
 import { basename, extname } from "node:path";
+import { mediaMime, mediaPreviewKind } from "@shared/media-preview";
 import type { FilePreview } from "@shared/types";
 
 /**
  * What the side pane will read into memory to draw a preview.
  *
- * Images and PDFs are handed to Chromium as a data URL and the reader is looking at
- * them rather than parsing them, so the ceiling is generous: the old 1 MB cap refused
- * ordinary photos off a phone. Text is different — the renderer highlights and lays it
- * out as DOM — so its cap is where a file stops being a preview and should be opened in
- * an editor instead. Both stay well inside the remote transport's own frame bounds,
- * which is what decides whether a phone can be shown the result at all.
+ * Images, PDFs and videos are not read here at all. The preview names the file; the
+ * renderer loads it from a URL the main process streams, so a photo or a movie never
+ * becomes a base64 frame. Text is different — the renderer highlights and lays it out
+ * as DOM — so its cap is where a file stops being a preview and should be opened in
+ * an editor instead.
  */
-const MAX_MEDIA_BYTES = 16 * 1024 * 1024;
 const MAX_TEXT_BYTES = 4 * 1024 * 1024;
-const IMAGE_EXT: Record<string, string> = {
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".gif": "image/gif",
-  ".webp": "image/webp",
-  ".svg": "image/svg+xml",
-  ".bmp": "image/bmp",
-  ".ico": "image/x-icon",
-};
 const CODE_EXT: Record<string, string> = {
   ".ts": "ts",
   ".tsx": "tsx",
@@ -66,30 +55,10 @@ export function readFilePreview(filePath: string): FilePreview {
       return { kind: "error", path: filePath, name, message: uiText("不是文件", "Not a file") };
     }
     const ext = extname(filePath).toLowerCase();
-    if (ext === ".pdf") {
-      if (stat.size > MAX_MEDIA_BYTES) {
-        return { kind: "binary", path: filePath, name, size: stat.size };
-      }
-      const data = readFileSync(filePath);
-      return {
-        kind: "pdf",
-        path: filePath,
-        name,
-        dataUrl: `data:application/pdf;base64,${data.toString("base64")}`,
-      };
-    }
-    const mime = IMAGE_EXT[ext];
-    if (mime) {
-      if (stat.size > MAX_MEDIA_BYTES) {
-        return { kind: "binary", path: filePath, name, size: stat.size };
-      }
-      const data = readFileSync(filePath);
-      return {
-        kind: "image",
-        path: filePath,
-        name,
-        dataUrl: `data:${mime};base64,${data.toString("base64")}`,
-      };
+    const mediaKind = mediaPreviewKind(filePath);
+    const mediaType = mediaMime(filePath);
+    if (mediaKind && mediaType) {
+      return { kind: mediaKind, path: filePath, name, mimeType: mediaType, size: stat.size };
     }
     if (ext === ".docx") {
       const text = extractDocx(filePath);

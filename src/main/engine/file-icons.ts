@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { protocol } from "electron";
+import { MEDIA_SCHEME } from "@shared/media-preview";
 import type { FileIconMapping } from "@shared/types";
 
 /**
@@ -64,12 +65,21 @@ function iconOrFallback(name: string, fallback: string): string {
   return available().has(name.toLowerCase()) && existsSync(join(iconsDir(), `${name}.svg`)) ? name : fallback;
 }
 
-/** Must run before `app.whenReady()` so the scheme is usable from the renderer. */
+/**
+ * Must run before `app.whenReady()` so the schemes are usable from the renderer.
+ * Electron accepts this call only once, so the icon scheme and the local video
+ * scheme are declared together. `stream` is what lets a `<video>` seek: without it
+ * the response is buffered whole and range requests never play.
+ */
 export function registerFileIconScheme(): void {
   protocol.registerSchemesAsPrivileged([
     {
       scheme: FILE_ICON_SCHEME,
       privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true },
+    },
+    {
+      scheme: MEDIA_SCHEME,
+      privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true },
     },
   ]);
 }

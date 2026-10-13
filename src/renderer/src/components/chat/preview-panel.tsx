@@ -1,11 +1,13 @@
-import { useRef, type JSX } from "react";
+import { useRef, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Cancel01Icon, Folder01Icon } from "@hugeicons/core-free-icons";
 import { IconButton } from "@/components/icon-button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { FilePreview } from "@shared/types";
+import { mediaPreviewUrl } from "@shared/media-preview";
 import { useHighlightedCode } from "@/lib/highlight";
+import { cn } from "@/lib/utils";
 import { MarkdownView } from "./markdown-view";
 import { DiffView } from "./diff-view";
 import { isRemoteRef } from "@/lib/remote-project";
@@ -39,9 +41,7 @@ export function PreviewPanel({
           <HugeiconsIcon strokeWidth={2} icon={Cancel01Icon} />
         </IconButton>
       </div>
-      <ScrollArea className="min-h-0 flex-1">
-        <PreviewBody preview={preview} />
-      </ScrollArea>
+      <PreviewSurface preview={preview} />
     </aside>
   );
 }
@@ -77,6 +77,32 @@ function SelectableText({
   );
 }
 
+/** A video fills the pane so its controls stay on screen; everything else scrolls. */
+export function PreviewSurface({
+  preview,
+  onQuote,
+  className,
+}: {
+  preview: FilePreview;
+  onQuote?: (text: string) => void;
+  className?: string;
+}): JSX.Element {
+  if (preview.kind === "video") {
+    return (
+      <div className={cn("relative min-h-0 flex-1", className)}>
+        <div className="absolute inset-0">
+          <PreviewBody preview={preview} />
+        </div>
+      </div>
+    );
+  }
+  return (
+    <ScrollArea className={cn("min-h-0 flex-1", className)}>
+      <PreviewBody preview={preview} onQuote={onQuote} />
+    </ScrollArea>
+  );
+}
+
 export function PreviewBody({ preview, onQuote }: { preview: FilePreview; onQuote?: (text: string) => void }): JSX.Element {
   const { t } = useTranslation("chat");
   if (preview.kind === "error") {
@@ -85,15 +111,18 @@ export function PreviewBody({ preview, onQuote }: { preview: FilePreview; onQuot
   if (preview.kind === "binary") {
     return <p className="px-3 py-3 text-sm text-muted-foreground">{t("preview.tooLarge", { size: Math.round(preview.size / 1024) })}</p>;
   }
+  if (preview.kind === "video") {
+    return <VideoPreview key={preview.path} preview={preview} />;
+  }
   if (preview.kind === "image") {
-    return <img src={preview.dataUrl} alt={preview.name} className="max-w-full" />;
+    return <ImagePreview key={preview.path} preview={preview} />;
   }
   if (preview.kind === "pdf") {
     return (
       <iframe
         title={preview.name}
         className="h-[70vh] w-full rounded-lg border border-border bg-white"
-        src={preview.dataUrl}
+        src={mediaPreviewUrl(preview.path)}
       />
     );
   }
@@ -150,6 +179,39 @@ export function PreviewBody({ preview, onQuote }: { preview: FilePreview; onQuot
     <SelectableText onQuote={onQuote}>
       <CodePreview text={preview.text} language={preview.language} />
     </SelectableText>
+  );
+}
+
+function MediaFallback(): JSX.Element {
+  const { t } = useTranslation("chat");
+  return <p className="px-3 py-3 text-sm text-muted-foreground">{t("preview.mediaFailed")}</p>;
+}
+
+function ImagePreview({ preview }: { preview: Extract<FilePreview, { kind: "image" }> }): JSX.Element {
+  const [failed, setFailed] = useState(false);
+  if (failed) return <MediaFallback />;
+  return (
+    <img
+      src={mediaPreviewUrl(preview.path)}
+      alt={preview.name}
+      className="max-w-full"
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
+function VideoPreview({ preview }: { preview: Extract<FilePreview, { kind: "video" }> }): JSX.Element {
+  const [failed, setFailed] = useState(false);
+  if (failed) return <MediaFallback />;
+  return (
+    <video
+      controls
+      playsInline
+      preload="metadata"
+      src={mediaPreviewUrl(preview.path)}
+      className="h-full w-full bg-black object-contain"
+      onError={() => setFailed(true)}
+    />
   );
 }
 
