@@ -157,3 +157,21 @@ test("a transcript read keeps the drawn turn in its own chat and nowhere else", 
   assert.equal(preserveOptimisticTail(shown, read, true).length, 4);
   assert.equal(preserveOptimisticTail(shown, [line("b1", "user", "another chat")], false).length, 1);
 });
+
+test("a transcript read that already holds the sent turn does not draw it twice", () => {
+  const shown = [line("k1", "user", "first"), line("k2", "assistant", ""), ...optimisticQueuedTurn({ id: "q1", text: "next" })];
+  // The stopped run's settle triggers a read; by then the next prompt is persisted.
+  const read = [line("k1", "user", "first"), line("k2", "assistant", ""), line("e9", "user", "next"), line("running:1", "assistant", "")];
+  const merged = preserveOptimisticTail(shown, read, true);
+  assert.deepEqual(merged.map((message) => message.id), ["k1", "k2", "queue:q1", "queue-reply:q1"]);
+  // An older identical prompt already on screen is not mistaken for the new one.
+  const again = [line("u0", "user", "next"), line("a0", "assistant", "ok"), ...optimisticQueuedTurn({ id: "q2", text: "next" })];
+  const readAgain = [line("u0", "user", "next"), line("a0", "assistant", "ok")];
+  assert.deepEqual(preserveOptimisticTail(again, readAgain, true).map((message) => message.id), ["u0", "a0", "queue:q2", "queue-reply:q2"]);
+});
+
+test("the entry id of a turn the transcript already holds never lands on two rows", () => {
+  const rows = [line("e9", "user", "next"), line("local:x", "user", "next")];
+  const next = exports.applyEngineEvent!(rows, { type: "user_message_persisted", entryId: "e9" } as EngineEvent, true).messages;
+  assert.deepEqual(next.map((message) => message.id), ["e9"]);
+});

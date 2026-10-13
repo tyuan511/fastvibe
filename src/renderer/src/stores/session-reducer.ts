@@ -194,11 +194,28 @@ export function settledBoundary(messages: ChatMessage[]): number {
  *
  * Only for the conversation the turn was sent in (`keep`): the read that opens
  * another chat replaces a transcript that still holds it, and carried it across.
+ *
+ * The read can also land *after* the engine took the prompt: the stop and the next
+ * prompt are a few milliseconds apart, so the transcript already holds the turn while
+ * the echo that adopts the drawn one is still on its way. Appending the drawn turn
+ * then showed the message twice, and the echo's rename gave both rows one id. Nothing
+ * of that turn has reached this client yet — its events all follow the echo — so the
+ * transcript's copy and what came after it are cut, and the drawn turn stands in for
+ * them until the stream (or the next read) fills it in.
  */
 export function preserveOptimisticTail(previous: ChatMessage[], next: ChatMessage[], keep: boolean): ChatMessage[] {
   if (!keep) return next;
-  const { tail } = splitOptimisticTail(previous);
-  return tail.length > 0 ? [...next, ...tail] : next;
+  const { base, tail } = splitOptimisticTail(previous);
+  if (tail.length === 0) return next;
+  const known = new Set(base.map((message) => message.id));
+  const text = tail[0].text.trim();
+  for (let index = next.length - 1; index >= 0; index -= 1) {
+    const row = next[index];
+    if (row.role === "user" && !known.has(row.id) && row.text.trim() === text) {
+      return [...next.slice(0, index), ...tail];
+    }
+  }
+  return [...next, ...tail];
 }
 
 /**
