@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { MessageQueueStore } from "../src/main/engine/message-queue.ts";
-import { verdictAfterEnd, verdictAfterStart } from "../src/main/pi/run-verdict.ts";
+import { verdictAfterEnd, verdictAfterStart, verdictContinuesQueue } from "../src/main/pi/run-verdict.ts";
 import { SendNowSpans } from "../src/main/pi/send-now.ts";
 
 /**
@@ -51,13 +51,14 @@ type Event = { type: string; running?: boolean; conversationId?: string };
 function harness(options: { stopFails?: boolean } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "queue-now-"));
   const Harness = new Function(
-    "uiText", "parseCompactCommand", "parseHandoffCommand", "isAbortOutcome",
+    "uiText", "parseCompactCommand", "parseHandoffCommand", "isAbortOutcome", "verdictContinuesQueue",
     `${compiled}; return Harness;`,
   )(
     (zh: string) => zh,
     (text: string) => (text.startsWith("/compact") ? {} : null),
     () => null,
     () => false,
+    verdictContinuesQueue,
   );
   const host = new Harness();
   const store = new MessageQueueStore(join(dir, "queue.json"));
@@ -249,9 +250,25 @@ test("a run the user stopped outright still pauses the queue", async () => {
   }
 });
 
+test("a run the repetition guard stopped leaves the queue running", async () => {
+  const f = harness();
+  try {
+    live(f);
+    const item = f.store.add({ conversationId: "chat", text: "next", behavior: "followUp" });
+    f.host.settle("chat", "repetition");
+    await f.idle();
+    // The guard stopped a reply that was never going to end by itself; the user's next
+    // message is not something they should have to release by hand afterwards.
+    assert.equal(f.store.state("chat").pause, null);
+    assert.deepEqual(f.sent, [item.id]);
+  } finally {
+    f.cleanup();
+  }
+});
+
 test("a stop that was asked for survives the turn the agent loop opens after a tool is aborted", () => {
   // Aborting mid-tool: tool results, `turn_end`, `turn_start`, then the aborted reply.
-  for (const asked of ["handoff", "stopped"] as const) {
+  for (const asked of ["handoff", "stopped", "repetition"] as const) {
     const afterTurnStart = verdictAfterStart(asked);
     assert.equal(afterTurnStart, asked);
     assert.equal(verdictAfterEnd(afterTurnStart, "aborted"), asked, "not a failed run");

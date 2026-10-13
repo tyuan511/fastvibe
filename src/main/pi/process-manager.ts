@@ -167,7 +167,8 @@ import {
 import { projectSessionMessages } from "./process-manager-transcript";
 import { SkillManager } from "./skill-manager";
 import { promptAccepted } from "./prompt-acceptance";
-import { type RunVerdict, verdictAfterEnd, verdictAfterStart } from "./run-verdict";
+import { type RunVerdict, verdictAfterEnd, verdictAfterStart, verdictAnnouncesActivity, verdictContinuesQueue } from "./run-verdict";
+import { OutputRepetitionWatch } from "./output-repetition";
 import { SendNowSpans } from "./send-now";
 import { PromptPreparations } from "./prompt-preparation";
 import { sendOpeningPrompt } from "./opening-prompt";
@@ -505,6 +506,14 @@ export class PiProcessManager {
    * may change a verdict is in `run-verdict.ts`.
    */
   #interruptedRuns = new Map<string, RunVerdict>();
+  /**
+   * The repetition guard's per-conversation state: the reply being streamed, watched
+   * for a loop, split by where the text came from. Both are dropped when the stream
+   * ends, so nothing grows with the number of chats that ever ran.
+   */
+  #repetitionWatches = new Map<string, { text: OutputRepetitionWatch; thinking: OutputRepetitionWatch }>();
+  /** Conversations whose run has already been stopped by the guard — one stop per run. */
+  #repetitionStopped = new Set<string>();
   /** Sessions whose catalog cwd changed mid-run; rebound once the turn settles. */
   #pendingCwdRebind = new Set<string>();
   #interruptMode: "immediate" | "wait" = "immediate";
@@ -3426,6 +3435,11 @@ export class PiProcessManager {
       // per assistant message (its request start), so this is the only chance to
       // record how long a block thought before the block is folded into the entry.
       this.#timeReasoning(conversation.id, event, result.session, now, (entryId, blocks) => this.#reasoning.set(entryId, blocks));
+      // A model that has stopped writing and started repeating itself is stopped here.
+      // Nothing else in the engine is watching for it — every delta it emits is a
+      // valid one, so the only other bound is the output budget, which is minutes and a
+      // hundred thousand tokens away.
+      this.#guardOutputRepetition(conversation.id, result.session, event);
       // File the finished turn in the usage ledger, so 使用统计 outlives the transcript
       // if this conversation is later deleted.
       if (event.type === "message_end" && isAssistantEngineMessage(event.message)) {
@@ -3531,6 +3545,8 @@ export class PiProcessManager {
       const settledVerdict = event.type === "agent_settled" ? this.#interruptedRuns.get(conversation.id) : undefined;
       if (event.type === "agent_settled") {
         this.#interruptedRuns.delete(conversation.id);
+        this.#repetitionWatches.delete(conversation.id);
+        this.#repetitionStopped.delete(conversation.id);
         this.#settleQueue(conversation.id, settledVerdict);
         // A configuration tool can update MCP while this very session is running.
         // Do not reload it from inside that tool: the SDK would invalidate the
@@ -3611,8 +3627,9 @@ export class PiProcessManager {
       // desktop. A mobile client can be backgrounded while the desktop happens to be
       // looking at the same chat, and it still needs the one durable end-of-turn signal.
       // Focused desktop windows suppress their own native notice in `raiseNotification`.
-      // 立即 cuts the reply short on purpose, so it is neither 「任务完成」 nor 「任务出错」.
-      const activity = event.type === "agent_settled" && conversation.kind !== "side-chat" && settledVerdict !== "stopped" && settledVerdict !== "handoff"
+      // 立即 cuts the reply short on purpose, and so does the repetition guard: neither
+      // is 「任务完成」 or 「任务出错」.
+      const activity = event.type === "agent_settled" && conversation.kind !== "side-chat" && verdictAnnouncesActivity(settledVerdict)
         ? {
             type: "conversation_activity",
             conversationId: conversation.id,
@@ -3999,7 +4016,7 @@ export class PiProcessManager {
    * releases it (立即 / 继续发送). A pause with nothing left to hold is cleared, so a
    * leftover cannot catch the next follow-up queued during a live run.
    */
-  #settleQueue(conversationId: string, interrupted: "stopped" | "error" | "handoff" | undefined): void {
+  #settleQueue(conversationId: string, interrupted: RunVerdict | undefined): void {
     void this.#withQueue(conversationId, async () => {
       const adapter = this.#sdkQueueAdapters.get(conversationId);
       let changed = false;
@@ -4016,9 +4033,9 @@ export class PiProcessManager {
       if (this.#reconcileClaims(conversationId)) changed = true;
       const items = this.#messageQueue.all(conversationId);
       const pause = this.#messageQueue.state(conversationId).pause;
-      // `handoff` is 立即: the run was stopped *so the queue could continue*, and
-      // pausing it here would hold the very message the user just asked to send.
-      if (interrupted && interrupted !== "handoff") {
+      // 立即 and the repetition guard stopped the run *so that* the queue could
+      // continue; pausing here would hold the very message the user just asked to send.
+      if (interrupted && !verdictContinuesQueue(interrupted)) {
         if (items.length > 0 && pause !== interrupted) {
           this.#messageQueue.pause(conversationId, interrupted);
           changed = true;
@@ -4028,9 +4045,9 @@ export class PiProcessManager {
         changed = true;
       }
       if (changed) this.#emitQueue(conversationId);
-      // `handoff` stopped the run so the queue could continue, so it drains exactly
-      // like a run that ended on its own. Only a real stop or failure holds it.
-      if (!interrupted || interrupted === "handoff") this.#scheduleQueueDrain(conversationId);
+      // A run that was stopped so the queue could continue drains exactly like one that
+      // ended on its own. Only a real stop or failure holds it.
+      if (verdictContinuesQueue(interrupted)) this.#scheduleQueueDrain(conversationId);
     }).catch(() => {
       // A failed durable write must not spin; an explicit resume clears the fault.
       this.#queueDrainFaults.add(conversationId);
@@ -4433,6 +4450,59 @@ export class PiProcessManager {
     if (!block) return;
     payload.thinkingStartedAt = block.startedAt;
     if (block.endedAt !== undefined) payload.thinkingEndedAt = block.endedAt;
+  }
+
+  /**
+   * Stop a reply that has fallen into a repetition loop.
+   *
+   * A degenerate model writes the same block over and over and the run does not end on
+   * its own: one real reply streamed 376 KB of the same 406 characters for 27 minutes,
+   * another 63 KB of a 24-character cycle, and both were ended by hand. What is watched
+   * is the reply's text and its thinking, separately, since a loop in either is the same
+   * failure; tool *arguments* are not, because a generated fixture legitimately repeats a
+   * block and aborting a call mid-write would cut a file the model was still writing.
+   *
+   * The abort is the whole run, not the request (`session.abort()`, as the stop button
+   * uses): a reply that has looped once is not something to continue, and anything the
+   * session still owes the run — a retry, a continuation — would loop again.
+   */
+  #guardOutputRepetition(conversationId: string, session: AgentSession, event: AgentSessionEvent): void {
+    if (event.type === "message_start") {
+      // A new message starts a new stream. Two of them in one run are not one long reply.
+      this.#repetitionWatches.delete(conversationId);
+      return;
+    }
+    if (event.type !== "message_update" || this.#repetitionStopped.has(conversationId)) return;
+    // A stop somebody already asked for owns this run. The deltas that keep arriving while
+    // it lands are not the guard's to relabel — the user's 停止 would come back as a
+    // repetition, and its notice with it.
+    if (this.#interruptedRuns.has(conversationId)) return;
+    const inner = event.assistantMessageEvent as { type?: unknown; delta?: unknown; text?: unknown };
+    const kind = inner.type === "text_delta" ? "text" : inner.type === "thinking_delta" ? "thinking" : null;
+    // `text` is the older spelling of the same field the renderer also accepts.
+    const delta = typeof inner.delta === "string" ? inner.delta : typeof inner.text === "string" ? inner.text : "";
+    if (!kind || delta === "") return;
+    let watches = this.#repetitionWatches.get(conversationId);
+    if (!watches) {
+      watches = { text: new OutputRepetitionWatch(), thinking: new OutputRepetitionWatch() };
+      this.#repetitionWatches.set(conversationId, watches);
+    }
+    const verdict = watches[kind].push(delta);
+    if (!verdict) return;
+    this.#repetitionStopped.add(conversationId);
+    this.#interruptedRuns.set(conversationId, "repetition");
+    // A tool parked on a question cannot see the abort while it waits, exactly as with
+    // the stop button, and the run would never settle.
+    this.#resolvePendingUi(conversationId);
+    this.#emit({
+      type: "notice",
+      conversationId,
+      message: uiText(
+        `模型开始重复同一段内容（已重复 ${verdict.repeats} 次，每段 ${verdict.period} 字），已停止本轮回复。`,
+        `The model started repeating itself (${verdict.repeats} copies of ${verdict.period} characters); this reply was stopped.`,
+      ),
+    });
+    void session.abort().catch(() => undefined);
   }
 
   /**
