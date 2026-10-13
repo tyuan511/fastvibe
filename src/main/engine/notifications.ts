@@ -15,6 +15,19 @@ import { getFastVibePaths } from "./paths";
  * the app already and whether this scenario is switched on.
  */
 
+/**
+ * Notices still on screen (or in Notification Center), held so they are not collected.
+ *
+ * Electron keeps no reference to a `Notification` once `show()` returns. When the object is
+ * garbage-collected its `click` listener goes with it, and macOS — which brings the app
+ * forward on a click by itself — then looks like it works while the jump to the chat never
+ * happens. A banner that times out still sits in Notification Center and can be clicked
+ * later, so `close` is not a reason to let go: one is released when clicked or failed, and
+ * the oldest are dropped past a cap so an app left running for weeks does not accumulate them.
+ */
+const live = new Set<Notification>();
+const MAX_LIVE = 50;
+
 /** The settings bag Main reads for a notice, or `{}` when the file has none yet. */
 export function readNotificationSettings(): Record<string, unknown> {
   return readAppSettings(getFastVibePaths());
@@ -45,7 +58,12 @@ export function presentNotification(
 ): void {
   if (!Notification.isSupported()) return;
   const notification = new Notification({ title: request.title, body: request.body });
+  live.add(notification);
+  if (live.size > MAX_LIVE) live.delete(live.values().next().value as Notification);
+  const release = (): void => void live.delete(notification);
+  notification.on("failed", release);
   notification.on("click", () => {
+    release();
     if (process.platform === "darwin") {
       // `window.focus()` alone cannot lift an app that is hidden (⌘H) or sitting on
       // another Space back to the front; the notification click is an explicit request
