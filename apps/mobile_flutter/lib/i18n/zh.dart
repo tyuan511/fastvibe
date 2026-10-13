@@ -332,7 +332,7 @@ const Map<String, String> zh = <String, String>{
   'update.update': '更新',
   'update.downloading': '正在下载…',
   'update.downloadingPercent': '正在下载 {percent}%',
-  'update.installing': '正在安装…',
+  'update.installing': '安装中',
   'update.downloaded': '{version} 已下载',
   'update.failed': '更新失败',
   'update.available': '发现新版本 {version}',
