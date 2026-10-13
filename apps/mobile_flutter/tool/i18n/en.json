@@ -323,7 +323,7 @@
   "conn.unreachableLan": "Can't reach this server. Make sure the phone and computer are on the same Wi-Fi and “Allow LAN access” is on.",
   "conn.unreachable": "Can't reach this server. Check that the link still opens.",
   "update.githubTimeout": "GitHub timed out. Check your network or turn on a proxy, then try again.",
-  "update.githubUnreachable": "Can't reach GitHub (api.github.com). Check your network or turn on a proxy, then try again.",
+  "update.githubUnreachable": "Can't reach GitHub. Check your network or turn on a proxy, then try again.",
   "update.githubRateLimited": "GitHub refused the request for now (probably rate-limited). Try again later.",
   "update.githubStatus": "GitHub returned {status}",
   "update.paused": "Download paused",

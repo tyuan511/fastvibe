@@ -2,31 +2,36 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import '../app_info.dart';
 import '../i18n/core.dart';
 
-/// Finding the newest Android build on GitHub Releases.
+/// Finding the newest Android build on GitHub.
 ///
-/// The repository's releases are shared with the desktop app and its agent runtime, which
-/// ship several times a day, so neither `releases/latest` (a desktop version) nor the
-/// first page of `releases` (a phone release a few weeks old has scrolled off it) can
-/// answer "what is the newest phone build". The tags can: every phone release is an
-/// `app-v<version>` tag, and `git/matching-refs` lists exactly those.
+/// Not the REST API. Unauthenticated `api.github.com` allows 60 requests an hour per IP,
+/// and a phone on a carrier network shares that IP with everyone else on it — which is
+/// why a check here came back 403 over and over. The desktop updater already avoids that
+/// host for the same reason and reads `github.com` instead. So does this: the tag list is
+/// the public git advertisement (every `app-v*` tag, so a phone release that has scrolled
+/// off the releases page is still found), and the APK is the release's own download URL.
 ///
 /// A tag is not yet a release — CI pushes the tag, then spends ten minutes building before
-/// it publishes — so the newest tag without a published APK is skipped in favour of the
-/// one below it.
+/// it publishes — so the newest tag whose APK is not there yet is skipped for the one below.
 const String releaseRepo = 'tyuan511/fastvibe';
 const String releaseTagPrefix = 'app-v';
-
-const String _api = 'https://api.github.com';
 
 /// Tags tried, newest first, before giving up on finding a published build.
 const int _maxTagsTried = 3;
 
-const Map<String, String> _headers = <String, String>{
-  'Accept': 'application/vnd.github+json',
-  'X-GitHub-Api-Version': '2022-11-28',
-};
+const String _refsUrl =
+    'https://github.com/$releaseRepo.git/info/refs?service=git-upload-pack';
+const String _atomUrl = 'https://github.com/$releaseRepo/releases.atom';
+
+const List<String> _knownAbis = <String>[
+  'arm64-v8a',
+  'armeabi-v7a',
+  'x86_64',
+  'x86',
+];
 
 class AppRelease {
   const AppRelease({
@@ -82,19 +87,6 @@ String? versionFromRef(String ref) {
   if (!ref.startsWith(prefix)) return null;
   final version = ref.substring(prefix.length);
   return parseVersion(version) != null ? version : null;
-}
-
-/// Phone versions named by `git/matching-refs`, newest first.
-List<String> versionsFromRefs(Object? refs) {
-  if (refs is! List) return <String>[];
-  final versions = <String>{};
-  for (final entry in refs) {
-    if (entry is! Map) continue;
-    final version = versionFromRef('${entry['ref'] ?? ''}');
-    if (version != null) versions.add(version);
-  }
-  final sorted = versions.toList()..sort((a, b) => compareVersions(b, a));
-  return sorted;
 }
 
 /// A `releases/tags/<tag>` body as an installable release, or null when it has no APK.
@@ -155,29 +147,150 @@ String notesForDisplay(String body) => body
 String releasePageUrl(String version) =>
     'https://github.com/$releaseRepo/releases/tag/$releaseTagPrefix$version';
 
-/// The note of one published phone version, as written in `docs/release/app-v<version>.md`
-/// (the workflow publishes that file as the release body). Null when the version was
-/// never published — a debug build, or a tag whose build has not finished. Unlike
-/// [findNewerRelease] this needs no APK, so it answers on iOS too.
+/// APK file names to try, the device's own ABI first and a universal package last.
+List<String> apkCandidates(String version, List<String> supportedAbis) {
+  final names = <String>[];
+  final seen = <String>{};
+  for (final abi in supportedAbis) {
+    if (!_knownAbis.contains(abi)) continue;
+    final name = 'FastVibe-$releaseTagPrefix$version-$abi.apk';
+    if (seen.add(name)) names.add(name);
+  }
+  if (seen.add('FastVibe.apk')) names.add('FastVibe.apk');
+  return names;
+}
+
+String apkDownloadUrl(String version, String name) =>
+    'https://github.com/$releaseRepo/releases/download/$releaseTagPrefix$version/$name';
+
+String _notesFileUrl(String version) =>
+    'https://raw.githubusercontent.com/$releaseRepo/$releaseTagPrefix$version/docs/release/$releaseTagPrefix$version.md';
+
+/// `refs/tags/app-v*` lines out of a git advertisement, newest first.
+///
+/// Anything that is not exactly `app-v<major>.<minor>.<patch>` is dropped, which is
+/// what keeps a desktop tag and an `app-v0.6.0-rc1` out of the list.
+List<String> versionsFromAdvertisement(String body) {
+  final versions = <String>{};
+  for (final match in RegExp(r'refs/tags/\S+').allMatches(body)) {
+    final version = versionFromRef(match.group(0)!);
+    if (version != null) versions.add(version);
+  }
+  final sorted = versions.toList()..sort((a, b) => compareVersions(b, a));
+  return sorted;
+}
+
+/// One release's notes out of a `releases.atom` document, or null when it is not there.
+///
+/// The feed only carries the newest releases, so a version that has scrolled off comes
+/// back null and the caller reads `docs/release/app-v<version>.md` instead.
+String? notesFromAtom(String xml, String version) {
+  final id = '/$releaseTagPrefix$version</id>';
+  for (final match in RegExp(
+    r'<entry\b[^>]*>[\s\S]*?</entry>',
+  ).allMatches(xml)) {
+    final block = match.group(0)!;
+    if (!block.contains(id)) continue;
+    final content = RegExp(
+      r'<content\b[^>]*>([\s\S]*?)</content>',
+    ).firstMatch(block);
+    if (content == null) return '';
+    return notesForDisplay(
+      markdownFromGitHubHtml(_xmlUnescape(content.group(1)!)),
+    );
+  }
+  return null;
+}
+
+/// GitHub's rendered release notes (the atom `<content>`) back into markdown.
+String markdownFromGitHubHtml(String html) {
+  var text = html;
+  text = text.replaceAllMapped(
+    RegExp(
+      r'<pre[^>]*>\s*<code[^>]*>([\s\S]*?)</code>\s*</pre>',
+      caseSensitive: false,
+    ),
+    (match) => '\n```\n${_inlineHtml(match.group(1)!)}\n```\n',
+  );
+  text = text.replaceAllMapped(
+    RegExp(r'<h([1-6])[^>]*>([\s\S]*?)</h\1>', caseSensitive: false),
+    (match) =>
+        '\n${"#" * int.parse(match.group(1)!)} ${_inlineHtml(match.group(2)!)}\n\n',
+  );
+  text = text.replaceAllMapped(
+    RegExp(r'<li[^>]*>([\s\S]*?)</li>', caseSensitive: false),
+    (match) => '\n- ${_inlineHtml(match.group(1)!)}\n',
+  );
+  text = text.replaceAll(RegExp(r'<br\s*/?>', caseSensitive: false), '\n');
+  text = text.replaceAll(RegExp(r'</p>', caseSensitive: false), '\n\n');
+  text = text.replaceAll(RegExp(r'<p[^>]*>', caseSensitive: false), '');
+  text = text.replaceAll(
+    RegExp(r'</?(ul|ol)[^>]*>', caseSensitive: false),
+    '\n',
+  );
+  text = _inlineHtml(text);
+  return text.replaceAll(RegExp(r'\n{3,}'), '\n\n').trim();
+}
+
+String _inlineHtml(String html) {
+  var text = html.replaceAllMapped(
+    RegExp(r'<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)</a>', caseSensitive: false),
+    (match) {
+      final href = _xmlUnescape(match.group(1)!);
+      final label = _xmlUnescape(
+        match.group(2)!.replaceAll(RegExp(r'<[^>]+>'), ''),
+      ).trim();
+      if (label.isEmpty || label == href) return href;
+      return '[$label]($href)';
+    },
+  );
+  text = text.replaceAllMapped(
+    RegExp(r'<strong\b[^>]*>([\s\S]*?)</strong>', caseSensitive: false),
+    (match) =>
+        '**${_xmlUnescape(match.group(1)!.replaceAll(RegExp(r'<[^>]+>'), ''))}**',
+  );
+  text = text.replaceAllMapped(
+    RegExp(r'<em\b[^>]*>([\s\S]*?)</em>', caseSensitive: false),
+    (match) => '*${_xmlUnescape(match.group(1)!)}*',
+  );
+  text = text.replaceAllMapped(
+    RegExp(r'<code\b[^>]*>([\s\S]*?)</code>', caseSensitive: false),
+    (match) => '`$_xmlUnescape(match.group(1)!)`',
+  );
+  text = text.replaceAll(RegExp(r'<[^>]+>'), '');
+  return _xmlUnescape(text);
+}
+
+String _xmlUnescape(String value) => value
+    .replaceAll('&lt;', '<')
+    .replaceAll('&gt;', '>')
+    .replaceAll('&quot;', '"')
+    .replaceAll('&#39;', "'")
+    .replaceAll('&amp;', '&');
+
+Map<String, String> get _requestHeaders => <String, String>{
+  'User-Agent': 'FastVibe/$appVersion',
+};
+
+/// The note of one published phone version. The atom feed carries it while the release
+/// is recent; otherwise it is `docs/release/app-v<version>.md` at that tag. Null when
+/// the version was never published. Unlike [findNewerRelease] this needs no APK, so it
+/// answers on iOS too.
 Future<String?> fetchReleaseNotes(String version, {http.Client? client}) async {
   final httpClient = client ?? http.Client();
   try {
-    final response = await httpClient
-        .get(
-          Uri.parse(
-            '$_api/repos/$releaseRepo/releases/tags/$releaseTagPrefix$version',
-          ),
-          headers: _headers,
-        )
-        .timeout(const Duration(seconds: 20));
-    if (response.statusCode == 404) return null;
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw GitHubStatusError(response.statusCode);
+    final atom = await _send(httpClient, Uri.parse(_atomUrl));
+    if (atom.statusCode == 403 || atom.statusCode == 429) {
+      throw GitHubStatusError(atom.statusCode);
     }
-    final payload = jsonDecode(response.body);
-    if (payload is! Map || payload['draft'] == true) return null;
-    final body = payload['body'];
-    return body is String ? notesForDisplay(body) : '';
+    if (atom.statusCode >= 200 && atom.statusCode < 300) {
+      final notes = notesFromAtom(atom.body, version);
+      if (notes != null) return notes;
+    }
+    final file = await _send(httpClient, Uri.parse(_notesFileUrl(version)));
+    if (file.statusCode == 404) return null;
+    _requireOk(file);
+    return notesForDisplay(file.body);
   } finally {
     if (client == null) httpClient.close();
   }
@@ -196,7 +309,7 @@ class GitHubStatusError extends Error {
 }
 
 /// The newest published phone build strictly newer than `currentVersion`, or null when
-/// this install is current. Throws on a network or API failure, so a caller can tell
+/// this install is current. Throws on a network or GitHub failure, so a caller can tell
 /// "up to date" from "could not check".
 Future<AppRelease?> findNewerRelease(
   String currentVersion, {
@@ -205,44 +318,76 @@ Future<AppRelease?> findNewerRelease(
 }) async {
   final httpClient = client ?? http.Client();
   try {
-    final refsResponse = await httpClient
-        .get(
-          Uri.parse(
-            '$_api/repos/$releaseRepo/git/matching-refs/tags/$releaseTagPrefix',
-          ),
-          headers: _headers,
-        )
-        .timeout(const Duration(seconds: 20));
-    if (refsResponse.statusCode < 200 || refsResponse.statusCode >= 300) {
-      throw GitHubStatusError(refsResponse.statusCode);
-    }
-    final newer = versionsFromRefs(jsonDecode(refsResponse.body))
+    final refs = await _send(httpClient, Uri.parse(_refsUrl));
+    _requireOk(refs);
+    // The advertisement is pkt-line and may carry a null; latin1 keeps every byte.
+    final newer = versionsFromAdvertisement(latin1.decode(refs.bodyBytes))
         .where((version) => compareVersions(version, currentVersion) > 0)
         .toList();
 
     for (final version in newer.take(_maxTagsTried)) {
-      final response = await httpClient
-          .get(
-            Uri.parse(
-              '$_api/repos/$releaseRepo/releases/tags/$releaseTagPrefix$version',
-            ),
-            headers: _headers,
-          )
-          .timeout(const Duration(seconds: 20));
-      // 404: the tag is pushed but CI has not published it yet (or the build failed).
-      if (response.statusCode == 404) continue;
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw GitHubStatusError(response.statusCode);
-      }
-      final release = releaseFromPayload(
-        version,
-        jsonDecode(response.body),
-        supportedAbis: supportedAbis,
+      final apk = await _publishedApk(httpClient, version, supportedAbis);
+      if (apk == null) continue;
+      return AppRelease(
+        version: version,
+        tag: '$releaseTagPrefix$version',
+        notes: await _notesOrEmpty(httpClient, version),
+        pageUrl: releasePageUrl(version),
+        apkUrl: apkDownloadUrl(version, apk.name),
+        apkName: apk.name,
+        apkSize: apk.size,
       );
-      if (release != null) return release;
     }
     return null;
   } finally {
     if (client == null) httpClient.close();
   }
+}
+
+Future<({String name, int size})?> _publishedApk(
+  http.Client client,
+  String version,
+  List<String> supportedAbis,
+) async {
+  for (final name in apkCandidates(version, supportedAbis)) {
+    final response = await _send(
+      client,
+      Uri.parse(apkDownloadUrl(version, name)),
+      head: true,
+    );
+    // 404: the tag is pushed but CI has not published this file yet.
+    if (response.statusCode == 404) continue;
+    _requireOk(response, allowRedirect: true);
+    final length = int.tryParse(response.headers['content-length'] ?? '') ?? 0;
+    return (name: name, size: length);
+  }
+  return null;
+}
+
+/// Notes are decoration on the update prompt. A feed that cannot be read must not
+/// turn a found release into a failed check.
+Future<String> _notesOrEmpty(http.Client client, String version) async {
+  try {
+    return await fetchReleaseNotes(version, client: client) ?? '';
+  } catch (_) {
+    return '';
+  }
+}
+
+Future<http.Response> _send(
+  http.Client client,
+  Uri uri, {
+  bool head = false,
+}) {
+  final request = head
+      ? client.head(uri, headers: _requestHeaders)
+      : client.get(uri, headers: _requestHeaders);
+  return request.timeout(const Duration(seconds: 20));
+}
+
+void _requireOk(http.Response response, {bool allowRedirect = false}) {
+  final status = response.statusCode;
+  if (status >= 200 && status < 300) return;
+  if (allowRedirect && (status == 301 || status == 302)) return;
+  throw GitHubStatusError(status);
 }

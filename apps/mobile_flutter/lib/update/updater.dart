@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
@@ -22,10 +23,17 @@ import 'release.dart';
 bool get updatesSupported => !kIsWeb && Platform.isAndroid;
 
 const String _skippedKey = 'fastvibe.update.skipped.v1';
+const String _cacheKey = 'fastvibe.update.checked.v1';
+const String _backoffKey = 'fastvibe.update.backoffUntil.v1';
+
+/// How long a 403/429 keeps an automatic check from asking again. A refusal that is
+/// retried on every resume is what keeps the refusal in place.
+const Duration _backoffFor = Duration(minutes: 30);
 
 /// How long an answer is reused. Not the process lifetime: backing out of the app on
 /// Android keeps the process alive, so a "no update" cached per launch outlived the
-/// release it predated and reopening the app never looked again.
+/// release it predated and reopening the app never looked again. The same window is
+/// kept on disk, so a process Android has killed does not ask again inside it.
 const Duration _checkFresh = Duration(minutes: 10);
 
 /// Per request. A network that silently drops GitHub's packets (common on mainland
@@ -48,24 +56,147 @@ Future<AppRelease?> checkForUpdate({bool force = false}) {
           _checkFresh.inMilliseconds) {
     return Future<AppRelease?>.value(settled.release);
   }
-  final check = () async {
-    final device = await DeviceInfoPlugin().androidInfo;
-    return findNewerRelease(appVersion, supportedAbis: device.supportedAbis);
-  }();
+  final check = _check(force);
   _inflight = check;
   check
       .then(
-        (release) => _settled = (
-          at: DateTime.now().millisecondsSinceEpoch,
-          release: release,
-        ),
-        // A failure is not remembered, so the next ask tries again.
+        // `_check` records the answer, keeping a disk hit on its original clock.
+        // A refusal is remembered there too: doing it here as well would push the
+        // window forward on every resume, so it would never expire.
+        (AppRelease? _) {},
         onError: (Object _) {},
       )
       .whenComplete(() {
         if (identical(_inflight, check)) _inflight = null;
       });
   return check;
+}
+
+Future<AppRelease?> _check(bool force) async {
+  if (!force) {
+    final until = await _backoffUntil();
+    if (until != null && DateTime.now().isBefore(until)) {
+      throw GitHubStatusError(403);
+    }
+    final cached = await _readCache();
+    if (cached != null &&
+        DateTime.now().millisecondsSinceEpoch - cached.at <
+            _checkFresh.inMilliseconds) {
+      _settled = cached;
+      return cached.release;
+    }
+  }
+  final device = await DeviceInfoPlugin().androidInfo;
+  try {
+    final release = await findNewerRelease(
+      appVersion,
+      supportedAbis: device.supportedAbis,
+    );
+    final at = DateTime.now().millisecondsSinceEpoch;
+    await _writeCache(release, at);
+    await _clearBackoff();
+    _settled = (at: at, release: release);
+    return release;
+  } on GitHubStatusError catch (error) {
+    if (error.status == 403 || error.status == 429) {
+      await _rememberBackoff();
+    }
+    rethrow;
+  }
+}
+
+Future<({int at, AppRelease? release})?> _readCache() async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_cacheKey);
+    if (raw == null) return null;
+    final decoded = jsonDecode(raw);
+    if (decoded is! Map) return null;
+    final at = decoded['at'];
+    if (at is! int) return null;
+    final release = decoded['release'];
+    if (release == null) return (at: at, release: null);
+    if (release is! Map) return null;
+    final version = release['version'];
+    final apkUrl = release['apkUrl'];
+    final apkName = release['apkName'];
+    if (version is! String || apkUrl is! String || apkName is! String) {
+      return null;
+    }
+    return (
+      at: at,
+      release: AppRelease(
+        version: version,
+        tag: release['tag'] is String
+            ? release['tag'] as String
+            : '$releaseTagPrefix$version',
+        notes: release['notes'] is String ? release['notes'] as String : '',
+        pageUrl: release['pageUrl'] is String
+            ? release['pageUrl'] as String
+            : releasePageUrl(version),
+        apkUrl: apkUrl,
+        apkName: apkName,
+        apkSize: release['apkSize'] is num
+            ? (release['apkSize'] as num).toInt()
+            : 0,
+      ),
+    );
+  } catch (_) {
+    return null;
+  }
+}
+
+Future<void> _writeCache(AppRelease? release, int at) async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _cacheKey,
+      jsonEncode(<String, Object?>{
+        'at': at,
+        'release': release == null
+            ? null
+            : <String, Object?>{
+                'version': release.version,
+                'tag': release.tag,
+                'notes': release.notes,
+                'pageUrl': release.pageUrl,
+                'apkUrl': release.apkUrl,
+                'apkName': release.apkName,
+                'apkSize': release.apkSize,
+              },
+      }),
+    );
+  } catch (_) {
+    // A check that cannot be remembered still answered.
+  }
+}
+
+Future<DateTime?> _backoffUntil() async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final until = prefs.getInt(_backoffKey);
+    if (until == null) return null;
+    return DateTime.fromMillisecondsSinceEpoch(until);
+  } catch (_) {
+    return null;
+  }
+}
+
+Future<void> _rememberBackoff() async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(
+      _backoffKey,
+      DateTime.now().add(_backoffFor).millisecondsSinceEpoch,
+    );
+  } catch (_) {}
+}
+
+Future<void> _clearBackoff() async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_backoffKey);
+  } catch (_) {}
 }
 
 /// A failed check as a sentence for the user; the raw error of a blocked request says
@@ -78,7 +209,8 @@ String describeCheckError(Object error) {
   if (message.contains('SocketException') || message.contains('network')) {
     return t('update.githubUnreachable');
   }
-  if (error is GitHubStatusError && error.status == 403) {
+  if (error is GitHubStatusError &&
+      (error.status == 403 || error.status == 429)) {
     return t('update.githubRateLimited');
   }
   return message;

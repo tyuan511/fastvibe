@@ -317,7 +317,7 @@
   "conn.unreachableLan": "连不上这台服务器。请确认手机和电脑在同一 Wi-Fi，并且电脑已打开「允许局域网访问」。",
   "conn.unreachable": "连不上这台服务器，请确认链接还能打开。",
   "update.githubTimeout": "连接 GitHub 超时。检查网络，或打开代理后再试。",
-  "update.githubUnreachable": "连不上 GitHub（api.github.com）。检查网络，或打开代理后再试。",
+  "update.githubUnreachable": "连不上 GitHub。检查网络，或打开代理后再试。",
   "update.githubRateLimited": "GitHub 暂时拒绝了请求（可能是访问次数超限），稍后再试。",
   "update.githubStatus": "GitHub 返回 {status}",
   "update.paused": "下载已暂停",
