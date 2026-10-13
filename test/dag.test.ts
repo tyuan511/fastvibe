@@ -4,8 +4,8 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DagStore } from "../src/main/engine/dag-store.ts";
-import { buildPrompt, DagScheduler, type DagNodeRun, type DagRunner } from "../src/main/pi/dag-scheduler.ts";
-import { canonicalDagId, dagGraphState, dagRunStatus, dagSeq, formatDagId, isDagNodeId, resolveDrafts, type DagConfiguredAgent, type DagNodeDraft, type DagProfile } from "../src/shared/dag.ts";
+import { buildPrompt, DagScheduler, nodeWritePaths, type DagNodeRun, type DagRunner } from "../src/main/pi/dag-scheduler.ts";
+import { canonicalDagId, dagGraphState, dagNodeTools, dagNodeWrites, dagRunStatus, dagSeq, formatDagId, isDagNodeId, resolveDrafts, type DagConfiguredAgent, type DagNode, type DagNodeDraft, type DagProfile } from "../src/shared/dag.ts";
 
 /**
  * The DAG engine: ids, validation, and the four rules the scheduler lives by. A graph that
@@ -113,6 +113,48 @@ test("a task with no matching configured agent falls back to the profile it was 
   assert.equal(node.agent, undefined);
   assert.equal(node.profile.name, "worker");
   assert.equal(node.model, undefined);
+});
+
+// 内置 worker 的角色文件里没有 tools 行，那是「不受限」的意思（普通委派会把 [] 展开成完整工具集）。
+// 经 DAG 复用时按节点缺省的只读理解，会把 worker 静默降级成 explorer：一个写不了文件的
+// worker 只能 dag_report blocked 退出，而调度器还以为它不写文件，让两个写同一目录的节点并行跑。
+const worker: DagConfiguredAgent = { name: "worker", instructions: "do the work", tools: [] };
+const asNode = (agent: string | undefined, coordinator: boolean, tools?: string[]): DagNode => ({
+  id: "T-0001",
+  title: "t",
+  instruction: "i",
+  status: "pending",
+  createdAt: 0,
+  dependsOn: [],
+  profile: { name: "worker", instructions: "do the work", ...(tools ? { tools } : {}) },
+  ...(agent ? { agent } : {}),
+  ...(coordinator ? { coordinator: true } : {}),
+});
+
+test("a reused role with no tool list keeps its full capabilities, not the node's read-only default", () => {
+  const [node] = resolveDrafts(new Set(), [draft("a", [], { agent: "worker" })], [worker]);
+  assert.equal(node.agent, "worker");
+  assert.deepEqual(node.profile.tools, undefined);
+  assert.deepEqual(dagNodeTools(node).sort(), ["bash", "edit", "find", "grep", "ls", "read", "write"]);
+  assert.equal(dagNodeWrites(node), true);
+  assert.deepEqual(nodeWritePaths(node), ["."]);
+
+  // 主 agent 现写的 profile 没给工具就是只读，这条不能松。
+  const [improvised] = resolveDrafts(new Set(), [draft("a")], [worker]);
+  assert.deepEqual(dagNodeTools(improvised), ["read", "grep", "find", "ls"]);
+  assert.equal(dagNodeWrites(improvised), false);
+  assert.deepEqual(nodeWritePaths(improvised), []);
+  // 明确列出的工具照旧，并且仍然决定写入范围。
+  assert.deepEqual(dagNodeTools(asNode(undefined, false, ["read", "bash"])), ["read", "bash"]);
+  assert.deepEqual(nodeWritePaths({ ...asNode(undefined, false, ["read", "bash"]), writePaths: ["src/a"] }), ["src/a"]);
+});
+
+test("a coordinator never gets a reused role's write tools", () => {
+  const [node] = resolveDrafts(new Set(), [draft("a", [], { agent: "worker", coordinator: true })], [worker]);
+  assert.deepEqual(dagNodeTools(node), ["read", "grep", "find", "ls"]);
+  assert.equal(dagNodeWrites(node), false);
+  assert.deepEqual(nodeWritePaths(node), []);
+  assert.deepEqual(dagNodeTools(asNode("worker", true)), ["read", "grep", "find", "ls"]);
 });
 
 test("a diamond runs in dependency order and hands upstream results downstream", async () => {

@@ -173,7 +173,7 @@ import { PromptPreparations } from "./prompt-preparation";
 import { sendOpeningPrompt } from "./opening-prompt";
 import type { AppConfigHostRequest, AppConfigHostResult } from "@shared/app-config";
 import type { DagHostRequest, DagHostResult } from "@shared/dag-tools";
-import { DAG_TOOLS, canonicalDagId, dagNodeFinished, isDagNodeId, type DagGraph, type DagNode, type DagOutputPage } from "@shared/dag";
+import { DAG_TOOLS, canonicalDagId, dagNodeFinished, dagNodeTools, isDagNodeId, type DagGraph, type DagNode, type DagOutputPage } from "@shared/dag";
 import { buildPrompt, DagScheduler, type DagNodeRun, type DagRunner } from "./dag-scheduler";
 import { DagStore } from "../engine/dag-store";
 import { runDagTool } from "../dag-tools";
@@ -743,7 +743,7 @@ export class PiProcessManager {
       agentSource: "project",
       task: prompt,
       systemPrompt: node.profile.instructions,
-      tools: node.profile.tools && node.profile.tools.length > 0 ? node.profile.tools : ["read", "grep", "find", "ls"],
+      tools: dagNodeTools(node),
       ...(node.model ? { model: node.model } : {}),
       ...(node.thinkingLevel && (THINKING_EFFORT_LEVELS as readonly string[]).includes(node.thinkingLevel)
         ? { thinkingLevel: node.thinkingLevel as ThinkingLevel }

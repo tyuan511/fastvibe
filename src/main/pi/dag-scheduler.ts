@@ -1,4 +1,4 @@
-import { canonicalDagId, DAG_BUDGET, DAG_MAX_DEPTH, DAG_READONLY_TOOLS, DAG_TOOLS, dagNodeFinished, dagOutcomeKey, dagRunId, resolveDrafts, type DagConfiguredAgent, type DagNode, type DagNodeDraft, type DagReport } from "../../shared/dag.ts";
+import { canonicalDagId, DAG_BUDGET, DAG_MAX_DEPTH, DAG_TOOLS, dagNodeFinished, dagNodeWrites, dagOutcomeKey, dagRunId, resolveDrafts, type DagConfiguredAgent, type DagNode, type DagNodeDraft, type DagReport } from "../../shared/dag.ts";
 import type { DagStore } from "../engine/dag-store.ts";
 
 /** 一个节点跑完的结果。`aborted` 是被取消 / 被用户停止，不算失败。 */
@@ -623,7 +623,7 @@ export function buildPrompt(node: DagNode, upstream: readonly DagNode[], maxHand
 }
 
 export function nodeWritePaths(node: DagNode): string[] {
-  if (!(node.profile.tools ?? DAG_READONLY_TOOLS).some((tool) => !DAG_READONLY_TOOLS.includes(tool))) return [];
+  if (!dagNodeWrites(node)) return [];
   return node.writePaths?.length ? node.writePaths : ["."];
 }
 function pathsOverlap(a: string, b: string): boolean {

@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { abortSubagent } from "@/lib/engine-client";
 import { formatDuration } from "@/lib/time";
 import { cn } from "@/lib/utils";
-import { DAG_PREVIEW_CHARS, DAG_READONLY_TOOLS, dagNodeFinished, type DagNode } from "@shared/dag";
+import { DAG_PREVIEW_CHARS, DAG_READONLY_TOOLS, dagNodeFinished, dagNodeTools, type DagNode } from "@shared/dag";
 import { useNow } from "./dag-canvas";
 
 /**
@@ -42,7 +42,7 @@ export function DagNodeDetail({
   const onSelect = onSelectNode;
   const elapsed = node.startedAt ? (node.endedAt ?? now) - node.startedAt : undefined;
   const downstream = nodes.filter((item) => item.dependsOn.includes(node.id)).map((item) => item.id);
-  const tools = node.profile.tools?.length ? node.profile.tools : DAG_READONLY_TOOLS;
+  const tools = dagNodeTools(node);
   const failure = (error: unknown): void => void toast.error(error instanceof Error ? error.message : String(error));
 
   return (

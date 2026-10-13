@@ -145,6 +145,25 @@ export function canonicalDagId(value: string): string {
   return seq === undefined ? value.trim() : formatDagId(seq);
 }
 
+/**
+ * 一个节点实际可用的工作区工具。
+ *
+ * 缺省的只读是给主 agent 现写的 profile 的：写文件、执行命令要它明确给出。复用了已配置角色的
+ * 节点不一样——角色没写 `tools` 意思是「这个角色不受限」（内置 worker 就是如此），普通委派会
+ * 展开成完整工具集，这里必须同样展开。否则同一个角色经 DAG 复用就静默降级成只读，而且
+ * `nodeWritePaths` 会认为它不写文件，两个写同一目录的节点会并行跑。
+ */
+export function dagNodeTools(node: Pick<DagNode, "agent" | "coordinator" | "profile">): string[] {
+  if (node.profile.tools?.length) return node.profile.tools;
+  if (!node.agent) return [...DAG_READONLY_TOOLS];
+  return node.coordinator ? [...DAG_READONLY_TOOLS] : [...DAG_TOOLS];
+}
+
+/** 这个节点会写工作区文件（调度按它串行重叠的写入范围）。 */
+export function dagNodeWrites(node: Pick<DagNode, "agent" | "coordinator" | "profile">): boolean {
+  return dagNodeTools(node).some((tool) => !DAG_READONLY_TOOLS.includes(tool));
+}
+
 /** 一次运行的 subagent id：第 1 次就是节点编号，之后带上次数。 */
 export function dagRunId(nodeId: string, attempt: number): string {
   return attempt <= 1 ? nodeId : `${nodeId}.${attempt}`;
