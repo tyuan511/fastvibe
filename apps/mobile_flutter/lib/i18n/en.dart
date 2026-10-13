@@ -338,7 +338,7 @@ const Map<String, String> en = <String, String>{
   'update.update': 'Update',
   'update.downloading': 'Downloading…',
   'update.downloadingPercent': 'Downloading {percent}%',
-  'update.installing': 'Opening the installer…',
+  'update.installing': 'Installing…',
   'update.downloaded': '{version} downloaded',
   'update.failed': 'Update failed',
   'update.available': 'New version {version}',
