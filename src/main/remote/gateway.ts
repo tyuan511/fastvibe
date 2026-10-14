@@ -155,6 +155,10 @@ const CATALOG_RESULT_METHODS: ReadonlySet<string> = new Set([
   Ipc.projectsRename,
   Ipc.projectsRemove,
   Ipc.projectsReorder,
+  Ipc.projectsCreate,
+  Ipc.projectsAddFolder,
+  Ipc.projectsRemoveFolder,
+  Ipc.projectsSetPrimary,
 ]);
 
 export class RemoteGateway {

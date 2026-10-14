@@ -1,4 +1,5 @@
 import type { ChatAttachment, ChatMessage, DagSettledInfo, MessagePart, ThinkingTiming, ToolCallBlock, TuiRun } from "@shared/types";
+import { isRepetitionStop } from "../../shared/abort.ts";
 import { extractPromptAttachments } from "../../shared/attachment-metadata.ts";
 import { stripMemoryCitation } from "../../shared/memory-citation.ts";
 import { toolImagesOf, toolResultStatus } from "../../shared/tool-result.ts";
@@ -72,6 +73,25 @@ export function mapEngineMessages(
         });
         continue;
       }
+      // Same rule for a scheduled run's outcome: the model reads the full note, the thread
+      // draws its one-line `notice` as an ordinary system bubble.
+      if (message.customType === "schedule-result") {
+        const createdAt = typeof message.timestamp === "number" ? message.timestamp : Date.now();
+        const notice = isRecord(message.details) && typeof message.details.notice === "string" ? message.details.notice : "";
+        if (notice) {
+          output.push({
+            id: idOf?.(entry) ?? String(message.id ?? `schedule:${createdAt}`),
+            role: "system",
+            text: notice,
+            tools: [],
+            parts: [],
+            createdAt,
+            kind: "custom",
+            customType: "schedule-result",
+          });
+        }
+        continue;
+      }
       if (message.display === false) continue;
       const customType = typeof message.customType === "string" ? message.customType : undefined;
       const { text, parts } = extractContent(message.content);
@@ -95,24 +115,18 @@ export function mapEngineMessages(
       const id = idOf?.(entry) ?? `compact:${createdAt}`;
       const compact = { status: "done" as const, tokensBefore };
       const compactPart = { kind: "compact" as const, text: summary, compact };
-      const previous = output.at(-1);
-      if (previous?.role === "assistant") {
-        output[output.length - 1] = {
-          ...previous,
-          parts: [...(previous.parts ?? []), compactPart],
-        };
-      } else {
-        output.push({
-          id,
-          role: "system",
-          text: summary,
-          tools: [],
-          parts: [compactPart],
-          createdAt,
-          kind: "compact",
-          compact,
-        });
-      }
+      // Its own row, after the reply it followed — not a part of that reply. A
+      // divider glued onto the previous turn reads as something that turn said.
+      output.push({
+        id,
+        role: "system",
+        text: summary,
+        tools: [],
+        parts: [compactPart],
+        createdAt,
+        kind: "compact",
+        compact,
+      });
       continue;
     }
     if (message.role === "toolResult") {
@@ -137,6 +151,7 @@ export function mapEngineMessages(
     applyThinkingTimings(parts, id ? timings?.get(id) : undefined);
     const error = assistantError(message);
     const stop = error ? undefined : assistantStop(message);
+    const stopCause = stop === "aborted" && isRepetitionStop(message) ? "repetition" : undefined;
     if (!text && !thinking && tools.length === 0 && attachments.length === 0 && !error && role !== "assistant") continue;
     output.push({
         id,
@@ -153,6 +168,7 @@ export function mapEngineMessages(
         attachments: attachments.length > 0 ? attachments : undefined,
         error,
         stop,
+        stopCause,
       });
     if (role === "assistant") {
       for (const tool of tools) toolsById.set(tool.id, tool);

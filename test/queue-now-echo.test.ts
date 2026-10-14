@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import test from "node:test";
+import * as abort from "../src/shared/abort.ts";
 import * as attachmentMetadata from "../src/shared/attachment-metadata.ts";
 import * as toolResult from "../src/shared/tool-result.ts";
 import type { ChatMessage, EngineEvent } from "../src/shared/types.ts";
@@ -22,6 +23,7 @@ const compiled = ts.transpileModule(
 type Step = { messages: ChatMessage[]; streaming: boolean; interrupted?: "aborted" | "error"; partBoundary?: number };
 const exports: { applyEngineEvent?: (messages: ChatMessage[], event: EngineEvent, streaming: boolean, boundary?: number) => Step } = {};
 new Function("require", "exports", compiled)((name: string) => {
+  if (name === "@shared/abort") return abort;
   if (name === "@shared/attachment-metadata") return attachmentMetadata;
   if (name === "@shared/tool-result") return toolResult;
   if (name.endsWith("random.ts")) return { randomUUID };

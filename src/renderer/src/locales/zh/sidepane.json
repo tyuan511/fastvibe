@@ -36,6 +36,7 @@
   },
   "files": {
     "unbound": "当前对话未绑定项目，绑定项目后即可浏览文件。",
+    "primary": "主",
     "pick": "选择一个文件",
     "resize": "调整列表宽度",
     "reveal": "在访达中显示",
@@ -46,6 +47,8 @@
     "pathCopied": "路径已复制",
     "notFound": "文件不存在",
     "back": "返回目录树",
+    "hideTree": "收起文件树",
+    "showTree": "展开文件树",
     "previewMode": "预览",
     "edit": "编辑",
     "save": "保存",

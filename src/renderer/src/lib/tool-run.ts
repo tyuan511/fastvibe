@@ -3,9 +3,9 @@ import { familyOf, type ToolFamily } from "./tool-family.ts";
 
 /**
  * Consecutive tool calls between two stretches of prose fold into one row.
- * A thought between two calls is not narration — the model thinks, then calls —
- * so thinking must not split the run, or a real turn never folds. Prose does:
- * that is the sentence the reader is meant to see between batches.
+ * A thought is not part of that row: it is its own block, and it splits the batch
+ * the same way prose does. Otherwise a thought between two calls disappears into
+ * the fold, and the reader cannot see that the model stopped to think.
  *
  * A few calls stay on their own line and break the run, because the row is the
  * thing to see: a question waits on the reader, and a todo / sub-agent / presented
@@ -21,9 +21,7 @@ export function foldsIntoRun(name: string): boolean {
   return !STANDALONE_FAMILIES.has(familyOf(key));
 }
 
-export type RunItem =
-  | { kind: "thinking"; part: Extract<MessagePart, { kind: "thinking" }> }
-  | { kind: "tool"; tool: ToolCallBlock };
+export type RunItem = { kind: "tool"; tool: ToolCallBlock };
 
 export type ToolRun = {
   /** First call's id, so a later call in the same batch does not remount the row. */
@@ -39,47 +37,43 @@ export type CollapsedPart =
 
 /**
  * Fold adjacent quiet tools into one run. A single call stays a row — it already
- * is its own description. Thinking that only separates the calls, including the
- * thought after the last call and before the next sentence, stays inside the run
- * so the collapsed line sits directly between the two stretches of prose.
+ * is its own description. Thinking is emitted on its own and splits the batch,
+ * the same as prose: a thought between two calls is not folded away.
  */
 export function collapseToolRuns(
   parts: MessagePart[],
   toolById: ReadonlyMap<string, ToolCallBlock>,
 ): CollapsedPart[] {
   const output: CollapsedPart[] = [];
-  let pending: RunItem[] = [];
-
-  const emitLoose = (item: RunItem): void => {
-    output.push(item.kind === "thinking" ? item.part : { kind: "tool", tool: item.tool });
-  };
+  let pending: ToolCallBlock[] = [];
 
   const flush = (): void => {
-    const tools = pending.flatMap((item) => (item.kind === "tool" ? [item.tool] : []));
-    if (tools.length >= 2) {
-      output.push({ kind: "run", id: `run:${tools[0].id}`, items: pending, tools });
-    } else {
-      for (const item of pending) emitLoose(item);
+    if (pending.length >= 2) {
+      output.push({
+        kind: "run",
+        id: `run:${pending[0].id}`,
+        items: pending.map((tool) => ({ kind: "tool", tool })),
+        tools: pending,
+      });
+    } else if (pending[0]) {
+      output.push({ kind: "tool", tool: pending[0] });
     }
     pending = [];
   };
 
   for (const part of parts) {
-    if (part.kind === "thinking") {
-      pending.push({ kind: "thinking", part });
-      continue;
-    }
     if (part.kind === "tool") {
       const tool = toolById.get(part.toolId);
       if (!tool) continue;
       if (foldsIntoRun(tool.name)) {
-        pending.push({ kind: "tool", tool });
+        pending.push(tool);
         continue;
       }
       flush();
       output.push({ kind: "tool", tool });
       continue;
     }
+    // Thinking, prose, and every other part sit outside the fold and split it.
     flush();
     output.push(part);
   }
@@ -97,7 +91,11 @@ export function liveTool(tools: ToolCallBlock[]): ToolCallBlock | undefined {
 
 type Translate = (key: string, options?: { count?: number }) => string;
 
-export type SummaryPiece = { kind: "text"; text: string } | { kind: "file"; name: string };
+/**
+ * A named file carries `path` so the summary can draw it as a path link. A query or a
+ * tool name is only a label — previewing it would open nothing.
+ */
+export type SummaryPiece = { kind: "text"; text: string } | { kind: "file"; name: string; path?: string };
 
 const FILE_KEYS = ["path", "file_path", "filePath", "filename", "file", "target_file", "target"];
 const QUERY_KEYS = ["query", "pattern", "search_query", "searchQuery", "regex"];
@@ -114,6 +112,16 @@ function argString(args: unknown, keys: string[]): string {
 
 function baseName(path: string): string {
   return path.split(/[/\\]/).filter(Boolean).at(-1) ?? path;
+}
+
+const FILE_FAMILIES = new Set<ToolFamily>(["read", "write", "edit", "delete"]);
+
+/** The name a settled clause prints, plus the path when that name is a file. */
+function namedPiece(tool: ToolCallBlock): SummaryPiece {
+  const name = callName(tool);
+  if (!FILE_FAMILIES.has(familyOf(tool.name))) return { kind: "file", name };
+  const path = argString(tool.args, FILE_KEYS);
+  return path ? { kind: "file", name, path } : { kind: "file", name };
 }
 
 /** What a single non-command call is named by. A file call uses the file name. */
@@ -170,9 +178,16 @@ const CATEGORY_CLAUSE: Record<RunCategory, { one: string; many: string }> = {
 /** Commands are only ever counted; a single shell call is not named by its command. */
 const COUNT_ONLY = new Set<RunCategory>(["command"]);
 
+/** A later clause of the same sentence: drop a leading 「已」, or uncapitalise an English verb. */
+function continueClause(clause: string): string {
+  if (clause.startsWith("已")) return clause.slice(1);
+  return clause.replace(/^[A-Z]/, (letter) => letter.toLowerCase());
+}
+
 /**
  * Settled line. Each category appears once, in the order it first showed up:
- * one call names the file or query, several say how many. Failures sit at the end.
+ * one call names the file or query, several say how many. A failed call is not
+ * counted here — the expanded row already marks it.
  */
 export function runSummary(tools: ToolCallBlock[], text: Translate): { line: string; pieces: SummaryPiece[] } {
   const buckets = new Map<RunCategory, ToolCallBlock[]>();
@@ -189,9 +204,14 @@ export function runSummary(tools: ToolCallBlock[], text: Translate): { line: str
 
   const pieces: SummaryPiece[] = [];
   const separator = text("common:group.separator");
+  // 「已」covers the whole line. Later clauses drop it, and an English verb drops
+  // its capital, so the line reads as one sentence rather than a list of them.
   const push = (clause: SummaryPiece[]): void => {
-    if (pieces.length > 0) pieces.push({ kind: "text", text: separator });
-    pieces.push(...clause);
+    const first = pieces.length === 0;
+    if (!first) pieces.push({ kind: "text", text: separator });
+    const [head, ...rest] = clause;
+    if (head?.kind === "text" && !first) pieces.push({ kind: "text", text: continueClause(head.text) }, ...rest);
+    else pieces.push(...clause);
   };
 
   for (const category of order) {
@@ -199,16 +219,11 @@ export function runSummary(tools: ToolCallBlock[], text: Translate): { line: str
     if (batch.length === 0) continue;
     const clause = CATEGORY_CLAUSE[category];
     if (batch.length === 1 && !COUNT_ONLY.has(category)) {
-      push([
-        { kind: "text", text: `${text(clause.one)} ` },
-        { kind: "file", name: callName(batch[0]) },
-      ]);
+      push([{ kind: "text", text: `${text(clause.one)} ` }, namedPiece(batch[0])]);
       continue;
     }
     push([{ kind: "text", text: text(clause.many, { count: batch.length }) }]);
   }
 
-  const failed = tools.filter((tool) => tool.status === "error").length;
-  if (failed > 0) pieces.push({ kind: "text", text: ` (${text("common:group.failed", { count: failed })})` });
   return { line: pieces.map((piece) => (piece.kind === "file" ? piece.name : piece.text)).join(""), pieces };
 }

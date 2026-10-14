@@ -4,8 +4,8 @@ import { findSubagent } from "@shared/subagent-state";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Add01Icon,
-  ArrowExpand02Icon,
   ArrowShrink01Icon,
+  FullScreenIcon,
   Cancel01Icon,
   ChromeIcon,
   File01Icon,
@@ -61,6 +61,7 @@ const SidePaneTerminal = lazy(async () => ({
 }));
 import { HAS_TRAFFIC_LIGHTS } from "@/lib/platform";
 import { toast } from "sonner";
+import { projectFolderPaths } from "@shared/project-folders";
 import { bindingStateKey, isRemoteProject, projectHasCapability } from "@/lib/remote-project";
 import type { AppCapability } from "@shared/app-protocol";
 import type { Project } from "@shared/types";
@@ -152,7 +153,7 @@ function MaximizeButton(): JSX.Element {
       label={maximized ? t("pane.restore") : t("pane.maximize")}
       onClick={toggleMaximized}
     >
-      <HugeiconsIcon strokeWidth={2} icon={maximized ? ArrowShrink01Icon : ArrowExpand02Icon} />
+      <HugeiconsIcon strokeWidth={2} icon={maximized ? ArrowShrink01Icon : FullScreenIcon} />
     </IconButton>
   );
 }
@@ -226,6 +227,7 @@ export const SidePane = memo(function SidePane({
   const closeTab = useSidePaneStore((state) => state.close);
   const openGit = useSidePaneStore((state) => state.openGit);
   const openTerminal = useSidePaneStore((state) => state.openTerminal);
+  const folders = workspace && !isRemoteProject(workspace) ? projectFolderPaths(workspace) : undefined;
   const openBrowser = useSidePaneStore((state) => state.openBrowser);
   const openFiles = useSidePaneStore((state) => state.openFiles);
   const openSideChat = useSidePaneStore((state) => state.openSideChat);
@@ -341,7 +343,7 @@ export const SidePane = memo(function SidePane({
       : null,
     { id: "files", label: t("pane.files"), icon: Folder01Icon, onOpen: () => openCapable("workspace", t("pane.files"), openFiles) },
     hasReviewTab ? null : { id: "review", label: t("pane.review"), icon: GitCompareIcon, onOpen: () => openCapable("git", t("pane.review"), openGit) },
-    // 修改记录 is chip-only: the transcript's file chips mint that tab. A card
+    // 修改记录 has no menu entry: the transcript's changes card mints that tab. An entry
     // here would let the pane open an empty turn-changes view on its own.
     { id: "terminal", label: t("pane.terminal"), icon: TerminalIcon, onOpen: () => openCapable("terminal", t("pane.terminal"), () => openTerminal(cwd)) },
     {
@@ -359,8 +361,14 @@ export const SidePane = memo(function SidePane({
 
   return (
     <ResizablePanel {...panePanel}>
+    {/* Maximised beside an open sidebar, the conversation column is gone and
+        the two 8px insets would stack. The frame shifts left by one inset and
+        the panel clips it — see the floating-panes block in index.css. The
+        sidebar is left alone: its width is a preference, and growing it here
+        would jump the moment the pane is maximised. */}
     <aside
       data-slot="panel-frame"
+      data-against-sidebar={maximized && !sidebarCollapsed ? "" : undefined}
       className={cn(
         "relative flex h-full min-h-0 w-full flex-col bg-background",
         // Maximized, the conversation column is gone and this pane sits against
@@ -520,6 +528,8 @@ export const SidePane = memo(function SidePane({
           {active?.type === "git" ? (
             <SidePaneGit
               cwd={cwd}
+              folders={folders}
+              projectCwd={workspace?.cwd}
               onError={onError}
               focusPath={active.gitFocusPath}
               focusSource={active.gitFocusSource}
@@ -529,6 +539,7 @@ export const SidePane = memo(function SidePane({
           {active?.type === "changes" ? (
             <SidePaneChanges
               cwd={cwd}
+              folders={folders}
               files={active.changeFiles ?? []}
               path={active.changePath}
               onSelect={(path) => patchTab(active.id, { changePath: path })}
@@ -547,7 +558,7 @@ export const SidePane = memo(function SidePane({
                 ) : tab.type === "browser" ? (
                   <SidePaneBrowser tabId={tab.id} url={tab.url ?? ""} visible={tab.id === activeTabId} />
                 ) : tab.type === "files" ? (
-                  <SidePaneFiles tab={tab} cwd={cwd} remote={isRemoteProject(workspace)} onError={onError} />
+                  <SidePaneFiles tab={tab} cwd={cwd} roots={folders} remote={isRemoteProject(workspace)} onError={onError} />
                 ) : tab.type === "dag-node" ? (
                   <SidePaneDagNode tab={tab} />
                 ) : (

@@ -747,15 +747,27 @@ class _TurnMetaLine extends StatelessWidget {
   }
 }
 
-/// A quiet rule with a label: a model switch, a DAG notice.
+/// A quiet rule with a label: a model switch, a DAG notice, a compaction.
 class _Divider extends StatelessWidget {
-  const _Divider({required this.palette, required this.label});
+  const _Divider({
+    required this.palette,
+    required this.label,
+    this.running = false,
+    this.danger = false,
+  });
 
   final Palette palette;
   final String label;
+  final bool running;
+  final bool danger;
 
   @override
   Widget build(BuildContext context) {
+    final style = TextStyle(
+      color: danger ? palette.danger : palette.muted,
+      fontSize: 12,
+      fontWeight: FontWeight.w500,
+    );
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
@@ -763,14 +775,9 @@ class _Divider extends StatelessWidget {
           Expanded(child: Container(height: 0.5, color: palette.border)),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 10),
-            child: Text(
-              label,
-              style: TextStyle(
-                color: palette.muted,
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
+            child: running
+                ? _BlinkingLabel(text: label, style: style.copyWith(color: palette.text))
+                : Text(label, style: style),
           ),
           Expanded(child: Container(height: 0.5, color: palette.border)),
         ],
@@ -779,7 +786,41 @@ class _Divider extends StatelessWidget {
   }
 }
 
-/// A compaction, drawn as its own notice: what happened, why, and the token delta.
+/// Opacity flicker for a divider that is still in progress.
+class _BlinkingLabel extends StatefulWidget {
+  const _BlinkingLabel({required this.text, required this.style});
+
+  final String text;
+  final TextStyle style;
+
+  @override
+  State<_BlinkingLabel> createState() => _BlinkingLabelState();
+}
+
+class _BlinkingLabelState extends State<_BlinkingLabel>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1100),
+  )..repeat(reverse: true);
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: Tween<double>(begin: 1, end: 0.28).animate(_controller),
+      child: Text(widget.text, style: widget.style),
+    );
+  }
+}
+
+/// A compaction, drawn as the same quiet rule as a model switch. It sits between
+/// turns; while it runs the label flickers, and once it lands the label is the result.
 class CompactNotice extends StatelessWidget {
   const CompactNotice({
     super.key,
@@ -815,72 +856,29 @@ class CompactNotice extends StatelessWidget {
         : before != null
         ? formatTokens(before)
         : null;
-    final color = status == 'error'
-        ? palette.danger
-        : running
-        ? palette.accent
-        : palette.muted;
     final error = status == 'error' ? (compact?.error ?? text.trim()) : null;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-      decoration: BoxDecoration(
-        color: status == 'error'
-            ? palette.dangerSoft
-            : running
-            ? palette.accentSoft
-            : palette.field,
-        borderRadius: BorderRadius.circular(Radii.md),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Row(
-            children: <Widget>[
-              if (running)
-                DesktopSpinner(size: 15, color: color)
-              else
-                HugeIcon(
-                  icon: AppIcons.scissor,
-                  size: 15,
-                  color: color,
-                  strokeWidth: 2,
-                ),
-              const SizedBox(width: 7),
-              Text(
-                label,
-                style: TextStyle(
-                  color: color,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              if (reason != null || tokens != null) ...<Widget>[
-                const SizedBox(width: 8),
-                Flexible(
-                  child: Text(
-                    <String?>[reason, tokens].whereType<String>().join(' · '),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(color: palette.muted, fontSize: 12),
-                  ),
-                ),
-              ],
-            ],
-          ),
-          if (error != null && error.isNotEmpty) ...<Widget>[
-            const SizedBox(height: 3),
-            Padding(
-              padding: const EdgeInsets.only(left: 22),
-              child: Text(
-                error,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(color: palette.danger, fontSize: 13),
-              ),
+    final detail = <String?>[reason, tokens].whereType<String>().join(' · ');
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        _Divider(
+          palette: palette,
+          label: detail.isEmpty ? label : '$label · $detail',
+          running: running,
+          danger: status == 'error',
+        ),
+        if (error != null && error.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text(
+              error,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: TextStyle(color: palette.danger, fontSize: 12),
             ),
-          ],
-        ],
-      ),
+          ),
+      ],
     );
   }
 }

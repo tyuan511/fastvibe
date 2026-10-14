@@ -1,12 +1,17 @@
 import { useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { ArrowRight01Icon, FileEditIcon } from "@hugeicons/core-free-icons";
 import { cn } from "@/lib/utils";
-import { FileIcon } from "@/components/file-icon";
 import { collectChangedFiles, type ChangedFile } from "@/lib/changed-files";
+import { DiffStatBadge } from "@/components/chat/diff-stat";
 import { useSidePaneStore } from "@/stores/side-pane";
-import { useSessionStore } from "@/stores/session";
-import { resolvePath } from "@/lib/workspace-path";
+import { useSessionStore, useWorkspacePath } from "@/stores/session";
+import { displayProjectPath, projectFolderPaths } from "@shared/project-folders";
+import { displayPath, resolvePath } from "@/lib/workspace-path";
 import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -17,15 +22,26 @@ import {
 export type { ChangedFile };
 export { collectChangedFiles };
 
-function fileName(path: string): string {
-  return path.split("/").pop() ?? path;
+function fileLabel(path: string, cwd?: string): string {
+  const { conversations, projects, activeId } = useSessionStore.getState();
+  const bound = conversations.find((item) => item.id === activeId)?.project;
+  const project = projects.find((item) => item.cwd === bound);
+  const folders = project ? projectFolderPaths(project) : [];
+  const shown = folders.length > 1 ? displayProjectPath(path, cwd, folders) : displayPath(path, cwd);
+  return shown.replace(/\\/g, "/");
 }
 
-function FileChip({ file, onOpen }: { file: ChangedFile; onOpen: (file: ChangedFile) => void }): JSX.Element {
+function FileRow({
+  file,
+  cwd,
+  onOpen,
+}: {
+  file: ChangedFile;
+  cwd?: string;
+  onOpen: (file: ChangedFile) => void;
+}): JSX.Element {
   const { t } = useTranslation("chat");
-  const name = fileName(file.path);
-  // The chip's own click opens the turn's diff; the menu is for the other questions one
-  // asks of a file — see it as it is now, find it on disk, take its path elsewhere.
+  const label = fileLabel(file.path, cwd);
   const absolute = (): string => {
     const { conversations, activeId } = useSessionStore.getState();
     return resolvePath(file.path, conversations.find((item) => item.id === activeId)?.cwd);
@@ -40,19 +56,14 @@ function FileChip({ file, onOpen }: { file: ChangedFile; onOpen: (file: ChangedF
         render={
           <button
             type="button"
-            // Purely an affordance for the *first* click: the chip adds nothing the tool card
-            // does not already show, but 「which of these 12 files was it」 is the question the
-            // chip exists to answer, and opening its diff is the answer.
             title={file.path}
             onClick={() => onOpen(file)}
-            className="inline-flex h-7 max-w-56 items-center gap-1.5 rounded-full border border-border bg-muted/40 pr-2 pl-1.5 text-xs transition-colors hover:border-ring hover:bg-muted"
+            className="flex w-full items-center gap-3 rounded-md px-2 py-1 text-left transition-colors hover:bg-muted"
           />
         }
       >
-        <FileIcon name={name} />
-        <span className="min-w-0 truncate text-foreground">{name}</span>
-        {file.added > 0 ? <span className="shrink-0 tabular-nums text-success">+{file.added}</span> : null}
-        {file.removed > 0 ? <span className="shrink-0 tabular-nums text-destructive">-{file.removed}</span> : null}
+        <span className="min-w-0 flex-1 truncate text-sm text-foreground">{label}</span>
+        <DiffStatBadge added={file.added} removed={file.removed} />
       </ContextMenuTrigger>
       <ContextMenuContent className="w-48">
         <ContextMenuItem onClick={() => void useSessionStore.getState().openPreview(absolute())}>
@@ -67,35 +78,60 @@ function FileChip({ file, onOpen }: { file: ChangedFile; onOpen: (file: ChangedF
   );
 }
 
-/** The turn's changed files as chips, collapsed to one row past six files. */
+/**
+ * One turn's writes, as the Codex card: a header naming how many files changed
+ * and the line totals, with the paths underneath. The header folds the list;
+ * a path (or 审查) opens that turn's own diff, not the working tree.
+ */
 export function TurnFileChips({ files, className }: { files: ChangedFile[]; className?: string }): JSX.Element | null {
   const { t } = useTranslation("chat");
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
+  const cwd = useWorkspacePath();
   const openTurnChanges = useSidePaneStore((state) => state.openTurnChanges);
   if (files.length === 0) return null;
-  const collapsible = files.length > 6;
+  const added = files.reduce((sum, file) => sum + file.added, 0);
+  const removed = files.reduce((sum, file) => sum + file.removed, 0);
+  const review = (): void => openTurnChanges(files, files[0].path);
   return (
-    <div className={cn("flex items-center gap-1.5", className)}>
-      <div className={cn("flex min-w-0 flex-wrap items-center gap-1.5", collapsible && !open && "max-h-7 overflow-hidden")}>
-        {files.map((file) => (
-          <FileChip
-            key={file.path}
-            file={file}
-            // The chip is the only way into 修改记录: the pane itself has no 打开
-            // entry, and 审查's git diff is a different question (working tree vs HEAD).
-            onOpen={(changed) => openTurnChanges(files, changed.path)}
-          />
-        ))}
-      </div>
-      {collapsible ? (
-        <button
-          type="button"
-          className="inline-flex h-7 shrink-0 items-center rounded-full px-2 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          onClick={() => setOpen((value) => !value)}
+    <Collapsible
+      open={open}
+      onOpenChange={setOpen}
+      className={cn("w-full overflow-hidden rounded-xl border border-border bg-muted/40", className)}
+    >
+      <div className="flex items-center gap-2 px-3 py-2.5">
+        <CollapsibleTrigger
+          className={cn(
+            "flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 rounded-md text-left",
+            "focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+          )}
         >
-          {open ? t("files.collapse") : t("files.expand", { count: files.length })}
-        </button>
-      ) : null}
-    </div>
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+            <HugeiconsIcon strokeWidth={2} icon={FileEditIcon} className="size-4" />
+          </span>
+          <span className="flex min-w-0 flex-col">
+            <span className="flex items-center gap-1 text-sm font-medium text-foreground">
+              <span className="truncate">{t("files.edited", { count: files.length })}</span>
+              <HugeiconsIcon
+                strokeWidth={2}
+                aria-hidden
+                icon={ArrowRight01Icon}
+                className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform duration-200", open && "rotate-90")}
+              />
+            </span>
+            <DiffStatBadge added={added} removed={removed} />
+          </span>
+        </CollapsibleTrigger>
+        <Button type="button" variant="outline" size="sm" className="rounded-full" onClick={review}>
+          {t("files.review")}
+        </Button>
+      </div>
+      <CollapsibleContent>
+        <div className="max-h-60 overflow-y-auto px-1.5 pb-1.5">
+          {files.map((file) => (
+            <FileRow key={file.path} file={file} cwd={cwd} onOpen={(changed) => openTurnChanges(files, changed.path)} />
+          ))}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }

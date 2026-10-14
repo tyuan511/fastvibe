@@ -99,6 +99,7 @@ export const Sidebar = memo(function Sidebar({
   onRenameProject,
   onRemoveProject,
   onRevealProject,
+  onManageFolders,
   onReorderProjects,
   onOpenSettings,
   onOpenMarket,
@@ -128,6 +129,7 @@ export const Sidebar = memo(function Sidebar({
   onRenameProject: (cwd: string, name: string) => void;
   onRemoveProject: (cwd: string) => void;
   onRevealProject: (cwd: string) => void;
+  onManageFolders?: (cwd: string) => void;
   /** Persists a drag-reordered project list; the catalog owns the order. */
   onReorderProjects: (cwds: string[]) => void;
   onOpenSettings: () => void;
@@ -541,7 +543,7 @@ export const Sidebar = memo(function Sidebar({
           setDrop(null);
         }}
       >
-        <div className={cn("no-drag px-2", HAS_CUSTOM_TITLE_BAR && "pt-2")}>
+        <div className={cn("no-drag shrink-0 px-2", HAS_CUSTOM_TITLE_BAR && "pt-2")}>
           <div className="flex h-8 items-center justify-between">
             {/* The row leads with whatever this platform has no place else for. macOS keeps
                 the panel controls on its traffic-light row, so the brand leads here; where the
@@ -628,8 +630,13 @@ export const Sidebar = memo(function Sidebar({
           </div>
         </div>
 
-        <ScrollArea className="no-drag min-h-0 flex-1">
-          <div className="px-2 pb-2">
+        {/* The list is the only part that scrolls, between two bars whose rows are
+            the same height and type as a conversation. No hairline at rest — it read
+            as a cut through the pane. `.sidebar-scroll` fades a row only as it meets
+            those bars. The 0.75rem padding is that fade, so a resting list is not
+            faded, and the first section's own top margin would stack on top of it. */}
+        <ScrollArea className="sidebar-scroll no-drag min-h-0 flex-1">
+          <div className="px-2 pt-3 pb-3 [&>:first-child]:mt-0">
             {pinnedItems.length > 0 ? (
               <>
                 <SectionLabel>{t("sidebar.pinned")}</SectionLabel>
@@ -685,6 +692,7 @@ export const Sidebar = memo(function Sidebar({
                       }}
                       onCancelRename={() => setRenaming(null)}
                       onReveal={() => onRevealProject(group.cwd)}
+                      onManageFolders={onManageFolders ? () => onManageFolders(group.cwd) : undefined}
                       onRemove={() => setPendingDelete({ type: "project", cwd: group.cwd, title: group.name })}
                     >
                       {renderProjectSessions(group.cwd, group.items)}
@@ -731,7 +739,7 @@ export const Sidebar = memo(function Sidebar({
         </DragOverlay>
       </DndContext>
 
-      <div className="no-drag flex items-center gap-1 p-2">
+      <div className="no-drag flex shrink-0 items-center gap-1 p-2">
         <button
           type="button"
           className="flex h-8 pointer-coarse:h-10 min-w-0 flex-1 items-center gap-2.5 rounded-md px-2 text-sm hover:bg-sidebar-accent/50"

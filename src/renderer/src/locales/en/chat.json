@@ -20,6 +20,9 @@
     "placeholder": "Ask anything",
     "placeholderQueued": "Keep typing to queue a follow-up",
     "attach": "Add attachment",
+    "fileMention": "Project files",
+    "fileMentionEmpty": "No matching files",
+    "fileMentionSearching": "Searching files",
     "pastedTextFile": "pasted-text.txt",
     "contextStats": "View context and turn stats",
     "compact": "Compact context",
@@ -93,7 +96,7 @@
     "running": "Compacting context",
     "cancelled": "Context compact cancelled",
     "failed": "Compact failed",
-    "done": "Context compacted"
+    "done": "Compacted context"
   },
   "thinking": {
     "running": "Thinking",
@@ -196,7 +199,8 @@
     "earlier_one": "Show {{count}} earlier turn",
     "earlier_other": "Show {{count}} earlier turns",
     "stoppedAtLength": "The reply hit the model's maximum output length and was cut off. Press Continue to regenerate it, or raise Max output in Settings → Models & defaults → Model details.",
-    "stoppedAborted": "Interrupted"
+    "stoppedAborted": "Interrupted",
+    "stoppedRepetition": "The model fell into a repetition loop, so this reply was stopped automatically. Click Continue to retry, or switch models or lower the thinking effort."
   },
   "permission": {
     "needConfirm": "Confirmation needed",
@@ -229,8 +233,9 @@
     "unanswered": "Unanswered"
   },
   "files": {
-    "collapse": "Collapse",
-    "expand": "Show {{count}}"
+    "edited_one": "Edited {{count}} file",
+    "edited_other": "Edited {{count}} files",
+    "review": "Review"
   },
   "preview": {
     "reveal": "Show in Finder",

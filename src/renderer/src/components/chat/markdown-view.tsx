@@ -12,17 +12,12 @@ import { useValidatedMarkdownPaths } from "@/lib/markdown-path-validation";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Copy01Icon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
-import { PathMenuItems } from "@/components/path-menu";
+import { PathLink } from "@/components/path-menu";
 import { useHighlightedCode } from "@/lib/highlight";
 import { splitMarkdownBlocks } from "@/lib/markdown-blocks";
 import { useSessionStore } from "@/stores/session";
 import { resolvePath } from "@/lib/workspace-path";
 import { stripMemoryCitation } from "@shared/memory-citation";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
 import { markdownMedia } from "@/lib/markdown-media";
 import { cn } from "@/lib/utils";
 import { DiffView } from "./diff-view";
@@ -137,33 +132,6 @@ function markdownPath(href: string): string | undefined {
   if (href.startsWith("file:")) return decodeURI(href.replace("file://", ""));
   if (href.startsWith("/")) return href;
   return undefined;
-}
-
-function resolvedMarkdownPath(path: string): string {
-  const { conversations, activeId } = useSessionStore.getState();
-  const cwd = conversations.find((item) => item.id === activeId)?.cwd;
-  // Keep this in sync with openPreview: context-menu actions need the absolute path
-  // before they call the host, while preview itself accepts the original path.
-  return resolvePath(path, cwd);
-}
-
-function PathLink({ path, children }: { path: string; children: ReactNode }): JSX.Element {
-  const resolved = resolvedMarkdownPath(path);
-  return (
-    <ContextMenu>
-      <ContextMenuTrigger
-        className="inline"
-        onClick={() => void useSessionStore.getState().openPreview(resolved)}
-      >
-        <span className="text-primary underline decoration-primary/40 underline-offset-2 hover:decoration-primary">
-          {children}
-        </span>
-      </ContextMenuTrigger>
-      <ContextMenuContent className="w-48">
-        <PathMenuItems path={resolved} />
-      </ContextMenuContent>
-    </ContextMenu>
-  );
 }
 
 /**

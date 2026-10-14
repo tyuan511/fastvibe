@@ -9,6 +9,7 @@ import { Agent } from "@earendil-works/pi-agent-core";
 import { AgentSession, DefaultResourceLoader, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { sendOpeningPrompt } from "../src/main/pi/opening-prompt.ts";
 import { mapEngineMessages } from "../src/main/engine/map-messages.ts";
+import * as abort from "../src/shared/abort.ts";
 import * as attachmentMetadata from "../src/shared/attachment-metadata.ts";
 import * as toolResult from "../src/shared/tool-result.ts";
 import type { ChatMessage, EngineEvent } from "../src/shared/types.ts";
@@ -43,6 +44,7 @@ const renderer = ts.transpileModule(rendererSource, {
 }).outputText;
 const exports: { applyEngineEvent?: (messages: ChatMessage[], event: EngineEvent, streaming: boolean) => { messages: ChatMessage[]; streaming: boolean } } = {};
 new Function("require", "exports", renderer)((name: string) => {
+  if (name === "@shared/abort") return abort;
   if (name === "@shared/attachment-metadata") return attachmentMetadata;
   if (name === "@shared/tool-result") return toolResult;
   if (name.endsWith("random.ts")) return { randomUUID };

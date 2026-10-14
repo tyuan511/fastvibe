@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Add01Icon, Alert02Icon, AlertCircleIcon, Archive04Icon, ArrowLeft01Icon, ArrowRight01Icon, Delete02Icon, Folder01Icon, Folder02Icon, FolderRootIcon, Link01Icon, Loading03Icon, MessageSquarePlusIcon, MoreHorizontalIcon, PanelLeftCloseIcon, PencilEdit02Icon, PinIcon, PuzzleIcon, Search01Icon, Settings01Icon } from "@hugeicons/core-free-icons";
+import { Alert02Icon, AlertCircleIcon, Archive04Icon, ArrowLeft01Icon, ArrowRight01Icon, Delete02Icon, Folder01Icon, Folder02Icon, FolderRootIcon, Link01Icon, Loading03Icon, MessageSquarePlusIcon, MoreHorizontalIcon, PanelLeftCloseIcon, PencilEdit02Icon, PinIcon, PuzzleIcon, Search01Icon, Settings01Icon } from "@hugeicons/core-free-icons";
 import {
   DndContext,
   DragOverlay,
@@ -191,6 +191,7 @@ export function DraggableProject({
   onRename,
   onCancelRename,
   onReveal,
+  onManageFolders,
   onRemove,
   children,
 }: {
@@ -204,6 +205,7 @@ export function DraggableProject({
   onRename: (name: string) => void;
   onCancelRename: () => void;
   onReveal: () => void;
+  onManageFolders?: () => void;
   onRemove: () => void;
   children: React.ReactNode;
 }): JSX.Element {
@@ -314,10 +316,12 @@ export function DraggableProject({
                     <HugeiconsIcon strokeWidth={2} icon={MoreHorizontalIcon} className="size-3.5" />
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="w-40 min-w-40">
-                    <DropdownMenuItem onClick={onNewChat}>
-                      <HugeiconsIcon strokeWidth={2} icon={Add01Icon} />
-                      {t("sidebar.newChat")}
-                    </DropdownMenuItem>
+                    {remote || !onManageFolders ? null : (
+                      <DropdownMenuItem onClick={onManageFolders}>
+                        <HugeiconsIcon strokeWidth={2} icon={PencilEdit02Icon} />
+                        {t("sidebar.manageFolders")}
+                      </DropdownMenuItem>
+                    )}
                     <DropdownMenuItem onClick={onStartRename}>
                       <HugeiconsIcon strokeWidth={2} icon={PencilEdit02Icon} />
                       {t("sidebar.rename")}
@@ -352,7 +356,9 @@ export function DraggableProject({
             </div>
           </ContextMenuTrigger>
           <ContextMenuContent className="w-40">
-            <ContextMenuItem onClick={onNewChat}>{t("sidebar.newChat")}</ContextMenuItem>
+            {remote || !onManageFolders ? null : (
+              <ContextMenuItem onClick={onManageFolders}>{t("sidebar.manageFolders")}</ContextMenuItem>
+            )}
             <ContextMenuItem onClick={onStartRename}>{t("sidebar.rename")}</ContextMenuItem>
             {remote ? null : <ContextMenuItem onClick={onReveal}>{t("sidebar.reveal")}</ContextMenuItem>}
             <ContextMenuSeparator />

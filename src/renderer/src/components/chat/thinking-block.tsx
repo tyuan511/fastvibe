@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState, type JSX } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { ArrowRight01Icon, BrainIcon } from "@hugeicons/core-free-icons";
@@ -7,17 +7,21 @@ import { cn } from "@/lib/utils";
 
 /** Fade length for the vertical scroll mask; zcode uses 24px. */
 const MASK_FADE = 24;
-/** The ticker is clipped at its right edge, so fade the last 16px. */
-const TICKER_MASK = "linear-gradient(to right, black 0, black calc(100% - 16px), transparent 100%)";
+/** Left fade once the one-line ticker has scrolled, so the cut is not a hard edge. */
+const TICKER_FADE = "linear-gradient(to right, transparent 0, black 16px, black 100%)";
+/** A few characters may slide in; a burst snaps so a fast stream never hides the tail. */
+const TICKER_SLIDE_MAX = 72;
 
-/** Last non-empty line of the reasoning — the live ticker's content. */
-function lastLine(text: string): { key: string; text: string } | null {
-  const lines = text.replace(/\r\n?/gu, "\n").split("\n");
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const line = lines[index]?.trim() ?? "";
-    if (line.length > 0) return { key: String(index), text: line };
-  }
-  return null;
+/**
+ * The collapsed live preview is one line of everything written so far, not the
+ * newest source line. A per-line entrance restarts on every newline, and a fast
+ * stream cuts that slide off before it finishes — the row then shows only a
+ * fragment. Collapsing whitespace keeps the preview one line; the expanded body
+ * still renders the original breaks.
+ */
+function tickerLine(text: string): string | null {
+  const line = text.replace(/\s+/gu, " ").trim();
+  return line.length > 0 ? line : null;
 }
 
 function secondsSince(startedAt: number, endedAt: number): number {
@@ -28,9 +32,9 @@ function secondsSince(startedAt: number, endedAt: number): number {
  * Reasoning display, modelled on zcode's Reasoning / Trigger / Content trio.
  *
  * Collapsed by default: while the model thinks, the header carries a shimmering
- * 「正在思考」 and a rolling ticker of the newest line, so progress stays legible
- * without a wall of text. Once settled it reads 「思考 · N 秒」 and the full
- * transcript stays one click away.
+ * 「正在思考」 and a single line that keeps growing at its right edge, so a fast
+ * stream stays a full row of the latest text instead of a clipped entrance.
+ * Once settled it reads 「思考 · N 秒」 and the full transcript stays one click away.
  *
  * The elapsed time is derived from the bounds Main measured (`startedAt` / `endedAt`)
  * rather than counted here, so it survives a remount — session switch, `agent_end`
@@ -101,7 +105,7 @@ export const ThinkingBlock = memo(function ThinkingBlock({
     return () => observer.disconnect();
   }, [open, updateMask]);
 
-  const ticker = active && !open ? lastLine(thinking) : null;
+  const ticker = active && !open ? tickerLine(thinking) : null;
 
   const bodyMask = mask.top || mask.bottom
     ? `linear-gradient(to bottom, ${
@@ -120,12 +124,16 @@ export const ThinkingBlock = memo(function ThinkingBlock({
         setOpen(next);
         if (next) interacted.current = true;
       }}
+      className="w-full min-w-0"
     >
       <CollapsibleTrigger
         className={cn(
-          "group/reasoning inline-flex min-w-0 max-w-full cursor-pointer items-center gap-2 self-start",
+          "group/reasoning min-w-0 max-w-full cursor-pointer items-center gap-2 self-start",
           "text-left text-sm transition-colors",
           "rounded-sm focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+          // A live preview needs a bounded one-line track. `flex` and `inline-flex`
+          // both set display, so only one may be present.
+          ticker ? "flex w-full" : "inline-flex",
         )}
       >
         <HugeiconsIcon
@@ -141,19 +149,7 @@ export const ThinkingBlock = memo(function ThinkingBlock({
           )}
         </span>
 
-        {ticker ? (
-          <>
-            <span className="shrink-0 text-muted-foreground/40">·</span>
-            <span
-              className="min-w-0 flex-1 overflow-hidden text-sm whitespace-nowrap text-muted-foreground/60"
-              style={{ WebkitMaskImage: TICKER_MASK, maskImage: TICKER_MASK }}
-            >
-              <span key={ticker.key} className="reasoning-line inline-block">
-                {ticker.text}
-              </span>
-            </span>
-          </>
-        ) : null}
+        {ticker ? <ReasoningTicker text={ticker} /> : null}
 
         <HugeiconsIcon
           strokeWidth={2}
@@ -186,6 +182,66 @@ export const ThinkingBlock = memo(function ThinkingBlock({
     </Collapsible>
   );
 });
+
+/**
+ * One line, growing at the right. The window follows the tail, so a fast stream
+ * keeps a full row of the latest text on screen instead of restarting an entrance
+ * on each newline. A short slide covers a few new characters; a burst snaps.
+ */
+function ReasoningTicker({ text }: { text: string }): JSX.Element {
+  const frameRef = useRef<HTMLSpanElement>(null);
+  const trackRef = useRef<HTMLSpanElement>(null);
+  const shiftRef = useRef(0);
+  const [shift, setShift] = useState(0);
+  const [slide, setSlide] = useState(false);
+
+  const follow = useCallback((allowSlide: boolean): void => {
+    const frame = frameRef.current;
+    const track = trackRef.current;
+    if (!frame || !track || frame.clientWidth <= 0) return;
+    const overflow = track.scrollWidth - frame.clientWidth;
+    const next = overflow > 1 ? -overflow : 0;
+    const delta = Math.abs(next - shiftRef.current);
+    shiftRef.current = next;
+    setSlide(allowSlide && delta > 0.5 && delta <= TICKER_SLIDE_MAX);
+    setShift((current) => (Math.abs(current - next) < 0.5 ? current : next));
+  }, []);
+
+  useLayoutEffect(() => {
+    follow(true);
+  }, [text, follow]);
+
+  useEffect(() => {
+    const frame = frameRef.current;
+    if (!frame || typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver(() => follow(false));
+    observer.observe(frame);
+    return () => observer.disconnect();
+  }, [follow]);
+
+  return (
+    <>
+      <span aria-hidden className="shrink-0 text-muted-foreground/40">
+        ·
+      </span>
+      <span
+        ref={frameRef}
+        aria-hidden
+        className="min-w-0 shrink overflow-hidden text-sm whitespace-nowrap text-muted-foreground/60"
+        style={shift < 0 ? { WebkitMaskImage: TICKER_FADE, maskImage: TICKER_FADE } : undefined}
+      >
+        <span
+          ref={trackRef}
+          data-slide={slide ? "1" : undefined}
+          className="reasoning-ticker inline-block whitespace-nowrap"
+          style={shift ? { transform: `translate3d(${shift}px,0,0)` } : undefined}
+        >
+          {text}
+        </span>
+      </span>
+    </>
+  );
+}
 
 /** 「思考 · N 秒」; without a measured duration, just 「思考」. */
 function SettledLabel({ elapsed }: { elapsed: number | null }): JSX.Element {

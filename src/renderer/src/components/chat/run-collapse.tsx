@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 
 function RunHeader({ children }: { children: ReactNode }): JSX.Element {
   return (
-    <div className="flex w-full max-w-2xl items-center border-b border-border pt-2 pb-2">
+    <div className="flex w-full max-w-2xl items-end border-b border-border pt-2 pb-2">
       {children}
     </div>
   );

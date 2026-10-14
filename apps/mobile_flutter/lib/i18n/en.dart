@@ -165,7 +165,7 @@ const Map<String, String> en = <String, String>{
   'chat.compacting': 'Compacting context',
   'chat.compactCancelled': 'Compaction cancelled',
   'chat.compactFailed': 'Compaction failed',
-  'chat.compacted': 'Context compacted',
+  'chat.compacted': 'Compacted context',
   'chat.compactThreshold': 'near the limit',
   'chat.compactOverflow': 'over the window',
   'chat.working': 'Working',

@@ -86,6 +86,7 @@ export function validateScheduleDraft(draft: ScheduledTaskDraft, now = Date.now(
   if (typeof draft?.name !== "string" || !draft.name.trim() || draft.name.length > 120) throw new Error("任务名称需要在 1–120 字之间");
   if (typeof draft.prompt !== "string" || !draft.prompt.trim() || draft.prompt.length > 20_000) throw new Error("任务指令需要在 1–20000 字之间");
   if (draft.project !== undefined && (typeof draft.project !== "string" || !draft.project.trim())) throw new Error("项目路径无效");
+  if (draft.notifyConversationId !== undefined && (typeof draft.notifyConversationId !== "string" || !draft.notifyConversationId.trim())) throw new Error("通知的会话无效");
   const rule = draft.schedule;
   if (!rule || !["once", "daily", "weekly"].includes(rule.kind)) throw new Error("任务时间规则无效");
   if (rule.kind === "once") {
@@ -127,9 +128,10 @@ function validStoredTask(value: unknown, now: number): ScheduledTask | undefined
   const createdAt = typeof raw.createdAt === "number" && Number.isFinite(raw.createdAt) ? raw.createdAt : now;
   const updatedAt = typeof raw.updatedAt === "number" && Number.isFinite(raw.updatedAt) ? raw.updatedAt : createdAt;
   const project = typeof raw.project === "string" && raw.project.trim() ? raw.project : undefined;
+  const notify = typeof raw.notifyConversationId === "string" && raw.notifyConversationId.trim() ? raw.notifyConversationId : undefined;
   const task: ScheduledTask = {
     id: raw.id, name: raw.name.trim(), prompt: raw.prompt.trim(), schedule, enabled: raw.enabled,
-    createdAt, updatedAt, ...(project ? { project } : {}),
+    createdAt, updatedAt, ...(project ? { project } : {}), ...(notify ? { notifyConversationId: notify } : {}),
     ...(typeof raw.lastRunAt === "number" && Number.isFinite(raw.lastRunAt) ? { lastRunAt: raw.lastRunAt } : {}),
     ...(isStatus(raw.lastStatus) ? { lastStatus: raw.lastStatus } : {}),
   };
@@ -205,6 +207,7 @@ export class ScheduledTaskStore {
     const next: ScheduledTask = {
       ...current, ...structuredClone(patch),
       project: patch.project === "" ? undefined : patch.project ?? current.project,
+      notifyConversationId: patch.notifyConversationId === "" ? undefined : patch.notifyConversationId ?? current.notifyConversationId,
       updatedAt: now,
     };
     // Pausing a one-shot task after its date is allowed; editing/resuming it is not.

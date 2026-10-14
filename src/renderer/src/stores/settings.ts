@@ -120,6 +120,11 @@ export type AppSettings = ProxySettings & {
    */
   fileTreeExpanded?: Record<string, string[]>;
   /**
+   * The 文件 tab's tree is hidden so the open file can use the whole pane.
+   * Absent means shown. A narrow pane ignores it — it already swaps the two.
+   */
+  fileTreeCollapsed?: boolean;
+  /**
    * Width in px of the list column (files tree, changed files, git files) inside the
    * side pane's 文件 / 变更 / Git views, keyed by view. One width per view, not per chat.
    */
@@ -226,6 +231,7 @@ function sanitize(parsed: Partial<AppSettings>): Partial<AppSettings> {
   if (!isFiniteNumber(next.sidePaneWidth)) delete next.sidePaneWidth;
   if (!isNumberMap(next.sidePaneWidths)) delete next.sidePaneWidths;
   if (!isIdListMap(next.fileTreeExpanded)) delete next.fileTreeExpanded;
+  if (typeof next.fileTreeCollapsed !== "boolean") delete next.fileTreeCollapsed;
   if (!isNumberMap(next.sidePaneSplits)) delete next.sidePaneSplits;
   if (!isIdList(next.archivedConversations)) delete next.archivedConversations;
   if (!isAutoArchiveDays(next.autoArchiveDays)) delete next.autoArchiveDays;

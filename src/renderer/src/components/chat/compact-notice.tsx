@@ -1,12 +1,7 @@
-import { useState, type JSX } from "react";
+import type { JSX } from "react";
 import { useTranslation } from "react-i18next";
-import { HugeiconsIcon } from "@hugeicons/react";
-import { ArrowRight01Icon, ScissorIcon } from "@hugeicons/core-free-icons";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import type { ChatMessage } from "@shared/types";
-import { MarkdownView } from "./markdown-view";
 
 
 
@@ -25,90 +20,51 @@ function tokenHint(before?: number, after?: number): string | null {
 }
 
 /**
- * Compaction card in the transcript: a thinking-block-like collapsible so a
- * running compact is visible, and the summary is one click away once it lands.
+ * Compaction divider. Same quiet rule as a model switch: it sits between turns,
+ * never inside the reply it followed. While it runs the label flickers; once the
+ * summary has landed the same rule just says it is done.
  */
 export function CompactNotice({ message }: { message: Pick<ChatMessage, "text" | "compact"> }): JSX.Element {
   const { t } = useTranslation("chat");
-  const [open, setOpen] = useState(false);
   const info = message.compact;
   const status = info?.status ?? (message.text ? "done" : "running");
   const running = status === "running";
-  const summary = status === "done" ? message.text.trim() : "";
   const reason = info?.reason === "threshold" || info?.reason === "overflow" ? t(`compact.${info.reason}`) : undefined;
   const tokens = tokenHint(info?.tokensBefore, info?.tokensAfter);
   const error = status === "error" ? (info?.error || message.text || t("compact.failed")) : null;
-  const expandable = Boolean(summary);
-
-  const label =
-    running ? (
-      <span className="animated-gradient-text font-medium">{t("compact.running")}</span>
-    ) : status === "aborted" ? (
-      <span className="font-medium text-muted-foreground">{t("compact.cancelled")}</span>
-    ) : status === "error" ? (
-      <span className="font-medium text-destructive">{t("compact.failed")}</span>
-    ) : (
-      <span className="font-medium text-muted-foreground">{t("compact.done")}</span>
-    );
-
-  const header = (
-    <span className="inline-flex min-w-0 max-w-full items-center gap-2 text-sm">
-      {running ? (
-        <Spinner className="size-4 text-muted-foreground" />
-      ) : (
-        <HugeiconsIcon strokeWidth={2} icon={ScissorIcon} className="size-4 shrink-0 text-muted-foreground" />
-      )}
-      <span className="shrink-0 whitespace-nowrap">{label}</span>
-      {reason || tokens ? (
-        <>
-          <span className="shrink-0 text-muted-foreground/40">·</span>
-          <span className="min-w-0 truncate text-muted-foreground/60">
-            {[reason, tokens].filter(Boolean).join(" · ")}
-          </span>
-        </>
-      ) : null}
-      {expandable ? (
-        <HugeiconsIcon
-          strokeWidth={2}
-          aria-hidden
-          icon={ArrowRight01Icon}
-          className={cn(
-            "size-4 shrink-0 text-muted-foreground/60 transition-all duration-200",
-            "opacity-0 group-hover/compact:opacity-100 pointer-coarse:opacity-100",
-            open && "rotate-90 opacity-100",
-          )}
-        />
-      ) : null}
-    </span>
-  );
-
-  if (!expandable) {
-    return (
-      <div className="flex flex-col gap-1">
-        {header}
-        {error ? <p className="pl-6 text-sm text-destructive">{error}</p> : null}
-      </div>
-    );
-  }
+  const detail = [reason, tokens].filter(Boolean).join(" · ");
+  const label = running
+    ? t("compact.running")
+    : status === "aborted"
+      ? t("compact.cancelled")
+      : status === "error"
+        ? t("compact.failed")
+        : t("compact.done");
 
   return (
-    <Collapsible open={open} onOpenChange={setOpen}>
-      <CollapsibleTrigger
-        className={cn(
-          "group/compact inline-flex min-w-0 max-w-full cursor-pointer items-center self-start",
-          "text-left transition-colors",
-          "rounded-sm focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
-        )}
-      >
-        {header}
-      </CollapsibleTrigger>
-      <CollapsibleContent>
-        <div className="pt-3">
-          <div className="ml-2 max-h-60 overflow-auto border-l border-border pl-3.5 text-sm leading-5 text-muted-foreground/80">
-            <MarkdownView text={summary} />
-          </div>
-        </div>
-      </CollapsibleContent>
-    </Collapsible>
+    <div className="flex w-full flex-col gap-1 py-1">
+      <div className="flex w-full items-center gap-3 text-xs text-muted-foreground/60">
+        <span aria-hidden className="h-px min-w-4 flex-1 bg-border" />
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span
+            className={cn(
+              "shrink-0",
+              running && "animated-gradient-text animated-gradient-text-emphasis compact-running-label font-medium",
+              status === "error" && "font-medium text-destructive",
+            )}
+          >
+            {label}
+          </span>
+          {detail ? (
+            <>
+              <span className="shrink-0 text-muted-foreground/40">·</span>
+              <span className="min-w-0 truncate font-medium text-muted-foreground/80">{detail}</span>
+            </>
+          ) : null}
+        </span>
+        <span aria-hidden className="h-px min-w-4 flex-1 bg-border" />
+      </div>
+      {error ? <p className="text-center text-xs text-destructive">{error}</p> : null}
+    </div>
   );
 }

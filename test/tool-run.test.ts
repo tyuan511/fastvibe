@@ -20,7 +20,7 @@ function text(key: string, options?: { count?: number }): string {
   return options?.count === undefined ? key : `${key}#${options.count}`;
 }
 
-test("prose splits a batch, and the thought between the calls stays inside it", () => {
+test("prose and a thought both split a batch, and the thought stays its own block", () => {
   const first = [tool("b1", "bash"), tool("b2", "bash"), tool("b3", "bash")];
   const second = [tool("b4", "bash"), tool("b5", "bash")];
   const folded = collapse([
@@ -33,16 +33,32 @@ test("prose splits a batch, and the thought between the calls stays inside it", 
     { kind: "text", text: "进度" },
   ]);
   assert.equal(folded[0]?.kind, "text");
-  assert.equal(folded[1]?.kind, "run");
-  if (folded[1]?.kind === "run") {
-    assert.equal(folded[1].id, "run:b1");
-    assert.deepEqual(folded[1].tools.map((item) => item.id), ["b1", "b2", "b3"]);
-    assert.equal(folded[1].items.at(-1)?.kind, "thinking");
+  assert.equal(folded[1]?.kind, "thinking");
+  assert.equal(folded[2]?.kind, "run");
+  if (folded[2]?.kind === "run") {
+    assert.equal(folded[2].id, "run:b1");
+    assert.deepEqual(folded[2].tools.map((item) => item.id), ["b1", "b2", "b3"]);
+    assert.equal(folded[2].items.some((item) => item.kind !== "tool"), false);
   }
-  assert.equal(folded[2]?.kind, "text");
-  assert.equal(folded[3]?.kind, "run");
-  if (folded[3]?.kind === "run") assert.deepEqual(folded[3].tools.map((item) => item.id), ["b4", "b5"]);
+  assert.equal(folded[3]?.kind, "thinking");
   assert.equal(folded[4]?.kind, "text");
+  assert.equal(folded[5]?.kind, "run");
+  if (folded[5]?.kind === "run") assert.deepEqual(folded[5].tools.map((item) => item.id), ["b4", "b5"]);
+  assert.equal(folded[6]?.kind, "text");
+});
+
+test("a thought between calls splits them, so they do not fold across it", () => {
+  const folded = collapse([
+    tool("b1", "bash"),
+    tool("b2", "bash"),
+    { kind: "thinking", text: "mid" },
+    tool("b3", "bash"),
+    tool("b4", "bash"),
+  ]);
+  assert.deepEqual(
+    folded.map((part) => (part.kind === "run" ? part.tools.map((item) => item.id).join("+") : part.kind)),
+    ["b1+b2", "thinking", "b3+b4"],
+  );
 });
 
 test("a single call between two sentences stays its own row", () => {
@@ -84,6 +100,11 @@ test("commands are counted, and a single read or write is named", () => {
     mixed.line,
     "common:group.ranCommands#2common:group.separatorcommon:group.readOne process-manager.ts",
   );
+  const named = mixed.pieces.find((piece) => piece.kind === "file");
+  assert.equal(named?.kind === "file" ? named.path : undefined, "src/main/pi/process-manager.ts");
+  const query = runSummary([{ ...tool("s1", "grep"), args: { query: "foo", path: "src" } }], text);
+  const queried = query.pieces.find((piece) => piece.kind === "file");
+  assert.equal(queried?.kind === "file" ? queried.path : "missing", undefined);
   const many = runSummary(
     [
       { ...tool("r1", "read"), args: { path: "a.ts" } },
@@ -97,7 +118,7 @@ test("commands are counted, and a single read or write is named", () => {
     "common:group.readMany#2common:group.separatorcommon:group.writeOne c.ts",
   );
   const failed = runSummary([tool("a", "bash"), tool("b", "bash", "error")], text);
-  assert.equal(failed.line, "common:group.ranCommands#2 (common:group.failed#1)");
+  assert.equal(failed.line, "common:group.ranCommands#2");
 });
 
 test("each category is one clause, however many kinds it gathered", () => {
@@ -125,6 +146,45 @@ test("each category is one clause, however many kinds it gathered", () => {
   assert.equal(
     rest.line,
     "common:group.searchMany#2common:group.separatorcommon:group.toolMany#2",
+  );
+});
+
+test("only the first clause keeps the completed prefix", () => {
+  const zh = (key: string, options?: { count?: number }): string => {
+    const count = options?.count ?? 0;
+    const table: Record<string, string> = {
+      "common:group.separator": "，",
+      "common:group.ranCommands": `已运行 ${count} 个命令`,
+      "common:group.readOne": "已读取",
+      "common:group.readMany": `已读取 ${count} 个文件`,
+      "common:group.writeOne": "已写入",
+    };
+    return table[key] ?? key;
+  };
+  const mixed = runSummary(
+    [tool("a", "bash"), tool("b", "bash"), { ...tool("c", "read"), args: { path: "src/a.ts" } }],
+    zh,
+  );
+  assert.equal(mixed.line, "已运行 2 个命令，读取 a.ts");
+  const named = mixed.pieces.find((piece) => piece.kind === "file");
+  assert.equal(named?.kind === "file" ? named.path : undefined, "src/a.ts");
+  const counted = runSummary(
+    [tool("a", "bash"), tool("b", "read"), tool("c", "read", "error")],
+    zh,
+  );
+  assert.equal(counted.line, "已运行 1 个命令，读取 2 个文件");
+  const en = (key: string, options?: { count?: number }): string => {
+    const count = options?.count ?? 0;
+    const table: Record<string, string> = {
+      "common:group.separator": ", ",
+      "common:group.ranCommands": `Ran ${count} commands`,
+      "common:group.readMany": `Read ${count} files`,
+    };
+    return table[key] ?? key;
+  };
+  assert.equal(
+    runSummary([tool("a", "bash"), tool("b", "read"), tool("c", "read")], en).line,
+    "Ran 1 commands, read 2 files",
   );
 });
 

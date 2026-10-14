@@ -12,20 +12,25 @@ export type ScheduledTaskRunner = (
   onConversation: (id: string) => void,
 ) => Promise<void>;
 
+/** Called once a run has ended on its own (not when the app quits under it). */
+export type ScheduledTaskSettled = (task: ScheduledTask, run: ScheduledTaskRun) => void;
+
 /** Engine-owned: a window can disappear without taking the next occurrence with it.
  * Claiming an occurrence is synchronous and durable; a crash cannot replay a prompt
  * whose tools may already have modified the workspace. */
 export class ScheduledTaskManager {
   readonly #store: ScheduledTaskStore;
   readonly #runner: ScheduledTaskRunner;
+  readonly #onSettled: ScheduledTaskSettled | undefined;
   readonly #listeners = new Set<(snapshot: ScheduledTaskSnapshot) => void>();
   #timer: ReturnType<typeof setTimeout> | null = null;
   #started = false;
   #active: { taskId: string; runId: string; abort: AbortController; stopRequested: boolean } | null = null;
 
-  constructor(file: string, runner: ScheduledTaskRunner) {
+  constructor(file: string, runner: ScheduledTaskRunner, onSettled?: ScheduledTaskSettled) {
     this.#store = new ScheduledTaskStore(file);
     this.#runner = runner;
+    this.#onSettled = onSettled;
     this.#store.onChange = (snapshot) => {
       this.#notify(snapshot);
       this.#arm();
@@ -135,6 +140,13 @@ export class ScheduledTaskManager {
     void Promise.resolve().then(() => this.#runner(task, active.abort.signal, (id) => this.#store.setConversation(run.id, id)))
       .then(() => this.#store.finish(run.id, active.stopRequested ? "stopped" : "completed"))
       .catch((error: unknown) => this.#store.finish(run.id, active.stopRequested ? "stopped" : "failed", String(error instanceof Error ? error.message : error)))
+      .then((finished) => {
+        // Only the call that moved the run out of `running` reports it: stop() has
+        // already marked a quit-time run interrupted, and that is nobody's news.
+        if (!finished) return;
+        try { this.#onSettled?.(this.#store.get(task.id) ?? task, finished); }
+        catch (error) { console.error("[schedules] settle listener failed:", error); }
+      })
       .finally(() => {
         if (this.#active === active) this.#active = null;
         this.#wake();

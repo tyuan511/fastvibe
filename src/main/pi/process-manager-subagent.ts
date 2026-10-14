@@ -86,6 +86,7 @@ export type SubagentRunHost = {
   resolvePendingUi(conversationId?: string, owner?: string): void;
   extensionUi(conversationId: string, owner: string): ExtensionUIContext;
   publishSubagentState(subagentId: string, conversationId: string, session: AgentSession): void;
+  folderPrompt?(cwd: string): Promise<string | undefined>;
   timeReasoning(
     key: string,
     event: AgentSessionEvent,
@@ -198,10 +199,12 @@ export class SubagentTurnRunner {
       // A delegated run never loads the `output-language` extension (`noExtensions`), so
       // its system prompt carries the same AI 偏好语言 requirement directly — a subagent
       // report the user cannot read is a bug, not a preference.
+      const folderPrompt = await this.#host.folderPrompt?.(cwd);
       const appendSystemPrompt = [
         request.systemPrompt.trim(),
         currentAiLanguageDirective(),
         currentCustomSystemPrompt(),
+        folderPrompt,
       ].filter(
         (value): value is string => Boolean(value),
       );

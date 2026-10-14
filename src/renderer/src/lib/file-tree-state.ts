@@ -20,6 +20,13 @@ export function writeExpandedDirs(cwd: string, expanded: Set<string>): void {
   store.update({ fileTreeExpanded: next });
 }
 
+/** The 文件 tree is hidden beside an open file. Absent means shown. */
+export function writeFileTreeCollapsed(collapsed: boolean): void {
+  const store = useSettingsStore.getState();
+  if ((store.settings.fileTreeCollapsed === true) === collapsed) return;
+  store.update({ fileTreeCollapsed: collapsed });
+}
+
 /** A removed project's tree state goes with it. */
 export function forgetFileTree(cwd: string): void {
   const current = useSettingsStore.getState().settings.fileTreeExpanded;

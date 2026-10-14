@@ -29,6 +29,7 @@ import { cn } from "@/lib/utils";
  *
  * Nothing is drawn large in the transcript. A reply mentions them the way it mentions a file —
  * an inline name — and a finished run shows a few thumbnails at the end of its 「用时」 row.
+ * A video thumb is a `<video>` the browser paints itself, not a play glyph.
  * Clicking either opens the **viewer**: the whole window, dimmed, one item at a time, with
  * ← / → through the same batch.
  */
@@ -317,6 +318,14 @@ export function InlineMediaItem({ preview }: { preview: InlinePreview }): JSX.El
 const STRIP_MAX = 3;
 
 /**
+ * Ask the browser for a frame a little past the start. Generated clips often open on black,
+ * and `#t=` is the media element's own way to present that moment — no canvas, no seek loop.
+ */
+function thumbVideoSrc(src: string): string {
+  return src.includes("#") ? src : `${src}#t=0.1`;
+}
+
+/**
  * What a finished run made, as a few thumbnails at the end of its 「用时」 row: at most three, then
  * 更多. Nothing is large until one is clicked, and the viewer then walks the whole batch.
  */
@@ -330,7 +339,7 @@ export function InlineThumbStrip({ items }: { items: InlinePreview[] }): JSX.Ele
   if (visible.length === 0) return null;
   const extra = visible.length - STRIP_MAX;
   return (
-    <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-3">
+    <span className="ml-auto flex shrink-0 items-end gap-1.5 pl-3">
       {visible.slice(0, STRIP_MAX).map((item, index) => (
         <button
           key={item.key}
@@ -338,7 +347,10 @@ export function InlineThumbStrip({ items }: { items: InlinePreview[] }): JSX.Ele
           title={item.title ?? nameOf(item.ref)}
           aria-label={item.title ?? (nameOf(item.ref) || t(`preview.kind.${item.kind}`))}
           onClick={() => setViewing(index)}
-          className="flex h-8 w-11 items-center justify-center overflow-hidden rounded-md border border-border bg-muted/40 text-muted-foreground shadow-xs transition-colors hover:border-ring"
+          className={cn(
+            "relative flex h-12 items-center justify-center overflow-hidden rounded-md border border-border bg-muted/40 text-muted-foreground shadow-xs transition-colors hover:border-ring",
+            item.kind === "video" ? "w-20" : "w-16",
+          )}
         >
           {item.kind === "image" && !failed.has(item.key) ? (
             <img
@@ -349,6 +361,24 @@ export function InlineThumbStrip({ items }: { items: InlinePreview[] }): JSX.Ele
               className="size-full object-cover"
               onError={() => setFailed((previous) => new Set(previous).add(item.key))}
             />
+          ) : item.kind === "video" && !failed.has(item.key) ? (
+            <>
+              <video
+                src={thumbVideoSrc(inlineSrc(item))}
+                muted
+                playsInline
+                preload="metadata"
+                tabIndex={-1}
+                aria-hidden
+                className="pointer-events-none absolute inset-0 size-full object-cover"
+                onError={() => setFailed((previous) => new Set(previous).add(item.key))}
+              />
+              <span className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                <span className="flex size-5 items-center justify-center rounded-full bg-black/55 text-white">
+                  <HugeiconsIcon strokeWidth={2} icon={PlayIcon} className="size-3" />
+                </span>
+              </span>
+            </>
           ) : (
             <HugeiconsIcon strokeWidth={2} icon={KIND_ICON[item.kind]} className="size-4" />
           )}

@@ -6,6 +6,7 @@ import { uiText } from "./ui-text.ts";
 import { ensureScratchWorkspace, scratchWorkspace } from "./paths.ts";
 import { readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
+import { extraFolders } from "../../shared/project-folders.ts";
 import type { Conversation, Project, WorkspaceSnapshot } from "@shared/types";
 
 type CatalogFile = {
@@ -114,6 +115,87 @@ export class ConversationCatalog {
     this.#projects = [project, ...this.#projects];
     this.#write();
     return project;
+  }
+
+  /**
+   * Create a project whose first folder is primary. An existing project with that
+   * primary folder gains the extra folders instead of being duplicated.
+   */
+  createProject(folders: string[], name?: string): Project | undefined {
+    const paths = folders.map((item) => item.trim()).filter(Boolean);
+    const primary = paths[0];
+    if (!primary) return undefined;
+    const existing = this.#projects.find((item) => item.cwd === primary);
+    if (existing) {
+      const next = extraFolders(primary, [...(existing.folders ?? []), ...paths.slice(1)]);
+      if (next) existing.folders = next;
+      const trimmed = name?.trim();
+      if (trimmed) existing.name = trimmed;
+      existing.updatedAt = Date.now();
+      this.#write();
+      return existing;
+    }
+    const extras = extraFolders(primary, paths.slice(1));
+    const project: Project = {
+      cwd: primary,
+      name: name?.trim() || basename(primary) || primary,
+      ...(extras ? { folders: extras } : {}),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    this.#projects = [project, ...this.#projects];
+    this.#write();
+    return project;
+  }
+
+  addProjectFolder(cwd: string, folder: string): Project | undefined {
+    const project = this.#projects.find((item) => item.cwd === cwd);
+    if (!project || project.kind === "remote") return undefined;
+    const path = folder.trim();
+    if (!path || path === project.cwd) return project;
+    project.folders = extraFolders(project.cwd, [...(project.folders ?? []), path]);
+    project.updatedAt = Date.now();
+    this.#write();
+    return project;
+  }
+
+  removeProjectFolder(cwd: string, folder: string): Project | undefined {
+    const project = this.#projects.find((item) => item.cwd === cwd);
+    if (!project || project.kind === "remote") return undefined;
+    if (!folder || folder === project.cwd) return undefined;
+    const next = extraFolders(project.cwd, (project.folders ?? []).filter((item) => item !== folder));
+    if (next) project.folders = next;
+    else delete project.folders;
+    project.updatedAt = Date.now();
+    this.#write();
+    return project;
+  }
+
+  /**
+   * Make `folder` the primary folder. That changes the project's identity (`cwd`)
+   * and every conversation bound to it. Existing conversation working directories
+   * stay where they are; only new chats use the new primary folder.
+   */
+  setProjectPrimary(cwd: string, folder: string): { project: Project; previous: string } | undefined {
+    const project = this.#projects.find((item) => item.cwd === cwd);
+    if (!project || project.kind === "remote") return undefined;
+    const next = folder.trim();
+    if (!next) return undefined;
+    if (next === cwd) return { project, previous: cwd };
+    const known = new Set([project.cwd, ...(project.folders ?? [])]);
+    if (!known.has(next)) return undefined;
+    const previous = project.cwd;
+    const rest = extraFolders(next, [previous, ...(project.folders ?? [])]);
+    project.cwd = next;
+    if (rest) project.folders = rest;
+    else delete project.folders;
+    if (project.name === (basename(previous) || previous)) project.name = basename(next) || next;
+    project.updatedAt = Date.now();
+    for (const item of this.#items) {
+      if (item.project === previous) item.project = next;
+    }
+    this.#write();
+    return { project, previous };
   }
 
   /**
@@ -294,7 +376,7 @@ export class ConversationCatalog {
         const storedProjects = Array.isArray(parsed.projects) ? parsed.projects.filter(isProject) : null;
         const needsProjectMigration = storedProjects ? storedProjects.some((item) => !hasCreatedAt(item)) : true;
         this.#projects = (storedProjects ?? projectsFromConversations(this.#items)).map((item) =>
-          withProjectCreatedAt(item, this.#items),
+          sanitizeProjectFolders(withProjectCreatedAt(item, this.#items)),
         );
         for (const item of this.#items) {
           if (item.project && !this.#projects.some((project) => project.cwd === item.project)) {
@@ -480,6 +562,14 @@ function projectsFromConversations(conversations: Conversation[]): Project[] {
 
 function hasCreatedAt(project: Project): boolean {
   return typeof project.createdAt === "number";
+}
+
+/** Drop a primary path or duplicates that an older write may have stored. */
+function sanitizeProjectFolders(project: Project): Project {
+  const folders = extraFolders(project.cwd, project.folders);
+  if (folders) project.folders = folders;
+  else delete project.folders;
+  return project;
 }
 
 /** Backfill `createdAt` on projects persisted before the field existed. */

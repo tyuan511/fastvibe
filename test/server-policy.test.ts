@@ -134,6 +134,9 @@ test("the denied set is exactly what the UI explains, so a new denial cannot go 
     "engine:export-html",
     "engine:import-skill",
     "projects:add",
+    // The folder picker in 创建项目 / 管理文件夹. The phone has no desktop dialog to
+    // drive; it can still add a path it already has via projects:add-folder.
+    "projects:pick-folder",
     "providers:fetch",
     "providers:identify-gateway",
     "providers:oauth-answer",

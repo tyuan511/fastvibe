@@ -36,6 +36,7 @@
   },
   "files": {
     "unbound": "This chat is not bound to a project. Bind one to browse files.",
+    "primary": "Primary",
     "pick": "Select a file",
     "resize": "Resize list",
     "reveal": "Show in Finder",
@@ -46,6 +47,8 @@
     "pathCopied": "Path copied",
     "notFound": "File not found",
     "back": "Back to tree",
+    "hideTree": "Hide file tree",
+    "showTree": "Show file tree",
     "previewMode": "Preview",
     "edit": "Edit",
     "save": "Save",

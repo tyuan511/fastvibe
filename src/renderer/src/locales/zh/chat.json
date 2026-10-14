@@ -20,6 +20,9 @@
     "placeholder": "随心输入",
     "placeholderQueued": "继续输入以排队后续修改",
     "attach": "添加附件",
+    "fileMention": "项目文件",
+    "fileMentionEmpty": "没有匹配的文件",
+    "fileMentionSearching": "正在查找文件",
     "pastedTextFile": "粘贴的文本.txt",
     "contextStats": "查看上下文与轮次统计",
     "compact": "压缩上下文",
@@ -93,7 +96,7 @@
     "running": "正在压缩上下文",
     "cancelled": "上下文压缩已取消",
     "failed": "压缩失败",
-    "done": "上下文已压缩"
+    "done": "已压缩上下文"
   },
   "thinking": {
     "running": "正在思考",
@@ -196,7 +199,8 @@
     "earlier_one": "显示更早的 {{count}} 个回合",
     "earlier_other": "显示更早的 {{count}} 个回合",
     "stoppedAtLength": "回复达到了模型的最大输出长度，已被截断。可以点「继续」重新生成，或在 设置 → 模型与默认 → 模型详情 中调大「最大输出」。",
-    "stoppedAborted": "已中断"
+    "stoppedAborted": "已中断",
+    "stoppedRepetition": "模型陷入了重复输出，已自动停止本轮回复。可以点「继续」重试，或换一个模型、调低思考强度。"
   },
   "permission": {
     "needConfirm": "需要确认",
@@ -229,8 +233,9 @@
     "unanswered": "未回答"
   },
   "files": {
-    "collapse": "收起",
-    "expand": "展开 {{count}}"
+    "edited_one": "已修改 {{count}} 个文件",
+    "edited_other": "已修改 {{count}} 个文件",
+    "review": "审查"
   },
   "preview": {
     "reveal": "在访达中显示",

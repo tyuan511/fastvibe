@@ -82,6 +82,9 @@ function fixture(options: { setup?: () => Promise<void>; create?: () => Promise<
     extensionUi: () => ({}),
     timeReasoning() {}, withThinkingTiming() {}, fileSubagentReasoning() {},
     resolvePendingUi: (_: unknown, owner: string) => { cleared.push(owner); },
+    // The extracted method keeps `this.host` (private `#host`). Point it at the
+    // same bag of fields the harness already assigns, so `folderPrompt` stays optional.
+    host,
     publishSubagentState: (subagentId: string, conversationId: string) => host.emit({ type: "subagent_state", subagentId, conversationId, model: session.model, thinkingLevel: "high" }),
     emit: (event: any) => {
       event.seq = phases.length + 1;

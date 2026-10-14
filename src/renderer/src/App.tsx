@@ -6,6 +6,7 @@ import { MessageSquarePlusIcon, PanelLeftOpenIcon, PanelRightOpenIcon } from "@h
 import { useLocation, useMatch, useNavigate, useNavigationType } from "react-router";
 import { Composer } from "@/components/chat/composer";
 import { AddProjectDialog } from "@/components/add-project-dialog";
+import { ProjectFoldersDialog } from "@/components/project-folders-dialog";
 import { GitStatusPopover } from "@/components/chat/git-status-popover";
 import { ExtensionNotices, ExtensionWidgets, GoalPanel } from "@/components/chat/extension-surface";
 import { TodoPanel } from "@/components/chat/todo-list";
@@ -95,7 +96,7 @@ import { useAppShortcuts, useShortcutLabel } from "@/lib/use-shortcuts";
 import { archiveConversations, archivedIdList, restoreConversations, useArchivedIds } from "@/stores/archive";
 import { AUTO_ARCHIVE_SWEEP_MS, sweepAutoArchive } from "@/lib/auto-archive";
 import { useStable } from "@/lib/use-stable";
-import { isAbortOutcome } from "@shared/abort";
+import { isAbortOutcome, isCompactionCancelled } from "@shared/abort";
 
 
 
@@ -299,6 +300,8 @@ export function App(): JSX.Element {
   }, [settingsOpen, settingsSection, routeSection, navigate]);
   const [commandOpen, setCommandOpen] = useState(false);
   const [addProjectOpen, setAddProjectOpen] = useState(false);
+  const [createProjectOpen, setCreateProjectOpen] = useState(false);
+  const [manageProjectCwd, setManageProjectCwd] = useState<string | null>(null);
   // `getStatus()` is async, so until it resolves the store still holds the "idle"
   // placeholder. Track whether the real status has landed: the shell shows the F
   // loader (and keeps the boot splash up) until it has.
@@ -754,7 +757,7 @@ export function App(): JSX.Element {
           await engine.compact(compact.instructions);
           void engine.getState().then(setSession).catch(() => undefined);
         } catch (err) {
-          setError(err instanceof Error ? err.message : String(err));
+          if (!isCompactionCancelled(err)) setError(err instanceof Error ? err.message : String(err));
         }
         return;
       }
@@ -1362,18 +1365,10 @@ export function App(): JSX.Element {
     void handleOpen(id, "history");
   }, [location.key, location.pathname, navigationType]);
 
-  async function handleAddProject(): Promise<void> {
-    // The picker would open on the machine running the server, where nobody is looking,
-    // and the promise would never settle. Guarded here because three different controls
-    // reach this one function.
-    try {
-      const added = await window.fastvibe.projects.add();
-      if (!added) return;
-      applyList(added);
-      setStatus(await getStatus());
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
+  function handleAddProject(): void {
+    // A native picker would open on the machine running the server. The dialog picks
+    // folders itself, and refuses that picker when this window is remote.
+    setCreateProjectOpen(true);
   }
 
   function handleAddRemoteProject(): void {
@@ -1773,6 +1768,27 @@ export function App(): JSX.Element {
 
   return (
     <div className="flex h-full flex-col bg-background">
+      <ProjectFoldersDialog
+        open={createProjectOpen}
+        mode="create"
+        onOpenChange={setCreateProjectOpen}
+        onSaved={(snapshot) => {
+          applyList(snapshot);
+          void getStatus().then(setStatus).catch(() => undefined);
+        }}
+      />
+      <ProjectFoldersDialog
+        open={manageProjectCwd !== null}
+        mode="manage"
+        project={projects.find((item) => item.cwd === manageProjectCwd)}
+        onOpenChange={(next) => {
+          if (!next) setManageProjectCwd(null);
+        }}
+        onSaved={(snapshot, cwd) => {
+          applyList(snapshot);
+          if (cwd) setManageProjectCwd(cwd);
+        }}
+      />
       <AddProjectDialog
         open={addProjectOpen}
         onOpenChange={setAddProjectOpen}
@@ -1821,6 +1837,7 @@ export function App(): JSX.Element {
             onRenameProject={onSidebarRenameProject}
             onRemoveProject={onSidebarRemoveProject}
             onRevealProject={onSidebarRevealProject}
+            onManageFolders={setManageProjectCwd}
             onReorderProjects={onSidebarReorderProjects}
             onOpenSettings={onSidebarOpenSettings}
             onOpenMarket={onSidebarOpenMarket}
@@ -1990,6 +2007,7 @@ export function App(): JSX.Element {
             <SidePane
               cwd={active?.project ? active.cwd : activeProject?.cwd}
               project={active?.project}
+              workspace={activeProject}
               parentId={activeId ?? undefined}
               canSideChat={Boolean(activeId && hasTranscript)}
               onNewChat={onSidePaneNewChat}

@@ -123,6 +123,7 @@
     "missing": "Remote workspace is gone"
   },
   "remove": "Remove from list",
+  "manageFolders": "Edit",
   "emptyChats": "No chats yet",
   "collapseMore": "Show less",
   "expandMore": "Show more",
@@ -145,6 +146,20 @@
   "autoArchived": "Auto-archived {{count}} chats with no recent activity",
   "undo": "Undo",
   "projectRemoved": "Removed project {{name}}"
+ },
+ "projectFolders": {
+  "createTitle": "Create project",
+  "manageTitle": "Edit project",
+  "namePlaceholder": "Project name",
+  "sources": "Source folders",
+  "primary": "Primary",
+  "makePrimary": "Set as primary",
+  "add": "Add folder",
+  "remove": "Remove",
+  "missing": "Folder is missing",
+  "cancel": "Cancel",
+  "create": "Create project",
+  "confirm": "Confirm"
  },
  "projectDialog": {
   "title": "Add project",

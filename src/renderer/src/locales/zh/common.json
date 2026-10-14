@@ -214,9 +214,7 @@
     "searchMany_other": "已搜索 {{count}} 次",
     "toolOne": "已调用",
     "toolMany_one": "已调用 {{count}} 个工具",
-    "toolMany_other": "已调用 {{count}} 个工具",
-    "failed_one": "{{count}} 个失败",
-    "failed_other": "{{count}} 个失败"
+    "toolMany_other": "已调用 {{count}} 个工具"
   },
   "shortcuts": {
     "group": {

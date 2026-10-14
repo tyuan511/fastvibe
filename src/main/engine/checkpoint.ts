@@ -63,12 +63,24 @@ export type CheckpointFile = {
   bytes?: number;
 };
 
+export type CheckpointRepo = {
+  /** `git rev-parse --show-toplevel` for the files in `paths`. */
+  root: string;
+  head?: string;
+  paths: string[];
+};
+
 export type TurnCheckpoint = {
   conversationId: string;
   cwd: string;
   createdAt: number;
-  /** Git revision to restore tracked files from, when the workspace is a repo. */
+  /** Git revision of `cwd`, kept for checkpoints written before per-repo grouping. */
   head?: string;
+  /**
+   * One baseline per repository the turn wrote into. Absent on older checkpoints,
+   * which restore from `cwd` + `head` alone.
+   */
+  repos?: CheckpointRepo[];
   files: CheckpointFile[];
 };
 
@@ -154,6 +166,47 @@ export function readBefore(path: string): CheckpointFile {
  * knows the moment before the write — this just resolves the git revision (so tracked
  * files can be restored from `HEAD` rather than from a copy) and files the checkpoint.
  */
+async function gitRevision(dir: string): Promise<string | undefined> {
+  const cached = headCache.get(dir);
+  if (cached && Date.now() - cached.at < HEAD_TTL_MS) return cached.head;
+  let head: string | undefined;
+  try {
+    const { stdout } = await execFileAsync("git", ["-C", dir, "rev-parse", "HEAD"], { timeout: 5000 });
+    head = stdout.trim() || undefined;
+  } catch {
+    // Not a repo, or no commits yet. The copies are then the only restore path.
+  }
+  headCache.set(dir, { head, at: Date.now() });
+  return head;
+}
+
+async function gitTopLevel(dir: string): Promise<string | undefined> {
+  try {
+    const { stdout } = await execFileAsync("git", ["-C", dir, "rev-parse", "--show-toplevel"], { timeout: 5000 });
+    return stdout.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Group captured files by the repository that owns them. */
+async function checkpointRepos(files: CheckpointFile[]): Promise<CheckpointRepo[]> {
+  const groups = new Map<string, string[]>();
+  for (const file of files) {
+    const root = await gitTopLevel(dirname(file.path));
+    if (!root) continue;
+    const paths = groups.get(root) ?? [];
+    paths.push(file.path);
+    groups.set(root, paths);
+  }
+  const repos: CheckpointRepo[] = [];
+  for (const [root, paths] of groups) {
+    const head = await gitRevision(root);
+    repos.push({ root, ...(head ? { head } : {}), paths });
+  }
+  return repos;
+}
+
 export async function captureCheckpoint(
   conversationId: string,
   cwd: string,
@@ -176,25 +229,15 @@ export async function captureCheckpoint(
     trimmed.push(file);
   }
 
-  let head: string | undefined;
-  const cached = headCache.get(cwd);
-  if (cached && Date.now() - cached.at < HEAD_TTL_MS) {
-    head = cached.head;
-  } else {
-    try {
-      const { stdout } = await execFileAsync("git", ["-C", cwd, "rev-parse", "HEAD"], { timeout: 5000 });
-      head = stdout.trim() || undefined;
-    } catch {
-      // Not a repo, or no commits yet. The copies are then the only restore path.
-    }
-    headCache.set(cwd, { head, at: Date.now() });
-  }
+  const head = await gitRevision(cwd);
+  const repos = await checkpointRepos(trimmed);
 
   const checkpoint: TurnCheckpoint = {
     conversationId,
     cwd,
     createdAt: Date.now(),
     ...(head ? { head } : {}),
+    ...(repos.length > 0 ? { repos } : {}),
     files: trimmed,
   };
   checkpoints.set(conversationId, checkpoint);
@@ -214,21 +257,29 @@ export type RestoreResult = { restored: string[]; removed: string[]; skipped: st
 export async function restoreCheckpoint(checkpoint: TurnCheckpoint): Promise<RestoreResult> {
   const result: RestoreResult = { restored: [], removed: [], skipped: [] };
 
-  const trackedPaths = checkpoint.files.filter((file) => file.content !== undefined || file.opaque).map((file) => file.path);
-  if (checkpoint.head && trackedPaths.length > 0) {
-    // One checkout for the whole set, falling back to per-path. A single path that is
-    // not in `HEAD` — an untracked but pre-existing file, anything gitignored — makes the
-    // batched form fail as a whole, which would leave every *opaque* file (too large or
-    // binary to copy, so git is its only restore path) sitting at the turn's output while
-    // the call still reported success for the rest.
+  const groups = checkpoint.repos?.length
+    ? checkpoint.repos
+    : checkpoint.head
+      ? [{ root: checkpoint.cwd, head: checkpoint.head, paths: checkpoint.files.map((file) => file.path) }]
+      : [];
+  for (const group of groups) {
+    if (!group.head) continue;
+    const trackedPaths = group.paths.filter((path) => {
+      const file = checkpoint.files.find((item) => item.path === path);
+      return file && (file.content !== undefined || file.opaque);
+    });
+    if (trackedPaths.length === 0) continue;
+    // One checkout per repository. A path from another checkout must not be restored
+    // against this group's HEAD — that is how a multi-folder turn used to rewind the
+    // wrong tree, or fail the whole batch.
     try {
-      await execFileAsync("git", ["-C", checkpoint.cwd, "checkout", checkpoint.head, "--", ...trackedPaths], {
+      await execFileAsync("git", ["-C", group.root, "checkout", group.head, "--", ...trackedPaths], {
         timeout: 20000,
         maxBuffer: 256 * 1024,
       });
     } catch {
       for (const path of trackedPaths) {
-        await execFileAsync("git", ["-C", checkpoint.cwd, "checkout", checkpoint.head, "--", path], {
+        await execFileAsync("git", ["-C", group.root, "checkout", group.head, "--", path], {
           timeout: 10000,
           maxBuffer: 64 * 1024,
         }).catch(() => undefined);

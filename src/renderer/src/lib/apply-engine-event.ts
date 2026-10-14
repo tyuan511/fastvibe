@@ -9,6 +9,7 @@ import type {
   ToolCallBlock,
   ToolImage,
 } from "@shared/types";
+import { isRepetitionStop } from "@shared/abort";
 import { extractPromptAttachments } from "@shared/attachment-metadata";
 import { toolImagesOf, toolResultStatus } from "@shared/tool-result";
 import { randomUUID } from "../../../shared/random.ts";
@@ -292,7 +293,7 @@ function clearTrailingAssistantErrors(messages: ChatMessage[]): ChatMessage[] {
     if (item.role !== "assistant") break;
     if (!item.error && !item.stop) continue;
     if (next === messages) next = next.slice();
-    next[index] = { ...item, error: undefined, stop: undefined };
+    next[index] = { ...item, error: undefined, stop: undefined, stopCause: undefined };
   }
   return next;
 }
@@ -365,34 +366,30 @@ function compactMessage(compact: CompactInfo, summary = ""): ChatMessage {
   };
 }
 
-function appendCompact(messages: ChatMessage[], compact: CompactInfo, summary = ""): ChatMessage[] {
+/** Drop a compact part that an older snapshot glued onto the previous reply. */
+function stripTrailingInlineCompact(messages: ChatMessage[]): ChatMessage[] {
   const last = messages.at(-1);
-  if (last?.role === "assistant") {
-    const list = messages.slice();
-    list[list.length - 1] = {
-      ...last,
-      parts: [...(last.parts ?? []), compactPart(compact, summary)],
-    };
-    return list;
-  }
-  return appendMessage(messages, compactMessage(compact, summary));
+  if (last?.role !== "assistant" || !last.parts?.some((part) => part.kind === "compact")) return messages;
+  const list = messages.slice();
+  list[list.length - 1] = { ...last, parts: last.parts.filter((part) => part.kind !== "compact") };
+  return list;
 }
 
-/** Replace the inline card when a running compaction returns its summary. */
-function finishTrailingCompact(
-  messages: ChatMessage[],
-  compact: CompactInfo,
-  summary: string,
-): ChatMessage[] | undefined {
-  const last = messages.at(-1);
-  if (last?.role !== "assistant" || !last.parts) return undefined;
-  let index = last.parts.length - 1;
-  while (index >= 0 && last.parts[index].kind !== "compact") index -= 1;
-  if (index < 0) return undefined;
-  const parts = last.parts.slice();
-  parts[index] = compactPart(compact, summary);
-  const list = messages.slice();
-  list[list.length - 1] = { ...last, parts };
+/**
+ * A compaction is its own divider after the reply, never a part of that reply.
+ * A start does not overwrite a finished divider; an end updates the one in flight.
+ */
+function placeCompact(messages: ChatMessage[], compact: CompactInfo, summary = ""): ChatMessage[] {
+  const base = stripTrailingInlineCompact(messages);
+  const last = base.at(-1);
+  const part = compactPart(compact, summary);
+  // Only the divider still in flight is reused. A finished one stays where it is:
+  // an end must not overwrite an older summary, and a start must not either.
+  if (!last || last.kind !== "compact" || last.compact?.status !== "running") {
+    return appendMessage(base, compactMessage(compact, summary));
+  }
+  const list = base.slice();
+  list[list.length - 1] = { ...last, text: part.text, parts: [part], compact };
   return list;
 }
 
@@ -662,7 +659,7 @@ function applyEvent(
       const last = next.at(-1);
       if (last?.role === "assistant") {
         const list = next.slice();
-        list[list.length - 1] = { ...last, stop };
+        list[list.length - 1] = { ...last, stop, stopCause: stop === "aborted" && isRepetitionStop(lastEngine) ? "repetition" : undefined };
         return { messages: list, streaming: nextStreaming, interrupted };
       }
     }
@@ -732,6 +729,8 @@ function applyEvent(
   }
 
   if (type === "notice") {
+    // Said by the stopped reply's own footer instead (`stopCause`), so it is not said twice.
+    if (event.code === "output-repetition") return { messages: next, streaming: nextStreaming };
     const text = asString(event.message) ?? asString(event.title) ?? toolText(event) ?? "notice";
     return {
       messages: appendMessage(next, {
@@ -758,34 +757,17 @@ function applyEvent(
 
   if (type === "compaction_start" || type === "auto_compaction_start") {
     // A compaction that was already in flight when this conversation was (re)loaded
-    // is already on screen — the engine re-serves its running card — so a retry
-    // updates that card's reason instead of stacking a second one on top of it.
-    const last = next.at(-1);
-    const inlineCompact = last?.role === "assistant" ? last.parts?.at(-1) : undefined;
-    if (
-      (last?.kind === "compact" && last.compact?.status === "running") ||
-      (inlineCompact?.kind === "compact" && inlineCompact.compact?.status === "running")
-    ) {
-      return { messages: next, streaming: nextStreaming };
-    }
+    // is already on screen — the engine re-serves its running divider — so a retry
+    // updates that divider's reason instead of stacking a second one on top of it.
     return {
-      messages: appendCompact(next, { status: "running", reason: compactReason(event) }),
+      messages: placeCompact(next, { status: "running", reason: compactReason(event) }),
       streaming: nextStreaming,
     };
   }
 
   if (type === "compaction_end" || type === "auto_compaction_end") {
     const { compact, summary } = compactFromEnd(event);
-    const inline = finishTrailingCompact(next, compact, summary);
-    if (inline) return { messages: inline, streaming: nextStreaming };
-    const last = next.at(-1);
-    if (last?.kind === "compact") {
-      const part = compactPart(compact, summary);
-      const list = next.slice();
-      list[list.length - 1] = { ...last, text: part.text, parts: [part], compact };
-      return { messages: list, streaming: nextStreaming };
-    }
-    return { messages: appendCompact(next, compact, summary), streaming: nextStreaming };
+    return { messages: placeCompact(next, compact, summary), streaming: nextStreaming };
   }
 
   if (type === "todo_reminder" || type === "todo_auto_clear") {

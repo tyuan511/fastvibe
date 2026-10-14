@@ -204,22 +204,26 @@ function WorkingStatus({ message }: { message: ChatMessage }): JSX.Element {
  * agent quitting on its own. A stop is named whoever caused it, because the transcript
  * cannot tell the user's 停止 from any other abort.
  */
-function StopNotice({ reason }: { reason: NonNullable<ChatMessage["stop"]> }): JSX.Element {
+function StopNotice({ reason, cause }: { reason: NonNullable<ChatMessage["stop"]>; cause?: ChatMessage["stopCause"] }): JSX.Element {
   const { t } = useTranslation("chat");
   return (
     <div
       className={cn(
         "flex w-full max-w-2xl items-start gap-2 text-sm leading-5",
-        reason === "length" ? "text-warning" : "text-muted-foreground",
+        reason === "length" || cause === "repetition" ? "text-warning" : "text-muted-foreground",
       )}
     >
       <HugeiconsIcon
         strokeWidth={2}
-        icon={reason === "length" ? AlertCircleIcon : StopCircleIcon}
+        icon={reason === "length" || cause === "repetition" ? AlertCircleIcon : StopCircleIcon}
         className="mt-0.5 size-3.5 shrink-0"
       />
       <span className="min-w-0 wrap-break-word">
-        {reason === "length" ? t("message.stoppedAtLength") : t("message.stoppedAborted")}
+        {reason === "length"
+          ? t("message.stoppedAtLength")
+          : cause === "repetition"
+            ? t("message.stoppedRepetition")
+            : t("message.stoppedAborted")}
       </span>
     </div>
   );
@@ -309,7 +313,7 @@ function UserPromptBubble({ text: raw }: { text: string }): JSX.Element {
       className={cn(
         "text-xs leading-4 text-muted-foreground transition-colors hover:text-foreground",
         expanded
-          ? "w-full border-t border-border px-3 py-1.5 text-left hover:bg-foreground/5"
+          ? "w-full px-3 py-1.5 text-left hover:bg-foreground/5"
           : "mt-1",
       )}
       aria-expanded={expanded}
@@ -566,7 +570,7 @@ function ChatMessageRowImpl({
     return index;
   }, [fold, parts]);
 
-  // Files this agent run wrote, surfaced as a chip row under the reply.
+  // Files this agent run wrote, surfaced as the changes card under the reply.
   const changedFiles = useMemo(
     () => (isUser ? [] : collectChangedFiles(message.tools)),
     [isUser, message.tools],
@@ -615,11 +619,7 @@ function ChatMessageRowImpl({
 
   if (message.role === "system") {
     if (message.kind === "compact") {
-      return (
-        <div className="flex w-full max-w-2xl flex-col py-1">
-          <CompactNotice message={message} />
-        </div>
-      );
+      return <CompactNotice message={message} />;
     }
     if (message.kind === "dag") {
       return (
@@ -740,7 +740,7 @@ function ChatMessageRowImpl({
       return (
         <Fragment key={part.group.id}>
           <PartSlot>
-            <ToolGroupRow group={part.group} showThinking={showThinking} />
+            <ToolGroupRow group={part.group} />
           </PartSlot>
           <InlinePreviews items={shown} />
         </Fragment>
@@ -751,11 +751,9 @@ function ChatMessageRowImpl({
       return <ModelChangeNotice key={`model-${index}`} to={part.to} />;
     }
     if (part.kind === "compact") {
-      return (
-        <PartSlot key={`compact-${index}`}>
-          <CompactNotice message={part} />
-        </PartSlot>
-      );
+      // A transcript-level rule, like a model switch: it spans the column instead
+      // of sitting inside the reply's cap.
+      return <CompactNotice key={`compact-${index}`} message={part} />;
     }
     return null;
   };
@@ -808,11 +806,11 @@ function ChatMessageRowImpl({
             </BubbleContent>
           </Bubble>
         ) : null}
-        {message.stop && !message.error && !message.retry && !streaming ? <StopNotice reason={message.stop} /> : null}
+        {message.stop && !message.error && !message.retry && !streaming ? <StopNotice reason={message.stop} cause={message.stopCause} /> : null}
 
         {/*
-         * Withhold the turn's file chips until the run ends. Mid-run they grow as
-         * each write/edit lands, reflowing the thread and showing a half-finished
+         * Withhold the turn's changes card until the run ends. Mid-run it would
+         * grow as each write/edit lands, reflowing the thread over a half-finished
          * change set.
          */}
         {!streaming && changedFiles.length > 0 ? (

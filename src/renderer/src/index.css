@@ -215,6 +215,15 @@ html[data-glass="true"] body:has([data-settings-overlay]) :is([data-shell-split]
   [data-slot="resizable-handle"][data-pane-edge="side-pane"] {
     translate: 8px 0;
   }
+  /* Maximised, the conversation column is resized to nothing, so this pane sits
+     against the sidebar. Each pane's 8px transparent border would then show, and
+     the gap doubles the 8px an open conversation leaves. Shift by one inset; the
+     panel's overflow clips the border that would otherwise paint over the sidebar,
+     and the visible pane starts where the conversation's content did. */
+  [data-slot="panel-frame"][data-against-sidebar] {
+    margin-left: -8px;
+    width: calc(100% + 8px);
+  }
 }
 
 /* Liquid Glass -----------------------------------------------------------------
@@ -440,12 +449,14 @@ html[data-glass="true"] .overlay-surface {
 }
 
 /* The library marks a separator while it is being dragged. Neither the panel it
-   moves nor the one opposite it may transition then. */
+   moves nor the one opposite it may transition then. The maximised pane's frame is
+   wider than its panel on purpose (floating panes, `data-against-sidebar`); resetting
+   it to 100% here would open the gap again for the length of the drag. */
 [data-slot="resizable-panel-group"]:has([data-separator="active"]) [data-slot="resizable-panel"] {
   transition: none;
 }
 
-[data-slot="resizable-panel-group"]:has([data-separator="active"]) [data-slot="panel-frame"] {
+[data-slot="resizable-panel-group"]:has([data-separator="active"]) [data-slot="panel-frame"]:not([data-against-sidebar]) {
   width: 100%;
 }
 
@@ -483,6 +494,33 @@ html[data-glass="true"] .overlay-surface {
 
 [data-slot="scroll-area-scrollbar"]:hover [data-slot="scroll-area-thumb"] {
   background-color: var(--scrollbar-thumb-hover);
+}
+
+/* Sidebar list edges ----------------------------------------------------------
+   The project list scrolls between two fixed bars (the nav above, 设置 below)
+   whose rows are the same height and type as a conversation. A hard clip put a
+   scrolling row flush against those bars, so the boundary disappeared the moment
+   the list moved. A resting hairline was the wrong fix: it cut the pane in two
+   when nothing was moving. The fade is the edge, and only while content is in it:
+   a row dissolves across the list's own 0.75rem padding before it meets a bar, and
+   at rest that padding is empty so nothing is faded and no line is drawn. Keep the
+   two in step — the padding lives on the list in sidebar.tsx. */
+.sidebar-scroll [data-slot="scroll-area-viewport"] {
+  overscroll-behavior: contain;
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 0.75rem,
+    #000 calc(100% - 0.75rem),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 0.75rem,
+    #000 calc(100% - 0.75rem),
+    transparent 100%
+  );
 }
 
 .drag-region {
@@ -558,19 +596,35 @@ html[data-glass="true"] .overlay-surface {
   }
 }
 
-/* The live reasoning ticker rolls a new line in from below as the model writes. */
-.reasoning-line {
-  animation: reasoning-line-in 240ms ease-out;
+/* The compaction divider is a quiet rule, so the sweep alone is easy to miss.
+   Fade the label as well: that flicker is what says the compact is still running.
+   Both animations have to be named together — a later `animation` replaces the sweep. */
+.animated-gradient-text.compact-running-label {
+  animation:
+    gradient-flow 4s linear infinite,
+    compact-label-blink 1.1s ease-in-out infinite;
 }
 
-@keyframes reasoning-line-in {
-  from {
-    opacity: 0;
-    transform: translateY(0.55em);
-  }
-  to {
+@keyframes compact-label-blink {
+  0%,
+  100% {
     opacity: 1;
-    transform: none;
+  }
+  50% {
+    opacity: 0.28;
+  }
+}
+
+/* The live reasoning ticker is one line. A short linear slide follows a few
+   new characters; a burst snaps (the attribute is omitted) so the tail stays
+   in view instead of flying past. */
+.reasoning-ticker[data-slide="1"] {
+  transition: transform 100ms linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reasoning-ticker[data-slide="1"] {
+    transition: none;
   }
 }
 
@@ -1105,6 +1159,7 @@ html[data-glass="true"] .overlay-surface {
  */
 .chat-editor {
   position: relative;
+  display: flex;
   min-height: 0;
   flex: 1;
   overflow: hidden;
@@ -1112,6 +1167,62 @@ html[data-glass="true"] .overlay-surface {
   font-size: 0.8125rem;
   line-height: 1.5;
   tab-size: 2;
+}
+
+/* Line numbers, outside the scroller. A sticky column inside the textarea cannot
+ * exist — the text is one element — and a column inside the scrolling highlight
+ * would slide away with a long line. No fill of its own: under 玻璃效果 a gutter
+ * painted to hide the code beside it can only be a different colour. The width is
+ * the digits (`ch`) plus the same horizontal padding the preview gutter uses. */
+.chat-editor-gutter {
+  position: relative;
+  flex: none;
+  /* The 1px is the border. Border-box would take it out of the digit width and clip
+   * the last figure; the track itself is only the digits plus the horizontal padding. */
+  width: calc(var(--editor-gutter, 2ch + 1.25rem) + 1px);
+  overflow: hidden;
+  border-right: 1px solid var(--border);
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
+.chat-editor-gutter-line {
+  position: absolute;
+  top: 0;
+  right: 0.5rem;
+  left: 0.75rem;
+  text-align: right;
+  line-height: inherit;
+}
+
+.chat-editor-body {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+}
+
+/* One line of the editor font. Its box is what tells the gutter that 界面字号 changed;
+ * the textarea's own box does not, because it is stretched to the pane. */
+.chat-editor-probe {
+  position: absolute;
+  top: 0;
+  left: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* Laid out like the textarea (same padding, wrapping and scrollbar gutter) but never
+ * shown. Soft-wrap measures each logical line here; the node stays empty otherwise. */
+.chat-editor-measure {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.chat-editor-measure > div {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .chat-editor-layer {

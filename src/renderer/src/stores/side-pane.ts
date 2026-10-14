@@ -94,7 +94,7 @@ export type SidePaneTab = {
   gitFocusSource?: GitDiffSource;
   /**
    * One turn's writes, shown by the 修改记录 tab. The tab is opened only from the
-   * transcript's file chips — never from the pane's own menus — and the diffs are
+   * transcript's changes card — never from the pane's own menus — and the diffs are
    * the tools' own patches, not the working tree.
    */
   changeFiles?: ChangedFile[];
@@ -837,20 +837,19 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
   openFiles: () =>
     set((state) => {
       const scope = scopeOf(state);
-      const existing = scope.tabs.find((item) => item.type === "files");
+      // A second 文件 is a new view with nothing selected. Reusing the open one
+      // would land on whatever file it already shows.
+      const another = scope.tabs.some((item) => item.type === "files");
       const tab: SidePaneTab = {
-        ...(existing ?? { id: "files", type: "files" as const, openedAt: Date.now() }),
-        // Re-opening 文件 must not replace the name of a file already on screen with
-        // the tab's own label: that label is derived from the type at render time and
-        // is never read back off a tab that has a preview.
-        title: existing?.path
-          ? existing.preview?.name || existing.title
-          : (i18n.t("sidepane:tabs.files") as string),
+        id: another ? `files:${uid()}` : "files",
+        type: "files",
+        openedAt: Date.now(),
+        title: i18n.t("sidepane:tabs.files") as string,
       };
       return writeScope(
         state,
         scopeKeyOf(state),
-        { ...scope, tabs: upsert(scope.tabs, tab), activeTabId: tab.id },
+        { ...scope, tabs: [...scope.tabs, tab], activeTabId: tab.id },
         { collapsed: false },
       );
     }),
@@ -912,7 +911,11 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
   openFilePreview: (preview, title) =>
     set((state) => {
       const scope = scopeOf(state);
-      const existing = scope.tabs.find((item) => item.type === "files");
+      // The view on screen, else an empty one, else the first. A click must not
+      // fill an older tab and leave the one the reader just opened blank.
+      const files = scope.tabs.filter((item) => item.type === "files");
+      const existing =
+        files.find((item) => item.id === scope.activeTabId) ?? files.find((item) => !item.path) ?? files[0];
       // The tab is named after what it shows. Defaulting to the preview's own file name
       // is what keeps the label honest: callers that pass no title (the transcript's
       // chips, the file tree, the browser harness) would otherwise leave the previous
@@ -977,7 +980,13 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
     const scope = state.scopes[key] ?? (key === scopeKeyOf(state) ? scopeOf(state) : EMPTY_SCOPE);
     return scope.tabs.filter((item) => item.type === "browser").map((item) => item.id);
   },
-  filesPreviewPath: () => scopeOf(get()).tabs.find((item) => item.type === "files")?.path,
+  filesPreviewPath: () => {
+    const scope = scopeOf(get());
+    const files = scope.tabs.filter((item) => item.type === "files");
+    const current =
+      files.find((item) => item.id === scope.activeTabId) ?? files.find((item) => !item.path) ?? files[0];
+    return current?.path;
+  },
   nextSideChatOrdinal: (parentSessionId?: string) => {
     const ordinals = scopeOf(get())
       .tabs.filter(

@@ -242,6 +242,12 @@ export type ChatMessage = {
    * abort, and a silent end is exactly what made both look like the agent quitting.
    */
   stop?: "length" | "aborted";
+  /**
+   * Why an `aborted` reply was stopped, when FastVibe did it. Absent for the user's own
+   * 停止. A separate field rather than a third `stop` value: older clients read
+   * `stop === "aborted"` as "can be continued".
+   */
+  stopCause?: "repetition";
   /** A transient provider failure that the engine is currently retrying. */
   retry?: {
     attempt: number;
@@ -408,6 +414,14 @@ export type DirEntry = {
   name: string;
   path: string;
   kind: "file" | "directory";
+};
+
+/** One project file the composer `@` menu can turn into a path reference. */
+export type ProjectFileHit = {
+  /** Project-relative path, `/`-separated. */
+  relative: string;
+  /** Absolute path the model can read. */
+  path: string;
 };
 
 export type FileIconMapping = {
@@ -1149,6 +1163,20 @@ export type Project = {
   serverInstanceId?: string;
   /** Where it lives over there. Display and diagnostics only — never opened locally. */
   remotePath?: string;
+  /**
+   * Additional folders besides `cwd`. `cwd` is the primary folder and the project's
+   * identity. Absent on a single-folder project, including every project saved before
+   * this field existed.
+   */
+  folders?: string[];
+};
+
+/** One git repository reached from a project's folders. Nested folders share a root. */
+export type ProjectRepo = {
+  root: string;
+  /** Project folders that resolved to this repository, primary first when it is one of them. */
+  folders: string[];
+  branch?: string;
 };
 
 /**

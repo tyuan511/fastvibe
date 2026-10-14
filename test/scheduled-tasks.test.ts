@@ -86,3 +86,24 @@ test("manager reports a consumed one-shot as background work until its run settl
   assert.ok(run.id);
   manager.stop();
 });
+
+test("a task remembers the chat that asked for it, and reporting can be switched off", (t) => {
+  const store = new ScheduledTaskStore(temporary(t));
+  const task = store.create({ name: "Daily", prompt: "work", notifyConversationId: "chat-1", schedule: daily });
+  assert.equal(store.get(task.id)?.notifyConversationId, "chat-1");
+  assert.equal(store.update(task.id, { name: "Renamed" })?.notifyConversationId, "chat-1");
+  assert.equal(store.update(task.id, { notifyConversationId: "" })?.notifyConversationId, undefined);
+  assert.throws(() => validateScheduleDraft({ name: "x", prompt: "work", notifyConversationId: " ", schedule: daily }));
+});
+
+test("the manager reports a run that ended, once, and not one cut short by quitting", async (t) => {
+  const file = temporary(t);
+  const seen: string[] = [];
+  const manager = new ScheduledTaskManager(file, async () => undefined, (task, run) => seen.push(`${task.id}:${run.status}`));
+  const task = manager.create({ name: "Once", prompt: "work", notifyConversationId: "chat-1", schedule: daily });
+  manager.start();
+  manager.runNow(task.id);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(seen, [`${task.id}:completed`]);
+  manager.stop();
+});

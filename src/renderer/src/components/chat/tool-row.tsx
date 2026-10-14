@@ -127,7 +127,9 @@ export function ToolRow({
       {showIcon ? <span className="shrink-0 text-muted-foreground [&_svg]:size-3.5">{icon}</span> : null}
       <span
         className={cn(
-          quiet ? "inline-flex min-w-0 items-center truncate font-normal" : "shrink-0 font-medium",
+          // The extra padding is inside the clip, so a path link's underline is not
+          // cut off by truncate; the negative margin keeps the row the same height.
+          quiet ? "inline-flex min-w-0 items-center truncate py-0.5 -my-0.5 font-normal" : "shrink-0 font-medium",
           running ? "animated-gradient-text" : "text-muted-foreground",
         )}
       >

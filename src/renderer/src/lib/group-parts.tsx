@@ -41,9 +41,8 @@ export function mergeAssistantRun(messages: ChatMessage[]): ChatMessage {
   const first = messages[0];
   if (messages.length === 1) return first;
 
-  // Inline compaction metadata is carried in the same row but is not an assistant
-  // round-trip. Use the last assistant for cache/status/timing, otherwise the card
-  // would erase the footer's completion time.
+  // A compaction divider is its own row. If one is still in this list, it is not an
+  // assistant round-trip — time the footer from the last assistant, not from the divider.
   let lastAssistant: ChatMessage | undefined;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     if (messages[index].role === "assistant") {
@@ -132,23 +131,53 @@ export type MessageRow = {
  * Consecutive assistant messages collapse into one row; user and system messages
  * always stand alone, so the transcript still alternates prompt → reply.
  */
+/**
+ * A compact part glued onto the reply it followed still has to render as its own
+ * divider. Older snapshots and a live card that landed inside the assistant row
+ * would otherwise show 「正在压缩上下文」 under that turn's footer.
+ */
+function splitCompacts(message: ChatMessage): ChatMessage[] {
+  if (message.kind === "compact" || message.role !== "assistant" || !message.parts?.some((part) => part.kind === "compact")) {
+    return [message];
+  }
+  const bodyParts = message.parts.filter((part) => part.kind !== "compact");
+  const body: ChatMessage = { ...message, parts: bodyParts };
+  const hasBody =
+    Boolean(body.text || body.thinking || body.error) ||
+    body.tools.length > 0 ||
+    bodyParts.length > 0;
+  const notices: ChatMessage[] = [];
+  let index = 0;
+  for (const part of message.parts) {
+    if (part.kind !== "compact") continue;
+    notices.push({
+      id: index === 0 ? `${message.id}:compact` : `${message.id}:compact:${index}`,
+      role: "system",
+      text: part.text,
+      tools: [],
+      parts: [part],
+      createdAt: message.createdAt,
+      kind: "compact",
+      compact: part.compact,
+    });
+    index += 1;
+  }
+  return hasBody ? [body, ...notices] : notices;
+}
+
 export function groupMessageRows(messages: ChatMessage[]): MessageRow[] {
   const rows: MessageRow[] = [];
-  for (const message of messages) {
-    const last = rows.at(-1);
-    // Compaction is transcript metadata, not another turn. Keep it in the assistant
-    // row it followed so an automatic compaction cannot split one visual reply into
-    // two bubbles/footers. The main projection already does this for persisted data;
-    // this branch also covers older snapshots and live fallback cards.
-    if (message.kind === "compact" && last && last.messages[0].role === "assistant") {
-      last.messages.push(message);
-      continue;
+  for (const source of messages) {
+    for (const message of splitCompacts(source)) {
+      const last = rows.at(-1);
+      // A compaction is a divider between turns, not part of the reply it followed.
+      // Folding it into that row is what put 「正在压缩上下文」 inside the previous turn.
+      if (message.role === "assistant" && last && last.messages[0].role === "assistant") {
+        last.messages.push(message);
+        continue;
+      }
+      rows.push({ id: message.id, messages: [message] });
     }
-    if (message.role === "assistant" && last && last.messages[0].role === "assistant") {
-      last.messages.push(message);
-      continue;
-    }
-    rows.push({ id: message.id, messages: [message] });
   }
   return rows;
 }

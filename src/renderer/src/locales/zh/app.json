@@ -123,6 +123,7 @@
     "missing": "远程工作区已不存在"
   },
   "remove": "从列表移除",
+  "manageFolders": "编辑",
   "emptyChats": "暂无对话",
   "collapseMore": "收起显示",
   "expandMore": "展开显示",
@@ -145,6 +146,20 @@
   "autoArchived": "已自动归档 {{count}} 个长期未更新的对话",
   "undo": "撤销",
   "projectRemoved": "已移除项目 {{name}}"
+ },
+ "projectFolders": {
+  "createTitle": "创建项目",
+  "manageTitle": "编辑项目",
+  "namePlaceholder": "项目名称",
+  "sources": "源文件夹",
+  "primary": "主",
+  "makePrimary": "设为主文件夹",
+  "add": "添加文件夹",
+  "remove": "移除",
+  "missing": "目录不存在",
+  "cancel": "取消",
+  "create": "创建项目",
+  "confirm": "确认"
  },
  "projectDialog": {
   "title": "添加项目",

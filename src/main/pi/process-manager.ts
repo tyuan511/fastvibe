@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, realpathSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { mkdir, rm, unlink } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -45,6 +45,7 @@ import type {
   EngineSessionState,
   EngineStatus,
   ProjectAddResult,
+  ProjectRepo,
   ProviderConfig,
   ProviderModel,
   SessionStats,
@@ -96,6 +97,8 @@ import { dropOldToolImages } from "../engine/context-images";
 import { externalizeToolEndEvent, savedToolImagePath, shrinkToolResultImages, toolImageFolder, type ImageResizer } from "../engine/tool-images";
 import { applyToolModes, toolModes } from "../engine/tool-modes";
 import { currentAiLanguageDirective, currentCustomSystemPrompt } from "../engine/ai-language";
+import { buildProjectFoldersPrompt, projectFolderPaths } from "../../shared/project-folders.ts";
+import { describeProjectFolders, resolveProjectRepos } from "../engine/project-repos";
 import { uiText } from "../engine/ui-text";
 import { mapEngineMessages } from "../engine/map-messages";
 import { canResumeRun } from "../engine/resume";
@@ -148,7 +151,7 @@ import { resolveSubagentModel } from "./subagent-model";
 import { runMemoryAgent } from "./memory-agent";
 import { SubagentTurnRunner, type SubagentHostRequest, type SubagentHostResponse } from "./process-manager-subagent";
 import { THINKING_EFFORT_LEVELS, type SubagentConfig, type SubagentDraft, type GatewayBalanceResult, type GatewayKind } from "@shared/types";
-import { isAbortOutcome } from "@shared/abort";
+import { isAbortOutcome, isCompactionCancelled, REPETITION_STOP_MESSAGE } from "@shared/abort";
 import { McpManager, type McpServerConfig, type McpServerStatus } from "./mcp-manager";
 import {
   compactReasonOf,
@@ -242,8 +245,8 @@ type FastVibeExtensionUIContext = ExtensionUIContext & {
 
 type ScheduleHostRequest =
   | { action: "list" }
-  | { action: "create"; draft: ScheduledTaskDraft }
-  | { action: "update"; id: string; patch: ScheduledTaskPatch }
+  | { action: "create"; draft: ScheduledTaskDraft & { reportBack?: boolean } }
+  | { action: "update"; id: string; patch: ScheduledTaskPatch & { reportBack?: boolean } }
   | { action: "remove" | "runNow" | "stopRun" | "history"; id: string }; 
 
 type ConversationSearchHostRequest = ConversationTranscriptSearchRequest & {
@@ -620,7 +623,7 @@ export class PiProcessManager {
     this.#extensions = new ExtensionManager(this.#paths.agentDir, this.#paths.scratchDir);
     this.#subagentManager = new SubagentManager(this.#paths);
     this.#scheduledTasks = new ScheduledTaskManager(this.#paths.schedulesFile, (task, signal, onConversation) =>
-      this.#runScheduledTask(task, signal, onConversation));
+      this.#runScheduledTask(task, signal, onConversation), (task, run) => void this.#announceScheduleResult(task, run));
     this.#memory.attach({
       conversations: () => this.#catalog.list(),
       loadBranch: (file, cwd) => loadConversationTranscriptBranch(file, cwd),
@@ -774,6 +777,59 @@ export class PiProcessManager {
       }
     } finally {
       signal.removeEventListener("abort", abort);
+    }
+  }
+  /**
+   * A scheduled run ended: tell the chat that asked for the task, so the agent there reads
+   * the outcome and answers the user instead of the result sitting in a chat nobody opened.
+   * The same hidden-message shape as a settled graph — the model gets the full note, the
+   * transcript draws one line (`notice`) — and `followUp` waits out a reply in progress.
+   */
+  async #announceScheduleResult(task: ScheduledTask, run: ScheduledTaskRun): Promise<void> {
+    const target = task.notifyConversationId;
+    if (!target || target === run.conversationId || this.#queueShutdown || !this.#catalog.get(target)) return;
+    const label = ({
+      completed: uiText("已完成", "completed"),
+      failed: uiText("失败", "failed"),
+      stopped: uiText("已停止", "stopped"),
+      interrupted: uiText("已中断", "interrupted"),
+      missed: uiText("已错过", "missed"),
+      running: uiText("运行中", "running"),
+    } satisfies Record<ScheduledTaskRun["status"], string>)[run.status];
+    const notice = uiText(`定时任务「${task.name}」${label}`, `Scheduled task "${task.name}" ${label}`);
+    const managed = run.conversationId ? this.#sessions.get(run.conversationId) : undefined;
+    const lastReply = managed
+      ? [...managed.session.messages].reverse().find((message): message is AssistantMessage => message.role === "assistant")
+      : undefined;
+    const output = lastReply?.content
+      .flatMap((block) => (block.type === "text" ? [block.text] : []))
+      .join("\n")
+      .trim()
+      .slice(0, 8000);
+    const text = [
+      [
+      `${notice}${run.error ? uiText(`：${run.error.slice(0, 500)}`, `: ${run.error.slice(0, 500)}`) : "."}`,
+      run.conversationId ? uiText(`运行对话 id：${run.conversationId}（可用 conversation_search 读取完整过程）`, `Run conversation id: ${run.conversationId} (read the full transcript with conversation_search)`) : "",
+      output ? uiText(`Agent 的最终回复：\n${output}`, `The agent's final reply:\n${output}`) : "",
+      ].filter(Boolean).join("\n"),
+      "",
+      uiText("请向用户简要汇报这次定时任务的结果；失败时说明原因，需要时给出下一步。", "Briefly tell the user how this scheduled task went; explain a failure and suggest a next step if useful."),
+    ].join("\n");
+    let deliveredSession: AgentSession | undefined;
+    const alreadyDelivered = (): boolean => deliveredSession?.messages.some((message) => {
+      const raw = message as unknown as { customType?: string; details?: { noticeId?: string } };
+      return raw.customType === "schedule-result" && raw.details?.noticeId === run.id;
+    }) ?? false;
+    try {
+      const { session } = await this.#sessionFor(target);
+      deliveredSession = session;
+      if (alreadyDelivered() || this.#queueShutdown) return;
+      await session.sendCustomMessage(
+        { customType: "schedule-result", content: text, display: false, details: { noticeId: run.id, notice, status: run.status, taskId: task.id, conversationId: run.conversationId } },
+        { triggerTurn: true, deliverAs: "followUp" },
+      );
+    } catch (error) {
+      console.warn(`[schedules] could not report ${task.id} to ${target}:`, error);
     }
   }
   /**
@@ -1808,7 +1864,13 @@ export class PiProcessManager {
     // compaction asked for mid-run waits for the run instead of killing it: that abort
     // ended the turn with no notice at all, which read as the agent quitting.
     if (!session.isIdle) await session.waitForIdle();
-    await session.compact(customInstructions);
+    try {
+      await session.compact(customInstructions);
+    } catch (error) {
+      // Stop rejects the compact with a plain "Compaction cancelled". The divider
+      // already says it was cancelled; rejecting here is what the composer toasts.
+      if (!isCompactionCancelled(error)) throw error;
+    }
     return this.getState(conversationId);
   }
   async getCommands(conversationId?: string): Promise<SlashCommand[]> {
@@ -2233,6 +2295,68 @@ export class PiProcessManager {
     return this.#catalog.snapshot();
   }
   addProject(cwd: string): ProjectAddResult { const project = this.#catalog.ensureProject(cwd); if (!project) throw new Error("invalid project"); return { ...this.#catalog.snapshot(), project }; }
+  createProject(input: { name?: string; folders?: unknown }): ProjectAddResult {
+    const folders = Array.isArray(input?.folders) ? input.folders.filter((item): item is string => typeof item === "string") : [];
+    const canonical = folders.map((folder) => this.#canonicalDirectory(folder));
+    if (canonical.length === 0) throw new Error(uiText("至少选择一个文件夹", "Choose at least one folder"));
+    const project = this.#catalog.createProject(canonical, typeof input?.name === "string" ? input.name : undefined);
+    if (!project) throw new Error("invalid project");
+    return { ...this.#catalog.snapshot(), project };
+  }
+  addProjectFolder(cwd: string, folder: string): WorkspaceSnapshot {
+    this.#requireLocalProject(cwd);
+    const project = this.#catalog.addProjectFolder(cwd, this.#canonicalDirectory(folder));
+    if (!project) throw new Error(uiText("无法添加文件夹", "Could not add the folder"));
+    return this.#catalog.snapshot();
+  }
+  removeProjectFolder(cwd: string, folder: string): WorkspaceSnapshot {
+    this.#requireLocalProject(cwd);
+    const project = this.#catalog.removeProjectFolder(cwd, folder);
+    if (!project) throw new Error(uiText("无法移除主文件夹", "The primary folder cannot be removed"));
+    return this.#catalog.snapshot();
+  }
+  setProjectPrimary(cwd: string, folder: string): { snapshot: WorkspaceSnapshot; previous: string; next: string } {
+    const project = this.#requireLocalProject(cwd);
+    const canonical = this.#canonicalDirectory(folder);
+    const match = projectFolderPaths(project).find((item) => item === folder || item === canonical);
+    if (!match) throw new Error(uiText("这个文件夹不在项目里", "That folder is not in the project"));
+    const result = this.#catalog.setProjectPrimary(cwd, match);
+    if (!result) throw new Error(uiText("无法更改主文件夹", "Could not change the primary folder"));
+    return { snapshot: this.#catalog.snapshot(), previous: result.previous, next: result.project.cwd };
+  }
+  async projectRepos(cwd: string): Promise<ProjectRepo[]> {
+    const project = this.#requireLocalProject(cwd);
+    return resolveProjectRepos(projectFolderPaths(project));
+  }
+  #requireLocalProject(cwd: string): import("@shared/types").Project {
+    const project = this.#catalog.listProjects().find((item) => item.cwd === cwd);
+    if (!project) throw new Error(uiText("项目不存在", "Project does not exist"));
+    if (project.kind === "remote") throw new Error(uiText("远程项目不能添加文件夹", "A remote project cannot have extra folders"));
+    return project;
+  }
+  #canonicalDirectory(path: string): string {
+    const trimmed = path.trim();
+    if (!trimmed) throw new Error(uiText("文件夹路径不能为空", "A folder path is required"));
+    let info;
+    try {
+      info = statSync(trimmed);
+    } catch {
+      throw new Error(uiText("文件夹不存在", "Folder does not exist"));
+    }
+    if (!info.isDirectory()) throw new Error(uiText("不是文件夹", "Not a folder"));
+    // A stat on the main thread is what makes macOS remember a protected-folder grant.
+    return realpathSync(trimmed);
+  }
+  async #projectFoldersPrompt(conversation: Conversation): Promise<string | undefined> {
+    const bound = conversation.project;
+    if (!bound) return undefined;
+    const project = this.#catalog.listProjects().find((item) => item.cwd === bound);
+    if (!project || project.kind === "remote") return undefined;
+    const folders = projectFolderPaths(project);
+    if (folders.length < 2) return undefined;
+    const described = await describeProjectFolders(folders, project.cwd);
+    return buildProjectFoldersPrompt(conversation.cwd || project.cwd, described, { worktree: Boolean(conversation.worktree) });
+  }
   renameProject(cwd: string, name: string): WorkspaceSnapshot { this.#catalog.renameProject(cwd, name); return this.#catalog.snapshot(); }
   reorderProjects(cwds: string[]): WorkspaceSnapshot { this.#catalog.reorderProjects(cwds); return this.#catalog.snapshot(); }
   async removeProject(cwd: string): Promise<ConversationDeleteResult> {
@@ -3462,6 +3586,18 @@ export class PiProcessManager {
             pi.setActiveTools(applyToolModes(pi.getActiveTools(), toolModes(readAppSettings(this.#paths), this.#mcp.list())));
           });
         },
+      }, {
+        // Lists the project's other folders on every turn. Read live, so adding a
+        // folder reaches the next message without rebuilding the session.
+        name: "fastvibe-project-folders",
+        hidden: true,
+        factory: (pi) => {
+          pi.on("before_agent_start", async (event) => {
+            const addition = await this.#projectFoldersPrompt(conversation);
+            if (!addition || event.systemPrompt.includes(addition)) return undefined;
+            return { systemPrompt: `${event.systemPrompt}\n\n${addition}` };
+          });
+        },
       }],
     });
     // browser-use and computer-use both close over the conversation id at factory time,
@@ -3554,6 +3690,13 @@ export class PiProcessManager {
       // valid one, so the only other bound is the output budget, which is minutes and a
       // hundred thousand tokens away.
       this.#guardOutputRepetition(conversation.id, result.session, event);
+      // The reply this guard cut is filed as a plain abort, which a reload cannot tell from
+      // the user's own 停止. Public listeners run before the SDK persists `message_end`, so
+      // marking the message here is what the transcript keeps.
+      if (event.type === "message_end" && this.#repetitionStopped.has(conversation.id)) {
+        const message = event.message as { role?: string; stopReason?: string; errorMessage?: string };
+        if (message.role === "assistant" && message.stopReason === "aborted") message.errorMessage = REPETITION_STOP_MESSAGE;
+      }
       // File the finished turn in the usage ledger, so 使用统计 outlives the transcript
       // if this conversation is later deleted.
       if (event.type === "message_end" && isAssistantEngineMessage(event.message)) {
@@ -4379,7 +4522,11 @@ export class PiProcessManager {
     if (!command) return false;
     // Never through the run: the SDK's `compact()` aborts it first (see `compact`).
     if (!session.isIdle) await session.waitForIdle();
-    await session.compact(command.instructions);
+    try {
+      await session.compact(command.instructions);
+    } catch (error) {
+      if (!isCompactionCancelled(error)) throw error;
+    }
     return true;
   }
   #timingFor(id: string): RunTiming {
@@ -4617,6 +4764,9 @@ export class PiProcessManager {
     this.#emit({
       type: "notice",
       conversationId,
+      // The desktop draws this as the stopped reply's own footer (`stopCause`), which also
+      // survives a reload; a client that does not know the field still gets the sentence.
+      code: "output-repetition",
       message: uiText(
         `模型开始重复同一段内容（已重复 ${verdict.repeats} 次，每段 ${verdict.period} 字），已停止本轮回复。`,
         `The model started repeating itself (${verdict.repeats} copies of ${verdict.period} characters); this reply was stopped.`,
@@ -4795,6 +4945,11 @@ export class PiProcessManager {
       timeReasoning: (key, event, session, now, file) => this.#timeReasoning(key, event, session, now, file),
       fileSubagentReasoning: (subagentId, entryId, blocks) => this.#fileSubagentReasoning(subagentId, entryId, blocks),
       withThinkingTiming: (key, event, payload) => this.#withThinkingTiming(key, event, payload),
+      folderPrompt: async (cwd) => {
+        const parent = this.#catalog.get(conversationId);
+        if (!parent?.project) return undefined;
+        return this.#projectFoldersPrompt({ ...parent, cwd });
+      },
     }).run(conversationId, request);
   }
 
@@ -4848,10 +5003,17 @@ export class PiProcessManager {
         switch (request.action) {
           case "list": return this.listSchedules();
           case "create": {
-            const project = request.draft.project ?? this.#catalog.get(conversationId)?.project;
-            return this.createSchedule({ ...request.draft, ...(project ? { project } : {}) });
+            const { reportBack, ...draft } = request.draft;
+            const project = draft.project ?? this.#catalog.get(conversationId)?.project;
+            // The chat that asks is told how every run ended, unless the agent opts out.
+            const notify = reportBack === false ? undefined : conversationId;
+            return this.createSchedule({ ...draft, ...(project ? { project } : {}), ...(notify ? { notifyConversationId: notify } : {}) });
           }
-          case "update": return this.updateSchedule(request.id, request.patch);
+          case "update": {
+            const { reportBack, ...patch } = request.patch;
+            if (reportBack !== undefined) patch.notifyConversationId = reportBack ? conversationId : "";
+            return this.updateSchedule(request.id, patch);
+          }
           case "remove": return this.removeSchedule(request.id);
           case "runNow": return this.runScheduleNow(request.id);
           case "stopRun": return this.stopScheduledRun(request.id);

@@ -9,6 +9,8 @@ export type ScheduledTaskDraft = {
   prompt: string;
   /** A project on the machine that owns the schedule; absent means a fresh scratch chat. */
   project?: string;
+  /** The chat that asked for this task. Each run's outcome is reported back into it. */
+  notifyConversationId?: string;
   schedule: ScheduleRule;
 };
 
@@ -45,5 +47,7 @@ export type ScheduledTaskSnapshot = {
 export type ScheduledTaskPatch = Partial<Pick<ScheduledTaskDraft, "name" | "prompt" | "schedule">> & {
   /** Explicitly clear a bound project with an empty string (undefined means leave unchanged). */
   project?: string;
+  /** An empty string stops reporting back. */
+  notifyConversationId?: string;
   enabled?: boolean;
 };

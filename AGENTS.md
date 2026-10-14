@@ -591,6 +591,15 @@ A client's own snapshot is not skipped (no `except: origin`): the originator alr
 the same state as its call's result, so applying it again changes nothing, and threading an
 origin down through the engine to the catalog would buy only that.
 
+### 多文件夹项目
+
+A project can own several local folders. `Project.cwd` stays the primary folder and the project's identity; `folders` holds the rest, in order. A missing `folders` is a single-folder project. Remote (`kind: "remote"`) projects cannot gain extra folders.
+
+- **Creating.** 添加本地项目 opens a dialog: a name (empty means the first folder's name) and an ordered folder list. The first folder is primary. `projects:pick-folder` is the native dialog and is denied remotely; `projects:create` / `add-folder` / `remove-folder` / `set-primary` are allowed.
+- **Primary change rekeys the project.** `conversation.project` and settings keyed by the old path (`projectDefaults`, sidebar fold lists) move with it. Existing chats keep their own `cwd`; only new chats use the new primary folder. The name follows the new folder's basename only when the user had not renamed the project.
+- **The agent is told on every turn.** A hidden `fastvibe-project-folders` extension appends absolute paths, which folder is the working directory, and whether each folder is a git repository. A one-folder project appends nothing. Delegated runs do not load the extension, so the same sentence is appended to their system prompt. Tools already accept absolute paths; there is no extra sandbox.
+- **Git is per repository.** `projects:repos` resolves each folder with `git rev-parse --show-toplevel` and collapses folders that share a checkout. The Git pane shows a repository switcher only when there are two or more. Checkpoints record one HEAD per repository (`repos` on the checkpoint); older checkpoints still restore from the single `cwd` + `head`.
+
 ### 会话作用域（每一条引擎调用都要带 `conversationId`）
 
 Main 每个会话一个 `AgentSession`，但引擎自己只有一个「当前会话」（`PiProcessManager.#activeId`）。
@@ -665,7 +674,10 @@ and the future project file tree.
   consumer: a lazily-loaded project tree (`workspace:read-dir`, hiding `.git` and
   `node_modules`). Narrow panes swap between the tree and the open file; when
   the pane is wide enough (`@min-[32rem]/files`) the tree stays on the left and
-  the file on the right. Text that is the file itself (code, Markdown, HTML,
+  the file on the right. The project directory is not a row — the tree starts at
+  its children — and 收起文件树 (`fileTreeCollapsed`, in the file header) hides
+  that column so the open file uses the pane. The same button brings it back.
+  Absent means shown. A narrow pane ignores the flag and swaps the two instead. Text that is the file itself (code, Markdown, HTML,
   diff) can be edited there and saved with `workspace:write-file`; a rendered
   office document, image, or other binary stays view-only, because writing it
   back would replace the original. Clicking a file anywhere in a conversation
@@ -806,7 +818,11 @@ rounded panes inset 8px from the window edge, in every theme (`index.css`, Float
 cannot square its corners. The inset is a **transparent border, never a margin** — the
 panels size and animate their frame by `width`, which a margin would overflow. The traffic
 lights sit at `WINDOW_BUTTON_POSITION` (`{24,24}`) to stay inside the sidebar pane's first
-row, and the conversation column takes the same 8px at the top. Below the breakpoint the
+row, and the conversation column takes the same 8px at the top. Maximised, that column is
+gone, so the two facing insets would stack into 16px; the side pane sets
+`data-against-sidebar` and shifts left by one inset, and the panel's overflow clips the
+transparent border, leaving the same 8px. The sidebar is not widened — its width is a
+preference, and growing it would jump on maximise. Below the breakpoint the
 sidebar is the full-viewport drawer and none of this applies.
 
 ### 玻璃效果（Glass）
@@ -1734,7 +1750,7 @@ viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`
   可展示；https 链接必须以图片/视频扩展名结尾；不收 data URL（让模型把 base64 写进参数是浪费 token）。结果
   `details.items` 记下 `{ref, title, ok, error}`，渲染层只画 `ok` 的。扩展不能 import `@shared`，所以扩展名
   清单在两处各一份，`test/inline-media.test.ts` 把它们对齐。
-- **消息里不画大图，只画名字。** 回复里的预览是行内文件名（图标 + 名字，和路径链接同一个观感；一次调用的多项同一行换行排列；markdown 的 `![]()` 同样），**折叠运行过程后**被折叠的产物在「用时 …」那一行右端收成最多 3 个缩略图（`InlineThumbStrip`，多于 3 个是「更多（n）」）。点名字或缩略图都打开**查看器**（`Viewer`）：全窗口深色遮罩，一次一项，图片 / 视频 / HTML 都支持，底部「‹ 第 i 项，共 n 项 ›」，← / → 在**同一批**里切换，左下是名字，右上是「在侧栏中打开」和 ⋮（在文件夹中显示 / 复制路径或链接 / 在浏览器中打开）与关闭。点遮罩空白处也关。猜出来的本地路径用 `filesExist` 核对，不存在就不画名字（`useMissingGuesses`）；明确要求展示的不核对，打不开时查看器里写「无法加载」。
+- **消息里不画大图，只画名字。** 回复里的预览是行内文件名（图标 + 名字，和路径链接同一个观感；一次调用的多项同一行换行排列；markdown 的 `![]()` 同样），**折叠运行过程后**被折叠的产物在「用时 …」那一行右端收成最多 3 个缩略图（`InlineThumbStrip`，多于 3 个是「更多（n）」）。视频缩略图就是一个不播放的 `<video>`（`#t=0.1`，让浏览器自己画出片头后一点的那一帧），帧上叠一个小播放标，解码失败才整格退回播放图标。点名字或缩略图都打开**查看器**（`Viewer`）：全窗口深色遮罩，一次一项，图片 / 视频 / HTML 都支持，底部「‹ 第 i 项，共 n 项 ›」，← / → 在**同一批**里切换，左下是名字，右上是「在侧栏中打开」和 ⋮（在文件夹中显示 / 复制路径或链接 / 在浏览器中打开）与关闭。点遮罩空白处也关。猜出来的本地路径用 `filesExist` 核对，不存在就不画名字（`useMissingGuesses`）；明确要求展示的不核对，打不开时查看器里写「无法加载」。
 - **位置。** 预览紧跟产生它的工具卡；折叠运行过程时它是**结果**不是过程，画在折叠行之下、正文之上（和 DAG 图一样
   不被收进“用时 …”）。`shared/media-preview.ts` 不能用 `node:path`：渲染层也 import 它，浏览器构建里 `extname`
   是 `undefined`，第一次展示文件就会抛。
@@ -2173,7 +2189,7 @@ means either: an agent **run** and a **compaction**.
   that, Stop → 继续 → Send held the message under 「由于你中断了当前响应」.
 - A compaction keeps its own flag `#compacting`, for when it is not part of a run at all:
   `/compact`, and the threshold check a fresh prompt runs before it is sent. It is the only
-  thing that can say such a chat is busy, and it is used to re-serve the 正在压缩上下文 card.
+  thing that can say such a chat is busy, and it is used to re-serve the 正在压缩上下文 divider.
   It is deliberately *not* folded into `#running`, because `#isLive()` uses that to decide
   whether a steer is drained mid-turn or a fresh turn is started — a standalone compaction
   must not pass for a live run there. `PiProcessManager` broadcasts the union of the two as
@@ -2229,8 +2245,10 @@ means either: an agent **run** and a **compaction**.
 
 A compaction's own payloads only reach the renderer while its conversation is on screen, and
 it has no transcript entry until the summary lands — so `#messages()` re-serves the running
-「正在压缩上下文」 card from `#compacting` for an in-flight compaction. Without it, switching
-away and back mid-compaction lost the card until the summary was finally written.
+「正在压缩上下文」 divider from `#compacting` for an in-flight compaction. It is its own row
+after the reply, the same quiet rule as a model switch — not a card inside that turn. While
+it runs the label flickers; once the summary lands the same rule says 「已压缩上下文」.
+Without the re-serve, switching away and back mid-compaction lost it until the summary was written.
 
 ## 排队消息的「立即发送」
 
@@ -2347,9 +2365,14 @@ categories, in the order they first appeared: 命令 (shell calls only, always c
 读取, 写入 (write / edit / delete), 搜索 (search / web / list), 工具 (MCP, browser,
 scripts, skills, anything else). One call inside a category names the file or query
 (「已读取 process-manager.ts」); several say how many (「已读取 3 个文件」).
-「(N 个失败)」 sits at the end when any call failed. A thought between two calls does not
-split the run. Prose does. Expanding the row shows the calls and the thoughts that only
-separated them.
+「已」is only on the first clause — 「已运行 2 个命令，读取 process-manager.ts」 — not
+repeated on every verb. A named file is the underlined path link used everywhere else
+— click previews it, right-click is the shared path menu — not a chip. A query or a
+tool name is not a path and stays a chip.
+A failed call is not counted on the summary line; the expanded row already marks it.
+A thought is its own block and
+splits the batch, the same way prose does; it is not folded into the row. Expanding
+the row shows the calls.
 
 Questions, todos, sub-agents, presented files, decision tasks and the task graph stay on
 their own line and break the run — the row is the status. A single tool is never folded;
@@ -2605,6 +2628,17 @@ FastVibe 是一个窗口、一个进程：`app.requestSingleInstanceLock()` 在�
   节点详情展示父子任务、验收、结论、证据和分页结果。执行页复用 `SidePaneSubagent`，用 `dagRunStatus` 映射终态。
   DAG 运行不自动打开标签页；侧栏子任务行按需打开所属会话里的执行页。
 
+
+## 定时任务（`pi/scheduled-task-manager.ts`、`components/schedules/`）
+
+页面是和插件页一样的卡片网格，点卡片弹窗看详情/历史，新建与编辑也在弹窗里（没有左右分栏）。
+
+- **结果回报到发起会话。** agent 的 `schedule_create` 默认把当前会话记成 `notifyConversationId`（参数 `reportBack: false`
+  关掉；`schedule_update` 的 `reportBack` 开关同理，补丁里 `""` 表示清除）。界面里建的任务没有这个字段。
+- **每次运行结束由 `ScheduledTaskManager` 回调 `#announceScheduleResult`**，只在 `finish` 真正把运行从 `running`
+  改走时触发——退出应用时 `stop()` 已先标成「已中断」，不通知。形态照搬 DAG 的 `dag-settled`：隐藏的自定义消息
+  （`schedule-result`，`noticeId` = run id 去重）带运行对话 id 与最终回复，`triggerTurn + followUp`，让那边的 agent
+  向用户汇报；转写里 `map-messages` 只画 `details.notice` 一行。发起会话已被删除或就是运行会话本身时不发。
 
 ## 测试
 

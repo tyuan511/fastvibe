@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type JSX, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { ArrowLeft01Icon, SourceCodeIcon, ViewIcon } from "@hugeicons/core-free-icons";
+import { ArrowLeft01Icon, PanelLeftCloseIcon, PanelLeftOpenIcon, SourceCodeIcon, ViewIcon } from "@hugeicons/core-free-icons";
 import { editableFileText, prefersSourceEditor } from "@shared/editable-preview";
 import { IconButton } from "@/components/icon-button";
 import {
@@ -19,7 +19,10 @@ import { HighlightedEditor } from "@/components/chat/highlighted-editor";
 import { FileBreadcrumb } from "@/components/layout/file-breadcrumb";
 import { cn } from "@/lib/utils";
 import { SplitHandle, splitStyle, useSplitWidth } from "@/components/layout/split-handle";
+import { writeFileTreeCollapsed } from "@/lib/file-tree-state";
 import { useSidePaneStore, type SidePaneTab } from "@/stores/side-pane";
+import { useSettingsStore } from "@/stores/settings";
+import { folderName } from "@shared/project-folders";
 import type { DirEntry, FilePreview } from "@shared/types";
 
 import { createTextAttachment } from "@/lib/attachments";
@@ -27,10 +30,6 @@ import { useSessionStore } from "@/stores/session";
 import { toast } from "sonner";
 
 type DirMap = Record<string, DirEntry[]>;
-
-function baseName(path: string): string {
-  return path.split("/").filter(Boolean).pop() ?? path;
-}
 
 /** Project-relative path, or null when `path` is the project root or outside it. */
 function projectRelative(cwd: string, path: string): string | null {
@@ -87,22 +86,29 @@ function withText(preview: FilePreview, text: string): FilePreview {
 /**
  * The right pane's project file view. Narrow panes swap between the tree and the
  * open file; when the pane is wide enough the tree stays on the left and the file
- * on the right. Text that is the file itself can be edited and saved; a rendered
- * office document cannot, because writing it back would replace the original.
+ * on the right, and can be collapsed so the file uses the whole pane. The project
+ * directory is not a row — the tree starts at its children. Text that is the file
+ * itself can be edited and saved; a rendered office document cannot, because
+ * writing it back would replace the original.
  */
 export function SidePaneFiles({
   tab,
   cwd,
+  roots,
   remote,
   onError,
 }: {
   tab: SidePaneTab;
   cwd?: string;
+  roots?: string[];
   remote?: boolean;
   onError: (message: string) => void;
 }): JSX.Element {
+  const treeRoots = roots && roots.length > 0 ? roots : cwd ? [cwd] : [];
+  const rootsKey = treeRoots.join("\0");
   const { t } = useTranslation("sidepane");
   const patchTab = useSidePaneStore((state) => state.patchTab);
+  const treeCollapsed = useSettingsStore((state) => state.settings.fileTreeCollapsed === true);
   const [children, setChildren] = useState<DirMap>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -137,37 +143,29 @@ export function SidePaneFiles({
 
   // A project opens collapsed. Previously expanded folders are not brought back:
   // opening a file should not dump the whole tree open.
-  const reset = useCallback(
-    (path: string | undefined): void => {
-      setChildren({});
-      setExpanded(new Set());
-      if (!path) return;
-      void loadDir(path);
-    },
-    [loadDir],
-  );
-
   useEffect(() => {
-    reset(cwd);
-  }, [cwd, reset]);
+    setChildren({});
+    setExpanded(new Set());
+    for (const root of treeRoots) void loadDir(root);
+  }, [rootsKey, loadDir]);
 
   // A preview click (or a file already on the tab when it mounts) reveals only that
   // file. A click inside this tree sets `openedHere` and leaves the folders as they are.
   useEffect(() => {
     const path = tab.path;
-    if (!cwd || !path) return;
+    const root = treeRoots.find((item) => path === item || (path?.startsWith(item.endsWith("/") ? item : `${item}/`) ?? false));
+    if (!root || !path) return;
     if (openedHere.current === path) {
       openedHere.current = null;
       return;
     }
-    const dirs = ancestorDirs(cwd, path);
+    const dirs = ancestorDirs(root, path);
     setExpanded(new Set(dirs));
     for (const dir of dirs) void loadDir(dir);
-  }, [cwd, tab.path, loadDir]);
+  }, [rootsKey, tab.path, loadDir]);
 
   function refreshTree(): void {
-    if (!cwd) return;
-    void loadDir(cwd);
+    for (const root of treeRoots) void loadDir(root);
     for (const dir of expanded) void loadDir(dir);
   }
 
@@ -262,6 +260,9 @@ export function SidePaneFiles({
   }
 
   const dirty = new Set(Object.keys(drafts));
+  // Collapsing only matters once a file is open: with nothing on the right, the
+  // tree is the pane. A narrow pane already swaps the two, so the flag is wide-only.
+  const hideTree = treeCollapsed && preview !== null;
 
   return (
     <div className="@container/files flex min-h-0 flex-1 flex-col">
@@ -269,39 +270,41 @@ export function SidePaneFiles({
         <div
           style={splitStyle(split.width)}
           className={cn(
-            "min-h-0 flex-col @min-[32rem]/files:w-(--split-w) @min-[32rem]/files:max-w-[75%] @min-[32rem]/files:flex-none",
-            preview ? "hidden @min-[32rem]/files:flex" : "flex flex-1",
+            "min-h-0 flex-col",
+            preview ? "hidden" : "flex flex-1",
+            hideTree
+              ? "@min-[32rem]/files:hidden"
+              : "@min-[32rem]/files:flex @min-[32rem]/files:w-(--split-w) @min-[32rem]/files:max-w-[75%] @min-[32rem]/files:flex-none",
           )}
         >
-          <ContextMenu>
-            <ContextMenuTrigger className="flex h-10 w-full shrink-0 items-center gap-1.5 border-b border-border px-2">
-              <FileIcon name={baseName(cwd)} kind="folder" />
-              <span className="min-w-0 flex-1 truncate text-xs font-medium" title={cwd}>
-                {baseName(cwd)}
-              </span>
-            </ContextMenuTrigger>
-            <ContextMenuContent className="w-44">
-              <PathContextItems path={cwd} cwd={cwd} remote={remote} onRefresh={refreshTree} />
-            </ContextMenuContent>
-          </ContextMenu>
           <ScrollArea className="h-full min-h-0 flex-1">
             <div className="flex min-h-full flex-col">
               <div className="py-1.5">
-                <TreeLevel
-                  dir={cwd}
-                  depth={0}
-                  children={children}
-                  expanded={expanded}
-                  selected={preview?.path}
-                  dirty={dirty}
-                  cwd={cwd}
-                  remote={remote}
-                  onToggle={toggleDir}
-                  onOpen={openFile}
-                  onRefresh={refreshTree}
-                />
+                {treeRoots.map((root) => (
+                  <div key={root}>
+                    {treeRoots.length > 1 ? (
+                      <div className="truncate px-2 py-1 text-xs text-muted-foreground" title={root}>
+                        {folderName(root)}
+                        {root === treeRoots[0] ? ` · ${t("files.primary")}` : ""}
+                      </div>
+                    ) : null}
+                    <TreeLevel
+                      dir={root}
+                      depth={0}
+                      children={children}
+                      expanded={expanded}
+                      selected={preview?.path}
+                      dirty={dirty}
+                      cwd={root}
+                      remote={remote}
+                      onToggle={toggleDir}
+                      onOpen={openFile}
+                      onRefresh={refreshTree}
+                    />
+                  </div>
+                ))}
               </div>
-              {/* Blank space under the list is the project root, same menu as the header. */}
+              {/* Blank space under the list is the project root. */}
               <ContextMenu>
                 <ContextMenuTrigger className="min-h-8 w-full flex-1" />
                 <ContextMenuContent className="w-44">
@@ -311,7 +314,9 @@ export function SidePaneFiles({
             </div>
           </ScrollArea>
         </div>
-        <SplitHandle listSide="start" label={t("files.resize")} className="hidden @min-[32rem]/files:block" {...split} />
+        {hideTree ? null : (
+          <SplitHandle listSide="start" label={t("files.resize")} className="hidden @min-[32rem]/files:block" {...split} />
+        )}
         {preview ? (
           <FilePreviewPane
             preview={preview}
@@ -323,6 +328,8 @@ export function SidePaneFiles({
             onSave={() => void saveFile()}
             onBack={clearPreview}
             onOpenFile={(path) => void openFile(path)}
+            onShowTree={hideTree ? () => writeFileTreeCollapsed(false) : undefined}
+            onHideTree={preview && !hideTree ? () => writeFileTreeCollapsed(true) : undefined}
             backClassName="@min-[32rem]/files:hidden"
           />
         ) : (
@@ -344,6 +351,8 @@ function FilePreviewPane({
   onDraft,
   onSave,
   onBack,
+  onShowTree,
+  onHideTree,
   onOpenFile,
   backClassName,
 }: {
@@ -356,6 +365,10 @@ function FilePreviewPane({
   onDraft: (text: string, baseline: string) => void;
   onSave: () => void;
   onBack: () => void;
+  /** Wide layout: the tree is collapsed, and this brings it back. */
+  onShowTree?: () => void;
+  /** Wide layout: hide the tree so this file uses the pane. */
+  onHideTree?: () => void;
   /** A crumb popover opened another file. */
   onOpenFile: (path: string) => void;
   backClassName?: string;
@@ -395,6 +408,22 @@ function FilePreviewPane({
         >
           <HugeiconsIcon strokeWidth={2} icon={ArrowLeft01Icon} />
         </IconButton>
+        {onShowTree || onHideTree ? (
+          // `hidden` is on the wrapper, not the button: the button's own `inline-flex`
+          // would otherwise win and show this control on a narrow pane, beside 返回.
+          <span className="hidden @min-[32rem]/files:contents">
+            <IconButton
+              size="icon-xs"
+              variant="ghost"
+              label={onShowTree ? t("files.showTree") : t("files.hideTree")}
+              className="text-muted-foreground"
+              onClick={onShowTree ?? onHideTree}
+            >
+              {/* The library names these by the panel; the chevron points the other way. */}
+              <HugeiconsIcon strokeWidth={2} icon={onShowTree ? PanelLeftCloseIcon : PanelLeftOpenIcon} />
+            </IconButton>
+          </span>
+        ) : null}
         {/* The path leads the header: the tree beside it is for browsing, and this says
             where the file on screen actually is — and is how a reader moves between
             folders once one is open. */}

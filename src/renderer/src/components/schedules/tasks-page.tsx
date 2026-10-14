@@ -4,7 +4,6 @@ import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Add01Icon,
-  ArrowLeft01Icon,
   Clock01Icon,
   Delete02Icon,
   PanelLeftOpenIcon,
@@ -25,6 +24,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
@@ -55,8 +55,8 @@ type Panel =
   | { kind: "edit"; id: string };
 
 /**
- * 定时任务 — a page of the main column, same idea as 智能体 and 插件.
- * Wide columns keep the list beside the detail; a narrow column stacks them.
+ * 定时任务 — a page of the main column, same shell as 智能体 and 插件: a card grid,
+ * and a dialog for the task you opened (details, history, and the create/edit form).
  */
 export function TasksPage({
   projects,
@@ -174,8 +174,6 @@ export function TasksPage({
 
   const detailRunning = Boolean(viewedId && history.some((run) => run.taskId === viewedId && run.status === "running"));
   const showList = ready && !unavailable && tasks.length > 0;
-  const listHiddenOnNarrow = panel.kind !== "list";
-  const detailHiddenOnNarrow = showList && panel.kind === "list";
 
   function runningOf(task: ScheduledTask): boolean {
     if (task.id === viewedId && historyReady) return detailRunning;
@@ -295,6 +293,12 @@ export function TasksPage({
   }
 
   const showingForm = panel.kind === "create" || panel.kind === "edit";
+  const dialogOpen = panel.kind !== "list" && (showingForm || Boolean(viewed));
+
+  function closeDialog(): void {
+    if (busy) return;
+    backToList();
+  }
 
   return (
     <div className="@container/tasks flex min-h-0 min-w-0 flex-1 flex-col">
@@ -305,25 +309,9 @@ export function TasksPage({
               <HugeiconsIcon strokeWidth={2} icon={PanelLeftOpenIcon} />
             </IconButton>
           ) : null}
-          {panel.kind !== "list" ? (
-            <IconButton
-              size="icon-sm"
-              variant="ghost"
-              label={t("back")}
-              onClick={() => {
-                if (panel.kind === "edit") setPanel({ kind: "view", id: panel.id });
-                else backToList();
-              }}
-              className="no-drag mt-0.5 @min-[40rem]/tasks:hidden"
-            >
-              <HugeiconsIcon strokeWidth={2} icon={ArrowLeft01Icon} />
-            </IconButton>
-          ) : null}
           <div className="flex min-w-0 flex-1 flex-col gap-1">
             <div className="flex min-w-0 items-center gap-2">
-              <h1 className="min-w-0 flex-1 truncate text-xl font-medium tracking-tight">
-                {panel.kind === "create" ? t("createTitle") : panel.kind === "edit" ? t("editTitle") : t("title")}
-              </h1>
+              <h1 className="min-w-0 flex-1 truncate text-xl font-medium tracking-tight">{t("title")}</h1>
               <Button size="sm" className="no-drag" disabled={unavailable || Boolean(busy)} onClick={startCreate}>
                 <HugeiconsIcon strokeWidth={2} icon={Add01Icon} data-icon="inline-start" />
                 {t("new")}
@@ -333,111 +321,82 @@ export function TasksPage({
           </div>
         </div>
       </header>
-      <div className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col">
-      <div className="flex min-h-0 flex-1 flex-col @min-[40rem]/tasks:flex-row">
-        <aside
-          className={cn(
-            "min-h-0 min-w-0 flex-col border-border @min-[40rem]/tasks:w-80 @min-[40rem]/tasks:shrink-0 @min-[40rem]/tasks:border-r",
-            !showList && "hidden",
-            showList && listHiddenOnNarrow && "hidden @min-[40rem]/tasks:flex",
-            showList && !listHiddenOnNarrow && "flex flex-1 @min-[40rem]/tasks:flex-none",
-          )}
-        >
-          <ScrollArea className="min-h-0 flex-1">
-            {showList ? (
-              <ul className="flex flex-col gap-0.5 p-2">
-                {tasks.map((task) => {
-                  const selected = viewedId === task.id;
-                  const running = runningOf(task);
-                  return (
-                    <li key={task.id}>
-                      <button
-                        type="button"
-                        aria-current={selected ? "true" : undefined}
-                        className={cn(
-                          "flex w-full flex-col gap-1 rounded-lg px-2.5 py-2 text-left hover:bg-accent/60 pointer-coarse:py-3",
-                          selected && "bg-accent",
-                        )}
-                        onClick={() => {
-                          setFormError(null);
-                          setPanel({ kind: "view", id: task.id });
-                        }}
-                      >
-                        <span className="flex min-w-0 items-center gap-2">
-                          {running ? <RunningMark /> : <HugeiconsIcon strokeWidth={2} icon={Clock01Icon} className="size-3.5 shrink-0 text-muted-foreground" />}
-                          <span className="min-w-0 flex-1 truncate text-sm font-medium">{task.name}</span>
-                          <TaskBadge task={task} running={running} />
-                        </span>
-                        <span className="line-clamp-2 text-xs text-muted-foreground">{scheduleSummary(task.schedule, t)}</span>
-                        <span className="text-xs text-muted-foreground">
-                          {t("next")}
-                          {" "}
-                          {formatWhen(task.enabled ? task.nextRunAt : undefined)}
-                        </span>
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            ) : null}
-          </ScrollArea>
-        </aside>
-        <section
-          className={cn(
-            "min-h-0 min-w-0 flex-1 flex-col",
-            detailHiddenOnNarrow ? "hidden @min-[40rem]/tasks:flex" : "flex",
-          )}
-        >
-          <ScrollArea className="min-h-0 flex-1">
-            <div className="flex w-full flex-col gap-5 px-6 py-4">
-              {showingForm ? (
-                <TaskForm
-                  form={form}
-                  projects={projects}
-                  error={formError}
-                  saving={Boolean(busy)}
-                  onChange={(patch) => {
-                    setForm((current) => ({ ...current, ...patch }));
-                    setFormError(null);
-                  }}
-                  onSubmit={save}
-                  onCancel={() => {
-                    if (panel.kind === "edit") setPanel({ kind: "view", id: panel.id });
-                    else backToList();
-                  }}
-                />
-              ) : viewed ? (
-                <TaskDetail
-                  task={viewed}
-                  projects={projects}
-                  running={historyReady ? detailRunning : viewed.lastStatus === "running"}
-                  history={history}
-                  historyReady={historyReady}
-                  busy={busy}
-                  onEdit={() => startEdit(viewed)}
-                  onPause={() => setEnabled(viewed, false)}
-                  onResume={() => setEnabled(viewed, true)}
-                  onRun={() => runNow(viewed)}
-                  onStop={() => stopRun(viewed)}
-                  onDelete={() => setPendingDelete(viewed)}
-                  onOpenConversation={onOpenConversation}
-                />
-              ) : !ready ? (
-                <div className="flex justify-center py-16">
-                  <Spinner />
-                </div>
-              ) : unavailable ? (
-                <p className="py-16 text-center text-sm text-muted-foreground">{t("unavailable")}</p>
-              ) : tasks.length === 0 ? (
-                <EmptyState onCreate={startCreate} />
-              ) : (
-                <p className="py-16 text-center text-sm text-muted-foreground">{t("selectHint")}</p>
-              )}
+      <ScrollArea className="min-h-0 flex-1">
+        <div className="mx-auto flex w-full max-w-5xl flex-col gap-5 px-6 pb-10 pt-1">
+          {!ready ? (
+            <div className="flex justify-center py-16">
+              <Spinner />
             </div>
-          </ScrollArea>
-        </section>
-      </div>
-      </div>
+          ) : unavailable ? (
+            <p className="py-16 text-center text-sm text-muted-foreground">{t("unavailable")}</p>
+          ) : tasks.length === 0 ? (
+            <EmptyState onCreate={startCreate} />
+          ) : (
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] gap-3">
+              {tasks.map((task) => (
+                <TaskCard
+                  key={task.id}
+                  task={task}
+                  running={runningOf(task)}
+                  onOpen={() => {
+                    setFormError(null);
+                    setPanel({ kind: "view", id: task.id });
+                  }}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </ScrollArea>
+      <Dialog open={dialogOpen} onOpenChange={(open) => { if (!open) closeDialog(); }}>
+        <DialogContent className="@container/tasks flex max-h-[88vh] min-h-0 flex-col gap-4 overflow-hidden sm:max-w-3xl">
+          <DialogHeader>
+            {showingForm || !viewed ? (
+              <DialogTitle>{panel.kind === "edit" ? t("editTitle") : t("createTitle")}</DialogTitle>
+            ) : (
+              <div className="flex flex-wrap items-center gap-2 pr-8">
+                <DialogTitle className="min-w-0 truncate">{viewed.name}</DialogTitle>
+                <TaskBadge task={viewed} running={historyReady ? detailRunning : viewed.lastStatus === "running"} />
+              </div>
+            )}
+          </DialogHeader>
+          <div className="-mx-1 min-h-0 overflow-y-auto px-1">
+            {showingForm ? (
+              <TaskForm
+                form={form}
+                projects={projects}
+                error={formError}
+                saving={Boolean(busy)}
+                onChange={(patch) => {
+                  setForm((current) => ({ ...current, ...patch }));
+                  setFormError(null);
+                }}
+                onSubmit={save}
+                onCancel={() => {
+                  if (panel.kind === "edit") setPanel({ kind: "view", id: panel.id });
+                  else backToList();
+                }}
+              />
+            ) : viewed ? (
+              <TaskDetail
+                task={viewed}
+                projects={projects}
+                running={historyReady ? detailRunning : viewed.lastStatus === "running"}
+                history={history}
+                historyReady={historyReady}
+                busy={busy}
+                onEdit={() => startEdit(viewed)}
+                onPause={() => setEnabled(viewed, false)}
+                onResume={() => setEnabled(viewed, true)}
+                onRun={() => runNow(viewed)}
+                onStop={() => stopRun(viewed)}
+                onDelete={() => setPendingDelete(viewed)}
+                onOpenConversation={onOpenConversation}
+              />
+            ) : null}
+          </div>
+        </DialogContent>
+      </Dialog>
       <AlertDialog open={pendingDelete !== null} onOpenChange={(open) => { if (!open && !busy) setPendingDelete(null); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -458,6 +417,46 @@ export function TasksPage({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+    </div>
+  );
+}
+
+/** One task on the page. The card opens its dialog; nothing on it acts on its own. */
+function TaskCard({ task, running, onOpen }: { task: ScheduledTask; running: boolean; onOpen: () => void }): JSX.Element {
+  const { t } = useTranslation("schedules");
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      className={cn(
+        "group flex min-w-0 cursor-pointer flex-col gap-2.5 rounded-xl border border-border bg-card/80 p-3 text-left transition-colors",
+        "hover:border-primary/30 hover:bg-muted/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+      )}
+      onClick={onOpen}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return;
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onOpen();
+        }
+      }}
+    >
+      <div className="flex min-w-0 items-center gap-2.5">
+        <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-info/10 text-info ring-1 ring-info/15">
+          {running ? <RunningMark /> : <HugeiconsIcon strokeWidth={1.8} icon={Clock01Icon} className="size-5" />}
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-medium" title={task.name}>{task.name}</p>
+          <p className="truncate text-xs text-muted-foreground" title={scheduleSummary(task.schedule, t)}>{scheduleSummary(task.schedule, t)}</p>
+        </div>
+      </div>
+      <p className="line-clamp-2 min-h-8 text-xs leading-4 text-muted-foreground">{task.prompt}</p>
+      <div className="flex items-center justify-between gap-2">
+        <span className="min-w-0 truncate text-xs text-muted-foreground">
+          {t("next")} {formatWhen(task.enabled ? task.nextRunAt : undefined)}
+        </span>
+        <TaskBadge task={task} running={running} />
+      </div>
     </div>
   );
 }
@@ -500,13 +499,7 @@ function TaskDetail({
 
   return (
     <div className="flex flex-col gap-5">
-      <div className="flex flex-col gap-2">
-        <div className="flex flex-wrap items-center gap-2">
-          <h2 className="min-w-0 text-sm font-semibold">{task.name}</h2>
-          <TaskBadge task={task} running={running} />
-        </div>
-        <p className="text-sm text-muted-foreground">{scheduleSummary(task.schedule, t)}</p>
-      </div>
+      <p className="text-sm text-muted-foreground">{scheduleSummary(task.schedule, t)}</p>
       <div className="flex flex-wrap gap-2">
         <Button size="sm" variant="outline" disabled={locked} onClick={onEdit}>
           <HugeiconsIcon strokeWidth={2} icon={PencilEdit02Icon} data-icon="inline-start" />
@@ -543,6 +536,21 @@ function TaskDetail({
         <Fact label={t("project")} value={projectName} />
         <Fact label={t("next")} value={formatWhen(task.enabled ? task.nextRunAt : undefined)} />
         <Fact label={t("last")} value={formatWhen(task.lastRunAt)} />
+        {task.notifyConversationId ? (
+          <div className="flex flex-col gap-0.5">
+            <dt className="text-xs text-muted-foreground">{t("notify")}</dt>
+            <dd className="text-sm">
+              <Button
+                variant="link"
+                size="sm"
+                className="h-auto px-0"
+                onClick={() => onOpenConversation(task.notifyConversationId!)}
+              >
+                {t("notifyOpen")}
+              </Button>
+            </dd>
+          </div>
+        ) : null}
       </dl>
       <section className="flex flex-col gap-1.5">
         <h3 className="text-sm font-medium">{t("prompt")}</h3>

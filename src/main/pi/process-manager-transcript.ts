@@ -107,24 +107,18 @@ export function projectSessionMessages(
   }
   if (!deps.page?.beforeEntryId && conversationId && deps.compacting.has(conversationId)) {
     const compact = { status: "running" as const, reason: deps.compacting.get(conversationId) };
-    const last = messages.at(-1);
-    if (last?.role === "assistant") {
-      messages[messages.length - 1] = {
-        ...last,
-        parts: [...(last.parts ?? []), { kind: "compact", text: "", compact }],
-      };
-    } else {
-      messages.push({
-        id: `compact:${conversationId}`,
-        role: "system",
-        text: "",
-        tools: [],
-        parts: [{ kind: "compact", text: "", compact }],
-        createdAt: Date.now(),
-        kind: "compact",
-        compact,
-      });
-    }
+    // After the reply, not inside it. Attaching the running card to the last
+    // assistant is what drew 「正在压缩上下文」 under the previous turn.
+    messages.push({
+      id: `compact:${conversationId}`,
+      role: "system",
+      text: "",
+      tools: [],
+      parts: [{ kind: "compact", text: "", compact }],
+      createdAt: Date.now(),
+      kind: "compact",
+      compact,
+    });
   }
   return { messages, anchored, ...(window ? { history: { beforeEntryId: window.beforeEntryId }, pageAnchorFound: window.found } : {}) };
 }

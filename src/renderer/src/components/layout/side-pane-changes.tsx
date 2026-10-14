@@ -7,30 +7,33 @@ import { DiffView } from "@/components/chat/diff-view";
 import { FileIcon } from "@/components/file-icon";
 import { IconButton } from "@/components/icon-button";
 import type { ChangedFile } from "@/lib/changed-files";
+import { displayProjectPath } from "@shared/project-folders";
 import { displayPath, resolvePath } from "@/lib/workspace-path";
 import { cn } from "@/lib/utils";
 import { SplitHandle, splitStyle, useSplitWidth } from "@/components/layout/split-handle";
 import { isRemoteRef } from "@/lib/remote-project";
 
-function splitRelPath(path: string, cwd?: string): { name: string; dir: string } {
-  const rel = displayPath(path, cwd).replace(/\\/g, "/");
+function splitRelPath(path: string, cwd?: string, folders?: string[]): { name: string; dir: string } {
+  const rel = (folders && folders.length > 1 ? displayProjectPath(path, cwd, folders) : displayPath(path, cwd)).replace(/\\/g, "/");
   const slash = rel.lastIndexOf("/");
   if (slash < 0) return { name: rel, dir: "" };
   return { name: rel.slice(slash + 1), dir: rel.slice(0, slash) };
 }
 
 /**
- * One turn's writes, opened from the transcript's file chips — never from the
+ * One turn's writes, opened from the transcript's changes card — never from the
  * pane's own 打开标签页 / 新增标签 menus. The diffs are the tools' own patches,
  * not `git diff HEAD`, so an older turn still shows what *it* changed.
  */
 export function SidePaneChanges({
   cwd,
+  folders,
   files,
   path,
   onSelect,
 }: {
   cwd?: string;
+  folders?: string[];
   files: ChangedFile[];
   path?: string;
   onSelect: (path: string | undefined) => void;
@@ -59,7 +62,7 @@ export function SidePaneChanges({
             <div className="px-1 py-1.5">
               {files.length ? (
                 files.map((file) => {
-                  const { name, dir } = splitRelPath(file.path, cwd);
+                  const { name, dir } = splitRelPath(file.path, cwd, folders);
                   const active = selected?.path === file.path;
                   return (
                     <button
@@ -94,7 +97,7 @@ export function SidePaneChanges({
         <SplitHandle listSide="start" label={t("changes.resize")} className="hidden @min-[32rem]/changes:block" {...split} />
 
         {selected ? (
-          <ChangeDiffPane cwd={cwd} file={selected} onBack={() => onSelect(undefined)} />
+          <ChangeDiffPane cwd={cwd} folders={folders} file={selected} onBack={() => onSelect(undefined)} />
         ) : (
           <div className="hidden min-h-0 min-w-0 flex-1 items-center justify-center px-8 text-center text-xs leading-5 text-muted-foreground @min-[32rem]/changes:flex">
             {t("changes.pick")}
@@ -107,15 +110,17 @@ export function SidePaneChanges({
 
 function ChangeDiffPane({
   cwd,
+  folders,
   file,
   onBack,
 }: {
   cwd?: string;
+  folders?: string[];
   file: ChangedFile;
   onBack: () => void;
 }): JSX.Element {
   const { t } = useTranslation("sidepane");
-  const { name } = splitRelPath(file.path, cwd);
+  const { name } = splitRelPath(file.path, cwd, folders);
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="flex h-10 shrink-0 items-center gap-1.5 border-b border-border px-2">

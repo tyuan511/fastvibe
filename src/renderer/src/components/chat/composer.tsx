@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Add01Icon, ArrowDown01Icon, ArrowUp02Icon, AttachmentIcon, Cancel01Icon, ChartHistogramIcon, Folder01Icon, MagicWand02Icon, PlayIcon, ScissorIcon, Search01Icon, SparklesIcon, SquareIcon } from "@hugeicons/core-free-icons";
+import { FileIcon } from "@/components/file-icon";
 import { IconButton } from "@/components/icon-button";
 import { ModelThinkingSelect } from "@/components/model-thinking-select";
 import { Button } from "@/components/ui/button";
@@ -17,11 +18,14 @@ import type {
   ContextUsage,
   FastVibeModel,
   Project,
+  ProjectFileHit,
   QueuePauseReason,
   QueuedPrompt,
   SessionStats,
   SlashCommand,
 } from "@shared/types";
+import { applyFileMention, fileMentionAtCaret } from "@/lib/file-mention";
+import { isCompactionCancelled } from "@shared/abort";
 import { filesToAttachments, pastedTextAttachmentName, shouldAttachPastedText } from "@/lib/attachments";
 import { randomUUID } from "../../../../shared/random.ts";
 import { useGitStatus } from "@/lib/use-git-status";
@@ -364,6 +368,14 @@ export function Composer({
   const [dragging, setDragging] = useState(false);
   const [slashIndex, setSlashIndex] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState(false);
+  const [caret, setCaret] = useState(0);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  /** `@` index whose menu the user closed; typing in that same token stays closed. */
+  const [mentionDismissed, setMentionDismissed] = useState<number | null>(null);
+  const [fileHits, setFileHits] = useState<ProjectFileHit[]>([]);
+  /** Query the current rows were ranked for. Enter must not confirm a stale list. */
+  const [fileHitsQuery, setFileHitsQuery] = useState<string | null>(null);
+  const [fileHitsBusy, setFileHitsBusy] = useState(false);
   /**
    * A `/handoff` writing this chat's summary owns its composer: the sentence goes in
    * the placeholder and nothing may be typed or sent, because the engine refuses
@@ -412,6 +424,7 @@ export function Composer({
       if (entering) {
         const end = el.value.length;
         el.setSelectionRange(end, end);
+        setCaret(end);
       }
     });
     return () => cancelAnimationFrame(frame);
@@ -428,6 +441,7 @@ export function Composer({
     if (document.activeElement !== el) return;
     const end = value.length;
     el.setSelectionRange(end, end);
+    setCaret(end);
   }, [value]);
 
   const slash = useMemo(() => {
@@ -445,6 +459,63 @@ export function Composer({
     setSlashIndex(0);
   }, [value]);
 
+  // `@` is a project-file reference, not a second way to type a path. It only opens
+  // when this chat has a project — a scratch draft has nothing to list — and a closed
+  // menu stays closed while the caret remains in that same token, so Escape can leave
+  // a literal `@query` in the draft.
+  const mentionToken = fileMentionAtCaret(value, caret);
+  const mention = !readOnly && !locked && project && slash.length === 0 && mentionToken && mentionDismissed !== mentionToken.start
+    ? mentionToken
+    : null;
+  const fileHitRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (mentionDismissed == null) return;
+    if (mentionToken?.start !== mentionDismissed) setMentionDismissed(null);
+  }, [mentionDismissed, mentionToken?.start]);
+
+  useEffect(() => {
+    setMentionIndex(0);
+  }, [mention?.query, mention?.start]);
+
+  useEffect(() => {
+    if (!mention || !project) {
+      setFileHits((current) => (current.length === 0 ? current : []));
+      setFileHitsQuery(null);
+      setFileHitsBusy(false);
+      return;
+    }
+    let cancelled = false;
+    setFileHitsBusy(true);
+    const query = mention.query;
+    const timer = setTimeout(() => {
+      void window.fastvibe.workspace.searchFiles(project, query)
+        .then((next) => {
+          if (cancelled) return;
+          setFileHits(next);
+          setFileHitsQuery(query);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setFileHits([]);
+          setFileHitsQuery(query);
+        })
+        .finally(() => {
+          if (!cancelled) setFileHitsBusy(false);
+        });
+    }, 80);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [mention?.query, mention?.start, project]);
+
+  const fileHitsReady = mention != null && fileHitsQuery === mention.query && !fileHitsBusy;
+  const fileHitIndex = fileHits.length === 0 ? 0 : Math.min(mentionIndex, fileHits.length - 1);
+  useEffect(() => {
+    fileHitRef.current?.scrollIntoView({ block: "nearest" });
+  }, [fileHitIndex, fileHits]);
+
   function applySlash(command: SlashCommand): void {
     // Toggles like `/goal` act the moment they are chosen: clear the draft and run
     // the command so the mode badge appears below the composer, instead of leaving
@@ -458,6 +529,28 @@ export function Composer({
     }
     onChange(`/${command.name} `);
     setSlashDismissed(true);
+  }
+
+  function selectFile(hit: ProjectFileHit): void {
+    if (!mention) return;
+    const next = applyFileMention(value, mention);
+    echoedValue.current = next.value;
+    onChange(next.value);
+    setCaret(next.caret);
+    setMentionDismissed(mention.start);
+    const name = hit.relative.split("/").pop() || hit.relative;
+    if (!attachments.some((item) => item.path === hit.path)) {
+      onAttachmentsChange([
+        ...attachments,
+        { id: randomUUID(), kind: "file", name, path: hit.path },
+      ]);
+    }
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(next.caret, next.caret);
+    });
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): void {
@@ -486,6 +579,37 @@ export function Composer({
       if (event.key === "Escape") {
         event.preventDefault();
         setSlashDismissed(true);
+        return;
+      }
+    }
+
+    if (mention) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setMentionDismissed(mention.start);
+        return;
+      }
+      if (fileHitsReady && fileHits.length > 0) {
+        if (event.key === "ArrowDown") {
+          event.preventDefault();
+          setMentionIndex((index) => (index + 1) % fileHits.length);
+          return;
+        }
+        if (event.key === "ArrowUp") {
+          event.preventDefault();
+          setMentionIndex((index) => (index - 1 + fileHits.length) % fileHits.length);
+          return;
+        }
+        if (event.key === "Tab" || event.key === "Enter") {
+          event.preventDefault();
+          const hit = fileHits[fileHitIndex] ?? fileHits[0];
+          if (hit) selectFile(hit);
+          return;
+        }
+      } else if (fileHitsBusy && (event.key === "Enter" || event.key === "Tab" || event.key === "ArrowDown" || event.key === "ArrowUp")) {
+        // The list for this query has not landed. Swallow the key so a fast Enter
+        // neither sends the raw `@query` nor confirms the previous query's row.
+        event.preventDefault();
         return;
       }
     }
@@ -596,7 +720,8 @@ export function Composer({
         useSessionStore.getState().setSession(next);
       }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
+      // Stopping a compact is the divider's "已取消", not a failure to announce.
+      if (!isCompactionCancelled(error)) toast.error(error instanceof Error ? error.message : String(error));
     } finally {
       compactingRef.current = false;
       setCompacting(false);
@@ -639,11 +764,12 @@ export function Composer({
     ]);
   }
 
-  function handleChange(next: string): void {
+  function handleChange(next: string, nextCaret: number): void {
     // Claim the value before it round-trips through state, so the caret effect above
     // can tell a keystroke apart from a draft written in from outside.
     echoedValue.current = next;
     setSlashDismissed(false);
+    setCaret(nextCaret);
     setHistIndex(null);
     onChange(next);
   }
@@ -686,6 +812,48 @@ export function Composer({
               </span>
             </button>
           ))}
+        </div>
+      ) : null}
+
+      {mention ? (
+        <div
+          className="overlay-surface mb-2 max-h-72 overflow-y-auto rounded-lg bg-popover/95"
+          role="listbox"
+          aria-label={t("composer.fileMention")}
+        >
+          {fileHitsQuery !== mention.query || fileHits.length === 0 ? (
+            <div className="px-3 py-2 text-sm text-muted-foreground">
+              {fileHitsQuery === mention.query && !fileHitsBusy
+                ? t("composer.fileMentionEmpty")
+                : t("composer.fileMentionSearching")}
+            </div>
+          ) : fileHits.map((hit, index) => {
+            const slashAt = hit.relative.lastIndexOf("/");
+            const dir = slashAt >= 0 ? hit.relative.slice(0, slashAt + 1) : "";
+            const name = slashAt >= 0 ? hit.relative.slice(slashAt + 1) : hit.relative;
+            return (
+              <button
+                key={hit.relative}
+                ref={index === fileHitIndex ? fileHitRef : undefined}
+                type="button"
+                role="option"
+                aria-selected={index === fileHitIndex}
+                className={cn(
+                  "flex w-full items-center gap-2 px-3 py-2 text-left text-sm",
+                  index === fileHitIndex ? "bg-muted" : "hover:bg-muted/60",
+                )}
+                onMouseDown={(event) => event.preventDefault()}
+                onMouseEnter={() => setMentionIndex(index)}
+                onClick={() => selectFile(hit)}
+              >
+                <FileIcon name={name} />
+                <span className="min-w-0 flex-1 truncate">
+                  {dir ? <span className="text-muted-foreground">{dir}</span> : null}
+                  <span className="font-medium">{name}</span>
+                </span>
+              </button>
+            );
+          })}
         </div>
       ) : null}
 
@@ -845,8 +1013,10 @@ export function Composer({
             "field-sizing-content max-h-56 min-h-13 resize-none border-0 bg-transparent px-4 text-sm leading-6 shadow-none focus-visible:ring-0 disabled:bg-transparent disabled:opacity-100 dark:bg-transparent dark:disabled:bg-transparent",
             attachments.length > 0 ? "pt-2" : "pt-3.5",
           )}
-          onChange={(event) => handleChange(event.target.value)}
+          onChange={(event) => handleChange(event.target.value, event.target.selectionStart)}
           onKeyDown={handleKeyDown}
+          onKeyUp={(event) => setCaret(event.currentTarget.selectionStart)}
+          onSelect={(event) => setCaret(event.currentTarget.selectionStart)}
           onPaste={handlePaste}
         />
 

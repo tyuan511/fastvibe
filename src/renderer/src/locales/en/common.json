@@ -214,9 +214,7 @@
     "searchMany_other": "Searched {{count}} times",
     "toolOne": "Called",
     "toolMany_one": "Called {{count}} tool",
-    "toolMany_other": "Called {{count}} tools",
-    "failed_one": "{{count}} failed",
-    "failed_other": "{{count}} failed"
+    "toolMany_other": "Called {{count}} tools"
   },
   "shortcuts": {
     "group": {

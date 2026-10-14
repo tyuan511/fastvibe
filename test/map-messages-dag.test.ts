@@ -9,6 +9,20 @@ const prompt = [
   "请用 dag_result 读取需要的产出，向用户汇总结果。",
 ].join("\n");
 
+test("a compaction summary is its own divider, not part of the previous reply", () => {
+  const messages = mapEngineMessages([
+    { role: "assistant", content: [{ type: "text", text: "done" }], timestamp: 1 },
+    { role: "compactionSummary", summary: "kept the decision", tokensBefore: 1200, timestamp: 2 },
+  ]);
+  assert.equal(messages.length, 2);
+  assert.equal(messages[0]?.role, "assistant");
+  assert.equal(messages[0]?.parts?.some((part) => part.kind === "compact"), false);
+  assert.equal(messages[1]?.kind, "compact");
+  assert.equal(messages[1]?.role, "system");
+  assert.equal(messages[1]?.compact?.status, "done");
+  assert.equal(messages[1]?.text, "kept the decision");
+});
+
 test("a settled sub-task notice is a system event, not the prompt", () => {
   const [message] = mapEngineMessages([
     {
@@ -73,4 +87,20 @@ test("other hidden custom messages stay out of the thread", () => {
   assert.equal(messages.length, 1);
   assert.equal(messages[0]?.kind, "custom");
   assert.equal(messages[0]?.text, "visible");
+});
+
+test("a scheduled run's report is one system line, not the note the model reads", () => {
+  const [message, ...rest] = mapEngineMessages([
+    {
+      role: "custom",
+      customType: "schedule-result",
+      display: false,
+      content: "long note for the model",
+      details: { noticeId: "r1", notice: "定时任务「每日整理」已完成" },
+      timestamp: 5,
+    },
+  ]);
+  assert.equal(rest.length, 0);
+  assert.equal(message?.role, "system");
+  assert.equal(message?.text, "定时任务「每日整理」已完成");
 });

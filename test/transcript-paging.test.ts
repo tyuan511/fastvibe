@@ -89,6 +89,18 @@ test("steering between a tool call and result cannot split that result away from
   assert.equal(transcriptWindow(branch, 1, "steer").found, false);
 });
 
+test("a running compaction is a divider after the reply, not inside it", () => {
+  const deps = setup([entry("a0", "assistant", "first")], false, true);
+  const messages = project(deps).messages;
+  const reply = messages.find((message) => message.id === "a0");
+  assert.equal(reply?.parts?.some((part) => part.kind === "compact"), false);
+  const compact = messages.at(-1);
+  assert.equal(compact?.kind, "compact");
+  assert.equal(compact?.role, "system");
+  assert.equal(compact?.id, "compact:chat");
+  assert.equal(compact?.compact?.status, "running");
+});
+
 test("empty users do not separate a compaction from its preceding visible reply", () => {
   const deps = setup([entry("a0", "assistant", "first"), entry("empty", "user", ""),
     { id: "compact", type: "compaction", timestamp: stamp, summary: "summary" }, entry("u1", "user", "next"), entry("a1", "assistant", "last")]);

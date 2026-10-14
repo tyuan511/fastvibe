@@ -1,10 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readBefore, restoreCheckpoint, type TurnCheckpoint } from "../src/main/engine/checkpoint.ts";
+import { captureCheckpoint, readBefore, restoreCheckpoint, type TurnCheckpoint } from "../src/main/engine/checkpoint.ts";
+import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { tmpdir } from "node:os";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 
 /**
  * The checkpoint is what makes 重试 safe to offer: it is the only thing standing between
@@ -114,5 +116,30 @@ test("an opaque file is reported as skipped rather than silently dropped", async
     };
     const result = await restoreCheckpoint(checkpoint);
     assert.deepEqual(result.skipped, [join(dir, "big.bin")]);
+  });
+});
+
+test("a turn that writes two repositories records a baseline for each", async () => {
+  const git = promisify(execFile);
+  await withTempDir(async (dir) => {
+    const left = join(dir, "left");
+    const right = join(dir, "right");
+    await Promise.all([git("git", ["init", left]), git("git", ["init", right])]);
+    const commit = async (root: string, name: string): Promise<void> => {
+      await writeFile(join(root, name), "before\n", "utf8");
+      await git("git", ["-C", root, "add", name]);
+      await git("git", ["-C", root, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-m", "init"]);
+    };
+    await commit(left, "a.txt");
+    await commit(right, "b.txt");
+    const checkpoint = await captureCheckpoint("c-repos", left, [
+      { path: join(left, "a.txt"), content: "before\n" },
+      { path: join(right, "b.txt"), content: "before\n" },
+    ]);
+    assert.equal(checkpoint.repos?.length, 2);
+    const roots = new Set(checkpoint.repos?.map((repo) => repo.root));
+    assert.equal(roots.has(realpathSync(left)), true);
+    assert.equal(roots.has(realpathSync(right)), true);
+    assert.ok(checkpoint.repos?.every((repo) => repo.head));
   });
 });

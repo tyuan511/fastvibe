@@ -32,6 +32,8 @@ import { displayPath, resolvePath } from "@/lib/workspace-path";
 import { useSessionStore } from "@/stores/session";
 import type { ChatMessage } from "@shared/types";
 import type { GitDiffSource, GitStatus } from "@shared/ipc";
+import { folderName } from "@shared/project-folders";
+import type { ProjectRepo } from "@shared/types";
 import { isRemoteRef } from "@/lib/remote-project";
 
 const SOURCE_IDS: GitDiffSource[] = ["unstaged", "staged", "branch", "last-turn"];
@@ -296,13 +298,17 @@ function DiffPane({
 }
 
 export function SidePaneGit({
-  cwd,
+  cwd: sessionCwd,
+  folders,
+  projectCwd,
   onError,
   focusPath,
   focusSource,
   onFocusHandled,
 }: {
   cwd?: string;
+  folders?: string[];
+  projectCwd?: string;
   onError: (message: string) => void;
   /** A chip click's target: select this file in this source when the pane opens. */
   focusPath?: string;
@@ -312,6 +318,27 @@ export function SidePaneGit({
 }): JSX.Element {
   const { t } = useTranslation("sidepane");
   const messages = useSessionStore((state) => state.messages);
+  const [repos, setRepos] = useState<ProjectRepo[]>([]);
+  const [picked, setPicked] = useState<string | undefined>();
+  const folderKey = folders?.join("\0") ?? "";
+  useEffect(() => {
+    if (!projectCwd || !folders || folders.length < 2) {
+      setRepos([]);
+      return;
+    }
+    let cancelled = false;
+    void window.fastvibe.projects.repos(projectCwd).then((list) => {
+      if (!cancelled) setRepos(list);
+    }).catch(() => {
+      if (!cancelled) setRepos([]);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectCwd, folderKey]);
+  const cwd = picked && repos.some((repo) => repo.root === picked)
+    ? picked
+    : repos.find((repo) => repo.root === sessionCwd || repo.folders.includes(sessionCwd ?? ""))?.root ?? sessionCwd;
   const [status, setStatus] = useState<GitStatus | null>(null);
   const [source, setSource] = useState<GitDiffSource>(focusSource ?? "unstaged");
   const [selected, setSelected] = useState<string>();
@@ -414,11 +441,42 @@ export function SidePaneGit({
     };
   }, [cwd, selected, source]);
 
+  const repoSelector = repos.length >= 2 ? (
+    <div className="flex shrink-0 gap-1 overflow-x-auto border-b border-border px-2 py-1.5">
+      {repos.map((repo) => {
+        const label = folderName(repo.folders[0] ?? repo.root);
+        const selectedRepo = cwd === repo.root;
+        return (
+          <button
+            key={repo.root}
+            type="button"
+            title={repo.root}
+            onClick={() => setPicked(repo.root)}
+            className={cn(
+              "shrink-0 rounded-md px-2 py-0.5 text-xs",
+              selectedRepo ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-muted",
+            )}
+          >
+            {label}{repo.branch ? ` · ${repo.branch}` : ""}
+          </button>
+        );
+      })}
+    </div>
+  ) : null;
+
   if (!cwd) {
     return <GitEmpty icon={GitCompareIcon} title={t("git.unboundTitle")} description={t("git.unboundDesc")} />;
   }
-  if (status && !status.isRepository) {
+  if (status && !status.isRepository && repos.length < 2) {
     return <GitEmpty icon={GitBranchIcon} title={t("git.notRepoTitle")} description={t("git.notRepoDesc")} />;
+  }
+  if (status && !status.isRepository) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col">
+        {repoSelector}
+        <GitEmpty icon={GitBranchIcon} title={t("git.notRepoTitle")} description={t("git.notRepoDesc")} />
+      </div>
+    );
   }
 
   const selectedFile = files.find((file) => file.path === selected);
@@ -429,6 +487,7 @@ export function SidePaneGit({
 
   return (
     <div className="@container/git flex min-h-0 flex-1 flex-col">
+      {repoSelector}
       <div className="flex h-10 shrink-0 items-center gap-1.5 border-b border-border px-2">
         <HugeiconsIcon strokeWidth={2} icon={GitBranchIcon} className="size-3.5 shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate text-xs font-medium" title={status?.branch}>

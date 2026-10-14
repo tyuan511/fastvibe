@@ -11,6 +11,7 @@ const draft = Type.Object({
   prompt: Type.String({ description: "Self-contained Agent instruction to run in a fresh conversation" }),
   project: Type.Optional(Type.String({ description: "Existing project path on this Agent's machine. Omit to use this chat's project." })),
   schedule: rule,
+  reportBack: Type.Optional(Type.Boolean({ description: "Default true: each run's outcome is reported back into this chat. Set false only when the user wants no follow-up here." })),
 });
 type ScheduleHost = { schedules?(request: Record<string, unknown>): Promise<unknown> };
 function hostOf(ctx: ExtensionContext): ScheduleHost { return ctx.ui as unknown as ScheduleHost; }
@@ -25,7 +26,7 @@ async function call(ctx: ExtensionContext, request: Record<string, unknown>) {
 export default function schedulesExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "schedule_create", label: T("创建定时任务", "Create scheduled task"),
-    description: "Schedule a self-contained Agent instruction for a future time. A run creates a new chat and may use tools in its selected project. The app keeps running after its last window closes, but an explicit Quit stops it. Only create when the user explicitly asks for future work.",
+    description: "Schedule a self-contained Agent instruction for a future time. A run creates a new chat and may use tools in its selected project. The app keeps running after its last window closes, but an explicit Quit stops it. Each run's outcome is reported back into this chat (and you will be asked to tell the user), so do not poll for it. Only create when the user explicitly asks for future work.",
     promptSnippet: "Create an Agent task that runs once, daily, or on selected weekdays",
     parameters: draft,
     async execute(_id, input, _signal, _update, ctx) { return call(ctx, { action: "create", draft: input }); },
@@ -42,6 +43,7 @@ export default function schedulesExtension(pi: ExtensionAPI): void {
     parameters: Type.Object({ id: Type.String(), patch: Type.Object({
       name: Type.Optional(Type.String()), prompt: Type.Optional(Type.String()), project: Type.Optional(Type.String()),
       schedule: Type.Optional(rule), enabled: Type.Optional(Type.Boolean()),
+      reportBack: Type.Optional(Type.Boolean({ description: "true: report runs back into this chat from now on; false: stop reporting." })),
     }) }),
     async execute(_id, input, _signal, _update, ctx) { return call(ctx, { action: "update", ...input }); },
   });

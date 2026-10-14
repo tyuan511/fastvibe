@@ -12,11 +12,13 @@ import { registerScheduleIpc } from "../main/ipc/schedule-handlers";
 import { dispatch, handle, handlerChannels } from "../main/ipc/registry";
 import type { PiProcessManager } from "../main/pi/process-manager";
 import { readFilePreview } from "../main/engine/file-preview";
+import { searchProjectFiles } from "../main/engine/project-files";
 import { readWorkspaceDir, writeWorkspaceTextFile } from "../main/engine/workspace-fs";
 import { existingFiles } from "../main/engine/path-exists";
 import { conversationCwd, readFileForPayload } from "../main/engine/file-chunk";
 import { TerminalSessions } from "../main/engine/terminal-sessions";
 import { applyLanguages } from "../main/engine/ai-language";
+import { rekeyProjectSettings } from "../shared/project-folders.ts";
 import { clearAppSettings, invalidateAppSettingsCache, readAppSettings, writeAppSettings } from "../main/engine/runtime-settings";
 import { toolModeSettingsChanged } from "../main/engine/tool-modes";
 import { writeAgentConfig } from "../main/engine/runtime-config";
@@ -150,12 +152,29 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
   handle(Ipc.projectsRename, (payload: { cwd: string; name: string }) => engine.renameProject(payload.cwd, payload.name));
   handle(Ipc.projectsRemove, (payload: { cwd: string }) => engine.removeProject(payload.cwd));
   handle(Ipc.projectsReorder, (payload: { cwds: string[] }) => engine.reorderProjects(Array.isArray(payload?.cwds) ? payload.cwds : []));
+  handle(Ipc.projectsCreate, (payload: { name?: string; folders?: string[] }) => engine.createProject(payload ?? {}));
+  handle(Ipc.projectsPickFolder, () => {
+    throw new Error("文件夹选择框只在桌面端可用");
+  });
+  handle(Ipc.projectsAddFolder, (payload: { cwd?: string; folder?: string }) => engine.addProjectFolder(payload?.cwd ?? "", payload?.folder ?? ""));
+  handle(Ipc.projectsRemoveFolder, (payload: { cwd?: string; folder?: string }) => engine.removeProjectFolder(payload?.cwd ?? "", payload?.folder ?? ""));
+  handle(Ipc.projectsSetPrimary, (payload: { cwd?: string; folder?: string }) => {
+    const result = engine.setProjectPrimary(payload?.cwd ?? "", payload?.folder ?? "");
+    if (result.previous !== result.next) {
+      writeAppSettings(paths, rekeyProjectSettings(readAppSettings(paths), result.previous, result.next));
+    }
+    return result.snapshot;
+  });
+  handle(Ipc.projectsRepos, (payload: { cwd?: string }) => engine.projectRepos(payload?.cwd ?? ""));
 
   handle(Ipc.workspacePreview, (payload: { path: string }) => readFilePreview(payload.path));
   handle(Ipc.workspaceFilesExist, (payload: { paths?: unknown; cwd?: unknown }) =>
     existingFiles(payload?.paths, payload?.cwd),
   );
   handle(Ipc.workspaceReadDir, (payload: { path: string }) => readWorkspaceDir(payload.path));
+  handle(Ipc.workspaceSearchFiles, (payload: { cwd?: unknown; query?: unknown }) =>
+    searchProjectFiles(payload?.cwd, payload?.query),
+  );
   handle(Ipc.workspaceWriteFile, (payload: { path?: unknown; text?: unknown }) => {
     writeWorkspaceTextFile(payload?.path, payload?.text);
   });
