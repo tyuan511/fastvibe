@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show HttpDate;
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:flutter_webrtc/flutter_webrtc.dart';
@@ -835,14 +836,24 @@ class RtcFrameSocket implements ExpiringFrameSocket {
     }
     final Incoming incoming;
     try {
-      incoming = _assembler.push(message.binary);
+      incoming = _assembler.push(message.binary, deferInflate: true);
     } on FrameError catch (error) {
       _violation(error.message);
       return;
     }
     switch (incoming) {
       case IncomingFrame(:final data, :final binary):
-        _frames.add(binary ? data : utf8.decode(data, allowMalformed: true));
+        // Behind a frame still being inflated, this one waits: frames are never reordered.
+        if (_inflating == 0) {
+          _deliver(data, binary);
+        } else {
+          _enqueue(() async => (data, binary));
+        }
+      case IncomingDeflated(:final packed, :final binary, :final maxFrameBytes):
+        _enqueue(() async {
+          final data = await _inflateOffThread(packed, maxFrameBytes);
+          return (data, binary);
+        });
       case IncomingPing():
         // Controls jump the queue: a pong stuck behind a large upload would read as a dead
         // phone to the desktop's heartbeat.
@@ -856,6 +867,29 @@ class RtcFrameSocket implements ExpiringFrameSocket {
       case IncomingPartial():
         break;
     }
+  }
+
+  void _deliver(Uint8List data, bool binary) {
+    if (_closed) return;
+    _frames.add(binary ? data : utf8.decode(data, allowMalformed: true));
+  }
+
+  int _inflating = 0;
+  Future<void>? _inflateChain;
+
+  /// Runs [work] after every earlier frame has been delivered, then delivers its result.
+  void _enqueue(Future<(Uint8List, bool)> Function() work) {
+    _inflating++;
+    _inflateChain = (_inflateChain ?? Future<void>.value())
+        .then((_) async {
+          if (_closed) return;
+          final (data, binary) = await work();
+          _deliver(data, binary);
+        })
+        .catchError((Object error) {
+          _violation(error is FrameError ? error.message : 'bad compressed frame');
+        })
+        .whenComplete(() => _inflating--);
   }
 
   void _violation(String reason) {
@@ -880,5 +914,17 @@ class RtcFrameSocket implements ExpiringFrameSocket {
       } catch (_) {}
     }());
     unawaited(_frames.close());
+  }
+}
+
+/// Inflate on another isolate; where there is none to spare, here — slower for the screen,
+/// not wrong.
+Future<Uint8List> _inflateOffThread(Uint8List packed, int maxFrameBytes) async {
+  try {
+    return await Isolate.run(() => inflateFrame(packed, maxFrameBytes));
+  } on FrameError {
+    rethrow;
+  } catch (_) {
+    return inflateFrame(packed, maxFrameBytes);
   }
 }

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:hugeicons/hugeicons.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
@@ -49,7 +51,7 @@ class TranscriptView extends StatefulWidget {
     required this.running,
     required this.waiting,
     required this.workingSince,
-    required this.now,
+    this.now,
     required this.onLongPress,
     required this.onOlder,
     this.dagWatcher,
@@ -64,7 +66,9 @@ class TranscriptView extends StatefulWidget {
   final bool running;
   final bool waiting;
   final int? workingSince;
-  final int now;
+
+  /// A fixed clock, for a test; null lets the pill tick on its own.
+  final int? now;
   final void Function(ChatMessage message) onLongPress;
   final VoidCallback onOlder;
   final DagWatcher? dagWatcher;
@@ -121,7 +125,21 @@ class _TranscriptViewState extends State<TranscriptView> {
   ///
   /// Rows come out in the list's own order — the newest content first, because the list is
   /// inverted — so a message's rows are emitted newest-block-first.
+  List<_Row>? _rowsCache;
+  List<ChatMessage>? _rowsFor;
+
   List<_Row> _rows() {
+    // The screen hands over the same list until a message changes, so a rebuild for
+    // anything else (a draft keystroke, the keyboard) does not walk every message again.
+    final cached = _rowsCache;
+    if (cached != null && identical(_rowsFor, widget.messages)) return cached;
+    final rows = _buildRows();
+    _rowsCache = rows;
+    _rowsFor = widget.messages;
+    return rows;
+  }
+
+  List<_Row> _buildRows() {
     final rows = <_Row>[];
     final live = <String>{};
     for (var position = 0; position < widget.messages.length; position++) {
@@ -165,13 +183,12 @@ class _TranscriptViewState extends State<TranscriptView> {
           }
           final key = '${message.id}:$index';
           live.add(key);
-          final chunker = _chunkers.putIfAbsent(
-            key,
-            () => MarkdownChunker(),
-          );
+          final chunker = _chunkers.putIfAbsent(key, () => MarkdownChunker());
           // An unchanged reply is fed back by identity on every repaint; scanning its
           // whole text again for that is the one cost this can still avoid.
-          if (!identical(chunker.source, block.text)) chunker.update(block.text);
+          if (!identical(chunker.source, block.text)) {
+            chunker.update(block.text);
+          }
           if (!chunker.isSplit) {
             pending.add(block);
             continue;
@@ -301,48 +318,83 @@ class _TranscriptViewState extends State<TranscriptView> {
 
 /// The floating 「正在工作」 capsule, with the run's elapsed time. It sits on the page
 /// rather than floating over it, so it takes the faintest lift there is.
-class WorkingPill extends StatelessWidget {
-  const WorkingPill({super.key, required this.since, required this.now});
+///
+/// It keeps its own once-a-second clock: a clock owned by the screen rebuilt the whole
+/// chat page, and every message row with it, to move one number.
+class WorkingPill extends StatefulWidget {
+  const WorkingPill({super.key, required this.since, this.now});
 
   final int? since;
-  final int now;
+
+  /// A fixed clock, for a test; null ticks with the wall clock.
+  final int? now;
+
+  @override
+  State<WorkingPill> createState() => _WorkingPillState();
+}
+
+class _WorkingPillState extends State<WorkingPill> {
+  Timer? _clock;
+  int _now = DateTime.now().millisecondsSinceEpoch;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.now == null) {
+      _clock = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (mounted) {
+          setState(() => _now = DateTime.now().millisecondsSinceEpoch);
+        }
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _clock?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final palette = paletteOf(context);
-    return Container(
-      height: _workingPillHeight,
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      decoration: BoxDecoration(
-        color: palette.card,
-        borderRadius: BorderRadius.circular(Radii.pill),
-        border: Border.all(color: palette.border, width: 0.5),
-        boxShadow: elevation(palette, 0),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          DesktopSpinner(size: 15, color: palette.accent),
-          const SizedBox(width: 7),
-          Text(
-            t('chat.working', context: context),
-            style: TextStyle(
-              color: palette.text,
-              fontSize: 13,
-              fontWeight: FontWeight.w700,
+    final now = widget.now ?? _now;
+    final since = widget.since;
+    return RepaintBoundary(
+      child: Container(
+        height: _workingPillHeight,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        decoration: BoxDecoration(
+          color: palette.card,
+          borderRadius: BorderRadius.circular(Radii.pill),
+          border: Border.all(color: palette.border, width: 0.5),
+          boxShadow: elevation(palette, 0),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            DesktopSpinner(size: 15, color: palette.accent),
+            const SizedBox(width: 7),
+            Text(
+              t('chat.working', context: context),
+              style: TextStyle(
+                color: palette.text,
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+              ),
             ),
-          ),
-          const SizedBox(width: 7),
-          Text(
-            formatElapsed(now - (since ?? now)),
-            style: TextStyle(
-              color: palette.muted,
-              fontSize: 12,
-              fontFamily: 'monospace',
-              fontFeatures: const <FontFeature>[FontFeature.tabularFigures()],
+            const SizedBox(width: 7),
+            Text(
+              formatElapsed(now - (since ?? now)),
+              style: TextStyle(
+                color: palette.muted,
+                fontSize: 12,
+                fontFamily: 'monospace',
+                fontFeatures: const <FontFeature>[FontFeature.tabularFigures()],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -519,11 +571,7 @@ class _UserRow extends StatelessWidget {
                       const SizedBox(height: 4),
                     ],
                     if (text.isNotEmpty)
-                      MarkdownView(
-                        text: text,
-                        palette: palette,
-                        compact: true,
-                      ),
+                      MarkdownView(text: text, palette: palette, compact: true),
                   ],
                 ),
               ),
@@ -666,9 +714,10 @@ class _AssistantRow extends StatelessWidget {
     ),
     ModelBlock(:final model) => _Divider(
       palette: palette,
-      label: t('chat.modelSwitched', vars: <String, Object?>{
-        'model': model ?? t('chat.newModel'),
-      }),
+      label: t(
+        'chat.modelSwitched',
+        vars: <String, Object?>{'model': model ?? t('chat.newModel')},
+      ),
     ),
     DagBlock() => const SizedBox.shrink(),
   };

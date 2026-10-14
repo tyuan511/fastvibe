@@ -54,7 +54,7 @@ Future<AppRelease?> checkForUpdate({bool force = false}) {
       settled != null &&
       DateTime.now().millisecondsSinceEpoch - settled.at <
           _checkFresh.inMilliseconds) {
-    return Future<AppRelease?>.value(settled.release);
+    return Future<AppRelease?>.value(_stillNewer(settled.release));
   }
   final check = _check(force);
   _inflight = check;
@@ -72,6 +72,14 @@ Future<AppRelease?> checkForUpdate({bool force = false}) {
   return check;
 }
 
+/// An answer is only "newer" for the version it was asked about. Installing the update
+/// and reopening the app inside the freshness window would otherwise read back the very
+/// release that was just installed and offer it again.
+AppRelease? _stillNewer(AppRelease? release) =>
+    release != null && compareVersions(release.version, appVersion) > 0
+    ? release
+    : null;
+
 Future<AppRelease?> _check(bool force) async {
   if (!force) {
     final until = await _backoffUntil();
@@ -83,7 +91,7 @@ Future<AppRelease?> _check(bool force) async {
         DateTime.now().millisecondsSinceEpoch - cached.at <
             _checkFresh.inMilliseconds) {
       _settled = cached;
-      return cached.release;
+      return _stillNewer(cached.release);
     }
   }
   final device = await DeviceInfoPlugin().androidInfo;

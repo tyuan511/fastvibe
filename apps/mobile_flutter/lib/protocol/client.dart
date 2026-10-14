@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:http/http.dart' as http;
 
@@ -356,11 +357,7 @@ class RemoteClient {
         fail(ConnectionError('unreachable', unreachable));
       }
 
-      socket.listen(
-        (data) {
-          if (stale()) return;
-          final parseStarted = DateTime.now().millisecondsSinceEpoch;
-          final message = _parseFrame(data);
+      void process(Map<String, Object?>? message, Object? data, int parseStarted) {
           if (message == null) return;
           _lastReceived = DateTime.now().millisecondsSinceEpoch;
           _frameChars = data is String ? data.length : 0;
@@ -397,6 +394,34 @@ class RemoteClient {
             return;
           }
           _handleReadyFrame(message);
+      }
+
+      // Frames are handled strictly in arrival order. A small frame (almost every stream
+      // delta) is decoded on the spot; a large one (a snapshot is megabytes) is decoded on
+      // another isolate so the UI thread does not stall, and anything arriving behind it
+      // waits for it rather than overtaking.
+      Future<void>? chain;
+      var queued = 0;
+      socket.listen(
+        (data) {
+          if (stale()) return;
+          final parseStarted = DateTime.now().millisecondsSinceEpoch;
+          if (queued == 0 && !_isLargeFrame(data)) {
+            process(_parseFrame(data), data, parseStarted);
+            return;
+          }
+          queued++;
+          chain = (chain ?? Future<void>.value())
+              .then((_) async {
+                if (stale()) return;
+                final message = _isLargeFrame(data)
+                    ? await _parseFrameOffThread(data)
+                    : _parseFrame(data);
+                if (stale()) return;
+                process(message, data, parseStarted);
+              })
+              .catchError((Object _) {})
+              .whenComplete(() => queued--);
         },
         onError: (Object _) {
           if (stale()) return;
@@ -686,6 +711,22 @@ EventMeta? _eventMeta(Map<String, Object?> value) {
   final cursor = _cursor(value);
   if (scope is! String || cursor == null) return null;
   return EventMeta(scope, cursor.epoch, cursor.seq);
+}
+
+/// Below this a frame decodes faster than an isolate can be handed it.
+const int _offThreadFrameBytes = 64 * 1024;
+
+bool _isLargeFrame(Object? data) =>
+    (data is String ? data.length : (data is List<int> ? data.length : 0)) >=
+    _offThreadFrameBytes;
+
+Future<Map<String, Object?>?> _parseFrameOffThread(Object? data) async {
+  try {
+    return await Isolate.run(() => _parseFrame(data));
+  } catch (_) {
+    // No isolate to spare: decoding here is slower for the screen, not wrong.
+    return _parseFrame(data);
+  }
 }
 
 Map<String, Object?>? _parseFrame(Object? data) {

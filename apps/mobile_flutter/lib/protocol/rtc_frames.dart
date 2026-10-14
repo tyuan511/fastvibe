@@ -103,6 +103,16 @@ class IncomingFrame extends Incoming {
   final bool binary;
 }
 
+/// A compressed frame whose inflating was left to the caller, because it is big enough
+/// that doing it on the UI thread would be felt. [inflateFrame] finishes it.
+class IncomingDeflated extends Incoming {
+  const IncomingDeflated(this.packed, {required this.binary, required this.maxFrameBytes});
+
+  final Uint8List packed;
+  final bool binary;
+  final int maxFrameBytes;
+}
+
 class IncomingPing extends Incoming {
   const IncomingPing();
 }
@@ -133,7 +143,10 @@ class FrameAssembler {
   bool _deflated = false;
 
   /// Throws [FrameError] for anything the format does not allow; the channel is then not trusted.
-  Incoming push(Uint8List message) {
+  ///
+  /// A compressed frame of [deferInflateBytes] or more is handed back still packed as an
+  /// [IncomingDeflated] when [deferInflate] is set, so the caller can inflate it elsewhere.
+  Incoming push(Uint8List message, {bool deferInflate = false}) {
     if (message.isEmpty) throw FrameError('empty message');
     final header = message[0];
     if (header & fragPing != 0) return const IncomingPing();
@@ -171,25 +184,32 @@ class FrameAssembler {
     }
     _parts.clear();
     _bytes = 0;
-    return IncomingFrame(deflated ? _inflate(data) : data, binary: binary);
-  }
-
-  /// Inflate, within the same ceiling as an uncompressed frame, so a few kilobytes cannot
-  /// be turned into memory the limit was meant to protect.
-  Uint8List _inflate(Uint8List packed) {
-    final out = BytesBuilder(copy: false);
-    final sink = _LimitedSink(out, maxFrameBytes);
-    try {
-      final conversion = ZLibDecoder(raw: true).startChunkedConversion(sink);
-      conversion.add(packed);
-      conversion.close();
-    } on FrameError {
-      rethrow;
-    } catch (_) {
-      throw FrameError('bad compressed frame');
+    if (deflated && deferInflate && data.length >= deferInflateBytes) {
+      return IncomingDeflated(data, binary: binary, maxFrameBytes: maxFrameBytes);
     }
-    return out.takeBytes();
+    return IncomingFrame(deflated ? inflateFrame(data, maxFrameBytes) : data, binary: binary);
   }
+}
+
+/// A compressed frame this size or larger is worth inflating off the UI thread: JSON
+/// deflates five- to tenfold, so this is a few hundred kilobytes of text.
+const int deferInflateBytes = 32 * 1024;
+
+/// Inflate, within the same ceiling as an uncompressed frame, so a few kilobytes cannot
+/// be turned into memory the limit was meant to protect.
+Uint8List inflateFrame(Uint8List packed, int maxFrameBytes) {
+  final out = BytesBuilder(copy: false);
+  final sink = _LimitedSink(out, maxFrameBytes);
+  try {
+    final conversion = ZLibDecoder(raw: true).startChunkedConversion(sink);
+    conversion.add(packed);
+    conversion.close();
+  } on FrameError {
+    rethrow;
+  } catch (_) {
+    throw FrameError('bad compressed frame');
+  }
+  return out.takeBytes();
 }
 
 class _LimitedSink implements Sink<List<int>> {

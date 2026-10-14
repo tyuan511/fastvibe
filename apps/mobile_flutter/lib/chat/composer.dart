@@ -32,7 +32,7 @@ class Composer extends StatefulWidget {
     required this.draft,
     required this.images,
     required this.onImagesChange,
-    required this.onDraftChange,
+    this.onDraftChange,
     required this.onSend,
     required this.onAbort,
     required this.onContinue,
@@ -52,7 +52,7 @@ class Composer extends StatefulWidget {
   final TextEditingController draft;
   final List<ComposerImage> images;
   final ValueChanged<List<ComposerImage>> onImagesChange;
-  final ValueChanged<String> onDraftChange;
+  final ValueChanged<String>? onDraftChange;
   final Future<void> Function() onSend;
   final VoidCallback onAbort;
   final VoidCallback onContinue;
@@ -84,12 +84,30 @@ class _ComposerState extends State<Composer> {
   void initState() {
     super.initState();
     Connection.instance.addListener(_refresh);
+    widget.draft.addListener(_onDraft);
+    _hasText = widget.draft.text.trim().isNotEmpty;
     _refresh();
+  }
+
+  /// Whether the draft has anything in it. The send button is the only thing that reads
+  /// the text, so a keystroke rebuilds the composer only when this flips — and never the
+  /// chat page around it, whose transcript has nothing to do with what is being typed.
+  bool _hasText = false;
+
+  void _onDraft() {
+    final has = widget.draft.text.trim().isNotEmpty;
+    if (has == _hasText) return;
+    setState(() => _hasText = has);
   }
 
   @override
   void didUpdateWidget(Composer oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.draft, widget.draft)) {
+      oldWidget.draft.removeListener(_onDraft);
+      widget.draft.addListener(_onDraft);
+      _hasText = widget.draft.text.trim().isNotEmpty;
+    }
     // The context window only moves while a run is going, so the state is re-read at the
     // boundaries rather than on a timer.
     if (oldWidget.running != widget.running ||
@@ -101,6 +119,7 @@ class _ComposerState extends State<Composer> {
   @override
   void dispose() {
     Connection.instance.removeListener(_refresh);
+    widget.draft.removeListener(_onDraft);
     _focus.dispose();
     super.dispose();
   }
@@ -367,8 +386,7 @@ class _ComposerState extends State<Composer> {
   @override
   Widget build(BuildContext context) {
     final palette = paletteOf(context);
-    final hasContent =
-        widget.draft.text.trim().isNotEmpty || widget.images.isNotEmpty;
+    final hasContent = _hasText || widget.images.isNotEmpty;
     final action = widget.sending
         ? 'sending'
         : widget.running && !hasContent

@@ -67,6 +67,20 @@ void main() {
     );
   });
 
+  test('a multi-megabyte reply is decoded off the UI thread and still lands in order', () async {
+    final big = List<String>.filled(300000, 'snapshot').join(' ');
+    server.handlers['test:big'] = (_) => big;
+    server.handlers['test:small'] = (_) => 'small';
+    await connect();
+    final replies = await Future.wait<Object?>([
+      client.call('test:big'),
+      client.call('test:small'),
+      client.call('test:big'),
+      client.call('test:small'),
+    ]);
+    expect(replies, [big, 'small', big, 'small']);
+  });
+
   test('out of order RPC replies resolve only their own request', () async {
     final first = Completer<Object?>();
     server.handlers['test:first'] = (_) => first.future;

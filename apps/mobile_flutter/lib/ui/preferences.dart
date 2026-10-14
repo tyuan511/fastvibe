@@ -1,3 +1,7 @@
+import 'dart:io' show Platform;
+
+import 'package:device_info_plus/device_info_plus.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -36,7 +40,11 @@ class Preferences extends ChangeNotifier {
     try {
       final prefs = await SharedPreferences.getInstance();
       final raw = prefs.getString(_key);
-      if (raw == null) return;
+      if (raw == null) {
+        // First run: nothing has been chosen yet, so the device decides.
+        _reduceGlass = await _suggestReduceGlass();
+        return;
+      }
       final theme = prefs.getString('$_key.theme');
       _theme = switch (theme) {
         'light' => ThemePreference.light,
@@ -45,9 +53,23 @@ class Preferences extends ChangeNotifier {
       };
       _haptics = prefs.getBool('$_key.haptics') ?? true;
       _notifications = prefs.getBool('$_key.notifications') ?? true;
-      _reduceGlass = prefs.getBool('$_key.reduceGlass') ?? false;
+      _reduceGlass =
+          prefs.getBool('$_key.reduceGlass') ?? await _suggestReduceGlass();
     } catch (_) {
       // An unreadable preference file leaves the defaults, which are usable.
+    }
+  }
+
+  /// Glass is a shader blur drawn behind every bar and sheet. A phone with little memory
+  /// (and, usually, a modest GPU) drops frames scrolling a chat under it, so such a phone
+  /// starts with the plainer surfaces; 设置 → 减少玻璃效果 turns either way.
+  static Future<bool> _suggestReduceGlass() async {
+    if (kIsWeb || !Platform.isAndroid) return false;
+    try {
+      final info = await DeviceInfoPlugin().androidInfo;
+      return info.isLowRamDevice || info.physicalRamSize <= 6144;
+    } catch (_) {
+      return false;
     }
   }
 

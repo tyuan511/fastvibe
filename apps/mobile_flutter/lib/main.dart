@@ -25,12 +25,6 @@ Future<void> main() => startApp();
 
 Future<void> startApp({bool checkUpdates = true}) async {
   WidgetsFlutterBinding.ensureInitialized();
-  // Pre-warms the fragment shaders so the first glass frame is not a white flash.
-  await LiquidGlassWidgets.initialize();
-  await loadAppVersion();
-  await i18n.load();
-  await Preferences.instance.load();
-  await _startAccount();
   // The model picker needs the catalog but must not import the connection layer, which
   // would make it and the composer import each other.
   bindModelCatalogReader(() {
@@ -38,10 +32,26 @@ Future<void> startApp({bool checkUpdates = true}) async {
     if (remote == null) return Future<List<Object?>>.value(const <Object?>[]);
     return readModelCatalog(remote);
   });
-  await LocalNotifications.instance.install((serverId, conversationId) {
-    unawaited(openNotificationTarget(serverId, conversationId));
-  });
+  // None of these needs another's result, and each is a platform-channel round trip or a
+  // shader compile, so the first frame waits for the slowest one rather than for the sum.
+  await Future.wait<void>(<Future<void>>[
+    // Pre-warms the fragment shaders so the first glass frame is not a white flash.
+    LiquidGlassWidgets.initialize(),
+    loadAppVersion(),
+    i18n.load(),
+    Preferences.instance.load(),
+    _startAccount(),
+  ]);
   runApp(FastVibeApp(checkUpdates: checkUpdates));
+  // After the first frame is queued, not before it: installing asks the system for
+  // notification permission, and a dialog the person has not answered yet must not be
+  // what keeps the app from drawing. A launching notification is opened in a post-frame
+  // callback anyway.
+  unawaited(
+    LocalNotifications.instance.install((serverId, conversationId) {
+      unawaited(openNotificationTarget(serverId, conversationId));
+    }),
+  );
 }
 
 /// The account decides which computers are on the list: signing in brings them, signing out
@@ -115,7 +125,10 @@ class _FastVibeAppState extends State<FastVibeApp> with WidgetsBindingObserver {
         adaptiveConfig: GlassAdaptiveScopeConfig(
           maxQuality: Preferences.instance.reduceGlass
               ? GlassQuality.minimal
-              : GlassQuality.premium,
+              // `premium` is the full refraction pipeline, meant for static headers on a
+              // Pixel 6 / A15 or newer; every bar here sits over a scrolling chat.
+              // `standard` is the lightweight shader the package recommends for that.
+              : GlassQuality.standard,
         ),
         theme: GlassThemeData.simple(blur: 12, thickness: 25),
         child: MaterialApp.router(

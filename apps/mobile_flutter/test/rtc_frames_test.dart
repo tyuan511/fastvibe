@@ -111,6 +111,27 @@ void main() {
       expect((out! as IncomingFrame).data, data);
     });
 
+    test('a large compressed frame can be handed back packed and inflated later', () {
+      final big = utf8.encode(List<String>.filled(40, json).join());
+      final packed = compressFrame(big)!;
+      expect(packed.length >= deferInflateBytes, isTrue, reason: 'big enough to defer');
+      final assembler = FrameAssembler(32 * 1024 * 1024);
+      Incoming? out;
+      for (final message in splitFrame(packed, binary: false, deflated: true)) {
+        out = assembler.push(message, deferInflate: true);
+      }
+      final deferred = out! as IncomingDeflated;
+      expect(inflateFrame(deferred.packed, deferred.maxFrameBytes), big);
+      expect(() => inflateFrame(deferred.packed, 1024), throwsA(isA<FrameError>()));
+      // A small one is still inflated on the spot, deferral or not.
+      final small = compressFrame(utf8.encode(json))!;
+      Incoming? quick;
+      for (final message in splitFrame(small, binary: false, deflated: true)) {
+        quick = assembler.push(message, deferInflate: true);
+      }
+      expect(quick, isA<IncomingFrame>());
+    });
+
     test('a frame too short, or that does not shrink, is not compressed', () {
       expect(compressFrame(utf8.encode('short')), isNull);
       final noise = Uint8List.fromList(List<int>.generate(compressMinBytes * 4, (i) => (i * 2654435761 >> 7) & 0xff));

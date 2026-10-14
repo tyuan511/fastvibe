@@ -92,8 +92,6 @@ class _ChatScreenState extends State<ChatScreen> {
   Map<String, TurnMeta> _footers = <String, TurnMeta>{};
   bool _fullRead = false;
   DagWatcher? _dag;
-  Timer? _clock;
-  int _now = DateTime.now().millisecondsSinceEpoch;
 
   String get _conversationId => widget.conversationId;
 
@@ -135,11 +133,6 @@ class _ChatScreenState extends State<ChatScreen> {
     Connection.instance.addListener(_onConnection);
     _draft.addListener(_onDraftChanged);
     _dag = DagWatcher(_conversationId);
-    _clock = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted && _running) {
-        setState(() => _now = DateTime.now().millisecondsSinceEpoch);
-      }
-    });
     _hydrateDraft();
     _startSync();
   }
@@ -164,7 +157,6 @@ class _ChatScreenState extends State<ChatScreen> {
     _draft.removeListener(_onDraftChanged);
     _draftTimer?.cancel();
     _paintTimer?.cancel();
-    _clock?.cancel();
     _teardownSync();
     _dag?.dispose();
     _flushDraft();
@@ -196,8 +188,18 @@ class _ChatScreenState extends State<ChatScreen> {
   String? _draftConversationId;
   int _draftGeneration = 0;
 
+  /// Bumped whenever [_messages] changes. A rebuild for anything else (a keystroke in the
+  /// composer, the keyboard, a toast) reuses the merged list and footers below instead of
+  /// merging every reply again, and hands the list the very same object so it can skip
+  /// its own pass too.
+  int _messagesRevision = 0;
+  int _viewRevision = -1;
+  bool _viewRunning = false;
+  List<ChatMessage> _mergedView = const <ChatMessage>[];
+
   void _resetForConversation() {
     _messages.clear();
+    _messagesRevision++;
     _replyCache.clear();
     _queue = emptyQueue(widget.conversationId);
     _historyCursor = null;
@@ -233,7 +235,6 @@ class _ChatScreenState extends State<ChatScreen> {
     if (!_draftHydrated) return;
     _draftTimer?.cancel();
     _draftTimer = Timer(const Duration(milliseconds: 350), _flushDraft);
-    if (mounted) setState(() {});
   }
 
   void _flushDraft() {
@@ -248,16 +249,19 @@ class _ChatScreenState extends State<ChatScreen> {
 
   // ---- transcript ------------------------------------------------------------------
 
-  /// Every event is reduced in order, but the list is painted at most once per
-  /// frame-sized interval. A fast model otherwise repaints per token.
+  /// Every event is reduced in order, but the list is painted at most every ~33ms. A fast
+  /// model otherwise repaints per token, and on a 90/120Hz screen a 16ms timer meant a
+  /// full layout of the growing reply on every single frame; reading speed does not need
+  /// more than 30 updates a second.
   void _setMessages(List<ChatMessage> next) {
     if (!mounted || identical(next, _messages)) return;
     _messages
       ..clear()
       ..addAll(next);
+    _messagesRevision++;
     if (_paintScheduled) return;
     _paintScheduled = true;
-    _paintTimer = Timer(const Duration(milliseconds: 16), () {
+    _paintTimer = Timer(const Duration(milliseconds: 33), () {
       _paintTimer = null;
       _paintScheduled = false;
       if (mounted) setState(() {});
@@ -783,7 +787,8 @@ class _ChatScreenState extends State<ChatScreen> {
       context,
       file: file,
       transfer: FileTransfer(
-        call: (method, payload, timeoutMs) => remote.call(method, payload, timeoutMs),
+        call: (method, payload, timeoutMs) =>
+            remote.call(method, payload, timeoutMs),
         conversationId: _conversationId,
       ),
     );
@@ -823,11 +828,16 @@ class _ChatScreenState extends State<ChatScreen> {
     final workingSince =
         currentRunStartedAt(_messages) ??
         connection.runningSince[_conversationId];
-    _footers = completedTurnFooters(_messages, running, _footers);
-    final merged = mergeReplies(
-      List<ChatMessage>.from(_messages),
-      _replyCache,
-    ).reversed.toList();
+    if (_viewRevision != _messagesRevision || _viewRunning != running) {
+      _footers = completedTurnFooters(_messages, running, _footers);
+      _mergedView = mergeReplies(
+        List<ChatMessage>.from(_messages),
+        _replyCache,
+      ).reversed.toList();
+      _viewRevision = _messagesRevision;
+      _viewRunning = running;
+    }
+    final merged = _mergedView;
     final last = _messages.isEmpty ? null : _messages.last;
     final canContinue =
         !running &&
@@ -895,7 +905,6 @@ class _ChatScreenState extends State<ChatScreen> {
                                     running: running,
                                     waiting: prompt != null,
                                     workingSince: workingSince,
-                                    now: _now,
                                     topInset: _dag != null ? 0 : top,
                                     bottomInset: _footerHeight,
                                     onLongPress: _messageAction,
@@ -972,7 +981,6 @@ class _ChatScreenState extends State<ChatScreen> {
                                   images: _images,
                                   onImagesChange: (value) =>
                                       setState(() => _images = value),
-                                  onDraftChange: (_) => setState(() {}),
                                   onSend: _send,
                                   onAbort: () => _runAction('engine:abort'),
                                   onContinue: () =>
