@@ -2145,14 +2145,15 @@ means either: an agent **run** and a **compaction**.
   (after an exponential backoff), auto-compacting, or continuing with messages an
   `agent_end` handler queued (`ctx.sendMessage` from a goal handler). Each of those
   then starts another `agent_start` *inside that same run*, and only `agent_settled` —
-  emitted once, at the end of `_runAgentPrompt`'s post-run loop — means it is over (it is
+  emitted once, at the end of `_startRun`'s post-run loop — means it is over (it is
   the same condition as the SDK's `session.isIdle`). Ending the flag at `agent_end` made
   the mark, the footer and the stop button go idle for the whole backoff/compaction
   window. `PiProcessManager` sets `#running` on those two events and nothing else;
   `apply-engine-event.ts` keeps the renderer's `streaming` on the same pair.
 - **A resume is a run too.** `continueTurn` (the composer's 继续) drives the resumed turn
-  through the SDK's own run wrapper — `_runAgentPrompt([])`, private because 0.85.1 has no
-  public entry point for continuing an interrupted turn — and not the bare
+  through the SDK's own run wrapper — `_startRun`, with `_prepareRun` returning no new
+  message for that one call (1.2.0 replaced `_runAgentPrompt([])`; there is still no
+  public entry point for continuing an interrupted turn) — and not the bare
   `agent.continue()` loop, because the wrapper is exactly where `agent_settled` and the
   post-run policy live. Calling the raw loop left a resumed run with nothing to clear the
   flag *and* with an `agent_end` claiming `willRetry` for a retry nothing would perform, so a

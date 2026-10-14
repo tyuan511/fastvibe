@@ -37,25 +37,24 @@ allowBuilds:
 
 minimumReleaseAgeExclude:
   - electron@44.4.0
-  - '@earendil-works/chord@1.1.0'
-  - '@earendil-works/pi-agent-core@1.1.0'
-  - '@earendil-works/pi-ai@1.1.0'
-  - '@earendil-works/pi-coding-agent@1.1.0'
-  - '@earendil-works/pi-mcp@1.1.0'
-  - '@earendil-works/pi-codemode@1.1.0'
-  - '@earendil-works/pi-telemetry@1.1.0'
-  - '@earendil-works/pi-tui@1.1.0'
+  - '@earendil-works/pi-agent-core@1.2.0'
+  - '@earendil-works/pi-ai@1.2.0'
+  - '@earendil-works/pi-coding-agent@1.2.0'
+  - '@earendil-works/pi-mcp@1.2.0'
+  - '@earendil-works/pi-codemode@1.2.0'
+  - '@earendil-works/pi-telemetry@1.2.0'
+  - '@earendil-works/pi-tui@1.2.0'
 
 # Pin the pi runtime to the exact SDK version FastVibe ships so the host and any
 # extension loaded into it share one pi-tui/pi-ai instance.
 overrides:
-  '@earendil-works/pi-ai': 1.1.0
-  '@earendil-works/pi-coding-agent': 1.1.0
-  '@earendil-works/pi-mcp': 1.1.0
-  '@earendil-works/pi-tui': 1.1.0
+  '@earendil-works/pi-ai': 1.2.0
+  '@earendil-works/pi-coding-agent': 1.2.0
+  '@earendil-works/pi-mcp': 1.2.0
+  '@earendil-works/pi-tui': 1.2.0
 
 peerDependencyRules:
   allowedVersions:
-    '@earendil-works/pi-ai': '1.1.0'
-    '@earendil-works/pi-coding-agent': '1.1.0'
-    '@earendil-works/pi-tui': '1.1.0'
+    '@earendil-works/pi-ai': '1.2.0'
+    '@earendil-works/pi-coding-agent': '1.2.0'
+    '@earendil-works/pi-tui': '1.2.0'

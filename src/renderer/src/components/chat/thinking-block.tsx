@@ -143,7 +143,7 @@ export const ThinkingBlock = memo(function ThinkingBlock({
         />
         <span className="shrink-0 whitespace-nowrap">
           {active ? (
-            <span className="animated-gradient-text font-medium">{t("thinking.running")}</span>
+            <span className="animated-gradient-text font-normal">{t("thinking.running")}</span>
           ) : (
             <SettledLabel elapsed={elapsed} />
           )}
@@ -246,10 +246,10 @@ function ReasoningTicker({ text }: { text: string }): JSX.Element {
 /** 「思考 · N 秒」; without a measured duration, just 「思考」. */
 function SettledLabel({ elapsed }: { elapsed: number | null }): JSX.Element {
   const { t } = useTranslation("chat");
-  if (elapsed === null) return <span className="font-medium text-muted-foreground">{t("thinking.done")}</span>;
+  if (elapsed === null) return <span className="font-normal text-muted-foreground">{t("thinking.done")}</span>;
   return (
     <span className="inline-flex items-center gap-2">
-      <span className="font-medium text-muted-foreground">{t("thinking.done")}</span>
+      <span className="font-normal text-muted-foreground">{t("thinking.done")}</span>
       <span className="font-normal text-muted-foreground/40">·</span>
       <span className="font-normal text-muted-foreground/60">{t("thinking.seconds", { n: elapsed })}</span>
     </span>

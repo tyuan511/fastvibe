@@ -119,7 +119,9 @@ export default function sessionTitle(pi: ExtensionAPI): void {
   });
 
   pi.on("before_agent_start", (event, ctx) => {
-    if (attempted || pi.getSessionName()) return;
+    // 1.2.0 also fires this for an idle custom message (`triggerTurn`). Those have
+    // no prompt, and a notice must not become the chat's title.
+    if (event.messageType !== "user" || attempted || pi.getSessionName()) return;
     const prompt = promptText(event.prompt);
     if (!prompt || isBareCommand(event.prompt.trim())) return;
     attempted = true;

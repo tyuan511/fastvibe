@@ -63,6 +63,51 @@ test("Stop during a real SDK memory hook releases preparation and prevents the p
   assert.equal(requests, 1);
 });
 
+test("a resumed turn uses _startRun without writing another user prompt", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "fastvibe-continue-run-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  let requests = 0;
+  const settled: string[] = [];
+  const partial = {
+    role: "assistant" as const, content: [{ type: "text" as const, text: "ok" }], provider: "fake", model: "m", timestamp: Date.now(), stopReason: "stop" as const,
+    usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+  };
+  const streamFn = () => {
+    requests += 1;
+    return { async *[Symbol.asyncIterator]() { yield { type: "start", partial }; yield { type: "done", reason: "stop", message: partial }; }, result: async () => partial };
+  };
+  const agent = new Agent({ initialState: {
+    systemPrompt: "", model: { provider: "fake", id: "m", name: "F", contextWindow: 100_000, maxTokens: 4096, input: ["text"], api: "openai-completions" }, thinkingLevel: "off", tools: [],
+  }, convertToLlm: (messages) => messages, streamFn } as never);
+  const settingsManager = SettingsManager.create(dir, join(dir, "agent"));
+  const sessionManager = SessionManager.create(dir, join(dir, "sessions"));
+  const resourceLoader = new DefaultResourceLoader({ cwd: dir, agentDir: join(dir, "agent"), settingsManager });
+  await resourceLoader.reload();
+  const session = new AgentSession({ agent, sessionManager, settingsManager, cwd: dir, resourceLoader, initialActiveToolNames: [], modelRuntime: {
+    hasConfiguredAuth: () => true, checkAuth: async () => ({}), isUsingOAuth: () => false, getAuth: async () => ({ auth: {} }), streamSimple: streamFn,
+  } as never });
+  session.subscribe((event) => { if (event.type === "agent_settled") settled.push(event.type); });
+  await session.prompt("first");
+  assert.equal(requests, 1);
+  const usersBefore = session.messages.filter((message) => message.role === "user").length;
+  // The same private path `#runContinuation` takes on pi 1.2.0.
+  const raw = session as unknown as {
+    _startRun: (trigger: unknown) => Promise<void>;
+    _prepareRun: (trigger: unknown) => Promise<unknown>;
+  };
+  const prepare = raw._prepareRun;
+  raw._prepareRun = async () => [];
+  try {
+    await raw._startRun({ messageType: "user", prompt: "" });
+  } finally {
+    raw._prepareRun = prepare;
+  }
+  assert.equal(requests, 2);
+  assert.equal(session.messages.filter((message) => message.role === "user").length, usersBefore);
+  assert.equal(session.isIdle, true);
+  assert.deepEqual(settled, ["agent_settled", "agent_settled"]);
+});
+
 test("cancelling one chat leaves another preparation intact and engine cancellation stops all", async () => {
   const preparations = new PromptPreparations();
   const held = deferred();

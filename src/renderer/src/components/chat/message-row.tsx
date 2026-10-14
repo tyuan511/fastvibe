@@ -190,7 +190,7 @@ function WorkingStatus({ message }: { message: ChatMessage }): JSX.Element {
   return (
     <div className="flex items-center gap-2 text-sm">
       <Spinner className="size-4 text-muted-foreground" />
-      <span className="animated-gradient-text animated-gradient-text-emphasis font-medium">
+      <span className="animated-gradient-text animated-gradient-text-emphasis font-normal">
         {message.tools.length > 0 ? t("message.workingOn") : t("message.working")}
       </span>
     </div>

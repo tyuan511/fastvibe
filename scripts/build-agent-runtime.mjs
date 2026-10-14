@@ -137,8 +137,9 @@ function agentDependencies(packages) {
 /**
  * Remove installed files no Agent code path can load.
  *
- * - esbuild and its ~10 MB native binary: pulled in by `@earendil-works/chord`, but only
- *   its `chord/node` bundler entry imports it, and nothing the Agent loads imports that.
+ * - esbuild and its ~10 MB native binary: nothing the Agent loads imports it. It used
+ *   to arrive through `@earendil-works/chord`, which pi-coding-agent 1.2.0 no longer
+ *   depends on; the prune stays so a later transitive copy cannot ship in the archive.
  * - `pi-coding-agent/dist/bundle`: the prebuilt `pi` CLI and `rpc-entry`. The library
  *   entry the Agent imports is `dist/index.js`, which never reaches into the bundle.
  *

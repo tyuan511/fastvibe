@@ -1457,14 +1457,6 @@ export function App(): JSX.Element {
     if (location.pathname.startsWith("/c/")) navigate("/", { replace: true });
   }
 
-  async function handleRenameProject(cwd: string, name: string): Promise<void> {
-    try {
-      applyList(await window.fastvibe.projects.rename(cwd, name));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  }
-
   /**
    * Persist a drag-reordered project list. The catalog owns the order (unlike the
    * conversation sections, which live in `sidebarOrder`), so the drop is applied to
@@ -1678,7 +1670,6 @@ export function App(): JSX.Element {
   const onSidebarAddProject = useStable(() => void handleAddProject());
   const onSidebarAddRemoteProject = useStable(() => handleAddRemoteProject());
   const onSidebarRenameSession = useStable((id: string, title: string) => void handleRenameSession(id, title));
-  const onSidebarRenameProject = useStable((cwd: string, name: string) => void handleRenameProject(cwd, name));
   const onSidebarRemoveProject = useStable((cwd: string) => void handleRemoveProject(cwd));
   const onSidebarRevealProject = useStable((cwd: string) => {
     void window.fastvibe.workspace.reveal(cwd);
@@ -1834,7 +1825,6 @@ export function App(): JSX.Element {
             onAddProject={onSidebarAddProject}
             onAddRemoteProject={onSidebarAddRemoteProject}
             onRenameSession={onSidebarRenameSession}
-            onRenameProject={onSidebarRenameProject}
             onRemoveProject={onSidebarRemoveProject}
             onRevealProject={onSidebarRevealProject}
             onManageFolders={setManageProjectCwd}

@@ -193,8 +193,10 @@ export function pdfSkillFile(env: NodeJS.ProcessEnv = process.env): string | und
 
 export default function pdfAttachment(pi: ExtensionAPI): void {
   pi.on("before_agent_start", (event) => {
-    // `event.images` 里不会有 PDF（图片附件是 image/*），所以只看 prompt。
+    // 1.2.0 对空闲时的自定义消息（`triggerTurn`）也会触发，那种事件没有 prompt。
+    // `event.images` 里不会有 PDF（图片附件是 image/*），所以只看用户提示。
     // 结构化附件不走这个事件——它们已经被渲染进 prompt 的路径块里了。
+    if (event.messageType !== "user") return;
     const paths = pdfTurnPaths(event.prompt);
     if (paths.length === 0) return;
 

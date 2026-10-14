@@ -1,7 +1,7 @@
 /**
  * Fails when pnpm resolved an agent package under more than one peer variant.
  *
- * `pi-ai@1.1.0(…)(undici@8.10.2)` and `pi-ai@1.1.0(…)(undici@8.11.2)` are two installs of the
+ * `pi-ai@1.2.0(…)(undici@8.10.2)` and `pi-ai@1.2.0(…)(undici@8.11.2)` are two installs of the
  * same version, which happens when this repo's own pin of a package differs from the one
  * `pi-coding-agent` declares. electron-builder's pnpm collector cannot place such a package and
  * silently drops what is under it: v0.19.0 shipped without `cross-spawn`, `@anthropic-ai/sdk`

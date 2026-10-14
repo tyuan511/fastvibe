@@ -1704,15 +1704,32 @@ export class PiProcessManager {
    * 502 mid-resume left the composer stuck on 停止 with no 继续 button at all.
    *
    * An empty message list is the continuation: the loop still starts from the
-   * projected transcript's last user/tool-result message, with everything the SDK wraps
-   * around a run kept intact. The wrapper is private (0.87.1 has no public entry point
-   * for continuing an interrupted turn), hence the cast — so a version that renames it
-   * must fail loudly here rather than silently go back to driving runs by hand.
+   * projected transcript, with everything the SDK wraps around a run kept intact.
+   * pi 1.2.0 replaced `_runAgentPrompt([])` with `_startRun`, which always builds a
+   * new starting message. For this one call `_prepareRun` returns nothing, so the
+   * wrapper stays and no extra prompt is written. A version that renames either
+   * method must fail loudly here rather than silently go back to the bare loop.
    */
   async #runContinuation(session: AgentSession): Promise<void> {
-    const run = (session as unknown as { _runAgentPrompt?: (messages: unknown[]) => Promise<void> })._runAgentPrompt;
-    if (typeof run !== "function") throw new Error(uiText("当前引擎版本不支持继续运行", "This engine version cannot continue a run"));
-    await run.call(session, []);
+    const raw = session as unknown as {
+      _runAgentPrompt?: (messages: unknown[]) => Promise<void>;
+      _startRun?: (trigger: unknown) => Promise<void>;
+      _prepareRun?: (trigger: unknown) => Promise<unknown>;
+    };
+    if (typeof raw._runAgentPrompt === "function") {
+      await raw._runAgentPrompt.call(session, []);
+      return;
+    }
+    if (typeof raw._startRun !== "function" || typeof raw._prepareRun !== "function") {
+      throw new Error(uiText("当前引擎版本不支持继续运行", "This engine version cannot continue a run"));
+    }
+    const prepare = raw._prepareRun;
+    raw._prepareRun = async () => [];
+    try {
+      await raw._startRun.call(session, { messageType: "user", prompt: "" });
+    } finally {
+      raw._prepareRun = prepare;
+    }
   }
 
   async clearQueue(conversationId?: string): Promise<{ steering: string[]; followUp: string[] }> {

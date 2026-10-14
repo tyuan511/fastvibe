@@ -262,7 +262,7 @@ const status: EngineStatus = { state: "ready", cwd: fixtureCwd };
 
 const APP_INFO: AppInfo = {
   version: "0.1.0",
-  engineVersion: "1.1.0",
+  engineVersion: "1.2.0",
   userData: "/Users/dev/Library/Application Support/FastVibe",
   runtimeRoot: "/Users/dev/Library/Application Support/FastVibe/runtime/engine",
   platform,

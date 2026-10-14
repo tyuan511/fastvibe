@@ -62,7 +62,7 @@ export const PROJECTS_SECTION = "projects";
 /** Gap between the sidebar's edge and the project path hint it hosts. */
 const PATH_HINT_GAP = 8;
 
-export type RenameTarget = { type: "session"; id: string } | { type: "project"; cwd: string };
+export type RenameTarget = { type: "session"; id: string };
 /** Only projects can be removed; sessions are archived, never deleted. */
 export type DeleteTarget = { type: "project"; cwd: string; title: string };
 
@@ -183,13 +183,9 @@ export function DropLine({ rect, edge }: { rect: DropRect; edge: "above" | "belo
 export function DraggableProject({
   project,
   open,
-  renaming,
   connectionState,
   onOpenChange,
   onNewChat,
-  onStartRename,
-  onRename,
-  onCancelRename,
   onReveal,
   onManageFolders,
   onRemove,
@@ -197,13 +193,9 @@ export function DraggableProject({
 }: {
   project: Project;
   open: boolean;
-  renaming: boolean;
   connectionState?: RemoteHostConnectionState;
   onOpenChange: (open: boolean) => void;
   onNewChat: () => void;
-  onStartRename: () => void;
-  onRename: (name: string) => void;
-  onCancelRename: () => void;
   onReveal: () => void;
   onManageFolders?: () => void;
   onRemove: () => void;
@@ -250,7 +242,6 @@ export function DraggableProject({
               {...attributes}
               {...listeners}
             >
-              {/* No path tooltip while renaming: it would cover the inline input. */}
               <Tooltip onOpenChange={(next) => next && measurePathOffset()}>
                 <TooltipTrigger
                   render={
@@ -268,12 +259,8 @@ export function DraggableProject({
                     icon={remote ? Link01Icon : open ? Folder02Icon : Folder01Icon}
                     className="size-3.5 shrink-0 text-muted-foreground"
                   />
-                  {renaming ? (
-                    <InlineRename value={name} onSubmit={onRename} onCancel={onCancelRename} />
-                  ) : (
-                    <span className="truncate">{name}</span>
-                  )}
-                  {remote && !renaming ? (
+                  <span className="truncate">{name}</span>
+                  {remote ? (
                     <span
                       className={cn(
                         "inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-xs",
@@ -294,16 +281,14 @@ export function DraggableProject({
                     </span>
                   ) : null}
                 </TooltipTrigger>
-                {renaming ? null : (
-                  <TooltipContent side="right" align="center" sideOffset={pathOffset} className="max-w-96">
-                    <span className="font-mono break-all">{pathHint}</span>
-                    {remote && project.bindingState && project.bindingState !== "available" ? (
-                      <span className="mt-1 block text-xs text-muted-foreground">
-                        {activityKey ? t(`sidebar.binding.${activityKey}`) : t(`sidebar.binding.${bindingKey}`)}
-                      </span>
-                    ) : null}
-                  </TooltipContent>
-                )}
+                <TooltipContent side="right" align="center" sideOffset={pathOffset} className="max-w-96">
+                  <span className="font-mono break-all">{pathHint}</span>
+                  {remote && project.bindingState && project.bindingState !== "available" ? (
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      {activityKey ? t(`sidebar.binding.${activityKey}`) : t(`sidebar.binding.${bindingKey}`)}
+                    </span>
+                  ) : null}
+                </TooltipContent>
               </Tooltip>
               {/* Shown on touch: an invisible button is still tappable. */}
               <div className="flex shrink-0 items-center gap-0.5 opacity-0 group-hover/project:opacity-100 focus-within:opacity-100 has-[[aria-expanded=true]]:opacity-100 pointer-coarse:opacity-100">
@@ -316,16 +301,12 @@ export function DraggableProject({
                     <HugeiconsIcon strokeWidth={2} icon={MoreHorizontalIcon} className="size-3.5" />
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="w-40 min-w-40">
-                    {remote || !onManageFolders ? null : (
+                    {onManageFolders ? (
                       <DropdownMenuItem onClick={onManageFolders}>
                         <HugeiconsIcon strokeWidth={2} icon={PencilEdit02Icon} />
                         {t("sidebar.manageFolders")}
                       </DropdownMenuItem>
-                    )}
-                    <DropdownMenuItem onClick={onStartRename}>
-                      <HugeiconsIcon strokeWidth={2} icon={PencilEdit02Icon} />
-                      {t("sidebar.rename")}
-                    </DropdownMenuItem>
+                    ) : null}
                     {remote ? null : (
                       <DropdownMenuItem onClick={onReveal}>
                         <HugeiconsIcon strokeWidth={2} icon={FolderRootIcon} />
@@ -356,10 +337,9 @@ export function DraggableProject({
             </div>
           </ContextMenuTrigger>
           <ContextMenuContent className="w-40">
-            {remote || !onManageFolders ? null : (
+            {onManageFolders ? (
               <ContextMenuItem onClick={onManageFolders}>{t("sidebar.manageFolders")}</ContextMenuItem>
-            )}
-            <ContextMenuItem onClick={onStartRename}>{t("sidebar.rename")}</ContextMenuItem>
+            ) : null}
             {remote ? null : <ContextMenuItem onClick={onReveal}>{t("sidebar.reveal")}</ContextMenuItem>}
             <ContextMenuSeparator />
             <ContextMenuItem variant="destructive" onClick={onRemove}>

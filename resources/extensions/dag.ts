@@ -88,13 +88,13 @@ export default function dagExtension(pi: ExtensionAPI): void {
     name: "dag_add_tasks",
     label: T("添加子任务", "Add sub-agent tasks"),
     description: [
-      "Create sub-agent tasks and run them as a dependency graph (DAG). Each task is its own sub-agent with a profile you write for it; a task starts as soon as every task it depends on has completed, tasks with no unmet dependencies run in parallel, and a failed task makes only its downstream tasks skip.",
+      "Create sub-agent tasks and run them as a dependency graph (DAG). Use it only when tasks depend on each other. Independent delegations, including a parallel fan-out where no task needs another's result, belong to the subagent tool, not a DAG. Each task is its own sub-agent with a profile you write for it; a task starts as soon as every task it depends on has completed, tasks with no unmet dependencies run in parallel, and a failed task makes only its downstream tasks skip.",
       "Tasks get ids T-0001, T-0002 … and run on their own after this call returns — you do not drive them; at most 5 run at once. You may call this again later to grow the graph; new tasks can depend on existing ones.",
       "Configured roles use their configured model; ad-hoc profiles follow your model. Only nodes marked coordinator may create child tasks. At most 5 DAG runs execute across the engine; waiting coordinators release their slot.",
     ].join(" "),
     promptSnippet: "Split work into sub-agent tasks that run as a dependency graph (DAG)",
     promptGuidelines: [
-      "Use dag_add_tasks when the work divides into parts that can be done independently or in stages (survey several areas in parallel, then synthesize; implement, then review). Do not use it for a step you can do directly.",
+      "Use dag_add_tasks only when the tasks have a dependency relationship: one must finish before another starts, a later task consumes an earlier result, or the work is staged (implement, then a review that reads that result). Do not create a DAG for sub-agents that do not depend on each other — several independent investigations or implementations run together through the subagent tool's parallel form. Do not use dag_add_tasks for a step you can do directly.",
       "Prefer a sub-agent that is already configured: the same roles the subagent tool lists. When one fits the task, set the task's agent to that role's exact name and omit profile — the node then runs as that agent, on the model configured for it. Write a profile only when no configured agent fits.",
       "Tasks that can run at the same time (no depends_on path between them) must be truly independent: neither needs the other's result, and no two of them change the same files. If one needs another's output, or both must edit the same file, chain them with depends_on — they share one working directory.",
       "Write each profile for its task: a focused role with concrete instructions. Default to read-only tools; give edit/write/bash only to a task that must change things.",

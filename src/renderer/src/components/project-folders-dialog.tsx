@@ -5,6 +5,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { folderName, projectFolderPaths } from "@shared/project-folders";
 import type { Project, WorkspaceSnapshot } from "@shared/types";
 import { Button } from "@/components/ui/button";
+import { isRemoteProject } from "@/lib/remote-project";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { cleanError } from "@/lib/ipc-error";
@@ -27,6 +28,7 @@ export function ProjectFoldersDialog({ open, mode, project, onOpenChange, onSave
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const managing = mode === "manage";
+  const remote = managing && isRemoteProject(project);
   const primary = folders[0];
   const placeholder = primary ? folderName(primary) : t("projectFolders.namePlaceholder");
   const savedFolders = project ? projectFolderPaths(project).join("\0") : "";
@@ -52,7 +54,7 @@ export function ProjectFoldersDialog({ open, mode, project, onOpenChange, onSave
   }, [open]);
 
   useEffect(() => {
-    if (!open || folders.length === 0) {
+    if (!open || remote || folders.length === 0) {
       setMissing(new Set());
       return;
     }
@@ -70,7 +72,7 @@ export function ProjectFoldersDialog({ open, mode, project, onOpenChange, onSave
     return () => {
       cancelled = true;
     };
-  }, [open, folders]);
+  }, [open, remote, folders]);
 
   async function pick(): Promise<void> {
     setError(null);
@@ -110,12 +112,21 @@ export function ProjectFoldersDialog({ open, mode, project, onOpenChange, onSave
   }
 
   async function confirm(): Promise<void> {
-    if (!project || folders.length === 0 || busy) return;
+    if (!project || busy || (!remote && folders.length === 0)) return;
     setBusy(true);
     setError(null);
     try {
       let current = project;
       let snapshot: WorkspaceSnapshot | undefined;
+      if (remote) {
+        const trimmed = name.trim();
+        if (nameTouched && trimmed && trimmed !== current.name) {
+          snapshot = await window.fastvibe.projects.rename(current.cwd, trimmed);
+        }
+        if (snapshot) onSaved(snapshot, current.cwd);
+        onOpenChange(false);
+        return;
+      }
       const desired = [...folders];
       for (let index = 0; index < desired.length; index += 1) {
         const folder = desired[index];
@@ -172,11 +183,11 @@ export function ProjectFoldersDialog({ open, mode, project, onOpenChange, onSave
             className="border-0 shadow-none focus-visible:ring-0"
           />
         </div>
-        <div className="flex flex-col gap-1">
+        {remote ? null : <div className="flex flex-col gap-1">
           <p className="text-sm text-muted-foreground">{t("projectFolders.sources")}</p>
           <div className="overflow-hidden rounded-lg border border-border">
             {folders.map((folder, index) => (
-              <div key={folder} className="flex items-center gap-2 border-b border-border px-3 py-2 last:border-b-0">
+              <div key={folder} className="group/folder flex items-center gap-2 border-b border-border px-3 py-2 last:border-b-0">
                 <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} className="size-4 shrink-0 text-muted-foreground" />
                 <span className={cn("min-w-0 flex-1 truncate text-sm", missing.has(folder) && "text-destructive")} title={folder}>
                   {folderName(folder)}
@@ -187,14 +198,16 @@ export function ProjectFoldersDialog({ open, mode, project, onOpenChange, onSave
                 {index === 0 ? (
                   <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">{t("projectFolders.primary")}</span>
                 ) : (
-                  <Button type="button" size="xs" variant="ghost" onClick={() => makePrimary(folder)}>
-                    {t("projectFolders.makePrimary")}
-                  </Button>
-                )}
-                {index === 0 ? null : (
-                  <Button type="button" size="icon-xs" variant="ghost" aria-label={t("projectFolders.remove")} onClick={() => remove(folder)}>
-                    <HugeiconsIcon strokeWidth={2} icon={Cancel01Icon} className="size-3.5" />
-                  </Button>
+                  // Collapsed, not merely faded: the label is wide enough to leave a blank
+                  // at the end of every row. Touch has no hover, so the actions stay shown.
+                  <div className="flex w-0 min-w-0 items-center gap-0.5 overflow-hidden opacity-0 transition-opacity group-hover/folder:w-auto group-hover/folder:overflow-visible group-hover/folder:opacity-100 group-focus-within/folder:w-auto group-focus-within/folder:overflow-visible group-focus-within/folder:opacity-100 pointer-coarse:w-auto pointer-coarse:overflow-visible pointer-coarse:opacity-100">
+                    <Button type="button" size="xs" variant="ghost" onClick={() => makePrimary(folder)}>
+                      {t("projectFolders.makePrimary")}
+                    </Button>
+                    <Button type="button" size="icon-xs" variant="ghost" aria-label={t("projectFolders.remove")} onClick={() => remove(folder)}>
+                      <HugeiconsIcon strokeWidth={2} icon={Cancel01Icon} className="size-3.5" />
+                    </Button>
+                  </div>
                 )}
               </div>
             ))}
@@ -207,12 +220,12 @@ export function ProjectFoldersDialog({ open, mode, project, onOpenChange, onSave
               {t("projectFolders.add")}
             </button>
           </div>
-        </div>
+        </div>}
         {error ? <p className="text-sm text-destructive">{error}</p> : null}
         <DialogFooter>
           <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>{t("projectFolders.cancel")}</Button>
           {managing ? (
-            <Button type="button" disabled={folders.length === 0 || busy || !dirty} onClick={() => void confirm()}>
+            <Button type="button" disabled={busy || !dirty || (remote ? !name.trim() : folders.length === 0)} onClick={() => void confirm()}>
               {t("projectFolders.confirm")}
             </Button>
           ) : (

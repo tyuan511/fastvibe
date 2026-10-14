@@ -455,8 +455,8 @@ export default function (pi: ExtensionAPI) {
 			`Reach for subagent when work is wide or self-contained and would otherwise flood this context: codebase recon, planning, an isolated implementation, or an independent review. Available agents: ${roster}.`,
 			"Route the work by role: explorer to gather facts and code context, planner to analyze requirements and produce an ordered plan, worker to implement, reviewer to check the result.",
 			"Keep orchestration, the user-facing reply, and the final judgement in this conversation; hand the subagent only the part it can finish alone.",
-			"When several independent investigations are needed, launch them together with the parallel form instead of one after another.",
-			"Chain agents only when a later step needs an earlier step's output, passing it through the {previous} placeholder.",
+			"When several independent investigations are needed, launch them together with the parallel form instead of one after another. Do not wrap that fan-out in dag_add_tasks: a DAG is only for tasks that depend on each other.",
+			"Chain agents only when a later step needs an earlier step's output, passing it through the {previous} placeholder. A short chain stays here; reach for dag_add_tasks only when the hand-off is a real dependency graph (several tasks, later ones blocked on earlier results).",
 		],
 		parameters: SubagentParams,
 

@@ -96,7 +96,6 @@ export const Sidebar = memo(function Sidebar({
   onAddProject,
   onAddRemoteProject,
   onRenameSession,
-  onRenameProject,
   onRemoveProject,
   onRevealProject,
   onManageFolders,
@@ -126,7 +125,6 @@ export const Sidebar = memo(function Sidebar({
   onAddProject: () => void;
   onAddRemoteProject: () => void;
   onRenameSession: (id: string, title: string) => void;
-  onRenameProject: (cwd: string, name: string) => void;
   onRemoveProject: (cwd: string) => void;
   onRevealProject: (cwd: string) => void;
   onManageFolders?: (cwd: string) => void;
@@ -672,25 +670,17 @@ export const Sidebar = memo(function Sidebar({
               <div className="space-y-0.5">
                 {groups.map((group, index) => {
                   const open = !collapsed.has(group.cwd);
-                  const renamingProject = renaming?.type === "project" && renaming.cwd === group.cwd;
                   return (
                     <DraggableProject
                       key={group.cwd}
                       project={group.project}
                       open={open}
-                      renaming={renamingProject}
                       connectionState={group.project.connectionId ? sshStatesByHost.get(group.project.connectionId) : undefined}
                       onOpenChange={(next) => setOpen(group.cwd, next)}
                       onNewChat={() => {
                         onNewChat(group.cwd);
                         dismissDrawer();
                       }}
-                      onStartRename={() => setRenaming({ type: "project", cwd: group.cwd })}
-                      onRename={(next) => {
-                        onRenameProject(group.cwd, next);
-                        setRenaming(null);
-                      }}
-                      onCancelRename={() => setRenaming(null)}
                       onReveal={() => onRevealProject(group.cwd)}
                       onManageFolders={onManageFolders ? () => onManageFolders(group.cwd) : undefined}
                       onRemove={() => setPendingDelete({ type: "project", cwd: group.cwd, title: group.name })}

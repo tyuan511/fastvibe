@@ -59,7 +59,7 @@ export function ToolRow({
   title?: string;
   canToggle?: boolean;
   showIcon?: boolean;
-  /** Settled fold line: regular weight, so it reads as a summary rather than a verb. */
+  /** Settled fold line: same weight as a tool call, and the sentence may truncate. */
   quiet?: boolean;
   /** A fold's chevron is the affordance. Hover-only reads as static text. */
   chevron?: "hover" | "always";
@@ -127,9 +127,12 @@ export function ToolRow({
       {showIcon ? <span className="shrink-0 text-muted-foreground [&_svg]:size-3.5">{icon}</span> : null}
       <span
         className={cn(
-          // The extra padding is inside the clip, so a path link's underline is not
-          // cut off by truncate; the negative margin keeps the row the same height.
-          quiet ? "inline-flex min-w-0 items-center truncate py-0.5 -my-0.5 font-normal" : "shrink-0 font-medium",
+          // One text line, not a nested flex. A flex child with min-width: 0 shrinks
+          // and its text keeps painting, so a long folded summary draws the file name
+          // on top of the next clause and the query chip. Clipping the line itself
+          // ellipsizes the tail instead. The padding stays inside that clip so a path
+          // link's underline is not cut off; the negative margin keeps the row height.
+          quiet ? "block min-w-0 truncate py-0.5 -my-0.5 font-normal" : "shrink-0 font-normal",
           running ? "animated-gradient-text" : "text-muted-foreground",
         )}
       >

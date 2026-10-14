@@ -171,9 +171,10 @@ export default function goalMode(pi: ExtensionAPI): void {
    * Start a goal turn from a slash command and do not return while it is still idle.
    *
    * `pi.sendUserMessage` does not return the prompt promise — the SDK fires it and
-   * swallows a failure. 0.87.1 only marks the session busy after several awaits, so a
-   * command that returned immediately left `prompt("/goal …")` idle. The host's
-   * `waitForIdle()` then saw nothing in flight and the goal never ran.
+   * swallows a failure. Older builds only marked the session busy after several
+   * awaits, so a command that returned immediately left `prompt("/goal …")` idle and
+   * the host's `waitForIdle()` saw nothing in flight. 1.2.0 marks it busy during
+   * `before_agent_start`; the poll still covers a start that has not landed yet.
    */
   const armTurn = async (
     ctx: ExtensionCommandContext,
@@ -265,9 +266,10 @@ export default function goalMode(pi: ExtensionAPI): void {
   });
 
   pi.on("before_agent_start", (event, ctx) => {
-    // Armed by a bare `/goal`: the first real message becomes the objective, so the
-    // goal only exists once the user has actually described it.
-    const prompt = typeof event.prompt === "string" ? event.prompt.trim() : "";
+    // Armed by a bare `/goal`: the first real user message becomes the objective, so
+    // the goal only exists once the user has actually described it. A custom
+    // `triggerTurn` message (1.2.0 fires this event for those too) is not that.
+    const prompt = event.messageType === "user" ? event.prompt.trim() : "";
     if (armed && prompt && !prompt.startsWith("/")) {
       armed = false;
       objective = prompt;
