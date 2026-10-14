@@ -8,6 +8,8 @@ import '../chat/image_note.dart';
 import '../chat/markdown_chunks.dart';
 import '../chat/markdown_view.dart';
 import '../chat/message.dart';
+import '../chat/output_files.dart';
+import '../chat/output_files_row.dart';
 import '../chat/process_group.dart';
 import '../chat/turn_meta.dart';
 import '../i18n/core.dart';
@@ -51,6 +53,7 @@ class TranscriptView extends StatefulWidget {
     required this.onLongPress,
     required this.onOlder,
     this.dagWatcher,
+    this.onOpenFile,
     this.topInset = 0,
     this.bottomInset = 0,
   });
@@ -65,6 +68,9 @@ class TranscriptView extends StatefulWidget {
   final void Function(ChatMessage message) onLongPress;
   final VoidCallback onOlder;
   final DagWatcher? dagWatcher;
+
+  /// Open a file a reply produced. Null where there is no machine to read it from.
+  final void Function(OutputFile file)? onOpenFile;
 
   /// How far the glass bar above and the footer below reach into this view. The list runs
   /// under both, so its content is padded by them rather than clipped at their edges.
@@ -205,6 +211,7 @@ class _TranscriptViewState extends State<TranscriptView> {
         live: widget.running && row.newest && row.last,
         dagWatcher: widget.dagWatcher,
         onLongPress: widget.onLongPress,
+        onOpenFile: row.last ? widget.onOpenFile : null,
       ),
     );
   }
@@ -380,6 +387,7 @@ class MessageRow extends StatelessWidget {
     required this.onLongPress,
     this.blocks,
     this.dagWatcher,
+    this.onOpenFile,
   });
 
   final ChatMessage message;
@@ -388,6 +396,9 @@ class MessageRow extends StatelessWidget {
 
   /// The blocks to draw, when the list has already cut the reply up; null draws it whole.
   final List<RenderBlock>? blocks;
+
+  /// Open a file this reply produced; drawn under the reply, on its last row, once it is settled.
+  final void Function(OutputFile file)? onOpenFile;
 
   /// The first assistant row of a turn — it carries the reply's name.
   final bool turnStart;
@@ -440,6 +451,7 @@ class MessageRow extends StatelessWidget {
       live: live,
       onLongPress: onLongPress,
       dagWatcher: dagWatcher,
+      onOpenFile: onOpenFile,
     );
   }
 }
@@ -544,12 +556,14 @@ class _AssistantRow extends StatelessWidget {
     required this.onLongPress,
     this.blocks,
     this.dagWatcher,
+    this.onOpenFile,
   });
 
   final ChatMessage message;
 
   /// The blocks to draw, when the list has already cut the reply up; null draws it whole.
   final List<RenderBlock>? blocks;
+  final void Function(OutputFile file)? onOpenFile;
   final Palette palette;
   final TurnMeta? meta;
   final bool turnStart;
@@ -609,11 +623,18 @@ class _AssistantRow extends StatelessWidget {
                 ),
               ),
             ],
+            if (onOpenFile != null && !live) _outputFiles(),
             if (meta != null) _TurnMetaLine(meta: meta!, palette: palette),
           ],
         ),
       ),
     );
+  }
+
+  Widget _outputFiles() {
+    final files = collectOutputFiles(message.tools);
+    if (files.isEmpty) return const SizedBox.shrink();
+    return OutputFilesRow(files: files, palette: palette, onOpen: onOpenFile!);
   }
 
   Widget _block(RenderBlock block, bool isLast) => switch (block) {

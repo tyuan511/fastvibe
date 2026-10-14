@@ -36,6 +36,8 @@ abstract final class AppIcons {
   static const computer = HugeIcons.strokeRoundedComputer;
   static const copy = HugeIcons.strokeRoundedCopy01;
   static const delete = HugeIcons.strokeRoundedDelete02;
+  static const download = HugeIcons.strokeRoundedDownload01;
+  static const fileDownload = HugeIcons.strokeRoundedFileDownload;
   static const fileEdit = HugeIcons.strokeRoundedFileEdit;
   static const fileMinus = HugeIcons.strokeRoundedFileMinus;
   static const filePlus = HugeIcons.strokeRoundedFilePlus;

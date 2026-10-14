@@ -9,12 +9,15 @@ import '../chat/composer.dart';
 import '../chat/dag_data.dart';
 import '../chat/dag_panel.dart';
 import '../chat/draft_storage.dart';
+import '../chat/file_sheet.dart';
+import '../chat/file_transfer.dart';
 import '../chat/history_pager.dart';
 import '../chat/image_note.dart';
 import '../chat/images.dart';
 import '../chat/live_events.dart';
 import '../chat/message.dart';
 import '../chat/option_sheet.dart';
+import '../chat/output_files.dart';
 import '../chat/prompt_card.dart';
 import '../chat/queue.dart';
 import '../chat/queue_panel.dart';
@@ -771,6 +774,21 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   /// A long press on a message: the iOS context menu where the finger is.
+  /// A file this reply produced. The machine reads it, relative to this conversation's
+  /// directory, and sends it in slices — the phone never learns where it lives.
+  void _openFile(OutputFile file) {
+    final remote = _remote;
+    if (remote == null) return;
+    showOutputFile(
+      context,
+      file: file,
+      transfer: FileTransfer(
+        call: (method, payload, timeoutMs) => remote.call(method, payload, timeoutMs),
+        conversationId: _conversationId,
+      ),
+    );
+  }
+
   Future<void> _messageAction(ChatMessage message) async {
     showContextMenu(
       context,
@@ -883,6 +901,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                     onLongPress: _messageAction,
                                     onOlder: () => _pager?.prefetch(),
                                     dagWatcher: _dag,
+                                    onOpenFile: _openFile,
                                   ),
                           ),
                         ],

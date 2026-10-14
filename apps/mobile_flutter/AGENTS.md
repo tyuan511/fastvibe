@@ -154,6 +154,41 @@ Read `lib/chat/message.dart`, `live_events.dart`, `snapshot_sync.dart` and
   the live path. `loadAll` drains it before a copy-all, which must never silently copy
   just the visible window.
 
+### Files a reply produced: listed, previewed, downloaded
+
+`lib/chat/output_files.dart` lists them under a settled reply (`OutputFilesRow`, on the
+message's last row, never while it streams): the file of every finished `write` / `edit`
+and every `present` item that worked. Nothing is guessed from a command's printed output —
+the phone asks for tool results in summary form, which leaves a long result out, so a
+guess would come and go with its length. Tapping a row opens `FileViewer`
+(`lib/chat/file_sheet.dart`): an image, Markdown or text is drawn in the sheet, anything else
+is a download; every file has 下载.
+
+- **Bytes cross the call channel, in slices.** The official connection is one WebRTC data
+  channel with no HTTP beside it, so `/api/media` (what the desktop's `fastvibe-media://`
+  streams from) is unreachable. `workspace:read-file` (`src/main/engine/file-chunk.ts`)
+  answers `{ size, mtimeMs, offset, data(base64), eof }` for `{ path, conversationId,
+  offset, length }`; `FileTransfer` asks for the next slice until `eof`. A slice is at most
+  512 KiB, so a transcript update queued behind it on the ordered channel waits briefly,
+  and the phone gets progress and a place to stop.
+- **The machine resolves the path, not the phone.** A tool wrote `out/report.md` relative to
+  its conversation's directory, which the phone never learns. It sends the path as the tool
+  named it plus the `conversationId`; Main resolves a relative path against that
+  conversation's `cwd`. The `conversationId` is also what routes the call to an SSH host
+  (the gateway scopes by `conversationId` / `path`), so no path is ever scoped on the phone.
+- **A download is one file or none.** It is written to `<name>.part` and renamed at the end;
+  `mtimeMs` changing between slices (`changed`), an empty slice that is not the end
+  (`stalled`) and a cancel (leaving the sheet) all delete the part. A name is made safe
+  (`safeFileName`) and never replaces an earlier download (`name (2).ext`).
+- **After a download the system opens it** (`open_filex`): iOS's document sheet offers
+  共享 / 存储到「文件」, Android picks an app. Downloads live in `<documents>/Downloads`, and
+  `UIFileSharingEnabled` + `LSSupportsOpeningDocumentsInPlace` make that folder show under
+  「FastVibe」 in the Files app. Nothing is written to a public folder: Android needs no
+  storage permission this way, and a file the person wants elsewhere goes through the
+  system's share sheet.
+- **Limits**: 12 MB of picture and 256 KB of text are previewed; the machine refuses a file
+  over 256 MiB. A text read that contains a NUL byte is shown as 「不是文本」, not as garbage.
+
 ### The queue is Main's, the phone holds a projection
 
 `lib/chat/queue.dart`. Every reply and push passes through `mergeQueue`'s **revision
