@@ -27,6 +27,7 @@ import { FileIcon } from "@/components/file-icon";
 import { IconButton } from "@/components/icon-button";
 import { readGitStatus } from "@/lib/use-git-status";
 import { cn } from "@/lib/utils";
+import { SplitHandle, splitStyle, useSplitWidth } from "@/components/layout/split-handle";
 import { displayPath, resolvePath } from "@/lib/workspace-path";
 import { useSessionStore } from "@/stores/session";
 import type { ChatMessage } from "@shared/types";
@@ -322,6 +323,7 @@ export function SidePaneGit({
   const [busy, setBusy] = useState(false);
   const [syncing, setSyncing] = useState<"pull" | "push" | null>(null);
   const [reloading, setReloading] = useState(false);
+  const split = useSplitWidth("git", 256);
   const lastTurn = useMemo(() => lastTurnPaths(messages), [messages]);
   const counts = useMemo(() => sourceCounts(status, lastTurn), [status, lastTurn]);
 
@@ -499,8 +501,9 @@ export function SidePaneGit({
 
       <div className="flex min-h-0 flex-1 flex-col @min-[32rem]/git:flex-row">
         <div
+          style={splitStyle(split.width)}
           className={cn(
-            "min-h-0 flex-col @min-[32rem]/git:w-[min(16rem,40%)] @min-[32rem]/git:min-w-40 @min-[32rem]/git:flex-none @min-[32rem]/git:border-r @min-[32rem]/git:border-border",
+            "min-h-0 flex-col @min-[32rem]/git:w-(--split-w) @min-[32rem]/git:max-w-[75%] @min-[32rem]/git:flex-none",
             selected ? "hidden @min-[32rem]/git:flex" : "flex flex-1",
           )}
         >
@@ -567,6 +570,7 @@ export function SidePaneGit({
             </div>
           </ScrollArea>
         </div>
+        <SplitHandle listSide="start" label={t("git.resize")} className="hidden @min-[32rem]/git:block" {...split} />
 
         {selected && selectedFile ? (
           <DiffPane

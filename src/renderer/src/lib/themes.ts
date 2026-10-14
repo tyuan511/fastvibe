@@ -4,7 +4,7 @@
  * Twenty-four first-party themes — twelve light and twelve dark — modelled on
  * the most installed VS Code colour themes (GitHub, One Dark Pro, Dracula,
  * Catppuccin, Tokyo Night, Solarized, Quiet Light, …) plus the Codex desktop
- * and Claude Code palettes. Each theme is a compact
+ * and Claude palettes. Each theme is a compact
  * seed palette; the full shadcn / Base UI token set is derived from it by
  * `buildTokens`, so a theme only has to describe its intent.
  *
@@ -140,7 +140,10 @@ function glassTokens(seed: ThemeSeed): ThemeTokens {
     // Liquid Glass (index.css): a floating pane is a little *lighter* than the window
     // behind it, the way a sheet of glass catches light, rather than a darker well.
     "glass-pane": dark ? "rgb(255 255 255 / 0.055)" : "rgb(255 255 255 / 0.42)",
-    "glass-overlay": fill(seed.surface, dark ? 62 : 70),
+    // Menus, popovers and dialogs. They carry the densest text on screen and float over
+    // whatever the page is showing, so they are far less see-through than the panes: at
+    // 62–70% a chip or a paragraph behind a list still read through it.
+    "glass-overlay": fill(seed.surface, dark ? 84 : 90),
     "glass-rim-strong": dark ? "rgb(255 255 255 / 0.5)" : "rgb(255 255 255 / 0.95)",
     "glass-rim-weak": dark ? "rgb(255 255 255 / 0.1)" : "rgb(255 255 255 / 0.45)",
     "glass-sheen": dark ? "rgb(255 255 255 / 0.10)" : "rgb(255 255 255 / 0.55)",
@@ -453,26 +456,28 @@ const SEEDS: Record<ThemeId, ThemeSeed> = {
     syntax: { keyword: "#c792ea", string: "#7ee787", comment: "#7a7a7a", number: "#79c0ff" },
     charts: ["#339cff", "#10a37f", "#e0a526", "#c792ea", "#ff6369"],
   },
+  // Resolved from Claude desktop's CDS (page/surface/text/role/chart) and the
+  // default Claude Dark code theme. Border is --cds-border (10% of the flipped ink).
   "claude-dark": {
     label: "Claude Dark",
-    source: "Claude Code",
+    source: "Claude",
     kind: "dark",
-    bg: "#1c1c1b",
-    fg: "#ececea",
-    surface: "#252524",
-    border: "#2f2f2d",
-    muted: "#2a2a28",
-    mutedFg: "#9c9a95",
+    bg: "#0b0b0b",
+    fg: "#f0efec",
+    surface: "#1a1a19",
+    border: "color-mix(in srgb, #ffffff 10%, transparent)",
+    muted: "#2c2c2a",
+    mutedFg: "#c3c2b7",
     accent: "#d97757",
     accentFg: "#ffffff",
-    destructive: "#ff6b80",
-    warning: "#ffc107",
-    success: "#4eba65",
-    sidebar: "#181817",
-    sidebarMuted: "#2a2a28",
-    codeBg: "#222221",
-    syntax: { keyword: "#e08a6b", string: "#a3b88a", comment: "#8a8984", number: "#8fb3dc" },
-    charts: ["#d97757", "#6a9bcc", "#788c5d", "#e0b25b", "#9c9a95"],
+    destructive: "#ec7e7e",
+    warning: "#db9300",
+    success: "#0ca30c",
+    sidebar: "#151515",
+    sidebarMuted: "#2c2c2a",
+    codeBg: "#1a1a19",
+    syntax: { keyword: "#cc7bf4", string: "#9be963", comment: "#818898", number: "#5eeded" },
+    charts: ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181"],
   },
 
   /* ----------------------------------------------------------------- light */
@@ -708,26 +713,28 @@ const SEEDS: Record<ThemeId, ThemeSeed> = {
     syntax: { keyword: "#8b3fd9", string: "#1a7f37", comment: "#8f8f8f", number: "#0969da" },
     charts: ["#0285ff", "#00a240", "#c27c00", "#8b3fd9", "#e02e2a"],
   },
+  // Same CDS ramp, light side. Accent stays --cds-clay; links in Claude itself
+  // use the blue role accent, which would stop reading as the Claude theme.
   "claude-light": {
     label: "Claude Light",
-    source: "Claude Code",
+    source: "Claude",
     kind: "light",
-    bg: "#fcfbfb",
-    fg: "#141413",
+    bg: "#f9f9f7",
+    fg: "#0b0b0b",
     surface: "#ffffff",
-    border: "#ebebe8",
+    border: "color-mix(in srgb, #0b0b0b 10%, transparent)",
     muted: "#f0efec",
-    mutedFg: "#858480",
+    mutedFg: "#52514e",
     accent: "#d97757",
     accentFg: "#ffffff",
-    destructive: "#ab2b3f",
-    warning: "#966c1e",
-    success: "#2c7a39",
-    sidebar: "#fafaf8",
-    sidebarMuted: "#edebe7",
-    codeBg: "#f7f6f4",
-    syntax: { keyword: "#c6613f", string: "#5f7a3f", comment: "#858480", number: "#3f73b0" },
-    charts: ["#d97757", "#6a9bcc", "#788c5d", "#c49a3a", "#858480"],
+    destructive: "#d03b3b",
+    warning: "#734500",
+    success: "#006300",
+    sidebar: "#fcfcfb",
+    sidebarMuted: "#f0efec",
+    codeBg: "#ffffff",
+    syntax: { keyword: "#c5621b", string: "#1e9e3c", comment: "#999999", number: "#cd2054" },
+    charts: ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4"],
   },
 };
 

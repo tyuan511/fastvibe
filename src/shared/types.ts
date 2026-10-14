@@ -611,6 +611,22 @@ export type ComputerPermissionStatus = {
   error?: string;
 };
 
+/**
+ * Whether the on-demand computer-control component is on disk.
+ *
+ * `missing` is the normal state until 电脑操控 is turned on. `ready` means the
+ * worker and the native library can be loaded; it does not mean macOS has granted
+ * anything. A settings read must not be treated as a request to download.
+ */
+export type ComputerComponentStatus = {
+  phase: "unsupported" | "missing" | "downloading" | "ready" | "failed";
+  received: number;
+  total: number;
+  error?: string;
+  /** Installed driver version, once a copy is on disk. */
+  version?: string;
+};
+
 /** The two macOS grants the driver needs, named as `ComputerPermissionStatus` keys. */
 export type GrantPermission = "accessibility" | "screenRecording";
 
@@ -1178,6 +1194,8 @@ export type Conversation = {
   kind?: "side-chat";
   /** Parent conversation for a side-chat tab. */
   parentId?: string;
+  /** The background schedule that created this run; never an activation target at creation. */
+  scheduledTaskId?: string;
   /** User chose this title; do not replace it with an auto-generated one. */
   titleManual?: boolean;
 };

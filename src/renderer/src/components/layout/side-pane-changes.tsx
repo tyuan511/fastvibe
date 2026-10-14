@@ -9,6 +9,7 @@ import { IconButton } from "@/components/icon-button";
 import type { ChangedFile } from "@/lib/changed-files";
 import { displayPath, resolvePath } from "@/lib/workspace-path";
 import { cn } from "@/lib/utils";
+import { SplitHandle, splitStyle, useSplitWidth } from "@/components/layout/split-handle";
 import { isRemoteRef } from "@/lib/remote-project";
 
 function splitRelPath(path: string, cwd?: string): { name: string; dir: string } {
@@ -35,14 +36,16 @@ export function SidePaneChanges({
   onSelect: (path: string | undefined) => void;
 }): JSX.Element {
   const { t } = useTranslation("sidepane");
+  const split = useSplitWidth("changes", 256);
   const selected = useMemo(() => files.find((file) => file.path === path), [files, path]);
 
   return (
     <div className="@container/changes flex min-h-0 flex-1 flex-col">
       <div className="flex min-h-0 flex-1 flex-col @min-[32rem]/changes:flex-row">
         <div
+          style={splitStyle(split.width)}
           className={cn(
-            "min-h-0 flex-col @min-[32rem]/changes:w-[min(16rem,40%)] @min-[32rem]/changes:min-w-40 @min-[32rem]/changes:flex-none @min-[32rem]/changes:border-r @min-[32rem]/changes:border-border",
+            "min-h-0 flex-col @min-[32rem]/changes:w-(--split-w) @min-[32rem]/changes:max-w-[75%] @min-[32rem]/changes:flex-none",
             selected ? "hidden @min-[32rem]/changes:flex" : "flex flex-1",
           )}
         >
@@ -88,6 +91,7 @@ export function SidePaneChanges({
             </div>
           </ScrollArea>
         </div>
+        <SplitHandle listSide="start" label={t("changes.resize")} className="hidden @min-[32rem]/changes:block" {...split} />
 
         {selected ? (
           <ChangeDiffPane cwd={cwd} file={selected} onBack={() => onSelect(undefined)} />

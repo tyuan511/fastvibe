@@ -580,7 +580,7 @@ function groupParts(parts: MessagePart[]): RenderPart[] { ... }
 | P0.2 有序 parts | `shared/types.ts`、`main/engine/map-messages.ts`、`lib/apply-engine-event.ts` | ✅ 新增 `MessagePart`；`ChatMessage.parts?`（可选，旧会话回退到 `resolveParts`） |
 | P1 动词化 | `lib/tool-presentation.tsx` | ✅ `familyOf()` 家族分类 + `describeTool()` 动词变位（读取/正在读取…）+ 图标 + `subject`/`context` 拆分 |
 | P1 工具行 | `components/chat/tool-row.tsx` | ✅ zcode `ToolLayout` 结构：`[图标][动词][宾语][灰色上下文][失败提示][hover 才出现的箭头]`；展开态按 toolId 记忆（`EXPANDED` Map，上限 800） |
-| P2 分组 | `lib/group-parts.tsx`、`components/chat/tool-group.tsx` | ✅ 相邻同类归并：查阅 / 更改 / 终端；汇总句与失败计数；组内子项 `border-l` 缩进 + `showIcon: false` |
+| P2 分组 | `lib/tool-run.ts`、`lib/group-parts.tsx`、`components/chat/tool-group.tsx` | ✅ 连续安静工具折成一行（思考不打断，正文打断）；运行中显示当前工具描述，结束后按五个大类汇总（命令 / 读取 / 写入 / 搜索 / 工具）；提问 / 待办 / 子 Agent 等仍独占一行 |
 | P3 详情渲染 | `components/chat/diff-view.tsx`、`tool-card.tsx` | ✅ `edit` 优先用引擎 `details.diff`；终端用 `$ command` + 输出面板；其余参数 + 结果 |
 | P4 运行态 | `index.css`、`tool-row.tsx` | ✅ 运行中标签用 `.animated-gradient-text`（同色相微光扫过，非换色） |
 | P4 推理样式 | `components/chat/thinking-block.tsx`、`index.css` | ✅ 见 §6.3 |
@@ -719,7 +719,7 @@ pnpm build              # 通过
 | P0.2 | `src/renderer/src/components/chat/message-list.tsx` | 改遍历 `parts`；`parts` 缺失时回退旧顺序 |
 | P1 | `src/renderer/src/components/chat/tool-card.tsx` | `toolMeta` → `ToolPresentation`（动词短语 + 状态变位 + 参数提取 + 详情渲染钩子） |
 | P1 | 新增 `src/renderer/src/lib/tool-presentation.tsx` | 分类表、`basename`、参数提取、（可选）i18n 词表 |
-| P2 | 新增 `src/renderer/src/lib/group-parts.ts` | 相邻同类归并 + 汇总句 |
+| P2 | 新增 `src/renderer/src/lib/group-parts.ts`、`tool-run.ts` | 连续安静工具折成一行；思考不打断，正文打断；结束后是「已运行 N 个命令」 |
 | P2 | 新增 `src/renderer/src/components/chat/tool-group.tsx` | 组摘要行 + 缩进子项容器 |
 | P3 | `src/main/pi/process-manager.ts` | 工具结果大字段截断 + 按需全量 IPC |
 | P3 | `src/renderer/src/components/chat/tool-card.tsx` | 用引擎 `details.diff` 替代 `looksLikeDiff` 猜测 |

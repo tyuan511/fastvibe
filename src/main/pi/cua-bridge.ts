@@ -7,6 +7,12 @@ import { readComputerSettings } from "../engine/app-settings";
 import { unpackedPath } from "../engine/asar-unpacked";
 import { getFastVibePaths } from "../engine/paths";
 import { resolveComputerAvailability } from "@shared/computer-availability";
+import {
+  cancelComputerComponent,
+  computerComponentReady,
+  computerWorkerPath,
+  ensureComputerComponent,
+} from "./cua-component";
 import type {
   ComputerAppInfo,
   ComputerError,
@@ -133,7 +139,9 @@ function installAsarNativeResolution(): void {
  */
 async function driverModule(): Promise<DriverModule> {
   installAsarNativeResolution();
-  modulePromise ??= import("@trycua/cua-driver").catch((error: unknown) => {
+  // The native library is downloaded on demand. Resolve it before the bindings
+  // look the platform package up, or the first call fails closed.
+  modulePromise ??= ensureComputerComponent().then(() => import("@trycua/cua-driver")).catch((error: unknown) => {
     modulePromise = null;
     const detail = error instanceof Error ? error.message : String(error);
     throw new ComputerFailure({
@@ -162,7 +170,7 @@ export async function computerPermissions(): Promise<ComputerPermissionStatus> {
   const availability = resolveComputerAvailability(process.platform, false);
   if (!availability.supported) {
     // Decide this before loading the optional native SDK. Unsupported platforms do not
-    // ship its package, and Settings should still explain the platform cleanly.
+    // offer the feature, and Settings should still explain the platform cleanly.
     return {
       platform: process.platform,
       accessibility: false,
@@ -179,6 +187,30 @@ export async function computerPermissions(): Promise<ComputerPermissionStatus> {
     };
   }
 
+  if (process.platform !== "darwin") {
+    // Windows needs no TCC-style grant. Do not load the engine here: it is downloaded
+    // only after the switch is turned on, and this read must not start that download.
+    return {
+      platform: process.platform,
+      accessibility: true,
+      screenRecording: true,
+      ready: true,
+      available: true,
+    };
+  }
+
+  if (!computerComponentReady()) {
+    // The component is fetched when the switch turns on. Until then there is nothing
+    // to ask macOS about, and asking would start the download from a settings read.
+    return {
+      platform: "darwin",
+      accessibility: false,
+      screenRecording: false,
+      ready: false,
+      available: true,
+    };
+  }
+
   let module: DriverModule;
   try {
     module = await driverModule();
@@ -190,17 +222,6 @@ export async function computerPermissions(): Promise<ComputerPermissionStatus> {
       ready: false,
       available: false,
       error: error instanceof Error ? error.message : String(error),
-    };
-  }
-  if (process.platform !== "darwin") {
-    // Windows needs no TCC-style grant; the driver either works or reports its own
-    // platform error on first use.
-    return {
-      platform: process.platform,
-      accessibility: true,
-      screenRecording: true,
-      ready: true,
-      available: true,
     };
   }
   const status = module.currentMacOsPermissionStatus();
@@ -259,22 +280,18 @@ export async function openComputerSettings(): Promise<void> {
  * check lives in `assertDrivable` on the action path.
  */
 /**
- * The bundled `cua-driver` executable, which this app runs as its private worker.
+ * The `cua-driver` executable this app runs as its private worker.
  *
- * Fetched at build time by `scripts/fetch-cua-driver.mjs` and shipped outside the asar,
- * because a private worker is the only arrangement that gives the user a visible agent
- * cursor. In-process mode (`CuaDriver.create`) refuses every cursor call with
- * `facility_unavailable`: `DriverHostOptions.cursor` is "Rust-only host configuration
- * used by the standalone daemon. Language bindings intentionally receive the smaller
- * DriverOptions record." An agent driving a desktop with no on-screen sign of what it
- * is doing is the thing worth paying ~30 MB to avoid.
+ * Not shipped in the installer. `ensureComputerComponent` downloads it the first time
+ * 电脑操控 is turned on; a dev tree may already have the predev copy. A private worker
+ * is the only arrangement that gives the user a visible agent cursor. In-process mode
+ * (`CuaDriver.create`) refuses every cursor call with `facility_unavailable`.
  */
 function driverBinary(): string {
-  // Packaged builds carry one slice, already named `cua-driver`; a dev tree holds both,
-  // so pick the one this process can run.
-  return app.isPackaged
-    ? join(process.resourcesPath, "cua-driver")
-    : join(__dirname, "../../resources/cua-driver", process.arch, "cua-driver");
+  return (
+    computerWorkerPath() ??
+    join(getFastVibePaths().userData, "runtime", "cua-driver", process.platform === "win32" ? "cua-driver.exe" : "cua-driver")
+  );
 }
 
 /**
@@ -292,8 +309,8 @@ async function ensureDriver(): Promise<Driver> {
     if (!existsSync(binary)) {
       throw new Error(
         uiText(
-          `未找到电脑操控组件（${binary}）。开发环境请先运行 pnpm fetch:cua-driver。`,
-          `The computer-use engine is missing (${binary}). In development, run pnpm fetch:cua-driver first.`,
+          `未找到电脑操控组件（${binary}）。请在设置中打开「允许操作电脑」以下载它。`,
+          `The computer-control component is missing (${binary}). Turn on computer control in Settings to download it.`,
         ),
       );
     }
@@ -1101,6 +1118,7 @@ export async function resetComputerWorker(): Promise<void> {
 export function installComputerGlobal(): void {
   (globalThis as Record<string, unknown>).__fastvibeComputerRequest = requestComputer;
   app.once("will-quit", () => {
+    cancelComputerComponent();
     void shutdownComputer();
   });
 }

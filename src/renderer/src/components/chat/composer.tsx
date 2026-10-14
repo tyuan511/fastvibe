@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type JSX, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Add01Icon, ArrowDown01Icon, ArrowUp02Icon, AttachmentIcon, Cancel01Icon, ChartHistogramIcon, Folder01Icon, MagicWand02Icon, PlayIcon, ScissorIcon, Search01Icon, SparklesIcon, SquareIcon } from "@hugeicons/core-free-icons";
 import { IconButton } from "@/components/icon-button";
 import { ModelThinkingSelect } from "@/components/model-thinking-select";
+import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { isTouchOnly } from "@/lib/platform";
 import { engine } from "@/lib/engine-client";
@@ -28,7 +30,7 @@ import { formatDuration } from "@/lib/time";
 import { matchChord, resolveBinding } from "@/lib/shortcuts";
 import { useShortcutLabel } from "@/lib/use-shortcuts";
 import { useSettingsStore } from "@/stores/settings";
-import { useExtensionStatusValue } from "@/stores/session";
+import { useExtensionStatusValue, useSessionStore } from "@/stores/session";
 import { GitBranchChip } from "./git-branch-chip";
 import { AttachmentChip } from "./attachment-chip";
 import { MessageQueue } from "./message-queue";
@@ -128,11 +130,18 @@ function ContextUsagePanel({
   used,
   window: windowTokens,
   stats,
+  canCompact = false,
+  compactBusy = false,
+  onCompact,
 }: {
   percent: number;
   used: number | null;
   window: number;
   stats?: SessionStats | null;
+  canCompact?: boolean;
+  /** Working, so the disabled button can say why. Other disables stay silent. */
+  compactBusy?: boolean;
+  onCompact?: () => void;
 }): JSX.Element {
   const { t } = useTranslation("chat");
   const clamped = Math.min(100, Math.max(0, percent));
@@ -170,6 +179,22 @@ function ContextUsagePanel({
             {t("composer.remaining", { remaining: formatCount(remaining), window: formatCount(windowTokens) })}
           </span>
         </div>
+        {onCompact ? (
+          // The disabled button drops pointer events, so the reason has to sit on a wrapper.
+          <span className="block" title={compactBusy ? t("composer.compactBusy") : undefined}>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="w-full"
+              disabled={!canCompact}
+              onClick={onCompact}
+            >
+              <HugeiconsIcon strokeWidth={2} icon={ScissorIcon} className="size-3.5" />
+              {t("composer.compact")}
+            </Button>
+          </span>
+        ) : null}
       </div>
 
       {stats ? (
@@ -351,6 +376,13 @@ export function Composer({
   const [histIndex, setHistIndex] = useState<number | null>(null);
   const [projectOpen, setProjectOpen] = useState(false);
   const [projectQuery, setProjectQuery] = useState("");
+  const [contextOpen, setContextOpen] = useState(false);
+  const [compacting, setCompacting] = useState(false);
+  const compactingRef = useRef(false);
+  // The ring reads the active conversation's usage. A side chat passes its own id
+  // but that same usage, so compacting there would shrink the wrong transcript.
+  const activeId = useSessionStore((state) => state.activeId);
+  const showCompact = !readOnly && conversationId != null && conversationId === activeId;
   const histDraft = useRef("");
   const sendBinding = useSettingsStore((state) => resolveBinding("send", state.settings.shortcuts));
   const sendShortcut = useShortcutLabel("send");
@@ -548,6 +580,28 @@ export function Composer({
   );
   const contextWindow = contextUsage?.contextWindow ?? 0;
   const contextUsedPercent = typeof contextPercent === "number" ? Math.round(contextPercent) : null;
+  // A run and a standalone compaction are both not idle. The local flag covers the
+  // gap before `working` flips, so a second click cannot start another compact.
+  const compactBusy = working || compacting;
+  const canCompact = showCompact && !locked && !compactBusy;
+
+  async function compactContext(): Promise<void> {
+    if (!conversationId || !canCompact || compactingRef.current) return;
+    compactingRef.current = true;
+    setCompacting(true);
+    setContextOpen(false);
+    try {
+      const next = await engine.compact(undefined, conversationId);
+      if (useSessionStore.getState().activeId === conversationId) {
+        useSessionStore.getState().setSession(next);
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      compactingRef.current = false;
+      setCompacting(false);
+    }
+  }
 
   async function addFiles(list: FileList | File[]): Promise<void> {
     const next = await filesToAttachments([...list]);
@@ -816,7 +870,7 @@ export function Composer({
 
           {contextUsedPercent != null && contextWindow > 0 ? (
             <span className="hidden @min-[27.5rem]/composer:contents">
-              <Popover>
+              <Popover open={contextOpen} onOpenChange={setContextOpen}>
                 <PopoverTrigger
                   render={
                     <button
@@ -834,6 +888,9 @@ export function Composer({
                     used={contextUsed}
                     window={contextWindow}
                     stats={stats}
+                    canCompact={canCompact}
+                    compactBusy={compactBusy}
+                    onCompact={showCompact ? () => void compactContext() : undefined}
                   />
                 </PopoverContent>
               </Popover>

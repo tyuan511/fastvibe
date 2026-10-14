@@ -107,6 +107,7 @@ export function CommandPalette({
   onNewChat,
   onAddProject,
   onOpenSettings,
+  onOpenPlugins,
 }: {
   open: boolean;
   conversations: Conversation[];
@@ -117,6 +118,7 @@ export function CommandPalette({
   onNewChat: () => void;
   onAddProject: () => void;
   onOpenSettings: (section: SectionId) => void;
+  onOpenPlugins: () => void;
 }): JSX.Element {
   const { t, i18n } = useTranslation("app");
   const [query, setQuery] = useState("");
@@ -215,7 +217,7 @@ export function CommandPalette({
     if (id === "new") onNewChat();
     else if (id === "folder") onAddProject();
     else if (id === "settings") onOpenSettings("general");
-    else onOpenSettings("extensions");
+    else onOpenPlugins();
   }
 
   const empty = chats.length === 0 && actions.length === 0 && settings.length === 0;

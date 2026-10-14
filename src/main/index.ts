@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, nativeTheme, protocol, safeStorage, screen, session, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, nativeTheme, powerMonitor, protocol, safeStorage, screen, session, shell } from "electron";
 import type { WebContents } from "electron";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
@@ -49,6 +49,7 @@ import { PiProcessManager } from "./pi/process-manager";
 import { applyAppIcon, createDesktopWindow, windowOrigin } from "./desktop-window";
 import { registerDesktopIpc } from "./ipc/desktop-handlers";
 import { registerDagIpc } from "./ipc/dag-handlers";
+import { registerScheduleIpc } from "./ipc/schedule-handlers";
 import { MemoryManager, removeLegacyMemory } from "./engine/memory";
 import { TerminalSessions } from "./engine/terminal-sessions";
 import { SshManager, openSshAppTransport } from "./ssh/ssh-manager";
@@ -71,6 +72,8 @@ import {
   startComputerDrag,
 } from "./pi/cua-bridge";
 import { cancelGrantFlow, grantFlowState, startGrantFlow } from "./pi/computer-grant-flow";
+import { syncComputerComponent } from "./pi/cua-component";
+import { syncScheduleTray, disposeScheduleTray } from "./schedule-tray";
 
 app.setName("FastVibe");
 configureFastVibeUserData(app.getPath("userData"));
@@ -210,6 +213,9 @@ const remoteConnections = new RemoteConnectionManager({
     broadcast(Ipc.sshState, next);
     broadcast(Ipc.sshStates, [...sshUiStates.values()]);
     gateway.publishLocalSnapshot(engine.listWorkspace());
+    if (status.state === "ready") void gateway.dispatch(Ipc.scheduleList, undefined, { kind: "window", window: null })
+      .then((snapshot) => broadcast(Ipc.scheduleChanged, snapshot))
+      .catch(() => undefined);
   },
   onPush: (channel, payload, serverInstanceId) => gateway.acceptNamespacedRemotePush(channel, payload, serverInstanceId),
   // A dropped tunnel (sleep, Wi-Fi change) comes back on its own. The resident Agent is
@@ -258,6 +264,13 @@ const gateway = new RemoteGateway({
 const windows = new Set<BrowserWindow>();
 function createWindow(): void {
   createDesktopWindow(windows);
+}
+function openWindow(): void {
+  const existing = [...windows].find((window) => !window.isDestroyed());
+  if (!existing) return createWindow();
+  if (existing.isMinimized()) existing.restore();
+  existing.show();
+  existing.focus();
 }
 
 
@@ -529,9 +542,12 @@ app.whenReady().then(async () => {
   installComputerTaskGlobal();
   installDecisionScenarioGlobals();
   // Registers the bridge global and an at-quit driver shutdown. The native library is
-  // still not loaded here — `cua-bridge` imports it on the first `computer_*` call, so a
-  // user who never touches the feature pays nothing for it.
+  // still not loaded here — a user who never turns the feature on pays nothing for it.
+  // An install that already had it on starts the download, which is not a load.
   installComputerGlobal();
+  // Already on from a previous launch: fetch the component without waiting for the
+  // settings page. A first run stays quiet until the switch is turned on.
+  if (readAppSettings(getFastVibePaths()).computerEnabled === true) syncComputerComponent(true);
   // The grant panel is a window, so it is torn down where the other windows are, not
   // inside the bridge — which would make the bridge and the flow import each other.
   app.once("will-quit", () => cancelGrantFlow());
@@ -576,6 +592,7 @@ app.whenReady().then(async () => {
     refreshModelsDev,
   });
   registerDagIpc(engine);
+  registerScheduleIpc(engine);
   registerUpdater(
     () => windows,
     () => createWindow(),
@@ -617,7 +634,19 @@ app.whenReady().then(async () => {
   });
   scheduleUpdateCheck(startupSettings.autoCheckUpdates !== false);
 
-  engine.onStatus(() => broadcastStatus());
+  engine.onStatus(() => {
+    broadcastStatus();
+    syncScheduleTray(engine.hasEnabledSchedules(), openWindow, () => app.quit());
+  });
+  engine.onSchedulesChanged(() => {
+    syncScheduleTray(engine.hasEnabledSchedules(), openWindow, () => app.quit());
+    void gateway.scheduleSnapshot().then((all) => broadcast(Ipc.scheduleChanged, all)).catch((error) => log.warn(`schedule push failed: ${String(error)}`));
+    // The claim of a one-off briefly disables it before its run is installed.
+    // Check after that synchronous transition, not from the intermediate snapshot.
+    if (windows.size === 0 && process.platform !== "darwin") queueMicrotask(() => {
+      if (!engine.hasEnabledSchedules() && shutdownPhase === "running") app.quit();
+    });
+  });
   engine.memory.onChange((state) => broadcast(Ipc.memoryChanged, state));
   engine.onConversationReady((payload) => {
     broadcast(Ipc.conversationReady, payload);
@@ -681,6 +710,7 @@ app.whenReady().then(async () => {
   });
 
   createWindow();
+  powerMonitor.on("resume", () => engine.wakeSchedules());
   void engine.start();
   // Warm every bound remote project in the background. Do not wait for SSH before
   // showing the window, and do not activate any conversation as catalogs arrive.
@@ -704,7 +734,14 @@ app.whenReady().then(async () => {
   });
 });
 
+app.on("will-quit", () => {
+  disposeScheduleTray();
+});
+
 app.on("window-all-closed", () => {
+  // The engine and the resident schedule timer remain alive after the last window.
+  // A tray menu (when schedules exist) is the explicit path back or to Quit.
+  if (engine.hasEnabledSchedules()) return;
   if (process.platform !== "darwin") app.quit();
 });
 

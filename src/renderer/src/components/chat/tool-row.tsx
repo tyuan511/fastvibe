@@ -39,6 +39,8 @@ export function ToolRow({
   title,
   canToggle = true,
   showIcon = true,
+  quiet = false,
+  chevron = "hover",
   persistKey,
   autoOpen = false,
   autoCollapseOnComplete = false,
@@ -49,15 +51,18 @@ export function ToolRow({
   /** Stable identity used to remember whether the user expanded this row. */
   persistKey?: string;
   icon: ReactNode;
-  label: string;
+  label: ReactNode;
   subject?: string;
   context?: string;
   error?: string;
   running?: boolean;
   title?: string;
   canToggle?: boolean;
-  /** Group children hide the icon so the group's kind label carries the category. */
   showIcon?: boolean;
+  /** Settled fold line: regular weight, so it reads as a summary rather than a verb. */
+  quiet?: boolean;
+  /** A fold's chevron is the affordance. Hover-only reads as static text. */
+  chevron?: "hover" | "always";
   /** Open as soon as the call starts running. */
   autoOpen?: boolean;
   /** Fold the body back up when the call settles. */
@@ -120,7 +125,12 @@ export function ToolRow({
   const summary = (
     <>
       {showIcon ? <span className="shrink-0 text-muted-foreground [&_svg]:size-3.5">{icon}</span> : null}
-      <span className={cn("shrink-0 font-medium", running ? "animated-gradient-text" : "text-muted-foreground")}>
+      <span
+        className={cn(
+          quiet ? "inline-flex min-w-0 items-center truncate font-normal" : "shrink-0 font-medium",
+          running ? "animated-gradient-text" : "text-muted-foreground",
+        )}
+      >
         {label}
       </span>
       {subjectNode}
@@ -139,11 +149,21 @@ export function ToolRow({
         <span className="min-w-0 flex-1 truncate font-mono text-sm text-muted-foreground/60">{context}</span>
       ) : null}
       {error ? <FailureHint error={error} /> : null}
-      {trailing}
     </>
   );
 
-  const row = (
+  const chevronIcon = (
+    <HugeiconsIcon strokeWidth={2} icon={ArrowRight01Icon}
+      aria-hidden
+      className={cn(
+        "size-3.5 shrink-0 text-muted-foreground transition-all duration-200",
+        chevron === "always" ? "opacity-100" : "opacity-0 group-hover/tool-summary:opacity-100",
+        open && "rotate-90 opacity-100",
+      )}
+    />
+  );
+
+  const head = (withChevron: boolean) => (
     <div
       data-slot="tool-row"
       data-tool-id={persistKey}
@@ -152,25 +172,44 @@ export function ToolRow({
       title={title ?? subject}
     >
       {summary}
-      {expandable ? (
-        <HugeiconsIcon strokeWidth={2} icon={ArrowRight01Icon}
-          aria-hidden
-          className={cn(
-            "size-3.5 shrink-0 text-muted-foreground opacity-0 transition-all duration-200",
-            "group-hover/tool-summary:opacity-100",
-            open && "rotate-90 opacity-100",
-          )}
-        />
-      ) : null}
+      {trailing}
+      {withChevron ? chevronIcon : null}
     </div>
   );
 
-  if (!expandable) return row;
+  if (!expandable) return head(false);
+
+  // A trailing action is its own button. Putting it inside the trigger drops it
+  // (a button cannot contain a button) and would also toggle the fold.
+  if (trailing) {
+    return (
+      <Collapsible open={open} onOpenChange={handleOpenChange} className="w-full">
+        <div
+          data-slot="tool-row"
+          data-tool-id={persistKey}
+          data-running={running ? "true" : undefined}
+          className="group/tool-summary flex w-full min-w-0 items-center gap-2 text-left text-sm"
+          title={title ?? subject}
+        >
+          <CollapsibleTrigger className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-sm text-left focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none">
+            {summary}
+          </CollapsibleTrigger>
+          {trailing}
+          <CollapsibleTrigger tabIndex={-1} aria-hidden className="shrink-0 cursor-pointer rounded-sm">
+            {chevronIcon}
+          </CollapsibleTrigger>
+        </div>
+        <CollapsibleContent className="pt-2">
+          <div className="ml-2 flex flex-col gap-2 border-l border-border pl-3.5">{children}</div>
+        </CollapsibleContent>
+      </Collapsible>
+    );
+  }
 
   return (
     <Collapsible open={open} onOpenChange={handleOpenChange}>
       <CollapsibleTrigger className="w-full cursor-pointer rounded-sm text-left focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none">
-        {row}
+        {head(true)}
       </CollapsibleTrigger>
       <CollapsibleContent className="pt-2">
         <div className="ml-2 flex flex-col gap-2 border-l border-border pl-3.5">{children}</div>

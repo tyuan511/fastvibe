@@ -305,8 +305,8 @@ export function GitStatusPopover({
               >
                 <HugeiconsIcon strokeWidth={2} icon={ArrowDown01Icon} className="size-3.5" />
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" sideOffset={6} className="min-w-28">
-                <DropdownMenuItem onClick={() => void commit(true)}>
+              <DropdownMenuContent align="end" sideOffset={6} className="w-max min-w-max">
+                <DropdownMenuItem className="whitespace-nowrap" onClick={() => void commit(true)}>
                   <HugeiconsIcon strokeWidth={2} icon={ArrowUp02Icon} />
                   {t("git.commitPush")}
                 </DropdownMenuItem>

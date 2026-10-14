@@ -1,6 +1,7 @@
 import { Ipc } from "@shared/ipc";
 import type { SubmitPromptRequest } from "./prompt-submission";
 import type { DagGraph, DagOutputPage } from "@shared/dag";
+import type { ScheduledTask, ScheduledTaskDraft, ScheduledTaskPatch, ScheduledTaskRun, ScheduledTaskSnapshot } from "@shared/schedules";
 import type {
   ChatMessage,
   TranscriptTail,
@@ -407,6 +408,16 @@ export function createFastVibeApi(t: ApiTransport) {
           listener({ conversationId: record.conversationId, graph: (record.graph as DagGraph | null) ?? null });
         }),
     },
+    schedules: {
+      list: (): Promise<ScheduledTaskSnapshot> => t.invoke(Ipc.scheduleList),
+      create: (draft: ScheduledTaskDraft): Promise<ScheduledTask> => t.invoke(Ipc.scheduleCreate, draft),
+      update: (id: string, patch: ScheduledTaskPatch): Promise<ScheduledTask> => t.invoke(Ipc.scheduleUpdate, { id, patch }),
+      remove: (id: string): Promise<boolean> => t.invoke(Ipc.scheduleRemove, { id }),
+      runNow: (id: string): Promise<ScheduledTaskRun> => t.invoke(Ipc.scheduleRunNow, { id }),
+      stopRun: (id: string): Promise<boolean> => t.invoke(Ipc.scheduleStopRun, { id }),
+      history: (id: string): Promise<ScheduledTaskRun[]> => t.invoke(Ipc.scheduleHistory, { id }),
+      onChanged: (listener: (snapshot: ScheduledTaskSnapshot) => void): (() => void) => t.subscribe(Ipc.scheduleChanged, listener),
+    },
     projects: {
       add: (): Promise<ProjectAddResult | null> => t.invoke(Ipc.projectsAdd),
       addRemote: (
@@ -432,6 +443,8 @@ export function createFastVibeApi(t: ApiTransport) {
         t.invoke(Ipc.workspaceFilesExist, { paths, cwd }),
       fileIcons: (): Promise<FileIconMapping> => t.invoke(Ipc.workspaceFileIcons),
       readDir: (path: string): Promise<DirEntry[]> => t.invoke(Ipc.workspaceReadDir, { path }),
+      /** Replace a text file the file pane already has open. Refuses anything that is not a regular file. */
+      writeFile: (path: string, text: string): Promise<void> => t.invoke(Ipc.workspaceWriteFile, { path, text }),
       gitStatus: (cwd: string): Promise<GitStatus> => t.invoke(Ipc.workspaceGitStatus, { cwd }),
       openTerminal: (cwd: string): Promise<void> => t.invoke(Ipc.workspaceOpenTerminal, { cwd }),
       gitBranches: (cwd: string): Promise<GitBranch[]> => t.invoke(Ipc.workspaceGitBranches, { cwd }),
@@ -603,6 +616,13 @@ export function createFastVibeApi(t: ApiTransport) {
       getGrantFlow: (): Promise<import("@shared/types").GrantFlowState> => t.invoke(Ipc.computerGetGrantFlow),
       onGrantFlowState: (listener: (state: import("@shared/types").GrantFlowState) => void): (() => void) =>
         t.subscribe(Ipc.computerGrantFlowState, listener),
+      component: (): Promise<import("@shared/types").ComputerComponentStatus> => t.invoke(Ipc.computerComponent),
+      ensureComponent: (force?: boolean): Promise<import("@shared/types").ComputerComponentStatus> =>
+        t.invoke(Ipc.computerEnsureComponent, force ? { force: true } : {}),
+      cancelComponent: (): Promise<import("@shared/types").ComputerComponentStatus> =>
+        t.invoke(Ipc.computerCancelComponent),
+      onComponentState: (listener: (state: import("@shared/types").ComputerComponentStatus) => void): (() => void) =>
+        t.subscribe(Ipc.computerComponentState, listener),
     },
     browser: {
       listProfiles: (): Promise<BrowserProfileInfo[]> => t.invoke(Ipc.browserListProfiles),

@@ -1,4 +1,5 @@
 import { Ipc } from "./ipc.ts";
+import type { ScheduledTask, ScheduledTaskRun, ScheduledTaskSnapshot } from "./schedules.ts";
 import {
   decodeRemoteConversationId,
   encodeRemoteConversationId,
@@ -42,11 +43,14 @@ export function classifyRemotePush(channel: string): RemotePushKind {
     channel === Ipc.accountState ||
     channel === Ipc.windowState ||
     channel === Ipc.providersOAuthEvent ||
-    channel === Ipc.browserRequest
+    channel === Ipc.browserRequest ||
+    channel === Ipc.computerComponentState ||
+    channel === Ipc.computerGrantFlowState
   ) {
     return "drop";
   }
   if (channel === Ipc.workspaceTerminalData) return "terminal";
+  if (channel === Ipc.scheduleChanged) return "engine";
   if (channel === Ipc.workspaceChanged || channel === Ipc.conversationReady) return "catalog";
   if (channel === Ipc.event) return "engine";
   return "unknown";
@@ -69,6 +73,7 @@ export function namespaceRemotePush(channel: string, payload: unknown, serverIns
   if (kind === "drop" || kind === "unknown") return undefined;
   if (kind === "catalog") return namespaceCatalogPayload(channel, payload, serverInstanceId);
   if (kind === "terminal") return namespaceTerminalData(payload, serverInstanceId);
+  if (channel === Ipc.scheduleChanged) return namespaceScheduleSnapshot(payload, serverInstanceId);
   return namespaceEngineEvent(payload, serverInstanceId);
 }
 
@@ -115,6 +120,31 @@ export function namespaceConversationSnapshot(value: unknown, serverInstanceId: 
 /** Graph ownership is routing metadata; node/run ids and tool payloads stay in the server's vocabulary. */
 export function namespaceDagGraph(value: unknown, serverInstanceId: string): unknown {
   return namespaceConversationSnapshot(value, serverInstanceId);
+}
+
+/** A server owns its task and transcript ids; qualify only routing metadata. */
+export function namespaceScheduleTask(task: ScheduledTask, serverInstanceId: string): ScheduledTask {
+  return {
+    ...task,
+    id: namespaceConversationId(task.id, serverInstanceId),
+    ...(task.project ? { project: namespaceWorkspace(task.project, serverInstanceId) } : {}),
+  };
+}
+
+export function namespaceScheduleRun(run: ScheduledTaskRun, serverInstanceId: string): ScheduledTaskRun {
+  return {
+    ...run,
+    id: namespaceConversationId(run.id, serverInstanceId),
+    taskId: namespaceConversationId(run.taskId, serverInstanceId),
+    ...(run.conversationId ? { conversationId: namespaceConversationId(run.conversationId, serverInstanceId) } : {}),
+  };
+}
+
+export function namespaceScheduleSnapshot(value: unknown, serverInstanceId: string): unknown {
+  if (typeof value !== "object" || value === null) return value;
+  const snapshot = value as ScheduledTaskSnapshot;
+  return { ...snapshot, tasks: Array.isArray(snapshot.tasks)
+    ? snapshot.tasks.map((task) => namespaceScheduleTask(task, serverInstanceId)) : [] };
 }
 
 /**

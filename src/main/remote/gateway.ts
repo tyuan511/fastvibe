@@ -3,6 +3,7 @@ import { basename } from "node:path";
 import type { AppCapability } from "../../shared/app-protocol.ts";
 import type { AgentConfigSnapshot, AgentConfigSyncPayload } from "../../shared/agent-config.ts";
 import { Ipc } from "../../shared/ipc.ts";
+import type { ScheduledTask, ScheduledTaskRun, ScheduledTaskSnapshot } from "../../shared/schedules.ts";
 import {
   bindingCapabilities,
   bindingProjectKey,
@@ -17,6 +18,9 @@ import {
   namespaceDagGraph,
   namespaceIdList,
   namespaceQueueState,
+  namespaceScheduleTask,
+  namespaceScheduleRun,
+  namespaceScheduleSnapshot,
   namespaceRemotePush,
   shouldRelayRemotePush,
 } from "../../shared/remote-events.ts";
@@ -162,6 +166,8 @@ export class RemoteGateway {
   /** One configuration write at a time per server, so provider edits cannot cross. */
   #configSyncs = new Map<string, Promise<void>>();
   #configConnections = new Map<string, string>();
+  #remoteSchedules = new Map<string, ScheduledTaskSnapshot>();
+  #scheduleRevision = 0;
 
   constructor(deps: GatewayDeps) {
     this.#deps = deps;
@@ -198,8 +204,16 @@ export class RemoteGateway {
     if (method === Ipc.engineGetRunning) return this.#allRunningConversations(ctx);
     if (method === Ipc.engineGetPendingUi) return this.#allPendingUi(ctx);
     if (method === Ipc.dagList) return this.#allDagGraphs(ctx);
+    if (method === Ipc.scheduleList) return this.#allSchedules(ctx);
 
     const scope = resolveServerScope(payload);
+    if (method === Ipc.scheduleUpdate && isRecord(payload) && isRecord(payload.patch) && payload.patch.project) {
+      const destination = decodeScopedId(payload.patch.project);
+      if ((destination?.serverInstanceId ?? null) !== (scope?.serverInstanceId ?? null)) {
+        throw new Error("定时任务不能移动到另一台机器，请在目标机器新建任务");
+      }
+      if (scope) payload = { ...payload, patch: unscopePayload(payload.patch, scope.serverInstanceId) };
+    }
     if (!scope) {
       const result = await this.#deps.localDispatch(method, payload, ctx);
       if (shouldSyncAgentConfig(method)) void this.#syncConnectedServers();
@@ -237,6 +251,12 @@ export class RemoteGateway {
     if (serverId && !alreadyNamespaced) {
       next = namespaceRemotePush(channel, payload, serverId);
       if (next === undefined) return;
+    }
+
+    if (channel === Ipc.scheduleChanged && serverId && isRecord(next) && Array.isArray(next.tasks)) {
+      this.#remoteSchedules.set(serverId, next as ScheduledTaskSnapshot);
+      void this.scheduleSnapshot().then((snapshot) => this.#deps.broadcast(Ipc.scheduleChanged, snapshot)).catch(() => undefined);
+      return;
     }
 
     if (channel === Ipc.workspaceChanged) {
@@ -529,6 +549,27 @@ export class RemoteGateway {
     return graphs.concat(remote.flat());
   }
 
+  /** A local mutation must not replace the page's remote rows with a local-only snapshot. */
+  async scheduleSnapshot(ctx?: unknown): Promise<ScheduledTaskSnapshot> {
+    const local = await this.#deps.localDispatch(Ipc.scheduleList, undefined, ctx) as ScheduledTaskSnapshot;
+    const bound = new Set(readBindings(this.#deps.bindingsFile).map((item) => item.serverInstanceId));
+    return {
+      revision: ++this.#scheduleRevision,
+      tasks: [...local.tasks, ...[...this.#remoteSchedules].filter(([id]) => bound.has(id)).flatMap(([, snapshot]) => snapshot.tasks)],
+    };
+  }
+
+  async #allSchedules(ctx: unknown): Promise<ScheduledTaskSnapshot> {
+    await Promise.all(this.#boundReadyServers().map(async (server) => {
+      try {
+        const result = await this.#deps.connections.call(server, Ipc.scheduleList, undefined);
+        const scoped = namespaceScheduleSnapshot(result, server.serverInstanceId) as ScheduledTaskSnapshot;
+        if (Array.isArray(scoped?.tasks)) this.#remoteSchedules.set(server.serverInstanceId, scoped);
+      } catch { /* An offline or older Agent does not hide the local task list. */ }
+    }));
+    return this.scheduleSnapshot(ctx);
+  }
+
   async #allPendingUi(ctx: unknown): Promise<Array<Record<string, unknown>>> {
     const local = await this.#deps.localDispatch(Ipc.engineGetPendingUi, undefined, ctx);
     const pending = Array.isArray(local) ? local.filter(isRecord) : [];
@@ -657,6 +698,9 @@ export class RemoteGateway {
     if (method === Ipc.workspaceReadDir) return scopeReadDir(result, serverInstanceId);
     if (method === Ipc.engineGetRunning) return namespaceIdList(result, serverInstanceId);
     if (method === Ipc.engineGetSubagents) return scopeSubagents(result, serverInstanceId);
+    if (method === Ipc.scheduleCreate || method === Ipc.scheduleUpdate) return namespaceScheduleTask(result as ScheduledTask, serverInstanceId);
+    if (method === Ipc.scheduleRunNow) return namespaceScheduleRun(result as ScheduledTaskRun, serverInstanceId);
+    if (method === Ipc.scheduleHistory && Array.isArray(result)) return result.map((run) => namespaceScheduleRun(run, serverInstanceId));
     if (CATALOG_RESULT_METHODS.has(method)) {
       if (isRecord(result) && Array.isArray(result.conversations)) {
         this.#ingestCatalog(namespaceCatalogSnapshot(result, serverInstanceId), serverInstanceId);

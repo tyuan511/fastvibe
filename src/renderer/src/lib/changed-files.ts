@@ -66,11 +66,35 @@ function toolDiff(tool: ToolCallBlock): string | undefined {
 /** A `write` with no patch is a new file: every line of the content is an addition. */
 function addedDiff(content: string): string | undefined {
   if (!content) return undefined;
-  return content
-    .replace(/\n$/, "")
-    .split("\n")
-    .map((line) => `+${line}`)
-    .join("\n");
+  const lines = content.replace(/\n$/, "").split("\n");
+  // A hunk header is what gives the file diff a gutter; a bare `+` list has no line numbers.
+  return [`@@ -0,0 +1,${lines.length} @@`, ...lines.map((line) => `+${line}`)].join("\n");
+}
+
+/** The patch an edit or write actually produced, for the tool's diff view and its line badge. */
+export type FileChange = {
+  diff: string;
+  added: number;
+  removed: number;
+};
+
+/**
+ * Edit carries the engine's diff. Write usually carries none — the file body is the
+ * addition. Anything else is not a file change this view knows how to draw.
+ */
+export function fileChange(tool: ToolCallBlock): FileChange | undefined {
+  const diff = toolDiff(tool);
+  if (isEditTool(tool.name)) {
+    if (!diff) return undefined;
+    return { diff, ...countPatch(diff) };
+  }
+  if (!isWriteTool(tool.name)) return undefined;
+  if (diff) return { diff, ...countPatch(diff) };
+  const args = record(tool.args);
+  const content = typeof args?.content === "string" ? args.content : "";
+  const synthesised = addedDiff(content);
+  if (!synthesised) return undefined;
+  return { diff: synthesised, added: countContent(content), removed: 0 };
 }
 
 /**

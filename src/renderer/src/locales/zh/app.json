@@ -131,6 +131,7 @@
   "forward": "前进",
   "search": "搜索",
   "plugins": "插件",
+  "tasks": "定时任务",
   "expandSubTasks": "展开子任务（{{count}}）",
   "collapseSubTasks": "收起子任务",
   "newProject": "新项目",

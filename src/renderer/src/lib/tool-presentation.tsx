@@ -6,6 +6,9 @@ import { i18n } from "@/lib/i18n";
 import { codemodeCalls, codemodeCode, codemodeFailures, codemodeSummary } from "./codemode";
 import { activeTodo, parseToolTodos, todoIndexOf } from "./todos";
 import { displayPath } from "./workspace-path";
+import { familyOf, type ToolFamily } from "./tool-family";
+
+export { familyOf, type ToolFamily } from "./tool-family";
 
 /**
  * Tool presentation, modelled on zcode's tool-call language.
@@ -14,25 +17,6 @@ import { displayPath } from "./workspace-path";
  * names. Each tool maps to a family that owns a category label, a progressive label
  * for the running state, an icon, and the shape of its one-line summary.
  */
-
-export type ToolFamily =
-  | "read"
-  | "edit"
-  | "write"
-  | "delete"
-  | "search"
-  | "web"
-  | "list"
-  | "terminal"
-  | "skill"
-  | "agent"
-  | "todo"
-  | "question"
-  | "mcp"
-  | "codemode"
-  | "browser"
-  | "present"
-  | "other";
 
 export type ToolView = {
   family: ToolFamily;
@@ -116,29 +100,6 @@ const ICONS: Record<ToolFamily, ReactNode> = {
 const FILE_PATH_KEYS = ["path", "file_path", "filePath", "filename", "file", "target_file", "target"];
 const SEARCH_KEYS = ["search_query", "searchQuery", "query", "pattern", "regex", "path", "url", "prompt", "target", "name"];
 const COMMAND_KEYS = ["command", "cmd", "script", "parsed_cmd"];
-
-/** Map an engine tool name onto a family. MCP tools keep their own family. */
-export function familyOf(name: string): ToolFamily {
-  const key = name.trim().toLowerCase();
-  if (!key) return "other";
-  if (key === "codemode") return "codemode";
-  if (key === "present") return "present";
-  if (key.startsWith("mcp") || key.includes("__")) return "mcp";
-  if (key.startsWith("browser_")) return "browser";
-  if (/^(read|read_file|readfile|view|cat)$/.test(key)) return "read";
-  if (/^(edit|edit_file|editfile|apply_patch|applypatch|patch|str_replace|strreplace)$/.test(key)) return "edit";
-  if (/^(write|write_file|writefile|create_file|createfile|create)$/.test(key)) return "write";
-  if (/^(delete|delete_file|remove|remove_file|rm)$/.test(key)) return "delete";
-  if (/^(web_search|websearch)$/.test(key)) return "web";
-  if (/^(grep|search|search_files|searchfiles|ripgrep|rg|fetch|webfetch|conversation_search|tool_search)$/.test(key)) return "search";
-  if (/^(find|glob|ls|list|list_dir|listdir|tree|list_files|listfiles)$/.test(key)) return "list";
-  if (/^(bash|shell|shell_exec|shellexec|exec|execute|run_command|runcommand|command|terminal|run)$/.test(key)) return "terminal";
-  if (key.includes("skill")) return "skill";
-  if (/^(task|agent|subagent|dispatch|delegate)/.test(key)) return "agent";
-  if (key.includes("todo")) return "todo";
-  if (/^(question|ask_user|askuser|questionnaire)$/.test(key)) return "question";
-  return "other";
-}
 
 /** Entries of a `question` tool call's `questions` array, for the summary row. */
 export function questionItems(args: unknown): Array<Record<string, unknown>> {

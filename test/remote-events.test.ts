@@ -16,6 +16,16 @@ import {
 
 const SERVER = "srv_alpha";
 
+test("schedule pushes qualify task/project ids but leave prompts and calendar rules intact", () => {
+  const payload = { revision: 2, tasks: [{ id: "task-1", name: "review", prompt: "Review /tmp/app", project: "/tmp/app", schedule: { kind: "daily", time: "09:00", timeZone: "UTC" }, enabled: true, createdAt: 1, updatedAt: 1 }] };
+  const scoped = namespaceRemotePush(Ipc.scheduleChanged, payload, SERVER) as typeof payload;
+  assert.equal(scoped.tasks[0]!.id, "remote:srv_alpha:task-1");
+  assert.equal(scoped.tasks[0]!.project, "remote:srv_alpha:/tmp/app");
+  assert.equal(scoped.tasks[0]!.prompt, "Review /tmp/app");
+  assert.deepEqual(scoped.tasks[0]!.schedule, payload.tasks[0]!.schedule);
+  assert.equal(payload.tasks[0]!.id, "task-1");
+});
+
 test("DAG pushes and lists namespace graph ownership without rewriting node ids or outputs", () => {
   const graph = { conversationId: "c1", nodes: [{ id: "T-0001", runId: "T-0001.2", output: "c1 T-0001" }] };
   const pushed = namespaceRemotePush(Ipc.event, { type: "dag_changed", conversationId: "c1", graph }, SERVER) as {

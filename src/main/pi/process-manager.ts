@@ -180,6 +180,8 @@ import type { DagHostRequest, DagHostResult } from "@shared/dag-tools";
 import { DAG_TOOLS, canonicalDagId, dagNodeFinished, dagNodeTools, isDagNodeId, type DagGraph, type DagNode, type DagOutputPage } from "@shared/dag";
 import { buildPrompt, DagScheduler, type DagNodeRun, type DagRunner } from "./dag-scheduler";
 import { DagStore } from "../engine/dag-store";
+import { ScheduledTaskManager } from "./scheduled-task-manager";
+import type { ScheduledTask, ScheduledTaskDraft, ScheduledTaskPatch, ScheduledTaskRun, ScheduledTaskSnapshot } from "@shared/schedules";
 import { runDagTool } from "../dag-tools";
 import { builtinExtensionFile, builtinExtensionPaths, builtinSkillPaths, ExtensionManager } from "./extension-manager";
 import { branchExists, createGitWorktree, gitBranch, gitCommonRoot, gitToplevel, listGitWorktrees, removeGitWorktree } from "./git-worktree";
@@ -235,7 +237,14 @@ type FastVibeExtensionUIContext = ExtensionUIContext & {
   appConfig(request: AppConfigHostRequest): Promise<AppConfigHostResult>;
   /** The DAG of sub-agent tasks, for the built-in `dag` extension (`src/main/dag-tools.ts`). */
   dag(request: DagHostRequest, signal?: AbortSignal): Promise<DagHostResult>;
+  schedules(request: ScheduleHostRequest): Promise<unknown>;
 };
+
+type ScheduleHostRequest =
+  | { action: "list" }
+  | { action: "create"; draft: ScheduledTaskDraft }
+  | { action: "update"; id: string; patch: ScheduledTaskPatch }
+  | { action: "remove" | "runNow" | "stopRun" | "history"; id: string }; 
 
 type ConversationSearchHostRequest = ConversationTranscriptSearchRequest & {
   conversationId: string;
@@ -559,6 +568,7 @@ export class PiProcessManager {
   #memory: MemoryHost;
   readonly #promptPreparations = new PromptPreparations();
   #subagentManager: SubagentManager;
+  readonly #scheduledTasks: ScheduledTaskManager;
   /** Live subagent registry and bounded transcript cache. */
   #subagents = new Map<string, SubagentInfo>();
   /**
@@ -609,6 +619,8 @@ export class PiProcessManager {
     this.#skills = new SkillManager(this.#paths.agentDir, this.#paths.skillsDir);
     this.#extensions = new ExtensionManager(this.#paths.agentDir, this.#paths.scratchDir);
     this.#subagentManager = new SubagentManager(this.#paths);
+    this.#scheduledTasks = new ScheduledTaskManager(this.#paths.schedulesFile, (task, signal, onConversation) =>
+      this.#runScheduledTask(task, signal, onConversation));
     this.#memory.attach({
       conversations: () => this.#catalog.list(),
       loadBranch: (file, cwd) => loadConversationTranscriptBranch(file, cwd),
@@ -691,6 +703,7 @@ export class PiProcessManager {
     this.#reasoning.flush();
     this.#usage.flush();
     this.#dagStore.flush();
+    this.#scheduledTasks.flush();
     // A node still running when the app quits keeps what it had done so far: its transcript is
     // what 恢复 / 重启后 shows for that run.
     for (const [runId, session] of this.#subagentSessions) {
@@ -711,6 +724,58 @@ export class PiProcessManager {
   /** The conversation/project catalog moved: a chat created, renamed, deleted, opened. */
   onWorkspaceChange(listener: (snapshot: WorkspaceSnapshot) => void): () => void { this.#workspaceListeners.add(listener); return () => this.#workspaceListeners.delete(listener); }
   onEvent(listener: (event: Record<string, unknown>) => void): () => void { this.#eventListeners.add(listener); return () => this.#eventListeners.delete(listener); }
+  onSchedulesChanged(listener: (snapshot: ScheduledTaskSnapshot) => void): () => void { return this.#scheduledTasks.onChange(listener); }
+  listSchedules(): ScheduledTaskSnapshot { return this.#scheduledTasks.list(); }
+  scheduleHistory(id: string): ScheduledTaskRun[] { return this.#scheduledTasks.history(id); }
+  hasEnabledSchedules(): boolean { return this.#scheduledTasks.hasEnabledTasks(); }
+  createSchedule(draft: ScheduledTaskDraft): ScheduledTask {
+    this.#assertScheduleProject(draft.project);
+    return this.#scheduledTasks.create(draft);
+  }
+  updateSchedule(id: string, patch: ScheduledTaskPatch): ScheduledTask {
+    if (patch.project !== undefined) this.#assertScheduleProject(patch.project || undefined);
+    return this.#scheduledTasks.update(id, patch);
+  }
+  removeSchedule(id: string): boolean { return this.#scheduledTasks.remove(id); }
+  runScheduleNow(id: string): ScheduledTaskRun { return this.#scheduledTasks.runNow(id); }
+  stopScheduledRun(id: string): boolean { return this.#scheduledTasks.stopRun(id); }
+  wakeSchedules(): void { this.#scheduledTasks.wake(); }
+
+  #assertScheduleProject(project: string | undefined): void {
+    if (!project) return;
+    if (!this.#catalog.listProjects().some((item) => item.cwd === project) || !existsSync(project)) {
+      throw new Error(uiText("定时任务的项目目录不存在，请重新选择项目", "The scheduled task's project is unavailable; choose it again"));
+    }
+  }
+
+  async #runScheduledTask(task: ScheduledTask, signal: AbortSignal, onConversation: (id: string) => void): Promise<void> {
+    let conversationId: string | undefined;
+    const abort = (): void => { if (conversationId) void this.abort(conversationId).catch(() => undefined); };
+    signal.addEventListener("abort", abort, { once: true });
+    try {
+      if (signal.aborted) throw new Error("任务已停止");
+      this.#assertScheduleProject(task.project);
+      // Every occurrence gets a fresh ordinary transcript. Do not reuse a blank draft,
+      // activate the chat, or consume the model pick pending on the user's empty hero.
+      const opened = await this.createConversation(task.project, { activate: false, reuseEmpty: false, scheduledTaskId: task.id });
+      conversationId = opened.conversation.id;
+      onConversation(conversationId);
+      this.renameConversation(conversationId, `${uiText("定时任务", "Scheduled task")} · ${task.name}`);
+      if (signal.aborted) { abort(); throw new Error("任务已停止"); }
+      await this.promptConversation(conversationId, task.prompt, undefined, signal);
+      const managed = this.#sessions.get(conversationId);
+      if (!managed) throw new Error("定时任务的会话没有启动");
+      await managed.session.waitForIdle();
+      if (signal.aborted) throw new Error("任务已停止");
+      const assistant = [...managed.session.messages].reverse().find((message): message is AssistantMessage => message.role === "assistant");
+      if (!assistant) throw new Error("Agent 没有返回结果");
+      if (assistant.stopReason === "error" || assistant.stopReason === "aborted" || assistant.stopReason === "length") {
+        throw new Error(assistant.errorMessage || `Agent 已停止：${assistant.stopReason}`);
+      }
+    } finally {
+      signal.removeEventListener("abort", abort);
+    }
+  }
   /**
    * Deliver a background conversation's live stream to whoever asked for it by name.
    *
@@ -983,6 +1048,7 @@ export class PiProcessManager {
       if (active) await this.#ensureSession(active);
       this.#dagScheduler.start();
       this.#setStatus({ state: "ready", cwd: this.#cwd });
+      this.#scheduledTasks.start();
       // Durable work belongs to every conversation, not only whichever chat happened
       // to be active when Main restarted. Drains lazily create background sessions.
       for (const conversationId of this.#messageQueue.conversationIds()) this.#scheduleQueueDrain(conversationId);
@@ -995,6 +1061,7 @@ export class PiProcessManager {
     this.#promptPreparations.cancel();
     this.#queueShutdown = true;
     this.#dagScheduler.stop(uiText("引擎已停止", "The engine was stopped"));
+    this.#scheduledTasks.stop();
     this.#stopSessionSweep();
     await this.#queue(async () => {
       const sessions = [...this.#sessions.values()];
@@ -1136,11 +1203,12 @@ export class PiProcessManager {
     }
   }
 
-  async promptConversation(id: string, message: string, images?: Array<{ type: "image"; data: string; mimeType: string }>): Promise<void> {
+  async promptConversation(id: string, message: string, images?: Array<{ type: "image"; data: string; mimeType: string }>, signal?: AbortSignal): Promise<void> {
     const conversation = this.#catalog.get(id);
     if (!conversation) throw new Error("conversation not found");
     await this.#ensureReady();
     const managed = await this.#ensureSession(conversation);
+    if (signal?.aborted) throw new Error("任务已停止");
     if (await this.#compactIfCommand(managed.session, message)) return;
     // Same rule as prompt(): only a pause over an empty queue is cleared here.
     if (this.#messageQueue.releaseEmptyPause(id)) this.#emitQueue(id);
@@ -1148,7 +1216,7 @@ export class PiProcessManager {
     this.#beginTurn(id);
     await this.#flushModelRebind(id);
     try {
-      await this.#promptWhenIdle(managed.session, message, images, id);
+      await this.#promptWhenIdle(managed.session, message, images, id, signal);
     } catch (error) {
       // Same contract as prompt(): an AbortError is the result of Stop, not a send
       // failure. Real failures continue across IPC unchanged.
@@ -1953,7 +2021,7 @@ export class PiProcessManager {
     }
   }
 
-  async createConversation(project?: string, options?: { activate?: boolean; reuseEmpty?: boolean }): Promise<ConversationOpenResult> {
+  async createConversation(project?: string, options?: { activate?: boolean; reuseEmpty?: boolean; scheduledTaskId?: string }): Promise<ConversationOpenResult> {
       // An unfinished chat is the project's composer workspace. Keep it around when
       // the user opens another chat, and reuse it instead of creating a second empty
       // session for the same project. The old global cleanup deleted the only place
@@ -1966,7 +2034,7 @@ export class PiProcessManager {
       // another create/open can finish first. The activation ticket decides which one
       // is allowed to become the engine's current conversation.
       const activation = activate ? this.#activationTicket.begin() : undefined;
-      const conversation = existing ?? this.#catalog.create(project, undefined, { activate: false });
+      const conversation = existing ?? this.#catalog.create(project, undefined, { activate: false, scheduledTaskId: options?.scheduledTaskId });
       if (activate) return this.#openFresh(conversation, activation!);
       // The phone page's 新对话. The engine's active id is one value every desktop window
       // follows, so a chat started on the phone must not move it: the desktop would jump
@@ -3700,7 +3768,7 @@ export class PiProcessManager {
     // conversation passes. Skipped when it already matches, since writing touches the file.
     if (!result.session.autoCompactionEnabled) result.session.setAutoCompactionEnabled(true);
     // A conversation with no history yet starts on the user's pinned 默认模型.
-    if (result.session.messages.length === 0) await this.#applyPreferredModel(result.session, conversation.project);
+    if (result.session.messages.length === 0) await this.#applyPreferredModel(result.session, conversation.project, Boolean(conversation.scheduledTaskId));
     const payload: ConversationReadyEvent = {
       id: conversation.id,
       messages: this.#messages(result.session, conversation.id),
@@ -3920,17 +3988,23 @@ export class PiProcessManager {
     message: string,
     images?: Array<{ type: "image"; data: string; mimeType: string }>,
     conversationId?: string,
+    signal?: AbortSignal,
   ): Promise<void> {
     const held = this.#holdCommand(conversationId, message);
     try {
+      if (signal?.aborted) throw new Error("任务已停止");
       if (await this.#compactIfCommand(session, message)) return;
       if (!session.isIdle) await session.waitForIdle();
+      if (signal?.aborted) throw new Error("任务已停止");
       // Same acceptance contract as `prompt()`: the call resolves once the SDK has
       // taken the message, not once the run finishes. The queue drain sends the next
       // row when this one returns, and waiting out the whole answer kept every later
       // 立即 behind the reply it had already interrupted.
       await promptAccepted(
-        (preflightResult) => session.prompt(message, { images, preflightResult }),
+        (preflightResult) => {
+          if (signal?.aborted) throw new Error("任务已停止");
+          return session.prompt(message, { images, preflightResult });
+        },
         {
           isAbort: isAbortOutcome,
           onLateFailure: (error) => {
@@ -4770,6 +4844,20 @@ export class PiProcessManager {
       listWorktrees: () => this.#listGitWorktrees(conversationId),
       appConfig: (request) =>
         this.#appConfigHost ? this.#appConfigHost(request) : Promise.resolve({ ok: false, error: uiText("当前宿主不支持修改 FastVibe 设置", "This host cannot change FastVibe settings") }),
+      schedules: async (request) => {
+        switch (request.action) {
+          case "list": return this.listSchedules();
+          case "create": {
+            const project = request.draft.project ?? this.#catalog.get(conversationId)?.project;
+            return this.createSchedule({ ...request.draft, ...(project ? { project } : {}) });
+          }
+          case "update": return this.updateSchedule(request.id, request.patch);
+          case "remove": return this.removeSchedule(request.id);
+          case "runNow": return this.runScheduleNow(request.id);
+          case "stopRun": return this.stopScheduledRun(request.id);
+          case "history": return this.scheduleHistory(request.id);
+        }
+      },
       dag: async (request, signal) => {
         const model = this.#sessions.get(conversationId)?.session.model;
         if (model) this.#dagParentModel.set(conversationId, `${model.provider}/${model.id}`);
@@ -5199,11 +5287,11 @@ export class PiProcessManager {
    * pin whose provider was removed or whose key is gone leaves the engine default in
    * place rather than blocking the session.
    */
-  async #applyPreferredModel(session: AgentSession, project?: string): Promise<void> {
-    const pending = this.#pendingModel;
-    const pendingThinking = this.#pendingThinking;
+  async #applyPreferredModel(session: AgentSession, project?: string, background = false): Promise<void> {
+    const pending = background ? undefined : this.#pendingModel;
+    const pendingThinking = background ? undefined : this.#pendingThinking;
     const preferred = readPreferredModelSettings(this.#paths, project);
-    this.#clearPendingPick();
+    if (!background) this.#clearPendingPick();
     // The pick made on the hero wins; the project pin overrides the global preference
     // for project conversations, and the global pin is the fallback for all others.
     const model =

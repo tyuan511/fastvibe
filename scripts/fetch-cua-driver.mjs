@@ -15,11 +15,10 @@
  * "Upgrade the bindings and native library together." Both are 0.28.2 here, and the
  * daemon confirms it at startup (`driverVersion: 0.28.2, contract: 0.8.0`).
  *
- * One universal archive is downloaded and then split, so each package carries only the
- * slice it can run: ~30 MB instead of 63. The split is what makes that safe — a local
- * `pnpm dist:mac` packages both architectures from a single invocation, so a lone file
- * would be copied into both, and `extraResources` reads
- * `resources/cua-driver/${arch}/cua-driver` to pick the right one per build.
+ * Dev only. Packaged builds do not ship this binary: the app downloads it, and the
+ * matching native library, the first time 电脑操控 is turned on. This script still
+ * splits the universal archive so `pnpm dev` can spawn the slice this machine runs
+ * without that download.
  *
  *   node scripts/fetch-cua-driver.mjs
  */

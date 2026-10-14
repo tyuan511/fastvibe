@@ -14,8 +14,9 @@ import { broadcast } from "./broadcast";
 import { registerEngineIpc } from "./engine-handlers";
 import { handle, type CallerContext } from "./registry";
 import { readFilePreview } from "../engine/file-preview";
-import { readWorkspaceDir } from "../engine/workspace-fs";
+import { readWorkspaceDir, writeWorkspaceTextFile } from "../engine/workspace-fs";
 import { existingFiles } from "../engine/path-exists";
+import { conversationCwd, readFileForPayload } from "../engine/file-chunk";
 import { loadModelsDev, type ModelsDevStats } from "../engine/models-dev";
 import {
   applyNativeTheme,
@@ -46,6 +47,7 @@ import {
   requestComputerPermissions,
   startComputerDrag,
 } from "../pi/cua-bridge";
+import { cancelComputerComponent, computerComponentStatus, ensureComputerComponent, syncComputerComponent } from "../pi/cua-component";
 import { cancelGrantFlow, grantFlowState, startGrantFlow } from "../pi/computer-grant-flow";
 import { importBrowserProfile, listBrowserProfiles } from "../engine/browser-profiles";
 import {
@@ -135,6 +137,15 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): void {
   handle(Ipc.computerStartGrantFlow, () => startGrantFlow());
   handle(Ipc.computerCancelGrantFlow, () => cancelGrantFlow());
   handle(Ipc.computerGetGrantFlow, () => grantFlowState());
+  handle(Ipc.computerComponent, () => computerComponentStatus());
+  handle(Ipc.computerEnsureComponent, async (payload?: { force?: boolean }) => {
+    await ensureComputerComponent({ force: payload?.force === true }).catch(() => undefined);
+    return computerComponentStatus();
+  });
+  handle(Ipc.computerCancelComponent, () => {
+    cancelComputerComponent();
+    return computerComponentStatus();
+  });
 
   registerEngineIpc(engine);
 
@@ -318,6 +329,13 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): void {
       return [];
     }
   });
+  handle(Ipc.workspaceWriteFile, (payload: { path?: unknown; text?: unknown }) => {
+    writeWorkspaceTextFile(payload?.path, payload?.text);
+  });
+  // A phone cannot reach `fastvibe-media://`, so a file it opens or saves arrives in slices.
+  handle(Ipc.workspaceReadFile, (payload: { path?: unknown; conversationId?: unknown; offset?: unknown; length?: unknown }) =>
+    readFileForPayload(payload, () => conversationCwd(engine.listWorkspace(), payload?.conversationId)),
+  );
   handle(Ipc.workspaceGitStatus, async (payload: { cwd: string }): Promise<GitStatus> => {
     const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
     if (!cwd) return { cwd, isRepository: false, changed: 0, staged: 0, additions: 0, deletions: 0, files: [] };
@@ -542,6 +560,10 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): void {
     applyKeepAwake(payload);
     // 代码模式 / 工具搜索 reach a session only when it reloads.
     if (toolModeSettingsChanged(previous, payload)) void engine.refreshToolModes().catch(() => undefined);
+    // The component is not in the installer. Turning the switch on is the request
+    // to fetch it; turning it off drops a download that has not finished.
+    if (payload.computerEnabled === true && previous.computerEnabled !== true) syncComputerComponent(true);
+    else if (payload.computerEnabled !== true && previous.computerEnabled === true) syncComputerComponent(false);
     paintWindows(windows, payload);
     scheduleUpdateCheck(payload.autoCheckUpdates !== false);
     // The other windows hold their own copy, loaded once at startup.
@@ -575,6 +597,7 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): void {
     applyLanguages({});
     applyKeepAwake({});
     if (toolModeSettingsChanged(previous, {})) void engine.refreshToolModes().catch(() => undefined);
+    if (previous.computerEnabled === true) syncComputerComponent(false);
     paintWindows(windows, {});
     // 恢复默认 is a write like any other: the other windows hold their own copy and
     // would otherwise keep — and later re-save — the settings that were just reset.

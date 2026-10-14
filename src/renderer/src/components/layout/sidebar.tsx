@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type JSX, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Add01Icon, Alert02Icon, AlertCircleIcon, Archive04Icon, ArrowLeft01Icon, ArrowRight01Icon, Delete02Icon, Folder01Icon, Folder02Icon, FolderRootIcon, Link01Icon, MessageSquarePlusIcon, MoreHorizontalIcon, PanelLeftCloseIcon, PencilEdit02Icon, PinIcon, PuzzleIcon, Search01Icon, Settings01Icon } from "@hugeicons/core-free-icons";
+import { Add01Icon, Alert02Icon, AlertCircleIcon, Archive04Icon, ArrowLeft01Icon, ArrowRight01Icon, Clock01Icon, Delete02Icon, Folder01Icon, Folder02Icon, FolderRootIcon, Link01Icon, MessageSquarePlusIcon, MoreHorizontalIcon, PanelLeftCloseIcon, PencilEdit02Icon, PinIcon, PuzzleIcon, Search01Icon, Settings01Icon } from "@hugeicons/core-free-icons";
 import {
   DndContext,
   DragOverlay,
@@ -102,6 +102,9 @@ export const Sidebar = memo(function Sidebar({
   onReorderProjects,
   onOpenSettings,
   onOpenMarket,
+  pluginsActive,
+  onOpenTasks,
+  tasksActive,
   onOpenSubTask,
   onSearch,
 }: {
@@ -129,6 +132,12 @@ export const Sidebar = memo(function Sidebar({
   onReorderProjects: (cwds: string[]) => void;
   onOpenSettings: () => void;
   onOpenMarket: () => void;
+  /** The 插件 page is on screen. */
+  pluginsActive: boolean;
+  /** The 定时任务 page, directly under 插件. */
+  onOpenTasks: () => void;
+  /** That page is the one on screen. */
+  tasksActive: boolean;
   /** Open a chat and show one of its sub-agent tasks in the side pane. */
   onOpenSubTask: (conversationId: string, node: DagNode) => void;
   onSearch: () => void;
@@ -588,7 +597,11 @@ export const Sidebar = memo(function Sidebar({
             </button>
             <button
               type="button"
-              className="flex h-8 pointer-coarse:h-10 w-full items-center gap-2.5 rounded-md px-2 text-sm hover:bg-sidebar-accent/50"
+              aria-current={pluginsActive ? "page" : undefined}
+              className={cn(
+                "flex h-8 pointer-coarse:h-10 w-full items-center gap-2.5 rounded-md px-2 text-sm hover:bg-sidebar-accent/50",
+                pluginsActive && "bg-sidebar-accent font-medium",
+              )}
               onClick={() => {
                 onOpenMarket();
                 dismissDrawer();
@@ -596,6 +609,21 @@ export const Sidebar = memo(function Sidebar({
             >
               <HugeiconsIcon strokeWidth={2} icon={PuzzleIcon} className="size-3.5 text-muted-foreground" />
               {t("sidebar.plugins")}
+            </button>
+            <button
+              type="button"
+              aria-current={tasksActive ? "page" : undefined}
+              className={cn(
+                "flex h-8 pointer-coarse:h-10 w-full items-center gap-2.5 rounded-md px-2 text-sm hover:bg-sidebar-accent/50",
+                tasksActive && "bg-sidebar-accent font-medium",
+              )}
+              onClick={() => {
+                onOpenTasks();
+                dismissDrawer();
+              }}
+            >
+              <HugeiconsIcon strokeWidth={2} icon={Clock01Icon} className="size-3.5 text-muted-foreground" />
+              {t("sidebar.tasks")}
             </button>
           </div>
         </div>

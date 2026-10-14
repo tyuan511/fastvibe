@@ -4,11 +4,13 @@ import { initReactI18next } from "react-i18next";
 import enApp from "@/locales/en/app.json";
 import enChat from "@/locales/en/chat.json";
 import enCommon from "@/locales/en/common.json";
+import enSchedules from "@/locales/en/schedules.json";
 import enSettings from "@/locales/en/settings.json";
 import enSidepane from "@/locales/en/sidepane.json";
 import zhApp from "@/locales/zh/app.json";
 import zhChat from "@/locales/zh/chat.json";
 import zhCommon from "@/locales/zh/common.json";
+import zhSchedules from "@/locales/zh/schedules.json";
 import zhSettings from "@/locales/zh/settings.json";
 import zhSidepane from "@/locales/zh/sidepane.json";
 import { detectSystemLanguage, htmlLang, type UiLanguage } from "./language";
@@ -16,7 +18,7 @@ import { detectSystemLanguage, htmlLang, type UiLanguage } from "./language";
 /**
  * Renderer i18n. `common` holds everything the shared `lib/*` modules render
  * (tool labels, permission modes, thinking levels, shortcut names, durations);
- * the other four namespaces follow the surface that owns them.
+ * the other namespaces follow the surface that owns them.
  *
  * The instance is the i18next singleton so `react-i18next`'s hooks resolve it
  * with no provider, while non-React modules can call `i18n.t` directly at the
@@ -24,14 +26,14 @@ import { detectSystemLanguage, htmlLang, type UiLanguage } from "./language";
  * render translated text must still call `useTranslation` so a language switch
  * re-renders them.
  */
-export const I18N_NAMESPACES = ["common", "app", "chat", "settings", "sidepane"] as const;
+export const I18N_NAMESPACES = ["common", "app", "chat", "settings", "sidepane", "schedules"] as const;
 
 export const i18n = i18next;
 
 void i18n.use(initReactI18next).init({
   resources: {
-    zh: { common: zhCommon, app: zhApp, chat: zhChat, settings: zhSettings, sidepane: zhSidepane },
-    en: { common: enCommon, app: enApp, chat: enChat, settings: enSettings, sidepane: enSidepane },
+    zh: { common: zhCommon, app: zhApp, chat: zhChat, settings: zhSettings, sidepane: zhSidepane, schedules: zhSchedules },
+    en: { common: enCommon, app: enApp, chat: enChat, settings: enSettings, sidepane: enSidepane, schedules: enSchedules },
   },
   // The pre-mount default; `applyUiLanguage` stamps the persisted choice from
   // `main.tsx` before the first render, exactly like the theme.

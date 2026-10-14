@@ -1,4 +1,4 @@
-import { createContext, memo, useContext, useDeferredValue, useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from "react";
+import { createContext, forwardRef, memo, useContext, useDeferredValue, useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import Markdown, { defaultUrlTransform, type Components } from "react-markdown";
 import type { PluggableList } from "unified";
@@ -6,12 +6,13 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import { remarkStrictInlineMath } from "@/lib/remark-strict-inline-math";
+import { rehypeHeadingIds } from "@/lib/rehype-heading-ids";
 import { isPathLike, remarkPathLinks } from "@/lib/remark-path-links";
 import { useValidatedMarkdownPaths } from "@/lib/markdown-path-validation";
-import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Copy01Icon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
+import { PathMenuItems } from "@/components/path-menu";
 import { useHighlightedCode } from "@/lib/highlight";
 import { splitMarkdownBlocks } from "@/lib/markdown-blocks";
 import { useSessionStore } from "@/stores/session";
@@ -20,10 +21,10 @@ import { stripMemoryCitation } from "@shared/memory-citation";
 import {
   ContextMenu,
   ContextMenuContent,
-  ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { markdownMedia } from "@/lib/markdown-media";
+import { cn } from "@/lib/utils";
 import { DiffView } from "./diff-view";
 import { InlineMediaItem } from "./inline-preview";
 
@@ -53,6 +54,14 @@ const REHYPE_PLUGINS: PluggableList = [
     },
   ],
 ];
+
+/**
+ * The same pipeline plus heading ids, for the file pane's document view.
+ *
+ * A module-level constant like `REHYPE_PLUGINS`: a new array identity per render is
+ * what makes `react-markdown` rebuild its processor for every streamed token.
+ */
+const REHYPE_PLUGINS_WITH_HEADING_IDS: PluggableList = [...REHYPE_PLUGINS, rehypeHeadingIds];
 
 /** Fence languages whose body is a diff, drawn by `DiffView` rather than Shiki. */
 const DIFF_LANGUAGES = new Set(["diff", "patch"]);
@@ -138,13 +147,7 @@ function resolvedMarkdownPath(path: string): string {
   return resolvePath(path, cwd);
 }
 
-async function revealMarkdownPath(path: string, missing: string): Promise<void> {
-  const result = await window.fastvibe.workspace.reveal(path);
-  if (result && result.ok === false) toast.error(missing);
-}
-
 function PathLink({ path, children }: { path: string; children: ReactNode }): JSX.Element {
-  const { t } = useTranslation("chat");
   const resolved = resolvedMarkdownPath(path);
   return (
     <ContextMenu>
@@ -157,9 +160,7 @@ function PathLink({ path, children }: { path: string; children: ReactNode }): JS
         </span>
       </ContextMenuTrigger>
       <ContextMenuContent className="w-48">
-        <ContextMenuItem onClick={() => void useSessionStore.getState().openPreview(resolved)}>{t("preview.pathPreview")}</ContextMenuItem>
-        <ContextMenuItem onClick={() => void revealMarkdownPath(resolved, t("preview.pathMissing"))}>{t("preview.pathReveal")}</ContextMenuItem>
-        <ContextMenuItem onClick={() => void navigator.clipboard?.writeText(resolved)}>{t("preview.pathCopy")}</ContextMenuItem>
+        <PathMenuItems path={resolved} />
       </ContextMenuContent>
     </ContextMenu>
   );
@@ -245,7 +246,7 @@ const MARKDOWN_COMPONENTS: Components = {
  * affordable is that a settled block's text never changes again: this component then
  * skips the render entirely, and only the block being streamed into is re-parsed.
  */
-const MarkdownBlock = memo(function MarkdownBlock({ text }: { text: string }): JSX.Element {
+const MarkdownBlock = memo(function MarkdownBlock({ text, headingIds }: { text: string; headingIds?: boolean }): JSX.Element {
   // The block in flight still re-parses on each flush; keep the urgent UI (caret,
   // scroll) ahead of it and let React apply the markdown at lower priority.
   const deferred = useDeferredValue(text);
@@ -255,7 +256,7 @@ const MarkdownBlock = memo(function MarkdownBlock({ text }: { text: string }): J
     <MarkdownPathContext.Provider value={validPaths}>
       <Markdown
         remarkPlugins={REMARK_PLUGINS}
-        rehypePlugins={REHYPE_PLUGINS}
+        rehypePlugins={headingIds ? REHYPE_PLUGINS_WITH_HEADING_IDS : REHYPE_PLUGINS}
         components={MARKDOWN_COMPONENTS}
         urlTransform={urlTransform}
       >
@@ -271,23 +272,22 @@ const MarkdownBlock = memo(function MarkdownBlock({ text }: { text: string }): J
  *
  * The text is cut into independently parsed blocks (`splitMarkdownBlocks`), which is
  * what bounds the cost of a *single* long answer — one pass over 50 KB of prose costs
- * ~100 ms, and it used to be paid again at every flush. Each block renders as a
- * sibling in this same parent, exactly as `react-markdown` would have emitted them,
- * so the DOM is unchanged.
+ * ~100 ms, and it used to be paid again at every flush. The blocks stay siblings
+ * inside one column so a collapsed prompt can clip them together; a position still
+ * keeps its content because blocks only grow at the end.
  */
-export const MarkdownView = memo(function MarkdownView({ text }: { text: string }): JSX.Element {
+export const MarkdownView = memo(forwardRef<HTMLDivElement, { text: string; className?: string; headingIds?: boolean }>(function MarkdownView({ text, className, headingIds }, ref): JSX.Element {
   // A reply that used memory ends with a citation block the pipeline reads; the reader does not.
   const blocks = useMemo(() => splitMarkdownBlocks(stripMemoryCitation(text)), [text]);
-  if (blocks.length === 1) return <MarkdownBlock text={blocks[0]} />;
   return (
-    <>
+    <div ref={ref} className={cn("chat-markdown-flow", className)}>
       {blocks.map((block, index) => (
         // Blocks only ever grow at the end, so a position keeps its content.
-        <MarkdownBlock key={index} text={block} />
+        <MarkdownBlock key={index} text={block} headingIds={headingIds} />
       ))}
-    </>
+    </div>
   );
-});
+}));
 
 function nodeText(node: ReactNode): string {
   if (typeof node === "string" || typeof node === "number") return String(node);

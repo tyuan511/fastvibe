@@ -22,6 +22,8 @@
     "attach": "Add attachment",
     "pastedTextFile": "pasted-text.txt",
     "contextStats": "View context and turn stats",
+    "compact": "Compact context",
+    "compactBusy": "Unavailable while this conversation is working",
     "addModel": "Add a model",
     "pickModel": "Choose a model",
     "noModels": "No models",
@@ -186,6 +188,7 @@
     "selection": {
       "label": "Selected text actions",
       "copy": "Copy",
+      "attachToContext": "Attach to context",
       "quoteCode": "Quote code into chat",
       "addToConversation": "Add to conversation",
       "askInSideChat": "Ask in side chat"
@@ -251,7 +254,8 @@
     "itemOf": "{{index}} of {{count}}",
     "previous": "Previous",
     "next": "Next",
-    "moreItems": "{{count}} more"
+    "moreItems": "{{count}} more",
+    "pathCopied": "Path copied"
   },
   "model": {
     "switched": "Model switched to"

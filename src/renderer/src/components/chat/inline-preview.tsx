@@ -186,12 +186,21 @@ function Viewer({
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
-      if (count < 2 || (event.key !== "ArrowLeft" && event.key !== "ArrowRight")) return;
+      if (count < 2 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      // The ⋮ menu is portaled over the viewer and uses the same keys to move its own highlight.
+      const target = event.target;
+      if (target instanceof Element && target.closest("[data-slot='dropdown-menu-content']")) return;
       event.preventDefault();
+      event.stopPropagation();
       onIndex((index + (event.key === "ArrowRight" ? 1 : count - 1)) % count);
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    // Capture, not bubble. DialogPopup stops ArrowLeft/ArrowRight from bubbling (they are
+    // composite keys), so a window listener in the bubble phase never runs — which is why
+    // ← / → did nothing while the viewer was open. Capture also runs before a focused
+    // <video> turns the same keys into a seek.
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, [count, index, onIndex]);
 
   if (!current) return null;

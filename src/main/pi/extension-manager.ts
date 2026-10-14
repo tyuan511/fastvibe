@@ -27,6 +27,7 @@ export const BUILTIN_EXTENSIONS: Array<{ source: string; file: string }> = [
   { source: "fastvibe:batch-decide", file: "batch-decide.ts" },
   { source: "fastvibe:app-config", file: "app-config.ts" },
   { source: "fastvibe:dag", file: "dag.ts" },
+  { source: "fastvibe:schedules", file: "schedules.ts" },
   { source: "fastvibe:pdf-attachment", file: "pdf-attachment.ts" },
   { source: "fastvibe:subagent-team", file: "subagent/index.ts" },
 ];

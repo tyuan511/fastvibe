@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { collectChangedFiles, countPatch } from "../src/renderer/src/lib/changed-files.ts";
+import { collectChangedFiles, countPatch, fileChange } from "../src/renderer/src/lib/changed-files.ts";
 import type { ToolCallBlock } from "../src/shared/types.ts";
 
 function tool(patch: Partial<ToolCallBlock> & Pick<ToolCallBlock, "id" | "name">): ToolCallBlock {
@@ -63,7 +63,7 @@ test("collectChangedFiles synthesises an add-only diff for write content", () =>
   ]);
   assert.equal(files[0].added, 2);
   assert.equal(files[0].removed, 0);
-  assert.equal(files[0].diff, "+one\n+two");
+  assert.equal(files[0].diff, "@@ -0,0 +1,2 @@\n+one\n+two");
 });
 
 test("collectChangedFiles aggregates two writes to the same path", () => {
@@ -105,6 +105,21 @@ test("collectChangedFiles skips running and failed tools", () => {
     }),
   ]);
   assert.deepEqual(files, []);
+});
+
+test("fileChange turns a write body into an add-only file diff and keeps an edit patch", () => {
+  const written = fileChange(
+    tool({ id: "1", name: "write", args: { path: "src/new.ts", content: "one\ntwo\n" } }),
+  );
+  assert.equal(written?.added, 2);
+  assert.equal(written?.removed, 0);
+  assert.match(written?.diff ?? "", /^@@ -0,0 \+1,2 @@\n\+one\n\+two$/);
+
+  const edited = fileChange(
+    tool({ id: "2", name: "edit", args: { path: "src/a.ts" }, details: { diff: "-old\n+new\n+more" } }),
+  );
+  assert.deepEqual(edited && { added: edited.added, removed: edited.removed }, { added: 2, removed: 1 });
+  assert.equal(fileChange(tool({ id: "3", name: "read", args: { path: "src/a.ts" } })), undefined);
 });
 
 test("collectChangedFiles matches write/edit family aliases and path keys", () => {

@@ -39,6 +39,7 @@ test("engine stop suspends DAG work before waiting on its operation queue or tea
     queue: async (work: () => Promise<void>) => { await queue; await work(); },
     stopSessionSweep() {}, resolvePendingUi() {},
     messageQueue: { conversationIds: () => [] }, mcp: { close: async () => {} },
+    scheduledTasks: { stop: () => {} },
     setStatus(value: unknown) { this.status = value; },
   });
   let finish!: (value: DagNodeRun) => void;

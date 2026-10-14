@@ -39,10 +39,21 @@ test("the read path puts the summary inline, with the folder, and caps a huge on
   assert.match(prompt, /\/Users\/me\/memories\/MEMORY\.md \(searchable registry/);
   assert.match(prompt, /Never update memories\. You can only read them\./);
   assert.match(prompt, /<oai-mem-citation>/);
+  // Line wrapping in the template is not the contract; the wording is.
+  const flat = prompt.replace(/\s+/g, " ");
+  assert.ok(flat.includes("absolute and is meant to be used exactly as written"), prompt.slice(0, 600));
+  assert.ok(flat.includes("Never rebuild one relative to the current directory"));
+  assert.ok(prompt.includes(`rg -n --heading -g MEMORY.md '<keyword 1>|<keyword 2>' "/Users/me/memories"`), prompt.slice(0, 600));
   assert.match(prompt, /========= MEMORY_SUMMARY BEGINS =========\nv1\n\n## User Profile\n- likes pnpm\n========= MEMORY_SUMMARY ENDS =========/);
   const huge = readPathPrompt({ basePath: "/m", summary: "v1\n".padEnd(SUMMARY_PROMPT_MAX_CHARS * 3, "x") });
   assert.ok(huge.includes("…(truncated)"));
   assert.ok(huge.length < SUMMARY_PROMPT_MAX_CHARS + 10_000);
+});
+
+test("the read path hands a folder name a shell command can take", () => {
+  const base = "/Users/me/Library/Application Support/FastVibe/memories";
+  const prompt = readPathPrompt({ basePath: base, summary: "v1\n" });
+  assert.ok(prompt.includes(`"${base}"`), "the folder appears quoted, ready for a shell");
 });
 
 test("a placeholder with no value is an error", () => {

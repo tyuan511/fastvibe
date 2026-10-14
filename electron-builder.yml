@@ -72,12 +72,6 @@ asarUnpack:
   - "**/*.node"
   - "**/*.wasm"
   - "**/node-pty/prebuilds/**"
-  # cua-driver's native packages ship a shared library (.dylib/.so/.dll) *beside* their
-  # .node addon, and the loader resolves it by path from the package directory. Only the
-  # .node is covered by the glob above; the shared library would be left inside the asar
-  # archive, which dlopen cannot open. Unpack the package so both halves land on disk
-  # together — the per-platform `files` filters below keep it to one architecture.
-  - "**/node_modules/@trycua/cua-driver-*/**"
 
 # node-pty / koffi / photon ship N-API prebuilds that already work in Electron.
 # Avoid running node-gyp against a toolchain the CI image may not have.
@@ -126,11 +120,6 @@ mac:
   # sends one without this string is killed by the OS rather than prompted.
   extendInfo:
     NSAppleEventsUsageDescription: FastVibe 需要发送 Apple 事件来完成应用更新。
-  # The private worker is only fetched and supported on macOS. Keep it in the
-  # macOS package instead of letting the global resource list copy it to Linux.
-  extraResources:
-    - from: resources/cua-driver/${arch}/cua-driver
-      to: cua-driver
   files:
     - "!**/node_modules/node-pty/prebuilds/{win32,linux}-*/**"
     - "!**/node_modules/node-pty/prebuilds/darwin-!(${arch}){,/**/*}"
@@ -149,11 +138,9 @@ mac:
     # runners, which may not have clipboard-darwin-x64 installed). Drop the
     # other arch's package; the loader tries universal first, then ${arch}.
     - "!**/node_modules/@mariozechner/clipboard-darwin-!(${arch}|universal){,/**/*}"
-    # ~50 MB per architecture, so shipping the other one doubles the cost of a feature
-    # it cannot serve. pnpm normally installs only the host's package anyway; these
-    # filters matter when a build host installs several (`supportedArchitectures`).
-    - "!**/node_modules/@trycua/cua-driver-{win32,linux}-*{,/**/*}"
-    - "!**/node_modules/@trycua/cua-driver-darwin-!(${arch}){,/**/*}"
+    # Downloaded when 电脑操控 is turned on, not shipped. The JS bindings stay;
+    # the platform package is the ~50 MB native library.
+    - "!**/node_modules/@trycua/cua-driver-*/**"
   # No `arch:` here on purpose. `computeArchToTargetNamesMap` only falls back to the
   # architectures named on the command line when a target declares none of its own
   # (`archs == null ? defaultArchs : asArray(archs)`), so listing them here made
@@ -178,8 +165,8 @@ win:
     - "!**/node_modules/@mariozechner/clipboard-win32-!(${arch}*){,/**/*}"
     - "!**/node_modules/@node-datachannel/{darwin,linux,android}-*{,/**/*}"
     - "!**/node_modules/@node-datachannel/win32-!(${arch}*){,/**/*}"
-    - "!**/node_modules/@trycua/cua-driver-{darwin,linux}-*{,/**/*}"
-    - "!**/node_modules/@trycua/cua-driver-win32-!(${arch}*){,/**/*}"
+    # Downloaded when 电脑操控 is turned on, not shipped.
+    - "!**/node_modules/@trycua/cua-driver-*/**"
   target:
     - target: nsis
       arch:

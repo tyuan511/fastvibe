@@ -1,7 +1,8 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@import "@fontsource-variable/geist";
+@import "@fontsource-variable/instrument-sans";
+@import "@fontsource-variable/instrument-sans/wght-italic.css";
 /*
  * KaTeX's stylesheet, for the LaTeX in replies and file previews
  * (`components/chat/markdown-view.tsx` → `rehype-katex`). Importing it here rather
@@ -116,7 +117,7 @@ html {
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
-  --font-sans: 'Geist Variable', sans-serif;
+  --font-sans: 'Instrument Sans Variable', sans-serif;
   --font-mono: "SF Mono", ui-monospace, Menlo, monospace;
   --font-heading: var(--font-sans);
   --color-sidebar-ring: var(--sidebar-ring);
@@ -633,6 +634,14 @@ html[data-glass="true"] .overlay-surface {
   }
 }
 
+/* A collapsed prompt clips the block column; line-clamp needs -webkit-box, which
+ * does not fold the block children, so the height is capped instead. */
+.chat-markdown-flow.line-clamp-2 {
+  display: block;
+  max-height: 2lh;
+  overflow: hidden;
+}
+
 .chat-markdown p {
   margin: 0.4em 0;
 }
@@ -726,6 +735,461 @@ html[data-glass="true"] .overlay-surface {
 }
 
 /*
+ * The file pane's document view ---------------------------------------------------
+ * A reply fills its column; a document is a fixed measure with the page around it, so
+ * a README stays readable in a pane dragged from 260px to the whole window. The rail
+ * sits outside the column and the column stays centred on the space left over.
+ */
+.chat-document {
+  position: relative;
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  container-type: inline-size;
+}
+
+.chat-document-column {
+  box-sizing: content-box;
+  max-width: 36em;
+  margin-inline: auto;
+  padding-inline: clamp(1.25rem, 6cqi, 4rem);
+  padding-block: clamp(1.5rem, 6cqi, 2.5rem) 4rem;
+}
+
+/* A heading is a jump target, so a scroll from the rail lands it below the header
+ * instead of flush against the top edge. */
+.chat-document :is(h1, h2, h3, h4, h5, h6) {
+  scroll-margin-top: 0.5rem;
+}
+
+.chat-document-frontmatter {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) 1fr;
+  align-items: baseline;
+  gap: 0.5rem 2rem;
+  margin-block-end: 2rem;
+  padding-block-end: 1.25rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--foreground) 10%, transparent);
+}
+
+.chat-document-frontmatter dt {
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+}
+
+.chat-document-frontmatter dd {
+  min-width: 0;
+  overflow-wrap: break-word;
+  white-space: pre-wrap;
+}
+
+.chat-document-frontmatter ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chat-document-frontmatter li {
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+  padding-inline: 0.25rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+/* The contents rail: a column of marks beside the text, one per heading, widening
+ * into a labelled list on hover.
+ *
+ * It is the scroller's first child and has no size of its own, so it takes no layout
+ * space and sticks to the top of the visible area; the marks then sit in the gutter
+ * beside the column. Below the width that leaves a gutter it is not drawn at all — a
+ * rail over the text it indexes is worse than no rail. */
+.chat-document-rail {
+  display: none;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  width: 0;
+  height: 0;
+}
+
+@container (min-width: 44rem) {
+  .chat-document-rail {
+    display: block;
+  }
+}
+
+.chat-document-rail-nav {
+  position: absolute;
+  inset-block-start: 0.75rem;
+  inset-inline-start: 0.5rem;
+  width: 3rem;
+  font-family: var(--font-sans);
+}
+
+.chat-document-rail-nav > ol {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chat-document-rail-nav > ol > li {
+  display: flex;
+  height: 8px;
+  align-items: center;
+}
+
+.chat-document-rail-mark {
+  display: block;
+  width: 14px;
+  height: 2px;
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--foreground) 20%, transparent);
+  transform-origin: left;
+  transition: transform 200ms ease, background-color 200ms ease;
+}
+
+.chat-document-rail-mark[data-depth="1"] { width: 11px; }
+.chat-document-rail-mark[data-depth="2"] { width: 8px; }
+
+.chat-document-rail-mark[data-active] {
+  background: var(--foreground);
+  transform: scaleX(calc(14 / 9));
+}
+
+/* The contents rail's hover panel. Drawn by hand rather than with `PopoverContent` —
+ * it is anchored to a rail that is itself sticky — so it carries `overlay-surface`
+ * for the border and the glass treatment, and owns its own fill and radius. */
+.chat-document-rail-panel {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-start: 0;
+  max-height: 70vh;
+  overflow-y: auto;
+  width: min(15rem, calc(100cqi - 3rem));
+  border-radius: 0.5rem;
+  background: var(--popover);
+  color: var(--popover-foreground);
+  padding: 0.375rem 0.25rem;
+}
+
+.chat-document-rail-panel ol {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1875rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chat-document-rail-panel button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.5rem;
+  border-radius: 5px;
+  padding: 0.25rem;
+  text-align: left;
+  color: var(--muted-foreground);
+}
+
+.chat-document-rail-panel button:hover {
+  background: var(--muted);
+  color: var(--foreground);
+}
+
+.chat-document-rail-panel button[aria-current="true"] {
+  color: var(--foreground);
+}
+
+.chat-document-rail-panel button > span:first-child {
+  display: grid;
+  width: 14px;
+  flex: none;
+  place-items: center;
+}
+
+.chat-document-rail-label {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8125rem;
+}
+
+/* The path breadcrumb above the viewer. */
+.chat-crumbs {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: 0.75rem;
+}
+
+.chat-crumb {
+  display: flex;
+  /* Ancestors give up width first. The filename shrinks last, and only once the
+     path is actually longer than the row — not because a button claimed half of it. */
+  min-width: 1.25rem;
+  flex: 0 2 auto;
+  align-items: center;
+  gap: 0.25rem;
+  overflow: hidden;
+  border-radius: 3px;
+  padding-inline: 0.1875rem;
+  color: var(--muted-foreground);
+  cursor: default;
+}
+
+.chat-crumb:hover,
+.chat-crumb.is-open {
+  background: color-mix(in srgb, var(--foreground) 7.5%, transparent);
+}
+
+.chat-crumb.is-file {
+  min-width: 3rem;
+  flex-shrink: 1;
+  color: var(--foreground);
+}
+
+.chat-crumb > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-crumb-sep {
+  flex: none;
+  color: var(--muted-foreground);
+}
+
+/* A CSV or sheet: sticky header, numeric columns right-aligned, a filter bar. */
+.chat-csv {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.chat-csv-bar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.75rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--foreground) 10%, transparent);
+  padding: 0.375rem 0.75rem;
+}
+
+.chat-csv-scroll {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+}
+
+.chat-csv-scroll table {
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+  width: 100%;
+}
+
+.chat-csv-scroll :is(th, td) {
+  max-width: 32em;
+  overflow-wrap: break-word;
+  border-bottom: 1px solid var(--border);
+  padding: 0.375rem 0.75rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.chat-csv-scroll :is(th, td)[data-numeric] {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.chat-csv-scroll th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--background);
+  font-weight: 500;
+}
+
+.chat-csv-scroll th > button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.25rem;
+  text-align: inherit;
+}
+
+.chat-csv-scroll th[data-numeric] > button {
+  flex-direction: row-reverse;
+}
+
+/* The project file tree. Rows are 24px; each nested level indents by `--tree-indent`
+ * and draws one hairline. The line sits on the parent folder icon's center, not on
+ * the leading edge of the indent slot — that edge is a gap left of the icon. */
+.chat-tree-row {
+  --tree-indent: 0.75rem;
+  --tree-icon: 0.875rem;
+  --tree-gap: 0.375rem;
+  display: flex;
+  width: 100%;
+  height: 1.5rem;
+  align-items: center;
+  gap: var(--tree-gap);
+  padding-inline: 0.5rem 0.5rem;
+  text-align: left;
+  font-size: 0.75rem;
+  color: var(--foreground);
+  transition: background-color 120ms ease;
+}
+
+.chat-tree-row:hover {
+  background: color-mix(in srgb, var(--foreground) 7.5%, transparent);
+}
+
+.chat-tree-row.is-active {
+  background: color-mix(in srgb, var(--foreground) 10%, transparent);
+}
+
+.chat-tree-row > img {
+  width: var(--tree-icon);
+  height: var(--tree-icon);
+}
+
+.chat-tree-guides {
+  display: flex;
+  align-self: stretch;
+  margin-inline-start: -0.125rem;
+}
+
+.chat-tree-guides > span {
+  position: relative;
+  width: var(--tree-indent);
+}
+
+/* The slot ends one gap before the child icon. The parent icon's center is half an
+ * icon in from its own left edge, one indent step left of that child. The difference
+ * is how far the line sits from the slot's trailing edge — negative, so it moves right
+ * onto the icon. */
+.chat-tree-guides > span::before {
+  content: "";
+  position: absolute;
+  inset-inline-end: calc(var(--tree-indent) - var(--tree-gap) - var(--tree-icon) / 2);
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: color-mix(in srgb, var(--foreground) 12%, transparent);
+}
+
+/*
+ * The overlay source editor --------------------------------------------------------
+ * A transparent <textarea> over a Shiki-highlighted <pre>. Both layers carry
+ * `chat-editor-layer`, so every metric that moves text — font, size, leading, padding,
+ * tab size, wrapping — is declared once and cannot drift between what is typed into and
+ * what is seen. The textarea keeps the caret, selection and undo stack; the layer under
+ * it paints the colour.
+ */
+.chat-editor {
+  position: relative;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  tab-size: 2;
+}
+
+.chat-editor-layer {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  border: 0;
+  padding: 0.75rem;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  tab-size: inherit;
+  white-space: pre;
+  overflow: auto;
+  overscroll-behavior: contain;
+  /* Both layers reserve the scrollbar gutter, so their content boxes are the same width
+   * and a wrapped line breaks at the same character in the colouring as in the text.
+   * The highlight layer's own scrollbar is painted transparent rather than hidden: a
+   * hidden one (`scrollbar-width: none`) gives the gutter back and the two widths part. */
+  scrollbar-gutter: stable;
+}
+
+.chat-editor-layer.is-wrapped {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* The highlight layer paints colour and takes no pointer: the textarea above it owns the
+ * caret, the selection and the scrollbar. This must NOT be on the shared
+ * `chat-editor-layer` class — the textarea carries that class too, and `pointer-events:
+ * none` there would leave the whole editor inert. */
+.chat-editor .chat-editor-highlight {
+  background: transparent;
+  pointer-events: none;
+  /* Painted transparent rather than hidden: a hidden scrollbar gives the gutter back,
+   * and the two layers would then wrap their lines at different widths. */
+  scrollbar-color: transparent transparent;
+}
+
+.chat-editor .chat-editor-highlight::-webkit-scrollbar-thumb,
+.chat-editor .chat-editor-highlight::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.chat-editor .chat-editor-layer :is(pre, code) {
+  margin: 0;
+  border: 0;
+  padding: 0;
+  background: transparent !important;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  white-space: inherit;
+  tab-size: inherit;
+  overflow: visible;
+  font-variant-ligatures: none;
+}
+
+.chat-editor .chat-editor-input {
+  background: transparent;
+  color: transparent;
+  caret-color: var(--foreground);
+  resize: none;
+  outline: none;
+  /* The app makes chrome unselectable (`body { user-select: none }`) and opts text back
+   * in per surface. An editor is text, so it opts back in — otherwise the caret cannot be
+   * placed by click and nothing can be selected. */
+  user-select: text;
+  -webkit-user-select: text;
+  /* Chrome draws a spell-check squiggle under the transparent text; nothing to check here. */
+  -webkit-text-fill-color: transparent;
+}
+.chat-editor .chat-editor-input::selection {
+  /* The highlight below stays readable through the selection rather than being erased. */
+  background: color-mix(in srgb, var(--primary) 28%, transparent);
+}
+
+/*
  * Math ---------------------------------------------------------------------------
  * KaTeX inherits `color` and the font stack from its surroundings, so a formula
  * already follows the active theme with no per-theme set-up — no token overrides are
@@ -744,6 +1208,8 @@ html[data-glass="true"] .overlay-surface {
 
 /* A display block carries KaTeX's own vertical padding; the paragraph spacing around
  * it is the markdown renderer's, so trim the doubled gap it would otherwise get. */
+.chat-markdown-flow > .katex-display:first-child,
+.chat-markdown-flow > p:first-child > .katex-display,
 .chat-markdown > .katex-display:first-child,
 .chat-markdown > p:first-child > .katex-display {
   margin-top: 0;

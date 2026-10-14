@@ -10,6 +10,8 @@ Version 2.0 (https://www.apache.org/licenses/LICENSE-2.0).
   git-repository paragraph and two shell hints (`wc -l`, `rg --files`) were reworded for FastVibe, which keeps a
   baseline copy of the folder instead of a git repository and gives the agent no shell; "Codex" became "FastVibe".
 - `read_path.md`: `codex-rs/core/templates/memories/read_path.md` at tag `rust-v0.120.0` (the last release that ships
-  it as a standalone file). Changed: the description of the rollout transcript format, which is pi's session format here.
+  it as a standalone file). Changed: the description of the rollout transcript format, which is pi's session format here;
+  the folder is named as an absolute path a shell command must quote, with one ready-to-run search command, because
+  FastVibe keeps the memory folder under a userData directory whose own name contains a space.
 
 The templates are instructions to a model and are read at run time (`src/main/engine/memory-templates.ts`).

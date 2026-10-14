@@ -6,10 +6,11 @@ import { Spinner } from "@/components/ui/spinner";
 import type { ToolCallBlock } from "@shared/types";
 import { useSessionStore, useWorkspacePath } from "@/stores/session";
 import { useSidePaneStore } from "@/stores/side-pane";
+import { countPatch, fileChange, type FileChange } from "@/lib/changed-files";
 import { asRecord, argString, describeTool, familyOf, unwrapShellCommand } from "@/lib/tool-presentation";
-import { displayPath, resolvePath } from "@/lib/workspace-path";
 import { parseToolTodos } from "@/lib/todos";
 import { codemodeCalls, codemodeCode, codemodeFence, formatCallDuration, splitCodemodeSource, type CodemodeCall } from "@/lib/codemode";
+import { DiffStatBadge } from "./diff-stat";
 import { DiffView } from "./diff-view";
 import { MarkdownView } from "./markdown-view";
 import { QuestionAnswers } from "./question-answers";
@@ -17,7 +18,6 @@ import { TodoChecklist } from "./todo-list";
 import { ToolRow } from "./tool-row";
 import { DagInline, useDagBatch } from "@/components/dag/dag-inline";
 import { useTranscriptConversation } from "./conversation-context";
-import { isRemoteRef } from "@/lib/remote-project";
 
 const RESULT_LIMIT = 4000;
 
@@ -51,6 +51,14 @@ function diffText(tool: ToolCallBlock): string | undefined {
   const result = tool.result ?? "";
   const marked = result.split("\n").filter((line) => /^[+-]/.test(line)).length;
   return marked >= 3 ? result : undefined;
+}
+
+/** Edit/write diff for the card: the engine patch, else a result that is already a diff. */
+function presentedChange(tool: ToolCallBlock): FileChange | undefined {
+  const change = fileChange(tool);
+  if (change) return change;
+  const diff = diffText(tool);
+  return diff ? { diff, ...countPatch(diff) } : undefined;
 }
 
 function trim(text: string): string {
@@ -191,8 +199,7 @@ function CodemodePanel({ tool, running }: { tool: ToolCallBlock; running: boolea
             {t("tools.script")}
             {options ? <span className="ml-2 font-mono font-normal">{options}</span> : null}
           </p>
-          {/* The code block already is a card, with its own border and 复制 button. `chat-markdown`
-              is what gives its <pre> the padding a code block has in a reply. */}
+          {/* `chat-markdown` is what gives a fenced block the same padding it has in a reply. */}
           <div className="chat-markdown max-h-72 overflow-y-auto text-sm">
             <MarkdownView text={codemodeFence(body)} />
           </div>
@@ -246,30 +253,17 @@ function Parameters({ args }: { args: unknown }): JSX.Element | null {
   );
 }
 
-function FileActions({ path }: { path: string }): JSX.Element {
+/** Opens the file in the side pane. Lives on the summary row, not a line of its own. */
+function PreviewButton({ path }: { path: string }): JSX.Element {
   const { t } = useTranslation("chat");
-  const cwd = useWorkspacePath();
   return (
-    <div className="flex flex-wrap items-center gap-3">
-      <button
-        type="button"
-        className="font-mono text-sm text-muted-foreground underline-offset-2 hover:underline"
-        onClick={() => {
-          const resolved = resolvePath(path, cwd);
-          if (isRemoteRef(resolved) || isRemoteRef(cwd) ) return;
-          void window.fastvibe.workspace.reveal(resolved);
-        }}
-      >
-        {displayPath(path, cwd)}
-      </button>
-      <button
-        type="button"
-        className="text-sm text-muted-foreground underline-offset-2 hover:underline"
-        onClick={() => void useSessionStore.getState().openPreview(path)}
-      >
-        {t("tools.preview")}
-      </button>
-    </div>
+    <button
+      type="button"
+      className="shrink-0 text-sm text-muted-foreground underline-offset-2 hover:underline"
+      onClick={() => void useSessionStore.getState().openPreview(path)}
+    >
+      {t("tools.preview")}
+    </button>
   );
 }
 
@@ -357,7 +351,6 @@ function SubagentPanel({ tool }: { tool: ToolCallBlock }): JSX.Element {
 function ToolDetail({ tool, running }: { tool: ToolCallBlock; running: boolean }): JSX.Element {
   const cwd = useWorkspacePath();
   const view = describeTool(tool, cwd);
-  const path = argString(tool.args, FILE_PATH_KEYS);
   const diff = diffText(tool);
 
   if (view.family === "question") return <QuestionAnswers tool={tool} running={running} />;
@@ -378,18 +371,18 @@ function ToolDetail({ tool, running }: { tool: ToolCallBlock; running: boolean }
     return <TerminalPanel command={command} output={tool.result ?? ""} running={running} />;
   }
 
-  if (diff) {
-    return (
-      <div className="flex flex-col gap-2">
-        {path ? <FileActions path={path} /> : null}
-        <DiffView text={diff} />
-      </div>
-    );
+  // The body is the file diff, not the arguments — a write has no engine diff, so its body is the addition.
+  if (view.family === "edit" || view.family === "write") {
+    const change = presentedChange(tool);
+    if (change) return <DiffView text={change.diff} />;
+    if (tool.result !== undefined) return <OutputBlock text={tool.result} />;
+    return <></>;
   }
+
+  if (diff) return <DiffView text={diff} />;
 
   return (
     <div className="flex flex-col gap-2">
-      {path ? <FileActions path={path} /> : null}
       <Parameters args={tool.args} />
       {tool.result !== undefined ? <OutputBlock text={tool.result} /> : null}
     </div>
@@ -414,16 +407,35 @@ export const ToolCard = memo(function ToolCard({
   // viewer instead of expanding an inline body.
   const inline = INLINE_FAMILIES.has(familyOf(tool.name));
   const path = argString(tool.args, FILE_PATH_KEYS);
-  const hasDetail =
-    view.family === "terminal" ||
-    view.family === "todo" ||
-    view.family === "question" ||
-    view.family === "web" ||
-    view.family === "agent" ||
-    view.family === "codemode" ||
-    Boolean(tool.result?.length) ||
-    Boolean(diffText(tool)) ||
-    (tool.args !== undefined && !inline);
+  const fileChangeFamily = view.family === "edit" || view.family === "write";
+  const change = fileChangeFamily ? presentedChange(tool) : undefined;
+  // The summary row already names the file. Repeating the path under the diff
+  // was a second line that only existed to hold 「预览」.
+  const previewPath =
+    path &&
+    (fileChangeFamily ||
+      view.family === "delete" ||
+      (!inline &&
+        view.family !== "terminal" &&
+        view.family !== "question" &&
+        view.family !== "web" &&
+        view.family !== "agent" &&
+        view.family !== "codemode" &&
+        view.family !== "todo"))
+      ? path
+      : undefined;
+  // Expand a file change only for its diff or an error: the arguments are the edit, not the file.
+  const hasDetail = fileChangeFamily
+    ? Boolean(change) || (tool.status === "error" && Boolean(tool.result?.trim()))
+    : view.family === "terminal" ||
+      view.family === "todo" ||
+      view.family === "question" ||
+      view.family === "web" ||
+      view.family === "agent" ||
+      view.family === "codemode" ||
+      Boolean(tool.result?.length) ||
+      Boolean(diffText(tool)) ||
+      (tool.args !== undefined && !inline);
   if (dagBatch) return <DagInline conversationId={dagBatch.conversationId} nodes={dagBatch.nodes} />;
   // A subagent tool row expands into its runs; each row in that panel is itself
   // the doorway to that run's tab (see SubagentPanel).
@@ -440,10 +452,17 @@ export const ToolCard = memo(function ToolCard({
       showIcon={showIcon}
       persistKey={tool.id}
       trailing={
-        view.family === "agent" ? (
-          <SubagentSummary tool={tool} />
-        ) : view.badge ? (
-          <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">{view.badge}</span>
+        previewPath || view.family === "agent" || change || view.badge ? (
+          <>
+            {view.family === "agent" ? (
+              <SubagentSummary tool={tool} />
+            ) : change ? (
+              <DiffStatBadge added={change.added} removed={change.removed} />
+            ) : view.badge ? (
+              <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">{view.badge}</span>
+            ) : null}
+            {previewPath ? <PreviewButton path={previewPath} /> : null}
+          </>
         ) : undefined
       }
       onSubjectClick={

@@ -9,11 +9,14 @@ export function SelectionActionBar({
   containerRef,
   onAddToConversation,
   onAskInSideChat,
+  onAttachToContext,
   onQuote,
 }: {
   containerRef: RefObject<HTMLElement | null>;
   onAddToConversation?: (text: string) => void;
   onAskInSideChat?: (text: string) => void;
+  /** Drop the selection into the composer's citations. The file pane uses this. */
+  onAttachToContext?: (text: string) => void;
   /** Quote the selection into the composer. File previews use this; the chat does not. */
   onQuote?: (text: string) => void;
 }): JSX.Element | null {
@@ -64,6 +67,13 @@ export function SelectionActionBar({
       run: (text) => void navigator.clipboard?.writeText(text),
     },
   ];
+  if (onAttachToContext) {
+    buttons.push({
+      key: "attach",
+      label: t("message.selection.attachToContext"),
+      run: onAttachToContext,
+    });
+  }
   if (onQuote) {
     buttons.push({ key: "quote", label: t("message.selection.quoteCode"), run: onQuote });
   }

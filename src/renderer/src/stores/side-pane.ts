@@ -843,7 +843,9 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
         // Re-opening 文件 must not replace the name of a file already on screen with
         // the tab's own label: that label is derived from the type at render time and
         // is never read back off a tab that has a preview.
-        title: existing?.path ? existing.title : (i18n.t("sidepane:tabs.files") as string),
+        title: existing?.path
+          ? existing.preview?.name || existing.title
+          : (i18n.t("sidepane:tabs.files") as string),
       };
       return writeScope(
         state,

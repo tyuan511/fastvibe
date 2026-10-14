@@ -18,10 +18,14 @@ Decision boundary: should you use memory for a new user query?
   - the ask is a non-trivial and related to MEMORY_SUMMARY below.
 - If unsure, do a quick memory pass.
 
-Memory layout (general -> specific):
+Memory layout (general -> specific). Every path below is absolute and is meant to be used
+exactly as written: the reader tools take it unchanged, and a shell command has to quote
+it, because this folder can sit under a path with a space in it. Never rebuild one
+relative to the current directory — `../../` counting is wrong more often than right.
 
 - {{ base_path }}/memory_summary.md (already provided below; do NOT open again)
-- {{ base_path }}/MEMORY.md (searchable registry; primary file to query)
+- {{ base_path }}/MEMORY.md (searchable registry; primary file to query — it grows to
+  hundreds of KB, so search it rather than reading it whole)
 - {{ base_path }}/skills/<skill-name>/ (skill folder)
   - SKILL.md (entrypoint instructions)
   - scripts/ (optional helper scripts)
@@ -35,7 +39,12 @@ Memory layout (general -> specific):
 Quick memory pass (when applicable):
 
 1. Skim the MEMORY_SUMMARY below and extract task-relevant keywords.
-2. Search {{ base_path }}/MEMORY.md using those keywords.
+2. Search {{ base_path }}/MEMORY.md using those keywords. One command does the whole
+   pass; the quotes around the folder are required:
+
+   ```
+   rg -n --heading -g MEMORY.md '<keyword 1>|<keyword 2>' "{{ base_path }}" | head -40
+   ```
 3. Only if MEMORY.md directly points to rollout summaries/skills, open the 1-2
    most relevant files under {{ base_path }}/rollout_summaries/ or
    {{ base_path }}/skills/.

@@ -27,8 +27,8 @@ import { InlinePreviews, InlineThumbStrip } from "./inline-preview";
 import { MarkdownView } from "./markdown-view";
 import { ThinkingBlock } from "./thinking-block";
 import { ToolCard } from "./tool-card";
-import { ToolRow } from "./tool-row";
 import { ToolGroupRow } from "./tool-group";
+import { ToolRow } from "./tool-row";
 import { CompactNotice } from "./compact-notice";
 import { DagSettledNotice } from "./dag-settled-notice";
 import { ModelChangeNotice } from "./model-change-notice";
@@ -327,17 +327,13 @@ function UserPromptBubble({ text: raw }: { text: string }): JSX.Element {
           // width instead of shrinking to the word 「收起」.
           <div className="grid">
             <div className="max-h-[min(20rem,40vh)] overflow-y-auto px-3 py-2">
-              <div ref={bodyRef}>
-                <MarkdownView text={text} />
-              </div>
+              <MarkdownView ref={bodyRef} text={text} />
             </div>
             {overflows ? toggle : null}
           </div>
         ) : (
           <>
-            <div ref={bodyRef} className="line-clamp-2">
-              <MarkdownView text={text} />
-            </div>
+            <MarkdownView ref={bodyRef} text={text} className="line-clamp-2" />
             {overflows ? toggle : null}
           </>
         )}
@@ -487,10 +483,9 @@ function ChatMessageRowImpl({
     },
     [message, onEdit],
   );
-  // `i18n.language` is part of the dependency list because the folded group summaries
-  // are translated and cached per language: without it a language switch would keep
-  // serving the previous language's summaries.
-  const parts = useMemo(() => groupParts(message), [message, i18n.language]);
+  // Summaries inside a folded tool run are translated, so a language switch
+  // has to rebuild them. Reading the language here is what invalidates the cache.
+  const parts = useMemo(() => groupParts(message, i18n.language), [message, i18n.language]);
 
   // 折叠运行过程: a finished run's work — thinking, tool calls, and the prose it wrote along
   // the way — goes behind one collapsed 「用时 …」 row, and the reply written after the last
@@ -546,6 +541,8 @@ function ChatMessageRowImpl({
     let cut = 0;
     for (let index = 0; index < parts.length; index += 1) {
       const kind = parts[index].kind;
+      // A folded batch of consecutive tools (`group`) is process like any single call: once
+      // the run settles, everything before the final answer goes behind 「用时」.
       if (kind === "thinking" || kind === "tool" || kind === "group") cut = index + 1;
     }
     // Nothing to put in the block (a reply that never thought or called a tool).
@@ -662,9 +659,8 @@ function ChatMessageRowImpl({
   // hang. The gate is the *tail*, not "the reply has no text yet": once a run has
   // written a sentence, every later tool→model boundary was silent.
   //
-  // The tool check is over the whole reply, not just the last part, because a run of
-  // sibling tools renders as one `group` part whose summary row shimmers on its own
-  // — the spinner lives inside the folded children, so the part alone cannot say.
+  // A running tool is its own spinner, wherever it sits, so the working row stays off
+  // while any call in this reply is still in flight.
   const lastPart = parts.at(-1);
   const liveTail =
     lastPart?.kind === "text" ||
@@ -739,6 +735,17 @@ function ChatMessageRowImpl({
         </Fragment>
       );
     }
+    if (part.kind === "group") {
+      const shown = withPreviews ? previewsOf(part) : [];
+      return (
+        <Fragment key={part.group.id}>
+          <PartSlot>
+            <ToolGroupRow group={part.group} showThinking={showThinking} />
+          </PartSlot>
+          <InlinePreviews items={shown} />
+        </Fragment>
+      );
+    }
     if (part.kind === "model") {
       // A transcript-level rule, so it spans the column instead of the reply's cap.
       return <ModelChangeNotice key={`model-${index}`} to={part.to} />;
@@ -750,15 +757,7 @@ function ChatMessageRowImpl({
         </PartSlot>
       );
     }
-    const shown = withPreviews ? previewsOf(part) : [];
-    return (
-      <Fragment key={part.group.id}>
-        <PartSlot>
-          <ToolGroupRow group={part.group} />
-        </PartSlot>
-        <InlinePreviews items={shown} />
-      </Fragment>
-    );
+    return null;
   };
 
   return (

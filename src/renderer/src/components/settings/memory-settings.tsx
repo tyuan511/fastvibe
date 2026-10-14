@@ -22,7 +22,7 @@ export function MemorySettings({ models }: { models: FastVibeModel[] }): JSX.Ele
     return () => { alive = false; off(); };
   }, []);
 
-  if (!state) return <div className="p-4 text-sm text-muted-foreground">{t("memory.loading")}</div>;
+  if (!state) return <div className="text-sm text-muted-foreground">{t("memory.loading")}</div>;
 
   const busy = saving || state.phase !== "idle";
   const act = (call: () => Promise<MemoryState>): void => {
@@ -38,7 +38,7 @@ export function MemorySettings({ models }: { models: FastVibeModel[] }): JSX.Ele
         : t("memory.counts", { count: state.conversations, pending: state.pending });
 
   return (
-    <div className="space-y-4 p-4">
+    <div className="space-y-4">
       <Group title={t("memory.title")}>
         <Row title={t("memory.enable")} description={t("memory.enableDesc")} control={
           <Switch checked={state.config.enabled} disabled={saving} onCheckedChange={(enabled) => act(() => window.fastvibe.memory.setConfig({ enabled }))} />

@@ -138,7 +138,7 @@ export function DagNodeDetail({
       {node.report?.evidence?.length ? <Block label={t("dag.evidence")}><ul className="list-disc pl-4">{node.report.evidence.map((item, i) => <li key={i}>{item}</li>)}</ul></Block> : null}
       {node.output ? (
         <Block label={t("dag.output")}>
-          <div className="chat-markdown max-h-80 overflow-y-auto rounded-lg border border-border bg-background px-3 py-2 text-sm leading-6">
+          <div className="chat-markdown max-h-80 overflow-y-auto rounded-lg border border-border bg-background px-3 py-2 text-sm">
             <MarkdownView text={output ?? node.output} />
             {(output === null ? (node.outputLength ?? 0) > DAG_PREVIEW_CHARS : nextOffset !== undefined) ? (
               <Button size="xs" variant="outline" disabled={loading} onClick={() => {

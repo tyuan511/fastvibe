@@ -4,12 +4,16 @@
  *
  * - `/` — shell with no conversation in the URL (first paint, empty window)
  * - `/c/:id` — a conversation; switching chats pushes a real history entry
+ * - `/agents`, `/plugins`, `/tasks` — pages of the main column, not settings overlays
  * - `/settings/<section>` — settings overlay; section switches replace
  */
 
 export function conversationPath(id: string): string {
   return `/c/${encodeURIComponent(id)}`;
 }
+
+/** Dedicated main-column page for scheduled tasks. Not a settings overlay. */
+export const TASKS_PATH = "/tasks";
 
 export function workspacePath(id: string | null | undefined): string {
   return id ? conversationPath(id) : "/";

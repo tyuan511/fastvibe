@@ -9,6 +9,7 @@ import { mediaPreviewUrl } from "@shared/media-preview";
 import { useHighlightedCode } from "@/lib/highlight";
 import { cn } from "@/lib/utils";
 import { MarkdownView } from "./markdown-view";
+import { CsvPreview } from "./csv-preview";
 import { DiffView } from "./diff-view";
 import { isRemoteRef } from "@/lib/remote-project";
 import { SelectionActionBar } from "./selection-action-bar";
@@ -63,16 +64,18 @@ export function previewText(preview: FilePreview): string | undefined {
 /** Selected text uses the same floating bar as the chat, not a separate context menu. */
 function SelectableText({
   onQuote,
+  onAttachToContext,
   children,
 }: {
   onQuote?: (text: string) => void;
+  onAttachToContext?: (text: string) => void;
   children: JSX.Element;
 }): JSX.Element {
   const ref = useRef<HTMLDivElement>(null);
   return (
     <div ref={ref}>
       {children}
-      <SelectionActionBar containerRef={ref} onQuote={onQuote} />
+      <SelectionActionBar containerRef={ref} onQuote={onQuote} onAttachToContext={onAttachToContext} />
     </div>
   );
 }
@@ -81,29 +84,51 @@ function SelectableText({
 export function PreviewSurface({
   preview,
   onQuote,
+  onAttachToContext,
   className,
+  document,
 }: {
   preview: FilePreview;
   onQuote?: (text: string) => void;
+  /** Selection bar: put the selected text on the composer's citations. */
+  onAttachToContext?: (text: string) => void;
   className?: string;
+  /**
+   * Draw the file as a document rather than as a reply.
+   *
+   * The file pane wants a measured column, a frontmatter block and a contents rail; the
+   * transcript's inline preview wants the same prose the reply used, so it keeps the
+   * plain surface. One component, two shapes, rather than two renderers that drift.
+   */
+  document?: boolean;
 }): JSX.Element {
   if (preview.kind === "video") {
     return (
       <div className={cn("relative min-h-0 flex-1", className)}>
         <div className="absolute inset-0">
-          <PreviewBody preview={preview} />
+          <PreviewBody preview={preview} document={document} />
         </div>
       </div>
     );
   }
   return (
     <ScrollArea className={cn("min-h-0 flex-1", className)}>
-      <PreviewBody preview={preview} onQuote={onQuote} />
+      <PreviewBody preview={preview} onQuote={onQuote} onAttachToContext={onAttachToContext} document={document} />
     </ScrollArea>
   );
 }
 
-export function PreviewBody({ preview, onQuote }: { preview: FilePreview; onQuote?: (text: string) => void }): JSX.Element {
+export function PreviewBody({
+  preview,
+  onQuote,
+  onAttachToContext,
+  document,
+}: {
+  preview: FilePreview;
+  onQuote?: (text: string) => void;
+  onAttachToContext?: (text: string) => void;
+  document?: boolean;
+}): JSX.Element {
   const { t } = useTranslation("chat");
   if (preview.kind === "error") {
     return <p className="px-3 py-3 text-sm text-destructive">{preview.message}</p>;
@@ -127,8 +152,10 @@ export function PreviewBody({ preview, onQuote }: { preview: FilePreview; onQuot
     );
   }
   if (preview.kind === "markdown") {
+    // The file pane and the transcript share the release renderer. The document
+    // column is a different style, and it is not what a markdown preview draws.
     return (
-      <SelectableText>
+      <SelectableText onAttachToContext={onAttachToContext}>
         <div className="chat-markdown px-3 py-3 text-sm">
           <MarkdownView text={preview.text} />
         </div>
@@ -157,8 +184,15 @@ export function PreviewBody({ preview, onQuote }: { preview: FilePreview; onQuot
     );
   }
   if (preview.kind === "csv") {
+    if (document) {
+      return (
+        <SelectableText onAttachToContext={onAttachToContext}>
+          <CsvPreview rows={preview.rows} name={preview.name} />
+        </SelectableText>
+      );
+    }
     return (
-      <SelectableText>
+      <SelectableText onAttachToContext={onAttachToContext}>
         <div className="overflow-x-auto rounded-lg border border-border">
           <table className="w-full border-collapse text-left">
             <tbody>
@@ -179,13 +213,13 @@ export function PreviewBody({ preview, onQuote }: { preview: FilePreview; onQuot
   }
   if (preview.kind === "diff") {
     return (
-      <SelectableText onQuote={onQuote}>
+      <SelectableText onQuote={onQuote} onAttachToContext={onAttachToContext}>
         <DiffView text={preview.text} className="mt-0 max-h-none rounded-none border-0 bg-transparent text-xs" />
       </SelectableText>
     );
   }
   return (
-    <SelectableText onQuote={onQuote}>
+    <SelectableText onQuote={onQuote} onAttachToContext={onAttachToContext}>
       <CodePreview text={preview.text} language={preview.language} />
     </SelectableText>
   );

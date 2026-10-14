@@ -4,6 +4,7 @@ import { readFileSync, statSync } from "node:fs";
 import { basename, extname } from "node:path";
 import { mediaMime, mediaPreviewKind } from "../../shared/media-preview.ts";
 import type { FilePreview } from "../../shared/types.ts";
+import { MAX_TEXT_FILE_BYTES } from "./workspace-fs.ts";
 
 /**
  * What the side pane will read into memory to draw a preview.
@@ -11,10 +12,8 @@ import type { FilePreview } from "../../shared/types.ts";
  * Images, PDFs and videos are not read here at all. The preview names the file; the
  * renderer loads it from a URL the main process streams, so a photo or a movie never
  * becomes a base64 frame. Text is different — the renderer highlights and lays it out
- * as DOM — so its cap is where a file stops being a preview and should be opened in
- * an editor instead.
+ * as DOM — so its cap is where a file stops being loaded into the editor.
  */
-const MAX_TEXT_BYTES = 4 * 1024 * 1024;
 const CODE_EXT: Record<string, string> = {
   ".ts": "ts",
   ".tsx": "tsx",
@@ -72,7 +71,7 @@ export function readFilePreview(filePath: string): FilePreview {
       const text = extractPptx(filePath);
       if (text) return { kind: "markdown", path: filePath, name, text };
     }
-    if (stat.size > MAX_TEXT_BYTES) {
+    if (stat.size > MAX_TEXT_FILE_BYTES) {
       return { kind: "binary", path: filePath, name, size: stat.size };
     }
     const text = readFileSync(filePath, "utf8");

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type JSX } from "react";
+import { useCallback, useEffect, useRef, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Alert02Icon, CheckmarkCircle02Icon, DragDropIcon } from "@hugeicons/core-free-icons";
@@ -6,9 +6,17 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Spinner } from "@/components/ui/spinner";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { SettingsGroup, SettingsRow } from "./settings-group";
 import { useSettingsStore } from "@/stores/settings";
-import type { ComputerPermissionStatus, GrantFlowState } from "@shared/types";
+import type { ComputerComponentStatus, ComputerPermissionStatus, GrantFlowState } from "@shared/types";
 import { cn } from "@/lib/utils";
 
 /**
@@ -39,6 +47,9 @@ export function ComputerSettings(): JSX.Element {
   // and settling on the same result a moment later.
   const [status, setStatus] = useState<ComputerPermissionStatus | null>(lastStatus);
   const [checking, setChecking] = useState(lastStatus === null);
+  const [component, setComponent] = useState<ComputerComponentStatus | null>(null);
+  const [downloadOpen, setDownloadOpen] = useState(false);
+  const prompted = useRef(false);
 
   const refresh = useCallback(async () => {
     // Only the first read shows a spinner. A refresh that already has an answer to
@@ -61,6 +72,39 @@ export function ComputerSettings(): JSX.Element {
     void refresh();
   }, [refresh]);
 
+  // The component is not in the installer. This subscription is how the pane learns
+  // that turning the switch on has started — or finished — the download.
+  useEffect(() => {
+    // A remote client is refused this call. Treat that as already settled so the pane
+    // does not sit on the spinner; the switch itself is an ordinary settings write.
+    void window.fastvibe.computer.component().then(setComponent, () => {
+      setComponent({ phase: "ready", received: 0, total: 0 });
+    });
+    return window.fastvibe.computer.onComponentState(setComponent);
+  }, []);
+
+  useEffect(() => {
+    if (component?.phase === "ready") {
+      setDownloadOpen(false);
+      void refresh();
+    }
+  }, [component?.phase, refresh]);
+
+  // Opening this page is opening computer control. If the driver is not on disk,
+  // pop the download instead of waiting for the user to find the row button.
+  useEffect(() => {
+    if (!component || prompted.current) return;
+    if (component.phase !== "missing" && component.phase !== "failed" && component.phase !== "downloading") return;
+    prompted.current = true;
+    setDownloadOpen(true);
+    if (component.phase !== "downloading") void window.fastvibe.computer.ensureComponent();
+  }, [component]);
+
+  const startDownload = (force: boolean): void => {
+    setDownloadOpen(true);
+    void window.fastvibe.computer.ensureComponent(force);
+  };
+
   // A grant is made in System Settings, not here, so this pane only learns about it by
   // looking again. Re-checking when the window regains focus is what turns "I just
   // flipped the toggle" into a pane that already agrees.
@@ -73,10 +117,47 @@ export function ComputerSettings(): JSX.Element {
   }, [refresh]);
 
   const ready = status?.ready === true;
+  const unsupported = status?.available === false || component?.phase === "unsupported";
+
+  const driverReady = component?.phase === "ready";
 
   return (
     <div className="space-y-6">
-      <PermissionCard status={status} checking={checking} onRefresh={refresh} />
+      {component && component.phase !== "unsupported" ? (
+        <SettingsGroup title={t("computer.driver")}>
+          <SettingsRow
+            title={t("computer.driverName")}
+            description={<DriverDetail component={component} />}
+            control={
+              driverReady ? (
+                <Button size="sm" variant="outline" disabled={false} onClick={() => startDownload(true)}>
+                  {t("computer.driverUpdate")}
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  disabled={component.phase === "downloading"}
+                  onClick={() => startDownload(false)}
+                >
+                  {component.phase === "downloading" ? <Spinner className="size-3.5" /> : null}
+                  {component.phase === "failed" ? t("computer.componentRetry") : t("computer.driverDownload")}
+                </Button>
+              )
+            }
+          />
+        </SettingsGroup>
+      ) : null}
+
+      <DownloadDialog
+        open={downloadOpen}
+        component={component}
+        onClose={() => setDownloadOpen(false)}
+        onStart={() => startDownload(component?.phase === "ready")}
+      />
+
+      {driverReady || unsupported ? (
+        <PermissionCard status={status} checking={checking} onRefresh={refresh} />
+      ) : null}
 
       <SettingsGroup title={t("computer.controlTitle")}>
         <SettingsRow
@@ -85,8 +166,14 @@ export function ComputerSettings(): JSX.Element {
           control={
             <Switch
               checked={settings.computerEnabled}
-              disabled={!ready}
-              onCheckedChange={(checked) => save({ computerEnabled: checked })}
+              disabled={checking || unsupported || !driverReady}
+              onCheckedChange={(checked) => {
+                if (checked && !driverReady) {
+                  startDownload(false);
+                  return;
+                }
+                save({ computerEnabled: checked });
+              }}
             />
           }
         />
@@ -114,6 +201,74 @@ export function ComputerSettings(): JSX.Element {
         />
       </SettingsGroup>
     </div>
+  );
+}
+
+function downloadPercent(component: ComputerComponentStatus): number | null {
+  if (component.total <= 0) return null;
+  return Math.min(100, Math.round((component.received / component.total) * 100));
+}
+
+function DriverDetail({ component }: { component: ComputerComponentStatus }): JSX.Element {
+  const { t } = useTranslation("settings");
+  if (component.phase === "ready" && component.version) {
+    return <span className="font-mono">{component.version}</span>;
+  }
+  if (component.phase === "downloading") {
+    const percent = downloadPercent(component);
+    return <span>{percent === null ? t("computer.componentDownloading") : t("computer.componentProgress", { percent })}</span>;
+  }
+  if (component.phase === "failed") {
+    return <span className="text-destructive">{component.error || t("computer.componentFailed")}</span>;
+  }
+  return <span>{t("computer.driverMissing")}</span>;
+}
+
+function DownloadDialog({
+  open,
+  component,
+  onClose,
+  onStart,
+}: {
+  open: boolean;
+  component: ComputerComponentStatus | null;
+  onClose: () => void;
+  onStart: () => void;
+}): JSX.Element {
+  const { t } = useTranslation("settings");
+  const downloading = component?.phase === "downloading";
+  const failed = component?.phase === "failed";
+  const percent = component ? downloadPercent(component) : null;
+  return (
+    <Dialog open={open} onOpenChange={(next) => !next && onClose()} disablePointerDismissal>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle>{t("computer.driverDialogTitle")}</DialogTitle>
+          <DialogDescription>
+            {downloading
+              ? percent === null
+                ? t("computer.componentDownloading")
+                : t("computer.componentProgress", { percent })
+              : failed
+                ? component?.error || t("computer.componentFailed")
+                : t("computer.driverDialogDesc")}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            {t("computer.driverClose")}
+          </Button>
+          {downloading ? (
+            <Button disabled>
+              <Spinner className="size-3.5" />
+              {t("computer.driverDownload")}
+            </Button>
+          ) : (
+            <Button onClick={onStart}>{failed ? t("computer.componentRetry") : t("computer.driverDownload")}</Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

@@ -392,6 +392,20 @@ or signed out → signaling closes and every phone is dropped.
   iOS 要 `NSBonjourServices`，Android 要 `CHANGE_WIFI_MULTICAST_STATE`。发现不可用（拒绝本地网络、
   网络过滤多播）时列表为空，扫码和手动输入照旧。原生手机客户端由 Flutter 实现。
 
+### 手机读取输出文件（`workspace:read-file`）
+
+手机上点开回复产出的文件、再下载，走调用表里的 `workspace:read-file`（`engine/file-chunk.ts`），**不走 `/api/media`**：
+官方连接只有一条 WebRTC 数据通道，没有 HTTP，所以文件字节只能以 base64 分片经调用通道来回。
+
+- **分片、不是整文件。** 一次最多 512 KiB（`MAX_CHUNK_BYTES`），应答 `{ size, mtimeMs, offset, data, eof }`；`length: 0` 只量大小。
+  单个大回复会让同一条有序通道上排在它后面的转写推送等一下，所以别调大；`mtimeMs` 让手机发现文件读到一半被改写。
+  超过 256 MiB（`MAX_DOWNLOAD_BYTES`）直接拒绝。
+- **相对路径由 Main 解析。** 工具写的 `out/report.md` 相对于会话目录，手机不知道那在哪。请求带 `conversationId`，
+  相对路径按该会话的 `cwd` 解析（`conversationCwd`，只在路径是相对时才查目录，避免每个分片都读一次目录快照）；
+  绝对路径不查。同一个 `conversationId` 也是网关把调用路由到 SSH 主机的依据，SSH Agent 注册了同一个方法。
+- **远程策略：允许。** 拿到密码的人本来就能让智能体跑命令，`workspace:preview` 也早就能读任意文本文件，所以这不是新的杠杆；
+  `server-policy.test.ts` 的覆盖检查会在漏分类时拒绝启动。
+
 ### SSH 主机的手机连接（`phoneAccess`）
 
 A server whose Agent was deployed over SSH is reachable from the desktop and nowhere else:
@@ -649,9 +663,12 @@ and the future project file tree.
   `img-src` when a new surface loads these icons.
 - The right pane's **文件** tab (`components/layout/side-pane-files.tsx`) is the
   consumer: a lazily-loaded project tree (`workspace:read-dir`, hiding `.git` and
-  `node_modules`). Narrow panes swap between the tree and a file preview; when
-  the pane is wide enough (`@min-[32rem]/files`) the preview sits on the left
-  and the tree stays on the right. Clicking a file anywhere in a conversation
+  `node_modules`). Narrow panes swap between the tree and the open file; when
+  the pane is wide enough (`@min-[32rem]/files`) the tree stays on the left and
+  the file on the right. Text that is the file itself (code, Markdown, HTML,
+  diff) can be edited there and saved with `workspace:write-file`; a rendered
+  office document, image, or other binary stays view-only, because writing it
+  back would replace the original. Clicking a file anywhere in a conversation
   routes through `openPreview` → `openFilePreview`, so it opens in this same
   view rather than a separate tab.
 
@@ -817,6 +834,9 @@ is only offered where there is a blur to show (`HAS_VIBRANCY`). `src/shared/glas
 - **The renderer only goes translucent where there is a blur to show** (`HAS_VIBRANCY`: a
   desktop window on macOS that is actually Electron — the preview harness reports `darwin`
   too). Elsewhere every theme keeps its solid palette.
+- **Floating layers are much more opaque than the panes** (`glass-overlay`: 84% dark / 90% light). Menus, popovers and
+  dialogs hold the densest text on screen and float over whatever the page shows; at the 62–70% they once had, a chip or a
+  paragraph behind a list read straight through it. The page's own alpha is a balance, a floating layer's is not.
 - **Fills stack, so only the bottom layer is a real alpha.** `body` is transparent under
   `data-glass`, the app root paints `--background` once, and `glassTokens` makes the sidebar
   and cards tints *over* that layer. `--code-bg` stays solid, since the terminal reads it.
@@ -860,6 +880,9 @@ is only offered where there is a blur to show (`HAS_VIBRANCY`). `src/shared/glas
   row, output/parameter blocks, diffs, thinking, todo and question cards) so the
   transcript reads at one size. `text-xs` is for chrome — timestamps, chips,
   badges, menus, dense stats.
+- The UI sans is **Instrument Sans** (bundled, OFL), set once as `--font-sans`. There is
+  no font picker. Chinese is not in that face, so it falls through to the system sans
+  (苹方 on macOS). Code stays `--font-mono`.
 - Sizes are **rem-based** and the root font size is a setting: 通用 → 外观 →
   界面字号 writes `--ui-root-font-size` inline on `<html>`, and `html { font-size:
   var(--ui-root-font-size, 16px) }` turns that one number into an interface-wide
@@ -925,9 +948,11 @@ history has nothing to fall back to — a reload on `/settings/providers` would 
 - `#/` — the workspace shell (sidebar + thread + composer). Always mounted.
 - `#/c/<id>` — a conversation. Switching chats, new chats, and the sidebar's
   back/forward buttons walk this as real HashRouter history (mouse side buttons too).
+- `#/plugins` — a page of the main column, not a settings overlay. The
+  sidebar stays and every chat keeps running. `#/settings/extensions` redirects to
+  `#/plugins`.
 - `#/settings/<section>` — a settings pane, rendered **over** the shell so app state
-  survives. Sections come from `SETTINGS_SECTIONS` in `settings-dialog.tsx`
-  (currently `general | shortcuts | archived | usage | providers | mcp | skills | extensions | import | about`);
+  survives. Sections come from `SETTINGS_SECTIONS` in `settings-sections.tsx`;
   `App.tsx` derives the valid set from that export, so adding a pane needs no routing change.
   Section switches `replace`; opening settings pushes, so back returns to the chat.
 - Unknown or missing sections normalise to `#/settings/general` via a redirect effect
@@ -1255,7 +1280,8 @@ engine is gone because the SDK never read them.
 
 ## Plugins & extensions
 
-FastVibe hosts pi extensions (the SDK's plugin system) and bridges their
+The 插件 page (`#/plugins`, `components/plugins/plugins-page.tsx`) is a page of the
+main column — not a settings pane. FastVibe hosts pi extensions (the SDK's plugin system) and bridges their
 terminal-only surface onto the GUI. **Built-in** extensions ship with the app
 (`resources/extensions/goal.ts`, `handoff.ts`, `todo.ts`, `question.ts`, `folder-consent.ts`, `session-title.ts`,
 `browser-use.ts`, `computer-use.ts`, `web-search.ts`, `conversation-search.ts`, `worktree.ts`,
@@ -1523,6 +1549,7 @@ viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`
     there). Parent cancellation releases prompts scoped to the run before awaiting abort,
     and late prompts after cancellation return their fallback. Setup and transcript-mapping
     failures still produce a terminal lifecycle and release the session/control in cleanup.
+- **Computer use** downloads its engine the first time 设置 → 电脑操控 → 允许操作电脑 is turned on. The installer does not carry the `cua-driver` worker or the `@trycua/cua-driver-*` native library (together ~80 MB). The small JS bindings stay, so the platform package can be resolved from the data directory after the download. A dev tree still fetches the worker in `predev`. Do not put either artifact back into `electron-builder.yml`.
 - **Browser use** — `browser-use.ts` is the tool surface for FastVibe's own side-pane
   `<webview>`; it holds no browser code. Every call crosses `browser:request` /`browser:response`
   (`src/main/pi/browser-bridge.ts`, one pending map keyed by request id, 30s default budget) into
@@ -2309,6 +2336,26 @@ timestamps always show.
   the statistics popover spells out its own `—`.
 - **Collapsed by default, and entirely the reader's afterwards** — nothing re-folds it under
   them. Every transcript draws it the same way: the main thread, 辅助对话, and 子 Agent.
+
+## 连续工具折叠
+
+Consecutive quiet tools between two stretches of prose fold into one row, collapsed by
+default (`collapseToolRuns` in `src/renderer/src/lib/tool-run.ts`). While a call in the
+batch is in flight the line is that call's own description. Once the batch has settled
+and the reply has moved on to the next sentence, the line is a summary of at most five
+categories, in the order they first appeared: 命令 (shell calls only, always counted),
+读取, 写入 (write / edit / delete), 搜索 (search / web / list), 工具 (MCP, browser,
+scripts, skills, anything else). One call inside a category names the file or query
+(「已读取 process-manager.ts」); several say how many (「已读取 3 个文件」).
+「(N 个失败)」 sits at the end when any call failed. A thought between two calls does not
+split the run. Prose does. Expanding the row shows the calls and the thoughts that only
+separated them.
+
+Questions, todos, sub-agents, presented files, decision tasks and the task graph stay on
+their own line and break the run — the row is the status. A single tool is never folded;
+it already is its own description. The two folds are separate: this one is while the run is
+going; once it settles, the outer 「用时」 fold takes the whole run — thoughts, calls, and these
+summary rows alike — and leaves only the final answer on screen.
 
 ## 思考耗时（思考块的「持续了 N 秒」）
 

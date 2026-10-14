@@ -26,6 +26,8 @@ import { CommandPalette } from "@/components/layout/command-palette";
 import { TitleBar } from "@/components/layout/title-bar";
 import { HAS_CUSTOM_TITLE_BAR, HAS_TRAFFIC_LIGHTS } from "@/lib/platform";
 import { isRemoteRef, shouldFollowCatalogActive } from "@/lib/remote-project";
+import { PluginsPage } from "@/components/plugins/plugins-page";
+import { TasksPage } from "@/components/schedules/tasks-page";
 import { createConversationRefresh } from "@/lib/conversation-refresh";
 import { sameServerScope } from "../../shared/server-scope.ts";
 import { Toaster } from "@/components/ui/sonner";
@@ -87,7 +89,7 @@ import type {
   WorkspaceSnapshot,
 } from "@shared/types";
 import { parseCompactCommand, parseHandoffCommand } from "@shared/slash";
-import { conversationIdFromHash, conversationIdFromPath, conversationPath, workspacePath } from "@/lib/routes";
+import { TASKS_PATH, conversationIdFromHash, conversationIdFromPath, conversationPath, workspacePath } from "@/lib/routes";
 import { useSidePaneStore } from "@/stores/side-pane";
 import { useAppShortcuts, useShortcutLabel } from "@/lib/use-shortcuts";
 import { archiveConversations, archivedIdList, restoreConversations, useArchivedIds } from "@/stores/archive";
@@ -270,6 +272,10 @@ export function App(): JSX.Element {
   const navigate = useNavigate();
   const initialLocationKey = useRef(location.key);
   const settingsOpen = Boolean(settingsMatch);
+  // 插件 and 定时任务 are pages of the main column, not overlays: the sidebar stays and every chat keeps running.
+  // Only one of them is mounted; the conversation column is the other page.
+  const pluginsOpen = Boolean(useMatch("/plugins"));
+  const tasksOpen = Boolean(useMatch(TASKS_PATH));
   // Latches on: the lazy chunk is fetched the first time 设置 is opened, and the
   // dialog stays mounted after so closing it still animates.
   const [settingsMounted, setSettingsMounted] = useState(false);
@@ -282,10 +288,15 @@ export function App(): JSX.Element {
     ? (routeSection as SectionId)
     : undefined;
 
-  // Normalise /settings and /settings/unknown onto a real pane.
+  // 插件 used to live at /settings/extensions. Keep that link, and normalise anything
+  // else that is not a real pane onto 通用.
   useEffect(() => {
+    if (routeSection === "extensions") {
+      navigate("/plugins", { replace: true });
+      return;
+    }
     if (settingsOpen && !settingsSection) navigate("/settings/general", { replace: true });
-  }, [settingsOpen, settingsSection, navigate]);
+  }, [settingsOpen, settingsSection, routeSection, navigate]);
   const [commandOpen, setCommandOpen] = useState(false);
   const [addProjectOpen, setAddProjectOpen] = useState(false);
   // `getStatus()` is async, so until it resolves the store still holds the "idle"
@@ -1327,7 +1338,7 @@ export function App(): JSX.Element {
       applyOpen(opened);
       if (source === "user") revealConversation(id);
       else if (source === "remote") revealConversation(id, true);
-      else if (source === "restore" && !window.location.hash.includes("/settings")) revealConversation(id, true);
+      else if (source === "restore" && !/\/(settings|plugins|tasks)/.test(window.location.hash)) revealConversation(id, true);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1679,7 +1690,8 @@ export function App(): JSX.Element {
   });
   const onSidebarReorderProjects = useStable((cwds: string[]) => void handleReorderProjects(cwds));
   const onSidebarOpenSettings = useStable(() => navigate("/settings/general"));
-  const onSidebarOpenMarket = useStable(() => navigate("/settings/extensions"));
+  const onSidebarOpenMarket = useStable(() => navigate("/plugins"));
+  const onSidebarOpenTasks = useStable(() => navigate(TASKS_PATH));
   const onSidebarSearch = useStable(() => setCommandOpen(true));
   const onSidebarOpenSubTask = useStable((conversationId: string, node: DagNode) => {
     void (async () => {
@@ -1812,6 +1824,9 @@ export function App(): JSX.Element {
             onReorderProjects={onSidebarReorderProjects}
             onOpenSettings={onSidebarOpenSettings}
             onOpenMarket={onSidebarOpenMarket}
+            pluginsActive={pluginsOpen}
+            onOpenTasks={onSidebarOpenTasks}
+            tasksActive={tasksOpen}
             onOpenSubTask={onSidebarOpenSubTask}
             onSearch={onSidebarSearch}
           />
@@ -1823,6 +1838,25 @@ export function App(): JSX.Element {
             inert={paneMaximized || undefined}
             aria-hidden={paneMaximized || undefined}
           >
+            {pluginsOpen ? (
+              <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+                <PluginsPage
+                  sidebarCollapsed={sidebarCollapsed}
+                  onExpandSidebar={() => setSidebarCollapsed(false)}
+                />
+              </main>
+            ) : tasksOpen ? (
+              <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+                <TasksPage
+                  projects={projects}
+                  sidebarCollapsed={sidebarCollapsed}
+                  onExpandSidebar={() => setSidebarCollapsed(false)}
+                  onOpenConversation={(id) => {
+                    void handleOpen(id, "user");
+                  }}
+                />
+              </main>
+            ) : (
             <main className="flex min-h-0 min-w-0 flex-1 flex-col">
             <motion.header
               initial={false}
@@ -1944,6 +1978,7 @@ export function App(): JSX.Element {
               </>
             )}
             </main>
+            )}
           </ResizablePanel>
           {/* Terminal, git diffs, the file tree and the embedded browser all want room a
               phone does not have — and the browser pane has no webview to drive out here
@@ -2000,6 +2035,7 @@ export function App(): JSX.Element {
         onNewChat={() => void handleNewChat()}
         onAddProject={() => void handleAddProject()}
         onOpenSettings={(section) => navigate(`/settings/${section}`)}
+        onOpenPlugins={() => navigate("/plugins")}
       />
       <PermissionDialog
         key={pendingDialog?.id ?? "permission"}

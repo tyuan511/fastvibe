@@ -237,7 +237,7 @@ function trailingAssistant(messages: ChatMessage[]): ChatMessage | undefined {
  * The two arrays are copied, but their *elements* are not: `upsertTool` and
  * `appendDelta` already replace the single entry they touch with a fresh object,
  * so cloning every entry here only destroyed the identity `ToolCard` /
- * `ToolGroupRow` / `ThinkingBlock` are memoised on — a reply with twenty tool
+ * `ThinkingBlock` are memoised on — a reply with twenty tool
  * calls re-rendered all twenty cards on every flush, each one re-scanning its
  * whole result for a diff, to show one new token of text.
  */

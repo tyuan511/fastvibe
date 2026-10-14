@@ -52,6 +52,8 @@ export type FastVibePaths = {
   memoriesBaselineDir: string;
   /** Pictures tool results returned, saved once as `<conversationId>/<toolCallId>-<n>.<ext>`; the transcript carries only these paths. */
   toolImagesDir: string;
+  /** Durable, engine-owned future Agent runs and their recent outcomes. */
+  schedulesFile: string;
   /** Durable, Main-owned user message queue. */
   messageQueueFile: string;
   /**
@@ -185,6 +187,7 @@ function buildFastVibePaths(): FastVibePaths {
     memoriesDir: join(runtimeRoot, "memories"),
     memoriesBaselineDir: join(runtimeRoot, "memories-baseline"),
     toolImagesDir: join(runtimeRoot, "tool-images"),
+    schedulesFile: join(runtimeRoot, "scheduled-tasks.json"),
     messageQueueFile: join(runtimeRoot, "message-queue.json"),
     remoteAccessFile: join(userData, "remote-access.json"),
     accountFile: join(userData, "account.json"),

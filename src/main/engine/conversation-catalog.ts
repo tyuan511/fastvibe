@@ -161,7 +161,7 @@ export class ConversationCatalog {
   create(
     project: string | undefined,
     session?: { sessionFile?: string; sessionId?: string; cwd?: string; worktree?: { path: string; branch: string } },
-    options?: { activate?: boolean; kind?: Conversation["kind"]; title?: string; parentId?: string; preview?: string },
+    options?: { activate?: boolean; kind?: Conversation["kind"]; title?: string; parentId?: string; preview?: string; scheduledTaskId?: string },
   ): Conversation {
     const id = session?.sessionId || randomUUID();
     const bound = normalizeProject(project);
@@ -179,6 +179,7 @@ export class ConversationCatalog {
       updatedAt: now,
       kind: options?.kind,
       parentId: options?.parentId,
+      scheduledTaskId: options?.scheduledTaskId,
       preview: options?.preview?.trim() || (options?.kind === "side-chat" ? options.title?.trim() || uiText("辅助对话", "Side chat") : undefined),
     });
     this.#items = [conversation, ...this.#items.filter((item) => item.id !== conversation.id)];

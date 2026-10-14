@@ -120,6 +120,11 @@ export type AppSettings = ProxySettings & {
    */
   fileTreeExpanded?: Record<string, string[]>;
   /**
+   * Width in px of the list column (files tree, changed files, git files) inside the
+   * side pane's 文件 / 变更 / Git views, keyed by view. One width per view, not per chat.
+   */
+  sidePaneSplits?: Record<string, number>;
+  /**
    * Conversations the user archived, in archive order. Archived chats are hidden
    * from the sidebar and managed from Settings → 归档对话. Persisted with the other
    * preferences so the list survives the dev/packaged origin switch; older builds
@@ -193,10 +198,11 @@ const DEFAULTS: AppSettings = {
 };
 
 /**
- * Keys an earlier build wrote that nothing reads any more (the permission modes and the
- * rules they remembered). Dropped on load, so the next save no longer carries them.
+ * Keys an earlier build wrote that nothing reads any more (the permission modes, the
+ * rules they remembered, and the retired interface-font pick). Dropped on load, so the
+ * next save no longer carries them.
  */
-const REMOVED_KEYS = ["permissionMode", "defaultPermissionMode", "fullAccessConfirmed", "permissionAlways", "computerAllowedApps"] as const;
+const REMOVED_KEYS = ["permissionMode", "defaultPermissionMode", "fullAccessConfirmed", "permissionAlways", "computerAllowedApps", "uiFont"] as const;
 
 /** Drop malformed persisted theme values so a stale id can never crash the app. */
 function sanitize(parsed: Partial<AppSettings>): Partial<AppSettings> {
@@ -220,6 +226,7 @@ function sanitize(parsed: Partial<AppSettings>): Partial<AppSettings> {
   if (!isFiniteNumber(next.sidePaneWidth)) delete next.sidePaneWidth;
   if (!isNumberMap(next.sidePaneWidths)) delete next.sidePaneWidths;
   if (!isIdListMap(next.fileTreeExpanded)) delete next.fileTreeExpanded;
+  if (!isNumberMap(next.sidePaneSplits)) delete next.sidePaneSplits;
   if (!isIdList(next.archivedConversations)) delete next.archivedConversations;
   if (!isAutoArchiveDays(next.autoArchiveDays)) delete next.autoArchiveDays;
   if (typeof next.computerEnabled !== "boolean") delete next.computerEnabled;

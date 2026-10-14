@@ -28,6 +28,7 @@ import {
 } from "./preview-data";
 import { websiteFixture, type WebsiteLanguage } from "./website-fixtures";
 import { setTranscriptDisplay } from "@/lib/transcript-display";
+import { createScheduleFixture } from "./schedule-fixture";
 
 /**
  * Browser preview harness.
@@ -46,7 +47,8 @@ const websiteScene = params.get("scene") ?? "workspace";
 const websiteData = website ? websiteFixture(websiteLanguage) : null;
 // The settings scenes are routes, so they have to be entered before the shell mounts.
 if (website && websiteScene === "models") window.location.hash = "#/settings/providers";
-if (website && websiteScene === "market") window.location.hash = "#/settings/extensions";
+if (website && websiteScene === "market") window.location.hash = "#/plugins";
+if (params.get("tasks") === "sample") window.location.hash = "#/tasks";
 const theme = params.get("theme");
 const pane = params.get("pane");
 const scroll = params.get("scroll");
@@ -423,6 +425,7 @@ function accountMock(): typeof window.fastvibe.account {
 
 const api = {
   dag: dagApi,
+  schedules: createScheduleFixture(params.get("tasks") === "sample"),
   engine: {
     getStatus: async () => status,
     start: async () => status,
@@ -635,6 +638,7 @@ const api = {
     pick: async () => null,
     reveal: async () => undefined,
     preview: async (path: string) => websiteData?.previewFor(path) ?? previewFor(path),
+    writeFile: async () => undefined,
     filesExist: async (paths: string[]) => paths.filter((path) => /\.[A-Za-z0-9]{1,12}$/.test(path)),
     fileIcons: loadIconMapping,
     readDir: async (path: string) => {
@@ -894,12 +898,24 @@ const api = {
     cancelGrantFlow: async () => undefined,
     getGrantFlow: async () => grantFlowState(),
     onGrantFlowState: () => () => undefined,
+    component: async () => computerComponent(),
+    ensureComponent: async () => computerComponent(),
+    cancelComponent: async () => computerComponent(),
+    onComponentState: () => () => undefined,
   },
 };
 
 function grantFlowState(): { active: boolean; permission?: "accessibility" | "screenRecording"; step: number; total: number } {
   if (params.get("computer") !== "granting") return { active: false, step: 0, total: 0 };
   return { active: true, permission: "screenRecording", step: 1, total: 2 };
+}
+
+function computerComponent(): { phase: "unsupported" | "missing" | "downloading" | "ready" | "failed"; received: number; total: number; version?: string } {
+  const mode = params.get("computer");
+  if (mode === "downloading") return { phase: "downloading", received: 40, total: 100 };
+  if (mode === "unavailable") return { phase: "unsupported", received: 0, total: 0 };
+  if (mode === "granted" || mode === "granting") return { phase: "ready", received: 0, total: 0, version: "0.28.2" };
+  return { phase: "missing", received: 0, total: 0 };
 }
 
 function computerStatus(): {
@@ -1222,9 +1238,10 @@ if (websiteData) {
     );
   } else if (websiteScene === "files") {
     // The preview's own header is the signal: the pane is open, and at this width the
-    // tree sits beside it rather than behind the back button.
+    // tree sits beside it rather than behind the back button. The breadcrumb carries the
+    // full path as its accessible name, which is the file the header is showing.
     whenFound(
-      () => document.querySelector<HTMLElement>(`span[title="${websiteData.previewPath}"]`),
+      () => document.querySelector<HTMLElement>(`[aria-label="${websiteData.previewPath}"]`),
       () => undefined,
     );
   } else if (websiteScene === "tools") {
@@ -1268,8 +1285,8 @@ if (pane === "files" || pane === "preview" || pane === "git") {
 }
 
 if (dialog === "market") {
-  // Sidebar 「插件」 routes to Settings → 插件; open the catalog tab.
-  window.location.hash = "#/settings/extensions";
+  // Sidebar 「插件」 opens the plugins page; open the catalog tab.
+  window.location.hash = "#/plugins";
   const clickByText = (text: string, root: ParentNode = document): boolean => {
     const target = [...root.querySelectorAll<HTMLElement>("button")].find((node) =>
       (node.textContent ?? "").includes(text),

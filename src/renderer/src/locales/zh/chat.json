@@ -22,6 +22,8 @@
     "attach": "添加附件",
     "pastedTextFile": "粘贴的文本.txt",
     "contextStats": "查看上下文与轮次统计",
+    "compact": "压缩上下文",
+    "compactBusy": "会话进行中，无法压缩",
     "addModel": "添加模型",
     "pickModel": "选择模型",
     "noModels": "暂无模型",
@@ -186,6 +188,7 @@
     "selection": {
       "label": "选中文本操作",
       "copy": "复制",
+      "attachToContext": "附加到上下文",
       "quoteCode": "引用代码到对话",
       "addToConversation": "添加到对话",
       "askInSideChat": "在侧边聊天中提问"
@@ -251,7 +254,8 @@
     "itemOf": "第 {{index}} 项，共 {{count}} 项",
     "previous": "上一张",
     "next": "下一张",
-    "moreItems": "更多（{{count}}）"
+    "moreItems": "更多（{{count}}）",
+    "pathCopied": "路径已复制"
   },
   "model": {
     "switched": "模型已切换至"

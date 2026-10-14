@@ -29,7 +29,6 @@ import { cn } from "@/lib/utils";
 import { ProvidersSettings } from "./providers-settings";
 import { ArchivedSettings, type DeleteConversationsResult } from "./archived-settings";
 import { ImportSettings } from "./import-settings";
-import { ExtensionsSettings } from "./extensions-settings";
 import { McpSettings } from "./mcp-settings";
 import { DecisionSettings } from "./decision-settings";
 import { MemorySettings } from "./memory-settings";
@@ -414,7 +413,6 @@ export function SettingsDialog({
           {section === "memory" ? <MemorySettings models={models} /> : null}
           {section === "mcp" ? <McpSettings /> : null}
           {section === "skills" ? <SkillsSettings /> : null}
-          {section === "extensions" ? <ExtensionsSettings /> : null}
           {section === "import" ? <ImportSettings onImported={onImported} /> : null}
 
           {section === "about" ? <AboutSettings /> : null}
