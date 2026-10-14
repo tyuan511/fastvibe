@@ -222,7 +222,10 @@ export function collectInlinePreviews(
         if (path && classifyRef(path)) add(path, true);
       }
       if (!NO_RESULT_IMAGES.test(tool.name)) {
-        for (const image of tool.images ?? []) add(image.dataUrl, true);
+        for (const image of tool.images ?? []) {
+          const ref = image.path ?? image.dataUrl;
+          if (ref) add(ref, true);
+        }
       }
       if (SCANNED_RESULTS.test(tool.name) && tool.result) {
         const command = text(record(tool.args)?.command);

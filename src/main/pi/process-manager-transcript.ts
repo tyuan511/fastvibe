@@ -6,6 +6,7 @@ import type { ChatMessage, CompactReason, EngineModel, ThinkingTiming, TuiRun } 
 import { mapEngineMessages } from "../engine/map-messages";
 import { renderExtensionMessage } from "./tui-bridge";
 import { isRecord } from "./process-manager-events";
+import { externalizeToolResultMessages } from "../engine/tool-images";
 import { transcriptWindow } from "../engine/transcript-window";
 import type { TranscriptPageInfo } from "../../shared/transcript-page";
 
@@ -15,6 +16,8 @@ export type TranscriptProjectionDeps = {
   fromEntryId?: string;
   page?: { turnLimit: number; beforeEntryId?: string };
   reasoning: { get(entryId: string): ThinkingTiming[] | undefined };
+  /** Where pictures a tool returned are saved; the transcript then carries their paths, not their bytes. */
+  toolImagesDir?: string;
   widgetWidth: number;
   running: ReadonlyMap<string, boolean>;
   compacting: ReadonlyMap<string, CompactReason | undefined>;
@@ -72,7 +75,7 @@ export function projectSessionMessages(
     return renderExtensionMessage(renderer, message, deps.widgetWidth);
   };
   const messages = mapEngineMessages(
-    transcript,
+    deps.toolImagesDir && conversationId ? externalizeToolResultMessages(transcript, deps.toolImagesDir, conversationId) : transcript,
     (message) => entryIds.get(message),
     timings,
     renderCustom,

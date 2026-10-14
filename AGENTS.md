@@ -1677,9 +1677,26 @@ viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`
 - **猜测要克制。** 只扫图片/视频，**从不猜 HTML**（构建日志里全是 `index.html`）；`ls/find/git/grep/file/du…` 这类
   列文件的命令整个跳过；`node_modules`、`.git` 之类目录跳过；猜出来加载失败就静默不画（`explicit: false`），
   明确要求的失败才写一行“无法加载”。`read` / `browser_*` / `computer_*` 的图片是输入或截屏，不展示。
-- **图片块随转写走。** `toolImagesOf`（`shared/tool-result.ts`，主进程映射和渲染层实时事件共用）把工具结果里的
-  image 块变成 `ToolCallBlock.images`（data URL，单张 12M 字符、一次 4 张封顶）；手机用的摘要形态会丢掉它
-  （`omitted.images`）。实时路径在 `tool_execution_end` 就带上，不用等 `agent_end` 重读转写。
+- **图片落盘，转写只带路径。** MCP 生图直接返回 base64，没有文件。Main 在两处把它存成
+  `runtime/engine/tool-images/<会话>/<toolCallId>-<n>.<ext>`（`engine/tool-images.ts`，文件名由调用决定，重复写只是
+  一次存在性检查）：转写映射前（`projectSessionMessages`）和实时的 `tool_execution_end` 事件，都把 image 块换成
+  `{ type: "image", mimeType, path }`。`toolImagesOf`（`shared/tool-result.ts`）见 `path` 就只带路径，渲染层按路径走
+  `fastvibe-media://`；写不了盘的才退回 data URL（单张 12M 字符、一次 4 张封顶）。**不要把图片字节放回转写**：
+  每次读转写、每条 IPC、渲染层 store 都会背着几十 MB。删会话时一并删这个目录；手机用的摘要形态仍丢掉它
+  （`omitted.images`）。
+- **发给模型的图：进入历史时缩一次，请求前只留字节兜底。** SDK 每次请求都把全部历史工具结果（含图）重发，而它自己的
+  规范化（`normalizeToolResultImages`：长边 ≤2000px、单张 <4.5MB）只是单张的上限，3.8MB 的图照样放行——一个生了
+  26 张图的会话请求体 58MB，网关回 413 / 502 / 超时，换哪个上游都一样。隐藏扩展 `fastvibe-tool-images`：
+  - **`tool_result` 钩子**：图一到就把**原图存盘**（`tool-images/`，界面显示用），历史里换成缩小的副本
+    （`shrinkToolResultImages`；SDK 导出的 `resizeImage`，Photon 跑在 worker 线程，不卡主线程；长边 1568、512KB
+    以内，生成图基本变成 JPEG，实测 3.8MB → 233KB）。缩不动或失败就保持原样。此后每次请求、重载、分叉带的都是小图。
+    转写里图是 JPEG、原图是 PNG，所以按调用 id + 序号找文件时**不看扩展名**（`findSaved`）。
+  - **`context` 钩子**：每次请求前按字节兜底（`dropOldToolImages`，`engine/context-images.ts`），总量超过 4MB
+    （base64 字符）就从最旧的开始丢，最新一张总是保留。没有按张数的裁剪：缩小后单张只有几百 KB。
+    它保护的是缩小机制出现之前的旧会话（图还是原尺寸）和特别长的会话。被丢的图换成一行说明，**带着落盘路径**
+    （没存过就当场存），模型要看就用 `read` 再读；存不了才写「重新生成」。
+  - 只改请求与历史里的副本，用户自己附的图不动。**不要把 `ToolCallBlock.images` 换回 data URL**，也不要引
+    Electron 的 `nativeImage` 来缩图：引擎层要能在无头 Agent 里跑。
 - **HTML 走独立文档，不走 `srcdoc`。** `srcdoc` 框架会继承应用的 CSP（`script-src 'self'`），脚本永远跑不起来。
   所以 `fastvibe-media://` 也能服务本地 `.html`（`authorizeMediaMime`：请求名和真实路径必须同属“页面”或同属
   “媒体”，不能用 `.png` 符号链接去读页面）；`media-protocol.ts` 对 `text/html` 响应**自己**加

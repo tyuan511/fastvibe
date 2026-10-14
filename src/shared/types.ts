@@ -124,7 +124,11 @@ export type EngineSessionState = {
 
 export type ToolCallStatus = "running" | "done" | "error" | "aborted";
 
-export type ToolImage = { mimeType: string; dataUrl: string };
+/**
+ * A picture a tool result returned. Main saves it to a file and carries `path`; `dataUrl` is only
+ * the fallback for a result that could not be saved (and for runs Main does not externalize).
+ */
+export type ToolImage = { mimeType: string; path?: string; dataUrl?: string };
 
 export type ToolCallBlock = {
   id: string;

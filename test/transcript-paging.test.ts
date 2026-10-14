@@ -19,6 +19,7 @@ const dependencies: Record<string, unknown> = {
   "./tui-bridge": { renderExtensionMessage: () => undefined },
   "./process-manager-events": { isRecord: (value: unknown) => typeof value === "object" && value !== null },
   "../engine/transcript-window": { transcriptWindow },
+  "../engine/tool-images": { externalizeToolResultMessages: <T>(messages: T[]) => messages },
 };
 runInNewContext(compiled, { module, exports: module.exports, Date, Map, require: (name: string) => {
   assert.ok(name in dependencies, name); return dependencies[name];

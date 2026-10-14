@@ -22,6 +22,7 @@ import {
   type LoadExtensionsResult,
   type SessionStartEvent,
   type ToolDefinition,
+  resizeImage,
 } from "@earendil-works/pi-coding-agent";
 import type {
   ChatMessage,
@@ -91,6 +92,8 @@ import {
 import { readAppSettings, readDefaultModel, readPreferredModelSettings } from "../engine/runtime-settings";
 import { submitPrompt } from "../engine/prompt-submission";
 import type { SubmitPromptRequest } from "../../shared/prompt-submission";
+import { dropOldToolImages } from "../engine/context-images";
+import { externalizeToolEndEvent, savedToolImagePath, shrinkToolResultImages, toolImageFolder, type ImageResizer } from "../engine/tool-images";
 import { applyToolModes, toolModes } from "../engine/tool-modes";
 import { currentAiLanguageDirective, currentCustomSystemPrompt } from "../engine/ai-language";
 import { uiText } from "../engine/ui-text";
@@ -183,6 +186,18 @@ import { branchExists, createGitWorktree, gitBranch, gitCommonRoot, gitToplevel,
 import { bindBrowserConversation, bindComputerConversation } from "./conversation-binding";
 import { createTuiWidget, renderTuiComponent, type TuiComponent } from "./tui-bridge";
 import { ActivationTicket } from "./activation-ticket";
+
+/**
+ * What a model is sent of a picture a tool returned: the SDK's own resizer (Photon in a worker
+ * thread, so the main thread keeps running) at the long edge a model scales to anyway, and a size
+ * that picks JPEG over PNG for a generated image. The SDK's default is 2000px and 4.5MB, which is
+ * only a ceiling for one picture.
+ */
+const MODEL_IMAGE_LIMITS = { maxWidth: 1568, maxHeight: 1568, maxBytes: 512 * 1024, jpegQuality: 80 };
+const resizeForModel: ImageResizer = async (bytes, mimeType) => {
+  const resized = await resizeImage(bytes, mimeType, MODEL_IMAGE_LIMITS);
+  return resized ? { data: resized.data, mimeType: resized.mimeType } : null;
+};
 
 /** The last assistant message's text parts, joined — what a finished sub-agent run reports. */
 function lastAssistantText(messages: unknown[]): string {
@@ -2034,6 +2049,7 @@ export class PiProcessManager {
     this.#resolvePendingUi(id);
     this.#runTouchedFiles.delete(id);
     clearCheckpoint(id);
+    await rm(join(this.#paths.toolImagesDir, toolImageFolder(id)), { recursive: true, force: true }).catch(() => undefined);
     return { ...this.#catalog.snapshot(), nextId: wasActive ? (this.#catalog.activeId ?? null) : null };
   }
   async setConversationProject(id: string, project: string | null): Promise<WorkspaceSnapshot> {
@@ -3348,6 +3364,26 @@ export class PiProcessManager {
         hidden: true,
         factory: createToolSearchExtension(),
       }, {
+        name: "fastvibe-tool-images",
+        hidden: true,
+        factory: (pi) => {
+          const dir = this.#paths.toolImagesDir;
+          // As a tool's pictures arrive: the full-size file is saved for the chat to show, and the
+          // history keeps a smaller copy. The SDK normalizes each picture on its own, which a
+          // 3 MB one passes, so a chat that made many still sent tens of MB with every request.
+          pi.on("tool_result", async (event) => {
+            const content = await shrinkToolResultImages(event.content, dir, conversation.id, event.toolCallId, resizeForModel);
+            return content ? { content: content as unknown as typeof event.content } : undefined;
+          });
+          // What is still too much, bounded before each request. Request-only: the transcript keeps it.
+          pi.on("context", (event) => {
+            const trimmed = dropOldToolImages(event.messages, {
+              locate: (message, index, block) => savedToolImagePath(dir, conversation.id, String(message.toolCallId ?? ""), index, block),
+            });
+            return trimmed === event.messages ? undefined : { messages: trimmed as typeof event.messages };
+          });
+        },
+      }, {
         // Switches codemode, tool_search and the dag_* tools on or off from the settings
         // as they are at `session_start`, which a reload emits again — the SDK's
         // `defaultTools` setting can only add.
@@ -3601,7 +3637,7 @@ export class PiProcessManager {
         });
       }
       const payload: Record<string, unknown> = {
-        ...slimStreamEvent(event as unknown as Record<string, unknown>),
+        ...externalizeToolEndEvent(slimStreamEvent(event as unknown as Record<string, unknown>), this.#paths?.toolImagesDir, conversation.id),
         conversationId: conversation.id,
       };
       // 立即 cut this reply short so the next message can run. A client reads the two
@@ -4993,6 +5029,7 @@ export class PiProcessManager {
       fromEntryId,
       page,
       reasoning: this.#reasoning,
+      toolImagesDir: this.#paths?.toolImagesDir,
       widgetWidth: this.#widgetWidth,
       running: this.#running,
       compacting: this.#compacting,

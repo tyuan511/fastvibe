@@ -42,8 +42,9 @@ export const MAX_RESULT_IMAGES = 4;
 
 /**
  * The image blocks of a tool result's content. An image generator behind MCP answers with the
- * picture itself, not a path, so this is the only place that picture exists; it is carried as a
- * data URL, bounded so one result cannot swamp a snapshot.
+ * picture itself, not a path, so Main saves it and rewrites the block to `{ type: "image", path }`
+ * before it reaches a client (`engine/tool-images.ts`): a block with a `path` is carried as that
+ * path and nothing else. A block that still holds `data` is carried as a bounded data URL.
  */
 export function toolImagesOf(content: unknown): ToolImage[] {
   if (!Array.isArray(content)) return [];
@@ -51,10 +52,15 @@ export function toolImagesOf(content: unknown): ToolImage[] {
   for (const part of content) {
     if (typeof part !== "object" || part === null) continue;
     const block = part as Record<string, unknown>;
-    if (block.type !== "image" || typeof block.data !== "string") continue;
-    if (block.data.length === 0 || block.data.length > MAX_RESULT_IMAGE_CHARS) continue;
+    if (block.type !== "image") continue;
     const mimeType = typeof block.mimeType === "string" && block.mimeType.startsWith("image/") ? block.mimeType : "image/png";
-    images.push({ mimeType, dataUrl: `data:${mimeType};base64,${block.data}` });
+    if (typeof block.path === "string" && block.path.length > 0) {
+      images.push({ mimeType, path: block.path });
+    } else if (typeof block.data === "string" && block.data.length > 0 && block.data.length <= MAX_RESULT_IMAGE_CHARS) {
+      images.push({ mimeType, dataUrl: `data:${mimeType};base64,${block.data}` });
+    } else {
+      continue;
+    }
     if (images.length >= MAX_RESULT_IMAGES) break;
   }
   return images;

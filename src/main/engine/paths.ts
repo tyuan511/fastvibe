@@ -50,6 +50,8 @@ export type FastVibePaths = {
   memoriesDir: string;
   /** A copy of that folder as it was when the last consolidation succeeded; the next one is shown the diff from it. */
   memoriesBaselineDir: string;
+  /** Pictures tool results returned, saved once as `<conversationId>/<toolCallId>-<n>.<ext>`; the transcript carries only these paths. */
+  toolImagesDir: string;
   /** Durable, Main-owned user message queue. */
   messageQueueFile: string;
   /**
@@ -182,6 +184,7 @@ function buildFastVibePaths(): FastVibePaths {
     memoryStateFile: join(runtimeRoot, "memory-state.json"),
     memoriesDir: join(runtimeRoot, "memories"),
     memoriesBaselineDir: join(runtimeRoot, "memories-baseline"),
+    toolImagesDir: join(runtimeRoot, "tool-images"),
     messageQueueFile: join(runtimeRoot, "message-queue.json"),
     remoteAccessFile: join(userData, "remote-access.json"),
     accountFile: join(userData, "account.json"),
