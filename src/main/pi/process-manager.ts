@@ -543,6 +543,15 @@ export class PiProcessManager {
   #repetitionWatches = new Map<string, { text: OutputRepetitionWatch; thinking: OutputRepetitionWatch }>();
   /** Conversations whose run has already been stopped by the guard — one stop per run. */
   #repetitionStopped = new Set<string>();
+  /**
+   * Model switch already drawn for the request in flight (`provider\0id`).
+   *
+   * The provider hook that fires as the request goes out can run twice for one call
+   * (a rejected payload is rebuilt and sent again). The new reply is not in the
+   * transcript yet, so the comparison below would announce both. Cleared when that
+   * reply finishes.
+   */
+  #modelNoticeSent = new Map<string, string>();
   /** Sessions whose catalog cwd changed mid-run; rebound once the turn settles. */
   #pendingCwdRebind = new Set<string>();
   #interruptMode: "immediate" | "wait" = "immediate";
@@ -2695,8 +2704,8 @@ export class PiProcessManager {
    * announced from here: choosing a model is not using one, and a divider drawn on
    * the pick said a switch had happened in the conversation while the next reply was
    * still free to be written by the previous model (or the pick to be reverted).
-   * `#announceModelUse` emits it from the assistant `message_start` that actually
-   * runs on the new model, which is the moment the divider is true.
+   * `#announceModelUse` emits it when the request that will run on the new model is
+   * sent, which is the moment the divider is true — not when the reply comes back.
    */
   async #useModel(
     session: AgentSession,
@@ -2705,19 +2714,22 @@ export class PiProcessManager {
     await session.setModel(model);
   }
   /**
-   * Announce a model switch at the moment the new model actually answers.
+   * Announce a model switch when the request that uses it is sent.
    *
    * The transcript can say *where* a switch sits in the branch, but not whether it was
    * ever used: a `model_change` entry is written the instant the pick is made, so a
    * switch that nothing followed (or one reverted before the next prompt) drew a
-   * divider for a run that never happened. The reply carries its own `provider`/`model`,
-   * so the announcement is made from the assistant `message_start` — and the model to
-   * compare against is the last assistant message already in the transcript, which
-   * makes picking A, then B, then A again before sending announce nothing at all.
+   * divider for a run that never happened. Waiting for the assistant `message_start`
+   * was the other failure: that event is the response starting, and a reasoning model
+   * can sit silent for a minute after the request has already gone out. The divider
+   * belongs on screen for that wait. `#armModelNotice` fires this from the payload
+   * hook, which runs once the routed model is known and before the HTTP call.
    *
-   * The first reply of a conversation has no predecessor and is not a switch — the
-   * model it starts on is the one the chat was created with, and it is already named
-   * on the composer's chip.
+   * The model to compare against is the last assistant message already in the
+   * transcript, which makes picking A, then B, then A again before sending announce
+   * nothing at all. The first reply of a conversation has no predecessor and is not a
+   * switch — the model it starts on is the one the chat was created with, and it is
+   * already named on the composer's chip.
    */
   #announceModelUse(
     conversationId: string,
@@ -2736,8 +2748,32 @@ export class PiProcessManager {
       break;
     }
     if (!previous) return;
-    if (previous.provider === provider && previous.id === id) return;
+    if (previous.provider === provider && previous.id === id) {
+      this.#modelNoticeSent.delete(conversationId);
+      return;
+    }
+    const key = `${provider}\0${id}`;
+    if (this.#modelNoticeSent.get(conversationId) === key) return;
+    this.#modelNoticeSent.set(conversationId, key);
     this.#emit({ type: "model_changed", conversationId, model: { provider, id }, previous });
+  }
+  /**
+   * Draw a model switch when the provider request leaves, not when its reply starts.
+   *
+   * `onPayload` is the hook every provider awaits immediately before the HTTP call,
+   * with the model that call will use — virtual routing has already resolved it, and
+   * the response headers (what used to emit this, via `message_start`) may be a minute
+   * away. Compaction does not go through it, so a summary request cannot announce a
+   * switch the chat never made.
+   */
+  #armModelNotice(conversationId: string, session: AgentSession): void {
+    this.#modelNoticeSent.delete(conversationId);
+    const agent = session.agent;
+    const forward = agent.onPayload;
+    agent.onPayload = (payload, model) => {
+      this.#announceModelUse(conversationId, session, { provider: model.provider, model: model.id });
+      return forward?.(payload, model);
+    };
   }
   async setInterruptMode(mode: "immediate" | "wait", conversationId?: string): Promise<EngineSessionState> { this.#interruptMode = mode; return this.getState(conversationId); }
   async setSteeringMode(mode: "all" | "one-at-a-time", conversationId?: string): Promise<EngineSessionState> { (await this.#sessionFor(conversationId)).session.setSteeringMode(mode); return this.getState(conversationId); }
@@ -3634,6 +3670,7 @@ export class PiProcessManager {
       resourceLoader,
       ...(sessionStartEvent ? { sessionStartEvent } : {}),
     });
+    this.#armModelNotice(conversation.id, result.session);
     lap("session");
     this.#promptPreparations.install(conversation.id, result.session);
     await result.session.bindExtensions({
@@ -3717,16 +3754,12 @@ export class PiProcessManager {
       // File the finished turn in the usage ledger, so 使用统计 outlives the transcript
       // if this conversation is later deleted.
       if (event.type === "message_end" && isAssistantEngineMessage(event.message)) {
+        // The reply is about to be the transcript's last assistant, so the next request
+        // compares against it. Dropping the guard here is what lets a later switch announce.
+        this.#modelNoticeSent.delete(conversation.id);
         this.#recordUsage(event.message, result.session, now);
         // A reply that cites memory is how consolidation learns which conversations were used.
         this.#memory.noteReply(messageText(event.message));
-      }
-      // A model switch is announced when the new model actually starts answering, not
-      // when it was picked: `#announceModelUse` compares this reply against the last
-      // one in the transcript before the payload is forwarded, so the renderer's
-      // divider lands on the reply that runs on the new model.
-      if (event.type === "message_start" && isAssistantEngineMessage(event.message)) {
-        this.#announceModelUse(conversation.id, result.session, event.message);
       }
       if (event.type === "session_info_changed") {
         this.#applySessionTitle(conversation.id, event.name);

@@ -179,9 +179,9 @@ export type MessagePart =
    * turns: consecutive engine messages of one reply are merged into a single row, so the
    * divider belongs between two parts of the reply that spans the switch — and a row
    * would split that reply into two blocks (two footers), while a part keeps it one turn.
-   * It exists only where the new model actually ran, and both sides are derived from the
-   * replies themselves (`#insertModelSwitches` / `#announceModelUse` in
-   * `src/main/pi/process-manager.ts`), so a pick that no reply followed draws nothing.
+   * It exists only where a request was actually sent on the new model, and both sides are
+   * derived from the replies themselves (`#insertModelSwitches` / `#announceModelUse` in
+   * `src/main/pi/process-manager.ts`), so a pick that no request followed draws nothing.
    */
   | { kind: "model"; from?: EngineModel; to: EngineModel }
   | { kind: "tool"; toolId: string }

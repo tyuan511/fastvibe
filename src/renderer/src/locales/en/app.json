@@ -106,6 +106,13 @@
   "newSession": "New chat",
   "reveal": "Show in Finder",
   "remote": "Remote",
+  "projectCard": {
+    "local": "Local",
+    "remote": "Remote",
+    "primary": "Primary folder",
+    "other": "Other folders",
+    "none": "None"
+  },
   "binding": {
     "available": "Connected",
     "connecting": "Connecting",

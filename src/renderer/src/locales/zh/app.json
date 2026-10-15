@@ -106,6 +106,13 @@
   "newSession": "新建会话",
   "reveal": "在访达中显示",
   "remote": "远程",
+  "projectCard": {
+    "local": "本地",
+    "remote": "远程",
+    "primary": "主目录",
+    "other": "其他目录",
+    "none": "无"
+  },
   "binding": {
     "available": "已连接",
     "connecting": "正在连接",

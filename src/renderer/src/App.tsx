@@ -1603,8 +1603,8 @@ export function App(): JSX.Element {
       }
       setSession(next);
       // Deliberately no transcript re-read here. Nothing about the chat changed yet —
-      // the pick is announced as a divider only when a reply actually runs on it (Main
-      // emits `model_changed` from the assistant `message_start`), so reading the
+      // the pick is announced as a divider only when a request actually goes out on it
+      // (Main emits `model_changed` from the provider payload hook), so reading the
       // transcript now would only invite a divider for a switch that has not happened.
     } catch {
       setError(t("errors.switchModel"));

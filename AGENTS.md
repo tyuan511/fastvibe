@@ -1229,13 +1229,16 @@ one reverted before the next prompt). The divider is therefore tied to the reply
   of one reply are merged into a single row, so a switch made while a reply was
   streaming belongs *between that reply's parts* — a row of its own would split the
   merged run into two blocks (and two footers).
-- `#announceModelUse` (`src/main/pi/process-manager.ts`) emits `model_changed` from the
-  assistant `message_start` whose `provider`/`model` differs from the last assistant
-  message already in the transcript, so the part is spliced in live as the new model
-  starts answering, at the part index the engine's current message began at —
-  `apply-engine-event.ts` tracks it as `partBoundary` (`stores/session.ts`). Picking A,
-  then B, then A again before sending announces nothing, and `#useModel` itself no
-  longer emits anything (nor does the renderer re-read the transcript after a pick).
+- `#announceModelUse` (`src/main/pi/process-manager.ts`) emits `model_changed` when the
+  provider request is sent (`#armModelNotice` wraps `onPayload`, which runs after virtual
+  routing and before the HTTP call), not from the assistant `message_start`. That event is
+  the response starting, and a reasoning model can sit silent for a minute after the
+  request has already gone out — the divider has to be on screen for that wait. The model
+  is compared with the last assistant message already in the transcript, and the part is
+  spliced at the part index the engine's current message began at — `apply-engine-event.ts`
+  tracks it as `partBoundary` (`stores/session.ts`). Picking A, then B, then A again before
+  sending announces nothing, and `#useModel` itself no longer emits anything (nor does the
+  renderer re-read the transcript after a pick).
 - `#insertModelSwitches` derives the dividers from the **replies**, not from the
   `model_change` entries: it walks `sessionManager.getBranch()` and inserts one at the
   start of every assistant message whose `provider`/`model` differs from the previous

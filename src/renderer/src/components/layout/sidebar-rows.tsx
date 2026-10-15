@@ -59,8 +59,65 @@ export const PROJECT_SESSION_LIMIT = 5;
 /** Section key for the project list itself, as opposed to a project's chats. */
 export const PROJECTS_SECTION = "projects";
 
-/** Gap between the sidebar's edge and the project path hint it hosts. */
+/** Gap between the sidebar's edge and the project card it hosts. */
 const PATH_HINT_GAP = 8;
+
+/** Hover card for a project row: name, kind, primary folder, and any extra folders. */
+function ProjectHoverCard({
+  project,
+  connectionState,
+}: {
+  project: Project;
+  connectionState?: RemoteHostConnectionState;
+}): JSX.Element {
+  const { t } = useTranslation("app");
+  const remote = isRemoteProject(project);
+  const primary = project.remotePath || (remote ? displayRemotePath(project.cwd) : project.cwd);
+  const others = (project.folders ?? [])
+    .map((folder) => folder.trim())
+    .filter((folder) => folder && folder !== project.cwd && folder !== primary)
+    .map((folder) => (remote ? displayRemotePath(folder) : folder));
+  const bindingKey = bindingStateKey(project.bindingState);
+  const activityKey = remoteProjectActivityKey(connectionState);
+  const status =
+    remote && project.bindingState && project.bindingState !== "available"
+      ? activityKey
+        ? t(`sidebar.binding.${activityKey}`)
+        : t(`sidebar.binding.${bindingKey}`)
+      : null;
+
+  return (
+    <div className="flex w-full flex-col text-left">
+      <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2">
+        <span className="min-w-0 truncate text-sm font-medium">{project.name || primary}</span>
+        <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-muted-foreground">
+          {remote ? t("sidebar.projectCard.remote") : t("sidebar.projectCard.local")}
+        </span>
+      </div>
+      <div className="flex flex-col gap-2.5 px-3 py-2.5">
+        <div>
+          <p className="text-muted-foreground">{t("sidebar.projectCard.primary")}</p>
+          <p className="mt-0.5 font-mono break-all">{primary}</p>
+        </div>
+        <div>
+          <p className="text-muted-foreground">{t("sidebar.projectCard.other")}</p>
+          {others.length > 0 ? (
+            <ul className="mt-0.5 flex max-h-40 flex-col gap-1 overflow-y-auto">
+              {others.map((folder, index) => (
+                <li key={`${folder}:${index}`} className="font-mono break-all">
+                  {folder}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-0.5 text-muted-foreground">{t("sidebar.projectCard.none")}</p>
+          )}
+        </div>
+        {status ? <p className="border-t border-border pt-2 text-muted-foreground">{status}</p> : null}
+      </div>
+    </div>
+  );
+}
 
 export type RenameTarget = { type: "session"; id: string };
 /** Only projects can be removed; sessions are archived, never deleted. */
@@ -204,13 +261,12 @@ export function DraggableProject({
   const cwd = project.cwd;
   const name = project.name;
   const remote = isRemoteProject(project);
-  const pathHint = project.remotePath || (remote ? displayRemotePath(cwd) : cwd);
   const bindingKey = bindingStateKey(project.bindingState);
   const activityKey = remoteProjectActivityKey(connectionState);
   const { t } = useTranslation("app");
   const { attributes, listeners, setNodeRef: setDraggableRef, setActivatorNodeRef, isDragging } = useDraggable({ id: cwd });
   const { setNodeRef: setDroppableRef } = useDroppable({ id: cwd });
-  // The path hint clears the sidebar edge, not the name: hover actions sit between
+  // The card clears the sidebar edge, not the name: hover actions sit between
   // the name and that edge, so a popup anchored to the name covers the session list.
   const pathTriggerRef = useRef<HTMLElement | null>(null);
   const [pathOffset, setPathOffset] = useState(PATH_HINT_GAP);
@@ -281,13 +337,13 @@ export function DraggableProject({
                     </span>
                   ) : null}
                 </TooltipTrigger>
-                <TooltipContent side="right" align="center" sideOffset={pathOffset} className="max-w-96">
-                  <span className="font-mono break-all">{pathHint}</span>
-                  {remote && project.bindingState && project.bindingState !== "available" ? (
-                    <span className="mt-1 block text-xs text-muted-foreground">
-                      {activityKey ? t(`sidebar.binding.${activityKey}`) : t(`sidebar.binding.${bindingKey}`)}
-                    </span>
-                  ) : null}
+                <TooltipContent
+                  side="right"
+                  align="center"
+                  sideOffset={pathOffset}
+                  className="w-80 max-w-none flex-col items-stretch gap-0 overflow-hidden rounded-lg p-0 text-left"
+                >
+                  <ProjectHoverCard project={project} connectionState={connectionState} />
                 </TooltipContent>
               </Tooltip>
               {/* Shown on touch: an invisible button is still tappable. */}

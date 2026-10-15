@@ -29,9 +29,9 @@ export type ApplyResult = {
    * engine has settled so far, which is where the next assistant message's content
    * begins. Returned on every event where an engine message starts or ends, so the
    * caller can keep it across streamed deltas — while the parts of the message in
-   * flight grow, the boundary must not move. `model_changed` is emitted from the
-   * assistant `message_start` the new model is about to run, so the boundary at that
-   * moment is exactly where the divider belongs: the top of that reply.
+   * flight grow, the boundary must not move. `model_changed` is emitted when the
+   * request goes out — after `turn_start` has settled this boundary and before the
+   * reply's content — so the divider opens that reply while it is still being waited on.
    */
   partBoundary?: number;
 };
@@ -710,12 +710,12 @@ function applyEvent(
   }
 
   if (type === "model_changed") {
-    // Main emits this from the assistant `message_start` the new model is about to
-    // run — picking a model is not using one, so a switch that no reply ever followed
-    // is never announced. The boundary at that instant is the end of everything
-    // settled, so the divider opens the reply the new model is about to write; a
-    // switch made mid-run lands between the run's parts, the same slot the transcript
-    // puts it in when it is re-read.
+    // Main emits this when the request is sent, not when the reply starts coming
+    // back — picking a model is not using one, so a switch that no request ever
+    // followed is never announced. The boundary at that instant is the end of
+    // everything settled, so the divider opens the reply the new model is about to
+    // write; a switch made mid-run lands between the run's parts, the same slot the
+    // transcript puts it in when it is re-read.
     const to = asEngineModel(event.model);
     if (!to) return { messages: next, streaming: nextStreaming };
     const from = asEngineModel(event.previous);
