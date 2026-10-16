@@ -54,6 +54,7 @@
     "save": "保存",
     "saveFailed": "保存失败",
     "unsaved": "未保存",
+    "gitChanges": "包含 Git 变更",
     "copy": "复制内容",
     "copied": "已复制",
     "copyFailed": "复制失败",
@@ -110,7 +111,12 @@
     }
   },
   "terminal": {
-    "ended": "会话已结束"
+    "ended": "会话已结束",
+    "findPlaceholder": "查找终端输出",
+    "findEmpty": "没有匹配",
+    "findPrev": "上一个（Shift+Enter）",
+    "findNext": "下一个（Enter）",
+    "findClose": "关闭查找（Esc）"
   },
   "browser": {
     "back": "后退",

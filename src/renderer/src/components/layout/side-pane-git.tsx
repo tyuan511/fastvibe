@@ -35,6 +35,7 @@ import type { GitDiffSource, GitStatus } from "@shared/ipc";
 import { folderName } from "@shared/project-folders";
 import type { ProjectRepo } from "@shared/types";
 import { isRemoteRef } from "@/lib/remote-project";
+import { buildChangeFileTree, type ChangeFileTreeNode } from "@/lib/change-file-tree";
 
 const SOURCE_IDS: GitDiffSource[] = ["unstaged", "staged", "branch", "last-turn"];
 const SOURCE_LABEL_KEYS: Record<GitDiffSource, string> = {
@@ -113,6 +114,83 @@ function splitRelPath(path: string, cwd?: string): { name: string; dir: string }
   const slash = rel.lastIndexOf("/");
   if (slash < 0) return { name: rel, dir: "" };
   return { name: rel.slice(slash + 1), dir: rel.slice(0, slash) };
+}
+
+function ChangeFileTree({
+  files,
+  cwd,
+  source,
+  selected,
+  onSelect,
+}: {
+  files: GitStatus["files"];
+  cwd: string;
+  source: GitDiffSource;
+  selected?: string;
+  onSelect: (path: string) => void;
+}): JSX.Element {
+  const nodes = useMemo(() => buildChangeFileTree(files, (file) => displayPath(file.path, cwd)), [files, cwd]);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+
+  // A file selected by a transcript chip must be visible even if its folder was closed.
+  useEffect(() => {
+    if (!selected) return;
+    const path = displayPath(selected, cwd).replace(/\\/g, "/");
+    setCollapsed((previous) => new Set([...previous].filter((dir) => !path.startsWith(`${dir}/`))));
+  }, [selected, cwd]);
+
+  function renderLevel(entries: ChangeFileTreeNode<GitStatus["files"][number]>[], depth: number): JSX.Element {
+    return (
+      <ul className="m-0 list-none p-0">
+        {entries.map((node) => {
+          const isDirectory = node.kind === "directory";
+          const open = isDirectory && !collapsed.has(node.path);
+          const active = !isDirectory && selected === node.file.path;
+          const letter = isDirectory ? undefined : fileLetter(node.file, source);
+          return (
+            <li key={`${node.kind}:${node.path}`}>
+              <button
+                type="button"
+                aria-current={active ? "true" : undefined}
+                aria-expanded={isDirectory ? open : undefined}
+                title={isDirectory ? node.path : node.file.path}
+                className={cn("chat-tree-row", active && "is-active")}
+                onClick={() => {
+                  if (!isDirectory) {
+                    onSelect(node.file.path);
+                    return;
+                  }
+                  setCollapsed((previous) => {
+                    const next = new Set(previous);
+                    if (next.has(node.path)) next.delete(node.path);
+                    else next.add(node.path);
+                    return next;
+                  });
+                }}
+              >
+                <span aria-hidden className="chat-tree-guides shrink-0">
+                  {Array.from({ length: depth }, (_, level) => <span key={level} />)}
+                </span>
+                <FileIcon name={node.name} kind={isDirectory ? "folder" : "file"} expanded={open} />
+                <span className="min-w-0 flex-1 truncate">{node.name}</span>
+                {letter ? (
+                  <span
+                    className={cn("w-4 shrink-0 text-center text-xs font-medium tabular-nums", STATUS_TONE[letter] ?? "text-muted-foreground")}
+                    title={statusLabel(letter)}
+                  >
+                    {letter}
+                  </span>
+                ) : null}
+              </button>
+              {node.kind === "directory" && open ? renderLevel(node.children, depth + 1) : null}
+            </li>
+          );
+        })}
+      </ul>
+    );
+  }
+
+  return renderLevel(nodes, 0);
 }
 
 function countPatch(text: string): { added: number; removed: number } {
@@ -588,39 +666,14 @@ export function SidePaneGit({
                   <Spinner className="size-4 text-muted-foreground" />
                 </div>
               ) : files.length ? (
-                files.map((file) => {
-                  const { name, dir } = splitRelPath(file.path, cwd);
-                  const letter = fileLetter(file, source);
-                  const active = selected === file.path;
-                  return (
-                    <button
-                      type="button"
-                      key={file.path}
-                      aria-current={active ? "true" : undefined}
-                      title={file.path}
-                      className={cn(
-                        "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted",
-                        active && "bg-muted",
-                      )}
-                      onClick={() => setSelected(file.path)}
-                    >
-                      <FileIcon name={name} />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-xs text-foreground">{name}</span>
-                        {dir ? <span className="block truncate text-xs text-muted-foreground">{dir}</span> : null}
-                      </span>
-                      <span
-                        className={cn(
-                          "w-4 shrink-0 text-center text-xs font-medium tabular-nums",
-                          STATUS_TONE[letter] ?? "text-muted-foreground",
-                        )}
-                        title={statusLabel(letter)}
-                      >
-                        {letter}
-                      </span>
-                    </button>
-                  );
-                })
+                <ChangeFileTree
+                  key={`${cwd}\0${source}\0${query.trim().toLowerCase()}`}
+                  files={files}
+                  cwd={cwd}
+                  source={source}
+                  selected={selected}
+                  onSelect={setSelected}
+                />
               ) : (
                 <p className="px-2 py-10 text-center text-xs leading-5 text-muted-foreground">
                   {query.trim() ? t("git.noMatch") : t(EMPTY_KEYS[source])}

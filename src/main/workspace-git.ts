@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { posix } from "node:path";
 import type { GitStatus } from "@shared/ipc";
 import {
   classifyCommitFile,
@@ -7,7 +8,7 @@ import {
   parseCommitPorcelain,
   type CommitFileMaterial,
   type CommitStatusPath,
-} from "./engine/commit-message";
+} from "./engine/commit-message.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -147,7 +148,7 @@ function parseGitNumstat(output: string): { additions: number; deletions: number
  * otherwise find the lock held and fail.
  */
 function gitRead(cwd: string, args: string[]): Promise<{ stdout: string }> {
-  return execFileAsync("git", ["--no-optional-locks", "-C", cwd, ...args], { timeout: 5000, maxBuffer: 256 * 1024 });
+  return execFileAsync("git", ["--no-optional-locks", "-C", cwd, ...args], { timeout: 5000, maxBuffer: 4 * 1024 * 1024 });
 }
 
 /**
@@ -165,9 +166,16 @@ export async function readGitStatus(cwd: string): Promise<GitStatus> {
   // large tree each is most of a second.
   const eager = notRepositories.has(cwd) ? undefined : readHeadStats();
   try {
-    const { stdout } = await gitRead(cwd, ["status", "--short", "--branch"]);
-    const lines = stdout.split(/\r?\n/).filter(Boolean);
-    const header = lines.shift() ?? "";
+    // NUL records preserve Unicode, whitespace and rename destinations verbatim.
+    // They are repository-relative even when cwd is a project subfolder, so rebase
+    // the paths for callers that resolve them against the requested cwd.
+    const [{ stdout }, prefixResult] = await Promise.all([
+      gitRead(cwd, ["status", "--porcelain=v1", "--branch", "-z", "--untracked-files=all"]),
+      gitRead(cwd, ["rev-parse", "--show-prefix"]),
+    ]);
+    const prefix = prefixResult.stdout.replace(/\r?\n$/, "");
+    const end = stdout.indexOf("\0");
+    const header = end < 0 ? stdout : stdout.slice(0, end);
     if (!header.startsWith("## ")) {
       notRepositories.add(cwd);
       return empty;
@@ -176,15 +184,10 @@ export async function readGitStatus(cwd: string): Promise<GitStatus> {
     const branch = parseBranchHeader(header.slice(3));
     const ahead = Number(header.match(/ahead (\d+)/)?.[1] ?? 0);
     const behind = Number(header.match(/behind (\d+)/)?.[1] ?? 0);
-    let changed = 0;
-    let staged = 0;
-    const files: GitStatus["files"] = [];
-    for (const line of lines) {
-      if (line.length < 2) continue;
-      changed += 1;
-      if (line[0] !== " " && line[0] !== "?") staged += 1;
-      files.push({ index: line[0] === "?" ? "?" : line[0], worktree: line[1] ?? " ", path: line.slice(3).trim() });
-    }
+    const files = parseCommitPorcelain(end < 0 ? "" : stdout.slice(end + 1))
+      .map(({ path, index, worktree }) => ({ path: prefix ? posix.relative(prefix, path) : path, index, worktree }));
+    const changed = files.length;
+    const staged = files.filter((file) => file.index !== " " && file.index !== "?").length;
     let stats = await (eager ?? readHeadStats());
     if (!stats) {
       // An unborn branch has no HEAD. Its staged and unstaged layers are still useful,

@@ -42,7 +42,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { bindingStateKey, displayRemotePath, isRemoteProject, remoteProjectActivityKey } from "@/lib/remote-project";
+import { formatRelativeTime } from "@/lib/time";
+import { bindingStateKey, displayRemotePath, isRemoteProject, isRemoteRef, remoteProjectActivityKey } from "@/lib/remote-project";
 import type { RemoteHostConnectionState } from "@shared/remote-host";
 import type { DagNode } from "@shared/dag";
 import type { Conversation, Project } from "@shared/types";
@@ -59,16 +60,42 @@ export const PROJECT_SESSION_LIMIT = 5;
 /** Section key for the project list itself, as opposed to a project's chats. */
 export const PROJECTS_SECTION = "projects";
 
-/** Gap between the sidebar's edge and the project card it hosts. */
+/** Gap between the sidebar's edge and the card a row hosts. */
 const PATH_HINT_GAP = 8;
 
-/** Hover card for a project row: name, kind, primary folder, and any extra folders. */
+const SIDEBAR_CARD_CLASS =
+  "w-80 max-w-none flex-col items-stretch gap-0 overflow-hidden rounded-lg p-0 text-left";
+
+/** Push the card past the sidebar, so it does not cover the list it describes. */
+function useSidebarCardOffset(): {
+  triggerRef: { current: HTMLElement | null };
+  offset: number;
+  measure: () => void;
+} {
+  const triggerRef = useRef<HTMLElement | null>(null);
+  const [offset, setOffset] = useState(PATH_HINT_GAP);
+  const measure = useCallback(() => {
+    const trigger = triggerRef.current;
+    const aside = trigger?.closest("aside");
+    if (!trigger || !aside) return;
+    setOffset(Math.round(aside.getBoundingClientRect().right + PATH_HINT_GAP - trigger.getBoundingClientRect().right));
+  }, []);
+  return { triggerRef, offset, measure };
+}
+
+/** Hover card for a project row: name, kind, task counts, primary folder, and any extra folders. */
 function ProjectHoverCard({
   project,
   connectionState,
+  tasks,
+  runningTasks,
 }: {
   project: Project;
   connectionState?: RemoteHostConnectionState;
+  /** Chats that belong to this project, pinned ones included. */
+  tasks: number;
+  /** How many of those chats are running right now. */
+  runningTasks: number;
 }): JSX.Element {
   const { t } = useTranslation("app");
   const remote = isRemoteProject(project);
@@ -88,11 +115,14 @@ function ProjectHoverCard({
 
   return (
     <div className="flex w-full flex-col text-left">
-      <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2">
-        <span className="min-w-0 truncate text-sm font-medium">{project.name || primary}</span>
-        <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-muted-foreground">
-          {remote ? t("sidebar.projectCard.remote") : t("sidebar.projectCard.local")}
-        </span>
+      <div className="flex flex-col gap-1 border-b border-border px-3 py-2">
+        <div className="flex items-center justify-between gap-3">
+          <span className="min-w-0 truncate text-sm font-medium">{project.name || primary}</span>
+          <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-muted-foreground">
+            {remote ? t("sidebar.projectCard.remote") : t("sidebar.projectCard.local")}
+          </span>
+        </div>
+        <p className="text-muted-foreground">{t("sidebar.projectCard.tasks", { count: tasks, running: runningTasks })}</p>
       </div>
       <div className="flex flex-col gap-2.5 px-3 py-2.5">
         <div>
@@ -241,6 +271,8 @@ export function DraggableProject({
   project,
   open,
   connectionState,
+  tasks,
+  runningTasks,
   onOpenChange,
   onNewChat,
   onReveal,
@@ -251,6 +283,8 @@ export function DraggableProject({
   project: Project;
   open: boolean;
   connectionState?: RemoteHostConnectionState;
+  tasks: number;
+  runningTasks: number;
   onOpenChange: (open: boolean) => void;
   onNewChat: () => void;
   onReveal: () => void;
@@ -268,15 +302,7 @@ export function DraggableProject({
   const { setNodeRef: setDroppableRef } = useDroppable({ id: cwd });
   // The card clears the sidebar edge, not the name: hover actions sit between
   // the name and that edge, so a popup anchored to the name covers the session list.
-  const pathTriggerRef = useRef<HTMLElement | null>(null);
-  const [pathOffset, setPathOffset] = useState(PATH_HINT_GAP);
-
-  function measurePathOffset(): void {
-    const trigger = pathTriggerRef.current;
-    const aside = trigger?.closest("aside");
-    if (!trigger || !aside) return;
-    setPathOffset(Math.round(aside.getBoundingClientRect().right + PATH_HINT_GAP - trigger.getBoundingClientRect().right));
-  }
+  const { triggerRef, offset, measure } = useSidebarCardOffset();
 
   return (
     <div className="relative">
@@ -298,12 +324,12 @@ export function DraggableProject({
               {...attributes}
               {...listeners}
             >
-              <Tooltip onOpenChange={(next) => next && measurePathOffset()}>
+              <Tooltip onOpenChange={(next) => next && measure()}>
                 <TooltipTrigger
                   render={
                     <CollapsibleTrigger
                       ref={(node) => {
-                        pathTriggerRef.current = node;
+                        triggerRef.current = node;
                       }}
                       // Fill the h-8 row: content height left a dead band above and below.
                       className="flex h-full min-w-0 flex-1 items-center gap-2.5 self-stretch text-left text-sm"
@@ -337,13 +363,8 @@ export function DraggableProject({
                     </span>
                   ) : null}
                 </TooltipTrigger>
-                <TooltipContent
-                  side="right"
-                  align="center"
-                  sideOffset={pathOffset}
-                  className="w-80 max-w-none flex-col items-stretch gap-0 overflow-hidden rounded-lg p-0 text-left"
-                >
-                  <ProjectHoverCard project={project} connectionState={connectionState} />
+                <TooltipContent side="right" align="center" sideOffset={offset} className={SIDEBAR_CARD_CLASS}>
+                  <ProjectHoverCard project={project} connectionState={connectionState} tasks={tasks} runningTasks={runningTasks} />
                 </TooltipContent>
               </Tooltip>
               {/* Shown on touch: an invisible button is still tappable. */}
@@ -428,6 +449,25 @@ export function sectionKey(kind: "pinned" | "recent"): string;
 export function sectionKey(kind: "project", cwd: string): string;
 export function sectionKey(kind: "pinned" | "recent" | "project", cwd?: string): string {
   return kind === "project" ? `project:${cwd ?? ""}` : kind;
+}
+
+/** Hover card for a conversation row: the full title, when it last ran, and its working directory. */
+function SessionHoverCard({ item }: { item: Conversation }): JSX.Element {
+  const directory = isRemoteRef(item.cwd) ? displayRemotePath(item.cwd) : item.cwd;
+  return (
+    <div className="flex w-full flex-col gap-2 px-3 py-2.5 text-left">
+      <div className="flex items-start justify-between gap-3">
+        <span className="min-w-0 flex-1 break-words text-sm font-medium">{item.title}</span>
+        <span className="shrink-0 text-muted-foreground">{formatRelativeTime(item.updatedAt)}</span>
+      </div>
+      {directory ? (
+        <div className="flex items-start gap-2">
+          <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 font-mono break-all">{directory}</span>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 /** The visual body of one conversation row. */
@@ -651,6 +691,27 @@ export function DraggableSession({
   const { setNodeRef: setDroppableRef } = useDroppable({ id: item.id });
   const [subTasksOpen, setSubTasksOpen] = useState(false);
   const subTaskCount = subTasks?.length ?? 0;
+  const { triggerRef, offset, measure } = useSidebarCardOffset();
+  const row = (
+    <SessionRowContent
+      item={item}
+      active={active}
+      isPinned={isPinned}
+      showSpinner={showSpinner}
+      waiting={waiting}
+      failed={failed}
+      renamingThis={renamingThis}
+      leadSlot={leadSlot}
+      subTaskCount={subTaskCount}
+      subTasksOpen={subTasksOpen}
+      onToggleSubTasks={() => setSubTasksOpen((open) => !open)}
+      onOpen={onOpen}
+      onTogglePin={onTogglePin}
+      onArchive={onArchive}
+      onRename={onRename}
+      onCancelRename={onCancelRename}
+    />
+  );
   // The sub-tasks sit outside the draggable box: dragging one must not pick the chat up,
   // and the drop indicators are measured on the chat's own row.
   return (
@@ -668,24 +729,25 @@ export function DraggableSession({
       <div className={cn("transition-opacity", isDragging && "opacity-40")}>
       <ContextMenu>
         <ContextMenuTrigger className="w-full">
-          <SessionRowContent
-            item={item}
-            active={active}
-            isPinned={isPinned}
-            showSpinner={showSpinner}
-            waiting={waiting}
-            failed={failed}
-            renamingThis={renamingThis}
-            leadSlot={leadSlot}
-            subTaskCount={subTaskCount}
-            subTasksOpen={subTasksOpen}
-            onToggleSubTasks={() => setSubTasksOpen((open) => !open)}
-            onOpen={onOpen}
-            onTogglePin={onTogglePin}
-            onArchive={onArchive}
-            onRename={onRename}
-            onCancelRename={onCancelRename}
-          />
+          {renamingThis ? row : (
+            <Tooltip onOpenChange={(next) => next && measure()}>
+              <TooltipTrigger
+                render={
+                  <div
+                    ref={(node) => {
+                      triggerRef.current = node;
+                    }}
+                    className="w-full"
+                  />
+                }
+              >
+                {row}
+              </TooltipTrigger>
+              <TooltipContent side="right" align="center" sideOffset={offset} className={SIDEBAR_CARD_CLASS}>
+                <SessionHoverCard item={item} />
+              </TooltipContent>
+            </Tooltip>
+          )}
         </ContextMenuTrigger>
         <ContextMenuContent className="w-32">
           <ContextMenuItem onClick={onTogglePin}>{isPinned ? t("sidebar.unpin") : t("sidebar.pin")}</ContextMenuItem>

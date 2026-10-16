@@ -57,7 +57,9 @@ function allPages(deps: Parameters<typeof project>[0], limit: number) {
   return { messages, latest, pages };
 }
 
-test("paged projection reconstructs the full transcript including tools, images, model changes and compactions", () => {
+test("paged projection reconstructs the full transcript including tools, images, model changes and compactions", (t) => {
+  // Separate projections create running compaction cards at the current time.
+  t.mock.timers.enable({ apis: ["Date"], now: Date.parse(stamp) });
   const branch: Entry[] = [{ id: "settings", type: "model_change", timestamp: stamp }];
   for (let index = 0; index < 37; index++) {
     const model = index % 2 ? "a" : "b";

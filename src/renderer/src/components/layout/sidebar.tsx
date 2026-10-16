@@ -281,6 +281,21 @@ export const Sidebar = memo(function Sidebar({
     return result;
   }, [conversations, pinned, archived, projects, sidebarOrder]);
 
+  // Chats of a project, wherever the sidebar currently draws them. A pinned chat
+  // leaves the project group but still counts; an empty draft and an archived chat do not.
+  const projectActivity = useMemo(() => {
+    const counts = new Map<string, { tasks: number; running: number }>();
+    for (const item of conversations) {
+      if (!item.project || item.kind === "side-chat" || archived.has(item.id)) continue;
+      if (!item.preview && running[item.id] !== true) continue;
+      const current = counts.get(item.project) ?? { tasks: 0, running: 0 };
+      current.tasks += 1;
+      if (running[item.id] === true) current.running += 1;
+      counts.set(item.project, current);
+    }
+    return counts;
+  }, [conversations, archived, running]);
+
   // Conversations with no project live here so they stay reachable without a project group.
   const recent = useMemo(() => {
     const unbound = conversations
@@ -676,6 +691,8 @@ export const Sidebar = memo(function Sidebar({
                       project={group.project}
                       open={open}
                       connectionState={group.project.connectionId ? sshStatesByHost.get(group.project.connectionId) : undefined}
+                      tasks={projectActivity.get(group.cwd)?.tasks ?? 0}
+                      runningTasks={projectActivity.get(group.cwd)?.running ?? 0}
                       onOpenChange={(next) => setOpen(group.cwd, next)}
                       onNewChat={() => {
                         onNewChat(group.cwd);

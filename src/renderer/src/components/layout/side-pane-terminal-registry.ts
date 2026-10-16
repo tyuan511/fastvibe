@@ -1,5 +1,6 @@
 import type { Terminal } from "@xterm/xterm";
 import type { FitAddon } from "@xterm/addon-fit";
+import type { SearchAddon } from "@xterm/addon-search";
 
 /**
  * The live terminals, kept apart from the component that creates them.
@@ -15,6 +16,7 @@ import type { FitAddon } from "@xterm/addon-fit";
 export type TerminalEntry = {
   term: Terminal;
   fit: FitAddon;
+  search: SearchAddon;
   host: HTMLDivElement;
   sessionId?: string;
   dispose: () => void;

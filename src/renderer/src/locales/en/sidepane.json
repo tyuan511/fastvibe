@@ -54,6 +54,7 @@
     "save": "Save",
     "saveFailed": "Could not save",
     "unsaved": "Unsaved",
+    "gitChanges": "Contains Git changes",
     "copy": "Copy content",
     "copied": "Copied",
     "copyFailed": "Copy failed",
@@ -110,7 +111,12 @@
     }
   },
   "terminal": {
-    "ended": "Session ended"
+    "ended": "Session ended",
+    "findPlaceholder": "Find in terminal output",
+    "findEmpty": "No matches",
+    "findPrev": "Previous (Shift+Enter)",
+    "findNext": "Next (Enter)",
+    "findClose": "Close find (Esc)"
   },
   "browser": {
     "back": "Back",

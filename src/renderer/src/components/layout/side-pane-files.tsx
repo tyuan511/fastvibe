@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type JSX, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { ArrowLeft01Icon, PanelLeftCloseIcon, PanelLeftOpenIcon, SourceCodeIcon, ViewIcon } from "@hugeicons/core-free-icons";
@@ -20,6 +20,8 @@ import { FileBreadcrumb } from "@/components/layout/file-breadcrumb";
 import { cn } from "@/lib/utils";
 import { SplitHandle, splitStyle, useSplitWidth } from "@/components/layout/split-handle";
 import { writeFileTreeCollapsed } from "@/lib/file-tree-state";
+import { fileTreeGit } from "@/lib/file-tree-git";
+import { useGitStatus } from "@/lib/use-git-status";
 import { useSidePaneStore, type SidePaneTab } from "@/stores/side-pane";
 import { useSettingsStore } from "@/stores/settings";
 import { folderName } from "@shared/project-folders";
@@ -113,6 +115,9 @@ export function SidePaneFiles({
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+  const [gitEpoch, setGitEpoch] = useState(0);
+  const streaming = useSessionStore((state) => state.streaming);
+  const gitRefreshKey = `${streaming}:${gitEpoch}`;
   const split = useSplitWidth("files", 224);
   const preview = tab.preview;
   const previewPath = preview?.path ?? null;
@@ -165,6 +170,7 @@ export function SidePaneFiles({
   }, [rootsKey, tab.path, loadDir]);
 
   function refreshTree(): void {
+    setGitEpoch((value) => value + 1);
     for (const root of treeRoots) void loadDir(root);
     for (const dir of expanded) void loadDir(dir);
   }
@@ -223,6 +229,7 @@ export function SidePaneFiles({
     setSaving(true);
     try {
       await window.fastvibe.workspace.writeFile(savedPath, draft);
+      setGitEpoch((value) => value + 1);
       if (openPath.current === savedPath) patchTab(tab.id, { preview: withText(preview, draft) });
       setDrafts((prev) => {
         if (prev[savedPath] !== draft) return prev;
@@ -288,7 +295,7 @@ export function SidePaneFiles({
                         {root === treeRoots[0] ? ` · ${t("files.primary")}` : ""}
                       </div>
                     ) : null}
-                    <TreeLevel
+                    <GitTreeRoot
                       dir={root}
                       depth={0}
                       children={children}
@@ -297,6 +304,7 @@ export function SidePaneFiles({
                       dirty={dirty}
                       cwd={root}
                       remote={remote}
+                      refreshKey={gitRefreshKey}
                       onToggle={toggleDir}
                       onOpen={openFile}
                       onRefresh={refreshTree}
@@ -472,6 +480,28 @@ function FilePreviewPane({
   );
 }
 
+type TreeLevelProps = {
+  dir: string;
+  depth: number;
+  children: DirMap;
+  expanded: Set<string>;
+  selected?: string;
+  dirty: Set<string>;
+  cwd: string;
+  remote?: boolean;
+  git: ReturnType<typeof fileTreeGit>;
+  onToggle: (path: string) => void;
+  onOpen: (path: string) => void;
+  onRefresh: () => void;
+};
+
+/** Each project folder can be in a different repository, including on an SSH host. */
+function GitTreeRoot({ refreshKey, ...props }: Omit<TreeLevelProps, "git"> & { refreshKey: string }): JSX.Element {
+  const status = useGitStatus(props.cwd, refreshKey);
+  const git = useMemo(() => fileTreeGit(status), [status]);
+  return <TreeLevel {...props} git={git} />;
+}
+
 function TreeLevel({
   dir,
   depth,
@@ -481,22 +511,11 @@ function TreeLevel({
   dirty,
   cwd,
   remote,
+  git,
   onToggle,
   onOpen,
   onRefresh,
-}: {
-  dir: string;
-  depth: number;
-  children: DirMap;
-  expanded: Set<string>;
-  selected?: string;
-  dirty: Set<string>;
-  cwd: string;
-  remote?: boolean;
-  onToggle: (path: string) => void;
-  onOpen: (path: string) => void;
-  onRefresh: () => void;
-}): JSX.Element {
+}: TreeLevelProps): JSX.Element {
   const { t } = useTranslation("sidepane");
   const entries = children[dir] ?? [];
   return (
@@ -506,6 +525,9 @@ function TreeLevel({
         const open = isDir && expanded.has(entry.path);
         const active = !isDir && selected === entry.path;
         const unsaved = !isDir && dirty.has(entry.path);
+        const relative = projectRelative(cwd, entry.path) ?? "";
+        const decoration = (isDir ? git.directories : git.files).get(relative);
+        const gitLabel = decoration ? (isDir ? t("files.gitChanges") : t(decoration.label)) : undefined;
         return (
           <div key={entry.path}>
             {/* An indent guide per level. The line is drawn on the trailing edge of the
@@ -516,7 +538,7 @@ function TreeLevel({
                   type="button"
                   aria-current={active ? "true" : undefined}
                   className={cn("chat-tree-row", active && "is-active")}
-                  title={entry.path}
+                  title={gitLabel ? `${entry.path} · ${gitLabel}` : entry.path}
                   onClick={() => (isDir ? onToggle(entry.path) : onOpen(entry.path))}
                 >
                   <span aria-hidden className="chat-tree-guides">
@@ -525,9 +547,18 @@ function TreeLevel({
                     ))}
                   </span>
                   <FileIcon name={entry.name} kind={isDir ? "folder" : "file"} expanded={open} />
-                  <span className="min-w-0 flex-1 truncate">{entry.name}</span>
+                  <span className={cn("min-w-0 flex-1 truncate", decoration?.tone)}>{entry.name}</span>
                   {unsaved ? (
                     <span className="size-1.5 shrink-0 rounded-full bg-warning" title={t("files.unsaved")} />
+                  ) : null}
+                  {decoration ? (
+                    <span
+                      className={cn("flex w-4 shrink-0 items-center justify-center text-xs font-medium", decoration.tone)}
+                      title={gitLabel}
+                      aria-label={gitLabel}
+                    >
+                      {isDir ? <span aria-hidden className="size-1.5 rounded-full bg-current" /> : decoration.badge}
+                    </span>
                   ) : null}
                 </button>
               </ContextMenuTrigger>
@@ -551,6 +582,7 @@ function TreeLevel({
                 dirty={dirty}
                 cwd={cwd}
                 remote={remote}
+                git={git}
                 onToggle={onToggle}
                 onOpen={onOpen}
                 onRefresh={onRefresh}

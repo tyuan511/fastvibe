@@ -111,7 +111,8 @@
     "remote": "远程",
     "primary": "主目录",
     "other": "其他目录",
-    "none": "无"
+    "none": "无",
+    "tasks": "{{count}} 个任务 · {{running}} 个运行中"
   },
   "binding": {
     "available": "已连接",

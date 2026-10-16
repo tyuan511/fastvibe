@@ -111,7 +111,8 @@
     "remote": "Remote",
     "primary": "Primary folder",
     "other": "Other folders",
-    "none": "None"
+    "none": "None",
+    "tasks": "{{count}} tasks · {{running}} running"
   },
   "binding": {
     "available": "Connected",
