@@ -457,7 +457,6 @@
     "copyFailed": "Could not copy path",
     "todos": "Todo list",
     "progress": "{{done}}/{{total}} completed",
-    "previousPlan": "Previous turn’s plan",
     "agents": "Subagents",
     "finished": "Finished · {{count}}",
     "outputs": "Recent outputs",
@@ -465,6 +464,7 @@
     "changesDescription": "All current changes in these repositories",
     "jump": "Go to message",
     "more": "Show more ({{count}})",
+    "less": "Show less",
     "previewFailed": "Could not open file"
   }
 }

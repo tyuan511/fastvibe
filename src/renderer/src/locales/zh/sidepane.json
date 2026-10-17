@@ -457,7 +457,6 @@
     "copyFailed": "复制失败",
     "todos": "任务清单",
     "progress": "{{done}}/{{total}} 已完成",
-    "previousPlan": "上一轮计划",
     "agents": "子代理",
     "finished": "已结束 {{count}} 项",
     "outputs": "最近产出",
@@ -465,6 +464,7 @@
     "changesDescription": "仓库当前的全部修改",
     "jump": "跳转到消息",
     "more": "展开更多（{{count}}）",
+    "less": "收起",
     "previewFailed": "无法打开文件"
   }
 }

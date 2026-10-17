@@ -52,9 +52,9 @@ function ResourceSection({ title, description, summary, collapsed, defaultOpen =
   );
 }
 
-function More({ count, onClick }: { count: number; onClick: () => void }) {
+function More({ count, expanded, onClick }: { count: number; expanded: boolean; onClick: () => void }) {
   const { t } = useTranslation("sidepane");
-  return <Button variant="ghost" size="sm" className="w-full text-xs text-muted-foreground" onClick={onClick}>{t("resources.more", { count })}</Button>;
+  return <Button variant="ghost" size="sm" aria-expanded={expanded} className="w-full text-xs text-muted-foreground" onClick={onClick}>{expanded ? t("resources.less") : t("resources.more", { count })}</Button>;
 }
 
 function Finished({ count, children }: { count: number; children: ReactNode }) {
@@ -159,6 +159,7 @@ function ResourceBody({ conversation, project, onClose }: { conversation: Conver
   const outputs = useMemo(() => conversationOutputs(messages, (path) => resolvePath(path, conversation.cwd)), [messages, conversation.cwd]);
   const [moreOutputs, setMoreOutputs] = useState(false);
   const [moreAgents, setMoreAgents] = useState(false);
+  const [moreFinishedAgents, setMoreFinishedAgents] = useState(false);
   const [repos, setRepos] = useState<string[]>([conversation.cwd]);
   const folderKey = project ? projectFolderPaths(project).join("\0") : "";
   useEffect(() => {
@@ -214,31 +215,29 @@ function ResourceBody({ conversation, project, onClose }: { conversation: Conver
   return <div className="divide-y divide-border/50">
     <Environment conversation={conversation} project={project} />
     {todo.items.length ? <ResourceSection title={t("resources.todos")} defaultOpen={false}
-      summary={(todo.superseded ? t("resources.previousPlan") + " · " : "") + t("resources.progress", { done, total: todo.items.length })}
+      summary={t("resources.progress", { done, total: todo.items.length })}
       collapsed={currentTodo ? <div className="px-1 pb-1"><TodoRow item={currentTodo} compact live={working && !todo.superseded} /></div> : undefined}>
-      {todo.superseded ? <p className="px-2 pb-1 text-xs text-muted-foreground">{t("resources.previousPlan")}</p> : null}
       <div className="px-2">{todo.items.map((item) => <TodoRow key={item.id} item={item} live={working && !todo.superseded} />)}</div>
-      {todo.entryId ? <Button variant="ghost" size="sm" className="mt-1 w-full text-xs text-muted-foreground" onClick={() => jump(todo.entryId!)}>{t("resources.jump")}</Button> : null}
     </ResourceSection> : null}
     {agents.length ? <ResourceSection title={t("resources.agents")} summary={agents.length}>
       {activeAgents.slice(0, moreAgents ? undefined : 5).map(agentRow)}
-      {!moreAgents && activeAgents.length > 5 ? <More count={activeAgents.length - 5} onClick={() => setMoreAgents(true)} /> : null}
+      {activeAgents.length > 5 ? <More count={activeAgents.length - 5} expanded={moreAgents} onClick={() => setMoreAgents((value) => !value)} /> : null}
       <Finished count={finishedAgents.length}>
-        {finishedAgents.slice(0, moreAgents ? undefined : 5).map(agentRow)}
-        {!moreAgents && finishedAgents.length > 5 ? <More count={finishedAgents.length - 5} onClick={() => setMoreAgents(true)} /> : null}
+        {finishedAgents.slice(0, moreFinishedAgents ? undefined : 5).map(agentRow)}
+        {finishedAgents.length > 5 ? <More count={finishedAgents.length - 5} expanded={moreFinishedAgents} onClick={() => setMoreFinishedAgents((value) => !value)} /> : null}
       </Finished>
     </ResourceSection> : null}
     {outputs.length ? <ResourceSection title={t("resources.outputs")} summary={outputs.length}>
-      {outputs.slice(0, moreOutputs ? undefined : 5).map((output) => <div key={output.path} className="group flex min-w-0 items-center">
-        <Button variant="ghost" className={cn(ROW, "min-w-0 flex-1")} disabled={narrow} title={displayRemotePath(output.path)} onClick={() => void openOutput(output.path)}>
+      {outputs.slice(0, moreOutputs ? undefined : 5).map((output) => <div key={output.path} className="group flex min-w-0 items-center rounded-md hover:bg-muted focus-within:bg-muted dark:hover:bg-muted/50 dark:focus-within:bg-muted/50">
+        <Button variant="ghost" className={cn(ROW, "min-w-0 flex-1 hover:bg-transparent dark:hover:bg-transparent")} disabled={narrow} title={displayRemotePath(output.path)} onClick={() => void openOutput(output.path)}>
           <FileIcon name={output.path} className="size-4 shrink-0" />
           <span className="min-w-0 truncate">{output.title || displayPath(output.path, conversation.cwd)}</span>
         </Button>
-        <IconButton size="icon-xs" variant="ghost" label={t("resources.jump")} onClick={() => jump(output.entryId)} className="mr-1 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:opacity-100">
+        <IconButton size="icon-xs" variant="ghost" label={t("resources.jump")} onClick={() => jump(output.entryId)} className="mr-1 shrink-0 text-muted-foreground opacity-0 hover:bg-transparent group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:opacity-100 dark:hover:bg-transparent">
           <HugeiconsIcon icon={ArrowRight01Icon} strokeWidth={2} />
         </IconButton>
       </div>)}
-      {!moreOutputs && outputs.length > 5 ? <More count={outputs.length - 5} onClick={() => setMoreOutputs(true)} /> : null}
+      {outputs.length > 5 ? <More count={outputs.length - 5} expanded={moreOutputs} onClick={() => setMoreOutputs((value) => !value)} /> : null}
     </ResourceSection> : null}
     <Repositories roots={repos} working={working} onClose={onClose} />
   </div>;

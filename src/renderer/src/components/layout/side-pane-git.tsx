@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type JSX } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -6,7 +6,6 @@ import { Add01Icon, ArrowDown02Icon, ArrowLeft01Icon, PanelLeftCloseIcon, PanelL
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Sheet, SheetClose, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Spinner } from "@/components/ui/spinner";
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/components/ui/alert-dialog";
 import { DiffView } from "@/components/chat/diff-view";
@@ -88,14 +87,7 @@ function RepositoryChanges({ cwd, onError, focusPath, focusSource, focusRevision
   const [comparison, setComparison] = useState<GitComparison>();
   const [comparisonError, setComparisonError] = useState("");
   const [selection, setSelection] = useState<Selection>();
-  const paneRef = useRef<HTMLDivElement>(null);
-  const treeToggleRef = useRef<HTMLButtonElement>(null);
-  const drawerCloseRef = useRef<HTMLButtonElement>(null);
-  const [paneBounds, setPaneBounds] = useState({ left: 0, width: 0 });
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const narrow = paneBounds.width > 0 && paneBounds.width < 576;
-  const sidebarOpen = narrow ? drawerOpen : !sidebarCollapsed;
   const [message, setMessage] = useState(() => commitDrafts.get(cwd) ?? "");
   const [tree, setTree] = useState(preferTree);
   const [diffMode, setDiffMode] = useState<"unified" | "split">("unified");
@@ -110,21 +102,7 @@ function RepositoryChanges({ cwd, onError, focusPath, focusSource, focusRevision
   const busyRef = useRef(false);
   const request = useRef(0);
   const alive = useRef(true);
-  const split = useSplitWidth("git", 240);
-  useLayoutEffect(() => {
-    const pane = paneRef.current;
-    if (!pane) return;
-    const measure = (): void => {
-      const { left, width } = pane.getBoundingClientRect();
-      setPaneBounds((old) => old.left === left && old.width === width ? old : { left, width });
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(pane);
-    window.addEventListener("resize", measure);
-    return () => { observer.disconnect(); window.removeEventListener("resize", measure); };
-  }, [status?.isRepository]);
-  useEffect(() => { setDrawerOpen(false); }, [narrow]);
+  const split = useSplitWidth("git", 224);
 
   const lastTurn = useMemo(() => lastTurnFiles(messages), [messages]);
   const reload = useCallback(async () => {
@@ -155,7 +133,6 @@ function RepositoryChanges({ cwd, onError, focusPath, focusSource, focusRevision
     const source = focusSource ?? "unstaged";
     setView(source === "branch" || source === "last-turn" ? source : "workspace");
     setCommit(undefined);
-    setDrawerOpen(false);
     setSelection({ file: { path: focusPath, index: source === "staged" ? "M" : " ", worktree: "M" }, source });
     onFocusHandled?.();
   }, [focusPath, focusSource, focusRevision]);
@@ -267,7 +244,7 @@ function RepositoryChanges({ cwd, onError, focusPath, focusSource, focusRevision
     setSelection((current) => selectGitChange(groups, current, cwd, commit?.hash));
   }, [groups, selectionReady, focusPath, cwd, commit?.hash]);
   const selected = selection && { ...selection, file: currentFile ?? selection.file };
-  function changeView(next: View): void { setView(next); setCommit(undefined); setSelection(undefined); setDrawerOpen(false); }
+  function changeView(next: View): void { setView(next); setCommit(undefined); setSelection(undefined); }
 
   if (status && !status.isRepository) return <GitEmpty title={t("git.notRepoTitle")} description={t("git.notRepoDesc")} />;
   const fileCount = groups.reduce((sum, group) => sum + group.files.length, 0);
@@ -296,7 +273,7 @@ function RepositoryChanges({ cwd, onError, focusPath, focusSource, focusRevision
               if (!group.files.length) return null;
               const editable = view === "workspace" && !commit;
               return <GitChangeGroup key={group.id} title={group.title} count={group.files.length} action={editable && group.id !== "conflicts" ? <IconButton size="icon-xs" variant="ghost" label={t(group.source === "staged" ? "git.unstageAll" : "git.stageAll")} disabled={!!busy} onClick={() => (group.source === "staged" ? unstage : stage)(group.files.map((file) => file.path))}><HugeiconsIcon icon={group.source === "staged" ? MinusSignIcon : Add01Icon} /></IconButton> : undefined}>
-                <GitChangeList files={group.files} label={group.title} cwd={cwd} source={group.source} selected={selection?.source === group.source ? selection.file.path : undefined} tree={tree} busy={!!busy} onSelect={(file) => { setSelection({ file, source: group.source, revision: commit?.hash }); setDrawerOpen(false); }} onStage={editable && group.source === "unstaged" ? stage : undefined} onUnstage={editable && group.source === "staged" ? unstage : undefined} onDiscard={editable && group.source === "unstaged" ? setDiscard : undefined} />
+                <GitChangeList files={group.files} label={group.title} cwd={cwd} source={group.source} selected={selection?.source === group.source ? selection.file.path : undefined} tree={tree} busy={!!busy} onSelect={(file) => { setSelection({ file, source: group.source, revision: commit?.hash }); }} onStage={editable && group.source === "unstaged" ? stage : undefined} onUnstage={editable && group.source === "staged" ? unstage : undefined} onDiscard={editable && group.source === "unstaged" ? setDiscard : undefined} />
               </GitChangeGroup>;
             })}
             {!fileCount ? <p className="px-3 py-8 text-center text-xs text-muted-foreground">{t(view === "workspace" && !commit ? "git.clean" : "git.noDiff")}</p> : null}
@@ -305,14 +282,14 @@ function RepositoryChanges({ cwd, onError, focusPath, focusSource, focusRevision
         </ResizablePanel>
         <ResizableHandle aria-label={t("git.resizeHistory")} className="h-px w-full cursor-row-resize bg-border after:top-[-4px] after:right-0 after:bottom-[-4px] after:left-0" />
         <ResizablePanel defaultSize="36%" minSize={historyOpen ? 110 : 32} maxSize={historyOpen ? "75%" : 32}>
-          <GitHistoryPanel cwd={cwd} epoch={historyEpoch} scope={historyScope} onScopeChange={setHistoryScope} selected={commit?.hash} open={historyOpen} onOpenChange={setHistoryOpen} onSelect={(next) => { setDrawerOpen(false); setCommit(next); if (next.hash === commit?.hash) return; setComparison(undefined); setComparisonError(""); setSelection(undefined); }} />
+          <GitHistoryPanel cwd={cwd} epoch={historyEpoch} scope={historyScope} onScopeChange={setHistoryScope} selected={commit?.hash} open={historyOpen} onOpenChange={setHistoryOpen} onSelect={(next) => { setCommit(next); if (next.hash === commit?.hash) return; setComparison(undefined); setComparisonError(""); setSelection(undefined); }} />
         </ResizablePanel>
         </ResizablePanelGroup>
         </div>
   </div>;
-  return <div ref={paneRef} className="@container/git flex min-h-0 min-w-0 flex-1 flex-col">
+  return <div className="@container/git flex min-h-0 min-w-0 flex-1 flex-col">
     <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border px-2">
-      <IconButton ref={treeToggleRef} size="icon-xs" variant="ghost" label={t(sidebarOpen ? "files.hideTree" : "files.showTree")} aria-expanded={sidebarOpen} onClick={() => narrow ? setDrawerOpen(!drawerOpen) : setSidebarCollapsed(!sidebarCollapsed)}><HugeiconsIcon icon={sidebarOpen ? PanelLeftCloseIcon : PanelLeftOpenIcon} /></IconButton>
+      <IconButton size="icon-xs" variant="ghost" label={t(sidebarCollapsed ? "files.showTree" : "files.hideTree")} aria-expanded={!sidebarCollapsed} onClick={() => setSidebarCollapsed(!sidebarCollapsed)}><HugeiconsIcon icon={sidebarCollapsed ? PanelLeftOpenIcon : PanelLeftCloseIcon} /></IconButton>
       <HugeiconsIcon icon={GitBranchIcon} className="size-3.5 text-muted-foreground" />
       <span className="min-w-0 flex-1 truncate text-xs font-medium">{status?.branch ?? "HEAD"}</span>
       {status?.behind ? <span className="text-xs text-muted-foreground">↓{status.behind}</span> : null}
@@ -323,34 +300,13 @@ function RepositoryChanges({ cwd, onError, focusPath, focusSource, focusRevision
       <IconButton size="icon-xs" variant="ghost" label={t("git.refresh")} disabled={!!busy || reloading} onClick={() => { void reload(); setHistoryEpoch((n) => n + 1); }}><HugeiconsIcon icon={RefreshIcon} className={cn(reloading && "animate-spin")} /></IconButton>
     </div>
     <div className="flex min-h-0 flex-1">
-      {!narrow ? <div style={splitStyle(split.width)} className={cn("min-h-0 w-(--split-w) max-w-[42%] flex-none flex-col", sidebarCollapsed ? "hidden" : "flex")}>{sidebarContent}</div> : null}
-      {!narrow && !sidebarCollapsed ? <SplitHandle listSide="start" maxWidthRatio={0.42} label={t("git.resize")} {...split} commit={(width) => {
-        if (width < 180) { split.commit(240); setSidebarCollapsed(true); treeToggleRef.current?.focus(); }
-        else split.commit(width);
-      }} /> : null}
+      <div style={splitStyle(split.width)} className={cn("min-h-0 min-w-[120px] w-(--split-w) max-w-[75%] flex-none flex-col", sidebarCollapsed ? "hidden" : "flex")}>{sidebarContent}</div>
+      {!sidebarCollapsed ? <SplitHandle listSide="start" label={t("git.resize")} {...split} /> : null}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       {commit ? <GitCommitDetails key={commit.hash} commit={commit} count={comparison?.files.length} /> : null}
       {selected ? <DiffPane key={`${selected.source}:${selected.revision ?? ""}:${selected.file.path}`} cwd={cwd} selection={selected} mode={diffMode} setMode={setDiffMode} wrap={wrap} setWrap={setWrap} epoch={epoch} busy={!!busy} onStage={view === "workspace" && !commit && selected.source === "unstaged" ? () => stage([selected.file.path]) : undefined} onUnstage={selected.source === "staged" ? () => unstage([selected.file.path]) : undefined} onDiscard={view === "workspace" && !commit && selected.source === "unstaged" && !isConflict(selected.file) ? () => setDiscard(selected.file) : undefined} onError={onError} /> : <div className="flex min-w-0 flex-1 items-center justify-center p-8 text-xs text-muted-foreground">{commit ? (!comparison && !comparisonError ? <Spinner /> : t(comparisonError ? "git.comparisonFailed" : "git.emptyCommit")) : !status ? <Spinner /> : t(fileCount ? "git.pickDiff" : "git.clean")}</div>}
       </div>
     </div>
-    {narrow ? <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
-      <SheetContent
-        side="left"
-        showCloseButton={false}
-        initialFocus={drawerCloseRef}
-        finalFocus={treeToggleRef}
-        aria-describedby={undefined}
-        className="gap-0 border-border p-0"
-        style={{ left: paneBounds.left, top: 0, bottom: 0, width: Math.min(320, Math.max(0, paneBounds.width - 32)), height: "100dvh" }}
-      >
-        <SheetHeader className="h-9 shrink-0 flex-row items-center gap-1 border-b border-border px-2 py-0">
-          <SheetTitle className="min-w-0 flex-1 text-xs">{t("git.changedFiles")}</SheetTitle>
-          <IconButton size="icon-xs" variant="ghost" label={t(tree ? "git.listView" : "git.treeView")} onClick={() => { preferTree = !tree; setTree(!tree); }}><HugeiconsIcon icon={tree ? ListIcon : FolderTreeIcon} /></IconButton>
-          <SheetClose render={<IconButton ref={drawerCloseRef} size="icon-xs" variant="ghost" label={t("files.hideTree")}><HugeiconsIcon icon={PanelLeftCloseIcon} /></IconButton>} />
-        </SheetHeader>
-        {sidebarContent}
-      </SheetContent>
-    </Sheet> : null}
     <AlertDialog open={!!discard} onOpenChange={(open) => { if (!open) setDiscard(undefined); }}>
       <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{t("git.discardTitle")}</AlertDialogTitle><AlertDialogDescription>{t(discard?.index === "?" ? "git.discardUntracked" : "git.discardDescription", { path: discard?.path })}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>{t("git.cancel")}</AlertDialogCancel><AlertDialogAction variant="destructive" disabled={!!busy} onClick={() => { const file = discard; setDiscard(undefined); if (file) void run("discard", () => window.fastvibe.workspace.gitDiscard(cwd, [file.path]), t("git.discardDone", { path: file.path })); }}>{t("git.discard")}</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
     </AlertDialog>
