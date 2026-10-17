@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { ArrowLeft01Icon, PanelLeftCloseIcon, PanelLeftOpenIcon, SourceCodeIcon, ViewIcon } from "@hugeicons/core-free-icons";
+import { ArrowLeft01Icon, ArrowRight01Icon, PanelLeftCloseIcon, PanelLeftOpenIcon, SourceCodeIcon, ViewIcon } from "@hugeicons/core-free-icons";
 import { editableFileText, prefersSourceEditor } from "@shared/editable-preview";
 import { IconButton } from "@/components/icon-button";
+import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -13,12 +15,10 @@ import {
 } from "@/components/ui/context-menu";
 import { copyPath, revealPath } from "@/components/path-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { FileIcon } from "@/components/file-icon";
 import { PreviewSurface, previewText } from "@/components/chat/preview-panel";
 import { HighlightedEditor } from "@/components/chat/highlighted-editor";
 import { FileBreadcrumb } from "@/components/layout/file-breadcrumb";
-import { ConversationOutputs } from "./conversation-outputs";
 import { cn } from "@/lib/utils";
 import { SplitHandle, splitStyle, useSplitWidth } from "@/components/layout/split-handle";
 import { writeFileTreeCollapsed } from "@/lib/file-tree-state";
@@ -91,7 +91,8 @@ function withText(preview: FilePreview, text: string): FilePreview {
  * The right pane's project file view. Narrow panes swap between the tree and the
  * open file; when the pane is wide enough the tree stays on the left and the file
  * on the right, and can be collapsed so the file uses the whole pane. The project
- * directory is not a row — the tree starts at its children. Text that is the file
+ * directory is not a row for single-folder projects; multiple roots have their own
+ * collapsible headings. Text that is the file
  * itself can be edited and saved; a rendered office document cannot, because
  * writing it back would replace the original.
  */
@@ -113,9 +114,9 @@ export function SidePaneFiles({
   const { t } = useTranslation("sidepane");
   const patchTab = useSidePaneStore((state) => state.patchTab);
   const treeCollapsed = useSettingsStore((state) => state.settings.fileTreeCollapsed === true);
-  const [fileView, setFileView] = useState<"tree" | "outputs">("tree");
   const [children, setChildren] = useState<DirMap>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [collapsedRoots, setCollapsedRoots] = useState<Set<string>>(new Set());
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [gitEpoch, setGitEpoch] = useState(0);
@@ -154,6 +155,7 @@ export function SidePaneFiles({
   useEffect(() => {
     setChildren({});
     setExpanded(new Set());
+    setCollapsedRoots(new Set());
     for (const root of treeRoots) void loadDir(root);
   }, [rootsKey, loadDir]);
 
@@ -167,6 +169,12 @@ export function SidePaneFiles({
       openedHere.current = null;
       return;
     }
+    setCollapsedRoots((prev) => {
+      if (!prev.has(root)) return prev;
+      const next = new Set(prev);
+      next.delete(root);
+      return next;
+    });
     const dirs = ancestorDirs(root, path);
     setExpanded(new Set(dirs));
     for (const dir of dirs) void loadDir(dir);
@@ -287,22 +295,16 @@ export function SidePaneFiles({
               : "@min-[32rem]/files:flex @min-[32rem]/files:w-(--split-w) @min-[32rem]/files:max-w-[75%] @min-[32rem]/files:flex-none",
           )}
         >
-          <Tabs value={fileView} onValueChange={(value) => setFileView(value as "tree" | "outputs")} className="shrink-0 px-2 pt-2"><TabsList className="w-full"><TabsTrigger value="tree">{t("outputs.files")}</TabsTrigger><TabsTrigger value="outputs">{t("outputs.title")}</TabsTrigger></TabsList></Tabs>
           <ScrollArea className="h-full min-h-0 flex-1">
-            {fileView === "outputs" ? <ConversationOutputs onOpen={(path) => void openFile(path)} /> : (
             <div className="flex min-h-full flex-col">
               <div className="py-1.5">
-                {treeRoots.map((root) => (
-                  <div key={root}>
-                    {treeRoots.length > 1 ? (
-                      <div className="truncate px-2 py-1 text-xs text-muted-foreground" title={root}>
-                        {folderName(root)}
-                        {root === treeRoots[0] ? ` · ${t("files.primary")}` : ""}
-                      </div>
-                    ) : null}
+                {treeRoots.map((root) => {
+                  const multiple = treeRoots.length > 1;
+                  const open = !collapsedRoots.has(root);
+                  const tree = (
                     <GitTreeRoot
                       dir={root}
-                      depth={0}
+                      depth={multiple ? 1 : 0}
                       children={children}
                       expanded={expanded}
                       selected={preview?.path}
@@ -314,8 +316,27 @@ export function SidePaneFiles({
                       onOpen={openFile}
                       onRefresh={refreshTree}
                     />
-                  </div>
-                ))}
+                  );
+                  if (!multiple) return <div key={root}>{tree}</div>;
+                  return (
+                    <Collapsible key={root} open={open} onOpenChange={(value) => {
+                      setCollapsedRoots((prev) => {
+                        const next = new Set(prev);
+                        if (value) next.delete(root);
+                        else next.add(root);
+                        return next;
+                      });
+                    }} className="mx-1 mt-1 first:mt-0">
+                      <CollapsibleTrigger title={root} render={<Button variant="ghost" className="h-8 w-full justify-start gap-2 bg-muted/60 px-2 text-sm font-medium text-foreground" />}>
+                        <HugeiconsIcon icon={ArrowRight01Icon} strokeWidth={2} className={cn("size-3 shrink-0 text-muted-foreground", open && "rotate-90")} />
+                        <FileIcon name={folderName(root)} kind="folder" expanded={open} />
+                        <span className="min-w-0 flex-1 truncate text-left">{folderName(root)}</span>
+                        {root === treeRoots[0] ? <span className="shrink-0 text-xs font-normal text-muted-foreground">{t("files.primary")}</span> : null}
+                      </CollapsibleTrigger>
+                      <CollapsibleContent>{tree}</CollapsibleContent>
+                    </Collapsible>
+                  );
+                })}
               </div>
               {/* Blank space under the list is the project root. */}
               <ContextMenu>
@@ -325,7 +346,6 @@ export function SidePaneFiles({
                 </ContextMenuContent>
               </ContextMenu>
             </div>
-            )}
           </ScrollArea>
         </div>
         {hideTree ? null : (

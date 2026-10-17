@@ -438,14 +438,6 @@
     "attention": "{{count}} 项待处理",
     "viewAll": "查看全部 {{count}} 项"
   },
-  "outputs": {
-    "title": "本会话产物",
-    "files": "项目文件",
-    "description": "按路径合并，显示本会话最近一次生成或修改。",
-    "empty": "这个会话还没有产物。",
-    "modified": "会话修改于 {{time}}",
-    "jump": "跳回生成消息"
-  },
   "resources": {
     "title": "会话资源",
     "environment": "环境",

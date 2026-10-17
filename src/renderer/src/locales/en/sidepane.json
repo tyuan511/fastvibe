@@ -438,14 +438,6 @@
     "attention": "{{count}} need attention",
     "viewAll": "View all {{count}} tasks"
   },
-  "outputs": {
-    "title": "Chat outputs",
-    "files": "Project files",
-    "description": "Grouped by path, with the latest creation or edit in this chat.",
-    "empty": "No outputs in this chat yet.",
-    "modified": "Updated in chat: {{time}}",
-    "jump": "Go to producing message"
-  },
   "resources": {
     "title": "Conversation resources",
     "environment": "Environment",
