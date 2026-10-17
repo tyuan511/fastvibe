@@ -47,12 +47,12 @@ function GraphCell({ row, columns }: { row: GitGraphRow; columns: number }): JSX
 export function GitRefBadges({ refs, head = false, limit = 2, compact = true }: { refs: GitReference[]; head?: boolean; limit?: number; compact?: boolean }): JSX.Element {
   const sorted = [...refs].sort((a, b) => Number(!!b.current) - Number(!!a.current) || ({ local: 0, remote: 1, tag: 2 }[a.kind] - { local: 0, remote: 1, tag: 2 }[b.kind]));
   return <span className="flex min-w-0 shrink-0 items-center gap-1">
-    {head && !refs.some((ref) => ref.current) ? <span className="rounded bg-primary/15 px-1 text-[10px] font-medium text-primary">HEAD</span> : null}
-    {sorted.slice(0, limit).map((ref) => <span key={`${ref.kind}:${ref.name}`} title={ref.current ? `HEAD → ${ref.name}` : ref.name} className={cn("inline-flex max-w-28 items-center gap-0.5 rounded px-1 py-0.5 text-[10px] leading-none", ref.current ? "bg-info text-white" : ref.kind === "remote" ? "bg-chart-2/15 text-chart-2" : ref.kind === "tag" ? "bg-warning/15 text-warning" : "bg-info/10 text-info")}>
-      <HugeiconsIcon icon={ref.current ? Target01Icon : ref.kind === "remote" ? CloudIcon : ref.kind === "tag" ? Tag01Icon : GitBranchIcon} size={11} strokeWidth={2} />
+    {head && !refs.some((ref) => ref.current) ? <span className="rounded bg-primary/15 px-1 text-xs font-medium text-primary">HEAD</span> : null}
+    {sorted.slice(0, limit).map((ref) => <span key={`${ref.kind}:${ref.name}`} title={ref.current ? `HEAD → ${ref.name}` : ref.name} className={cn("inline-flex max-w-28 items-center gap-0.5 rounded px-1 py-0.5 text-xs leading-none", ref.current ? "bg-info text-white" : ref.kind === "remote" ? "bg-chart-2/15 text-chart-2" : ref.kind === "tag" ? "bg-warning/15 text-warning" : "bg-info/10 text-info")}>
+      <HugeiconsIcon icon={ref.current ? Target01Icon : ref.kind === "remote" ? CloudIcon : ref.kind === "tag" ? Tag01Icon : GitBranchIcon} className="size-[1em] shrink-0" strokeWidth={2} />
       <span className={compact && ref.kind === "remote" && refs.some((local) => local.kind === "local" && ref.name.endsWith(`/${local.name}`)) ? "sr-only" : "truncate"}>{ref.name}</span>
     </span>)}
-    {sorted.length > limit ? <span className="text-[10px] text-muted-foreground" title={sorted.slice(limit).map((ref) => ref.name).join("\n")}>+{sorted.length - limit}</span> : null}
+    {sorted.length > limit ? <span className="text-xs text-muted-foreground" title={sorted.slice(limit).map((ref) => ref.name).join("\n")}>+{sorted.length - limit}</span> : null}
   </span>;
 }
 
