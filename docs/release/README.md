@@ -5,6 +5,8 @@ GitHub Release 以英文为正文，顶部提供简体中文链接。
 
 | Release / 版本 | English | 简体中文 |
 | --- | --- | --- |
+| Desktop / 桌面端 v0.20.4 | [English](v0.20.4.md) | [简体中文](v0.20.4_zh-CN.md) |
+| Mobile / 手机端 app-v0.5.9 | [English](app-v0.5.9.md) | [简体中文](app-v0.5.9_zh-CN.md) |
 | Desktop / 桌面端 v0.20.3 | [English](v0.20.3.md) | [简体中文](v0.20.3_zh-CN.md) |
 | Mobile / 手机端 app-v0.5.8 | [English](app-v0.5.8.md) | [简体中文](app-v0.5.8_zh-CN.md) |
 
