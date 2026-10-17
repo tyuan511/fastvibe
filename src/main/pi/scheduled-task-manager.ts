@@ -2,6 +2,9 @@ import type {
   ScheduledTask, ScheduledTaskDraft, ScheduledTaskPatch, ScheduledTaskRun, ScheduledTaskSnapshot,
 } from "@shared/schedules";
 import { ScheduledTaskStore } from "../engine/scheduled-tasks.ts";
+import { uiText } from "../engine/ui-text.ts";
+
+type ActiveRun = { taskId: string; runId: string; abort: AbortController; stopRequested: boolean; timedOut: boolean; timer?: ReturnType<typeof setTimeout> };
 
 const MAX_MISSED_AGE_MS = 24 * 60 * 60 * 1000;
 const MAX_TIMER_MS = 60_000;
@@ -25,14 +28,14 @@ export class ScheduledTaskManager {
   readonly #listeners = new Set<(snapshot: ScheduledTaskSnapshot) => void>();
   #timer: ReturnType<typeof setTimeout> | null = null;
   #started = false;
-  #active: { taskId: string; runId: string; abort: AbortController; stopRequested: boolean } | null = null;
+  #active: ActiveRun | null = null;
 
   constructor(file: string, runner: ScheduledTaskRunner, onSettled?: ScheduledTaskSettled) {
     this.#store = new ScheduledTaskStore(file);
     this.#runner = runner;
     this.#onSettled = onSettled;
-    this.#store.onChange = (snapshot) => {
-      this.#notify(snapshot);
+    this.#store.onChange = () => {
+      this.#notify();
       this.#arm();
     };
   }
@@ -42,9 +45,9 @@ export class ScheduledTaskManager {
     return () => this.#listeners.delete(listener);
   }
 
-  list(): ScheduledTaskSnapshot { return this.#store.snapshot(); }
+  list(): ScheduledTaskSnapshot { return { ...this.#store.snapshot(), runningTaskId: this.#active?.taskId, queuedTaskIds: this.#store.queued().map((run) => run.taskId) }; }
   history(id: string): ScheduledTaskRun[] { return this.#store.listRuns(id); }
-  hasEnabledTasks(): boolean { return this.#store.hasEnabledTasks() || this.#active !== null; }
+  hasEnabledTasks(): boolean { return this.#store.hasEnabledTasks() || this.#active !== null || this.#store.queued().length > 0; }
   flush(): void { this.#store.flush(); }
 
   create(draft: ScheduledTaskDraft): ScheduledTask {
@@ -56,8 +59,11 @@ export class ScheduledTaskManager {
   update(id: string, patch: ScheduledTaskPatch): ScheduledTask {
     const task = this.#store.update(id, patch);
     if (!task) throw new Error("定时任务不存在");
+    if (patch.enabled === false) {
+      for (const run of this.#store.queued().filter((run) => run.taskId === id)) this.#store.finish(run.id, "stopped");
+    }
     this.#wake();
-    return task;
+    return this.#store.get(id)!;
   }
 
   remove(id: string): boolean {
@@ -69,15 +75,23 @@ export class ScheduledTaskManager {
     const task = this.#store.get(id);
     if (!task) throw new Error("定时任务不存在");
     if (!this.#started) throw new Error("引擎未启动，无法立即执行");
-    if (this.#active) throw new Error("已有定时任务正在执行，请等待其结束");
-    const run = this.#store.claim(id, Date.now(), "running", true);
-    this.#launch(task, run);
-    return run;
+    if (this.#active?.taskId === id) throw new Error(uiText("该任务正在执行", "This task is already running"));
+    const queued = this.#store.queued().find((run) => run.taskId === id);
+    if (queued) return queued;
+    const run = this.#store.claim(id, Date.now(), "queued", true);
+    this.#wake();
+    return this.#store.listRuns(id).find((item) => item.id === run.id) ?? run;
   }
 
   stopRun(id: string): boolean {
     const active = this.#active;
-    if (!active || active.taskId !== id) return false;
+    if (!active || active.taskId !== id) {
+      const queued = this.#store.queued().find((run) => run.taskId === id);
+      if (!queued) return false;
+      this.#store.finish(queued.id, "stopped");
+      this.#wake();
+      return true;
+    }
     active.stopRequested = true;
     active.abort.abort();
     return true;
@@ -99,6 +113,7 @@ export class ScheduledTaskManager {
     this.#timer = null;
     const active = this.#active;
     if (active) {
+      clearTimeout(active.timer);
       this.#store.finish(active.runId, "interrupted", "应用已退出");
       active.abort.abort();
       // Keep the slot occupied until the runner's finally settles. A quick stop/start
@@ -116,16 +131,30 @@ export class ScheduledTaskManager {
 
   #pump(): void {
     if (!this.#started) return;
+    const now = Date.now();
+    for (const task of this.#store.due(now).sort((a, b) => (a.nextRunAt ?? 0) - (b.nextRunAt ?? 0))) {
+      const due = task.nextRunAt!;
+      if (this.#store.queued().some((run) => run.taskId === task.id)) {
+        const missed = this.#store.claim(task.id, due, "missed", false,
+          uiText("已有待执行任务，本次触发已跳过", "Skipped because an earlier occurrence is still queued"));
+        this.#report(task, missed);
+        continue;
+      }
+      const tooLate = now - due > (task.missedPolicy === "skip" ? 60_000 : MAX_MISSED_AGE_MS);
+      const run = this.#store.claim(task.id, due, tooLate ? "missed" : "queued");
+      if (tooLate) this.#report(task, run);
+    }
     if (!this.#active) {
-      const now = Date.now();
-      for (const task of this.#store.due(now).sort((a, b) => (a.nextRunAt ?? 0) - (b.nextRunAt ?? 0))) {
-        const due = task.nextRunAt!;
-        if (now - due > MAX_MISSED_AGE_MS) {
-          this.#store.claim(task.id, due, "missed");
+      for (const queued of this.#store.queued()) {
+        const task = this.#store.get(queued.taskId);
+        if (!task) continue;
+        if (!queued.manual && now - queued.scheduledAt > (task.missedPolicy === "skip" ? 60_000 : MAX_MISSED_AGE_MS)) {
+          const skipped = this.#store.finish(queued.id, "missed");
+          if (skipped) this.#report(task, skipped);
           continue;
         }
-        const run = this.#store.claim(task.id, due);
-        this.#launch(task, run);
+        const run = this.#store.startRun(queued.id);
+        if (run) this.#launch(task, run);
         break;
       }
     }
@@ -133,21 +162,27 @@ export class ScheduledTaskManager {
   }
 
   #launch(task: ScheduledTask, run: ScheduledTaskRun): void {
-    const active = { taskId: task.id, runId: run.id, abort: new AbortController(), stopRequested: false };
+    const active: ActiveRun = { taskId: task.id, runId: run.id, abort: new AbortController(), stopRequested: false, timedOut: false };
     this.#active = active;
+    active.timer = setTimeout(() => {
+      active.timedOut = true;
+      active.abort.abort();
+      // Keep the slot until the runner settles: abort is not proof that tools stopped.
+      this.#notify();
+    }, (task.maxRunSeconds ?? 3600) * 1000);
     this.#arm(); // No zero-delay retry loop while another occurrence is in flight.
     this.#notify(); // A consumed one-off still needs the tray until this run ends.
     void Promise.resolve().then(() => this.#runner(task, active.abort.signal, (id) => this.#store.setConversation(run.id, id)))
-      .then(() => this.#store.finish(run.id, active.stopRequested ? "stopped" : "completed"))
-      .catch((error: unknown) => this.#store.finish(run.id, active.stopRequested ? "stopped" : "failed", String(error instanceof Error ? error.message : error)))
+      .then(() => this.#store.finish(run.id, active.stopRequested ? "stopped" : active.timedOut ? "failed" : "completed", active.timedOut ? uiText("已超过执行时限", "Execution time limit exceeded") : undefined))
+      .catch((error: unknown) => this.#store.finish(run.id, active.stopRequested ? "stopped" : "failed", active.timedOut ? uiText("已超过执行时限", "Execution time limit exceeded") : String(error instanceof Error ? error.message : error)))
       .then((finished) => {
         // Only the call that moved the run out of `running` reports it: stop() has
         // already marked a quit-time run interrupted, and that is nobody's news.
         if (!finished) return;
-        try { this.#onSettled?.(this.#store.get(task.id) ?? task, finished); }
-        catch (error) { console.error("[schedules] settle listener failed:", error); }
+        this.#report(this.#store.get(task.id) ?? task, finished);
       })
       .finally(() => {
+        clearTimeout(active.timer);
         if (this.#active === active) this.#active = null;
         this.#wake();
         this.#notify();
@@ -155,7 +190,13 @@ export class ScheduledTaskManager {
       .catch((error: unknown) => console.error("[schedules] could not persist run outcome:", error));
   }
 
-  #notify(snapshot = this.#store.snapshot()): void {
+  #report(task: ScheduledTask, run: ScheduledTaskRun): void {
+    try { this.#onSettled?.(task, run); }
+    catch (error) { console.error("[schedules] settle listener failed:", error); }
+  }
+
+  #notify(): void {
+    const snapshot = this.list();
     for (const listener of this.#listeners) {
       try { listener(snapshot); }
       catch (error) { console.error("[schedules] subscriber failed:", error); }
@@ -165,7 +206,6 @@ export class ScheduledTaskManager {
   #arm(): void {
     if (!this.#started) return;
     if (this.#timer) clearTimeout(this.#timer);
-    if (this.#active) { this.#timer = null; return; }
     const next = this.#store.snapshot().tasks.filter((task) => task.enabled && task.nextRunAt !== undefined)
       .reduce<number | undefined>((earliest, task) => earliest === undefined ? task.nextRunAt : Math.min(earliest, task.nextRunAt!), undefined);
     if (next === undefined) { this.#timer = null; return; }

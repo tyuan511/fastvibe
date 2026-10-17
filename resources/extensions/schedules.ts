@@ -11,6 +11,8 @@ const draft = Type.Object({
   prompt: Type.String({ description: "Self-contained Agent instruction to run in a fresh conversation" }),
   project: Type.Optional(Type.String({ description: "Existing project path on this Agent's machine. Omit to use this chat's project." })),
   schedule: rule,
+  maxRunSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 86400, description: "Execution time limit in seconds; default 3600." })),
+  missedPolicy: Type.Optional(Type.Union([Type.Literal("run-latest"), Type.Literal("skip")])),
   reportBack: Type.Optional(Type.Boolean({ description: "Default true: each run's outcome is reported back into this chat. Set false only when the user wants no follow-up here." })),
 });
 type ScheduleHost = { schedules?(request: Record<string, unknown>): Promise<unknown> };
@@ -42,6 +44,8 @@ export default function schedulesExtension(pi: ExtensionAPI): void {
     description: "Edit or pause/resume one task by id. enabled=false pauses future runs without stopping a current run; enabled=true resumes from the next occurrence.",
     parameters: Type.Object({ id: Type.String(), patch: Type.Object({
       name: Type.Optional(Type.String()), prompt: Type.Optional(Type.String()), project: Type.Optional(Type.String()),
+      maxRunSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 86400 })),
+      missedPolicy: Type.Optional(Type.Union([Type.Literal("run-latest"), Type.Literal("skip")])),
       schedule: Type.Optional(rule), enabled: Type.Optional(Type.Boolean()),
       reportBack: Type.Optional(Type.Boolean({ description: "true: report runs back into this chat from now on; false: stop reporting." })),
     }) }),
@@ -49,7 +53,7 @@ export default function schedulesExtension(pi: ExtensionAPI): void {
   });
   pi.registerTool({
     name: "schedule_run_now", label: T("立即运行定时任务", "Run scheduled task now"),
-    description: "Start one scheduled Agent task immediately. A recurring task keeps its future planned time; a one-off task is consumed.",
+    description: "Start one scheduled Agent task now, or queue it when another task is running. A recurring task keeps its future planned time; a one-off task is consumed.",
     parameters: Type.Object({ id: Type.String() }),
     async execute(_id, input, _signal, _update, ctx) { return call(ctx, { action: "runNow", id: input.id }); },
   });

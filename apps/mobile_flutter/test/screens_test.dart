@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -12,7 +13,9 @@ import 'package:fastvibe_mobile/chat/queue_panel.dart';
 import 'package:fastvibe_mobile/chat/tool_card.dart';
 import 'package:fastvibe_mobile/chat/turn_meta.dart';
 import 'package:fastvibe_mobile/i18n/core.dart';
+import 'package:fastvibe_mobile/protocol/diagnostics.dart';
 import 'package:fastvibe_mobile/screens/add_device.dart';
+import 'package:fastvibe_mobile/screens/connection_diagnostics.dart';
 import 'package:fastvibe_mobile/screens/devices.dart';
 import 'package:fastvibe_mobile/screens/scan.dart';
 import 'package:fastvibe_mobile/screens/settings.dart';
@@ -297,6 +300,39 @@ void main() {
     expect(find.textContaining('a question'), findsOneWidget);
   });
 
+  for (final active in [light, dark]) {
+    testWidgets('deferred content loads only visible rows, with a retry in ${active.dark ? "dark" : "light"}', (tester) async {
+      final loaded = <String>[];
+      var result = Completer<void>();
+      final messages = [
+        for (var i = 0; i < 60; i++) ChatMessage(
+          id: 'a$i', role: 'assistant', text: 'reply $i ' * 15,
+          deferredIds: i == 0 || i == 59 ? ['a$i'] : const [],
+        ),
+      ];
+      await pump(tester, Scaffold(body: TranscriptView(
+        messages: messages, footers: const {}, running: false, waiting: false,
+        workingSince: null, onLongPress: (_) {}, onOlder: () {},
+        onLoadContent: (message) { loaded.add(message.id); return result.future; },
+      )), palette: active);
+      expect(loaded, ['a0']);
+      expect(find.text(t('chat.loadingContent')), findsOneWidget);
+      await tester.pump();
+      expect(loaded, ['a0']);
+      result.completeError(StateError('offline'));
+      await tester.pump();
+      await tester.pump();
+      expect(find.text(t('chat.retryContent')), findsOneWidget);
+      result = Completer<void>();
+      await tester.tap(find.text(t('chat.retryContent')));
+      await tester.pump();
+      expect(loaded, ['a0', 'a0']);
+      result.complete();
+      await tester.pumpWidget(const SizedBox());
+      expect(tester.takeException(), isNull);
+    });
+  }
+
   testWidgets('the working capsule renders while a run is in flight', (
     tester,
   ) async {
@@ -483,6 +519,8 @@ void main() {
       expect(tester.takeException(), isNull, reason: 'add/$name');
       await pump(tester, const SettingsScreen(), palette: palette);
       expect(tester.takeException(), isNull, reason: 'settings/$name');
+      await pump(tester, Material(child: ConnectionDiagnosticsView(summary: const ConnectionDiagnosticSummary(state: 'auth', timings: <String, int>{'rtt': 42}), onCopy: () {})), palette: palette);
+      expect(tester.takeException(), isNull, reason: 'diagnostics/$name');
       await pump(
         tester,
         Scaffold(

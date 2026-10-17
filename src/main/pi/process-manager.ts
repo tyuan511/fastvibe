@@ -69,11 +69,15 @@ import type {
   ImportSourceId,
   ImportSourceStatus,
 } from "@shared/types";
+import type { ProviderTestResult } from "@shared/provider-test";
 import { parseCompactCommand, parseHandoffCommand } from "@shared/slash";
 import { buildCommitMessagePlan, type CommitFileMaterial } from "../engine/commit-message";
 import { summarizeToolCalls } from "@shared/tool-summary";
-import type { ToolDetailLevel } from "@shared/transcript-page";
+import type { ToolDetailLevel, TranscriptReadOptions } from "@shared/transcript-page";
+import { previewTranscript } from "@shared/transcript-preview";
+import { TranscriptReader } from "../engine/transcript-reader";
 import { ConversationCatalog } from "../engine/conversation-catalog";
+import { installNativeCompactionGuard } from "../engine/native-compaction";
 import { promptPreview } from "../engine/prompt-preview";
 import { searchConversationContent } from "../engine/conversation-search";
 import { closeOrphanToolCalls, readTranscriptPrompt, repairTranscriptFile, transcriptPrompt, writeTranscriptEntries } from "../engine/transcript-file";
@@ -135,6 +139,7 @@ import {
   updateProvider as updateProviderConfig,
   usableProviders,
 } from "../engine/providers";
+import { testProviderModel } from "../engine/provider-test";
 import { importCcSwitch, scanCcSwitch } from "../engine/cc-switch";
 import { catalogPrice } from "../engine/models-dev";
 import { findNativeProvider } from "../engine/native-providers";
@@ -798,6 +803,7 @@ export class PiProcessManager {
     const target = task.notifyConversationId;
     if (!target || target === run.conversationId || this.#queueShutdown || !this.#catalog.get(target)) return;
     const label = ({
+      queued: uiText("排队中", "queued"),
       completed: uiText("已完成", "completed"),
       failed: uiText("失败", "failed"),
       stopped: uiText("已停止", "stopped"),
@@ -2460,11 +2466,64 @@ export class PiProcessManager {
    * `seq` is the last event number in existence at that instant. A caller that
    * subscribes afterwards discards anything at or below it and applies the rest.
    */
-  async getSnapshot(conversationId?: string, fromEntryId?: string, historyLimit?: number, toolDetail?: ToolDetailLevel): Promise<ConversationSnapshot> {
-    const { id, session } = await this.#sessionFor(conversationId);
-    const page = !fromEntryId && typeof historyLimit === "number" ? { turnLimit: historyLimit } : undefined;
-    const projected = this.#messagesFrom(session, id, fromEntryId, page);
-    const messages = toolDetail === "summary" ? summarizeToolCalls(projected.messages) : projected.messages;
+  #transcriptReader = new TranscriptReader();
+
+  async #readTranscript(conversationId: string | undefined, fromEntryId: string | undefined,
+    page: { turnLimit: number; beforeEntryId?: string } | undefined, toolDetail?: ToolDetailLevel,
+    options?: TranscriptReadOptions, entryOnly = false) {
+    const started = performance.now();
+    let id = conversationId;
+    let session = id ? this.#sessions.get(id)?.session : undefined;
+    let branch: ReturnType<AgentSession["sessionManager"]["getBranch"]> | undefined;
+    // Only the compact, plain phone transcript can skip extension renderers. Desktop
+    // reads retain the session path. An already opening/running session is authoritative.
+    const conversation = id ? this.#catalog.get(id) : undefined;
+    const opening = id ? this.#sessionPromises.get(id) : undefined;
+    if (!session && opening) session = (await opening).session;
+    if (!session && id && toolDetail === "summary" && conversation?.sessionFile && !this.#working(id)) {
+      branch = await this.#transcriptReader.read(conversation.sessionFile, conversation.cwd || conversation.project || ".");
+      const pending = this.#sessionPromises.get(id);
+      if (pending) await pending;
+      session = this.#sessions.get(id)?.session;
+      if (session) branch = undefined;
+    }
+    if (!session && !branch) ({ id, session } = await this.#sessionFor(id));
+    const readMs = performance.now() - started;
+    const projectNow = () => {
+      session = id ? this.#sessions.get(id)?.session ?? session : session;
+      if (session) branch = undefined;
+      const projectStarted = performance.now();
+      const deps = { session, branch, conversationId: id, fromEntryId, page, entryOnly, reasoning: this.#reasoning,
+        toolImagesDir: toolDetail === "summary" ? undefined : this.#paths?.toolImagesDir, widgetWidth: this.#widgetWidth, running: this.#running, compacting: this.#compacting };
+      const project = (): ReturnType<typeof projectSessionMessages> => {
+        const value = session ? this.#messagesFrom(session, id, fromEntryId, deps.page, entryOnly, toolDetail) : projectSessionMessages(deps);
+        if (fromEntryId && !value.anchored && options?.preview === true) {
+          deps.page = { turnLimit: 3 };
+          return project();
+        }
+        let messages = toolDetail === "summary" ? summarizeToolCalls(value.messages) : value.messages;
+        if (options?.preview === true) messages = previewTranscript(messages, 12_000, !!id && this.#working(id));
+        return { ...value, messages };
+      };
+      let projected = project();
+      const maxBytes = typeof options?.maxBytes === "number" && Number.isFinite(options.maxBytes)
+        ? Math.max(16 * 1024, Math.min(512 * 1024, options.maxBytes)) : undefined;
+      // A complete user/tool/result unit always survives, even above the soft budget.
+      while (deps.page && deps.page.turnLimit > 1 && maxBytes && Buffer.byteLength(JSON.stringify(projected.messages)) > maxBytes) {
+        deps.page = { ...deps.page, turnLimit: Math.max(1, Math.floor(deps.page.turnLimit / 2)) };
+        projected = project();
+      }
+      return { projected, timing: { readMs, projectMs: performance.now() - projectStarted } };
+    };
+    return { id, project: projectNow };
+  }
+
+  async getSnapshot(conversationId?: string, fromEntryId?: string, historyLimit?: number, toolDetail?: ToolDetailLevel, options?: TranscriptReadOptions): Promise<ConversationSnapshot> {
+    const page = !fromEntryId && typeof historyLimit === "number" ? { turnLimit: Math.max(1, Math.min(50, Math.floor(historyLimit) || 3)) } : undefined;
+    const source = await this.#readTranscript(conversationId, fromEntryId, page, toolDetail, options);
+    const { id } = source;
+    const { projected, timing } = source.project();
+    const messages = projected.messages;
     const running = id ? this.#working(id) : false;
     const turn = running && id ? this.#turnEvents.get(id) : undefined;
     const pendingUi: Array<Record<string, unknown>> = [];
@@ -2475,6 +2534,7 @@ export class PiProcessManager {
     }
     return {
       conversationId: id ?? null,
+      timing,
       messages,
       ...(fromEntryId ? { messageMode: projected.anchored ? "tail" : "full", messageAnchorId: fromEntryId } : {}),
       ...(projected.history ? { messageMode: "window", history: projected.history } : {}),
@@ -2494,13 +2554,33 @@ export class PiProcessManager {
       seq: this.#eventSeq,
     };
   }
-  async getMessagesPage(conversationId: string, beforeEntryId: string, turnLimit = 12, toolDetail?: ToolDetailLevel) {
+  async getMessagesPage(conversationId: string, beforeEntryId: string, turnLimit = 12, toolDetail?: ToolDetailLevel, options?: TranscriptReadOptions) {
     if (!conversationId || typeof beforeEntryId !== "string" || !beforeEntryId) throw new Error(uiText("历史消息游标无效", "Invalid history cursor"));
-    const { id, session } = await this.#sessionFor(conversationId);
-    const page = this.#messagesFrom(session, id, undefined, { turnLimit, beforeEntryId });
-    return { conversationId: id ?? null, messages: toolDetail === "summary" ? summarizeToolCalls(page.messages) : page.messages, beforeEntryId,
+    const limit = Number.isFinite(turnLimit) ? Math.max(1, Math.min(50, Math.floor(turnLimit))) : 12;
+    const source = await this.#readTranscript(conversationId, undefined, { turnLimit: limit, beforeEntryId }, toolDetail, options);
+    const { id } = source;
+    const { projected: page, timing } = source.project();
+    return { conversationId: id ?? null, messages: page.messages, beforeEntryId, timing,
       nextBeforeEntryId: page.history?.beforeEntryId ?? null, reset: page.pageAnchorFound === false };
   }
+  async getMessage(conversationId: string, entryId: string) {
+    if (!conversationId || typeof entryId !== "string" || !entryId) throw new Error("Invalid message entry");
+    const source = await this.#readTranscript(conversationId, entryId, undefined, "summary", undefined, true);
+    const { projected } = source.project();
+    if (!projected.anchored) throw new Error("Message is no longer on this branch");
+    const message = projected.messages.find((message) => message.id === entryId);
+    if (!message) throw new Error("Message not found");
+    return { conversationId, message };
+  }
+  async testProvider(provider: string, id: string): Promise<ProviderTestResult> {
+    await this.#ensureReady();
+    const registry = this.#models;
+    const model = registry?.find(provider, id);
+    if (!registry || !model) return { model: id, api: "", status: "failed", tools: "not-tested", elapsedMs: 0, errorCode: "model" };
+    if (!registry.hasConfiguredAuth(model)) return { model: id, api: model.api, status: "failed", tools: "not-tested", elapsedMs: 0, errorCode: "auth" };
+    return testProviderModel(model, registry.streamSimple.bind(registry));
+  }
+
   /**
    * The models this install can chat with. An unconfigured engine has none, which is an
    * answer rather than an error — the composer's model menu is how the user connects one.
@@ -3670,6 +3750,7 @@ export class PiProcessManager {
       resourceLoader,
       ...(sessionStartEvent ? { sessionStartEvent } : {}),
     });
+    installNativeCompactionGuard(result.session);
     this.#armModelNotice(conversation.id, result.session);
     lap("session");
     this.#promptPreparations.install(conversation.id, result.session);
@@ -5322,20 +5403,23 @@ export class PiProcessManager {
     conversationId: string | undefined,
     fromEntryId?: string,
     page?: { turnLimit: number; beforeEntryId?: string },
+    entryOnly = false,
+    toolDetail?: ToolDetailLevel,
   ): ReturnType<typeof projectSessionMessages> {
     const projected = projectSessionMessages({
       session,
       conversationId,
       fromEntryId,
       page,
+      entryOnly,
       reasoning: this.#reasoning,
-      toolImagesDir: this.#paths?.toolImagesDir,
+      toolImagesDir: toolDetail === "summary" ? undefined : this.#paths?.toolImagesDir,
       widgetWidth: this.#widgetWidth,
       running: this.#running,
       compacting: this.#compacting,
     });
     const opening = conversationId ? this.#openingPrompts.get(conversationId) : undefined;
-    if (!page?.beforeEntryId && opening && !session.messages.some((message) => message.role === "user")) projected.messages.push(opening);
+    if (!entryOnly && !page?.beforeEntryId && opening && !session.messages.some((message) => message.role === "user")) projected.messages.push(opening);
     return projected;
   }
   /**

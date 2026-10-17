@@ -177,7 +177,7 @@ export function TasksPage({
 
   function runningOf(task: ScheduledTask): boolean {
     if (task.id === viewedId && historyReady) return detailRunning;
-    return task.lastStatus === "running";
+    return snapshot?.runningTaskId === task.id || task.lastStatus === "running";
   }
 
   function backToList(): void {
@@ -225,6 +225,8 @@ export function TasksPage({
           name: draft.name,
           prompt: draft.prompt,
           schedule: draft.schedule,
+          maxRunSeconds: draft.maxRunSeconds,
+          missedPolicy: draft.missedPolicy,
           project: draft.project ?? "",
         };
         const saved = await api.update(editingId, patch);
@@ -242,6 +244,7 @@ export function TasksPage({
 
   function adopt(task: ScheduledTask): void {
     setSnapshot((current) => ({
+      ...current,
       revision: current?.revision ?? 0,
       tasks: [...(current?.tasks ?? []).filter((item) => item.id !== task.id), task],
     }));
@@ -262,7 +265,7 @@ export function TasksPage({
       const runs = await api.history(task.id).catch(() => [run]);
       setHistory(runs.some((item) => item.id === run.id) ? runs : [run, ...runs]);
       setHistoryReady(true);
-      toast.success(t("ran"));
+      toast.success(t(run.status === "queued" ? "queuedNotice" : "ran"));
     });
   }
 
@@ -500,6 +503,7 @@ function TaskDetail({
   return (
     <div className="flex flex-col gap-5">
       <p className="text-sm text-muted-foreground">{scheduleSummary(task.schedule, t)}</p>
+      {!running && task.lastStatus === "queued" ? <p className="text-sm text-warning" role="status">{t("queueReason")}</p> : null}
       <div className="flex flex-wrap gap-2">
         <Button size="sm" variant="outline" disabled={locked} onClick={onEdit}>
           <HugeiconsIcon strokeWidth={2} icon={PencilEdit02Icon} data-icon="inline-start" />
@@ -516,10 +520,10 @@ function TaskDetail({
             {t("resume")}
           </Button>
         ) : null}
-        {running ? (
+        {running || task.lastStatus === "queued" ? (
           <Button size="sm" variant="outline" disabled={locked} onClick={onStop}>
             <HugeiconsIcon strokeWidth={2} icon={StopIcon} data-icon="inline-start" />
-            {t("stop")}
+            {t(running ? "stop" : "cancelQueued")}
           </Button>
         ) : (
           <Button size="sm" disabled={locked} onClick={onRun}>
@@ -533,6 +537,8 @@ function TaskDetail({
         </Button>
       </div>
       <dl className="grid gap-3 text-sm @min-[28rem]/tasks:grid-cols-2">
+        <Fact label={t("timeLimit")} value={t("minutes", { count: (task.maxRunSeconds ?? 3600) / 60 })} />
+        <Fact label={t("missedPolicy")} value={t(task.missedPolicy === "skip" ? "missedSkip" : "missedRunLatest")} />
         <Fact label={t("project")} value={projectName} />
         <Fact label={t("next")} value={formatWhen(task.enabled ? task.nextRunAt : undefined)} />
         <Fact label={t("last")} value={formatWhen(task.lastRunAt)} />
@@ -629,6 +635,7 @@ function Fact({ label, value }: { label: string; value: string }): JSX.Element {
 
 function TaskBadge({ task, running }: { task: ScheduledTask; running: boolean }): JSX.Element {
   if (running) return <StatusBadge status="running" />;
+  if (task.lastStatus === "queued") return <StatusBadge status="queued" />;
   if (!task.enabled) {
     if (task.schedule.kind === "once" && task.lastStatus && task.lastStatus !== "running") return <StatusBadge status={task.lastStatus} />;
     return <StatusBadge status="paused" />;

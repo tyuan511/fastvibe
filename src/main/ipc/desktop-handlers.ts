@@ -13,6 +13,7 @@ import { Ipc, type AppModelsDevInfo } from "@shared/ipc";
 import { broadcast } from "./broadcast";
 import { registerEngineIpc } from "./engine-handlers";
 import { handle, type CallerContext } from "./registry";
+import { registerBrowserWorkspaceIpc } from "./browser-workspace";
 import { readFilePreview } from "../engine/file-preview";
 import { searchProjectFiles } from "../engine/project-files";
 import { readWorkspaceDir, writeWorkspaceTextFile } from "../engine/workspace-fs";
@@ -65,6 +66,8 @@ import { promisify } from "node:util";
 import { createNetworkProxy } from "../engine/network-proxy";
 import { collectCommitMessageMaterial, readCommitStatusFiles, readGitStatus } from "../workspace-git";
 
+import { commitGitChanges, readGitDiff, readGitComparison, readGitHistory, stageGitFiles, unstageGitFiles, discardGitFiles } from "../source-control";
+
 const execFileAsync = promisify(execFile);
 
 export type DesktopIpcDeps = {
@@ -82,6 +85,7 @@ export type DesktopIpcDeps = {
 };
 
 export function registerDesktopIpc(deps: DesktopIpcDeps): void {
+  registerBrowserWorkspaceIpc();
   const {
     engine,
     windows,
@@ -120,9 +124,6 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): void {
     }
     return importBrowserProfile(allowed, (cookie) => session.fromPartition("persist:fastvibe-browser").cookies.set(cookie));
   });
-  handle(Ipc.browserClearData, () =>
-    session.fromPartition("persist:fastvibe-browser").clearStorageData(),
-  );
   handle(Ipc.browserListEngines, () => installedBrowsers());
   handle(Ipc.computerPermissions, () => computerPermissions());
   handle(Ipc.computerRequestPermissions, () => requestComputerPermissions());
@@ -209,6 +210,7 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): void {
   handle(Ipc.providersRemove, async (payload: { id: string }) => {
     return engine.removeProvider(payload.id);
   });
+  handle(Ipc.providersTest, (payload: { id: string; model: string }) => engine.testProvider(payload.id, payload.model));
   handle(Ipc.providersRefresh, async (payload: { id: string }) => {
     return engine.refreshProviderModels(payload.id);
   });
@@ -414,67 +416,24 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): void {
     await execFileAsync("git", ["-C", cwd, "switch", "-c", branch], { timeout: 10000, maxBuffer: 128 * 1024 });
     return readGitStatus(cwd);
   });
-  handle(Ipc.workspaceGitStage, async (payload: { cwd: string; paths?: string[]; all?: boolean }): Promise<GitStatus> => {
-    const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
-    if (!cwd) throw new Error(uiText("项目路径无效", "Invalid project path"));
-    const paths = Array.isArray(payload.paths) ? payload.paths.filter((item): item is string => typeof item === "string" && item.length > 0 && !item.includes("\0")) : [];
-    const args = ["-C", cwd, "add", payload.all || paths.length === 0 ? "-A" : "--", ...paths];
-    await execFileAsync("git", args, { timeout: 10000, maxBuffer: 128 * 1024 });
-    return readGitStatus(cwd);
-  });
-  handle(Ipc.workspaceGitCommit, async (payload: { cwd: string; message: string }): Promise<GitStatus> => {
-    const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
-    const message = typeof payload.message === "string" ? payload.message.trim() : "";
-    if (!cwd || !message) throw new Error(uiText("提交信息不能为空", "Commit message cannot be empty"));
-    if (message.length > 5000) throw new Error(uiText("提交信息过长", "Commit message is too long"));
-    await execFileAsync("git", ["-C", cwd, "commit", "-m", message], { timeout: 30000, maxBuffer: 256 * 1024 });
-    return readGitStatus(cwd);
-  });
-  handle(Ipc.workspaceGitGenerateCommitMessage, async (payload: { cwd: string; conversationId?: string }): Promise<string> => {
+  handle(Ipc.workspaceGitStage, (payload: { cwd: string; paths?: string[]; all?: boolean }) => stageGitFiles(payload.cwd, payload.paths, payload.all));
+  handle(Ipc.workspaceGitCommit, (payload: { cwd: string; message: string }) => commitGitChanges(payload.cwd, payload.message));
+  handle(Ipc.workspaceGitAmend, (payload: { cwd: string; message: string }) => commitGitChanges(payload.cwd, payload.message, { amend: true }));
+  handle(Ipc.workspaceGitGenerateCommitMessage, async (payload: { cwd: string; conversationId?: string; stagedOnly?: boolean }): Promise<string> => {
     const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
     const conversationId = typeof payload.conversationId === "string" ? payload.conversationId : undefined;
     if (!cwd) throw new Error(uiText("项目路径无效", "Invalid project path"));
     const statusFiles = await readCommitStatusFiles(cwd);
     if (statusFiles.length === 0) throw new Error(uiText("没有要提交的改动", "No changes to commit"));
-    const files = await collectCommitMessageMaterial(cwd, statusFiles);
+    const files = await collectCommitMessageMaterial(cwd, statusFiles, payload.stagedOnly === true);
+    if (!files.length) throw new Error(uiText("没有要提交的改动", "No changes to commit"));
     return engine.generateCommitMessage(files, conversationId);
   });
-  handle(Ipc.workspaceGitDiff, async (payload: { cwd: string; path?: string; source?: GitDiffSource }): Promise<string> => {
-    const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
-    if (!cwd) return "";
-    const path = typeof payload.path === "string" ? payload.path.trim() : "";
-    const source = payload.source ?? "unstaged";
-    const args = ["-C", cwd, "diff", "--no-ext-diff", "--unified=3"];
-    if (source === "staged") args.push("--cached");
-    else if (source === "branch") args.push("@{upstream}...HEAD");
-    else if (source === "last-turn") args.push("HEAD");
-    if (path && !path.includes("\0")) args.push("--", path);
-    try {
-      const { stdout } = await execFileAsync("git", args, { timeout: 10000, maxBuffer: 1024 * 1024 });
-      return stdout;
-    } catch (error) {
-      const detail = error && typeof error === "object" && "stdout" in error && typeof error.stdout === "string" ? error.stdout : "";
-      return detail;
-    }
-  });
-  handle(Ipc.workspaceGitUnstage, async (payload: { cwd: string; paths: string[] }): Promise<GitStatus> => {
-    const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
-    if (!cwd) throw new Error(uiText("项目路径无效", "Invalid project path"));
-    const paths = Array.isArray(payload.paths) ? payload.paths.filter((item): item is string => typeof item === "string" && item.length > 0 && !item.includes("\0")) : [];
-    if (paths.length === 0) throw new Error(uiText("没有要取消暂存的文件", "No files to unstage"));
-    await execFileAsync("git", ["-C", cwd, "restore", "--staged", "--", ...paths], { timeout: 10000, maxBuffer: 128 * 1024 });
-    return readGitStatus(cwd);
-  });
-  handle(Ipc.workspaceGitDiscard, async (payload: { cwd: string; paths: string[] }): Promise<GitStatus> => {
-    const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
-    if (!cwd) throw new Error(uiText("项目路径无效", "Invalid project path"));
-    const paths = Array.isArray(payload.paths) ? payload.paths.filter((item): item is string => typeof item === "string" && item.length > 0 && !item.includes("\0")) : [];
-    if (paths.length === 0) throw new Error(uiText("没有要丢弃的文件", "No files to discard"));
-    await execFileAsync("git", ["-C", cwd, "restore", "--worktree", "--source=HEAD", "--", ...paths], { timeout: 10000, maxBuffer: 128 * 1024 }).catch(async () => {
-      await execFileAsync("git", ["-C", cwd, "checkout", "--", ...paths], { timeout: 10000, maxBuffer: 128 * 1024 });
-    });
-    return readGitStatus(cwd);
-  });
+  handle(Ipc.workspaceGitDiff, (payload: { cwd: string; path?: string; source?: GitDiffSource; revision?: string }) => readGitDiff(payload.cwd, payload.path, payload.source, payload.revision));
+  handle(Ipc.workspaceGitComparison, (payload: { cwd: string; revision?: string }) => readGitComparison(payload.cwd, payload.revision));
+  handle(Ipc.workspaceGitHistory, (payload: { cwd: string; skip?: number; scope?: "all" | "current"; tips?: string[] }) => readGitHistory(payload.cwd, payload.skip, payload.scope, payload.tips));
+  handle(Ipc.workspaceGitUnstage, (payload: { cwd: string; paths: string[] }) => unstageGitFiles(payload.cwd, payload.paths));
+  handle(Ipc.workspaceGitDiscard, (payload: { cwd: string; paths: string[] }) => discardGitFiles(payload.cwd, payload.paths));
   handle(Ipc.workspaceTerminalStart, (payload: { cwd?: string; cols?: number; rows?: number }, ctx) => {
     const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
     // A terminal is not tied to a project: with no workspace bound it opens in home.
@@ -546,7 +505,7 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): void {
    */
   handle(Ipc.modelsDevUpdate, () => refreshModelsDev());
   handle(Ipc.statsUsage, (payload?: { range?: UsageRange }) => {
-    return collectUsageStats(getFastVibePaths(), payload?.range ?? "30d");
+    return collectUsageStats(getFastVibePaths(), payload?.range ?? "30d", engine.listWorkspace().conversations);
   });
   handle(Ipc.windowNew, () => {
     // FastVibe is a single-window app: every push, and every method that acts on "the

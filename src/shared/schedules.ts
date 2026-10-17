@@ -12,6 +12,10 @@ export type ScheduledTaskDraft = {
   /** The chat that asked for this task. Each run's outcome is reported back into it. */
   notifyConversationId?: string;
   schedule: ScheduleRule;
+  /** Maximum run duration; defaults to one hour. */
+  maxRunSeconds?: number;
+  /** Run the latest missed occurrence within 24h, or skip once over a minute late. */
+  missedPolicy?: "run-latest" | "skip";
 };
 
 export type ScheduledTask = ScheduledTaskDraft & {
@@ -24,7 +28,7 @@ export type ScheduledTask = ScheduledTaskDraft & {
   lastStatus?: ScheduledRunStatus;
 };
 
-export type ScheduledRunStatus = "running" | "completed" | "failed" | "stopped" | "interrupted" | "missed";
+export type ScheduledRunStatus = "queued" | "running" | "completed" | "failed" | "stopped" | "interrupted" | "missed";
 
 export type ScheduledTaskRun = {
   id: string;
@@ -42,9 +46,11 @@ export type ScheduledTaskRun = {
 export type ScheduledTaskSnapshot = {
   revision: number;
   tasks: ScheduledTask[];
+  runningTaskId?: string;
+  queuedTaskIds?: string[];
 };
 
-export type ScheduledTaskPatch = Partial<Pick<ScheduledTaskDraft, "name" | "prompt" | "schedule">> & {
+export type ScheduledTaskPatch = Partial<Pick<ScheduledTaskDraft, "name" | "prompt" | "schedule" | "maxRunSeconds" | "missedPolicy">> & {
   /** Explicitly clear a bound project with an empty string (undefined means leave unchanged). */
   project?: string;
   /** An empty string stops reporting back. */

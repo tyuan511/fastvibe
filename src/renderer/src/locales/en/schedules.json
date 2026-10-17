@@ -72,7 +72,8 @@
     "interrupted": "Interrupted",
     "missed": "Missed",
     "paused": "Paused",
-    "scheduled": "Scheduled"
+    "scheduled": "Scheduled",
+    "queued": "Queued"
   },
   "summary": {
     "once": "Once at {{time}}",
@@ -95,5 +96,14 @@
   "endedAt": "Ended {{time}}",
   "deleteTitle": "Delete this scheduled task?",
   "deleteDesc": "“{{name}}” and its run history will be deleted. This cannot be undone.",
-  "deleteAction": "Delete"
+  "deleteAction": "Delete",
+  "timeLimit": "Execution time limit",
+  "minutes": "{{count}} minutes",
+  "missedPolicy": "When overdue",
+  "missedRunLatest": "Run latest occurrence within 24 hours",
+  "missedSkip": "Skip if over 1 minute late",
+  "queueReason": "Queued, waiting for earlier scheduled tasks to finish.",
+  "cancelQueued": "Cancel queued run",
+  "queuedNotice": "Added to the execution queue",
+  "seconds": "{{count}} seconds"
 }

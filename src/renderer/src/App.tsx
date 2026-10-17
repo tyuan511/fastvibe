@@ -18,6 +18,7 @@ import { PermissionPanel, type PermissionResponse } from "@/components/chat/perm
 import { usagePercent } from "@/components/chat/session-controls";
 import { Sidebar } from "@/components/layout/sidebar";
 import { SidePane, disposeSidePaneTabs } from "@/components/layout/side-pane";
+import { ConversationResources } from "@/components/layout/conversation-resources";
 import { forgetFileTree } from "@/lib/file-tree-state";
 import { forgetSidebarProject } from "@/lib/sidebar-project-state";
 import { handleBrowserRequest } from "@/components/layout/side-pane-browser";
@@ -69,6 +70,7 @@ import { isNarrowViewport, setSidebarCollapsed, useIsNarrowViewport, useSidebarC
 import type { DeleteConversationsResult } from "@/components/settings/archived-settings";
 import { useConversationWorking, useSessionStore, visibleQueue, working } from "@/stores/session";
 import { useSettingsStore } from "@/stores/settings";
+import { useTranscriptNavigation } from "@/stores/transcript-navigation";
 import { useDagStore, useDagSync } from "@/stores/dag";
 import type { DagNode } from "@shared/dag";
 import { DagDialog } from "@/components/dag/dag-dialog";
@@ -351,12 +353,14 @@ export function App(): JSX.Element {
         conversationWidth.current = panel.getSize().asPercentage;
         panel.resize(0);
       } else if (conversationWidth.current !== null) {
-        panel.resize(`${conversationWidth.current}%`);
+        // Collapsing a maximized pane already returns its space to this column.
+        // Replaying the old split would leave room for a now-hidden detail pane.
+        if (!paneCollapsed) panel.resize(`${conversationWidth.current}%`);
         conversationWidth.current = null;
       }
     });
     return () => cancelAnimationFrame(frame);
-  }, [paneMaximized]);
+  }, [paneMaximized, paneCollapsed]);
   const toggleSidebarShortcut = useShortcutLabel("toggleSidebar");
   const toggleSidePaneShortcut = useShortcutLabel("toggleSidePane");  const newChatShortcut = useShortcutLabel("newChat");
 
@@ -1864,8 +1868,9 @@ export function App(): JSX.Element {
                 />
               </main>
             ) : (
-            <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <main data-conversation-resources-host className="relative flex min-h-0 min-w-0 flex-1 flex-col">
             <motion.header
+              data-conversation-header
               initial={false}
               // Expanded: the collapse control lives on the sidebar, next to the
               // traffic lights. Collapsed: inset this bar on macOS so the expand
@@ -1934,9 +1939,10 @@ export function App(): JSX.Element {
                   </>
                 )}
               </div>
-              {/* A narrow layout renders no side pane at all, so this would open nothing. */}
-              {paneCollapsed && !narrow ? (
-                <div className="no-drag flex items-center">
+              {/* Resources remain readable when narrow; the side pane itself is desktop-only. */}
+              <div className="no-drag flex shrink-0 items-center gap-1">
+                <ConversationResources disabled={opening} />
+                {paneCollapsed && !narrow ? (
                   <IconButton
                     size="icon-sm"
                     variant="ghost"
@@ -1946,8 +1952,8 @@ export function App(): JSX.Element {
                   >
                     <HugeiconsIcon strokeWidth={2} icon={PanelRightOpenIcon} />
                   </IconButton>
-                </div>
-              ) : null}
+                ) : null}
+              </div>
             </motion.header>
             {showHero ? (
               // New conversation: the greeting hero sits above the composer and the
@@ -2039,7 +2045,11 @@ export function App(): JSX.Element {
         projects={projects}
         activeId={activeId}
         onOpenChange={setCommandOpen}
-        onSelectChat={(id) => void handleOpen(id, "user")}
+        onSelectChat={(id, entryId) => {
+          void handleOpen(id, "user").then(() => {
+            if (entryId && useSessionStore.getState().activeId === id) useTranscriptNavigation.getState().jump(id, entryId);
+          });
+        }}
         onNewChat={() => void handleNewChat()}
         onAddProject={() => void handleAddProject()}
         onOpenSettings={(section) => navigate(`/settings/${section}`)}

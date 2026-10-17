@@ -92,6 +92,7 @@ export type SidePaneTab = {
    */
   gitFocusPath?: string;
   gitFocusSource?: GitDiffSource;
+  gitFocusRevision?: number;
   /**
    * One turn's writes, shown by the 修改记录 tab. The tab is opened only from the
    * transcript's changes card — never from the pane's own menus — and the diffs are
@@ -239,7 +240,7 @@ type SidePaneStore = {
   close: (id: string, options?: { collapse?: boolean }) => void;
   closeOthers: (id: string) => void;
   closeAll: () => void;
-  openGit: () => void;
+  openGit: (cwd?: string) => void;
   /**
    * Open 审查 focused on one file's diff, so a caller that already knows the file
    * lands on it instead of the pane's last state.
@@ -687,11 +688,11 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
         { collapsed: true, maximized: false },
       ),
     ),
-  openGit: () =>
+  openGit: (cwd) =>
     set((state) => {
       const scope = scopeOf(state);
       const existing = scope.tabs.find((item) => item.type === "git");
-      const tab = existing ?? { id: "git", type: "git" as const, openedAt: Date.now(), title: i18n.t("sidepane:tabs.git") as string };
+      const tab = { ...(existing ?? { id: "git", type: "git" as const, openedAt: Date.now(), title: i18n.t("sidepane:tabs.git") as string }), ...(cwd ? { cwd, gitFocusRevision: (existing?.gitFocusRevision ?? 0) + 1 } : {}) };
       return writeScope(
         state,
         scopeKeyOf(state),
@@ -707,6 +708,7 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
         ...(existing ?? { id: "git", type: "git" as const, openedAt: Date.now(), title: i18n.t("sidepane:tabs.git") as string }),
         gitFocusPath: path,
         gitFocusSource: source,
+        gitFocusRevision: (existing?.gitFocusRevision ?? 0) + 1,
         ...(cwd ? { cwd } : {}),
       };
       return writeScope(

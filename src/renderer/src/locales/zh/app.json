@@ -84,7 +84,9 @@
    "folder": "打开项目 添加项目 文件夹 open folder project",
    "settings": "偏好 通用 settings preferences",
    "extensions": "扩展 市场 extensions plugins"
-  }
+  },
+  "includeArchived": "包括已归档对话",
+  "archived": "已归档"
  },
  "sidebar": {
   "pinned": "置顶",

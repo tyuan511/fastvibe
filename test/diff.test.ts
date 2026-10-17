@@ -87,3 +87,20 @@ test("a removed line and an added line do not share a number", () => {
     ],
   );
 });
+
+test("split rows align replacement blocks without borrowing lines across hunks", async () => {
+  const { splitDiffRows, changedRange } = await import("../src/renderer/src/lib/diff.ts");
+  const rows = splitDiffRows(parseDiff("@@ -1,3 +1,4 @@\n-old\n+new\n+extra\n keep\n end\n@@ -50 +51 @@\n-before\n+after").rows);
+  assert.deepEqual(rows.map((row) => [row.left?.text, row.right?.text, row.header?.kind]), [
+    [undefined, undefined, "hunk"], ["old", "new", undefined], [undefined, "extra", undefined], ["keep", "keep", undefined], ["end", "end", undefined], [undefined, undefined, "hunk"], ["before", "after", undefined],
+  ]);
+  assert.deepEqual(changedRange("const old = 1", "const new = 1"), [6, 9]);
+  assert.deepEqual(changedRange("same", "same"), [4, 4]);
+});
+
+test("content beginning with diff header characters is still content inside a hunk", () => {
+  const doc = parseDiff("--- a/x\n+++ b/x\n@@ -1,2 +1,2 @@\n--- value\n+++ value\n keep\n");
+  assert.deepEqual(doc.rows.slice(3).map((row) => [row.kind, row.text, row.oldNumber, row.newNumber]), [
+    ["removed", "-- value", 1, undefined], ["added", "++ value", undefined, 1], ["context", "keep", 2, 2],
+  ]);
+});

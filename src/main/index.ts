@@ -72,7 +72,6 @@ import {
   startComputerDrag,
 } from "./pi/cua-bridge";
 import { cancelGrantFlow, grantFlowState, startGrantFlow } from "./pi/computer-grant-flow";
-import { syncComputerComponent } from "./pi/cua-component";
 import { syncScheduleTray, disposeScheduleTray } from "./schedule-tray";
 
 app.setName("FastVibe");
@@ -542,12 +541,9 @@ app.whenReady().then(async () => {
   installComputerTaskGlobal();
   installDecisionScenarioGlobals();
   // Registers the bridge global and an at-quit driver shutdown. The native library is
-  // still not loaded here — a user who never turns the feature on pays nothing for it.
-  // An install that already had it on starts the download, which is not a load.
+  // still not loaded here. A saved enabled preference must not start a driver
+  // download or update at launch; wait for an explicit action.
   installComputerGlobal();
-  // Already on from a previous launch: fetch the component without waiting for the
-  // settings page. A first run stays quiet until the switch is turned on.
-  if (readAppSettings(getFastVibePaths()).computerEnabled === true) syncComputerComponent(true);
   // The grant panel is a window, so it is torn down where the other windows are, not
   // inside the bridge — which would make the bridge and the flow import each other.
   app.once("will-quit", () => cancelGrantFlow());

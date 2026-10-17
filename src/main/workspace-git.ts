@@ -38,7 +38,9 @@ export async function readCommitStatusFiles(cwd: string): Promise<CommitStatusPa
 export async function collectCommitMessageMaterial(
   cwd: string,
   files: CommitStatusPath[],
+  stagedOnly = false,
 ): Promise<CommitFileMaterial[]> {
+  if (stagedOnly) files = files.filter((file) => file.index !== " " && file.index !== "?").map((file) => ({ ...file, worktree: " " }));
   const results: CommitFileMaterial[] = new Array(files.length);
   // Read bodies from at most 128 files, rotating across top-level directories so one
   // generated subtree cannot consume the whole collection budget. Every other path
@@ -95,7 +97,7 @@ export async function collectCommitMessageMaterial(
       try {
         patch = (await execFileAsync(
           "git",
-          ["-C", cwd, "diff", "HEAD", "--no-ext-diff", "--no-textconv", "--unified=3", "--", pathspec],
+          ["-C", cwd, "diff", stagedOnly ? "--cached" : "HEAD", "--no-ext-diff", "--no-textconv", "--unified=3", "--", pathspec],
           { timeout: 5000, maxBuffer: 128 * 1024 },
         )).stdout;
       } catch (error) {
@@ -105,6 +107,9 @@ export async function collectCommitMessageMaterial(
         if (partial) {
           patch = partial;
           omitted = "diff truncated";
+        } else if (stagedOnly) {
+          // Never fall back to unstaged content for an index-only commit message.
+          omitted = "diff unavailable";
         } else {
           const [staged, working] = await Promise.all([
             execFileAsync("git", ["-C", cwd, "diff", "--cached", "--no-ext-diff", "--no-textconv", "--unified=3", "--", pathspec], { timeout: 5000, maxBuffer: 64 * 1024 }).catch(() => ({ stdout: "" })),

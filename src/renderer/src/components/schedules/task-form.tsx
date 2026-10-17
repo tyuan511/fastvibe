@@ -55,6 +55,8 @@ export function TaskForm({
   };
   const projectItems = Object.fromEntries(projectOptions.map((item) => [item.value, item.label]));
   const zoneItems = Object.fromEntries(zones.map((zone) => [zone, zone]));
+  const runDurations = [...new Set([form.maxRunSeconds, 300, 900, 1800, 3600, 7200, 21600, 86400])].sort((a, b) => a - b);
+  const durationLabel = (seconds: number): string => t(seconds % 60 === 0 ? "minutes" : "seconds", { count: seconds % 60 === 0 ? seconds / 60 : seconds });
   const minAt = isoToDatetimeLocal(new Date().toISOString());
 
   return (
@@ -106,6 +108,18 @@ export function TaskForm({
               </SelectItem>
             ))}
           </SelectContent>
+        </Select>
+      </Field>
+      <Field label={t("timeLimit")}>
+        <Select value={String(form.maxRunSeconds)} items={Object.fromEntries(runDurations.map((seconds) => [String(seconds), durationLabel(seconds)]))} disabled={saving} onValueChange={(value) => { if (value) onChange({ maxRunSeconds: Number(value) }); }}>
+          <SelectTrigger className="w-full" aria-label={t("timeLimit")}><SelectValue /></SelectTrigger>
+          <SelectContent>{runDurations.map((seconds) => <SelectItem key={seconds} value={String(seconds)}>{durationLabel(seconds)}</SelectItem>)}</SelectContent>
+        </Select>
+      </Field>
+      <Field label={t("missedPolicy")}>
+        <Select value={form.missedPolicy} items={{ "run-latest": t("missedRunLatest"), skip: t("missedSkip") }} disabled={saving} onValueChange={(value) => { if (value === "skip" || value === "run-latest") onChange({ missedPolicy: value }); }}>
+          <SelectTrigger className="w-full" aria-label={t("missedPolicy")}><SelectValue /></SelectTrigger>
+          <SelectContent><SelectItem value="run-latest">{t("missedRunLatest")}</SelectItem><SelectItem value="skip">{t("missedSkip")}</SelectItem></SelectContent>
         </Select>
       </Field>
       <Field label={t("kind.label")}>

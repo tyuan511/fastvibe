@@ -5,7 +5,7 @@ import { createRequire } from "node:module";
 import { runInNewContext } from "node:vm";
 import { sessionEntryToContextMessages } from "@earendil-works/pi-coding-agent";
 import { mapEngineMessages } from "../src/main/engine/map-messages.ts";
-import { transcriptWindow } from "../src/main/engine/transcript-window.ts";
+import { transcriptWindow, transcriptEntryEnd } from "../src/main/engine/transcript-window.ts";
 
 const require = createRequire(import.meta.url);
 const ts = require("typescript") as typeof import("typescript");
@@ -18,7 +18,7 @@ const dependencies: Record<string, unknown> = {
   "../engine/map-messages": { mapEngineMessages },
   "./tui-bridge": { renderExtensionMessage: () => undefined },
   "./process-manager-events": { isRecord: (value: unknown) => typeof value === "object" && value !== null },
-  "../engine/transcript-window": { transcriptWindow },
+  "../engine/transcript-window": { transcriptWindow, transcriptEntryEnd },
   "../engine/tool-images": { externalizeToolResultMessages: <T>(messages: T[]) => messages },
 };
 runInNewContext(compiled, { module, exports: module.exports, Date, Map, require: (name: string) => {

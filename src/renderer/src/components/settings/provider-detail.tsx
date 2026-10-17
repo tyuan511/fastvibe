@@ -40,6 +40,7 @@ import { OAuthExtraUsageNote } from "./oauth-extra-usage-note";
 import { GatewayBalance } from "./gateway-balance";
 import { EMPTY_ADD, PROVIDER_API_ITEMS, PROVIDER_API_SHORT, type AddMode, type AddState, type PickerState } from "./providers-settings-types";
 import { OpenAIQuota } from "./openai-quota";
+import { ProviderTest } from "./provider-test";
 import {
   orderProviderModels,
   providerModelLabel,
@@ -453,6 +454,7 @@ export function ProviderDetail({
 
       <OpenAIQuota provider={provider} />
 
+      <ProviderTest provider={provider} onEditModel={onEditModel} />
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <Label className="text-xs font-normal text-muted-foreground">{t("providers.models")}</Label>

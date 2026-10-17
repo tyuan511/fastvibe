@@ -39,7 +39,7 @@ function fixture(options: { setup?: () => Promise<void>; create?: () => Promise<
   let listener: (event: any) => void = () => {};
   const api = { on() {}, registerTool(tool: any) { tools.set(tool.name, tool); } };
   const session = {
-    messages: [{ role: "assistant", content: [] }], model: { provider: "fake", id: "m" },
+    messages: [{ role: "assistant", content: [] }], model: { provider: "fake", id: "m" }, thinkingLevel: "medium",
     systemPrompt: options.systemPrompt ?? "short system prompt",
     getAllTools: () => [...tools.values()], getActiveToolNames: () => activeTools,
     setActiveToolsByName(names: string[]) { activeTools = names; },
@@ -60,7 +60,11 @@ function fixture(options: { setup?: () => Promise<void>; create?: () => Promise<
       async reload() { await options.setup?.(); for (const extension of this.settings.extensionFactories ?? []) await extension.factory(api); }
     },
     readDefaultModel: () => undefined,
-    createAgentSession: async () => { await options.create?.(); return { session }; },
+    createAgentSession: async (settings: { thinkingLevel: string }) => {
+      await options.create?.();
+      session.thinkingLevel = settings.thinkingLevel;
+      return { session };
+    },
     SessionManager: { inMemory: () => ({}) },
     summarizeSubagentMessages: () => ({ usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, turns: 1 }, stopReason: "stop" }),
     sessionEntryIds: () => new Map(), sessionCompletionTimes: () => new Map(),
@@ -85,7 +89,7 @@ function fixture(options: { setup?: () => Promise<void>; create?: () => Promise<
     // The extracted method keeps `this.host` (private `#host`). Point it at the
     // same bag of fields the harness already assigns, so `folderPrompt` stays optional.
     host,
-    publishSubagentState: (subagentId: string, conversationId: string) => host.emit({ type: "subagent_state", subagentId, conversationId, model: session.model, thinkingLevel: "high" }),
+    publishSubagentState: (subagentId: string, conversationId: string) => host.emit({ type: "subagent_state", subagentId, conversationId, model: session.model, thinkingLevel: session.thinkingLevel }),
     emit: (event: any) => {
       event.seq = phases.length + 1;
       host.info = reduceSubagent(host.info, event);

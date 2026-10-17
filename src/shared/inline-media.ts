@@ -5,15 +5,15 @@ import type { ToolCallBlock } from "./types.ts";
  * What a reply shows in the conversation itself — an image, a video, an HTML page — instead of
  * a path the reader has to open in the side pane.
  *
- * Four things put one on screen, from most to least certain:
+ * Three things put one on screen:
  *
  * 1. **`present`** — the model says "show this". Local files, https URLs and data URLs.
- * 2. **An image in a tool's result** — an MCP image generator returns the picture as an image
- *    block, with no file at all.
+ * 2. **An image in a producing tool's result** — an image generator returns the picture as an
+ *    image block, with no file at all. Readers and tools of unknown purpose do not qualify.
  * 3. **A `write`** of an image or HTML file — the tool's own argument names the file.
- * 4. **A path or URL in a shell / MCP / script result** — a guess. `bash` output that says
- *    `saved to /tmp/out.png` is almost always something the reader wants; a `find` listing is not.
- *    Only this source is heuristic, so only it gives up silently when the file will not load.
+ *
+ * Printed paths are not evidence of production: even "saved to" may be text read from an old
+ * log. A script or a tool that returns only paths uses `present` to show its deliverables.
  *
  * Nothing here reads the disk: a preview is a reference, and the renderer loads it the way the
  * file preview does (`fastvibe-media://`). That keeps the list recomputable from the transcript.
@@ -101,37 +101,6 @@ function isPathRef(ref: string): boolean {
   return !ref.startsWith("data:") && !/^https:\/\//i.test(ref);
 }
 
-const TOKEN_SPLIT = /[\s"'`<>()[\]{},;|]+/;
-const SKIP_DIRS = /\/(node_modules|\.git|site-packages|\.venv|__pycache__)\//;
-/** Commands whose output *lists* files instead of making one. */
-const LISTING_COMMAND = /^\s*(?:sudo\s+)?(?:ls|find|file|du|stat|tree|git|grep|rg|wc|rm|identify|ffprobe|exiftool|mdls)\b/;
-
-/**
- * Paths and https URLs in a tool's printed result that point at an image or video.
- *
- * HTML is deliberately not guessed: a build log is full of `index.html`, and an unrequested
- * page that can run script is the one preview here that costs something.
- */
-export function scanMediaRefs(text: string): string[] {
-  const found: string[] = [];
-  const seen = new Set<string>();
-  for (const raw of text.split(TOKEN_SPLIT)) {
-    if (!raw) continue;
-    let token = raw.replace(/[.:!?]+$/, "");
-    if (token.startsWith("file://")) token = decodeURI(token.slice("file://".length));
-    let ref: string | null = null;
-    if (/^https:\/\//i.test(token)) ref = token;
-    else if (token.startsWith("/") && !SKIP_DIRS.test(token)) ref = token;
-    if (!ref) continue;
-    const kind = classifyRef(ref);
-    if (kind !== "image" && kind !== "video") continue;
-    if (seen.has(ref)) continue;
-    seen.add(ref);
-    found.push(ref);
-  }
-  return found;
-}
-
 function record(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -158,10 +127,40 @@ function isWriteTool(name: string): boolean {
   return /^(write|write_file|writefile|create_file|createfile|create)$/i.test(name.trim());
 }
 
-/** Tools whose images are the *input* of the work or a viewport, not something it made. */
-const NO_RESULT_IMAGES = /^(read|view|browser_|computer_|screenshot|todo|question)/i;
-/** Tools whose printed result is worth scanning for a path the work produced. */
-const SCANNED_RESULTS = /^(bash|shell|mcp_|codemode)/i;
+// Match words, including MCP prefixes and camelCase names in older transcripts. A server's
+// original tool name, when recorded, avoids mistaking its namespace for the operation.
+const INPUT_OPERATION = /(?:^|_)(?:read|view|open|inspect|analyze|analyse|describe|list|search|find|get|fetch|load|browser|computer|screenshot|snapshot|capture|todo|question|preview|probe)(?:_|$)/;
+const OUTPUT_OPERATION = /(?:^|_)(?:generate|gen|imagegen|create|write|edit|render|export|convert|resize|upscale|transform)(?:_|$)/;
+
+function operationWords(value: string): string {
+  return value.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase().replace(/[^a-z0-9]+/g, "_");
+}
+
+function producesImages(name: string, args?: unknown, details?: unknown): boolean {
+  const mcp = record(record(details)?.mcp);
+  if (mcp?.readOnlyHint === true) return false;
+  const operation = operationWords(text(mcp?.toolName) || name);
+  if (INPUT_OPERATION.test(operation) || !OUTPUT_OPERATION.test(operation)) return false;
+  // Some MCP tools multiplex reads and writes behind one name.
+  const params = record(args);
+  return ![params?.action, params?.operation, params?.method].some((value) => INPUT_OPERATION.test(operationWords(text(value))));
+}
+
+function hasOutputImages(tool: ToolCallBlock): boolean {
+  if (tool.name !== "codemode") return producesImages(tool.name, tool.args, tool.details);
+  // A script's image blocks have no per-image provenance. Only accept an unambiguous batch
+  // of successful producing calls; mixed reads/generation must select outputs with `present`.
+  const calls = record(tool.details)?.calls;
+  return Array.isArray(calls) && calls.length > 0 && calls.every((item) => {
+    const call = record(item);
+    if (!call || call.status !== "ok") return false;
+    let args: unknown = call.args;
+    if (typeof args === "string") {
+      try { args = JSON.parse(args); } catch { return false; }
+    }
+    return producesImages(text(call.name), args);
+  });
+}
 
 function presentItems(tool: ToolCallBlock): Array<{ ref: string; title?: string }> {
   const details = record(tool.details);
@@ -221,16 +220,10 @@ export function collectInlinePreviews(
         const path = argPath(tool);
         if (path && classifyRef(path)) add(path, true);
       }
-      if (!NO_RESULT_IMAGES.test(tool.name)) {
+      if (hasOutputImages(tool)) {
         for (const image of tool.images ?? []) {
           const ref = image.path ?? image.dataUrl;
           if (ref) add(ref, true);
-        }
-      }
-      if (SCANNED_RESULTS.test(tool.name) && tool.result) {
-        const command = text(record(tool.args)?.command);
-        if (!command || !LISTING_COMMAND.test(command)) {
-          for (const ref of scanMediaRefs(tool.result)) add(ref, false);
         }
       }
     }

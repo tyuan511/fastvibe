@@ -251,13 +251,34 @@
   "tools": "Available tools",
   "toolsHint": "Tools this role can use",
   "toolOptions": {
-   "read": { "label": "Read files", "description": "Inspect file contents" },
-   "grep": { "label": "Search content", "description": "Find text across files" },
-   "find": { "label": "Find files", "description": "Locate files by name" },
-   "ls": { "label": "Browse folders", "description": "List directory contents" },
-   "bash": { "label": "Run commands", "description": "Execute terminal commands" },
-   "edit": { "label": "Edit files", "description": "Modify existing files" },
-   "write": { "label": "Write files", "description": "Create or overwrite files" },
+   "read": {
+    "label": "Read files",
+    "description": "Inspect file contents"
+   },
+   "grep": {
+    "label": "Search content",
+    "description": "Find text across files"
+   },
+   "find": {
+    "label": "Find files",
+    "description": "Locate files by name"
+   },
+   "ls": {
+    "label": "Browse folders",
+    "description": "List directory contents"
+   },
+   "bash": {
+    "label": "Run commands",
+    "description": "Execute terminal commands"
+   },
+   "edit": {
+    "label": "Edit files",
+    "description": "Modify existing files"
+   },
+   "write": {
+    "label": "Write files",
+    "description": "Create or overwrite files"
+   },
    "other": "Other tools"
   },
   "prompt": "System prompt",
@@ -397,7 +418,18 @@
    "F",
    "",
    "S"
-  ]
+  ],
+  "inputTokens": "Input tokens",
+  "outputTokens": "Output tokens",
+  "cacheTokens": "Cache tokens",
+  "estimateHint": "Estimated using current model prices. Actual charges follow your provider bill.",
+  "cacheDetail": "Cache read {{read}} · write {{write}} · {{rate}}% of input served from cache",
+  "retry": "Retry",
+  "costBreakdown": "Cost breakdown",
+  "byProject": "By project",
+  "byConversation": "By chat",
+  "scratch": "Scratch workspace",
+  "unavailableChat": "Deleted or other chats"
  },
  "providers": {
   "gatewayIdentify": "Identify upstream",
@@ -920,6 +952,13 @@
   "driverMissing": "Not downloaded",
   "driverDownload": "Download",
   "driverUpdate": "Update",
+  "driverCheckUpdate": "Check for updates",
+  "driverChecking": "Checking…",
+  "driverUpToDate": "Already up to date",
+  "driverCheckFailed": "Could not check for driver updates",
+  "driverUpdateTitle": "Driver update available",
+  "driverUpdateDesc": "Computer-control component {{version}} is available. Click Update to download and install it.",
+  "driverInstalled": "Computer-control component installed",
   "driverDialogTitle": "Download the computer-control component",
   "driverDialogDesc": "Computer control needs this component before it can run.",
   "driverClose": "Close"
@@ -943,5 +982,33 @@
   "loading": "Looking for browsers…",
   "noProfiles": "No profiles to import",
   "noProfilesDesc": "Supports Chrome, Edge, Brave, Chromium, Arc and Opera."
+ },
+ "providerTest": {
+  "title": "Model check",
+  "model": "Model",
+  "description": "Sends two small requests to check replies and tool calls. Provider charges apply.",
+  "running": "Checking…",
+  "run": "Run check",
+  "passed": "Replies and tool calls passed",
+  "partial": "Reply passed; tool calls not yet verified",
+  "failed": "Model check failed",
+  "protocol": "Protocol: {{api}}",
+  "firstToken": "First token: {{ms}} ms",
+  "edit": "Edit model settings",
+  "tools": {
+   "passed": "Tool call: passed",
+   "unconfirmed": "The model did not return the test tool call. Check its capabilities.",
+   "failed": "Tool-call request failed",
+   "not-tested": "Tool calls not tested"
+  },
+  "errors": {
+   "auth": "Authentication failed. Check your API key or sign in again.",
+   "protocol": "Check the endpoint, model name and API protocol.",
+   "rate-limit": "Rate or quota limit reached. Try again later.",
+   "network": "Connection failed. Check the proxy and provider address.",
+   "timeout": "Request timed out. Retry or check the network.",
+   "model": "Model unavailable. Refresh the model list and select again.",
+   "unknown": "The request did not complete. Check the provider configuration and retry."
+}
 }
 }

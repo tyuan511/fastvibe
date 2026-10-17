@@ -107,3 +107,111 @@ test("the manager reports a run that ended, once, and not one cut short by quitt
   assert.deepEqual(seen, [`${task.id}:completed`]);
   manager.stop();
 });
+
+test("busy manual runs are durably queued, deduplicated and recovered after restart", async (t) => {
+  const file = temporary(t);
+  let release!: () => void;
+  const manager = new ScheduledTaskManager(file, async () => new Promise<void>((resolve) => { release = resolve; }));
+  const once = { kind: "once" as const, at: new Date(Date.now() + 60_000).toISOString() };
+  const a = manager.create({ name: "A", prompt: "work", schedule: once });
+  const b = manager.create({ name: "B", prompt: "work", schedule: once });
+  manager.start();
+  manager.runNow(a.id);
+  await new Promise((resolve) => setImmediate(resolve));
+  const queued = manager.runNow(b.id);
+  assert.equal(queued.status, "queued");
+  assert.equal(manager.runNow(b.id).id, queued.id);
+  assert.deepEqual(manager.list().queuedTaskIds, [b.id]);
+  manager.stop();
+  release();
+  await new Promise((resolve) => setImmediate(resolve));
+  const ran: string[] = [];
+  const restored = new ScheduledTaskManager(file, async (task) => { ran.push(task.id); });
+  restored.start();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(ran, [b.id]);
+  assert.equal(restored.history(a.id)[0]?.status, "interrupted");
+  assert.equal(restored.history(b.id)[0]?.status, "completed");
+  restored.stop();
+});
+
+test("time limits abort a run and allow queued work after it has settled", async (t) => {
+  const ran: string[] = [];
+  const manager = new ScheduledTaskManager(temporary(t), async (task, signal) => {
+    ran.push(task.name);
+    if (task.name === "slow") await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+  });
+  const schedule = { kind: "once" as const, at: new Date(Date.now() + 60_000).toISOString() };
+  const slow = manager.create({ name: "slow", prompt: "work", schedule, maxRunSeconds: 1 });
+  const next = manager.create({ name: "next", prompt: "work", schedule });
+  manager.start();
+  manager.runNow(slow.id);
+  manager.runNow(next.id);
+  await new Promise((resolve) => setTimeout(resolve, 1100));
+  assert.equal(manager.history(slow.id)[0]?.status, "failed");
+  assert.ok(manager.history(slow.id)[0]?.error);
+  assert.equal(manager.history(next.id)[0]?.status, "completed");
+  assert.deepEqual(ran, ["slow", "next"]);
+  manager.stop();
+});
+
+test("overdue tasks honor skip policy without invoking a runner", async (t) => {
+  const file = temporary(t);
+  const store = new ScheduledTaskStore(file);
+  const task = store.create({ name: "skip", prompt: "work", schedule: daily, missedPolicy: "skip" });
+  const data = JSON.parse(readFileSync(file, "utf8"));
+  data.tasks[0].nextRunAt = Date.now() - 120_000;
+  const { writeFileSync } = await import("node:fs");
+  writeFileSync(file, JSON.stringify(data));
+  let ran = false;
+  const manager = new ScheduledTaskManager(file, async () => { ran = true; });
+  manager.start();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(ran, false);
+  assert.equal(manager.history(task.id)[0]?.status, "missed");
+  manager.stop();
+});
+
+test("a recovered automatic queue rechecks lateness before starting", async (t) => {
+  const file = temporary(t);
+  const store = new ScheduledTaskStore(file);
+  const task = store.create({ name: "queued", prompt: "work", schedule: daily, missedPolicy: "skip" });
+  store.claim(task.id, task.nextRunAt!, "queued");
+  const data = JSON.parse(readFileSync(file, "utf8"));
+  data.runs[0].scheduledAt = Date.now() - 120_000;
+  const { writeFileSync } = await import("node:fs");
+  writeFileSync(file, JSON.stringify(data));
+  let ran = false;
+  const manager = new ScheduledTaskManager(file, async () => { ran = true; });
+  manager.start();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(ran, false);
+  assert.equal(manager.history(task.id)[0]?.status, "missed");
+  manager.stop();
+});
+
+test("a due occurrence behind an existing queue gets a missed record without hiding the queue", async (t) => {
+  const file = temporary(t);
+  const store = new ScheduledTaskStore(file);
+  const task = store.create({ name: "repeat", prompt: "work", schedule: daily });
+  store.claim(task.id, Date.now(), "queued", true);
+  const data = JSON.parse(readFileSync(file, "utf8"));
+  const due = Date.now() - 1000;
+  data.tasks[0].nextRunAt = due;
+  const { writeFileSync } = await import("node:fs");
+  writeFileSync(file, JSON.stringify(data));
+  let finish!: () => void;
+  const manager = new ScheduledTaskManager(file, async () => new Promise<void>((resolve) => { finish = resolve; }));
+  manager.start();
+  await new Promise((resolve) => setImmediate(resolve));
+  const history = manager.history(task.id);
+  assert.equal(history.filter((run) => run.status === "missed" && run.scheduledAt === due).length, 1);
+  assert.match(history.find((run) => run.status === "missed")?.error ?? "", /queued|待执行/);
+  assert.equal(history.filter((run) => run.status === "running").length, 1);
+  assert.equal(manager.list().tasks[0].lastStatus, "running");
+  manager.wake();
+  assert.equal(manager.history(task.id).length, 2);
+  manager.stop();
+  finish();
+  await new Promise((resolve) => setImmediate(resolve));
+});

@@ -29,8 +29,9 @@ name: Release
 # `scripts/check-release-note.mjs` asserts in each job, early, that the file is there and has
 # content — without that, a tag whose note was never added still spends twenty minutes
 # packaging and then publishes an empty body, which is the one thing about a release nobody
-# can fix in a rerun. The checker stops there and does not police the note's language (English
-# is the convention, see docs/release/README.md).
+# can fix in a rerun. Bilingual notes also require a nonempty Chinese translation and
+# reciprocal absolute links; historical single-language notes remain valid. The checker
+# does not police prose language (see docs/release/README.md).
 # `generate_release_notes` is deliberately gone: it *appends*, which is how one release once
 # ended up with three stacked changelogs.
 

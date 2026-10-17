@@ -220,16 +220,18 @@ export function registerEngineIpc(engine: PiProcessManager): void {
     if (!anchor) return { mode: "full", messages: await engine.loadMessages(payload?.conversationId) };
     return engine.loadMessagesSince(anchor, payload?.conversationId);
   });
-  handle(Ipc.engineGetSnapshot, async (payload?: { conversationId?: string; fromEntryId?: string; historyLimit?: number; toolDetail?: unknown }) => {
+  handle(Ipc.engineGetSnapshot, async (payload?: { conversationId?: string; fromEntryId?: string; historyLimit?: number; toolDetail?: unknown; readOptions?: import("../../shared/transcript-page").TranscriptReadOptions }) => {
     const toolDetail = payload?.toolDetail === "summary" ? "summary" : undefined;
     return toolDetail
-      ? engine.getSnapshot(payload?.conversationId, payload?.fromEntryId, payload?.historyLimit, toolDetail)
+      ? engine.getSnapshot(payload?.conversationId, payload?.fromEntryId, payload?.historyLimit, toolDetail, payload?.readOptions)
       : engine.getSnapshot(payload?.conversationId, payload?.fromEntryId, payload?.historyLimit);
   });
+  handle(Ipc.engineGetMessage, (payload: { conversationId: string; entryId: string }) =>
+    engine.getMessage(payload.conversationId, payload.entryId));
   handle(Ipc.engineGetMessagesPage, (payload: import("../../shared/transcript-page").TranscriptPageRequest) => {
     const toolDetail = payload.toolDetail === "summary" ? "summary" : undefined;
     return toolDetail
-      ? engine.getMessagesPage(payload.conversationId, payload.beforeEntryId, payload.turnLimit, toolDetail)
+      ? engine.getMessagesPage(payload.conversationId, payload.beforeEntryId, payload.turnLimit, toolDetail, payload.readOptions)
       : engine.getMessagesPage(payload.conversationId, payload.beforeEntryId, payload.turnLimit);
   });
   handle(Ipc.engineGetStats, async (payload?: { conversationId?: string }) => {

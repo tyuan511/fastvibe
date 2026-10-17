@@ -151,8 +151,8 @@ function scanTodos(messages: ChatMessage[]): { items: TodoItem[]; messageIndex: 
  * signal that the work is back on a checklist. A list written during the current turn
  * — including the reply still streaming — is not superseded.
  */
-export function todoSnapshot(messages: ChatMessage[]): { items: TodoItem[]; superseded: boolean } {
+export function todoSnapshot(messages: ChatMessage[]): { items: TodoItem[]; superseded: boolean; entryId?: string } {
   const { items, messageIndex } = scanTodos(messages);
   if (items.length === 0 || messageIndex < 0) return { items, superseded: false };
-  return { items, superseded: lastUserIndex(messages) > messageIndex };
+  return { items, superseded: lastUserIndex(messages) > messageIndex, entryId: messages[messageIndex].id };
 }

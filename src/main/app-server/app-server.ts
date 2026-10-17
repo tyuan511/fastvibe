@@ -153,6 +153,7 @@ export class AppServer {
             ...(session.supportsConversationResume ? { conversationResume: true } : {}),
             ...(this.#deps.channels().includes("engine:submit-prompt") ? { promptSubmit: true } : {}),
             ...(this.#deps.channels().includes("engine:get-messages-page") ? { historyPaging: true } : {}),
+            ...(this.#deps.channels().includes("engine:get-message") ? { transcriptPreview: true } : {}),
           },
         });
         return true;

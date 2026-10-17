@@ -1,7 +1,7 @@
 import { memo, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { subagentStatusText } from "@/lib/subagent-status";
-import { findSubagent, subagentResultStatus } from "@shared/subagent-state";
+import { findSubagent, subagentEntries, subagentResultStatus } from "@shared/subagent-state";
 import { Spinner } from "@/components/ui/spinner";
 import type { ToolCallBlock } from "@shared/types";
 import { useSessionStore, useWorkspacePath } from "@/stores/session";
@@ -265,26 +265,6 @@ function PreviewButton({ path }: { path: string }): JSX.Element {
       {t("tools.preview")}
     </button>
   );
-}
-
-type SubagentEntry = { agent: string; task?: string };
-
-/** Flatten any of the three subagent modes into the runs the host will spawn. */
-function subagentEntries(args: unknown): SubagentEntry[] {
-  const record = asRecord(args);
-  if (!record) return [];
-  const entries: SubagentEntry[] = [];
-  if (typeof record.agent === "string")
-    entries.push({ agent: record.agent, task: typeof record.task === "string" ? record.task : undefined });
-  for (const key of ["tasks", "chain"]) {
-    if (!Array.isArray(record[key])) continue;
-    for (const item of record[key] as unknown[]) {
-      const entry = asRecord(item);
-      if (typeof entry?.agent === "string")
-        entries.push({ agent: entry.agent, task: typeof entry.task === "string" ? entry.task : undefined });
-    }
-  }
-  return entries;
 }
 
 function SubagentSummary({ tool }: { tool: ToolCallBlock }): JSX.Element {

@@ -130,9 +130,12 @@ export class SubagentManager {
     declared?: ThinkingLevel,
     source?: "user" | "project",
   ): ThinkingLevel {
-    if (source === "project" || declared) return declared ?? "medium";
+    if (source === "project") return declared ?? "medium";
+    // Discovery supplies a level even when a bundled role has no frontmatter
+    // setting (medium). Read the saved preset first so that default, or a stale
+    // custom-role declaration, cannot mask the user's current choice.
     const config = this.list().find((item) => item.id === agentName || item.name === agentName);
-    return config?.thinkingLevel ?? "medium";
+    return config?.thinkingLevel ?? declared ?? "medium";
   }
 
   save(draft: SubagentDraft): SubagentConfig[] {

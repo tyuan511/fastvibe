@@ -29,6 +29,8 @@ import {
 import { websiteFixture, type WebsiteLanguage } from "./website-fixtures";
 import { setTranscriptDisplay } from "@/lib/transcript-display";
 import { createScheduleFixture } from "./schedule-fixture";
+import { gitTreeFixture } from "./git-tree-fixture";
+import { gitHistoryFixture } from "./git-history-fixture";
 
 /**
  * Browser preview harness.
@@ -41,6 +43,15 @@ import { createScheduleFixture } from "./schedule-fixture";
  */
 
 const params = new URLSearchParams(window.location.search);
+const gitPreviewOverrides = new Map<string, GitStatus>();
+async function mutateGitPreview(cwd: string, change: (status: GitStatus) => void): Promise<GitStatus> {
+  const next = structuredClone(await api.workspace.gitStatus(cwd));
+  change(next);
+  next.changed = next.files.length;
+  next.staged = next.files.filter((file) => file.index !== " " && file.index !== "?").length;
+  gitPreviewOverrides.set(cwd, next);
+  return next;
+}
 const website = params.get("website") === "1";
 const websiteLanguage: WebsiteLanguage = params.get("lang") === "en" ? "en" : "zh";
 const websiteScene = params.get("scene") ?? "workspace";
@@ -101,7 +112,7 @@ try {
 const initialSettings: Record<string, unknown> = {
   thinkingLevel: "high",
   sendOnEnter: true,
-  ...(website || params.get("mobile") === "1" ? { uiLanguage: websiteLanguage, aiLanguage: websiteLanguage } : {}),
+  ...(website || params.has("lang") || params.get("mobile") === "1" || params.has("resources") ? { uiLanguage: websiteLanguage, aiLanguage: websiteLanguage } : {}),
   // The website embeds this page and hands it the theme it is showing (`?theme=`, then
   // live through the message below); a capture run passes nothing and gets dark.
   themeMode: theme === "light" || theme === "dark" ? theme : website ? "dark" : "system",
@@ -114,7 +125,21 @@ const initialSettings: Record<string, unknown> = {
   sidePaneWidth: website ? (websiteScene === "files" ? 760 : 460) : 384,
 };
 
-const fixtureProjects = websiteData?.projects ?? PROJECTS;
+// Optional mock disk for checking resource visibility across reloads. The real
+// app uses settings.json; preview cases get an isolated, explicitly named key.
+const resourcePersistenceKey = params.get("resourcePersistence")
+  ? "fastvibe.preview.resource-panel." + params.get("resourcePersistence") : null;
+if (resourcePersistenceKey) {
+  try {
+    const saved = localStorage.getItem(resourcePersistenceKey);
+    if (saved === "true" || saved === "false") initialSettings.resourcePanelOpen = saved === "true";
+  } catch { /* preview storage is optional */ }
+}
+
+const fixtureProjects = (websiteData?.projects ?? PROJECTS).map((project) =>
+  params.get("resources") === "sample" && project.cwd === PREVIEW_CWD
+    ? { ...project, folders: [PREVIEW_CWD + "-services"] } : project,
+);
 const fixtureConversations = websiteData?.conversations ?? CONVERSATIONS;
 const fixtureMessages = websiteData?.messages ?? MESSAGES;
 const fixtureSession = websiteData?.session ?? SESSION;
@@ -566,6 +591,7 @@ const api = {
    */
   account: accountMock(),
   providers: {
+    test: async (_provider: string, model: string) => ({ model, api: "openai-responses", status: "passed", tools: "passed", firstTokenMs: 180, elapsedMs: 650 }),
     list: async () => PROVIDERS,
     native: async () => [],
     addNative: async () => PROVIDERS,
@@ -606,13 +632,17 @@ const api = {
       const needle = query.trim().toLowerCase();
       if (needle.length < 2) return [];
       return fixtureConversations.filter((item) => `${item.title} ${item.preview ?? ""}`.toLowerCase().includes(needle)).map(
-        (item) => ({ id: item.id, snippet: item.preview }),
+        (item) => ({ id: item.id, snippet: item.preview, entryId: fixtureMessages.find((message) => message.text.toLowerCase().includes(needle))?.id }),
       );
     },
     // Nothing else is writing the catalog in the preview, so this push never fires.
     onChanged: () => () => undefined,
   },
   projects: {
+    repos: async (cwd: string) => {
+      const project = fixtureProjects.find((item) => item.cwd === cwd);
+      return [cwd, ...(project?.folders ?? [])].map((root) => ({ root, folders: [root], branch: root.endsWith("-services") ? "main" : "feat/theme-mode" }));
+    },
     add: async () => null,
     addRemote: async (cwd: string) => {
       const project = PROJECTS.find((item) => item.cwd === cwd) ?? {
@@ -662,10 +692,10 @@ const api = {
         path: remoteProjectKey(decoded.serverInstanceId, entry.path),
       }));
     },
-    gitStatus: async (cwd: string): Promise<GitStatus> => websiteData?.gitStatus ?? ({
+    gitStatus: async (cwd: string): Promise<GitStatus> => gitPreviewOverrides.get(cwd) ?? (params.get("git") === "large" ? gitTreeFixture(cwd) : undefined) ?? websiteData?.gitStatus ?? ({
       cwd,
-      isRepository: true,
-      branch: "feat/theme-mode",
+      isRepository: params.get("resources") !== "empty",
+      branch: cwd.endsWith("-services") ? "main" : "feat/theme-mode",
       changed: 4,
       staged: 1,
       additions: 128,
@@ -683,8 +713,12 @@ const api = {
     gitBranches: async () => [{ name: "feat/theme-mode", current: true, upstream: "origin/feat/theme-mode" }, { name: "main", current: false }],
     gitCheckout: async (cwd: string) => api.workspace.gitStatus(cwd),
     gitCreateBranch: async (cwd: string) => api.workspace.gitStatus(cwd),
-    gitStage: async (cwd: string) => api.workspace.gitStatus(cwd),
-    gitCommit: async (cwd: string) => api.workspace.gitStatus(cwd),
+    gitStage: async (cwd: string, paths?: string[]) => mutateGitPreview(cwd, (status) => {
+      status.files = status.files.map((file) => !paths || paths.includes(file.path) ? { ...file, index: file.index === "?" ? "A" : "M", worktree: " " } : file);
+    }),
+    gitCommit: async (cwd: string) => mutateGitPreview(cwd, (status) => {
+      status.files = status.files.filter((file) => file.worktree !== " ").map((file) => ({ ...file, index: file.index === "?" ? "?" : " " }));
+    }),
     gitGenerateCommitMessage: async () => "feat: add repository status shortcuts",
     gitDiff: async (_cwd: string, path?: string) => {
       if (websiteData) return websiteData.gitDiff(path);
@@ -700,8 +734,14 @@ const api = {
  }
 `;
     },
-    gitUnstage: async (cwd: string) => api.workspace.gitStatus(cwd),
-    gitDiscard: async (cwd: string) => api.workspace.gitStatus(cwd),
+    gitComparison: async (cwd: string, revision?: string) => ({ base: "a".repeat(40), target: revision ?? "HEAD", files: (await api.workspace.gitStatus(cwd)).files.slice(revision?.startsWith("b") ? 3 : 0, revision?.startsWith("b") ? 6 : 3) }),
+    gitHistory: async (_cwd: string, skip = 0, scope?: "all" | "current") => gitHistoryFixture(skip, scope),
+    gitUnstage: async (cwd: string, paths: string[]) => mutateGitPreview(cwd, (status) => {
+      status.files = status.files.map((file) => paths.includes(file.path) ? { ...file, index: file.index === "A" ? "?" : " ", worktree: file.index === "A" ? "?" : "M" } : file);
+    }),
+    gitDiscard: async (cwd: string, paths: string[]) => mutateGitPreview(cwd, (status) => {
+      status.files = status.files.filter((file) => !paths.includes(file.path) || (file.index !== " " && file.index !== "?")).map((file) => paths.includes(file.path) ? { ...file, worktree: " " } : file);
+    }),
     gitPull: async (cwd: string) => api.workspace.gitStatus(cwd),
     gitPush: async (cwd: string) => api.workspace.gitStatus(cwd),
     terminalStart: async (cwd?: string) => ({ id: "term-mock", cwd: cwd ?? fixtureCwd }),
@@ -727,7 +767,11 @@ const api = {
   settings: {
     initial: initialSettings,
     load: async () => initialSettings,
-    save: async () => undefined,
+    save: async (settings: Record<string, unknown>) => {
+      if (resourcePersistenceKey && typeof settings.resourcePanelOpen === "boolean") {
+        try { localStorage.setItem(resourcePersistenceKey, String(settings.resourcePanelOpen)); } catch { /* preview only */ }
+      }
+    },
     saveProxy: async () => undefined,
     clear: async () => undefined,
     // The real bridge pushes cross-window settings writes; the preview has one window.
@@ -744,7 +788,7 @@ const api = {
     onState: () => () => undefined,
   },
   stats: {
-    usage: async () => USAGE,
+    usage: async () => ({ ...USAGE, conversations: USAGE.models.map((model, index) => ({ ...model, sessionId: `fixture-${index}`, conversationId: fixtureConversations[index]?.id, title: fixtureConversations[index]?.title, project: fixtureConversations[index]?.project })) }),
   },
   // `?phone=on` previews a host that already allows phone connections (the QR icon beside it).
   // Starting an Agent and turning phone access on both play a few seconds of progress, as the
@@ -877,6 +921,12 @@ const api = {
   // The browser-use bridge is main-process driven: in the preview nothing ever
   // requests a browser action, so `onRequest` just returns its unsubscribe.
   browser: {
+    library: async () => ({ history: [], downloads: [] }),
+    downloadAction: async () => undefined,
+    capture: async () => null,
+    print: async () => undefined,
+    onLibraryChanged: () => () => undefined,
+    onShortcut: () => () => undefined,
     listProfiles: async () => [],
     importProfile: async () => ({ browser: "", profile: "", cookies: 0, encryptedCookiesSkipped: 0, message: "" }),
     clearData: async () => undefined,
@@ -1272,6 +1322,12 @@ if (websiteData) {
   }
 }
 
+if (params.has("resources")) {
+  window.setTimeout(() => {
+    void import("./resources-preview").then(({ previewResources }) => previewResources(params.get("resources") ?? "sample"));
+  }, 800);
+}
+
 if (params.has("subagent")) {
   window.setTimeout(() => {
     void import("./subagent-preview").then(({ previewSubagent }) => previewSubagent(params.get("subagent") ?? "running"));
@@ -1284,6 +1340,7 @@ if (pane === "files" || pane === "preview" || pane === "git") {
       const store = useSidePaneStore.getState();
       if (pane === "git") {
         store.openGit();
+        if (maximize) useSidePaneStore.getState().toggleMaximized();
         return;
       }
       store.openFiles();

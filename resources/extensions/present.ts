@@ -87,7 +87,8 @@ export default function presentExtension(pi: ExtensionAPI): void {
     promptSnippet: "Show an image, video or HTML file to the user inside the conversation",
     promptGuidelines: [
       "Use present when you have made or fetched something the user should look at — a generated image, a chart, a rendered video, a prototype or report as .html — and name its file or https URL.",
-      "Images returned by a tool's own result, and image/html files you create with write, are already shown automatically; do not present those again.",
+      "Images returned directly by a clearly named image generation/editing tool, and image/html files you create with write, are already shown automatically; do not present those again.",
+      "Paths in shell, script or MCP text output are not shown automatically. Call present directly for those deliverables, and for images from tools of uncertain purpose or scripts mixing reads with generation.",
       "Present only the few results that matter (at most 8 per call), then say in your reply what each one is. Do not present input files you were merely reading.",
     ],
     parameters: Type.Object({

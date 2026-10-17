@@ -53,13 +53,17 @@ function versionStamp(): string {
   return join(componentRoot(), ".version");
 }
 
+function downloadedVersion(): string | undefined {
+  try {
+    return readFileSync(versionStamp(), "utf8").trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** A download from another bindings version must not be reused. */
 function downloadedVersionMatches(spec: CuaPlatformSpec): boolean {
-  try {
-    return readFileSync(versionStamp(), "utf8").trim() === spec.version;
-  } catch {
-    return false;
-  }
+  return downloadedVersion() === spec.version;
 }
 
 function downloadedWorker(spec: CuaPlatformSpec): string | null {
@@ -107,10 +111,12 @@ export function computerComponentReady(): boolean {
 export function computerComponentStatus(): ComputerComponentStatus {
   const spec = specForHere();
   if (!spec) return { phase: "unsupported", received: 0, total: 0 };
-  if (phaseOverride === "downloading") return { phase: "downloading", received, total, version: spec.version };
+  const version = downloadedVersion();
+  const update = { version, targetVersion: spec.version, updateAvailable: Boolean(version && version !== spec.version) };
+  if (phaseOverride === "downloading") return { phase: "downloading", received, total, ...update };
   if (computerComponentReady()) return { phase: "ready", received: 0, total: 0, version: spec.version };
-  if (phaseOverride === "failed") return { phase: "failed", received, total, error: errorMessage, version: spec.version };
-  return { phase: "missing", received: 0, total: 0 };
+  if (phaseOverride === "failed") return { phase: "failed", received, total, error: errorMessage, ...update };
+  return { phase: "missing", received: 0, total: 0, ...update };
 }
 
 function publish(force = false): void {

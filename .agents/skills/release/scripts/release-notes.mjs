@@ -5,17 +5,18 @@
  *   node .agents/skills/release/scripts/release-notes.mjs --tag v0.2.0
  *   node .agents/skills/release/scripts/release-notes.mjs --tag v0.2.0 --from v0.1.0
  *   node .agents/skills/release/scripts/release-notes.mjs --tag app-v0.4.5
+ *   node .agents/skills/release/scripts/release-notes.mjs --tag v0.2.0 --lang zh-CN
  *
  * An `app-v` tag drafts the phone app's note: the range starts at the previous `app-v`
  * tag and only commits touching `apps/mobile_flutter` are listed.
  *
  * Markdown goes to stdout (nothing else); the range being summarised goes to
- * stderr. The output is a *draft*: every entry is still an English commit
- * subject. Rewrite it into user-facing English prose and commit it to
- * `docs/release/<tag>.md` — that file, at the tag, is the GitHub Release body
- * (`release.yml`'s `body_path`), so it must contain no Chinese; see SKILL.md and
- * docs/release/README.md. `scripts/check-release-note.mjs` is the same check CI
- * runs. Generate it BEFORE the version-bump commit so the notes cover only
+ * stderr. The output is a *draft*: commit subjects and bodies are not translated.
+ * Rewrite aligned English and Simplified Chinese notes, committing both
+ * `docs/release/<tag>.md` (the GitHub Release body) and `<tag>_zh-CN.md`. The
+ * language links use the release tag so they work outside the repository too.
+ * See SKILL.md and docs/release/README.md. `scripts/check-release-note.mjs` is
+ * the same check CI runs. Generate BEFORE the version-bump commit so notes cover only
  * shipped work; `chore: release vX.Y.Z` is skipped either way.
  */
 import { execFileSync } from "node:child_process";
@@ -46,6 +47,9 @@ const value = (name) => {
 const tag = value("--tag");
 if (!tag || !/^(app-)?v?\d+\.\d+\.\d+/.test(tag)) fail("--tag vX.Y.Z or app-vX.Y.Z is required");
 const mobile = tag.startsWith("app-");
+const language = value("--lang") ?? "en";
+if (language !== "en" && language !== "zh-CN") fail("--lang must be en or zh-CN");
+const chinese = language === "zh-CN";
 
 const from =
   value("--from") ??
@@ -59,16 +63,22 @@ const remote = git(["remote", "get-url", "origin"]);
 const repo = /github\.com[:/]([^/]+)\/([^/.]+?)(?:\.git)?$/.exec(remote);
 const commitUrl = (hash) => (repo ? `https://github.com/${repo[1]}/${repo[2]}/commit/${hash}` : "");
 const compareUrl = repo && from ? `https://github.com/${repo[1]}/${repo[2]}/compare/${from}...${tag}` : "";
+const noteUrl = repo ? `https://github.com/${repo[1]}/${repo[2]}/blob/${tag}/docs/release/${tag}` : "";
+const navigation = noteUrl
+  ? chinese
+    ? `[English](${noteUrl}.md) | **简体中文**`
+    : `**English** | [简体中文](${noteUrl}_zh-CN.md)`
+  : "";
 
 const SECTIONS = [
-  ["feat", "Added"],
-  ["fix", "Fixed"],
-  ["perf", "Performance"],
-  ["refactor", "Refactor"],
-  ["docs", "Docs"],
+  ["feat", chinese ? "新增" : "Added"],
+  ["fix", chinese ? "修复" : "Fixed"],
+  ["perf", chinese ? "性能" : "Performance"],
+  ["refactor", chinese ? "重构" : "Refactor"],
+  ["docs", chinese ? "文档" : "Docs"],
 ];
-const BREAKING = "Breaking changes";
-const MISC = "Build & chores";
+const BREAKING = chinese ? "不兼容变更" : "Breaking changes";
+const MISC = chinese ? "构建与维护" : "Build & chores";
 const TRAILER = /^(Co-authored-by|Signed-off-by|Reviewed-by|Generated with|🤖)/i;
 
 /** One bullet per `- ` item, one bullet per prose block; wrapped lines rejoin. */
@@ -153,7 +163,7 @@ function render(commit) {
   const scope = commit.scope ? `**${commit.scope}**: ` : "";
   const link = commitUrl(commit.hash);
   const ref = link ? ` ([${commit.short}](${link}))` : ` (${commit.short})`;
-  const head = `- ${commit.breaking ? "**BREAKING** " : ""}${scope}${commit.title}${ref}`;
+  const head = `- ${commit.breaking ? (chinese ? "**不兼容变更** " : "**BREAKING** ") : ""}${scope}${commit.title}${ref}`;
   return [head, ...commit.bullets.map((bullet) => `  - ${bullet}`)].join("\n");
 }
 
@@ -166,7 +176,7 @@ const body = sections
   .join("\n\n");
 
 console.log(
-  [body || "### Changes\n\n- None", compareUrl ? `**Full Changelog**: ${compareUrl}` : ""]
+  [navigation, body || (chinese ? "### 变更\n\n- 无" : "### Changes\n\n- None"), compareUrl ? `**Full Changelog**: ${compareUrl}` : ""]
     .filter(Boolean)
     .join("\n\n"),
 );

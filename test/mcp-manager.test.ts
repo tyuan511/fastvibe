@@ -93,6 +93,24 @@ test("an error result is flagged as an error, with a message when the server sen
   await manager.close();
 });
 
+test("MCP results retain the original operation and explicit read-only hint for media filtering", async () => {
+  const { manager } = await managerWith([configOf("generate_images")], (_c, server) => fakeServer(server, {
+    tools: [
+      { name: "execute", inputSchema: { type: "object" }, annotations: { readOnlyHint: true } },
+      { name: "generate_image", inputSchema: { type: "object" } },
+    ],
+  }));
+  try {
+    const [reader, generator] = await manager.tools();
+    const read = await reader.execute("read", {}, undefined as never, undefined, undefined as never);
+    const generated = await generator.execute("gen", {}, undefined as never, undefined, undefined as never);
+    assert.deepEqual(read.details, { isError: false, mcp: { toolName: "execute", readOnlyHint: true } });
+    assert.deepEqual(generated.details, { isError: false, mcp: { toolName: "generate_image", readOnlyHint: false } });
+  } finally {
+    await manager.close();
+  }
+});
+
 test("an empty successful result still says something", async () => {
   const { manager } = await managerWith([configOf("e")], (_c, server) => fakeServer(server, { call: () => ({ content: [] }) }));
   const [tool] = await manager.tools();

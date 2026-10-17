@@ -13,11 +13,12 @@ import { dispatch, handle, handlerChannels } from "../main/ipc/registry";
 import type { PiProcessManager } from "../main/pi/process-manager";
 import { readFilePreview } from "../main/engine/file-preview";
 import { searchProjectFiles } from "../main/engine/project-files";
-import { readGitStatus as readWorkspaceGitStatus } from "../main/workspace-git";
+import { readGitStatus as readWorkspaceGitStatus, collectCommitMessageMaterial, readCommitStatusFiles } from "../main/workspace-git";
 import { readWorkspaceDir, writeWorkspaceTextFile } from "../main/engine/workspace-fs";
 import { existingFiles } from "../main/engine/path-exists";
 import { conversationCwd, readFileForPayload } from "../main/engine/file-chunk";
 import { TerminalSessions } from "../main/engine/terminal-sessions";
+import { collectUsageStats } from "../main/engine/usage-stats";
 import { applyLanguages } from "../main/engine/ai-language";
 import { rekeyProjectSettings } from "../shared/project-folders.ts";
 import { clearAppSettings, invalidateAppSettingsCache, readAppSettings, writeAppSettings } from "../main/engine/runtime-settings";
@@ -27,6 +28,8 @@ import type { FastVibePaths } from "../main/engine/paths";
 import type { GitBranch, GitDiffSource, GitStatus } from "@shared/ipc";
 import type { ImportSourceId, ProviderModel, UsageRange, McpServerConfig, SkillDraft, SubagentDraft } from "@shared/types";
 import type { AgentRuntime } from "./runtime";
+
+import { commitGitChanges, readGitDiff, readGitComparison, readGitHistory, stageGitFiles, unstageGitFiles, discardGitFiles } from "../main/source-control";
 
 const execFileAsync = promisify(execFile);
 
@@ -113,16 +116,18 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
   handle(Ipc.engineBranch, (payload: { entryId: string; conversationId?: string }) => engine.branch(payload.entryId, payload.conversationId));
   handle(Ipc.engineFork, (payload?: { entryId?: string; conversationId?: string }) => engine.fork(payload?.entryId, payload?.conversationId));
   handle(Ipc.engineGetMessages, (payload?: { conversationId?: string }) => engine.loadMessages(payload?.conversationId));
-  handle(Ipc.engineGetSnapshot, (payload?: { conversationId?: string; fromEntryId?: string; historyLimit?: number; toolDetail?: unknown }) => {
+  handle(Ipc.engineGetSnapshot, (payload?: { conversationId?: string; fromEntryId?: string; historyLimit?: number; toolDetail?: unknown; readOptions?: import("../shared/transcript-page").TranscriptReadOptions }) => {
     const toolDetail = payload?.toolDetail === "summary" ? "summary" : undefined;
     return toolDetail
-      ? engine.getSnapshot(payload?.conversationId, payload?.fromEntryId, payload?.historyLimit, toolDetail)
+      ? engine.getSnapshot(payload?.conversationId, payload?.fromEntryId, payload?.historyLimit, toolDetail, payload?.readOptions)
       : engine.getSnapshot(payload?.conversationId, payload?.fromEntryId, payload?.historyLimit);
   });
+  handle(Ipc.engineGetMessage, (payload: { conversationId: string; entryId: string }) =>
+    engine.getMessage(payload.conversationId, payload.entryId));
   handle(Ipc.engineGetMessagesPage, (payload: import("../shared/transcript-page").TranscriptPageRequest) => {
     const toolDetail = payload.toolDetail === "summary" ? "summary" : undefined;
     return toolDetail
-      ? engine.getMessagesPage(payload.conversationId, payload.beforeEntryId, payload.turnLimit, toolDetail)
+      ? engine.getMessagesPage(payload.conversationId, payload.beforeEntryId, payload.turnLimit, toolDetail, payload.readOptions)
       : engine.getMessagesPage(payload.conversationId, payload.beforeEntryId, payload.turnLimit);
   });
   handle(Ipc.engineGetStats, (payload?: { conversationId?: string }) => engine.getSessionStats(payload?.conversationId));
@@ -186,11 +191,20 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
   handle(Ipc.workspaceGitBranches, (payload: { cwd: string }) => gitBranches(payload.cwd));
   handle(Ipc.workspaceGitCheckout, (payload: { cwd: string; branch: string }) => gitCheckout(payload.cwd, payload.branch));
   handle(Ipc.workspaceGitCreateBranch, (payload: { cwd: string; branch: string }) => gitCreateBranch(payload.cwd, payload.branch));
-  handle(Ipc.workspaceGitStage, (payload: { cwd: string; paths?: string[]; all?: boolean }) => gitStage(payload.cwd, payload.paths, payload.all));
-  handle(Ipc.workspaceGitCommit, (payload: { cwd: string; message: string }) => gitCommit(payload.cwd, payload.message));
-  handle(Ipc.workspaceGitDiff, (payload: { cwd: string; path?: string; source?: GitDiffSource }) => gitDiff(payload.cwd, payload.path, payload.source));
-  handle(Ipc.workspaceGitUnstage, (payload: { cwd: string; paths: string[] }) => gitUnstage(payload.cwd, payload.paths));
-  handle(Ipc.workspaceGitDiscard, (payload: { cwd: string; paths: string[] }) => gitDiscard(payload.cwd, payload.paths));
+  handle(Ipc.workspaceGitStage, (payload: { cwd: string; paths?: string[]; all?: boolean }) => stageGitFiles(cwd(payload.cwd), payload.paths, payload.all));
+  handle(Ipc.workspaceGitCommit, (payload: { cwd: string; message: string }) => commitGitChanges(cwd(payload.cwd), payload.message));
+  handle(Ipc.workspaceGitAmend, (payload: { cwd: string; message: string }) => commitGitChanges(cwd(payload.cwd), payload.message, { amend: true }));
+  handle(Ipc.workspaceGitGenerateCommitMessage, async (payload: { cwd: string; conversationId?: string; stagedOnly?: boolean }) => {
+    const root = cwd(payload.cwd);
+    const files = await collectCommitMessageMaterial(root, await readCommitStatusFiles(root), payload.stagedOnly === true);
+    if (!files.length) throw new Error("No changes to commit");
+    return engine.generateCommitMessage(files, payload.conversationId);
+  });
+  handle(Ipc.workspaceGitDiff, (payload: { cwd: string; path?: string; source?: GitDiffSource; revision?: string }) => readGitDiff(cwd(payload.cwd), payload.path, payload.source, payload.revision));
+  handle(Ipc.workspaceGitComparison, (payload: { cwd: string; revision?: string }) => readGitComparison(cwd(payload.cwd), payload.revision));
+  handle(Ipc.workspaceGitHistory, (payload: { cwd: string; skip?: number; scope?: "all" | "current"; tips?: string[] }) => readGitHistory(cwd(payload.cwd), payload.skip, payload.scope, payload.tips));
+  handle(Ipc.workspaceGitUnstage, (payload: { cwd: string; paths: string[] }) => unstageGitFiles(cwd(payload.cwd), payload.paths));
+  handle(Ipc.workspaceGitDiscard, (payload: { cwd: string; paths: string[] }) => discardGitFiles(cwd(payload.cwd), payload.paths));
   handle(Ipc.workspaceGitPull, (payload: { cwd: string }) => gitRemote(payload.cwd, "pull"));
   handle(Ipc.workspaceGitPush, (payload: { cwd: string }) => gitRemote(payload.cwd, "push"));
   handle(Ipc.workspaceTerminalStart, (payload: { cwd?: string; cols?: number; rows?: number }) => terminals.start(payload.cwd || homedir(), { cols: payload.cols, rows: payload.rows }));
@@ -213,13 +227,14 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
   });
   handle(Ipc.appGetInfo, () => ({ version: process.env.FASTVIBE_VERSION ?? "agent", engineVersion: piVersion, userData: paths.userData, runtimeRoot: paths.runtimeRoot, platform: process.platform }));
   handle(Ipc.workspaceFileIcons, () => ({ files: {}, folders: {} }));
-  handle(Ipc.statsUsage, (_payload?: { range?: UsageRange }) => ({ range: "30d", from: "", to: "", totals: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, tokens: 0, cost: 0, requests: 0, toolCalls: 0, activeDays: 0 }, days: [], models: [], sessions: 0, longestSessionMinutes: 0, currentStreak: 0, longestStreak: 0 }));
+  handle(Ipc.statsUsage, (payload?: { range?: UsageRange }) => collectUsageStats(paths, payload?.range ?? "30d", engine.listWorkspace().conversations));
 
   handle(Ipc.providersList, () => engine.listProviders());
   handle(Ipc.providersNative, () => engine.listNativeProviders());
   handle(Ipc.providersAdd, (payload: { name: string; baseUrl: string; apiKey: string; api?: any; models: ProviderModel[] }) => engine.addProvider({ name: payload.name, baseUrl: payload.baseUrl, apiKey: payload.apiKey, api: payload.api }, payload.models));
   handle(Ipc.providersUpdate, (payload: { id: string; name?: string; baseUrl?: string; api?: any; enabled?: boolean; apiKey?: string; models?: ProviderModel[]; modelOrder?: string[] }) => engine.updateProvider(payload.id, payload));
   handle(Ipc.providersRemove, (payload: { id: string }) => engine.removeProvider(payload.id));
+  handle(Ipc.providersTest, (payload: { id: string; model: string }) => engine.testProvider(payload.id, payload.model));
   handle(Ipc.providersRefresh, (payload: { id: string }) => engine.refreshProviderModels(payload.id));
   handle(Ipc.providersAddNative, (payload: { id: string; apiKey: string; models: ProviderModel[] }) => engine.addNativeProvider(payload.id, payload.apiKey, payload.models));
   handle(Ipc.providersLogout, (payload: { id: string }) => engine.logoutProvider(payload.id));
@@ -265,9 +280,4 @@ async function gitBranches(root: string): Promise<GitBranch[]> {
 
 async function gitCheckout(root: string, branch: string): Promise<GitStatus> { await execFileAsync("git", ["-C", cwd(root), "switch", branch], { timeout: 10000 }); return readGitStatus(root); }
 async function gitCreateBranch(root: string, branch: string): Promise<GitStatus> { await execFileAsync("git", ["-C", cwd(root), "switch", "-c", branch], { timeout: 10000 }); return readGitStatus(root); }
-async function gitStage(root: string, paths?: string[], all?: boolean): Promise<GitStatus> { await execFileAsync("git", ["-C", cwd(root), "add", all || !paths?.length ? "-A" : "--", ...(paths ?? [])], { timeout: 10000 }); return readGitStatus(root); }
-async function gitCommit(root: string, message: string): Promise<GitStatus> { await execFileAsync("git", ["-C", cwd(root), "commit", "-m", message], { timeout: 30000 }); return readGitStatus(root); }
-async function gitDiff(root: string, path?: string, source: GitDiffSource = "unstaged"): Promise<string> { const args = ["-C", cwd(root), "diff", "--no-ext-diff", "--unified=3"]; if (source === "staged") args.push("--cached"); else if (source === "branch") args.push("@{upstream}...HEAD"); else if (source === "last-turn") args.push("HEAD"); if (path) args.push("--", path); try { const { stdout } = await execFileAsync("git", args, { timeout: 10000, maxBuffer: 1024 * 1024 }); return stdout; } catch (error: any) { return typeof error?.stdout === "string" ? error.stdout : ""; } }
-async function gitUnstage(root: string, paths: string[]): Promise<GitStatus> { await execFileAsync("git", ["-C", cwd(root), "restore", "--staged", "--", ...paths], { timeout: 10000 }); return readGitStatus(root); }
-async function gitDiscard(root: string, paths: string[]): Promise<GitStatus> { await execFileAsync("git", ["-C", cwd(root), "restore", "--worktree", "--source=HEAD", "--", ...paths], { timeout: 10000 }); return readGitStatus(root); }
 async function gitRemote(root: string, command: "pull" | "push"): Promise<GitStatus> { await execFileAsync("git", ["-C", cwd(root), command, ...(command === "pull" ? ["--ff-only"] : [])], { timeout: 60000 }); return readGitStatus(root); }

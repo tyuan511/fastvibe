@@ -88,12 +88,14 @@ export default function dagExtension(pi: ExtensionAPI): void {
     name: "dag_add_tasks",
     label: T("添加子任务", "Add sub-agent tasks"),
     description: [
+      "For one independent sub-agent task, call subagent with agent + task. For several independent tasks, use subagent with a tasks array. The host rejects independent top-level tasks here before creating any nodes.",
       "Create sub-agent tasks and run them as a dependency graph (DAG). Use it only when tasks depend on each other. Independent delegations, including a parallel fan-out where no task needs another's result, belong to the subagent tool, not a DAG. Each task is its own sub-agent with a profile you write for it; a task starts as soon as every task it depends on has completed, tasks with no unmet dependencies run in parallel, and a failed task makes only its downstream tasks skip.",
       "Tasks get ids T-0001, T-0002 … and run on their own after this call returns — you do not drive them; at most 5 run at once. You may call this again later to grow the graph; new tasks can depend on existing ones.",
       "Configured roles use their configured model; ad-hoc profiles follow your model. Only nodes marked coordinator may create child tasks. At most 5 DAG runs execute across the engine; waiting coordinators release their slot.",
     ].join(" "),
-    promptSnippet: "Split work into sub-agent tasks that run as a dependency graph (DAG)",
+    promptSnippet: "Schedule tasks with dependencies; independent tasks use subagent",
     promptGuidelines: [
+      "A single independent delegation always uses subagent (agent + task), even for a long or complex task. Never create a one-node DAG, a lone coordinator, or extra planning/review nodes just to launch that task. Do not invent depends_on edges to satisfy the tool's validation. At the top level, submit the actual dependent tasks together; every task must have a dependency or be another task's dependency. A running DAG coordinator may still add children within its existing scope.",
       "Use dag_add_tasks only when the tasks have a dependency relationship: one must finish before another starts, a later task consumes an earlier result, or the work is staged (implement, then a review that reads that result). Do not create a DAG for sub-agents that do not depend on each other — several independent investigations or implementations run together through the subagent tool's parallel form. Do not use dag_add_tasks for a step you can do directly.",
       "Prefer a sub-agent that is already configured: the same roles the subagent tool lists. When one fits the task, set the task's agent to that role's exact name and omit profile — the node then runs as that agent, on the model configured for it. Write a profile only when no configured agent fits.",
       "Tasks that can run at the same time (no depends_on path between them) must be truly independent: neither needs the other's result, and no two of them change the same files. If one needs another's output, or both must edit the same file, chain them with depends_on — they share one working directory.",
@@ -103,7 +105,7 @@ export default function dagExtension(pi: ExtensionAPI): void {
       "After adding tasks you may call dag_wait to block until they finish, then read what you need with dag_result and answer the user. If you end your turn without waiting, you will receive a message when the whole graph has finished — summarise the results then. Do not poll in a tight loop.",
     ],
     parameters: Type.Object({
-      tasks: Type.Array(NODE, { description: "The tasks to add (at most 30 per call)." }),
+      tasks: Type.Array(NODE, { description: "The tasks to add (at most 30 per call). Each top-level task must participate in a depends_on relationship with another new or existing task. Independent tasks use subagent. Existing DAG coordinators may add children within their scope." }),
     }),
     async execute(_id, input, _signal, _onUpdate, ctx) {
       return call(ctx, "add", input, _signal);

@@ -123,3 +123,59 @@ String connectionDiagnostics(String version) {
     'timings': timings,
   });
 }
+
+class ConnectionDiagnosticSummary {
+  const ConnectionDiagnosticSummary({required this.state, required this.timings, this.at});
+  final String state;
+  final String? at;
+  final Map<String, int> timings;
+}
+
+ConnectionDiagnosticSummary connectionDiagnosticSummary() => summarizeConnectionDiagnostics(_entries, _metrics);
+
+/// Interpret the latest connection attempt only; older failures must not describe a
+/// connection that has since recovered. Returns translation keys, never raw payloads.
+ConnectionDiagnosticSummary summarizeConnectionDiagnostics(
+  List<Diagnostic> entries,
+  Map<String, List<Diagnostic>> metrics,
+) {
+  const lifecycle = <String>{'connecting', 'connected', 'connect-failed', 'disconnected', 'rolled-over'};
+  final relevant = entries.where((entry) => lifecycle.contains(entry.event)).toList();
+  if (relevant.isEmpty) return const ConnectionDiagnosticSummary(state: 'empty', timings: <String, int>{});
+  final latest = relevant.last;
+  final starts = relevant.where((entry) => entry.event == 'connecting').toList();
+  final since = starts.isEmpty ? latest.at : starts.last.at;
+  final recent = <String, Diagnostic>{};
+  for (final entry in metrics.entries) {
+    final samples = entry.value.where((sample) => sample.at.compareTo(since) >= 0).toList();
+    if (samples.isNotEmpty) recent[entry.key] = samples.last;
+  }
+  var state = latest.event == 'connecting' ? 'connecting' : 'network';
+  if (latest.event == 'connected' || latest.event == 'rolled-over') {
+    state = 'ready';
+  } else if (latest.failure == 'unauthorized' || latest.detailCode == 4001) {
+    state = 'auth';
+  } else if (latest.failure == 'offline' || latest.failure == 'gone') {
+    state = latest.failure!;
+  } else if (latest.event != 'disconnected') {
+    // Successful timing samples describe completed phases, not failure causes.
+    // In particular, an open official RTC channel has no password to diagnose.
+    if (latest.failure == 'restore-failed' || recent.containsKey('catalog-start') || recent.containsKey('welcome')) {
+      state = 'catalog';
+    } else if (recent.containsKey('rtc.open') || recent.containsKey('socket')) {
+      state = 'handshake';
+    } else if (recent.containsKey('rtc.failed')) {
+      state = 'transport';
+    } else if (recent.containsKey('rtc.signal-start') && !recent.containsKey('rtc.signal')) {
+      state = 'signal';
+    }
+  }
+  return ConnectionDiagnosticSummary(
+    state: state,
+    at: latest.at,
+    timings: <String, int>{
+      for (final key in <String>['rtc.signal', 'socket', 'rtt', 'catalog'])
+        if (recent[key]?.elapsedMs case final int elapsed) key: elapsed,
+    },
+  );
+}

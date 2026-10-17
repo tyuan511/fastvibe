@@ -87,6 +87,8 @@ export function validateScheduleDraft(draft: ScheduledTaskDraft, now = Date.now(
   if (typeof draft.prompt !== "string" || !draft.prompt.trim() || draft.prompt.length > 20_000) throw new Error("任务指令需要在 1–20000 字之间");
   if (draft.project !== undefined && (typeof draft.project !== "string" || !draft.project.trim())) throw new Error("项目路径无效");
   if (draft.notifyConversationId !== undefined && (typeof draft.notifyConversationId !== "string" || !draft.notifyConversationId.trim())) throw new Error("通知的会话无效");
+  if (draft.maxRunSeconds !== undefined && (!Number.isInteger(draft.maxRunSeconds) || draft.maxRunSeconds < 1 || draft.maxRunSeconds > 86400)) throw new Error("执行时限需要在 1–86400 秒之间");
+  if (draft.missedPolicy !== undefined && draft.missedPolicy !== "run-latest" && draft.missedPolicy !== "skip") throw new Error("错过时间后的处理方式无效");
   const rule = draft.schedule;
   if (!rule || !["once", "daily", "weekly"].includes(rule.kind)) throw new Error("任务时间规则无效");
   if (rule.kind === "once") {
@@ -102,7 +104,7 @@ export function validateScheduleDraft(draft: ScheduledTaskDraft, now = Date.now(
 }
 
 function isStatus(value: unknown): value is ScheduledRunStatus {
-  return value === "running" || value === "completed" || value === "failed" || value === "stopped" || value === "interrupted" || value === "missed";
+  return value === "queued" || value === "running" || value === "completed" || value === "failed" || value === "stopped" || value === "interrupted" || value === "missed";
 }
 
 function validRule(value: unknown, now: number): ScheduleRule | undefined {
@@ -130,6 +132,8 @@ function validStoredTask(value: unknown, now: number): ScheduledTask | undefined
   const project = typeof raw.project === "string" && raw.project.trim() ? raw.project : undefined;
   const notify = typeof raw.notifyConversationId === "string" && raw.notifyConversationId.trim() ? raw.notifyConversationId : undefined;
   const task: ScheduledTask = {
+    maxRunSeconds: typeof raw.maxRunSeconds === "number" && Number.isInteger(raw.maxRunSeconds) && raw.maxRunSeconds >= 1 && raw.maxRunSeconds <= 86400 ? raw.maxRunSeconds : 3600,
+    missedPolicy: raw.missedPolicy === "skip" ? "skip" : "run-latest",
     id: raw.id, name: raw.name.trim(), prompt: raw.prompt.trim(), schedule, enabled: raw.enabled,
     createdAt, updatedAt, ...(project ? { project } : {}), ...(notify ? { notifyConversationId: notify } : {}),
     ...(typeof raw.lastRunAt === "number" && Number.isFinite(raw.lastRunAt) ? { lastRunAt: raw.lastRunAt } : {}),
@@ -235,7 +239,7 @@ export class ScheduledTaskStore {
   }
 
   /** Claim one occurrence at most. `missed` consumes it without sending a prompt. */
-  claim(taskId: string, scheduledAt: number, status: "running" | "missed" = "running", manual = false): ScheduledTaskRun {
+  claim(taskId: string, scheduledAt: number, status: "queued" | "running" | "missed" = "running", manual = false, error?: string): ScheduledTaskRun {
     const task = this.#tasks.get(taskId);
     if (!task) throw new Error("定时任务不存在");
     if (!manual && (!task.enabled || task.nextRunAt !== scheduledAt)) throw new Error("任务的执行时间已变更");
@@ -245,9 +249,11 @@ export class ScheduledTaskStore {
       status, startedAt: status === "running" ? now : undefined,
       endedAt: status === "missed" ? now : undefined,
       ...(manual ? { manual: true } : {}),
+      ...(error ? { error } : {}),
     };
     this.#change(() => {
-      this.#runs = [run, ...this.#runs].slice(0, MAX_RUNS);
+      const retained = [run, ...this.#runs];
+      this.#runs = retained.filter((item, index) => index < MAX_RUNS || item.status === "queued" || item.status === "running");
       if (!manual || task.schedule.kind === "once") {
         if (task.schedule.kind === "once") {
           task.enabled = false;
@@ -257,8 +263,25 @@ export class ScheduledTaskStore {
         }
       }
       task.lastRunAt = now;
-      task.lastStatus = status;
+      task.lastStatus = this.#runs.some((item) => item.taskId === taskId && item.status === "running") ? "running"
+        : this.#runs.some((item) => item.taskId === taskId && item.status === "queued") ? "queued" : status;
       task.updatedAt = now;
+    });
+    return { ...run };
+  }
+
+  queued(): ScheduledTaskRun[] {
+    return this.#runs.filter((run) => run.status === "queued").reverse().map((run) => ({ ...run }));
+  }
+
+  startRun(id: string): ScheduledTaskRun | undefined {
+    const run = this.#runs.find((item) => item.id === id && item.status === "queued");
+    if (!run) return undefined;
+    this.#change(() => {
+      run.status = "running";
+      run.startedAt = Date.now();
+      const task = this.#tasks.get(run.taskId);
+      if (task) { task.lastStatus = "running"; task.lastRunAt = run.startedAt; }
     });
     return { ...run };
   }
@@ -268,16 +291,20 @@ export class ScheduledTaskStore {
     if (run && run.status === "running") this.#change(() => { run.conversationId = conversationId; });
   }
 
-  finish(runId: string, status: Exclude<ScheduledRunStatus, "running" | "missed">, error?: string): ScheduledTaskRun | undefined {
+  finish(runId: string, status: Exclude<ScheduledRunStatus, "queued" | "running">, error?: string): ScheduledTaskRun | undefined {
     const run = this.#runs.find((item) => item.id === runId);
-    if (!run || run.status !== "running") return undefined;
+    if (!run || (run.status !== "running" && run.status !== "queued")) return undefined;
     const now = Date.now();
     this.#change(() => {
       run.status = status;
       run.endedAt = now;
       if (error) run.error = error;
       const task = this.#tasks.get(run.taskId);
-      if (task) { task.lastStatus = status; task.updatedAt = now; }
+      if (task) {
+        task.lastStatus = this.#runs.some((item) => item.taskId === run.taskId && item.status === "running") ? "running"
+          : this.#runs.some((item) => item.taskId === run.taskId && item.status === "queued") ? "queued" : status;
+        task.updatedAt = now;
+      }
     });
     return { ...run };
   }
@@ -316,7 +343,7 @@ export class ScheduledTaskStore {
         if (task) this.#tasks.set(task.id, task);
       }
       this.#runs = Array.isArray(data.runs)
-        ? data.runs.filter((run): run is ScheduledTaskRun => validStoredRun(run) && this.#tasks.has(run.taskId)).slice(0, MAX_RUNS)
+        ? data.runs.filter((run): run is ScheduledTaskRun => validStoredRun(run) && this.#tasks.has(run.taskId)).filter((run, index) => index < MAX_RUNS || run.status === "queued" || run.status === "running")
         : [];
       this.#revision = Number.isSafeInteger(data.revision) && data.revision! >= 0 ? data.revision! : 0;
       let changed = false;

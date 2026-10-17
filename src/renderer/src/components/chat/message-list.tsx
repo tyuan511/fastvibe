@@ -21,6 +21,7 @@ import { TranscriptConversationContext } from "./conversation-context";
 import { cn } from "@/lib/utils";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-layout";
 import { transcriptDisplay } from "@/lib/transcript-display";
+import { useTranscriptNavigation } from "@/stores/transcript-navigation";
 import type { ChatAttachment, ChatMessage } from "@shared/types";
 import { SelectionActionBar } from "./selection-action-bar";
 import { NewSessionHero } from "./new-session";
@@ -476,6 +477,9 @@ export function MessageList({
 }): JSX.Element {
   const { showThinking, showTimestamp, collapseRuns } = transcriptDisplay();
   const { t } = useTranslation("chat");
+  const navigationTarget = useTranscriptNavigation((state) => state.target);
+  const navigated = useRef<object | null>(null);
+  const [highlightedTurn, setHighlightedTurn] = useState<string | null>(null);
   const selectionRootRef = useRef<HTMLDivElement>(null);
   // One row per user prompt and per assistant reply, not per engine message.
   const rows = useMemo(() => groupMessageRows(messages), [messages]);
@@ -594,7 +598,7 @@ export function MessageList({
 
   const scrollToMessage = useCallback((messageId: string, options?: { align?: "start" | "center" | "end" | "auto" | "nearest"; behavior?: ScrollBehavior }): boolean => {
     const index = rowIndexByMessage.get(messageId);
-    if (index === undefined) return false;
+    if (index === undefined || !viewportRef.current) return false;
     followingRef.current = false;
     // A first render is deliberately tail-only. A rail/search jump is an explicit
     // request for history, so stop the landing extractor before calculating the target
@@ -651,8 +655,11 @@ export function MessageList({
     // can retain the previous scroll offset or land at the old estimated height.
     let settleFrame = 0;
     const frame = window.requestAnimationFrame(() => {
-      scrollToEnd();
-      settleFrame = window.requestAnimationFrame(() => scrollToEnd());
+      if (followingRef.current) scrollToEnd();
+      settleFrame = window.requestAnimationFrame(() => {
+        // An explicit search/output jump or a user scroll wins over initial landing.
+        if (followingRef.current) scrollToEnd();
+      });
     });
     return () => {
       window.cancelAnimationFrame(frame);
@@ -667,6 +674,25 @@ export function MessageList({
   useLayoutEffect(() => {
     if (followingRef.current && turns.length > 0) scrollToEnd();
   }, [messages, scrollToEnd, totalSize, turns.length, virtualRows.length]);
+
+  useEffect(() => {
+    if (!navigationTarget || navigationTarget === navigated.current || navigationTarget.conversationId !== conversationId || loading) return;
+    const index = rowIndexByMessage.get(navigationTarget.entryId);
+    if (index === undefined) return;
+    const frame = window.requestAnimationFrame(() => {
+      if (scrollToMessage(navigationTarget.entryId, { align: "start" })) {
+        navigated.current = navigationTarget;
+        useTranscriptNavigation.setState((state) => state.target === navigationTarget ? { target: null } : state);
+        setHighlightedTurn(turns[index]?.id ?? null);
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [navigationTarget, conversationId, loading, rowIndexByMessage, scrollToMessage, turns]);
+  useEffect(() => {
+    if (!highlightedTurn) return;
+    const timer = window.setTimeout(() => setHighlightedTurn(null), 2400);
+    return () => window.clearTimeout(timer);
+  }, [highlightedTurn]);
 
   const virtualScrollController = useMemo(() => ({
     scrollToEnd,
@@ -725,7 +751,7 @@ export function MessageList({
                         key={virtualRow.key}
                         ref={virtualizer.measureElement}
                         data-index={virtualRow.index}
-                        className="absolute inset-x-0 pb-5"
+                        className={cn("absolute inset-x-0 pb-5 rounded-lg transition-colors", highlightedTurn === turn.id && "bg-warning/10")}
                         // `top`, never `transform: translateY`. The turn's prompt is
                         // `position: sticky`, and sticky is resolved against layout
                         // positions, which a transform does not change: every turn laid

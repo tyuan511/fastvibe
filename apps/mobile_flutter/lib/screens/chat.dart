@@ -22,6 +22,7 @@ import '../chat/prompt_card.dart';
 import '../chat/queue.dart';
 import '../chat/queue_panel.dart';
 import '../chat/snapshot_sync.dart';
+import '../chat/transcript_cache.dart';
 import '../chat/turn_meta.dart';
 import '../i18n/core.dart';
 import '../protocol/client.dart';
@@ -53,9 +54,10 @@ import '../ui/context_menu.dart';
 ///   a fast model does not repaint the list once per token.
 /// - **Older history has its own flight**, so scrolling back never blocks the live path.
 class ChatScreen extends StatefulWidget {
-  const ChatScreen({super.key, required this.conversationId});
+  const ChatScreen({super.key, required this.conversationId, this.transcriptCache});
 
   final String conversationId;
+  final TranscriptCache? transcriptCache;
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -91,6 +93,135 @@ class _ChatScreenState extends State<ChatScreen> {
   SyncCheckpoint? _checkpoint;
   Map<String, TurnMeta> _footers = <String, TurnMeta>{};
   bool _fullRead = false;
+  bool _cachedPreview = false;
+  TranscriptCache get _transcriptCache => widget.transcriptCache ?? TranscriptCache.instance;
+  String? _messageServerId;
+  List<Object?> _recentWire = const <Object?>[];
+  final Stopwatch _openWatch = Stopwatch()..start();
+  bool _firstPaintRecorded = false;
+  int _conversationGeneration = 0;
+  final Map<String, Future<void>> _contentReads = {};
+  Future<void> _contentQueue = Future<void>.value();
+
+  Future<void> _hydrateCachedTranscript() async {
+    final server = _serverId;
+    final conversation = _conversationId;
+    if (server == null) return;
+    final messages = await _transcriptCache.read(server, conversation);
+    if (!mounted ||
+        server != _serverId ||
+        conversation != _conversationId ||
+        _restored ||
+        _messages.isNotEmpty ||
+        messages == null ||
+        messages.isEmpty) {
+      return;
+    }
+    _cachedPreview = true;
+    _recentWire = messages;
+    _loading = false;
+    _setMessages(messages.map(ChatMessage.fromJson).toList());
+  }
+
+  void _recordFirstPaint() {
+    if (_firstPaintRecorded || _messages.isEmpty) return;
+    final generation = _conversationGeneration;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || generation != _conversationGeneration || _firstPaintRecorded || _messages.isEmpty) return;
+      _firstPaintRecorded = true;
+      recordConnectionDiagnostic(
+        Diagnostic.metric(
+          'chat-first-paint',
+          elapsedMs: _openWatch.elapsedMilliseconds,
+          outcome: _cachedPreview ? 'cache' : 'snapshot',
+        ),
+      );
+    });
+  }
+
+  Future<void> _loadMessageContent(ChatMessage message) async {
+    for (final id in message.deferredIds) {
+      await _loadContentEntry(id);
+    }
+  }
+
+  Future<void> _loadContentEntry(String id) {
+    final pending = _contentReads[id];
+    if (pending != null) return pending;
+    final remote = _remote;
+    final conversation = _conversationId;
+    final server = _serverId;
+    final preview = _messages.where((message) => message.id == id).firstOrNull;
+    if (preview != null && preview.deferredIds.isEmpty) return Future<void>.value();
+    if (remote == null ||
+        !_restored ||
+        preview == null ||
+        preview.deferredIds.isEmpty) {
+      return Future<void>.error(StateError(t('chat.loadFailed')));
+    }
+    late Future<void> flight;
+    flight = _contentQueue
+        .catchError((Object _) {})
+        .then((_) async {
+          if (!mounted ||
+              remote != _remote ||
+              conversation != _conversationId ||
+              server != _serverId) {
+            throw StateError(t('chat.loadFailed'));
+          }
+          final value = await remote.call('engine:get-message', {
+            'conversationId': conversation,
+            'entryId': id,
+          });
+          if (!mounted ||
+              remote != _remote ||
+              conversation != _conversationId ||
+              server != _serverId) {
+            throw StateError(t('chat.loadFailed'));
+          }
+          if (value is! Map ||
+              value['conversationId'] != conversation ||
+              value['message'] is! Map ||
+              (value['message'] as Map)['id'] != id) {
+            throw StateError(t('chat.loadFailed'));
+          }
+          final current = _messages.indexWhere((message) => message.id == id);
+          // A live delta or branch reset that replaced this object wins over a late body.
+          if (current >= 0 && identical(_messages[current], preview)) {
+            final full = ChatMessage.fromJson(value['message']);
+            if (full.deferredIds.isNotEmpty) {
+              throw StateError(t('chat.loadFailed'));
+            }
+            final next = List<ChatMessage>.from(_messages)..[current] = full;
+            _setMessages(next);
+          }
+        })
+        .whenComplete(() {
+          if (identical(_contentReads[id], flight)) _contentReads.remove(id);
+        });
+    _contentReads[id] = flight;
+    _contentQueue = flight.catchError((Object _) {});
+    return flight;
+  }
+
+  Future<void> _resolveContents() async {
+    // A fresh snapshot may replace previews while a body is in flight. Iterate the
+    // authoritative projection again rather than copying any remaining abbreviation.
+    while (_messages.any((message) => message.deferredIds.isNotEmpty)) {
+      final before = _messages.firstWhere(
+        (message) => message.deferredIds.isNotEmpty,
+      );
+      await _loadMessageContent(before);
+      if (!mounted ||
+          identical(
+            _messages.where((message) => message.id == before.id).firstOrNull,
+            before,
+          )) {
+        throw StateError(t('chat.loadFailed'));
+      }
+    }
+  }
+
   DagWatcher? _dag;
 
   String get _conversationId => widget.conversationId;
@@ -130,10 +261,12 @@ class _ChatScreenState extends State<ChatScreen> {
   void initState() {
     super.initState();
     _queue = emptyQueue(widget.conversationId);
+    _messageServerId = _serverId;
     Connection.instance.addListener(_onConnection);
     _draft.addListener(_onDraftChanged);
     _dag = DagWatcher(_conversationId);
     _hydrateDraft();
+    _hydrateCachedTranscript();
     _startSync();
   }
 
@@ -148,6 +281,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _dag = DagWatcher(widget.conversationId);
     _resetForConversation();
     _hydrateDraft();
+    _hydrateCachedTranscript();
     _startSync();
   }
 
@@ -166,6 +300,12 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _onConnection() {
     if (!mounted) return;
+    if (_serverId != null && _messageServerId != _serverId) {
+      _teardownSync();
+      _resetForConversation();
+      _messageServerId = _serverId;
+      _hydrateCachedTranscript();
+    }
     // A scope may first mount before a socket is ready. Retire the old listener even
     // while disconnected; a new socket must restore its own queue before Send enables.
     if (!identical(_syncScopeRemote, _remote)) {
@@ -199,6 +339,15 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _resetForConversation() {
     _messages.clear();
+    _cachedPreview = false;
+    _recentWire = const <Object?>[];
+    _firstPaintRecorded = false;
+    _conversationGeneration++;
+    _openWatch
+      ..reset()
+      ..start();
+    _contentReads.clear();
+    _contentQueue = Future<void>.value();
     _messagesRevision++;
     _replyCache.clear();
     _queue = emptyQueue(widget.conversationId);
@@ -264,7 +413,10 @@ class _ChatScreenState extends State<ChatScreen> {
     _paintTimer = Timer(const Duration(milliseconds: 33), () {
       _paintTimer = null;
       _paintScheduled = false;
-      if (mounted) setState(() {});
+      if (mounted) {
+        setState(() {});
+        _recordFirstPaint();
+      }
     });
   }
 
@@ -338,7 +490,7 @@ class _ChatScreenState extends State<ChatScreen> {
           cursor,
         ),
         load: () async {
-          final anchorEntryId = !_fullRead
+          final anchorEntryId = !_fullRead && !_cachedPreview
               ? _messages
                     .lastWhere(
                       (message) =>
@@ -356,17 +508,31 @@ class _ChatScreenState extends State<ChatScreen> {
               // results out of snapshots so a relayed connection does not carry UI
               // data that can never be displayed here.
               'toolDetail': 'summary',
+              'readOptions': <String, Object?>{
+                'maxBytes': 128 * 1024,
+                if (remote.supportsTranscriptPreview) 'preview': true,
+              },
               if (anchorEntryId != null && anchorEntryId.isNotEmpty)
                 'fromEntryId': anchorEntryId,
-              if (!_fullRead &&
-                  _messages.isEmpty &&
+              if ((_fullRead || _messages.isEmpty || _cachedPreview) &&
                   remote.supportsHistoryPaging)
-                'historyLimit': 12,
+                'historyLimit': 3,
             },
           );
           final map = result is Map
               ? result.cast<String, Object?>()
               : <String, Object?>{};
+          final timing = map['timing'];
+          if (timing is Map) {
+            for (final field in const ['readMs', 'projectMs']) {
+              final value = timing[field];
+              if (value is num && value.isFinite && value >= 0) {
+                recordConnectionDiagnostic(
+                  Diagnostic.metric('host-$field', elapsedMs: value.round()),
+                );
+              }
+            }
+          }
           return Snapshot(
             seq: map['seq'] is int ? map['seq'] as int : 0,
             messages: map['messages'] is List ? map['messages'] as List : null,
@@ -389,6 +555,30 @@ class _ChatScreenState extends State<ChatScreen> {
           );
         },
         onSnapshot: (snapshot) {
+          final projection = Stopwatch()..start();
+          _cachedPreview = false;
+          final incoming = snapshot.messages ?? const <Object?>[];
+          if (snapshot.messageMode == 'tail') {
+            final anchor = _recentWire.indexWhere(
+              (row) => row is Map && row['id'] == snapshot.messageAnchorId,
+            );
+            _recentWire = recentTranscript(<Object?>[
+              if (anchor >= 0) ..._recentWire.take(anchor),
+              ...incoming,
+            ]);
+          } else {
+            _recentWire = recentTranscript(incoming);
+          }
+          final server = _serverId;
+          if (server != null) {
+            unawaited(
+              _transcriptCache.write(
+                server,
+                conversationId,
+                _recentWire,
+              ),
+            );
+          }
           Connection.instance.applyChatSnapshot(
             remote,
             conversationId,
@@ -416,12 +606,19 @@ class _ChatScreenState extends State<ChatScreen> {
             _fullRead = false;
             // Warm the adjacent page after first paint; further pages are fetched before
             // they enter view, with no extra controls or rows in the transcript.
-            if (pager.cursor != null) {
+            if (pager.cursor != null &&
+                !next.any((message) => message.deferredIds.isNotEmpty)) {
               Timer(const Duration(milliseconds: 300), pager.prefetch);
             }
           }
           _applyQueue(snapshot.queue);
           _restored = true;
+          recordConnectionDiagnostic(
+            Diagnostic.metric(
+              'chat-projection',
+              elapsedMs: projection.elapsedMilliseconds,
+            ),
+          );
         },
         onEvent: applyEvent,
         onError: (error) {
@@ -451,6 +648,10 @@ class _ChatScreenState extends State<ChatScreen> {
               'beforeEntryId': beforeEntryId,
               'turnLimit': 12,
               'toolDetail': 'summary',
+              'readOptions': <String, Object?>{
+                'maxBytes': 128 * 1024,
+                if (remote.supportsTranscriptPreview) 'preview': true,
+              },
             },
           );
           if (page is! Map ||
@@ -757,8 +958,10 @@ class _ChatScreenState extends State<ChatScreen> {
   /// drained first.
   Future<void> _copyAll() async {
     try {
-      if (_loading && _messages.isEmpty) await _reload();
+      if (!_restored || _cachedPreview) await _reload();
+      if (!_restored || _cachedPreview) throw StateError(t('chat.loadFailed'));
       if (_historyCursor != null) await _pager?.loadAll();
+      await _resolveContents();
       final transcript = _messages
           .where(
             (message) =>
@@ -783,18 +986,45 @@ class _ChatScreenState extends State<ChatScreen> {
   void _openFile(OutputFile file) {
     final remote = _remote;
     if (remote == null) return;
+    final serverId = Connection.instance.server?.id;
     showOutputFile(
       context,
       file: file,
       transfer: FileTransfer(
-        call: (method, payload, timeoutMs) =>
-            remote.call(method, payload, timeoutMs),
+        call: (method, payload, timeoutMs) {
+          final connection = Connection.instance;
+          final current = connection.client;
+          if (connection.server?.id != serverId || current == null) {
+            throw TransportError('closed', t('conn.notConnected'));
+          }
+          return current.call(method, payload, timeoutMs);
+        },
         conversationId: _conversationId,
+        serverId: serverId ?? '',
       ),
     );
   }
 
   Future<void> _messageAction(ChatMessage message) async {
+    if (!_restored || _cachedPreview) return;
+    if (message.deferredIds.isNotEmpty) {
+      try {
+        await _loadMessageContent(message);
+        if (!mounted) return;
+        final merged = mergeReplies(
+          List<ChatMessage>.from(_messages),
+          _replyCache,
+        );
+        final full = merged.where((row) => row.id == message.id).firstOrNull;
+        if (full == null || full.deferredIds.isNotEmpty) {
+          throw StateError(t('chat.loadFailed'));
+        }
+        return await _messageAction(full);
+      } catch (error) {
+        if (mounted) toastFailure(error, t('chat.loadFailed'));
+        return;
+      }
+    }
     showContextMenu(
       context,
       contextMenuItems(<SheetOption>[
@@ -885,7 +1115,7 @@ class _ChatScreenState extends State<ChatScreen> {
                               child: MobileDagSummary(watcher: _dag!),
                             ),
                           Expanded(
-                            child: _loading
+                            child: _loading && _messages.isEmpty
                                 ? BrandLoading(
                                     message: t(
                                       'chat.loading',
@@ -908,7 +1138,12 @@ class _ChatScreenState extends State<ChatScreen> {
                                     topInset: _dag != null ? 0 : top,
                                     bottomInset: _footerHeight,
                                     onLongPress: _messageAction,
-                                    onOlder: () => _pager?.prefetch(),
+                                    onOlder: () {
+                                      if (_restored) _pager?.prefetch();
+                                    },
+                                    onLoadContent: _restored
+                                        ? _loadMessageContent
+                                        : null,
                                     dagWatcher: _dag,
                                     onOpenFile: _openFile,
                                   ),
@@ -937,6 +1172,7 @@ class _ChatScreenState extends State<ChatScreen> {
                               if (connection.reconnecting ||
                                   (!_loading && !_connected))
                                 _ReconnectBanner(
+                                  syncing: _cachedPreview && _remote != null && !connection.reconnecting,
                                   onRetry: () {
                                     Haptic.tap();
                                     if (_remote != null) {
@@ -977,6 +1213,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                   sending: _sending,
                                   queueing: running || _queue.items.isNotEmpty,
                                   disabled: !_connected || _queue.revision < 0,
+                                  deferSessionRead: !_restored,
                                   draft: _draft,
                                   images: _images,
                                   onImagesChange: (value) =>
@@ -1228,9 +1465,10 @@ class _Welcome extends StatelessWidget {
 }
 
 class _ReconnectBanner extends StatelessWidget {
-  const _ReconnectBanner({required this.onRetry});
+  const _ReconnectBanner({required this.onRetry, this.syncing = false});
 
   final VoidCallback onRetry;
+  final bool syncing;
 
   @override
   Widget build(BuildContext context) {
@@ -1239,17 +1477,17 @@ class _ReconnectBanner extends StatelessWidget {
       margin: const EdgeInsets.fromLTRB(10, 0, 10, 6),
       padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
       decoration: BoxDecoration(
-        color: palette.warningSoft,
+        color: syncing ? palette.field : palette.warningSoft,
         borderRadius: BorderRadius.circular(Radii.md),
-        border: Border.all(color: palette.warning, width: 0.5),
+        border: Border.all(color: syncing ? palette.border : palette.warning, width: 0.5),
       ),
       child: Row(
         children: <Widget>[
-          DesktopSpinner(size: 14, color: palette.warning),
+          DesktopSpinner(size: 14, color: syncing ? palette.muted : palette.warning),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              t('chat.reconnecting', context: context),
+              t(syncing ? 'chat.syncing' : 'chat.reconnecting', context: context),
               style: TextStyle(
                 color: palette.text,
                 fontSize: 13,

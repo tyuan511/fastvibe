@@ -40,6 +40,7 @@ class Composer extends StatefulWidget {
     this.sending = false,
     this.queueing = false,
     this.disabled = false,
+    this.deferSessionRead = false,
   });
 
   final String conversationId;
@@ -49,6 +50,8 @@ class Composer extends StatefulWidget {
   final bool sending;
   final bool queueing;
   final bool disabled;
+  /// History gets the first frame before metadata can initialize a cold agent.
+  final bool deferSessionRead;
   final TextEditingController draft;
   final List<ComposerImage> images;
   final ValueChanged<List<ComposerImage>> onImagesChange;
@@ -110,7 +113,9 @@ class _ComposerState extends State<Composer> {
     }
     // The context window only moves while a run is going, so the state is re-read at the
     // boundaries rather than on a timer.
-    if (oldWidget.running != widget.running ||
+    if (oldWidget.deferSessionRead && !widget.deferSessionRead) {
+      WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) _refresh(); });
+    } else if (oldWidget.running != widget.running ||
         oldWidget.conversationId != widget.conversationId) {
       _refresh();
     }
@@ -128,7 +133,7 @@ class _ComposerState extends State<Composer> {
     final remote = Connection.instance.client;
     final generation = ++_refreshGeneration;
     final conversationId = widget.conversationId;
-    if (remote == null) return;
+    if (remote == null || widget.deferSessionRead) return;
     try {
       final results = await Future.wait<Object?>(<Future<Object?>>[
         remote.call('engine:get-state', <String, Object?>{

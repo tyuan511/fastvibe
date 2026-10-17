@@ -378,6 +378,7 @@ export const SidePane = memo(function SidePane({
     >
       {visibleTabs.length > 0 ? (
         <div
+          data-side-pane-header
           className={cn(
             "flex h-11 shrink-0 items-center gap-1 overflow-hidden border-b border-border px-2",
             leadWithSidebarChrome && HAS_TRAFFIC_LIGHTS && "pl-22",
@@ -485,6 +486,7 @@ export const SidePane = memo(function SidePane({
         </div>
       ) : (
         <div
+          data-side-pane-header
           className={cn(
             "drag-region flex h-11 shrink-0 items-center gap-0.5 px-2",
             leadWithSidebarChrome ? "justify-between" : "justify-end",
@@ -532,6 +534,8 @@ export const SidePane = memo(function SidePane({
               projectCwd={workspace?.cwd}
               onError={onError}
               focusPath={active.gitFocusPath}
+              focusCwd={active.cwd}
+              focusRevision={active.gitFocusRevision}
               focusSource={active.gitFocusSource}
               onFocusHandled={() => patchTab(active.id, { gitFocusPath: undefined, gitFocusSource: undefined })}
             />

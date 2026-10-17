@@ -276,6 +276,19 @@ test("history pages route by conversation while transcript cursors and message i
   assert.deepEqual(connections.calls.at(-1)?.payload, { conversationId: "chat-1", beforeEntryId: "user:20", turnLimit: 12 });
 });
 
+test("deferred message reads scope only the conversation, preserving the entry id and content", async () => {
+  const connections = fakeConnections({
+    servers: [{ connectionId: "host-a", serverInstanceId: "srv_alpha", capabilities: ["engine"] }],
+    results: { [Ipc.engineGetMessage]: { conversationId: "chat-1", message: { id: "raw:entry", text: "full" } } },
+  });
+  const { instance } = gateway({ connections });
+  const conversationId = encodeRemoteConversationId("srv_alpha", "chat-1");
+  const result = await instance.dispatch(Ipc.engineGetMessage, { conversationId, entryId: "raw:entry" }, {}) as { conversationId: string; message: { id: string } };
+  assert.equal(result.conversationId, conversationId);
+  assert.equal(result.message.id, "raw:entry");
+  assert.deepEqual(connections.calls.at(-1)?.payload, { conversationId: "chat-1", entryId: "raw:entry" });
+});
+
 test("remote turn refreshes never read the host's local active conversation", async () => {
   const connections = fakeConnections({
     servers: [{ connectionId: "host-a", serverInstanceId: "srv_alpha", capabilities: ["engine"] }],

@@ -19,6 +19,8 @@ export type ScheduleFormState = {
   time: string;
   timeZone: string;
   days: number[];
+  maxRunSeconds: number;
+  missedPolicy: "run-latest" | "skip";
 };
 
 export type ScheduleFormError = "name" | "prompt" | "at" | "atPast" | "time" | "timeZone" | "days";
@@ -74,6 +76,8 @@ export function emptyScheduleForm(now = Date.now()): ScheduleFormState {
     time: "09:00",
     timeZone: localTimeZone(),
     days: [1, 2, 3, 4, 5],
+    maxRunSeconds: 3600,
+    missedPolicy: "run-latest",
   };
 }
 
@@ -81,6 +85,8 @@ export function formFromTask(task: ScheduledTask, now = Date.now()): ScheduleFor
   const base = emptyScheduleForm(now);
   const rule = task.schedule;
   return {
+    maxRunSeconds: task.maxRunSeconds ?? 3600,
+    missedPolicy: task.missedPolicy ?? "run-latest",
     name: task.name,
     prompt: task.prompt,
     project: task.project ?? "",
@@ -134,6 +140,8 @@ export function draftFromForm(form: ScheduleFormState, now = Date.now()): Schedu
     prompt: form.prompt.trim(),
     ...(project ? { project } : {}),
     schedule,
+    maxRunSeconds: form.maxRunSeconds,
+    missedPolicy: form.missedPolicy,
   };
 }
 

@@ -13,12 +13,10 @@
  * packaging and then publishes a release with an empty body, which is the one thing
  * about a release nobody can fix in a rerun.
  *
- * It checks no further than that. The note is written in English (see
- * `.agents/skills/release/SKILL.md` and `docs/release/README.md`) because it is read
- * on GitHub by an international audience, but that is a writing guideline, not a gate:
- * a note somebody chose to publish in another language is a deliberate choice this
- * script has no business overriding, and a release that cannot go out because of a
- * regex is worse than one whose prose is in the wrong language.
+ * New notes link to a matching Simplified Chinese file. When a language link or
+ * translation is present, check both files and their reciprocal absolute URLs.
+ * Legacy single-language notes remain valid for historical rebuilds. This checks
+ * structure, not prose language or translation quality; see docs/release/README.md.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -27,12 +25,13 @@ import { fileURLToPath } from "node:url";
 // The repo this script ships in — not the process cwd. `root` is injectable so a test can
 // point it at a fixture tree instead of writing into the real `docs/release/`.
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const NOTES_URL = "https://github.com/tyuan511/fastvibe/blob";
 
 /** `v1.2.3`, `v1.2.3-rc.1` and the phone app's `app-v1.2.3`; not `latest`, not `1.2.3`. */
 export const RELEASE_TAG = /^(app-)?v\d+\.\d+\.\d+/;
 
 /**
- * Returns `{ tag, path, lines }` when the note is present and has content, otherwise
+ * Returns note metadata when the note is present and has content, otherwise
  * throws with the reason. Every refusal is phrased as the fix — the caller is a CI log
  * somebody is reading once.
  */
@@ -47,7 +46,26 @@ export function checkReleaseNote(tag, root = ROOT) {
   const note = readFileSync(path, "utf8");
   if (!note.trim()) throw new Error(`release note is empty: ${relative}`);
 
-  return { tag, path, lines: note.trim().split("\n").length };
+  const translationPath = join(root, "docs", "release", `${tag}_zh-CN.md`);
+  const bilingual = existsSync(translationPath) || note.includes("[简体中文](");
+  if (bilingual) {
+    const translationRelative = `docs/release/${tag}_zh-CN.md`;
+    if (!existsSync(translationPath)) throw new Error(`missing Chinese release note: ${translationRelative}`);
+    const translation = readFileSync(translationPath, "utf8");
+    if (!translation.trim()) throw new Error(`Chinese release note is empty: ${translationRelative}`);
+
+    // New releases pin to their tag. A translation added after publication lives
+    // on main: moving an existing tag just to add prose would change shipped source.
+    const ref = [tag, "main"].find((ref) =>
+      note.includes(`**English** | [简体中文](${NOTES_URL}/${ref}/${translationRelative})`),
+    );
+    if (!ref) throw new Error(`add an absolute Chinese language link for ${tag} to ${relative} (see docs/release/README.md)`);
+    if (!translation.includes(`[English](${NOTES_URL}/${ref}/${relative}) | **简体中文**`)) {
+      throw new Error(`add the matching absolute English language link to ${translationRelative}`);
+    }
+  }
+
+  return { tag, path, lines: note.trim().split("\n").length, translationPath: bilingual ? translationPath : undefined };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -55,8 +73,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const index = argv.indexOf("--tag");
   const tag = index === -1 ? process.env.GITHUB_REF_NAME : argv[index + 1];
   try {
-    const { lines } = checkReleaseNote(tag);
-    console.error(`check-release-note: docs/release/${tag}.md (${lines} lines)`);
+    const { lines, translationPath } = checkReleaseNote(tag);
+    console.error(`check-release-note: docs/release/${tag}.md (${lines} lines)${translationPath ? " + Simplified Chinese" : ""}`);
   } catch (error) {
     console.error(`check-release-note: ${error.message}`);
     process.exit(1);

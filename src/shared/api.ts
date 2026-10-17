@@ -1,4 +1,5 @@
 import { Ipc } from "@shared/ipc";
+import type { BrowserLibrary, BrowserClearData, BrowserDownloadAction, BrowserShortcut } from "./browser-workspace";
 import type { SubmitPromptRequest } from "./prompt-submission";
 import type { DagGraph, DagOutputPage } from "@shared/dag";
 import type { ScheduledTask, ScheduledTaskDraft, ScheduledTaskPatch, ScheduledTaskRun, ScheduledTaskSnapshot } from "@shared/schedules";
@@ -64,6 +65,10 @@ import type {
   AppUpdateState,
   GitBranch,
   GitDiffSource,
+  GitCommitOptions,
+  GitComparison,
+  GitHistory,
+  GitHistoryScope,
   GitStatus,
   GitWorktree,
   TerminalDataEvent,
@@ -251,6 +256,8 @@ export function createFastVibeApi(t: ApiTransport) {
        */
       getSnapshot: (conversationId?: string, fromEntryId?: string, historyLimit?: number): Promise<ConversationSnapshot> =>
         t.invoke(Ipc.engineGetSnapshot, { conversationId, fromEntryId, ...(historyLimit !== undefined ? { historyLimit } : {}) }),
+      getMessage: (conversationId: string, entryId: string): Promise<{ conversationId: string; message: ChatMessage }> =>
+        t.invoke(Ipc.engineGetMessage, { conversationId, entryId }),
       getMessagesPage: (payload: import("./transcript-page").TranscriptPageRequest): Promise<ConversationHistoryPage> =>
         t.invoke(Ipc.engineGetMessagesPage, payload),
       getStats: (conversationId?: string): Promise<SessionStats> =>
@@ -278,6 +285,7 @@ export function createFastVibeApi(t: ApiTransport) {
       onConversationReady: (listener: (payload: ConversationReadyEvent) => void): (() => void) => t.subscribe(Ipc.conversationReady, listener),
     },
     providers: {
+      test: (id: string, model: string): Promise<import("./provider-test").ProviderTestResult> => t.invoke(Ipc.providersTest, { id, model }),
       list: (): Promise<ProviderConfig[]> => t.invoke(Ipc.providersList),
       native: (): Promise<NativeProviderConfig[]> => t.invoke(Ipc.providersNative),
       addNative: (payload: {
@@ -468,11 +476,15 @@ export function createFastVibeApi(t: ApiTransport) {
       gitCheckout: (cwd: string, branch: string): Promise<GitStatus> => t.invoke(Ipc.workspaceGitCheckout, { cwd, branch }),
       gitCreateBranch: (cwd: string, branch: string): Promise<GitStatus> => t.invoke(Ipc.workspaceGitCreateBranch, { cwd, branch }),
       gitStage: (cwd: string, paths?: string[], all?: boolean): Promise<GitStatus> => t.invoke(Ipc.workspaceGitStage, { cwd, paths, all }),
-      gitCommit: (cwd: string, message: string): Promise<GitStatus> => t.invoke(Ipc.workspaceGitCommit, { cwd, message }),
-      gitGenerateCommitMessage: (cwd: string, conversationId?: string): Promise<string> =>
-        t.invoke(Ipc.workspaceGitGenerateCommitMessage, { cwd, conversationId }),
-      gitDiff: (cwd: string, path?: string, source?: GitDiffSource): Promise<string> =>
-        t.invoke(Ipc.workspaceGitDiff, { cwd, path, source }),
+      gitCommit: (cwd: string, message: string, options?: GitCommitOptions): Promise<GitStatus> => t.invoke(options?.amend ? Ipc.workspaceGitAmend : Ipc.workspaceGitCommit, { cwd, message }),
+      gitGenerateCommitMessage: (cwd: string, conversationId?: string, stagedOnly?: boolean): Promise<string> =>
+        t.invoke(Ipc.workspaceGitGenerateCommitMessage, { cwd, conversationId, stagedOnly }),
+      gitDiff: (cwd: string, path?: string, source?: GitDiffSource, revision?: string): Promise<string> =>
+        t.invoke(Ipc.workspaceGitDiff, { cwd, path, source, revision }),
+      gitComparison: (cwd: string, revision?: string): Promise<GitComparison> =>
+        t.invoke(Ipc.workspaceGitComparison, { cwd, revision }),
+      gitHistory: (cwd: string, skip?: number, scope?: GitHistoryScope, tips?: string[]): Promise<GitHistory> =>
+        t.invoke(Ipc.workspaceGitHistory, { cwd, skip, scope, tips }),
       gitUnstage: (cwd: string, paths: string[]): Promise<GitStatus> =>
         t.invoke(Ipc.workspaceGitUnstage, { cwd, paths }),
       gitDiscard: (cwd: string, paths: string[]): Promise<GitStatus> =>
@@ -644,7 +656,13 @@ export function createFastVibeApi(t: ApiTransport) {
     browser: {
       listProfiles: (): Promise<BrowserProfileInfo[]> => t.invoke(Ipc.browserListProfiles),
       importProfile: (profile: BrowserProfileInfo, target?: "builtin" | "system"): Promise<BrowserImportResult> => t.invoke(Ipc.browserImportProfile, { profile, target }),
-      clearData: (): Promise<void> => t.invoke(Ipc.browserClearData),
+      clearData: (options?: BrowserClearData): Promise<void> => t.invoke(Ipc.browserClearData, options),
+      library: (): Promise<BrowserLibrary> => t.invoke(Ipc.browserLibrary),
+      downloadAction: (id: string, action: BrowserDownloadAction): Promise<void> => t.invoke(Ipc.browserDownloadAction, { id, action }),
+      capture: (guestId: number): Promise<string | null> => t.invoke(Ipc.browserCapture, { guestId }),
+      print: (guestId: number): Promise<void> => t.invoke(Ipc.browserPrint, { guestId }),
+      onLibraryChanged: (listener: () => void): (() => void) => t.subscribe(Ipc.browserLibraryChanged, listener),
+      onShortcut: (listener: (payload: { guestId: number; command: BrowserShortcut; at: number }) => void): (() => void) => t.subscribe(Ipc.browserShortcut, listener),
       listEngines: (): Promise<Array<{ id: string; label: string }>> => t.invoke(Ipc.browserListEngines),
       onRequest: (listener: (payload: { id: string; request: BrowserRequest }) => void): (() => void) => t.subscribe(Ipc.browserRequest, listener),
       respond: (payload: { id: string; ok: boolean; result?: unknown; error?: string }): void => {

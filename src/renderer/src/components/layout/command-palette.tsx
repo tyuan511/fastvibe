@@ -11,6 +11,7 @@ import {
   CommandList,
   CommandShortcut,
 } from "@/components/ui/command";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Kbd } from "@/components/ui/kbd";
 import { useTranslation } from "react-i18next";
 import { i18n } from "@/lib/i18n";
@@ -114,7 +115,7 @@ export function CommandPalette({
   projects: Project[];
   activeId: string | null;
   onOpenChange: (open: boolean) => void;
-  onSelectChat: (id: string) => void;
+  onSelectChat: (id: string, entryId?: string) => void;
   onNewChat: () => void;
   onAddProject: () => void;
   onOpenSettings: (section: SectionId) => void;
@@ -122,6 +123,7 @@ export function CommandPalette({
 }): JSX.Element {
   const { t, i18n } = useTranslation("app");
   const [query, setQuery] = useState("");
+  const [includeArchived, setIncludeArchived] = useState(false);
   const [hits, setHits] = useState<ConversationSearchHit[]>([]);
   const archived = useArchivedIds();
   const newChatShortcut = useShortcutLabel("newChat");
@@ -171,9 +173,9 @@ export function CommandPalette({
   const listed = useMemo(
     () =>
       conversations
-        .filter((item) => item.preview && !archived.has(item.id))
-        .sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id)),
-    [conversations, archived],
+        .filter((item) => item.preview && (includeArchived || !archived.has(item.id)))
+        .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id)),
+    [conversations, archived, includeArchived],
   );
 
   const hitMap = useMemo(() => new Map(hits.map((hit) => [hit.id, hit.snippet])), [hits]);
@@ -209,7 +211,7 @@ export function CommandPalette({
 
   function selectChat(id: string): void {
     close();
-    onSelectChat(id);
+    onSelectChat(id, hits.find((hit) => hit.id === id)?.entryId);
   }
 
   function runAction(id: ActionId): void {
@@ -242,6 +244,10 @@ export function CommandPalette({
         }}
       >
         <CommandInput placeholder={t("palette.placeholder")} value={query} onValueChange={setQuery} />
+        <label className="flex items-center gap-2 border-b px-3 py-2 text-xs text-muted-foreground">
+          <Checkbox checked={includeArchived} onCheckedChange={(value) => setIncludeArchived(value === true)} />
+          {t("palette.includeArchived")}
+        </label>
         <CommandList className="max-h-[min(28rem,60vh)]">
           {empty ? <CommandEmpty>{t("palette.empty")}</CommandEmpty> : null}
           {chats.length > 0 ? (
@@ -266,6 +272,7 @@ export function CommandPalette({
                     <span className="flex min-w-0 flex-1 flex-col">
                       <span className="truncate">
                         <Marked parts={titleParts} />
+                        {archived.has(item.id) ? <span className="ml-2 text-xs text-muted-foreground">{t("palette.archived")}</span> : null}
                       </span>
                       {body ? (
                         <span className="truncate text-xs text-muted-foreground">

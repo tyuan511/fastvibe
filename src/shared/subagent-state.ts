@@ -26,6 +26,24 @@ export function subagentFinished(status: string | undefined): boolean {
   return status === "completed" || status === "error" || status === "aborted";
 }
 
+/** Flatten the three delegation modes using the same order as the runner. */
+export function subagentEntries(args: unknown): Array<{ agent: string; task?: string }> {
+  const input = record(args);
+  if (!input) return [];
+  const entries: Array<{ agent: string; task?: string }> = [];
+  const add = (value: unknown): void => {
+    const item = record(value);
+    if (typeof item?.agent === "string") {
+      entries.push({ agent: item.agent, task: typeof item.task === "string" ? item.task : undefined });
+    }
+  };
+  add(input);
+  for (const key of ["tasks", "chain"]) {
+    if (Array.isArray(input[key])) for (const item of input[key]) add(item);
+  }
+  return entries;
+}
+
 /** Main and renderer use the same reducer. Only the runner's final lifecycle ends
  * a delegation: agent_end can retry, and agent_settled precedes transcript caching. */
 export function reduceSubagent(previous: SubagentInfo | undefined, event: Event, now = Date.now()): SubagentInfo | undefined {

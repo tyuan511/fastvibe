@@ -32,7 +32,7 @@ export type DiffDocument = {
   numberWidth: number;
 };
 
-const HUNK = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
+const HUNK = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
 const META =
   /^(?:diff --git |diff --|index [0-9a-f]{4,}\.\.[0-9a-f]{4,}|--- |\+\+\+ |old mode |new mode |new file mode |deleted file mode |similarity index |dissimilarity index |rename from |rename to |copy from |copy to |Binary files |\\ No newline)/;
 /** pi's numbered row: marker, a right-aligned number field, one space, the line. */
@@ -48,17 +48,21 @@ export function parseDiff(text: string): DiffDocument {
   let oldNo = 0;
   let newNo = 0;
   let counted = false;
+  let oldRemaining = 0;
+  let newRemaining = 0;
 
   for (const line of lines) {
     const hunk = HUNK.exec(line);
     if (hunk) {
       oldNo = Number(hunk[1]);
-      newNo = Number(hunk[2]);
-      counted = true;
+      newNo = Number(hunk[3]);
+      oldRemaining = Number(hunk[2] ?? 1);
+      newRemaining = Number(hunk[4] ?? 1);
+      counted = oldRemaining > 0 || newRemaining > 0;
       rows.push({ kind: "hunk", marker: "", text: line });
       continue;
     }
-    if (META.test(line)) {
+    if (META.test(line) && (!counted || line.startsWith("diff --") || line.startsWith("\\ No newline"))) {
       rows.push({ kind: "meta", marker: "", text: line });
       continue;
     }
@@ -70,8 +74,9 @@ export function parseDiff(text: string): DiffDocument {
     const kind: DiffRowKind = marker === "+" ? "added" : marker === "-" ? "removed" : "context";
     const row: DiffRow = { kind, marker, text: marker ? line.slice(1) : line };
     if (counted) {
-      if (kind !== "added") row.oldNumber = oldNo++;
-      if (kind !== "removed") row.newNumber = newNo++;
+      if (kind !== "added") { row.oldNumber = oldNo++; oldRemaining--; }
+      if (kind !== "removed") { row.newNumber = newNo++; newRemaining--; }
+      counted = oldRemaining > 0 || newRemaining > 0;
     }
     rows.push(row);
   }
@@ -123,4 +128,37 @@ function numberWidth(rows: DiffRow[]): number {
     max = Math.max(max, row.oldNumber ?? 0, row.newNumber ?? 0);
   }
   return max === 0 ? 0 : String(max).length;
+}
+
+export type SplitDiffRow = { left?: DiffRow; right?: DiffRow; header?: DiffRow; sourceIndex: number };
+
+/** Pair only adjacent removals/additions in the same change block; context and hunks are boundaries. */
+export function splitDiffRows(rows: DiffRow[]): SplitDiffRow[] {
+  const result: SplitDiffRow[] = [];
+  for (let i = 0; i < rows.length;) {
+    const row = rows[i];
+    if (row.kind === "removed" || row.kind === "added") {
+      const start = i;
+      const left: DiffRow[] = [];
+      const right: DiffRow[] = [];
+      while (i < rows.length && (rows[i].kind === "removed" || rows[i].kind === "added")) {
+        (rows[i].kind === "removed" ? left : right).push(rows[i++]);
+      }
+      for (let j = 0; j < Math.max(left.length, right.length); j++) result.push({ left: left[j], right: right[j], sourceIndex: start + j });
+    } else {
+      result.push(row.kind === "context" ? { left: row, right: row, sourceIndex: i } : { header: row, sourceIndex: i });
+      i++;
+    }
+  }
+  return result;
+}
+
+/** Minimal changed range, preserving matching prefix/suffix without injecting HTML. */
+export function changedRange(text: string, other: string): [number, number] {
+  let start = 0;
+  while (start < text.length && start < other.length && text[start] === other[start]) start++;
+  let end = text.length;
+  let otherEnd = other.length;
+  while (end > start && otherEnd > start && text[end - 1] === other[otherEnd - 1]) { end--; otherEnd--; }
+  return [start, end];
 }

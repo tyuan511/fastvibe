@@ -1,3 +1,5 @@
+**English** | [简体中文](https://github.com/tyuan511/fastvibe/blob/main/docs/release/app-v0.5.8_zh-CN.md)
+
 ### Improved
 
 - **Smoother chat.** Streaming replies repaint 30 times a second instead of on every frame, so long answers no longer stutter on 90/120 Hz screens. Typing in the message box no longer redraws the whole conversation. Large conversations, and replies carried over the relay, are now decoded off the main thread, so opening a long chat or reconnecting no longer freezes the screen for a moment.

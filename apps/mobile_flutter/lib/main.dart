@@ -9,6 +9,7 @@ import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'account/account.dart';
 import 'account/official_devices.dart';
 import 'app_info.dart';
+import 'chat/download_maintenance.dart';
 import 'chat/model_picker.dart';
 import 'i18n/core.dart';
 import 'notifications/local.dart';
@@ -43,6 +44,7 @@ Future<void> startApp({bool checkUpdates = true}) async {
     _startAccount(),
   ]);
   runApp(FastVibeApp(checkUpdates: checkUpdates));
+  unawaited(cleanupSavedDownloads());
   // After the first frame is queued, not before it: installing asks the system for
   // notification permission, and a dialog the person has not answered yet must not be
   // what keeps the app from drawing. A launching notification is opened in a post-frame

@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
+import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -9,6 +10,7 @@ import { providerLabel } from "@/lib/provider-label";
 import { cn } from "@/lib/utils";
 import type { UsageDay, UsageModelBreakdown, UsageRange, UsageStats } from "@shared/types";
 import { CartesianGrid, Cell, Line, LineChart, Pie, PieChart, XAxis, YAxis } from "recharts";
+import { UsageBreakdown } from "./usage-breakdown";
 
 const RANGE_KEYS: UsageRange[] = ["7d", "30d", "90d", "365d", "all"];
 const RANGE_LABEL_KEYS: Record<UsageRange, string> = {
@@ -31,6 +33,7 @@ export function UsageSettings(): JSX.Element {
   const [stats, setStats] = useState<UsageStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
+  const [refresh, setRefresh] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -53,7 +56,7 @@ export function UsageSettings(): JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [range]);
+  }, [range, refresh]);
 
   const totals = stats?.totals;
   const peakTokens = stats ? Math.max(0, ...stats.days.map((day) => day.tokens)) : 0;
@@ -65,6 +68,7 @@ export function UsageSettings(): JSX.Element {
         <h2 className="text-xl font-medium tracking-tight">{t("usage.title")}</h2>
         <span className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium">{t("usage.appUsage")}</span>
       </header>
+      {stats ? <UsageBreakdown stats={stats} /> : null}
 
       <section className="grid grid-cols-2 overflow-hidden rounded-xl bg-muted/45 sm:grid-cols-5">
         <SummaryItem label={t("usage.totalTokenCount")} value={totals ? formatCompact(totals.tokens, i18n.language) : "—"} />
@@ -101,7 +105,7 @@ export function UsageSettings(): JSX.Element {
           </div>
         </div>
         {failed ? (
-          <p className="py-12 text-center text-sm text-muted-foreground">{t("usage.loadFailed")}</p>
+          <div className="py-8 text-center text-sm text-muted-foreground"><p>{t("usage.loadFailed")}</p><Button variant="outline" size="sm" className="mt-2" onClick={() => setRefresh((value) => value + 1)}>{t("usage.retry")}</Button></div>
         ) : stats ? (
           <Heatmap stats={stats} view={activityView} dimmed={loading} />
         ) : (

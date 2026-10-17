@@ -12,6 +12,7 @@ import { runDagTool } from "../src/main/dag-tools.ts";
 function setup(agents: Array<{ name: string; instructions: string; tools?: string[]; model?: string; thinkingLevel?: string }> = []): {
   call: (action: string, input?: Record<string, unknown>, signal?: AbortSignal) => ReturnType<typeof runDagTool>;
   finish: (id: string, result?: { status?: "completed" | "failed"; output?: string; error?: string }) => void;
+  callAs: (nodeId: string, action: string, input?: Record<string, unknown>) => ReturnType<typeof runDagTool>;
   store: DagStore;
 } {
   const store = new DagStore(join(mkdtempSync(join(tmpdir(), "fastvibe-dagtool-")), "dag.json"));
@@ -25,6 +26,7 @@ function setup(agents: Array<{ name: string; instructions: string; tools?: strin
   return {
     store,
     call: (action, input, signal) => runDagTool({ store, scheduler, agents: () => agents }, { action, input }, "c1", signal),
+    callAs: (nodeId, action, input) => runDagTool({ store, scheduler, agents: () => agents, scope: { nodeId, runId: store.node("c1", nodeId)!.runId! } }, { action, input }, "c1"),
     finish: (id, result) => waiting.get(id)?.({ status: "completed", output: `out ${id}`, ...result }),
   };
 }
@@ -37,6 +39,48 @@ const task = (ref: string, deps?: string[]) => ({
   ...(deps ? { depends_on: deps } : {}),
 });
 
+for (const [label, tasks] of [
+  ["one independent task", [task("a")]],
+  ["independent parallel tasks", [task("a"), task("b")]],
+  ["empty dependency lists", [task("a", []), task("b", [])]],
+  ["blank dependencies", [task("a", [" "])]],
+  ["a singleton coordinator", [{ ...task("a"), coordinator: true }]],
+  ["an independent task mixed into a valid graph", [task("a"), task("b", ["a"]), task("c")]],
+] as const) {
+  test(`add redirects ${label} to subagent without creating a graph`, async () => {
+    const { call, store } = setup();
+    const result = await call("add", { tasks });
+    assert.equal(result.ok, false);
+    assert.match(String(!result.ok && result.error), /subagent/);
+    assert.equal(store.get("c1"), undefined);
+    const next = await call("add", { tasks: [task("a"), task("b", ["a"])] });
+    assert.equal(next.ok, true);
+    assert.ok(store.node("c1", "T-0001"), "rejected calls must not allocate node ids");
+  });
+}
+
+test("add rejects an unrelated task in an existing graph but allows one depending on an existing node", async () => {
+  const { call, store } = setup();
+  await call("add", { tasks: [task("a"), task("b", ["a"])] });
+  const before = JSON.stringify(store.get("c1"));
+  const refused = await call("add", { tasks: [task("unrelated")] });
+  assert.equal(refused.ok, false);
+  assert.match(String(!refused.ok && refused.error), /subagent/);
+  assert.equal(JSON.stringify(store.get("c1")), before);
+  const added = await call("add", { tasks: [task("c", ["t-2"])] });
+  assert.equal(added.ok, true);
+  assert.deepEqual(store.node("c1", "T-0003")?.dependsOn, ["T-0002"]);
+});
+
+test("an existing coordinator may add standalone children within its owned scope", async () => {
+  const { call, callAs, store } = setup();
+  await call("add", { tasks: [{ ...task("module"), coordinator: true }, task("review", ["module"])] });
+  const result = await callAs("T-0001", "add", { tasks: [task("child")] });
+  assert.equal(result.ok, true);
+  assert.equal(store.node("c1", "T-0003")?.parentId, "T-0001");
+  assert.equal(store.node("c1", "T-0003")?.status, "running");
+});
+
 test("add: tasks get T- ids, start on their own, and the reply names them", async () => {
   const { call, store } = setup();
   const result = await call("add", { tasks: [task("a"), task("b", ["a"])] });
@@ -47,6 +91,16 @@ test("add: tasks get T- ids, start on their own, and the reply names them", asyn
   assert.equal(store.node("c1", "T-0001")?.status, "running");
   assert.equal(store.node("c1", "T-0002")?.status, "pending");
   assert.deepEqual(store.node("c1", "T-0001")?.profile.tools, ["read", "grep"]);
+});
+
+test("add allows parallel branches when their results feed a dependent task", async () => {
+  const { call, store } = setup();
+  const result = await call("add", { tasks: [task("a"), task("b"), task("merge", ["a", "b"])] });
+  assert.equal(result.ok, true);
+  assert.equal(store.node("c1", "T-0001")?.status, "running");
+  assert.equal(store.node("c1", "T-0002")?.status, "running");
+  assert.deepEqual(store.node("c1", "T-0003")?.dependsOn, ["T-0001", "T-0002"]);
+  assert.equal(store.node("c1", "T-0003")?.status, "pending");
 });
 
 test("add: a bad batch is refused whole, with the reason in words the agent can act on", async () => {
@@ -63,7 +117,7 @@ test("add: a bad batch is refused whole, with the reason in words the agent can 
 
 test("add: naming a configured agent reuses it, and a name that matches none is refused", async () => {
   const { call, store } = setup([{ name: "Reviewer", instructions: "review carefully", tools: ["read"], model: "openai/gpt-x", thinkingLevel: "high" }]);
-  const reused = await call("add", { tasks: [{ ...task("a"), agent: "reviewer" }] });
+  const reused = await call("add", { tasks: [{ ...task("a"), agent: "reviewer" }, task("b", ["a"])] });
   assert.equal(reused.ok, true);
   const node = store.node("c1", "T-0001");
   assert.equal(node?.agent, "Reviewer");
@@ -76,9 +130,10 @@ test("add: naming a configured agent reuses it, and a name that matches none is 
 
 test("wait returns when everything is done and previews outputs; failure is a result, not an error", async () => {
   const { call, finish } = setup();
-  await call("add", { tasks: [task("a"), task("b")] });
+  await call("add", { tasks: [task("a"), task("b", ["a"])] });
   const waiting = call("wait", { timeoutSeconds: 5, include_outputs: true });
   finish("T-0001", { output: "x".repeat(2000) });
+  await new Promise((done) => setImmediate(done));
   finish("T-0002", { status: "failed", error: "boom" });
   const result = await waiting;
   assert.equal(result.ok, true);
@@ -93,7 +148,7 @@ test("wait on an empty graph says to add tasks first; an aborted wait leaves the
   const { call, store } = setup();
   const empty = await call("wait", {});
   assert.equal(empty.ok, false);
-  await call("add", { tasks: [task("a")] });
+  await call("add", { tasks: [task("a"), task("b", ["a"])] });
   const controller = new AbortController();
   const waiting = call("wait", { timeoutSeconds: 60 }, controller.signal);
   controller.abort();
@@ -129,20 +184,20 @@ test("an unknown action lists the real ones", async () => {
 
 test("resume: stopped nodes start again and the reply says so; with nothing stopped it points at dag_retry", async () => {
   const { call, store } = setup();
-  await call("add", { tasks: [task("a")] });
+  await call("add", { tasks: [task("a"), task("b", ["a"])] });
   const none = await call("resume", {});
   assert.match(String(none.ok && (none.value as { note: string }).note), /dag_retry/);
   await call("cancel", {});
   await new Promise((done) => setImmediate(done));
   assert.equal(store.node("c1", "T-0001")?.status, "cancelled");
   const resumed = await call("resume", {});
-  assert.deepEqual(resumed.ok && (resumed.value as { resumed: string[] }).resumed, ["T-0001"]);
+  assert.deepEqual(resumed.ok && (resumed.value as { resumed: string[] }).resumed, ["T-0001", "T-0002"]);
   assert.equal(store.node("c1", "T-0001")?.status, "running");
 });
 
 test("wait refuses an id that does not exist instead of returning at once as if it had finished", async () => {
   const { call } = setup();
-  await call("add", { tasks: [task("a")] });
+  await call("add", { tasks: [task("a"), task("b", ["a"])] });
   const result = await call("wait", { ids: ["T-0099"], timeoutSeconds: 5 });
   assert.equal(result.ok, false);
   assert.match(String(!result.ok && result.error), /T-0099/);

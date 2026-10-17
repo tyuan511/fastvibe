@@ -23,10 +23,11 @@ function visibleUser(message: Record<string, unknown>): boolean {
   return false;
 }
 
-/** Boundaries are complete user turns. Never split a tool call from a later result,
- * even when a steering prompt was inserted between them. Limits are deliberately soft. */
-export function transcriptWindow(entries: readonly Entry[], requested = 12, beforeEntryId?: string): Window {
-  const limit = Number.isFinite(requested) ? Math.max(1, Math.min(50, Math.floor(requested))) : 12;
+const indexes = new WeakMap<readonly Entry[], { boundaries: number[]; byId: Map<string, number> }>();
+
+function indexTurns(entries: readonly Entry[]) {
+  const cached = indexes.get(entries);
+  if (cached) return cached;
   const results = new Map<string, number>();
   for (let index = 0; index < entries.length; index++) {
     const message = entries[index].message;
@@ -36,15 +37,15 @@ export function transcriptWindow(entries: readonly Entry[], requested = 12, befo
     }
   }
   const boundaries: number[] = [];
+  const byId = new Map<string, number>();
   let through = -1;
-  let end = beforeEntryId ? -1 : entries.length;
   for (let index = 0; index < entries.length; index++) {
     const entry = entries[index];
     const message = entry.message;
     if (entry.type !== "message" || !record(message)) continue;
     if (index > through && visibleUser(message)) {
       boundaries.push(index);
-      if (entry.id === beforeEntryId) end = index;
+      byId.set(entry.id, index);
     }
     if (message.role === "assistant" && Array.isArray(message.content)) {
       for (const part of message.content) {
@@ -54,11 +55,39 @@ export function transcriptWindow(entries: readonly Entry[], requested = 12, befo
       }
     }
   }
+  const result = { boundaries, byId };
+  indexes.set(entries, result);
+  return result;
+}
+
+/** Boundaries are complete user turns. Never split a tool call from a later result,
+ * even when a steering prompt was inserted between them. Limits are deliberately soft. */
+export function transcriptWindow(entries: readonly Entry[], requested = 12, beforeEntryId?: string): Window {
+  const limit = Number.isFinite(requested) ? Math.max(1, Math.min(50, Math.floor(requested))) : 12;
+  const { boundaries, byId } = indexTurns(entries);
+  const end = beforeEntryId ? byId.get(beforeEntryId) ?? -1 : entries.length;
   if (end < 0) return { start: 0, end: 0, beforeEntryId: null, found: false };
-  const earlier = boundaries.filter((index) => index < end);
+  const count = boundaryAtOrAfter(boundaries, end);
   // The first turn includes any preceding notices/settings, avoiding an empty extra page.
-  const start = earlier.length > limit ? earlier[earlier.length - limit] : 0;
+  const start = count > limit ? boundaries[count - limit] : 0;
   return { start, end, beforeEntryId: start > 0 ? entries[start].id : null, found: true };
+}
+
+/** Enough of this entry's complete turn to attach every result to its tool call. */
+export function transcriptEntryEnd(entries: readonly Entry[], start: number): number {
+  const { boundaries } = indexTurns(entries);
+  return boundaries[boundaryAtOrAfter(boundaries, start + 1)] ?? entries.length;
+}
+
+function boundaryAtOrAfter(boundaries: number[], end: number): number {
+  let low = 0;
+  let high = boundaries.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (boundaries[middle] < end) low = middle + 1;
+    else high = middle;
+  }
+  return low;
 }
 
 function record(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null; }

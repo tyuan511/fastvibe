@@ -7,13 +7,16 @@ import { mapEngineMessages } from "../engine/map-messages";
 import { renderExtensionMessage } from "./tui-bridge";
 import { isRecord } from "./process-manager-events";
 import { externalizeToolResultMessages } from "../engine/tool-images";
-import { transcriptWindow } from "../engine/transcript-window";
+import { transcriptWindow, transcriptEntryEnd } from "../engine/transcript-window";
 import type { TranscriptPageInfo } from "../../shared/transcript-page";
 
 export type TranscriptProjectionDeps = {
-  session: AgentSession;
+  session?: AgentSession;
+  /** Read-only persisted branch: no agent or extensions need to be initialized. */
+  branch?: ReturnType<AgentSession["sessionManager"]["getBranch"]>;
   conversationId?: string;
   fromEntryId?: string;
+  entryOnly?: boolean;
   page?: { turnLimit: number; beforeEntryId?: string };
   reasoning: { get(entryId: string): ThinkingTiming[] | undefined };
   /** Where pictures a tool returned are saved; the transcript then carries their paths, not their bytes. */
@@ -34,11 +37,11 @@ export function projectSessionMessages(
   deps: TranscriptProjectionDeps,
 ): { messages: ChatMessage[]; anchored: boolean; history?: TranscriptPageInfo; pageAnchorFound?: boolean } {
   const { session, conversationId, fromEntryId } = deps;
-  const branch = [...session.sessionManager.getBranch()];
+  const branch = deps.branch ?? session?.sessionManager.getBranch() ?? [];
   const window = deps.page ? transcriptWindow(branch, deps.page.turnLimit, deps.page.beforeEntryId) : undefined;
   const start = window ? window.start : fromEntryId ? branch.findIndex((entry) => entry.id === fromEntryId) : 0;
   const anchored = start >= 0;
-  const end = window?.end ?? branch.length;
+  const end = deps.entryOnly && anchored ? transcriptEntryEnd(branch, start) : window?.end ?? branch.length;
   const entries = branch.slice(anchored ? start : 0, end);
   const entryIds = new Map<unknown, string>();
   const timings = new Map<string, ThinkingTiming[]>();
@@ -66,11 +69,11 @@ export function projectSessionMessages(
     if (blocks) timings.set(entry.id, blocks);
   }
 
-  const runner = session.extensionRunner;
+  const runner = session?.extensionRunner;
   const renderCustom = (message: Record<string, unknown>): TuiRun[][] | undefined => {
     const customType = typeof message.customType === "string" ? message.customType : undefined;
     if (!customType) return undefined;
-    const renderer = runner.getMessageRenderer(customType);
+    const renderer = runner?.getMessageRenderer(customType);
     if (!renderer) return undefined;
     return renderExtensionMessage(renderer, message, deps.widgetWidth);
   };
@@ -83,8 +86,8 @@ export function projectSessionMessages(
   );
   insertModelSwitches(messages, branch, anchored ? start : 0, end);
 
-  if (!deps.page?.beforeEntryId && conversationId && deps.running.get(conversationId) === true && !deps.compacting.has(conversationId)) {
-    const [inFlight] = mapEngineMessages(session.state.streamingMessage ? [session.state.streamingMessage] : []);
+  if (!deps.entryOnly && !deps.page?.beforeEntryId && conversationId && deps.running.get(conversationId) === true && !deps.compacting.has(conversationId)) {
+    const [inFlight] = mapEngineMessages(session?.state.streamingMessage ? [session.state.streamingMessage] : []);
     if (inFlight?.role === "assistant") {
       messages.push({
         ...inFlight,
@@ -105,7 +108,7 @@ export function projectSessionMessages(
       });
     }
   }
-  if (!deps.page?.beforeEntryId && conversationId && deps.compacting.has(conversationId)) {
+  if (!deps.entryOnly && !deps.page?.beforeEntryId && conversationId && deps.compacting.has(conversationId)) {
     const compact = { status: "running" as const, reason: deps.compacting.get(conversationId) };
     // After the reply, not inside it. Attaching the running card to the last
     // assistant is what drew 「正在压缩上下文」 under the previous turn.

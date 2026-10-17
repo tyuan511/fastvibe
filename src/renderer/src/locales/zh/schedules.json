@@ -72,7 +72,8 @@
     "interrupted": "已中断",
     "missed": "已错过",
     "paused": "已暂停",
-    "scheduled": "已排期"
+    "scheduled": "已排期",
+    "queued": "排队中"
   },
   "summary": {
     "once": "{{time}} 运行一次",
@@ -95,5 +96,14 @@
   "endedAt": "结束于 {{time}}",
   "deleteTitle": "删除定时任务？",
   "deleteDesc": "「{{name}}」和它的运行记录会被删除，此操作无法撤销。",
-  "deleteAction": "删除"
+  "deleteAction": "删除",
+  "timeLimit": "执行时限",
+  "minutes": "{{count}} 分钟",
+  "missedPolicy": "错过时间后",
+  "missedRunLatest": "24 小时内补跑最近一次",
+  "missedSkip": "超过 1 分钟就跳过",
+  "queueReason": "已进入执行队列，等待前面的定时任务结束。",
+  "cancelQueued": "取消排队",
+  "queuedNotice": "已加入执行队列",
+  "seconds": "{{count}} 秒"
 }

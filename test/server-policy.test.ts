@@ -109,10 +109,15 @@ test("the denied set is exactly what the UI explains, so a new denial cannot go 
     "account:login",
     "account:logout",
     "app:export-logs",
+    // The browser pane is desktop-only, so remote clients never offer these controls.
+    "browser:capture",
     "browser:clear-data",
+    "browser:download-action",
     "browser:import-profile",
+    "browser:library",
     "browser:list-engines",
     "browser:list-profiles",
+    "browser:print",
     "browser:response",
     // 设置 › 电脑操控 guards every one of these with `blockedRemotely`: the pane renders
     // read-only from a remote client and says why, rather than offering buttons that

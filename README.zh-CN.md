@@ -1,102 +1,69 @@
+<p align="center">
+  <img src="resources/icon.png" width="96" height="96" alt="FastVibe 图标" />
+</p>
+
 # FastVibe
 
-[English README](README.md) · 中文 README
+[English](README.md) | **简体中文**
 
+[![最新桌面版](https://img.shields.io/github/v/release/tyuan511/fastvibe?display_name=tag&sort=semver)](https://github.com/tyuan511/fastvibe/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Electron](https://img.shields.io/badge/Electron-44.4.0-47848F?logo=electron&logoColor=white)](https://www.electronjs.org/)
-[![pi coding agent](https://img.shields.io/badge/pi%20coding%20agent-1.2.0-6E56CF)](https://github.com/badlogic/pi-mono)
-[![最新版本](https://img.shields.io/github/v/release/tyuan511/fastvibe?display_name=tag&sort=semver)](https://github.com/tyuan511/fastvibe/releases/latest)
 
-> 基于 **pi coding agent** 的桌面智能体工作台。
+面向代码、文档和日常任务的 AI 智能体工作台。接入你自己的模型，查看智能体的执行过程，在桌面上集中处理对话、文件、终端和 Git 变更。
 
-FastVibe 将 pi coding agent 嵌入 Electron 主进程，把会话、工具调用、扩展和项目工作区整合到一个桌面界面中。
+[下载](#下载) · [开始使用](#开始使用) · [功能](#功能) · [用手机继续工作](#用手机继续工作) · [开发](#开发) · [更新说明 / Release notes](docs/release/README.md)
 
-![FastVibe 界面](docs/images/workspace-zh.webp)
+![FastVibe 工作区：对话与工具调用](docs/images/workspace-zh.webp)
 
 ## 下载
 
-前往 [GitHub Releases](https://github.com/tyuan511/fastvibe/releases/latest) 下载对应平台的安装包：
+前往 [GitHub Releases](https://github.com/tyuan511/fastvibe/releases/latest) 下载桌面端。安装包自带运行环境，无需另装 Node.js 或 pnpm。
 
-- macOS：`.dmg` 或 `.zip`
-- Windows：`.exe`
-- Linux：`.AppImage` 或 `.deb`（x64 与 arm64）
+| 平台 | 架构 | 安装包 |
+| --- | --- | --- |
+| macOS | Apple Silicon / Intel | `.dmg` 或 `.zip` |
+| Windows | x64 | `.exe` 安装程序 |
+| Linux | x64 / arm64 | `.AppImage` 或 `.deb` |
+
+macOS 打开 DMG 后，将 FastVibe 拖入「应用程序」；Windows 运行安装程序；Linux 安装 DEB，或为 AppImage 添加可执行权限后启动。桌面端会检查更新，由你决定何时下载并重启安装。
+
+手机端可从 [Android 发布页](https://github.com/tyuan511/fastvibe/releases?q=app-v&expanded=true) 下载 arm64 APK。iOS 可通过 [Flutter 项目](apps/mobile_flutter/README.md)自行构建。
+
+## 开始使用
+
+1. 打开 **设置 → 供应商**，添加供应商，填入 API Key 或使用受支持的供应商登录方式，再选择需要的模型。也可以接入自己的兼容接口。
+2. 选择文件夹创建项目，或直接新建对话，使用独立的临时工作区。本地项目可以包含多个文件夹和仓库。
+3. 选择模型，描述任务。在对话中查看工具调用和文件变更，按需在旁边打开文件、终端或 Git 审查。
+
+> [!NOTE]
+> 执行任务需要先配置模型供应商。FastVibe 账号登录与供应商配置相互独立，账号用于官方远程连接；模型用量由你选择的供应商计费。
 
 ## 功能
 
-- 基于原生 pi SDK，支持会话、工具调用和 pi 扩展。
-- 多项目工作区，支持会话归档、分支、附件和隔离的 scratch 工作区。
-- 工具调用、编辑 diff、终端输出、思考过程可视化。
-- 目标模式，用于长期任务。
-- 支持 FastVibe、OpenAI 兼容供应商、模型协议配置和 OAuth 登录。
-- 支持 MCP、技能、待办、子 Agent、Git worktree 和用量统计。
-- 可选决策引擎 Jev，用于浏览器操控、电脑操控和批量决策。
-- 可选长期记忆（参考 Codex）：把已结束的对话整理成本地 Markdown 文件，智能体按需读取。
-- 集成文件预览、终端、浏览器操控、电脑操控和 Git 审查侧栏。
-- 支持远程网页 / 手机客户端，以及通过 SSH 连接远程 Linux Agent。
-- 多主题、界面字号、自定义快捷键和自动更新。
+- **围绕任务组织工作。** 管理项目与对话、搜索历史、附加图片和文件、创建对话分支，完成后归档。
+- **看得见的执行过程。** 查看流式回答、思考过程、工具调用和编辑 diff；从对话中预览文件变更，在侧栏阅读 Markdown、代码、CSV、图片等成果。
+- **文件、终端与 Git 集中处理。** 浏览项目的多个文件夹，在文件树中定位变更，搜索终端输出，审查、暂存并提交代码。
+- **持续推进与并行协作。** 支持目标模式、待办、子 Agent、任务依赖和隔离的 Git worktree；可安排定时任务，让结果回到发起任务的对话。
+- **接入自己的模型与工具。** 配置供应商及各模型的接口协议，连接 MCP 服务器，添加技能或 pi 扩展，查看跨对话的 Token 用量和费用估算。
+- **浏览器与电脑操控。** 让智能体操作内嵌浏览器，或在 macOS、Windows 上启用电脑操控；可选用 Jev 决策引擎处理浏览器、电脑和批量决策。
+- **可选长期记忆。** 将已结束对话的经验整理成本地 Markdown，供后续任务读取。默认关闭，可在设置中检查或清除。
+- **跨设备继续工作。** 用 Flutter 手机客户端连接电脑，或从桌面端通过 SSH 连接无图形界面的 Linux Agent。支持中英文界面、多主题、界面缩放和自定义快捷键。
 
-## 决策引擎（Jev）
+## 用手机继续工作
 
-设置 → 决策引擎 可以选择用 **Jev（TypeSafe）** 承担一批「下一步做什么」的判断，逐步应用于以下场景（各自独立开关）：
+在桌面端打开 **设置 → 远程访问**，再从手机 App 连接：
 
-| 场景 | 作用 |
+| 连接方式 | 设置方法 |
 | --- | --- |
-| 浏览器控制 | 浏览器里的连续点击和输入交给决策模型（`browser_task`） |
-| 电脑控制 | 桌面窗口里的操作交给决策模型（`computer_task`） |
-| 批量决策 | 主 Agent 获得 `batch_decide` 工具 |
+| FastVibe 账号 | 两端登录同一个账号，手机自动发现电脑；优先直连，需要时通过中转连接。 |
+| 局域网 | 在电脑上设置远程访问密码；手机连接同一网络，扫码或从「附近的电脑」选择，再输入密码。 |
+| SSH 主机 | 在桌面端的 SSH 主机设置中开启「允许手机连接」，为驻留的 Linux Agent 设置密码。 |
 
-关闭时各场景都走默认路径：主模型直接调用 `browser_*` / `computer_*` 工具。Jev 只服务决策场景，不作为普通对话模型出现在模型列表里，API key 保存在本机，不会回传渲染层。
-
-## 长期记忆
-
-设置 → 长期记忆 只有一个开关，默认关闭。开启后，对话安静六小时后会由模型整理成一份笔记和一份回顾（提示词取自 Codex）；后台智能体再把它们汇总成手册（`MEMORY.md`）和一页摘要（`memory_summary.md`）。每轮对话开始时，智能体会看到这页摘要，需要细节时再去读手册和各对话的摘要。全部是本机上的 Markdown 文件，可以在设置页里打开文件夹，也可以一键清除；关掉开关就不再读取、写入和注入。写入之前会先抹掉其中的密钥。详见 `docs/memory.md`。
-
-## 与 pi 的关系
-
-FastVibe 使用 `@earendil-works/pi-coding-agent` SDK，并将运行数据保存在自己的 userData 目录中，不读写用户的 `~/.pi`。
-
-常用的 pi UI API 已映射到桌面界面：
-
-| pi API | FastVibe 呈现 |
-| --- | --- |
-| `ctx.ui.confirm` | 内联是 / 否面板 |
-| `ctx.ui.select` / `input` / `questions` | 选择、输入和多问题表单 |
-| `ctx.ui.editor` | 多行编辑对话框 |
-| `ctx.ui.notify` | 通知 |
-| `ctx.ui.setStatus` / `setWidget` | 状态行和输入框上方组件 |
-| `ctx.newSession` / `switchSession` | 创建 / 切换会话 |
-
-扩展通过 SDK 的包管理器安装到 FastVibe 的隔离目录。`ctx.ui.custom()` 等依赖终端全屏交互的能力暂不支持，建议使用 `select`、`confirm`、`input`、`editor` 或 `questions` 等语义化 API。
-
-## 安装与开发
-
-需要 **Node.js 24** 与 **pnpm 11**。macOS、Windows、Linux 均可开发与打包。
-
-```bash
-pnpm install
-pnpm dev          # 启动 electron-vite
-```
-
-常用命令：
-
-```bash
-pnpm typecheck    # 类型检查
-pnpm test         # 运行测试
-pnpm sync:models  # 更新 models.dev 快照
-pnpm build        # 构建到 out/
-pnpm dist:mac     # 打包 macOS（另有 dist:win / dist:linux）
-```
-
-浏览器预览：
-
-```bash
-pnpm exec vite src/renderer --config vite.config.ts
-# 访问 /mock.html?theme=dark
-```
+手机使用主机上的同一批对话、模型和任务。连接期间，请保持电脑或远程 Agent 运行且网络可达。
 
 ## 数据与隐私
 
-运行数据保存在 FastVibe 自己的目录中：
+FastVibe 将对话、设置、凭据和运行文件保存在自己的应用数据目录中：
 
 | 平台 | 目录 |
 | --- | --- |
@@ -104,19 +71,47 @@ pnpm exec vite src/renderer --config vite.config.ts
 | Windows | `%APPDATA%\FastVibe\` |
 | Linux | `~/.config/FastVibe/` |
 
-供应商凭据保存在隔离运行时，并注入 SDK 的内存认证存储，不会导出到登录 shell 或应用内终端。浏览器登录 Cookie 只写入 FastVibe 自己的隔离浏览器会话。长期记忆以 Markdown 文件保存在本地的 `runtime/engine/memories`；开启期间，已结束的对话会发给你配置的模型做整理。
+模型请求会发送到你配置的供应商。供应商凭据保存在 FastVibe 的隔离运行时中，不会导出到登录 shell 或应用内终端。内嵌浏览器的 Cookie 使用独立会话保存。
 
-## 项目结构
+长期记忆按需开启。开启后，符合条件的对话会发送给配置的模型做整理，生成的 Markdown 保存在 `runtime/engine/memories/`。关闭后停止整理和使用，已有文件会保留，直到你主动清除。详见[长期记忆说明](docs/memory.md)。
 
-```text
-src/main/       Electron 主进程、IPC、内嵌 Agent 与远程服务
-src/agent/      headless FastVibe Agent
-src/preload/    contextBridge API
-src/renderer/   React 界面
-src/shared/     IPC、App Protocol 与共享类型
-resources/      内置扩展、技能和模型资源
+## 开发
+
+使用 **Node.js 24** 和 **pnpm 11**，支持 macOS、Windows、Linux。
+
+```bash
+git clone https://github.com/tyuan511/fastvibe.git
+cd fastvibe
+pnpm install
+pnpm dev
 ```
 
-## 许可
+| 命令 | 用途 |
+| --- | --- |
+| `pnpm typecheck` | 检查注入脚本、依赖变体和 TypeScript |
+| `pnpm test` | 运行 Node.js 测试 |
+| `pnpm build` | 将桌面端构建到 `out/` |
+| `pnpm dist:mac` / `pnpm dist:win` / `pnpm dist:linux` | 打包桌面端安装程序 |
+| `pnpm sync:models` | 更新 models.dev 快照 |
+| `pnpm flutter:analyze` / `pnpm flutter:test` | 检查 Flutter 手机客户端 |
 
-[MIT](LICENSE) © 2026 FastVibe
+在浏览器中预览界面：
+
+```bash
+pnpm exec vite src/renderer --config vite.config.ts
+# 在 Vite 打印的地址下访问 /mock.html?desktop=1&theme=dark。
+```
+
+FastVibe 在 Electron 主进程中嵌入 `@earendil-works/pi-coding-agent` SDK，使用独立的运行路径，不以 `~/.pi` 为数据根目录。pi 扩展安装在隔离运行时中，其语义化 UI 请求映射为桌面控件。
+
+```text
+src/main/             Electron 主进程、内嵌智能体、IPC 和远程连接
+src/renderer/         React 桌面界面
+src/preload/          Electron 桥接
+src/shared/           共享 API、类型和 App Protocol
+src/agent/            无图形界面的 Linux Agent
+resources/            内置扩展、技能、图标和模型元数据
+apps/mobile_flutter/  iOS / Android 手机客户端
+```
+
+进一步了解[架构与仓库约定](AGENTS.md)、[多文件夹项目](docs/multi-folder-projects.md)、[Agent runtime 发布](docs/agent-runtime.md)和 [Flutter 开发指南](apps/mobile_flutter/README.md)。遇到问题可在 [GitHub Issues](https://github.com/tyuan511/fastvibe/issues) 中附上应用版本、操作系统和复现步骤。

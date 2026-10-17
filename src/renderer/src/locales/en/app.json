@@ -84,7 +84,9 @@
    "folder": "open folder project",
    "settings": "preferences settings",
    "extensions": "extensions plugins marketplace"
-  }
+  },
+  "includeArchived": "Include archived chats",
+  "archived": "Archived"
  },
  "sidebar": {
   "pinned": "Pinned",

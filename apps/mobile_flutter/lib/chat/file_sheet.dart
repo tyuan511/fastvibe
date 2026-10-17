@@ -110,8 +110,10 @@ class FileViewer extends StatefulWidget {
 class _FileViewerState extends State<FileViewer> {
   _Preview? _preview;
   final CancelToken _cancel = CancelToken();
+  CancelToken _downloadCancel = CancelToken();
   double? _progress;
   bool _downloading = false;
+  bool _resumeAvailable = false;
   File? _saved;
 
   @override
@@ -122,8 +124,9 @@ class _FileViewerState extends State<FileViewer> {
 
   @override
   void dispose() {
-    // Leaving the sheet is also giving up a download in flight.
+    // Closing pauses a download; only the explicit Cancel action discards progress.
     _cancel.cancel();
+    _downloadCancel.cancel(discard: false);
     super.dispose();
   }
 
@@ -183,6 +186,7 @@ class _FileViewerState extends State<FileViewer> {
       await _open(saved);
       return;
     }
+    _downloadCancel = CancelToken();
     setState(() {
       _downloading = true;
       _progress = 0;
@@ -193,7 +197,7 @@ class _FileViewerState extends State<FileViewer> {
         widget.file.path,
         directory: directory,
         name: widget.file.name,
-        cancel: _cancel,
+        cancel: _downloadCancel,
         onProgress: (received, total) {
           if (mounted) setState(() => _progress = total <= 0 ? null : received / total);
         },
@@ -201,6 +205,7 @@ class _FileViewerState extends State<FileViewer> {
       if (!mounted) return;
       setState(() {
         _saved = file;
+        _resumeAvailable = false;
         _downloading = false;
         _progress = null;
       });
@@ -216,6 +221,7 @@ class _FileViewerState extends State<FileViewer> {
         _downloading = false;
         _progress = null;
       });
+      setState(() => _resumeAvailable = error is FileTransferError && error.code == 'interrupted');
       if (error is FileTransferError && error.code == 'cancelled') return;
       toastError(describeFileError(error));
     }
@@ -239,6 +245,14 @@ class _FileViewerState extends State<FileViewer> {
           leading: _FileGlyph(kind: file.kind, palette: palette),
         ),
         Expanded(child: _body(palette)),
+        if (_downloading || _resumeAvailable)
+          TextButton(
+            onPressed: () {
+              _downloadCancel.cancel();
+              setState(() => _resumeAvailable = false);
+            },
+            child: Text(t('file.cancelDownload')),
+          ),
         Padding(
           padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
           child: PrimaryButton(
@@ -247,7 +261,7 @@ class _FileViewerState extends State<FileViewer> {
                     'file.downloading',
                     vars: <String, Object?>{'percent': ((_progress ?? 0) * 100).floor()},
                   )
-                : t(_saved == null ? 'file.download' : 'file.open'),
+                : t(_saved == null ? (_resumeAvailable ? 'file.resume' : 'file.download') : 'file.open'),
             icon: _saved == null ? AppIcons.download : AppIcons.fileText,
             enabled: !_downloading,
             onPressed: _download,
@@ -310,6 +324,8 @@ String describeFileError(Object error) {
   if (error is FileTransferError) {
     return switch (error.code) {
       'changed' => t('file.changed'),
+      'interrupted' => t('file.interrupted'),
+      'busy' => t('file.busy'),
       _ => t('file.loadFailed'),
     };
   }

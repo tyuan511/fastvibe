@@ -43,6 +43,17 @@ const ROUTES: Route[] = [
     payload: { conversationId: "conv-1", beforeEntryId: "u-20", turnLimit: 12 }, args: ["conv-1", "u-20", 12],
   },
   {
+    label: "compact bounded snapshot",
+    ipc: "engineGetSnapshot", method: "getSnapshot",
+    payload: { conversationId: "conv-1", historyLimit: 3, toolDetail: "summary", readOptions: { preview: true, maxBytes: 131072 } },
+    args: ["conv-1", undefined, 3, "summary", { preview: true, maxBytes: 131072 }],
+  },
+  {
+    label: "deferred message content",
+    ipc: "engineGetMessage", method: "getMessage",
+    payload: { conversationId: "conv-1", entryId: "raw:entry" }, args: ["conv-1", "raw:entry"],
+  },
+  {
     label: "commands",
     ipc: "engineGetCommands",
     method: "getCommands",

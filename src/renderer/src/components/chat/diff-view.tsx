@@ -1,7 +1,7 @@
-import { memo, useMemo, useState, type JSX } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
-import { parseDiff, type DiffRow, type DiffRowKind } from "@/lib/diff";
+import { parseDiff, splitDiffRows, changedRange, type DiffRow, type DiffRowKind } from "@/lib/diff";
 
 /**
  * Rows drawn before the rest is folded behind a button.
@@ -57,29 +57,61 @@ function Gutter({ row, width }: { row: DiffRow; width: number }): JSX.Element {
 export const DiffView = memo(function DiffView({
   text,
   className,
+  mode = "unified",
+  wrap = false,
+  activeHunk,
+  hideFileHeaders = false,
 }: {
   text: string;
   className?: string;
+  mode?: "unified" | "split";
+  wrap?: boolean;
+  activeHunk?: number;
+  hideFileHeaders?: boolean;
 }): JSX.Element {
   const { t } = useTranslation("common");
   const [expanded, setExpanded] = useState(false);
-  const { rows, numberWidth } = useMemo(() => parseDiff(text), [text]);
+  const { rows, numberWidth } = useMemo(() => {
+    const doc = parseDiff(text);
+    return hideFileHeaders ? { ...doc, rows: doc.rows.filter((row) => row.kind !== "meta" || !/^(diff --git |index |--- |\+\+\+ )/.test(row.text)) } : doc;
+  }, [text, hideFileHeaders]);
+  const root = useRef<HTMLDivElement>(null);
+  const pairs = useMemo(() => splitDiffRows(rows), [rows]);
+  useEffect(() => { setExpanded(false); }, [text]);
+  useEffect(() => {
+    if (activeHunk === undefined || activeHunk < 0) return;
+    setExpanded(true);
+    const frame = requestAnimationFrame(() => root.current?.querySelectorAll<HTMLElement>("[data-diff-hunk]")[activeHunk]?.scrollIntoView({ block: "nearest", inline: "nearest" }));
+    return () => cancelAnimationFrame(frame);
+  }, [activeHunk, mode]);
   const hidden = expanded ? 0 : Math.max(0, rows.length - ROW_LIMIT);
   const shown = hidden > 0 ? rows.slice(0, ROW_LIMIT) : rows;
   return (
     <div
+      ref={root}
       className={cn(
         "mt-1.5 max-h-80 overflow-auto rounded-md border border-border bg-background font-mono text-xs leading-5 select-text",
         className,
       )}
     >
-      {shown.map((row, index) => (
-        <div key={index} className={cn("flex w-max min-w-full border-l-2 border-l-transparent", ROW_STYLE[row.kind])}>
+      {mode === "split" ? (
+        <div className={cn("grid min-w-full", wrap ? "grid-cols-2" : "grid-cols-[minmax(max-content,1fr)_minmax(max-content,1fr)]")}>
+          {pairs.filter((pair) => !hidden || pair.sourceIndex < ROW_LIMIT).map((pair, index) => pair.header ? (
+            <div key={index} data-diff-hunk={pair.header.kind === "hunk" ? "" : undefined} className={cn("col-span-2 px-3 py-0.5 whitespace-pre-wrap break-all", ROW_STYLE[pair.header.kind])}>{pair.header.text}</div>
+          ) : (
+            <div key={index} className="contents">
+              <SplitCell row={pair.left} other={pair.right} side="old" width={numberWidth} wrap={wrap} />
+              <SplitCell row={pair.right} other={pair.left} side="new" width={numberWidth} wrap={wrap} />
+            </div>
+          ))}
+        </div>
+      ) : shown.map((row, index) => (
+        <div key={index} data-diff-hunk={row.kind === "hunk" ? "" : undefined} className={cn("flex min-w-full border-l-2 border-l-transparent", wrap ? "w-full" : "w-max", ROW_STYLE[row.kind])}>
           {numberWidth > 0 ? <Gutter row={row} width={numberWidth} /> : null}
           <span aria-hidden className={cn("w-4 shrink-0 text-center select-none", MARKER_STYLE[row.kind])}>
             {row.marker}
           </span>
-          <code className="block flex-1 whitespace-pre px-2">{row.text || " "}</code>
+          <code className={cn("block min-w-0 flex-1 px-2", wrap ? "whitespace-pre-wrap break-all" : "whitespace-pre")}>{row.text || " "}</code>
         </div>
       ))}
       {hidden > 0 ? (
@@ -94,3 +126,16 @@ export const DiffView = memo(function DiffView({
     </div>
   );
 });
+
+function SplitCell({ row, other, side, width, wrap }: { row?: DiffRow; other?: DiffRow; side: "old" | "new"; width: number; wrap: boolean }): JSX.Element {
+  const changed = row && (row.kind === "added" || row.kind === "removed");
+  const range = changed && other ? changedRange(row.text, other.text) : undefined;
+  return (
+    <div className={cn("flex min-w-0 border-l-2 border-l-transparent first:border-r first:border-r-border", row ? ROW_STYLE[row.kind] : "bg-muted/40")}>
+      {width > 0 ? <span aria-hidden className="shrink-0 border-r border-border px-1.5 text-right text-muted-foreground/60 select-none" style={{ minWidth: `calc(${width}ch + 0.75rem)` }}>{(side === "old" ? row?.oldNumber : row?.newNumber) ?? ""}</span> : null}
+      <code className={cn("block min-w-0 flex-1 px-2", wrap ? "whitespace-pre-wrap break-all" : "whitespace-pre")}>
+        {range && row ? <>{row.text.slice(0, range[0])}<span className={row.kind === "added" ? "bg-success/25" : "bg-destructive/25"}>{row.text.slice(range[0], range[1])}</span>{row.text.slice(range[1])}</> : row?.text || " "}
+      </code>
+    </div>
+  );
+}

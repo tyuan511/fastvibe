@@ -7,7 +7,6 @@ import {
   classifyRef,
   collectInlinePreviews,
   inlineSrc,
-  scanMediaRefs,
 } from "../src/shared/inline-media.ts";
 import { toolImagesOf } from "../src/shared/tool-result.ts";
 import { authorizeMediaMime } from "../src/shared/media-preview.ts";
@@ -49,26 +48,6 @@ test("a path becomes a media URL and a URL stays itself", () => {
   assert.equal(inlineSrc({ ref: "https://x.test/a.png" }), "https://x.test/a.png");
 });
 
-test("printed output yields image and video paths, without listings of dependencies", () => {
-  const text = [
-    "saved to /Users/me/out/chart.png.",
-    'wrote {"video":"/tmp/clip.mp4"}',
-    "see /Users/me/proj/node_modules/pkg/logo.png",
-    "https://cdn.example.com/gen/1.webp?X-Sig=abc",
-    "file:///tmp/from%20file.jpg",
-    "/Users/me/proj/index.html",
-    "relative/shot.png",
-    "/tmp/chart.png",
-  ].join("\n");
-  assert.deepEqual(scanMediaRefs(text), [
-    "/Users/me/out/chart.png",
-    "/tmp/clip.mp4",
-    "https://cdn.example.com/gen/1.webp?X-Sig=abc",
-    "/tmp/from file.jpg",
-    "/tmp/chart.png",
-  ]);
-});
-
 test("present shows exactly what its result lists, and a failed item shows nothing", () => {
   const previews = collectInlinePreviews([
     tool({
@@ -107,27 +86,62 @@ test("a write of an image or a page is shown; a write of code is not", () => {
   assert.deepEqual(previews.get("w3")?.map((item) => item.kind), ["image"]);
 });
 
-test("a result's picture is shown for an MCP tool and not for a read or a screenshot", () => {
+test("only producing tools surface result images, including namespaced and camelCase readers", () => {
   const images = [{ mimeType: "image/png", dataUrl: "data:image/png;base64,AAAA" }];
-  const previews = collectInlinePreviews([
-    tool({ id: "m1", name: "mcp_img_generate", images }),
-    tool({ id: "r1", name: "read", images }),
-    tool({ id: "b1", name: "browser_snapshot", images }),
-  ]);
-  assert.deepEqual(previews.get("m1")?.map((item) => item.explicit), [true]);
-  assert.equal(previews.has("r1"), false);
-  assert.equal(previews.has("b1"), false);
+  for (const name of ["read", "view_image", "browser_snapshot", "mcp_files_read_image", "mcp_images_viewImage", "mcp_browser_takeScreenshot", "mcp_image_search", "mcp_images_get_generated_image", "mcp_unknown_execute"]) {
+    // Separate replies: deduplication must not disguise a reader being accepted.
+    assert.equal(collectInlinePreviews([tool({ id: "r", name, images })]).size, 0, name);
+  }
+  for (const name of ["mcp_img_generate", "imagegen", "mcp_images_editImage", "mcp_video_render"]) {
+    assert.deepEqual(collectInlinePreviews([tool({ id: "g", name, images })]).get("g")?.map((item) => item.explicit), [true], name);
+  }
 });
 
-test("a shell result is scanned unless the command only lists files", () => {
+test("MCP provenance distinguishes a server name from the tool operation and respects read-only hints", () => {
+  const images = [{ mimeType: "image/png", path: "/tmp/result.png" }];
+  const make = (toolName: string, readOnlyHint: boolean, args?: unknown) => tool({
+    id: "m", name: "mcp_image_generate_execute", args, images,
+    details: { mcp: { toolName, readOnlyHint } },
+  });
+  assert.equal(collectInlinePreviews([make("execute", false)]).size, 0);
+  assert.equal(collectInlinePreviews([make("generate_image", true)]).size, 0);
+  assert.equal(collectInlinePreviews([make("generate_image", false, { action: "read" })]).size, 0);
+  assert.equal(collectInlinePreviews([make("generate_image", false)]).size, 1);
+  assert.equal(collectInlinePreviews([{ ...make("generate_image", false), name: "mcp_browser_generate_image" }]).size, 1);
+});
+
+test("printed paths are not deliverables, even in old save logs, wrapped commands or generator responses", () => {
+  for (const [name, command] of [
+    ["bash", "python inspect.py"], ["bash", "cd /tmp && find ."], ["bash", "cat generation.log"],
+    ["shell", "ffprobe /tmp/input.mp4"], ["mcp_files_read", ""], ["mcp_img_generate", ""], ["codemode", ""],
+  ]) {
+    const previews = collectInlinePreviews([tool({
+      id: "s", name, args: { command },
+      result: 'saved to /tmp/old.png\n{"video":"/tmp/input.mp4"}\nhttps://cdn.example.com/reference.jpg',
+    })]);
+    assert.equal(previews.size, 0, `${name}: ${command}`);
+  }
+});
+
+test("a script's read images stay hidden, while an unambiguous generation batch remains visible", () => {
+  const images = [{ mimeType: "image/png", path: "/tmp/script.png" }];
+  const script = (calls?: unknown[]) => tool({ id: "s", name: "codemode", images, details: { calls } });
+  const generated = { id: "s/1", name: "models.generateImages", args: "{}", status: "ok" };
+  const read = { id: "s/2", name: "mcp_files_read_image", args: "{}", status: "ok" };
+  assert.equal(collectInlinePreviews([script()]).size, 0);
+  assert.equal(collectInlinePreviews([script([read])]).size, 0);
+  assert.equal(collectInlinePreviews([script([generated, read])]).size, 0);
+  assert.equal(collectInlinePreviews([script([{ ...generated, status: "error" }])]).size, 0);
+  assert.equal(collectInlinePreviews([script([generated])]).size, 1);
+});
+
+test("explicit presentation can show a previously read file without readers claiming the reference", () => {
   const previews = collectInlinePreviews([
-    tool({ id: "s1", name: "bash", args: { command: "python gen.py" }, result: "saved /tmp/out/a.png" }),
-    tool({ id: "s2", name: "bash", args: { command: "ls -R /tmp/out" }, result: "/tmp/out/a.png\n/tmp/out/b.png" }),
-    tool({ id: "s3", name: "read", result: "mentions /tmp/out/c.png" }),
+    tool({ id: "r", name: "mcp_images_view", images: [{ mimeType: "image/png", path: "/tmp/input.png" }] }),
+    tool({ id: "p", name: "present", details: { items: [{ ref: "/tmp/input.png", ok: true }] } }),
   ]);
-  assert.deepEqual(previews.get("s1")?.map((item) => [item.ref, item.explicit]), [["/tmp/out/a.png", false]]);
-  assert.equal(previews.has("s2"), false);
-  assert.equal(previews.has("s3"), false);
+  assert.equal(previews.has("r"), false);
+  assert.deepEqual(previews.get("p")?.map((item) => item.ref), ["/tmp/input.png"]);
 });
 
 test("a file shown once is not shown again, and a reply is bounded", () => {

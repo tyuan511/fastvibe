@@ -208,6 +208,32 @@ html[data-glass="true"] body:has([data-settings-overlay]) :is([data-shell-split]
      keep it off the rounded corners: 8px of inset plus the 16px inner radius. */
   [data-slot="resizable-handle"][data-pane-edge] {
     margin-block: 24px;
+    background-color: transparent;
+    outline: none;
+  }
+  /* Reveal the centred grip on interaction; ::after keeps the full-height grab target. */
+  [data-slot="resizable-handle"][data-pane-edge]::before {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 4px;
+    height: 32px;
+    translate: -50% -50%;
+    border-radius: 999px;
+    background-color: color-mix(in oklab, var(--muted-foreground) 40%, transparent);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 150ms, background-color 150ms;
+  }
+  [data-slot="resizable-handle"][data-pane-edge]:is(:hover, [data-separator="active"])::before {
+    opacity: 1;
+    background-color: color-mix(in oklab, var(--muted-foreground) 65%, transparent);
+  }
+  [data-slot="resizable-handle"][data-pane-edge]:focus-visible::before {
+    opacity: 1;
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
   }
   [data-slot="resizable-handle"][data-pane-edge="sidebar"] {
     translate: -8px 0;
@@ -264,7 +290,7 @@ html[data-glass="true"] {
   );
   --glass-ring-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
 }
-html[data-glass="true"] :is(.glass-rim, .overlay-surface)::after {
+html[data-glass="true"] :is(.glass-rim, .overlay-surface, .resource-surface)::after {
   content: "";
   position: absolute;
   inset: 0;
@@ -372,6 +398,37 @@ html[data-glass="true"] .overlay-surface {
     0 2px 6px rgb(0 0 0 / 5%);
   -webkit-backdrop-filter: blur(18px) saturate(1.08);
   backdrop-filter: blur(18px) saturate(1.08);
+}
+
+/* Conversation resources keep the sidebar's edge and corners without its 8px
+   window inset or a raised outer shadow. The popup's glass fill is denser below
+   because it can cover transcript text. */
+.resource-surface {
+  overflow: hidden;
+  border: 0;
+  border-radius: 16px;
+  background-color: var(--sidebar);
+  background-clip: padding-box;
+  color: var(--sidebar-foreground);
+  box-shadow: inset 0 0 0 1px var(--sidebar-border);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+html[data-glass="true"] .resource-surface {
+  border-radius: 16px;
+  background-color: var(--glass-pane);
+  box-shadow:
+    inset 0 0 0 0.5px var(--glass-edge),
+    inset 0 18px 32px -28px var(--glass-sheen);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+/* Match the global dialog's opacity over transcript text, while keeping the
+   sidebar's light edge treatment and avoiding an extra saturation boost. */
+html[data-glass="true"] .resource-surface[data-resource-presentation="popover"] {
+  background-color: var(--glass-overlay);
+  -webkit-backdrop-filter: blur(28px);
+  backdrop-filter: blur(28px);
 }
 
 @keyframes overlay-fade-in {
@@ -497,30 +554,31 @@ html[data-glass="true"] .overlay-surface {
 }
 
 /* Sidebar list edges ----------------------------------------------------------
-   The project list scrolls between two fixed bars (the nav above, 设置 below)
-   whose rows are the same height and type as a conversation. A hard clip put a
-   scrolling row flush against those bars, so the boundary disappeared the moment
-   the list moved. A resting hairline was the wrong fix: it cut the pane in two
-   when nothing was moving. The fade is the edge, and only while content is in it:
-   a row dissolves across the list's own 0.75rem padding before it meets a bar, and
-   at rest that padding is empty so nothing is faded and no line is drawn. Keep the
-   two in step — the padding lives on the list in sidebar.tsx. */
+   Base UI tracks hidden content at each edge, including after a resize or list
+   update. Draw the borders over the scroll area so they never shift its layout. */
 .sidebar-scroll [data-slot="scroll-area-viewport"] {
   overscroll-behavior: contain;
-  -webkit-mask-image: linear-gradient(
-    to bottom,
-    transparent 0,
-    #000 0.75rem,
-    #000 calc(100% - 0.75rem),
-    transparent 100%
-  );
-  mask-image: linear-gradient(
-    to bottom,
-    transparent 0,
-    #000 0.75rem,
-    #000 calc(100% - 0.75rem),
-    transparent 100%
-  );
+}
+.sidebar-scroll::before,
+.sidebar-scroll::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  height: 1px;
+  background-color: var(--sidebar-border);
+  pointer-events: none;
+  z-index: 1;
+  opacity: 0;
+}
+.sidebar-scroll::before {
+  top: 0;
+}
+.sidebar-scroll::after {
+  bottom: 0;
+}
+.sidebar-scroll[data-overflow-y-start]::before,
+.sidebar-scroll[data-overflow-y-end]::after {
+  opacity: 1;
 }
 
 .drag-region {

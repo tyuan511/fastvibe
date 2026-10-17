@@ -1,6 +1,8 @@
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import type {
+  Conversation,
+  UsageConversationBreakdown,
   ModelPrice,
   UsageDay,
   UsageMetrics,
@@ -41,6 +43,7 @@ type ModelBucket = {
 export async function collectUsageStats(
   paths: FastVibePaths,
   range: UsageRange = "30d",
+  conversations: Conversation[] = [],
 ): Promise<UsageStats> {
   const files = await listSessionFiles(paths.sessionsDir);
   const prices = modelPriceIndex(paths);
@@ -59,6 +62,13 @@ export async function collectUsageStats(
   // `sessionId` + entry id, so a session deleted and reimported cannot double-count.
   // `parseSessionTurns` guarantees a non-empty session id (path-derived if the header
   // was unreadable), so the ledger's keys cannot collide with a damaged transcript.
+  const metadata = new Map<string, Conversation>();
+  const byFile = new Map(conversations.filter((item) => item.sessionFile).map((item) => [item.sessionFile, item]));
+  parsed.forEach((entry, index) => {
+    const conversation = byFile.get(files[index]);
+    if (entry && conversation) metadata.set(entry.sessionId, conversation);
+  });
+  const conversationUsage = new Map<string, UsageConversationBreakdown>();
   const turns = new Map<string, UsageTurn>();
   for (const file of parsed) {
     if (!file) continue;
@@ -89,6 +99,13 @@ export async function collectUsageStats(
     if (date < from || date > today) continue;
 
     const cost = priceTurn(turn, prices);
+    let usage = conversationUsage.get(turn.sessionId);
+    if (!usage) {
+      const conversation = metadata.get(turn.sessionId);
+      usage = { ...emptyMetrics(), sessionId: turn.sessionId, conversationId: conversation?.id, title: conversation?.title, project: conversation?.project };
+      conversationUsage.set(turn.sessionId, usage);
+    }
+    addTurn(usage, turn, cost);
     const day = ensure(days, date);
     addTurn(day, turn, cost);
 
@@ -154,6 +171,7 @@ export async function collectUsageStats(
     totals,
     days: dayList,
     models: modelList,
+    conversations: [...conversationUsage.values()].sort((a, b) => b.cost - a.cost || b.tokens - a.tokens),
     sessions,
     longestSessionMinutes,
     currentStreak: streaks.current,

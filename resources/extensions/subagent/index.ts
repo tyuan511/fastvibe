@@ -443,6 +443,7 @@ export default function (pi: ExtensionAPI) {
 		label: "Subagent",
 		description: [
 			"Delegate a self-contained task to a specialized subagent that runs in its own isolated context window.",
+			"Default tool for delegation: use agent + task for one independent task, or tasks for independent parallel tasks. Neither needs a DAG, even when the work is long or complex.",
 			`Available agents: ${roster}.`,
 			"Modes: single (agent + task), parallel (tasks array, up to 8), chain (sequential, pass prior output through the {previous} placeholder).",
 			"The subagent cannot see this conversation, so every brief must be complete and self-contained.",
@@ -450,8 +451,9 @@ export default function (pi: ExtensionAPI) {
 			`To enable project-local agents in ${CONFIG_DIR_NAME}/agents, set agentScope: "both" (or "project").`,
 		].join(" "),
 		promptSnippet:
-			"Delegate a self-contained task to a subagent with an isolated context (single / parallel / chain)",
+			"Default delegation for one independent task or parallel tasks (single / parallel / chain)",
 		promptGuidelines: [
+			"For one independent task, call subagent with agent and task directly. Do not call dag_add_tasks, create a lone coordinator, or invent planning/review steps merely to delegate it. For example, one independent code review is subagent({agent: 'reviewer', task: 'Review ...'}).",
 			`Reach for subagent when work is wide or self-contained and would otherwise flood this context: codebase recon, planning, an isolated implementation, or an independent review. Available agents: ${roster}.`,
 			"Route the work by role: explorer to gather facts and code context, planner to analyze requirements and produce an ordered plan, worker to implement, reviewer to check the result.",
 			"Keep orchestration, the user-facing reply, and the final judgement in this conversation; hand the subagent only the part it can finish alone.",

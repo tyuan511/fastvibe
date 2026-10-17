@@ -656,6 +656,23 @@ Provider credentials are kept in FastVibe's isolated runtime and injected into t
 - Wrap the tree with `TooltipProvider`.
 - `vite.config.ts` exists so the shadcn CLI can detect Vite. The Electron app builds through `electron.vite.config.ts`.
 
+### 会话资源
+
+`AiExpandIcon` 资源入口只挂载在中间聊天区自己的标题栏右侧，不跨列、不移到右侧详情区域。右侧面板收起时，这里按「资源 → 展开面板」排列；右侧面板展开后，中间区只保留资源按钮，收起按钮属于右侧面板自己的标题行。
+两个区域各有标题行，右侧面板不为跨列标题栏下移。资源面板展开或收起都保留同一个入口；右侧面板最大化时，中间区及其标题栏一起隐藏，资源入口也不迁移过去。
+`ConversationResources` 内容随会话栏实际宽度切换：有足够正文留白时绝对定位常驻，同一个按钮可以收起；空间不足时点击按钮打开可在外部点击关闭的浮层。
+资源面板固定为 `300px` 宽，浮层在极窄窗口内再收窄。`ResizeObserver` 同时观察会话栏和 `calc(50rem + 600px)` 的尺寸探针（`48rem` 居中正文、两侧各 `300px + 1rem` 留白），所以侧栏拖动和界面字号也参与判断，不以整窗宽度代替。
+用户打开偏好保存在 `settings.resourcePanelOpen`（默认开启），跨会话和重启保留。宽度变化只清空临时浮窗，不改写偏好：变窄自动隐藏，重新变宽时按偏好恢复。按钮、点击外部或 Escape 的主动关闭才记为关闭；打开文件等导航动作只临时收起浮窗。窄布局不会因为恢复偏好自动弹出浮窗，仍需手动点击查看。
+视觉采用单层浮层和平铺列表：分组间用细分隔线与留白，不套边框卡片，展开标题也不铺底色。
+常驻与浮窗共用 `resource-surface`，保留左侧栏的内侧细边、高光和边缘反光，不加外投影。普通主题使用 `--sidebar` 底色；玻璃主题的常驻面板使用 `--glass-pane`，浮窗则使用与全局弹窗一致的 `--glass-overlay` 透明度，避免下面的正文干扰，同时模糊背后文字、不额外增强饱和度。
+只在常驻面板可见或浮层展开时挂载资源读取；切换会话关闭浮层，异步文件预览返回后必须再次核对所属会话。
+任务清单复用 `todoSnapshot` / `TodoRow`，显示已完成数量，旧一轮的计划明确标记。
+子代理合并转写、当前会话的运行注册表和 DAG；实时状态优先，DAG 的当前运行不能重复列出。
+资源面板不展示后台任务或命令调用；命令输出仍在会话转写中查看。
+最近产出复用当前已载入转写的 `conversationOutputs`，不代表未载入历史的完整文件索引。
+工作区变更是仓库全部改动，不宣称由本会话产生；点击仓库通过 `openGit(cwd)` 定位审查。
+预览：`mock.html?resources=sample|empty&theme=light|dark&lang=zh|en`。
+
 ### File icons
 
 File/folder glyphs come from **Material Icon Theme** (`material-icon-theme`, the
@@ -744,6 +761,19 @@ rather than highlighted (below).
   the loop for these: its CSS-variables theme maps nothing for `markup.inserted` /
   `markup.deleted`, so a `diff` fence came out flat and monochrome.
 - The wasm engine needs `'wasm-unsafe-eval'` in the CSP `script-src` (`index.html`).
+
+### 变更视图
+
+`side-pane-git.tsx` 同时展示冲突、已暂存和未暂存文件，选择项包含路径和 diff 来源；同一文件可同时在暂存区和工作区。
+列表与目录树复用 `git-change-list.tsx`：`git-change-tree.ts` 只压缩单子目录链，分叉保留；行布局为文件名、固定操作槽、状态列，方向键和右键操作与点击一致。右上角仅保留列表/目录树切换（ListIcon / FolderTreeIcon），不显示文件筛选和全部折叠。历史列表在 `git-history.tsx`，与文件区之间可拖动调整高度。提交区由 `git-commit-form.tsx` 组成：输入框右侧 AI 生成、提交分体按钮及提交/修订/提交并推送/提交并同步菜单。提交只包含已暂存内容，Cmd/Ctrl+Enter 提交，多行草稿在切换仓库时保留。AI 有暂存内容时只读取 index；修订空文案沿用上次提交信息。提交成功即清空已提交草稿并刷新，后续 push/pull 失败单独报告；同步按提交 → 既有 ff-only 拉取 → 推送执行，不做强制推送。桌面与 SSH 共用 `commitGitChanges` 并都注册 AI 生成方法；修订走独立的 `workspace:git-amend`，旧 Agent 会明确拒绝未知方法，不能忽略 amend 参数后误做普通提交。
+`DiffView` 仍是唯一 diff 渲染器，默认统一（合并）视图，按用户操作切换并排，支持换行和 hunk 跳转；并排列只配对同一变更块内的增删行。变更视图加载后自动选中冲突/未暂存/已暂存文件，刷新和暂存尽量保留当前路径；目录默认 240px，有独立收起/展开按钮；面板窄于 576px 自动收起，展开时以沿变更面板左侧定位、占满窗口高度的 Sheet 抽屉覆盖，选中文件或提交后自动关闭。diff 始终保持挂载，不能以目录/差异两级视图互相替换；拖动树宽到 180px 以下也会收起。历史分支筛选在停靠/抽屉切换间保留。
+
+- `main/source-control.ts` 是桌面和 SSH Agent 共用的 Git 实现。新方法通过中立调用表和远程策略注册：`workspace:git-comparison`、`workspace:git-history`；`git-diff` 的可选 `revision` 只接受完整 commit hash。
+- 分支文件列表和 patch 使用同一个 upstream merge base；历史支持当前分支与全部分支，以拓扑顺序读取完整 parents，`git-graph.ts` 按真实父哈希分配和合并色道；根提交不得画向无关历史的线。HEAD、本地/远端分支和标签按 `for-each-ref` 的结构化元数据展示；分页固定初次读取的 tip hashes，避免新提交造成跳页。点击提交自动打开首个文件，显示作者、时间、提交正文及标签；合并提交默认对比第一父提交，根提交对比空树。
+- Git 路径按 literal pathspec 传递，不 trim 文件名。未跟踪文件用 `diff --no-index` 读取，只有退出码 1 表示成功生成差异，其它失败必须显示。
+- 丢弃工作区修改恢复到 **index**，保留部分暂存的内容；删除未跟踪文件先由界面确认，只 unlink 状态中列出的文件，不能递归删除目录。取消暂存重命名要同时处理源路径和目标路径；未首次提交的仓库用 `rm --cached` 保留工作文件。
+- 切仓库和卸载后丢弃迟到的读取结果；刷新也重读已选文件的 diff。历史 commit 是不可变的，工作区轮询不应重置历史分页。
+- 验证：`test/source-control.test.ts` 使用临时真实仓库覆盖新文件、部分暂存、重命名、根提交、分支和子目录；`test/diff.test.ts` 覆盖并排对齐和 hunk 内伪装成文件头的代码行。`test/git-change-tree.test.ts` 和 `test/git-graph.test.ts` 覆盖紧凑目录和真实拓扑；`mock.html?pane=git&git=large&maximize=1&lang=zh` 提供百文件与分叉/合并预览。
 
 ### Math (LaTeX)
 
@@ -1041,6 +1071,8 @@ must not slide under them.
   Windows machine.
 
 ## Providers
+
+已保存的模型可在供应商详情里自检。`providers:test` 仅接受供应商与模型 id，通过当前 `ModelRegistry.streamSimple` 的协议和鉴权发两个有界小请求：普通回复和一个不执行的测试工具。结果只包含状态、首字耗时和错误分类，不把提供方原始响应或凭据传给渲染层。桌面与 SSH Agent 注册同一调用。
 
 There is **no built-in provider**: the app ships with none, and there is no connect wall
 and no separate 「not configured」 engine state. An install with no provider boots an
@@ -1393,6 +1425,26 @@ viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`
   a short title via a fire-and-forget `modelRegistry.complete` call, then
   `pi.setSessionName`. Manual sidebar renames set `titleManual` so they are not
   overwritten. Parallel runs and side chats name the session up front and are skipped.
+  - **That call is retried by the extension, because nothing else retries it.**
+    `modelRegistry.complete` is a plain provider request — the SDK's `retry`
+    setting only reaches the agent loop, compaction and branch summaries — so one
+    transient 502 used to cost a chat its title for good: `attempted` was set
+    before `generate()` and never cleared. The extension now runs the attempt
+    under `pi.getSettings().retry` (`isRetryableAssistantError` +
+    `retryDelayMs` from `pi-ai`, the same policy those summarisation calls use),
+    reads the policy per call so a settings change lands without a reload, and
+    falls back to the SDK's own defaults for fields the file does not store.
+    A deterministic failure (quota, billing, a rejected key) and a reply with no
+    usable title both stop early on their own terms: a deterministic error fails
+    the same way however often it is sent, whereas an answer that is a sentence
+    rather than a title — or one cut off at `length` — is worth another attempt
+    instead of being clipped into garbage. Stop has to come through `agent_end`
+    rather than `ctx.signal`: `before_agent_start` fires while `ctx.signal` is
+    still undefined (the getter only has one from `agent_start` onward), so the
+    extension owns an `AbortController` per call and aborts it when a run ends
+    `aborted` (and on `session_shutdown`) — the backoff and the request in flight
+    both end there, instead of a chat the user stopped paying for a title behind
+    it. `test/session-title.test.ts` pins all of it against the real SDK.
   `output-language.ts` is always on: each `before_agent_start` appends the host's
   AI 偏好语言 requirement (from `FASTVIBE_AI_LANGUAGE_PROMPT`) to the system prompt.
   - **Goal** runs a long-term execution loop: every turn is instructed to compare
@@ -1503,6 +1555,10 @@ viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`
     frontmatter; absent or invalid values migrate to `medium` rather than inheriting
     the parent run. Built-in role overrides live beside model overrides in
     `subagents.json`, while custom roles persist the field in their Markdown template.
+    For user/built-in roles, the host reads the current saved reasoning preset before
+    the discovered template's value (discovery always supplies `medium` by default).
+    Project-local roles and DAG profiles keep their own declared value and never
+    borrow a same-named built-in role's reasoning override.
   - **Renderer.** The sub-session's engine events are re-emitted as
     `subagent_event` / `subagent_state` / `subagent_lifecycle` (see `#trackSubagentEvent`), which the
     renderer folds into `session.subagents` + `subagentStreams`. Main and the renderer share
@@ -1713,16 +1769,18 @@ viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`
 
 ### 会话内联预览（图片 / 视频 / HTML，`shared/inline-media.ts`）
 
-回复里产生的可看的东西直接画在转写里，而不是只给一个路径。**谁来“要”一个预览，从确定到猜测**：
-`present` 工具（模型明说“展示这个”）→ 工具结果里的图片块（MCP 生图直接返回图，没有文件）→ `write` 写出的
-图片/HTML → `bash` / MCP / `codemode` 输出里出现的路径或 https 链接（**只有这一类是猜的**）。
+回复里产生的可看的东西直接画在转写里，而不是只给一个路径。预览来自 `present` 工具（模型明说“展示这个”）、
+能识别为生成/编辑操作的工具返回的图片块（MCP 生图直接返回图，没有文件），以及 `write` 写出的图片/HTML。
+**不从普通文本输出猜产物路径**：`bash` / MCP / `codemode` 输出中的路径、链接甚至“saved to”都可能来自读取旧日志；
+仅返回路径的工具、脚本和用途不明的工具要用独立的 `present` 调用明确展示交付物。
 
 - **纯函数、只靠转写重算。** `collectInlinePreviews(tools, resolve)` 只看 `ToolCallBlock`（参数、结果、`details`、
   `images`），不读磁盘，所以刷新、切会话、手机重连画出来的和流式时一样。只处理 `status === "done"` 的非嵌套调用，
   半写的 HTML 不会闪。同一个引用只出现一次，每个调用最多 4 个、每条回复最多 12 个。
-- **猜测要克制。** 只扫图片/视频，**从不猜 HTML**（构建日志里全是 `index.html`）；`ls/find/git/grep/file/du…` 这类
-  列文件的命令整个跳过；`node_modules`、`.git` 之类目录跳过；猜出来加载失败就静默不画（`explicit: false`），
-  明确要求的失败才写一行“无法加载”。`read` / `browser_*` / `computer_*` 的图片是输入或截屏，不展示。
+- **读取素材不是产物。** 图片块按工具操作筛选，识别 MCP 前缀、分隔符和 camelCase；读取、查看、搜索、截图及
+  用途不明的工具不自动展示。MCP bridge 在 `details.mcp` 保存原始 `toolName` 和 `readOnlyHint`，避免服务器名干扰
+  判断；明确只读优先排除，旧转写回退到完整工具名。`codemode` 只有整批调用均成功且均可识别为产物操作才自动
+  展示图片；混合读取和生成时图片缺少逐张来源，必须用独立 `present` 选择产物。明确要求展示的文件允许是已有素材。
 - **图片落盘，转写只带路径。** MCP 生图直接返回 base64，没有文件。Main 在两处把它存成
   `runtime/engine/tool-images/<会话>/<toolCallId>-<n>.<ext>`（`engine/tool-images.ts`，文件名由调用决定，重复写只是
   一次存在性检查）：转写映射前（`projectSessionMessages`）和实时的 `tool_execution_end` 事件，都把 image 块换成
@@ -1944,11 +2002,14 @@ pnpm shadcn add <component> -y
 
 ## 发版与 release note
 
-版本号写 `package.json`，release note 写 `docs/release/<tag>.md`（如
-`docs/release/v0.11.0.md`），两者在同一个 `chore: release vX.Y.Z` 提交里。推 `v*` tag
+版本号写 `package.json`，英文 release note 写 `docs/release/<tag>.md`，简体中文译文写
+`docs/release/<tag>_zh-CN.md`，三者在同一个 `chore: release vX.Y.Z` 提交里。两份顶部用
+固定到本次 tag 的绝对 URL 双向切换语言；已发布版本补译时用 `blob/main`，不移动旧 tag。
+推 `v*` tag
 触发 `.github/workflows/release.yml`：每个 job 先跑 `scripts/check-release-note.mjs`
-（只查文件是否存在、是否有内容），打包产物上传进 draft Release，最后 `publish` job
-合并 mac 清单并转正。**Release 的 body 就是那个 commit 上的 note 文件**
+（检查文件是否存在、有内容；双语 note 还检查译文与双向链接，不判断正文语言），
+打包产物上传进 draft Release，最后 `publish` job
+合并 mac 清单并转正。**Release 的 body 就是那个 commit 上的英文 note 文件**
 （`body_path`），不是 GitHub 自动生成的提交列表，也没有「事后 `gh release edit` 覆盖」
 这个步骤。note 文件本身的约定见 `docs/release/README.md`，完整流程见
 `.agents/skills/release/SKILL.md`。
@@ -2100,6 +2161,8 @@ leading `!` is a shell command. Existing files are copied under `backups/` befor
 real change. A file that is not valid JSON stops the sync before anything is written.
 
 ## Usage statistics (使用统计)
+
+用量页展示按当前价格估算的费用、输入/输出/缓存构成，以及按项目/会话的费用来源。分组在原有去重之后计算，继承的分叉历史仍记在原始 session 上；删除的会话保留用量，缺失目录元数据时归入「已删除或其他会话」。SSH Agent 使用相同聚合器。
 
 Settings → 使用统计 (`components/settings/usage-settings.tsx`) is fed by
 `collectUsageStats` (`src/main/engine/usage-stats.ts`) over the `stats:usage` channel.
@@ -2419,6 +2482,25 @@ of a bare 「思考」. Measured bounds always win. The owner lookup is a `Map<M
 built from the row's messages, which works because `mergeAssistantRun` passes thinking parts
 through by reference.
 
+## 原生压缩的窗口保护（`engine/native-compaction.ts`）
+
+主会话保留 Pi 原生的摘要提示词、切点、文件清单和持久化。自动压缩在用量超过窗口的 **90%** 时触发，按当前模型
+窗口动态计算，不改设置文件；Pi 默认固定预留 16K，在 1M 窗口上会拖到约 98.4%。即使不换模型，工具输出突增、
+估算误差或供应商实际限制也可能导致摘要请求超窗；切到较小窗口时，已有历史更可能放不下。
+`installNativeCompactionGuard` 包装 Pi 1.2 的 `_runDefaultCompaction`（手动与自动共用），先解析实际压缩模型，
+为指令、输出和安全余量留位置，再按 UTF-8 字节估算输入。能放下的保持原路径；超出的用 Pi 原生增量摘要按片段处理，
+前一片摘要传给下一片，原始转写不改写。供应商仍报超窗或因输出空间不足截断时，按实际失败请求再减半重试，最多六次缩减。
+旧摘要本身太长也参与分片；只在最后结果附完整文件清单，累计各片用量。用户取消立即退出，鉴权等非容量错误不通过缩小历史重试。
+触发用的 reserve 是窗口的 10%，**与摘要输出预算分开**：调用原生总结前将 preparation 的 reserve 还原为原生配置，
+避免 1M 窗口的 100K 触发余量变成 80K 摘要输出。实际摘要 reserve 和保留尾部在小窗口时最多取窗口四分之一，
+较大窗口仍用原配置。未获得有效窗口时回退原生 reserve；关闭自动压缩仍然有效。
+落盘前用 SDK 的内存会话投影检查「摘要 + 系统提示/工具声明 + 保留尾部」：必须能装进目标窗口并留出回复空间，
+自动压缩还必须比原上下文更小。容量失败后记录当前历史的指纹，停止本轮；新增错误行或“继续”提示不会解锁同一份失败历史，
+也不会再发送普通模型请求来触发下一轮超窗。Pi 因“已经没有可裁剪历史”而直接返回、没有发压缩结束事件的路径也要拦住。
+改模型/窗口、编辑或切换历史后可自动恢复；显式 `/compact` 可以重试，取消或失败不会误清已有保护。非容量错误不加入这份记录。
+这是对 SDK 实例内部方法的适配，`test/native-compaction.test.ts` 用真实 SDK 验证切换模型、首次请求预算、失败缩减和恢复任务；
+升级 Pi 必须保留这项测试。它不加载已放弃的自定义摘要、遮蔽、入口限长或回放方案。
+
 ## 上下文用量（composer 的上下文环）
 
 The composer's context ring and its popover read `session.contextUsage`, which only a state
@@ -2466,7 +2548,9 @@ from an event payload. So it is as fresh as the last `reloadActiveState()`.
   里面什么都没标。
 - **没输入时**只列最近 9 条有 preview 的未归档会话，并带 `mod+1…9` 快捷键；输入后标题命中
   与正文命中混在一起，第二行优先给摘要（那是唯一能看见「为什么命中」的地方），没有摘要才退回项目名。
-- 限制：单文件 >2MB 跳过、最多 20 条命中、按文件顺序而非相关度排序、纯子串不分词。
+- 大转写按行读取，不按文件大小跳过；按文件大小和修改时间只重建变化会话的搜索索引，缓存受字符数与行数上限约束，按会话最近更新时间优先准入，冷文件扫描不淘汰更近期的缓存；超限文件只保留当前查询摘要和分支链接。另有有界查询备忘：文件未变时复用相同查询及无命中查询的收窄结果。
+- 后端不在归档过滤之前截断命中数；界面可选择「包括已归档对话」，按更新时间排列。命中携带可见消息的 `entryId`（工具输出指向所属回复），跳转复用 `stores/transcript-navigation.ts` 和虚拟列表的消息定位。
+- 搜索只沿当前分支读取正文；仍是大小写不敏感的字面子串，不做分词。
 
 ## 重试与文件回退（checkpoint）
 
@@ -2591,6 +2675,10 @@ FastVibe 是一个窗口、一个进程：`app.requestSingleInstanceLock()` 在�
 主 agent 用 `dag_*` 动态生成依赖图，`PiProcessManager` 持有 `DagStore`、`DagScheduler`、工具宿主和运行记录。
 一个会话一张图；`/handoff` 只交接结果，不迁移或接管任务编排。设置里的 `dynamicDag` 只决定主 agent 的活动工具集。
 
+- **独立任务直接委派。** 一个独立任务用 `subagent` 的 `agent + task`，多个互不依赖的任务用 `tasks` 并行。
+  `runDagTool` 在创建节点前校验顶层批次：每个节点必须参与新节点之间或指向已有节点的 `depends_on` 关系；
+  单个独立节点、独立并行批次、混入依赖图的孤立节点都整批退回并提示使用 `subagent`，不分配编号、不启动运行。
+  已有协调者在自己的作用域内追加子任务仍然允许；不要为满足校验虚构依赖或额外规划/审查节点。
 - **统一引擎、统一传输。** `ctx.ui.dag` → `runDagTool`，SSH Agent 注册相同的 `registerDagIpc`；`dag_changed` 经引擎事件推送。
   `dag:list` 汇总本机与已连接主机，其余 `dag:*` 按 `conversationId` 路由。API 加在 `shared/api.ts`，方法进远端策略表。
 - **编号和尝试分开。** 节点 `T-0001`；尝试 `T-0001`、`T-0001.2`…。全局序号单独持久化，不因删图回退。
@@ -2634,6 +2722,11 @@ FastVibe 是一个窗口、一个进程：`app.requestSingleInstanceLock()` 在�
 
 
 ## 定时任务（`pi/scheduled-task-manager.ts`、`components/schedules/`）
+
+- `maxRunSeconds` 默认 3600（允许 1–86400 秒）；到期中止运行，等执行器真正结束才释放名额，不能让尚未停下的工具与下个任务重叠。
+- 忙碌时手动运行持久化为 `queued`，同一任务不会重复排队；已排队但未执行的任务可在重启后继续，已开始的仍标记中断、不自动重放。取消排队和暂停未来执行会清除对应待执行项。
+- 已有待执行项时新的触发会记录为 `missed`，注明排队冲突，并推进下一次触发时间；不重复入队、不静默丢失。
+- `missedPolicy` 默认 `run-latest`（24 小时内补最近一次），也可选 `skip`（超过一分钟跳过）；入队和真正开始时都检查，避免长队列让过期任务执行。
 
 页面是和插件页一样的卡片网格，点卡片弹窗看详情/历史，新建与编辑也在弹窗里（没有左右分栏）。
 

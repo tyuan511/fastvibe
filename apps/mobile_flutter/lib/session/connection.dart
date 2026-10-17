@@ -309,6 +309,7 @@ class Connection extends ChangeNotifier {
         final deviceId = server.officialDeviceId!;
         final name = await account.deviceLabel();
         final clientId = await stableDeviceId();
+        recordConnectionDiagnostic(Diagnostic.metric('rtc.signal-start'));
         await remote.connectOpened(
           () => RtcDialer(
             origin: account.origin,
@@ -717,6 +718,7 @@ class Connection extends ChangeNotifier {
 
   Future<void> _readCatalog(RemoteClient remote, Map<String, _CatalogPush> pushes) async {
     final started = DateTime.now().millisecondsSinceEpoch;
+    recordConnectionDiagnostic(Diagnostic.metric('catalog-start'));
     final results = await Future.wait(<Future<Object?>>[
       remote.call('conversations:list'),
       remote.call('engine:get-running'),

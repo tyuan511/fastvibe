@@ -9,6 +9,7 @@ import 'package:fastvibe_mobile/chat/output_files.dart';
 import 'package:fastvibe_mobile/chat/output_files_row.dart';
 import 'package:fastvibe_mobile/i18n/core.dart';
 import 'package:fastvibe_mobile/main.dart';
+import 'package:fastvibe_mobile/protocol/client.dart';
 import 'package:fastvibe_mobile/theme/theme.dart';
 import 'package:fastvibe_mobile/ui/feedback.dart';
 import 'package:fastvibe_mobile/ui/kit.dart';
@@ -79,6 +80,22 @@ class _InstantDownload extends FileTransfer {
 }
 
 Uint8List sample(int length) => Uint8List.fromList(List<int>.generate(length, (i) => (i * 7) % 256));
+
+class _InterruptedDownload extends FileTransfer {
+  _InterruptedDownload() : super(call: (_, _, _) async => null, conversationId: 'c1');
+  CancelToken? token;
+
+  @override
+  Future<File> download(String path, {
+    required Directory directory,
+    required String name,
+    CancelToken? cancel,
+    void Function(int received, int total)? onProgress,
+  }) async {
+    token = cancel;
+    throw const FileTransferError('interrupted');
+  }
+}
 
 void main() {
   setUpAll(() async {
@@ -178,6 +195,131 @@ void main() {
       expect(machine.requests.every((r) => r['conversationId'] == 'c1' && r['path'] == 'out/blob.bin'), isTrue);
       expect(progress.last, machine.bytes.length);
       expect(dir.listSync().map((e) => e.path.split('/').last), <String>['blob.bin']);
+    });
+
+    test('a dropped connection resumes at saved bytes after validating the remote file', () async {
+      final machine = FakeMachine(sample(sliceBytes * 2 + 10));
+      final transfer = over(machine);
+      machine.beforeSlice = (served) { if (served == 1) throw TransportError('dropped', 'offline'); };
+      await expectLater(transfer.download('big.bin', directory: dir, name: 'big.bin'), throwsA(isA<FileTransferError>().having((e) => e.code, 'code', 'interrupted')));
+      expect(dir.listSync().whereType<File>().where((file) => file.path.endsWith('.part')).single.lengthSync(), sliceBytes);
+      machine.beforeSlice = null;
+      machine.requests.clear();
+      final file = await over(machine).download('big.bin', directory: dir, name: 'big.bin');
+      expect(machine.requests.first['length'], 0);
+      expect(machine.requests[1]['offset'], sliceBytes);
+      expect(await file.readAsBytes(), machine.bytes);
+      expect(dir.listSync().length, 1);
+    });
+
+    test('resuming a replaced remote file restarts without mixing old bytes', () async {
+      final machine = FakeMachine(sample(sliceBytes * 2));
+      machine.beforeSlice = (served) { if (served == 1) throw TransportError('closed', 'offline'); };
+      await expectLater(over(machine).download('big.bin', directory: dir, name: 'big.bin'), throwsA(isA<FileTransferError>()));
+      machine.beforeSlice = null;
+      machine.mtimeMs = 2;
+      machine.bytes = Uint8List.fromList(List<int>.filled(sliceBytes + 5, 42));
+      machine.requests.clear();
+      final file = await over(machine).download('big.bin', directory: dir, name: 'big.bin');
+      expect(machine.requests[1]['offset'], 0);
+      expect(await file.readAsBytes(), machine.bytes);
+      expect(dir.listSync().length, 1);
+    });
+
+    test('cancelling after a disconnect deletes the retained checkpoint', () async {
+      final machine = FakeMachine(sample(sliceBytes * 2));
+      final cancel = CancelToken();
+      machine.beforeSlice = (served) { if (served == 1) throw TransportError('timeout', 'offline'); };
+      await expectLater(over(machine).download('big.bin', directory: dir, name: 'big.bin', cancel: cancel), throwsA(isA<FileTransferError>()));
+      cancel.cancel();
+      for (var i = 0; i < 20 && dir.listSync().isNotEmpty; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+      expect(dir.listSync(), isEmpty);
+    });
+
+    test('closing a viewer pauses in-flight work and a new instance resumes it', () async {
+      final machine = FakeMachine(sample(sliceBytes * 2 + 7));
+      final cancel = CancelToken();
+      machine.beforeSlice = (served) { if (served == 1) cancel.cancel(discard: false); };
+      await expectLater(over(machine).download('big.bin', directory: dir, name: 'big.bin', cancel: cancel),
+        throwsA(isA<FileTransferError>().having((e) => e.code, 'code', 'cancelled')));
+      expect(dir.listSync().whereType<File>().where((file) => file.path.endsWith('.part')).single.lengthSync(), sliceBytes);
+      machine.beforeSlice = null;
+      machine.requests.clear();
+      final file = await over(machine).download('big.bin', directory: dir, name: 'big.bin');
+      expect(machine.requests[1]['offset'], sliceBytes);
+      expect(await file.readAsBytes(), machine.bytes);
+    });
+
+    test('older hosts without offset and modification time still preview and download', () async {
+      final machine = FakeMachine(sample(sliceBytes + 5));
+      final transfer = FileTransfer(conversationId: 'c1', call: (method, payload, timeout) async {
+        final reply = (await machine.call(method, payload, timeout) as Map).cast<String, Object?>();
+        reply.remove('offset');
+        reply.remove('mtimeMs');
+        return reply;
+      });
+      expect((await transfer.read('old.bin', maxBytes: 10)).bytes, machine.bytes.take(10).toList());
+      final file = await transfer.download('old.bin', directory: dir, name: 'old.bin');
+      expect(await file.readAsBytes(), machine.bytes);
+      expect(dir.listSync().length, 1);
+    });
+
+    test('a dropped legacy transfer without validators is not resumed blindly', () async {
+      final machine = FakeMachine(sample(sliceBytes * 2));
+      final transfer = FileTransfer(conversationId: 'c1', call: (method, payload, timeout) async {
+        if ((payload as Map)['offset'] == sliceBytes) throw TransportError('dropped', 'offline');
+        final reply = (await machine.call(method, payload, timeout) as Map).cast<String, Object?>();
+        reply.remove('offset');
+        reply.remove('mtimeMs');
+        return reply;
+      });
+      await expectLater(transfer.download('old.bin', directory: dir, name: 'old.bin'), throwsA(isA<TransportError>()));
+      expect(dir.listSync(), isEmpty);
+    });
+
+    test('supplied but incorrect offset remains an invalid reply', () async {
+      final machine = FakeMachine(sample(10));
+      final transfer = FileTransfer(conversationId: 'c1', call: (method, payload, timeout) async {
+        final reply = (await machine.call(method, payload, timeout) as Map).cast<String, Object?>();
+        reply['offset'] = 99;
+        return reply;
+      });
+      await expectLater(transfer.download('bad.bin', directory: dir, name: 'bad.bin'), throwsA(isA<FileTransferError>().having((e) => e.code, 'code', 'invalid')));
+      expect(dir.listSync(), isEmpty);
+    });
+
+    test('maintenance removes crash orphans, expires old checkpoints, and preserves completed files', () async {
+      final completed = File('${dir.path}/report.txt')..writeAsStringSync('keep');
+      final orphan = File('${dir.path}/.fastvibe-${'a' * 64}.part')..writeAsStringSync('orphan');
+      final orphanMeta = File('${dir.path}/.fastvibe-${'b' * 64}.part.json')..writeAsStringSync('{}');
+      final machine = FakeMachine(sample(sliceBytes * 2));
+      machine.beforeSlice = (served) { if (served == 1) throw TransportError('dropped', 'offline'); };
+      await expectLater(over(machine).download('big.bin', directory: dir, name: 'big.bin'), throwsA(isA<FileTransferError>()));
+      expect(orphan.existsSync(), isFalse);
+      expect(orphanMeta.existsSync(), isFalse);
+      await FileTransfer.cleanupCheckpoints(dir, now: DateTime.now().add(const Duration(days: 8)));
+      expect(dir.listSync().map((file) => file.path), <String>[completed.path]);
+      expect(completed.readAsStringSync(), 'keep');
+    });
+
+    test('maintenance enforces its byte budget but cannot remove an active writer', () async {
+      final machine = FakeMachine(sample(sliceBytes * 2));
+      machine.beforeSlice = (served) { if (served == 1) throw TransportError('dropped', 'offline'); };
+      await expectLater(over(machine).download('big.bin', directory: dir, name: 'big.bin'), throwsA(isA<FileTransferError>()));
+      await FileTransfer.cleanupCheckpoints(dir, maxBytes: 1);
+      expect(dir.listSync(), isEmpty);
+      machine.beforeSlice = null;
+      final transfer = FileTransfer(conversationId: 'c1', call: (method, payload, timeout) async {
+        if ((payload as Map)['offset'] == sliceBytes) {
+          await FileTransfer.cleanupCheckpoints(dir, maxBytes: 0);
+          expect(dir.listSync().whereType<File>().where((file) => file.path.endsWith('.part')), hasLength(1));
+        }
+        return machine.call(method, payload, timeout);
+      });
+      final saved = await transfer.download('big.bin', directory: dir, name: 'big.bin');
+      expect(await saved.readAsBytes(), machine.bytes);
     });
 
     test('a second download does not replace the first', () async {
@@ -334,6 +476,39 @@ void main() {
         expect(transfer.downloaded, hasLength(1));
         expect(opened, hasLength(2));
         // The toast's timer must not outlive the test.
+        await tester.pump(const Duration(seconds: 10));
+      });
+
+      testWidgets('closing an interrupted file viewer preserves its checkpoint (${p.dark})', (tester) async {
+        final transfer = _InterruptedDownload();
+        await pump(tester, FileViewer(
+          file: const OutputFile(path: 'archive.zip', name: 'archive.zip', kind: OutputFileKind.other, created: true),
+          transfer: transfer,
+          downloadDirectory: () async => Directory.systemTemp,
+        ), p);
+        await tester.tap(find.text('Download'));
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(find.text('Resume download'), findsOneWidget);
+        expect(find.text('Cancel download and discard progress'), findsOneWidget);
+        await pump(tester, const SizedBox(), p);
+        expect(transfer.token!.cancelled, isTrue);
+        expect(transfer.token!.discardOnCancel, isFalse);
+        await tester.pump(const Duration(seconds: 10));
+      });
+
+      testWidgets('explicit cancel discards interrupted progress (${p.dark})', (tester) async {
+        final transfer = _InterruptedDownload();
+        await pump(tester, FileViewer(
+          file: const OutputFile(path: 'archive.zip', name: 'archive.zip', kind: OutputFileKind.other, created: true),
+          transfer: transfer,
+          downloadDirectory: () async => Directory.systemTemp,
+        ), p);
+        await tester.tap(find.text('Download'));
+        await tester.pump(const Duration(milliseconds: 100));
+        await tester.tap(find.text('Cancel download and discard progress'));
+        await tester.pump();
+        expect(transfer.token!.discardOnCancel, isTrue);
+        expect(find.text('Resume download'), findsNothing);
         await tester.pump(const Duration(seconds: 10));
       });
 

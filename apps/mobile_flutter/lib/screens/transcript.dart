@@ -54,6 +54,7 @@ class TranscriptView extends StatefulWidget {
     this.now,
     required this.onLongPress,
     required this.onOlder,
+    this.onLoadContent,
     this.dagWatcher,
     this.onOpenFile,
     this.topInset = 0,
@@ -71,6 +72,7 @@ class TranscriptView extends StatefulWidget {
   final int? now;
   final void Function(ChatMessage message) onLongPress;
   final VoidCallback onOlder;
+  final Future<void> Function(ChatMessage message)? onLoadContent;
   final DagWatcher? dagWatcher;
 
   /// Open a file a reply produced. Null where there is no machine to read it from.
@@ -219,16 +221,32 @@ class _TranscriptViewState extends State<TranscriptView> {
     final message = row.message;
     return Padding(
       padding: EdgeInsets.only(top: row.gapBefore, bottom: row.last ? 24 : 0),
-      child: MessageRow(
-        message: message,
-        palette: palette,
-        blocks: row.blocks,
-        meta: row.last ? widget.footers[message.lastId ?? message.id] : null,
-        turnStart: message.isAssistant && !row.previousIsAssistant && row.first,
-        live: widget.running && row.newest && row.last,
-        dagWatcher: widget.dagWatcher,
-        onLongPress: widget.onLongPress,
-        onOpenFile: row.last ? widget.onOpenFile : null,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          MessageRow(
+            message: message,
+            palette: palette,
+            blocks: row.blocks,
+            meta: row.last
+                ? widget.footers[message.lastId ?? message.id]
+                : null,
+            turnStart:
+                message.isAssistant && !row.previousIsAssistant && row.first,
+            live: widget.running && row.newest && row.last,
+            dagWatcher: widget.dagWatcher,
+            onLongPress: widget.onLongPress,
+            onOpenFile: row.last ? widget.onOpenFile : null,
+          ),
+          if (row.last &&
+              message.deferredIds.isNotEmpty &&
+              widget.onLoadContent != null)
+            _DeferredContent(
+              key: ValueKey(message.deferredIds.join(':')),
+              message: message,
+              load: widget.onLoadContent!,
+            ),
+        ],
       ),
     );
   }
@@ -314,6 +332,60 @@ class _TranscriptViewState extends State<TranscriptView> {
       ],
     );
   }
+}
+
+/// Mounted only for a built list row: off-screen bodies consume no bandwidth.
+class _DeferredContent extends StatefulWidget {
+  const _DeferredContent({
+    super.key,
+    required this.message,
+    required this.load,
+  });
+  final ChatMessage message;
+  final Future<void> Function(ChatMessage) load;
+  @override
+  State<_DeferredContent> createState() => _DeferredContentState();
+}
+
+class _DeferredContentState extends State<_DeferredContent> {
+  bool _failed = false;
+  bool _loading = false;
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _read();
+    });
+  }
+
+  Future<void> _read() async {
+    if (_loading) return;
+    setState(() {
+      _failed = false;
+      _loading = true;
+    });
+    try {
+      await widget.load(widget.message);
+    } catch (_) {
+      if (mounted) setState(() => _failed = true);
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(top: 8),
+    child: _failed
+        ? TextButton(
+            onPressed: _read,
+            child: Text(t('chat.retryContent', context: context)),
+          )
+        : Text(
+            t('chat.loadingContent', context: context),
+            style: TextStyle(color: paletteOf(context).muted, fontSize: 12),
+          ),
+  );
 }
 
 /// The floating 「正在工作」 capsule, with the run's elapsed time. It sits on the page
@@ -776,7 +848,10 @@ class _Divider extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 10),
             child: running
-                ? _BlinkingLabel(text: label, style: style.copyWith(color: palette.text))
+                ? _BlinkingLabel(
+                    text: label,
+                    style: style.copyWith(color: palette.text),
+                  )
                 : Text(label, style: style),
           ),
           Expanded(child: Container(height: 0.5, color: palette.border)),

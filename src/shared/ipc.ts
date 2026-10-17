@@ -61,6 +61,7 @@ export const Ipc = {
   engineGetMessagesSince: "engine:get-messages-since",
   /** Transcript + the turn in flight, read at one instant (`ConversationSnapshot`). */
   engineGetSnapshot: "engine:get-snapshot",
+  engineGetMessage: "engine:get-message",
   engineGetMessagesPage: "engine:get-messages-page",
   /** Every parked extension prompt, across conversations (`getPendingUi`). */
   engineGetPendingUi: "engine:get-pending-ui",
@@ -125,8 +126,11 @@ export const Ipc = {
   workspaceGitCreateBranch: "workspace:git-create-branch",
   workspaceGitStage: "workspace:git-stage",
   workspaceGitCommit: "workspace:git-commit",
+  workspaceGitAmend: "workspace:git-amend",
   workspaceGitGenerateCommitMessage: "workspace:git-generate-commit-message",
   workspaceGitDiff: "workspace:git-diff",
+  workspaceGitComparison: "workspace:git-comparison",
+  workspaceGitHistory: "workspace:git-history",
   workspaceGitUnstage: "workspace:git-unstage",
   workspaceGitDiscard: "workspace:git-discard",
   workspaceGitPull: "workspace:git-pull",
@@ -142,6 +146,12 @@ export const Ipc = {
   browserListProfiles: "browser:list-profiles",
   browserImportProfile: "browser:import-profile",
   browserClearData: "browser:clear-data",
+  browserLibrary: "browser:library",
+  browserLibraryChanged: "browser:library-changed",
+  browserDownloadAction: "browser:download-action",
+  browserCapture: "browser:capture",
+  browserPrint: "browser:print",
+  browserShortcut: "browser:shortcut",
   /** Browsers installed on this machine, so the settings picker can offer them. */
   browserListEngines: "browser:list-engines",
   /** Cua Driver permission state. The tools themselves need no IPC — the driver is
@@ -379,7 +389,31 @@ export type GitWorktree = {
   current?: boolean;
 };
 
+export type GitCommitOptions = { amend?: boolean };
+
 export type GitDiffSource = "unstaged" | "staged" | "branch" | "last-turn";
+
+export type GitComparison = {
+  base: string;
+  target: string;
+  files: GitStatus["files"];
+};
+
+export type GitHistoryScope = "all" | "current";
+export type GitReference = { name: string; kind: "local" | "remote" | "tag"; current?: boolean };
+
+export type GitHistoryEntry = {
+  hash: string;
+  parents: string[];
+  subject: string;
+  author: string;
+  date: string;
+  body: string;
+  refs: GitReference[];
+  isHead: boolean;
+};
+
+export type GitHistory = { commits: GitHistoryEntry[]; hasMore: boolean; tips: string[]; head?: string; branch?: string };
 
 export type TerminalSessionInfo = { id: string; cwd: string };
 

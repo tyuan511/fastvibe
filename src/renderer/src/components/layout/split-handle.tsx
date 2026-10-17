@@ -61,6 +61,7 @@ export function SplitHandle({
   reset,
   label,
   className,
+  maxWidthRatio,
 }: {
   listSide: "start" | "end";
   width: number;
@@ -69,6 +70,8 @@ export function SplitHandle({
   reset: () => void;
   label: string;
   className?: string;
+  /** Optional responsive cap for the list column, without rewriting its saved width. */
+  maxWidthRatio?: number;
 }): JSX.Element {
   const ref = useRef<HTMLDivElement>(null);
   const drag = useRef<{ x: number; width: number; max: number } | null>(null);
@@ -77,7 +80,9 @@ export function SplitHandle({
   const clamp = (value: number, max: number): number => Math.round(Math.max(MIN_LIST, Math.min(max, value)));
   const containerMax = (): number => {
     const parent = ref.current?.parentElement;
-    return Math.max(MIN_LIST, (parent?.getBoundingClientRect().width ?? 0) - MIN_REST);
+    const total = parent?.getBoundingClientRect().width ?? 0;
+    const max = maxWidthRatio === undefined ? total - MIN_REST : Math.min(total - MIN_REST, total * maxWidthRatio);
+    return Math.max(MIN_LIST, max);
   };
   const sign = listSide === "start" ? 1 : -1;
 
@@ -111,7 +116,8 @@ export function SplitHandle({
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
     event.preventDefault();
     const delta = (event.key === "ArrowRight" ? 1 : -1) * sign * KEY_STEP;
-    commit(clamp(width + delta, containerMax()));
+    const max = containerMax();
+    commit(clamp(Math.min(width, max) + delta, max));
   }
 
   return (

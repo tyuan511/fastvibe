@@ -13,10 +13,12 @@ import {
 } from "@/components/ui/context-menu";
 import { copyPath, revealPath } from "@/components/path-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { FileIcon } from "@/components/file-icon";
 import { PreviewSurface, previewText } from "@/components/chat/preview-panel";
 import { HighlightedEditor } from "@/components/chat/highlighted-editor";
 import { FileBreadcrumb } from "@/components/layout/file-breadcrumb";
+import { ConversationOutputs } from "./conversation-outputs";
 import { cn } from "@/lib/utils";
 import { SplitHandle, splitStyle, useSplitWidth } from "@/components/layout/split-handle";
 import { writeFileTreeCollapsed } from "@/lib/file-tree-state";
@@ -111,6 +113,7 @@ export function SidePaneFiles({
   const { t } = useTranslation("sidepane");
   const patchTab = useSidePaneStore((state) => state.patchTab);
   const treeCollapsed = useSettingsStore((state) => state.settings.fileTreeCollapsed === true);
+  const [fileView, setFileView] = useState<"tree" | "outputs">("tree");
   const [children, setChildren] = useState<DirMap>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -284,7 +287,9 @@ export function SidePaneFiles({
               : "@min-[32rem]/files:flex @min-[32rem]/files:w-(--split-w) @min-[32rem]/files:max-w-[75%] @min-[32rem]/files:flex-none",
           )}
         >
+          <Tabs value={fileView} onValueChange={(value) => setFileView(value as "tree" | "outputs")} className="shrink-0 px-2 pt-2"><TabsList className="w-full"><TabsTrigger value="tree">{t("outputs.files")}</TabsTrigger><TabsTrigger value="outputs">{t("outputs.title")}</TabsTrigger></TabsList></Tabs>
           <ScrollArea className="h-full min-h-0 flex-1">
+            {fileView === "outputs" ? <ConversationOutputs onOpen={(path) => void openFile(path)} /> : (
             <div className="flex min-h-full flex-col">
               <div className="py-1.5">
                 {treeRoots.map((root) => (
@@ -320,6 +325,7 @@ export function SidePaneFiles({
                 </ContextMenuContent>
               </ContextMenu>
             </div>
+            )}
           </ScrollArea>
         </div>
         {hideTree ? null : (

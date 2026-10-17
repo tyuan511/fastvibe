@@ -107,6 +107,9 @@ export type AppSettings = ProxySettings & {
    * collapsed state survives a restart.
    */
   sidebarCollapsed?: boolean;
+  /** User's resource-panel visibility preference. Width-based hiding never writes
+   * this value; absent means open when the conversation has enough room. */
+  resourcePanelOpen?: boolean;
   /**
    * Right-hand side pane width in px; same lifecycle as `sidebarWidth`. The width
    * last dragged anywhere, and what a conversation with no width of its own opens at.
@@ -228,6 +231,7 @@ function sanitize(parsed: Partial<AppSettings>): Partial<AppSettings> {
   if (!isProjectDefaultMap(next.projectDefaults)) delete next.projectDefaults;
   if (!isFiniteNumber(next.sidebarWidth)) delete next.sidebarWidth;
   if (typeof next.sidebarCollapsed !== "boolean") delete next.sidebarCollapsed;
+  if (typeof next.resourcePanelOpen !== "boolean") delete next.resourcePanelOpen;
   if (!isFiniteNumber(next.sidePaneWidth)) delete next.sidePaneWidth;
   if (!isNumberMap(next.sidePaneWidths)) delete next.sidePaneWidths;
   if (!isIdListMap(next.fileTreeExpanded)) delete next.fileTreeExpanded;

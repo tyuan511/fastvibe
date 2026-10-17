@@ -23,6 +23,7 @@ class ChatMessage {
     this.parts,
     this.attachments,
     this.lastId,
+    this.deferredIds = const <String>[],
   }) : tools = tools ?? <ToolBlock>[];
 
   factory ChatMessage.fromJson(Object? value) {
@@ -41,6 +42,8 @@ class ChatMessage {
       id: map['id'] is String ? map['id'] as String : 'message-${DateTime.now().microsecondsSinceEpoch}',
       role: map['role'] is String ? map['role'] as String : 'assistant',
       text: map['text'] is String ? map['text'] as String : '',
+      deferredIds: map['deferredContent'] == true && map['id'] is String
+          ? <String>[map['id'] as String] : const <String>[],
       thinking: map['thinking'] is String ? map['thinking'] as String : null,
       tools: tools,
       error: map['error'] is String ? map['error'] as String : null,
@@ -57,6 +60,7 @@ class ChatMessage {
 
   final String id;
   final String role;
+  final List<String> deferredIds;
   String text;
   String? thinking;
   List<ToolBlock> tools;
@@ -96,6 +100,7 @@ class ChatMessage {
         parts: parts == null ? null : List<MessagePart>.from(parts!),
         attachments: attachments,
         lastId: lastId,
+        deferredIds: deferredIds,
       );
 }
 
@@ -344,6 +349,7 @@ ChatMessage combineReplies(ChatMessage previous, ChatMessage message) {
     parts: parts,
     attachments: message.attachments,
     lastId: message.lastId ?? message.id,
+    deferredIds: <String>[...previous.deferredIds, ...message.deferredIds],
   );
 }
 

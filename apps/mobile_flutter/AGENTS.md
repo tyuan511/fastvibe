@@ -153,6 +153,19 @@ Read `lib/chat/message.dart`, `live_events.dart`, `snapshot_sync.dart` and
 - **Older history has its own flight** (`HistoryPager`), so scrolling back never blocks
   the live path. `loadAll` drains it before a copy-all, which must never silently copy
   just the visible window.
+- **Open a small authoritative window.** Start with three complete turns and a 128 KiB
+  soft budget; tool/result boundaries can exceed that budget. `transcriptPreview` is
+  negotiated before asking for abbreviated settled bodies and inline images. A built
+  row fetches its `deferredIds` through `engine:get-message`; merged replies preserve
+  all of those ids. Copy, reuse and Copy All must resolve every required body first.
+  Live tails retain their full prefix for the stream reducer.
+- **A cached transcript is only a display hint.** `transcript_cache.dart` keeps the
+  recent window under the app cache directory, keyed by saved host and conversation,
+  with 256 KiB per entry, twenty entries and a seven-day expiry. It never persists a
+  queue, engine seq or replay checkpoint. An authoritative snapshot replaces it before
+  actions are enabled; a late cache read cannot overwrite fresh/live content. Defer
+  the composer's session read until the history's first frame, otherwise metadata can
+  initialize the whole agent ahead of the read-only transcript path.
 
 ### Files a reply produced: listed, previewed, downloaded
 
@@ -176,10 +189,7 @@ is a download; every file has 下载.
   named it plus the `conversationId`; Main resolves a relative path against that
   conversation's `cwd`. The `conversationId` is also what routes the call to an SSH host
   (the gateway scopes by `conversationId` / `path`), so no path is ever scoped on the phone.
-- **A download is one file or none.** It is written to `<name>.part` and renamed at the end;
-  `mtimeMs` changing between slices (`changed`), an empty slice that is not the end
-  (`stalled`) and a cancel (leaving the sheet) all delete the part. A name is made safe
-  (`safeFileName`) and never replaces an earlier download (`name (2).ext`).
+- **A download is one completed file or a resumable checkpoint.** Bytes stay in a hidden `.part` until completion. The checkpoint key hashes the host id, conversation id and path; metadata stores size and modification time. A transient disconnect retains it and the viewer offers Resume. A reconnect uses the current client of the same saved host, never the retired socket or a different device. Resume checks size and `mtimeMs` before appending; a changed remote file restarts from zero. A mid-transfer change, malformed slice, stalled transfer or explicit cancellation removes the checkpoint. Closing the sheet pauses and preserves a verifiable checkpoint, including after a disconnect. Startup and new downloads remove invalid/orphaned checkpoints and checkpoints older than seven days, and evict oldest inactive checkpoints above a 512 MiB budget. Completed downloads and active writers are excluded. Older hosts that omit offset/mtime may still download normally, but cannot create a resumable checkpoint; incorrect supplied fields are still rejected. Final names remain safe and never replace earlier downloads (`name (2).ext`).
 - **After a download the system opens it** (`open_filex`): iOS's document sheet offers
   共享 / 存储到「文件」, Android picks an app. Downloads live in `<documents>/Downloads`, and
   `UIFileSharingEnabled` + `LSSupportsOpeningDocumentsInPlace` make that folder show under
@@ -269,3 +279,7 @@ The Flutter SDK is pinned by `environment.flutter` in `pubspec.yaml`.
   the existing App Store Connect key. `github.run_number.github.run_attempt` is passed
   as `--build-number` so reruns rise too. `TESTFLIGHT_AUTO=true` enables tag uploads;
   manual runs can export an IPA without uploading. `APPLE_TEAM_ID` overrides the team.
+
+## Connection diagnostics
+
+Settings opens a readable summary of the latest connection attempt, with separate authentication, offline-device, transport and catalog-restoration guidance plus recent timings. A later success supersedes an earlier failure. Successful signaling/channel-open timings never imply an authentication rejection; only explicit unauthorized errors or close code 4001 do. An incomplete post-open protocol handshake has its own guidance, and a later disconnect is not blamed on initial restoration. Full diagnostic JSON remains copyable; both views exclude credentials and RPC payloads. Summaries are snapshots when the sheet opens, not a second connection state machine.

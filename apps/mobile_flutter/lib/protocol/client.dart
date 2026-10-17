@@ -133,6 +133,7 @@ class RemoteClient {
   bool get supportsConversationResume => _features['conversationResume'] == true;
 
   bool get supportsHistoryPaging => _features['historyPaging'] == true;
+  bool get supportsTranscriptPreview => _features['transcriptPreview'] == true;
 
   String get epoch => _epoch;
 

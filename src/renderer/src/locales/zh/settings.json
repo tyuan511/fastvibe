@@ -251,13 +251,34 @@
   "tools": "可用工具",
   "toolsHint": "这个角色可以使用的工具",
   "toolOptions": {
-   "read": { "label": "读取文件", "description": "查看文件内容" },
-   "grep": { "label": "搜索内容", "description": "在文件中查找文本" },
-   "find": { "label": "查找文件", "description": "按名称定位文件" },
-   "ls": { "label": "查看目录", "description": "列出目录内容" },
-   "bash": { "label": "运行命令", "description": "执行终端命令" },
-   "edit": { "label": "编辑文件", "description": "修改现有文件" },
-   "write": { "label": "写入文件", "description": "创建或覆盖文件" },
+   "read": {
+    "label": "读取文件",
+    "description": "查看文件内容"
+   },
+   "grep": {
+    "label": "搜索内容",
+    "description": "在文件中查找文本"
+   },
+   "find": {
+    "label": "查找文件",
+    "description": "按名称定位文件"
+   },
+   "ls": {
+    "label": "查看目录",
+    "description": "列出目录内容"
+   },
+   "bash": {
+    "label": "运行命令",
+    "description": "执行终端命令"
+   },
+   "edit": {
+    "label": "编辑文件",
+    "description": "修改现有文件"
+   },
+   "write": {
+    "label": "写入文件",
+    "description": "创建或覆盖文件"
+   },
    "other": "其他工具"
   },
   "prompt": "系统提示词",
@@ -395,7 +416,18 @@
    "五",
    "",
    "日"
-  ]
+  ],
+  "inputTokens": "输入 Token",
+  "outputTokens": "输出 Token",
+  "cacheTokens": "缓存 Token",
+  "estimateHint": "按当前模型价格估算，实际费用以供应商账单为准。",
+  "cacheDetail": "缓存读取 {{read}} · 写入 {{write}} · 读取占输入 {{rate}}%",
+  "retry": "重试",
+  "costBreakdown": "费用来源",
+  "byProject": "按项目",
+  "byConversation": "按会话",
+  "scratch": "临时工作区",
+  "unavailableChat": "已删除或其他会话"
  },
  "providers": {
   "gatewayIdentify": "识别上游",
@@ -918,6 +950,13 @@
   "driverMissing": "未下载",
   "driverDownload": "下载",
   "driverUpdate": "更新",
+  "driverCheckUpdate": "检查更新",
+  "driverChecking": "正在检查…",
+  "driverUpToDate": "已经是最新版本",
+  "driverCheckFailed": "检查驱动更新失败",
+  "driverUpdateTitle": "发现驱动更新",
+  "driverUpdateDesc": "电脑操控组件 {{version}} 可供更新。点击「更新」下载并安装。",
+  "driverInstalled": "电脑操控组件已安装完成",
   "driverDialogTitle": "下载电脑操控组件",
   "driverDialogDesc": "使用电脑操控需要先下载这个组件。",
   "driverClose": "关闭"
@@ -941,5 +980,33 @@
   "loading": "正在查找本机浏览器…",
   "noProfiles": "没有找到可导入的配置",
   "noProfilesDesc": "支持 Chrome、Edge、Brave、Chromium、Arc 和 Opera。"
+ },
+ "providerTest": {
+  "title": "模型自检",
+  "model": "测试模型",
+  "description": "发送两个小请求检查回答和工具调用，按供应商计费。",
+  "running": "检测中…",
+  "run": "开始检测",
+  "passed": "回答与工具调用均正常",
+  "partial": "回答正常，工具调用尚未通过",
+  "failed": "模型检测失败",
+  "protocol": "接口协议：{{api}}",
+  "firstToken": "首字响应：{{ms}} ms",
+  "edit": "修改模型设置",
+  "tools": {
+   "passed": "工具调用：通过",
+   "unconfirmed": "模型未返回测试工具调用，请检查模型能力。",
+   "failed": "工具调用请求失败",
+   "not-tested": "尚未检测工具调用"
+  },
+  "errors": {
+   "auth": "鉴权失败，请检查 API Key 或重新登录供应商。",
+   "protocol": "接口不兼容，请检查地址、模型名称和协议。",
+   "rate-limit": "供应商限流或额度不足，请稍后重试。",
+   "network": "网络连接失败，请检查代理和供应商地址。",
+   "timeout": "请求超时，请重试或检查网络。",
+   "model": "模型不可用，请同步模型列表并重新选择。",
+   "unknown": "请求未正常完成，请核对供应商配置后重试。"
+}
 }
 }

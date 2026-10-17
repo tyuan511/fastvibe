@@ -6,9 +6,8 @@ import { join } from "node:path";
 import { checkReleaseNote } from "../scripts/check-release-note.mjs";
 
 // The checker is what stands between a tag and a published release whose body is empty, so
-// every refusal is pinned here — and so is what it deliberately does *not* refuse. It reads
-// one file at one path, and the path is the only thing the workflow hands it, so the
-// contract is entirely about which files it accepts and why it says no.
+// every refusal is pinned here — and so is compatibility with older single-language
+// releases. Bilingual notes must link to complete translations of the same release.
 function fixture(notes: Record<string, string>, run: (root: string) => void) {
   const root = mkdtempSync(join(tmpdir(), "release-note-"));
   try {
@@ -62,5 +61,61 @@ test("does not police the language — a non-English note is published as writte
     // English is the guideline for notes, not a gate: a release must not be blockable by a
     // regex over prose. What is checked is that the file is there and says something.
     assert.equal(checkReleaseNote("v0.11.0", root).lines, 3);
+  });
+});
+
+function bilingualNotes(tag: string, ref = tag) {
+  const url = `https://github.com/tyuan511/fastvibe/blob/${ref}/docs/release/${tag}`;
+  return {
+    [`${tag}.md`]: `**English** | [简体中文](${url}_zh-CN.md)\n\n### Fixed\n\n- A bug.\n`,
+    [`${tag}_zh-CN.md`]: `[English](${url}.md) | **简体中文**\n\n### 修复\n\n- 一个问题。\n`,
+  };
+}
+
+test("checks paired desktop, mobile and prerelease notes with absolute tag links", () => {
+  for (const tag of ["v0.21.0", "app-v0.5.9", "v0.21.0-rc.1"]) {
+    fixture(bilingualNotes(tag), (root) => {
+      assert.equal(checkReleaseNote(tag, root).translationPath, join(root, "docs", "release", `${tag}_zh-CN.md`));
+    });
+  }
+});
+
+test("refuses a published language link with a missing or blank translation", () => {
+  const notes = bilingualNotes("v0.21.0");
+  delete notes["v0.21.0_zh-CN.md"];
+  fixture(notes, (root) => {
+    throws(() => checkReleaseNote("v0.21.0", root), /missing Chinese release note/);
+  });
+  notes["v0.21.0_zh-CN.md"] = " \n\t";
+  fixture(notes, (root) => {
+    throws(() => checkReleaseNote("v0.21.0", root), /Chinese release note is empty/);
+  });
+});
+
+test("refuses relative or cross-version language links in release bodies", () => {
+  for (const url of ["v0.21.0_zh-CN.md", "https://github.com/tyuan511/fastvibe/blob/v0.20.3/docs/release/v0.21.0_zh-CN.md"]) {
+    const notes = bilingualNotes("v0.21.0");
+    notes["v0.21.0.md"] = `**English** | [简体中文](${url})\n\n- A bug.\n`;
+    fixture(notes, (root) => {
+      throws(() => checkReleaseNote("v0.21.0", root), /absolute Chinese language link/);
+    });
+  }
+});
+
+test("requires reciprocal navigation when a translation file exists", () => {
+  const notes = bilingualNotes("v0.21.0");
+  notes["v0.21.0_zh-CN.md"] = "### 修复\n\n- 一个问题。\n";
+  fixture(notes, (root) => {
+    throws(() => checkReleaseNote("v0.21.0", root), /matching absolute English language link/);
+  });
+  notes["v0.21.0.md"] = "### Fixed\n\n- A bug.\n";
+  fixture(notes, (root) => {
+    throws(() => checkReleaseNote("v0.21.0", root), /absolute Chinese language link/);
+  });
+});
+
+test("accepts translations backfilled on main without moving published tags", () => {
+  fixture(bilingualNotes("v0.20.3", "main"), (root) => {
+    assert.ok(checkReleaseNote("v0.20.3", root).translationPath);
   });
 });

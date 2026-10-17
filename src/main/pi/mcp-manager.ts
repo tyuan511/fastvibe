@@ -148,7 +148,11 @@ export class McpManager {
             if (!content.length) content.push({ type: "text", text: result.isError ? uiText("MCP 工具返回了错误", "The MCP tool returned an error") : "(empty result)" });
             return {
               content,
-              details: { isError: result.isError === true },
+              details: {
+                isError: result.isError === true,
+                // Keep provenance with the transcript so preview filtering also works on reload.
+                mcp: { toolName: tool.name, readOnlyHint: tool.annotations?.readOnlyHint === true },
+              },
               ...(result.isError ? { isError: true } : {}),
             };
           },

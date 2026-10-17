@@ -207,6 +207,8 @@ export type ChatAttachment = {
 
 export type ChatMessage = {
   id: string;
+  /** Opt-in preview; retrieve this entry through engine:get-message before copying. */
+  deferredContent?: boolean;
   role: "user" | "assistant" | "system";
   text: string;
   thinking?: string;
@@ -639,6 +641,10 @@ export type ComputerComponentStatus = {
   error?: string;
   /** Installed driver version, once a copy is on disk. */
   version?: string;
+  /** Driver version compatible with this app; worker and bindings must match. */
+  targetVersion?: string;
+  /** An installed copy needs updating to match this app. */
+  updateAvailable?: boolean;
 };
 
 /** The two macOS grants the driver needs, named as `ComputerPermissionStatus` keys. */
@@ -1231,6 +1237,8 @@ export type Conversation = {
 /** A conversation whose transcript matched a command-palette query. */
 export type ConversationSearchHit = {
   id: string;
+  /** Visible message containing the match (tool results point at their reply). */
+  entryId?: string;
   /** Short excerpt around the first match, for the palette's secondary line. */
   snippet?: string;
 };
@@ -1268,6 +1276,8 @@ export type TranscriptTail =
 
 export type ConversationSnapshot = {
   conversationId: string | null;
+  /** Payload-free host timings, in milliseconds. */
+  timing?: { readMs: number; projectMs: number };
   /** The transcript, including the reply in flight while `running`. */
   messages: ChatMessage[];
   /** When present, `messages` is either the requested tail or a full fallback. */
@@ -1386,6 +1396,13 @@ export type UsageModelBreakdown = UsageMetrics & {
   days?: UsageDay[];
 };
 
+export type UsageConversationBreakdown = UsageMetrics & {
+  sessionId: string;
+  conversationId?: string;
+  title?: string;
+  project?: string;
+};
+
 export type UsageStats = {
   range: UsageRange;
   /** Inclusive local-date window (`YYYY-MM-DD`) covered by `days`. */
@@ -1396,6 +1413,7 @@ export type UsageStats = {
   days: UsageDay[];
   /** Models seen in the window, highest token usage first. */
   models: UsageModelBreakdown[];
+  conversations?: UsageConversationBreakdown[];
   /** Session transcripts that contributed to the totals. */
   sessions: number;
   /** Longest span between turns in one session, in minutes. */

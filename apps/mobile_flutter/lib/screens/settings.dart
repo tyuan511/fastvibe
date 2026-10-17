@@ -12,9 +12,11 @@ import '../ui/glass_screen.dart';
 import '../ui/icons.dart';
 import '../ui/kit.dart';
 import '../ui/preferences.dart';
+import '../ui/sheet.dart';
 import '../notifications/local.dart';
 import '../update/release_notes_sheet.dart';
 import '../update/updater.dart';
+import 'connection_diagnostics.dart';
 
 /// Settings that belong to this phone. Which model the agent runs and what it may do are
 /// the machine's settings and stay in the chat's composer; this page is only the app
@@ -343,9 +345,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         onTap: () => showReleaseNotesSheet(context),
                       ),
                       SettingsRow(
-                        icon: AppIcons.copy,
+                        icon: AppIcons.information,
                         label: t('settings.connectionDiagnostics', context: context),
-                        onTap: _copyDiagnostics,
+                        onTap: () => showAppSheet<void>(context: context, height: 420, builder: (_) => ConnectionDiagnosticsView(summary: connectionDiagnosticSummary(), onCopy: _copyDiagnostics)),
                       ),
                     ],
                   ),

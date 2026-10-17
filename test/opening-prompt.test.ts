@@ -18,7 +18,7 @@ const ts = createRequire(import.meta.url)("typescript") as typeof import("typesc
 const source = readFileSync(new URL("../src/main/pi/process-manager.ts", import.meta.url), "utf8");
 const file = ts.createSourceFile("process-manager.ts", source, ts.ScriptTarget.Latest, true);
 const methods: string[] = [];
-const wanted = new Set(["#replacementContext", "#messagesFrom", "#holdCommand", "getSnapshot"]);
+const wanted = new Set(["#replacementContext", "#messagesFrom", "#holdCommand", "#readTranscript", "getSnapshot"]);
 function visit(node: import("typescript").Node): void {
   if (ts.isMethodDeclaration(node) && wanted.has(node.name.getText(file))) methods.push(node.getText(file));
   ts.forEachChild(node, visit);
@@ -105,6 +105,7 @@ async function fixture(t: Parameters<Parameters<typeof test>[1]>[0], options: { 
   const restored: string[] = [];
   const events: EngineEvent[] = [];
   Object.assign(host, {
+    sessions: new Map([["next", { session }]]), sessionPromises: new Map(), catalog: { get: () => undefined },
     openingPrompts: new Map(), commandsInFlight: new Set(), pendingUi: new Map(), turnEvents: new Map(), eventSeq: 0,
     running: new Map(), compacting: new Map(), reasoning: { get: () => undefined }, widgetWidth: 80,
     busy: () => false, working: () => false, sessionFor: async () => ({ id: "next", session }),

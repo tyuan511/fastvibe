@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type JSX, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { ScrollArea as ScrollAreaPrimitive } from "@base-ui/react/scroll-area";
 import { Add01Icon, Alert02Icon, AlertCircleIcon, Archive04Icon, ArrowLeft01Icon, ArrowRight01Icon, Clock01Icon, Delete02Icon, Folder01Icon, Folder02Icon, FolderRootIcon, Link01Icon, MessageSquarePlusIcon, MoreHorizontalIcon, PanelLeftCloseIcon, PencilEdit02Icon, PinIcon, PuzzleIcon, Search01Icon, Settings01Icon } from "@hugeicons/core-free-icons";
 import {
   DndContext,
@@ -643,13 +644,11 @@ export const Sidebar = memo(function Sidebar({
           </div>
         </div>
 
-        {/* The list is the only part that scrolls, between two bars whose rows are
-            the same height and type as a conversation. No hairline at rest — it read
-            as a cut through the pane. `.sidebar-scroll` fades a row only as it meets
-            those bars. The 0.75rem padding is that fade, so a resting list is not
-            faded, and the first section's own top margin would stack on top of it. */}
+        {/* Content observes the list's height as projects collapse or chats disappear;
+            observing the fixed-height viewport alone leaves the scrollbar stale.
+            Overflow-edge attributes show a border only where content is hidden. */}
         <ScrollArea className="sidebar-scroll no-drag min-h-0 flex-1">
-          <div className="px-2 pt-3 pb-3 [&>:first-child]:mt-0">
+          <ScrollAreaPrimitive.Content className="px-2 pt-3 pb-3 [&>:first-child]:mt-0" style={{ minWidth: 0 }}>
             {pinnedItems.length > 0 ? (
               <>
                 <SectionLabel>{t("sidebar.pinned")}</SectionLabel>
@@ -734,7 +733,7 @@ export const Sidebar = memo(function Sidebar({
                 <EmptyDescription className="text-xs">{t("sidebar.emptyChats")}</EmptyDescription>
               </Empty>
             )}
-          </div>
+          </ScrollAreaPrimitive.Content>
         </ScrollArea>
         {drop ? <DropLine rect={drop.rect} edge={drop.edge} /> : null}
         <DragOverlay dropAnimation={DROP_ANIMATION}>

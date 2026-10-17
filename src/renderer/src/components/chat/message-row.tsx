@@ -233,6 +233,16 @@ function StopNotice({ reason, cause }: { reason: NonNullable<ChatMessage["stop"]
  * A transient provider failure is a tool-shaped status, not a terminal error. The
  * retry count stays visible in the summary; the provider's verbose response is kept
  * behind the same disclosure affordance as tool parameters and output.
+ *
+ * It goes through `PartSlot` like every other process row, and that is load-bearing:
+ * `MessageContent` is a column flex box with `items-start`, so a row that states no
+ * width of its own is sized to fit-content — and the provider's error is a wall of
+ * JSON with no spaces in it, whose min-content width is the whole string. The row
+ * therefore grew to 1,149px inside a 720px column and pushed the transcript's
+ * `scrollWidth` past its `clientWidth`, drawing a horizontal scrollbar across the
+ * whole thread. `break-words` cannot save it either: `overflow-wrap: break-word`
+ * only breaks a word that would overflow its line, and a fit-content line box has no
+ * width to overflow. Given a definite width it breaks as intended.
  */
 function RetryStatus({ message }: { message: ChatMessage }): JSX.Element | null {
   const { t } = useTranslation("common");
@@ -242,19 +252,21 @@ function RetryStatus({ message }: { message: ChatMessage }): JSX.Element | null 
     ? t("errors.retryingAttempt", { attempt: retry.attempt, maxAttempts: retry.maxAttempts })
     : undefined;
   return (
-    <ToolRow
-      icon={<Spinner className="size-3" />}
-      label={t("errors.retryingLabel")}
-      context={context}
-      running
-      title={t("errors.retrying")}
-      canToggle={Boolean(retry.error)}
-      persistKey={`retry:${message.id}`}
-    >
-      {retry.error ? (
-        <div className="whitespace-pre-wrap break-words text-sm text-muted-foreground">{retry.error}</div>
-      ) : null}
-    </ToolRow>
+    <PartSlot>
+      <ToolRow
+        icon={<Spinner className="size-3" />}
+        label={t("errors.retryingLabel")}
+        context={context}
+        running
+        title={t("errors.retrying")}
+        canToggle={Boolean(retry.error)}
+        persistKey={`retry:${message.id}`}
+      >
+        {retry.error ? (
+          <div className="whitespace-pre-wrap break-words text-sm text-muted-foreground">{retry.error}</div>
+        ) : null}
+      </ToolRow>
+    </PartSlot>
   );
 }
 

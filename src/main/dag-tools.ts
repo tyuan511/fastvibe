@@ -3,6 +3,7 @@ import {
   DAG_TOOLS,
   dagNodeFinished,
   normalizeDagBudget,
+  resolveDrafts,
   DAG_LIMITS,
   type DagConfiguredAgent,
   type DagNode,
@@ -161,6 +162,17 @@ export async function runDagTool(
       case "add": {
         const available = agents();
         const drafts = draftsOf(input, available);
+        if (!owner) {
+          // Validate before admitting the batch, without allocating ids or starting
+          // runners. Each top-level task must take part in a dependency edge;
+          // existing graph history does not justify an unrelated new delegation.
+          const resolved = resolveDrafts(new Set(graph().map((node) => node.id)), drafts, available, deps.tools);
+          const upstream = new Set(resolved.flatMap((draft) => draft.batchDeps));
+          const independent = resolved.filter((draft, index) => !draft.batchDeps.length && !draft.existingDeps.length && !upstream.has(index));
+          if (independent.length) {
+            throw new Error(`独立任务「${independent.map((draft) => draft.ref).join("、")}」请使用 subagent：单个任务用 agent + task，多个互不依赖的任务用 tasks 并行。dag_add_tasks 的顶层任务必须参与 depends_on 依赖；不要为使用 DAG 虚构节点或依赖。`);
+          }
+        }
         const refs = new Set(drafts.map((draft, i) => draft.ref?.trim() || `#${i + 1}`));
         if (owner && drafts.some((draft) => draft.dependsOn?.some((id) => !refs.has(id) && !readable.has(canonicalDagId(id))))) throw new Error("子任务只能依赖本批任务、已有子任务或协调者的上游");
         const created = scheduler.add(conversationId, drafts, available, owner?.id, deps.tools);

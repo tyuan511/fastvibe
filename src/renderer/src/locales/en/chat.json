@@ -235,7 +235,7 @@
   "files": {
     "edited_one": "Edited {{count}} file",
     "edited_other": "Edited {{count}} files",
-    "review": "Review",
+    "review": "View changes",
     "more_one": "Show {{count}} more file",
     "more_other": "Show {{count}} more files",
     "collapse": "Show less",

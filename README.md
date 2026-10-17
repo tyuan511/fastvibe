@@ -1,122 +1,117 @@
+<p align="center">
+  <img src="resources/icon.png" width="96" height="96" alt="FastVibe logo" />
+</p>
+
 # FastVibe
 
-[中文 README](README.zh-CN.md) · English README
+**English** | [简体中文](README.zh-CN.md)
 
+[![Latest desktop release](https://img.shields.io/github/v/release/tyuan511/fastvibe?display_name=tag&sort=semver)](https://github.com/tyuan511/fastvibe/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Electron](https://img.shields.io/badge/Electron-44.4.0-47848F?logo=electron&logoColor=white)](https://www.electronjs.org/)
-[![pi coding agent](https://img.shields.io/badge/pi%20coding%20agent-1.2.0-6E56CF)](https://github.com/badlogic/pi-mono)
-[![Latest release](https://img.shields.io/github/v/release/tyuan511/fastvibe?display_name=tag&sort=semver)](https://github.com/tyuan511/fastvibe/releases/latest)
 
-> A desktop AI agent workspace built on **pi coding agent**.
+An AI agent workspace for code, documents, and everyday tasks. Work with your own models, follow what the agent does, and keep conversations, files, terminals, and Git changes together on your desktop.
 
-FastVibe embeds pi coding agent in an Electron desktop app, bringing conversations, tool calls, extensions, and project workspaces into one interface.
+[Download](#download) · [Get started](#get-started) · [Features](#features) · [Use your phone](#use-your-phone) · [Development](#development) · [Release notes / 更新说明](docs/release/README.md)
 
-![FastVibe](docs/images/workspace-en.webp)
+![FastVibe workspace with conversations and tools](docs/images/workspace-en.webp)
 
 ## Download
 
-Download the latest installer from [GitHub Releases](https://github.com/tyuan511/fastvibe/releases/latest):
+Get the desktop app from [GitHub Releases](https://github.com/tyuan511/fastvibe/releases/latest). Downloaded builds do not require Node.js or pnpm.
 
-- macOS: `.dmg` or `.zip`
-- Windows: `.exe`
-- Linux: `.AppImage` or `.deb` (x64 and arm64)
+| Platform | Architecture | Installer |
+| --- | --- | --- |
+| macOS | Apple Silicon / Intel | `.dmg` or `.zip` |
+| Windows | x64 | `.exe` installer |
+| Linux | x64 / arm64 | `.AppImage` or `.deb` |
+
+On macOS, open the DMG and drag FastVibe into Applications. On Windows, run the installer. On Linux, install the DEB or make the AppImage executable before launching it. The desktop app checks for updates; you choose when to download and restart.
+
+The [Android releases](https://github.com/tyuan511/fastvibe/releases?q=app-v&expanded=true) provide an arm64 APK for the companion app. iOS can be built from the [Flutter project](apps/mobile_flutter/README.md).
+
+## Get started
+
+1. Open **Settings → Providers**, add a provider, and connect it with your API key or a supported provider login. Select the models you want to use; custom compatible endpoints are supported too.
+2. Create a project by choosing a folder, or start a conversation without a project to use a separate scratch workspace. Local projects can include several folders and repositories.
+3. Choose a model and describe the task. Follow tool calls and file changes in the conversation, then open files, the terminal, or Git review alongside it.
+
+> [!NOTE]
+> Bring a model provider to run tasks. FastVibe account sign-in is separate from provider setup and is used for account-based remote connections. Model usage is billed by your provider.
 
 ## Features
 
-- Native pi SDK support for conversations, tool calls, and pi extensions.
-- Multi-project workspaces with archived chats, branches, attachments, and isolated scratch workspaces.
-- Visual tool calls, edit diffs, terminal output, and reasoning.
-- Goal mode for long-running objectives.
-- FastVibe and OpenAI-compatible providers, model protocol settings, and OAuth login.
-- MCP, skills, todos, subagents, Git worktrees, and usage statistics.
-- Optional Jev decision engine for browser control, computer control, and batch decisions.
-- Optional long-term memory, after Codex: finished conversations are distilled into local Markdown files, and the agent reads them on demand.
-- File preview, terminal, browser use, computer use, and Git review side panes.
-- Remote web / mobile clients and SSH connections to headless Linux Agents.
-- Themes, UI scaling, customizable shortcuts, and automatic updates.
+- **A workspace around the task.** Organize projects and conversations, search history, attach images and files, branch a conversation, and archive finished work.
+- **Visible agent activity.** Read streaming replies, reasoning, tool calls, and edit diffs. Preview changed files from the conversation and inspect Markdown, code, CSV, images, and other outputs beside the chat.
+- **Files, terminals, and Git together.** Browse multiple project folders, find changed files in the tree, search terminal output, and review, stage, and commit changes without leaving the workspace.
+- **Longer and parallel work.** Use goal mode, todos, subagents, task dependencies, and isolated Git worktrees. Schedule recurring tasks and receive results in the conversation that requested them.
+- **Your models and tools.** Configure providers and per-model protocols, connect MCP servers, and add skills or pi extensions. Track token usage and estimated cost across conversations.
+- **Browser and computer use.** Let the agent work in the embedded browser, or enable desktop control on macOS and Windows. An optional Jev decision engine can handle browser, computer, and batch decisions.
+- **Optional long-term memory.** Let finished conversations inform future work through local Markdown notes. Memory is off by default and can be inspected or cleared in Settings.
+- **Work across devices.** Continue from the Flutter phone app, or connect the desktop to a headless Linux Agent over SSH. Chinese and English interfaces, themes, interface scaling, and configurable shortcuts are included.
 
-## Decision engine (Jev)
+## Use your phone
 
-Settings → Decision engine can put **Jev (TypeSafe)** behind a set of “what happens next” judgements, applied per scenario (each with its own switch):
+Turn on **Settings → Remote access** on the desktop, then connect from the phone app:
 
-| Scenario | What it does |
+| Connection | Setup |
 | --- | --- |
-| Browser control | The decision model drives clicking and typing in the browser (`browser_task`) |
-| Computer control | The decision model drives operations in desktop windows (`computer_task`) |
-| Batch decisions | The main agent gains the `batch_decide` tool |
+| FastVibe account | Sign in to the same account on both devices. The phone discovers your computer and connects directly when possible, using the relay when needed. |
+| Local network | Set a remote-access password on the desktop. On the same network, scan its QR code or choose it from nearby computers, then enter the password. |
+| SSH host | In the desktop's SSH host settings, enable phone access and set a password for the resident Linux Agent. |
 
-When it is off every scenario takes its default path: the main model calls `browser_*` / `computer_*` directly. Jev serves decision scenarios only — it is not a chat model and never appears in the model list. Its API key stays on this machine and is never handed back to the renderer.
-
-## Long-term memory
-
-Settings → Memory is one switch, off by default. When it is on, a conversation that has been quiet for six hours is distilled by the model into a note and a recap, using Codex's own prompts; a background agent then consolidates them into a handbook (`MEMORY.md`) and a compact summary (`memory_summary.md`). Each turn the agent is shown the summary and reads the handbook and recaps on demand. Everything is Markdown on this computer, can be opened from the settings page, and is cleared with one button; turning the switch off stops reading, writing and injecting. Secrets are redacted before anything is stored. See `docs/memory.md`.
-
-## Relationship with pi
-
-FastVibe uses the `@earendil-works/pi-coding-agent` SDK and stores runtime data in its own userData directory. It never reads or writes the user's native `~/.pi` directory.
-
-Common pi UI APIs are mapped to the desktop UI:
-
-| pi API | FastVibe UI |
-| --- | --- |
-| `ctx.ui.confirm` | Inline yes / no panel |
-| `ctx.ui.select` / `input` / `questions` | Selection, input, and question forms |
-| `ctx.ui.editor` | Multiline editor dialog |
-| `ctx.ui.notify` | Notification |
-| `ctx.ui.setStatus` / `setWidget` | Status row and composer widgets |
-| `ctx.newSession` / `switchSession` | Create / switch conversations |
-
-Extensions are installed through the SDK package manager into FastVibe's isolated directory. Terminal-only full-screen interaction such as `ctx.ui.custom()` is not supported; extensions should use `select`, `confirm`, `input`, `editor`, or `questions` instead.
-
-## Development
-
-Requirements: **Node.js 24** and **pnpm 11**. macOS, Windows, and Linux are supported.
-
-```bash
-pnpm install
-pnpm dev          # start electron-vite
-```
-
-Useful commands:
-
-```bash
-pnpm typecheck    # type-check the project
-pnpm test         # run tests
-pnpm sync:models  # update the models.dev snapshot
-pnpm build        # build to out/
-pnpm dist:mac     # package macOS (also dist:win / dist:linux)
-```
-
-Browser preview:
-
-```bash
-pnpm exec vite src/renderer --config vite.config.ts
-# open /mock.html?theme=dark
-```
+The phone works with the host's conversations, models, and tasks. Keep the desktop or remote Agent running and reachable while connected.
 
 ## Data and privacy
 
-Runtime data is stored in FastVibe's own userData directory:
+FastVibe keeps conversations, settings, credentials, and runtime files in its own application data directory:
 
 | Platform | Directory |
 | --- | --- |
 | macOS | `~/Library/Application Support/FastVibe/` |
-| Windows | `%APPDATA%\\FastVibe\\` |
+| Windows | `%APPDATA%\FastVibe\` |
 | Linux | `~/.config/FastVibe/` |
 
-Provider credentials stay in the isolated runtime and are injected into the SDK's in-memory authentication storage. They are not exported to the user's login shell or the in-app terminal. Browser login cookies are stored only in FastVibe's isolated browser session, and long-term memory lives as Markdown files in the local `runtime/engine/memories`. While memory is on, finished conversations are sent to your configured model to be distilled.
+Requests go to the model provider you configure. Provider credentials are held in FastVibe's isolated runtime and are not exported to your login shell or the integrated terminal. Embedded-browser cookies use a separate browser session.
 
-## Project structure
+Long-term memory is optional. When enabled, eligible conversations are sent to the configured model for summarization, and the resulting Markdown files stay in `runtime/engine/memories/`. Turning memory off stops extraction and use; existing files remain until you clear them. See [how memory works](docs/memory.md).
 
-```text
-src/main/       Electron main process, IPC, embedded Agent, and remote services
-src/agent/      headless FastVibe Agent
-src/preload/    contextBridge API
-src/renderer/   React UI
-src/shared/     IPC, App Protocol, and shared types
-resources/      bundled extensions, skills, and model resources
+## Development
+
+Use **Node.js 24** and **pnpm 11** on macOS, Windows, or Linux.
+
+```bash
+git clone https://github.com/tyuan511/fastvibe.git
+cd fastvibe
+pnpm install
+pnpm dev
 ```
 
-## License
+| Command | Purpose |
+| --- | --- |
+| `pnpm typecheck` | Check injected scripts, dependency variants, and TypeScript |
+| `pnpm test` | Run the Node.js test suite |
+| `pnpm build` | Build the desktop app into `out/` |
+| `pnpm dist:mac` / `pnpm dist:win` / `pnpm dist:linux` | Package desktop installers |
+| `pnpm sync:models` | Refresh the models.dev snapshot |
+| `pnpm flutter:analyze` / `pnpm flutter:test` | Check the Flutter companion app |
 
-[MIT](LICENSE) © 2026 FastVibe
+To preview the renderer in a browser:
+
+```bash
+pnpm exec vite src/renderer --config vite.config.ts
+# Open /mock.html?desktop=1&theme=dark on the URL printed by Vite.
+```
+
+FastVibe embeds the `@earendil-works/pi-coding-agent` SDK in Electron's main process. It supplies its own runtime paths and does not use `~/.pi` as its data root. pi extensions are installed into that isolated runtime, with their semantic UI requests mapped to desktop controls.
+
+```text
+src/main/             Electron main process, embedded agent, IPC, and remote connections
+src/renderer/         React desktop interface
+src/preload/          Electron bridge
+src/shared/           Shared APIs, types, and App Protocol
+src/agent/            Headless Linux Agent
+resources/            Bundled extensions, skills, icons, and model metadata
+apps/mobile_flutter/  iOS and Android companion app
+```
+
+For deeper work, see the [architecture and repository conventions](AGENTS.md), [multi-folder projects](docs/multi-folder-projects.md), [Agent runtime releases](docs/agent-runtime.md), and [Flutter development guide](apps/mobile_flutter/README.md). Report problems through [GitHub Issues](https://github.com/tyuan511/fastvibe/issues), including your app version, operating system, and steps to reproduce.

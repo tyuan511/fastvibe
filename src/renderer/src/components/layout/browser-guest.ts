@@ -1,3 +1,4 @@
+import { normalizeBrowserUrl } from "@shared/browser-workspace";
 import { i18n } from "@/lib/i18n";
 import { useSessionStore } from "@/stores/session";
 import { useSidePaneStore } from "@/stores/side-pane";
@@ -20,7 +21,10 @@ export type Guest = HTMLElement & {
   goBack(): void;
   goForward(): void;
   reload(): void;
-  loadURL(url: string): void;
+  reloadIgnoringCache(): void;
+  stop(): void;
+  getWebContentsId(): number;
+  loadURL(url: string): Promise<void>;
   executeJavaScript(code: string): Promise<unknown>;
   isLoading(): boolean;
   sendInputEvent(event: Record<string, unknown>): void;
@@ -62,6 +66,9 @@ export type Entry = {
    * auto-recovered call would quietly answer from the wrong document.
    */
   url: string;
+  viewport?: ViewportMode;
+  landscape?: boolean;
+  originalUserAgent?: string;
 };
 
 /** How the injected page scripts report success and failure. */
@@ -104,7 +111,6 @@ const VIEWPORTS: Record<Exclude<ViewportMode, "responsive">, { width: number; he
   mobile: { width: 375, height: 812 },
   tablet: { width: 768, height: 1024 },
 };
-export const ZOOM_STEPS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
 /** How much of a picked element's text rides along as the chip's readable content. */
 export const PICK_TEXT_LIMIT = 8_000;
 
@@ -250,12 +256,13 @@ export function showGuest(entry: Entry, rect: { left: number; top: number; width
  * Mobile changed nothing. So the host stays the preset size and is scaled down to
  * fit, centred, with the layer's own background letterboxing whatever is left.
  */
-export function placeDevice(entry: Entry, mode: ViewportMode, box: { width: number; height: number }): void {
+export function placeDevice(entry: Entry, mode: ViewportMode, box: { width: number; height: number }, landscape = false): void {
   if (mode === "responsive" || box.width <= 0 || box.height <= 0) {
     entry.host.style.cssText = SHOWN_HOST;
     return;
   }
-  const preset = VIEWPORTS[mode];
+  const size = VIEWPORTS[mode];
+  const preset = landscape ? { width: size.height, height: size.width } : size;
   const scale = Math.min(1, box.width / preset.width, box.height / preset.height);
   const left = Math.max(0, (box.width - preset.width * scale) / 2);
   const top = Math.max(0, (box.height - preset.height * scale) / 2);
@@ -322,22 +329,9 @@ export function ensureGuest(tabId: string, url: string): Entry {
   return registry.get(tabId) ?? createGuest(tabId, url);
 }
 
-const SEARCH_ENGINE = "https://www.google.com/search?q=";
-
 /** What an address-less tab loads: an empty page, never a site the app picked. */
 const BLANK_PAGE = "about:blank";
-
-export function normalizeUrl(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) return BLANK_PAGE;
-  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return trimmed;
-  // Treat spaces, CJK text, and bare words as a search query. Host-like input
-  // (including localhost and IPv4) remains a direct navigation.
-  if (/\s/u.test(trimmed) || /[^\x00-\x7f]/u.test(trimmed) || (!trimmed.includes(".") && !/^localhost(?::\d+)?$/i.test(trimmed))) {
-    return `${SEARCH_ENGINE}${encodeURIComponent(trimmed)}`;
-  }
-  return `https://${trimmed}`;
-}
+export const normalizeUrl = normalizeBrowserUrl;
 
 export function safe<T>(read: () => T, fallback: T): T {
   try {
@@ -569,7 +563,10 @@ function loadUrl(view: Guest, url: string, timeout = 20_000): Promise<LoadOutcom
     view.addEventListener("did-fail-load", onFail);
     timer = window.setTimeout(() => finish(!failure, false), timeout);
     try {
-      view.loadURL(url);
+      void view.loadURL(url).catch((error: unknown) => {
+        failure = error instanceof Error ? error.message : String(error);
+        finish(false, true);
+      });
     } catch (error) {
       failure = error instanceof Error ? error.message : String(error);
       finish(false, true);
