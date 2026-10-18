@@ -706,10 +706,10 @@ class _AssistantRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final drawn = blocks ?? buildBlocks(message);
-    // The list is as wide as the composer, so a user's bubble ends where the composer does;
-    // a reply's text is inset by the composer's own padding so the two start together.
+    // The list is as wide as the composer's card, and so is a reply: its text starts and
+    // ends on the card's edges, as a user's bubble does.
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12),
+      padding: EdgeInsets.zero,
       child: GestureDetector(
         onLongPress: () => onLongPress(message),
         child: ConstrainedBox(
