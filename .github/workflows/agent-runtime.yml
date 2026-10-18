@@ -48,6 +48,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # The runtime tar has to carry the OfficeCLI binary for the CPU it is built for:
+      # scripts/build-agent-runtime.mjs refuses a runtime that would fail its first Office
+      # preview. Nothing in this workflow fetches it otherwise — `predev` and `stage:app` do,
+      # and a tag build runs neither — so the architecture is named here rather than left to
+      # the script's own guess, which is the machine doing the building.
+      - name: Fetch OfficeCLI for this architecture
+        run: node scripts/fetch-officecli.mjs --platforms=linux-${{ matrix.arch }}
+
       - name: Build Agent runtime candidate
         run: |
           pnpm build
